@@ -34032,29 +34032,35 @@ const _DB_STRIP = [
       sub: f => (f.custConvNum != null && f.custConvDen != null) ? f.custConvNum + ' of ' + f.custConvDen : '',
       keys: ['conv', 'conv_perfect', 'conv_low'] },
     { label: 'Device Conv.', fmt: f => _dbPct(f.devConvPct) },
+    // The sub-line shows the BAR this day had to clear rather than the old listing
+    // goal, because the bar is what the rule now uses: 25 items with three or fewer
+    // people rostered, 40 with four or more. That makes it possible to see at a
+    // glance why the listing signal did or didn't fire.
     { label: 'Listed', fmt: f => _dbNum(f.listed),
-      sub: f => (f.storeGoal ? 'goal ' + f.storeGoal + (f.listedPct != null ? ' · ' + Math.round(f.listedPct) + '%' : '') : ''),
+      sub: f => (f.staffed == null ? '' : ((f.staffed >= 4 ? 40 : 25) + '+ needed, ' + f.staffed + ' on')),
       keys: ['listed', 'listed_low'] },
+    { label: 'Listed Value', fmt: f => _dbMoney(f.processedValue), keys: ['listed_value'] },
     { label: '5-Star MTD', fmt: f => _dbNum(f.fiveStarMtd),
       keys: ['reviews_jump', 'reviews_up', 'reviews_flat'] },
     { label: 'Customers', fmt: f => _dbNum(f.totalCustomers) },
-    { label: 'Processed', fmt: f => _dbMoney(f.processedValue) },
     { label: 'Available', fmt: f => _dbNum(f.availableCount) },
     { label: 'Rostered', fmt: f => (f.staffed == null ? '—' : _dbNum(f.staffed)),
       sub: f => (f.listers == null ? '' : f.listers + ' listing') },
-    // The only NAME in the strip, and the reason it is here: a draft may call out
-    // the crowned top producer, and that is the one claim in a message no column
-    // of figures can confirm. Spans two columns — a name is not a number.
-    { label: 'Top Producer', wide: true,
+    // The only NAMES in the strip, and the reason they are here: a draft may call
+    // somebody out, and that is the one claim in a message no column of figures can
+    // confirm. BOTH leaders, because they are often different people and the Day End
+    // Report's crown only tracks value: on 2026-08-13 MPL's draft called Olivia the
+    // processing leader when Calvin had processed more items than her. Two cells make
+    // that disagreement visible instead of hiding it behind one label.
+    // people: true puts these in their own grid under the metrics. In the shared
+    // grid the two double-width cells straddled a row boundary and Top Value was
+    // left stranded on a line of its own with six empty columns beside it.
+    { label: 'Most Listed', people: true,
+      fmt: f => (f.topLister && f.topLister.name) ? f.topLister.name : '—',
+      sub: f => (f.topLister && f.topLister.processed != null) ? f.topLister.processed + ' items' : '' },
+    { label: 'Top Value', people: true,
       fmt: f => (f.topProducer && f.topProducer.name) ? f.topProducer.name : '—',
-      sub: f => {
-          const t = f.topProducer;
-          if (!t) return '';
-          const bits = [];
-          if (t.processed != null) bits.push(t.processed + ' processed');
-          if (t.value != null) bits.push(_dbMoney(t.value));
-          return bits.join(' · ');
-      } }
+      sub: f => (f.topProducer && f.topProducer.value != null) ? _dbMoney(f.topProducer.value) : '' }
 ];
 
 function _dbStripHtml(facts, signals) {
@@ -34064,22 +34070,26 @@ function _dbStripHtml(facts, signals) {
     // so conversion / listings / reviews are UNKNOWN rather than zero. Saying so
     // is the difference between "they listed nothing" and "we don't know".
     const missing = (f.hasReport === false)
-        ? `<div class="dbr-noreport">No Day End Report for this night — conversion, listings and reviews are unknown, not zero. Buying and sales came from the sheet.</div>`
+        ? `<div class="dbr-noreport">No Day End Report for this night. Conversion, listings and reviews are unknown, not zero. Buying and sales came from the sheet.</div>`
         : '';
-    const cells = _DB_STRIP.map(c => {
+    const cell = c => {
         const hit = (c.keys || []).some(k => fired.has(k));
         const val = c.fmt(f);
         // A sub-line under an unknown value is worse than no sub-line: showing
-        // "goal 27" beside a listed count of "—", or "15 of 17" under a conversion
-        // of "—", reads as a figure we have when we do not.
+        // "9 items" beside a name of "—", or "15 of 17" under a conversion of "—",
+        // reads as a figure we have when we do not.
         const sub = (c.sub && val !== '—') ? (c.sub(f) || '') : '';
-        return `<div class="dbr-cell${hit ? ' fired' : ''}${c.wide ? ' wide' : ''}">
+        return `<div class="dbr-cell${hit ? ' fired' : ''}${c.people ? ' wide' : ''}">
             <span class="dbr-cl">${_samEsc(c.label)}</span>
             <span class="dbr-cv">${_samEsc(val)}</span>
             ${sub ? `<span class="dbr-cs">${_samEsc(sub)}</span>` : ''}
         </div>`;
-    }).join('');
-    return missing + `<div class="dbr-strip">${cells}</div>`;
+    };
+    const metrics = _DB_STRIP.filter(c => !c.people).map(cell).join('');
+    const people = _DB_STRIP.filter(c => c.people).map(cell).join('');
+    return missing
+        + `<div class="dbr-strip">${metrics}</div>`
+        + (people ? `<div class="dbr-strip dbr-people">${people}</div>` : '');
 }
 
 async function _dbFetch() {
@@ -34146,7 +34156,7 @@ async function checkDailyBriefDrafts() {
         const stores = pending.map(d => d.store).join(', ');
         title = 'Store Messages to Approve';
         summary = `${pending.length} draft${pending.length === 1 ? '' : 's'} ready for ${stores}`
-            + ' — nothing goes out to a store until you approve it.';
+            + '. Nothing goes out to a store until you approve it.';
         sig = 'pend|' + pending.map(d => d.id).join(',');
     }
     if (t) {
@@ -34217,9 +34227,7 @@ function _dbRenderReview(force) {
             <span class="dbr-err">${errs.length ? _samEsc(errs.join(' · ')) : 'No reason was recorded.'}</span>
             No store has been messaged.</div>`;
     } else if (!_dbRun) {
-        banner = `<div class="dbr-banner amber"><strong>No run recorded for today.</strong>
-            The 7:15am job has not written anything yet — if it is well past that, the cron or the
-            Day End import is stuck.</div>`;
+        banner = `<div class="dbr-banner amber"><strong>No run recorded for today.</strong></div>`;
     } else if (_dbRun.note) {
         banner = `<div class="dbr-banner grey">${_samEsc(_dbRun.note)}</div>`;
     }
@@ -34334,7 +34342,7 @@ async function _dbDecide(id, status, opts) {
     // Past noon the draft is retired whether or not the sweep has stamped it yet,
     // so an already-open modal cannot be used to send one late.
     if (_dbPastWindow()) {
-        if (!silent) alert('These are morning messages — after noon they are retired unsent.\n\n'
+        if (!silent) alert('These are morning messages. After noon they are retired unsent.\n\n'
             + 'Use Send Store Comment if you still want to write to a store today.');
         _dbRenderReview(true);
         return false;
@@ -34342,7 +34350,7 @@ async function _dbDecide(id, status, opts) {
 
     const text = ((_dbEdits[id] != null ? _dbEdits[id] : d.message) || '').trim();
     if (status === 'approved' && !text) {
-        if (!silent) alert('There is no message to send — write one or skip it.');
+        if (!silent) alert('There is no message to send. Write one or skip it.');
         return false;
     }
     if (!silent && status === 'approved'

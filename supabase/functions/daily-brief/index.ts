@@ -66,14 +66,19 @@ const T = {
   buyMarginStretch: 0.53,      // a store climbing out of a hole
   sellMargin: 0.56,
   sellMarginStretch: 0.54,
-  // Listed items are judged as a FRACTION OF THE STORE'S OWN DAILY GOAL (the sum
-  // of each rostered person's target in listing_goals), not as a flat count —
-  // Ethan 2026-08-14. Distribution over Aug 1-13: 35% of store-days at or above
-  // goal, 13% at 150%+, and no store systematically high or low, which is exactly
-  // what a flat count could not achieve.
-  listedGoalPraise: 1.00,      // met their own goal
-  listedGoalStrong: 1.50,      // well clear of it
-  listedGoalLow: 0.60,         // needs a pattern, and someone rostered to list
+  // Listed items: ABSOLUTE counts, tiered on how many people were rostered
+  // (Ethan 2026-08-14). This replaced a goal-fraction rule, which gave MPL listing
+  // credit for 16 items and BAL for 10 — a percentage of a small goal reads as an
+  // achievement he would never have called out. Over the 55 store-days on record
+  // this fires on 29% of them.
+  listedSmall: 25,             // 3 or fewer people rostered
+  listedBig: 40,               // 4 or more
+  listedBigTeamFrom: 4,
+  // Processed VALUE, as its own signal. A store can have a quiet count and a big
+  // day: MPL listed 16 items on 2026-08-13 worth $7,235, and his own read was to
+  // "compliment the store as a whole for their listed value". Fires on 13%.
+  listedValue: 7_000,
+  badListed: 20,
   buyValue: 6_500,
   netSales: 5_000,
   custConv: 0.90,
@@ -131,6 +136,26 @@ const G = {
 };
 
 type Facts = Record<string, any>;
+
+const fmtMoney = (x: number) => "$" + Math.round(x).toLocaleString("en-US");
+
+// He does not write dashes, and an em dash is the single most recognisable tell of
+// generated text — his own words: "get rid of all em dashes as that screams AI".
+// The prompt forbids them; this is the net for when it slips through anyway, since
+// one dash undoes the whole point of the voice work.
+//
+// Replaced with a comma rather than deleted: a dash is nearly always doing a
+// comma's job in these sentences ("margin is gorgeous — let's do it again" reads
+// correctly as "margin is gorgeous, let's do it again"). The follow-up passes
+// clean up the punctuation collisions that substitution can create.
+function stripDashes(s: string): string {
+  return String(s)
+    .replace(/\s*[—–]\s*/g, ", ")
+    .replace(/,\s*,+/g, ",")
+    .replace(/,\s*([.!?,;:])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
 
 // ---------------------------------------------------------------------------
 // Dates. The edge runtime is UTC, so a naive new Date() rolls over at 7pm
@@ -361,8 +386,12 @@ function evaluate(f: Facts, hist: Facts[], ctx: {
       push({ key: "conv_perfect", dir: "praise", points: 2,
         fact: `perfect customer conversion, ${f.custConvNum}/${f.custConvDen}` });
     } else if (f.custConv >= T.custConv) {
+      // The NUMERATOR has to be in here. Without it this read "customer conversion
+      // 93.3% on 15 customers", and the model filled the gap by writing "15 for 15
+      // conversion" to OVL on 2026-08-14 — when they went 14 for 15. A fact that
+      // omits a figure the sentence wants is an invitation to invent it.
       push({ key: "conv", dir: "praise", points: 1,
-        fact: `customer conversion ${pct(f.custConv)} on ${f.custConvDen} customers` });
+        fact: `customer conversion ${f.custConvNum} of ${f.custConvDen} customers (${pct(f.custConv)})` });
     }
   }
   if (f.custConv != null && f.custConv < T.badCustConv) {
@@ -374,38 +403,49 @@ function evaluate(f: Facts, hist: Facts[], ctx: {
     }
   }
 
-  // --- listed items, judged against the STORE'S OWN GOAL for that day.
+  // --- listed items: an absolute count, tiered on the roster.
   //
-  // Not a flat item count. The goal is the sum of each rostered person's target,
-  // so it already carries the staffing and role mix, and the same percentage means
-  // the same thing at a two-person BAL and a four-person WSP. Measured over Aug
-  // 1-13 the flat 20/25 rule silently missed LEE's best listing day of the window
-  // (25 items against a goal of 10 — 250% — which "not more than 25" called
-  // nothing) while nudging stores that were simply short-staffed.
-  if (f.listedPct != null) {
-    if (f.listedPct >= T.listedGoalPraise) {
-      const strong = f.listedPct >= T.listedGoalStrong;
-      // Worth more when they listed heavily AND bought heavily — his own phrasing
-      // for that combination is "a very solid listing day even with 18 customers".
+  // 25+ with three or fewer people, 40+ with four or more (Ethan 2026-08-14). The
+  // previous rule scored listings as a fraction of the store's summed daily goal,
+  // which was mathematically fair and practically wrong: it handed MPL listing
+  // credit for 16 items (59% of a 27 goal) and BAL for 10, and his own reaction to
+  // those two drafts was that he would never have praised either. A percentage of
+  // a small goal is not a good listing day.
+  const staffedN = ctx.staffed ?? 0;
+  if (f.listed != null) {
+    const bar = staffedN >= T.listedBigTeamFrom ? T.listedBig : T.listedSmall;
+    if (f.listed >= bar) {
       const busy = f.buyValue >= buyFloor;
-      push({ key: "listed", dir: "praise", points: (strong || busy) ? 2 : 1,
-        fact: `${f.listed} items listed against a goal of ${f.storeGoal}`
-          + ` (${Math.round(f.listedPct * 100)}%)`
-          + (busy ? `, on a ${money(f.buyValue)} buying day` : ""),
-        detail: strong ? "Well clear of goal — this is the kind of day worth leading with." : undefined });
-    } else if (f.listedPct < T.listedGoalLow) {
-      // Nobody rostered to a listing role means nobody was asked to list. Nudging
-      // for it would be unfair and obviously so to the manager reading it.
-      if ((f.listers ?? 0) > 0) {
+      push({ key: "listed", dir: "praise", points: busy ? 2 : 1,
+        fact: `${f.listed} items listed with ${staffedN || "?"} people rostered`
+          + (busy ? `, on a ${money(f.buyValue)} buying day` : "") });
+    } else if (f.listed < T.badListed) {
+      // Two exemptions, both his. Nobody in a listing role was never asked to
+      // list; and a two-person day that was slammed with buying earned the
+      // shortfall ("unless only 2 people staffed and a very busy buying day").
+      const noListers = (f.listers ?? 0) === 0;
+      const shortAndBusy = staffedN > 0 && staffedN <= 2 && f.buyValue >= buyFloor;
+      if (!noListers && !shortAndBusy) {
         const recent = [f, ...hist].slice(0, T.patternOf)
-          .filter((h) => h.listedPct != null && h.listedPct < T.listedGoalLow).length;
+          .filter((h) => h.listed != null && h.listed < T.badListed).length;
         if (recent >= T.patternHits) {
           push({ key: "listed_low", dir: "correct", points: 0,
-            fact: `${f.listed} listed against a goal of ${f.storeGoal}`
-              + ` (${Math.round(f.listedPct * 100)}%), ${recent} of the last ${T.patternOf} days under goal` });
+            fact: `${f.listed} items listed, ${recent} of the last ${T.patternOf} days under ${T.badListed}` });
         }
       }
     }
+  }
+
+  // --- the VALUE of what was processed, separate from the count.
+  //
+  // A quiet count can still be a big day, and this is the signal that catches it:
+  // MPL listed 16 items on 2026-08-13 worth $7,235. His own read of that day was
+  // to compliment the store as a whole for the listed value rather than name
+  // anyone, which is exactly what the detail line asks for.
+  if (f.processedValue != null && f.processedValue >= T.listedValue) {
+    push({ key: "listed_value", dir: "praise", points: 2,
+      fact: `${money(f.processedValue)} of inventory processed and listed`,
+      detail: "This is the store as a WHOLE having a big day, not one person. Praise the store." });
   }
 
   // --- Google reviews. ONLY from MTD movement (his rule): a jump day to day is
@@ -453,17 +493,21 @@ function systemPrompt(): string {
     "- Energy comes from caps, elongation and rhetorical questions: \"SALES ON SALES ON SALES\", \"lotsssssss of listings\", \"amazing as usual......\", \"Am I smelling a LEE record month???\"",
     "- He sometimes treats the store as a character (\"Team WSP\", \"the BUYING MACHINE\"). These are specific to the store he coined them for. NEVER transplant one to a different store — MPL's team would recognise their own nickname handed to BAL, and nothing gives a generated message away faster.",
     "- He calls the metric by name but almost NEVER quotes the dollar figure. \"Huge sales day\", not \"$7,863\". Numbers appear only as small counts (\"18 customers\", \"9 reviews\") or as targets (\"54%+ buy margin target\"). A message reciting revenue reads as automated — this is the single most important rule.",
-    "- Corrections NEVER open negative. Always a sandwich — praise first, then the ask: \"Sales were great yesterday, but let's put some emphasis on customer conversion and buying margin.\" Or a bare soft ask: \"Let's try and tighten up our buying margin a little bit.\"",
+    "- Corrections NEVER open negative. Always a sandwich, praise first then the ask: \"Sales were great yesterday, but let's put some emphasis on customer conversion and buying margin.\" Or a bare soft ask: \"Let's try and tighten up our buying margin a little bit.\"",
+    "- When there is BOTH praise and an ask, the two must CONNECT. They cannot be two unrelated sentences stapled together. \"44 listings and 14 for 15 conversion, unreal day guys! Let's get that buy margin climbing back toward 54%+.\" is stark: the praise stops dead and a new topic starts. Find the hinge and use a real conjunction: \"...unreal day guys, now let's get that buying margin up to match it\", or \"the only thing missing was the buying margin, let's get that back to 54%+ today\". The ask should read as the NEXT thing to do off the back of a good day, not as a separate memo.",
     "- He writes to the team, not about them. \"You guys\", \"gentlemen\", first names when someone is named.",
     "",
     "HARD RULES:",
+    "- NEVER use an em dash or an en dash. Not one. He does not write them, and they are the clearest signal in English that a machine wrote the sentence. Use a comma, a full stop, or a conjunction.",
     "- Use ONLY the facts given. Never invent a number, a name, a rank, a record or a trend.",
+    "- Never state a fraction, ratio or count that is not written in the facts. If the facts say \"14 of 15 customers\" you may write \"14 for 15\"; you may NOT write \"15 for 15\". Do not round a fraction up to a perfect score.",
+    "- If you name a person, say what they actually led on: items listed, or value processed. Never call someone the leader without naming the thing.",
     "- Do not quote dollar amounts unless the fact is a small count or a percentage target.",
     "- Output the message text ONLY. No greeting, no signature, no quote marks, no preamble.",
     "- At most one correction, and only if one is listed. If none is listed, the message is pure praise.",
     "- Do not reuse the opening words of the recent messages you are shown.",
     "- NEVER say a figure is \"over target\", \"above target\", \"beats the target\" or similar when praising. He cites the 54%+ target ONLY when asking for improvement. Praising a margin he says \"beautiful margin\", \"fantastic margin\", \"amazing as usual\" — the number is good on its own terms, not against a threshold. Naming a target while praising leaks the fact that a rule fired.",
-    "- The SAME applies to listing goals. The facts give you a goal comparison so you know how good the day was; do NOT recite it. \"32 listings against a goal of 27\" is a spreadsheet talking. He says \"great listing productivity\", \"love seeing this listing productivity\", \"lotsssssss of listings\", \"smashing the listing productivity\", or on a short day \"let's get the listings back up\". Never quote the goal, the percentage, or \"X for X\".",
+    "- The SAME applies to listings. The facts tell you the item count and how many people were on, so you know how good the day was; do NOT recite the staffing or turn it into a ratio. \"32 items with 3 people rostered\" is a spreadsheet talking. He says \"great listing productivity\", \"love seeing this listing productivity\", \"lotsssssss of listings\", \"smashing the listing productivity\", or on a short day \"let's get the listings back up\". A bare item count is fine (\"44 listings\"); the roster size is not.",
     "- Do not frame the day by its weekday (\"strong Monday\", \"good Tuesday\"). He says \"yesterday\" or nothing.",
     "- The example messages are for REGISTER ONLY. Do not reuse their sentence shapes with the nouns swapped. If your draft would still read as one of the examples after changing the store name and the metric, write a different sentence.",
   ].join("\n");
@@ -478,24 +522,41 @@ function userPrompt(store: string, refDate: string, signals: Signal[], recent: s
   lines.push(`Reacting to: ${new Date(refDate + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}`);
   lines.push("");
   lines.push("WHAT WENT WELL (lead with these):");
-  praise.forEach((s) => lines.push(`- ${s.fact}${s.detail ? ` — ${s.detail}` : ""}`));
+  praise.forEach((s) => lines.push(`- ${s.fact}${s.detail ? `. ${s.detail}` : ""}`));
 
   if (correct.length) {
     lines.push("");
     lines.push("ONE THING TO PUSH ON (mention after the praise, softly):");
-    correct.forEach((s) => lines.push(`- ${s.fact}${s.detail ? ` — ${s.detail}` : ""}`));
+    correct.forEach((s) => lines.push(`- ${s.fact}${s.detail ? `. ${s.detail}` : ""}`));
   }
 
   // Named people, straight from the report. This is where his best messages come
   // from ("great listing Zach", "C-Money coming in with 9 reviews") and it is the
-  // one thing a generator could not otherwise reach.
-  const top = Array.isArray(f.teamProduction)
-    ? f.teamProduction.filter((t: any) => t?.top && t?.name)
-    : [];
-  if (top.length) {
+  // one thing a generator could not otherwise reach. Two things had to change:
+  //
+  // 1. GATED on a listing signal. BAL named its top producer on a 10-item day,
+  //    which reads as listing praise the store had not earned. If the store's
+  //    listings were unremarkable, there is nobody to congratulate for them.
+  // 2. The report's crown is awarded on VALUE, not item count, and this block used
+  //    to print only the count beside the crowned name. So "Olivia leading the way
+  //    processing" went to MPL on a day Calvin had processed more items than her
+  //    (9 to her 7). The two leaders are now named separately and labelled.
+  const listingFired = signals.some((s) => s.key === "listed" || s.key === "listed_value");
+  const team = Array.isArray(f.teamProduction) ? f.teamProduction.filter((t: any) => t?.name) : [];
+  if (listingFired && team.length) {
+    const num = (x: unknown) => Number(x) || 0;
+    const byCount = [...team].sort((a: any, b: any) => num(b.processed) - num(a.processed))[0];
+    const byValue = [...team].sort((a: any, b: any) => num(b.value) - num(a.value))[0];
     lines.push("");
-    lines.push(`Top producer yesterday: ${top.map((t: any) => `${t.name} (${t.processed} processed)`).join(", ")}`);
-    lines.push("You may name them. Only if it fits naturally — he does not do it every time.");
+    if (byCount && byValue && byCount.name === byValue.name) {
+      lines.push(`Led the board on BOTH counts: ${byCount.name}, ${byCount.processed} items and ${fmtMoney(num(byCount.value))} of value.`);
+      lines.push("Unambiguous, so you may name them for the listing day.");
+    } else {
+      lines.push(`Most items listed: ${byCount.name} (${byCount.processed} items).`);
+      lines.push(`Highest value processed: ${byValue.name} (${fmtMoney(num(byValue.value))}).`);
+      lines.push("These are two DIFFERENT people. Either name one and say which of the two things they led, or name nobody and praise the store. Do not call someone the leader without saying what they led.");
+    }
+    lines.push("He does not name anyone every time. Only if it fits.");
   }
   if (Array.isArray(f.shoutouts) && f.shoutouts.length) {
     lines.push("");
@@ -556,16 +617,22 @@ function factSnapshot(f: Facts) {
     listedPct: f.listedPct == null ? null : Math.round(f.listedPct * 1000) / 10,
     staffed: f.staffed ?? null,
     listers: f.listers ?? null,
-    // The crowned top producer — the ONE person a draft is allowed to name, so
-    // the verification strip has to carry them. Every other claim in a message is
-    // a number he can check against a column; "Zach led the way" was the single
-    // assertion the strip said nothing about.
+    // The two leaders, BOTH of them, because they are frequently different people
+    // and the report's crown only tracks value. A draft naming "the leader" is the
+    // one claim a column of numbers cannot settle, so the strip has to show who led
+    // on items AND who led on value: MPL 2026-08-13 was Calvin on items (9) and
+    // Olivia on value ($4,150), and the draft called Olivia the processing leader.
+    topLister: (() => {
+      const tp = (Array.isArray(f.teamProduction) ? f.teamProduction : []).filter((p: any) => p?.name);
+      if (!tp.length) return null;
+      const top = [...tp].sort((a: any, b: any) => (Number(b.processed) || 0) - (Number(a.processed) || 0))[0];
+      return { name: String(top.name ?? ""), processed: top.processed ?? null, value: top.value ?? null };
+    })(),
     topProducer: (() => {
-      const tp = Array.isArray(f.teamProduction) ? f.teamProduction : [];
-      const top = tp.find((p: any) => p && p.top);
-      return top
-        ? { name: String(top.name ?? ""), processed: top.processed ?? null, value: top.value ?? null }
-        : null;
+      const tp = (Array.isArray(f.teamProduction) ? f.teamProduction : []).filter((p: any) => p?.name);
+      if (!tp.length) return null;
+      const top = [...tp].sort((a: any, b: any) => (Number(b.value) || 0) - (Number(a.value) || 0))[0];
+      return { name: String(top.name ?? ""), processed: top.processed ?? null, value: top.value ?? null };
     })(),
     // False means the Day End Report was missing for that night, so conversion,
     // listed items and reviews are unknown rather than zero — the card says so.
@@ -976,9 +1043,9 @@ Deno.serve(async (req) => {
         messages: [{ role: "user", content: userPrompt(c.store, ref, c.signals, recent, c.facts, written_so_far) }],
       });
 
-      const text = res.content
+      const text = stripDashes(res.content
         .filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim()
-        .replace(/^["“]|["”]$/g, "").trim();
+        .replace(/^["“]|["”]$/g, "").trim());
       if (!text) throw new Error(`empty completion (stop_reason ${res.stop_reason})`);
 
       written_so_far.push(text);

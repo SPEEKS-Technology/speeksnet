@@ -16113,10 +16113,14 @@ body.tv-body { display: block; background: #eef1f5; }
 .dbr-cv { font-size: 14.5px; font-weight: 800; color: #0f172a; letter-spacing: -0.01em; }
 .dbr-cell.fired .dbr-cv { color: #14713d; }
 .dbr-cs { font-size: 10.5px; color: var(--dbr-muted); }
-/* A name needs room a figure does not, so the Top Producer cell takes two
-   columns and drops to a text-weight size. */
+/* A name needs room a figure does not, so the people cells take two columns and
+   drop to a text-weight size. They also get their OWN grid row (.dbr-people) —
+   inside the metric grid the pair straddled a row boundary and the second one was
+   left stranded on a line of its own. */
 .dbr-cell.wide { grid-column: span 2; }
 .dbr-cell.wide .dbr-cv { font-size: 12.5px; }
+.dbr-strip.dbr-people { grid-template-columns: repeat(auto-fill, minmax(216px, 1fr)); margin-top: -2px; }
+.dbr-strip.dbr-people .dbr-cell.wide { grid-column: auto; }
 
 /* The raw error from the API / the ingest — on its own line, since it never ends
    in a period and would otherwise run into the sentence after it. */
