@@ -33955,12 +33955,43 @@ let _dbBusy = {};            // id -> true while its decision is in flight
 let _dbStarted = false;
 let _dbPaintedSig = '';
 
-// DM only. The backend allows the CEO too (ADMIN_ROLES), but the voice is
-// modelled on Ethan's own 150 messages and approving publishes under the
-// approver's name -- so a CEO approval would sign his name to someone else's
-// register. Left permitted server-side, not offered here.
+// DM by default -- the voice is modelled on Ethan's own 150 messages and
+// approving publishes under the APPROVER's name, so handing this to someone else
+// signs their name to his register.
+//
+// Routed through _featureOverrideFor on the same key the tools-panel link carries
+// (tool-store-comment-drafts), so ONE Feature Access switch governs all three
+// things: whether the tool link shows, whether the feed card is raised, and
+// whether a draft may be approved. Same pattern as _gpCanEdit -- without it the
+// switch would hide the tool while the feed card kept nagging.
 function _dbCanReview() {
-    return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager';
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    // Normalised exactly as applyRoleBasedUI does, so the slug looked up here is
+    // the slug the Feature Access tool writes.
+    const roleClass = role.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    const name = sessionStorage.getItem('speeksUserName') || '';
+    const byDefault = role === 'district manager';
+    if (typeof _featureOverrideFor !== 'function') return byDefault;
+    const ov = _featureOverrideFor('tool-store-comment-drafts', roleClass, name);
+    return (ov === null || ov === undefined) ? byDefault : !!ov;
+}
+
+// Drafts are a MORNING thing: they land as people open the site, and one
+// approved mid-afternoon about yesterday reads as an afterthought. A noon cron
+// retires anything unreviewed (?action=expire). This mirrors that hour on the
+// client so the card disappears at 12:00 rather than lingering until the next
+// poll or ping catches up with the sweep -- and so nothing can be approved out of
+// a card that should already be gone.
+const _DB_EXPIRE_HOUR = 12;
+function _dbPastWindow() {
+    // Central, not the browser's zone: he could be on a laptop set to Eastern
+    // and the deadline is a store-hours deadline, not a local-clock one.
+    // hourCycle h23, not hour12:false — the latter reports midnight as "24",
+    // which is >= 12 and would read as "past the window" for a whole hour.
+    const h = parseInt(new Date().toLocaleString('en-US', {
+        timeZone: 'America/Chicago', hour: '2-digit', hourCycle: 'h23'
+    }), 10);
+    return isFinite(h) && h >= _DB_EXPIRE_HOUR;
 }
 
 function _dbMoney(v) { return (v == null) ? '—' : '$' + Math.round(Number(v)).toLocaleString('en-US'); }
@@ -34086,7 +34117,11 @@ async function checkDailyBriefDrafts() {
     const live = new Set(_dbDrafts.filter(d => d.status === 'pending').map(d => String(d.id)));
     Object.keys(_dbEdits).forEach(k => { if (!live.has(k)) delete _dbEdits[k]; });
 
-    const pending = _dbDrafts.filter(d => d.status === 'pending');
+    // Past noon Central, a still-pending draft is on its way out (the noon cron
+    // may not have swept yet) — so it must not raise a card or offer an Approve
+    // button. Treated as no longer pending here, which is the one place that
+    // decides both.
+    const pending = _dbPastWindow() ? [] : _dbDrafts.filter(d => d.status === 'pending');
     const failed = !!(_dbRun && _dbRun.ok === false);
 
     // Two reasons for a card: drafts waiting, or a run that broke. A quiet
@@ -34144,7 +34179,11 @@ async function openDailyBriefReview() {
 function _dbSig() {
     return _dbDrafts.map(d => d.id + ':' + d.status).join('|')
         + '#' + (_dbRun ? [_dbRun.ran_at, _dbRun.drafted, _dbRun.ok].join(':') : 'norun')
-        + '#' + Object.keys(_dbBusy).filter(k => _dbBusy[k]).join(',');
+        + '#' + Object.keys(_dbBusy).filter(k => _dbBusy[k]).join(',')
+        // Crossing noon retires every pending draft without any row changing, so
+        // without this an open modal would keep offering Approve past the deadline
+        // until something else happened to move the signature.
+        + '#' + (_dbPastWindow() ? 'past' : 'open');
 }
 
 function _dbRenderReview(force) {
@@ -34154,8 +34193,11 @@ function _dbRenderReview(force) {
     if (!force && sig === _dbPaintedSig) return;
     _dbPaintedSig = sig;
 
-    const pending = _dbDrafts.filter(d => d.status === 'pending');
-    const decided = _dbDrafts.filter(d => d.status !== 'pending');
+    // Same window rule as checkDailyBriefDrafts: past noon, a pending draft is
+    // shown as retired rather than as something he can still send.
+    const past = _dbPastWindow();
+    const pending = past ? [] : _dbDrafts.filter(d => d.status === 'pending');
+    const decided = past ? _dbDrafts.slice() : _dbDrafts.filter(d => d.status !== 'pending');
     const refDate = (_dbDrafts[0] && _dbDrafts[0].ref_date) || (_dbRun && _dbRun.ref_date) || '';
 
     // --- banner: did the generator run, and did it work? ---
@@ -34218,13 +34260,25 @@ function _dbRenderReview(force) {
     }).join('');
 
     // --- what he already decided this morning ---
+    // A pending draft past the window is shown as Expired even before the noon
+    // cron has stamped it, so the card never labels something "Skipped" that he
+    // never actually looked at.
+    const TAG = {
+        approved: ['Sent', 'sent'],
+        skipped: ['Skipped', 'skip'],
+        expired: ['Expired', 'skip'],
+        pending: ['Expired', 'skip'],
+    };
     const done = decided.length ? `<div class="dbr-done">
-        <div class="dbr-sec-label">Already Decided Today</div>
-        ${decided.map(d => `<div class="dbr-done-row">
+        <div class="dbr-sec-label">${past ? 'Today\'s Messages' : 'Already Decided Today'}</div>
+        ${decided.map(d => {
+            const t = TAG[d.status] || [String(d.status || ''), 'skip'];
+            return `<div class="dbr-done-row">
             <span class="dbr-chip sm" style="--tint:${_samEsc((typeof STORE_TINTS === 'object' && STORE_TINTS[d.store]) || '#1f9d57')}">${_samEsc(d.store)}</span>
-            <span class="dbr-done-tag ${d.status === 'approved' ? 'sent' : 'skip'}">${d.status === 'approved' ? 'Sent' : 'Skipped'}</span>
+            <span class="dbr-done-tag ${t[1]}">${_samEsc(t[0])}</span>
             <span class="dbr-done-msg">${_samEsc(d.edited_message || d.message || '')}</span>
-        </div>`).join('')}
+        </div>`;
+        }).join('')}
     </div>` : '';
 
     // --- the stores that got nothing, and why ---
@@ -34271,6 +34325,14 @@ async function _dbDecide(id, status, opts) {
     if (_dbBusy[id]) return false;
     const d = _dbDrafts.find(x => String(x.id) === String(id));
     if (!d || d.status !== 'pending') return false;
+    // Past noon the draft is retired whether or not the sweep has stamped it yet,
+    // so an already-open modal cannot be used to send one late.
+    if (_dbPastWindow()) {
+        if (!silent) alert('These are morning messages — after noon they are retired unsent.\n\n'
+            + 'Use Send Store Comment if you still want to write to a store today.');
+        _dbRenderReview(true);
+        return false;
+    }
 
     const text = ((_dbEdits[id] != null ? _dbEdits[id] : d.message) || '').trim();
     if (status === 'approved' && !text) {

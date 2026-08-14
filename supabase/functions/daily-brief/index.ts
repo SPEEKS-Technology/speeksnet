@@ -108,17 +108,26 @@ const G = {
   minScore: 2,
   perStorePerWeek: 3,
   correctionsPerStorePerWeek: 1,
-  // Mornings a draft may be written. Matches his own record exactly: across 150
-  // messages there is not one Saturday, Sunday or Monday send.
+  // Mornings a draft may be written.
   //
-  // KNOWN GAP, left in his hands rather than decided for him: Friday's numbers
-  // would be acknowledged on Saturday, so with Saturday off they never are —
-  // and Friday is the biggest buying day at several stores (LEE averages $5,931
-  // Friday against $3,623 Thursday). Add 6 here to close it.
-  sendDays: [2, 3, 4, 5],      // Tue Wed Thu Fri, Chicago
+  // Saturday added 2026-08-14 at his request: his own 150 messages contain only
+  // 5 Saturday sends, but that reflects the cost of writing them by hand, not
+  // what he wants now that it is automated. Saturday is what makes FRIDAY's
+  // numbers get acknowledged, and Friday is the biggest buying day at several
+  // stores (LEE averages $5,931 Friday against $3,623 Thursday).
+  //
+  // REMAINING GAP, his call: Monday is still off, so Saturday's own numbers are
+  // never acknowledged (Sunday is skipped by refDayFor, so Monday would react to
+  // Saturday). Add 1 here to close it.
+  sendDays: [2, 3, 4, 5, 6],   // Tue Wed Thu Fri Sat, Chicago
   // Praise-only window at the top of the month — observed, not invented: BAL on
   // Jul 1 ran a 49.4% margin, well under any floor, and got pure praise.
   praiseOnlyThroughDay: 2,
+  // A draft unreviewed by NOON Central is retired unsent. These are morning
+  // messages — they land as people open the site — and one arriving mid-afternoon
+  // about yesterday reads as an afterthought. Expiring is his "skip": nothing is
+  // sent, and it does not spend the weekly budget.
+  expireHour: 12,
 };
 
 type Facts = Record<string, any>;
@@ -131,11 +140,14 @@ function chicagoParts(d: Date) {
   const s = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Chicago",
     year: "numeric", month: "2-digit", day: "2-digit", weekday: "short",
+    // hourCycle h23, not hour12:false — the latter reports midnight as "24" in
+    // some locales, which would make an hour comparison silently wrong once a day.
+    hour: "2-digit", hourCycle: "h23",
   }).formatToParts(d);
   const get = (t: string) => s.find((p) => p.type === t)?.value ?? "";
   const iso = `${get("year")}-${get("month")}-${get("day")}`;
   const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get("weekday"));
-  return { iso, dow, day: parseInt(get("day"), 10) };
+  return { iso, dow, day: parseInt(get("day"), 10), hour: parseInt(get("hour"), 10) };
 }
 
 function addDays(iso: string, n: number): string {
@@ -589,16 +601,33 @@ Deno.serve(async (req) => {
 
   const machine = url.searchParams.get("secret") === SECRET;
 
-  // Browser path: the DM/CEO review card. Role is re-checked by pin against the
-  // users table — hiding a control in the frontend is not a boundary.
+  // Browser path: the review card. Role is re-checked by pin against the users
+  // table — hiding a control in the frontend is not a boundary.
+  //
+  // The role default is then deferred to feature_overrides on the SAME key the
+  // frontend gate and the tools-panel link use (tool-store-comment-drafts), so
+  // this allow-list cannot drift away from what the Feature Access tool shows.
+  // A backend role list that silently disagrees with the frontend is how the
+  // Weekly/Monthly KPI tool ended up 403-ing saves for a role the UI offered.
   let viewer: any = null;
   if (!machine) {
     const pin = req.headers.get("x-user-pin") || "";
     if (!pin) return json({ ok: false, error: "unauthorized" }, 401);
     const { data } = await sb.from("users").select("name, role").eq("pin", pin).single();
-    if (!data || !ADMIN_ROLES.includes(String(data.role).toLowerCase())) {
-      return json({ ok: false, error: "forbidden" }, 403);
-    }
+    if (!data) return json({ ok: false, error: "unauthorized" }, 401);
+
+    const role = String(data.role ?? "").toLowerCase().trim();
+    const roleClass = role.replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "-");
+    const { data: ovs } = await sb.from("feature_overrides")
+      .select("subject_type, subject, enabled").eq("feature_key", "tool-store-comment-drafts");
+    // A per-user override beats a per-role one, matching _featureOverrideFor.
+    const forUser = (ovs ?? []).find((o: any) => o.subject_type === "user"
+      && String(o.subject).toLowerCase() === String(data.name ?? "").toLowerCase());
+    const forRole = (ovs ?? []).find((o: any) => o.subject_type === "role"
+      && String(o.subject).toLowerCase() === roleClass);
+    const ov = forUser ?? forRole;
+    const allowed = ov ? !!ov.enabled : ADMIN_ROLES.includes(role);
+    if (!allowed) return json({ ok: false, error: "forbidden" }, 403);
     viewer = data;
   }
 
@@ -663,6 +692,28 @@ Deno.serve(async (req) => {
     return json({ ok: true, id, status });
   }
 
+  // ---- expire: retire anything he did not get to ----
+  //
+  // Run by cron at noon Central. `status = 'expired'` rather than a delete: it is
+  // behaviourally identical to a skip (nothing was sent, and the weekly budget is
+  // not spent — see usedThisWeek below), but it keeps the distinction between "he
+  // looked and passed" and "he never got to it". If these start expiring most
+  // days that is the single most useful signal about whether the whole thing is
+  // being used, and a DELETE would throw it away.
+  //
+  // Sweeps every date at or before today, not just today: a pending draft left
+  // over from an earlier day would otherwise sit there forever counting against
+  // that store's weekly cap for a message nobody ever sent.
+  if (url.searchParams.get("action") === "expire") {
+    const { data, error } = await sb.from("comment_drafts")
+      .update({ status: "expired", decided_at: new Date().toISOString(), decided_by: "expired (unreviewed by noon)" })
+      .eq("status", "pending").lte("date", today.iso)
+      .select("store, date");
+    if (error) return json({ ok: false, error: error.message }, 500);
+    if (data?.length) await broadcastChange("dailyBrief", null);
+    return json({ ok: true, date: today.iso, expired: data?.length ?? 0, rows: data ?? [] });
+  }
+
   // ---- generate ----
   if (url.searchParams.get("action") !== "generate") {
     return json({ ok: false, error: 'unknown action — use ?action=generate, GET, or POST a decision' }, 400);
@@ -675,8 +726,18 @@ Deno.serve(async (req) => {
   // quiet morning from a broken one — and so a failure is visible to a human
   // instead of dying in the cron log. Never written on a dryRun: a test replay
   // of an old day must not overwrite the real record for that date.
-  const recordRun = async (row: Record<string, unknown>) => {
+  // opts.onlyIfAbsent — for the paths that did NO work (not a send day, past the
+  // review window). Those must not upsert over a morning that already ran: the row
+  // is keyed on date, so a late or retried invocation would replace "drafted 5,
+  // here are the per-store skip reasons" with "drafted 0, past the window" and the
+  // review card would report the morning as empty when it wasn't.
+  const recordRun = async (row: Record<string, unknown>, opts?: { onlyIfAbsent?: boolean }) => {
     if (dryRun) return;
+    if (opts?.onlyIfAbsent) {
+      const { data: existing } = await sb.from("daily_brief_runs")
+        .select("date").eq("date", row.date as string).maybeSingle();
+      if (existing) return;
+    }
     await sb.from("daily_brief_runs").upsert(
       { ran_at: new Date().toISOString(), ...row }, { onConflict: "date" },
     );
@@ -695,11 +756,23 @@ Deno.serve(async (req) => {
   const parts = forDate === today.iso ? today : { iso: forDate, dow: dowOf(forDate), day: parseInt(forDate.slice(8), 10) };
 
   const skipReasons: string[] = [];
+
+  // Past the review window already. Without this a late or retried cron could
+  // write a fresh set of drafts at 1pm that nothing would clear until noon
+  // TOMORROW — so they would either go out a day stale or sit in the card
+  // contradicting "these are this morning's". Only guards a run for TODAY; a
+  // deliberate historical replay by date is unaffected.
+  if (!force && parts.iso === today.iso && today.hour >= G.expireHour) {
+    const note = `past the ${G.expireHour}:00 Central review window — no drafts written`;
+    await recordRun({ date: parts.iso, ok: true, drafted: 0, evaluated: 0, note }, { onlyIfAbsent: true });
+    return json({ ok: true, date: parts.iso, generated: 0, note });
+  }
+
   if (!force && !G.sendDays.includes(parts.dow)) {
     const note = `${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][parts.dow]} is not a send day.`;
     // Recorded, not silent. A morning with no card at all is indistinguishable
     // from a broken cron; a run row saying "today isn't a send day" is not.
-    await recordRun({ date: parts.iso, ok: true, drafted: 0, evaluated: 0, note });
+    await recordRun({ date: parts.iso, ok: true, drafted: 0, evaluated: 0, note }, { onlyIfAbsent: true });
     return json({ ok: true, date: parts.iso, generated: 0, note });
   }
 
@@ -774,7 +847,8 @@ Deno.serve(async (req) => {
 
   const usedThisWeek = new Map<string, { total: number; corrections: number }>();
   for (const d of weekDrafts.data ?? []) {
-    if (d.status === "skipped") continue;
+    // Neither a skip nor an expiry reached a store, so neither spends the budget.
+    if (d.status === "skipped" || d.status === "expired") continue;
     const u = usedThisWeek.get(d.store) ?? { total: 0, corrections: 0 };
     u.total++;
     if (d.kind === "correction" || d.kind === "mixed") u.corrections++;

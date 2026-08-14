@@ -10546,7 +10546,14 @@ body.sam-active .hotbar-btn:hover {
    row still has a clear order of emphasis. */
 .lv-tbl .lv-boldnum { color: var(--slate-charcoal); font-weight: 850; }
 .lv-store { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
-.lv-store b { color: var(--slate-charcoal); font-weight: 850; letter-spacing: .02em; }
+/* The three-letter codes are NOT the same width in this font — measured at 12px
+   they run from 20.5px (LEE) to 28.1px (WSP) — so the store names after them
+   started at five different x positions and the column read as ragged. A floor on
+   the code pins every name to the same offset. In em so it tracks the font size,
+   and it degrades gracefully: a machine with a wider font just stops binding on
+   the widest code rather than breaking the row. */
+.lv-store b { color: var(--slate-charcoal); font-weight: 850; letter-spacing: .02em;
+    min-width: 2.5em; }
 .lv-tint { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .lv-store-nm { color: #94a3b8; font-weight: 650; }
 .lv-of { color: #b0bac6; font-weight: 650; }
@@ -11652,6 +11659,9 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     /* The store name is the first thing to go: the code identifies the row and the
        numbers are the point. */
     .lv-store-nm, .lv-of { display: none; }
+    /* With the name gone there is nothing left to align to, and the floor would
+       just be a gap between the code and the next column. */
+    .lv-store b { min-width: 0; }
 }
 @media (max-width: 720px) {
     .lv-strip, .lv-dist-strip { grid-template-columns: 1fr 1fr; }
