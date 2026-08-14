@@ -178,11 +178,18 @@ const SUBS: Record<Category, Sub[]> = {
   ],
   claims: [],
   variance_aging: [
-    { key: "variance", label: "Variance Replies", blurb: "New sheets, the DM's notes, and the reply deadline.",
-      kinds: ["variance_upload", "variance_upload_clear", "variance_dm_note", "variance_mgr_reply", "varianceDue"],
+    // The per-note kinds (variance_dm_note / variance_mgr_reply / aging_dm_note /
+    // aging_store_reply) were retired 2026-08-14 in favour of the *Review slugs
+    // below, which fire once at the deadline instead of once per note. They are
+    // kept in these lists on purpose: an existing muted_kinds row may still name
+    // one, and dropping the name would make that saved preference unreadable.
+    { key: "variance", label: "Variance Replies", blurb: "New sheets, the DM's review, and the reply deadline.",
+      kinds: ["variance_upload", "variance_upload_clear", "variance_dm_note", "variance_mgr_reply",
+              "varianceDue", "varianceDmReview", "varianceMgrReview"],
       roles: new Set([...STORE_SIDE_ROLES, "district manager", "ceo"]) },
-    { key: "aging",    label: "Aging Inventory", blurb: "New items, the DM's notes, and the review deadline.",
-      kinds: ["aging_item_added", "aging_dm_note", "aging_store_reply", "agingDue"] },
+    { key: "aging",    label: "Aging Inventory", blurb: "New items, the DM's replies, and the review deadline.",
+      kinds: ["aging_item_added", "aging_dm_note", "aging_store_reply",
+              "agingDue", "agingDmReview", "agingMgrReview"] },
   ],
   deadlines: [
     { key: "kpis",     label: "Store KPIs", blurb: "Weekly and monthly entry.",
@@ -228,7 +235,9 @@ const KIND_LABEL: Record<string, string> = {
   recycle_verdict: "Recycle Verdict", recycle_dm_note: "Recycle Note", recycle_reply: "Recycle Reply",
   variance_upload: "Variance", variance_upload_clear: "Variance", variance_dm_note: "Variance",
   variance_mgr_reply: "Variance",
+  varianceDmReview: "Variance", varianceMgrReview: "Variance",
   aging_item_added: "Aging Inventory", aging_dm_note: "Aging Inventory", aging_store_reply: "Aging Inventory",
+  agingDmReview: "Aging Inventory", agingMgrReview: "Aging Inventory",
   audit_practice_submitted: "PayMore Audit", audit_official_submitted: "PayMore Audit",
   scorecard_submitted: "SPEEKS Scorecard",
 };
@@ -618,8 +627,50 @@ async function sendEmail(to: string, subject: string, html: string) {
 // ============================================================================
 type Outbox = {
   person: Person; email: string;
-  items: { title: string; body: string; link: string; tone: "red" | "amber" | "sage"; meta: string; key: string }[];
+  // `group` is the collapse axis — see collapseItems. Items sharing one render as a
+  // single counted card. Absent means "always its own card".
+  items: { title: string; body: string; link: string; tone: "red" | "amber" | "sage"; meta: string; key: string; group?: string }[];
 };
+
+// Fold repeats of the same thing into ONE counted card (Ethan 2026-08-14: "I don't
+// want to see 20 cards of the same thing").
+//
+// Done HERE, at the delivery layer, rather than at each of the fifteen
+// queueNotification call sites. A batch write is normal across this whole app — 20
+// aging items added at once, a DM ruling on a stack of recycle lines — and fixing
+// it per caller would mean finding every one, getting each right, and remembering
+// the rule the next time a tool is built. One collapse covers all of them, present
+// and future.
+//
+// RENDERING ONLY. Every original item key must survive to the ledger: they are
+// deduped individually, so a key that goes unwritten comes straight back on the
+// next run and mails again. That is why this returns cards while flushOutbox keeps
+// iterating box.items for notify_sent.
+// The collapsed card is a COUNT AND NOTHING ELSE (Ethan 2026-08-14). An earlier
+// version listed the first three SKUs plus "and 17 more", which for a weekly aging
+// batch is a wall of device names nobody reads — the card links into the tool, and
+// that is where the list belongs. Applied to every kind, not just aging: uniform is
+// easier to trust than a per-kind rule, and no batch has yet been worth naming.
+function collapseItems(items: Outbox["items"]) {
+  type Card = Outbox["items"][number] & { n: number };
+  const out: Card[] = [];
+  const at = new Map<string, number>();
+
+  for (const it of items) {
+    const g = it.group;
+    if (!g) { out.push({ ...it, n: 1 }); continue; }
+    const i = at.get(g);
+    if (i === undefined) { at.set(g, out.length); out.push({ ...it, n: 1 }); }
+    else {
+      out[i].n++;
+      // Loudest tone wins — one red row in a batch makes the whole card red.
+      if (it.tone === "red" || (it.tone === "amber" && out[i].tone === "sage")) out[i].tone = it.tone;
+    }
+  }
+
+  // n === 1 keeps its own body: a single event still says what it was.
+  return out.map((c) => (c.n === 1 ? c : { ...c, body: `${c.n} items.` }));
+}
 
 function newOutbox(map: Map<string, Outbox>, person: Person, email: string): Outbox {
   let o = map.get(person.key);
@@ -634,13 +685,16 @@ async function flushOutbox(
   for (const box of boxes.values()) {
     if (!box.items.length) continue;
     const [title, sub] = opts.heading(box);
-    const first = box.items[0];
-    const subject = box.items.length === 1
+    // Cards, not raw items: 20 aging adds are ONE card. The subject counts cards for
+    // the same reason — "20 things need you" for a single batch overstated it badly.
+    const cards = collapseItems(box.items);
+    const first = cards[0];
+    const subject = cards.length === 1
       ? `Speeks — ${first.title}`
-      : `Speeks — ${box.items.length} things need you`;
+      : `Speeks — ${cards.length} things need you`;
     const body = `
       <div style="font-size:13.5px;font-weight:600;color:${C.charcoal};margin:0 0 14px;">Hi ${esc(box.person.name.split(" ")[0] || box.person.name)},</div>
-      ${box.items.map((i) => itemCard(i.title, i.body, i.link, i.tone, i.meta)).join("")}`;
+      ${cards.map((i) => itemCard(i.title, i.body, i.link, i.tone, i.meta)).join("")}`;
     const html = wrapEmail(title, sub, body, FOOT_PREFS);
     const target = opts.to || box.email;
 
@@ -719,6 +773,10 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
       tone: h.row.priority === "high" ? "red" : "sage",
       meta: storeMeta(h.row.title, h.row.store, h.row.kind, h.person),
       key: h.key,
+      // Same kind + same store = the same thing happening repeatedly, which is what
+      // a batch write looks like from here. Priority rides along so a high-priority
+      // row is never folded in with routine ones.
+      group: `${h.row.kind}|${h.row.store ?? ""}|${h.row.priority ?? "normal"}`,
     });
   }
 
@@ -1032,6 +1090,156 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
     }
   }
 
+  // ---- "Replies are in" — BOTH tools, BOTH directions ------------------------
+  // Replaces the per-note emails the two tools used to queue on every write
+  // (variance_dm_note / variance_mgr_reply / aging_dm_note / aging_store_reply,
+  // all removed 2026-08-14). A period carries twenty-odd flagged lines, the drain
+  // runs every five minutes, and the old shape mailed a fresh batch the entire
+  // time somebody worked down the list.
+  //
+  // These are deadline-driven instead, so the number of notes written cannot
+  // change the number of emails sent — which is the whole point. Each dedupes on
+  // its `period` key, so an unread one does not nag daily.
+  {
+    const { data: periods } = await sb.from("variance_reply_periods")
+      .select("id, store, manager_due_at, dm_notes_at, dm_reviewed_at, all_clear").is("all_clear", null);
+
+    for (const per of periods || []) {
+      const store = String(per.store || "").toUpperCase();
+      const { data: items } = await sb.from("variance_reply_items")
+        .select("mgr_reply, dm_note, needs_reply, dm_reply_requested").eq("period_id", per.id);
+      const rows = items || [];
+
+      if (!per.dm_notes_at) {
+        // STAGE 1 — the manager's explanations are in and it is the DM's turn.
+        // Mirrors the site's `readyStores`: everything answered, or the window shut
+        // with whatever came in.
+        const owed = rows.filter((r: any) => r.needs_reply && !r.mgr_reply).length;
+        const answered = rows.filter((r: any) => r.needs_reply && r.mgr_reply).length;
+        const duePassed = per.manager_due_at && new Date(per.manager_due_at).getTime() <= Date.now();
+        if (answered > 0 && (owed === 0 || duePassed)) {
+          due.push({
+            slug: "varianceDmReview", period: String(per.id) + ":s1", cat: "variance_aging", store,
+            title: `Variance replies are in — ${STORE_NAME[store] || store}`,
+            body: `${answered} explanation${answered === 1 ? "" : "s"} to review`
+              + (owed ? `, ${owed} still outstanding.` : ` — the store is done.`),
+            link: "workspace.html#vreplies", tone: "sage",
+            for: (p) => ["district manager", "ceo"].includes(p.role),
+          });
+        }
+      } else {
+        // STAGE 2 — the DM asked follow-up questions and that window has now shut.
+        // Same clock the site uses: two days past the later of the two stamps.
+        const replyDue = Math.max(
+          per.manager_due_at ? new Date(per.manager_due_at).getTime() : 0,
+          new Date(per.dm_notes_at).getTime(),
+        ) + 2 * 86400000;
+        const replied = rows.filter((r: any) => r.dm_reply_requested && r.mgr_reply).length;
+        if (Date.now() >= replyDue && !per.dm_reviewed_at) {
+          due.push({
+            // Keyed on the window's CLOSE DATE, not the period alone. dm_reviewed_at
+            // is cleared server-side whenever a newer reply lands, so a second
+            // question-and-answer cycle re-opens this condition — and a period-only
+            // key would have already fired, silently swallowing every later cycle.
+            // The close date moves with dm_notes_at, so each cycle gets exactly one.
+            slug: "varianceDmReview", period: String(per.id) + ":s2:" + fmtDate(new Date(replyDue)),
+            cat: "variance_aging", store,
+            title: `Variance reply window closed — ${STORE_NAME[store] || store}`,
+            body: replied
+              ? `${replied} repl${replied === 1 ? "y" : "ies"} came in — give them a final review.`
+              : `The window closed with no replies to your notes.`,
+            link: "workspace.html#vreplies", tone: replied ? "sage" : "amber",
+            for: (p) => ["district manager", "ceo"].includes(p.role),
+          });
+        }
+        // The MANAGER side of the same event.
+        const asked = rows.filter((r: any) => r.dm_note).length;
+        if (asked > 0) {
+          due.push({
+            // Keyed on the period plus the DAY the DM last wrote. The day — not the
+            // timestamp — is what makes this one email: a review pass updates
+            // dm_notes_at once per note, so a timestamp key would be twenty keys and
+            // twenty emails, the exact thing this replaced. A genuinely later pass on
+            // another day is a new key and correctly notifies again.
+            slug: "varianceMgrReview", period: String(per.id) + ":" + fmtDate(new Date(per.dm_notes_at)),
+            cat: "variance_aging", store,
+            title: `The DM reviewed your variance replies — ${STORE_NAME[store] || store}`,
+            body: `${asked} line${asked === 1 ? " has" : "s have"} a note from the DM.`
+              + (rows.some((r: any) => r.dm_reply_requested && !r.mgr_reply) ? " Some ask for a reply." : ""),
+            link: "workspace.html#vreplies", tone: "sage",
+            for: (p) => ["manager", "owner (manager)", "owner manager"].includes(p.role) && covers(p, store),
+          });
+        }
+      }
+    }
+  }
+
+  {
+    // Aging has no "the DM finished reviewing" stamp — the thread is per item — so
+    // both sides group BY STORE and dedupe on the week, exactly like agingDue.
+    const { data: items } = await sb.from("aging_items")
+      .select("id, store, due_at, dm_seen_at").is("closed_at", null).eq("status", "open");
+    const ids = (items || []).map((i: any) => i.id);
+    const notesById = new Map<string, any[]>();
+    if (ids.length) {
+      const { data: notes } = await sb.from("aging_notes")
+        .select("item_id, author_side, created_at").in("item_id", ids)
+        .order("created_at", { ascending: true });
+      for (const n of notes || []) {
+        const arr = notesById.get(n.item_id) ?? [];
+        arr.push(n);
+        notesById.set(n.item_id, arr);
+      }
+    }
+
+    const dmSide: Record<string, number> = {};
+    const mgrSide: Record<string, number> = {};
+    for (const it of items || []) {
+      const st = String(it.store || "").toUpperCase();
+      const notes = notesById.get(it.id) ?? [];
+      if (!notes.length) continue;
+      const last = notes[notes.length - 1];
+      const windowClosed = it.due_at && new Date(it.due_at).getTime() <= Date.now();
+
+      if (last.author_side === "store") {
+        // The store replied and it is the DM's turn. Unread only — reading IS the
+        // acknowledgement here (dm_seen_at), matching _agNewStoreReply on the site.
+        const seen = it.dm_seen_at ? new Date(it.dm_seen_at).getTime() : 0;
+        if (new Date(last.created_at).getTime() > seen && windowClosed) {
+          dmSide[st] = (dmSide[st] ?? 0) + 1;
+        }
+      } else if (notes.some((n: any) => n.author_side === "store")) {
+        // The DM has answered a store reply — a review prompt for the store, not
+        // homework. A first DM note with no store reply behind it is the store's
+        // homework and already covered by agingDue above, so it is skipped here.
+        mgrSide[st] = (mgrSide[st] ?? 0) + 1;
+      }
+    }
+
+    for (const [store, n] of Object.entries(dmSide)) {
+      due.push({
+        slug: "agingDmReview", period: weekStamp(t.date), cat: "variance_aging", store,
+        title: `Aging inventory replies are in — ${STORE_NAME[store] || store}`,
+        body: `${n} item${n === 1 ? "" : "s"} replied and waiting on your review.`,
+        link: "workspace.html#aging", tone: "sage",
+        for: (p) => ["district manager", "ceo"].includes(p.role),
+      });
+    }
+    for (const [store, n] of Object.entries(mgrSide)) {
+      due.push({
+        slug: "agingMgrReview", period: weekStamp(t.date), cat: "variance_aging", store,
+        title: `The DM replied on aging inventory — ${STORE_NAME[store] || store}`,
+        body: `${n} item${n === 1 ? " has" : "s have"} a new note from the DM.`,
+        link: "workspace.html#aging", tone: "sage",
+        // ASMs included here and NOT on the variance twin: they work the aging
+        // threads but receive no variance at all. See the category relabelling that
+        // shows them "Aging Inventory" in place of "Variance & Aging Inventory".
+        for: (p) => ["manager", "owner (manager)", "owner manager", "assistant manager"].includes(p.role)
+          && covers(p, store),
+      });
+    }
+  }
+
   return due;
 }
 
@@ -1069,7 +1277,12 @@ async function runDigest(sb: any, opts: { dryRun: boolean; to: string | null; on
 
   const sent = await flushOutbox(sb, boxes, {
     dryRun: opts.dryRun, to: opts.to,
-    heading: (o) => ["SPEEKSNET Alerts", `${o.items.length} item${o.items.length === 1 ? "" : "s"}`],
+    // Counted off the COLLAPSED cards, not the raw items — otherwise the header
+    // says "23 items" above a mail showing four.
+    heading: (o) => {
+      const n = collapseItems(o.items).length;
+      return ["SPEEKSNET Alerts", `${n} item${n === 1 ? "" : "s"}`];
+    },
   });
   if (!opts.dryRun) { try { await sb.rpc("notify_prune"); } catch (_) { /* housekeeping only */ } }
   return { mode: "digest", due: due.length, heldEvents: eventsForDigest, sent };
@@ -1115,6 +1328,9 @@ async function drainHeldForDigest(
     box.items.push({
       title: cardTitle(h.row.title, h.person, h.row.kind), body: h.row.body || "", link: h.row.link || "",
       tone: "sage", meta: storeMeta(h.row.title, h.row.store, h.row.kind, h.person), key: h.key,
+      // Digest subscribers get a whole day of events at once, so they are the MOST
+      // exposed to a batch write — collapse matters more here than in the drain.
+      group: `${h.row.kind}|${h.row.store ?? ""}|${h.row.priority ?? "normal"}`,
     });
     n++;
   }

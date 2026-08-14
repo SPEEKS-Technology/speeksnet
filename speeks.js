@@ -70,6 +70,7 @@ const SUMMARY_WEEKLY_URL = `${_BASE}/summary-weekly`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
 const NOTIFY_URL        = `${_BASE}/notify`;
+const DAILY_BRIEF_URL   = `${_BASE}/daily-brief`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -12048,10 +12049,33 @@ function _lvStoreError(m) {
 // Null when there is no such row: a DM or CEO signs in against CORP, and a code
 // that is not in the payload (a store not yet connected to Shopify) must not
 // silently resolve to somebody else's numbers. Callers fall back to the district.
+// Which store's figures the headline tiles and the collapsed summary belong to.
+//
+// The DASHBOARD's store wins over the payload's scope, and that ordering is the
+// whole point: `d.scope.store` is decided server-side from the pin (scopeFor in
+// shopify-live), so for a Multi-Store Manager it is a single fixed home store
+// and never moves when they switch between BAL and MPL. Every other tile on the
+// card — Scorecard, eBay, Audit — is keyed off `speeksUserStore`, so reading a
+// different source here is what let one card show MPL's heading above BAL's
+// $915.49 with BAL's row visible in the table underneath it.
+//
+// Only accepted when it is actually a healthy row in this payload, which is what
+// keeps the other roles on their existing behaviour: a DM/CEO carries 'ALL' or
+// 'CORP', neither of which is a store code, so they fall through to the scope
+// exactly as before. A single-store manager's two values are the same string.
+//
+// MOCD is the one role this deliberately MOVES: stored as CORP but re-homed to
+// OVL at login, so these tiles used to show the district under a card titled
+// "OVL Command Center" with OVL's Scorecard, eBay and Audit beside them. OVL is
+// their home office, and OVL is what they should see (Ethan 2026-08-14). The
+// five-store table underneath stays district-wide for them either way.
 function _lvOwnStore(d, stores) {
-    const code = String((d.scope && d.scope.store) || '').toUpperCase();
-    if (!code) return null;
-    return (stores || []).find(m => String(m.code).toUpperCase() === code && !m.error) || null;
+    const rows = stores || [];
+    const pick = (code) => code
+        ? rows.find(m => String(m.code).toUpperCase() === code && !m.error) || null
+        : null;
+    const viewing = String(sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return pick(viewing) || pick(String((d.scope && d.scope.store) || '').toUpperCase());
 }
 
 function _lvCombine(stores) {
@@ -20473,7 +20497,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -29361,6 +29385,9 @@ const FEATURE_CATALOG = [
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
+    // Shares the `tool-store-comment` stem deliberately — the Delegation tab
+    // pairs them, because approving a draft posts the same store comment.
+    { key: 'tool-store-comment-drafts', label: 'Daily Store Messages',         tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     // Two versions of one tool, sharing the `tool-preferred` stem so the
@@ -30393,6 +30420,7 @@ const JUMP_KEYWORDS = {
     'tool-preferred-request':    'preferred purchase purchases request buy approval',
     'tool-preferred-approve':    'preferred purchase purchases approve owner',
     'tool-store-comment':        'comment message note feedback to store',
+    'tool-store-comment-drafts': 'daily messages drafts approve morning brief day end automated',
     'tool-submit-scores':        'scorecard audit score scores grading points marketing',
     'tool-manager-checklist':    'manager checklist tasks store',
     'tool-variance-report':      'variance report upload excel markdown',
@@ -33763,10 +33791,15 @@ async function checkAgingInvDmReminders() {
             // Only replies the DM hasn't read yet. Reading is the acknowledgement:
             // choosing not to answer is a valid outcome and must not re-nag.
             if (!_agNewStoreReply(it)) return false;
-            // Ongoing back-and-forth: ping the DM as soon as the store replies —
-            // the deadline gate is only for the store's initial reply window.
-            if (_agIsFollowUp(it, 'dm')) return true;
-            // First review of the batch: hold until the reply deadline passes.
+            // EVERY reply waits for the deadline, first or fifth (Ethan 2026-08-14).
+            // There used to be a carve-out here that pinged immediately once a thread
+            // was into follow-ups, on the reasoning that an ongoing back-and-forth is
+            // awaited. With twenty-odd items in a weekly batch that meant a ping per
+            // reply, which is what it was asked to stop doing.
+            //
+            // Nothing is lost by dropping it: a DM note resets due_at to +1 week
+            // (see the note handler in aging-inventory), so a follow-up carries a
+            // real deadline of its own and this gate honours it like any other.
             return it.due_at && new Date(it.due_at).getTime() <= Date.now();
         });
         const members = _agPendingMembers(reviewable, 'dm');
@@ -33889,6 +33922,429 @@ function _agRenderBubble(icon, title, bodyText) {
         { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
         { transform: 'scale(1) translateX(0)', opacity: 1 }
     ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
+}
+
+
+/* =========================================================
+   DAILY STORE MESSAGES  (draft review)
+   The 7:15am cron runs the daily-brief fn: it reads last
+   night's Day End Report facts, decides on its own whether a
+   store has earned a message, and writes a PENDING draft.
+   NOTHING reaches a store until it is approved here.
+   Approving inserts through the same store_comments shape the
+   Send Store Comment tool uses, so read receipts, the green
+   bubble and the reads tab behave identically.
+
+   Silence is a valid outcome. A morning where every store was
+   unremarkable produces no drafts and no card -- so the card
+   also has to prove the generator RAN (daily_brief_runs),
+   because "nothing to review" and "the cron is broken" look
+   identical from an empty list and want opposite reactions.
+
+   Every draft carries the facts it was built from
+   (comment_drafts.facts, a point-in-time snapshot) and the
+   signals that fired. The verification strip renders that
+   snapshot rather than re-fetching, so the numbers he checks
+   are provably the numbers the sentence was written from.
+   ========================================================= */
+let _dbDrafts = [];          // today's drafts, decided ones included
+let _dbRun = null;           // daily_brief_runs row for today, or null
+let _dbDate = '';            // the morning (Central) these belong to
+let _dbEdits = {};           // id -> his edited text, kept across repaints
+let _dbBusy = {};            // id -> true while its decision is in flight
+let _dbStarted = false;
+let _dbPaintedSig = '';
+
+// DM only. The backend allows the CEO too (ADMIN_ROLES), but the voice is
+// modelled on Ethan's own 150 messages and approving publishes under the
+// approver's name -- so a CEO approval would sign his name to someone else's
+// register. Left permitted server-side, not offered here.
+function _dbCanReview() {
+    return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager';
+}
+
+function _dbMoney(v) { return (v == null) ? '—' : '$' + Math.round(Number(v)).toLocaleString('en-US'); }
+function _dbPct(v) { return (v == null) ? '—' : (Math.round(Number(v) * 10) / 10) + '%'; }
+function _dbNum(v) { return (v == null) ? '—' : Number(v).toLocaleString('en-US'); }
+
+// 'YYYY-MM-DD' -> "Wednesday, Aug 13". Built from the parts, NOT new Date(iso):
+// that parses as UTC and renders the day before in Central.
+function _dbDayLabel(iso) {
+    const p = String(iso || '').split('-');
+    if (p.length !== 3) return String(iso || '');
+    const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+    return isNaN(d.getTime()) ? String(iso)
+        : d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+// The verification strip. One row per metric the Day End Report carries, in the
+// order he reads them. `keys` are the signal keys that would have fired off that
+// metric -- a cell whose metric is part of WHY the draft exists is highlighted,
+// so he can see at a glance that the sentence and the numbers agree.
+// Everything renders, including nulls as '—': a metric silently omitted looks
+// like a metric that didn't matter.
+const _DB_STRIP = [
+    { label: 'Buy Value', fmt: f => _dbMoney(f.buyValue), sub: () => 'estimated',
+      keys: ['buy_value', 'buy_record', 'buy_near_record'] },
+    { label: 'Cash Paid', fmt: f => _dbMoney(f.cashSpent) },
+    { label: 'Buy Margin', fmt: f => _dbPct(f.buyMarginPct),
+      keys: ['buy_margin', 'buy_margin_improving', 'buy_margin_low'] },
+    { label: 'Net Sales', fmt: f => _dbMoney(f.netSales), keys: ['net_sales'] },
+    { label: 'Sell Margin', fmt: f => _dbPct(f.sellMarginPct), keys: ['sell_margin'] },
+    { label: 'Cust. Conv.', fmt: f => _dbPct(f.custConvPct),
+      sub: f => (f.custConvNum != null && f.custConvDen != null) ? f.custConvNum + ' of ' + f.custConvDen : '',
+      keys: ['conv', 'conv_perfect', 'conv_low'] },
+    { label: 'Device Conv.', fmt: f => _dbPct(f.devConvPct) },
+    { label: 'Listed', fmt: f => _dbNum(f.listed),
+      sub: f => (f.storeGoal ? 'goal ' + f.storeGoal + (f.listedPct != null ? ' · ' + Math.round(f.listedPct) + '%' : '') : ''),
+      keys: ['listed', 'listed_low'] },
+    { label: '5-Star MTD', fmt: f => _dbNum(f.fiveStarMtd),
+      keys: ['reviews_jump', 'reviews_up', 'reviews_flat'] },
+    { label: 'Customers', fmt: f => _dbNum(f.totalCustomers) },
+    { label: 'Processed', fmt: f => _dbMoney(f.processedValue) },
+    { label: 'Available', fmt: f => _dbNum(f.availableCount) },
+    { label: 'Rostered', fmt: f => (f.staffed == null ? '—' : _dbNum(f.staffed)),
+      sub: f => (f.listers == null ? '' : f.listers + ' listing') },
+    // The only NAME in the strip, and the reason it is here: a draft may call out
+    // the crowned top producer, and that is the one claim in a message no column
+    // of figures can confirm. Spans two columns — a name is not a number.
+    { label: 'Top Producer', wide: true,
+      fmt: f => (f.topProducer && f.topProducer.name) ? f.topProducer.name : '—',
+      sub: f => {
+          const t = f.topProducer;
+          if (!t) return '';
+          const bits = [];
+          if (t.processed != null) bits.push(t.processed + ' processed');
+          if (t.value != null) bits.push(_dbMoney(t.value));
+          return bits.join(' · ');
+      } }
+];
+
+function _dbStripHtml(facts, signals) {
+    const f = facts || {};
+    const fired = new Set((signals || []).map(s => s && s.key).filter(Boolean));
+    // hasReport === false means the Day End Report never arrived for that night,
+    // so conversion / listings / reviews are UNKNOWN rather than zero. Saying so
+    // is the difference between "they listed nothing" and "we don't know".
+    const missing = (f.hasReport === false)
+        ? `<div class="dbr-noreport">No Day End Report for this night — conversion, listings and reviews are unknown, not zero. Buying and sales came from the sheet.</div>`
+        : '';
+    const cells = _DB_STRIP.map(c => {
+        const hit = (c.keys || []).some(k => fired.has(k));
+        const val = c.fmt(f);
+        // A sub-line under an unknown value is worse than no sub-line: showing
+        // "goal 27" beside a listed count of "—", or "15 of 17" under a conversion
+        // of "—", reads as a figure we have when we do not.
+        const sub = (c.sub && val !== '—') ? (c.sub(f) || '') : '';
+        return `<div class="dbr-cell${hit ? ' fired' : ''}${c.wide ? ' wide' : ''}">
+            <span class="dbr-cl">${_samEsc(c.label)}</span>
+            <span class="dbr-cv">${_samEsc(val)}</span>
+            ${sub ? `<span class="dbr-cs">${_samEsc(sub)}</span>` : ''}
+        </div>`;
+    }).join('');
+    return missing + `<div class="dbr-strip">${cells}</div>`;
+}
+
+async function _dbFetch() {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) throw new Error('not signed in');
+    const r = await fetch(`${DAILY_BRIEF_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.error || `Request failed (HTTP ${r.status})`);
+    return j;
+}
+
+// The hidden feed bubble, same contract as every other reminder: it must stay
+// display:flex to be live (see the RETIRED FLOATING ALERT TOASTS block in
+// styles.css) and _samGatherReminders reads its computed display.
+function _dbBubbleEl() {
+    let b = document.getElementById('dailyBriefAlertBubble');
+    if (b) return b;
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'dailyBriefAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #0f766e, #115e59); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(13, 94, 89, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = '<span id="dailyBriefAlertBubbleIcon" style="font-size:16px; flex-shrink:0; margin-top:2px;">✍️</span>'
+        + '<span id="dailyBriefAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>';
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+async function checkDailyBriefDrafts() {
+    if (!_dbCanReview()) return;
+    const b = _dbBubbleEl();
+    if (!b) return;
+    let j = null;
+    try { j = await _dbFetch(); } catch (_) { return; }
+
+    _dbDate = j.date || '';
+    _dbRun = j.run || null;
+    _dbDrafts = Array.isArray(j.drafts) ? j.drafts : [];
+    // Drop edits belonging to drafts that are gone or already decided, so a
+    // re-run that replaces a pending draft can't resurrect yesterday's typing.
+    const live = new Set(_dbDrafts.filter(d => d.status === 'pending').map(d => String(d.id)));
+    Object.keys(_dbEdits).forEach(k => { if (!live.has(k)) delete _dbEdits[k]; });
+
+    const pending = _dbDrafts.filter(d => d.status === 'pending');
+    const failed = !!(_dbRun && _dbRun.ok === false);
+
+    // Two reasons for a card: drafts waiting, or a run that broke. A quiet
+    // morning is NOT one of them -- no card is the correct output for silence.
+    if (!pending.length && !failed) { b.style.display = 'none'; _dbRepaintOpen(); return; }
+
+    const t = document.getElementById('dailyBriefAlertBubbleText');
+    let title, summary, sig;
+    if (failed) {
+        const errs = (Array.isArray(_dbRun.errors) ? _dbRun.errors : []).map(String);
+        title = 'Message Drafts Failed';
+        summary = 'This morning\'s drafts could not be generated' + (errs.length ? ': ' + errs.join('; ') : '.')
+            + ' No store has been messaged.';
+        sig = 'fail|' + _dbDate + '|' + errs.join('|');
+    } else {
+        const stores = pending.map(d => d.store).join(', ');
+        title = 'Store Messages to Approve';
+        summary = `${pending.length} draft${pending.length === 1 ? '' : 's'} ready for ${stores}`
+            + ' — nothing goes out to a store until you approve it.';
+        sig = 'pend|' + pending.map(d => d.id).join(',');
+    }
+    if (t) {
+        t.innerHTML = '<div style="line-height:1.4;"><strong>' + escapeHtml(title) + '</strong></div>'
+            + '<div style="line-height:1.4; opacity:0.96;">' + escapeHtml(summary) + '</div>';
+        t.dataset.summary = summary;
+        // Identity is the draft SET (or the error), so a second cron run that
+        // replaces a draft breaks through a snooze -- it is different work.
+        t.dataset.sig = sig;
+        if (failed) t.dataset.failed = '1'; else delete t.dataset.failed;
+    }
+    b.style.display = 'flex';
+    _dbRepaintOpen();
+}
+
+function _dbModalOpen() {
+    const m = document.getElementById('dailyBriefModal');
+    return !!(m && m.classList.contains('show'));
+}
+function _dbRepaintOpen() { if (_dbModalOpen()) _dbRenderReview(); }
+
+async function openDailyBriefReview() {
+    if (!_dbCanReview()) return;
+    toggleModal('dailyBriefModal');
+    if (!_dbModalOpen()) return;              // it was open; toggleModal closed it
+    const body = document.getElementById('dailyBriefBody');
+    if (body && !_dbDrafts.length) body.innerHTML = '<div class="status-message">Loading…</div>';
+    await checkDailyBriefDrafts();
+    _dbRenderReview(true);
+}
+
+// Repaint signature. Deliberately excludes the textarea contents: this runs off
+// a poll and a realtime ping, and rebuilding the list while he is mid-sentence
+// would throw away the caret and the edit. Only a status change, a new run or a
+// busy flag is worth touching the DOM for.
+function _dbSig() {
+    return _dbDrafts.map(d => d.id + ':' + d.status).join('|')
+        + '#' + (_dbRun ? [_dbRun.ran_at, _dbRun.drafted, _dbRun.ok].join(':') : 'norun')
+        + '#' + Object.keys(_dbBusy).filter(k => _dbBusy[k]).join(',');
+}
+
+function _dbRenderReview(force) {
+    const body = document.getElementById('dailyBriefBody');
+    if (!body) return;
+    const sig = _dbSig();
+    if (!force && sig === _dbPaintedSig) return;
+    _dbPaintedSig = sig;
+
+    const pending = _dbDrafts.filter(d => d.status === 'pending');
+    const decided = _dbDrafts.filter(d => d.status !== 'pending');
+    const refDate = (_dbDrafts[0] && _dbDrafts[0].ref_date) || (_dbRun && _dbRun.ref_date) || '';
+
+    // --- banner: did the generator run, and did it work? ---
+    let banner = '';
+    if (_dbRun && _dbRun.ok === false) {
+        const errs = (Array.isArray(_dbRun.errors) ? _dbRun.errors : []).map(String);
+        // The error text is whatever the API or the ingest returned and rarely
+        // ends in a period, so the sentence after it needs its own line rather
+        // than running on ("…too low to access the Anthropic API No store has…").
+        banner = `<div class="dbr-banner red"><strong>The generator failed this morning.</strong>
+            <span class="dbr-err">${errs.length ? _samEsc(errs.join(' · ')) : 'No reason was recorded.'}</span>
+            No store has been messaged.</div>`;
+    } else if (!_dbRun) {
+        banner = `<div class="dbr-banner amber"><strong>No run recorded for today.</strong>
+            The 7:15am job has not written anything yet — if it is well past that, the cron or the
+            Day End import is stuck.</div>`;
+    } else if (_dbRun.note) {
+        banner = `<div class="dbr-banner grey">${_samEsc(_dbRun.note)}</div>`;
+    }
+
+    // --- header ---
+    const head = `<div class="dbr-head">
+        <div>
+            <div class="dbr-head-title">${refDate ? 'Reacting To ' + _samEsc(_dbDayLabel(refDate)) : 'Today\'s Drafts'}</div>
+            <div class="dbr-head-sub">${pending.length
+                ? _samEsc(pending.length + ' draft' + (pending.length === 1 ? '' : 's') + ' waiting on you. Edit anything before you send it.')
+                : 'Nothing is waiting on you.'}</div>
+        </div>
+        ${pending.length > 1 ? `<button class="dbr-btn dbr-all" onclick="_dbApproveAll()">Approve All ${pending.length}</button>` : ''}
+    </div>`;
+
+    // --- one card per pending draft ---
+    const KIND = { praise: ['Praise', 'sage'], correction: ['Correction', 'amber'], mixed: ['Praise + Nudge', 'blue'] };
+    const cards = pending.map(d => {
+        const id = String(d.id);
+        const tint = (typeof STORE_TINTS === 'object' && STORE_TINTS[d.store]) || '#1f9d57';
+        const k = KIND[d.kind] || [d.kind || 'Draft', 'grey'];
+        const text = (_dbEdits[id] != null) ? _dbEdits[id] : String(d.message || '');
+        const busy = !!_dbBusy[id];
+        const n = text.trim().length;
+        const edited = text.trim() !== String(d.message || '').trim();
+        return `<div class="dbr-card">
+            <div class="dbr-card-top">
+                <span class="dbr-chip" style="--tint:${_samEsc(tint)}">${_samEsc(d.store)}</span>
+                <span class="dbr-kind ${k[1]}">${_samEsc(k[0])}</span>
+                <span class="dbr-edited" id="dbEdited-${id}"${edited ? '' : ' hidden'}>Edited</span>
+                <span class="dbr-grow"></span>
+                <span class="dbr-count" id="dbCount-${id}">${n} characters</span>
+            </div>
+            <textarea class="dbr-msg" rows="2" ${busy ? 'disabled' : ''}
+                oninput="_dbOnEdit('${id}', this)"
+                placeholder="Write the message for ${_samEsc(d.store)}…">${_samEsc(text)}</textarea>
+            <div class="dbr-why"><span class="dbr-why-l">Fired On</span>${_samEsc(d.reason || 'no reason recorded')}</div>
+            ${_dbStripHtml(d.facts, d.signals)}
+            <div class="dbr-actions">
+                <button class="dbr-btn ghost" ${busy ? 'disabled' : ''} onclick="_dbDecide('${id}','skipped')">Skip Today</button>
+                <button class="dbr-btn go" ${busy ? 'disabled' : ''} onclick="_dbDecide('${id}','approved')">${busy ? 'Sending…' : 'Approve &amp; Send'}</button>
+            </div>
+        </div>`;
+    }).join('');
+
+    // --- what he already decided this morning ---
+    const done = decided.length ? `<div class="dbr-done">
+        <div class="dbr-sec-label">Already Decided Today</div>
+        ${decided.map(d => `<div class="dbr-done-row">
+            <span class="dbr-chip sm" style="--tint:${_samEsc((typeof STORE_TINTS === 'object' && STORE_TINTS[d.store]) || '#1f9d57')}">${_samEsc(d.store)}</span>
+            <span class="dbr-done-tag ${d.status === 'approved' ? 'sent' : 'skip'}">${d.status === 'approved' ? 'Sent' : 'Skipped'}</span>
+            <span class="dbr-done-msg">${_samEsc(d.edited_message || d.message || '')}</span>
+        </div>`).join('')}
+    </div>` : '';
+
+    // --- the stores that got nothing, and why ---
+    // His own audit trail. Without it a two-draft morning silently hides the
+    // three decisions the rule engine made not to write anything.
+    const skipped = (Array.isArray(_dbRun && _dbRun.skipped) ? _dbRun.skipped : []).map(String).filter(Boolean);
+    const quiet = skipped.length ? `<div class="dbr-quiet">
+        <div class="dbr-sec-label">No Message Today</div>
+        ${skipped.map(s => {
+            const i = s.indexOf(':');
+            const store = i > 0 ? s.slice(0, i).trim() : '';
+            const why = i > 0 ? s.slice(i + 1).trim() : s;
+            return `<div class="dbr-quiet-row">${store
+                ? `<span class="dbr-chip sm" style="--tint:${_samEsc((typeof STORE_TINTS === 'object' && STORE_TINTS[store]) || '#98a2ae')}">${_samEsc(store)}</span>` : ''}
+                <span class="dbr-quiet-why">${_samEsc(why)}</span></div>`;
+        }).join('')}
+    </div>` : '';
+
+    const empty = (!pending.length && !decided.length && !skipped.length)
+        ? '<div class="status-message">Nothing drafted for today.</div>' : '';
+
+    body.innerHTML = banner + head + cards + done + quiet + empty;
+}
+
+function _dbOnEdit(id, el) {
+    _dbEdits[id] = el.value;
+    const n = el.value.trim().length;
+    const c = document.getElementById('dbCount-' + id);
+    if (c) {
+        c.textContent = n + ' characters';
+        // Not a limit -- a nudge. His real messages run 90-180 characters, and a
+        // long one is the single clearest tell that something wasn't written by him.
+        c.classList.toggle('dbr-long', n > 220);
+    }
+    const d = _dbDrafts.find(x => String(x.id) === String(id));
+    const badge = document.getElementById('dbEdited-' + id);
+    if (badge) badge.hidden = !(d && el.value.trim() !== String(d.message || '').trim());
+}
+
+// opts.silent: no confirm and no refetch -- used by Approve All, which confirms
+// once for the whole set and refetches at the end.
+async function _dbDecide(id, status, opts) {
+    const silent = !!(opts && opts.silent);
+    if (_dbBusy[id]) return false;
+    const d = _dbDrafts.find(x => String(x.id) === String(id));
+    if (!d || d.status !== 'pending') return false;
+
+    const text = ((_dbEdits[id] != null ? _dbEdits[id] : d.message) || '').trim();
+    if (status === 'approved' && !text) {
+        if (!silent) alert('There is no message to send — write one or skip it.');
+        return false;
+    }
+    if (!silent && status === 'approved'
+        && !confirm(`Send this to ${d.store} now?\n\n"${text}"`)) return false;
+    if (!silent && status === 'skipped'
+        && !confirm(`Skip ${d.store} today? Nothing will be sent, and the draft will not come back.`)) return false;
+
+    _dbBusy[id] = true;
+    if (!silent) _dbRenderReview();
+    // Our own write. The fn broadcasts to every subscriber including us, and an
+    // echo mid-decision would repaint the list out from under the next click.
+    try { if (typeof _rtMute === 'function') _rtMute('dailyBrief', 6000); } catch (_) {}
+
+    let ok = false;
+    try {
+        const pin = sessionStorage.getItem('speeksUserPin') || '';
+        const r = await fetch(DAILY_BRIEF_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ id: id, status: status, message: text })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || `Request failed (HTTP ${r.status})`);
+        d.status = status;
+        if (status === 'approved') d.edited_message = text;
+        delete _dbEdits[id];
+        ok = true;
+    } catch (e) {
+        alert(`Could not ${status === 'approved' ? 'send' : 'skip'} the ${d.store} message: `
+            + ((e && e.message) || 'unknown error'));
+    }
+    _dbBusy[id] = false;
+    if (!silent) {
+        await checkDailyBriefDrafts();
+        _dbRenderReview(true);
+    }
+    return ok;
+}
+
+async function _dbApproveAll() {
+    const pending = _dbDrafts.filter(d => d.status === 'pending');
+    if (!pending.length) return;
+    // Every message in the confirm, in full. "Approve All" is the one control
+    // here that can post to five stores from a single click, so it shows exactly
+    // what it is about to say rather than a count.
+    const lines = pending.map(d => {
+        const t = ((_dbEdits[String(d.id)] != null ? _dbEdits[String(d.id)] : d.message) || '').trim();
+        return `${d.store}:  ${t || '(empty — will be skipped)'}`;
+    }).join('\n\n');
+    if (!confirm(`Send all ${pending.length} of these now?\n\n${lines}`)) return;
+
+    let sent = 0, failed = 0;
+    for (const d of pending) {
+        const ok = await _dbDecide(String(d.id), 'approved', { silent: true });
+        if (ok) sent++; else failed++;
+        _dbRenderReview(true);
+    }
+    await checkDailyBriefDrafts();
+    _dbRenderReview(true);
+    if (failed) alert(`${sent} sent, ${failed} could not be sent. The ones that failed are still waiting.`);
+}
+
+function startDailyBriefReminder() {
+    if (_dbStarted || !_dbCanReview()) return;
+    _dbStarted = true;
+    checkDailyBriefDrafts();
+    // Slow on purpose: the drafts are written once a morning and the fn
+    // broadcasts on every decision, so realtime carries the interactive case.
+    // This is only here for a browser whose socket never connected.
+    setInterval(checkDailyBriefDrafts, 20 * 60 * 1000);
 }
 
 
@@ -34667,6 +35123,22 @@ function _samReminderCfg() {
         title: _moOd ? 'Monthly KPIs Overdue' : 'Monthly KPIs Due', urgency: _moOd ? 3 : 2,
         due: _moOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
         action: "sessionStorage.setItem('speeksKpiTab','monthly'); window.location.href='workspace.html#kpis'" });
+    // Daily store messages — DM only (checkDailyBriefDrafts gates it). Two very
+    // different cards off one bubble: drafts waiting to approve, and a generator
+    // that failed. data-failed is stamped by the same code that wrote the
+    // summary, so the badge and the sentence under it cannot disagree.
+    //
+    // noSnooze: snoozing it would quietly mean nobody gets a message today, and
+    // it clears itself the moment the last draft is decided — so there is nothing
+    // to dismiss that isn't just a decision he hasn't made yet.
+    const _dbT = document.getElementById('dailyBriefAlertBubbleText');
+    const _dbFailed = !!(_dbT && _dbT.dataset && _dbT.dataset.failed);
+    cfg.push({ key: 'dailyBrief', id: 'dailyBriefAlertBubble', text: 'dailyBriefAlertBubbleText',
+        title: _dbFailed ? 'Message Drafts Failed' : 'Store Messages to Approve',
+        urgency: _dbFailed ? 1 : 3,
+        due: _dbFailed ? 'Broken' : 'Approve',
+        cls: _dbFailed ? 'sam-due-amber' : 'sam-due-red',
+        noSnooze: true, action: "openDailyBriefReview()" });
     // DM ONLY (checkListingGoalReminders gates it — the CEO does not set these).
     // Snoozable — unlike the KPI deadlines this is the DM's own admin task, and
     // the card comes straight back if a store is still unset tomorrow (the sig is
@@ -34840,6 +35312,10 @@ const _RT_TOOL_CHECKS = {
     // loadPatchNotes still runs after, to refresh an already-open hub.
     patch:         ['checkForNewPatchNotes', 'loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
+    // The morning cron broadcasts once it has written the drafts, so the card
+    // appears without a refresh; each approve/skip broadcasts too, so a decision
+    // made on the laptop clears the card on the phone.
+    dailyBrief:    ['checkDailyBriefDrafts'],
     gpGoals:       ['checkGpGoalReminder'],
     preferred:     ['checkPreferredReminders'],
     b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders'],

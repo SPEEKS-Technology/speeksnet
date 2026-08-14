@@ -16005,3 +16005,149 @@ body.tv-body { display: block; background: #eef1f5; }
 .set-back[hidden] { display: none !important; }
 /* Hidden on a subpage so the header keeps one leading element, not two. */
 .tool-head-ico[hidden] { display: none !important; }
+
+/* =========================================================
+   DAILY STORE MESSAGES — draft review  (#dailyBriefModal)
+   One card per store, stacked. Each carries the drafted
+   sentence (editable in place), the signals that fired, and
+   the verification strip: every metric last night's Day End
+   Report supplied, so the numbers can be checked against the
+   message before it goes anywhere. A metric that fired the
+   draft is tinted, so agreement between the sentence and the
+   data is visible without reading both closely.
+   V4 airy palette, same emerald as the Action Menu.
+   ========================================================= */
+.dbr-menu { --dbr-line: #e8edf2; --dbr-muted: #64707c; --dbr-faint: #93a0ab;
+    --dbr-accent: #1f9d57; --dbr-accent-tint: #e8f7ee; }
+
+/* --- banners: did the generator run, and did it work? --- */
+.dbr-banner {
+    border-radius: 12px; padding: 11px 14px; font-size: 13px; line-height: 1.5;
+    border: 1px solid transparent;
+}
+.dbr-banner strong { display: block; margin-bottom: 2px; }
+.dbr-banner.red   { background: #fdecec; border-color: #f6cdcd; color: #8f2626; }
+.dbr-banner.amber { background: #fdf5e6; border-color: #f3e2bb; color: #8a6316; }
+.dbr-banner.grey  { background: #f2f5f7; border-color: var(--dbr-line); color: var(--dbr-muted); }
+
+/* --- header --- */
+.dbr-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; padding: 2px 2px 0; }
+.dbr-head-title { font-size: 16px; font-weight: 800; color: #0f172a; letter-spacing: -0.01em; }
+.dbr-head-sub { font-size: 12.5px; color: var(--dbr-muted); margin-top: 2px; }
+
+/* --- one card per draft --- */
+.dbr-card {
+    background: #fff; border: 1px solid var(--dbr-line); border-radius: 16px;
+    padding: 14px 16px 13px; display: flex; flex-direction: column; gap: 10px;
+    box-shadow: 0 4px 16px rgba(16, 24, 40, 0.05);
+}
+.dbr-card-top { display: flex; align-items: center; gap: 8px; }
+.dbr-grow { flex: 1; }
+
+.dbr-chip {
+    display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 800;
+    letter-spacing: 0.04em; color: #fff; background: var(--tint, #1f9d57);
+    padding: 3px 9px; border-radius: 999px; flex-shrink: 0;
+}
+.dbr-chip.sm { font-size: 10.5px; padding: 2px 7px; }
+
+.dbr-kind {
+    font-size: 10.5px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 6px;
+}
+.dbr-kind.sage  { background: var(--dbr-accent-tint); color: #14713d; }
+.dbr-kind.amber { background: #fdf5e6; color: #8a6316; }
+.dbr-kind.blue  { background: #eaf1fb; color: #2b5a97; }
+.dbr-kind.grey  { background: #f2f5f7; color: var(--dbr-muted); }
+
+.dbr-edited { font-size: 11px; font-weight: 700; color: #8a6316; background: #fdf5e6; padding: 2px 7px; border-radius: 5px; }
+.dbr-edited[hidden] { display: none !important; }
+.dbr-count { font-size: 11px; color: var(--dbr-faint); flex-shrink: 0; }
+.dbr-count.dbr-long { color: #8a6316; font-weight: 700; }
+
+/* The message itself. Deliberately the largest text in the card — it is the one
+   thing that reaches a store, and everything else here exists to check it. */
+.dbr-msg {
+    width: 100%; font: inherit; font-size: 15px; line-height: 1.55; color: #0f172a;
+    background: #fbfdfc; border: 1px solid var(--dbr-line); border-radius: 12px;
+    padding: 11px 13px; resize: vertical; min-height: 66px;
+    font-family: inherit;
+}
+.dbr-msg:focus { outline: none; border-color: var(--dbr-accent); background: #fff;
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, 0.13); }
+.dbr-msg:disabled { opacity: 0.6; }
+
+.dbr-why { font-size: 12px; color: var(--dbr-muted); line-height: 1.5; }
+.dbr-why-l {
+    display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--dbr-faint); margin-right: 7px;
+}
+
+.dbr-noreport {
+    font-size: 12px; line-height: 1.45; background: #fdf5e6; color: #8a6316;
+    border: 1px solid #f3e2bb; border-radius: 10px; padding: 8px 11px;
+}
+
+/* --- the verification strip --- */
+.dbr-strip {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 6px;
+}
+.dbr-cell {
+    display: flex; flex-direction: column; gap: 1px; padding: 7px 9px;
+    background: #f7f9fa; border: 1px solid transparent; border-radius: 9px;
+}
+/* This metric is part of WHY the draft exists. */
+.dbr-cell.fired { background: var(--dbr-accent-tint); border-color: #bfe6cf; }
+.dbr-cl { font-size: 9.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dbr-faint); }
+.dbr-cell.fired .dbr-cl { color: #3f8d63; }
+.dbr-cv { font-size: 14.5px; font-weight: 800; color: #0f172a; letter-spacing: -0.01em; }
+.dbr-cell.fired .dbr-cv { color: #14713d; }
+.dbr-cs { font-size: 10.5px; color: var(--dbr-muted); }
+/* A name needs room a figure does not, so the Top Producer cell takes two
+   columns and drops to a text-weight size. */
+.dbr-cell.wide { grid-column: span 2; }
+.dbr-cell.wide .dbr-cv { font-size: 12.5px; }
+
+/* The raw error from the API / the ingest — on its own line, since it never ends
+   in a period and would otherwise run into the sentence after it. */
+.dbr-err { display: block; font-weight: 600; margin: 2px 0; }
+
+/* --- actions --- */
+.dbr-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+.dbr-btn {
+    font: inherit; font-size: 13px; font-weight: 700; border-radius: 10px;
+    padding: 8px 15px; cursor: pointer; border: 1px solid transparent; transition: background 0.15s, border-color 0.15s;
+}
+.dbr-btn:disabled { opacity: 0.55; cursor: default; }
+.dbr-btn.go { background: var(--dbr-accent); color: #fff; }
+.dbr-btn.go:hover:not(:disabled) { background: #178048; }
+.dbr-btn.ghost { background: #fff; color: var(--dbr-muted); border-color: var(--dbr-line); }
+.dbr-btn.ghost:hover:not(:disabled) { background: #f7f9fa; border-color: #d5dee5; }
+.dbr-all { background: var(--dbr-accent); color: #fff; flex-shrink: 0; }
+.dbr-all:hover { background: #178048; }
+
+/* --- already decided, and the stores that got nothing --- */
+.dbr-sec-label {
+    font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--dbr-faint); margin-bottom: 7px;
+}
+.dbr-done, .dbr-quiet {
+    background: #fff; border: 1px solid var(--dbr-line); border-radius: 14px; padding: 12px 14px;
+}
+.dbr-done-row, .dbr-quiet-row {
+    display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12.5px;
+    border-top: 1px solid #f2f5f7;
+}
+.dbr-done-row:first-of-type, .dbr-quiet-row:first-of-type { border-top: none; }
+.dbr-done-tag { font-size: 10px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; flex-shrink: 0; }
+.dbr-done-tag.sent { background: var(--dbr-accent-tint); color: #14713d; }
+.dbr-done-tag.skip { background: #f2f5f7; color: var(--dbr-muted); }
+.dbr-done-msg { color: #37424d; line-height: 1.45; }
+.dbr-quiet-why { color: var(--dbr-muted); }
+
+@media (max-width: 640px) {
+    .dbr-head { flex-direction: column; align-items: stretch; }
+    .dbr-strip { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
+    .dbr-actions { flex-direction: column-reverse; }
+    .dbr-btn { width: 100%; }
+}
