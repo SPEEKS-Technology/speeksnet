@@ -11419,7 +11419,7 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
     text-transform: uppercase; color: var(--b2b-faint);
 }
-.b2b-sum-v { font-size: 12.5px; font-weight: 750; color: #1a1c1e; }
+.b2b-sum-v { font-size: 12.5px; font-weight: 750; color: #1a1c1e; min-width: 0; overflow-wrap: anywhere; }
 
 .b2b-note {
     display: flex; align-items: baseline; gap: 9px; padding: 11px 14px;
@@ -11476,7 +11476,7 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 }
 .b2b-pick.on .b2b-pick-ac { background: #fff; }
 .b2b-pick-co { grid-area: co; font-size: 13.5px; font-weight: 750; color: #1a1c1e; }
-.b2b-pick-sub { grid-area: sub; font-size: 11px; color: var(--b2b-muted); }
+.b2b-pick-sub { grid-area: sub; font-size: 11px; color: var(--b2b-muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .b2b-pick-n {
     grid-area: n; align-self: center; justify-self: end;
     padding: 3px 9px; border-radius: 999px; background: var(--b2b-chip);
