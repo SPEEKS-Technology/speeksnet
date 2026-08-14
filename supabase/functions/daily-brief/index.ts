@@ -179,6 +179,32 @@ const fmtMoney = (x: number) => "$" + Math.round(x).toLocaleString("en-US");
 // comma's job in these sentences ("margin is gorgeous — let's do it again" reads
 // correctly as "margin is gorgeous, let's do it again"). The follow-up passes
 // clean up the punctuation collisions that substitution can create.
+// The rules a draft can be checked against mechanically. The prompt states all of
+// these, and the blind test showed the prompt alone does not hold them: he
+// identified 14 of 15 drafts, almost entirely on numbers and length.
+//
+// Returns the list of what is wrong, which is fed straight back for one retry.
+// Enforced here rather than trusted because these are the exact tells: 0 of his 15
+// real messages carried a percentage, 60% of the drafts did.
+// Figures that are not measurements and are allowed through: the standing target
+// written "54%+", and "5 star" as an adjective. "5 star review" is how everyone
+// writes it, including him; treating that 5 as a statistic made the checker demand
+// a rewrite of a perfectly natural phrase.
+const TARGET_OK = /\b5[0-9]%\+|\b5[\s-]?star\b/gi;
+function violations(text: string): string[] {
+  const out: string[] = [];
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  if (words > 20) out.push(`It is ${words} words. His median is 11. Cut it to under 15.`);
+  // Strip the allowed figures before looking for stray ones.
+  const bare = text.replace(TARGET_OK, " ");
+  if (/%/.test(bare)) out.push("It quotes a percentage. He never does. Describe the margin or the conversion in words instead.");
+  if (/\$/.test(bare)) out.push("It quotes a dollar amount. He never does.");
+  if (/\b\d+\s*(?:for|of|\/)\s*\d+\b/.test(bare)) out.push("It quotes a conversion fraction. Say the conversion was strong, without the figures.");
+  if (/\d/.test(bare)) out.push("It contains a figure. Take every number out except a '54%+' style target in an ask.");
+  if (/[—–]/.test(text)) out.push("It contains a dash. Use a comma or a full stop.");
+  return out;
+}
+
 function stripDashes(s: string): string {
   return String(s)
     .replace(/\s*[—–]\s*/g, ", ")
@@ -517,13 +543,16 @@ function systemPrompt(): string {
     "You are drafting a short morning message from Ethan Kushnir, Director of Operations, to one of his five PayMore stores. He reacts to yesterday's numbers. You are writing AS him, in his voice, for him to review.",
     "",
     "HOW HE WRITES — from 150 of his real messages:",
-    "- One or two sentences. Never more than about 25 words. Not one message in 150 is longer.",
+    "- SHORT. His median message is ELEVEN WORDS. 20 is a hard ceiling. Measured in a blind test the drafts ran to a median of 25 against his 11, and length alone gave them away. One clean thought beats three stacked ones.",
+    "- VARY the length, hard. His fifteen messages ran from FOUR words to twenty-seven. A second round of drafts fixed the median but landed 14, 14, 15, 15, 16, and that uniformity is its own tell: nobody writes five messages the same length. A day with one good signal should often be four to eight words. Look at what you have already written to the other stores this morning and deliberately do not match their length.",
+    "- Often only ONE thing. \"MPL the BUYING MACHINE!\" \"LEE MACHINE! SALES ON SALES ON SALES\" \"Love seeing that level of volume to start the month off!\" Naming two metrics and adding a closer EVERY time is itself a tell: he flagged one of his own two-metric messages as machine-written because that shape has become the giveaway. If the facts give you three good things, pick the best one and drop the others.",
     "- He opens with the REACTION, not the metric: \"Love seeing...\", \"Great...\", \"Huge...\", \"BOOM!\", \"Absolutely massive...\", \"HOLY...\", \"Props to you guys...\"",
     "- He names two or three things, usually paired: \"volume and margin\", \"conversion, volume, and listing productivity\".",
     "- He closes with a forward push, and only ever with one of HIS: \"Keep it up!\", \"Keep up the great work!\", \"Don't take your foot off the gas!\", \"Let's do it again today!\", \"Keep pushing!\", \"Let's keep that energy going!\". Do not invent a new one (\"let's run it back\" is not his). Not every message needs a closer at all.",
     "- Energy comes from caps, elongation and rhetorical questions: \"SALES ON SALES ON SALES\", \"lotsssssss of listings\", \"amazing as usual......\", \"Am I smelling a LEE record month???\"",
     "- He sometimes treats the store as a character (\"Team WSP\", \"the BUYING MACHINE\"). These are specific to the store he coined them for. NEVER transplant one to a different store — MPL's team would recognise their own nickname handed to BAL, and nothing gives a generated message away faster.",
-    "- He calls the metric by name but almost NEVER quotes the dollar figure. \"Huge sales day\", not \"$7,863\". Numbers appear only as small counts (\"18 customers\", \"9 reviews\") or as targets (\"54%+ buy margin target\"). A message reciting revenue reads as automated — this is the single most important rule.",
+    "- NO NUMBERS. This is the single most important rule and the one the drafts kept breaking. In a blind test of 15 of his real messages, ZERO contained a percentage and only one contained any digit at all; 60% of the drafts quoted a percentage and 87% had a digit. He names the metric and rates it in words: \"huge buying day\", \"beautiful margin\", \"fantastic customer conversion\", \"lotsssssss of listings\". Never a percentage. Never a dollar amount. Never an item count. Never a conversion fraction, in any form, including \"14 for 15\" or \"14/15\".",
+    "- The ONE exception: when you are asking for improvement you may cite the standing target, written exactly as \"54%+\". Nothing else. Never a target while praising.",
     "- Corrections NEVER open negative. Always a sandwich, praise first then the ask: \"Sales were great yesterday, but let's put some emphasis on customer conversion and buying margin.\" Or a bare soft ask: \"Let's try and tighten up our buying margin a little bit.\"",
     "- When there is BOTH praise and an ask, the two must CONNECT. They cannot be two unrelated sentences stapled together. \"44 listings and 14 for 15 conversion, unreal day guys! Let's get that buy margin climbing back toward 54%+.\" is stark: the praise stops dead and a new topic starts. Find the hinge and use a real conjunction: \"...unreal day guys, now let's get that buying margin up to match it\", or \"the only thing missing was the buying margin, let's get that back to 54%+ today\". The ask should read as the NEXT thing to do off the back of a good day, not as a separate memo.",
     "- He writes to the team, not about them. \"You guys\", \"gentlemen\", first names when someone is named.",
@@ -532,19 +561,36 @@ function systemPrompt(): string {
     "- NEVER use an em dash or an en dash. Not one. He does not write them, and they are the clearest signal in English that a machine wrote the sentence. Use a comma, a full stop, or a conjunction.",
     "- Use ONLY the facts given. Never invent a number, a name, a rank, a record or a trend.",
     "- Never state a fraction, ratio or count that is not written in the facts. If the facts say \"14 of 15 customers\" you may write \"14 for 15\"; you may NOT write \"15 for 15\". Do not round a fraction up to a perfect score.",
-    "- If you name a person, say what they actually led on: items listed, or value processed. Never call someone the leader without naming the thing.",
+    "- Naming a person is RARE. None of the 15 real messages in the blind test named anyone; 40% of the drafts did. Most mornings, name nobody.",
+    "- If you do name someone, say what they led IN WORDS, never with a figure: \"Caleb led the listings\" or \"Olivia had the biggest value day\", never \"Caleb led with 37 of them\". Never call someone the leader without saying which of the two things they led.",
     "- Do not quote dollar amounts unless the fact is a small count or a percentage target.",
     "- Output the message text ONLY. No greeting, no signature, no quote marks, no preamble.",
     "- At most one correction, and only if one is listed. If none is listed, the message is pure praise.",
     "- Do not reuse the opening words of the recent messages you are shown.",
     "- NEVER say a figure is \"over target\", \"above target\", \"beats the target\" or similar when praising. He cites the 54%+ target ONLY when asking for improvement. Praising a margin he says \"beautiful margin\", \"fantastic margin\", \"amazing as usual\" — the number is good on its own terms, not against a threshold. Naming a target while praising leaks the fact that a rule fired.",
-    "- The SAME applies to listings. The facts tell you the item count and how many people were on, so you know how good the day was; do NOT recite the staffing or turn it into a ratio. \"32 items with 3 people rostered\" is a spreadsheet talking. He says \"great listing productivity\", \"love seeing this listing productivity\", \"lotsssssss of listings\", \"smashing the listing productivity\", or on a short day \"let's get the listings back up\". A bare item count is fine (\"44 listings\"); the roster size is not.",
+    "- The SAME applies to listings. The facts tell you the item count and how many people were on so you know how good the day was; recite neither. \"32 items with 3 people rostered\" is a spreadsheet talking, and so is \"44 listings\". He says \"great listing productivity\", \"love seeing this listing productivity\", \"lotsssssss of listings\", \"smashing the listing productivity\", or on a short day \"let's get the listings back up\".",
     "- Do not frame the day by its weekday (\"strong Monday\", \"good Tuesday\"). He says \"yesterday\" or nothing.",
     "- The example messages are for REGISTER ONLY. Do not reuse their sentence shapes with the nouns swapped. If your draft would still read as one of the examples after changing the store name and the metric, write a different sentence.",
   ].join("\n");
 }
 
-function userPrompt(store: string, refDate: string, signals: Signal[], recent: string[], f: Facts, siblings: string[]): string {
+// Which of a store's real staff a review actually named. Exact word match on the
+// first name or the full name: a fuzzy match risks naming the WRONG colleague, and
+// naming nobody is strictly better than that.
+function reviewNames(shoutouts: unknown, roster: string[]): string[] {
+  const text = (Array.isArray(shoutouts) ? shoutouts : []).join(" ");
+  if (!text.trim() || !roster.length) return [];
+  const hit: string[] = [];
+  for (const full of roster) {
+    const first = String(full).trim().split(/\s+/)[0];
+    if (!first || first.length < 3) continue;
+    const re = new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    if (re.test(text)) hit.push(full);
+  }
+  return [...new Set(hit)];
+}
+
+function userPrompt(store: string, refDate: string, signals: Signal[], recent: string[], f: Facts, siblings: string[], names: string[] = []): string {
   const praise = signals.filter((s) => s.dir === "praise");
   const correct = signals.filter((s) => s.dir === "correct");
   const lines: string[] = [];
@@ -589,10 +635,21 @@ function userPrompt(store: string, refDate: string, signals: Signal[], recent: s
     }
     lines.push("He does not name anyone every time. Only if it fits.");
   }
-  if (Array.isArray(f.shoutouts) && f.shoutouts.length) {
+  // Reviews: NAMES ONLY, and only names that match a real person on the roster.
+  //
+  // The prose is never passed. It is PaytonAI's summary of the review, not the
+  // review, and it is not reliable enough to repeat to a store: LEE's 2026-08-12
+  // report calls the same person "Jurrel" in one line and "Jerrell" in the next
+  // (he is Jurell Guild), wrapped in invented interpretation like "signaling a
+  // highly satisfying overall experience". Ethan's rule, 2026-08-14: never comment
+  // on what a review said. Saying somebody got named in one is fine.
+  //
+  // Matching against the roster is what makes that safe. A mangled name simply
+  // fails to match and nobody is named, which is the right way to fail.
+  if (names.length) {
     lines.push("");
-    lines.push("Customers named staff in 5-star reviews yesterday:");
-    f.shoutouts.slice(0, 4).forEach((s: string) => lines.push(`- ${s}`));
+    lines.push(`Named by a customer in a 5-star review yesterday: ${names.join(", ")}.`);
+    lines.push("You may say they got named in a review. You may NOT say anything about what the review said, or what the customer liked: that text is an unreliable summary and is deliberately not shown to you.");
   }
 
   if (recent.length) {
@@ -608,7 +665,7 @@ function userPrompt(store: string, refDate: string, signals: Signal[], recent: s
   // manager comparing notes would spot it instantly.
   if (siblings.length) {
     lines.push("");
-    lines.push("Already written to OTHER stores this morning. Yours must not share their sentence shape or their closing line:");
+    lines.push("Already written to OTHER stores this morning. Yours must not share their sentence shape, their closing line, their LENGTH, or the phrase they use to turn from praise into the ask. \"Now let's get that X climbing\" turned up in six drafts out of nine on one test run, which is worse than any single bad sentence: he sends these minutes apart and a manager comparing notes would see the template immediately. His own transitions vary: \"but let's put some emphasis on\", \"the only thing missing was\", \"let's try and tighten up\", \"let's finish the job and\", or simply a full stop and a fresh sentence.");
     siblings.forEach((m) => lines.push(`- "${m}"`));
   }
 
@@ -929,7 +986,7 @@ Deno.serve(async (req) => {
   // window and hangs storeGoal / staffed / listers on every day, because the
   // low-listing pattern check needs each historical day's own goal, not just the
   // ref day's.
-  const [recs, comments, weekDrafts, decided, opened] = await Promise.all([
+  const [recs, comments, weekDrafts, decided, opened, roster] = await Promise.all([
     sb.from("records").select("store,label,value").eq("label", "Daily Buy Record"),
     sb.from("store_comments").select("store,author,message,created_at")
       .order("created_at", { ascending: false }).limit(120),
@@ -954,7 +1011,21 @@ Deno.serve(async (req) => {
     // instead of a constant nobody remembers to switch on.
     sb.from("daily_buysell").select("store,date").gt("buy", 0)
       .order("date", { ascending: true }).limit(2000),
+    // Who actually works at each store. Used ONLY to check a name a review
+    // mentioned against a real person — see reviewNames. PaytonAI mangles them
+    // ("Jurrel" and "Jerrell" for the same man in one report), and a name we
+    // cannot verify is a name we do not use.
+    sb.from("users").select("name, store"),
   ]);
+
+  const rosterFor = new Map<string, string[]>();
+  for (const u of (roster.data ?? []) as any[]) {
+    const s = String(u.store ?? "").toUpperCase();
+    if (!s || !u.name) continue;
+    const arr = rosterFor.get(s) ?? [];
+    arr.push(String(u.name));
+    rosterFor.set(s, arr);
+  }
 
   const firstDay = new Map<string, string>();
   for (const r of opened.data ?? []) {
@@ -1090,26 +1161,53 @@ Deno.serve(async (req) => {
     ];
 
     try {
-      const res = await anthropic.messages.create({
-        model: MODEL,
-        max_tokens: 400,
-        // Adaptive by default on Opus 5. Effort kept low: the reasoning here is
-        // small (pick an angle, stay inside 25 words) and the latency budget is
-        // a five-store fan-out inside one edge-function invocation.
-        output_config: { effort: "low" },
-        system: sys,
-        messages: [{ role: "user", content: userPrompt(c.store, ref, c.signals, recent, c.facts, written_so_far) }],
-      });
+      const names = reviewNames(c.facts.shoutouts, rosterFor.get(c.store) ?? []);
+      const ask = userPrompt(c.store, ref, c.signals, recent, c.facts, written_so_far, names);
+      const turns: any[] = [{ role: "user", content: ask }];
 
-      const text = stripDashes(res.content
-        .filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim()
-        .replace(/^["“]|["”]$/g, "").trim());
-      if (!text) throw new Error(`empty completion (stop_reason ${res.stop_reason})`);
+      // Draft, check mechanically, and give it ONE chance to fix what it broke.
+      //
+      // The prompt has always forbidden figures and length; the blind test proved
+      // instruction alone does not hold the line (14 of 15 drafts identified,
+      // almost entirely on numbers and length). Feeding the specific violation back
+      // is far more reliable than restating the rule, and one extra call on a
+      // failing draft costs about a penny.
+      let text = "", usage: any = null, fixed: string[] = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const res = await anthropic.messages.create({
+          model: MODEL,
+          max_tokens: 400,
+          // Adaptive by default on Opus 5. Effort kept low: the reasoning here is
+          // small (pick an angle, stay inside the word count) and the latency
+          // budget is a five-store fan-out inside one invocation.
+          output_config: { effort: "low" },
+          system: sys,
+          messages: turns,
+        });
+        usage = res.usage;
+        text = stripDashes(res.content
+          .filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim()
+          .replace(/^["“]|["”]$/g, "").trim());
+        if (!text) throw new Error(`empty completion (stop_reason ${res.stop_reason})`);
+
+        const bad = violations(text);
+        if (!bad.length) break;
+        if (attempt === 1) { fixed = bad; break; }   // second try still off: keep it, report it
+        fixed = bad;
+        turns.push({ role: "assistant", content: text });
+        turns.push({ role: "user", content:
+          "That breaks his rules:\n" + bad.map((b) => `- ${b}`).join("\n")
+          + "\n\nRewrite it. Same facts, same warmth, shorter, and with no figures. Output the message only." });
+      }
 
       written_so_far.push(text);
       results.push({
         store: c.store, ok: true, message: text, reason, kind: c.kind, score: c.score,
-        signals: c.signals, usage: res.usage, facts: factSnapshot(c.facts),
+        signals: c.signals, usage, facts: factSnapshot(c.facts),
+        // Surfaced so a rule the model keeps breaking is visible in the dryRun
+        // output rather than only discoverable by reading 30 drafts by hand.
+        retried: fixed.length ? fixed : undefined,
+        stillBreaking: violations(text).length ? violations(text) : undefined,
       });
     } catch (err) {
       // One store failing must not cost the others their drafts — the loop
