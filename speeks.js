@@ -34149,8 +34149,11 @@ async function checkDailyBriefDrafts() {
     if (failed) {
         const errs = (Array.isArray(_dbRun.errors) ? _dbRun.errors : []).map(String);
         title = 'Message Drafts Failed';
-        summary = 'This morning\'s drafts could not be generated' + (errs.length ? ': ' + errs.join('; ') : '.')
-            + ' No store has been messaged.';
+        // Short on purpose. A raw API error ("400 Your credit balance is too low...")
+        // pushed this snippet to a second line that ran right under the Broken pill,
+        // and a feed row is a summary anyway. The full reason is in the popout banner,
+        // which is where he can act on it.
+        summary = 'Could not be generated this morning. No store has been messaged.';
         sig = 'fail|' + _dbDate + '|' + errs.join('|');
     } else {
         const stores = pending.map(d => d.store).join(', ');
@@ -34237,7 +34240,10 @@ function _dbRenderReview(force) {
         <div>
             <div class="dbr-head-title">${refDate ? 'Reacting To ' + _samEsc(_dbDayLabel(refDate)) : 'Today\'s Drafts'}</div>
             <div class="dbr-head-sub">${pending.length
-                ? _samEsc(pending.length + ' draft' + (pending.length === 1 ? '' : 's') + ' waiting on you. Edit anything before you send it.')
+                // "Drafts" capitalised: a line opening with a figure still starts a
+                // sentence. The feed row gets this from the central sentence-case fix
+                // in _samGatherReminders; this string never passes through it.
+                ? _samEsc(pending.length + ' Draft' + (pending.length === 1 ? '' : 's') + ' waiting on you. Edit anything before you send it.')
                 : 'Nothing is waiting on you.'}</div>
         </div>
         ${pending.length > 1 ? `<button class="dbr-btn dbr-all" onclick="_dbApproveAll()">Approve All ${pending.length}</button>` : ''}
@@ -34264,7 +34270,10 @@ function _dbRenderReview(force) {
             <textarea class="dbr-msg" rows="2" ${busy ? 'disabled' : ''}
                 oninput="_dbOnEdit('${id}', this)"
                 placeholder="Write the message for ${_samEsc(d.store)}…">${_samEsc(text)}</textarea>
-            <div class="dbr-why"><span class="dbr-why-l">Fired On</span>${_samEsc(d.reason || 'no reason recorded')}</div>
+            ${/* No "Fired On" line: the green cells in the strip below already say
+                  which metrics caused the draft, and repeating them as prose was the
+                  same information twice. `reason` is still written to comment_drafts
+                  on every row, so the audit trail is unaffected. */''}
             ${_dbStripHtml(d.facts, d.signals)}
             <div class="dbr-actions">
                 <button class="dbr-btn ghost" ${busy ? 'disabled' : ''} onclick="_dbDecide('${id}','skipped')">Skip Today</button>

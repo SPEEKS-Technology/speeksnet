@@ -16087,11 +16087,8 @@ body.tv-body { display: block; background: #eef1f5; }
     box-shadow: 0 0 0 3px rgba(31, 157, 87, 0.13); }
 .dbr-msg:disabled { opacity: 0.6; }
 
-.dbr-why { font-size: 12px; color: var(--dbr-muted); line-height: 1.5; }
-.dbr-why-l {
-    display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: 0.07em;
-    text-transform: uppercase; color: var(--dbr-faint); margin-right: 7px;
-}
+/* .dbr-why / .dbr-why-l removed with the "Fired On" line (2026-08-14): the green
+   cells in the strip already say which metrics caused the draft. */
 
 .dbr-noreport {
     font-size: 12px; line-height: 1.45; background: #fdf5e6; color: #8a6316;
