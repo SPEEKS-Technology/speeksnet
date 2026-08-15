@@ -225,8 +225,24 @@ const SANDBOX_PLACEHOLDER: Required<LocationCfg> = {
   postalCode: "66210",
 };
 
+// Machine auth, same secret and reasoning as shopify-live. This one creates
+// merchant locations and binds business policies — config that every listing
+// then inherits.
+const OPS_SECRET = "sp33ks-sync-k3y-2026-x9mq";
+
+function opsAuthed(url: URL): boolean {
+  const given = url.searchParams.get("secret") || "";
+  if (given.length !== OPS_SECRET.length) return false;
+  let diff = 0;
+  for (let i = 0; i < OPS_SECRET.length; i++) {
+    diff |= given.charCodeAt(i) ^ OPS_SECRET.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
+  if (!opsAuthed(url)) return json({ error: "unauthorised" }, 401);
   const store = (url.searchParams.get("store") || "").toUpperCase().trim();
   const dry = url.searchParams.get("dry") === "1";
   const create = url.searchParams.get("create") === "1";

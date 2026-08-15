@@ -465,6 +465,26 @@ async function reprice(
   };
 }
 
+// --- auth --------------------------------------------------------------------
+// Machine auth, the same secret and reasoning as shopify-live. verify_jwt has
+// to stay OFF here because Shopify webhooks cannot present a Supabase JWT, so
+// the operator GET paths carry the check themselves.
+//
+// Deliberately NOT in speeks.js: a secret shipped in public JavaScript is not a
+// secret, so the Operations UI gets an x-user-pin path with a role check.
+const OPS_SECRET = "sp33ks-sync-k3y-2026-x9mq";
+
+function opsAuthed(url: URL): boolean {
+  const given = url.searchParams.get("secret") || "";
+  // Constant time: a fast-exit compare leaks the secret a character at a time.
+  if (given.length !== OPS_SECRET.length) return false;
+  let diff = 0;
+  for (let i = 0; i < OPS_SECRET.length; i++) {
+    diff |= given.charCodeAt(i) ^ OPS_SECRET.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 // --- handler ----------------------------------------------------------------
 
 Deno.serve(async (req: Request) => {
@@ -472,6 +492,9 @@ Deno.serve(async (req: Request) => {
 
   // --- registration / status (operator, not Shopify) ------------------------
   if (req.method === "GET") {
+    // The POST path below authenticates with Shopify's HMAC. These GET paths
+    // had nothing at all, and they can move real stock and price.
+    if (!opsAuthed(url)) return json({ error: "unauthorised" }, 401);
     const store = (url.searchParams.get("store") || "").toUpperCase().trim();
     if (!store) return json({ error: "pass ?store=OVL with &register=1 or &status=1" }, 400);
 

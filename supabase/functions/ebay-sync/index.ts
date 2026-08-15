@@ -556,10 +556,33 @@ function offerPayload(
   };
 }
 
+// --- auth --------------------------------------------------------------------
+// Machine auth, the same secret and the same reasoning as shopify-live. These
+// endpoints publish listings, move real stock and create real orders, and
+// verify_jwt has to stay OFF because Shopify webhooks and pg_cron cannot
+// present a Supabase JWT.
+//
+// Deliberately NOT in speeks.js. A secret shipped in public JavaScript is not a
+// secret, so when the Operations UI needs these it gets an x-user-pin path with
+// a role check instead — the pattern the rest of the site already uses.
+const OPS_SECRET = "sp33ks-sync-k3y-2026-x9mq";
+
+function opsAuthed(url: URL): boolean {
+  const given = url.searchParams.get("secret") || "";
+  // Constant time: a fast-exit compare leaks the secret a character at a time.
+  if (given.length !== OPS_SECRET.length) return false;
+  let diff = 0;
+  for (let i = 0; i < OPS_SECRET.length; i++) {
+    diff |= given.charCodeAt(i) ^ OPS_SECRET.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 // --- handler ----------------------------------------------------------------
 
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
+  if (!opsAuthed(url)) return json({ error: "unauthorised" }, 401);
   const store = (url.searchParams.get("store") || "").toUpperCase().trim();
   const sku = (url.searchParams.get("sku") || "").trim();
   const preview = url.searchParams.get("preview") === "1";

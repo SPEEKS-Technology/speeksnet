@@ -39,8 +39,23 @@ async function sb(path: string) {
   return res;
 }
 
+// Machine auth, same secret and reasoning as shopify-live. Read-only, but
+// ?order= dumps a real customer's order including money and fulfilments.
+const OPS_SECRET = "sp33ks-sync-k3y-2026-x9mq";
+
+function opsAuthed(url: URL): boolean {
+  const given = url.searchParams.get("secret") || "";
+  if (given.length !== OPS_SECRET.length) return false;
+  let diff = 0;
+  for (let i = 0; i < OPS_SECRET.length; i++) {
+    diff |= given.charCodeAt(i) ^ OPS_SECRET.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
+  if (!opsAuthed(url)) return json({ error: "unauthorised" }, 401);
   const store = (url.searchParams.get("store") || "").toUpperCase().trim();
   if (!store) return json({ error: "pass ?store=OVL" }, 400);
 

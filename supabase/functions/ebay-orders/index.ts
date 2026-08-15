@@ -349,6 +349,26 @@ async function variantIdForSku(shop: string, token: string, sku: string): Promis
   return exact[0].node.id;
 }
 
+// --- auth --------------------------------------------------------------------
+// Machine auth, the same secret and reasoning as shopify-live. verify_jwt has
+// to stay OFF here because the Shopify webhook and pg_cron cannot present a
+// Supabase JWT, so the operator GET paths carry the check themselves.
+//
+// Deliberately NOT in speeks.js: a secret shipped in public JavaScript is not a
+// secret, so the Operations UI gets an x-user-pin path with a role check.
+const OPS_SECRET = "sp33ks-sync-k3y-2026-x9mq";
+
+function opsAuthed(url: URL): boolean {
+  const given = url.searchParams.get("secret") || "";
+  // Constant time: a fast-exit compare leaks the secret a character at a time.
+  if (given.length !== OPS_SECRET.length) return false;
+  let diff = 0;
+  for (let i = 0; i < OPS_SECRET.length; i++) {
+    diff |= given.charCodeAt(i) ^ OPS_SECRET.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
 
@@ -414,6 +434,10 @@ Deno.serve(async (req: Request) => {
   }
 
   if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
+
+  // The POST path above authenticates with Shopify's HMAC. These GET paths had
+  // nothing, and they create real Shopify orders and push tracking to buyers.
+  if (!opsAuthed(url)) return json({ error: "unauthorised" }, 401);
 
   const store = (url.searchParams.get("store") || "").toUpperCase().trim();
   if (!store) return json({ error: "pass ?store=OVL" }, 400);
@@ -502,69 +526,20 @@ Deno.serve(async (req: Request) => {
   const api = ebayClient(HOSTS[row.environment as "production" | "sandbox"],
     await ebayAccessToken(row));
 
-  let allOrders: any[];
-
-  if (url.searchParams.get("simulate") === "1") {
-    // eBay's SANDBOX does not reliably propagate a completed purchase to the
-    // seller's order list, which blocks testing the half of this integration
-    // that carries the financial reporting. This builds an eBay-shaped order
-    // and feeds it through the IDENTICAL code path below — same SKU
-    // resolution, same orderCreate, same backdating, same address mapping.
-    //
-    // What it does not prove is that eBay's real order JSON matches this
-    // shape, since the shape is mine. That gap closes on the first real order.
-    //
-    // It creates a REAL Shopify order. The SIM- prefix keeps it identifiable.
-    const simSku = (url.searchParams.get("sku") || "").trim();
-    if (!simSku) return json({ error: "simulate needs &sku=" }, 400);
-
-    const d = await shopifyGql(shop, shopToken,
-      `query($q: String!) { productVariants(first: 5, query: $q) {
-         edges { node { id sku price } } } }`,
-      { q: `sku:${simSku}` },
-    );
-    const v = (d.productVariants?.edges || [])
-      .map((e: any) => e.node).find((n: any) => n.sku === simSku);
-    if (!v) return json({ error: `sku ${simSku} not found in ${shop}` }, 404);
-
-    const price = url.searchParams.get("price") || v.price;
-    allOrders = [{
-      orderId: `SIM-${new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14)}`,
-      creationDate: new Date().toISOString(),
-      buyer: { username: "TESTUSER_speeksbuyer" },
-      pricingSummary: { total: { value: price, currency: "USD" } },
-      lineItems: [{
-        sku: simSku,
-        quantity: 1,
-        lineItemCost: { value: price, currency: "USD" },
-      }],
-      fulfillmentStartInstructions: [{
-        shippingStep: {
-          shipTo: {
-            fullName: "Ethan Kushnir",
-            contactAddress: {
-              addressLine1: "1200 Main St",
-              city: "Kansas City",
-              stateOrProvince: "MO",
-              postalCode: "64105",
-              countryCode: "US",
-            },
-            primaryPhone: { phoneNumber: "9139532770" },
-          },
-        },
-      }],
-    }];
-  } else {
-    // Deliberately NO server-side filter. eBay's filter syntax is fussy about
-    // encoding and a malformed one returns 200 with zero orders — identical to
-    // "you made no sales". Silently missing real orders is far worse than
-    // fetching a few extra, so the window is applied here instead.
-    const res = await api(`/sell/fulfillment/v1/order?limit=100`);
-    if (res.status >= 300) {
-      return json({ error: "eBay order fetch failed", detail: errText(res.body) }, 502);
-    }
-    allOrders = res.body?.orders || [];
+  // Deliberately NO server-side filter. eBay's filter syntax is fussy about
+  // encoding and a malformed one returns 200 with zero orders — identical to
+  // "you made no sales". Silently missing real orders is far worse than
+  // fetching a few extra, so the window is applied here instead.
+  //
+  // There was a &simulate=1 mode here that fabricated an eBay-shaped order to
+  // exercise this path while the sandbox would not surface real ones. It
+  // created a REAL Shopify order and was reachable in production, so it came
+  // out once real orders proved the path.
+  const ordersRes = await api(`/sell/fulfillment/v1/order?limit=100`);
+  if (ordersRes.status >= 300) {
+    return json({ error: "eBay order fetch failed", detail: errText(ordersRes.body) }, 502);
   }
+  const allOrders: any[] = ordersRes.body?.orders || [];
   const cutoff = Date.parse(since);
   const orders = allOrders.filter((o: any) => {
     const t = Date.parse(o.creationDate || "");

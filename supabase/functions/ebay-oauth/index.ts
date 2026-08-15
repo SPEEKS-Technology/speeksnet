@@ -199,6 +199,21 @@ async function saveTokens(store: string, env: string, tok: {
   if (!res.ok) throw new Error(`storing tokens failed: ${res.status} ${await res.text()}`);
 }
 
+// --- auth --------------------------------------------------------------------
+// Machine auth, same secret and reasoning as shopify-live. Starting a consent
+// flow points a real seller account at our app, so it is not left open.
+const OPS_SECRET = "sp33ks-sync-k3y-2026-x9mq";
+
+function opsAuthed(url: URL): boolean {
+  const given = url.searchParams.get("secret") || "";
+  if (given.length !== OPS_SECRET.length) return false;
+  let diff = 0;
+  for (let i = 0; i < OPS_SECRET.length; i++) {
+    diff |= given.charCodeAt(i) ^ OPS_SECRET.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 // --- handler ----------------------------------------------------------------
 
 Deno.serve(async (req: Request) => {
@@ -264,6 +279,14 @@ Deno.serve(async (req: Request) => {
   }
 
   // --- leg 1: start consent -------------------------------------------------
+  // Leg 2 above is deliberately NOT gated: eBay redirects the buyer's browser
+  // there and cannot carry our secret. It is protected instead by the signed,
+  // 10-minute state parameter, which only this function can mint. Leg 1 is what
+  // starts a consent flow against a real seller account, so it is gated.
+  if (!opsAuthed(url)) {
+    return page("Unauthorised", "<p>This endpoint needs an operator secret.</p>", 401);
+  }
+
   const store = (url.searchParams.get("store") || "").toUpperCase().trim();
 
   if (!store) {

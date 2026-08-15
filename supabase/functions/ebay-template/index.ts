@@ -240,8 +240,23 @@ function learnTemplate(src: string, itemId: string): Learned {
   return { html: h, found, seller, storeName, logoUrl };
 }
 
+// Machine auth, same secret and reasoning as shopify-live. This one overwrites
+// the branded wrapper every listing for a store is published with.
+const OPS_SECRET = "sp33ks-sync-k3y-2026-x9mq";
+
+function opsAuthed(url: URL): boolean {
+  const given = url.searchParams.get("secret") || "";
+  if (given.length !== OPS_SECRET.length) return false;
+  let diff = 0;
+  for (let i = 0; i < OPS_SECRET.length; i++) {
+    diff |= given.charCodeAt(i) ^ OPS_SECRET.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
+  if (!opsAuthed(url)) return json({ error: "unauthorised" }, 401);
   const store = (url.searchParams.get("store") || "").toUpperCase().trim();
   if (!store) return json({ error: "pass ?store=OVL" }, 400);
 
