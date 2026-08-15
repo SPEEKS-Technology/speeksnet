@@ -107,8 +107,12 @@ Deno.serve(async (req: Request) => {
   // Marketplace Connect created, which is how we recover the PayMore branded
   // template rather than rebuilding it by eye from a screenshot.
   const wantTemplate = url.searchParams.get("mcTemplate") === "1";
-  if (!store || (!sku && !wantTemplate && !url.searchParams.get("order"))) {
-    return json({ error: "pass ?store=OVL&sku=... or ?store=OVL&mcTemplate=1" }, 400);
+  // ?store=OVL&mine=1 lists what is ACTUALLY live on the eBay account, whoever
+  // put it there. See the Trading-API note below the handler for why this is
+  // the only question worth asking while Marketplace Connect is still running.
+  const wantMine = url.searchParams.get("mine") === "1";
+  if (!store || (!sku && !wantTemplate && !wantMine && !url.searchParams.get("order"))) {
+    return json({ error: "pass ?store=OVL&sku=... , &mcTemplate=1 or &mine=1" }, 400);
   }
 
   const row = (await (await sb(
@@ -129,6 +133,80 @@ Deno.serve(async (req: Request) => {
     try { return { status: r.status, body: t ? JSON.parse(t) : null }; }
     catch { return { status: r.status, body: t }; }
   };
+
+  // --- &mine=1 : every ACTIVE listing on the account, with its SKU ----------
+  //
+  // THE INVENTORY API CANNOT SEE MARKETPLACE CONNECT. MC (Codisto) lists
+  // through the older Trading API, and listings created that way are
+  // "unmanaged": GET /sell/inventory/v1/inventory_item/{sku} answers 25710 NOT
+  // FOUND for an item that is live and selling on eBay right now. Verified on
+  // three in-stock OVL SKUs.
+  //
+  // That matters more than it sounds. We share ONE eBay account with MC, so
+  // "not in ebay_listings" does not mean "not on eBay" — and auto-listing on
+  // that assumption would put a second live listing against a single physical
+  // unit, which oversells by construction.
+  //
+  // GetMyeBaySelling is the Trading API call that answers it, and it returns
+  // SKU for every active listing regardless of which API created it. The OAuth
+  // token goes in X-EBAY-API-IAF-TOKEN rather than Authorization.
+  if (wantMine) {
+    const page = Number(url.searchParams.get("page") || 1);
+    const perPage = Math.min(Number(url.searchParams.get("per") || 200), 200);
+    const xml =
+      `<?xml version="1.0" encoding="utf-8"?>
+       <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+         <ActiveList>
+           <Include>true</Include>
+           <Pagination>
+             <EntriesPerPage>${perPage}</EntriesPerPage>
+             <PageNumber>${page}</PageNumber>
+           </Pagination>
+         </ActiveList>
+       </GetMyeBaySellingRequest>`;
+    // NO DetailLevel. "ReturnAll" makes GetMyeBaySelling return every list it
+    // has — Active, Scheduled, Sold and Unsold — regardless of the Include
+    // flags, and the Pagination under ActiveList then paginates only one of
+    // them. That is what made page 1 and page 2 both answer 536 items against a
+    // reported total of 413: sold and unsold items were being counted as live.
+    const tradingHost = row.environment === "sandbox"
+      ? "https://api.sandbox.ebay.com" : "https://api.ebay.com";
+    const r = await fetch(`${tradingHost}/ws/api.dll`, {
+      method: "POST",
+      headers: {
+        "X-EBAY-API-CALL-NAME": "GetMyeBaySelling",
+        "X-EBAY-API-SITEID": "0",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+        "X-EBAY-API-IAF-TOKEN": token,
+        "Content-Type": "text/xml",
+      },
+      body: xml,
+    });
+    const text = await r.text();
+    const ack = (text.match(/<Ack>([^<]+)<\/Ack>/) || [])[1] || "unknown";
+    // Scope to the ActiveList container before matching anything. Item, and the
+    // pagination totals, appear inside several containers in this response, and
+    // reading them from the whole document is how sold items get counted as
+    // live. Regex rather than an XML parser: one flat repeating shape, three
+    // fields, not worth a dependency in an edge function.
+    const active = (text.match(/<ActiveList>([\s\S]*?)<\/ActiveList>/) || [])[1] || "";
+    const items = [...active.matchAll(/<Item>([\s\S]*?)<\/Item>/g)].map(m => {
+      const chunk = m[1];
+      const one = (tag: string) =>
+        (chunk.match(new RegExp(`<${tag}>([^<]*)</${tag}>`)) || [])[1] || null;
+      return { itemId: one("ItemID"), sku: one("SKU"), title: one("Title"), quantity: one("Quantity") };
+    });
+    return json({
+      store, ack, page, perPage,
+      totalPages: Number((active.match(/<TotalNumberOfPages>(\d+)<\/TotalNumberOfPages>/) || [])[1] || 0),
+      totalEntries: Number((active.match(/<TotalNumberOfEntries>(\d+)<\/TotalNumberOfEntries>/) || [])[1] || 0),
+      returned: items.length,
+      withSku: items.filter(i => i.sku).length,
+      items: url.searchParams.get("raw") === "1" ? items : items.slice(0, 10),
+      errors: ack === "Success" ? null
+        : [...text.matchAll(/<LongMessage>([^<]*)<\/LongMessage>/g)].map(e => e[1]),
+    }, ack === "Failure" ? 502 : 200);
+  }
 
   // ?store=OVL&order=<ebayOrderId> — what eBay itself holds for an order,
   // including the shipping fulfilments. Seller Hub can lag or cache, so this is

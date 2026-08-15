@@ -405,7 +405,49 @@ const MPN_ABSENT = "Does Not Apply";
 // Fall back to the closest spec key: one that ENDS with the aspect name first
 // ("Memory Type" -> "Type"), then each half of a slashed name
 // ("Chipset/GPU Model" -> "Chipset"), then any key containing it.
+// Where the two vocabularies simply disagree and no amount of substring
+// matching bridges them. eBay says "Storage Capacity", the spec table says
+// "Storage Size" — no shared word ending, no shared half, no containment, so
+// the aspect went out empty and the publish failed with "25002: The item
+// specific Storage Capacity is missing" on a product that plainly says 32GB.
+//
+// Keyed by the EBAY name, listing the spec-table keys to try in order. Add to
+// this when a 25002 names an aspect the product obviously has.
+const ASPECT_SYNONYMS: Record<string, string[]> = {
+  "storage capacity": ["Storage Size", "Hard Drive Capacity", "SSD Capacity", "Capacity", "Storage"],
+  "hard drive capacity": ["Storage Size", "Hard Drive Capacity", "Capacity", "Storage"],
+  "ssd capacity": ["Storage Size", "SSD Capacity", "Capacity", "Storage"],
+  "screen size": ["Screen Size", "Display Size", "Size"],
+  "ram size": ["RAM", "Memory Size", "Memory", "RAM Size"],
+  "maximum resolution": ["Resolution", "Max Resolution"],
+  "processor speed": ["Processor Speed", "CPU Speed", "Speed"],
+  "network": ["Carrier", "Connectivity/Carrier", "Network"],
+  "operating system": ["Android Version", "OS", "Operating System", "iOS Version"],
+  "connectivity": ["Internet Connectivity", "Connectivity/Carrier", "Connectivity"],
+  "model": ["Model", "Series"],
+  "manufacturer color": ["Color", "Colour"],
+};
+
+// Keys above are written readably; normAspect strips every space and slash, so
+// they must be normalised before any lookup can hit. Doing it here rather than
+// writing "storagecapacity" in the table keeps the table legible.
+const SYNONYMS_BY_NORM: Record<string, string[]> = Object.fromEntries(
+  Object.entries(ASPECT_SYNONYMS).map(([k, v]) => [normAspect(k), v]));
+
 function aliasValue(aspectName: string, specs: Record<string, string>): string | null {
+  // Explicit synonyms first: they are the cases where the generic matching
+  // below is known to find nothing, or worse, to find the wrong key.
+  const syn = SYNONYMS_BY_NORM[normAspect(aspectName)];
+  if (syn) {
+    for (const key of syn) {
+      const hit = Object.keys(specs).find(k => normAspect(k) === normAspect(key));
+      if (hit && !isPlaceholder(specs[hit])) return specs[hit];
+    }
+  }
+  return aliasValueGeneric(aspectName, specs);
+}
+
+function aliasValueGeneric(aspectName: string, specs: Record<string, string>): string | null {
   const want = normAspect(aspectName);
   const keys = Object.keys(specs).filter(k => !isPlaceholder(specs[k]));
   const ends = keys.find(k => normAspect(k).endsWith(want) && normAspect(k) !== want);
