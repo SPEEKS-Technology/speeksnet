@@ -53,8 +53,15 @@
 // without following the redirect and without revealing any credential.
 // ============================================================================
 
-const SCOPES = Deno.env.get("SHOPIFY_SCOPES")
-  || "read_orders,read_products,read_inventory,read_analytics,read_reports";
+// Trimmed per-scope, not just end to end: the secret is pasted by hand into a
+// single-line field and arrived with a trailing newline, which was being
+// URL-encoded onto the last scope as "read_locations%0A". Shopify happened to
+// tolerate it, but a scope list that depends on the other side being forgiving
+// is not something to leave in place — and the same paste habit put literal
+// line breaks inside SHOPIFY_APPS.
+const SCOPES = (Deno.env.get("SHOPIFY_SCOPES")
+  || "read_orders,read_products,read_inventory,read_analytics,read_reports")
+  .split(",").map(s => s.trim()).filter(Boolean).join(",");
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
