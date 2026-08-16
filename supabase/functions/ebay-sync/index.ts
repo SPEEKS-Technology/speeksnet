@@ -137,6 +137,7 @@ async function shopifyGql(shop: string, token: string, query: string, variables:
 
 const PRODUCT_FIELDS = `
   id title descriptionHtml vendor productType status
+  metafields(first: 60) { edges { node { namespace key value type } } }
   images(first: ${EBAY_MAX_IMAGES}) { edges { node { url } } }
   variants(first: 10) { edges { node {
     id sku price inventoryQuantity
@@ -156,6 +157,7 @@ type Candidate = {
   vendor: string;
   productType: string;
   descriptionHtml: string;
+  metafields: Record<string, string>;
   imageUrls: string[];
 };
 
@@ -163,6 +165,19 @@ function flatten(products: any[]): Candidate[] {
   const out: Candidate[] = [];
   for (const p of products) {
     const imageUrls = (p.images?.edges || []).map((e: any) => e.node.url);
+    // Flattened to a plain name -> value map so it can be read exactly like the
+    // spec table. The key alone is what a person would recognise ("connectivity"),
+    // and the namespace is kept alongside for the cases where two namespaces use
+    // the same key.
+    const metafields: Record<string, string> = {};
+    for (const e of (p.metafields?.edges || [])) {
+      const n = e.node;
+      if (!n?.key || n.value == null) continue;
+      const v = String(n.value).trim();
+      if (!v) continue;
+      if (!metafields[n.key]) metafields[n.key] = v;
+      metafields[`${n.namespace}.${n.key}`] = v;
+    }
     for (const v of (p.variants?.edges || []).map((e: any) => e.node)) {
       if (!v.sku) continue;
       out.push({
@@ -177,6 +192,7 @@ function flatten(products: any[]): Candidate[] {
         vendor: p.vendor || "",
         productType: p.productType || "",
         descriptionHtml: p.descriptionHtml || "",
+        metafields,
         imageUrls,
       });
     }
@@ -336,6 +352,71 @@ const stripTags = (html: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+// THE SPEC TABLE IS NOT THE ONLY PLACE THE ANSWER LIVES.
+// PayMore's listing tool writes the same product into Shopify METAFIELDS as
+// well as into the description table, and the two do not always carry the same
+// fields. An Amazon Echo Show failed to publish for a missing Connectivity that
+// was sitting in a `connectivity` metafield the whole time; a screen extender
+// failed on Screen Size with `screen_size` right there. eBay was not being
+// fussy — Connectivity really is required in that category — we were simply
+// reading one of the two places the store had already written it down.
+//
+// Three shapes are handled:
+//   connectivity: "Wired"        a plain scalar, keyed by name
+//   screen_size:  "15.6\""       snake_case, so it becomes "Screen Size"
+//   filter_attributes: JSON      [{key, value}, ...], the structured twin of
+//                                the spec table, sometimes richer than it
+//
+// Values are only ever a FALLBACK. The description table is what a buyer reads
+// on the listing, so where both speak, the table wins and nothing about the
+// existing behaviour changes.
+const METAFIELD_LISTS = ["filter_attributes", "other_attributes", "title_attributes"];
+
+// Metafields we must not treat as item specifics: internal bookkeeping, long
+// prose, or things that mean something different to eBay than to us.
+const METAFIELD_SKIP = new Set([
+  "condition", "ebay_condition", "functionality_condition", "cosmetic_condition",
+  "whats_include", "not_included", "product_qty", "google_product_category",
+  "serial_number", "title_attributes",
+]);
+
+function titleCaseKey(key: string): string {
+  return String(key).replace(/[_-]+/g, " ").trim()
+    .split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+function specsFromMetafields(mf: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const listKey of METAFIELD_LISTS) {
+    const raw = mf[listKey];
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) continue;
+      for (const entry of parsed) {
+        const k = String(entry?.key || "").trim();
+        const v = String(entry?.value ?? "").trim();
+        // "MFG Warranty?" and friends are ours, not eBay's; the trailing question
+        // mark would never match an aspect name anyway, so tidy it here.
+        const key = k.replace(/\?+$/, "").trim();
+        if (!key || !v || isPlaceholder(v)) continue;
+        if (!out[key]) out[key] = v;
+      }
+    } catch { /* a malformed metafield is not worth failing a listing over */ }
+  }
+  for (const [k, v] of Object.entries(mf)) {
+    // The namespaced duplicates are only for disambiguation; skip them here.
+    if (k.includes(".")) continue;
+    if (METAFIELD_SKIP.has(k) || METAFIELD_LISTS.includes(k)) continue;
+    const val = String(v).trim();
+    // Prose, not a specific. eBay caps a value at 65 characters anyway.
+    if (!val || val.length > 65 || /^</.test(val) || isPlaceholder(val)) continue;
+    const name = titleCaseKey(k);
+    if (!out[name]) out[name] = val;
+  }
+  return out;
+}
+
 function parseSpecs(html: string): Record<string, string> {
   const specs: Record<string, string> = {};
   // Any <tr> holding exactly two cells is a label/value pair. The templates use
@@ -403,9 +484,42 @@ const CONDITION_BY_TEXT: [RegExp, string][] = [
 // Excellent purely because nobody typed anything. Missing is now refused too,
 // and it is a separate signal from unknown because the fix is different: one
 // person needs to correct a word, the other needs to add the field.
+// PAYMORE ALREADY DECIDED THE eBay CONDITION; WE WERE RE-DERIVING IT FROM PROSE.
+// The listing tool writes an `ebay_condition` metafield holding eBay's own
+// numeric condition id. Reading it removes the whole guessing layer — the layer
+// that once shipped a phone titled "Broken" as USED_EXCELLENT because "Broken"
+// was missing from a regex list.
+//
+// Checked against 8 products across three stores: the metafield agreed with our
+// text mapping on 7. The one disagreement was a Ray-Ban that PayMore graded 3000
+// and we called USED_GOOD — and that SKU is exactly the one eBay rejected with
+// 25021, condition invalid for the category. Their value was right and ours was
+// not, which is the whole argument for preferring it.
+const EBAY_CONDITION_BY_ID: Record<string, string> = {
+  "1000": "NEW",
+  "1500": "NEW_OTHER",
+  "1750": "NEW_WITH_DEFECTS",
+  "2000": "CERTIFIED_REFURBISHED",
+  "2010": "EXCELLENT_REFURBISHED",
+  "2020": "VERY_GOOD_REFURBISHED",
+  "2030": "GOOD_REFURBISHED",
+  "2500": "SELLER_REFURBISHED",
+  "3000": "USED_EXCELLENT",
+  "4000": "USED_VERY_GOOD",
+  "5000": "USED_GOOD",
+  "6000": "USED_ACCEPTABLE",
+  "7000": "FOR_PARTS_OR_NOT_WORKING",
+};
+
 function conditionFrom(
   specs: Record<string, string>, fallback: string,
-): { value: string; unknown: string | null; missing: boolean } {
+  metafields: Record<string, string> = {},
+): { value: string; unknown: string | null; missing: boolean; source?: string } {
+  const declared = String(metafields["ebay_condition"] || "").trim();
+  if (EBAY_CONDITION_BY_ID[declared]) {
+    return { value: EBAY_CONDITION_BY_ID[declared], unknown: null, missing: false,
+             source: `ebay_condition metafield (${declared})` };
+  }
   const text = (specs["Condition"] || "").trim();
   if (!text) return { value: fallback, unknown: null, missing: true };
   for (const [re, value] of CONDITION_BY_TEXT) {
@@ -1249,11 +1363,13 @@ Deno.serve(async (req: Request) => {
     .filter((a: any) => a.aspectConstraint?.aspectRequired)
     .map((a: any) => a.localizedAspectName);
 
-  const specs = parseSpecs(c.descriptionHtml);
+  // Table first, metafields underneath it: where both speak, the buyer-facing
+  // table wins and nothing that already worked changes.
+  const specs = { ...specsFromMetafields(c.metafields || {}), ...parseSpecs(c.descriptionHtml) };
 
   // Ask the category which conditions it will accept BEFORE building the item.
   const allowedConditions = await allowedConditionIds(api, categoryId);
-  const picked = conditionFrom(specs, condition);
+  const picked = conditionFrom(specs, condition, c.metafields || {});
 
   // An unrecognised condition word stops the listing. Guessing here would mean
   // publishing a grade nobody chose, and the grade is the field a buyer leans on
@@ -1294,6 +1410,7 @@ Deno.serve(async (req: Request) => {
       store, sku, dryRun: true,
       shopify: { title: c.title, price: c.price, cost: c.cost, quantity: c.quantity, images: c.images },
       specsParsed: specs,
+      metafields: c.metafields,
       conditionResolved: item.condition,
       condition: {
         fromSpecTable: wantedCondition,
