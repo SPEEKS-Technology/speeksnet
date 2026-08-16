@@ -426,7 +426,7 @@ async function loadRecipients(sb: any): Promise<string[]> {
 
 async function sendEmail(to: string[], subject: string, html: string) {
   const res = await fetch(GMAIL_RELAY, {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
     body: JSON.stringify({ secret: SECRET, to: to.join(","), subject, html }),
   });
   const txt = await res.text();

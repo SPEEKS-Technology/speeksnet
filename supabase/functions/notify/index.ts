@@ -611,7 +611,7 @@ const FOOT_PREFS = `You're getting this because you switched on email alerts in 
 async function sendEmail(to: string, subject: string, html: string) {
   try {
     const res = await fetch(GMAIL_RELAY, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
       body: JSON.stringify({ secret: SECRET, to, subject, html }),
     });
     const txt = await res.text();
