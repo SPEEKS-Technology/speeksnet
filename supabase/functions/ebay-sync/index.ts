@@ -1328,6 +1328,35 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // A RENAMED SKU SLIPS PAST THE GUARD ABOVE, BECAUSE THE GUARD MATCHES ON SKU.
+  // Split a shared SKU into new ones in Shopify and the physical unit stays live
+  // on eBay under the OLD SKU while the new one looks untouched — upload it and
+  // there are two live listings against one unit, with nothing to warn anybody.
+  // Happened the moment three shared SKUs were split at OVL.
+  //
+  // The title is the thread that still connects them, since MC built its listing
+  // from the same Shopify product. But a title match is NOT proof: identical
+  // stock legitimately shares one (two SimpliSafe sensors at BAL match each other
+  // exactly) and refusing those would block real listings. So this warns and
+  // publishes. The judgement belongs to the person holding the item.
+  let titleWarning: any = null;
+  if (url.searchParams.get("force") !== "1") {
+    const sameTitle = await (await sb(
+      `ebay_live?store_code=eq.${encodeURIComponent(store)}`
+      + `&title=eq.${encodeURIComponent(c.title)}&select=sku,item_id&limit=4`)).json();
+    const others = (sameTitle || []).filter((r: any) => r.sku !== sku);
+    if (others.length) {
+      titleWarning = {
+        message: `An item with this exact title is already live on ${store}'s eBay account `
+          + `under a different SKU (${others.map((o: any) => o.sku).join(", ")}). If this SKU was `
+          + `renamed in Shopify, that listing is the same physical unit and there are now two `
+          + `— end the old one on eBay. If it is genuinely a second copy, nothing is wrong.`,
+        liveUnder: others.map((o: any) => ({ sku: o.sku, itemId: o.item_id,
+          viewUrl: `https://www.ebay.com/itm/${o.item_id}` })),
+      };
+    }
+  }
+
   // WHERE THIS THING BELONGS, asked of the marketplace before the dictionary.
   // recommendCategory samples the live listings for the same product and takes
   // the most common leaf, falling back to eBay's text-match suggestion when the
@@ -1409,6 +1438,7 @@ Deno.serve(async (req: Request) => {
     return json({
       store, sku, dryRun: true,
       shopify: { title: c.title, price: c.price, cost: c.cost, quantity: c.quantity, images: c.images },
+      titleWarning,
       specsParsed: specs,
       metafields: c.metafields,
       conditionResolved: item.condition,
@@ -1569,6 +1599,7 @@ Deno.serve(async (req: Request) => {
   return json({
     store, sku,
     published: true,
+    titleWarning,
     listingId,
     offerId,
     categoryId,

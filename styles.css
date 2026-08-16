@@ -16371,6 +16371,12 @@ body.tv-body { display: block; background: #eef1f5; }
 .ec-fail td { background: var(--cb-red-tint); border-bottom: 1px solid #f4d3d1 !important; padding: 0 12px 12px; }
 .ec-fail-in { display: flex; align-items: flex-start; gap: 10px; }
 .ec-fail-msg { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; color: #a1362f; line-height: 1.5; }
+
+/* Same shape as a failure line, amber rather than red: the upload worked, this
+   is a second look worth taking, not something that went wrong. */
+.ec-warn td { background: #fdf6e7; border-top: 1px solid #f0dfae; }
+.ec-warn-msg { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; color: #8a6212; line-height: 1.5; }
+.ec-warn-msg a { color: #8a6212; text-decoration: underline; }
 .ec-fail-msg code {
     font-family: Consolas, 'SFMono-Regular', Menlo, monospace; font-size: 11.5px;
     background: #fff; border: 1px solid #f4d3d1; border-radius: 5px; padding: 1px 5px;

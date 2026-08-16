@@ -39996,6 +39996,22 @@ function _ecRow(i) {
     // hundred words of raw markup, which is what put a wall of <div class="rcp">
     // across this table. eBay's exact wording is one click away for whoever
     // needs to escalate, and folded shut for everyone who does not.
+    // A SUCCESSFUL UPLOAD CAN STILL BE WORTH A SECOND LOOK.
+    // Renaming a SKU in Shopify does not rename Marketplace Connect's live eBay
+    // listing, so the unit stays up under the old SKU while the new one looks
+    // untouched — two live listings against one item, and the ownership guard
+    // cannot see it because it matches on SKU. The title still connects them.
+    // Deliberately a note and not a refusal: identical stock legitimately shares
+    // a title, and blocking those would refuse real listings.
+    if (i.titleWarning && i.state !== 'failed') {
+        const links = (i.titleWarning.liveUnder || []).map(o =>
+            `<a href="${o.viewUrl}" target="_blank" rel="noopener">${_ecEsc(o.sku)}</a>`).join(', ');
+        return row + `
+        <tr class="ec-warn"><td colspan="6"><div class="ec-fail-in">
+          <div class="ec-warn-msg">${_ecEsc(i.titleWarning.message)}${links ? ' &nbsp;' + links : ''}</div>
+        </div></td></tr>`;
+    }
+
     if (i.state === 'failed' && i.error) {
         const raw = i.errorRaw && i.errorRaw !== i.error
             ? `<details class="ec-fail-raw"><summary>eBay's Exact Wording</summary>
@@ -40099,7 +40115,10 @@ async function _ecUpload(sku, extra) {
         // conflict is cleared explicitly: _ecApply merges, and the server's item
         // has no such key, so a row that once conflicted would keep the flag —
         // and stay stuck without its buttons — after the conflict was resolved.
-        _ecApply(sku, { ...(b.item || { state: 'live' }), conflict: false, error: null });
+        // titleWarning rides on the response, not on the stored row — it is about
+        // a DIFFERENT listing, so there is nothing in ebay_listings to hold it.
+        _ecApply(sku, { ...(b.item || { state: 'live' }), conflict: false, error: null,
+                        titleWarning: b.titleWarning || null });
         return true;
     }
     // The row the server wrote carries the title, price and Shopify link, all
