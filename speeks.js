@@ -39829,6 +39829,11 @@ function ecRender() {
     }
 
     body.innerHTML = _ecQuickHtml() + _ecFeedHtml();
+
+    // The table was just rebuilt beneath any open category picker: its anchor
+    // button is a new element and the rows may have shifted. Re-place so the
+    // popover follows rather than hanging over stale coordinates.
+    if (document.getElementById('ecCatPop')) _ecCatPlace();
 }
 
 // The whole point of the tab: scan a SKU, send it. Several at once is allowed
@@ -40102,16 +40107,36 @@ let _ecCatChrome = null;
 // and never again, it grows downward off the bottom of the window. So the list
 // gets a max-height cut from whatever room actually exists, and every path that
 // changes the contents calls this again.
+// THE ANCHOR GETS DESTROYED UNDER US, AND THAT IS NORMAL.
+// ecRender() rebuilds #ecBody wholesale on every state change, so the button a
+// popover is anchored to stops existing the moment any row changes — a pending
+// upload turning live while somebody is picking a category, most obviously.
+// Bailing out then left the list at whatever height it had BEFORE the search
+// results arrived: too short to have a scrollbar, too tall to fit, and never
+// repositioned. Re-adopting the new button for the same SKU is the fix.
+function _ecCatAnchorEl() {
+    if (_ecCatAnchor?.isConnected) return _ecCatAnchor;
+    if (!_ecCatSku) return null;
+    const sel = (window.CSS && CSS.escape)
+        ? CSS.escape(_ecCatSku)
+        : String(_ecCatSku).replace(/["\\]/g, '\\$&');
+    const el = document.querySelector(`#ecBody .ec-catbtn[data-sku="${sel}"]`);
+    if (el) _ecCatAnchor = el;
+    return el;
+}
+
 function _ecCatPlace() {
     const pop = document.getElementById('ecCatPop');
-    const anchor = _ecCatAnchor;
-    // ecRender() replaces the row while the popover is open on some paths; an
-    // anchor no longer in the document has no position to speak of.
-    if (!pop || !anchor || !anchor.isConnected) return;
+    if (!pop) return;
 
     const MARGIN = 10, GAP = 6;
     const vh = window.innerHeight, vw = window.innerWidth;
-    const r = anchor.getBoundingClientRect();
+
+    // If the row really is gone — filtered out, removed with the × — hold the
+    // popover where it is and size it against the viewport anyway. Sizing must
+    // never depend on the anchor surviving.
+    const anchor = _ecCatAnchorEl();
+    const r = anchor ? anchor.getBoundingClientRect() : pop.getBoundingClientRect();
 
     // THE ANCHOR ITSELF MAY BE OFF SCREEN — a row below the fold, or the window
     // shrunk under an open popover. Measuring room from a rect that starts at
@@ -40170,7 +40195,6 @@ function _ecCatReflow(ev) {
     const pop = document.getElementById('ecCatPop');
     if (!pop) return;
     if (ev?.target && pop.contains(ev.target.nodeType ? ev.target : pop)) return;
-    if (!_ecCatAnchor?.isConnected) { ecCloseCategory(); return; }
     _ecCatPlace();
 }
 
