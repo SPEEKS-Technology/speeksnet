@@ -334,29 +334,54 @@ var BUY_CLOSED_DATES = [
 // the write for that run — which costs nothing, because the counter is
 // recomputed from day 1 every morning rather than incremented, so the next
 // successful run repairs it completely.
+// ⚠️ AND A FAILED LOOKUP MUST SAY WHY. The first version swallowed the error and
+// returned a bare null, so the run report said only "closed-day list
+// unavailable" — true, useless, and indistinguishable from a one-off blip. It
+// went unnoticed from 2026-08-13 to 08-16 while somebody re-typed the counter by
+// hand every morning. `_buyClosedWhy` carries the real reason out to the report.
+//
+// The likeliest reason, and the one to check first: this is the ONLY
+// UrlFetchApp call in the file. Before it, the script never made an outbound
+// request, so it never held the script.external_request scope. Adding the call
+// does not re-prompt — a web app keeps running under the authorisation granted
+// when it was installed — so the fetch throws "Authorization is required to
+// perform that action" until the owner opens the editor, runs any function and
+// accepts the new permission. Everything else keeps working, because Gmail and
+// Sheets were already granted, which is what makes it look so selective.
 var GP_GOALS_URL = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/gp-goals';
 var _buyClosedCache = {};
+var _buyClosedWhy = {};
 
 function _buyClosedDays(y, monthIdx) {
   var ym = y + '-' + ('0' + (monthIdx + 1)).slice(-2);
   if (_buyClosedCache[ym] !== undefined) return _buyClosedCache[ym];
-  var days = null;
+  var days = null, why = null;
   try {
     var res = UrlFetchApp.fetch(GP_GOALS_URL + '?month=' + ym, { muteHttpExceptions: true });
-    if (res.getResponseCode() === 200) {
+    var code = res.getResponseCode();
+    if (code === 200) {
       var j = JSON.parse(res.getContentText());
       if (j && Object.prototype.toString.call(j.closed) === '[object Array]') {
         days = j.closed.map(function (c) { return Number(c.day); })
                        .filter(function (d) { return d >= 1 && d <= 31; });
+      } else {
+        why = 'gp-goals returned 200 but no closed[] array';
       }
+    } else {
+      why = 'gp-goals returned HTTP ' + code + ': '
+        + String(res.getContentText() || '').slice(0, 200);
     }
-  } catch (e) { /* falls through to the local list */ }
+  } catch (e) {
+    why = 'UrlFetchApp threw: ' + String(e && e.message || e).slice(0, 300);
+  }
   if (days === null && BUY_CLOSED_DATES.length) {
     days = BUY_CLOSED_DATES
       .filter(function (iso) { return iso.indexOf(ym + '-') === 0; })
       .map(function (iso) { return parseInt(iso.slice(8), 10); });
+    why = null;   // the fallback answered, so nothing was left unknown
   }
   _buyClosedCache[ym] = days;
+  _buyClosedWhy[ym] = why;
   return days;
 }
 
@@ -1337,6 +1362,11 @@ function ingestBuyingEmails(opts) {
         _syncBuyDaysThru(t, ref, opts.dryRun).forEach(function (d) {
           d.tab = tabName;
           report.daysThru.push(d);
+          if (d.warn) {
+            (report.warnings = report.warnings || []).push({
+              note: 'Days thru Month was not advanced', tab: tabName, hint: d.why
+            });
+          }
         });
         var chk = _buyPlannedCheck(t, ref);
         if (chk) { chk.tab = tabName; (report.warnings = report.warnings || []).push(chk); }
@@ -1489,8 +1519,21 @@ function _syncBuyDaysThru(t, refDate, dryRun) {
   // If SPEEKS could not be reached, the closure list is UNKNOWN, not empty.
   // Writing anyway would silently count a holiday as a working day; skipping
   // leaves yesterday's figure standing, and tomorrow's run puts it right.
+  //
+  // "Tomorrow's run puts it right" is only true if tomorrow's run can reach
+  // SPEEKS. When it cannot, this skip is not a blip, it is a stopped clock —
+  // and a stopped "Days thru Month" inflates every Tracking projection on the
+  // Buy tab in proportion (stuck at 9 on the 16th read 44% high). So the reason
+  // travels with the skip, and it goes out as a WARNING, which sales-ingest
+  // already surfaces, rather than as one more line in the daysThru list nobody
+  // reads until someone notices the sheet is wrong.
+  var ym = refDate.getFullYear() + '-' + ('0' + (refDate.getMonth() + 1)).slice(-2);
   if (_buyClosedDays(refDate.getFullYear(), refDate.getMonth()) === null) {
-    out.push({ skipped: 'closed-day list unavailable — Days thru Month left alone this run' });
+    out.push({
+      skipped: 'closed-day list unavailable — Days thru Month left alone this run',
+      why: _buyClosedWhy[ym] || 'no reason recorded',
+      warn: true
+    });
     return out;
   }
 
@@ -2455,12 +2498,21 @@ function _logBuySummary(r) {
   });
   r.errors.forEach(function (e) { Logger.log('  ERROR: ' + e.subject + ' — ' + e.error); });
   (r.daysThru || []).forEach(function (d) {
-    Logger.log('  days-thru ' + d.tab + ' ' + d.a1 + ' (' + d.store + '): '
-      + (d.skipped ? 'skipped — ' + d.skipped : d.from + ' -> ' + d.to));
+    // Two shapes share this list: a per-store write/skip, which has a cell and a
+    // store, and a whole-tab bail-out, which has neither. Printing the second
+    // through the first's format spells the interesting case "undefined
+    // (undefined)", so each says only what it actually knows.
+    Logger.log('  days-thru ' + d.tab
+      + (d.a1 ? ' ' + d.a1 + ' (' + d.store + ')' : '') + ': '
+      + (d.skipped ? 'skipped — ' + d.skipped + (d.why ? ' [' + d.why + ']' : '')
+                   : d.from + ' -> ' + d.to));
   });
   (r.warnings || []).forEach(function (w) {
-    Logger.log('  WARNING [' + w.tab + '] ' + w.note + ': sheet=' + w.sheet
-      + ' expected=' + w.expected + ' — ' + w.hint);
+    // Two warning shapes too: the buying-days cross-check carries sheet/expected,
+    // the days-thru bail-out carries only a hint.
+    Logger.log('  WARNING [' + w.tab + '] ' + w.note
+      + (w.expected === undefined ? '' : ': sheet=' + w.sheet + ' expected=' + w.expected)
+      + (w.hint ? ' — ' + w.hint : ''));
   });
 }
 
@@ -4070,4 +4122,24 @@ function diagnoseDayEndFacts() {
     ].join('  '));
   });
   return r;
+}
+
+// ------------------------------------------------------------
+// Scope probe — keep it.
+// ------------------------------------------------------------
+// The one UNGUARDED outbound call in this file, and the only reliable way to
+// make the editor raise its Review Permissions dialog.
+//
+// ⚠️ A try/catch around a first-of-its-kind Google service call HIDES THE
+// PROMPT THAT AUTHORISES IT. _buyClosedDays catches the "You do not have
+// permission to call UrlFetchApp.fetch" error to report it, so dryRunBuying
+// finished as ok:true and no dialog ever appeared — while "Days thru Month"
+// sat unwritten for four days and somebody re-typed it every morning.
+// Re-deploying does not help either: a new version ships new CODE, not a new
+// GRANT. Run this instead, accept, and the web app picks it up with no redeploy.
+//
+// Any future new service here (DriveApp, a second UrlFetch host, CalendarApp)
+// lands in the same trap. Point this at it first.
+function scopeTest() {
+  Logger.log(UrlFetchApp.fetch('https://example.com').getResponseCode());
 }
