@@ -2384,32 +2384,16 @@ select.bs-hidden-select:focus {
     text-align: center;
 }
 
+/* NOTE (2026-08-14): the nav/modal/table rules that used to live at the top of
+   this block were retired by the mobile layer at the end of this file. This
+   block predates the 2026 redesign and only survives for the widgets the new
+   layer hasn't reached yet — do NOT add to it. See "MOBILE LAYER" below. */
 @media (max-width: 768px) {
     body { flex-direction: column; }
-    
-    .top-nav {
-        position: relative !important;
-        width: 100% !important;
-        right: 0 !important; 
-        flex-direction: column;
-        align-items: center;
-        padding: 25px 15px !important;
-        height: auto;
-        gap: 20px;
-        border-bottom: none;
-        box-sizing: border-box;
-    }
-    
-    .nav-left { max-width: 100%; align-items: center; text-align: center; }
-    .nav-bar { flex-wrap: wrap; justify-content: center; width: 100%; gap: 8px; }
-    
-    .nav-right { flex-direction: column; width: 100%; gap: 15px; margin: 0; }
-    .user-profile-nav { border: none !important; padding: 0 !important; flex-direction: column; width: 100%; gap: 15px; }
-    .greeting-stack { align-items: center; margin: 0; }
-    
+
     .top-actions { justify-content: center; flex-wrap: wrap; width: 100%; gap: 10px; }
-    
-    .main-content { 
+
+    .main-content {
         padding: 20px 15px !important; 
         margin: 0 !important; 
         width: 100%; 
@@ -2422,13 +2406,6 @@ select.bs-hidden-select:focus {
         grid-template-columns: 1fr !important; 
     }
 
-    .weekly-kpi-grid { 
-    display: grid; 
-    grid-template-columns: repeat(5, 1fr); 
-    gap: 20px; 
-    align-items: start; 
-}
-    
     .docs-grid { grid-template-columns: 1fr !important; }
     .doc-card { height: auto !important; min-height: 92px; }
     
@@ -2455,16 +2432,13 @@ select.bs-hidden-select:focus {
         flex-wrap: wrap !important;
     }
     
-    .modal-menu { width: 95vw !important; max-width: 95vw; }
     .modal-body { padding: 15px !important; }
-    .kb-table-container, .manage-content, .kpi-scroll-area, .vw-scroll-area, .kpi-inner-wrapper { 
+    .kb-table-container, .manage-content, .kpi-scroll-area, .vw-scroll-area, .kpi-inner-wrapper {
         overflow-x: auto !important;
         max-width: 100vw !important;
         width: 100% !important;
     }
-    
-    .manage-row, .user-manage-row, .alert-manage-row { min-width: 800px; } 
-    
+
     .scorecard-widget { padding: 15px 10px; }
     
     select.kpi-select, select.metric-dropdown, select.dist-kpi-select, select.bs-hidden-select, select.vw-primary, select.vw-compare {
@@ -7291,6 +7265,17 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    under the fixed .top-nav at 60px. */
 .ws-panel-vreplies { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
 .ws-panel-vreplies .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+/* SPEEKS Connect gets the Aging treatment too: the listing table grows with the
+   store and the shared pane height would put most of it behind an inner
+   scrollbar, taking the SKU box out of reach the moment you scrolled to check a
+   row. Grows to fit, page scrolls, header pinned under the fixed .top-nav. */
+.ws-panel.ec-panel { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.ws-panel.ec-panel .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+.ws-panel.ec-panel .cb-head {
+    position: sticky; top: 60px; z-index: 4;
+    background: #fff; border-bottom: 1px solid var(--cb-line-2);
+}
+
 .ws-panel-vreplies .ws-head {
     position: sticky; top: 60px; z-index: 4;
     background: #fff; border-bottom: 1px solid #eef2f6;
@@ -16149,6 +16134,22 @@ body.tv-body { display: block; background: #eef1f5; }
     display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12.5px;
     border-top: 1px solid #f2f5f7;
 }
+/* Three fixed columns, not a flex row. The status labels are not the same length
+   — "Sent" is four characters and "Skipped" / "Expired" are seven — so on a flex
+   row every message started at whatever x the tag beside it happened to end at,
+   and a mixed morning read as a ragged left edge. The message column now begins
+   in the same place on every row regardless of status, and the pills are centred
+   in a column of their own rather than left-packed against the store chip.
+   align-items:start (not center) so a wrapped two-line message keeps its chip and
+   pill on the first line instead of floating them to the vertical middle. */
+.dbr-done-row {
+    display: grid;
+    grid-template-columns: 40px 64px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+}
+.dbr-done-row > .dbr-chip { justify-self: center; }
+.dbr-done-row > .dbr-done-tag { justify-self: center; }
 .dbr-done-row:first-of-type, .dbr-quiet-row:first-of-type { border-top: none; }
 .dbr-done-tag { font-size: 10px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; flex-shrink: 0; }
 .dbr-done-tag.sent { background: var(--dbr-accent-tint); color: #14713d; }
@@ -16162,3 +16163,855 @@ body.tv-body { display: block; background: #eef1f5; }
     .dbr-actions { flex-direction: column-reverse; }
     .dbr-btn { width: 100%; }
 }
+
+
+/* ============================================================================
+   EBAY CHANNEL (.ec-*) — Operations tab 4
+   ============================================================================
+   Lives inside .cb-panel and inherits its token set, so it recolours with the
+   rest of the Operations page rather than carrying its own palette. Anything
+   phone-specific belongs in the MOBILE LAYER below, not here. */
+
+.ec-panel .cb-head-ico { background: #e8f0fb; color: #2563a8; }
+.ec-panel .cb-head-controls .ec-btn { height: 34px; }
+
+/* --- Summary strip: what is worth knowing before reading a single row --- */
+.ec-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0 14px; }
+.ec-stat {
+    border: 1px solid var(--cb-line); border-radius: 12px; padding: 11px 13px;
+    background: var(--cb-panel-2); min-width: 0;
+}
+.ec-stat-k { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cb-faint); }
+.ec-stat-v { font-size: 21px; font-weight: 800; letter-spacing: -0.02em; color: var(--slate-charcoal); line-height: 1.25; margin-top: 3px; }
+.ec-stat-s { font-size: 11.5px; font-weight: 600; color: var(--cb-muted); }
+.ec-stat-crit { background: var(--cb-red-tint); border-color: #f4d3d1; }
+.ec-stat-crit .ec-stat-v { color: #d1443b; }
+.ec-stat-ok .ec-stat-v { color: #178048; }
+.ec-stat-sm .ec-stat-v { font-size: 16px; }
+.ec-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: 1px; }
+.ec-dot-ok { background: #1f9d57; box-shadow: 0 0 0 3px rgba(31, 157, 87, 0.15); }
+.ec-dot-off { background: #b3bcc9; }
+
+/* --- Quick-list bar: scan a SKU, see it, send it --- */
+.ec-quick {
+    display: flex; gap: 9px; align-items: center;
+    background: var(--cb-panel-2); border: 1px solid var(--cb-line);
+    border-radius: 12px; padding: 11px 12px; margin-bottom: 10px;
+}
+.ec-quick input {
+    flex: 1; min-width: 0; border: 1px solid var(--cb-line); border-radius: 8px;
+    padding: 9px 11px; font-size: 13px; font-family: inherit; background: #fff;
+    color: var(--slate-charcoal);
+}
+.ec-quick input::placeholder { color: var(--cb-faint); }
+.ec-quick input:focus { outline: none; border-color: var(--cb-sage); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
+.ec-note { font-size: 11.5px; font-weight: 600; color: var(--cb-faint); margin: 0 0 16px 2px; }
+
+.ec-btn {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--cb-line); background: #fff; color: var(--cb-muted);
+    border-radius: 8px; padding: 9px 14px; font-size: 12.5px; font-weight: 700;
+    font-family: inherit; cursor: pointer; white-space: nowrap;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.ec-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ec-btn:hover { border-color: #cfd6df; color: var(--slate-charcoal); }
+.ec-btn:disabled { opacity: 0.5; cursor: default; }
+.ec-btn-sm { padding: 6px 11px; font-size: 12px; }
+.ec-btn-go { background: var(--cb-sage); border-color: var(--cb-sage); color: #fff; }
+.ec-btn-go:hover { background: #178048; border-color: #178048; color: #fff; }
+.ec-btn-blue { background: #2563a8; border-color: #2563a8; color: #fff; }
+.ec-btn-blue:hover { background: #1e5490; border-color: #1e5490; color: #fff; }
+
+/* --- Rows --- */
+.ec-item { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ec-item-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+
+/* Drop one row off the list. It leads the row rather than trailing the title,
+   so it forms one straight column you can run down instead of chasing the ragged
+   right edge of ellipsized titles.
+
+   The glyph is centred by grid placement rather than by line-height: × has no
+   descender and sits high in its em box, so the usual line-height trick leaves
+   it visibly above centre in its own square. Faint by default so a column of
+   them does not compete with the titles; red on hover so the one about to be
+   clicked is unmistakable. It removes the row, never the listing. */
+.ec-x {
+    flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px;
+    border: 1px solid transparent; background: transparent;
+    color: var(--cb-faint); font-size: 16px; line-height: 0; font-family: inherit;
+    display: grid; place-items: center; cursor: pointer; padding: 0;
+    transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.ec-x:hover { color: #d1443b; background: #fdf4f4; border-color: #e0a9a4; }
+/* A pending row has no × — it would read as Cancel and would not be. The gap
+   keeps its title on the same left edge as every other row. */
+.ec-x-gap { flex: 0 0 auto; width: 22px; }
+
+/* The category is a control, not a label: eBay guesses it from our title and
+   the guess is wrong often enough to matter. Styled quietly so a table of
+   correct rows still reads as data, with the caret as the only hint. */
+.ec-cat {
+    display: inline-block; max-width: 100%; font-size: 11.5px; font-weight: 700;
+    color: var(--cb-muted); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; vertical-align: bottom;
+}
+.ec-catbtn {
+    display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+    border: 1px solid transparent; background: transparent; border-radius: 7px;
+    padding: 4px 7px; font-family: inherit; font-size: 11.5px; font-weight: 700;
+    color: var(--cb-muted); cursor: pointer; text-align: left;
+    transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.ec-catbtn-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ec-catbtn svg {
+    width: 11px; height: 11px; flex: 0 0 auto; fill: none; stroke: currentColor;
+    stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; opacity: 0.5;
+}
+.ec-catbtn:hover { border-color: var(--cb-line); background: #fff; color: var(--slate-charcoal); }
+.ec-catbtn-none { color: var(--cb-faint); font-style: italic; }
+
+/* --- the picker ---------------------------------------------------------- *
+   On <body> and fixed, because ecRender() replaces #ecBody wholesale and an
+   open dropdown inside it would disappear mid-interaction. */
+.ec-catpop {
+    position: fixed; z-index: 1200; width: 360px; max-width: calc(100vw - 20px);
+    background: #fff; border: 1px solid var(--cb-line); border-radius: 12px;
+    box-shadow: 0 12px 34px rgba(20, 35, 25, 0.16);
+    display: flex; flex-direction: column; overflow: hidden;
+}
+.ec-catpop-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 9px 10px 9px 13px; border-bottom: 1px solid var(--cb-line-2);
+    background: var(--cb-panel-2);
+}
+.ec-catpop-sku {
+    font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
+    font-size: 11.5px; font-weight: 700; color: var(--cb-muted);
+}
+.ec-catpop-q {
+    margin: 10px 12px 6px; border: 1px solid var(--cb-line); border-radius: 8px;
+    padding: 8px 10px; font-size: 12.5px; font-family: inherit;
+    color: var(--slate-charcoal); background: #fff;
+}
+.ec-catpop-q::placeholder { color: var(--cb-faint); }
+.ec-catpop-q:focus { outline: none; border-color: var(--cb-sage); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
+.ec-catpop-list { max-height: 300px; overflow: auto; padding: 4px 8px 10px; }
+.ec-catpop-label {
+    font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--cb-faint); padding: 8px 6px 4px;
+}
+.ec-catpop-note {
+    font-size: 11.5px; font-weight: 600; color: var(--cb-muted);
+    padding: 10px 6px; line-height: 1.5;
+}
+.ec-catopt {
+    display: block; width: 100%; text-align: left; border: 1px solid transparent;
+    background: transparent; border-radius: 8px; padding: 7px 8px; cursor: pointer;
+    font-family: inherit; transition: background 0.12s ease, border-color 0.12s ease;
+}
+.ec-catopt:hover { background: var(--cb-sage-tint); border-color: var(--cb-sage); }
+.ec-catopt-n { display: block; font-size: 12.5px; font-weight: 700; color: var(--slate-charcoal); }
+/* The ancestor path is what tells Sunglasses-under-Clothing apart from a
+   Consumer Electronics category of the same name, so it wraps rather than
+   truncating — a clipped path answers nothing. */
+.ec-catopt-p { display: block; font-size: 10.5px; font-weight: 600; color: var(--cb-faint); margin-top: 2px; line-height: 1.4; }
+.ec-catopt-m { display: block; font-size: 10.5px; font-weight: 700; color: #178048; margin-top: 2px; }
+
+/* eBay's verbatim refusal, folded shut. Open it and it is monospaced and
+   scrollable, because it can run to several hundred words of pasted markup and
+   must never again be able to push the table around. */
+.ec-fail-raw { margin-top: 9px; }
+.ec-fail-raw summary {
+    cursor: pointer; font-size: 11px; font-weight: 800; color: #a1362f;
+    opacity: 0.75; letter-spacing: 0.02em; list-style: none;
+}
+.ec-fail-raw summary::-webkit-details-marker { display: none; }
+.ec-fail-raw summary::before { content: '▸ '; }
+.ec-fail-raw[open] summary::before { content: '▾ '; }
+.ec-fail-raw summary:hover { opacity: 1; }
+.ec-fail-rawtext {
+    margin-top: 6px; max-height: 170px; overflow: auto;
+    background: #fff; border: 1px solid #f4d3d1; border-radius: 7px; padding: 8px 10px;
+    font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
+    font-size: 11px; line-height: 1.55; color: #8c332d; word-break: break-word;
+}
+.ec-item-t { font-weight: 700; color: var(--slate-charcoal); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ec-item-s {
+    font-size: 11.5px; font-weight: 600; color: var(--cb-faint);
+    font-family: Consolas, 'SFMono-Regular', Menlo, monospace; letter-spacing: 0.02em;
+}
+.ec-money { font-weight: 800; }
+.ec-muted { color: var(--cb-muted); font-weight: 600; }
+.ec-acts { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
+.ec-ico {
+    width: 28px; height: 28px; border-radius: 7px; border: 1px solid transparent;
+    background: transparent; display: grid; place-items: center; cursor: pointer;
+    color: var(--cb-faint); opacity: 0; transition: opacity 0.12s ease;
+}
+.cb-row:hover .ec-ico { opacity: 1; }
+.ec-ico:hover { background: #fff; border-color: var(--cb-line); color: var(--cb-sage); }
+.ec-ico svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Chips added to the shared .cb-chip set */
+.ec-chip-fail { background: var(--cb-red-tint); color: #d1443b; }
+.ec-chip-mc { background: #f0eafc; color: #6d28d9; }
+.ec-chip-ours { background: var(--cb-sage-tint); color: #178048; }
+
+/* A full 22-digit tracking number in a fixed-width cell wraps and orphans two
+   characters onto a second line. Carrier plus the last four is what anyone
+   reads; the whole number rides along in the title attribute. */
+.ec-track {
+    display: block; margin-top: 3px; font-size: 11px; font-weight: 600;
+    color: var(--cb-faint); font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
+    white-space: nowrap;
+}
+
+/* --- The failure row. Always open: a hidden error is an unfixed error. --- */
+.ec-fail td { background: var(--cb-red-tint); border-bottom: 1px solid #f4d3d1 !important; padding: 0 12px 12px; }
+.ec-fail-in { display: flex; align-items: flex-start; gap: 10px; }
+.ec-fail-msg { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; color: #a1362f; line-height: 1.5; }
+.ec-fail-msg code {
+    font-family: Consolas, 'SFMono-Regular', Menlo, monospace; font-size: 11.5px;
+    background: #fff; border: 1px solid #f4d3d1; border-radius: 5px; padding: 1px 5px;
+}
+.ec-fail-act { flex: 0 0 auto; }
+
+/* --- Banner above a table: the bulk action, or a warning --- */
+.ec-bulk {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: var(--cb-panel-2); border: 1px solid var(--cb-line);
+    border-radius: 12px; padding: 11px 13px; margin-bottom: 16px;
+}
+.ec-bulk-t { font-size: 12.5px; font-weight: 700; color: var(--slate-charcoal); }
+.ec-bulk-s { font-size: 11.5px; font-weight: 600; color: var(--cb-muted); margin-top: 1px; }
+.ec-bulk-warn { background: var(--cb-red-tint); border-color: #f4d3d1; }
+.ec-bulk-warn .ec-bulk-t { color: #a1362f; }
+.ec-bulk-warn .ec-bulk-s { color: #a1362f; opacity: 0.8; }
+
+/* --- Channel Health --- */
+.ec-health { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-top: 16px; }
+.ec-hcard { border: 1px solid var(--cb-line); border-radius: 12px; overflow: hidden; background: #fff; }
+.ec-hhead {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 11px 13px; border-bottom: 1px solid var(--cb-line-2); background: var(--cb-panel-2);
+}
+.ec-hstore { font-size: 13.5px; font-weight: 800; color: var(--slate-charcoal); }
+.ec-hbody { padding: 4px 13px 10px; }
+.ec-hrow {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 7px 0; border-bottom: 1px solid var(--cb-line-2); font-size: 12.5px;
+}
+.ec-hrow:last-child { border-bottom: none; }
+.ec-hk { font-weight: 600; color: var(--cb-muted); }
+.ec-hv { font-weight: 700; color: var(--slate-charcoal); text-align: right; }
+.ec-ok { color: #178048; }
+.ec-warn { color: #b7791f; }
+.ec-off { color: var(--cb-faint); }
+.ec-hfoot { padding: 0 13px 13px; display: flex; gap: 8px; }
+.ec-hfoot .ec-btn { flex: 1; justify-content: center; }
+
+/* The auto-list switch. Deliberately plain: it turns on a robot that lists real
+   items on a real marketplace, and it should read like a decision. */
+.ec-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.ec-switch input { width: 15px; height: 15px; accent-color: var(--cb-sage); cursor: pointer; }
+.ec-switch span { font-size: 12px; font-weight: 700; color: var(--cb-muted); }
+
+/* Three headline numbers rather than four: live, failed, ended. */
+.ec-stats-3 { grid-template-columns: repeat(3, 1fr); }
+
+/* Filter row above the table. Reads as a set of counts you can click, which is
+   what people actually want from it — "how many failed" answered before the
+   table is even scanned. */
+/* Two tabs, each taking half the width. Equal size on purpose: they are a
+   choice between two views, not a row of chips of varying importance. */
+.ec-filters { display: flex; gap: 8px; margin-bottom: 14px; }
+.ec-filters .ec-fbtn { flex: 1 1 0; justify-content: center; min-width: 0; }
+.ec-fbtn {
+    display: inline-flex; align-items: center; gap: 7px;
+    border: 1px solid var(--cb-line); background: #fff; color: var(--cb-muted);
+    border-radius: 9px; padding: 7px 12px; font-size: 12.5px; font-weight: 700;
+    font-family: inherit; cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.ec-fbtn:hover { border-color: #cfd6df; color: var(--slate-charcoal); }
+.ec-fbtn.active { background: var(--cb-sage-tint); border-color: var(--cb-sage); color: #178048; }
+.ec-fcount {
+    font-size: 11px; font-weight: 800; background: var(--cb-line-2); color: var(--cb-muted);
+    border-radius: 20px; padding: 1px 7px; min-width: 20px; text-align: center;
+}
+.ec-fbtn.active .ec-fcount { background: #fff; color: #178048; }
+
+.ec-empty { padding: 34px 10px; text-align: center; color: var(--cb-muted); font-size: 13px; font-weight: 600; }
+
+/* --- The session feed ---------------------------------------------------- *
+   One row per SKU somebody scanned, and it changes state under them: amber
+   while eBay is being asked, green when it is up, red when it is refused. The
+   colour is doing the work here — nobody watching a shelf go up is going to
+   read a status word on every line. */
+
+.ec-chip-pending {
+    background: var(--cb-gold-tint); color: #b7791f;
+    display: inline-flex; align-items: center; gap: 6px;
+}
+.ec-chip-err { background: var(--cb-red-tint); color: #d1443b; }
+.ec-chip-off { background: var(--cb-line-2); color: var(--cb-muted); }
+
+.ec-spin {
+    width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%;
+    border: 2px solid rgba(183, 121, 31, 0.3); border-top-color: #b7791f;
+    animation: ec-spin 0.7s linear infinite;
+}
+@keyframes ec-spin { to { transform: rotate(360deg); } }
+
+/* The whole row carries the state, not just the chip. A shelf of twenty is
+   scanned down the left edge, not read cell by cell. */
+.cb-row.ec-r-pending td { background: #fefaf1; }
+.cb-row.ec-r-failed td { background: var(--cb-red-tint); }
+/* Ended means sold or gone — faded is right. Disabled is NOT faded: you turned
+   it off yourself and the row's own button turns it back on, so it stays as
+   legible as any other line. */
+.cb-row.ec-r-ended td { opacity: 0.62; }
+
+/* Prefers-reduced-motion still needs to say "working". Losing the spin without
+   losing the amber is the honest trade. */
+@media (prefers-reduced-motion: reduce) {
+    .ec-spin { animation: none; border-top-color: rgba(183, 121, 31, 0.3); }
+}
+
+/* --- The two links ------------------------------------------------------- *
+   An item lives in two places and people jump between them constantly: eBay to
+   see the listing as a buyer does, Shopify to fix whatever eBay complained
+   about. Outline pills rather than filled ones — they are destinations, and
+   they must not out-shout the status chip sitting next to them. */
+.ec-pills { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.ec-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    border: 1px solid var(--cb-line); background: #fff;
+    border-radius: 20px; padding: 4px 10px;
+    font-size: 11.5px; font-weight: 700; font-family: inherit;
+    text-decoration: none; white-space: nowrap; cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+.ec-pill svg {
+    width: 10px; height: 10px; fill: none; stroke: currentColor;
+    stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; opacity: 0.65;
+}
+.ec-pill-ebay { color: #0064d2; }
+.ec-pill-ebay:hover { border-color: #0064d2; background: #eef5fd; }
+.ec-pill-shopify { color: #5e8e3e; }
+.ec-pill-shopify:hover { border-color: #5e8e3e; background: #f1f7ec; }
+
+/* Ending a listing is destructive enough to look it on hover, and plain enough
+   the rest of the time not to invite the click. Enable is its opposite number
+   and leans the other way — putting something back is the safe direction. */
+.ec-btn-off:hover { border-color: #e0a9a4; color: #d1443b; background: #fdf4f4; }
+.ec-btn-on { color: #178048; }
+.ec-btn-on:hover { border-color: var(--cb-sage); color: #178048; background: var(--cb-sage-tint); }
+
+
+/* ============================================================================
+   MOBILE LAYER — Phase 1 foundation (2026-08-14)
+   ============================================================================
+   The single source of truth for phone/tablet layout. Everything mobile goes
+   HERE, at the end of the file, so it wins on source order without needing an
+   !important arms race with the older per-component media queries.
+
+   Two breakpoints only. Do not invent a third:
+     <= 900px  "compact"  — nav becomes a bottom tab bar, side panels become
+                            full-height sheets, multi-column grids drop to one.
+     <= 640px  "phone"    — modals become bottom sheets, wide tables stack or
+                            scroll with an affordance, curation hides.
+
+   !important is used deliberately in three places only: rules that must beat
+   .top-nav base padding, rules that must beat per-modal ID selectors, and the
+   curation utilities. Nowhere else.
+   ========================================================================= */
+
+/* --- Curation utilities -----------------------------------------------------
+   The site already tags 200+ elements with data-feature for the Feature Access
+   tool. Mobile curation rides the same markup rather than inventing a parallel
+   system: tag anything desktop-only with data-mobile="hide" and it disappears
+   below 900px. .m-only / .m-hide are the ad-hoc escape hatches. */
+.m-only { display: none; }
+
+@media (max-width: 900px) {
+    [data-mobile="hide"], .m-hide { display: none !important; }
+    .m-only { display: revert; }
+    .m-only.m-flex { display: flex; }
+}
+
+/* --- Base hardening --------------------------------------------------------- */
+@media (max-width: 900px) {
+    html {
+        -webkit-text-size-adjust: 100%;   /* iOS Safari otherwise inflates text in landscape */
+        overflow-x: hidden;
+    }
+    body {
+        overflow-x: hidden;
+        /* One stray wide child used to drag the whole page sideways; this makes
+           the overflow the offending container problem, not the document one. */
+        max-width: 100vw;
+    }
+    /* Nothing may exceed the viewport by its own padding. */
+    .main-content, .main-content * { min-width: 0; }
+    img, svg, canvas, video { max-width: 100%; }
+}
+
+/* --- Nav: top bar slims down, links move to a bottom tab bar ----------------- */
+@media (max-width: 900px) {
+    .top-nav {
+        padding: 8px 12px !important;
+        min-height: 52px;
+        gap: 10px;
+        justify-content: space-between;
+    }
+    .nav-left { max-width: none; flex: 1 1 auto; min-width: 0; }
+    .top-nav .brand-wordmark { font-size: 13px; }
+    .nav-right { gap: 10px; flex-shrink: 1; min-width: 0; }
+    .user-profile-nav { gap: 8px; border-right: none; padding-right: 0; }
+    /* The greeting and version tag are the least useful pixels in the bar and
+       the widest. Sign Out must survive them — it is the ONLY sign-out control
+       on the site, and hiding the whole stack strands people signed in. */
+    .greeting-stack { margin: 0; flex-direction: row; align-items: center; }
+    #userGreeting, .greeting-stack .version-tag { display: none; }
+    .version-signout-row { margin: 0; }
+    .sign-out-mini { min-height: 36px; padding: 0 10px; white-space: nowrap; }
+
+    .tools-nav-label { display: none; }
+    .msm-store-select { max-width: 120px; }
+
+    /* Four icons + tools + sign-out is already at the limit of a 390px bar, so
+       the row must be allowed to give ground rather than push past the edge. */
+    .top-actions { gap: 4px; flex-wrap: nowrap; min-width: 0; }
+    .top-actions .action-btn { width: 38px; height: 38px; flex: 0 0 auto; }
+    .top-actions .action-btn svg { width: 18px; height: 18px; }
+
+    /* The tab bar. It stays a child of .top-nav in the DOM (so the
+       body:not(.is-authenticated) hide rule still covers it, and so the
+       .nav-link.active styling keeps working) but is positioned to the
+       viewport. .top-nav carries no transform, so fixed escapes it cleanly. */
+    .top-nav .nav-bar {
+        position: fixed;
+        left: 0; right: 0; bottom: 0;
+        top: auto;
+        display: flex;
+        flex-wrap: nowrap;
+        justify-content: space-around;
+        align-items: stretch;
+        gap: 0;
+        padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+        background: var(--slate-charcoal, #1f2937);
+        border-top: 1px solid rgba(255,255,255,0.10);
+        box-shadow: 0 -4px 18px rgba(0,0,0,0.18);
+        z-index: 120;
+    }
+    .top-nav .nav-bar .nav-link {
+        flex: 1 1 0;
+        min-width: 0;
+        height: auto;
+        min-height: 48px;              /* tap target */
+        padding: 4px 2px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        border-radius: 10px;
+        font-size: 10px;
+    }
+    /* checkNavCompact() adds .nav-compact at these widths and hides the labels.
+       In a tab bar the label is the whole point, so we out-specify it and swap
+       in the short form from data-m instead. */
+    .top-nav.nav-compact .nav-bar .nav-link span,
+    .top-nav .nav-bar .nav-link span { display: none; }
+    .top-nav .nav-bar .nav-link[data-m]::after {
+        content: attr(data-m);
+        display: block;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        line-height: 1;
+        white-space: nowrap;
+    }
+    .top-nav .nav-bar .nav-link i,
+    .top-nav.nav-compact .nav-bar .nav-link i { font-size: 0; }
+    .top-nav .nav-bar .nav-link svg { width: 21px; height: 21px; }
+
+    /* Content clears the slim top bar and the tab bar. */
+    .main-content {
+        padding: 68px 14px calc(78px + env(safe-area-inset-bottom, 0px)) 14px !important;
+        margin-left: 0 !important;
+    }
+    /* The FAB would otherwise sit under the tab bar. */
+    .manage-fab {
+        bottom: calc(78px + env(safe-area-inset-bottom, 0px));
+        right: 16px;
+        padding: 13px 20px;
+    }
+}
+
+/* --- Side panels become full-height sheets ----------------------------------- */
+@media (max-width: 900px) {
+    .tools-side-panel,
+    .goals-side-panel,
+    .checklist-side-panel {
+        top: 0 !important;
+        width: 100%;
+        max-width: 100%;
+        height: 100vh;
+        height: 100dvh;
+        border-radius: 0;
+        border-left: none;
+        z-index: 320;                 /* above the tab bar */
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .tools-panel-header { padding: 16px; }
+    .tools-panel-close { min-width: 40px; min-height: 40px; font-size: 18px; }
+    .tools-panel-body { padding: 12px 12px 28px; }
+}
+
+/* --- Modals become bottom sheets --------------------------------------------
+   Individual modals set their own width (.manage-menu 1050px,
+   #scorecardSubmitModal 1200px, and others), so these need !important to land.
+   This is the one place in the file where that is correct rather than lazy. */
+@media (max-width: 640px) {
+    .modal-menu {
+        top: auto !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        height: 92vh !important;
+        height: 92dvh !important;
+        max-height: 92dvh !important;
+        border-radius: 18px 18px 0 0 !important;
+        transform: translateY(3%) scale(1) !important;
+    }
+    .modal-menu.show { transform: translateY(0) scale(1) !important; }
+
+    .modal-header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        padding: 14px 16px;
+    }
+    /* A grab handle, so the sheet reads as a sheet. */
+    .modal-header::before {
+        content: "";
+        position: absolute;
+        top: 6px; left: 50%;
+        transform: translateX(-50%);
+        width: 38px; height: 4px;
+        border-radius: 2px;
+        background: #d5dbe1;
+    }
+    .modal-header h3 { font-size: 15px; padding-top: 6px; }
+    .modal-header .close-btn,
+    .modal-header button { min-width: 40px; min-height: 40px; }
+
+    .manage-content, .modal-content, .modal-body { padding: 14px !important; }
+    .manage-footer, .modal-footer {
+        padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .manage-footer > button, .modal-footer > button { flex: 1 1 auto; min-height: 44px; }
+}
+
+/* --- Tables ------------------------------------------------------------------
+   Two strategies. Genuinely tabular data (comparisons across many columns)
+   keeps its columns and scrolls, but announces it with an edge fade instead of
+   silently clipping. Row-per-record lists stack into cards via .tbl-stack,
+   which needs data-label on each cell — applied per table in Phase 2. */
+/* `table-layout: fixed` + `width: 100%` does not degrade — below its natural
+   width the columns overlap into unreadable mush rather than clipping. Every
+   such table needs a min-width floor AND a scrolling host, or it turns to soup
+   on a phone. Phase 2 replaces these with .tbl-stack where a card list reads
+   better; this is the floor that keeps them usable until then. */
+@media (max-width: 900px) {
+    #mbBody, .ws-scroll, .weekly-kpi-scroll-area {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    .mb-table { min-width: 760px; }
+    .kb-table, .cb-table, .kpi-full-table { min-width: 640px; }
+}
+
+@media (max-width: 900px) {
+    .tbl-scroll,
+    .kb-table-container, .kpi-scroll-area, .vw-scroll-area, .bd-scroll,
+    .ws-scroll, .weekly-kpi-scroll-area {
+        position: relative;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+        /* Right-edge fade: the "there is more this way" cue. */
+        background:
+            linear-gradient(to right, #fff 30%, rgba(255,255,255,0)) left center / 28px 100% no-repeat,
+            linear-gradient(to left,  #fff 30%, rgba(255,255,255,0)) right center / 28px 100% no-repeat,
+            radial-gradient(farthest-side at 0 50%, rgba(15,23,42,0.14), transparent) left center / 12px 100% no-repeat,
+            radial-gradient(farthest-side at 100% 50%, rgba(15,23,42,0.14), transparent) right center / 12px 100% no-repeat;
+        background-attachment: local, local, scroll, scroll;
+    }
+}
+
+@media (max-width: 640px) {
+    /* Stacked cards. Add data-label="Column Name" to each <td> to light this up. */
+    .tbl-stack { min-width: 0 !important; display: block; }
+    .tbl-stack thead { display: none; }
+    .tbl-stack tbody, .tbl-stack tr, .tbl-stack td { display: block; width: auto; }
+    .tbl-stack tr {
+        margin: 0 0 10px;
+        padding: 10px 12px;
+        border: 1px solid #e3e8ee;
+        border-radius: 12px;
+        background: #fff;
+    }
+    .tbl-stack td {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+        padding: 5px 0;
+        border: none;
+        text-align: right;
+        white-space: normal;
+    }
+    .tbl-stack td::before {
+        content: attr(data-label);
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #64748b;
+        text-align: left;
+    }
+    .tbl-stack td[data-label=""]::before { content: none; }
+
+    /* Tables that keep their columns: drop the desktop min-widths to something a
+       phone can actually pan across rather than 1080px of dead grid. */
+    .dc-tbl { min-width: 640px; }
+    .dc-tbl-score { min-width: 700px; }
+    .lv-tbl, .lv-tbl-buy { min-width: 720px; font-size: 11px; }
+    .bd-tbl { min-width: 640px; }
+}
+
+/* --- Grids collapse ---------------------------------------------------------- */
+@media (max-width: 900px) {
+    .sam-board { grid-template-columns: 1fr; }
+    /* .sam-board > .sam-card is height:300px so the feed column height-matches
+       the rail beside it. Stacked in one column there is nothing to match, and
+       an empty feed became 300px of white. Cap instead of fix: a long feed still
+       scrolls, an empty one collapses to its message. */
+    .speeks-action-menu .sam-board > .sam-card { height: auto; max-height: 65vh; }
+    .speeks-action-menu .sam-feed { max-height: 60vh; }
+    .project-grid, .metrics-grid, .checklist-grid, .records-masonry-grid,
+    .weekly-kpi-grid, .district-master-grid, .dashboard-layout,
+    .bs-widget-container, .ew-dash, .docs-grid {
+        grid-template-columns: 1fr;
+    }
+    /* Stats: Champions / Awards / Records. Records is a keep — it renders as a
+       card grid rather than a table, so it only needs the column collapse. */
+    .records-grid { grid-template-columns: 1fr; }
+    .stats-subnav {
+        width: 100%;
+        max-width: 100%;
+        margin: 2px 0 20px;
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+    .stats-subnav::-webkit-scrollbar { display: none; }
+    .stats-seg { flex: 1 0 auto; justify-content: center; padding: 9px 13px; font-size: 12.5px; }
+
+    .hotbar-container { flex-direction: column; align-items: stretch; gap: 10px; }
+    .hotbar-links { flex-wrap: wrap; gap: 8px; }
+    .hotbar-btn { flex: 1 1 calc(50% - 4px); min-height: 44px; }
+}
+
+/* --- Live Dashboard: phone cards --------------------------------------------
+   Built by _lvCards() in speeks.js, which emits these next to the ten-column
+   selling table. Exactly one of the two is ever visible: cards below 900px, the
+   table above it. Desktop is untouched by design — this is additive. */
+.lv-cards, .lv-cards-legend { display: none; }
+
+@media (max-width: 900px) {
+    .lv-cards-legend {
+        display: block;
+        margin: 0;
+        padding: 0 12px 8px;
+        font-size: 11px;
+        font-style: italic;
+        color: #8b968f;
+    }
+    .lv-cards {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        list-style: none;
+        margin: 0;
+        padding: 0 12px 12px;
+    }
+    .lv-sell-wrap { display: none; }
+
+    .lvc {
+        background: #fff;
+        border: 1px solid #e3ebe6;
+        border-radius: 12px;
+        padding: 11px 13px;
+    }
+    /* The district total is a summary of the rows above it, not a sixth store. */
+    .lvc-roll { background: #f5f8f6; border-color: #d3ded8; }
+
+    .lvc-h { display: flex; align-items: center; gap: 8px; }
+    .lvc-h b { font-size: 14px; font-weight: 800; color: var(--slate-charcoal); }
+    .lvc-h .lv-tint { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+
+    /* Goal % sits on the header line, right-aligned — it is the one figure you
+       scan a column of, so it must land in the same place on every card. */
+    .lvc-goal {
+        margin-left: auto;
+        font-size: 15px;
+        font-weight: 850;
+        font-variant-numeric: tabular-nums;
+        color: #64748b;
+    }
+    .lvc-goal.good { color: #178048; }
+    .lvc-goal.near { color: #8a6d1f; }
+    .lvc-goal.low  { color: #b23636; }
+
+    .lvc-figs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 9px;
+    }
+    .lvc-f { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .lvc-k {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: #7d8d85;
+    }
+    .lvc-v {
+        font-size: 17px;
+        font-weight: 800;
+        color: var(--slate-charcoal);
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* Shown only when a store has no goal set — the exception, not the rule. */
+    .lvc-goal-lab {
+        margin-top: 8px;
+        padding-top: 7px;
+        border-top: 1px solid #eef2f0;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #9aa6a0;
+        text-align: right;
+    }
+
+    .lvc-err { background: #fdf6f6; border-color: #e7cccc; }
+    .lvc-errmsg { margin: 6px 0 0; font-size: 12px; color: #b23636; }
+}
+
+/* --- Segmented controls / tab bars ------------------------------------------
+   The Command Center, Store Health and Workspace tab strips size their tabs off
+   a min-width tuned for a full-width desktop panel (.cc-seg is 140px each, so
+   four tabs demand 560px). They wrap instead of overflowing. */
+@media (max-width: 900px) {
+    .cc-seg, .sh-seg, .timeframe-toggle, .goal-tab-container {
+        flex-wrap: wrap;
+        width: 100%;
+        height: auto !important;
+    }
+    .cc-seg .toggle-btn, .sh-seg .toggle-btn {
+        min-width: 0;
+        flex: 1 1 auto;
+    }
+    .cc-tabbar { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+    .cc-tabbar-right { flex: 1 1 100%; justify-content: flex-start; }
+
+    /* Workspace / Operations section rails. These are peer sections, not a
+       segmented control, so they scroll sideways as one strip rather than
+       wrapping into three ragged rows. Equal-width (flex:1 1 0) is a desktop
+       affordance — on a phone each tab takes the width its label needs. */
+    .ws-subtabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        /* the underline must run the full scroll width, not just the viewport */
+        margin-bottom: 0;
+    }
+    .ws-subtabs::-webkit-scrollbar { display: none; }
+    .ws-subtabs .ws-tab {
+        flex: 0 0 auto;
+        padding: 11px 14px;
+        font-size: 12.5px;
+    }
+    .ws-titlebar { gap: 10px; }
+    .ws-title { font-size: 18px; }
+}
+
+@media (max-width: 640px) {
+    .ekpi-grid, .bd-strip { grid-template-columns: repeat(2, 1fr); }
+    .hotbar-btn { flex: 1 1 100%; }
+    /* Fixed panel heights are a desktop conceit — on a phone they either clip
+       content or leave a hole. Let content decide. */
+    .ew-dash > *, .cc-panel, .employee-kpi-body, .employee-widget-body {
+        height: auto !important;
+        min-height: 0 !important;
+    }
+}
+
+/* --- Forms and tap targets ---------------------------------------------------- */
+@media (max-width: 900px) {
+    /* iOS Safari zooms the viewport on focus for any input under 16px and never
+       zooms back out. This one rule prevents the single most common "the site
+       feels broken on my phone" complaint. */
+    input, select, textarea,
+    .form-input, .form-input-lg, .kpi-select, .metric-dropdown {
+        font-size: 16px !important;
+    }
+    input, select, textarea, button, .btn, .action-btn, .tool-btn {
+        min-height: 44px;
+    }
+    input[type="checkbox"], input[type="radio"] { min-height: 0; }
+    .form-input, .form-input-lg, input[type="text"], input[type="number"],
+    input[type="date"], select, textarea {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+    /* Rows of controls that were laid out side by side. */
+    .kpi-header-controls, .chart-controls, .modal-actions, .filter-row {
+        flex-wrap: wrap;
+        width: 100%;
+        gap: 8px;
+    }
+}
+
+/* --- Tap feedback ------------------------------------------------------------- */
+@media (hover: none) {
+    /* Hover lifts read as stuck states on touch — a card that transformed on tap
+       stays transformed until you tap elsewhere. */
+    .sam-card:hover, .doc-card:hover, .hotbar-btn:hover, .manage-fab:hover {
+        transform: none;
+    }
+    a, button, .nav-link, .hotbar-btn, .tool-link {
+        -webkit-tap-highlight-color: rgba(90, 141, 59, 0.15);
+    }
+}
+
+/* --- Login screen -------------------------------------------------------------
+   Deliberately absent. The auth screen was built responsive (clamp() sizing plus
+   its own 430px block near .auth-page) and measures clean at 390px — verified,
+   not assumed. Do not add rules here without a measurement showing a real
+   problem; a second set of login breakpoints is how the sprawl started. */

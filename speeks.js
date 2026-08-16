@@ -5964,6 +5964,8 @@ function switchOperationsTab(name) {
         _startB2bSync();
     } else if (name === 'marginguide') {
         mgLoad();
+    } else if (name === 'ebay') {
+        ecLoad();
     }
 }
 
@@ -7340,7 +7342,7 @@ function initOperations() {
     const sign = hash.match(/^b2b-sign-([A-Za-z0-9-]{6,})$/);
     if (sign) _b2bPendingSign = sign[1];
     let initial = sign ? 'b2b'
-        : ['marginguide', 'callbacks', 'b2b'].includes(hash) ? hash : 'marginguide';
+        : ['marginguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
     if (!tabVisible('ops-tab-' + initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ops-tab-"]'))
@@ -8681,7 +8683,10 @@ function handleSignOut() {
     // user's PIN stayed readable in the tab until the next login overwrote it.
     ['speeksUnlocked', 'speeksUserName', 'speeksUserRole', 'speeksUserStore',
      'speeksMultiStore', 'speeksUserPin', 'speeksUserOnboardedAt',
-     'speeksSeenCommentKeys'].forEach(function (k) { sessionStorage.removeItem(k); });
+     'speeksSeenCommentKeys', 'speeksConnectFeed'].forEach(function (k) { sessionStorage.removeItem(k); });
+    // The SPEEKS Connect feed is held in memory as well as in storage, and
+    // sign-out does not always end in a reload.
+    if (typeof ecClearFeed === 'function') ecClearFeed();
 
     // Hide authenticated chrome and close any open panels BEFORE reloading, so the
     // teardown/fetch window can't briefly paint role-gated controls (e.g. the green
@@ -12217,6 +12222,59 @@ function _lvStoreRow(v, d, foot, rev) {
         + '<td>' + tail + '</td></tr>';
 }
 
+// The phone view of the selling table.
+//
+// This is a REDUCTION, not a reflow. The table carries ten columns and a 390px
+// screen can hold three, so rather than shrink all ten into unreadability it
+// shows the three figures that answer "how is each store doing right now":
+// sell value, sell margin, and progress against the month's goal.
+//
+// One honesty note on the third figure. pctOfGoal is `mtdGp / goal * 100` — it
+// measures GROSS PROFIT against the monthly GP goal, and it stays month-scoped
+// even when the panel is set to Today or Yesterday (see the field list above
+// _lvView). So it is labelled "to GP goal · month" rather than a bare "to goal",
+// which on a Today view would read as a claim about today.
+//
+// Emitted next to the table, not instead of it: CSS shows exactly one of the two,
+// so the desktop table is untouched and this cannot regress it.
+function _lvCards(stores, d, rollup, rollupLabel) {
+    function card(v, isRoll) {
+        const tint = (!isRoll && STORE_TINTS[v.code])
+            ? '<i class="lv-tint" style="background:' + STORE_TINTS[v.code] + '"></i>' : '';
+        const head = '<div class="lvc-h">' + tint + '<b>' + escapeHtml(String(v.code || '')) + '</b>';
+        if (v.error) {
+            return '<li class="lvc lvc-err">' + head + '</div>'
+                + '<p class="lvc-errmsg">not reporting &middot; ' + escapeHtml(v.error) + '</p></li>';
+        }
+        const pct = v.pctOfGoal;
+        const has = !(pct === null || pct === undefined);
+        // Same three-band read as the pace column: at or past goal, within reach,
+        // or behind. Colour carries it so the row is scannable without reading.
+        const band = !has ? '' : (Number(pct) >= 100 ? ' good' : (Number(pct) >= 75 ? ' near' : ' low'));
+        return '<li class="lvc' + (isRoll ? ' lvc-roll' : '') + '">'
+            + head + '<span class="lvc-goal' + band + '">' + _lvPct(pct) + '</span></div>'
+            + '<div class="lvc-figs">'
+            + '<div class="lvc-f"><span class="lvc-k">Sell value</span>'
+            + '<span class="lvc-v">' + _lvMoney(v.netToday, false) + '</span></div>'
+            + '<div class="lvc-f"><span class="lvc-k">Margin</span>'
+            + '<span class="lvc-v">' + _lvPct(v.marginToday) + '</span></div>'
+            + '</div>'
+            // Only the exception is worth a per-card line. Stating "to GP goal"
+            // on every card repeats the same six words six times; it is said once
+            // in the legend below instead.
+            + (has ? '' : '<div class="lvc-goal-lab">no goal set</div>')
+            + '</li>';
+    }
+
+    let html = '<p class="lv-cards-legend">Percentage is month-to-date gross profit against goal.</p>'
+        + '<ul class="lv-cards">';
+    stores.forEach(m => { html += card(_lvView(m), false); });
+    if (rollup) {
+        html += card(Object.assign({}, _lvView(rollup), { code: rollupLabel, name: '' }), true);
+    }
+    return html + '</ul>';
+}
+
 function _lvTable(stores, d, rollup, rollupLabel) {
     const prev = _lvIsPrev();
     // Refunds has a column of its own now, so the tail column — which was Refunds
@@ -12234,7 +12292,8 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     // sell a device, so it belongs beside what was bought off them, not beside
     // what was sold to somebody else. Moved to _lvBuyBlock (user's call).
     let html = _lvSplit('Selling', '')
-        + '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
+        + _lvCards(stores, d, rollup, rollupLabel)
+        + '<div class="lv-tbl-scroll lv-sell-wrap"><table class="lv-tbl"><thead><tr>'
         + '<th>Store</th><th>' + (_lvMode === 'today' ? 'Net today' : 'Net sales') + '</th>'
         + '<th>Cost</th><th>Gross profit</th>'
         + '<th>Refunds</th><th>Orders</th><th>Margin</th>'
@@ -29493,6 +29552,7 @@ const FEATURE_CATALOG = [
     { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
+    { key: 'widget-ops-ebay',          label: 'SPEEKS Connect (Tab)',          tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -29683,7 +29743,7 @@ const _SECTION_TABS = {
     // 'widget-margin-replies' is intentionally omitted — see the parked block in
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
-    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks', 'widget-ops-b2b'],
+    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks', 'widget-ops-b2b', 'widget-ops-ebay'],
 };
 
 function _applySectionNavVisibility(userRoleClass, userName) {
@@ -30403,6 +30463,7 @@ const JUMP_KEYWORDS = {
     'widget-ops-marginguide':    'margin guide buy ladder buying percentages offer ceiling rebuttals condition testing tips projection what should i offer',
     'widget-ops-callbacks':      'callback sheet call back call backs customer calls waiting hold looking for item phone',
     'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
+    'widget-ops-ebay':           'speeks connect ebay listings upload list publish online marketplace sku',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
     'widget-variance-replies':   'variance replies gm notes dm notes markdown discount negative',
@@ -30461,6 +30522,7 @@ const JUMP_PLACES = [
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
+    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: 'widget-ops-ebay',             page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
     // card are separate Feature Access keys, and a single row would be invisible to
@@ -39534,3 +39596,788 @@ async function saveNotifySettings() {
     }
 }
 window.saveNotifySettings = saveNotifySettings;
+
+/* ========================================================================== *
+ * MODULE: SPEEKS CONNECT (operations.html #ops-pane-ebay)
+ * --------------------------------------------------------------------------
+ * Our own eBay listing channel. Scan a SKU, watch it go up.
+ *
+ * SPEEKS CONNECT RUNS INDEPENDENTLY OF MARKETPLACE CONNECT. A SKU listed here
+ * is not one MC handles, so this panel reports on OUR listings only and makes
+ * no claim about the rest of the catalog. It deliberately does not try to
+ * answer "what else could be listed" — the store decides that by scanning.
+ *
+ * THE FEED IS THIS SESSION'S WORK, NOT A LEDGER. What you see is what you
+ * uploaded since you signed in, held in sessionStorage and dropped at sign-out.
+ * That is the whole point: the person at the counter is listing a shelf right
+ * now and wants to see those items turn live, not scroll past nine hundred
+ * things somebody listed in March. The permanent record still exists — every
+ * upload writes an ebay_listings row, which is what drives the eBay sync, the
+ * collision guard and the DM's All Stores view — the panel simply stops
+ * showing all of it. On load the feed is re-read against the server, so a row
+ * that sold or was ended while you were away tells the truth rather than the
+ * state it had when you uploaded it.
+ *
+ * TWO VIEWS:
+ *   listings   this session's uploads                        (everyone)
+ *   health     live and error counts per store               (DM and CEO)
+ *
+ * ONE ENDPOINT, AUTHENTICATED BY PIN. The operator secret that guards every
+ * other ebay-* function must never appear in this file — a secret shipped in
+ * public JavaScript is not a secret. `ebay-channel` takes x-user-pin, does the
+ * role check server-side, and makes the privileged calls itself. It returns a
+ * `scope` describing what this person may do, and that is what decides whether
+ * a control is drawn at all.
+ * ========================================================================== */
+
+const EBAY_CHANNEL_URL = `${_BASE}/ebay-channel`;
+
+// Session-scoped, and per store so a DM switching stores does not inherit
+// somebody else's shelf. One key, so sign-out clears it with one removeItem.
+const EC_FEED_KEY = 'speeksConnectFeed';
+
+let _ecView = 'listings';
+let _ecStore = null;
+let _ecScope = null;
+let _ecData = null;          // { summary, items } — the server's permanent record
+let _ecHealth = null;
+let _ecFeed = [];            // this session's uploads, newest first
+let _ecBusy = false;
+
+const _ecEsc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+const _ecMoney = n => (n == null || n === '') ? '—'
+    : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function _ecAgo(iso) {
+    if (!iso) return '—';
+    const ms = Date.now() - Date.parse(iso);
+    if (!isFinite(ms)) return '—';
+    const mins = Math.round(ms / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins} min ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs} hr${hrs === 1 ? '' : 's'} ago`;
+    const days = Math.round(hrs / 24);
+    if (days <= 14) return `${days} day${days === 1 ? '' : 's'} ago`;
+    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+async function _ecFetch(path) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(`${EBAY_CHANNEL_URL}${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`,
+        { headers: { 'x-user-pin': pin } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || body.error || `Request failed (${r.status})`);
+    return body;
+}
+
+async function _ecPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(EBAY_CHANNEL_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok && body.ok !== false, status: r.status, body };
+}
+
+// --- the session feed -------------------------------------------------------
+
+const _ecSame = (a, b) => String(a || '').toUpperCase() === String(b || '').toUpperCase();
+
+function _ecFeedLoad() {
+    try {
+        const all = JSON.parse(sessionStorage.getItem(EC_FEED_KEY) || '{}');
+        _ecFeed = Array.isArray(all[_ecStore]) ? all[_ecStore] : [];
+    } catch (e) {
+        _ecFeed = [];
+    }
+}
+
+function _ecFeedSave() {
+    try {
+        const all = JSON.parse(sessionStorage.getItem(EC_FEED_KEY) || '{}');
+        all[_ecStore] = _ecFeed;
+        sessionStorage.setItem(EC_FEED_KEY, JSON.stringify(all));
+    } catch (e) {
+        // A blocked or full sessionStorage costs the history, not the upload.
+    }
+}
+
+// Signed out means done. Called from handleSignOut so the next person at the
+// same terminal starts on an empty shelf instead of yours.
+function ecClearFeed() {
+    _ecFeed = [];
+    try { sessionStorage.removeItem(EC_FEED_KEY); } catch (e) { /* non-fatal */ }
+}
+window.ecClearFeed = ecClearFeed;
+
+// The feed remembers what you uploaded; the server knows what became of it.
+// Anything that changed while the tab sat idle — it sold, someone ended it,
+// the sweep caught it gone — is corrected here rather than left showing the
+// state it had at upload.
+function _ecFeedReconcile() {
+    if (!_ecFeed.length || !_ecData?.items) return;
+    const byS = new Map(_ecData.items.map(i => [String(i.sku).toUpperCase(), i]));
+    _ecFeed = _ecFeed.map(e => {
+        // A row still waiting on its own request is the one thing the server
+        // cannot know about yet. Leave it pending.
+        if (e.state === 'pending') return e;
+        const live = byS.get(String(e.sku).toUpperCase());
+        return live ? { ...e, ...live } : e;
+    });
+    _ecFeedSave();
+}
+
+// --- entry ------------------------------------------------------------------
+
+async function ecLoad() {
+    const body = document.getElementById('ecBody');
+    if (!body) return;
+    if (!_ecData) body.innerHTML = '<div class="status-message">Loading SPEEKS Connect…</div>';
+    try {
+        if (_ecView === 'health') {
+            _ecHealth = await _ecFetch('?view=health');
+            _ecScope = _ecHealth.scope;
+        } else {
+            _ecData = await _ecFetch(`?view=listings${_ecStore ? `&store=${_ecStore}` : ''}`);
+            _ecScope = _ecData.scope;
+            _ecStore = _ecData.store;
+            _ecFeedLoad();
+            _ecFeedReconcile();
+        }
+        _ecSyncChrome();
+        ecRender();
+    } catch (e) {
+        body.innerHTML = `<div class="ec-empty">Could not load SPEEKS Connect.<br>
+            <span style="font-weight:600;color:var(--cb-faint);">${_ecEsc(e.message)}</span></div>`;
+    }
+}
+
+// Store picker and the All Stores tab come from the scope the SERVER returned,
+// never from the browser's own idea of the role. This only avoids drawing a
+// control that would 403; the edge function is what actually decides.
+function _ecSyncChrome() {
+    const sub = document.getElementById('ecSubtitle');
+    const sel = document.getElementById('ecStoreFilter');
+    const health = document.getElementById('ecViewHealthBtn');
+    if (health) health.style.display = _ecScope?.allStores ? '' : 'none';
+    // Everyone but the DM and the CEO has exactly one view. A toggle offering
+    // a single option is a button that does nothing, so it goes with the
+    // second view rather than sitting there inviting a click.
+    const toggle = document.getElementById('ecViewToggle');
+    if (toggle) toggle.style.display = _ecScope?.allStores ? '' : 'none';
+
+    if (sel) {
+        const many = (_ecScope?.stores || []).length > 1;
+        sel.style.display = many && _ecView !== 'health' ? '' : 'none';
+        if (many) {
+            sel.innerHTML = _ecScope.stores
+                .map(s => `<option value="${s}"${s === _ecStore ? ' selected' : ''}>${s}</option>`).join('');
+        }
+    }
+    if (sub) {
+        const errs = _ecFeed.filter(e => e.state === 'failed').length;
+        sub.textContent = _ecView === 'health' ? 'Every store, at a glance'
+            : !_ecData?.summary?.connected ? `${_ecStore || ''} · Not connected to eBay yet`
+            : !_ecFeed.length ? `${_ecStore} · Scan a SKU to list it on eBay`
+            : `${_ecStore} · ${_ecFeed.length} Uploaded this session`
+              + (errs ? `, ${errs} with an error` : '');
+    }
+    // The pip counts this session's errors, because that is what the tab shows.
+    const pip = document.getElementById('ecFailPip');
+    if (pip) {
+        const errs = _ecFeed.filter(e => e.state === 'failed').length;
+        pip.style.display = errs ? '' : 'none';
+        pip.textContent = errs;
+    }
+}
+
+function ecSetView(view) {
+    _ecView = view;
+    ['listings', 'health'].forEach(v => {
+        const b = document.getElementById('ecView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
+        if (b) b.classList.toggle('active', v === view);
+    });
+    ecLoad();
+}
+
+function ecSetStore(store) {
+    _ecStore = store;
+    _ecData = null;
+    ecLoad();
+}
+
+// --- render -----------------------------------------------------------------
+
+function ecRender() {
+    const body = document.getElementById('ecBody');
+    if (!body) return;
+    _ecSyncChrome();
+
+    if (_ecView === 'health') { body.innerHTML = _ecHealthHtml(); return; }
+
+    const s = _ecData?.summary;
+    if (!s) { body.innerHTML = '<div class="ec-empty">No store selected.</div>'; return; }
+    if (!s.connected) {
+        body.innerHTML = `<div class="ec-empty">${_ecEsc(_ecStore)} is not connected to eBay yet.</div>`;
+        return;
+    }
+
+    body.innerHTML = _ecQuickHtml() + _ecFeedHtml();
+}
+
+// The whole point of the tab: scan a SKU, send it. Several at once is allowed
+// because a store listing a shelf does not want to do this one row at a time.
+function _ecQuickHtml() {
+    if (!_ecScope?.canList) return '';
+    // Clear List only appears once there is a list to clear, and it clears the
+    // panel, not eBay — nothing that is live comes down. Said plainly on the
+    // button's title because "clear" next to a column of live listings could be
+    // read the other way.
+    return `
+    <div class="ec-quick">
+      <input id="ecSkuInput" placeholder="Scan Or Type A SKU"
+             onpaste="ecPasteSkus(event)"
+             onkeydown="if(event.key==='Enter')ecListTyped()">
+      <button class="ec-btn ec-btn-go" onclick="ecListTyped()">Upload To eBay</button>
+      ${_ecFeed.length ? `<button class="ec-btn" onclick="ecClearList()"
+         title="Empties this list. Nothing on eBay changes.">Clear List</button>` : ''}
+    </div>`;
+}
+
+function _ecFeedHtml() {
+    if (!_ecFeed.length) {
+        return `<div class="ec-empty">Nothing uploaded yet this session.<br>
+          <span style="font-weight:600;color:var(--cb-faint);">Scan a SKU above and it will appear here.</span></div>`;
+    }
+    return `
+    <table class="cb-table">
+      <thead><tr>
+        <th style="width:30%;">Item</th>
+        <th style="width:15%;" class="cb-col-status">eBay Category</th>
+        <th style="width:9%;" class="cb-col-status">Price</th>
+        <th style="width:13%;" class="cb-col-status">Status</th>
+        <th style="width:17%;" class="cb-col-status">Open</th>
+        <th style="width:16%;"></th>
+      </tr></thead>
+      <tbody>${_ecFeed.map(_ecRow).join('')}</tbody>
+    </table>`;
+}
+
+const _EC_ICON_LINK = '<svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+
+function _ecRow(i) {
+    const sku = _ecEsc(i.sku);
+    const pending = i.state === 'pending';
+
+    const chip = pending
+        ? '<span class="cb-chip ec-chip-pending"><span class="ec-spin"></span>Pending</span>'
+        : i.state === 'failed'   ? '<span class="cb-chip ec-chip-err">Error</span>'
+        : i.state === 'disabled' ? '<span class="cb-chip ec-chip-off">Disabled</span>'
+        : i.state === 'ended'    ? '<span class="cb-chip cb-chip-expired">Sold Or Ended</span>'
+        : '<span class="cb-chip cb-chip-completed">Live</span>';
+
+    // Both halves of the same item, one click each. The Shopify pill is drawn
+    // whenever we know the product — including on a failure, which is exactly
+    // when somebody needs to open it and fix what eBay complained about.
+    const pill = (href, label, cls) => href
+        ? `<a class="ec-pill ${cls}" href="${_ecEsc(href)}" target="_blank" rel="noopener"
+             >${label}${_EC_ICON_LINK}</a>`
+        : '';
+    const links = pending ? '<span class="ec-muted">—</span>'
+        : (pill(i.ebayUrl, 'eBay', 'ec-pill-ebay') + pill(i.shopifyUrl, 'Shopify', 'ec-pill-shopify'))
+          || '<span class="ec-muted">—</span>';
+
+    // The SKU rides in a data attribute rather than inside the onclick string.
+    // It is typed by a person, and one containing a quote would come back out of
+    // _ecEsc as &#39;, which the parser decodes before the JS is read — closing
+    // the argument early and breaking the row's own buttons. dataset hands back
+    // the decoded original with no quoting problem to get wrong.
+    // Disable and Enable are the same row's two states, so the button flips in
+    // place rather than the line fading out. A greyed row reads as "gone", and
+    // a listing you turned off yourself is not gone — it is one click from back.
+    //
+    // A conflict gets no button at all. Something else on the account holds this
+    // SKU, so trying again fails identically every time; the eBay link is the
+    // only move, and it is already sitting in the row.
+    const acts = pending || !_ecScope?.canList || i.conflict ? ''
+        : i.state === 'live'
+            ? `<button class="ec-btn ec-btn-sm ec-btn-off" data-sku="${sku}"
+                 onclick="ecDisable(this.dataset.sku, this)">Disable</button>`
+            : `<button class="ec-btn ec-btn-sm${i.state === 'disabled' ? ' ec-btn-on' : ''}" data-sku="${sku}"
+                 onclick="ecListOne(this.dataset.sku, this)">${
+                  i.state === 'disabled' ? 'Enable'
+                  : i.state === 'failed' ? 'Try Again' : 'Upload Again'}</button>`;
+
+    // eBay picks the category from the title, not the store — so it is the one
+    // part of a listing nobody here chose and nobody could see. Worth showing on
+    // every row: when it lands somewhere odd, the refusal that follows reads as
+    // a condition problem when the category was the actual mistake.
+    const catLabel = i.category || (i.categoryId ? `#${i.categoryId}` : 'Choose Category');
+    const cat = pending ? '<span class="ec-muted">—</span>'
+        : !_ecScope?.canList
+            ? `<span class="ec-cat">${_ecEsc(catLabel)}</span>`
+            : `<button class="ec-catbtn${i.category ? '' : ' ec-catbtn-none'}" data-sku="${sku}"
+                 title="eBay category ${_ecEsc(i.categoryId || '')} — click to change it"
+                 onclick="ecOpenCategory(this.dataset.sku, this)">
+                 <span class="ec-catbtn-t">${_ecEsc(catLabel)}</span>
+                 <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+               </button>`;
+
+    // The × leads the row rather than trailing the title: titles are ellipsized
+    // to fit, so anything after them lands in a different place on every line.
+    const row = `
+    <tr class="cb-row ec-r-${i.state}">
+      <td><div class="ec-item">
+        ${pending ? '<span class="ec-x-gap"></span>'
+          : `<button class="ec-x" data-sku="${sku}" title="Remove From This List"
+               aria-label="Remove ${sku} from this list"
+               onclick="ecRemoveOne(this.dataset.sku)">&times;</button>`}
+        <div class="ec-item-txt">
+          <span class="ec-item-t" title="${_ecEsc(i.title || i.sku)}">${_ecEsc(i.title || i.sku)}</span>
+          <span class="ec-item-s">${sku}</span>
+        </div>
+      </div></td>
+      <td class="cb-cell-status">${cat}</td>
+      <td class="cb-cell-status ec-money">${_ecMoney(i.price)}</td>
+      <td class="cb-cell-status">${chip}</td>
+      <td class="cb-cell-status"><div class="ec-pills">${links}</div></td>
+      <td><div class="ec-acts">${acts}</div></td>
+    </tr>`;
+
+    // The reason sits open under the row it belongs to. Collapsing it would hide
+    // the only part of a failure anybody can act on.
+    //
+    // What shows is the plain-English translation the edge function makes, not
+    // eBay's own text — that arrives as API vocabulary wrapped around several
+    // hundred words of raw markup, which is what put a wall of <div class="rcp">
+    // across this table. eBay's exact wording is one click away for whoever
+    // needs to escalate, and folded shut for everyone who does not.
+    if (i.state === 'failed' && i.error) {
+        const raw = i.errorRaw && i.errorRaw !== i.error
+            ? `<details class="ec-fail-raw"><summary>eBay's Exact Wording</summary>
+                 <div class="ec-fail-rawtext">${_ecEsc(i.errorRaw)}</div></details>`
+            : '';
+        return row + `
+        <tr class="ec-fail"><td colspan="6"><div class="ec-fail-in">
+          <div class="ec-fail-msg">${_ecEsc(i.error)}${raw}</div>
+        </div></td></tr>`;
+    }
+    return row;
+}
+
+function _ecHealthHtml() {
+    const stores = _ecHealth?.stores || [];
+    if (!stores.length) return '<div class="ec-empty">No stores to show.</div>';
+    return `<div class="ec-health">${stores.map(s => {
+        const c = s.counts;
+        const chip = !s.connected
+            ? '<span class="cb-chip cb-chip-expired"><span class="ec-dot ec-dot-off"></span>Not Connected</span>'
+            : c.failed
+                ? '<span class="cb-chip ec-chip-fail">' + c.failed + ' To Fix</span>'
+                : '<span class="cb-chip cb-chip-completed"><span class="ec-dot ec-dot-ok"></span>Live</span>';
+        const row = (k, v, cls) => `<div class="ec-hrow"><span class="ec-hk">${k}</span><span class="ec-hv ${cls || ''}">${v}</span></div>`;
+        return `
+        <div class="ec-hcard">
+          <div class="ec-hhead"><span class="ec-hstore">${_ecEsc(s.store)}</span>${chip}</div>
+          <div class="ec-hbody">
+            ${row('Live On eBay', s.connected ? c.live : '—', s.connected ? 'ec-ok' : 'ec-off')}
+            ${row('Did Not Upload', s.connected ? c.failed : '—',
+                  !s.connected ? 'ec-off' : c.failed ? 'ec-warn' : 'ec-ok')}
+            ${row('Checked Against eBay', s.freshness.liveMinutes == null ? 'Never'
+                  : _ecAgo(new Date(Date.now() - s.freshness.liveMinutes * 60000).toISOString()),
+                  s.freshness.liveMinutes == null ? 'ec-off'
+                  : s.freshness.liveMinutes > 90 ? 'ec-warn' : 'ec-ok')}
+          </div>
+        </div>`;
+    }).join('')}</div>`;
+}
+
+// --- actions ----------------------------------------------------------------
+
+// Spaces, commas, tabs and newlines all separate. Somebody pasting a column out
+// of a spreadsheet should not have to reformat it first.
+const _ecSkus = text => String(text || '').split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+
+// A COLUMN PASTED FROM A SHEET ARRIVES AS ONE WORD WITHOUT THIS.
+// A single-line <input> runs the HTML value sanitization algorithm on whatever
+// is put into it, and that algorithm STRIPS carriage returns and line feeds —
+// it does not turn them into spaces. So ten SKUs pasted one per line become one
+// hundred and fifty unbroken characters, and the splitter downstream never sees
+// a boundary to split on. It reads as "you must type commas", which is what a
+// store concluded. Catch the paste, normalize the whitespace to single spaces
+// while the newlines still exist, and insert that instead.
+function ecPasteSkus(ev) {
+    const text = (ev.clipboardData || window.clipboardData)?.getData('text') || '';
+    // An ordinary one-SKU paste needs no help; leave the browser to it so the
+    // undo stack and the caret behave the way people expect.
+    if (!/[\r\n\t]/.test(text)) return;
+    ev.preventDefault();
+
+    const input = ev.target;
+    const clean = _ecSkus(text).join(' ');
+    // Honour the caret and any selection: pasting into a part-typed box should
+    // insert, not overwrite the lot.
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(end);
+    const gap = before && !/\s$/.test(before) ? ' ' : '';
+    input.value = before + gap + clean + after;
+    const caret = (before + gap + clean).length;
+    input.setSelectionRange(caret, caret);
+}
+window.ecPasteSkus = ecPasteSkus;
+
+// Fold a result back into the row it belongs to and repaint.
+function _ecApply(sku, patch) {
+    const idx = _ecFeed.findIndex(e => _ecSame(e.sku, sku));
+    if (idx < 0) return;
+    _ecFeed[idx] = { ..._ecFeed[idx], ...patch };
+    _ecFeedSave();
+    ecRender();
+}
+
+async function _ecUpload(sku, extra) {
+    const res = await _ecPost({ action: 'list', store: _ecStore, sku, ...(extra || {}) });
+    const b = res.body || {};
+    if (res.ok) {
+        // conflict is cleared explicitly: _ecApply merges, and the server's item
+        // has no such key, so a row that once conflicted would keep the flag —
+        // and stay stuck without its buttons — after the conflict was resolved.
+        _ecApply(sku, { ...(b.item || { state: 'live' }), conflict: false, error: null });
+        return true;
+    }
+    // The row the server wrote carries the title, price and Shopify link, all
+    // of which are worth having on a failed row. Its own last_error is the same
+    // message, but the response's detail is the fuller one — the 409 collision
+    // reply, for instance, explains itself and last_error would not.
+    // The row the server wrote is preferred: its `error` has already been turned
+    // into plain English, where b.error is whatever eBay said verbatim. b.detail
+    // still wins for the cases the edge function explains itself, like a
+    // collision, which never reach the listings table at all.
+    _ecApply(sku, {
+        ...(b.item || {}),
+        state: 'failed',
+        conflict: !!b.conflict,
+        error: b.item?.error || b.detail || b.error || 'Upload failed.',
+    });
+    return false;
+}
+
+/* --- the category picker ---------------------------------------------------
+ * eBay picks the category from our title, and it is the one part of a listing
+ * nobody at the store chose. When it lands wrong the refusal that follows reads
+ * as something else entirely — a pair of Ray-Ban Meta smart glasses filed under
+ * Sunglasses came back as a *condition* error, because Sunglasses will not take
+ * the grade we send.
+ *
+ * So the category is now a control rather than a label. Opening it asks the
+ * marketplace where the same product actually sells (Browse, sampled live) and
+ * offers a search across eBay's tree for anything else. Picking one re-uploads
+ * with it, because choosing a category is only ever done in order to list.
+ *
+ * The popover lives on <body>, not inside #ecBody: ecRender() replaces that
+ * subtree wholesale on every state change, and an open dropdown inside it would
+ * vanish mid-interaction.
+ */
+
+let _ecCatSku = null;
+let _ecCatTimer = null;
+let _ecCatAnchor = null;
+
+// KEEP IT ON THE PAGE, AFTER THE CONTENT LANDS.
+// Placing it once at open time is not enough: at that moment the popover holds
+// a one-line "checking…" and is a couple of hundred pixels shorter than it will
+// be once the market sample or twenty-five search results arrive. Measured then
+// and never again, it grows downward off the bottom of the window. So the list
+// gets a max-height cut from whatever room actually exists, and every path that
+// changes the contents calls this again.
+function _ecCatPlace() {
+    const pop = document.getElementById('ecCatPop');
+    const anchor = _ecCatAnchor;
+    // ecRender() replaces the row while the popover is open on some paths; an
+    // anchor no longer in the document has no position to speak of.
+    if (!pop || !anchor || !anchor.isConnected) return;
+
+    const MARGIN = 10, GAP = 6;
+    const vh = window.innerHeight, vw = window.innerWidth;
+    const r = anchor.getBoundingClientRect();
+
+    // THE ANCHOR ITSELF MAY BE OFF SCREEN — a row below the fold, or the window
+    // shrunk under an open popover. Measuring room from a rect that starts at
+    // y=626 in a 560px window says there are 610 pixels "above" it, and placing
+    // the popover there puts it off the bottom just as surely as placing it
+    // below would. Clamping the reference edges into the viewport first makes
+    // both directions honest.
+    const aTop = Math.max(MARGIN, Math.min(r.top, vh - MARGIN));
+    const aBottom = Math.max(MARGIN, Math.min(r.bottom, vh - MARGIN));
+
+    const below = vh - aBottom - GAP - MARGIN;
+    const above = aTop - GAP - MARGIN;
+    // Flip upward only when below is genuinely cramped and above is roomier.
+    const useAbove = below < 240 && above > below;
+    // Never taller than the window, whichever way it goes.
+    const room = Math.min(vh - 2 * MARGIN, Math.max(150, useAbove ? above : below));
+
+    const list = pop.querySelector('.ec-catpop-list');
+    if (list) {
+        // Measure the head and search box rather than hard-coding their height,
+        // so this keeps working if either changes.
+        list.style.maxHeight = 'none';
+        const chrome = pop.offsetHeight - list.offsetHeight;
+        list.style.maxHeight = `${Math.max(90, room - chrome)}px`;
+    }
+
+    const h = pop.offsetHeight;
+    const w = pop.offsetWidth;
+    const wanted = useAbove ? aTop - GAP - h : aBottom + GAP;
+    // Final clamp. Whatever the arithmetic above concluded, it has to be on the
+    // page — this is the line that makes clipping impossible rather than
+    // unlikely.
+    pop.style.top = `${Math.max(MARGIN, Math.min(wanted, vh - h - MARGIN))}px`;
+    pop.style.left = `${Math.max(MARGIN, Math.min(r.left, vw - w - MARGIN))}px`;
+}
+
+// The popover is fixed but its anchor scrolls with the table, so it has to
+// follow. Capture phase catches the panel's own scroller as well as the window.
+function _ecCatReflow() {
+    if (!document.getElementById('ecCatPop')) return;
+    if (!_ecCatAnchor?.isConnected) { ecCloseCategory(); return; }
+    _ecCatPlace();
+}
+
+function _ecCatOutside(ev) {
+    const pop = document.getElementById('ecCatPop');
+    if (pop && !pop.contains(ev.target)) ecCloseCategory();
+}
+function _ecCatEsc(ev) { if (ev.key === 'Escape') ecCloseCategory(); }
+
+function ecCloseCategory() {
+    document.getElementById('ecCatPop')?.remove();
+    document.removeEventListener('mousedown', _ecCatOutside, true);
+    document.removeEventListener('keydown', _ecCatEsc, true);
+    document.removeEventListener('scroll', _ecCatReflow, true);
+    window.removeEventListener('resize', _ecCatReflow);
+    clearTimeout(_ecCatTimer);
+    _ecCatSku = null;
+    _ecCatAnchor = null;
+}
+window.ecCloseCategory = ecCloseCategory;
+
+async function ecOpenCategory(sku, btn) {
+    // A second click on the same row closes it rather than stacking another.
+    if (_ecCatSku && _ecSame(_ecCatSku, sku)) { ecCloseCategory(); return; }
+    ecCloseCategory();
+    _ecCatSku = sku;
+
+    const pop = document.createElement('div');
+    pop.id = 'ecCatPop';
+    pop.className = 'ec-catpop';
+    pop.innerHTML = `
+      <div class="ec-catpop-head">
+        <span class="ec-catpop-sku">${_ecEsc(sku)}</span>
+        <button class="ec-x" onclick="ecCloseCategory()" aria-label="Close">&times;</button>
+      </div>
+      <input class="ec-catpop-q" id="ecCatQ" placeholder="Search eBay Categories"
+             oninput="ecCategorySearch(this.value)" autocomplete="off">
+      <div class="ec-catpop-list" id="ecCatList">
+        <div class="ec-catpop-note">Checking where these sell on eBay…</div>
+      </div>`;
+    document.body.appendChild(pop);
+    _ecCatAnchor = btn;
+    _ecCatPlace();
+
+    document.addEventListener('mousedown', _ecCatOutside, true);
+    document.addEventListener('keydown', _ecCatEsc, true);
+    document.addEventListener('scroll', _ecCatReflow, true);
+    window.addEventListener('resize', _ecCatReflow);
+    document.getElementById('ecCatQ')?.focus();
+
+    // Ask the market. This is the recommendation the store came for, so it
+    // loads without being asked and the search box is there if it is wrong.
+    const res = await _ecPost({ action: 'recommend', store: _ecStore, sku });
+    if (!_ecSame(_ecCatSku, sku)) return;         // closed or moved on
+    const list = document.getElementById('ecCatList');
+    if (!list) return;
+    const b = res.body || {};
+    if (!res.ok) {
+        list.innerHTML = `<div class="ec-catpop-note">Could not check eBay. Search above instead.
+          <br><span style="opacity:.7;">${_ecEsc(b.detail || b.error || '')}</span></div>`;
+        _ecCatPlace();
+        return;
+    }
+    list.innerHTML = _ecCatRecHtml(b);
+    _ecCatPlace();
+}
+window.ecOpenCategory = ecOpenCategory;
+
+function _ecCatRecHtml(b) {
+    const rows = [];
+    const market = b.market || [];
+
+    if (b.basis === 'market' && market.length) {
+        rows.push(`<div class="ec-catpop-label">Where These Actually Sell</div>`);
+        // Every category the sample landed in, not only the winner — a 60/40
+        // split is a real judgement call and hiding the 40 would make it look
+        // like a settled answer.
+        market.forEach(m => rows.push(_ecCatOption(m.id, m.name, '',
+            `${m.share}% of ${b.sampled} live listings`)));
+    } else if (market.length) {
+        rows.push(`<div class="ec-catpop-label">Where These Actually Sell</div>`);
+        rows.push(`<div class="ec-catpop-note">Too few live listings to call it —
+          ${b.sampled || 0} found. eBay's own guess is below.</div>`);
+        market.forEach(m => rows.push(_ecCatOption(m.id, m.name, '',
+            `${m.share}% of ${b.sampled} live listings`)));
+    } else {
+        rows.push(`<div class="ec-catpop-note">No live listings matched this item, so there is
+          nothing to compare against. eBay's own guess is below.</div>`);
+    }
+
+    if (b.suggested?.id && !market.some(m => m.id === b.suggested.id)) {
+        rows.push(`<div class="ec-catpop-label">eBay's Guess From The Title</div>`);
+        rows.push(_ecCatOption(b.suggested.id, b.suggested.name, '', 'Matched on wording'));
+    }
+    return rows.join('');
+}
+
+function _ecCatOption(id, name, path, note) {
+    return `
+    <button class="ec-catopt" data-id="${_ecEsc(id)}" data-name="${_ecEsc(name || id)}"
+            onclick="ecPickCategory(this.dataset.id, this.dataset.name)">
+      <span class="ec-catopt-n">${_ecEsc(name || id)}</span>
+      ${path ? `<span class="ec-catopt-p">${_ecEsc(path)}</span>` : ''}
+      ${note ? `<span class="ec-catopt-m">${_ecEsc(note)}</span>` : ''}
+    </button>`;
+}
+
+// Debounced: every keystroke is an eBay call otherwise.
+function ecCategorySearch(text) {
+    clearTimeout(_ecCatTimer);
+    const q = String(text || '').trim();
+    const list = document.getElementById('ecCatList');
+    if (!list) return;
+    if (q.length < 2) return;
+    _ecCatTimer = setTimeout(async () => {
+        list.innerHTML = '<div class="ec-catpop-note">Searching…</div>';
+        _ecCatPlace();
+        try {
+            const b = await _ecFetch(`?view=categories&q=${encodeURIComponent(q)}`);
+            const results = b.results || [];
+            document.getElementById('ecCatList').innerHTML = results.length
+                ? `<div class="ec-catpop-label">${results.length} Matches</div>`
+                  + results.map(r => _ecCatOption(r.id, r.name, r.path, '')).join('')
+                : '<div class="ec-catpop-note">Nothing matched those words.</div>';
+            _ecCatPlace();
+        } catch (e) {
+            const el = document.getElementById('ecCatList');
+            if (el) el.innerHTML = `<div class="ec-catpop-note">${_ecEsc(e.message)}</div>`;
+        }
+    }, 350);
+}
+window.ecCategorySearch = ecCategorySearch;
+
+// Choosing a category is only ever done in order to list, so it lists.
+async function ecPickCategory(id, name) {
+    const sku = _ecCatSku;
+    if (!sku) return;
+    ecCloseCategory();
+    _ecApply(sku, { state: 'pending', error: null, category: name, categoryId: id });
+    await _ecUpload(sku, { category: id, categoryName: name });
+}
+window.ecPickCategory = ecPickCategory;
+
+// Drops one row off the list. Like Clear List, this touches nothing on eBay —
+// a live listing stays live, it just stops being in the way while the rest of
+// the shelf goes up.
+function ecRemoveOne(sku) {
+    const before = _ecFeed.length;
+    _ecFeed = _ecFeed.filter(e => !_ecSame(e.sku, sku));
+    if (_ecFeed.length === before) return;
+    _ecFeedSave();
+    ecRender();
+}
+window.ecRemoveOne = ecRemoveOne;
+
+// Empties the panel. Nothing on eBay is touched — these rows are a record of
+// what this person did this session, not the listings themselves.
+function ecClearList() {
+    if (!_ecFeed.length) return;
+    _ecFeed = [];
+    _ecFeedSave();
+    ecRender();
+}
+window.ecClearList = ecClearList;
+
+async function ecListTyped() {
+    const input = document.getElementById('ecSkuInput');
+    const skus = _ecSkus(input?.value);
+    if (!skus.length) return;
+
+    if (skus.length > 1
+        && !confirm(`Upload ${skus.length} items to eBay?\n\n${skus.join('\n')}`)) return;
+
+    // The box empties the moment you commit. What you typed is now a row you can
+    // watch, and leaving it in the field only invites a second upload of it.
+    if (input) { input.value = ''; input.focus(); }
+
+    const now = new Date().toISOString();
+    // Newest first. Re-uploading something already on screen moves that row
+    // rather than growing a second one for the same item.
+    skus.forEach(sku => {
+        _ecFeed = _ecFeed.filter(e => !_ecSame(e.sku, sku));
+        _ecFeed.unshift({
+            sku, at: now, state: 'pending', title: sku,
+            price: null, itemId: null, ebayUrl: null, shopifyUrl: null, error: null,
+        });
+    });
+    _ecFeedSave();
+    ecRender();
+
+    // One at a time on purpose: a publish is several eBay calls, and firing a
+    // shelf of them at once is how you meet a rate limit.
+    for (const sku of skus) await _ecUpload(sku);
+}
+
+async function ecListOne(sku, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+    _ecApply(sku, { state: 'pending', error: null });
+    await _ecUpload(sku);
+}
+
+// Off eBay, and staying off. Worth a confirm: the unit is still on the shelf
+// and still for sale in Shopify, so this is a decision about the listing rather
+// than about the item, and nothing automatic will put it back.
+async function ecDisable(sku, btn) {
+    if (!confirm(`Take ${sku} off eBay?\n\n`
+        + 'It stays for sale in the store — this ends the eBay listing only, '
+        + 'and nothing will put it back automatically.')) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Ending…'; }
+    const res = await _ecPost({ action: 'end', store: _ecStore, sku });
+    const b = res.body || {};
+    if (!res.ok) {
+        _ecApply(sku, { state: 'failed', error: b.detail || b.error || 'Could not end the listing.' });
+        return;
+    }
+    _ecApply(sku, b.item || { state: 'disabled', error: null });
+}
+
+async function ecRefresh() {
+    if (_ecBusy) return;
+    _ecBusy = true;
+    const btn = document.getElementById('ecRefreshBtn');
+    if (btn) btn.disabled = true;
+    try {
+        _ecData = null;
+        _ecHealth = null;
+        await ecLoad();
+    } finally {
+        _ecBusy = false;
+        if (btn) btn.disabled = false;
+    }
+}

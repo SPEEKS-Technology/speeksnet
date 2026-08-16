@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260814p">
+  <link rel="stylesheet" href="styles.css?v=20260815p">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260814p" defer></script>
+  <script src="speeks.js?v=20260815p" defer></script>
 </head>
 
 <body class="preload">
@@ -39,11 +39,11 @@
   </div>
   
   <nav class="nav-bar">
-    <a href="index.html" class="nav-link active"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></i><span>QuickPortal</span></a>
-    <a href="operations.html" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></i><span>Operations</span></a>
-    <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></i><span>Workspace</span></a>
-    <a href="docs.html" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></i><span>Processes & Policies</span></a>
-    <a href="stats.html" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg></i><span>Stats & Awards</span></a>
+    <a href="index.html" data-m="Home" class="nav-link active"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></i><span>QuickPortal</span></a>
+    <a href="operations.html" data-m="Ops" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></i><span>Operations</span></a>
+    <a href="workspace.html" data-m="Work" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></i><span>Workspace</span></a>
+    <a href="docs.html" data-m="Docs" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></i><span>Processes & Policies</span></a>
+    <a href="stats.html" data-m="Stats" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg></i><span>Stats & Awards</span></a>
   </nav>
 
   <div class="nav-right">
@@ -73,10 +73,10 @@
         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
     </button>
 </div>
-        <a href="#" onclick="toggleIdeaModal(); return false;" class="idea-btn action-btn" data-tip="Have an Idea?"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z"/></svg></a>
-      <div class="action-btn" onclick="toggleModal('quickMsgDropdown'); loadQuickMessages();" data-tip="Quick Messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
-      <div class="action-btn" onclick="toggleModal('hotkeysDropdown')" data-tip="Hotkeys &amp; Commands"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 3-3z"/></svg></div>
-      <div class="action-btn" onclick="toggleCalendar()" data-tip="Strategic Calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
+        <a href="#" onclick="toggleIdeaModal(); return false;" class="idea-btn action-btn" data-mobile="hide" data-tip="Have an Idea?"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z"/></svg></a>
+      <div class="action-btn" onclick="toggleModal('quickMsgDropdown'); loadQuickMessages();" data-mobile="hide" data-tip="Quick Messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+      <div class="action-btn" onclick="toggleModal('hotkeysDropdown')" data-mobile="hide" data-tip="Hotkeys &amp; Commands"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 3-3z"/></svg></div>
+      <div class="action-btn" onclick="toggleCalendar()" data-mobile="hide" data-tip="Strategic Calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
       <div class="action-btn" id="notifBellBtn" onclick="toggleNotifs()" data-tip="Announcements"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><div class="notif-dot" id="notifBadge"></div>
       </div>
       <div class="action-btn" id="notifySettingsBtn" data-feature="nav-settings" onclick="openSettings()" data-tip="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
@@ -755,9 +755,9 @@
         <div class="hotbar-container">
           <span class="hotbar-label">CEO</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-ceo-sales-summary">📊 Sales Summary</a> 
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-sales-summary">📊 Sales Summary</a> 
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-store-passwords">🔑 Store Passwords</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-b2b-records">🏢 B2B Records</a>  
             <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-tom-folder">📁 MOCD Folder</a>
             <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-paymore-google-drive">☁️ PayMore Google Drive</a> 
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
@@ -770,7 +770,7 @@
           <span class="hotbar-label">DM</span>
           <div class="hotbar-links">
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-store-passwords">🔑 Store Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-dm-sales-summary">📊 Sales Summary</a>
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-sales-summary">📊 Sales Summary</a>
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>
             <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-paymore-google-drive">☁️ PayMore Google Drive</a> 
           </div>
@@ -782,7 +782,7 @@
           <span class="hotbar-label">MOCD</span>
           <div class="hotbar-links">
             <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-tom-folder">📁 MOCD Folder</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-b2b-records">🏢 B2B Records</a>   
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-tom-b2b-records">🏢 B2B Records</a>   
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
         </div>
         </div>
@@ -792,8 +792,8 @@
         <div class="hotbar-container">
           <span class="hotbar-label">Resources</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-res-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-res-training">🎓 Training</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-res-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-res-training">🎓 Training</a>
           </div>
         </div>
       </div>
@@ -802,7 +802,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">MGR</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-mgr-sales-summary">📊 Sales Summary</a>
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mgr-sales-summary">📊 Sales Summary</a>
           </div>
         </div>
       </div>
@@ -811,7 +811,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">ASM</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-asm-sales-summary">📊 Sales Summary</a>
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-asm-sales-summary">📊 Sales Summary</a>
           </div>
         </div>
       </div>
@@ -821,11 +821,11 @@
           <span class="hotbar-label">LEE</span>
           <div class="hotbar-links">
             <a href="https://docs.google.com/spreadsheets/d/1BWWMPddxjoTTZL9ZRfgiH6-EiE5vaOczi-x_41Skaxk/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-passwords">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/130-aH4s8pNeggrqVSXSJ0R0JDnWkskXUfhNPxSAlPRg/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-marketplace">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1qExWuMZKBD3DCm_i9m5kNnN4WhouHeJuA3gYWXLihrA/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-employee-purchases">🛍️ Employee Purchases</a>
-            <a href="https://docs.google.com/spreadsheets/d/1D9epYOeJ1OZADUniM4MovvUqaiPfoyKAnedCcbEeFbM/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-pc-inventory">💻 PC Inventory</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-training">🎓 Training</a>
+            <a href="https://docs.google.com/spreadsheets/d/130-aH4s8pNeggrqVSXSJ0R0JDnWkskXUfhNPxSAlPRg/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1qExWuMZKBD3DCm_i9m5kNnN4WhouHeJuA3gYWXLihrA/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://docs.google.com/spreadsheets/d/1D9epYOeJ1OZADUniM4MovvUqaiPfoyKAnedCcbEeFbM/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-pc-inventory">💻 PC Inventory</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-training">🎓 Training</a>
           </div>
         </div>
       </div>
@@ -835,11 +835,11 @@
           <span class="hotbar-label">OVL</span>
           <div class="hotbar-links">
             <a href="https://docs.google.com/spreadsheets/d/1Ze3z9iyDZZaXsOEjOekEEsrO7OqDpVeH6Bhk4t67K2I/edit" target="_blank" class="hotbar-btn" data-feature="hb-ovl-passwords">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1r2UfB926QvaSDuO7_mqOE8z4u6IWjgbIqg_N6rfFV9c/edit" target="_blank" class="hotbar-btn" data-feature="hb-ovl-marketplace">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1DhNRld28CSUKG-4B-dHU4o8gyREKtqLo2J2rI2IdT8M/edit" target="_blank" class="hotbar-btn" data-feature="hb-ovl-employee-purchases">🛍️ Employee Purchases</a>
-            <a href="https://docs.google.com/spreadsheets/d/1RKMryoJ7BZgB5DjSUaTjCSvJQW8_OAkmnwXfBznlSX0/edit" target="_blank" class="hotbar-btn" data-feature="hb-ovl-pc-inventory">💻 PC Inventory</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ovl-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ovl-training">🎓 Training</a>
+            <a href="https://docs.google.com/spreadsheets/d/1r2UfB926QvaSDuO7_mqOE8z4u6IWjgbIqg_N6rfFV9c/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1DhNRld28CSUKG-4B-dHU4o8gyREKtqLo2J2rI2IdT8M/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://docs.google.com/spreadsheets/d/1RKMryoJ7BZgB5DjSUaTjCSvJQW8_OAkmnwXfBznlSX0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-pc-inventory">💻 PC Inventory</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-training">🎓 Training</a>
           </div>
         </div>
       </div>
@@ -849,10 +849,10 @@
           <span class="hotbar-label">WSP</span>
           <div class="hotbar-links">
             <a href="https://docs.google.com/spreadsheets/d/14AYsHQ0R1IEXqgKqrGEuyURHGi3fFKrAglgu0dVFJPE/edit" target="_blank" class="hotbar-btn" data-feature="hb-wsp-passwords">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1V0TQ1cJXqUzt0mRnrjvPt_TLzlE8vE7MpxxIMQ9X2yE/edit" target="_blank" class="hotbar-btn" data-feature="hb-wsp-marketplace">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1tp5E1yQhx0j776N-1WMhTzXA_ltvPOPiltsYo65fyc0/edit" target="_blank" class="hotbar-btn" data-feature="hb-wsp-employee-purchases">🛍️ Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-wsp-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-wsp-training">🎓 Training</a>
+            <a href="https://docs.google.com/spreadsheets/d/1V0TQ1cJXqUzt0mRnrjvPt_TLzlE8vE7MpxxIMQ9X2yE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1tp5E1yQhx0j776N-1WMhTzXA_ltvPOPiltsYo65fyc0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-training">🎓 Training</a>
           </div>
         </div>
       </div>
@@ -862,10 +862,10 @@
           <span class="hotbar-label">MPL</span>
           <div class="hotbar-links">
             <a href="https://docs.google.com/spreadsheets/d/18VeWgGjoIfKRlJUtj0PTU1-uJJavKaPu3W2o_A4vyFs/edit" target="_blank" class="hotbar-btn" data-feature="hb-mpl-passwords">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1xVJ_JJD-wZUbzFfer4fF50CH6RkZ-sqzxe4bYRGqDtE/edit" target="_blank" class="hotbar-btn" data-feature="hb-mpl-marketplace">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/10DiGbDO0tyHitLpltOiTix2TowoeMNzsp0a3MjOtTSY/edit" target="_blank" class="hotbar-btn" data-feature="hb-mpl-employee-purchases">🛍️ Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mpl-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mpl-training">🎓 Training</a>
+            <a href="https://docs.google.com/spreadsheets/d/1xVJ_JJD-wZUbzFfer4fF50CH6RkZ-sqzxe4bYRGqDtE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/10DiGbDO0tyHitLpltOiTix2TowoeMNzsp0a3MjOtTSY/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-training">🎓 Training</a>
           </div>
         </div>
       </div>
@@ -875,10 +875,10 @@
           <span class="hotbar-label">BAL</span>
           <div class="hotbar-links">
             <a href="https://docs.google.com/spreadsheets/d/1SuXAQc66OzKOfXkPcp7pCCsccWFB4RbHG2N6YGt3wf0/edit" target="_blank" class="hotbar-btn" data-feature="hb-bal-passwords">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/192c0M5Mxe9oy5PR6JQelD_DPh4ebvJpCnK26kYGpnbk/edit" target="_blank" class="hotbar-btn" data-feature="hb-bal-marketplace">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1RHnw3rK9kvNvmQznMFr6qkg82j0GpWEwUhDOIPDGfts/edit" target="_blank" class="hotbar-btn" data-feature="hb-bal-employee-purchases">🛍️ Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-bal-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-bal-training">🎓 Training</a>
+            <a href="https://docs.google.com/spreadsheets/d/192c0M5Mxe9oy5PR6JQelD_DPh4ebvJpCnK26kYGpnbk/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1RHnw3rK9kvNvmQznMFr6qkg82j0GpWEwUhDOIPDGfts/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-training">🎓 Training</a>
           </div>
         </div>
       </div>
