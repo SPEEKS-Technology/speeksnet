@@ -818,13 +818,33 @@ async function recommendCategory(
   // the taxonomy guess is no worse, and it is at least consistent.
   const confident = !!best && sampled >= 4 && best.n / sampled >= 0.25;
 
+  // ⚠️ THE MARKET SAMPLE IS DOMINATED BY ACCESSORIES FOR ANY POPULAR DEVICE.
+  // Searching an iPad Air's model number returns mostly CASES for that iPad —
+  // 70% of the sample — because every case listing names the device it fits. So
+  // "what do the same items sell in" answered "Cases, Covers, Keyboard Folios"
+  // and overrode eBay's own correct suggestion of Tablets & eBook Readers. Same
+  // shape on an external USB drive, where 44% of the sample was Internal Hard
+  // Disk Drives. Both were caught auditing OVL's live listings.
+  //
+  // The tell is that eBay's suggestion is ITSELF in the sample, just outnumbered
+  // — the iPad's real category held 30%. An accessory swarm cannot make the
+  // device's own category disappear, it can only outvote it. So when the
+  // taxonomy's answer appears in the market at all, take it: eBay matched on the
+  // words of THIS item, while the market only matched on items that mention it.
+  // The market data still rides along in the response, so the picker keeps
+  // showing the reasoning and a person can override on sight of the item.
+  const suggestedInMarket = !!suggested && ranked.some(r => r.id === suggested.id);
+  const useMarket = confident && !suggestedInMarket;
+
   return {
     query: q,
     suggested,
     market: ranked.slice(0, 5).map(r => ({ ...r, share: Math.round((r.n / (sampled || 1)) * 100) })),
     sampled,
-    recommended: confident ? { id: best.id, name: best.name } : suggested,
-    basis: confident ? "market" : "taxonomy",
+    recommended: useMarket ? { id: best!.id, name: best!.name } : suggested,
+    basis: useMarket ? "market"
+      : suggestedInMarket ? "taxonomy (confirmed by market)"
+      : "taxonomy",
   };
 }
 

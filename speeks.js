@@ -39846,7 +39846,7 @@ function _ecQuickHtml() {
     // read the other way.
     return `
     <div class="ec-quick">
-      <input id="ecSkuInput" placeholder="Scan Or Type A SKU"
+      <input id="ecSkuInput" placeholder="Scan Or Type a SKU"
              onpaste="ecPasteSkus(event)"
              onkeydown="if(event.key==='Enter')ecListTyped()">
       <button class="ec-btn ec-btn-go" onclick="ecListTyped()">Upload To eBay</button>
