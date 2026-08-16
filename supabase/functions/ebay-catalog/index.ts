@@ -380,6 +380,41 @@ async function sweepLive(store: string): Promise<Response> {
     pruned = (await res.json()).length;
   }
 
+  // RECONCILE OUR OWN ROWS AGAINST WHAT EBAY ACTUALLY HAS.
+  //
+  // ebay_listings.status is event-driven — ebay-sync writes it on publish,
+  // ebay-inventory on a stock change — and that is the right source for the
+  // panel, because it is current to the second. What it cannot see is a listing
+  // eBay ended on its own: policy takedowns, expiries, an end from Seller Hub.
+  // Nothing calls us about those, so the row would read "live" forever.
+  //
+  // This is the only place that comparison can be made honestly, because only a
+  // COMPLETE sweep proves an absence. A truncated run never reached the tail,
+  // and marking rows ended from it would kill listings that are perfectly fine.
+  //
+  // Published DURING the sweep is excluded: a listing created after this run
+  // started was never going to appear in it.
+  let reconciled = 0;
+  if (!truncated) {
+    const stale = (await (await sb(
+      `ebay_listings?store_code=eq.${encodeURIComponent(store)}&status=eq.published`
+      + `&published_at=lt.${encodeURIComponent(startedAt)}&select=sku`)).json())
+      .filter((r: any) => !seen.has(r.sku));
+    for (const r of stale) {
+      await sb(`ebay_listings?store_code=eq.${encodeURIComponent(store)}`
+             + `&sku=eq.${encodeURIComponent(r.sku)}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          status: "ended",
+          last_error: "eBay no longer lists this. It was ended outside SPEEKS Connect.",
+          updated_at: new Date().toISOString(),
+        }),
+      });
+      reconciled += 1;
+    }
+  }
+
   await sb("ebay_live_runs?on_conflict=store_code", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
@@ -393,7 +428,7 @@ async function sweepLive(store: string): Promise<Response> {
   // eBay's own count of active listings, reported beside ours. They should
   // match once SKU-less listings are added back; if they do not, the sweep is
   // missing something and the difference is the place to look.
-  return json({ store, listings, withoutSku, duplicateSkus, ebayReports: totalEntries, pruned, truncated });
+  return json({ store, listings, withoutSku, duplicateSkus, ebayReports: totalEntries, pruned, reconciled, truncated });
 }
 
 Deno.serve(async (req: Request) => {

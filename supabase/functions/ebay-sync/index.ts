@@ -311,21 +311,59 @@ function parseSpecs(html: string): Record<string, string> {
 }
 
 // Their condition vocabulary maps cleanly onto eBay's used-condition enums.
+//
+// DAMAGE IS TESTED FIRST, AND IT IS TESTED FOR PROPERLY.
+// The list is ordered, first match wins, and the damage words have to come
+// before the cosmetic grades — a spec reading "Broken, excellent screen" must
+// land on For Parts, not on Excellent, because the conservative reading is the
+// only safe one when two words disagree.
+//
+// "Broken" was missing from this list entirely. A Broken iPhone therefore
+// matched nothing, fell through to the fallback, and went to eBay as USED
+// EXCELLENT. eBay refused it (25019: the title says broken, the condition says
+// working) and that refusal is the only reason it was caught — had the title
+// been quieter, we would have sold a phone with a dead battery as excellent.
+// Only words that cannot mean anything else. A bare "parts" or "repair" would
+// swallow "all parts original" and "no repairs needed" and dump a working item
+// into For Parts, which costs real money on price and placement. Anything not
+// listed here is refused rather than guessed at, so the damage list can afford
+// to be strict — the safety net is the refusal, not a catch-all pattern.
 const CONDITION_BY_TEXT: [RegExp, string][] = [
+  [/broken|for\s*parts|parts\s*only|not\s*working|faulty|defective|cracked|damaged|as[\s-]*is|dead/i,
+   "FOR_PARTS_OR_NOT_WORKING"],
   [/^new$/i, "NEW"],
   [/like\s*new/i, "LIKE_NEW"],
+  // PayMore's own top grade is "Flawless", not "Excellent" — sampled live at
+  // OVL, where it is what the two iPads carry. It matched nothing here, so it
+  // was only ever reaching eBay as USED_EXCELLENT by way of the default, which
+  // happened to be right and was never a mapping. "Mint" is the same tier in
+  // the buying vocabulary (mg_band_conditions: "Used-A/Mint").
+  [/flawless|mint|pristine/i, "USED_EXCELLENT"],
   [/excellent/i, "USED_EXCELLENT"],
   [/very\s*good/i, "USED_VERY_GOOD"],
   [/^good$/i, "USED_GOOD"],
   [/acceptable|fair/i, "USED_ACCEPTABLE"],
-  [/parts|not\s*working/i, "FOR_PARTS_OR_NOT_WORKING"],
+  // eBay's 3000 is literally "Used" in hardware categories, so a spec saying
+  // just "Used" is the plain used grade, not an unknown word to refuse over.
+  [/^used$/i, "USED_EXCELLENT"],
 ];
 
-function conditionFrom(specs: Record<string, string>, fallback: string): string {
-  const text = specs["Condition"];
-  if (!text) return fallback;
-  for (const [re, value] of CONDITION_BY_TEXT) if (re.test(text.trim())) return value;
-  return fallback;
+// A CONDITION WE DO NOT RECOGNISE MUST NOT BECOME "EXCELLENT".
+// The old fallback did exactly that: any word not on the list above quietly
+// became whatever the default was, which is USED_EXCELLENT. That is the worst
+// possible direction to guess in — it overstates the goods, and it does so
+// silently, on the one field a buyer relies on most. Unknown now comes back as
+// unknown and the caller refuses the listing, so the failure is a listing that
+// did not go up rather than a return, a refund and an eBay defect.
+function conditionFrom(
+  specs: Record<string, string>, fallback: string,
+): { value: string; unknown: string | null } {
+  const text = (specs["Condition"] || "").trim();
+  if (!text) return { value: fallback, unknown: null };
+  for (const [re, value] of CONDITION_BY_TEXT) {
+    if (re.test(text)) return { value, unknown: null };
+  }
+  return { value: fallback, unknown: text };
 }
 
 // THE USED TIERS ARE NOT UNIVERSAL.
@@ -609,6 +647,80 @@ function offerPayload(
 // a role check instead — the pattern the rest of the site already uses.
 const OPS_SECRET = "sp33ks-sync-k3y-2026-x9mq";
 
+// --- where does this thing actually sell? -----------------------------------
+//
+// Browse search wants a query a buyer would type, not our full listing title.
+// "Broken Verizon Apple iPhone 12 Pro Max 256GB 26.1 MYW33LL/A BAD BATT" finds
+// nothing; "Apple iPhone 12 Pro Max 256GB" finds the market. So the condition
+// words, the carrier, the MPN and any bare version numbers come out, and what
+// is left is the product.
+const MARKET_NOISE =
+  /\b(broken|for\s*parts|parts\s*only|not\s*working|faulty|defective|cracked|damaged|as[\s-]*is|dead|bad\s*batt\w*|no\s*charg\w*|unlocked|locked|network\s*locked)\b/gi;
+
+function marketQuery(title: string): string {
+  const cleaned = title
+    .replace(MARKET_NOISE, " ")
+    // Model numbers like MYW33LL/A or SM-G781U are precise enough to return
+    // nothing at all, which is the opposite of what a market sample needs.
+    .replace(/\b[A-Z0-9]{3,}[-/][A-Z0-9-/]{2,}\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Browse rewards a short query. Past about eight words it starts returning
+  // nothing rather than something loosely related.
+  return cleaned.split(" ").slice(0, 8).join(" ") || title.split(" ").slice(0, 6).join(" ");
+}
+
+async function recommendCategory(
+  api: (path: string, init?: RequestInit) => Promise<{ status: number; body: any }>,
+  title: string,
+) {
+  const q = marketQuery(title);
+
+  const sugg = await api(
+    `/commerce/taxonomy/v1/category_tree/${CATEGORY_TREE_ID}/get_category_suggestions`
+    + `?q=${encodeURIComponent(title)}`);
+  const top = sugg.body?.categorySuggestions?.[0]?.category;
+  const suggested = top ? { id: top.categoryId, name: top.categoryName } : null;
+
+  const live = await api(
+    `/buy/browse/v1/item_summary/search?q=${encodeURIComponent(q)}&limit=50`);
+
+  // Browse is a nice-to-have, not a dependency. If it is unavailable or the
+  // query matched nothing, say so plainly and fall back to the taxonomy rather
+  // than pretending to a confidence we do not have.
+  if (live.status >= 300) {
+    return { query: q, suggested, market: null, recommended: suggested,
+             basis: "taxonomy", note: `Browse unavailable: ${errText(live.body).slice(0, 160)}` };
+  }
+
+  const tally = new Map<string, { id: string; name: string; n: number }>();
+  for (const it of (live.body?.itemSummaries || [])) {
+    const id = it.leafCategoryIds?.[0] || it.categories?.[0]?.categoryId;
+    const name = it.categories?.find((k: any) => k.categoryId === id)?.categoryName
+      || it.categories?.[0]?.categoryName;
+    if (!id) continue;
+    const hit = tally.get(id) || { id, name: name || id, n: 0 };
+    hit.n += 1;
+    tally.set(id, hit);
+  }
+  const ranked = [...tally.values()].sort((a, b) => b.n - a.n);
+  const sampled = (live.body?.itemSummaries || []).length;
+  const best = ranked[0] || null;
+
+  // One or two stray listings are not a market. Below a quarter of the sample
+  // the taxonomy guess is no worse, and it is at least consistent.
+  const confident = !!best && sampled >= 4 && best.n / sampled >= 0.25;
+
+  return {
+    query: q,
+    suggested,
+    market: ranked.slice(0, 5).map(r => ({ ...r, share: Math.round((r.n / (sampled || 1)) * 100) })),
+    sampled,
+    recommended: confident ? { id: best.id, name: best.name } : suggested,
+    basis: confident ? "market" : "taxonomy",
+  };
+}
+
 function opsAuthed(url: URL): boolean {
   const given = url.searchParams.get("secret") || "";
   // Constant time: a fast-exit compare leaks the secret a character at a time.
@@ -638,6 +750,53 @@ Deno.serve(async (req: Request) => {
   if (!row) return json({ error: `no ebay_stores row for ${store}` }, 404);
 
   const { shop, token: shopToken } = await shopFor(store);
+
+  // --- category search: type words, get categories --------------------------
+  // eBay publishes no "list every category" endpoint worth calling from a
+  // browser — the tree is tens of thousands of nodes. get_category_suggestions
+  // IS the search: give it words and it ranks leaf categories. Ancestors come
+  // back with each hit, so the picker can show the full path and a person can
+  // tell "Sunglasses" under Clothing apart from one under Consumer Electronics.
+  if (url.searchParams.get("categorySearch") === "1") {
+    const term = (url.searchParams.get("q") || "").trim();
+    if (!term) return json({ error: "pass &q=" }, 400);
+    const searchApi = ebayClient(HOSTS[row.environment], await accessTokenFor(row));
+    const res = await searchApi(
+      `/commerce/taxonomy/v1/category_tree/${CATEGORY_TREE_ID}/get_category_suggestions`
+      + `?q=${encodeURIComponent(term)}`);
+    if (res.status >= 300) {
+      return json({ error: "eBay category search failed", detail: errText(res.body) }, 502);
+    }
+    return json({
+      q: term,
+      results: (res.body?.categorySuggestions || []).slice(0, 25).map((s: any) => ({
+        id: s.category?.categoryId,
+        name: s.category?.categoryName,
+        // Ancestors arrive deepest-first; reversed they read as a path.
+        path: (s.categoryTreeNodeAncestors || [])
+          .map((a: any) => a.categoryName).reverse().join(" › "),
+      })).filter((r: any) => r.id),
+    });
+  }
+
+  // --- recommend a category from what the same thing actually sells in ------
+  // The taxonomy suggestion is a text match on our title, and it is how a pair
+  // of Ray-Ban META smart glasses ended up in Sunglasses — where eBay then
+  // refused the condition, so a category mistake surfaced as a condition error.
+  //
+  // Asking the marketplace is a better question than asking the dictionary: run
+  // the title through Browse, look at where the live listings for that same
+  // product actually sit, and take the most common leaf. Taxonomy stays as the
+  // fallback and is always returned alongside, because Browse can find nothing
+  // (a rare item, or a title too specific to match anything).
+  if (url.searchParams.get("recommend") === "1") {
+    if (!sku) return json({ error: "pass &sku=" }, 400);
+    const found = await findProducts(shop, shopToken, `sku:${sku}`, 10);
+    const item = found.find(m => m.sku === sku);
+    if (!item) return json({ error: `sku ${sku} not found in ${shop}` }, 404);
+    const recApi = ebayClient(HOSTS[row.environment], await accessTokenFor(row));
+    return json({ sku, title: item.title, ...(await recommendCategory(recApi, item.title)) });
+  }
 
   // --- preview: pick something to test with ---------------------------------
   if (preview || !sku) {
@@ -690,21 +849,27 @@ Deno.serve(async (req: Request) => {
   const host = HOSTS[row.environment];
   const api = ebayClient(host, await accessTokenFor(row));
 
-  // Category suggestion from the title. Deliberately not cached yet — the first
-  // runs exist to find out how good these suggestions actually are.
-  const sugg = await api(
-    `/commerce/taxonomy/v1/category_tree/${CATEGORY_TREE_ID}/get_category_suggestions`
-    + `?q=${encodeURIComponent(c.title)}`,
-  );
-  const suggestion = sugg.body?.categorySuggestions?.[0];
-  const categoryId = url.searchParams.get("category") || suggestion?.category?.categoryId;
+  // WHERE THIS THING BELONGS, asked of the marketplace before the dictionary.
+  // recommendCategory samples the live listings for the same product and takes
+  // the most common leaf, falling back to eBay's text-match suggestion when the
+  // sample is thin. A person's explicit &category= always beats both — they are
+  // holding the item.
+  const chosenCategory = url.searchParams.get("category");
+  const rec = await recommendCategory(api, c.title);
+  const categoryId = chosenCategory || rec.recommended?.id;
+  // The picker sends the name it showed, so an overridden category is not left
+  // nameless in the panel. Without an override the name comes from whichever
+  // source won.
+  const categoryName: string | null = chosenCategory
+    ? (url.searchParams.get("categoryName") || null)
+    : (rec.recommended?.name || null);
 
   if (!categoryId) {
     return json({
       store, sku,
-      error: "no category suggestion — pass &category=<id> explicitly",
-      taxonomyStatus: sugg.status,
-      taxonomyError: errText(sugg.body),
+      error: "eBay matched this title to no category at all. Pick one from the "
+        + "category list on the row and upload again.",
+      recommendation: rec,
     }, 422);
   }
 
@@ -723,7 +888,23 @@ Deno.serve(async (req: Request) => {
 
   // Ask the category which conditions it will accept BEFORE building the item.
   const allowedConditions = await allowedConditionIds(api, categoryId);
-  const wantedCondition = conditionFrom(specs, condition);
+  const picked = conditionFrom(specs, condition);
+
+  // An unrecognised condition word stops the listing. Guessing here would mean
+  // publishing a grade nobody chose, and the grade is the field a buyer leans on
+  // hardest — better a listing that did not go up than one that overstates the
+  // goods. An explicit ?condition= is a person deciding on purpose, so it wins.
+  if (picked.unknown && !url.searchParams.get("condition")) {
+    const msg = `The product's Condition reads "${picked.unknown}", which is not a condition `
+      + `SPEEKS Connect recognises, so it will not guess one — guessing here would put a grade `
+      + `on eBay that nobody chose. Set the Condition on the Shopify product to one of: New, `
+      + `Like New, Excellent, Very Good, Good, Acceptable, Used, or Broken / For Parts.`;
+    if (!dry) await recordFailure(store, c, categoryId, msg, undefined, categoryName);
+    return json({ store, sku, step: "condition", error: msg,
+                  conditionFound: picked.unknown }, 422);
+  }
+
+  const wantedCondition = picked.value;
   const cond = adjustCondition(wantedCondition, allowedConditions);
   const item = inventoryItemPayload(c, cond.condition, specs, aspectDefs, required);
 
@@ -755,8 +936,12 @@ Deno.serve(async (req: Request) => {
       },
       category: {
         id: categoryId,
-        name: suggestion?.category?.categoryName,
-        fromSuggestion: !url.searchParams.get("category"),
+        name: categoryName,
+        fromSuggestion: !chosenCategory,
+        // How the category was arrived at, and what the live market looked
+        // like. This is the part that makes a wrong category arguable instead
+        // of mysterious.
+        recommendation: rec,
         requiredAspects: required,
         aspectsWeAreSending: Object.keys(item.product.aspects || {}),
         missing: required.filter((r: string) => !(item.product.aspects || {})[r]),
@@ -810,7 +995,7 @@ Deno.serve(async (req: Request) => {
     body: JSON.stringify(item),
   });
   if (put.status >= 300) {
-    await recordFailure(store, c, categoryId, `inventory_item: ${errText(put.body)}`);
+    await recordFailure(store, c, categoryId, `inventory_item: ${errText(put.body)}`, undefined, categoryName);
     return json({ step: "inventory_item", status: put.status, error: errText(put.body) }, 502);
   }
 
@@ -828,7 +1013,7 @@ Deno.serve(async (req: Request) => {
     );
     offerId = existing.body?.offers?.[0]?.offerId;
     if (!offerId) {
-      await recordFailure(store, c, categoryId, `offer: ${errText(offerRes.body)}`);
+      await recordFailure(store, c, categoryId, `offer: ${errText(offerRes.body)}`, undefined, categoryName);
       return json({ step: "offer", status: offerRes.status, error: errText(offerRes.body) }, 502);
     }
     // Reusing the id is not enough. Without this PUT the existing offer keeps
@@ -841,7 +1026,7 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify(mutable0),
     });
     if (upd.status >= 300) {
-      await recordFailure(store, c, categoryId, `offer update: ${errText(upd.body)}`, offerId);
+      await recordFailure(store, c, categoryId, `offer update: ${errText(upd.body)}`, offerId, categoryName);
       return json({ step: "offer update", status: upd.status, error: errText(upd.body) }, 502);
     }
     updatedExisting = true;
@@ -852,7 +1037,7 @@ Deno.serve(async (req: Request) => {
     method: "POST",
   });
   if (pub.status >= 300) {
-    await recordFailure(store, c, categoryId, `publish: ${errText(pub.body)}`, offerId);
+    await recordFailure(store, c, categoryId, `publish: ${errText(pub.body)}`, offerId, categoryName);
     return json({
       step: "publish",
       status: pub.status,
@@ -892,7 +1077,7 @@ Deno.serve(async (req: Request) => {
     status: "published",
     last_error: null,
     published_at: new Date().toISOString(),
-  });
+  }, categoryName);
 
   return json({
     store, sku,
@@ -912,6 +1097,7 @@ Deno.serve(async (req: Request) => {
 
 async function upsertListing(
   store: string, c: Candidate, categoryId: string, extra: Record<string, unknown>,
+  categoryName: string | null = null,
 ) {
   await sb("ebay_listings?on_conflict=store_code,sku", {
     method: "POST",
@@ -922,6 +1108,15 @@ async function upsertListing(
       shopify_product_id: c.productId,
       shopify_variant_id: c.variantId,
       category_id: categoryId,
+      // "56083" answers nobody's question. The category is the one part of a
+      // listing that eBay picks rather than the store, so it is worth showing.
+      ...(categoryName ? { category_name: categoryName } : {}),
+      // Written on EVERY path, success and failure alike. A failed row with no
+      // title is a SKU and an error message, which is not enough for anyone to
+      // recognise the item they were trying to list.
+      title: ebayTitle(c.title),
+      price: Number(c.price) || null,
+      quantity: c.quantity,
       updated_at: new Date().toISOString(),
       ...extra,
     }]),
@@ -930,10 +1125,11 @@ async function upsertListing(
 
 async function recordFailure(
   store: string, c: Candidate, categoryId: string, error: string, offerId?: string,
+  categoryName: string | null = null,
 ) {
   await upsertListing(store, c, categoryId, {
     status: "failed",
     last_error: error,
     ...(offerId ? { ebay_offer_id: offerId } : {}),
-  });
+  }, categoryName);
 }

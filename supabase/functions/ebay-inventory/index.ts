@@ -8,6 +8,7 @@
 //   GET  ?register=1&store=OVL        subscribe to BOTH topics
 //   GET  ?status=1&store=OVL          list the subscriptions Shopify holds
 //   GET  ?resync=1&store=OVL&sku=X    force one sku back into step (qty+price)
+//   GET  ?end=1&store=OVL&sku=X       take one listing down on purpose, for good
 //
 // Store is derived from X-Shopify-Shop-Domain, so one callback URL serves every
 // store.
@@ -536,6 +537,58 @@ Deno.serve(async (req: Request) => {
         ...out.body,
         ...(priced ? { prices: priced.body.prices } : {}),
       }, out.status);
+    }
+
+    // Take a listing down on purpose, and have it STAY down.
+    //
+    // ?resync=1 asks Shopify what is true and makes eBay agree. This asks for
+    // the opposite: end it whatever the stock says. Withdrawing alone would not
+    // hold — reconcile() republishes anything sitting at 'ended' as soon as the
+    // next inventory_levels/update or products/update webhook arrives for that
+    // product, so a Disable button would quietly undo itself within minutes of
+    // anyone touching the item in Shopify.
+    //
+    // Parking the row at 'disabled' is what makes it stick: reconcile() only
+    // acts on published/ended, and ebay-catalog's sweep only reconciles
+    // published, so neither automatic path can see it. Shopify is untouched —
+    // the unit is still for sale in the store, it is only off eBay. Uploading
+    // it again through SPEEKS Connect is the way back on, which is the
+    // deliberate act it ought to be.
+    if (url.searchParams.get("end") === "1") {
+      const sku = (url.searchParams.get("sku") || "").trim();
+      if (!sku) return json({ error: "pass &sku=" }, 400);
+
+      const listings = await (await sb(
+        `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
+        + `&sku=eq.${encodeURIComponent(sku)}&select=*`)).json();
+      const listing = (listings || []).find((l: any) => l.ebay_offer_id);
+      if (!listing) {
+        return json({ error: `SPEEKS Connect has no listing for ${sku}` }, 404);
+      }
+      if (listing.status === "disabled") {
+        return json({ ok: true, store, sku, action: "already disabled" });
+      }
+
+      // Only a live listing needs withdrawing. One already ended — sold, or
+      // pulled on eBay's side — just needs the row moved out of reach of the
+      // republish path, and calling withdraw on it would fail for no reason.
+      if (listing.status === "published") {
+        const row = await ebayStore(store);
+        const api = ebayClient(HOSTS[row.environment as "production" | "sandbox"],
+                               await ebayAccessToken(row));
+        const res = await api(
+          `/sell/inventory/v1/offer/${encodeURIComponent(listing.ebay_offer_id)}/withdraw`,
+          { method: "POST" });
+        if (res.status >= 300) {
+          const msg = errText(res.body);
+          console.error("ebay-inventory: end failed", sku, res.status, msg);
+          await patchListing(listing.id, { last_error: `end: ${msg}` });
+          return json({ error: "eBay would not end the listing", sku, detail: msg }, 502);
+        }
+      }
+
+      await patchListing(listing.id, { status: "disabled", last_error: null });
+      return json({ ok: true, store, sku, action: "listing disabled" });
     }
 
     // Both topics land on this one URL and are told apart by X-Shopify-Topic.

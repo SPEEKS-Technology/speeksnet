@@ -1,32 +1,40 @@
 // ============================================================================
-// ebay-channel — everything the Operations > eBay Channel tab needs, and the
+// ebay-channel — everything the Operations > SPEEKS Connect tab needs, and the
 // ONLY eBay endpoint the browser is allowed to talk to.
 //
-//   GET  ?view=summary                the four headline numbers, per store
-//   GET  ?view=needs&store=OVL        in stock, not on eBay, and why
-//   GET  ?view=live&store=OVL         what is live, ours and MC's, plus failures
-//   GET  ?view=orders&store=OVL       eBay sales and where each one got to
-//   GET  ?view=health                 per-store connection state (corp only)
-//   POST {action, store, sku}         preview | list | retry | resync | refresh
+//   GET  ?view=listings&store=OVL     what SPEEKS Connect has listed, and what failed
+//   GET  ?view=health                 per-store: live count, error count (DM/CEO)
+//   POST {action, store, sku}         preview | list | retry | end | resync
+//
+// SPEEKS CONNECT IS ITS OWN CHANNEL. It runs independently of Marketplace
+// Connect: a SKU listed here is not listed by MC, and this panel reports on
+// OUR listings only. It deliberately does NOT try to answer "what is not on
+// eBay yet" across the whole catalog — a store decides what to list by typing
+// the SKU, and the panel's job is to say whether it worked.
 //
 // AUTH IS BY PERSON, NOT BY SECRET. Every other ebay-* function is gated by the
 // shared operator secret, which pg_cron can carry and a browser cannot: a
 // secret shipped in speeks.js is not a secret. This one takes x-user-pin, looks
 // the person up, and decides from their role and store what they may see and
-// do — the same split shopify-live documents.
+// do — the same split shopify-live documents. It holds the operator secret
+// itself and calls the other functions with it server-side, so the privilege
+// lives behind a role check instead of in public JavaScript.
 //
-// It holds the operator secret itself and calls the other functions with it
-// server-side. That is the whole point: the privilege lives here, behind a
-// role check, instead of in public JavaScript.
+// WHO GETS WHAT. Listing is open to every role that has a store, because the
+// person who photographs and prices an item is the person who should be able to
+// put it on eBay, and at four of five stores that is not the manager. The role
+// check that remains is about REACH, not permission: an employee's SKU has to
+// go to their own store, and the five-store overview is a district view that
+// only the DM and the CEO have any use for.
 //
-// WHY ebay_live EXISTS AND WHY EVERY COVERAGE ANSWER GOES THROUGH IT. We share
-// one eBay account per store with Marketplace Connect, and MC lists through the
-// Trading API, which the Inventory API cannot see. "Not in ebay_listings"
-// therefore does NOT mean "not on eBay" — on OVL, 387 in-stock items are live
-// via MC and absent from ebay_listings entirely. Answering the coverage
-// question from our own table would offer 387 items for listing that are
-// already live, and listing them would put two live listings against one
-// physical unit. Coverage is always ebay_catalog minus ebay_live.
+// ONE GUARD REMAINS FROM THE MC ERA, AND IT SHOULD. Each store shares one eBay
+// account with MC, and MC lists through the Trading API, which the Inventory
+// API cannot see — asking /sell/inventory/v1/inventory_item/{sku} about a live
+// MC listing returns 25710 NOT FOUND. So ebay-sync cannot tell whether a SKU is
+// already live. `ebay_live` (swept from GetMyeBaySelling, which does see
+// everything) is checked before any publish. The channels are meant to be
+// separate; this is what makes a mistake bounce instead of creating two live
+// listings against one physical unit.
 // ============================================================================
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -37,17 +45,30 @@ const OPS_SECRET = "sp33ks-sync-k3y-2026-x9mq";
 const FN_BASE = `${SUPABASE_URL}/functions/v1`;
 
 const STORE_ORDER = ["OVL", "LEE", "WSP", "MPL", "BAL"];
-// Corp sees every store and may change setup. Store roles see their own.
+// Corp has no home store of its own, so it gets the picker over all five.
 const CORP_ROLES = ["district manager", "ceo", "mocd", "tom"];
-const STORE_ROLES = ["manager", "owner (manager)", "owner manager", "assistant manager"];
+// The All Stores overview is narrower than corp on purpose: it is a district
+// view of five stores at once, which is a thing to run a district with, not a
+// thing to do a job with.
+const ALL_STORES_ROLES = ["district manager", "ceo"];
+// LISTING IS FOR EVERYONE. Whoever photographs and prices the item is who
+// should be able to put it on eBay, and that is usually not the manager. The
+// only role held back is the TV board, which has no operator sitting at it and
+// no Operations page to reach this from.
+const NO_ACCESS_ROLES = ["store"];
 // Mirrors MULTISTORE_MANAGER_STORES in speeks.js. Duplicated deliberately: the
 // backend must not take the browser's word for which stores someone manages.
 const MULTISTORE_MANAGER_STORES = ["BAL", "MPL"];
 
-// An item can only be listed if eBay would accept it. Both of these are
-// refusals from eBay, not preferences of ours: a listing with no picture is
-// rejected outright, and one with no price has nothing to sell for.
-const MIN_IMAGES = 1;
+// shopify_stores.store_code is null on every row, so the mapping lives here the
+// same way it lives in ebay-inventory. Used only to build an admin link.
+const SHOP_BY_STORE: Record<string, string> = {
+  OVL: "paymore-overland-park.myshopify.com",
+  LEE: "paymore-lees-summit.myshopify.com",
+  WSP: "paymore-westport.myshopify.com",
+  MPL: "paymore-maplewood.myshopify.com",
+  BAL: "paymore-ballwin.myshopify.com",
+};
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -77,13 +98,9 @@ async function sb(path: string, init: RequestInit = {}) {
 const rows = async (path: string) => await (await sb(path)).json();
 
 // POSTGREST CAPS EVERY RESPONSE AT 1000 ROWS AND SAYS NOTHING. `&limit=2000` is
-// not an error and not a warning — it just returns 1000 and a Content-Range
-// that nobody reads. OVL has 1,378 in-stock SKUs, so the first version of the
-// coverage count answered 647 where the truth was 991, and the gap would widen
-// with every product the store takes in.
-//
-// Range-paged, and it keeps going until a short page proves the end. Any table
-// that can outgrow a thousand rows has to come through here.
+// not an error and not a warning — it returns 1000 and a Content-Range nobody
+// reads. That silently under-reported a count here by a third before it was
+// found. Any table that can outgrow a thousand rows comes through this.
 const PAGE_ROWS = 1000;
 
 async function allRows(path: string): Promise<any[]> {
@@ -94,9 +111,7 @@ async function allRows(path: string): Promise<any[]> {
     });
     const page = await res.json();
     out.push(...page);
-    if (page.length < PAGE_ROWS) return out;
-    // A table that somehow never returns a short page must not spin forever.
-    if (out.length >= 50000) return out;
+    if (page.length < PAGE_ROWS || out.length >= 50000) return out;
   }
 }
 
@@ -110,24 +125,20 @@ async function countOf(path: string): Promise<number> {
 // --- who is asking ----------------------------------------------------------
 
 type Scope = {
-  name: string;
-  role: string;
-  store: string;
-  stores: string[];
-  corp: boolean;
-  canList: boolean;
-  canManage: boolean;
+  name: string; role: string; store: string; stores: string[];
+  corp: boolean; canList: boolean; allStores: boolean;
 };
 
 async function scopeFor(pin: string): Promise<Scope | null> {
   if (!pin) return null;
-  const found = await rows(
-    `users?pin=eq.${encodeURIComponent(pin)}&select=name,role,store&limit=1`);
+  const found = await rows(`users?pin=eq.${encodeURIComponent(pin)}&select=name,role,store&limit=1`);
   const user = found[0];
   if (!user) return null;
 
   const role = String(user.role || "").toLowerCase().trim();
   const home = String(user.store || "").toUpperCase().trim();
+  if (NO_ACCESS_ROLES.includes(role)) return null;
+
   const corp = CORP_ROLES.includes(role);
 
   // A Multi-Store Manager runs two stores and needs both, not just the one
@@ -138,222 +149,271 @@ async function scopeFor(pin: string): Promise<Scope | null> {
       ? [...MULTISTORE_MANAGER_STORES]
       : home && home !== "CORP" ? [home] : [];
 
-  const isStoreLead = STORE_ROLES.includes(role) || role === "multi-store manager";
-  if (!corp && !isStoreLead) return null;   // employees and the TV role get nothing
+  // Somebody with no store and no corp role has nothing to list against. That
+  // is a data problem, not a permission one, but it still has no answer here.
+  if (!stores.length) return null;
 
   return {
-    name: user.name || "",
-    role,
-    store: stores[0] || home,
-    stores,
-    corp,
-    // Listing an item is a store job, so store leads do it. It is also the only
-    // write here that reaches the outside world.
-    canList: corp || isStoreLead,
-    // Connecting an account, importing a template, registering webhooks: setup,
-    // and setup is corp's.
-    canManage: corp,
+    name: user.name || "", role, store: stores[0], stores, corp,
+    // Every role that gets this far lists. What separates them is how many
+    // stores they can point at, not whether they may upload.
+    canList: true,
+    allStores: ALL_STORES_ROLES.includes(role),
   };
 }
 
 // A store code a caller has no business seeing must never be answerable, and
-// the honest answer to "which store?" is theirs, not a 403 the UI has to
-// special-case on every call.
+// the honest default is theirs rather than a 403 the UI has to special-case.
 function resolveStore(scope: Scope, asked: string | null): string | null {
   const want = (asked || "").toUpperCase().trim();
   if (!want) return scope.stores[0] || null;
   return scope.stores.includes(want) ? want : null;
 }
 
-// --- freshness --------------------------------------------------------------
+const publicScope = (s: Scope) => ({
+  name: s.name, role: s.role, store: s.store, stores: s.stores,
+  corp: s.corp, canList: s.canList, allStores: s.allStores,
+});
+
+// Shopify ids are stored as GIDs — gid://shopify/Product/8154021462118. The
+// admin URL wants the number on the end.
+const shopifyUrlFor = (store: string, gid: string | null | undefined) => {
+  const id = gid ? String(gid).split("/").pop() : null;
+  const shop = SHOP_BY_STORE[store];
+  return id && shop ? `https://${shop}/admin/products/${id}` : null;
+};
+
+const ebayUrlFor = (itemId: string | null | undefined, environment?: string | null) =>
+  !itemId ? null
+    : environment === "sandbox"
+      ? `https://sandbox.ebay.com/itm/${itemId}`
+      : `https://www.ebay.com/itm/${itemId}`;
 
 const ageMinutes = (iso: string | null | undefined) =>
   !iso ? null : Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
 
 // --- views ------------------------------------------------------------------
 
-// The one query the whole panel is built on: in stock on Shopify, absent from
-// eBay. Selected here rather than in five places so "listed" can only ever mean
-// one thing.
-// Both halves of the coverage question come out of the same two reads, so the
-// "not listed" count and the "listed but out of stock" count can never be
-// computed against different snapshots of the data.
-async function coverage(store: string) {
-  const catalog = await allRows(
-    `ebay_catalog?store_code=eq.${encodeURIComponent(store)}&quantity=gt.0`
-    + `&select=sku,title,price,quantity,image_count,product_created_at`
-    + `&order=product_created_at.desc.nullslast`);
-  const liveRows = await allRows(
-    `ebay_live?store_code=eq.${encodeURIComponent(store)}&select=sku,item_id,title`);
-  const live = new Set<string>(liveRows.map((r: any) => r.sku));
-  const inStock = new Set<string>(catalog.map((c: any) => c.sku));
-  // Our own failures carry the reason eBay gave, which is the single most
-  // useful thing on the row — without it "this did not list" is unactionable.
-  const mine: Record<string, any> = {};
-  for (const l of await allRows(
+// OUR listings only. `ebay_listings` is written solely by ebay-sync, so every
+// row here is something SPEEKS Connect tried to publish — which is exactly the
+// scope this panel reports on.
+const LISTING_COLS = "sku,title,price,quantity,status,ebay_listing_id,shopify_product_id,"
+  + "category_id,category_name,last_error,attempts,last_attempt_at,published_at,updated_at";
+
+// --- saying what went wrong, to the person holding the item -----------------
+//
+// eBay writes its refusals for the developer who made the API call. They arrive
+// as a number, a sentence of API vocabulary, and — routinely — eBay's own help
+// page pasted in as raw markup, which rendered in the panel as several hundred
+// words of <div class="g-rcp-rcp"> nobody could read past. Even the readable
+// part says things like "the unpublished offer has invalid item condition
+// information", which is true and useless: it does not say what to change or
+// where to change it.
+//
+// So the codes we actually see get turned into a sentence that names the field,
+// names the place, and says what to do. Everything else falls back to eBay's
+// own words with the markup stripped, which is worse than a translation and far
+// better than the wall. The original is always kept as errorRaw — a store needs
+// plain English, and whoever they escalate to needs the exact refusal.
+
+const stripMarkup = (s: string) =>
+  s.replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const ERROR_RULES: { test: RegExp; help: (m: RegExpMatchArray) => string }[] = [
+  // Not a listing problem at all — the SKU never matched a product. Nearly
+  // always a partial SKU: "B2B310" typed where "KS01-B2B310-E11" was meant.
+  {
+    test: /sku (\S+) not found in/i,
+    help: (m) => `Shopify has no product with the SKU ${m[1]}. Check it against the `
+      + `product page — a partial SKU will not match, so "${m[1]}" has to be the whole thing.`,
+  },
+  // An aspect whose value eBay will not take. Brand is the usual offender:
+  // eBay keeps a fixed brand list per category and rejects anything else.
+  {
+    test: /\b([A-Z][\w \-\/]{1,28}?) has an invalid value of ["“]([^"”]{1,60})["”]/,
+    help: (m) => `eBay will not accept "${m[2]}" as the ${m[1]} in this category — it keeps a `
+      + `fixed list of ${m[1]} values and that is not on it. Open the item in Shopify and set `
+      + `${m[1]} to the real manufacturer, or to Unbranded if it does not have one.`,
+  },
+  // A required aspect missing from the product.
+  {
+    test: /\b(?:aspect ["“]?)?([A-Z][\w \-\/]{1,28}?)["“]?\s+is missing\b/,
+    help: (m) => `eBay requires ${m[1]} for this category and the item does not have it. Add `
+      + `${m[1]} to the product's spec table in Shopify and upload again.`,
+  },
+  // 25019. eBay compares the title against the condition and refuses when they
+  // disagree — a "Broken"/"Cracked"/"Bad" title listed as a working condition.
+  // Its own explanation is buried in the markup dump, so it is restated here.
+  {
+    test: /\b25019\b|cannot revise listing|title.{0,80}conflicts with other details|improper words/i,
+    help: () => `eBay refused this because the title and the condition disagree. A title saying `
+      + `Broken, Cracked, Bad or No Charge has to be listed as "For Parts Or Not Working" — `
+      + `eBay will not let an item described as damaged go up under a working condition. `
+      + `Either set the item's Condition in Shopify to For Parts Or Not Working, or take the `
+      + `damage wording out of the title.`,
+  },
+  // 25021. The granular used tiers only exist in some categories.
+  {
+    test: /\b25021\b|condition id is invalid for the selected primary category/i,
+    help: () => `eBay does not allow this item's condition in the category it was matched to. `
+      + `Most hardware categories accept only a plain "Used" — not Good, Very Good or `
+      + `Acceptable. Set the item's Condition in Shopify to Used or Excellent and upload again. `
+      + `If the category itself looks wrong, that is the thing to fix first.`,
+  },
+  // No photos. eBay will not publish a listing without at least one.
+  {
+    test: /\b25004\b.{0,80}(picture|image)|at least one picture|no images/i,
+    help: () => `eBay will not publish a listing with no photos. Add at least one image to the `
+      + `product in Shopify and upload again.`,
+  },
+  // Policies not set up for the store. An operator problem, not a store one.
+  {
+    test: /(payment|return|fulfillment|shipping) polic/i,
+    help: () => `This store's eBay account is missing one of its policies (payment, returns or `
+      + `postage), so nothing can publish until it is set up. This is an account setting, not `
+      + `something wrong with the item — send it on rather than retrying.`,
+  },
+];
+
+// eBay repeats itself: the readable sentence, then the same thing again inside
+// a bracketed array of raw help markup. Cut at the bracket before translating.
+function humanError(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const flat = stripMarkup(String(raw));
+  const head = flat.split(/\s*\[0=/)[0].trim() || flat;
+
+  for (const rule of ERROR_RULES) {
+    const m = head.match(rule.test) || flat.match(rule.test);
+    if (m) return rule.help(m);
+  }
+  // Nothing matched. Give back eBay's own leading sentence rather than a guess,
+  // capped so an untranslated refusal can never become a wall again.
+  return head.length > 300 ? head.slice(0, 300).replace(/\s+\S*$/, "") + "…" : head;
+}
+
+// STATE COMES FROM OUR OWN COLUMN, NOT FROM THE SWEEP. See the long note in
+// listingsFor(). Four states, and they are all the panel needs to show:
+//   live      published, and eBay still has it
+//   ended     published, but no longer live — it sold, or someone ended it
+//   disabled  somebody took it down on purpose; nothing automatic will undo it
+//   failed    eBay refused, and last_error says why
+function mapListing(store: string, l: any) {
+  return {
+    sku: l.sku,
+    title: l.title || l.sku,
+    price: l.price,
+    quantity: l.quantity,
+    itemId: l.ebay_listing_id,
+    state: l.status === "failed" ? "failed"
+         : l.status === "disabled" ? "disabled"
+         : l.status === "published" ? "live"
+         : l.ebay_listing_id ? "ended" : "failed",
+    // Plain English for the person holding the item; eBay's exact words kept
+    // alongside it for whoever they escalate to.
+    error: humanError(l.last_error),
+    errorRaw: l.last_error ? stripMarkup(l.last_error).slice(0, 1200) : null,
+    category: l.category_name || null,
+    categoryId: l.category_id || null,
+    attempts: l.attempts || 0,
+    lastAttempt: l.last_attempt_at || null,
+    publishedAt: l.published_at || null,
+    updatedAt: l.updated_at || null,
+    // Both halves of the item, one click each. The eBay link only exists once
+    // there is a listing id; the Shopify link exists as soon as we know the
+    // product, which includes every failure — and a failure is precisely when
+    // somebody needs to open the product and fix what eBay complained about.
+    ebayUrl: ebayUrlFor(l.ebay_listing_id),
+    shopifyUrl: shopifyUrlFor(store, l.shopify_product_id),
+  };
+}
+
+async function itemFor(store: string, sku: string) {
+  const found = await rows(
     `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
-    + `&select=sku,status,last_error,attempts,last_attempt_at`)) {
-    mine[l.sku] = l;
-  }
-
-  // Live on eBay, and NOT among the in-stock SKUs Shopify gave us. Somebody
-  // can buy it and we may not have it. Reported, never auto-corrected: ending
-  // a listing is a decision, and half of these are usually a stock count that
-  // needs fixing rather than a listing that needs killing.
-  const oversell = liveRows
-    .filter((r: any) => !inStock.has(r.sku))
-    .map((r: any) => ({ sku: r.sku, title: r.title, itemId: r.item_id }));
-
-  const needs = catalog
-    .filter((c: any) => !live.has(c.sku))
-    .map((c: any) => {
-      const own = mine[c.sku];
-      const blocked = !c.image_count || c.image_count < MIN_IMAGES
-        ? "No photos on the Shopify product"
-        : !(Number(c.price) > 0) ? "No price on the Shopify product"
-        : null;
-      return {
-        sku: c.sku,
-        title: c.title,
-        price: c.price,
-        quantity: c.quantity,
-        images: c.image_count,
-        since: c.product_created_at,
-        // Three states, and the UI colours all three differently: ready to go,
-        // blocked on Shopify data, or tried and refused by eBay.
-        state: own?.status === "failed" ? "failed" : blocked ? "blocked" : "ready",
-        blocked,
-        error: own?.status === "failed" ? own.last_error : null,
-        attempts: own?.attempts || 0,
-        lastAttempt: own?.last_attempt_at || null,
-      };
-    });
-
-  return { needs, oversell };
+    + `&sku=eq.${encodeURIComponent(sku)}&select=${LISTING_COLS}&limit=1`);
+  return found[0] ? mapListing(store, found[0]) : null;
 }
 
-async function liveView(store: string) {
-  const live = await allRows(
-    `ebay_live?store_code=eq.${encodeURIComponent(store)}`
-    + `&select=sku,item_id,title,quantity,seen_at&order=title.asc`);
-  const mine: Record<string, any> = {};
-  for (const l of await allRows(
+async function listingsFor(store: string) {
+  const mine = await allRows(
     `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
-    + `&select=sku,status,ebay_listing_id,last_error,published_at,price,title`)) {
-    mine[l.sku] = l;
-  }
-  const catalog: Record<string, any> = {};
-  for (const c of await allRows(
-    `ebay_catalog?store_code=eq.${encodeURIComponent(store)}&select=sku,price,quantity`)) {
-    catalog[c.sku] = c;
-  }
+    + `&select=${LISTING_COLS}&order=updated_at.desc`);
 
-  return live.map((r: any) => {
-    const own = mine[r.sku];
-    return {
-      sku: r.sku,
-      title: r.title || own?.title || catalog[r.sku]?.title || r.sku,
-      itemId: r.item_id,
-      quantity: r.quantity,
-      price: own?.price ?? catalog[r.sku]?.price ?? null,
-      // Which system put it there. Until MC is switched off this is the most
-      // important column on the row: only "speeks" listings answer to our
-      // stock and price sync, and an MC row moving is not ours to explain.
-      source: own?.ebay_listing_id ? "speeks" : "mc",
-      publishedAt: own?.published_at || null,
-      // Shopify says zero, eBay says live. Somebody can buy something we do
-      // not have.
-      oversell: (catalog[r.sku]?.quantity ?? 0) < 1,
-    };
-  });
-}
-
-async function failedView(store: string) {
-  return (await rows(
-    `ebay_listings?store_code=eq.${encodeURIComponent(store)}&status=eq.failed`
-    + `&select=sku,title,price,last_error,attempts,last_attempt_at,updated_at`
-    + `&order=updated_at.desc&limit=200`));
-}
-
-async function ordersView(store: string) {
-  return await rows(
-    `ebay_orders?store_code=eq.${encodeURIComponent(store)}`
-    + `&select=ebay_order_id,shopify_order_name,shopify_order_id,buyer_username,total,`
-    + `sold_at,tracking_number,tracking_carrier,tracking_pushed_at,status,last_error`
-    + `&order=sold_at.desc&limit=100`);
+  // STATE COMES FROM OUR OWN COLUMN, NOT FROM THE SWEEP. The first version of
+  // this joined ebay_live and called anything present there "live", which reads
+  // as the more trustworthy source right up until you notice the sweep is a
+  // snapshot up to twenty minutes old while ebay_listings.status is written by
+  // ebay-sync and ebay-inventory at the moment of each event.
+  //
+  // It showed up immediately: a GPU sold out, was ended, and was republished by
+  // the restock path within the same sweep window. Our column tracked all three
+  // steps; the sweep still held the pre-sale snapshot and called it live under
+  // a listing id that no longer existed.
+  //
+  // The sweep's job is the other direction — catching a listing that ended on
+  // eBay's side without telling us — and that reconciliation belongs in
+  // ebay-catalog, where it can compare against a COMPLETE sweep, rather than
+  // being guessed at per page load.
+  return mine.map((l: any) => mapListing(store, l));
 }
 
 async function summaryFor(store: string) {
-  const [ebayRow, catalogRun, liveRun] = await Promise.all([
+  const [ebayRow, liveRun] = await Promise.all([
     rows(`ebay_stores?store_code=eq.${encodeURIComponent(store)}`
        + `&select=ebay_user_id,environment,merchant_location_key,payment_policy_id,`
        + `return_policy_id,fulfillment_policy_id,installed_at`),
-    rows(`ebay_catalog_runs?store_code=eq.${encodeURIComponent(store)}&select=*`),
     rows(`ebay_live_runs?store_code=eq.${encodeURIComponent(store)}&select=*`),
   ]);
   const st = ebayRow[0] || null;
+  if (!st) {
+    return { store, connected: false,
+             counts: { live: 0, ended: 0, disabled: 0, failed: 0, total: 0 },
+             setup: null, freshness: { liveMinutes: null, liveError: null } };
+  }
 
-  const [inStock, liveCount, ours, failed, lastOrder] = await Promise.all([
-    countOf(`ebay_catalog?store_code=eq.${encodeURIComponent(store)}&quantity=gt.0&select=sku`),
-    countOf(`ebay_live?store_code=eq.${encodeURIComponent(store)}&select=sku`),
-    countOf(`ebay_listings?store_code=eq.${encodeURIComponent(store)}&status=eq.published&select=sku`),
-    countOf(`ebay_listings?store_code=eq.${encodeURIComponent(store)}&status=eq.failed&select=sku`),
-    rows(`ebay_orders?store_code=eq.${encodeURIComponent(store)}&select=sold_at&order=sold_at.desc&limit=1`),
-  ]);
-
-  // Counted from the same coverage() the table renders, so the headline
-  // number and the list underneath can never disagree.
-  const cover = st ? await coverage(store) : { needs: [], oversell: [] };
-  const needs = cover.needs;
-
-  // Sold this month, in the store's own month rather than UTC's.
-  const monthStart = new Date();
-  monthStart.setUTCDate(1);
-  monthStart.setUTCHours(5, 0, 0, 0);   // ~midnight Central
-  const sold = await allRows(
-    `ebay_orders?store_code=eq.${encodeURIComponent(store)}`
-    + `&sold_at=gte.${monthStart.toISOString()}&select=total`);
+  const items = await listingsFor(store);
+  const failed = await countOf(
+    `ebay_listings?store_code=eq.${encodeURIComponent(store)}&status=eq.failed&select=sku`);
 
   return {
     store,
-    connected: !!st,
-    ebayUserId: st?.ebay_user_id || null,
-    environment: st?.environment || null,
-    setup: st ? {
+    connected: true,
+    ebayUserId: st.ebay_user_id || null,
+    environment: st.environment || null,
+    setup: {
       merchantLocation: !!st.merchant_location_key,
       paymentPolicy: !!st.payment_policy_id,
       returnPolicy: !!st.return_policy_id,
       fulfillmentPolicy: !!st.fulfillment_policy_id,
       installedAt: st.installed_at,
-    } : null,
+    },
     counts: {
-      inStock,
-      liveOnEbay: liveCount,
-      ours,
-      mc: Math.max(0, liveCount - ours),
-      needsListing: needs.length,
-      ready: needs.filter(n => n.state === "ready").length,
-      blocked: needs.filter(n => n.state === "blocked").length,
-      failed,
-      oversell: cover.oversell.length,
-      soldThisMonth: sold.length,
-      soldThisMonthValue: sold.reduce((a: number, r: any) => a + Number(r.total || 0), 0),
+      live: items.filter(i => i.state === "live").length,
+      ended: items.filter(i => i.state === "ended").length,
+      disabled: items.filter(i => i.state === "disabled").length,
+      // Counted from the table AND from the column, which must agree. They can
+      // only diverge if a row is written outside ebay-sync.
+      failed: items.filter(i => i.state === "failed").length,
+      failedByStatus: failed,
+      total: items.length,
     },
     freshness: {
-      catalogMinutes: ageMinutes(catalogRun[0]?.finished_at),
-      catalogError: catalogRun[0]?.error || null,
       liveMinutes: ageMinutes(liveRun[0]?.finished_at),
       liveError: liveRun[0]?.error || null,
-      lastOrderAt: lastOrder[0]?.sold_at || null,
     },
   };
 }
 
 // --- actions ----------------------------------------------------------------
 
-// Every action is a call to a function that already exists, made with the
-// operator secret this one holds. Nothing about eBay is reimplemented here;
-// the point is only that a role check stands in front of it.
+// Every action calls a function that already exists, with the operator secret
+// this one holds. Nothing about eBay is reimplemented here; the point is only
+// that a role check stands in front of it.
 async function callFn(path: string): Promise<{ status: number; body: any }> {
   const url = `${FN_BASE}/${path}${path.includes("?") ? "&" : "?"}secret=${OPS_SECRET}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${SERVICE_KEY}` } });
@@ -376,43 +436,49 @@ Deno.serve(async (req: Request) => {
   }
   // A stale sessionStorage pin outlives a PIN change and lands exactly here.
   // Saying so beats leaving someone staring at an empty panel.
-  if (!scope) return json({ error: "unauthorized", detail: "no matching user, or your role has no eBay access" }, 401);
+  if (!scope) {
+    return json({ error: "unauthorized",
+                  detail: "no matching user, or your role has no SPEEKS Connect access" }, 401);
+  }
 
   try {
     if (req.method === "POST") return await handleAction(req, scope);
 
-    const view = url.searchParams.get("view") || "summary";
+    const view = url.searchParams.get("view") || "listings";
 
-    if (view === "summary" || view === "health") {
-      if (view === "health" && !scope.corp) return json({ error: "forbidden" }, 403);
-      const list = view === "health" ? STORE_ORDER : scope.stores;
+    if (view === "health") {
+      if (!scope.allStores) return json({ error: "forbidden" }, 403);
       const stores = [];
-      for (const s of list) stores.push(await summaryFor(s));
+      for (const s of STORE_ORDER) stores.push(await summaryFor(s));
       return json({ scope: publicScope(scope), stores });
     }
 
     const store = resolveStore(scope, url.searchParams.get("store"));
     if (!store) return json({ error: "forbidden", detail: "that store is not yours" }, 403);
 
-    if (view === "needs") {
-      const cover = await coverage(store);
-      return json({ scope: publicScope(scope), store, items: cover.needs, oversell: cover.oversell });
+    // The category picker's search. eBay publishes no "every category" list
+    // worth shipping to a browser, so its suggestion endpoint IS the search:
+    // words in, ranked leaf categories with their full path out.
+    if (view === "categories") {
+      const q = (url.searchParams.get("q") || "").trim();
+      if (!q) return json({ results: [] });
+      const r = await callFn(
+        `ebay-sync?store=${store}&categorySearch=1&q=${encodeURIComponent(q)}`);
+      return json(r.body, r.status < 300 ? 200 : r.status);
     }
-    if (view === "live")   return json({ scope: publicScope(scope), store, items: await liveView(store), failed: await failedView(store) });
-    if (view === "orders") return json({ scope: publicScope(scope), store, orders: await ordersView(store) });
+
+    if (view === "listings") {
+      const summary = await summaryFor(store);
+      return json({
+        scope: publicScope(scope), store, summary,
+        items: summary.connected ? await listingsFor(store) : [],
+      });
+    }
 
     return json({ error: `unknown view "${view}"` }, 400);
   } catch (e) {
     return json({ error: "failed", detail: String((e as Error)?.message || e).slice(0, 500) }, 500);
   }
-});
-
-// The caller is told what it may do, so the UI can hide what would 403 rather
-// than offering a button that fails. The role gate above is still the one that
-// decides — this is only so the interface can be honest about it.
-const publicScope = (s: Scope) => ({
-  name: s.name, role: s.role, store: s.store, stores: s.stores,
-  corp: s.corp, canList: s.canList, canManage: s.canManage,
 });
 
 async function handleAction(req: Request, scope: Scope): Promise<Response> {
@@ -422,51 +488,95 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
   const sku = String(body.sku || "").trim();
 
   if (!store) return json({ error: "forbidden", detail: "that store is not yours" }, 403);
-
-  if (action === "refresh") {
-    if (!scope.canList) return json({ error: "forbidden" }, 403);
-    // Shopify first: a live sweep is meaningless against a stale catalog.
-    const catalog = await callFn(`ebay-catalog?store=${store}&sweep=1`);
-    const live = await callFn(`ebay-catalog?store=${store}&live=1`);
-    return json({ ok: catalog.status < 300 && live.status < 300, catalog: catalog.body, live: live.body });
-  }
-
+  if (!scope.canList) return json({ error: "forbidden" }, 403);
   if (!sku) return json({ error: "pass a sku" }, 400);
 
   if (action === "preview") {
-    if (!scope.canList) return json({ error: "forbidden" }, 403);
     const r = await callFn(`ebay-sync?store=${store}&sku=${encodeURIComponent(sku)}&dry=1`);
     return json({ ok: r.status < 300, ...r.body }, r.status < 300 ? 200 : r.status);
   }
 
   if (action === "list" || action === "retry") {
-    if (!scope.canList) return json({ error: "forbidden" }, 403);
-
     // REFUSE ANYTHING ALREADY LIVE, whoever listed it. ebay-sync cannot make
-    // this check — it only knows the Inventory API, which cannot see MC — so it
-    // has to happen here, against ebay_live. Publishing over a live MC listing
-    // would leave two listings against one unit.
+    // this check — it only knows the Inventory API, which cannot see listings
+    // made through the Trading API — so it happens here, against ebay_live.
+    // SPEEKS Connect and Marketplace Connect are meant to hold different SKUs;
+    // this is what makes a slip bounce rather than double-list a single unit.
     const already = await rows(
       `ebay_live?store_code=eq.${encodeURIComponent(store)}&sku=eq.${encodeURIComponent(sku)}&select=item_id`);
     const ours = await rows(
-      `ebay_listings?store_code=eq.${encodeURIComponent(store)}&sku=eq.${encodeURIComponent(sku)}&select=ebay_listing_id,status`);
+      `ebay_listings?store_code=eq.${encodeURIComponent(store)}&sku=eq.${encodeURIComponent(sku)}`
+      + `&select=ebay_listing_id,status`);
     const isOurs = !!ours[0]?.ebay_listing_id;
     if (already.length && !isOurs) {
+      const itemId = already[0].item_id;
+      // A conflict row used to be a dead end: no title, no price, no links, and
+      // a Try Again button that would fail identically forever. The one useful
+      // thing is the listing itself, so hand back everything needed to open it.
+      // ebay_catalog is our Shopify mirror and may be stale, so it is a bonus
+      // rather than a dependency — the eBay link is the part that matters.
+      const cat = (await rows(
+        `ebay_catalog?store_code=eq.${encodeURIComponent(store)}`
+        + `&sku=eq.${encodeURIComponent(sku)}&select=title,price,product_id&limit=1`))[0] || {};
+      const detail =
+        "This SKU is already live on the store's eBay account, and SPEEKS Connect did not "
+        + "put it there — which almost always means Marketplace Connect did. Uploading it "
+        + "again would put two live listings against one unit. SPEEKS Connect cannot end it "
+        + "either, because it cannot see a listing it did not create: open it on eBay and end "
+        + "it where it was made.";
       return json({
         ok: false,
-        error: "already listed on eBay by Marketplace Connect",
-        itemId: already[0].item_id,
-        detail: "Listing it again would put two live listings against one unit. End the Marketplace Connect listing first.",
+        error: "already live on eBay",
+        // Tells the panel this is not a retryable failure.
+        conflict: true,
+        itemId,
+        detail,
+        item: {
+          sku, title: cat.title || sku, price: cat.price ?? null, quantity: null,
+          itemId, state: "failed", conflict: true, error: detail,
+          attempts: 0, lastAttempt: null, publishedAt: null, updatedAt: null,
+          ebayUrl: ebayUrlFor(itemId),
+          shopifyUrl: shopifyUrlFor(store, cat.product_id),
+        },
       }, 409);
     }
 
-    const r = await callFn(`ebay-sync?store=${store}&sku=${encodeURIComponent(sku)}`);
+    // A category chosen on the row beats anything eBay suggests — the person
+    // sending it is holding the item. The name rides along so an overridden
+    // category is not left showing a bare id in the panel.
+    const cat = String(body.category || "").trim();
+    const catName = String(body.categoryName || "").trim();
+    const override = cat
+      ? `&category=${encodeURIComponent(cat)}`
+        + (catName ? `&categoryName=${encodeURIComponent(catName)}` : "")
+      : "";
+
+    const r = await callFn(`ebay-sync?store=${store}&sku=${encodeURIComponent(sku)}${override}`);
     await stampAttempt(store, sku, r.status < 300 ? null : errorOf(r.body));
-    return json({ ok: r.status < 300, ...r.body }, r.status < 300 ? 200 : r.status);
+    // The finished row goes back with the answer. The panel shows one line per
+    // SKU somebody typed, and it has to turn from pending into a real item —
+    // title, price, both links — without re-reading the whole store to find the
+    // one row that just changed.
+    return json({ ...r.body, ok: r.status < 300, item: await itemFor(store, sku) },
+                r.status < 300 ? 200 : r.status);
+  }
+
+  // Where does this thing actually sell? Answered from the live market rather
+  // than from a text match on our title, with the taxonomy guess alongside it.
+  if (action === "recommend") {
+    const r = await callFn(`ebay-sync?store=${store}&recommend=1&sku=${encodeURIComponent(sku)}`);
+    return json({ ...r.body, ok: r.status < 300 }, r.status < 300 ? 200 : r.status);
+  }
+
+  // Take it off eBay and leave it off. ebay-inventory holds the logic and the
+  // reasoning; see the note on its ?end=1 route for why 'ended' would not hold.
+  if (action === "end") {
+    const r = await callFn(`ebay-inventory?store=${store}&end=1&sku=${encodeURIComponent(sku)}`);
+    return json({ ...r.body, ok: r.status < 300, item: await itemFor(store, sku) },
+                r.status < 300 ? 200 : r.status);
   }
 
   if (action === "resync") {
-    if (!scope.canList) return json({ error: "forbidden" }, 403);
     const r = await callFn(`ebay-inventory?store=${store}&resync=1&sku=${encodeURIComponent(sku)}`);
     return json({ ok: r.status < 300, ...r.body }, r.status < 300 ? 200 : r.status);
   }
@@ -479,9 +589,10 @@ const errorOf = (body: any): string =>
     : body?.error ? String(body.error).slice(0, 400)
     : JSON.stringify(body || {}).slice(0, 400);
 
-// ebay-sync writes status and last_error itself. attempts is ours: it is what
-// the auto-lister backs off on, and it has to count manual tries too or a
-// person hammering Retry would reset the backoff for the robot.
+// ebay-sync writes status, title, price and last_error itself. attempts and
+// last_attempt_at are ours, and they must be stamped even when ebay-sync never
+// got far enough to write a row — otherwise a SKU that fails at the very first
+// step shows no evidence of having been tried at all.
 async function stampAttempt(store: string, sku: string, error: string | null) {
   const existing = await rows(
     `ebay_listings?store_code=eq.${encodeURIComponent(store)}&sku=eq.${encodeURIComponent(sku)}&select=attempts`);
