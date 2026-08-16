@@ -225,6 +225,17 @@ const stripMarkup = (s: string) =>
     .trim();
 
 const ERROR_RULES: { test: RegExp; help: (m: RegExpMatchArray) => string }[] = [
+  // eBay's own backend fell over. Nothing is wrong with the item, and the same
+  // SKU typically publishes on the very next attempt — seen first on LEE's
+  // opening listing, which went straight through on a retry with no change to
+  // the product. Saying "a system error has occurred" to a store reads as
+  // "you broke something"; it needs to say whose fault it is and what to do.
+  {
+    test: /\b2500[01]\b|core inventory service internal error/i,
+    help: () => `This one is eBay's end, not the item — their inventory service returned an `
+      + `internal error. Nothing is wrong with the product and nothing needs changing. `
+      + `Press Try Again; it usually goes through on the second attempt.`,
+  },
   // Not a listing problem at all — the SKU never matched a product. Nearly
   // always a partial SKU: "B2B310" typed where "KS01-B2B310-E11" was meant.
   {
@@ -640,10 +651,15 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
   return json({ error: `unknown action "${action}"` }, 400);
 }
 
+// The STEP is the most useful half of a failure — inventory_item, offer,
+// publish — and it was being thrown away. ebay-sync records it prefixed, then
+// this overwrote that row with the bare message, so the stored error said what
+// went wrong but never where. Put it back.
 const errorOf = (body: any): string =>
   typeof body === "string" ? body.slice(0, 400)
-    : body?.error ? String(body.error).slice(0, 400)
-    : JSON.stringify(body || {}).slice(0, 400);
+    : body?.error
+      ? `${body.step ? `${body.step}: ` : ""}${String(body.error)}`.slice(0, 400)
+      : JSON.stringify(body || {}).slice(0, 400);
 
 // ebay-sync writes status, title, price and last_error itself. attempts and
 // last_attempt_at are ours, and they must be stamped even when ebay-sync never

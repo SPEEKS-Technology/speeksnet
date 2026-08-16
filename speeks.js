@@ -40090,6 +40090,10 @@ async function _ecUpload(sku, extra) {
 let _ecCatSku = null;
 let _ecCatTimer = null;
 let _ecCatAnchor = null;
+// Height of everything above the list (header + search box). Constant for the
+// life of a popover, and measured once — see _ecCatPlace for why re-measuring
+// it is what jammed the scrollbar.
+let _ecCatChrome = null;
 
 // KEEP IT ON THE PAGE, AFTER THE CONTENT LANDS.
 // Placing it once at open time is not enough: at that moment the popover holds
@@ -40127,11 +40131,24 @@ function _ecCatPlace() {
 
     const list = pop.querySelector('.ec-catpop-list');
     if (list) {
-        // Measure the head and search box rather than hard-coding their height,
-        // so this keeps working if either changes.
-        list.style.maxHeight = 'none';
-        const chrome = pop.offsetHeight - list.offsetHeight;
-        list.style.maxHeight = `${Math.max(90, room - chrome)}px`;
+        // MEASURE THE CHROME ONCE, NOT ON EVERY CALL.
+        // Working it out by subtraction means setting max-height to 'none' and
+        // reading the full height back — which collapses the scroll container
+        // for a frame and resets where it was scrolled to. Doing that on every
+        // reposition made the list snap back to the top mid-drag, so the
+        // scrollbar felt jammed. The header and search box never change size
+        // while a popover is open, so this is measured on the first placement
+        // and reused.
+        if (_ecCatChrome == null) {
+            const before = list.style.maxHeight;
+            list.style.maxHeight = 'none';
+            _ecCatChrome = pop.offsetHeight - list.offsetHeight;
+            list.style.maxHeight = before;
+        }
+        const want = `${Math.max(90, room - _ecCatChrome)}px`;
+        // Only touch the DOM when the value actually changes; an identical
+        // write still costs a layout pass on some browsers.
+        if (list.style.maxHeight !== want) list.style.maxHeight = want;
     }
 
     const h = pop.offsetHeight;
@@ -40145,9 +40162,14 @@ function _ecCatPlace() {
 }
 
 // The popover is fixed but its anchor scrolls with the table, so it has to
-// follow. Capture phase catches the panel's own scroller as well as the window.
-function _ecCatReflow() {
-    if (!document.getElementById('ecCatPop')) return;
+// follow. Capture phase catches the panel's own scroller as well as the window
+// — and that is exactly why the popover's OWN list has to be excluded. Scrolling
+// the results is a scroll event too, and repositioning in response to it fought
+// the user for the scrollbar.
+function _ecCatReflow(ev) {
+    const pop = document.getElementById('ecCatPop');
+    if (!pop) return;
+    if (ev?.target && pop.contains(ev.target.nodeType ? ev.target : pop)) return;
     if (!_ecCatAnchor?.isConnected) { ecCloseCategory(); return; }
     _ecCatPlace();
 }
@@ -40167,6 +40189,7 @@ function ecCloseCategory() {
     clearTimeout(_ecCatTimer);
     _ecCatSku = null;
     _ecCatAnchor = null;
+    _ecCatChrome = null;
 }
 window.ecCloseCategory = ecCloseCategory;
 
