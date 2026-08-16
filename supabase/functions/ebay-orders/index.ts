@@ -671,7 +671,19 @@ Deno.serve(async (req: Request) => {
     }
 
     const address = shippingAddressFrom(o);
-    const created = await shopifyGql(shop, shopToken, `
+    // ONE UNIMPORTABLE ORDER MUST NOT ABORT THE POLL.
+    // orderCreate's *userErrors* were handled below from the start, but a
+    // top-level GraphQL error — the ACCESS_DENIED you get without write_orders —
+    // throws inside shopifyGql instead, and that throw went straight out of the
+    // handler. Consequences, all seen live on LEE: the run 500s, every OTHER
+    // order in the same batch is skipped, the tracking sweep at the end never
+    // runs, and no ebay_orders row is written, so the failure is invisible in
+    // the data and repeats every two minutes forever. Catch it, record it like
+    // any other failure, and carry on; retriedPreviousFailures re-attempts it
+    // each run, so it self-heals the moment the scope is granted.
+    let created: any;
+    try {
+      created = await shopifyGql(shop, shopToken, `
       mutation($order: OrderCreateOrderInput!, $options: OrderCreateOptionsInput) {
         orderCreate(order: $order, options: $options) {
           order { id name }
@@ -725,7 +737,34 @@ Deno.serve(async (req: Request) => {
           }],
         },
       },
-    );
+      );
+    } catch (err) {
+      const raw = String(err instanceof Error ? err.message : err);
+      // The scope failure is the one worth naming, because the fix is an app
+      // re-install and nothing about the order or the code will ever make it
+      // work. Everything else keeps eBay's own words.
+      const msg = /write_orders|ACCESS_DENIED/i.test(raw)
+        ? `Shopify refused to create the order: this store's app does not have the `
+          + `write_orders scope, so eBay sales cannot be written into Shopify. Re-install `
+          + `the Shopify app for this store with write_orders. Raw: ${raw.slice(0, 300)}`
+        : raw.slice(0, 600);
+      report.push({ ebayOrderId, action: "failed", reason: msg });
+      await sb("ebay_orders?on_conflict=store_code,ebay_order_id", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify([{
+          store_code: store,
+          ebay_order_id: ebayOrderId,
+          buyer_username: o.buyer?.username || null,
+          total: o.pricingSummary?.total?.value ?? null,
+          sold_at: o.creationDate || null,
+          status: "failed",
+          last_error: msg,
+          updated_at: new Date().toISOString(),
+        }]),
+      });
+      continue;
+    }
 
     const errs = created.orderCreate?.userErrors || [];
     if (errs.length || !created.orderCreate?.order) {
