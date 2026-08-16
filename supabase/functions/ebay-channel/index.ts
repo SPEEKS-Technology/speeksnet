@@ -311,6 +311,17 @@ const ERROR_RULES: { test: RegExp; help: (m: RegExpMatchArray) => string }[] = [
 function humanError(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const flat = stripMarkup(String(raw));
+
+  // OUR OWN REFUSALS ARE NOT eBay'S AND MUST NOT BE PROCESSED LIKE THEM.
+  // ebay-sync marks the messages it writes itself with a "SPEEKS:" prefix. Those
+  // are already plain English and deliberately longer than the 300-character cap
+  // below — which was quietly cutting the condition refusals in half, taking the
+  // list of grades to type with it and leaving a store told what was wrong but
+  // not what to type. The step name eBay-side errors carry ("condition: ") is
+  // allowed in front of the marker, since errorOf() prepends it.
+  const mine = flat.match(/^(?:[a-z]+:\s*)?SPEEKS:\s*([\s\S]+)$/);
+  if (mine) return mine[1].trim();
+
   const head = flat.split(/\s*\[0=/)[0].trim() || flat;
 
   for (const rule of ERROR_RULES) {
@@ -655,10 +666,23 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
 // publish — and it was being thrown away. ebay-sync records it prefixed, then
 // this overwrote that row with the bare message, so the stored error said what
 // went wrong but never where. Put it back.
+//
+// THE CAP IS FOR eBay'S WALLS, NOT FOR OUR OWN SENTENCES. 400 characters is
+// plenty for a refusal we wrote and far too little to let a raw eBay markup dump
+// through, which is why it is here. But the condition refusals run just past it,
+// so this was storing them cut off mid-word — and worse, it was overwriting the
+// complete copy ebay-sync had already written with the truncated one. A message
+// carrying the SPEEKS marker is ours and is kept whole (still bounded, because
+// nothing unbounded should reach a text column from an HTTP response).
+const errStr = (s: string): string => {
+  const cap = s.includes("SPEEKS: ") ? 1000 : 400;
+  return s.slice(0, cap);
+};
+
 const errorOf = (body: any): string =>
-  typeof body === "string" ? body.slice(0, 400)
+  typeof body === "string" ? errStr(body)
     : body?.error
-      ? `${body.step ? `${body.step}: ` : ""}${String(body.error)}`.slice(0, 400)
+      ? errStr(`${body.step ? `${body.step}: ` : ""}${String(body.error)}`)
       : JSON.stringify(body || {}).slice(0, 400);
 
 // ebay-sync writes status, title, price and last_error itself. attempts and

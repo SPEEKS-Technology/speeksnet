@@ -355,16 +355,38 @@ const CONDITION_BY_TEXT: [RegExp, string][] = [
 // silently, on the one field a buyer relies on most. Unknown now comes back as
 // unknown and the caller refuses the listing, so the failure is a listing that
 // did not go up rather than a return, a refund and an eBay defect.
+//
+// AN ABSENT CONDITION IS THE SAME RISK BY A DIFFERENT ROUTE. A product with no
+// Condition row at all used to take the fallback silently, which is the exact
+// overstatement the unknown-word refusal exists to prevent — a listing graded
+// Excellent purely because nobody typed anything. Missing is now refused too,
+// and it is a separate signal from unknown because the fix is different: one
+// person needs to correct a word, the other needs to add the field.
 function conditionFrom(
   specs: Record<string, string>, fallback: string,
-): { value: string; unknown: string | null } {
+): { value: string; unknown: string | null; missing: boolean } {
   const text = (specs["Condition"] || "").trim();
-  if (!text) return { value: fallback, unknown: null };
+  if (!text) return { value: fallback, unknown: null, missing: true };
   for (const [re, value] of CONDITION_BY_TEXT) {
-    if (re.test(text)) return { value, unknown: null };
+    if (re.test(text)) return { value, unknown: null, missing: false };
   }
-  return { value: fallback, unknown: text };
+  return { value: fallback, unknown: text, missing: false };
 }
+
+// The one place the accepted vocabulary is written down, so the refusal message
+// and any future validator cannot drift apart.
+const CONDITION_WORDS = "New, Like New, Flawless, Excellent, Very Good, Good, "
+  + "Acceptable, Used, or Broken / For Parts";
+
+// A REFUSAL WE WROTE OURSELVES IS NOT A REFUSAL TO TRANSLATE.
+// ebay-channel runs every stored error through humanError(), which pattern-matches
+// eBay's phrasing and then caps the result at 300 characters so an untranslated
+// wall of eBay markup cannot reach a store. Our own messages are already plain
+// English and are longer than that cap, so they were arriving with their most
+// useful half — the list of conditions to actually type — cut off the end. This
+// prefix marks a message as ours; the channel strips it and passes the rest
+// through whole, no rules and no cap.
+const OURS = "SPEEKS: ";
 
 // THE USED TIERS ARE NOT UNIVERSAL.
 // eBay's granular used conditions — Very Good (4000), Good (5000), Acceptable
@@ -985,14 +1007,19 @@ Deno.serve(async (req: Request) => {
   // publishing a grade nobody chose, and the grade is the field a buyer leans on
   // hardest — better a listing that did not go up than one that overstates the
   // goods. An explicit ?condition= is a person deciding on purpose, so it wins.
-  if (picked.unknown && !url.searchParams.get("condition")) {
-    const msg = `The product's Condition reads "${picked.unknown}", which is not a condition `
-      + `SPEEKS Connect recognises, so it will not guess one — guessing here would put a grade `
-      + `on eBay that nobody chose. Set the Condition on the Shopify product to one of: New, `
-      + `Like New, Excellent, Very Good, Good, Acceptable, Used, or Broken / For Parts.`;
+  if ((picked.unknown || picked.missing) && !url.searchParams.get("condition")) {
+    const msg = OURS + (picked.missing
+      ? `This product has no Condition on it in Shopify, so SPEEKS Connect will not list it — `
+        + `with the field blank the only thing it could do is assume a grade, and the assumption `
+        + `it used to make was "Excellent". Add a Condition row to the product's description `
+        + `specs in Shopify, set to one of: ${CONDITION_WORDS}. Then upload the SKU again.`
+      : `The product's Condition reads "${picked.unknown}", which is not a condition `
+        + `SPEEKS Connect recognises, so it will not guess one — guessing here would put a grade `
+        + `on eBay that nobody chose. Set the Condition on the Shopify product to one of: `
+        + `${CONDITION_WORDS}.`);
     if (!dry) await recordFailure(store, c, categoryId, msg, undefined, categoryName);
     return json({ store, sku, step: "condition", error: msg,
-                  conditionFound: picked.unknown }, 422);
+                  conditionFound: picked.unknown, conditionMissing: picked.missing }, 422);
   }
 
   const wantedCondition = picked.value;
