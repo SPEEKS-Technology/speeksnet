@@ -508,10 +508,26 @@ function legalValue(value: string, aspect: any): string | null {
     .map((v: any) => v.localizedValue).filter(Boolean);
   if (!allowed.length) return value;
   const v = normAspect(value);
-  return allowed.find(a => normAspect(a) === v)
-    ?? allowed.find(a => normAspect(a).startsWith(v))
-    ?? allowed.find(a => normAspect(a).includes(v) || v.includes(normAspect(a)))
-    ?? (aspect?.aspectConstraint?.aspectMode === "FREE_TEXT" ? value : null);
+
+  const exact = allowed.find(a => normAspect(a) === v);
+  if (exact) return exact;
+
+  // THE LONGEST PARTIAL MATCH WINS, NOT THE FIRST ONE IN THE LIST.
+  // Taking the first match sent a SATA III drive to eBay as SATA I: normalised,
+  // "sataiii6gbps" contains "satai", and "SATA I" happens to come first in
+  // eBay's own value list. Every roman-numeral and generation ladder has this
+  // shape — USB 3 inside USB 3.2, DDR4 inside DDR4L, Gen 1 inside Gen 12 — so
+  // the shortest candidate is the one most likely to be wrong. Ranking by
+  // length picks the most specific value that still fits.
+  const partial = allowed
+    .filter(a => {
+      const n = normAspect(a);
+      return n.startsWith(v) || n.includes(v) || v.includes(n);
+    })
+    .sort((a, b) => normAspect(b).length - normAspect(a).length);
+  if (partial.length) return partial[0];
+
+  return aspect?.aspectConstraint?.aspectMode === "FREE_TEXT" ? value : null;
 }
 
 // UPC-A (12) and EAN-13 share one check-digit rule: weight the digits 3-1-3-1
@@ -813,6 +829,45 @@ Deno.serve(async (req: Request) => {
           .map((a: any) => a.categoryName).reverse().join(" › "),
       })).filter((r: any) => r.id),
     });
+  }
+
+  // --- what does a category actually accept? --------------------------------
+  // "Brand has an invalid value" does not say what a valid one would be, and
+  // that is the whole question when a listing is refused over an aspect. This
+  // dumps eBay's own definitions for a category so the answer is readable
+  // instead of inferred: which aspects are required, which are closed lists,
+  // and exactly what is on each list.
+  //   ?aspects=1&category=56083          by id
+  //   ?aspects=1&sku=KS01-...            by whatever the sku resolves to
+  //   &aspect=Brand                      just that one
+  if (url.searchParams.get("aspects") === "1") {
+    const aspectApi = ebayClient(HOSTS[row.environment], await accessTokenFor(row));
+    let categoryId = (url.searchParams.get("category") || "").trim();
+    if (!categoryId) {
+      if (!sku) return json({ error: "pass &category=<id> or &sku=" }, 400);
+      const found = await findProducts(shop, shopToken, `sku:${sku}`, 10);
+      const item = found.find(m => m.sku === sku);
+      if (!item) return json({ error: `sku ${sku} not found in ${shop}` }, 404);
+      categoryId = (await recommendCategory(aspectApi, item.title)).recommended?.id || "";
+      if (!categoryId) return json({ error: "no category resolved for that sku" }, 422);
+    }
+    const res = await aspectApi(
+      `/commerce/taxonomy/v1/category_tree/${CATEGORY_TREE_ID}/get_item_aspects_for_category`
+      + `?category_id=${encodeURIComponent(categoryId)}`);
+    if (res.status >= 300) {
+      return json({ error: "eBay would not describe that category", detail: errText(res.body) }, 502);
+    }
+    const only = (url.searchParams.get("aspect") || "").trim().toLowerCase();
+    const aspects = (res.body?.aspects || [])
+      .filter((a: any) => !only || String(a.localizedAspectName).toLowerCase() === only)
+      .map((a: any) => ({
+        name: a.localizedAspectName,
+        required: !!a.aspectConstraint?.aspectRequired,
+        mode: a.aspectConstraint?.aspectMode,
+        closedList: (a.aspectValues || []).length > 0,
+        values: (a.aspectValues || []).map((v: any) => v.localizedValue),
+      }));
+    return json({ categoryId, count: aspects.length, aspects });
   }
 
   // --- recommend a category from what the same thing actually sells in ------
