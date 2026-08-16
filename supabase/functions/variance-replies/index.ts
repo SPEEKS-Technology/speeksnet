@@ -60,6 +60,12 @@ async function queueNotification(n: {
   category: string; kind: string; title: string; body?: string; link?: string;
   store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
   audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+  // The feature_overrides key of the surface this notification is about, so
+  // notify can drop anyone whose Feature Access hides it. See notifys
+  // featureAllows: the roles above stay the DEFAULT, an override moves an
+  // individual either way. Null = no gated surface (an announcement board, a
+  // store message) and roles alone are the whole answer.
+  audienceFeature?: string | null;
 }) {
   try {
     const sb = createClient(
@@ -75,6 +81,7 @@ async function queueNotification(n: {
       audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
       exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
       priority: n.priority ?? "normal",
+      audience_feature: n.audienceFeature ?? null,
     });
   } catch (_) { /* best-effort */ }
 }
@@ -255,6 +262,7 @@ Deno.serve(async (req: Request) => {
             // telling an ASM a sheet had landed and then going silent as the
             // deadline ran down was the worst of both. Out of both halves now.
             audienceRoles: ["manager", "owner (manager)"],
+            audienceFeature: "widget-variance-replies",
             excludeUser: body.uploaded_by ? String(body.uploaded_by).trim() : null,
           });
         }

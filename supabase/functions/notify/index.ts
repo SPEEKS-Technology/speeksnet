@@ -906,6 +906,18 @@ type Due = {
   title: string; body: string; link: string; tone: "red" | "amber";
   for: (p: Person) => boolean;      // who owes this
   store?: string;
+  // The feature_overrides key of the surface this chases, so somebody the tool
+  // has been hidden from stops being nagged about it. A function where the
+  // answer depends on the reader: an expense reminder is tool-expenses for the
+  // DM and tool-expenses-mgr for the MSM, and a claim is the oversight tool for
+  // one and the store tool for the other.
+  //
+  // REVOKE-ONLY, unlike the queue path. The `for` predicate above has already
+  // decided who owes this, and it encodes store coverage as well as role — an
+  // override cannot stand in for that, since granting somebody a tool says
+  // nothing about WHICH store they answer for. So an override can take a
+  // reminder away and never invent one.
+  feature?: string | ((p: Person) => string | null);
 };
 
 async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
@@ -935,6 +947,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
       body: `Nothing has been entered for the week ending ${prettyDate(wkEnd)}.${wkOverdue ? " The Monday 8:30am deadline has passed." : ""}`,
       link: "workspace.html#kpis", tone: wkOverdue ? "red" : "amber",
       for: (p) => KPI_ROLES.has(p.role) && covers(p, store),
+      feature: "widget-ws-weekly-kpis",
     });
   }
 
@@ -962,6 +975,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         body: `${label} has closed and no monthly KPIs have been entered.`,
         link: "workspace.html#kpis", tone: moOverdue ? "red" : "amber",
         for: (p) => KPI_ROLES.has(p.role) && covers(p, store),
+        feature: "widget-ws-weekly-kpis",
       });
     }
   }
@@ -982,6 +996,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         body: `${missing.length} store${missing.length === 1 ? "" : "s"} still have no weekly total: ${missing.join(", ")}. Every listing goal bar has nothing to measure against until they're set.`,
         link: "index.html", tone: "amber",
         for: (p) => p.role === "district manager",
+        feature: "widget-dm-listing-goals",
       });
     }
   }
@@ -1005,6 +1020,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         // 8:31, the day's roles are simply owed. Red is for a passed deadline.
         link: "index.html", tone: "amber",
         for: (p) => LG_ROLES.has(p.role) && covers(p, store),
+        feature: "listing-goals-assign",
       });
     }
   }
@@ -1026,6 +1042,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         body: `${missing.join(", ")} ${missing.length === 1 ? "has" : "have"} no gross-profit goal for this month yet.`,
         link: "index.html", tone: "amber",
         for: (p) => p.role === "district manager",
+        feature: "tool-store-goals",
       });
     }
   }
@@ -1044,6 +1061,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
       body: `${label} has closed and your expense report hasn't been marked filed.`,
       link: "index.html", tone: "amber",
       for: (p) => (p.role === "district manager" || p.isMsm) && !done.has(p.key),
+      feature: (p: Person) => p.isMsm ? "tool-expenses-mgr" : "tool-expenses",
     });
   }
 
@@ -1067,6 +1085,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         body: `${items.length} item${items.length === 1 ? "" : "s"} still need a reply${dueAt ? `, due ${prettyDate(fmtDate(dueAt))}` : ""}.`,
         link: "workspace.html#vreplies", tone: late ? "red" : "amber",
         for: (p) => ["manager", "owner (manager)", "owner manager"].includes(p.role) && covers(p, store),
+        feature: "widget-variance-replies",
       });
     }
   }
@@ -1131,6 +1150,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         link: "index.html", tone: "red",
         for: (p) => p.role === "district manager" ||
                     (["manager", "owner (manager)", "owner manager"].includes(p.role) && covers(p, store)),
+        feature: (p: Person) => p.role === "district manager" ? "tool-claims-oversight" : "tool-claims-store",
       });
     }
   }
@@ -1171,6 +1191,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
           : `${agg.n} item${agg.n === 1 ? "" : "s"} still need a reply, due ${prettyDate(agg.soonest)}.`,
         link: "workspace.html#aging", tone: late ? "red" : "amber",
         for: (p) => ["manager", "owner (manager)", "owner manager", "assistant manager"].includes(p.role) && covers(p, store),
+        feature: "widget-aging-inventory",
       });
     }
   }
@@ -1210,6 +1231,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
               + (owed ? `, ${owed} still outstanding.` : ` — the store is done.`),
             link: "workspace.html#vreplies", tone: "sage",
             for: (p) => ["district manager", "ceo"].includes(p.role),
+            feature: "widget-variance-replies",
           });
         }
       } else {
@@ -1235,6 +1257,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
               : `The window closed with no replies to your notes.`,
             link: "workspace.html#vreplies", tone: replied ? "sage" : "amber",
             for: (p) => ["district manager", "ceo"].includes(p.role),
+            feature: "widget-variance-replies",
           });
         }
         // The MANAGER side of the same event.
@@ -1253,6 +1276,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
               + (rows.some((r: any) => r.dm_reply_requested && !r.mgr_reply) ? " Some ask for a reply." : ""),
             link: "workspace.html#vreplies", tone: "sage",
             for: (p) => ["manager", "owner (manager)", "owner manager"].includes(p.role) && covers(p, store),
+        feature: "widget-variance-replies",
           });
         }
       }
@@ -1308,6 +1332,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         body: `${n} item${n === 1 ? "" : "s"} replied and waiting on your review.`,
         link: "workspace.html#aging", tone: "sage",
         for: (p) => ["district manager", "ceo"].includes(p.role),
+        feature: "widget-aging-inventory",
       });
     }
     for (const [store, n] of Object.entries(mgrSide)) {
@@ -1321,6 +1346,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         // shows them "Aging Inventory" in place of "Variance & Aging Inventory".
         for: (p) => ["manager", "owner (manager)", "owner manager", "assistant manager"].includes(p.role)
           && covers(p, store),
+        feature: "widget-aging-inventory",
       });
     }
   }
@@ -1333,12 +1359,27 @@ async function runDigest(sb: any, opts: { dryRun: boolean; to: string | null; on
   const prefs = await loadPrefs(sb);
   const due = await collectDue(sb, people);
 
+  // Every key any due item might ask about, resolved once. The per-person form
+  // has to be expanded against the real roster rather than read off the item,
+  // because which key applies IS the per-person part.
+  const dueKeys = new Set<string>();
+  for (const d of due) {
+    if (!d.feature) continue;
+    if (typeof d.feature === "string") { dueKeys.add(d.feature); continue; }
+    for (const p of people) { const k = d.feature(p); if (k) dueKeys.add(k); }
+  }
+  const dueOverrides = await loadFeatureOverrides(sb, [...dueKeys]);
+
   type Hit = { d: Due; person: Person; key: string };
   const hits: Hit[] = [];
   for (const d of due) {
     for (const person of people) {
       if (opts.onlyUser && person.key !== opts.onlyUser) continue;
       if (!d.for(person)) continue;
+      // Revoke-only: `for` already said they owe it, so the override's only job
+      // is to take it away from somebody the tool is hidden from.
+      const fk = typeof d.feature === "function" ? d.feature(person) : (d.feature || null);
+      if (fk && !featureAllows(dueOverrides.get(fk) || [], person, true)) continue;
       if (!wants(prefs.get(person.key), d.cat, d.slug)) continue;
       hits.push({ d, person, key: `due:${d.slug}:${d.period}:${person.key}` });
     }
