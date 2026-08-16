@@ -201,6 +201,40 @@ const errText = (body: any) =>
 const buyerEmail = (username: string) =>
   `${(username || "ebay-buyer").replace(/[^A-Za-z0-9._-]/g, "")}@ebay.invalid`;
 
+// eBay's lineItemCost is the EXTENDED cost of the line — the unit price already
+// multiplied by the quantity. Shopify's line priceSet is PER UNIT and multiplies
+// by the quantity itself. Handing one straight to the other SQUARES the quantity,
+// and does it silently: LEE #MO01-8805 was six units at $88.99 (eBay charged
+// $533.94) and landed in Shopify as six units at $533.94 = $3,203.64. Nothing
+// errors. The order reads "Paid" against a $533.94 transaction with $2,669.70
+// still outstanding — which is where the "Enter credit card" button comes from —
+// and every report downstream, the Live Dashboard and the daily Shopify sales
+// email into the Sales Summary sheet included, counts revenue that never existed.
+//
+// Only quantity > 1 on a SINGLE line is affected; two lines of one unit each are
+// already right, which is why this survived 73 correct imports before it showed.
+//
+// Cents are integers here on purpose: 533.94 / 6 in floating point is
+// 88.99000000000001, and .toFixed(2) on the way into money is how a rounding
+// error becomes a permanent balance nobody can pay off.
+function unitPriceFor(li: any): { amount: string; currency: string; residual: string | null } {
+  const currency = li.lineItemCost?.currency ?? "USD";
+  const qty = Math.max(1, Number(li.quantity) || 1);
+  const extendedCents = Math.round(Number(li.lineItemCost?.value ?? 0) * 100);
+  const unitCents = Math.round(extendedCents / qty);
+  return {
+    amount: (unitCents / 100).toFixed(2),
+    currency,
+    // eBay derives lineItemCost from a listed unit price with two decimals, so
+    // this should be unreachable. If it ever fires, the rounded unit price
+    // leaves the order a few cents adrift of the payment — the same defect in
+    // miniature — and that is worth saying out loud rather than absorbing.
+    residual: unitCents * qty === extendedCents
+      ? null
+      : `${(extendedCents / 100).toFixed(2)} does not divide evenly by ${qty}`,
+  };
+}
+
 function shippingAddressFrom(order: any) {
   const ship = order.fulfillmentStartInstructions?.[0]
     ?.shippingStep?.shipTo;
@@ -613,6 +647,7 @@ Deno.serve(async (req: Request) => {
     const lines = o.lineItems || [];
     const resolved: any[] = [];
     let unresolved: string | null = null;
+    const priceNotes: string[] = [];
 
     for (const li of lines) {
       const variantId = await variantIdForSku(shop, shopToken, li.sku || "");
@@ -620,6 +655,8 @@ Deno.serve(async (req: Request) => {
         unresolved = li.sku || "(no sku)";
         break;
       }
+      const unit = unitPriceFor(li);
+      if (unit.residual) priceNotes.push(`${li.sku || "(no sku)"}: ${unit.residual}`);
       resolved.push({
         variantId,
         quantity: li.quantity || 1,
@@ -628,12 +665,24 @@ Deno.serve(async (req: Request) => {
         // tracking field — which silently breaks the tracking push back to eBay.
         requiresShipping: true,
         priceSet: {
-          shopMoney: {
-            amount: li.lineItemCost?.value ?? "0.00",
-            currencyCode: li.lineItemCost?.currency ?? "USD",
-          },
+          shopMoney: { amount: unit.amount, currencyCode: unit.currency },
         },
       });
+    }
+
+    // Does what we are about to create still add up to what eBay charged? This
+    // is the invariant the quantity bug broke, and the one cheap check that
+    // catches its whole family — a wrong unit price, a dropped line, a discount
+    // eBay applied that we did not carry over. Reported, never blocking: a real
+    // sale that reconciles oddly still belongs in Shopify, it just should not
+    // arrive silently. Orders where the buyer paid shipping or tax legitimately
+    // differ, so this is a note rather than an alert.
+    const linesTotal = resolved.reduce(
+      (sum, l) => sum + Math.round(Number(l.priceSet.shopMoney.amount) * 100) * l.quantity, 0);
+    const ebayTotal = Math.round(Number(o.pricingSummary?.total?.value ?? 0) * 100);
+    if (!unresolved && linesTotal !== ebayTotal) {
+      priceNotes.push(
+        `lines total ${(linesTotal / 100).toFixed(2)} vs eBay total ${(ebayTotal / 100).toFixed(2)}`);
     }
 
     if (unresolved) {
@@ -665,7 +714,13 @@ Deno.serve(async (req: Request) => {
         action: "would import",
         soldAt: o.creationDate,
         total: o.pricingSummary?.total?.value,
-        lines: lines.map((li: any) => ({ sku: li.sku, qty: li.quantity })),
+        // Unit price as well as quantity: "qty 6" alone cannot tell you whether
+        // the money is right, which is exactly why the squared-quantity import
+        // looked fine in a dry run.
+        lines: resolved.map((l: any, i: number) => ({
+          sku: lines[i]?.sku, qty: l.quantity, unit: l.priceSet.shopMoney.amount,
+        })),
+        ...(priceNotes.length ? { priceCheck: priceNotes } : {}),
       });
       continue;
     }
@@ -813,6 +868,7 @@ Deno.serve(async (req: Request) => {
       shopifyOrder: shopifyOrder.name,
       total: o.pricingSummary?.total?.value,
       soldAt: o.creationDate,
+      ...(priceNotes.length ? { priceCheck: priceNotes } : {}),
     });
   }
 
