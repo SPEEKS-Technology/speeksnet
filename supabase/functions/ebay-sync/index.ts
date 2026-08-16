@@ -197,6 +197,47 @@ async function findProducts(shop: string, token: string, q: string, n: number) {
 
 // --- eBay -------------------------------------------------------------------
 
+// IS THIS eBay ITEM STILL ACTIVE? BROWSE CANNOT ANSWER IT.
+// The obvious check — Browse getItem, 404 means gone — is wrong: eBay keeps
+// serving an ENDED listing through Browse with its full description for some
+// time afterwards. Verified on a listing ended minutes earlier, which came back
+// 200 with 171k characters of content. Trading GetItem carries an explicit
+// ListingStatus (Active / Completed / Ended), which is the actual answer.
+//
+// Returns true, false, or null for "could not tell" — and null must be treated
+// as still-live by callers, because the expensive mistake is publishing over a
+// listing that really is up.
+async function itemStillActive(row: StoreRow, itemId: string): Promise<boolean | null> {
+  try {
+    const token = await accessTokenFor(row);
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?>'
+      + '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+      + '<ItemID>' + itemId + '</ItemID>'
+      + '<DetailLevel>ReturnSummary</DetailLevel>'
+      + '</GetItemRequest>';
+    const res = await fetch(HOSTS[row.environment] + "/ws/api.dll", {
+      method: "POST",
+      headers: {
+        "X-EBAY-API-CALL-NAME": "GetItem",
+        "X-EBAY-API-SITEID": "0",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+        "X-EBAY-API-IAF-TOKEN": token,
+        "Content-Type": "text/xml",
+      },
+      body: xml,
+    });
+    const text = await res.text();
+    const status = (text.match(/<ListingStatus>([^<]+)<\/ListingStatus>/) || [])[1];
+    if (status) return status.toLowerCase() === "active";
+    // eBay answers a long-gone item with an error rather than a status.
+    if (/<Ack>Failure<\/Ack>/.test(text) && /(invalid item|not found|17)/i.test(text)) return false;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function accessTokenFor(row: StoreRow): Promise<string> {
   const expiresAt = row.access_token_expires_at ? Date.parse(row.access_token_expires_at) : 0;
   if (row.access_token && expiresAt - Date.now() > 60000) return row.access_token;
@@ -518,7 +559,36 @@ function aliasValueGeneric(aspectName: string, specs: Record<string, string>): s
     if (hit) return specs[hit];
   }
   const contains = keys.find(k => normAspect(k).includes(want));
-  return contains ? specs[contains] : null;
+  if (contains) return specs[contains];
+
+  // THE ASPECT CAN BE MORE SPECIFIC THAN OUR KEY, AND THAT DIRECTION IS RISKY.
+  // Everything above matches when OUR key carries the extra words — "Processor
+  // Speed" answering "Speed". A CPU is the other way round: eBay category 164
+  // requires "Processor Model" and the spec table just says "Model", so nothing
+  // matched and a perfectly good i9-13900k failed the publish with 25002 while
+  // its model number sat right there in the table.
+  //
+  // Matching that direction blindly would be worse than the bug. On a laptop the
+  // same rule would answer "Processor Model" with the LAPTOP model — publishing
+  // "Lenovo Yoga Pro 9i" as the CPU. So the extra words the aspect adds have to
+  // be corroborated by what the item says it IS: the spec table names itself
+  // "Sub-Collection: Processor (CPU)", and a laptop never will. The item
+  // describes itself; we only agree with it.
+  const context = normAspect(
+    [specs["Sub-Collection"], specs["Collection"], specs["Type"], specs["Category"]]
+      .filter(Boolean).join(" "));
+  if (context) {
+    const general = keys.find(k => {
+      const n = normAspect(k);
+      if (n === want || !want.endsWith(n) || n.length < 3) return false;
+      // What the aspect adds beyond our key — "processor" for Processor Model.
+      const extra = want.slice(0, want.length - n.length);
+      return extra.length >= 3 && context.includes(extra);
+    });
+    if (general) return specs[general];
+  }
+
+  return null;
 }
 
 // A closed value list means eBay rejects anything not on it, so map our wording
@@ -1012,6 +1082,9 @@ Deno.serve(async (req: Request) => {
   }
   const c = exact[0];
 
+  const host = HOSTS[row.environment];
+  const api = ebayClient(host, await accessTokenFor(row));
+
   // ⚠️ THE MARKETPLACE-CONNECT OWNERSHIP GUARD LIVES HERE, IN THE ENGINE.
   // It used to exist only in ebay-channel, the browser's route. Every other way
   // in — this function called directly with the operator secret, a cron, a
@@ -1039,29 +1112,55 @@ Deno.serve(async (req: Request) => {
         `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
         + `&sku=eq.${encodeURIComponent(sku)}&select=ebay_listing_id`)).json();
       if (!mineRows[0]?.ebay_listing_id) {
-        return json({
-          store, sku, step: "ownership",
-          error: OURS + `This SKU is already live on ${store}'s eBay account and SPEEKS Connect `
-            + `did not put it there, which almost always means Marketplace Connect did. `
-            + `Listing it again would overwrite MC's record and leave two systems fighting `
-            + `over one physical unit — and if it sells, the sale would be imported into `
-            + `Shopify twice. Take it down in Marketplace Connect first if you want SPEEKS `
-            + `Connect to own it.`,
-          alreadyLiveItemId: liveRows[0].item_id,
-          viewUrl: `https://www.ebay.com/itm/${liveRows[0].item_id}`,
-          // Deliberately fires on dry runs too. A dry run that reports "clean"
-          // for a SKU that must not be published reads as permission, and the
-          // preview → list flow means that is exactly when it would be read.
-          // &force=1&dry=1 inspects one safely, since dry never writes.
-          override: "&force=1 publishes anyway — for the day MC is switched off. "
-            + "&force=1&dry=1 inspects without publishing.",
-        }, 409);
+        // ASK eBay BEFORE REFUSING. ebay_live is a CACHE, refreshed by a sweep
+        // every 20 minutes, and the most common reason to be listing a SKU
+        // through SPEEKS Connect is that somebody just ended it in Marketplace
+        // Connect in order to move it across. For up to twenty minutes after
+        // they do, this guard refused them and the message told them to go and
+        // end a listing they had already ended — a dead end with a Try Again
+        // button that could only fail identically. Seen on three OVL SKUs at
+        // once. One Browse lookup on the cached id settles it, and it only
+        // runs on the refusal path, so the happy path costs nothing.
+        const stale = [];
+        let stillLive = null;
+        for (const r of liveRows) {
+          if (!r.item_id) continue;
+          // Only a definite "not active" clears it. null means eBay could not
+          // tell us, and that has to fail closed: the expensive mistake is
+          // publishing over a listing that really is live.
+          const active = await itemStillActive(row, r.item_id);
+          if (active === false) stale.push(r.item_id);
+          else { stillLive = r.item_id; break; }
+        }
+        // Drop what eBay says is gone so the panel and the next attempt agree,
+        // rather than waiting on the sweep to notice.
+        for (const id of stale) {
+          await sb(`ebay_live?store_code=eq.${encodeURIComponent(store)}`
+            + `&sku=eq.${encodeURIComponent(sku)}&item_id=eq.${encodeURIComponent(id)}`,
+            { method: "DELETE" }).catch(() => {});
+        }
+        if (stillLive) {
+          return json({
+            store, sku, step: "ownership",
+            error: OURS + `This SKU is already live on ${store}'s eBay account and SPEEKS Connect `
+              + `did not put it there, which almost always means Marketplace Connect did. `
+              + `Listing it again would overwrite MC's record and leave two systems fighting `
+              + `over one physical unit — and if it sells, the sale would be imported into `
+              + `Shopify twice. Take it down in Marketplace Connect first if you want SPEEKS `
+              + `Connect to own it.`,
+            alreadyLiveItemId: stillLive,
+            viewUrl: `https://www.ebay.com/itm/${stillLive}`,
+            // Deliberately fires on dry runs too. A dry run that reports "clean"
+            // for a SKU that must not be published reads as permission, and the
+            // preview → list flow means that is exactly when it would be read.
+            // &force=1&dry=1 inspects one safely, since dry never writes.
+            override: "&force=1 publishes anyway — for the day MC is switched off. "
+              + "&force=1&dry=1 inspects without publishing.",
+          }, 409);
+        }
       }
     }
   }
-
-  const host = HOSTS[row.environment];
-  const api = ebayClient(host, await accessTokenFor(row));
 
   // WHERE THIS THING BELONGS, asked of the marketplace before the dictionary.
   // recommendCategory samples the live listings for the same product and takes

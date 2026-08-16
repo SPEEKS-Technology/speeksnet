@@ -563,49 +563,16 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
   }
 
   if (action === "list" || action === "retry") {
-    // REFUSE ANYTHING ALREADY LIVE, whoever listed it. ebay-sync cannot make
-    // this check — it only knows the Inventory API, which cannot see listings
-    // made through the Trading API — so it happens here, against ebay_live.
-    // SPEEKS Connect and Marketplace Connect are meant to hold different SKUs;
-    // this is what makes a slip bounce rather than double-list a single unit.
-    const already = await rows(
-      `ebay_live?store_code=eq.${encodeURIComponent(store)}&sku=eq.${encodeURIComponent(sku)}&select=item_id`);
-    const ours = await rows(
-      `ebay_listings?store_code=eq.${encodeURIComponent(store)}&sku=eq.${encodeURIComponent(sku)}`
-      + `&select=ebay_listing_id,status`);
-    const isOurs = !!ours[0]?.ebay_listing_id;
-    if (already.length && !isOurs) {
-      const itemId = already[0].item_id;
-      // A conflict row used to be a dead end: no title, no price, no links, and
-      // a Try Again button that would fail identically forever. The one useful
-      // thing is the listing itself, so hand back everything needed to open it.
-      // ebay_catalog is our Shopify mirror and may be stale, so it is a bonus
-      // rather than a dependency — the eBay link is the part that matters.
-      const cat = (await rows(
-        `ebay_catalog?store_code=eq.${encodeURIComponent(store)}`
-        + `&sku=eq.${encodeURIComponent(sku)}&select=title,price,product_id&limit=1`))[0] || {};
-      const detail =
-        "This SKU is already live on the store's eBay account, and SPEEKS Connect did not "
-        + "put it there — which almost always means Marketplace Connect did. Uploading it "
-        + "again would put two live listings against one unit. SPEEKS Connect cannot end it "
-        + "either, because it cannot see a listing it did not create: open it on eBay and end "
-        + "it where it was made.";
-      return json({
-        ok: false,
-        error: "already live on eBay",
-        // Tells the panel this is not a retryable failure.
-        conflict: true,
-        itemId,
-        detail,
-        item: {
-          sku, title: cat.title || sku, price: cat.price ?? null, quantity: null,
-          itemId, state: "failed", conflict: true, error: detail,
-          attempts: 0, lastAttempt: null, publishedAt: null, updatedAt: null,
-          ebayUrl: ebayUrlFor(itemId),
-          shopifyUrl: shopifyUrlFor(store, cat.product_id),
-        },
-      }, 409);
-    }
+    // THE ALREADY-LIVE GUARD MOVED INTO ebay-sync, AND IS NOT REPEATED HERE.
+    // This route used to run its own ebay_live lookup and refuse before ever
+    // calling ebay-sync. Two problems. It was a second copy of a rule that
+    // belongs in the engine — which is exactly how the engine came to have no
+    // rule at all. And it trusted the cache: ebay_live is refreshed by a sweep
+    // every 20 minutes, so somebody who had just ended a listing in Marketplace
+    // Connect in order to move it across was refused, and told to go end a
+    // listing they had already ended. ebay-sync now checks the same table and
+    // then asks eBay whether the cached listing is genuinely still there,
+    // pruning it if not. Its 409 is enriched into a conflict row below.
 
     // A category chosen on the row beats anything eBay suggests — the person
     // sending it is holding the item. The name rides along so an overridden
@@ -618,6 +585,27 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
       : "";
 
     const r = await callFn(`ebay-sync?store=${store}&sku=${encodeURIComponent(sku)}${override}`);
+
+    // The engine refused because the SKU really is live and not ours. Give the
+    // panel a row it can act on — the eBay link is the useful part, since the
+    // listing has to be ended where it was made. Not a retryable failure.
+    if (r.status === 409 && r.body?.step === "ownership") {
+      const itemId = r.body.alreadyLiveItemId;
+      const catRow = (await rows(
+        `ebay_catalog?store_code=eq.${encodeURIComponent(store)}`
+        + `&sku=eq.${encodeURIComponent(sku)}&select=title,price,product_id&limit=1`))[0] || {};
+      const detail = humanError(r.body.error) || String(r.body.error || "already live on eBay");
+      return json({
+        ok: false, error: "already live on eBay", conflict: true, itemId, detail,
+        item: {
+          sku, title: catRow.title || sku, price: catRow.price ?? null, quantity: null,
+          itemId, state: "failed", conflict: true, error: detail,
+          attempts: 0, lastAttempt: null, publishedAt: null, updatedAt: null,
+          ebayUrl: ebayUrlFor(itemId),
+          shopifyUrl: shopifyUrlFor(store, catRow.product_id),
+        },
+      }, 409);
+    }
 
     // A TYPO MUST NOT LEAVE A ROW BEHIND.
     // stampAttempt upserts by (store, sku), so a SKU that does not exist in
