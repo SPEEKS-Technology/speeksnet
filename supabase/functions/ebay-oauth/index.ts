@@ -325,6 +325,20 @@ Deno.serve(async (req: Request) => {
       ruNameSent: creds.ruName,
       clientIdTail: creds.clientId.slice(-6),
       scopes: SCOPES.split(" "),
+      // ebay-setup refuses to invent a merchant-location address in production,
+      // so a missing one fails AFTER consent — the one step that costs a person
+      // a trip through eBay's login. Surface it here, where it can be checked
+      // before that. City and postcode only: enough to tell the right address
+      // from a placeholder, and it is a shop address, not a credential.
+      // Read the raw EBAY_APPS entry, not `creds` — credsFor() narrows to the
+      // four OAuth fields and drops everything else, so asking `creds` about a
+      // location reports "missing" for every store including the two that
+      // demonstrably have one.
+      locationConfigured: Boolean((APPS[store] as any)?.location),
+      locationCity: (APPS[store] as any)?.location
+        ? [(APPS[store] as any).location.city, (APPS[store] as any).location.postalCode]
+          .filter(Boolean).join(" ") || "(set, no city)"
+        : null,
       consentUrl: consent,
       note: "redirect_uri must be the RuName, not this function's URL. The URL itself "
         + "is what you register in the developer portal to obtain that RuName.",
