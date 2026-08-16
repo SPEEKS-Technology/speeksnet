@@ -959,6 +959,54 @@ Deno.serve(async (req: Request) => {
   }
   const c = exact[0];
 
+  // ⚠️ THE MARKETPLACE-CONNECT OWNERSHIP GUARD LIVES HERE, IN THE ENGINE.
+  // It used to exist only in ebay-channel, the browser's route. Every other way
+  // in — this function called directly with the operator secret, a cron, a
+  // future caller — walked straight past it and published over a live MC
+  // listing. That is not hypothetical: three listings across WSP, MPL and BAL
+  // were taken over exactly this way while *testing the guard*, because the test
+  // used the unguarded route. A safety net that only one of four callers goes
+  // through is not a safety net.
+  //
+  // The old comment in ebay-channel said this check could not live here, since
+  // ebay-sync only knows the Inventory API and the Inventory API cannot see
+  // Trading-API listings. True about eBay, irrelevant here: the check reads
+  // `ebay_live` — OUR table, swept from GetMyeBaySelling, which does see MC —
+  // and this function already talks to that database on every publish.
+  //
+  // Re-pushing something WE listed stays allowed: ownership is decided by an
+  // ebay_listings row carrying a real listing id, not by presence in ebay_live
+  // (our own published listings appear there too, on the next sweep).
+  if (url.searchParams.get("force") !== "1") {
+    const liveRows = await (await sb(
+      `ebay_live?store_code=eq.${encodeURIComponent(store)}`
+      + `&sku=eq.${encodeURIComponent(sku)}&select=item_id`)).json();
+    if (liveRows.length) {
+      const mineRows = await (await sb(
+        `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
+        + `&sku=eq.${encodeURIComponent(sku)}&select=ebay_listing_id`)).json();
+      if (!mineRows[0]?.ebay_listing_id) {
+        return json({
+          store, sku, step: "ownership",
+          error: OURS + `This SKU is already live on ${store}'s eBay account and SPEEKS Connect `
+            + `did not put it there, which almost always means Marketplace Connect did. `
+            + `Listing it again would overwrite MC's record and leave two systems fighting `
+            + `over one physical unit — and if it sells, the sale would be imported into `
+            + `Shopify twice. Take it down in Marketplace Connect first if you want SPEEKS `
+            + `Connect to own it.`,
+          alreadyLiveItemId: liveRows[0].item_id,
+          viewUrl: `https://www.ebay.com/itm/${liveRows[0].item_id}`,
+          // Deliberately fires on dry runs too. A dry run that reports "clean"
+          // for a SKU that must not be published reads as permission, and the
+          // preview → list flow means that is exactly when it would be read.
+          // &force=1&dry=1 inspects one safely, since dry never writes.
+          override: "&force=1 publishes anyway — for the day MC is switched off. "
+            + "&force=1&dry=1 inspects without publishing.",
+        }, 409);
+      }
+    }
+  }
+
   const host = HOSTS[row.environment];
   const api = ebayClient(host, await accessTokenFor(row));
 
