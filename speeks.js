@@ -39806,6 +39806,39 @@ function ecSetView(view) {
     ecLoad();
 }
 
+// Open a store on its failures. Called from the All Stores card, which knows
+// the count but not the rows, and from nowhere else. Everything it puts in the
+// feed is a real ebay_listings row for that store, so Try Again, the links and
+// the plain-English reason all work exactly as they do for a fresh upload.
+async function ecShowFailed(store) {
+    _ecStore = store;
+    _ecView = "listings";
+    _ecData = null;
+    ecSetView("listings");
+    const body = document.getElementById("ecBody");
+    if (body) body.innerHTML = `<div class="status-message">Loading ${_ecEsc(store)}…</div>`;
+    try {
+        _ecData = await _ecFetch(`?view=listings&store=${encodeURIComponent(store)}`);
+        _ecScope = _ecData.scope;
+        _ecStore = _ecData.store;
+        _ecFeedLoad();
+        const failed = (_ecData.items || []).filter(i => i.state === "failed");
+        // Merge rather than replace: whatever the person was already working
+        // through this session stays where it is, and a SKU that is in both
+        // keeps one row.
+        const have = new Set(_ecFeed.map(e => String(e.sku).toUpperCase()));
+        for (const f of failed) {
+            if (have.has(String(f.sku).toUpperCase())) continue;
+            _ecFeed.unshift({ ...f, at: f.lastAttempt || f.updatedAt || new Date().toISOString() });
+        }
+        _ecFeedReconcile();
+        _ecFeedSave();
+        ecRender();
+    } catch (err) {
+        if (body) body.innerHTML = `<div class="ec-empty">Could not load ${_ecEsc(store)}: ${_ecEsc(String(err.message || err))}</div>`;
+    }
+}
+
 function ecSetStore(store) {
     _ecStore = store;
     _ecData = null;
@@ -39992,7 +40025,18 @@ function _ecHealthHtml() {
           <div class="ec-hhead"><span class="ec-hstore">${_ecEsc(s.store)}</span>${chip}</div>
           <div class="ec-hbody">
             ${row('Live On eBay', s.connected ? c.live : '—', s.connected ? 'ec-ok' : 'ec-off')}
-            ${row('Did Not Upload', s.connected ? c.failed : '—',
+            ${row('Did Not Upload',
+                  !s.connected ? '—'
+                    : c.failed
+                      // A COUNT NOBODY CAN OPEN IS A DEAD END. "Did Not Upload: 1"
+                      // says a listing failed and gives no way to find out which,
+                      // and the store view is session-scoped so signing in again
+                      // shows nothing. Clicking pulls those rows into the feed,
+                      // where the error, both links and Try Again already live.
+                      ? `<button type="button" class="ec-hlink"
+                           onclick="ecShowFailed('${_ecEsc(s.store)}')"
+                           title="Show what did not upload">${c.failed}</button>`
+                      : c.failed,
                   !s.connected ? 'ec-off' : c.failed ? 'ec-warn' : 'ec-ok')}
             ${row('Checked Against eBay', s.freshness.liveMinutes == null ? 'Never'
                   : _ecAgo(new Date(Date.now() - s.freshness.liveMinutes * 60000).toISOString()),

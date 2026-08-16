@@ -674,6 +674,55 @@ function validBarcode(code: string): boolean {
   return (10 - (sum % 10)) % 10 === Number(d[d.length - 1]);
 }
 
+// eBay REFUSES THE WHOLE LISTING OVER ONE OVER-LONG ASPECT VALUE.
+// The cap is 65 characters, and the spec table cheerfully carries longer:
+// Features on a handheld console arrived as the 88-character run-on "Gyro
+// Controls Hall Effect Joysticks and Triggers Fingerprint Scanner Hall Effect
+// Triggers", which killed the publish with 25002 over an aspect eBay did not
+// even require. Losing a listing to an optional field is the wrong trade.
+//
+// Order of preference, most faithful first:
+//   1. If the category publishes a value list, send every listed value that
+//      appears in our text. Aspects like Features are multi-value by nature,
+//      and this turns one unusable string into several correct entries.
+//   2. Otherwise trim at a word boundary — still true, just shorter. Only for
+//      free text; a truncated value would not survive a closed list.
+//   3. Otherwise leave the aspect out, and let a genuinely required one fail
+//      with eBay naming it, which humanError already turns into English.
+const ASPECT_MAX = 65;
+
+function fitAspect(value: string, def: any): string[] | null {
+  if (value.length <= ASPECT_MAX) return [value];
+
+  const allowed: string[] = (def?.aspectValues || [])
+    .map((v: any) => v.localizedValue).filter(Boolean);
+  if (allowed.length) {
+    const hay = normAspect(value);
+    const found = allowed.filter(a => {
+      const n = normAspect(a);
+      return n.length >= 4 && hay.includes(n);
+    });
+    // Longest first, then drop any that is merely a fragment of one already
+    // kept, so "Hall Effect Sensor" does not also bring in "Sensor".
+    found.sort((a, b) => b.length - a.length);
+    const kept: string[] = [];
+    for (const f of found) {
+      if (!kept.some(k => normAspect(k).includes(normAspect(f)))) kept.push(f);
+    }
+    if (kept.length) return kept.slice(0, 10);
+  }
+
+  const freeText = def?.aspectConstraint?.aspectMode === "FREE_TEXT" && !allowed.length;
+  if (freeText) {
+    const cut = value.slice(0, ASPECT_MAX);
+    const atWord = cut.replace(/\s+\S*$/, "");
+    const trimmed = (atWord.length >= 8 ? atWord : cut).trim();
+    if (trimmed) return [trimmed];
+  }
+
+  return null;
+}
+
 function inventoryItemPayload(
   c: Candidate,
   resolvedCondition: string,
@@ -690,7 +739,8 @@ function inventoryItemPayload(
     const hit = Object.keys(specs).find(k => k.toLowerCase() === name.toLowerCase());
     if (!hit || isPlaceholder(specs[hit])) continue;
     const legal = legalValue(specs[hit], def);
-    if (legal) aspects[name] = [legal];
+    const fitted = legal ? fitAspect(legal, def) : null;
+    if (fitted) aspects[name] = fitted;
   }
   // Second pass, required aspects only. Guessing at optional ones would put
   // wrong data on listings for no gain; a missing required one blocks the sale.
@@ -698,8 +748,10 @@ function inventoryItemPayload(
     if (aspects[name]) continue;
     const raw = aliasValue(name, specs);
     if (!raw || isPlaceholder(raw)) continue;
-    const legal = legalValue(raw, aspectDefs.find(d => d.localizedAspectName === name));
-    if (legal) aspects[name] = [legal];
+    const def = aspectDefs.find(d => d.localizedAspectName === name);
+    const legal = legalValue(raw, def);
+    const fitted = legal ? fitAspect(legal, def) : null;
+    if (fitted) aspects[name] = fitted;
   }
   // Say it in eBay's words rather than leaving the field blank or, worse,
   // stamped "N/A".

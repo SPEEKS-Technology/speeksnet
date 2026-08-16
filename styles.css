@@ -16405,6 +16405,18 @@ body.tv-body { display: block; background: #eef1f5; }
 .ec-hrow:last-child { border-bottom: none; }
 .ec-hk { font-weight: 600; color: var(--cb-muted); }
 .ec-hv { font-weight: 700; color: var(--slate-charcoal); text-align: right; }
+
+/* The failure count is a control when there is something behind it. It has to
+   read as the number it replaces, not as a button parked in a stat row, so it
+   inherits .ec-hv sizing and only earns an underline on hover. */
+.ec-hlink {
+  font: inherit; color: inherit; font-weight: 700;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline; text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+.ec-hlink:hover { text-decoration-style: solid; }
+.ec-hlink:focus-visible { outline: 2px solid var(--sage-500, #6b8f71); outline-offset: 2px; border-radius: 3px; }
 .ec-ok { color: #178048; }
 .ec-warn { color: #b7791f; }
 .ec-off { color: var(--cb-faint); }
