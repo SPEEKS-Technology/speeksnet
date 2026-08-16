@@ -104,6 +104,16 @@ const STORE_SCORES = {
   blurb: "A PayMore audit scored on your store, practice or official.",
 };
 
+// The Owner (Manager) sits on BOTH sides of this category, which no other role
+// does: preferred-purchases queues its requests to whoever holds the approve
+// tool — them — while recycle verdicts still come back down to them like any
+// other store role. STORE_REQUESTS alone would promise only the second half and
+// leave every purchase request arriving under a label that denies it exists.
+const OWNER_REQUESTS = {
+  label: "Purchase & Recycle Requests",
+  blurb: "Purchase requests waiting on your verdict, plus the DM's answer on recycle requests you sent up.",
+};
+
 const META_OVERRIDES: { roles: Set<string>; meta: Partial<Record<Category, { label: string; blurb: string }>> }[] = [
   {
     // Assistant Managers receive strictly less than two of these labels claim:
@@ -128,8 +138,14 @@ const META_OVERRIDES: { roles: Set<string>; meta: Partial<Record<Category, { lab
   {
     // The store side of the requests tool: they get the verdict coming back DOWN
     // on something they sent up, not a queue of requests waiting on them.
-    roles: new Set(["manager", "owner (manager)", "owner manager"]),
+    // Owner (Manager) is deliberately NOT here — they own the purchase queue, so
+    // they get both directions and their own label below.
+    roles: new Set(["manager"]),
     meta: { requests: STORE_REQUESTS, scores: STORE_SCORES },
+  },
+  {
+    roles: new Set(["owner (manager)", "owner manager"]),
+    meta: { requests: OWNER_REQUESTS, scores: STORE_SCORES },
   },
 ];
 
@@ -170,9 +186,13 @@ const SUBS: Record<Category, Sub[]> = {
   ],
   store_messages: [],
   requests: [
+    // The owner roles are here for purchase_request only — recycle and delete
+    // requests still go up to the DM. Sharing one switch is right anyway: the
+    // sub answers "do I want the requests that wait on me", and which kinds
+    // those are is a fact about the role, not a thing to configure.
     { key: "req_in",  label: "Requests Coming In", blurb: "Purchase and recycle requests, and delete requests, waiting on a verdict.",
       kinds: ["purchase_request", "recycle_request", "claim_delete_request", "recycle_delete_request"],
-      roles: new Set(["district manager", "ceo"]) },
+      roles: new Set(["district manager", "ceo", "owner (manager)", "owner manager"]) },
     { key: "req_out", label: "Verdicts And Replies", blurb: "The DM's answer on something you sent up.",
       kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply"] },
   ],
@@ -263,13 +283,19 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   // A store comment is scoped to a store; one sent to ALL is company-wide, which
   // corp roles do receive. So: everyone.
   store_messages: null,
-  // Two directions: preferred-purchases and recycle-requests send UP to the corp
-  // queue, and recycle-requests sends the DM's verdict/notes BACK DOWN to the
-  // store that asked. So both sides appear here, under different labels (metaFor).
+  // Two directions. recycle-requests sends UP to the corp queue and its
+  // verdict/notes BACK DOWN to the store that asked; preferred-purchases sends
+  // up to whoever holds the approve tool, which is the Owner (Manager), NOT
+  // corp. So both sides appear here, under three different labels (metaFor).
+  //
   // MOCD is deliberately absent here and from every category below except the
   // two open ones (Ethan, 2026-08-13). They hold none of these tools, so every
   // switch beyond announcements and store messages was one that could never
-  // send them anything.
+  // send them anything. ⚠️ That was only half true until 2026-08-16:
+  // preferred-purchases queued purchase requests to "mocd" outright, so they
+  // arrived regardless of this set — wants() reads muted_kinds, never
+  // CATEGORY_ROLES, so a category absent from the popout still delivers if an
+  // audience names the role. The audience is the thing to fix, and was.
   requests: new Set([
     "district manager", "ceo",
     "manager", "owner (manager)", "owner manager", "assistant manager",
@@ -413,6 +439,65 @@ async function loadPeople(sb: any): Promise<Person[]> {
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Feature Access, server side
+// ---------------------------------------------------------------------------
+// Roles alone cannot answer "can this person open this tool". Feature Access
+// exists precisely to hand a tool to someone outside its default roles, or take
+// it away from someone inside them, and that decision lives in
+// feature_overrides. A notification that ignores it mails people about work they
+// cannot open, and stays silent for the people who were given it.
+//
+// The DEFAULT passed in is the caller's own audience_roles match, so attaching a
+// feature key never widens an audience by itself — it only lets an override move
+// a named person either way. Precedence is _featureOverrideFor's exactly: user
+// beats role beats default.
+async function loadFeatureOverrides(sb: any, keys: string[]): Promise<Map<string, any[]>> {
+  const out = new Map<string, any[]>();
+  if (!keys.length) return out;
+  const { data } = await sb.from("feature_overrides")
+    .select("feature_key, subject_type, subject, enabled").in("feature_key", keys);
+  for (const r of data || []) {
+    const k = String(r.feature_key);
+    if (!out.has(k)) out.set(k, []);
+    out.get(k)!.push(r);
+  }
+  return out;
+}
+
+// ⚠️ Matches the role on rawRole, NOT role. `role` is the EFFECTIVE role —
+// loadPeople flattens a Multi-Store Manager to "manager" and TOM to "mocd" so
+// the rest of this file can reason about them uniformly — while the Feature
+// Access tool writes the slug of whatever is literally in users.role. Matching
+// the flattened one would silently apply every manager's override to the MSM,
+// and never match a TOM's own row at all.
+function featureAllows(rows: any[], person: Person, byRole: boolean): boolean {
+  if (!rows.length) return byRole;
+  const lc = (v: unknown) => String(v || "").toLowerCase().trim();
+  const slug = lc(person.rawRole).replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "-");
+  const forUser = rows.find((r) => lc(r.subject_type) === "user" && lc(r.subject) === lc(person.name));
+  if (forUser) return !!forUser.enabled;
+  const forRole = rows.find((r) => lc(r.subject_type) === "role" && lc(r.subject) === slug);
+  if (forRole) return !!forRole.enabled;
+  return byRole;
+}
+
+// The queue's own role filter, kept in one place because the instant drain and
+// the digest sweep both have to answer it identically — they read the same rows,
+// and a person on digest cadence who resolved differently would get an email
+// nobody else could explain.
+function passesAudience(row: any, person: Person, overrides: Map<string, any[]>): boolean {
+  const roles: string[] | null = row.audience_roles;
+  const byRole = !roles?.length
+    || roles.map((r: string) => r.toLowerCase().trim()).includes(person.role);
+  const key = row.audience_feature ? String(row.audience_feature) : null;
+  return key ? featureAllows(overrides.get(key) || [], person, byRole) : byRole;
+}
+
+function featureKeysIn(queue: any[]): string[] {
+  return [...new Set(queue.map((r: any) => r.audience_feature).filter(Boolean).map(String))];
 }
 
 type Prefs = {
@@ -728,6 +813,7 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
 
   const people = await loadPeople(sb);
   const prefs = await loadPrefs(sb);
+  const overrides = await loadFeatureOverrides(sb, featureKeysIn(queue));
 
   // Resolve every row to its recipients first, so the ledger can be checked in
   // one query instead of one per row.
@@ -738,7 +824,6 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
   for (const row of queue) {
     const cat = row.category as Category;
     const stores: string[] | null = row.audience_stores;
-    const roles: string[] | null = row.audience_roles;
     const only = nameKey(row.audience_user);
     const skip = nameKey(row.exclude_user);
 
@@ -750,7 +835,7 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
       } else {
         if (person.key === skip) continue;               // don't mail your own write
         if (stores?.length && !person.stores.some((s) => stores.map((x) => x.toUpperCase()).includes(s))) continue;
-        if (roles?.length && !roles.map((r) => r.toLowerCase().trim()).includes(person.role)) continue;
+        if (!passesAudience(row, person, overrides)) continue;
       }
       const p = prefs.get(person.key);
       if (!wants(p, cat, row.kind)) continue;
@@ -1297,13 +1382,14 @@ async function drainHeldForDigest(
     .select("*").is("processed_at", null).order("created_at", { ascending: true }).limit(500);
   if (!queue?.length) return 0;
 
+  const overrides = await loadFeatureOverrides(sb, featureKeysIn(queue));
+
   type Hit = { row: any; person: Person; key: string };
   const hits: Hit[] = [];
   for (const row of queue) {
     const only = nameKey(row.audience_user);
     const skip = nameKey(row.exclude_user);
     const stores: string[] | null = row.audience_stores;
-    const roles: string[] | null = row.audience_roles;
     for (const person of people) {
       if (opts.onlyUser && person.key !== opts.onlyUser) continue;
       const p = prefs.get(person.key);
@@ -1313,7 +1399,7 @@ async function drainHeldForDigest(
       else {
         if (person.key === skip) continue;
         if (stores?.length && !person.stores.some((s) => stores.map((x) => x.toUpperCase()).includes(s))) continue;
-        if (roles?.length && !roles.map((r) => r.toLowerCase().trim()).includes(person.role)) continue;
+        if (!passesAudience(row, person, overrides)) continue;
       }
       hits.push({ row, person, key: `q:${row.id}:${person.key}` });
     }
