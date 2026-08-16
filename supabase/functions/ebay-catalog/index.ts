@@ -336,11 +336,17 @@ async function sweepLive(store: string): Promise<Response> {
       // number is never quietly smaller than reality.
       const rows = items
         .filter(i => { if (!i.sku) { withoutSku += 1; return false; } return true; })
-        // Two live listings under one SKU. Real on OVL, and the reason our
-        // stored count lands below eBay's own: both are the same item as far as
-        // coverage goes, but only one of them can be kept as a row.
+        // TWO LIVE LISTINGS UNDER ONE SKU ARE BOTH KEPT NOW.
+        // This used to count the second one and drop it, because the primary key
+        // was (store_code, sku) and had room for nothing else. That lost the very
+        // thing worth knowing: eight OVL SKUs are in this state, some of them a
+        // unit we listed that Marketplace Connect listed again. It also left a
+        // hole in the ownership guard, which verifies the cached listing against
+        // eBay and prunes it when ended — with only one of two rows stored, a SKU
+        // whose stored listing had ended would publish while the other was live.
+        // Still counted, so the number stays visible; no longer discarded.
         .filter(i => {
-          if (seen.has(i.sku)) { duplicateSkus += 1; return false; }
+          if (seen.has(i.sku)) duplicateSkus += 1;
           seen.add(i.sku);
           return true;
         })
@@ -349,7 +355,7 @@ async function sweepLive(store: string): Promise<Response> {
           title: i.title, quantity: i.quantity, seen_at: new Date().toISOString(),
         }));
       for (let i = 0; i < rows.length; i += 500) {
-        await sb("ebay_live?on_conflict=store_code,sku", {
+        await sb("ebay_live?on_conflict=store_code,sku,item_id", {
           method: "POST",
           headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
           body: JSON.stringify(rows.slice(i, i + 500)),
