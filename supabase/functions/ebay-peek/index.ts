@@ -409,7 +409,16 @@ Deno.serve(async (req: Request) => {
     inventoryItem: item.status === 200
       ? { quantity: item.body?.availability?.shipToLocationAvailability?.quantity,
           condition: item.body?.condition,
-          title: item.body?.product?.title }
+          title: item.body?.product?.title,
+          // A WRONG ASPECT PUBLISHES PERFECTLY CLEANLY AND THEN JUST SITS THERE.
+          // Unlike a missing required aspect, which fails the publish loudly,
+          // a value eBay accepts but that misdescribes the item — SATA III sent
+          // as SATA I — produces no error anywhere. There is no way to notice it
+          // except by reading back what eBay stored, so this has to be visible.
+          aspects: item.body?.product?.aspects,
+          upc: item.body?.product?.upc,
+          mpn: item.body?.product?.mpn,
+          brand: item.body?.product?.brand }
       : { status: item.status, body: item.body },
     offer: offer
       ? {

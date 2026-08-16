@@ -534,20 +534,53 @@ function legalValue(value: string, aspect: any): string | null {
   const exact = allowed.find(a => normAspect(a) === v);
   if (exact) return exact;
 
-  // THE LONGEST PARTIAL MATCH WINS, NOT THE FIRST ONE IN THE LIST.
-  // Taking the first match sent a SATA III drive to eBay as SATA I: normalised,
-  // "sataiii6gbps" contains "satai", and "SATA I" happens to come first in
-  // eBay's own value list. Every roman-numeral and generation ladder has this
-  // shape — USB 3 inside USB 3.2, DDR4 inside DDR4L, Gen 1 inside Gen 12 — so
-  // the shortest candidate is the one most likely to be wrong. Ranking by
-  // length picks the most specific value that still fits.
-  const partial = allowed
-    .filter(a => {
-      const n = normAspect(a);
-      return n.startsWith(v) || n.includes(v) || v.includes(n);
-    })
-    .sort((a, b) => normAspect(b).length - normAspect(a).length);
-  if (partial.length) return partial[0];
+  // MATCH BY PREFIX, IN A DIRECTION, RATHER THAN BY RAW SUBSTRING LENGTH.
+  //
+  // Two wrong versions preceded this. Taking the FIRST substring match sent a
+  // SATA III drive as SATA I — normalised, "sataiii6gbps" contains "satai", and
+  // "SATA I" comes first in eBay's list. Ranking those same matches by LENGTH
+  // fixed SATA and broke other things just as badly, because "longest" is no
+  // less of a guess than "first": DDR4 desktop RAM became "GDDR4 SDRAM", which
+  // is graphics memory (ours merely sits INSIDE theirs), a 2.5" drive became
+  // 5.25" ("25" sits inside "525in"), and an 11" iPad became 11.1". An audit of
+  // the live listings caught all three before a re-push shipped them.
+  //
+  // Direction is what those cases turn on, so it is what this matches on:
+  //
+  //   ours starts with theirs  — "sataiii6gbps" -> "sataiii". Ours carries
+  //     extra detail past a value that genuinely fits, so take the LONGEST such
+  //     value: the most specific one our text actually supports.
+  //
+  //   theirs starts with ours  — "ddr4" -> "ddr4 dram". Theirs adds detail we
+  //     did not state, so take the SHORTEST: the least invented. This is what
+  //     rejects "gddr4 sdram", which does not start with "ddr4" at all, and
+  //     "5.25 in", which does not start with "2.5".
+  //
+  // Only if neither direction fits does a loose contains apply, and there the
+  // shortest wins for the same reason — "GeForce GTX 970" should become
+  // "NVIDIA GeForce GTX 970", not "NVIDIA GeForce GTX 970 Jetstream", which
+  // names a board variant nobody wrote down.
+  const byLen = (dir: number) => (a: string, b: string) =>
+    (normAspect(a).length - normAspect(b).length) * dir;
+
+  const oursExtends = allowed.filter(a => v.startsWith(normAspect(a))).sort(byLen(-1));
+  if (oursExtends.length) return oursExtends[0];
+
+  const theirsExtends = allowed.filter(a => normAspect(a).startsWith(v)).sort(byLen(1));
+  if (theirsExtends.length) return theirsExtends[0];
+
+  // A LIST VALUE BEATS A TRUER VALUE THAT NOBODY CAN FILTER ON.
+  // Tried and reverted: skipping this stage for FREE_TEXT aspects, so a
+  // DualSense stayed "Starlight Blue" instead of becoming "Blue". It reads
+  // better and it is more accurate, but eBay's aspect lists are what the
+  // left-hand filters are built from — a colour outside the list drops the
+  // listing out of "Blue", and the precise shade is in the title regardless. It
+  // also regressed the GPU, turning a canonical "NVIDIA GeForce GTX 970" back
+  // into "GeForce GTX 970". Snap to the list; free text is the last resort.
+  const loose = allowed
+    .filter(a => normAspect(a).includes(v) || v.includes(normAspect(a)))
+    .sort(byLen(1));
+  if (loose.length) return loose[0];
 
   return aspect?.aspectConstraint?.aspectMode === "FREE_TEXT" ? value : null;
 }
