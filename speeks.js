@@ -36148,6 +36148,22 @@ function _plNoteHtml(row, whoLabel) {
         + '</div>';
 }
 
+// The requester's own words for why they asked. It is a required field, so it
+// exists on every request, and it belongs everywhere the request appears — not
+// only while it is pending. Deciding a request does not stop "why" being the
+// reason for it: the owner reviewing an old call, and the requester rereading
+// their own, were both looking at an item name and a verdict with the argument
+// missing.
+//
+// Uses .pl-tbl-note rather than the card's .pl-reason — same text sized for a
+// table cell. pre-wrap and word-break are load-bearing: this is FREE TEXT up to
+// 2000 characters, and free text that cannot wrap is what blew Recycle's My
+// Requests table 2341px wide inside a 908px modal. Never let it go nowrap.
+function _plReasonHtml(row) {
+    if (!row.reason) return '';
+    return '<div class="pl-tbl-note"><b>Why:</b> ' + escapeHtml(row.reason) + '</div>';
+}
+
 function _plMineHtml() {
     if (!_plRequests.length) {
         return '<div class="pl-empty"><div class="pl-empty-t">Nothing sent yet.</div>'
@@ -36160,7 +36176,7 @@ function _plMineHtml() {
         return '<tr>'
             + '<td>' + _plStatusChip(r.status) + '</td>'
             + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
-            + escapeHtml(r.item_name) + '</a></div>' + _plNoteHtml(r) + '</td>'
+            + escapeHtml(r.item_name) + '</a></div>' + _plReasonHtml(r) + _plNoteHtml(r) + '</td>'
             + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
             + '<td style="white-space:nowrap;">' + _plFmtDate(r.created_at) + '</td>'
             + '<td>' + act + '</td>'
@@ -36243,7 +36259,7 @@ function _plDecidedHtml() {
         return '<tr>'
             + '<td>' + _plStatusChip(r.status) + '</td>'
             + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
-            + escapeHtml(r.item_name) + '</a></div>' + _plNoteHtml(r, 'You') + '</td>'
+            + escapeHtml(r.item_name) + '</a></div>' + _plReasonHtml(r) + _plNoteHtml(r, 'You') + '</td>'
             + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
             + '<td>' + escapeHtml((r.requested_by || '').split(' ')[0])
             + (r.store ? ' &middot; ' + escapeHtml(r.store) : '') + '</td>'
