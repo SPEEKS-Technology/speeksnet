@@ -111,8 +111,17 @@ Deno.serve(async (req: Request) => {
   // put it there. See the Trading-API note below the handler for why this is
   // the only question worth asking while Marketplace Connect is still running.
   const wantMine = url.searchParams.get("mine") === "1";
-  if (!store || (!sku && !wantTemplate && !wantMine && !url.searchParams.get("order"))) {
-    return json({ error: "pass ?store=OVL&sku=... , &mcTemplate=1 or &mine=1" }, 400);
+  // ?store=OVL&rateLimits=1 — what eBay will actually let us spend in a day.
+  //
+  // THE CAPS ARE PER APPLICATION, AND ALL FIVE STORES SHARE ONE KEYSET. So the
+  // order poll's cost is 5 x its per-store rate, against one shared allowance,
+  // and the honest way to choose a polling cadence is to read the number rather
+  // than reason about it. Any store's token answers, since the limits belong to
+  // the application, not the seller.
+  const wantLimits = url.searchParams.get("rateLimits") === "1";
+  if (!store || (!sku && !wantTemplate && !wantMine && !wantLimits
+                 && !url.searchParams.get("order"))) {
+    return json({ error: "pass ?store=OVL&sku=... , &mcTemplate=1, &mine=1 or &rateLimits=1" }, 400);
   }
 
   const row = (await (await sb(
@@ -133,6 +142,32 @@ Deno.serve(async (req: Request) => {
     try { return { status: r.status, body: t ? JSON.parse(t) : null }; }
     catch { return { status: r.status, body: t }; }
   };
+
+  // --- &rateLimits=1 : the application's daily allowances --------------------
+  // Only the entries with a real cost are worth reading back, so this reports
+  // the calls we actually make and drops the hundreds of untouched resources.
+  if (wantLimits) {
+    const r = await get("/developer/analytics/v1_beta/rate_limit/");
+    if (r.status >= 300) return json({ store, status: r.status, body: r.body }, 200);
+    const want = /getOrders|createOrReplaceInventoryItem|publishOffer|bulk_update|getItem|item_summary|get_category|createShippingFulfillment|withdraw/i;
+    const out: any[] = [];
+    for (const api of (r.body?.rateLimits || [])) {
+      for (const res of (api.resources || [])) {
+        const r0 = res.rates?.[0];
+        if (!r0) continue;
+        if (!want.test(res.name) && Number(r0.limit || 0) < 100000) {
+          if (Number(r0.remaining) === Number(r0.limit)) continue; // untouched
+        }
+        out.push({
+          api: api.apiName, resource: res.name,
+          limit: r0.limit, remaining: r0.remaining, resets: r0.reset,
+        });
+      }
+    }
+    out.sort((a, b) => (a.limit - a.remaining) < (b.limit - b.remaining) ? 1 : -1);
+    return json({ store, note: "caps are per APPLICATION — all five stores share these",
+                  used: out.slice(0, 25) });
+  }
 
   // --- &mine=1 : every ACTIVE listing on the account, with its SKU ----------
   //
