@@ -514,6 +514,25 @@ function legalValue(value: string, aspect: any): string | null {
     ?? (aspect?.aspectConstraint?.aspectMode === "FREE_TEXT" ? value : null);
 }
 
+// UPC-A (12) and EAN-13 share one check-digit rule: weight the digits 3-1-3-1
+// from the right of the body, and the last digit is what makes the total land
+// on a multiple of ten. Twelve or thirteen digits that fail it are not a
+// barcode — they are a mis-scan or somebody's typing.
+function validBarcode(code: string): boolean {
+  const d = String(code || "").replace(/\D/g, "");
+  if (d.length !== 12 && d.length !== 13) return false;
+  // All-zero and all-same strings pass the arithmetic and mean nothing.
+  if (/^(\d)\1+$/.test(d)) return false;
+  const body = d.slice(0, -1);
+  let sum = 0;
+  for (let i = 0; i < body.length; i++) {
+    // Rightmost body digit always carries weight 3.
+    const weight = (body.length - 1 - i) % 2 === 0 ? 3 : 1;
+    sum += Number(body[i]) * weight;
+  }
+  return (10 - (sum % 10)) % 10 === Number(d[d.length - 1]);
+}
+
 function inventoryItemPayload(
   c: Candidate,
   resolvedCondition: string,
@@ -550,7 +569,24 @@ function inventoryItemPayload(
   // NOT the Shopify vendor — that is the PayMore store, not the manufacturer.
   // Brand comes from the spec table when the template records it, otherwise
   // eBay's catalog match on UPC is the better source.
-  const upc = (specs["UPC"] || "").replace(/\D/g, "");
+  //
+  // A BARCODE IS ONLY WORTH SENDING IF IT IS ARITHMETICALLY REAL.
+  // eBay checks the check digit and refuses the whole listing over a bad one —
+  // "UPC has an invalid value of 056597769440" is a mis-scan or a hand-typed
+  // number, not a category problem, and it blocked a listing whose category had
+  // just been corrected. Length alone never caught it: twelve wrong digits are
+  // still twelve digits. Sending nothing is the honest move; a UPC we cannot
+  // verify would attach the listing to the wrong catalogue entry, which is
+  // worse than having none.
+  const upcRaw = (specs["UPC"] || "").replace(/\D/g, "");
+  const upc = validBarcode(upcRaw) ? upcRaw : "";
+
+  // Where the category demands one, say so in eBay's own words rather than
+  // passing the bad number through the aspect route instead.
+  if (upcRaw && !upc) {
+    const upcDef = aspectDefs.find((d: any) => normAspect(d.localizedAspectName) === "upc");
+    if (upcDef) aspects[upcDef.localizedAspectName] = ["Does not apply"];
+  }
 
   return {
     availability: { shipToLocationAvailability: { quantity: Math.max(c.quantity, 0) } },
@@ -561,7 +597,7 @@ function inventoryItemPayload(
       imageUrls: c.imageUrls.slice(0, EBAY_MAX_IMAGES),
       // A valid UPC lets eBay match its own catalog entry and fill aspects we
       // never sent, which is far more reliable than our parsing.
-      ...(upc.length >= 12 ? { upc: [upc] } : {}),
+      ...(upc ? { upc: [upc] } : {}),
       ...(Object.keys(aspects).length ? { aspects } : {}),
     },
   };

@@ -232,13 +232,28 @@ const ERROR_RULES: { test: RegExp; help: (m: RegExpMatchArray) => string }[] = [
     help: (m) => `Shopify has no product with the SKU ${m[1]}. Check it against the `
       + `product page — a partial SKU will not match, so "${m[1]}" has to be the whole thing.`,
   },
-  // An aspect whose value eBay will not take. Brand is the usual offender:
-  // eBay keeps a fixed brand list per category and rejects anything else.
+  // An aspect whose value eBay will not take. The advice has to match the
+  // field: telling somebody to set a UPC to "the real manufacturer" is worse
+  // than saying nothing, and an early version of this rule did exactly that
+  // because it was written for Brand and then applied to everything.
+  {
+    test: /\b(UPC|EAN|GTIN|ISBN)\b has an invalid value of ["“]([^"”]{1,60})["”]/i,
+    help: (m) => `The barcode on this product — ${m[1].toUpperCase()} "${m[2]}" — is not a valid `
+      + `one; its check digit does not add up, so it is a mis-scan or a typo rather than a real `
+      + `${m[1].toUpperCase()}. Fix it on the Shopify product, or clear the field and upload `
+      + `again: an item with no barcode lists fine, one with the wrong barcode does not.`,
+  },
+  {
+    test: /\bBrand\b has an invalid value of ["“]([^"”]{1,60})["”]/i,
+    help: (m) => `eBay will not accept "${m[1]}" as the Brand in this category — it keeps a fixed `
+      + `list of brands and that is not on it. Open the item in Shopify and set Brand to the real `
+      + `manufacturer, or to Unbranded if it does not have one.`,
+  },
   {
     test: /\b([A-Z][\w \-\/]{1,28}?) has an invalid value of ["“]([^"”]{1,60})["”]/,
     help: (m) => `eBay will not accept "${m[2]}" as the ${m[1]} in this category — it keeps a `
-      + `fixed list of ${m[1]} values and that is not on it. Open the item in Shopify and set `
-      + `${m[1]} to the real manufacturer, or to Unbranded if it does not have one.`,
+      + `fixed list of ${m[1]} values and that is not on it. Open the item in Shopify and correct `
+      + `${m[1]}, then upload again.`,
   },
   // A required aspect missing from the product.
   {
