@@ -477,8 +477,21 @@ Deno.serve(async (req: Request) => {
     if (view === "categories") {
       const q = (url.searchParams.get("q") || "").trim();
       if (!q) return json({ results: [] });
+      // eBay's category tree is the same for every seller — the store only
+      // supplies the token to ask with. Tying the search to the CALLER's store
+      // meant anyone at a store still being onboarded got a 404 from a picker
+      // that has nothing to do with their store's setup, so any connected store
+      // will do.
+      const connected = await rows(
+        `ebay_stores?store_code=eq.${encodeURIComponent(store)}&select=store_code&limit=1`);
+      const tokenStore = connected.length
+        ? store
+        : (await rows(`ebay_stores?select=store_code&limit=1`))[0]?.store_code;
+      if (!tokenStore) {
+        return json({ results: [], note: "no eBay-connected store to search with" });
+      }
       const r = await callFn(
-        `ebay-sync?store=${store}&categorySearch=1&q=${encodeURIComponent(q)}`);
+        `ebay-sync?store=${tokenStore}&categorySearch=1&q=${encodeURIComponent(q)}`);
       return json(r.body, r.status < 300 ? 200 : r.status);
     }
 
@@ -505,6 +518,22 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
   if (!store) return json({ error: "forbidden", detail: "that store is not yours" }, 403);
   if (!scope.canList) return json({ error: "forbidden" }, 403);
   if (!sku) return json({ error: "pass a sku" }, 400);
+
+  // A STORE WITH NO eBay CONNECTION HAS TO BE REFUSED HERE, NOT LATER.
+  // ebay_listings.store_code is a foreign key into ebay_stores, so the attempt
+  // stamp at the end of a failed action hit a 23503 and turned an ordinary "not
+  // set up yet" into a 500 with raw Postgres in the body. Every store except
+  // OVL is in exactly this state until it is onboarded, so this is the normal
+  // path for a second store, not an edge case.
+  if (!(await rows(
+    `ebay_stores?store_code=eq.${encodeURIComponent(store)}&select=store_code&limit=1`)).length) {
+    return json({
+      ok: false,
+      error: "store not connected",
+      detail: `${store} is not connected to eBay yet, so nothing can be listed from it. `
+            + `The store's eBay account has to be connected first.`,
+    }, 409);
+  }
 
   if (action === "preview") {
     const r = await callFn(`ebay-sync?store=${store}&sku=${encodeURIComponent(sku)}&dry=1`);
@@ -567,7 +596,19 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
       : "";
 
     const r = await callFn(`ebay-sync?store=${store}&sku=${encodeURIComponent(sku)}${override}`);
-    await stampAttempt(store, sku, r.status < 300 ? null : errorOf(r.body));
+
+    // A TYPO MUST NOT LEAVE A ROW BEHIND.
+    // stampAttempt upserts by (store, sku), so a SKU that does not exist in
+    // Shopify used to become a permanent ebay_listings row — counted forever in
+    // the store's "Did Not Upload" and in the DM's five-store view. "B2B310"
+    // typed instead of "KS01-B2B310-E11" is not a failed listing; it is a
+    // keystroke. The session feed still shows it, which is where a mistake
+    // belongs — in front of the person who made it, until they sign out.
+    const failedText = r.status < 300 ? "" : errorOf(r.body);
+    const notInShopify = /not found in \S*myshopify\.com/i.test(failedText);
+    if (!notInShopify) {
+      await stampAttempt(store, sku, r.status < 300 ? null : failedText);
+    }
     // The finished row goes back with the answer. The panel shows one line per
     // SKU somebody typed, and it has to turn from pending into a real item —
     // title, price, both links — without re-reading the whole store to find the
@@ -608,7 +649,18 @@ const errorOf = (body: any): string =>
 // last_attempt_at are ours, and they must be stamped even when ebay-sync never
 // got far enough to write a row — otherwise a SKU that fails at the very first
 // step shows no evidence of having been tried at all.
+// Bookkeeping, so it must never be what fails the request. The caller has
+// already done the thing that matters — published, or been refused by eBay —
+// and losing an attempt counter is not worth turning that answer into a 500.
 async function stampAttempt(store: string, sku: string, error: string | null) {
+  try {
+    await stampAttemptInner(store, sku, error);
+  } catch (e) {
+    console.error("ebay-channel: attempt stamp failed", store, sku, String((e as Error).message));
+  }
+}
+
+async function stampAttemptInner(store: string, sku: string, error: string | null) {
   const existing = await rows(
     `ebay_listings?store_code=eq.${encodeURIComponent(store)}&sku=eq.${encodeURIComponent(sku)}&select=attempts`);
   await sb("ebay_listings?on_conflict=store_code,sku", {
