@@ -1022,8 +1022,18 @@ async function recommendCategory(
   const sugg = await api(
     `/commerce/taxonomy/v1/category_tree/${CATEGORY_TREE_ID}/get_category_suggestions`
     + `?q=${encodeURIComponent(title)}`);
-  const top = sugg.body?.categorySuggestions?.[0]?.category;
-  const suggested = top ? { id: top.categoryId, name: top.categoryName } : null;
+  // KEEP MORE THAN eBay'S FIRST GUESS.
+  // Only [0] was kept, and when the market sample is empty that single guess is
+  // the ENTIRE picker. A Hisense laser projector drew "TV Boards, Parts &
+  // Components" and a store opening the dropdown saw one wrong option and no
+  // projector anywhere — the right category was in eBay's own list all along,
+  // just not first. Ranked, so the head of the list is unchanged.
+  const suggestions = (sugg.body?.categorySuggestions || [])
+    .map((s: any) => s.category)
+    .filter((c: any) => c?.categoryId)
+    .slice(0, 6)
+    .map((c: any) => ({ id: c.categoryId, name: c.categoryName }));
+  const suggested = suggestions[0] || null;
 
   const live = await api(
     `/buy/browse/v1/item_summary/search?q=${encodeURIComponent(q)}&limit=50`);
@@ -1032,7 +1042,7 @@ async function recommendCategory(
   // query matched nothing, say so plainly and fall back to the taxonomy rather
   // than pretending to a confidence we do not have.
   if (live.status >= 300) {
-    return { query: q, suggested, market: null, recommended: suggested,
+    return { query: q, suggested, suggestions, market: null, recommended: suggested,
              basis: "taxonomy", note: `Browse unavailable: ${errText(live.body).slice(0, 160)}` };
   }
 
@@ -1075,6 +1085,7 @@ async function recommendCategory(
   return {
     query: q,
     suggested,
+    suggestions,
     market: ranked.slice(0, 5).map(r => ({ ...r, share: Math.round((r.n / (sampled || 1)) * 100) })),
     sampled,
     recommended: useMarket ? { id: best!.id, name: best!.name } : suggested,

@@ -268,7 +268,10 @@ const ERROR_RULES: { test: RegExp; help: (m: RegExpMatchArray) => string }[] = [
   },
   // A required aspect missing from the product.
   {
-    test: /\b(?:aspect ["“]?)?([A-Z][\w \-\/]{1,28}?)["“]?\s+is missing\b/,
+    // eBay phrases it "The item specific Brand is missing", and the capture used
+    // to swallow the preamble, giving "eBay requires The item specific Brand for
+    // this category". Consume the lead-in so the field name stands on its own.
+    test: /(?:The item specific |aspect ["“]?)?([A-Z][\w \-\/]{1,28}?)["”]?\s+is missing\b/,
     help: (m) => `eBay requires ${m[1]} for this category and the item does not have it. Add `
       + `${m[1]} to the product's spec table in Shopify and upload again.`,
   },

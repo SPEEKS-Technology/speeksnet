@@ -16415,14 +16415,23 @@ body.tv-body { display: block; background: #eef1f5; }
 /* The failure count is a control when there is something behind it. It has to
    read as the number it replaces, not as a button parked in a stat row, so it
    inherits .ec-hv sizing and only earns an underline on hover. */
-.ec-hlink {
-  font: inherit; color: inherit; font-weight: 700;
-  background: none; border: 0; padding: 0; cursor: pointer;
-  text-decoration: underline; text-decoration-style: dotted;
-  text-underline-offset: 3px;
+/* The failure count is a CONTROL, so it has to look like one. As a number with a
+   dotted underline it read as emphasis and people walked straight past it. Same
+   amber as the warning rows, sized to sit inside the stat line. */
+.ec-hbtn {
+  font: inherit; font-weight: 700; font-size: 12px;
+  color: #8a6212; background: #fdf6e7; border: 1px solid #f0dfae;
+  padding: 3px 10px; border-radius: 999px; cursor: pointer;
+  line-height: 1.4; white-space: nowrap;
 }
-.ec-hlink:hover { text-decoration-style: solid; }
-.ec-hlink:focus-visible { outline: 2px solid var(--sage-500, #6b8f71); outline-offset: 2px; border-radius: 3px; }
+.ec-hbtn:hover { background: #f9ecd0; border-color: #e3ce93; }
+.ec-hbtn:focus-visible { outline: 2px solid var(--sage-500, #6b8f71); outline-offset: 2px; }
+
+/* Same idea in the store view, beside Upload To eBay. */
+.ec-btn-fix {
+  color: #8a6212; background: #fdf6e7; border-color: #f0dfae; font-weight: 700;
+}
+.ec-btn-fix:hover { background: #f9ecd0; border-color: #e3ce93; }
 .ec-ok { color: #178048; }
 .ec-warn { color: #b7791f; }
 .ec-off { color: var(--cb-faint); }

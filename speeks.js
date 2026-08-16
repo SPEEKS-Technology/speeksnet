@@ -39873,6 +39873,12 @@ function ecRender() {
 // because a store listing a shelf does not want to do this one row at a time.
 function _ecQuickHtml() {
     if (!_ecScope?.canList) return '';
+    // A FAILURE HAS TO BE REACHABLE WITHOUT BEING A DM.
+    // The only way in used to be the All Stores card, which only the DM and CEO
+    // can see — so the people who actually upload, at the store, had no way to
+    // find out what had not gone up. The feed is session-scoped, so signing in
+    // again showed them nothing at all. This is their store's own count.
+    const failed = _ecData?.summary?.counts?.failed || 0;
     // Clear List only appears once there is a list to clear, and it clears the
     // panel, not eBay — nothing that is live comes down. Said plainly on the
     // button's title because "clear" next to a column of live listings could be
@@ -39885,6 +39891,8 @@ function _ecQuickHtml() {
       <button class="ec-btn ec-btn-go" onclick="ecListTyped()">Upload To eBay</button>
       ${_ecFeed.length ? `<button class="ec-btn" onclick="ecClearList()"
          title="Empties this list. Nothing on eBay changes.">Clear List</button>` : ''}
+      ${failed ? `<button class="ec-btn ec-btn-fix" onclick="ecShowFailed('${_ecEsc(_ecStore)}')"
+         title="Show the SKUs that did not upload">${failed} Did Not Upload</button>` : ''}
     </div>`;
 }
 
@@ -40049,9 +40057,9 @@ function _ecHealthHtml() {
                       // and the store view is session-scoped so signing in again
                       // shows nothing. Clicking pulls those rows into the feed,
                       // where the error, both links and Try Again already live.
-                      ? `<button type="button" class="ec-hlink"
+                      ? `<button type="button" class="ec-hbtn"
                            onclick="ecShowFailed('${_ecEsc(s.store)}')"
-                           title="Show what did not upload">${c.failed}</button>`
+                           title="Show what did not upload">${c.failed} To Fix</button>`
                       : c.failed,
                   !s.connected ? 'ec-off' : c.failed ? 'ec-warn' : 'ec-ok')}
             ${row('Checked Against eBay', s.freshness.liveMinutes == null ? 'Never'
@@ -40349,9 +40357,17 @@ function _ecCatRecHtml(b) {
           nothing to compare against. eBay's own guess is below.</div>`);
     }
 
-    if (b.suggested?.id && !market.some(m => m.id === b.suggested.id)) {
-        rows.push(`<div class="ec-catpop-label">eBay's Guess From The Title</div>`);
-        rows.push(_ecCatOption(b.suggested.id, b.suggested.name, '', 'Matched on wording'));
+    // ALL of eBay's ranked guesses, not just the first.
+    // Only [0] used to be shown, and when the market sample is empty that single
+    // option is the entire picker. A laser projector drew "TV Boards, Parts &
+    // Components" and the store saw one wrong choice with no projector anywhere —
+    // "Home Theater Projectors" was sixth on eBay's own list the whole time.
+    const guesses = (b.suggestions?.length ? b.suggestions : (b.suggested ? [b.suggested] : []))
+        .filter(g => g?.id && !market.some(m => m.id === g.id));
+    if (guesses.length) {
+        rows.push(`<div class="ec-catpop-label">eBay's Guesses From The Title</div>`);
+        guesses.forEach((g, i) => rows.push(_ecCatOption(g.id, g.name, '',
+            i === 0 ? 'Best match on wording' : 'Also matched')));
     }
     return rows.join('');
 }
