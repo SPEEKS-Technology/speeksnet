@@ -12217,12 +12217,13 @@ function _lvStoreRow(v, d, foot, rev) {
     // Per-store month-end projections come off the hub, the same numbers the
     // Tracking strip above the table is built from -- NOT recomputed here, or the
     // row and the tile would drift apart the first time the sheet changed how it
-    // projects. The roll-up row has no hub entry of its own, so it falls back to
-    // the banked figure rather than inventing a total from five projections.
-    const fc = _lvIsMtd() ? _lvFcFor(v.code) : null;
-    const trackCell = (proj, actual, strong) => (proj > 0)
-        ? _lvMoney(proj, strong) + '<span class="lv-of"> now ' + _lvMoney(actual, false) + '</span>'
-        : _lvMoney(actual, strong);
+    // projects. The roll-up is handed its own summed projection (fcSum) by the
+    // table: with the banked figure no longer printed beside each projection,
+    // a total that stayed banked would sit under five projections and simply
+    // look wrong -- five figures around $130k over a total of $330k.
+    const fc = _lvIsMtd() ? (v.fcSum || _lvFcFor(v.code)) : null;
+    const trackCell = (proj, actual, strong) =>
+        (proj > 0) ? _lvMoney(proj, strong) : _lvMoney(actual, strong);
     const gp = _lvHasMonth(d)
         ? _lvMoney(v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
         : '—';
@@ -12350,6 +12351,9 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         const rv = _lvView(rollup);
         const r = Object.assign({}, rv, {
             code: rollupLabel, name: '',
+            // Its own projection, summed from the stores above it by the one
+            // function the Tracking tiles also use.
+            fcSum: _lvIsMtd() ? _lvFcSum(stores.map(_lvView)) : null,
             paceIndex: _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
