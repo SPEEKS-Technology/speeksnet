@@ -27533,7 +27533,11 @@ async function savePatchEntry() {
     status.className = 'pn-save-status';
 
     try {
-        await postWrite(PATCH_NOTES_URL, { action: 'addEntries', title, date, items });
+        await postWrite(PATCH_NOTES_URL, { action: 'addEntries', title, date, items,
+            // Keeps the release out of its own author's inbox; the function passes
+            // this through as excludeUser. Separate from the read-marking below,
+            // which only clears the in-app badge.
+            submittedBy: sessionStorage.getItem('speeksUserName') || null });
         // Whoever wrote the notes has, by definition, read them. Without this the
         // author published a version and then got badged about their own words,
         // and had to click Mark as read on something they had just typed.

@@ -162,6 +162,11 @@ Deno.serve(async (req: Request) => {
           title: `New patch notes${ver ? ` — ${ver.replace(/^\s*v/i, "v")}` : ""}`,
           body: `${rows.length} change${rows.length === 1 ? "" : "s"} shipped${cats.length ? ` across ${cats.join(", ")}` : ""}.`,
           link: "index.html",
+          // The person who wrote the release does not need mailing about it.
+          // Every other notification in the system already excludes its author;
+          // this one had no exclusion at all, so the author was told about their
+          // own patch notes and then had to mark them read.
+          excludeUser: body.submittedBy ? String(body.submittedBy).trim() : null,
         });
       }
       return json({ success: true, inserted: rows.length });
