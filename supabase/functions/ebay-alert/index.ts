@@ -339,6 +339,45 @@ Deno.serve(async (req: Request) => {
   const q = (k: string) => url.searchParams.get(k);
   if (q("secret") !== SECRET) return json({ error: "Unauthorized" }, 401);
 
+  // PREVIEW MODE. Renders the mail with invented issues and sends it nowhere
+  // near the real check: no table is read and no dedupe state is written. It
+  // stays in the function on purpose — this alerter is silent when healthy, so
+  // without a way to make it speak on demand there is no way to see what a
+  // change to the layout actually did until something breaks for real.
+  if (q("sample") === "1") {
+    const t0 = Date.now();
+    const fake: Issue[] = [
+      { key: "s1", store: "WSP", severity: "critical",
+        title: "eBay is refusing listings",
+        detail: "6 listings failed in the last hour, all with the same error: HTTP 429 rate limit exceeded. This is not a data problem — the store cannot clear it." },
+      { key: "s2", store: "LEE", severity: "critical",
+        title: "Order poll has stopped",
+        detail: "Scheduled job ebay-orders-lee last ran 3h 12m ago; it should run every 2 minutes. Orders placed since then are not in SPEEKS Connect." },
+      { key: "s3", store: null, severity: "critical",
+        title: "Error watch cannot read ebay_orders",
+        detail: "permission denied for relation ebay_orders — until this is fixed, problems in ebay_orders will go unreported." },
+      { key: "s4", store: "MPL", severity: "warning",
+        title: "Tracking not pushed back to eBay",
+        detail: "2 orders have been shipped with tracking in Shopify for over an hour but eBay has not been told, so the buyer sees no tracking." },
+      { key: "s5", store: "OVL", severity: "warning",
+        title: "Live sweep is behind",
+        detail: "Last successful sweep was 2h 41m ago; it runs every 20 minutes. Sold-out items may still show as available on eBay." },
+    ];
+    const fs2: Record<string, string> = {};
+    const ages = [95, 192, 41, 1500, 168];
+    fake.forEach((i, n) => { fs2[i.key] = new Date(t0 - ages[n] * 60000).toISOString(); });
+    const h = build(fake, fs2);
+    if (q("html") === "1") return new Response(h, { headers: { "Content-Type": "text/html" } });
+    const to = q("to") || TO_DEFAULT.join(",");
+    const nC = fake.filter((i) => i.severity === "critical").length;
+    const subject = `[SAMPLE] SPEEKS Connect — ${fake.length} Issues (${nC} To Fix Now)`;
+    const res = await fetch(GMAIL_RELAY, {
+      method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ secret: SECRET, to, subject, html: h }),
+    });
+    return json({ ok: res.ok, status: res.status, to, sample: true });
+  }
+
   try {
     const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
     const { issues, counts } = await collect(sb);
@@ -376,8 +415,8 @@ Deno.serve(async (req: Request) => {
     if (toAlert.length) {
       const to = q("to") ? [q("to")!] : await loadRecipients(sb);
       const nCrit = toAlert.filter((i) => i.severity === "critical").length;
-      const subject = `SPEEKS Connect — ${toAlert.length} issue${toAlert.length === 1 ? "" : "s"}` +
-        (nCrit ? ` (${nCrit} to fix now)` : "");
+      const subject = `SPEEKS Connect — ${toAlert.length} Issue${toAlert.length === 1 ? "" : "s"}` +
+        (nCrit ? ` (${nCrit} To Fix Now)` : "");
       const res = await fetch(GMAIL_RELAY, {
         method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify({ secret: SECRET, to: to.join(","), subject, html }),
