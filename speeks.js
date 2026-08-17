@@ -9559,15 +9559,6 @@ const _lvIsPrev = () => _lvMode === 'prev';
 const _lvIsMtd  = () => _lvMode === 'mtd';
 const _lvIsToday = () => _lvMode === 'today';
 
-// Net profit for whatever period is on screen, by the SAME rule the Daily
-// Breakdown applies (BD_NET_GP_RATE). Null when there is nothing to take a
-// percentage of -- a store that has not sold today has no net profit yet, and
-// printing $0 would read as a loss rather than as an empty morning.
-const _lvNetProfit = (r) => {
-    const gp = Number(r && r.gpToday), sales = Number(r && r.netToday);
-    if (!isFinite(gp) || !isFinite(sales) || !sales) return null;
-    return gp - sales * BD_NET_GP_RATE;
-};
 
 // WHICH COLUMNS EACH TAB CARRIES.
 // Every mode used to draw all ten and fill the ones that did not apply with a
@@ -12050,6 +12041,15 @@ function _lvForecast(views, d) {
     const buys = d ? views.map(v => _lvBuyFor(v.code, d)).filter(Boolean) : [];
     const mtdBuy = buys.length ? _lvBuySum(buys).bought : null;
     const soFar = n => _lvMoney(n, false) + ' So Far';
+    // TRACKING NET PROFIT, derived from the two projections beside it rather
+    // than projected on its own: net is gross profit less 21% of sales, so a
+    // separately-projected net could disagree with the GP and Revenue tiles it
+    // sits between, which is the one thing a band of four figures must not do.
+    // Same constant as the Daily Breakdown (BD_NET_GP_RATE), so the boards
+    // cannot quote different net figures for one month.
+    const trackNet = (f.trackGp > 0 && f.trackRev > 0)
+        ? f.trackGp - f.trackRev * BD_NET_GP_RATE : null;
+    const mtdNet = mtdGp - mtdRev * BD_NET_GP_RATE;
 
     // Stores that got through a whole open day without a new review. Computed
     // once: it drives both the tile's class and its sub-line.
@@ -12068,6 +12068,8 @@ function _lvForecast(views, d) {
         + _lvTile('Tracking Buying', _lvMoney(f.buyProj, false),
             mtdBuy === null ? 'Projected Month-End' : soFar(mtdBuy))
         + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), soFar(mtdRev))
+        + (trackNet === null ? '' : _lvTile('Tracking Net Profit',
+            _lvMoney(trackNet, false), soFar(mtdNet)))
         + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
             soFar(mtdGp) + (f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''))
         // The only tile whose sub-line carries figures rather than a caption, and
@@ -12201,20 +12203,11 @@ function _lvRollupTiles(r, d, label, views) {
         ? avg
         : _lvSubPair('Average', _lvMoney(r.aov, true),
                      'Refunds', r.returnsToday > 0 ? _lvMoney(r.returnsToday, false) : 'none');
-    // NET PROFIT. Gross profit less 21% of sales, which is the same definition
-    // the Daily Breakdown's Net GP tile uses -- one constant, BD_NET_GP_RATE, so
-    // the two boards cannot quote different net figures for the same month. The
-    // caption states the rule rather than hiding it: this is a house rate, not
-    // something measured, and a number that looks measured invites arguments
-    // about why it disagrees with the books.
-    const netGp = _lvNetProfit(r);
     return _lvTile(_lvHeadKey(), _lvMoney(r.netToday, true), _lvStamp(d), true)
         + _lvTile('Orders', String(r.ordersToday), r.aov === null ? label : ordersSub)
         + _lvTile('Gross Margin', _lvPct(r.marginToday),
             _lvSubPair('Total Cost', _lvMoney(r.cogsToday, false),
                        'Total Profit', _lvMoney(r.gpToday, false)))
-        + (netGp === null ? '' : _lvTile('Net Profit', _lvMoney(netGp, false),
-            'Gross Profit Less ' + Math.round(BD_NET_GP_RATE * 100) + '%'))
         + last;
 }
 
