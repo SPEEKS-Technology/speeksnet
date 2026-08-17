@@ -10320,8 +10320,11 @@ body.sam-active .hotbar-btn:hover {
 /* The district card has no .cc-strip of its own, so its tile row is bordered here
    instead of relying on the strip band above it. (The employee widget used to be
    the other case; it now shares the Command Center's strip band.) */
+/* Five tiles since Net Profit joined, and four before it. auto-fit rather
+   than a hard count so the strip cannot be broken by adding a sixth, and so
+   the Yesterday view -- which has one tile fewer -- does not leave a gap. */
 .lv-strip, .lv-dist-strip {
-    display: grid; grid-template-columns: repeat(4, 1fr);
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
     gap: 1px; background: #eef2f6;
 }
 .lv-dist-strip {

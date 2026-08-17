@@ -9559,6 +9559,16 @@ const _lvIsPrev = () => _lvMode === 'prev';
 const _lvIsMtd  = () => _lvMode === 'mtd';
 const _lvIsToday = () => _lvMode === 'today';
 
+// Net profit for whatever period is on screen, by the SAME rule the Daily
+// Breakdown applies (BD_NET_GP_RATE). Null when there is nothing to take a
+// percentage of -- a store that has not sold today has no net profit yet, and
+// printing $0 would read as a loss rather than as an empty morning.
+const _lvNetProfit = (r) => {
+    const gp = Number(r && r.gpToday), sales = Number(r && r.netToday);
+    if (!isFinite(gp) || !isFinite(sales) || !sales) return null;
+    return gp - sales * BD_NET_GP_RATE;
+};
+
 // WHICH COLUMNS EACH TAB CARRIES.
 // Every mode used to draw all ten and fill the ones that did not apply with a
 // dash or with a figure nobody reads. Kept in ONE place because the header and
@@ -10107,15 +10117,40 @@ function _lvChime() {
     } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
 }
 
-// A REFUND: the mirror image — B5 falling to E5, quieter and with a longer tail.
-// Deliberately the same shape as the sale chime played backwards, so which one
-// just happened is readable from across the room without looking up.
+// One note that SLIDES rather than steps. The sale chime is two struck notes
+// with a gap between them, so a continuous fall cannot be mistaken for it even
+// at the edge of hearing -- which two struck notes in the other order could be,
+// and were.
+function _lvSlide(bus, type, from, to, at, peak, attack, decay) {
+    const t = _lvAudio.currentTime + at;
+    const osc = _lvAudio.createOscillator(), gain = _lvAudio.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(from, t);
+    // Exponential, not linear: pitch is heard logarithmically, and a linear
+    // sweep sounds like it slows down as it falls.
+    osc.frequency.exponentialRampToValueAtTime(to, t + attack + decay * 0.8);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(peak, t + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+    osc.connect(gain); gain.connect(bus);
+    osc.start(t); osc.stop(t + attack + decay + 0.06);
+}
+
+// A REFUND: a soft downward swoop an octave below the sale, over a low thump.
+//
+// It used to be the sale chime backwards -- same timbre, same register, same
+// two struck notes, just reordered. That is only distinguishable if you are
+// listening for the ORDER of two pitches, which across a shop floor nobody is.
+// Three things separate it now, any one of which would do on its own: it is an
+// octave lower, it slides instead of stepping, and it lands on a thump the sale
+// does not have. The low-pass sits far below the sale's so it stays dull where
+// the sale is bright -- money going out should not sparkle.
 function _lvRefundChime() {
     try {
-        const bus = _lvBus(3200, 0.45);
+        const bus = _lvBus(1100, 0.5);
         if (!bus) return;
-        _lvNote(bus, 'triangle', 987.8, 0,    0.20, 0.008, 0.34);
-        _lvNote(bus, 'triangle', 659.3, 0.11, 0.20, 0.008, 0.44);
+        _lvSlide(bus, 'triangle', 392.0, 196.0, 0, 0.26, 0.010, 0.42);   // G4 down to G3
+        _lvNote(bus, 'sine', 98.0, 0.02, 0.22, 0.012, 0.30);              // the thump under it
     } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
 }
 
@@ -12166,11 +12201,20 @@ function _lvRollupTiles(r, d, label, views) {
         ? avg
         : _lvSubPair('Average', _lvMoney(r.aov, true),
                      'Refunds', r.returnsToday > 0 ? _lvMoney(r.returnsToday, false) : 'none');
+    // NET PROFIT. Gross profit less 21% of sales, which is the same definition
+    // the Daily Breakdown's Net GP tile uses -- one constant, BD_NET_GP_RATE, so
+    // the two boards cannot quote different net figures for the same month. The
+    // caption states the rule rather than hiding it: this is a house rate, not
+    // something measured, and a number that looks measured invites arguments
+    // about why it disagrees with the books.
+    const netGp = _lvNetProfit(r);
     return _lvTile(_lvHeadKey(), _lvMoney(r.netToday, true), _lvStamp(d), true)
         + _lvTile('Orders', String(r.ordersToday), r.aov === null ? label : ordersSub)
         + _lvTile('Gross Margin', _lvPct(r.marginToday),
             _lvSubPair('Total Cost', _lvMoney(r.cogsToday, false),
                        'Total Profit', _lvMoney(r.gpToday, false)))
+        + (netGp === null ? '' : _lvTile('Net Profit', _lvMoney(netGp, false),
+            'Gross Profit Less ' + Math.round(BD_NET_GP_RATE * 100) + '%'))
         + last;
 }
 
