@@ -23424,6 +23424,11 @@ function submitNewScorecard() {
         date: date,
         scores,
         notes: noteEl ? noteEl.value.trim() : '',
+        // Who is saving this. The scorecard function has always passed it on as
+        // excludeUser so the submitter is left out of the alert, but this payload
+        // never sent it — so excludeUser was null every time and the DM got
+        // emailed about the score he had just entered himself.
+        submittedBy: sessionStorage.getItem('speeksUserName') || null,
     };
 
     fetch(SCORECARD_URL, {
@@ -23883,7 +23888,12 @@ async function submitNewAudit() {
         const res = await fetch(SCORECARD_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, time, results, sectionNotes, sectionPhotos })
+            // submittedBy is the logged-in person, deliberately separate from
+            // auditor: auditor is typed and names who walked the store, which may
+            // be somebody else. Only the person clicking Save should be dropped
+            // from the alert.
+            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, time, results, sectionNotes, sectionPhotos,
+                submittedBy: sessionStorage.getItem('speeksUserName') || null })
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
