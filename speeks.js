@@ -9565,14 +9565,14 @@ const _lvIsToday = () => _lvMode === 'today';
 // the row are built by different functions, and a disagreement between them
 // shifts every cell in the table one column right.
 //
-// Cost is off Today: the day's cost is still moving underneath it, and Margin
-// already carries what it is worth knowing. Orders is off the Month, where a
-// whole month's order count is not a number anybody acts on -- the block at the
-// top still has it. The tail column is gone from both finished views: on the
-// Month it was Net sales over a constant, and on Yesterday it was Net over
-// Orders, each of them a division of two figures already in the row.
+// Cost is gone from the table: Margin states the same fact as a ratio, in a
+// column that is comparable between two stores of different size. Orders is
+// off the Month, where a whole month's order count is nothing anybody acts on;
+// the block at the top still has it. The tail column is gone from both
+// finished views: on the Month it was Net sales over a constant, and on
+// Yesterday Net over Orders -- each a division of two figures already there.
 const _lvCols = () => ({
-    cost:   !_lvIsToday(),
+    cost:   false,
     orders: !_lvIsMtd(),
     tail:   _lvIsToday(),
 });
@@ -11195,7 +11195,7 @@ function _bdRender() {
         const small = o.track ? 'Current ' + v : '';
         return '<div class="cc-cell bd-tile' + (o.accent ? ' lv-accent' : '') + '">'
             + '<span class="sh-stripe g"></span>'
-            + '<div class="sh-k">' + k + '</div>'
+            + '<div class="sh-k">' + k + (o.track ? ' <span class="bd-k-sub">- Tracking</span>' : '') + '</div>'
             + '<div class="bd-tile-row">'
             + '<div class="bd-tile-main"><div class="sh-v">' + big + '</div>'
             + (small ? '<div class="bd-track">' + small + '</div>' : '')
@@ -12214,6 +12214,15 @@ function _lvStoreRow(v, d, foot, rev) {
     const cols = _lvCols();
     const tail = (v.lastOrderAt && _lvCentralDay(v.lastOrderAt) === String(asOf || '').slice(0, 10))
         ? _lvOrderClock(v.lastOrderAt) : '—';
+    // Per-store month-end projections come off the hub, the same numbers the
+    // Tracking strip above the table is built from -- NOT recomputed here, or the
+    // row and the tile would drift apart the first time the sheet changed how it
+    // projects. The roll-up row has no hub entry of its own, so it falls back to
+    // the banked figure rather than inventing a total from five projections.
+    const fc = _lvIsMtd() ? _lvFcFor(v.code) : null;
+    const trackCell = (proj, actual, strong) => (proj > 0)
+        ? _lvMoney(proj, strong) + '<span class="lv-of"> now ' + _lvMoney(actual, false) + '</span>'
+        : _lvMoney(actual, strong);
     const gp = _lvHasMonth(d)
         ? _lvMoney(v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
         : '—';
@@ -12224,12 +12233,12 @@ function _lvStoreRow(v, d, foot, rev) {
     return '<tr' + (rowCls ? ' class="' + rowCls + '"' : '') + '><td><span class="lv-store">' + tint
         + '<b>' + escapeHtml(v.code) + '</b><span class="lv-store-nm">'
         + escapeHtml(v.name || '') + '</span></span></td>'
-        + '<td class="lv-strongnum">' + _lvMoney(v.netToday, true) + '</td>'
+        + '<td class="lv-strongnum">' + trackCell(fc && fc.trackRev, v.netToday, true) + '</td>'
         // Cost and gross profit for the day itself. The single-store view has had
         // these all along (cost under the margin tile, GP as a chip); the table did
         // not, so the district read sales without the money actually made on them.
         + (cols.cost ? '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>' : '')
-        + '<td class="lv-strongnum">' + _lvMoney(v.gpToday, false) + '</td>'
+        + '<td class="lv-strongnum">' + trackCell(fc && fc.trackGp, v.gpToday, false) + '</td>'
         // Refunds sits beside Orders because it is the other half of the same
         // count — what came back out of the till against what went in.
         + '<td class="lv-quietnum"' + (v.returnsToday === null || v.returnsToday === undefined
@@ -12318,8 +12327,14 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     let html = _lvSplit('Selling', '')
         + _lvCards(stores, d, rollup, rollupLabel)
         + '<div class="lv-tbl-scroll lv-sell-wrap"><table class="lv-tbl"><thead><tr>'
-        + '<th>Store</th><th>' + (_lvIsToday() ? 'Net today' : 'Net sales') + '</th>'
-        + (cols.cost ? '<th>Cost</th>' : '') + '<th>Gross profit</th>'
+        + '<th>Store</th>'
+        // The Month view is a forecast of a month that has not finished, so its
+        // two money columns forecast too and say so. Each cell keeps the banked
+        // figure underneath, the same shape as the tiles above the table.
+        + '<th>' + (_lvIsMtd() ? 'Tracking net sales'
+            : (_lvIsToday() ? 'Net today' : 'Net sales')) + '</th>'
+        + (cols.cost ? '<th>Cost</th>' : '')
+        + '<th>' + (_lvIsMtd() ? 'Tracking gross profit' : 'Gross profit') + '</th>'
         + '<th>Refunds</th>' + (cols.orders ? '<th>Orders</th>' : '') + '<th>Margin</th>'
         + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>% to goal</th>'
         + (cols.tail ? '<th>Last order</th>' : '')
