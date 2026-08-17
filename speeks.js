@@ -29426,8 +29426,41 @@ async function openEmailRecipients() {
     closeAllModals();
     toggleModal('emailRecipientsModal');
     const body = document.getElementById('emailRecipientsBody');
+    _erOpen = null; _erQuery = '';   // a fresh open starts collapsed and unfiltered
     if (body) body.innerHTML = '<div class="status-message">Loading recipients…</div>';
     await _fetchEmailLists(true);
+    renderEmailRecipients();
+}
+
+// ---- the collapsible list, its search, and which bar is open ----
+// Eleven reports and nineteen lists: fully expanded this ran several screens and
+// the one you came for was never the one on screen. One group open at a time,
+// same shape as the Margin Guide rebuttal accordion.
+//
+// The search matches ADDRESSES as well as report names on purpose — you
+// usually arrive here knowing the person you want to remove, not which of the
+// nineteen lists they happen to sit on.
+let _erOpen = null;     // title of the open group, or null for all closed
+let _erQuery = '';
+
+function _erGroupMatches(group, q) {
+    if (!q) return true;
+    const hay = [
+        group.title, group.desc,
+        ...group.lists.map(l => l.label),
+        ...group.lists.map(l => l.key),
+        ...group.lists.reduce((all, l) => all.concat(_recipientsFor(l.key, [])), []),
+    ].join(' ').toLowerCase();
+    return hay.indexOf(q) >= 0;
+}
+
+function filterEmailRecipients(value) {
+    _erQuery = value || '';
+    renderEmailRecipients();
+}
+
+function emailRecipientsToggle(title) {
+    _erOpen = (_erOpen === title) ? null : title;
     renderEmailRecipients();
 }
 
@@ -29439,37 +29472,75 @@ function renderEmailRecipients() {
         return;
     }
 
-    let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
-        These lists control where each tool's emails go. Changes apply immediately —
-        the recycle report and box orders read them when composing, and the weekly
-        report reads them on every send.</p>`;
+    // Keep the caret where the user left it: every keystroke re-renders, and
+    // rebuilding the input would otherwise send the cursor to the end of it.
+    const active = document.activeElement;
+    const hadFocus = active && active.id === 'emailRecipientSearch';
+    const caret = hadFocus ? active.selectionStart : null;
 
-    EMAIL_LIST_GROUPS.forEach(group => {
-        html += `<div style="margin-bottom: 18px;">
-            <div style="font-size: 13.5px; font-weight: 900; color: var(--slate-charcoal);">${group.title}</div>
-            <div style="font-size: 11.5px; color: #94a3b8; font-weight: 600; margin: 1px 0 8px;">${group.desc}</div>`;
-        group.lists.forEach(l => {
-            const emails = _recipientsFor(l.key, []);
-            const chips = emails.length
-                ? emails.map(e => `<span style="display: inline-flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 12px; font-weight: 700; color: var(--slate-charcoal); margin: 0 6px 6px 0;">
-                        ${escapeHtml(e)}
-                        <button data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove" style="border: none; background: #e2e8f0; color: #64748b; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 900; cursor: pointer; line-height: 1;">✕</button>
-                    </span>`).join('')
-                : '<span style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px;">None — the built-in default applies.</span>';
-            const inputId = `email-add-${l.key}`;
-            html += `<div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;">
-                <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: 7px;">${escapeHtml(l.label)}</div>
-                <div>${chips}</div>
-                <div style="display: flex; gap: 6px; margin-top: 6px;">
-                    <input type="email" id="${inputId}" placeholder="name@company.com" style="flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px;"
-                        onkeydown="if(event.key==='Enter'){event.preventDefault(); emailRecipientAdd('${l.key}', '${inputId}', this.nextElementSibling);}">
-                    <button class="btn-secondary" style="padding: 6px 14px; font-size: 12px;" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
-                </div>
-            </div>`;
-        });
+    const q = _erQuery.trim().toLowerCase();
+    const groups = EMAIL_LIST_GROUPS.filter(g => _erGroupMatches(g, q));
+
+    // A search narrow enough to have found something should show it. Leaving it
+    // shut would mean typing an address and still having to click to see it.
+    if (q && groups.length && !groups.some(g => g.title === _erOpen)) _erOpen = groups[0].title;
+
+    let html = `<div class="kb-search-bar doc-search-wrapper" style="margin-bottom: 12px;">
+        <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+        <input type="text" id="emailRecipientSearch" class="kb-search-input doc-search-input"
+            placeholder="Search reports & addresses..." value="${escapeHtml(_erQuery)}"
+            oninput="filterEmailRecipients(this.value)">
+    </div>`;
+
+    if (!groups.length) {
+        html += `<div class="er-empty">No report or address matches “${escapeHtml(_erQuery.trim())}”.</div>`;
+    }
+
+    groups.forEach(group => {
+        const open = group.title === _erOpen;
+        const total = group.lists.reduce((n, l) => n + _recipientsFor(l.key, []).length, 0);
+        html += `<div class="er-acc${open ? ' open' : ''}">
+            <button type="button" class="er-bar" data-group="${escapeHtml(group.title)}"
+                aria-expanded="${open ? 'true' : 'false'}" onclick="emailRecipientsToggle(this.dataset.group)">
+                <span class="er-cv"><svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg></span>
+                <span class="er-bar-t">
+                    <span class="er-bar-n">${escapeHtml(group.title)}</span>
+                    <span class="er-bar-d">${escapeHtml(group.desc)}</span>
+                </span>
+                <span class="er-count${total ? '' : ' er-none'}">${total ? `${total} email${total === 1 ? '' : 's'}` : 'None'}</span>
+            </button>`;
+        if (open) {
+            html += `<div class="er-body">`;
+            group.lists.forEach(l => {
+                const emails = _recipientsFor(l.key, []);
+                const chips = emails.length
+                    ? emails.map(e => `<span style="display: inline-flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 12px; font-weight: 700; color: var(--slate-charcoal); margin: 0 6px 6px 0;">
+                            ${escapeHtml(e)}
+                            <button data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove" style="border: none; background: #e2e8f0; color: #64748b; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 900; cursor: pointer; line-height: 1;">✕</button>
+                        </span>`).join('')
+                    : '<span style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px;">None — the built-in default applies.</span>';
+                const inputId = `email-add-${l.key}`;
+                html += `<div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;">
+                    <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: 7px;">${escapeHtml(l.label)}</div>
+                    <div>${chips}</div>
+                    <div style="display: flex; gap: 6px; margin-top: 6px;">
+                        <input type="email" id="${inputId}" placeholder="name@company.com" style="flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px;"
+                            onkeydown="if(event.key==='Enter'){event.preventDefault(); emailRecipientAdd('${l.key}', '${inputId}', this.nextElementSibling);}">
+                        <button class="btn-secondary" style="padding: 6px 14px; font-size: 12px;" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
+                    </div>
+                </div>`;
+            });
+            html += `</div>`;
+        }
         html += `</div>`;
     });
+
     body.innerHTML = html;
+
+    if (hadFocus) {
+        const el = document.getElementById('emailRecipientSearch');
+        if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch (e) { /* older browsers */ } }
+    }
 }
 
 async function _emailRecipientsPost(payload) {
