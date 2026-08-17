@@ -57,6 +57,12 @@ async function queueNotification(n: {
   category: string; kind: string; title: string; body?: string; link?: string;
   store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
   audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+  // The feature_overrides key of the surface this notification is about, so
+  // notify can drop anyone whose Feature Access hides it. See notifys
+  // featureAllows: the roles above stay the DEFAULT, an override moves an
+  // individual either way. Null = no gated surface (an announcement board, a
+  // store message) and roles alone are the whole answer.
+  audienceFeature?: string | null;
 }) {
   try {
     const sb = createClient(
@@ -72,6 +78,7 @@ async function queueNotification(n: {
       audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
       exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
       priority: n.priority ?? "normal",
+      audience_feature: n.audienceFeature ?? null,
     });
   } catch (_) { /* best-effort */ }
 }
@@ -121,6 +128,7 @@ Deno.serve(async (req: Request) => {
           link: "operations.html",
           store,
           audienceRoles: ["district manager", "ceo"],
+          audienceFeature: "tool-recycle-inventory",
           excludeUser: record.created_by,
         });
         return jsonResponse({ success: true, data });
@@ -169,6 +177,7 @@ Deno.serve(async (req: Request) => {
             store: st,
             audienceStores: [st],
             audienceRoles: ["manager", "owner (manager)", "assistant manager"],
+            audienceFeature: "tool-recycle-inventory",
             excludeUser: body.reviewed_by ? String(body.reviewed_by).trim() : null,
           });
         }
@@ -205,6 +214,7 @@ Deno.serve(async (req: Request) => {
             store: st,
             audienceStores: [st],
             audienceRoles: ["manager", "owner (manager)", "assistant manager"],
+            audienceFeature: "tool-recycle-inventory",
             excludeUser: body.by ? String(body.by).trim() : null,
           });
         }
@@ -256,6 +266,7 @@ Deno.serve(async (req: Request) => {
             audienceRoles: role === "dm"
               ? ["manager", "owner (manager)", "assistant manager"]
               : ["district manager", "ceo"],
+            audienceFeature: "tool-recycle-inventory",
             excludeUser: by,
           });
         }
@@ -287,6 +298,7 @@ Deno.serve(async (req: Request) => {
             body: reply.slice(0, 300),
             link: "operations.html",
             audienceRoles: ["district manager", "ceo"],
+            audienceFeature: "tool-recycle-inventory",
             excludeUser: body.by ? String(body.by).trim() : null,
           });
         }
@@ -340,6 +352,7 @@ Deno.serve(async (req: Request) => {
             link: "operations.html",
             store: store || null,
             audienceRoles: ["district manager"],
+            audienceFeature: "tool-recycle-inventory",
             excludeUser: who,
           });
         }

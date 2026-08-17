@@ -154,7 +154,7 @@ function cadenceLabel(every: number | null, unit: string | null): string {
 async function sendEmail(to: string[], subject: string, html: string) {
   if (GMAIL_RELAY) {
     const res = await fetch(GMAIL_RELAY, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
       body: JSON.stringify({ secret: SECRET, to: to.join(","), subject, html }),
     });
     const txt = await res.text();

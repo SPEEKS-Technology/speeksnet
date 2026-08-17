@@ -288,7 +288,7 @@ async function sendWeeklyAlert(sb: any, report: any, p: any) {
   try {
     const res = await fetch(GMAIL_RELAY, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json; charset=utf-8" },
       body: JSON.stringify({ secret: SECRET, to: to.join(","), subject, html }),
     });
     return { ok: res.ok, status: res.status, to };

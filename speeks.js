@@ -70,6 +70,7 @@ const SUMMARY_WEEKLY_URL = `${_BASE}/summary-weekly`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
 const NOTIFY_URL        = `${_BASE}/notify`;
+const DAILY_BRIEF_URL   = `${_BASE}/daily-brief`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -5963,6 +5964,8 @@ function switchOperationsTab(name) {
         _startB2bSync();
     } else if (name === 'marginguide') {
         mgLoad();
+    } else if (name === 'ebay') {
+        ecLoad();
     }
 }
 
@@ -7339,7 +7342,7 @@ function initOperations() {
     const sign = hash.match(/^b2b-sign-([A-Za-z0-9-]{6,})$/);
     if (sign) _b2bPendingSign = sign[1];
     let initial = sign ? 'b2b'
-        : ['marginguide', 'callbacks', 'b2b'].includes(hash) ? hash : 'marginguide';
+        : ['marginguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
     if (!tabVisible('ops-tab-' + initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ops-tab-"]'))
@@ -8680,7 +8683,10 @@ function handleSignOut() {
     // user's PIN stayed readable in the tab until the next login overwrote it.
     ['speeksUnlocked', 'speeksUserName', 'speeksUserRole', 'speeksUserStore',
      'speeksMultiStore', 'speeksUserPin', 'speeksUserOnboardedAt',
-     'speeksSeenCommentKeys'].forEach(function (k) { sessionStorage.removeItem(k); });
+     'speeksSeenCommentKeys', 'speeksConnectFeed'].forEach(function (k) { sessionStorage.removeItem(k); });
+    // The SPEEKS Connect feed is held in memory as well as in storage, and
+    // sign-out does not always end in a reload.
+    if (typeof ecClearFeed === 'function') ecClearFeed();
 
     // Hide authenticated chrome and close any open panels BEFORE reloading, so the
     // teardown/fetch window can't briefly paint role-gated controls (e.g. the green
@@ -12048,10 +12054,33 @@ function _lvStoreError(m) {
 // Null when there is no such row: a DM or CEO signs in against CORP, and a code
 // that is not in the payload (a store not yet connected to Shopify) must not
 // silently resolve to somebody else's numbers. Callers fall back to the district.
+// Which store's figures the headline tiles and the collapsed summary belong to.
+//
+// The DASHBOARD's store wins over the payload's scope, and that ordering is the
+// whole point: `d.scope.store` is decided server-side from the pin (scopeFor in
+// shopify-live), so for a Multi-Store Manager it is a single fixed home store
+// and never moves when they switch between BAL and MPL. Every other tile on the
+// card — Scorecard, eBay, Audit — is keyed off `speeksUserStore`, so reading a
+// different source here is what let one card show MPL's heading above BAL's
+// $915.49 with BAL's row visible in the table underneath it.
+//
+// Only accepted when it is actually a healthy row in this payload, which is what
+// keeps the other roles on their existing behaviour: a DM/CEO carries 'ALL' or
+// 'CORP', neither of which is a store code, so they fall through to the scope
+// exactly as before. A single-store manager's two values are the same string.
+//
+// MOCD is the one role this deliberately MOVES: stored as CORP but re-homed to
+// OVL at login, so these tiles used to show the district under a card titled
+// "OVL Command Center" with OVL's Scorecard, eBay and Audit beside them. OVL is
+// their home office, and OVL is what they should see (Ethan 2026-08-14). The
+// five-store table underneath stays district-wide for them either way.
 function _lvOwnStore(d, stores) {
-    const code = String((d.scope && d.scope.store) || '').toUpperCase();
-    if (!code) return null;
-    return (stores || []).find(m => String(m.code).toUpperCase() === code && !m.error) || null;
+    const rows = stores || [];
+    const pick = (code) => code
+        ? rows.find(m => String(m.code).toUpperCase() === code && !m.error) || null
+        : null;
+    const viewing = String(sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return pick(viewing) || pick(String((d.scope && d.scope.store) || '').toUpperCase());
 }
 
 function _lvCombine(stores) {
@@ -12193,6 +12222,59 @@ function _lvStoreRow(v, d, foot, rev) {
         + '<td>' + tail + '</td></tr>';
 }
 
+// The phone view of the selling table.
+//
+// This is a REDUCTION, not a reflow. The table carries ten columns and a 390px
+// screen can hold three, so rather than shrink all ten into unreadability it
+// shows the three figures that answer "how is each store doing right now":
+// sell value, sell margin, and progress against the month's goal.
+//
+// One honesty note on the third figure. pctOfGoal is `mtdGp / goal * 100` — it
+// measures GROSS PROFIT against the monthly GP goal, and it stays month-scoped
+// even when the panel is set to Today or Yesterday (see the field list above
+// _lvView). So it is labelled "to GP goal · month" rather than a bare "to goal",
+// which on a Today view would read as a claim about today.
+//
+// Emitted next to the table, not instead of it: CSS shows exactly one of the two,
+// so the desktop table is untouched and this cannot regress it.
+function _lvCards(stores, d, rollup, rollupLabel) {
+    function card(v, isRoll) {
+        const tint = (!isRoll && STORE_TINTS[v.code])
+            ? '<i class="lv-tint" style="background:' + STORE_TINTS[v.code] + '"></i>' : '';
+        const head = '<div class="lvc-h">' + tint + '<b>' + escapeHtml(String(v.code || '')) + '</b>';
+        if (v.error) {
+            return '<li class="lvc lvc-err">' + head + '</div>'
+                + '<p class="lvc-errmsg">not reporting &middot; ' + escapeHtml(v.error) + '</p></li>';
+        }
+        const pct = v.pctOfGoal;
+        const has = !(pct === null || pct === undefined);
+        // Same three-band read as the pace column: at or past goal, within reach,
+        // or behind. Colour carries it so the row is scannable without reading.
+        const band = !has ? '' : (Number(pct) >= 100 ? ' good' : (Number(pct) >= 75 ? ' near' : ' low'));
+        return '<li class="lvc' + (isRoll ? ' lvc-roll' : '') + '">'
+            + head + '<span class="lvc-goal' + band + '">' + _lvPct(pct) + '</span></div>'
+            + '<div class="lvc-figs">'
+            + '<div class="lvc-f"><span class="lvc-k">Sell value</span>'
+            + '<span class="lvc-v">' + _lvMoney(v.netToday, false) + '</span></div>'
+            + '<div class="lvc-f"><span class="lvc-k">Margin</span>'
+            + '<span class="lvc-v">' + _lvPct(v.marginToday) + '</span></div>'
+            + '</div>'
+            // Only the exception is worth a per-card line. Stating "to GP goal"
+            // on every card repeats the same six words six times; it is said once
+            // in the legend below instead.
+            + (has ? '' : '<div class="lvc-goal-lab">no goal set</div>')
+            + '</li>';
+    }
+
+    let html = '<p class="lv-cards-legend">Percentage is month-to-date gross profit against goal.</p>'
+        + '<ul class="lv-cards">';
+    stores.forEach(m => { html += card(_lvView(m), false); });
+    if (rollup) {
+        html += card(Object.assign({}, _lvView(rollup), { code: rollupLabel, name: '' }), true);
+    }
+    return html + '</ul>';
+}
+
 function _lvTable(stores, d, rollup, rollupLabel) {
     const prev = _lvIsPrev();
     // Refunds has a column of its own now, so the tail column — which was Refunds
@@ -12210,7 +12292,8 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     // sell a device, so it belongs beside what was bought off them, not beside
     // what was sold to somebody else. Moved to _lvBuyBlock (user's call).
     let html = _lvSplit('Selling', '')
-        + '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
+        + _lvCards(stores, d, rollup, rollupLabel)
+        + '<div class="lv-tbl-scroll lv-sell-wrap"><table class="lv-tbl"><thead><tr>'
         + '<th>Store</th><th>' + (_lvMode === 'today' ? 'Net today' : 'Net sales') + '</th>'
         + '<th>Cost</th><th>Gross profit</th>'
         + '<th>Refunds</th><th>Orders</th><th>Margin</th>'
@@ -20632,7 +20715,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -29520,6 +29603,15 @@ const FEATURE_CATALOG = [
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
+    // Sits under Send Store Comment because approving a draft posts exactly that.
+    // NOT paired with it in the Delegation tab: _faManagerCounterpart looks for a
+    // sibling starting with 'tool-store-comment-' (trailing dash), and plain
+    // 'tool-store-comment' does not match — so this shows there as a standalone
+    // delegable item with no "(DM)" suffix. Being delegable is right: covering the
+    // DM's mornings is a real handover, and an approval is signed by whoever made
+    // it. The daily-brief fn reads the same overrides, so a delegation actually
+    // works rather than hiding a 403.
+    { key: 'tool-store-comment-drafts', label: 'Daily Store Messages',         tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     // Two versions of one tool, sharing the `tool-preferred` stem so the
@@ -29619,6 +29711,7 @@ const FEATURE_CATALOG = [
     { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
+    { key: 'widget-ops-ebay',          label: 'SPEEKS Connect (Tab)',          tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -29809,7 +29902,7 @@ const _SECTION_TABS = {
     // 'widget-margin-replies' is intentionally omitted — see the parked block in
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
-    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks', 'widget-ops-b2b'],
+    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks', 'widget-ops-b2b', 'widget-ops-ebay'],
 };
 
 function _applySectionNavVisibility(userRoleClass, userName) {
@@ -30529,6 +30622,7 @@ const JUMP_KEYWORDS = {
     'widget-ops-marginguide':    'margin guide buy ladder buying percentages offer ceiling rebuttals condition testing tips projection what should i offer',
     'widget-ops-callbacks':      'callback sheet call back call backs customer calls waiting hold looking for item phone',
     'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
+    'widget-ops-ebay':           'speeks connect ebay listings upload list publish online marketplace sku',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
     'widget-variance-replies':   'variance replies gm notes dm notes markdown discount negative',
@@ -30552,6 +30646,7 @@ const JUMP_KEYWORDS = {
     'tool-preferred-request':    'preferred purchase purchases request buy approval',
     'tool-preferred-approve':    'preferred purchase purchases approve owner',
     'tool-store-comment':        'comment message note feedback to store',
+    'tool-store-comment-drafts': 'daily messages drafts approve morning brief day end automated',
     'tool-submit-scores':        'scorecard audit score scores grading points marketing',
     'tool-manager-checklist':    'manager checklist tasks store',
     'tool-variance-report':      'variance report upload excel markdown',
@@ -30586,6 +30681,7 @@ const JUMP_PLACES = [
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
+    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: 'widget-ops-ebay',             page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
     // card are separate Feature Access keys, and a single row would be invisible to
@@ -33922,10 +34018,15 @@ async function checkAgingInvDmReminders() {
             // Only replies the DM hasn't read yet. Reading is the acknowledgement:
             // choosing not to answer is a valid outcome and must not re-nag.
             if (!_agNewStoreReply(it)) return false;
-            // Ongoing back-and-forth: ping the DM as soon as the store replies —
-            // the deadline gate is only for the store's initial reply window.
-            if (_agIsFollowUp(it, 'dm')) return true;
-            // First review of the batch: hold until the reply deadline passes.
+            // EVERY reply waits for the deadline, first or fifth (Ethan 2026-08-14).
+            // There used to be a carve-out here that pinged immediately once a thread
+            // was into follow-ups, on the reasoning that an ongoing back-and-forth is
+            // awaited. With twenty-odd items in a weekly batch that meant a ping per
+            // reply, which is what it was asked to stop doing.
+            //
+            // Nothing is lost by dropping it: a DM note resets due_at to +1 week
+            // (see the note handler in aging-inventory), so a follow-up carries a
+            // real deadline of its own and this gate honours it like any other.
             return it.due_at && new Date(it.due_at).getTime() <= Date.now();
         });
         const members = _agPendingMembers(reviewable, 'dm');
@@ -34048,6 +34149,508 @@ function _agRenderBubble(icon, title, bodyText) {
         { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
         { transform: 'scale(1) translateX(0)', opacity: 1 }
     ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
+}
+
+
+/* =========================================================
+   DAILY STORE MESSAGES  (draft review)
+   The 7:15am cron runs the daily-brief fn: it reads last
+   night's Day End Report facts, decides on its own whether a
+   store has earned a message, and writes a PENDING draft.
+   NOTHING reaches a store until it is approved here.
+   Approving inserts through the same store_comments shape the
+   Send Store Comment tool uses, so read receipts, the green
+   bubble and the reads tab behave identically.
+
+   Silence is a valid outcome. A morning where every store was
+   unremarkable produces no drafts and no card -- so the card
+   also has to prove the generator RAN (daily_brief_runs),
+   because "nothing to review" and "the cron is broken" look
+   identical from an empty list and want opposite reactions.
+
+   Every draft carries the facts it was built from
+   (comment_drafts.facts, a point-in-time snapshot) and the
+   signals that fired. The verification strip renders that
+   snapshot rather than re-fetching, so the numbers he checks
+   are provably the numbers the sentence was written from.
+   ========================================================= */
+let _dbDrafts = [];          // today's drafts, decided ones included
+let _dbRun = null;           // daily_brief_runs row for today, or null
+let _dbDate = '';            // the morning (Central) these belong to
+let _dbEdits = {};           // id -> his edited text, kept across repaints
+let _dbBusy = {};            // id -> true while its decision is in flight
+let _dbStarted = false;
+let _dbPaintedSig = '';
+
+// DM by default -- the voice is modelled on Ethan's own 150 messages and
+// approving publishes under the APPROVER's name, so handing this to someone else
+// signs their name to his register.
+//
+// Routed through _featureOverrideFor on the same key the tools-panel link carries
+// (tool-store-comment-drafts), so ONE Feature Access switch governs all three
+// things: whether the tool link shows, whether the feed card is raised, and
+// whether a draft may be approved. Same pattern as _gpCanEdit -- without it the
+// switch would hide the tool while the feed card kept nagging.
+function _dbCanReview() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    // Normalised exactly as applyRoleBasedUI does, so the slug looked up here is
+    // the slug the Feature Access tool writes.
+    const roleClass = role.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    const name = sessionStorage.getItem('speeksUserName') || '';
+    const byDefault = role === 'district manager';
+    if (typeof _featureOverrideFor !== 'function') return byDefault;
+    const ov = _featureOverrideFor('tool-store-comment-drafts', roleClass, name);
+    return (ov === null || ov === undefined) ? byDefault : !!ov;
+}
+
+// Drafts are a MORNING thing: they land as people open the site, and one
+// approved mid-afternoon about yesterday reads as an afterthought. A noon cron
+// retires anything unreviewed (?action=expire). This mirrors that hour on the
+// client so the card disappears at 12:00 rather than lingering until the next
+// poll or ping catches up with the sweep -- and so nothing can be approved out of
+// a card that should already be gone.
+const _DB_EXPIRE_HOUR = 12;
+function _dbPastWindow() {
+    // Central, not the browser's zone: he could be on a laptop set to Eastern
+    // and the deadline is a store-hours deadline, not a local-clock one.
+    // hourCycle h23, not hour12:false — the latter reports midnight as "24",
+    // which is >= 12 and would read as "past the window" for a whole hour.
+    const h = parseInt(new Date().toLocaleString('en-US', {
+        timeZone: 'America/Chicago', hour: '2-digit', hourCycle: 'h23'
+    }), 10);
+    return isFinite(h) && h >= _DB_EXPIRE_HOUR;
+}
+
+function _dbMoney(v) { return (v == null) ? '—' : '$' + Math.round(Number(v)).toLocaleString('en-US'); }
+function _dbPct(v) { return (v == null) ? '—' : (Math.round(Number(v) * 10) / 10) + '%'; }
+function _dbNum(v) { return (v == null) ? '—' : Number(v).toLocaleString('en-US'); }
+
+// 'YYYY-MM-DD' -> "Wednesday, Aug 13". Built from the parts, NOT new Date(iso):
+// that parses as UTC and renders the day before in Central.
+function _dbDayLabel(iso) {
+    const p = String(iso || '').split('-');
+    if (p.length !== 3) return String(iso || '');
+    const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+    return isNaN(d.getTime()) ? String(iso)
+        : d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+// The verification strip. One row per metric the Day End Report carries, in the
+// order he reads them. `keys` are the signal keys that would have fired off that
+// metric -- a cell whose metric is part of WHY the draft exists is highlighted,
+// so he can see at a glance that the sentence and the numbers agree.
+// Everything renders, including nulls as '—': a metric silently omitted looks
+// like a metric that didn't matter.
+const _DB_STRIP = [
+    { label: 'Buy Value', fmt: f => _dbMoney(f.buyValue), sub: () => 'estimated',
+      keys: ['buy_value', 'buy_record', 'buy_near_record'] },
+    { label: 'Cash Paid', fmt: f => _dbMoney(f.cashSpent) },
+    { label: 'Buy Margin', fmt: f => _dbPct(f.buyMarginPct),
+      keys: ['buy_margin', 'buy_margin_improving', 'buy_margin_low'] },
+    { label: 'Net Sales', fmt: f => _dbMoney(f.netSales), keys: ['net_sales'] },
+    { label: 'Sell Margin', fmt: f => _dbPct(f.sellMarginPct), keys: ['sell_margin'] },
+    { label: 'Cust. Conv.', fmt: f => _dbPct(f.custConvPct),
+      sub: f => (f.custConvNum != null && f.custConvDen != null) ? f.custConvNum + ' of ' + f.custConvDen : '',
+      keys: ['conv', 'conv_perfect', 'conv_low'] },
+    { label: 'Device Conv.', fmt: f => _dbPct(f.devConvPct) },
+    // The sub-line shows the BAR this day had to clear rather than the old listing
+    // goal, because the bar is what the rule now uses: 25 items with three or fewer
+    // people rostered, 40 with four or more. That makes it possible to see at a
+    // glance why the listing signal did or didn't fire.
+    { label: 'Listed', fmt: f => _dbNum(f.listed),
+      sub: f => (f.staffed == null ? '' : ((f.staffed >= 4 ? 40 : 25) + '+ needed, ' + f.staffed + ' on')),
+      keys: ['listed', 'listed_low'] },
+    { label: 'Listed Value', fmt: f => _dbMoney(f.processedValue), keys: ['listed_value'] },
+    { label: '5-Star MTD', fmt: f => _dbNum(f.fiveStarMtd),
+      keys: ['reviews_jump', 'reviews_up', 'reviews_flat'] },
+    { label: 'Customers', fmt: f => _dbNum(f.totalCustomers) },
+    { label: 'Available', fmt: f => _dbNum(f.availableCount) },
+    { label: 'Rostered', fmt: f => (f.staffed == null ? '—' : _dbNum(f.staffed)),
+      sub: f => (f.listers == null ? '' : f.listers + ' listing') },
+    // The only NAMES in the strip, and the reason they are here: a draft may call
+    // somebody out, and that is the one claim in a message no column of figures can
+    // confirm. BOTH leaders, because they are often different people and the Day End
+    // Report's crown only tracks value: on 2026-08-13 MPL's draft called Olivia the
+    // processing leader when Calvin had processed more items than her. Two cells make
+    // that disagreement visible instead of hiding it behind one label.
+    // people: true puts these in their own grid under the metrics. In the shared
+    // grid the two double-width cells straddled a row boundary and Top Value was
+    // left stranded on a line of its own with six empty columns beside it.
+    { label: 'Most Listed', people: true,
+      fmt: f => (f.topLister && f.topLister.name) ? f.topLister.name : '—',
+      sub: f => (f.topLister && f.topLister.processed != null) ? f.topLister.processed + ' items' : '' },
+    { label: 'Top Value', people: true,
+      fmt: f => (f.topProducer && f.topProducer.name) ? f.topProducer.name : '—',
+      sub: f => (f.topProducer && f.topProducer.value != null) ? _dbMoney(f.topProducer.value) : '' }
+];
+
+function _dbStripHtml(facts, signals) {
+    const f = facts || {};
+    const fired = new Set((signals || []).map(s => s && s.key).filter(Boolean));
+    // hasReport === false means the Day End Report never arrived for that night,
+    // so conversion / listings / reviews are UNKNOWN rather than zero. Saying so
+    // is the difference between "they listed nothing" and "we don't know".
+    const missing = (f.hasReport === false)
+        ? `<div class="dbr-noreport">No Day End Report for this night. Conversion, listings and reviews are unknown, not zero. Buying and sales came from the sheet.</div>`
+        : '';
+    const cell = c => {
+        const hit = (c.keys || []).some(k => fired.has(k));
+        const val = c.fmt(f);
+        // A sub-line under an unknown value is worse than no sub-line: showing
+        // "9 items" beside a name of "—", or "15 of 17" under a conversion of "—",
+        // reads as a figure we have when we do not.
+        const sub = (c.sub && val !== '—') ? (c.sub(f) || '') : '';
+        return `<div class="dbr-cell${hit ? ' fired' : ''}${c.people ? ' wide' : ''}">
+            <span class="dbr-cl">${_samEsc(c.label)}</span>
+            <span class="dbr-cv">${_samEsc(val)}</span>
+            ${sub ? `<span class="dbr-cs">${_samEsc(sub)}</span>` : ''}
+        </div>`;
+    };
+    const metrics = _DB_STRIP.filter(c => !c.people).map(cell).join('');
+    const people = _DB_STRIP.filter(c => c.people).map(cell).join('');
+    return missing
+        + `<div class="dbr-strip">${metrics}</div>`
+        + (people ? `<div class="dbr-strip dbr-people">${people}</div>` : '');
+}
+
+async function _dbFetch() {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) throw new Error('not signed in');
+    const r = await fetch(`${DAILY_BRIEF_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.error || `Request failed (HTTP ${r.status})`);
+    return j;
+}
+
+// The hidden feed bubble, same contract as every other reminder: it must stay
+// display:flex to be live (see the RETIRED FLOATING ALERT TOASTS block in
+// styles.css) and _samGatherReminders reads its computed display.
+function _dbBubbleEl() {
+    let b = document.getElementById('dailyBriefAlertBubble');
+    if (b) return b;
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'dailyBriefAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #0f766e, #115e59); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(13, 94, 89, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = '<span id="dailyBriefAlertBubbleIcon" style="font-size:16px; flex-shrink:0; margin-top:2px;">✍️</span>'
+        + '<span id="dailyBriefAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>';
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+async function checkDailyBriefDrafts() {
+    if (!_dbCanReview()) return;
+    const b = _dbBubbleEl();
+    if (!b) return;
+    let j = null;
+    try { j = await _dbFetch(); } catch (_) { return; }
+
+    _dbDate = j.date || '';
+    _dbRun = j.run || null;
+    _dbDrafts = Array.isArray(j.drafts) ? j.drafts : [];
+    // Drop edits belonging to drafts that are gone or already decided, so a
+    // re-run that replaces a pending draft can't resurrect yesterday's typing.
+    const live = new Set(_dbDrafts.filter(d => d.status === 'pending').map(d => String(d.id)));
+    Object.keys(_dbEdits).forEach(k => { if (!live.has(k)) delete _dbEdits[k]; });
+
+    // Past noon Central, a still-pending draft is on its way out (the noon cron
+    // may not have swept yet) — so it must not raise a card or offer an Approve
+    // button. Treated as no longer pending here, which is the one place that
+    // decides both.
+    const pending = _dbPastWindow() ? [] : _dbDrafts.filter(d => d.status === 'pending');
+    const failed = !!(_dbRun && _dbRun.ok === false);
+
+    // Two reasons for a card: drafts waiting, or a run that broke. A quiet
+    // morning is NOT one of them -- no card is the correct output for silence.
+    if (!pending.length && !failed) { b.style.display = 'none'; _dbRepaintOpen(); return; }
+
+    const t = document.getElementById('dailyBriefAlertBubbleText');
+    let title, summary, sig;
+    if (failed) {
+        const errs = (Array.isArray(_dbRun.errors) ? _dbRun.errors : []).map(String);
+        title = 'Message Drafts Failed';
+        // Short on purpose. A raw API error ("400 Your credit balance is too low...")
+        // pushed this snippet to a second line that ran right under the Broken pill,
+        // and a feed row is a summary anyway. The full reason is in the popout banner,
+        // which is where he can act on it.
+        summary = 'Could not be generated this morning. No store has been messaged.';
+        sig = 'fail|' + _dbDate + '|' + errs.join('|');
+    } else {
+        const stores = pending.map(d => d.store).join(', ');
+        title = 'Store Messages to Approve';
+        summary = `${pending.length} draft${pending.length === 1 ? '' : 's'} ready for ${stores}`
+            + '. Nothing goes out to a store until you approve it.';
+        sig = 'pend|' + pending.map(d => d.id).join(',');
+    }
+    if (t) {
+        t.innerHTML = '<div style="line-height:1.4;"><strong>' + escapeHtml(title) + '</strong></div>'
+            + '<div style="line-height:1.4; opacity:0.96;">' + escapeHtml(summary) + '</div>';
+        t.dataset.summary = summary;
+        // Identity is the draft SET (or the error), so a second cron run that
+        // replaces a draft breaks through a snooze -- it is different work.
+        t.dataset.sig = sig;
+        if (failed) t.dataset.failed = '1'; else delete t.dataset.failed;
+    }
+    b.style.display = 'flex';
+    _dbRepaintOpen();
+}
+
+function _dbModalOpen() {
+    const m = document.getElementById('dailyBriefModal');
+    return !!(m && m.classList.contains('show'));
+}
+function _dbRepaintOpen() { if (_dbModalOpen()) _dbRenderReview(); }
+
+async function openDailyBriefReview() {
+    if (!_dbCanReview()) return;
+    toggleModal('dailyBriefModal');
+    if (!_dbModalOpen()) return;              // it was open; toggleModal closed it
+    const body = document.getElementById('dailyBriefBody');
+    if (body && !_dbDrafts.length) body.innerHTML = '<div class="status-message">Loading…</div>';
+    await checkDailyBriefDrafts();
+    _dbRenderReview(true);
+}
+
+// Repaint signature. Deliberately excludes the textarea contents: this runs off
+// a poll and a realtime ping, and rebuilding the list while he is mid-sentence
+// would throw away the caret and the edit. Only a status change, a new run or a
+// busy flag is worth touching the DOM for.
+function _dbSig() {
+    return _dbDrafts.map(d => d.id + ':' + d.status).join('|')
+        + '#' + (_dbRun ? [_dbRun.ran_at, _dbRun.drafted, _dbRun.ok].join(':') : 'norun')
+        + '#' + Object.keys(_dbBusy).filter(k => _dbBusy[k]).join(',')
+        // Crossing noon retires every pending draft without any row changing, so
+        // without this an open modal would keep offering Approve past the deadline
+        // until something else happened to move the signature.
+        + '#' + (_dbPastWindow() ? 'past' : 'open');
+}
+
+function _dbRenderReview(force) {
+    const body = document.getElementById('dailyBriefBody');
+    if (!body) return;
+    const sig = _dbSig();
+    if (!force && sig === _dbPaintedSig) return;
+    _dbPaintedSig = sig;
+
+    // Same window rule as checkDailyBriefDrafts: past noon, a pending draft is
+    // shown as retired rather than as something he can still send.
+    const past = _dbPastWindow();
+    const pending = past ? [] : _dbDrafts.filter(d => d.status === 'pending');
+    const decided = past ? _dbDrafts.slice() : _dbDrafts.filter(d => d.status !== 'pending');
+    const refDate = (_dbDrafts[0] && _dbDrafts[0].ref_date) || (_dbRun && _dbRun.ref_date) || '';
+
+    // --- banner: did the generator run, and did it work? ---
+    let banner = '';
+    if (_dbRun && _dbRun.ok === false) {
+        const errs = (Array.isArray(_dbRun.errors) ? _dbRun.errors : []).map(String);
+        // The error text is whatever the API or the ingest returned and rarely
+        // ends in a period, so the sentence after it needs its own line rather
+        // than running on ("…too low to access the Anthropic API No store has…").
+        banner = `<div class="dbr-banner red"><strong>The generator failed this morning.</strong>
+            <span class="dbr-err">${errs.length ? _samEsc(errs.join(' · ')) : 'No reason was recorded.'}</span>
+            No store has been messaged.</div>`;
+    } else if (!_dbRun) {
+        banner = `<div class="dbr-banner amber"><strong>No run recorded for today.</strong></div>`;
+    } else if (_dbRun.note) {
+        banner = `<div class="dbr-banner grey">${_samEsc(_dbRun.note)}</div>`;
+    }
+
+    // --- header ---
+    const head = `<div class="dbr-head">
+        <div>
+            <div class="dbr-head-title">${refDate ? 'Reacting To ' + _samEsc(_dbDayLabel(refDate)) : 'Today\'s Drafts'}</div>
+            <div class="dbr-head-sub">${pending.length
+                // "Drafts" capitalised: a line opening with a figure still starts a
+                // sentence. The feed row gets this from the central sentence-case fix
+                // in _samGatherReminders; this string never passes through it.
+                ? _samEsc(pending.length + ' Draft' + (pending.length === 1 ? '' : 's') + ' waiting on you. Edit anything before you send it.')
+                : 'Nothing is waiting on you.'}</div>
+        </div>
+        ${pending.length > 1 ? `<button class="dbr-btn dbr-all" onclick="_dbApproveAll()">Approve All ${pending.length}</button>` : ''}
+    </div>`;
+
+    // --- one card per pending draft ---
+    const KIND = { praise: ['Praise', 'sage'], correction: ['Correction', 'amber'], mixed: ['Praise + Nudge', 'blue'] };
+    const cards = pending.map(d => {
+        const id = String(d.id);
+        const tint = (typeof STORE_TINTS === 'object' && STORE_TINTS[d.store]) || '#1f9d57';
+        const k = KIND[d.kind] || [d.kind || 'Draft', 'grey'];
+        const text = (_dbEdits[id] != null) ? _dbEdits[id] : String(d.message || '');
+        const busy = !!_dbBusy[id];
+        const n = text.trim().length;
+        const edited = text.trim() !== String(d.message || '').trim();
+        return `<div class="dbr-card">
+            <div class="dbr-card-top">
+                <span class="dbr-chip" style="--tint:${_samEsc(tint)}">${_samEsc(d.store)}</span>
+                <span class="dbr-kind ${k[1]}">${_samEsc(k[0])}</span>
+                <span class="dbr-edited" id="dbEdited-${id}"${edited ? '' : ' hidden'}>Edited</span>
+                <span class="dbr-grow"></span>
+                <span class="dbr-count" id="dbCount-${id}">${n} characters</span>
+            </div>
+            <textarea class="dbr-msg" rows="2" ${busy ? 'disabled' : ''}
+                oninput="_dbOnEdit('${id}', this)"
+                placeholder="Write the message for ${_samEsc(d.store)}…">${_samEsc(text)}</textarea>
+            ${/* No "Fired On" line: the green cells in the strip below already say
+                  which metrics caused the draft, and repeating them as prose was the
+                  same information twice. `reason` is still written to comment_drafts
+                  on every row, so the audit trail is unaffected. */''}
+            ${_dbStripHtml(d.facts, d.signals)}
+            <div class="dbr-actions">
+                <button class="dbr-btn ghost" ${busy ? 'disabled' : ''} onclick="_dbDecide('${id}','skipped')">Skip Today</button>
+                <button class="dbr-btn go" ${busy ? 'disabled' : ''} onclick="_dbDecide('${id}','approved')">${busy ? 'Sending…' : 'Approve &amp; Send'}</button>
+            </div>
+        </div>`;
+    }).join('');
+
+    // --- what he already decided this morning ---
+    // A pending draft past the window is shown as Expired even before the noon
+    // cron has stamped it, so the card never labels something "Skipped" that he
+    // never actually looked at.
+    const TAG = {
+        approved: ['Sent', 'sent'],
+        skipped: ['Skipped', 'skip'],
+        expired: ['Expired', 'skip'],
+        pending: ['Expired', 'skip'],
+    };
+    const done = decided.length ? `<div class="dbr-done">
+        <div class="dbr-sec-label">${past ? 'Today\'s Messages' : 'Already Decided Today'}</div>
+        ${decided.map(d => {
+            const t = TAG[d.status] || [String(d.status || ''), 'skip'];
+            return `<div class="dbr-done-row">
+            <span class="dbr-chip sm" style="--tint:${_samEsc((typeof STORE_TINTS === 'object' && STORE_TINTS[d.store]) || '#1f9d57')}">${_samEsc(d.store)}</span>
+            <span class="dbr-done-tag ${t[1]}">${_samEsc(t[0])}</span>
+            <span class="dbr-done-msg">${_samEsc(d.edited_message || d.message || '')}</span>
+        </div>`;
+        }).join('')}
+    </div>` : '';
+
+    // --- the stores that got nothing, and why ---
+    // His own audit trail. Without it a two-draft morning silently hides the
+    // three decisions the rule engine made not to write anything.
+    const skipped = (Array.isArray(_dbRun && _dbRun.skipped) ? _dbRun.skipped : []).map(String).filter(Boolean);
+    const quiet = skipped.length ? `<div class="dbr-quiet">
+        <div class="dbr-sec-label">No Message Today</div>
+        ${skipped.map(s => {
+            const i = s.indexOf(':');
+            const store = i > 0 ? s.slice(0, i).trim() : '';
+            const why = i > 0 ? s.slice(i + 1).trim() : s;
+            return `<div class="dbr-quiet-row">${store
+                ? `<span class="dbr-chip sm" style="--tint:${_samEsc((typeof STORE_TINTS === 'object' && STORE_TINTS[store]) || '#98a2ae')}">${_samEsc(store)}</span>` : ''}
+                <span class="dbr-quiet-why">${_samEsc(why)}</span></div>`;
+        }).join('')}
+    </div>` : '';
+
+    const empty = (!pending.length && !decided.length && !skipped.length)
+        ? '<div class="status-message">Nothing drafted for today.</div>' : '';
+
+    body.innerHTML = banner + head + cards + done + quiet + empty;
+}
+
+function _dbOnEdit(id, el) {
+    _dbEdits[id] = el.value;
+    const n = el.value.trim().length;
+    const c = document.getElementById('dbCount-' + id);
+    if (c) {
+        c.textContent = n + ' characters';
+        // Not a limit -- a nudge. His real messages run 90-180 characters, and a
+        // long one is the single clearest tell that something wasn't written by him.
+        c.classList.toggle('dbr-long', n > 220);
+    }
+    const d = _dbDrafts.find(x => String(x.id) === String(id));
+    const badge = document.getElementById('dbEdited-' + id);
+    if (badge) badge.hidden = !(d && el.value.trim() !== String(d.message || '').trim());
+}
+
+// opts.silent: no confirm and no refetch -- used by Approve All, which confirms
+// once for the whole set and refetches at the end.
+async function _dbDecide(id, status, opts) {
+    const silent = !!(opts && opts.silent);
+    if (_dbBusy[id]) return false;
+    const d = _dbDrafts.find(x => String(x.id) === String(id));
+    if (!d || d.status !== 'pending') return false;
+    // Past noon the draft is retired whether or not the sweep has stamped it yet,
+    // so an already-open modal cannot be used to send one late.
+    if (_dbPastWindow()) {
+        if (!silent) alert('These are morning messages. After noon they are retired unsent.\n\n'
+            + 'Use Send Store Comment if you still want to write to a store today.');
+        _dbRenderReview(true);
+        return false;
+    }
+
+    const text = ((_dbEdits[id] != null ? _dbEdits[id] : d.message) || '').trim();
+    if (status === 'approved' && !text) {
+        if (!silent) alert('There is no message to send. Write one or skip it.');
+        return false;
+    }
+    if (!silent && status === 'approved'
+        && !confirm(`Send this to ${d.store} now?\n\n"${text}"`)) return false;
+    if (!silent && status === 'skipped'
+        && !confirm(`Skip ${d.store} today? Nothing will be sent, and the draft will not come back.`)) return false;
+
+    _dbBusy[id] = true;
+    if (!silent) _dbRenderReview();
+    // Our own write. The fn broadcasts to every subscriber including us, and an
+    // echo mid-decision would repaint the list out from under the next click.
+    try { if (typeof _rtMute === 'function') _rtMute('dailyBrief', 6000); } catch (_) {}
+
+    let ok = false;
+    try {
+        const pin = sessionStorage.getItem('speeksUserPin') || '';
+        const r = await fetch(DAILY_BRIEF_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ id: id, status: status, message: text })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || `Request failed (HTTP ${r.status})`);
+        d.status = status;
+        if (status === 'approved') d.edited_message = text;
+        delete _dbEdits[id];
+        ok = true;
+    } catch (e) {
+        alert(`Could not ${status === 'approved' ? 'send' : 'skip'} the ${d.store} message: `
+            + ((e && e.message) || 'unknown error'));
+    }
+    _dbBusy[id] = false;
+    if (!silent) {
+        await checkDailyBriefDrafts();
+        _dbRenderReview(true);
+    }
+    return ok;
+}
+
+async function _dbApproveAll() {
+    const pending = _dbDrafts.filter(d => d.status === 'pending');
+    if (!pending.length) return;
+    // Every message in the confirm, in full. "Approve All" is the one control
+    // here that can post to five stores from a single click, so it shows exactly
+    // what it is about to say rather than a count.
+    const lines = pending.map(d => {
+        const t = ((_dbEdits[String(d.id)] != null ? _dbEdits[String(d.id)] : d.message) || '').trim();
+        return `${d.store}:  ${t || '(empty — will be skipped)'}`;
+    }).join('\n\n');
+    if (!confirm(`Send all ${pending.length} of these now?\n\n${lines}`)) return;
+
+    let sent = 0, failed = 0;
+    for (const d of pending) {
+        const ok = await _dbDecide(String(d.id), 'approved', { silent: true });
+        if (ok) sent++; else failed++;
+        _dbRenderReview(true);
+    }
+    await checkDailyBriefDrafts();
+    _dbRenderReview(true);
+    if (failed) alert(`${sent} sent, ${failed} could not be sent. The ones that failed are still waiting.`);
+}
+
+function startDailyBriefReminder() {
+    if (_dbStarted || !_dbCanReview()) return;
+    _dbStarted = true;
+    checkDailyBriefDrafts();
+    // Slow on purpose: the drafts are written once a morning and the fn
+    // broadcasts on every decision, so realtime carries the interactive case.
+    // This is only here for a browser whose socket never connected.
+    setInterval(checkDailyBriefDrafts, 20 * 60 * 1000);
 }
 
 
@@ -34826,6 +35429,22 @@ function _samReminderCfg() {
         title: _moOd ? 'Monthly KPIs Overdue' : 'Monthly KPIs Due', urgency: _moOd ? 3 : 2,
         due: _moOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
         action: "sessionStorage.setItem('speeksKpiTab','monthly'); window.location.href='workspace.html#kpis'" });
+    // Daily store messages — DM only (checkDailyBriefDrafts gates it). Two very
+    // different cards off one bubble: drafts waiting to approve, and a generator
+    // that failed. data-failed is stamped by the same code that wrote the
+    // summary, so the badge and the sentence under it cannot disagree.
+    //
+    // noSnooze: snoozing it would quietly mean nobody gets a message today, and
+    // it clears itself the moment the last draft is decided — so there is nothing
+    // to dismiss that isn't just a decision he hasn't made yet.
+    const _dbT = document.getElementById('dailyBriefAlertBubbleText');
+    const _dbFailed = !!(_dbT && _dbT.dataset && _dbT.dataset.failed);
+    cfg.push({ key: 'dailyBrief', id: 'dailyBriefAlertBubble', text: 'dailyBriefAlertBubbleText',
+        title: _dbFailed ? 'Message Drafts Failed' : 'Store Messages to Approve',
+        urgency: _dbFailed ? 1 : 3,
+        due: _dbFailed ? 'Broken' : 'Approve',
+        cls: _dbFailed ? 'sam-due-amber' : 'sam-due-red',
+        noSnooze: true, action: "openDailyBriefReview()" });
     // DM ONLY (checkListingGoalReminders gates it — the CEO does not set these).
     // Snoozable — unlike the KPI deadlines this is the DM's own admin task, and
     // the card comes straight back if a store is still unset tomorrow (the sig is
@@ -34999,6 +35618,10 @@ const _RT_TOOL_CHECKS = {
     // loadPatchNotes still runs after, to refresh an already-open hub.
     patch:         ['checkForNewPatchNotes', 'loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
+    // The morning cron broadcasts once it has written the drafts, so the card
+    // appears without a refresh; each approve/skip broadcasts too, so a decision
+    // made on the laptop clears the card on the phone.
+    dailyBrief:    ['checkDailyBriefDrafts'],
     gpGoals:       ['checkGpGoalReminder'],
     preferred:     ['checkPreferredReminders'],
     b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders'],
@@ -35684,6 +36307,22 @@ function _plNoteHtml(row, whoLabel) {
         + '</div>';
 }
 
+// The requester's own words for why they asked. It is a required field, so it
+// exists on every request, and it belongs everywhere the request appears — not
+// only while it is pending. Deciding a request does not stop "why" being the
+// reason for it: the owner reviewing an old call, and the requester rereading
+// their own, were both looking at an item name and a verdict with the argument
+// missing.
+//
+// Uses .pl-tbl-note rather than the card's .pl-reason — same text sized for a
+// table cell. pre-wrap and word-break are load-bearing: this is FREE TEXT up to
+// 2000 characters, and free text that cannot wrap is what blew Recycle's My
+// Requests table 2341px wide inside a 908px modal. Never let it go nowrap.
+function _plReasonHtml(row) {
+    if (!row.reason) return '';
+    return '<div class="pl-tbl-note"><b>Why:</b> ' + escapeHtml(row.reason) + '</div>';
+}
+
 function _plMineHtml() {
     if (!_plRequests.length) {
         return '<div class="pl-empty"><div class="pl-empty-t">Nothing sent yet.</div>'
@@ -35696,7 +36335,7 @@ function _plMineHtml() {
         return '<tr>'
             + '<td>' + _plStatusChip(r.status) + '</td>'
             + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
-            + escapeHtml(r.item_name) + '</a></div>' + _plNoteHtml(r) + '</td>'
+            + escapeHtml(r.item_name) + '</a></div>' + _plReasonHtml(r) + _plNoteHtml(r) + '</td>'
             + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
             + '<td style="white-space:nowrap;">' + _plFmtDate(r.created_at) + '</td>'
             + '<td>' + act + '</td>'
@@ -35779,7 +36418,7 @@ function _plDecidedHtml() {
         return '<tr>'
             + '<td>' + _plStatusChip(r.status) + '</td>'
             + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
-            + escapeHtml(r.item_name) + '</a></div>' + _plNoteHtml(r, 'You') + '</td>'
+            + escapeHtml(r.item_name) + '</a></div>' + _plReasonHtml(r) + _plNoteHtml(r, 'You') + '</td>'
             + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
             + '<td>' + escapeHtml((r.requested_by || '').split(' ')[0])
             + (r.store ? ' &middot; ' + escapeHtml(r.store) : '') + '</td>'
@@ -39132,3 +39771,914 @@ async function saveNotifySettings() {
     }
 }
 window.saveNotifySettings = saveNotifySettings;
+
+/* ========================================================================== *
+ * MODULE: SPEEKS CONNECT (operations.html #ops-pane-ebay)
+ * --------------------------------------------------------------------------
+ * Our own eBay listing channel. Scan a SKU, watch it go up.
+ *
+ * SPEEKS CONNECT RUNS INDEPENDENTLY OF MARKETPLACE CONNECT. A SKU listed here
+ * is not one MC handles, so this panel reports on OUR listings only and makes
+ * no claim about the rest of the catalog. It deliberately does not try to
+ * answer "what else could be listed" — the store decides that by scanning.
+ *
+ * THE FEED IS THIS SESSION'S WORK, NOT A LEDGER. What you see is what you
+ * uploaded since you signed in, held in sessionStorage and dropped at sign-out.
+ * That is the whole point: the person at the counter is listing a shelf right
+ * now and wants to see those items turn live, not scroll past nine hundred
+ * things somebody listed in March. The permanent record still exists — every
+ * upload writes an ebay_listings row, which is what drives the eBay sync, the
+ * collision guard and the DM's All Stores view — the panel simply stops
+ * showing all of it. On load the feed is re-read against the server, so a row
+ * that sold or was ended while you were away tells the truth rather than the
+ * state it had when you uploaded it.
+ *
+ * TWO VIEWS:
+ *   listings   this session's uploads                        (everyone)
+ *   health     live and error counts per store               (DM and CEO)
+ *
+ * ONE ENDPOINT, AUTHENTICATED BY PIN. The operator secret that guards every
+ * other ebay-* function must never appear in this file — a secret shipped in
+ * public JavaScript is not a secret. `ebay-channel` takes x-user-pin, does the
+ * role check server-side, and makes the privileged calls itself. It returns a
+ * `scope` describing what this person may do, and that is what decides whether
+ * a control is drawn at all.
+ * ========================================================================== */
+
+const EBAY_CHANNEL_URL = `${_BASE}/ebay-channel`;
+
+// Session-scoped, and per store so a DM switching stores does not inherit
+// somebody else's shelf. One key, so sign-out clears it with one removeItem.
+const EC_FEED_KEY = 'speeksConnectFeed';
+
+let _ecView = 'listings';
+let _ecStore = null;
+let _ecScope = null;
+let _ecData = null;          // { summary, items } — the server's permanent record
+let _ecHealth = null;
+let _ecFeed = [];            // this session's uploads, newest first
+let _ecBusy = false;
+
+const _ecEsc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+const _ecMoney = n => (n == null || n === '') ? '—'
+    : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function _ecAgo(iso) {
+    if (!iso) return '—';
+    const ms = Date.now() - Date.parse(iso);
+    if (!isFinite(ms)) return '—';
+    const mins = Math.round(ms / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins} min ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs} hr${hrs === 1 ? '' : 's'} ago`;
+    const days = Math.round(hrs / 24);
+    if (days <= 14) return `${days} day${days === 1 ? '' : 's'} ago`;
+    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+async function _ecFetch(path) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(`${EBAY_CHANNEL_URL}${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`,
+        { headers: { 'x-user-pin': pin } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || body.error || `Request failed (${r.status})`);
+    return body;
+}
+
+async function _ecPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(EBAY_CHANNEL_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok && body.ok !== false, status: r.status, body };
+}
+
+// --- the session feed -------------------------------------------------------
+
+const _ecSame = (a, b) => String(a || '').toUpperCase() === String(b || '').toUpperCase();
+
+function _ecFeedLoad() {
+    try {
+        const all = JSON.parse(sessionStorage.getItem(EC_FEED_KEY) || '{}');
+        _ecFeed = Array.isArray(all[_ecStore]) ? all[_ecStore] : [];
+    } catch (e) {
+        _ecFeed = [];
+    }
+}
+
+function _ecFeedSave() {
+    try {
+        const all = JSON.parse(sessionStorage.getItem(EC_FEED_KEY) || '{}');
+        all[_ecStore] = _ecFeed;
+        sessionStorage.setItem(EC_FEED_KEY, JSON.stringify(all));
+    } catch (e) {
+        // A blocked or full sessionStorage costs the history, not the upload.
+    }
+}
+
+// Signed out means done. Called from handleSignOut so the next person at the
+// same terminal starts on an empty shelf instead of yours.
+function ecClearFeed() {
+    _ecFeed = [];
+    try { sessionStorage.removeItem(EC_FEED_KEY); } catch (e) { /* non-fatal */ }
+}
+window.ecClearFeed = ecClearFeed;
+
+// The feed remembers what you uploaded; the server knows what became of it.
+// Anything that changed while the tab sat idle — it sold, someone ended it,
+// the sweep caught it gone — is corrected here rather than left showing the
+// state it had at upload.
+function _ecFeedReconcile() {
+    if (!_ecFeed.length || !_ecData?.items) return;
+    const byS = new Map(_ecData.items.map(i => [String(i.sku).toUpperCase(), i]));
+    _ecFeed = _ecFeed.map(e => {
+        // A row still waiting on its own request is the one thing the server
+        // cannot know about yet. Leave it pending.
+        if (e.state === 'pending') return e;
+        const live = byS.get(String(e.sku).toUpperCase());
+        return live ? { ...e, ...live } : e;
+    });
+    _ecFeedSave();
+}
+
+// --- entry ------------------------------------------------------------------
+
+async function ecLoad() {
+    const body = document.getElementById('ecBody');
+    if (!body) return;
+    if (!_ecData) body.innerHTML = '<div class="status-message">Loading SPEEKS Connect…</div>';
+    try {
+        if (_ecView === 'health') {
+            _ecHealth = await _ecFetch('?view=health');
+            _ecScope = _ecHealth.scope;
+        } else {
+            _ecData = await _ecFetch(`?view=listings${_ecStore ? `&store=${_ecStore}` : ''}`);
+            _ecScope = _ecData.scope;
+            _ecStore = _ecData.store;
+            _ecFeedLoad();
+            _ecFeedReconcile();
+        }
+        _ecSyncChrome();
+        ecRender();
+    } catch (e) {
+        body.innerHTML = `<div class="ec-empty">Could not load SPEEKS Connect.<br>
+            <span style="font-weight:600;color:var(--cb-faint);">${_ecEsc(e.message)}</span></div>`;
+    }
+}
+
+// Store picker and the All Stores tab come from the scope the SERVER returned,
+// never from the browser's own idea of the role. This only avoids drawing a
+// control that would 403; the edge function is what actually decides.
+function _ecSyncChrome() {
+    const sub = document.getElementById('ecSubtitle');
+    const sel = document.getElementById('ecStoreFilter');
+    const health = document.getElementById('ecViewHealthBtn');
+    if (health) health.style.display = _ecScope?.allStores ? '' : 'none';
+    // Everyone but the DM and the CEO has exactly one view. A toggle offering
+    // a single option is a button that does nothing, so it goes with the
+    // second view rather than sitting there inviting a click.
+    const toggle = document.getElementById('ecViewToggle');
+    if (toggle) toggle.style.display = _ecScope?.allStores ? '' : 'none';
+
+    if (sel) {
+        const many = (_ecScope?.stores || []).length > 1;
+        sel.style.display = many && _ecView !== 'health' ? '' : 'none';
+        if (many) {
+            sel.innerHTML = _ecScope.stores
+                .map(s => `<option value="${s}"${s === _ecStore ? ' selected' : ''}>${s}</option>`).join('');
+        }
+    }
+    if (sub) {
+        const errs = _ecFeed.filter(e => e.state === 'failed').length;
+        sub.textContent = _ecView === 'health' ? 'Every store, at a glance'
+            : !_ecData?.summary?.connected ? `${_ecStore || ''} · Not connected to eBay yet`
+            : !_ecFeed.length ? `${_ecStore} · Scan a SKU to list it on eBay`
+            : `${_ecStore} · ${_ecFeed.length} Uploaded this session`
+              + (errs ? `, ${errs} with an error` : '');
+    }
+    // The pip counts this session's errors, because that is what the tab shows.
+    const pip = document.getElementById('ecFailPip');
+    if (pip) {
+        const errs = _ecFeed.filter(e => e.state === 'failed').length;
+        pip.style.display = errs ? '' : 'none';
+        pip.textContent = errs;
+    }
+}
+
+function ecSetView(view) {
+    _ecView = view;
+    ['listings', 'health'].forEach(v => {
+        const b = document.getElementById('ecView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
+        if (b) b.classList.toggle('active', v === view);
+    });
+    ecLoad();
+}
+
+// Open a store on its failures. Called from the All Stores card, which knows
+// the count but not the rows, and from nowhere else. Everything it puts in the
+// feed is a real ebay_listings row for that store, so Try Again, the links and
+// the plain-English reason all work exactly as they do for a fresh upload.
+async function ecShowFailed(store) {
+    _ecStore = store;
+    _ecView = "listings";
+    _ecData = null;
+    ecSetView("listings");
+    const body = document.getElementById("ecBody");
+    if (body) body.innerHTML = `<div class="status-message">Loading ${_ecEsc(store)}…</div>`;
+    try {
+        _ecData = await _ecFetch(`?view=listings&store=${encodeURIComponent(store)}`);
+        _ecScope = _ecData.scope;
+        _ecStore = _ecData.store;
+        _ecFeedLoad();
+        const failed = (_ecData.items || []).filter(i => i.state === "failed");
+        // Merge rather than replace: whatever the person was already working
+        // through this session stays where it is, and a SKU that is in both
+        // keeps one row.
+        const have = new Set(_ecFeed.map(e => String(e.sku).toUpperCase()));
+        for (const f of failed) {
+            if (have.has(String(f.sku).toUpperCase())) continue;
+            _ecFeed.unshift({ ...f, at: f.lastAttempt || f.updatedAt || new Date().toISOString() });
+        }
+        _ecFeedReconcile();
+        _ecFeedSave();
+        ecRender();
+    } catch (err) {
+        if (body) body.innerHTML = `<div class="ec-empty">Could not load ${_ecEsc(store)}: ${_ecEsc(String(err.message || err))}</div>`;
+    }
+}
+
+function ecSetStore(store) {
+    _ecStore = store;
+    _ecData = null;
+    ecLoad();
+}
+
+// --- render -----------------------------------------------------------------
+
+function ecRender() {
+    const body = document.getElementById('ecBody');
+    if (!body) return;
+    _ecSyncChrome();
+
+    if (_ecView === 'health') { body.innerHTML = _ecHealthHtml(); return; }
+
+    const s = _ecData?.summary;
+    if (!s) { body.innerHTML = '<div class="ec-empty">No store selected.</div>'; return; }
+    if (!s.connected) {
+        body.innerHTML = `<div class="ec-empty">${_ecEsc(_ecStore)} is not connected to eBay yet.</div>`;
+        return;
+    }
+
+    body.innerHTML = _ecQuickHtml() + _ecFeedHtml();
+
+    // The table was just rebuilt beneath any open category picker: its anchor
+    // button is a new element and the rows may have shifted. Re-place so the
+    // popover follows rather than hanging over stale coordinates.
+    if (document.getElementById('ecCatPop')) _ecCatPlace();
+}
+
+// The whole point of the tab: scan a SKU, send it. Several at once is allowed
+// because a store listing a shelf does not want to do this one row at a time.
+function _ecQuickHtml() {
+    if (!_ecScope?.canList) return '';
+    // A FAILURE HAS TO BE REACHABLE WITHOUT BEING A DM.
+    // The only way in used to be the All Stores card, which only the DM and CEO
+    // can see — so the people who actually upload, at the store, had no way to
+    // find out what had not gone up. The feed is session-scoped, so signing in
+    // again showed them nothing at all. This is their store's own count.
+    const failed = _ecData?.summary?.counts?.failed || 0;
+    // Clear List only appears once there is a list to clear, and it clears the
+    // panel, not eBay — nothing that is live comes down. Said plainly on the
+    // button's title because "clear" next to a column of live listings could be
+    // read the other way.
+    return `
+    <div class="ec-quick">
+      <input id="ecSkuInput" placeholder="Scan Or Type a SKU"
+             onpaste="ecPasteSkus(event)"
+             onkeydown="if(event.key==='Enter')ecListTyped()">
+      <button class="ec-btn ec-btn-go" onclick="ecListTyped()">Upload To eBay</button>
+      ${_ecFeed.length ? `<button class="ec-btn" onclick="ecClearList()"
+         title="Empties this list. Nothing on eBay changes.">Clear List</button>` : ''}
+      ${failed ? `<button class="ec-btn ec-btn-fix" onclick="ecShowFailed('${_ecEsc(_ecStore)}')"
+         title="Show the SKUs that did not upload">${failed} Did Not Upload</button>` : ''}
+    </div>`;
+}
+
+function _ecFeedHtml() {
+    if (!_ecFeed.length) {
+        return `<div class="ec-empty">Nothing uploaded yet this session.<br>
+          <span style="font-weight:600;color:var(--cb-faint);">Scan a SKU above and it will appear here.</span></div>`;
+    }
+    return `
+    <table class="cb-table">
+      <thead><tr>
+        <th style="width:30%;">Item</th>
+        <th style="width:15%;" class="cb-col-status">eBay Category</th>
+        <th style="width:9%;" class="cb-col-status">Price</th>
+        <th style="width:13%;" class="cb-col-status">Status</th>
+        <th style="width:17%;" class="cb-col-status">Open</th>
+        <th style="width:16%;"></th>
+      </tr></thead>
+      <tbody>${_ecFeed.map(_ecRow).join('')}</tbody>
+    </table>`;
+}
+
+const _EC_ICON_LINK = '<svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+
+function _ecRow(i) {
+    const sku = _ecEsc(i.sku);
+    const pending = i.state === 'pending';
+
+    const chip = pending
+        ? '<span class="cb-chip ec-chip-pending"><span class="ec-spin"></span>Pending</span>'
+        : i.state === 'failed'   ? '<span class="cb-chip ec-chip-err">Error</span>'
+        : i.state === 'disabled' ? '<span class="cb-chip ec-chip-off">Disabled</span>'
+        : i.state === 'ended'    ? '<span class="cb-chip cb-chip-expired">Sold Or Ended</span>'
+        : '<span class="cb-chip cb-chip-completed">Live</span>';
+
+    // Both halves of the same item, one click each. The Shopify pill is drawn
+    // whenever we know the product — including on a failure, which is exactly
+    // when somebody needs to open it and fix what eBay complained about.
+    const pill = (href, label, cls) => href
+        ? `<a class="ec-pill ${cls}" href="${_ecEsc(href)}" target="_blank" rel="noopener"
+             >${label}${_EC_ICON_LINK}</a>`
+        : '';
+    const links = pending ? '<span class="ec-muted">—</span>'
+        : (pill(i.ebayUrl, 'eBay', 'ec-pill-ebay') + pill(i.shopifyUrl, 'Shopify', 'ec-pill-shopify'))
+          || '<span class="ec-muted">—</span>';
+
+    // The SKU rides in a data attribute rather than inside the onclick string.
+    // It is typed by a person, and one containing a quote would come back out of
+    // _ecEsc as &#39;, which the parser decodes before the JS is read — closing
+    // the argument early and breaking the row's own buttons. dataset hands back
+    // the decoded original with no quoting problem to get wrong.
+    // Disable and Enable are the same row's two states, so the button flips in
+    // place rather than the line fading out. A greyed row reads as "gone", and
+    // a listing you turned off yourself is not gone — it is one click from back.
+    //
+    // A conflict gets no button at all. Something else on the account holds this
+    // SKU, so trying again fails identically every time; the eBay link is the
+    // only move, and it is already sitting in the row.
+    const acts = pending || !_ecScope?.canList || i.conflict ? ''
+        : i.state === 'live'
+            ? `<button class="ec-btn ec-btn-sm ec-btn-off" data-sku="${sku}"
+                 onclick="ecDisable(this.dataset.sku, this)">Disable</button>`
+            : `<button class="ec-btn ec-btn-sm${i.state === 'disabled' ? ' ec-btn-on' : ''}" data-sku="${sku}"
+                 onclick="ecListOne(this.dataset.sku, this)">${
+                  i.state === 'disabled' ? 'Enable'
+                  : i.state === 'failed' ? 'Try Again' : 'Upload Again'}</button>`;
+
+    // eBay picks the category from the title, not the store — so it is the one
+    // part of a listing nobody here chose and nobody could see. Worth showing on
+    // every row: when it lands somewhere odd, the refusal that follows reads as
+    // a condition problem when the category was the actual mistake.
+    const catLabel = i.category || (i.categoryId ? `#${i.categoryId}` : 'Choose Category');
+    const cat = pending ? '<span class="ec-muted">—</span>'
+        : !_ecScope?.canList
+            ? `<span class="ec-cat">${_ecEsc(catLabel)}</span>`
+            : `<button class="ec-catbtn${i.category ? '' : ' ec-catbtn-none'}" data-sku="${sku}"
+                 title="eBay category ${_ecEsc(i.categoryId || '')} — click to change it"
+                 onclick="ecOpenCategory(this.dataset.sku, this)">
+                 <span class="ec-catbtn-t">${_ecEsc(catLabel)}</span>
+                 <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+               </button>`;
+
+    // The × leads the row rather than trailing the title: titles are ellipsized
+    // to fit, so anything after them lands in a different place on every line.
+    const row = `
+    <tr class="cb-row ec-r-${i.state}">
+      <td><div class="ec-item">
+        ${pending ? '<span class="ec-x-gap"></span>'
+          : `<button class="ec-x" data-sku="${sku}" title="Remove From This List"
+               aria-label="Remove ${sku} from this list"
+               onclick="ecRemoveOne(this.dataset.sku)">&times;</button>`}
+        <div class="ec-item-txt">
+          <span class="ec-item-t" title="${_ecEsc(i.title || i.sku)}">${_ecEsc(i.title || i.sku)}</span>
+          <span class="ec-item-s">${sku}</span>
+        </div>
+      </div></td>
+      <td class="cb-cell-status">${cat}</td>
+      <td class="cb-cell-status ec-money">${_ecMoney(i.price)}</td>
+      <td class="cb-cell-status">${chip}</td>
+      <td class="cb-cell-status"><div class="ec-pills">${links}</div></td>
+      <td><div class="ec-acts">${acts}</div></td>
+    </tr>`;
+
+    // The reason sits open under the row it belongs to. Collapsing it would hide
+    // the only part of a failure anybody can act on.
+    //
+    // What shows is the plain-English translation the edge function makes, not
+    // eBay's own text — that arrives as API vocabulary wrapped around several
+    // hundred words of raw markup, which is what put a wall of <div class="rcp">
+    // across this table. eBay's exact wording is one click away for whoever
+    // needs to escalate, and folded shut for everyone who does not.
+    // A SUCCESSFUL UPLOAD CAN STILL BE WORTH A SECOND LOOK.
+    // Renaming a SKU in Shopify does not rename Marketplace Connect's live eBay
+    // listing, so the unit stays up under the old SKU while the new one looks
+    // untouched — two live listings against one item, and the ownership guard
+    // cannot see it because it matches on SKU. The title still connects them.
+    // Deliberately a note and not a refusal: identical stock legitimately shares
+    // a title, and blocking those would refuse real listings.
+    if (i.titleWarning && i.state !== 'failed') {
+        const links = (i.titleWarning.liveUnder || []).map(o =>
+            `<a href="${o.viewUrl}" target="_blank" rel="noopener">${_ecEsc(o.sku)}</a>`).join(', ');
+        return row + `
+        <tr class="ec-warn"><td colspan="6"><div class="ec-fail-in">
+          <div class="ec-warn-msg">${_ecEsc(i.titleWarning.message)}${links ? ' &nbsp;' + links : ''}</div>
+        </div></td></tr>`;
+    }
+
+    if (i.state === 'failed' && i.error) {
+        const raw = i.errorRaw && i.errorRaw !== i.error
+            ? `<details class="ec-fail-raw"><summary>eBay's Exact Wording</summary>
+                 <div class="ec-fail-rawtext">${_ecEsc(i.errorRaw)}</div></details>`
+            : '';
+        return row + `
+        <tr class="ec-fail"><td colspan="6"><div class="ec-fail-in">
+          <div class="ec-fail-msg">${_ecEsc(i.error)}${raw}</div>
+        </div></td></tr>`;
+    }
+    return row;
+}
+
+function _ecHealthHtml() {
+    const stores = _ecHealth?.stores || [];
+    if (!stores.length) return '<div class="ec-empty">No stores to show.</div>';
+    return `<div class="ec-health">${stores.map(s => {
+        const c = s.counts;
+        const chip = !s.connected
+            ? '<span class="cb-chip cb-chip-expired"><span class="ec-dot ec-dot-off"></span>Not Connected</span>'
+            : c.failed
+                ? '<span class="cb-chip ec-chip-fail">' + c.failed + ' To Fix</span>'
+                : '<span class="cb-chip cb-chip-completed"><span class="ec-dot ec-dot-ok"></span>Live</span>';
+        const row = (k, v, cls) => `<div class="ec-hrow"><span class="ec-hk">${k}</span><span class="ec-hv ${cls || ''}">${v}</span></div>`;
+        return `
+        <div class="ec-hcard">
+          <div class="ec-hhead"><span class="ec-hstore">${_ecEsc(s.store)}</span>${chip}</div>
+          <div class="ec-hbody">
+            ${row('Live On eBay', s.connected ? c.live : '—', s.connected ? 'ec-ok' : 'ec-off')}
+            ${row('Did Not Upload',
+                  !s.connected ? '—'
+                    : c.failed
+                      // A COUNT NOBODY CAN OPEN IS A DEAD END. "Did Not Upload: 1"
+                      // says a listing failed and gives no way to find out which,
+                      // and the store view is session-scoped so signing in again
+                      // shows nothing. Clicking pulls those rows into the feed,
+                      // where the error, both links and Try Again already live.
+                      ? `<button type="button" class="ec-hbtn"
+                           onclick="ecShowFailed('${_ecEsc(s.store)}')"
+                           title="Show what did not upload">${c.failed} To Fix</button>`
+                      : c.failed,
+                  !s.connected ? 'ec-off' : c.failed ? 'ec-warn' : 'ec-ok')}
+            ${row('Checked Against eBay', s.freshness.liveMinutes == null ? 'Never'
+                  : _ecAgo(new Date(Date.now() - s.freshness.liveMinutes * 60000).toISOString()),
+                  s.freshness.liveMinutes == null ? 'ec-off'
+                  : s.freshness.liveMinutes > 90 ? 'ec-warn' : 'ec-ok')}
+          </div>
+        </div>`;
+    }).join('')}</div>`;
+}
+
+// --- actions ----------------------------------------------------------------
+
+// Spaces, commas, tabs and newlines all separate. Somebody pasting a column out
+// of a spreadsheet should not have to reformat it first.
+const _ecSkus = text => String(text || '').split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+
+// A COLUMN PASTED FROM A SHEET ARRIVES AS ONE WORD WITHOUT THIS.
+// A single-line <input> runs the HTML value sanitization algorithm on whatever
+// is put into it, and that algorithm STRIPS carriage returns and line feeds —
+// it does not turn them into spaces. So ten SKUs pasted one per line become one
+// hundred and fifty unbroken characters, and the splitter downstream never sees
+// a boundary to split on. It reads as "you must type commas", which is what a
+// store concluded. Catch the paste, normalize the whitespace to single spaces
+// while the newlines still exist, and insert that instead.
+function ecPasteSkus(ev) {
+    const text = (ev.clipboardData || window.clipboardData)?.getData('text') || '';
+    // An ordinary one-SKU paste needs no help; leave the browser to it so the
+    // undo stack and the caret behave the way people expect.
+    if (!/[\r\n\t]/.test(text)) return;
+    ev.preventDefault();
+
+    const input = ev.target;
+    const clean = _ecSkus(text).join(' ');
+    // Honour the caret and any selection: pasting into a part-typed box should
+    // insert, not overwrite the lot.
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(end);
+    const gap = before && !/\s$/.test(before) ? ' ' : '';
+    input.value = before + gap + clean + after;
+    const caret = (before + gap + clean).length;
+    input.setSelectionRange(caret, caret);
+}
+window.ecPasteSkus = ecPasteSkus;
+
+// Fold a result back into the row it belongs to and repaint.
+function _ecApply(sku, patch) {
+    const idx = _ecFeed.findIndex(e => _ecSame(e.sku, sku));
+    if (idx < 0) return;
+    _ecFeed[idx] = { ..._ecFeed[idx], ...patch };
+    _ecFeedSave();
+    ecRender();
+}
+
+async function _ecUpload(sku, extra) {
+    const res = await _ecPost({ action: 'list', store: _ecStore, sku, ...(extra || {}) });
+    const b = res.body || {};
+    if (res.ok) {
+        // conflict is cleared explicitly: _ecApply merges, and the server's item
+        // has no such key, so a row that once conflicted would keep the flag —
+        // and stay stuck without its buttons — after the conflict was resolved.
+        // titleWarning rides on the response, not on the stored row — it is about
+        // a DIFFERENT listing, so there is nothing in ebay_listings to hold it.
+        _ecApply(sku, { ...(b.item || { state: 'live' }), conflict: false, error: null,
+                        titleWarning: b.titleWarning || null });
+        return true;
+    }
+    // The row the server wrote carries the title, price and Shopify link, all
+    // of which are worth having on a failed row. Its own last_error is the same
+    // message, but the response's detail is the fuller one — the 409 collision
+    // reply, for instance, explains itself and last_error would not.
+    // The row the server wrote is preferred: its `error` has already been turned
+    // into plain English, where b.error is whatever eBay said verbatim. b.detail
+    // still wins for the cases the edge function explains itself, like a
+    // collision, which never reach the listings table at all.
+    _ecApply(sku, {
+        ...(b.item || {}),
+        state: 'failed',
+        conflict: !!b.conflict,
+        error: b.item?.error || b.detail || b.error || 'Upload failed.',
+    });
+    return false;
+}
+
+/* --- the category picker ---------------------------------------------------
+ * eBay picks the category from our title, and it is the one part of a listing
+ * nobody at the store chose. When it lands wrong the refusal that follows reads
+ * as something else entirely — a pair of Ray-Ban Meta smart glasses filed under
+ * Sunglasses came back as a *condition* error, because Sunglasses will not take
+ * the grade we send.
+ *
+ * So the category is now a control rather than a label. Opening it asks the
+ * marketplace where the same product actually sells (Browse, sampled live) and
+ * offers a search across eBay's tree for anything else. Picking one re-uploads
+ * with it, because choosing a category is only ever done in order to list.
+ *
+ * The popover lives on <body>, not inside #ecBody: ecRender() replaces that
+ * subtree wholesale on every state change, and an open dropdown inside it would
+ * vanish mid-interaction.
+ */
+
+let _ecCatSku = null;
+let _ecCatTimer = null;
+let _ecCatAnchor = null;
+// Height of everything above the list (header + search box). Constant for the
+// life of a popover, and measured once — see _ecCatPlace for why re-measuring
+// it is what jammed the scrollbar.
+let _ecCatChrome = null;
+
+// KEEP IT ON THE PAGE, AFTER THE CONTENT LANDS.
+// Placing it once at open time is not enough: at that moment the popover holds
+// a one-line "checking…" and is a couple of hundred pixels shorter than it will
+// be once the market sample or twenty-five search results arrive. Measured then
+// and never again, it grows downward off the bottom of the window. So the list
+// gets a max-height cut from whatever room actually exists, and every path that
+// changes the contents calls this again.
+// THE ANCHOR GETS DESTROYED UNDER US, AND THAT IS NORMAL.
+// ecRender() rebuilds #ecBody wholesale on every state change, so the button a
+// popover is anchored to stops existing the moment any row changes — a pending
+// upload turning live while somebody is picking a category, most obviously.
+// Bailing out then left the list at whatever height it had BEFORE the search
+// results arrived: too short to have a scrollbar, too tall to fit, and never
+// repositioned. Re-adopting the new button for the same SKU is the fix.
+function _ecCatAnchorEl() {
+    if (_ecCatAnchor?.isConnected) return _ecCatAnchor;
+    if (!_ecCatSku) return null;
+    const sel = (window.CSS && CSS.escape)
+        ? CSS.escape(_ecCatSku)
+        : String(_ecCatSku).replace(/["\\]/g, '\\$&');
+    const el = document.querySelector(`#ecBody .ec-catbtn[data-sku="${sel}"]`);
+    if (el) _ecCatAnchor = el;
+    return el;
+}
+
+function _ecCatPlace() {
+    const pop = document.getElementById('ecCatPop');
+    if (!pop) return;
+
+    const MARGIN = 10, GAP = 6;
+    const vh = window.innerHeight, vw = window.innerWidth;
+
+    // If the row really is gone — filtered out, removed with the × — hold the
+    // popover where it is and size it against the viewport anyway. Sizing must
+    // never depend on the anchor surviving.
+    const anchor = _ecCatAnchorEl();
+    const r = anchor ? anchor.getBoundingClientRect() : pop.getBoundingClientRect();
+
+    // THE ANCHOR ITSELF MAY BE OFF SCREEN — a row below the fold, or the window
+    // shrunk under an open popover. Measuring room from a rect that starts at
+    // y=626 in a 560px window says there are 610 pixels "above" it, and placing
+    // the popover there puts it off the bottom just as surely as placing it
+    // below would. Clamping the reference edges into the viewport first makes
+    // both directions honest.
+    const aTop = Math.max(MARGIN, Math.min(r.top, vh - MARGIN));
+    const aBottom = Math.max(MARGIN, Math.min(r.bottom, vh - MARGIN));
+
+    const below = vh - aBottom - GAP - MARGIN;
+    const above = aTop - GAP - MARGIN;
+    // Flip upward only when below is genuinely cramped and above is roomier.
+    const useAbove = below < 240 && above > below;
+    // Never taller than the window, whichever way it goes.
+    const room = Math.min(vh - 2 * MARGIN, Math.max(150, useAbove ? above : below));
+
+    const list = pop.querySelector('.ec-catpop-list');
+    if (list) {
+        // MEASURE THE CHROME ONCE, NOT ON EVERY CALL.
+        // Working it out by subtraction means setting max-height to 'none' and
+        // reading the full height back — which collapses the scroll container
+        // for a frame and resets where it was scrolled to. Doing that on every
+        // reposition made the list snap back to the top mid-drag, so the
+        // scrollbar felt jammed. The header and search box never change size
+        // while a popover is open, so this is measured on the first placement
+        // and reused.
+        if (_ecCatChrome == null) {
+            const before = list.style.maxHeight;
+            list.style.maxHeight = 'none';
+            _ecCatChrome = pop.offsetHeight - list.offsetHeight;
+            list.style.maxHeight = before;
+        }
+        const want = `${Math.max(90, room - _ecCatChrome)}px`;
+        // Only touch the DOM when the value actually changes; an identical
+        // write still costs a layout pass on some browsers.
+        if (list.style.maxHeight !== want) list.style.maxHeight = want;
+    }
+
+    const h = pop.offsetHeight;
+    const w = pop.offsetWidth;
+    const wanted = useAbove ? aTop - GAP - h : aBottom + GAP;
+    // Final clamp. Whatever the arithmetic above concluded, it has to be on the
+    // page — this is the line that makes clipping impossible rather than
+    // unlikely.
+    pop.style.top = `${Math.max(MARGIN, Math.min(wanted, vh - h - MARGIN))}px`;
+    pop.style.left = `${Math.max(MARGIN, Math.min(r.left, vw - w - MARGIN))}px`;
+}
+
+// The popover is fixed but its anchor scrolls with the table, so it has to
+// follow. Capture phase catches the panel's own scroller as well as the window
+// — and that is exactly why the popover's OWN list has to be excluded. Scrolling
+// the results is a scroll event too, and repositioning in response to it fought
+// the user for the scrollbar.
+function _ecCatReflow(ev) {
+    const pop = document.getElementById('ecCatPop');
+    if (!pop) return;
+    if (ev?.target && pop.contains(ev.target.nodeType ? ev.target : pop)) return;
+    _ecCatPlace();
+}
+
+function _ecCatOutside(ev) {
+    const pop = document.getElementById('ecCatPop');
+    if (pop && !pop.contains(ev.target)) ecCloseCategory();
+}
+function _ecCatEsc(ev) { if (ev.key === 'Escape') ecCloseCategory(); }
+
+function ecCloseCategory() {
+    document.getElementById('ecCatPop')?.remove();
+    document.removeEventListener('mousedown', _ecCatOutside, true);
+    document.removeEventListener('keydown', _ecCatEsc, true);
+    document.removeEventListener('scroll', _ecCatReflow, true);
+    window.removeEventListener('resize', _ecCatReflow);
+    clearTimeout(_ecCatTimer);
+    _ecCatSku = null;
+    _ecCatAnchor = null;
+    _ecCatChrome = null;
+}
+window.ecCloseCategory = ecCloseCategory;
+
+async function ecOpenCategory(sku, btn) {
+    // A second click on the same row closes it rather than stacking another.
+    if (_ecCatSku && _ecSame(_ecCatSku, sku)) { ecCloseCategory(); return; }
+    ecCloseCategory();
+    _ecCatSku = sku;
+
+    const pop = document.createElement('div');
+    pop.id = 'ecCatPop';
+    pop.className = 'ec-catpop';
+    pop.innerHTML = `
+      <div class="ec-catpop-head">
+        <span class="ec-catpop-sku">${_ecEsc(sku)}</span>
+        <button class="ec-x" onclick="ecCloseCategory()" aria-label="Close">&times;</button>
+      </div>
+      <input class="ec-catpop-q" id="ecCatQ" placeholder="Search eBay Categories"
+             oninput="ecCategorySearch(this.value)" autocomplete="off">
+      <div class="ec-catpop-list" id="ecCatList">
+        <div class="ec-catpop-note">Checking where these sell on eBay…</div>
+      </div>`;
+    document.body.appendChild(pop);
+    _ecCatAnchor = btn;
+    _ecCatPlace();
+
+    document.addEventListener('mousedown', _ecCatOutside, true);
+    document.addEventListener('keydown', _ecCatEsc, true);
+    document.addEventListener('scroll', _ecCatReflow, true);
+    window.addEventListener('resize', _ecCatReflow);
+    document.getElementById('ecCatQ')?.focus();
+
+    // Ask the market. This is the recommendation the store came for, so it
+    // loads without being asked and the search box is there if it is wrong.
+    const res = await _ecPost({ action: 'recommend', store: _ecStore, sku });
+    if (!_ecSame(_ecCatSku, sku)) return;         // closed or moved on
+    const list = document.getElementById('ecCatList');
+    if (!list) return;
+    const b = res.body || {};
+    if (!res.ok) {
+        list.innerHTML = `<div class="ec-catpop-note">Could not check eBay. Search above instead.
+          <br><span style="opacity:.7;">${_ecEsc(b.detail || b.error || '')}</span></div>`;
+        _ecCatPlace();
+        return;
+    }
+    list.innerHTML = _ecCatRecHtml(b);
+    _ecCatPlace();
+}
+window.ecOpenCategory = ecOpenCategory;
+
+function _ecCatRecHtml(b) {
+    const rows = [];
+    const market = b.market || [];
+
+    if (b.basis === 'market' && market.length) {
+        rows.push(`<div class="ec-catpop-label">Where These Actually Sell</div>`);
+        // Every category the sample landed in, not only the winner — a 60/40
+        // split is a real judgement call and hiding the 40 would make it look
+        // like a settled answer.
+        market.forEach(m => rows.push(_ecCatOption(m.id, m.name, '',
+            `${m.share}% of ${b.sampled} live listings`)));
+    } else if (market.length) {
+        rows.push(`<div class="ec-catpop-label">Where These Actually Sell</div>`);
+        rows.push(`<div class="ec-catpop-note">Too few live listings to call it —
+          ${b.sampled || 0} found. eBay's own guess is below.</div>`);
+        market.forEach(m => rows.push(_ecCatOption(m.id, m.name, '',
+            `${m.share}% of ${b.sampled} live listings`)));
+    } else {
+        rows.push(`<div class="ec-catpop-note">No live listings matched this item, so there is
+          nothing to compare against. eBay's own guess is below.</div>`);
+    }
+
+    // ALL of eBay's ranked guesses, not just the first.
+    // Only [0] used to be shown, and when the market sample is empty that single
+    // option is the entire picker. A laser projector drew "TV Boards, Parts &
+    // Components" and the store saw one wrong choice with no projector anywhere —
+    // "Home Theater Projectors" was sixth on eBay's own list the whole time.
+    const guesses = (b.suggestions?.length ? b.suggestions : (b.suggested ? [b.suggested] : []))
+        .filter(g => g?.id && !market.some(m => m.id === g.id));
+    if (guesses.length) {
+        rows.push(`<div class="ec-catpop-label">eBay's Guesses From The Title</div>`);
+        guesses.forEach((g, i) => rows.push(_ecCatOption(g.id, g.name, '',
+            i === 0 ? 'Best match on wording' : 'Also matched')));
+    }
+    return rows.join('');
+}
+
+function _ecCatOption(id, name, path, note) {
+    return `
+    <button class="ec-catopt" data-id="${_ecEsc(id)}" data-name="${_ecEsc(name || id)}"
+            onclick="ecPickCategory(this.dataset.id, this.dataset.name)">
+      <span class="ec-catopt-n">${_ecEsc(name || id)}</span>
+      ${path ? `<span class="ec-catopt-p">${_ecEsc(path)}</span>` : ''}
+      ${note ? `<span class="ec-catopt-m">${_ecEsc(note)}</span>` : ''}
+    </button>`;
+}
+
+// Debounced: every keystroke is an eBay call otherwise.
+function ecCategorySearch(text) {
+    clearTimeout(_ecCatTimer);
+    const q = String(text || '').trim();
+    const list = document.getElementById('ecCatList');
+    if (!list) return;
+    if (q.length < 2) return;
+    _ecCatTimer = setTimeout(async () => {
+        list.innerHTML = '<div class="ec-catpop-note">Searching…</div>';
+        _ecCatPlace();
+        try {
+            const b = await _ecFetch(`?view=categories&q=${encodeURIComponent(q)}`);
+            const results = b.results || [];
+            document.getElementById('ecCatList').innerHTML = results.length
+                ? `<div class="ec-catpop-label">${results.length} Matches</div>`
+                  + results.map(r => _ecCatOption(r.id, r.name, r.path, '')).join('')
+                : '<div class="ec-catpop-note">Nothing matched those words.</div>';
+            _ecCatPlace();
+        } catch (e) {
+            const el = document.getElementById('ecCatList');
+            if (el) el.innerHTML = `<div class="ec-catpop-note">${_ecEsc(e.message)}</div>`;
+        }
+    }, 350);
+}
+window.ecCategorySearch = ecCategorySearch;
+
+// Choosing a category is only ever done in order to list, so it lists.
+async function ecPickCategory(id, name) {
+    const sku = _ecCatSku;
+    if (!sku) return;
+    ecCloseCategory();
+    _ecApply(sku, { state: 'pending', error: null, category: name, categoryId: id });
+    await _ecUpload(sku, { category: id, categoryName: name });
+}
+window.ecPickCategory = ecPickCategory;
+
+// Drops one row off the list. Like Clear List, this touches nothing on eBay —
+// a live listing stays live, it just stops being in the way while the rest of
+// the shelf goes up.
+function ecRemoveOne(sku) {
+    const before = _ecFeed.length;
+    _ecFeed = _ecFeed.filter(e => !_ecSame(e.sku, sku));
+    if (_ecFeed.length === before) return;
+    _ecFeedSave();
+    ecRender();
+}
+window.ecRemoveOne = ecRemoveOne;
+
+// Empties the panel. Nothing on eBay is touched — these rows are a record of
+// what this person did this session, not the listings themselves.
+function ecClearList() {
+    if (!_ecFeed.length) return;
+    _ecFeed = [];
+    _ecFeedSave();
+    ecRender();
+}
+window.ecClearList = ecClearList;
+
+async function ecListTyped() {
+    const input = document.getElementById('ecSkuInput');
+    const skus = _ecSkus(input?.value);
+    if (!skus.length) return;
+
+    if (skus.length > 1
+        && !confirm(`Upload ${skus.length} items to eBay?\n\n${skus.join('\n')}`)) return;
+
+    // The box empties the moment you commit. What you typed is now a row you can
+    // watch, and leaving it in the field only invites a second upload of it.
+    if (input) { input.value = ''; input.focus(); }
+
+    const now = new Date().toISOString();
+    // Newest first. Re-uploading something already on screen moves that row
+    // rather than growing a second one for the same item.
+    skus.forEach(sku => {
+        _ecFeed = _ecFeed.filter(e => !_ecSame(e.sku, sku));
+        _ecFeed.unshift({
+            sku, at: now, state: 'pending', title: sku,
+            price: null, itemId: null, ebayUrl: null, shopifyUrl: null, error: null,
+        });
+    });
+    _ecFeedSave();
+    ecRender();
+
+    // One at a time on purpose: a publish is several eBay calls, and firing a
+    // shelf of them at once is how you meet a rate limit.
+    for (const sku of skus) await _ecUpload(sku);
+}
+
+async function ecListOne(sku, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+    _ecApply(sku, { state: 'pending', error: null });
+    await _ecUpload(sku);
+}
+
+// Off eBay, and staying off. Worth a confirm: the unit is still on the shelf
+// and still for sale in Shopify, so this is a decision about the listing rather
+// than about the item, and nothing automatic will put it back.
+async function ecDisable(sku, btn) {
+    if (!confirm(`Take ${sku} off eBay?\n\n`
+        + 'It stays for sale in the store — this ends the eBay listing only, '
+        + 'and nothing will put it back automatically.')) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Ending…'; }
+    const res = await _ecPost({ action: 'end', store: _ecStore, sku });
+    const b = res.body || {};
+    if (!res.ok) {
+        _ecApply(sku, { state: 'failed', error: b.detail || b.error || 'Could not end the listing.' });
+        return;
+    }
+    _ecApply(sku, b.item || { state: 'disabled', error: null });
+}
+
+async function ecRefresh() {
+    if (_ecBusy) return;
+    _ecBusy = true;
+    const btn = document.getElementById('ecRefreshBtn');
+    if (btn) btn.disabled = true;
+    try {
+        _ecData = null;
+        _ecHealth = null;
+        await ecLoad();
+    } finally {
+        _ecBusy = false;
+        if (btn) btn.disabled = false;
+    }
+}

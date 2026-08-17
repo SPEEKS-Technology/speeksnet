@@ -82,6 +82,7 @@ async function queueNotification(n: {
   category: string; kind: string; title: string; body?: string; link?: string;
   store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
   audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+  audienceFeature?: string | null;
 }) {
   try {
     const sb = createClient(
@@ -97,6 +98,7 @@ async function queueNotification(n: {
       audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
       exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
       priority: n.priority ?? "normal",
+      audience_feature: n.audienceFeature ?? null,
     });
   } catch (_) { /* best-effort */ }
 }
@@ -168,6 +170,17 @@ Deno.serve(async (req: Request) => {
         // it. Only this direction is emailed: the ANSWER coming back to the
         // requester stays feed-only (it's information, not a task — which is why
         // its card carries no due badge and offers "Mark read" instead of Snooze).
+        //
+        // ⚠️ The audience is the APPROVE tool's, and it must stay that way. It
+        // was district manager / ceo / mocd, which does not overlap the tool's
+        // gate (role-owner-manager) by a single person: three people were emailed
+        // about a queue none of them can open, and the one person who can decide
+        // it was never told at all.
+        //
+        // audienceFeature is what keeps the two from drifting apart again —
+        // notify resolves the roles below as the DEFAULT and then lets a Feature
+        // Access override move any individual either way, so whoever actually
+        // holds the tool is whoever gets the mail.
         await queueNotification({
           category: "requests",
           kind: "purchase_request",
@@ -175,7 +188,8 @@ Deno.serve(async (req: Request) => {
           body: `${item_name}${body.price ? ` — ${String(body.price)}` : ""}. ${reason}`.slice(0, 300),
           link: "operations.html",
           store,
-          audienceRoles: ["district manager", "ceo", "mocd"],
+          audienceRoles: ["owner (manager)", "owner manager"],
+          audienceFeature: "tool-preferred-approve",
           excludeUser: requested_by,
         });
         return jsonResponse({ success: true, id: data?.id ?? null });
