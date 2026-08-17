@@ -259,6 +259,26 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     });
   }
 
+  // --- 5b. listings eBay shows us that carry no SKU --------------------------
+  // THE BLIND SPOT BEHIND THE CHECK ABOVE. Everything here matches on SKU, and
+  // the live sweep drops any listing that has none — it cannot be tied to a
+  // Shopify product, so it cannot be reasoned about. That is defensible for
+  // listing, and dangerous for overselling: a Marketplace Connect listing with
+  // no custom label is a second buyable copy of a unit we may also have live,
+  // and the duplicate check above cannot see it to say so.
+  const skuRuns = await read("ebay_live_runs_sku", sb.from("ebay_live_runs")
+    .select("store_code, without_sku, started_at"));
+  for (const r of skuRuns) {
+    const n = Number(r.without_sku || 0);
+    if (n > 0) {
+      push({
+        key: `live_no_sku:${r.store_code}`, store: r.store_code, severity: "warning",
+        title: `${r.store_code} has ${n} eBay listing${n === 1 ? "" : "s"} with no SKU`,
+        detail: `They cannot be matched to a Shopify product, so the same-SKU-twice check cannot see them. If one is a unit already listed here, nothing would catch the oversell — give it a custom label on eBay, or end it.`,
+      });
+    }
+  }
+
   // --- 6. have the cron jobs themselves stopped? ----------------------------
   // Everything above measures what the jobs PRODUCED. This measures the jobs.
   // A poll that stops finding orders looks identical to a poll that stopped

@@ -29426,16 +29426,21 @@ async function openEmailRecipients() {
 let _erOpen = null;     // title of the open group, or null for all closed
 let _erQuery = '';
 
-function _erGroupMatches(group, q) {
-    if (!q) return true;
-    const hay = [
-        group.title, group.desc,
-        ...group.lists.map(l => l.label),
-        ...group.lists.map(l => l.desc || ''),
-        ...group.lists.map(l => l.key),
-        ...group.lists.reduce((all, l) => all.concat(_recipientsFor(l.key, [])), []),
-    ].join(' ').toLowerCase();
-    return hay.indexOf(q) >= 0;
+// Narrow to the LIST, not just the group. Searching "expense" should leave one
+// address box on screen, not the five in Operations Reports — same as every
+// other search on the site. The group heading stays, because a bare address box
+// with no idea which report it feeds is worse than one extra line.
+//
+// A query matching the GROUP (its title or blurb) keeps all of its lists: if
+// you searched "box orders" you meant all five stores, not none of them.
+function _erFilterGroup(group, q) {
+    if (!q) return group;
+    const has = (s) => String(s || '').toLowerCase().indexOf(q) >= 0;
+    if (has(group.title) || has(group.desc)) return group;
+    const lists = group.lists.filter(l =>
+        has(l.label) || has(l.desc) || has(l.key) ||
+        _recipientsFor(l.key, []).some(has));
+    return lists.length ? { ...group, lists } : null;
 }
 
 function filterEmailRecipients(value) {
@@ -29463,7 +29468,7 @@ function renderEmailRecipients() {
     const caret = hadFocus ? active.selectionStart : null;
 
     const q = _erQuery.trim().toLowerCase();
-    const groups = EMAIL_LIST_GROUPS.filter(g => _erGroupMatches(g, q));
+    const groups = EMAIL_LIST_GROUPS.map(g => _erFilterGroup(g, q)).filter(Boolean);
 
     // A search narrow enough to have found something should show it. Leaving it
     // shut would mean typing an address and still having to click to see it.
@@ -29483,6 +29488,7 @@ function renderEmailRecipients() {
     groups.forEach(group => {
         const open = group.title === _erOpen;
         const total = group.lists.reduce((n, l) => n + _recipientsFor(l.key, []).length, 0);
+        const hidden = (EMAIL_LIST_GROUPS.find(g => g.title === group.title) || group).lists.length - group.lists.length;
         html += `<div class="er-acc${open ? ' open' : ''}">
             <button type="button" class="er-bar" data-group="${escapeHtml(group.title)}"
                 aria-expanded="${open ? 'true' : 'false'}" onclick="emailRecipientsToggle(this.dataset.group)">
@@ -29491,7 +29497,7 @@ function renderEmailRecipients() {
                     <span class="er-bar-n">${escapeHtml(group.title)}</span>
                     <span class="er-bar-d">${escapeHtml(group.desc)}</span>
                 </span>
-                <span class="er-count${total ? '' : ' er-none'}">${total ? `${total} email${total === 1 ? '' : 's'}` : 'None'}</span>
+                <span class="er-count${total ? '' : ' er-none'}">${hidden ? `${group.lists.length} of ${group.lists.length + hidden}` : (total ? `${total} email${total === 1 ? '' : 's'}` : 'None')}</span>
             </button>`;
         if (open) {
             html += `<div class="er-body">`;
@@ -39922,6 +39928,7 @@ window.saveNotifySettings = saveNotifySettings;
  * ========================================================================== */
 
 const EBAY_CHANNEL_URL = `${_BASE}/ebay-channel`;
+const EBAY_LOOKUP_URL  = `${_BASE}/ebay-lookup`;
 
 // Session-scoped, and per store so a DM switching stores does not inherit
 // somebody else's shelf. One key, so sign-out clears it with one removeItem.
@@ -40176,7 +40183,7 @@ function _ecQuickHtml() {
     // read the other way.
     return `
     <div class="ec-quick">
-      <input id="ecSkuInput" placeholder="Scan Or Type a SKU"
+      <input id="ecSkuInput" placeholder="Scan Or Type a SKU Or Barcode"
              onpaste="ecPasteSkus(event)"
              onkeydown="if(event.key==='Enter')ecListTyped()">
       <button class="ec-btn ec-btn-go" onclick="ecListTyped()">Upload To eBay</button>
@@ -40731,10 +40738,44 @@ function ecClearList() {
 }
 window.ecClearList = ecClearList;
 
+// SCANNING THE BOX. The label on a unit carries the Shopify barcode, not the
+// SKU, so a scanner pointed at it used to produce a string Shopify had never
+// heard of and the item had to be found by hand first.
+//
+// Anything that comes back mapped is SWAPPED for its SKU before it becomes a
+// row: the feed, the retry button and the listing itself are all keyed by SKU,
+// and a row keyed by a barcode would look right and then fail on every retry.
+// Anything unresolved is left exactly as typed — it is probably a SKU already,
+// and if it is not, the normal "not found in Shopify" path says so.
+//
+// A failure here is not a failure to upload: if the lookup is down, the tokens
+// go through untouched and a real SKU still lists.
+async function _ecResolveCodes(tokens) {
+    if (!tokens.length) return tokens;
+    try {
+        const pin = sessionStorage.getItem('speeksUserPin') || '';
+        const r = await fetch(EBAY_LOOKUP_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ store: _ecStore, codes: tokens }),
+        });
+        const b = await r.json().catch(() => ({}));
+        const map = (b && b.map) || {};
+        if (!Object.keys(map).length) return tokens;
+        return tokens.map(t => map[t] || t);
+    } catch (e) {
+        return tokens;
+    }
+}
+
 async function ecListTyped() {
     const input = document.getElementById('ecSkuInput');
-    const skus = _ecSkus(input?.value);
-    if (!skus.length) return;
+    const typed = _ecSkus(input?.value);
+    if (!typed.length) return;
+
+    // Barcodes become SKUs before anything else happens, so what the
+    // confirm box lists is what will actually be uploaded.
+    const skus = await _ecResolveCodes(typed);
 
     if (skus.length > 1
         && !confirm(`Upload ${skus.length} items to eBay?\n\n${skus.join('\n')}`)) return;
