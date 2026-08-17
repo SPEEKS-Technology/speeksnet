@@ -9557,6 +9557,25 @@ function _lvCentralDay(iso) {
 // goal, error — falls through from the live row.
 const _lvIsPrev = () => _lvMode === 'prev';
 const _lvIsMtd  = () => _lvMode === 'mtd';
+const _lvIsToday = () => _lvMode === 'today';
+
+// WHICH COLUMNS EACH TAB CARRIES.
+// Every mode used to draw all ten and fill the ones that did not apply with a
+// dash or with a figure nobody reads. Kept in ONE place because the header and
+// the row are built by different functions, and a disagreement between them
+// shifts every cell in the table one column right.
+//
+// Cost is off Today: the day's cost is still moving underneath it, and Margin
+// already carries what it is worth knowing. Orders is off the Month, where a
+// whole month's order count is not a number anybody acts on -- the block at the
+// top still has it. The tail column is gone from both finished views: on the
+// Month it was Net sales over a constant, and on Yesterday it was Net over
+// Orders, each of them a division of two figures already in the row.
+const _lvCols = () => ({
+    cost:   !_lvIsToday(),
+    orders: !_lvIsMtd(),
+    tail:   _lvIsToday(),
+});
 // A finished DAY is what the day columns mean in both of the other two modes, so
 // the third one is the same trick a second time: month-to-date figures copied
 // over the day fields. Everything month-scoped (mtdGp, goal, pctOfGoal,
@@ -10982,9 +11001,9 @@ function _bdGoalChip(store, t, proj, isCurrent) {
     // "Tracking" is a word about the future, and a closed month has none. The
     // running month says what it is heading for; a finished one says what it
     // came to.
-    const verb = isCurrent ? ' tracking to ' : ' of ';
+    const verb = isCurrent ? ' Tracking To ' : ' Of ';
     return '<span class="bd-h-goal' + tone + '">'
-        + '<b>' + _lvPct(pct) + '</b>' + verb + _lvMoney(goal, false) + ' goal</span>';
+        + '<b>' + _lvPct(pct) + '</b>' + verb + _lvMoney(goal, false) + ' Goal</span>';
 }
 
 // The block on screen, store or company. Every reader goes through this so the
@@ -11162,15 +11181,24 @@ function _bdRender() {
           + '<span class="bd-cmp-v">' + c.v + '</span>'
           + '<span class="bd-cmp-d">' + (c.d || '') + '</span></div>'
         : '';
+    // THE PROJECTION IS THE HEADLINE, the month so far is the footnote (user's
+    // call). Mid-month the banked figure is always the smaller and always the
+    // less useful of the two -- on the 12th it reads like a disaster next to a
+    // goal the month is comfortably on pace to beat. Swapped here rather than at
+    // each call site so no tile can end up the other way round; a tile with no
+    // projection at all (a finished month, a figure that cannot be projected)
+    // keeps its own value as the headline and shows no second line.
     const tile = (k, v, o) => {
         o = o || {};
         const rows = (o.cmp || []).map(cmpRow).join('');
+        const big = o.track || v;
+        const small = o.track ? 'Current ' + v : '';
         return '<div class="cc-cell bd-tile' + (o.accent ? ' lv-accent' : '') + '">'
             + '<span class="sh-stripe g"></span>'
             + '<div class="sh-k">' + k + '</div>'
             + '<div class="bd-tile-row">'
-            + '<div class="bd-tile-main"><div class="sh-v">' + v + '</div>'
-            + (o.track ? '<div class="bd-track">Tracking ' + o.track + '</div>' : '')
+            + '<div class="bd-tile-main"><div class="sh-v">' + big + '</div>'
+            + (small ? '<div class="bd-track">' + small + '</div>' : '')
             + (o.note ? '<div class="bd-track bd-note">' + o.note + '</div>' : '')
             + '</div>'
             + (rows ? '<div class="bd-tile-cmp">' + rows + '</div>' : '')
@@ -12183,13 +12211,9 @@ function _lvStoreRow(v, d, foot, rev) {
     // Last column: a live clock only means something today. On a finished day it
     // holds what an average order was worth; over a month, what an average day
     // looked like — the figure that makes two stores of different size comparable.
-    const orders = Number(v.ordersToday) || 0;
-    const tail = _lvIsMtd()
-        ? _lvMoney((Number(v.netToday) || 0) / _lvDays(d), false)
-        : _lvIsPrev()
-            ? (orders > 0 ? _lvMoney((Number(v.netToday) || 0) / orders, true) : '—')
-            : (v.lastOrderAt && _lvCentralDay(v.lastOrderAt) === String(asOf || '').slice(0, 10)
-                ? _lvOrderClock(v.lastOrderAt) : '—');
+    const cols = _lvCols();
+    const tail = (v.lastOrderAt && _lvCentralDay(v.lastOrderAt) === String(asOf || '').slice(0, 10))
+        ? _lvOrderClock(v.lastOrderAt) : '—';
     const gp = _lvHasMonth(d)
         ? _lvMoney(v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
         : '—';
@@ -12204,7 +12228,7 @@ function _lvStoreRow(v, d, foot, rev) {
         // Cost and gross profit for the day itself. The single-store view has had
         // these all along (cost under the margin tile, GP as a chip); the table did
         // not, so the district read sales without the money actually made on them.
-        + '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>'
+        + (cols.cost ? '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>' : '')
         + '<td class="lv-strongnum">' + _lvMoney(v.gpToday, false) + '</td>'
         // Refunds sits beside Orders because it is the other half of the same
         // count — what came back out of the till against what went in.
@@ -12212,14 +12236,14 @@ function _lvStoreRow(v, d, foot, rev) {
             ? ' title="This cache was written before the feed carried month-to-date'
               + ' refunds — it fills in on the next refresh."' : '') + '>'
         + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
-        + '<td>' + v.ordersToday + '</td>'
+        + (cols.orders ? '<td>' + v.ordersToday + '</td>' : '')
         + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
         + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex + '%') + '</span></td>'
         + (rev === null || rev === undefined ? ''
             : '<td class="lv-boldnum">' + (rev > 0 ? _lvNum(rev) : '—') + '</td>')
-        + '<td>' + tail + '</td></tr>';
+        + (cols.tail ? '<td>' + tail + '</td>' : '') + '</tr>';
 }
 
 // The phone view of the selling table.
@@ -12281,7 +12305,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     // on Yesterday — carries the day's average order instead. A live "last order"
     // clock means nothing on a finished day, which is why that slot was never
     // Last order here.
-    const tailHead = _lvIsMtd() ? 'Avg / day' : (prev ? 'Avg order' : 'Last order');
+    const cols = _lvCols();
     // Named, the same way Buying below it is. Unlabelled, the table read as "the
     // dashboard" and Buying as an appendix to it; they are two halves of the same
     // question, so both get a header. Lives here so every surface that draws this
@@ -12294,11 +12318,11 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     let html = _lvSplit('Selling', '')
         + _lvCards(stores, d, rollup, rollupLabel)
         + '<div class="lv-tbl-scroll lv-sell-wrap"><table class="lv-tbl"><thead><tr>'
-        + '<th>Store</th><th>' + (_lvMode === 'today' ? 'Net today' : 'Net sales') + '</th>'
-        + '<th>Cost</th><th>Gross profit</th>'
-        + '<th>Refunds</th><th>Orders</th><th>Margin</th>'
-        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
-        + '<th>' + tailHead + '</th>'
+        + '<th>Store</th><th>' + (_lvIsToday() ? 'Net today' : 'Net sales') + '</th>'
+        + (cols.cost ? '<th>Cost</th>' : '') + '<th>Gross profit</th>'
+        + '<th>Refunds</th>' + (cols.orders ? '<th>Orders</th>' : '') + '<th>Margin</th>'
+        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>% to goal</th>'
+        + (cols.tail ? '<th>Last order</th>' : '')
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
     // this list by position, so re-sorting it worst-first would cost more than the
