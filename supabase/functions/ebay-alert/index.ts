@@ -34,7 +34,6 @@ const SWEEP_STALE_MIN     = 90;  // live sweep runs every 20 min per store
 const CRON_STALE_MIN      = 30;  // order poll runs every 2 min per store
 const LISTING_STUCK_MIN   = 60;  // pending longer than this is not "in flight"
 const TRACKING_STUCK_MIN  = 60;  // tracking known but never pushed back to eBay
-const ORDER_UNSHIPPED_DAY = 5;   // eBay handling time, with room to spare
 const TOKEN_WARN_DAYS     = 30;  // refresh token; access token renews itself
 
 type Issue = {
@@ -52,6 +51,20 @@ const short = (s: unknown, n = 180) => {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
   return t.length > n ? t.slice(0, n - 1) + "…" : t;
 };
+
+// WHOSE PROBLEM IS IT. A listing eBay rejects for a missing item specific, a bad
+// category or a title it does not allow is a DATA problem: the store already sees
+// it in SPEEKS Connect and fixes it themselves, and mailing about it buries the
+// alerts that mean the tool is actually broken. What survives this filter is the
+// class of failure a store can do nothing about -- the connection, the shared
+// rate limit, and eBay itself being down.
+//
+// Deliberately matched on HTTP status and transport words rather than on eBay's
+// errorId list: the id list changes without notice, and a new data-validation id
+// failing OPEN here would put us straight back to mailing about item specifics.
+// An unrecognised error is treated as the store's, which is the quiet failure --
+// the loud one would be nagging about work already being done.
+const SYSTEMIC = /HTTP *(401|403|429|5[0-9][0-9])|"statusCode" *: *(401|403|429|5[0-9][0-9])|unauthor|invalid_grant|invalid_token|token (has )?expired|expired token|refresh token|rate limit|call limit|quota|throttl|internal error|service unavailable|temporarily unavailable|timed out|time out|ECONNRESET|network error/i;
 
 // ---------------------------------------------------------------------------
 async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<string, number> }> {
@@ -88,16 +101,12 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     .or("status.eq.failed,status.eq.pending,last_error.not.is.null"));
   for (const l of listings) {
     const st = String(l.status || "");
-    if (st === "failed") {
+    const systemic = SYSTEMIC.test(String(l.last_error || ""));
+    if (st === "failed" && systemic) {
       push({
-        key: `listing_failed:${l.store_code}:${l.sku}`, store: l.store_code, severity: "critical",
-        title: `Listing failed — ${l.sku}`,
-        detail: `${short(l.title, 70)}${l.attempts ? ` · ${l.attempts} attempts` : ""}. ${short(l.last_error) || "No reason recorded."}`,
-      });
-    } else if (l.last_error && st !== "ended" && st !== "disabled") {
-      push({
-        key: `listing_error:${l.store_code}:${l.sku}`, store: l.store_code, severity: "warning",
-        title: `Listing error — ${l.sku}`, detail: short(l.last_error),
+        key: `listing_blocked:${l.store_code}:${l.sku}`, store: l.store_code, severity: "critical",
+        title: `eBay refused a listing — ${l.sku}`,
+        detail: `Not a data problem, so the store cannot clear it: ${short(l.last_error)}`,
       });
     } else if (st === "pending") {
       const m = minsAgo(l.last_attempt_at);
@@ -140,16 +149,9 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
         });
       }
     }
-    if (String(o.status) === "imported" && o.sold_at) {
-      const days = (Date.now() - new Date(o.sold_at).getTime()) / 86400000;
-      if (days > ORDER_UNSHIPPED_DAY) {
-        push({
-          key: `order_unshipped:${o.store_code}:${o.ebay_order_id}`, store: o.store_code, severity: "warning",
-          title: `Order unshipped ${Math.floor(days)} days — ${label}`,
-          detail: `Sold ${new Date(o.sold_at).toISOString().slice(0, 10)} and still has no tracking.`,
-        });
-      }
-    }
+    // An order the store simply has not packed yet is store behaviour, not a
+    // broken tool, so it is not alerted here. Tracking that EXISTS and was never
+    // pushed stays above: that one is the tool failing on a store that did its job.
   }
 
   // --- 3. the sweeps: did they error, and are they still running at all ------
@@ -309,12 +311,12 @@ function build(issues: Issue[], firstSeen: Record<string, string>) {
     <div style="font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#6ee7a7;">Speeks Technology</div>
     <div style="font-size:19px;font-weight:800;color:#ffffff;margin-top:2px;">SPEEKS Connect — Errors</div>
     <div style="font-size:12.5px;font-weight:600;color:rgba(255,255,255,.66);margin-top:2px;">
-      ${crit.length} needing attention${warn.length ? `, ${warn.length} to watch` : ""}</div>
+      ${crit.length} Needing Attention${warn.length ? `, ${warn.length} To Watch` : ""}</div>
   </td></tr>
   <tr><td style="height:3px;background:${C.sage};font-size:0;line-height:0;">&nbsp;</td></tr>
   <tr><td style="padding:14px 20px 20px;">
-    ${section("Fix now", crit)}
-    ${section("Worth a look", warn)}
+    ${section("Fix Now", crit)}
+    ${section("Worth A Look", warn)}
   </td></tr>
   <tr><td style="padding:14px;text-align:center;color:${C.faint};font-size:10.5px;line-height:1.6;border-top:1px solid ${C.line};background:#f7faf8;">
     Checked every 15 minutes. You only get this mail when something is wrong, and
