@@ -29348,77 +29348,60 @@ function _recipientsFor(key, fallback) {
 }
 
 // ---- the DM/CEO management tool ----
+// FOUR groups, not one per report. Eleven bars for twenty lists meant most of
+// the panel was bars, and half of them opened onto a single address box. They
+// are grouped by what the mail IS — a scheduled performance report, an
+// operations report, an alert that fires only when something is wrong, or a
+// supplier address — because that is what you know when you come looking.
+//
+// Every list a report READS must appear here as well as in the edge fn's
+// LIST_KEYS, or it becomes an orphan only SQL can change — which is what had
+// happened to sales_import_alert, summary_weekly_alert and connect_alerts.
 const EMAIL_LIST_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const EMAIL_LIST_GROUPS = [
     {
-        title: 'Recycle Month-End Report',
-        desc: 'Who the month-end recycle report email is addressed to.',
-        lists: [{ key: 'recycle_report', label: 'Recipients' }],
+        title: 'Store Performance Reports',
+        desc: 'Monday morning performance emails, sent automatically.',
+        lists: [
+            { key: 'weekly_leadership', label: 'Leadership Report', desc: 'The district-wide roll-up.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} Manager Report` })),
+        ],
+    },
+    {
+        title: 'Operations Reports',
+        desc: 'Scheduled reports on how the stores are running.',
+        lists: [
+            { key: 'unlisted_report', label: 'Unlisted Inventory Weekly Update',
+              desc: 'Monday 9am — the pile per store, and what it would take to clear it.' },
+            { key: 'cash_report', label: 'Cash On Hand',
+              desc: '7am closing-cash table, read off each store\'s Day End Report.' },
+            { key: 'usage_report', label: 'Site Usage',
+              desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
+            { key: 'recycle_report', label: 'Recycle Month-End Report',
+              desc: 'Who the month-end recycle report email is addressed to.' },
+            { key: 'expense_report', label: 'Expense Reports',
+              desc: 'Where a monthly expense report goes when the DM or MSM sends one.' },
+        ],
+    },
+    {
+        title: 'System Alerts',
+        desc: 'Silent unless something is broken or a decision is waiting.',
+        lists: [
+            { key: 'connect_alerts', label: 'SPEEKS Connect Errors',
+              desc: 'Checked every 15 minutes; mails only when the eBay integration is actually broken.' },
+            { key: 'sales_import_alert', label: 'Sales Import',
+              desc: 'The nightly Shopify sales email failing to reach the Sales Summary sheet.' },
+            { key: 'summary_weekly_alert', label: 'Weekly Summary Import',
+              desc: 'The same, for the Saturday summary. Deliberately narrower than the daily list above.' },
+            { key: 'b2b_quote_ready', label: 'B2B Quote Ready',
+              desc: 'A pickup has been priced and a quote is waiting on approval. '
+                  + 'Leave this empty and it falls back to the single address in CRM Settings.' },
+        ],
     },
     {
         title: 'Box Orders',
         desc: 'Supplier address each store\'s box order email opens to.',
         lists: EMAIL_LIST_STORES.map(s => ({ key: `box_order_${s}`, label: s })),
-    },
-    {
-        title: 'Expense Reports',
-        desc: 'Who a monthly expense report is emailed to when the DM or MSM sends it.',
-        lists: [{ key: 'expense_report', label: 'Recipients' }],
-    },
-    {
-        title: 'Weekly SPEEKS Reports',
-        desc: 'Monday morning performance emails (sent automatically).',
-        lists: [
-            { key: 'weekly_leadership', label: 'Leadership report' },
-            ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} manager report` })),
-        ],
-    },
-    {
-        title: 'Unlisted Inventory Weekly Update',
-        desc: 'Monday 9am backlog report — the pile per store, and what it would take to clear it.',
-        lists: [{ key: 'unlisted_report', label: 'Recipients' }],
-    },
-    // Every list a report READS must appear here as well as in the edge fn's
-    // LIST_KEYS, or it becomes an orphan only SQL can change — which is exactly
-    // what happened to sales_import_alert. The backend has allowed usage_report
-    // since day one; this row is what makes it editable.
-    {
-        title: 'Site Usage Reports',
-        desc: 'Nightly 8pm usage email, plus the Saturday and month-end summaries (sent automatically).',
-        lists: [{ key: 'usage_report', label: 'Recipients' }],
-    },
-    // The three alert lists. Each existed in the table and was read by a live
-    // report before it was ever shown here, which is the orphan the comment in
-    // the edge fn warns about: addresses only SQL could change.
-    {
-        title: 'Sales Import Alerts',
-        desc: 'Told when the nightly Shopify sales email fails to import into the Sales Summary sheet.',
-        lists: [{ key: 'sales_import_alert', label: 'Recipients' }],
-    },
-    {
-        title: 'Weekly Summary Alerts',
-        desc: 'The same, for the Saturday weekly summary import. Kept separate so it can stay narrower.',
-        lists: [{ key: 'summary_weekly_alert', label: 'Recipients' }],
-    },
-    {
-        title: 'SPEEKS Connect Errors',
-        desc: 'Checked every 15 minutes; mails only when the eBay integration is actually broken.',
-        lists: [{ key: 'connect_alerts', label: 'Recipients' }],
-    },
-    {
-        title: 'Cash On Hand',
-        desc: '7am closing-cash table, read off each store\'s Day End Report.',
-        lists: [{ key: 'cash_report', label: 'Recipients' }],
-    },
-    // Last because it is the one operational alert here rather than a scheduled
-    // report. b2b_quote_ready had to be added to LIST_KEYS in the same breath:
-    // the allowlist arrived on another branch, and without it this row would
-    // render and then refuse every address with "Unknown list".
-    {
-        title: 'B2B Quote Ready',
-        desc: 'Told the moment a pickup is priced and a quote is waiting on approval. '
-            + 'Leave this empty and it falls back to the single address in CRM Settings.',
-        lists: [{ key: 'b2b_quote_ready', label: 'Recipients' }],
     },
 ];
 
@@ -29433,13 +29416,13 @@ async function openEmailRecipients() {
 }
 
 // ---- the collapsible list, its search, and which bar is open ----
-// Eleven reports and nineteen lists: fully expanded this ran several screens and
+// Four groups over twenty lists: fully expanded this ran several screens and
 // the one you came for was never the one on screen. One group open at a time,
 // same shape as the Margin Guide rebuttal accordion.
 //
 // The search matches ADDRESSES as well as report names on purpose — you
 // usually arrive here knowing the person you want to remove, not which of the
-// nineteen lists they happen to sit on.
+// twenty lists they happen to sit on.
 let _erOpen = null;     // title of the open group, or null for all closed
 let _erQuery = '';
 
@@ -29448,6 +29431,7 @@ function _erGroupMatches(group, q) {
     const hay = [
         group.title, group.desc,
         ...group.lists.map(l => l.label),
+        ...group.lists.map(l => l.desc || ''),
         ...group.lists.map(l => l.key),
         ...group.lists.reduce((all, l) => all.concat(_recipientsFor(l.key, [])), []),
     ].join(' ').toLowerCase();
@@ -29521,7 +29505,8 @@ function renderEmailRecipients() {
                     : '<span style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px;">None — the built-in default applies.</span>';
                 const inputId = `email-add-${l.key}`;
                 html += `<div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;">
-                    <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: 7px;">${escapeHtml(l.label)}</div>
+                    <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: ${l.desc ? '3px' : '7px'};">${escapeHtml(l.label)}</div>
+                    ${l.desc ? `<div style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 8px;">${escapeHtml(l.desc)}</div>` : ''}
                     <div>${chips}</div>
                     <div style="display: flex; gap: 6px; margin-top: 6px;">
                         <input type="email" id="${inputId}" placeholder="name@company.com" style="flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px;"

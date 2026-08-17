@@ -16626,6 +16626,24 @@ body.tv-body { display: block; background: #eef1f5; }
 .er-body { border-top: 1px solid #e2e8f0; padding: 11px 13px 12px; }
 .er-body > div:last-child { margin-bottom: 0; }
 .er-empty { text-align: center; color: #94a3b8; font-weight: 600; font-size: 12.5px; padding: 22px 0; }
+/* THE PANEL SCROLLS; NOTHING IN IT SHRINKS.
+   #emailRecipientsBody IS .manage-content — a flex column — so every bar is a
+   flex ITEM, and a flex item's default is to shrink to fit rather than let its
+   container overflow. Open one group and the closed bars were squeezed thinner
+   to make room: descriptions clipped out, count badges pushed through the
+   bottom edge, and no scrollbar, because nothing had overflowed. The panel is
+   already overflow-y:auto; it just needed permission to use it. */
+#emailRecipientsBody { gap: 0; }
+#emailRecipientsBody > * { flex-shrink: 0; }
+
+/* Worth keeping in reach: the search is how you get back out of a long open
+   group, and it is useless once it has scrolled off. The negative offsets let
+   it cover the panel's own 20px padding as it pins, so nothing slides under. */
+#emailRecipientsBody .kb-search-bar {
+    position: sticky; top: -20px; z-index: 4;
+    background: #f9fafb; padding: 20px 0 10px; margin: -20px 0 0;
+}
+
 
 /* ============================================================================
    MOBILE LAYER — Phase 1 foundation (2026-08-14)
