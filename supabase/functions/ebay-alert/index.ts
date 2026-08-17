@@ -47,6 +47,22 @@ const json = (b: unknown, s = 200) =>
 const esc = (s: unknown) => String(s ?? "")
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const minsAgo = (t: string | null) => t ? Math.round((Date.now() - new Date(t).getTime()) / 60000) : null;
+// The first WORD of a detail line is capitalised, whether it opens the sentence
+// or follows a count: "6 listings failed" reads as "6 Listings failed". Applied
+// here at render rather than at each message, because half these strings arrive
+// from Postgres or eBay already lowercased and cannot be written any other way.
+// A word that already carries a capital is left alone, so eBay never becomes EBay.
+const capFirst = (s: string) => {
+  const w = s.split(" ");
+  for (let i = 0; i < w.length; i++) {
+    if (!w[i] || !/[A-Za-z]/.test(w[i])) continue;   // a bare count — keep looking
+    if (w[i] !== w[i].toLowerCase()) break;          // already capitalised somewhere
+    w[i] = w[i].charAt(0).toUpperCase() + w[i].slice(1);
+    break;
+  }
+  return w.join(" ");
+};
+
 const short = (s: unknown, n = 180) => {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
   return t.length > n ? t.slice(0, n - 1) + "…" : t;
@@ -292,7 +308,7 @@ function build(issues: Issue[], firstSeen: Record<string, string>) {
           <div style="font-size:13.5px;font-weight:800;color:${bad ? C.red : C.amberInk};">
             ${i.store ? `<span style="display:inline-block;background:#ffffff;border:1px solid ${bad ? C.redRing : C.amberRing};border-radius:5px;padding:1px 6px;font-size:10.5px;margin-right:7px;">${esc(i.store)}</span>` : ""}${esc(i.title)}
           </div>
-          <div style="font-size:12.5px;line-height:1.5;color:${C.muted};margin-top:4px;">${esc(i.detail)}</div>
+          <div style="font-size:12.5px;line-height:1.5;color:${C.muted};margin-top:4px;">${esc(capFirst(i.detail))}</div>
           ${age > 0 ? `<div style="font-size:10.5px;color:${C.faint};margin-top:5px;">Open for ${ageTxt}</div>` : ""}
         </td></tr>
       </table></td></tr>`;
@@ -349,16 +365,16 @@ Deno.serve(async (req: Request) => {
     const fake: Issue[] = [
       { key: "s1", store: "WSP", severity: "critical",
         title: "eBay is refusing listings",
-        detail: "6 listings failed in the last hour, all with the same error: HTTP 429 rate limit exceeded. This is not a data problem — the store cannot clear it." },
+        detail: "6 Listings failed in the last hour, all with the same error: HTTP 429 rate limit exceeded. This is not a data problem — the store cannot clear it." },
       { key: "s2", store: "LEE", severity: "critical",
         title: "Order poll has stopped",
         detail: "Scheduled job ebay-orders-lee last ran 3h 12m ago; it should run every 2 minutes. Orders placed since then are not in SPEEKS Connect." },
       { key: "s3", store: null, severity: "critical",
         title: "Error watch cannot read ebay_orders",
-        detail: "permission denied for relation ebay_orders — until this is fixed, problems in ebay_orders will go unreported." },
+        detail: "Permission denied for relation ebay_orders — until this is fixed, problems in ebay_orders will go unreported." },
       { key: "s4", store: "MPL", severity: "warning",
         title: "Tracking not pushed back to eBay",
-        detail: "2 orders have been shipped with tracking in Shopify for over an hour but eBay has not been told, so the buyer sees no tracking." },
+        detail: "2 Orders have been shipped with tracking in Shopify for over an hour but eBay has not been told, so the buyer sees no tracking." },
       { key: "s5", store: "OVL", severity: "warning",
         title: "Live sweep is behind",
         detail: "Last successful sweep was 2h 41m ago; it runs every 20 minutes. Sold-out items may still show as available on eBay." },

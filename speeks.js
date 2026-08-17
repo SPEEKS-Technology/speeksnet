@@ -29387,6 +29387,24 @@ const EMAIL_LIST_GROUPS = [
         desc: 'Nightly 8pm usage email, plus the Saturday and month-end summaries (sent automatically).',
         lists: [{ key: 'usage_report', label: 'Recipients' }],
     },
+    // The three alert lists. Each existed in the table and was read by a live
+    // report before it was ever shown here, which is the orphan the comment in
+    // the edge fn warns about: addresses only SQL could change.
+    {
+        title: 'Sales Import Alerts',
+        desc: 'Told when the nightly Shopify sales email fails to import into the Sales Summary sheet.',
+        lists: [{ key: 'sales_import_alert', label: 'Recipients' }],
+    },
+    {
+        title: 'Weekly Summary Alerts',
+        desc: 'The same, for the Saturday weekly summary import. Kept separate so it can stay narrower.',
+        lists: [{ key: 'summary_weekly_alert', label: 'Recipients' }],
+    },
+    {
+        title: 'SPEEKS Connect Errors',
+        desc: 'Checked every 15 minutes; mails only when the eBay integration is actually broken.',
+        lists: [{ key: 'connect_alerts', label: 'Recipients' }],
+    },
     {
         title: 'Cash On Hand',
         desc: '7am closing-cash table, read off each store\'s Day End Report.',
