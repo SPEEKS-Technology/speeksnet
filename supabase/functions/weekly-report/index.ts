@@ -779,7 +779,7 @@ async function sendEmail(to: string[], subject: string, html: string) {
   const relay = GMAIL_RELAY;
   if (relay) {
     const res = await fetch(relay, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: JSON.stringify({ secret: SECRET, to: to.join(','), subject, html }),
     });
     const txt = await res.text();

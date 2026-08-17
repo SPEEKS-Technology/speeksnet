@@ -334,29 +334,54 @@ var BUY_CLOSED_DATES = [
 // the write for that run — which costs nothing, because the counter is
 // recomputed from day 1 every morning rather than incremented, so the next
 // successful run repairs it completely.
+// ⚠️ AND A FAILED LOOKUP MUST SAY WHY. The first version swallowed the error and
+// returned a bare null, so the run report said only "closed-day list
+// unavailable" — true, useless, and indistinguishable from a one-off blip. It
+// went unnoticed from 2026-08-13 to 08-16 while somebody re-typed the counter by
+// hand every morning. `_buyClosedWhy` carries the real reason out to the report.
+//
+// The likeliest reason, and the one to check first: this is the ONLY
+// UrlFetchApp call in the file. Before it, the script never made an outbound
+// request, so it never held the script.external_request scope. Adding the call
+// does not re-prompt — a web app keeps running under the authorisation granted
+// when it was installed — so the fetch throws "Authorization is required to
+// perform that action" until the owner opens the editor, runs any function and
+// accepts the new permission. Everything else keeps working, because Gmail and
+// Sheets were already granted, which is what makes it look so selective.
 var GP_GOALS_URL = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/gp-goals';
 var _buyClosedCache = {};
+var _buyClosedWhy = {};
 
 function _buyClosedDays(y, monthIdx) {
   var ym = y + '-' + ('0' + (monthIdx + 1)).slice(-2);
   if (_buyClosedCache[ym] !== undefined) return _buyClosedCache[ym];
-  var days = null;
+  var days = null, why = null;
   try {
     var res = UrlFetchApp.fetch(GP_GOALS_URL + '?month=' + ym, { muteHttpExceptions: true });
-    if (res.getResponseCode() === 200) {
+    var code = res.getResponseCode();
+    if (code === 200) {
       var j = JSON.parse(res.getContentText());
       if (j && Object.prototype.toString.call(j.closed) === '[object Array]') {
         days = j.closed.map(function (c) { return Number(c.day); })
                        .filter(function (d) { return d >= 1 && d <= 31; });
+      } else {
+        why = 'gp-goals returned 200 but no closed[] array';
       }
+    } else {
+      why = 'gp-goals returned HTTP ' + code + ': '
+        + String(res.getContentText() || '').slice(0, 200);
     }
-  } catch (e) { /* falls through to the local list */ }
+  } catch (e) {
+    why = 'UrlFetchApp threw: ' + String(e && e.message || e).slice(0, 300);
+  }
   if (days === null && BUY_CLOSED_DATES.length) {
     days = BUY_CLOSED_DATES
       .filter(function (iso) { return iso.indexOf(ym + '-') === 0; })
       .map(function (iso) { return parseInt(iso.slice(8), 10); });
+    why = null;   // the fallback answered, so nothing was left unknown
   }
   _buyClosedCache[ym] = days;
+  _buyClosedWhy[ym] = why;
   return days;
 }
 
@@ -397,7 +422,7 @@ function _handle(e) {
   // makes a deploy-drift miss say so.
   if (['ingest', 'diagnose', 'diagnoseBuying', 'diagnoseReviews', 'buying',
        'diagnoseWeekly', 'diagnoseSummary', 'weekly', 'rehearseShift',
-       'backfillConversions', 'verifyConversions'].indexOf(action) < 0) {
+       'backfillConversions', 'verifyConversions', 'dayEndFacts'].indexOf(action) < 0) {
     return _json({ ok: false, error: 'unknown action "' + action + '"' });
   }
 
@@ -427,6 +452,18 @@ function _handle(e) {
     }
     if (action === 'verifyConversions') {
       return _json(verifyConversionWeek({ weekEnd: p.weekEnd || null }));
+    }
+    // Read-only, and the pull side of day_end_facts: the day-end-ingest edge
+    // function calls this and upserts what comes back. Deliberately NOT a write
+    // from here — every other Supabase-bound feed in this file is a pull too,
+    // which is what keeps the service-role key out of Apps Script entirely.
+    //
+    // `days` is caller-set so the same action serves both the nightly 1-day
+    // pass and the one-time history backfill. Large windows return large
+    // bodies; past a few weeks, run diagnoseDayEndFacts() from the editor or
+    // page the backfill in month-sized chunks.
+    if (action === 'dayEndFacts') {
+      return _json(dayEndFacts({ days: p.days ? parseInt(p.days, 10) : 30 }));
     }
     if (action === 'buying') return _json(ingestBuyingEmails({ dryRun: dryRun }));
 
@@ -1325,6 +1362,11 @@ function ingestBuyingEmails(opts) {
         _syncBuyDaysThru(t, ref, opts.dryRun).forEach(function (d) {
           d.tab = tabName;
           report.daysThru.push(d);
+          if (d.warn) {
+            (report.warnings = report.warnings || []).push({
+              note: 'Days thru Month was not advanced', tab: tabName, hint: d.why
+            });
+          }
         });
         var chk = _buyPlannedCheck(t, ref);
         if (chk) { chk.tab = tabName; (report.warnings = report.warnings || []).push(chk); }
@@ -1477,8 +1519,21 @@ function _syncBuyDaysThru(t, refDate, dryRun) {
   // If SPEEKS could not be reached, the closure list is UNKNOWN, not empty.
   // Writing anyway would silently count a holiday as a working day; skipping
   // leaves yesterday's figure standing, and tomorrow's run puts it right.
+  //
+  // "Tomorrow's run puts it right" is only true if tomorrow's run can reach
+  // SPEEKS. When it cannot, this skip is not a blip, it is a stopped clock —
+  // and a stopped "Days thru Month" inflates every Tracking projection on the
+  // Buy tab in proportion (stuck at 9 on the 16th read 44% high). So the reason
+  // travels with the skip, and it goes out as a WARNING, which sales-ingest
+  // already surfaces, rather than as one more line in the daysThru list nobody
+  // reads until someone notices the sheet is wrong.
+  var ym = refDate.getFullYear() + '-' + ('0' + (refDate.getMonth() + 1)).slice(-2);
   if (_buyClosedDays(refDate.getFullYear(), refDate.getMonth()) === null) {
-    out.push({ skipped: 'closed-day list unavailable — Days thru Month left alone this run' });
+    out.push({
+      skipped: 'closed-day list unavailable — Days thru Month left alone this run',
+      why: _buyClosedWhy[ym] || 'no reason recorded',
+      warn: true
+    });
     return out;
   }
 
@@ -2443,12 +2498,21 @@ function _logBuySummary(r) {
   });
   r.errors.forEach(function (e) { Logger.log('  ERROR: ' + e.subject + ' — ' + e.error); });
   (r.daysThru || []).forEach(function (d) {
-    Logger.log('  days-thru ' + d.tab + ' ' + d.a1 + ' (' + d.store + '): '
-      + (d.skipped ? 'skipped — ' + d.skipped : d.from + ' -> ' + d.to));
+    // Two shapes share this list: a per-store write/skip, which has a cell and a
+    // store, and a whole-tab bail-out, which has neither. Printing the second
+    // through the first's format spells the interesting case "undefined
+    // (undefined)", so each says only what it actually knows.
+    Logger.log('  days-thru ' + d.tab
+      + (d.a1 ? ' ' + d.a1 + ' (' + d.store + ')' : '') + ': '
+      + (d.skipped ? 'skipped — ' + d.skipped + (d.why ? ' [' + d.why + ']' : '')
+                   : d.from + ' -> ' + d.to));
   });
   (r.warnings || []).forEach(function (w) {
-    Logger.log('  WARNING [' + w.tab + '] ' + w.note + ': sheet=' + w.sheet
-      + ' expected=' + w.expected + ' — ' + w.hint);
+    // Two warning shapes too: the buying-days cross-check carries sheet/expected,
+    // the days-thru bail-out carries only a hint.
+    Logger.log('  WARNING [' + w.tab + '] ' + w.note
+      + (w.expected === undefined ? '' : ': sheet=' + w.sheet + ' expected=' + w.expected)
+      + (w.hint ? ' — ' + w.hint : ''));
   });
 }
 
@@ -3717,4 +3781,365 @@ function _a1col(c) {
   c += 1;
   while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = (c - m - 1) / 26; }
   return s;
+}
+
+// ============================================================
+// DAY END FACTS — the fact sheet behind the DM's daily messages
+// ============================================================
+// The DM writes a short note to each store most mornings, reacting to the
+// previous day. Those notes are being generated, and the figures they react to
+// live almost entirely in THIS email and nowhere else:
+//
+//   customer / device conversion   — daily_buysell has neither
+//   Devices Processed              — "listed items", the >25 / <20 thresholds
+//   5-star reviews (Month to Date) — the only review figure that may be used
+//   Total Customers                — "even with 18 customers"
+//   Team Production                — the only place a PERSON is named
+//
+// daily_buysell already carries est_value, margin and net sales, so this table
+// is additive rather than a second copy of the same feed. Where they overlap
+// they must agree: daily_buysell.buy IS Estimated Value (verified across all
+// five stores on 2026-08-04 and 2026-08-12), NOT cash paid. Cash paid is
+// `total_spent` and exists only here.
+//
+// Read-only and idempotent by (store, date). Nothing is archived, no sheet is
+// touched, no counter moves — this pass can be re-run over the same mail as
+// often as we like, which is what makes the one-time history backfill safe.
+
+// A per-message parse. Every field is optional: PayMore edits this template
+// (the "5-star reviews (Month to Date)" line appears on 2026-08-12 copies and
+// is absent from 2026-08-04 ones), so a missing section must degrade to a null
+// and a warning, never an exception that costs us the other four stores.
+function _deParse(body) {
+  var lines = _wkLines(body);
+  var out = { warnings: [] };
+  function warn(w) { out.warnings.push(w); }
+
+  // --- Buying Statistics. Bounded above by PaytonAI, whose prose quotes store
+  // names and dollar figures out of customer reviews and would otherwise be
+  // read as data — the same trap the weekly parser documents.
+  var bs = _wkIdx(lines, /^buying statistics$/i, 0);
+  var bsEnd = _wkIdx(lines, /^paytonai/i, bs < 0 ? 0 : bs);
+  if (bs < 0) { warn('no "Buying Statistics" section'); }
+  else {
+    if (bsEnd < 0) bsEnd = lines.length;
+    var ci = _wkLabelIdx(lines, 'customer conversion rate', bs, bsEnd);
+    var di = _wkLabelIdx(lines, 'device conversion rate', bs, bsEnd);
+    var cf = ci >= 0 ? _wkFraction(lines, ci) : null;
+    var df = di >= 0 ? _wkFraction(lines, di) : null;
+    if (!cf) warn('customer conversion fraction not found');
+    if (!df) warn('device conversion fraction not found');
+    out.custConvNum = cf ? cf.num : null;
+    out.custConvDen = cf ? cf.den : null;
+    out.devConvNum  = df ? df.num : null;
+    out.devConvDen  = df ? df.den : null;
+
+    out.cashSpent      = _wkMoney(_wkAfter(lines, 'cash spent', bs, bsEnd));
+    out.totalSpent     = _wkMoney(_wkAfter(lines, 'total spent', bs, bsEnd));
+    out.estValue       = _wkMoney(_wkAfter(lines, 'estimated value', bs, bsEnd));
+    out.estGrossProfit = _wkMoney(_wkAfter(lines, 'estimated gross profit', bs, bsEnd));
+    out.estMarginPct   = _wkPct(_wkAfter(lines, 'estimated gross margin', bs, bsEnd));
+    out.failedDeals    = _wkInt(_wkAfter(lines, 'failed deals', bs, bsEnd));
+    out.devicesLost    = _wkInt(_wkAfter(lines, 'devices lost', bs, bsEnd));
+    out.lostRevenue    = _wkMoney(_wkAfter(lines, 'total lost revenue', bs, bsEnd));
+    if (out.estValue == null) warn('Estimated Value did not parse');
+  }
+
+  // --- Review Statistics. "Total reviews" is the dangerous neighbour of the
+  // MTD line: both are bare counts a few lines apart, and reading the wrong one
+  // turns a whole month into a single day. Bounded to the section, and the MTD
+  // label is matched in full.
+  var rs = _wkIdx(lines, /^review statistics$/i, 0);
+  var rsEnd = _wkIdx(lines, /^paytonai/i, rs < 0 ? 0 : rs);
+  if (rs < 0) warn('no "Review Statistics" section');
+  else {
+    if (rsEnd < 0) rsEnd = lines.length;
+    out.fiveStarToday = _wkInt(_wkAfter(lines, '5 stars', rs, rsEnd));
+    out.reviewsToday  = _wkInt(_wkAfter(lines, 'total reviews', rs, rsEnd));
+    out.fiveStarMtd   = _wkInt(_wkAfter(lines, '5-star reviews (month to date)', rs, rsEnd));
+    // Absent on older copies — a fact about the template, not a parse failure.
+    if (out.fiveStarMtd == null) warn('no MTD 5-star line (pre-2026-08 template)');
+  }
+
+  // --- Sales Statistics. "Gross Margin" here is the SELL margin; the buying
+  // section's is "Estimated Gross Margin". Two different numbers, and the only
+  // thing separating them is which section you are anchored in.
+  var ss = _wkIdx(lines, /^sales statistics$/i, 0);
+  if (ss < 0) warn('no "Sales Statistics" section');
+  else {
+    var ssEnd = _wkIdx(lines, /^customer activity$/i, ss);
+    if (ssEnd < 0) ssEnd = lines.length;
+    out.grossSales     = _wkMoney(_wkAfter(lines, 'gross sales', ss, ssEnd));
+    out.netSales       = _wkMoney(_wkAfter(lines, 'net sales', ss, ssEnd));
+    out.salesMarginPct = _wkPct(_wkAfter(lines, 'gross margin', ss, ssEnd));
+  }
+
+  // --- Customer Activity
+  var ca = _wkIdx(lines, /^customer activity$/i, 0);
+  if (ca < 0) warn('no "Customer Activity" section');
+  else {
+    var caEnd = _wkIdx(lines, /^inventory snapshot$/i, ca);
+    if (caEnd < 0) caEnd = lines.length;
+    out.newCustomers      = _wkInt(_wkAfter(lines, 'new customers', ca, caEnd));
+    out.returnCustomers   = _wkInt(_wkAfter(lines, 'return customers', ca, caEnd));
+    out.recycleCustomers  = _wkInt(_wkAfter(lines, 'recycle customers', ca, caEnd));
+    out.noDealCustomers   = _wkInt(_wkAfter(lines, 'no deal customers', ca, caEnd));
+    out.browsingCustomers = _wkInt(_wkAfter(lines, 'browsing customers', ca, caEnd));
+    out.totalCustomers    = _wkInt(_wkAfter(lines, 'total customers', ca, caEnd));
+  }
+
+  // --- Inventory Snapshot. _wkAvailable already reads the middle card and
+  // checks the count/money/money shape, so a column swap upstream is caught
+  // rather than silently filling Value with Cost.
+  var av = _wkAvailable(lines);
+  if (av.why) warn('Available card: ' + av.why);
+  out.availableCount = av.count != null ? av.count : null;
+  out.availableCost  = av.cost != null ? av.cost : null;
+  out.queueCount     = _deCardCount(lines, /^in queue$/i);
+  out.liveCount      = _deCardCount(lines, /^live$/i);
+
+  // --- Processed Stats. "Devices Processed" is ALSO a column header in the
+  // Team Production table directly above, and "Total Value" would then read one
+  // buyer's row instead of the store total. Anchored past the section heading
+  // and matched as a whole line, which the wide table header never is.
+  var ps = _wkIdx(lines, /^processed stats$/i, 0);
+  if (ps < 0) warn('no "Processed Stats" section — listed items unavailable');
+  else {
+    out.devicesProcessed = _wkInt(_wkAfter(lines, 'devices processed', ps, lines.length));
+    out.processedValue   = _wkMoney(_wkAfter(lines, 'total value', ps, lines.length));
+  }
+
+  out.teamProduction = _deTeamProduction(lines);
+  out.shoutouts      = _deShoutouts(lines);
+  return out;
+}
+
+// One Inventory Snapshot card's device count. Same three-column layout as the
+// Available card; only the anchor differs.
+function _deCardCount(lines, re) {
+  var snap = _wkIdx(lines, /^inventory snapshot$/i, 0);
+  if (snap < 0) return null;
+  var card = _wkIdx(lines, re, snap);
+  if (card < 0) return null;
+  for (var i = card; i < Math.min(lines.length, card + 6); i++) {
+    if (/device\W*count\W+cost\W+projection/i.test(lines[i])) {
+      var lv = _wkLevels(lines[i + 1]);
+      return lv.length ? _wkInt(lv[0]) : null;
+    }
+  }
+  return null;
+}
+
+// Team Production — the only place in the whole feed where a PERSON is named
+// against a number, which is what makes "great listing Zach" reproducible.
+//
+// The table is one wide row per member, preceded by that member's name and job
+// title on their own lines, and the day's top performer carries a crown. Read
+// positionally off the header rather than by label: every cell here is a bare
+// figure, so there is nothing to anchor to except column order — and the header
+// is REQUIRED, so a reordering upstream drops the section rather than silently
+// attributing the wrong number to a name.
+function _deTeamProduction(lines) {
+  var tp = _wkIdx(lines, /^team production$/i, 0);
+  if (tp < 0) return null;
+  var hdr = -1;
+  for (var i = tp; i < Math.min(lines.length, tp + 4); i++) {
+    if (/team member.*devices processed.*total cost.*processed value/i.test(lines[i])) { hdr = i; break; }
+  }
+  if (hdr < 0) return null;
+
+  var stop = _wkIdx(lines, /^processed stats$/i, hdr);
+  if (stop < 0) stop = lines.length;
+
+  var rows = [], pending = [];
+  for (var j = hdr + 1; j < stop; j++) {
+    var line = lines[j];
+    if (/^\s*Please note/i.test(line) || /devices repriced/i.test(line)) { continue; }
+
+    var lv = _wkLevels(line);
+    // A data row is count / count / money / money / time — the two leading bare
+    // integers are what separate it from a name line or a job title.
+    var isData = lv.length >= 4 &&
+      String(lv[0]).indexOf('$') === -1 &&
+      /^[0-9]/.test(String(lv[0]).trim());
+    if (!isData) {
+      // The header's trailing cells sit on their OWN lines below the line the
+      // regex above matched, so they fall through to here and get banked as
+      // though they were content. That is what put "Time" in the name of the
+      // first member of every table. Named explicitly rather than by shape: a
+      // one-word line is also what a mononym staff member looks like.
+      if (!/^(time|total\s*time|avg\.?\s*time|average\s*time|devices\s*repriced)$/i.test(String(line).trim())) {
+        pending.push(line);
+      }
+      continue;
+    }
+
+    // The name and job title are the LAST TWO lines banked since the previous
+    // data row, not the first two.
+    //
+    // Taking the first two put the header's trailing "Time" cell — which lands on
+    // its own line after the header the regex above matches — into the name of the
+    // first member of every table, and pushed that member's real name into the
+    // role. Every store's first row read { name: "Time", role: "Garrett Burnell" }
+    // until 2026-08-14. Anchoring to the END is correct whatever precedes it,
+    // because the two lines immediately above a data row are always that member's.
+    var name = null, role = null;
+    if (pending.length === 1) { name = pending[0]; }
+    else if (pending.length >= 2) {
+      name = pending[pending.length - 2];
+      role = pending[pending.length - 1];
+    }
+    var top = false;
+    if (name) {
+      // U+1F451 CROWN, matched as its surrogate pair - Apps Script JS is
+      // UTF-16, so charAt(0) on an emoji returns half a character.
+      top = /👑/.test(name);
+      name = name.replace(/^[^A-Za-z]+/, '').trim();
+    }
+    pending = [];
+    if (!name) { continue; }
+
+    rows.push({
+      name: name,
+      role: role,
+      processed: _wkInt(lv[0]),
+      repriced:  _wkInt(lv[1]),
+      cost:      _wkMoney(lv[2]),
+      value:     _wkMoney(lv[3]),
+      top: top
+    });
+  }
+  return rows.length ? rows : null;
+}
+
+// The named staff praise out of the PaytonAI 5-star summary. Kept as raw lines
+// rather than parsed into a name list: this is model-written prose whose wording
+// changes week to week, and the generator wants the sentence, not a token.
+// Bounded to the 5-star half so a 1-star improvement tip can never be quoted
+// back to a store as praise.
+function _deShoutouts(lines) {
+  var five = _wkIdx(lines, /^5 star reviews\b.*praise/i, 0);
+  if (five < 0) return null;
+  var stop = _wkIdx(lines, /^(sales statistics|customer activity|inventory snapshot)$/i, five);
+  if (stop < 0) stop = Math.min(lines.length, five + 40);
+
+  var out = [];
+  for (var i = five + 1; i < stop; i++) {
+    var l = lines[i];
+    if (/^(summary|praise & staff shoutouts)\s*:?$/i.test(l)) { continue; }
+    if (l === '—' || l === '-') { continue; }
+    if (/^no 5-star reviews/i.test(l)) { return null; }
+    out.push(l);
+  }
+  return out.length ? out.slice(0, 12) : null;
+}
+
+// Every Day End Report in a window, parsed. Read-only: no archiving, no sheet
+// write, no counter moved. `days` is explicit rather than LOOKBACK because the
+// whole point of the first run is to reach back over months of history at once.
+//
+// Newest copy wins per (store, date), except that a DIRECT copy always beats a
+// forwarded one: forwarding re-renders the bold cells and has already cost this
+// codebase one round of rework.
+function dayEndFacts(opts) {
+  opts = opts || {};
+  var days = opts.days ? parseInt(opts.days, 10) : 30;
+  if (!(days > 0)) { days = 30; }
+
+  var q = '(from:(' + BUY_SENDER + ') OR subject:("Day End Report")) newer_than:' + days + 'd';
+  var msgs = [];
+  GmailApp.search(q, 0, 500).forEach(function (t) {
+    t.getMessages().forEach(function (m) { msgs.push(m); });
+  });
+  msgs.sort(function (a, b) { return a.getDate().getTime() - b.getDate().getTime(); });
+
+  var byKey = {}, skipped = { notDayEnd: 0, badSubject: 0 };
+  msgs.forEach(function (msg) {
+    var subject = String(msg.getSubject() || '');
+
+    // pmdev.site also sends the WEEKLY report — same sender, same subject shape,
+    // the same money labels. Reading one as a day would hand a store a week's
+    // buying volume as yesterday's.
+    if (!DAY_END_SUBJECT.test(subject)) { skipped.notDayEnd++; return; }
+    if (/weekly report/i.test(subject))  { skipped.notDayEnd++; return; }
+
+    var meta = _buyParseSubject(subject);
+    if (!meta || !meta.ok) { skipped.badSubject++; return; }
+
+    var forwarded = /^\s*(fw|fwd|re)\s*:/i.test(subject);
+    var key = meta.store + '|' + _iso(meta.date);
+    var prior = byKey[key];
+    // Direct beats forwarded regardless of arrival order; otherwise newest wins.
+    if (prior && !prior.forwarded && forwarded) { return; }
+
+    var parsed;
+    try {
+      parsed = _deParse(msg.getPlainBody());
+    } catch (err) {
+      parsed = { warnings: ['parse threw: ' + String(err && err.message || err)] };
+    }
+    parsed.store = meta.store;
+    parsed.date = _iso(meta.date);
+    parsed.forwarded = forwarded;
+    parsed.source = forwarded ? 'gmail-forwarded' : 'gmail-direct';
+    byKey[key] = parsed;
+  });
+
+  var rows = Object.keys(byKey).map(function (k) { return byKey[k]; });
+  rows.sort(function (a, b) {
+    return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.store < b.store ? -1 : 1);
+  });
+
+  return {
+    ok: true,
+    days: days,
+    messages_seen: msgs.length,
+    skipped: skipped,
+    rows_returned: rows.length,
+    // Surfaced rather than buried in the rows: a template change shows up here
+    // as a sudden jump, which is the signal that a threshold has gone quiet.
+    rows_with_warnings: rows.filter(function (r) { return r.warnings && r.warnings.length; }).length,
+    rows: rows
+  };
+}
+
+// Run-dropdown entry point — runs the EDITOR's code, unlike anything reached
+// through /exec, so the parse can be checked before a deploy rather than after.
+function diagnoseDayEndFacts() {
+  var r = dayEndFacts({ days: 14 });
+  Logger.log('rows: ' + r.rows_returned + '   with warnings: ' + r.rows_with_warnings);
+  r.rows.slice(-12).forEach(function (row) {
+    Logger.log([
+      row.date, row.store,
+      'conv ' + row.custConvNum + '/' + row.custConvDen,
+      'listed ' + row.devicesProcessed,
+      'estVal ' + row.estValue,
+      'margin ' + row.estMarginPct,
+      'net ' + row.netSales,
+      'mtd5 ' + row.fiveStarMtd,
+      'team ' + (row.teamProduction ? row.teamProduction.length : 0),
+      (row.warnings && row.warnings.length ? '! ' + row.warnings.join('; ') : '')
+    ].join('  '));
+  });
+  return r;
+}
+
+// ------------------------------------------------------------
+// Scope probe — keep it.
+// ------------------------------------------------------------
+// The one UNGUARDED outbound call in this file, and the only reliable way to
+// make the editor raise its Review Permissions dialog.
+//
+// ⚠️ A try/catch around a first-of-its-kind Google service call HIDES THE
+// PROMPT THAT AUTHORISES IT. _buyClosedDays catches the "You do not have
+// permission to call UrlFetchApp.fetch" error to report it, so dryRunBuying
+// finished as ok:true and no dialog ever appeared — while "Days thru Month"
+// sat unwritten for four days and somebody re-typed it every morning.
+// Re-deploying does not help either: a new version ships new CODE, not a new
+// GRANT. Run this instead, accept, and the web app picks it up with no redeploy.
+//
+// Any future new service here (DriveApp, a second UrlFetch host, CalendarApp)
+// lands in the same trap. Point this at it first.
+function scopeTest() {
+  Logger.log(UrlFetchApp.fetch('https://example.com').getResponseCode());
 }

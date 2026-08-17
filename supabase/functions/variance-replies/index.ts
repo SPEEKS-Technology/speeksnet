@@ -60,6 +60,12 @@ async function queueNotification(n: {
   category: string; kind: string; title: string; body?: string; link?: string;
   store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
   audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+  // The feature_overrides key of the surface this notification is about, so
+  // notify can drop anyone whose Feature Access hides it. See notifys
+  // featureAllows: the roles above stay the DEFAULT, an override moves an
+  // individual either way. Null = no gated surface (an announcement board, a
+  // store message) and roles alone are the whole answer.
+  audienceFeature?: string | null;
 }) {
   try {
     const sb = createClient(
@@ -75,6 +81,7 @@ async function queueNotification(n: {
       audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
       exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
       priority: n.priority ?? "normal",
+      audience_feature: n.audienceFeature ?? null,
     });
   } catch (_) { /* best-effort */ }
 }
@@ -255,6 +262,7 @@ Deno.serve(async (req: Request) => {
             // telling an ASM a sheet had landed and then going silent as the
             // deadline ran down was the worst of both. Out of both halves now.
             audienceRoles: ["manager", "owner (manager)"],
+            audienceFeature: "widget-variance-replies",
             excludeUser: body.uploaded_by ? String(body.uploaded_by).trim() : null,
           });
         }
@@ -303,34 +311,16 @@ Deno.serve(async (req: Request) => {
         }
         await broadcastChange("variance", null);
 
-        // Both directions of the note cycle are worth an email, and only these
-        // two: a DM note is a question put to the store, a manager reply is the
-        // answer coming back. gm_note (the manager's own first pass) is skipped —
-        // it is the manager writing on their own sheet, not a handoff to anyone.
-        // Clearing a note (empty text) is silent for the same reason as recycle.
-        if (text && (field === "dm_note" || field === "mgr_reply")) {
-          const { data: per } = await supabase.from("variance_reply_periods")
-            .select("store").eq("id", item.period_id).maybeSingle();
-          const store = String(per?.store || "").toUpperCase();
-          const toManager = field === "dm_note";
-          await queueNotification({
-            category: "variance_aging",
-            kind: toManager ? "variance_dm_note" : "variance_mgr_reply",
-            title: toManager
-              ? `Variance note from the DM — ${store}`
-              : `Variance reply from ${by || "a manager"} — ${store}`,
-            body: text.slice(0, 300),
-            link: "workspace.html#vreplies",
-            store: store || null,
-            // A DM note goes to that store's manager; a reply goes back to the DM.
-            // No ASMs on the store side — see the upload hook above.
-            audienceStores: toManager && store ? [store] : null,
-            audienceRoles: toManager
-              ? ["manager", "owner (manager)"]
-              : ["district manager", "ceo"],
-            excludeUser: by,
-          });
-        }
+        // NO per-note email. Deliberately removed 2026-08-14 (Ethan): a period can
+        // carry twenty flagged lines, and one email per note meant the drain — which
+        // runs every FIVE minutes — mailed a fresh batch the whole time a manager
+        // worked down the list. Both directions now wait for the deadline and arrive
+        // as ONE "replies are in" email, built in notify's due-date pass as
+        // varianceDmReview / varianceMgrReview. Deadline-driven rather than
+        // write-driven, so the volume of notes cannot change the volume of email.
+        //
+        // The in-app feed row is unaffected and still state-based, so nothing here
+        // delays what he sees on the site — only what lands in his inbox.
         return jsonResponse({ success: true });
       }
 

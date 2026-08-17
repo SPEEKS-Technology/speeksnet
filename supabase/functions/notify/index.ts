@@ -104,6 +104,16 @@ const STORE_SCORES = {
   blurb: "A PayMore audit scored on your store, practice or official.",
 };
 
+// The Owner (Manager) sits on BOTH sides of this category, which no other role
+// does: preferred-purchases queues its requests to whoever holds the approve
+// tool — them — while recycle verdicts still come back down to them like any
+// other store role. STORE_REQUESTS alone would promise only the second half and
+// leave every purchase request arriving under a label that denies it exists.
+const OWNER_REQUESTS = {
+  label: "Purchase & Recycle Requests",
+  blurb: "Purchase requests waiting on your verdict, plus the DM's answer on recycle requests you sent up.",
+};
+
 const META_OVERRIDES: { roles: Set<string>; meta: Partial<Record<Category, { label: string; blurb: string }>> }[] = [
   {
     // Assistant Managers receive strictly less than two of these labels claim:
@@ -128,8 +138,14 @@ const META_OVERRIDES: { roles: Set<string>; meta: Partial<Record<Category, { lab
   {
     // The store side of the requests tool: they get the verdict coming back DOWN
     // on something they sent up, not a queue of requests waiting on them.
-    roles: new Set(["manager", "owner (manager)", "owner manager"]),
+    // Owner (Manager) is deliberately NOT here — they own the purchase queue, so
+    // they get both directions and their own label below.
+    roles: new Set(["manager"]),
     meta: { requests: STORE_REQUESTS, scores: STORE_SCORES },
+  },
+  {
+    roles: new Set(["owner (manager)", "owner manager"]),
+    meta: { requests: OWNER_REQUESTS, scores: STORE_SCORES },
   },
 ];
 
@@ -170,19 +186,30 @@ const SUBS: Record<Category, Sub[]> = {
   ],
   store_messages: [],
   requests: [
+    // The owner roles are here for purchase_request only — recycle and delete
+    // requests still go up to the DM. Sharing one switch is right anyway: the
+    // sub answers "do I want the requests that wait on me", and which kinds
+    // those are is a fact about the role, not a thing to configure.
     { key: "req_in",  label: "Requests Coming In", blurb: "Purchase and recycle requests, and delete requests, waiting on a verdict.",
       kinds: ["purchase_request", "recycle_request", "claim_delete_request", "recycle_delete_request"],
-      roles: new Set(["district manager", "ceo"]) },
+      roles: new Set(["district manager", "ceo", "owner (manager)", "owner manager"]) },
     { key: "req_out", label: "Verdicts And Replies", blurb: "The DM's answer on something you sent up.",
       kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply"] },
   ],
   claims: [],
   variance_aging: [
-    { key: "variance", label: "Variance Replies", blurb: "New sheets, the DM's notes, and the reply deadline.",
-      kinds: ["variance_upload", "variance_upload_clear", "variance_dm_note", "variance_mgr_reply", "varianceDue"],
+    // The per-note kinds (variance_dm_note / variance_mgr_reply / aging_dm_note /
+    // aging_store_reply) were retired 2026-08-14 in favour of the *Review slugs
+    // below, which fire once at the deadline instead of once per note. They are
+    // kept in these lists on purpose: an existing muted_kinds row may still name
+    // one, and dropping the name would make that saved preference unreadable.
+    { key: "variance", label: "Variance Replies", blurb: "New sheets, the DM's review, and the reply deadline.",
+      kinds: ["variance_upload", "variance_upload_clear", "variance_dm_note", "variance_mgr_reply",
+              "varianceDue", "varianceDmReview", "varianceMgrReview"],
       roles: new Set([...STORE_SIDE_ROLES, "district manager", "ceo"]) },
-    { key: "aging",    label: "Aging Inventory", blurb: "New items, the DM's notes, and the review deadline.",
-      kinds: ["aging_item_added", "aging_dm_note", "aging_store_reply", "agingDue"] },
+    { key: "aging",    label: "Aging Inventory", blurb: "New items, the DM's replies, and the review deadline.",
+      kinds: ["aging_item_added", "aging_dm_note", "aging_store_reply",
+              "agingDue", "agingDmReview", "agingMgrReview"] },
   ],
   deadlines: [
     { key: "kpis",     label: "Store KPIs", blurb: "Weekly and monthly entry.",
@@ -228,7 +255,9 @@ const KIND_LABEL: Record<string, string> = {
   recycle_verdict: "Recycle Verdict", recycle_dm_note: "Recycle Note", recycle_reply: "Recycle Reply",
   variance_upload: "Variance", variance_upload_clear: "Variance", variance_dm_note: "Variance",
   variance_mgr_reply: "Variance",
+  varianceDmReview: "Variance", varianceMgrReview: "Variance",
   aging_item_added: "Aging Inventory", aging_dm_note: "Aging Inventory", aging_store_reply: "Aging Inventory",
+  agingDmReview: "Aging Inventory", agingMgrReview: "Aging Inventory",
   audit_practice_submitted: "PayMore Audit", audit_official_submitted: "PayMore Audit",
   scorecard_submitted: "SPEEKS Scorecard",
 };
@@ -254,13 +283,19 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   // A store comment is scoped to a store; one sent to ALL is company-wide, which
   // corp roles do receive. So: everyone.
   store_messages: null,
-  // Two directions: preferred-purchases and recycle-requests send UP to the corp
-  // queue, and recycle-requests sends the DM's verdict/notes BACK DOWN to the
-  // store that asked. So both sides appear here, under different labels (metaFor).
+  // Two directions. recycle-requests sends UP to the corp queue and its
+  // verdict/notes BACK DOWN to the store that asked; preferred-purchases sends
+  // up to whoever holds the approve tool, which is the Owner (Manager), NOT
+  // corp. So both sides appear here, under three different labels (metaFor).
+  //
   // MOCD is deliberately absent here and from every category below except the
   // two open ones (Ethan, 2026-08-13). They hold none of these tools, so every
   // switch beyond announcements and store messages was one that could never
-  // send them anything.
+  // send them anything. ⚠️ That was only half true until 2026-08-16:
+  // preferred-purchases queued purchase requests to "mocd" outright, so they
+  // arrived regardless of this set — wants() reads muted_kinds, never
+  // CATEGORY_ROLES, so a category absent from the popout still delivers if an
+  // audience names the role. The audience is the thing to fix, and was.
   requests: new Set([
     "district manager", "ceo",
     "manager", "owner (manager)", "owner manager", "assistant manager",
@@ -404,6 +439,65 @@ async function loadPeople(sb: any): Promise<Person[]> {
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Feature Access, server side
+// ---------------------------------------------------------------------------
+// Roles alone cannot answer "can this person open this tool". Feature Access
+// exists precisely to hand a tool to someone outside its default roles, or take
+// it away from someone inside them, and that decision lives in
+// feature_overrides. A notification that ignores it mails people about work they
+// cannot open, and stays silent for the people who were given it.
+//
+// The DEFAULT passed in is the caller's own audience_roles match, so attaching a
+// feature key never widens an audience by itself — it only lets an override move
+// a named person either way. Precedence is _featureOverrideFor's exactly: user
+// beats role beats default.
+async function loadFeatureOverrides(sb: any, keys: string[]): Promise<Map<string, any[]>> {
+  const out = new Map<string, any[]>();
+  if (!keys.length) return out;
+  const { data } = await sb.from("feature_overrides")
+    .select("feature_key, subject_type, subject, enabled").in("feature_key", keys);
+  for (const r of data || []) {
+    const k = String(r.feature_key);
+    if (!out.has(k)) out.set(k, []);
+    out.get(k)!.push(r);
+  }
+  return out;
+}
+
+// ⚠️ Matches the role on rawRole, NOT role. `role` is the EFFECTIVE role —
+// loadPeople flattens a Multi-Store Manager to "manager" and TOM to "mocd" so
+// the rest of this file can reason about them uniformly — while the Feature
+// Access tool writes the slug of whatever is literally in users.role. Matching
+// the flattened one would silently apply every manager's override to the MSM,
+// and never match a TOM's own row at all.
+function featureAllows(rows: any[], person: Person, byRole: boolean): boolean {
+  if (!rows.length) return byRole;
+  const lc = (v: unknown) => String(v || "").toLowerCase().trim();
+  const slug = lc(person.rawRole).replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "-");
+  const forUser = rows.find((r) => lc(r.subject_type) === "user" && lc(r.subject) === lc(person.name));
+  if (forUser) return !!forUser.enabled;
+  const forRole = rows.find((r) => lc(r.subject_type) === "role" && lc(r.subject) === slug);
+  if (forRole) return !!forRole.enabled;
+  return byRole;
+}
+
+// The queue's own role filter, kept in one place because the instant drain and
+// the digest sweep both have to answer it identically — they read the same rows,
+// and a person on digest cadence who resolved differently would get an email
+// nobody else could explain.
+function passesAudience(row: any, person: Person, overrides: Map<string, any[]>): boolean {
+  const roles: string[] | null = row.audience_roles;
+  const byRole = !roles?.length
+    || roles.map((r: string) => r.toLowerCase().trim()).includes(person.role);
+  const key = row.audience_feature ? String(row.audience_feature) : null;
+  return key ? featureAllows(overrides.get(key) || [], person, byRole) : byRole;
+}
+
+function featureKeysIn(queue: any[]): string[] {
+  return [...new Set(queue.map((r: any) => r.audience_feature).filter(Boolean).map(String))];
 }
 
 type Prefs = {
@@ -602,7 +696,7 @@ const FOOT_PREFS = `You're getting this because you switched on email alerts in 
 async function sendEmail(to: string, subject: string, html: string) {
   try {
     const res = await fetch(GMAIL_RELAY, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
       body: JSON.stringify({ secret: SECRET, to, subject, html }),
     });
     const txt = await res.text();
@@ -618,8 +712,50 @@ async function sendEmail(to: string, subject: string, html: string) {
 // ============================================================================
 type Outbox = {
   person: Person; email: string;
-  items: { title: string; body: string; link: string; tone: "red" | "amber" | "sage"; meta: string; key: string }[];
+  // `group` is the collapse axis — see collapseItems. Items sharing one render as a
+  // single counted card. Absent means "always its own card".
+  items: { title: string; body: string; link: string; tone: "red" | "amber" | "sage"; meta: string; key: string; group?: string }[];
 };
+
+// Fold repeats of the same thing into ONE counted card (Ethan 2026-08-14: "I don't
+// want to see 20 cards of the same thing").
+//
+// Done HERE, at the delivery layer, rather than at each of the fifteen
+// queueNotification call sites. A batch write is normal across this whole app — 20
+// aging items added at once, a DM ruling on a stack of recycle lines — and fixing
+// it per caller would mean finding every one, getting each right, and remembering
+// the rule the next time a tool is built. One collapse covers all of them, present
+// and future.
+//
+// RENDERING ONLY. Every original item key must survive to the ledger: they are
+// deduped individually, so a key that goes unwritten comes straight back on the
+// next run and mails again. That is why this returns cards while flushOutbox keeps
+// iterating box.items for notify_sent.
+// The collapsed card is a COUNT AND NOTHING ELSE (Ethan 2026-08-14). An earlier
+// version listed the first three SKUs plus "and 17 more", which for a weekly aging
+// batch is a wall of device names nobody reads — the card links into the tool, and
+// that is where the list belongs. Applied to every kind, not just aging: uniform is
+// easier to trust than a per-kind rule, and no batch has yet been worth naming.
+function collapseItems(items: Outbox["items"]) {
+  type Card = Outbox["items"][number] & { n: number };
+  const out: Card[] = [];
+  const at = new Map<string, number>();
+
+  for (const it of items) {
+    const g = it.group;
+    if (!g) { out.push({ ...it, n: 1 }); continue; }
+    const i = at.get(g);
+    if (i === undefined) { at.set(g, out.length); out.push({ ...it, n: 1 }); }
+    else {
+      out[i].n++;
+      // Loudest tone wins — one red row in a batch makes the whole card red.
+      if (it.tone === "red" || (it.tone === "amber" && out[i].tone === "sage")) out[i].tone = it.tone;
+    }
+  }
+
+  // n === 1 keeps its own body: a single event still says what it was.
+  return out.map((c) => (c.n === 1 ? c : { ...c, body: `${c.n} items.` }));
+}
 
 function newOutbox(map: Map<string, Outbox>, person: Person, email: string): Outbox {
   let o = map.get(person.key);
@@ -634,13 +770,16 @@ async function flushOutbox(
   for (const box of boxes.values()) {
     if (!box.items.length) continue;
     const [title, sub] = opts.heading(box);
-    const first = box.items[0];
-    const subject = box.items.length === 1
+    // Cards, not raw items: 20 aging adds are ONE card. The subject counts cards for
+    // the same reason — "20 things need you" for a single batch overstated it badly.
+    const cards = collapseItems(box.items);
+    const first = cards[0];
+    const subject = cards.length === 1
       ? `Speeks — ${first.title}`
-      : `Speeks — ${box.items.length} things need you`;
+      : `Speeks — ${cards.length} things need you`;
     const body = `
       <div style="font-size:13.5px;font-weight:600;color:${C.charcoal};margin:0 0 14px;">Hi ${esc(box.person.name.split(" ")[0] || box.person.name)},</div>
-      ${box.items.map((i) => itemCard(i.title, i.body, i.link, i.tone, i.meta)).join("")}`;
+      ${cards.map((i) => itemCard(i.title, i.body, i.link, i.tone, i.meta)).join("")}`;
     const html = wrapEmail(title, sub, body, FOOT_PREFS);
     const target = opts.to || box.email;
 
@@ -674,6 +813,7 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
 
   const people = await loadPeople(sb);
   const prefs = await loadPrefs(sb);
+  const overrides = await loadFeatureOverrides(sb, featureKeysIn(queue));
 
   // Resolve every row to its recipients first, so the ledger can be checked in
   // one query instead of one per row.
@@ -684,7 +824,6 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
   for (const row of queue) {
     const cat = row.category as Category;
     const stores: string[] | null = row.audience_stores;
-    const roles: string[] | null = row.audience_roles;
     const only = nameKey(row.audience_user);
     const skip = nameKey(row.exclude_user);
 
@@ -696,7 +835,7 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
       } else {
         if (person.key === skip) continue;               // don't mail your own write
         if (stores?.length && !person.stores.some((s) => stores.map((x) => x.toUpperCase()).includes(s))) continue;
-        if (roles?.length && !roles.map((r) => r.toLowerCase().trim()).includes(person.role)) continue;
+        if (!passesAudience(row, person, overrides)) continue;
       }
       const p = prefs.get(person.key);
       if (!wants(p, cat, row.kind)) continue;
@@ -719,6 +858,10 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
       tone: h.row.priority === "high" ? "red" : "sage",
       meta: storeMeta(h.row.title, h.row.store, h.row.kind, h.person),
       key: h.key,
+      // Same kind + same store = the same thing happening repeatedly, which is what
+      // a batch write looks like from here. Priority rides along so a high-priority
+      // row is never folded in with routine ones.
+      group: `${h.row.kind}|${h.row.store ?? ""}|${h.row.priority ?? "normal"}`,
     });
   }
 
@@ -763,6 +906,18 @@ type Due = {
   title: string; body: string; link: string; tone: "red" | "amber";
   for: (p: Person) => boolean;      // who owes this
   store?: string;
+  // The feature_overrides key of the surface this chases, so somebody the tool
+  // has been hidden from stops being nagged about it. A function where the
+  // answer depends on the reader: an expense reminder is tool-expenses for the
+  // DM and tool-expenses-mgr for the MSM, and a claim is the oversight tool for
+  // one and the store tool for the other.
+  //
+  // REVOKE-ONLY, unlike the queue path. The `for` predicate above has already
+  // decided who owes this, and it encodes store coverage as well as role — an
+  // override cannot stand in for that, since granting somebody a tool says
+  // nothing about WHICH store they answer for. So an override can take a
+  // reminder away and never invent one.
+  feature?: string | ((p: Person) => string | null);
 };
 
 async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
@@ -792,6 +947,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
       body: `Nothing has been entered for the week ending ${prettyDate(wkEnd)}.${wkOverdue ? " The Monday 8:30am deadline has passed." : ""}`,
       link: "workspace.html#kpis", tone: wkOverdue ? "red" : "amber",
       for: (p) => KPI_ROLES.has(p.role) && covers(p, store),
+      feature: "widget-ws-weekly-kpis",
     });
   }
 
@@ -819,6 +975,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         body: `${label} has closed and no monthly KPIs have been entered.`,
         link: "workspace.html#kpis", tone: moOverdue ? "red" : "amber",
         for: (p) => KPI_ROLES.has(p.role) && covers(p, store),
+        feature: "widget-ws-weekly-kpis",
       });
     }
   }
@@ -839,6 +996,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         body: `${missing.length} store${missing.length === 1 ? "" : "s"} still have no weekly total: ${missing.join(", ")}. Every listing goal bar has nothing to measure against until they're set.`,
         link: "index.html", tone: "amber",
         for: (p) => p.role === "district manager",
+        feature: "widget-dm-listing-goals",
       });
     }
   }
@@ -862,6 +1020,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         // 8:31, the day's roles are simply owed. Red is for a passed deadline.
         link: "index.html", tone: "amber",
         for: (p) => LG_ROLES.has(p.role) && covers(p, store),
+        feature: "listing-goals-assign",
       });
     }
   }
@@ -883,6 +1042,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         body: `${missing.join(", ")} ${missing.length === 1 ? "has" : "have"} no gross-profit goal for this month yet.`,
         link: "index.html", tone: "amber",
         for: (p) => p.role === "district manager",
+        feature: "tool-store-goals",
       });
     }
   }
@@ -901,6 +1061,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
       body: `${label} has closed and your expense report hasn't been marked filed.`,
       link: "index.html", tone: "amber",
       for: (p) => (p.role === "district manager" || p.isMsm) && !done.has(p.key),
+      feature: (p: Person) => p.isMsm ? "tool-expenses-mgr" : "tool-expenses",
     });
   }
 
@@ -924,6 +1085,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         body: `${items.length} item${items.length === 1 ? "" : "s"} still need a reply${dueAt ? `, due ${prettyDate(fmtDate(dueAt))}` : ""}.`,
         link: "workspace.html#vreplies", tone: late ? "red" : "amber",
         for: (p) => ["manager", "owner (manager)", "owner manager"].includes(p.role) && covers(p, store),
+        feature: "widget-variance-replies",
       });
     }
   }
@@ -988,6 +1150,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         link: "index.html", tone: "red",
         for: (p) => p.role === "district manager" ||
                     (["manager", "owner (manager)", "owner manager"].includes(p.role) && covers(p, store)),
+        feature: (p: Person) => p.role === "district manager" ? "tool-claims-oversight" : "tool-claims-store",
       });
     }
   }
@@ -1028,6 +1191,162 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
           : `${agg.n} item${agg.n === 1 ? "" : "s"} still need a reply, due ${prettyDate(agg.soonest)}.`,
         link: "workspace.html#aging", tone: late ? "red" : "amber",
         for: (p) => ["manager", "owner (manager)", "owner manager", "assistant manager"].includes(p.role) && covers(p, store),
+        feature: "widget-aging-inventory",
+      });
+    }
+  }
+
+  // ---- "Replies are in" — BOTH tools, BOTH directions ------------------------
+  // Replaces the per-note emails the two tools used to queue on every write
+  // (variance_dm_note / variance_mgr_reply / aging_dm_note / aging_store_reply,
+  // all removed 2026-08-14). A period carries twenty-odd flagged lines, the drain
+  // runs every five minutes, and the old shape mailed a fresh batch the entire
+  // time somebody worked down the list.
+  //
+  // These are deadline-driven instead, so the number of notes written cannot
+  // change the number of emails sent — which is the whole point. Each dedupes on
+  // its `period` key, so an unread one does not nag daily.
+  {
+    const { data: periods } = await sb.from("variance_reply_periods")
+      .select("id, store, manager_due_at, dm_notes_at, dm_reviewed_at, all_clear").is("all_clear", null);
+
+    for (const per of periods || []) {
+      const store = String(per.store || "").toUpperCase();
+      const { data: items } = await sb.from("variance_reply_items")
+        .select("mgr_reply, dm_note, needs_reply, dm_reply_requested").eq("period_id", per.id);
+      const rows = items || [];
+
+      if (!per.dm_notes_at) {
+        // STAGE 1 — the manager's explanations are in and it is the DM's turn.
+        // Mirrors the site's `readyStores`: everything answered, or the window shut
+        // with whatever came in.
+        const owed = rows.filter((r: any) => r.needs_reply && !r.mgr_reply).length;
+        const answered = rows.filter((r: any) => r.needs_reply && r.mgr_reply).length;
+        const duePassed = per.manager_due_at && new Date(per.manager_due_at).getTime() <= Date.now();
+        if (answered > 0 && (owed === 0 || duePassed)) {
+          due.push({
+            slug: "varianceDmReview", period: String(per.id) + ":s1", cat: "variance_aging", store,
+            title: `Variance replies are in — ${STORE_NAME[store] || store}`,
+            body: `${answered} explanation${answered === 1 ? "" : "s"} to review`
+              + (owed ? `, ${owed} still outstanding.` : ` — the store is done.`),
+            link: "workspace.html#vreplies", tone: "sage",
+            for: (p) => ["district manager", "ceo"].includes(p.role),
+            feature: "widget-variance-replies",
+          });
+        }
+      } else {
+        // STAGE 2 — the DM asked follow-up questions and that window has now shut.
+        // Same clock the site uses: two days past the later of the two stamps.
+        const replyDue = Math.max(
+          per.manager_due_at ? new Date(per.manager_due_at).getTime() : 0,
+          new Date(per.dm_notes_at).getTime(),
+        ) + 2 * 86400000;
+        const replied = rows.filter((r: any) => r.dm_reply_requested && r.mgr_reply).length;
+        if (Date.now() >= replyDue && !per.dm_reviewed_at) {
+          due.push({
+            // Keyed on the window's CLOSE DATE, not the period alone. dm_reviewed_at
+            // is cleared server-side whenever a newer reply lands, so a second
+            // question-and-answer cycle re-opens this condition — and a period-only
+            // key would have already fired, silently swallowing every later cycle.
+            // The close date moves with dm_notes_at, so each cycle gets exactly one.
+            slug: "varianceDmReview", period: String(per.id) + ":s2:" + fmtDate(new Date(replyDue)),
+            cat: "variance_aging", store,
+            title: `Variance reply window closed — ${STORE_NAME[store] || store}`,
+            body: replied
+              ? `${replied} repl${replied === 1 ? "y" : "ies"} came in — give them a final review.`
+              : `The window closed with no replies to your notes.`,
+            link: "workspace.html#vreplies", tone: replied ? "sage" : "amber",
+            for: (p) => ["district manager", "ceo"].includes(p.role),
+            feature: "widget-variance-replies",
+          });
+        }
+        // The MANAGER side of the same event.
+        const asked = rows.filter((r: any) => r.dm_note).length;
+        if (asked > 0) {
+          due.push({
+            // Keyed on the period plus the DAY the DM last wrote. The day — not the
+            // timestamp — is what makes this one email: a review pass updates
+            // dm_notes_at once per note, so a timestamp key would be twenty keys and
+            // twenty emails, the exact thing this replaced. A genuinely later pass on
+            // another day is a new key and correctly notifies again.
+            slug: "varianceMgrReview", period: String(per.id) + ":" + fmtDate(new Date(per.dm_notes_at)),
+            cat: "variance_aging", store,
+            title: `The DM reviewed your variance replies — ${STORE_NAME[store] || store}`,
+            body: `${asked} line${asked === 1 ? " has" : "s have"} a note from the DM.`
+              + (rows.some((r: any) => r.dm_reply_requested && !r.mgr_reply) ? " Some ask for a reply." : ""),
+            link: "workspace.html#vreplies", tone: "sage",
+            for: (p) => ["manager", "owner (manager)", "owner manager"].includes(p.role) && covers(p, store),
+        feature: "widget-variance-replies",
+          });
+        }
+      }
+    }
+  }
+
+  {
+    // Aging has no "the DM finished reviewing" stamp — the thread is per item — so
+    // both sides group BY STORE and dedupe on the week, exactly like agingDue.
+    const { data: items } = await sb.from("aging_items")
+      .select("id, store, due_at, dm_seen_at").is("closed_at", null).eq("status", "open");
+    const ids = (items || []).map((i: any) => i.id);
+    const notesById = new Map<string, any[]>();
+    if (ids.length) {
+      const { data: notes } = await sb.from("aging_notes")
+        .select("item_id, author_side, created_at").in("item_id", ids)
+        .order("created_at", { ascending: true });
+      for (const n of notes || []) {
+        const arr = notesById.get(n.item_id) ?? [];
+        arr.push(n);
+        notesById.set(n.item_id, arr);
+      }
+    }
+
+    const dmSide: Record<string, number> = {};
+    const mgrSide: Record<string, number> = {};
+    for (const it of items || []) {
+      const st = String(it.store || "").toUpperCase();
+      const notes = notesById.get(it.id) ?? [];
+      if (!notes.length) continue;
+      const last = notes[notes.length - 1];
+      const windowClosed = it.due_at && new Date(it.due_at).getTime() <= Date.now();
+
+      if (last.author_side === "store") {
+        // The store replied and it is the DM's turn. Unread only — reading IS the
+        // acknowledgement here (dm_seen_at), matching _agNewStoreReply on the site.
+        const seen = it.dm_seen_at ? new Date(it.dm_seen_at).getTime() : 0;
+        if (new Date(last.created_at).getTime() > seen && windowClosed) {
+          dmSide[st] = (dmSide[st] ?? 0) + 1;
+        }
+      } else if (notes.some((n: any) => n.author_side === "store")) {
+        // The DM has answered a store reply — a review prompt for the store, not
+        // homework. A first DM note with no store reply behind it is the store's
+        // homework and already covered by agingDue above, so it is skipped here.
+        mgrSide[st] = (mgrSide[st] ?? 0) + 1;
+      }
+    }
+
+    for (const [store, n] of Object.entries(dmSide)) {
+      due.push({
+        slug: "agingDmReview", period: weekStamp(t.date), cat: "variance_aging", store,
+        title: `Aging inventory replies are in — ${STORE_NAME[store] || store}`,
+        body: `${n} item${n === 1 ? "" : "s"} replied and waiting on your review.`,
+        link: "workspace.html#aging", tone: "sage",
+        for: (p) => ["district manager", "ceo"].includes(p.role),
+        feature: "widget-aging-inventory",
+      });
+    }
+    for (const [store, n] of Object.entries(mgrSide)) {
+      due.push({
+        slug: "agingMgrReview", period: weekStamp(t.date), cat: "variance_aging", store,
+        title: `The DM replied on aging inventory — ${STORE_NAME[store] || store}`,
+        body: `${n} item${n === 1 ? " has" : "s have"} a new note from the DM.`,
+        link: "workspace.html#aging", tone: "sage",
+        // ASMs included here and NOT on the variance twin: they work the aging
+        // threads but receive no variance at all. See the category relabelling that
+        // shows them "Aging Inventory" in place of "Variance & Aging Inventory".
+        for: (p) => ["manager", "owner (manager)", "owner manager", "assistant manager"].includes(p.role)
+          && covers(p, store),
+        feature: "widget-aging-inventory",
       });
     }
   }
@@ -1040,12 +1359,27 @@ async function runDigest(sb: any, opts: { dryRun: boolean; to: string | null; on
   const prefs = await loadPrefs(sb);
   const due = await collectDue(sb, people);
 
+  // Every key any due item might ask about, resolved once. The per-person form
+  // has to be expanded against the real roster rather than read off the item,
+  // because which key applies IS the per-person part.
+  const dueKeys = new Set<string>();
+  for (const d of due) {
+    if (!d.feature) continue;
+    if (typeof d.feature === "string") { dueKeys.add(d.feature); continue; }
+    for (const p of people) { const k = d.feature(p); if (k) dueKeys.add(k); }
+  }
+  const dueOverrides = await loadFeatureOverrides(sb, [...dueKeys]);
+
   type Hit = { d: Due; person: Person; key: string };
   const hits: Hit[] = [];
   for (const d of due) {
     for (const person of people) {
       if (opts.onlyUser && person.key !== opts.onlyUser) continue;
       if (!d.for(person)) continue;
+      // Revoke-only: `for` already said they owe it, so the override's only job
+      // is to take it away from somebody the tool is hidden from.
+      const fk = typeof d.feature === "function" ? d.feature(person) : (d.feature || null);
+      if (fk && !featureAllows(dueOverrides.get(fk) || [], person, true)) continue;
       if (!wants(prefs.get(person.key), d.cat, d.slug)) continue;
       hits.push({ d, person, key: `due:${d.slug}:${d.period}:${person.key}` });
     }
@@ -1069,7 +1403,12 @@ async function runDigest(sb: any, opts: { dryRun: boolean; to: string | null; on
 
   const sent = await flushOutbox(sb, boxes, {
     dryRun: opts.dryRun, to: opts.to,
-    heading: (o) => ["SPEEKSNET Alerts", `${o.items.length} item${o.items.length === 1 ? "" : "s"}`],
+    // Counted off the COLLAPSED cards, not the raw items — otherwise the header
+    // says "23 items" above a mail showing four.
+    heading: (o) => {
+      const n = collapseItems(o.items).length;
+      return ["SPEEKSNET Alerts", `${n} item${n === 1 ? "" : "s"}`];
+    },
   });
   if (!opts.dryRun) { try { await sb.rpc("notify_prune"); } catch (_) { /* housekeeping only */ } }
   return { mode: "digest", due: due.length, heldEvents: eventsForDigest, sent };
@@ -1084,13 +1423,14 @@ async function drainHeldForDigest(
     .select("*").is("processed_at", null).order("created_at", { ascending: true }).limit(500);
   if (!queue?.length) return 0;
 
+  const overrides = await loadFeatureOverrides(sb, featureKeysIn(queue));
+
   type Hit = { row: any; person: Person; key: string };
   const hits: Hit[] = [];
   for (const row of queue) {
     const only = nameKey(row.audience_user);
     const skip = nameKey(row.exclude_user);
     const stores: string[] | null = row.audience_stores;
-    const roles: string[] | null = row.audience_roles;
     for (const person of people) {
       if (opts.onlyUser && person.key !== opts.onlyUser) continue;
       const p = prefs.get(person.key);
@@ -1100,7 +1440,7 @@ async function drainHeldForDigest(
       else {
         if (person.key === skip) continue;
         if (stores?.length && !person.stores.some((s) => stores.map((x) => x.toUpperCase()).includes(s))) continue;
-        if (roles?.length && !roles.map((r) => r.toLowerCase().trim()).includes(person.role)) continue;
+        if (!passesAudience(row, person, overrides)) continue;
       }
       hits.push({ row, person, key: `q:${row.id}:${person.key}` });
     }
@@ -1115,6 +1455,9 @@ async function drainHeldForDigest(
     box.items.push({
       title: cardTitle(h.row.title, h.person, h.row.kind), body: h.row.body || "", link: h.row.link || "",
       tone: "sage", meta: storeMeta(h.row.title, h.row.store, h.row.kind, h.person), key: h.key,
+      // Digest subscribers get a whole day of events at once, so they are the MOST
+      // exposed to a batch write — collapse matters more here than in the drain.
+      group: `${h.row.kind}|${h.row.store ?? ""}|${h.row.priority ?? "normal"}`,
     });
     n++;
   }

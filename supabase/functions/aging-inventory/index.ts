@@ -79,6 +79,12 @@ async function queueNotification(n: {
   category: string; kind: string; title: string; body?: string; link?: string;
   store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
   audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+  // The feature_overrides key of the surface this notification is about, so
+  // notify can drop anyone whose Feature Access hides it. See notifys
+  // featureAllows: the roles above stay the DEFAULT, an override moves an
+  // individual either way. Null = no gated surface (an announcement board, a
+  // store message) and roles alone are the whole answer.
+  audienceFeature?: string | null;
 }) {
   try {
     const sb = createClient(
@@ -94,6 +100,7 @@ async function queueNotification(n: {
       audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
       exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
       priority: n.priority ?? "normal",
+      audience_feature: n.audienceFeature ?? null,
     });
   } catch (_) { /* best-effort */ }
 }
@@ -154,6 +161,7 @@ Deno.serve(async (req: Request) => {
           store,
           audienceStores: [store],
           audienceRoles: ["manager", "owner (manager)", "assistant manager"],
+          audienceFeature: "widget-aging-inventory",
           excludeUser: by,
         });
         return jsonResponse({ success: true, item_id: item.id });
@@ -191,28 +199,17 @@ Deno.serve(async (req: Request) => {
             .eq("id", itemId);
         }
         await broadcastChange("aging", item.store);
-        // The thread has two sides and the email follows whichever way it just
-        // moved: a DM note goes to the store, a store note goes back to the DM.
-        // `side` is already validated to one of the two above.
-        {
-          const toStore = side === "dm";
-          const st = String(item.store || "").toUpperCase();
-          await queueNotification({
-            category: "variance_aging",
-            kind: toStore ? "aging_dm_note" : "aging_store_reply",
-            title: toStore
-              ? `Aging inventory note from the DM — ${st}`
-              : `Aging inventory reply from ${body.by ? String(body.by).trim() : "the store"} — ${st}`,
-            body: text.slice(0, 300),
-            link: "workspace.html#aging",
-            store: st,
-            audienceStores: toStore ? [st] : null,
-            audienceRoles: toStore
-              ? ["manager", "owner (manager)", "assistant manager"]
-              : ["district manager", "ceo"],
-            excludeUser: body.by ? String(body.by).trim() : null,
-          });
-        }
+        // NO per-note email. Deliberately removed 2026-08-14 (Ethan) — same reason
+        // as the variance twin: a weekly aging batch is twenty-odd items, and one
+        // email per note turned a manager working down the list into a fresh email
+        // every five minutes (the drain's interval). Both directions now wait for
+        // the deadline and arrive as ONE "replies are in" email, built in notify's
+        // due-date pass as agingDmReview / agingMgrReview.
+        //
+        // This also retires the follow-up carve-out that used to sit in the site's
+        // checkAgingInvDmReminders: due_at is already reset to +1 week by every DM
+        // note above, so a follow-up has a real deadline of its own and needs no
+        // special case to be noticed.
         return jsonResponse({ success: true, note_id: note.id });
       }
 

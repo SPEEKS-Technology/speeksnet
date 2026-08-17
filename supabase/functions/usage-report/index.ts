@@ -124,6 +124,18 @@ function plainText(s: unknown, max: number): string {
     .trim()
     .slice(0, max);
 }
+// A high-priority announcement opens with its own red "🚨 HIGH PRIORITY"
+// banner, baked into the stored HTML by the composer. The report already labels
+// the row High Priority in its own column, so carrying the banner into the
+// excerpt spends the first twenty of a hundred and twenty characters saying
+// what the row next to it just said — and puts a decorative siren in the middle
+// of a data table, where it was the one character in the whole email that had
+// to survive the trip to Gmail intact. Strip the banner; keep whatever the
+// author actually wrote, emoji included.
+const annExcerpt = (message: unknown, max: number) =>
+  plainText(String(message ?? '')
+    .replace(/<span[^>]*>[^<]*HIGH\s+PRIORITY[^<]*<\/span>\s*(<br\s*\/?>)?/i, ' '), max);
+
 const norm = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 const firstName = (s: unknown) => String(s ?? '').trim().split(' ')[0];
 
@@ -588,7 +600,7 @@ async function gather(sb: any, endDay: string, mode: Mode) {
     return {
       date: a.date, author: a.author,
       kind: a.doc_only ? 'Document' : a.high_priority ? 'High Priority' : 'Announcement',
-      text: plainText(a.message, 120),
+      text: annExcerpt(a.message, 120),
       readers: readers.length, audience: audienceSize, p: pct(readers.length, audienceSize),
     };
   }).sort((x: any, y: any) => x.p - y.p || x.date.localeCompare(y.date));
@@ -1106,7 +1118,7 @@ function buildReport(d: any) {
 async function sendEmail(to: string[], subject: string, html: string) {
   if (GMAIL_RELAY) {
     const res = await fetch(GMAIL_RELAY, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: JSON.stringify({ secret: SECRET, to: to.join(','), subject, html }),
     });
     const txt = await res.text();
