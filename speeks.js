@@ -27524,6 +27524,28 @@ async function savePatchEntry() {
 
     try {
         await postWrite(PATCH_NOTES_URL, { action: 'addEntries', title, date, items });
+        // Whoever wrote the notes has, by definition, read them. Without this the
+        // author published a version and then got badged about their own words,
+        // and had to click Mark as read on something they had just typed.
+        // The key is built exactly as buildPatchGroups builds it (title|date), so
+        // checkPatchNotesBadge's equality test against _latestPatchKey matches.
+        // Writing the key rather than clearing the flag outright keeps this honest:
+        // if the note being saved is back-dated and something NEWER is still
+        // unread, the seen key won't equal the latest and the badge correctly stays.
+        try {
+            const _pnUser = sessionStorage.getItem('speeksUserName');
+            const _pnClean = _pnUser ? String(_pnUser).trim().toLowerCase() : null;
+            if (_pnClean) {
+                const _pnKey = title + '|' + date;
+                localStorage.setItem('speeksPatchNotesSeen_' + _pnClean, _pnKey);
+                localStorage.removeItem('speeksUnseenPatchNotes_' + _pnClean);
+                postWrite(PATCH_NOTES_URL, { action: 'markPatchRead', user: _pnClean, lastSeenKey: _pnKey }).catch(() => {});
+            }
+        } catch (_) {}
+        // Re-read so _latestPatchKey and the badges reflect what was just written.
+        try { await loadPatchNotes(); } catch (_) {}
+        try { checkPatchNotesBadge(); } catch (_) {}
+        try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (_) {}
         status.textContent = `${items.length} item${items.length !== 1 ? 's' : ''} saved!`;
         status.className = 'pn-save-status pn-save-ok';
         document.getElementById('pnEntryTitle').value = '';
@@ -35445,14 +35467,13 @@ function _samReminderCfg() {
         due: _dbFailed ? 'Broken' : 'Approve',
         cls: _dbFailed ? 'sam-due-amber' : 'sam-due-red',
         noSnooze: true, action: "openDailyBriefReview()" });
-    // DM ONLY (checkListingGoalReminders gates it — the CEO does not set these).
-    // Snoozable — unlike the KPI deadlines this is the DM's own admin task, and
-    // the card comes straight back if a store is still unset tomorrow (the sig is
-    // the pending-store list, so it also breaks through early whenever that list
-    // changes).
-    cfg.push({ key: 'listingGoals', id: 'listingGoalAlertBubble', text: 'listingGoalAlertBubbleText',
-        title: 'Set This Week’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-amber',
-        action: "openDmListingGoals()" });
+    // RETIRED 2026-08-17 — the weekly per-store totals are now set by the system
+    // every week, so nagging the DM to do it by hand asked for work that was
+    // already done. The bubble and checkListingGoalReminders are left in place
+    // (harmless, and they still carry the pending-store state); only the feed
+    // card is gone. The DAILY store-side card below is a different reminder —
+    // that one is the manager/ASM dividing the week's total into roles, which
+    // nothing automates, so it stays.
     // Store side, daily from 9am. Shared across the store: the card is derived from
     // the saved rows, so whoever sets them clears it for the manager AND the ASM.
     // noSnooze: the goals have to actually be entered — there is no "later" for
@@ -35494,6 +35515,13 @@ function _samSetDismissedRem(map) { try { localStorage.setItem(_samDismKey(), JS
 function _samGatherReminders() {
     const dismissed = _samGetDismissedRem();
     const out = [];
+    // ONE clock reading for the whole pass. dateMs used to be Date.now() read
+    // per reminder, which made the feed order depend on whether the millisecond
+    // happened to tick mid-loop: urgency only offsets by 1-3, so a single tick
+    // outweighed it and two cards traded places on re-render for no reason.
+    // Sharing one base makes urgency the only thing that separates them, and
+    // equal-urgency cards tie -- Array.sort is stable, so they keep config order.
+    const nowBase = Date.now();
     _samReminderCfg().forEach(c => {
         const el = document.getElementById(c.id);
         if (!el) return;
@@ -35566,7 +35594,7 @@ function _samGatherReminders() {
         }
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
-            due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: Date.now() + c.urgency,
+            due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: nowBase + c.urgency,
             action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, readAction: c.readAction || '',
             doneAction: c.doneAction || '', doneLabel: c.doneLabel || ''
         });

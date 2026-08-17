@@ -7662,7 +7662,10 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .cb-head-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 /* View toggle (reuses .mb-view-toggle) — add icons */
-.cb-view-toggle .mb-view-btn { display: inline-flex; align-items: center; gap: 6px; }
+.cb-view-toggle .mb-view-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-width: 112px; box-sizing: border-box;
+}
 .cb-view-toggle .mb-view-btn svg { width: 14px; height: 14px; }
 
 .cb-store-filter { height: 34px; }
@@ -16543,9 +16546,16 @@ body.tv-body { display: block; background: #eef1f5; }
    see the listing as a buyer does, Shopify to fix whatever eBay complained
    about. Outline pills rather than filled ones — they are destinations, and
    they must not out-shout the status chip sitting next to them. */
-.ec-pills { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+/* Centred under the "Open" header, which is text-align:center like every other
+   .cb-col-status heading -- right-aligned pills left the column reading crooked.
+   Both pills share a min-width so eBay and Shopify are the same size: they are
+   the same kind of thing, and two different widths read as two different weights
+   of action. 82px clears the wider label ("Shopify" + icon) at 11.5px Inter 700,
+   so neither pill ever grows past it and the pair stays matched. */
+.ec-pills { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
 .ec-pill {
-    display: inline-flex; align-items: center; gap: 5px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    min-width: 82px; box-sizing: border-box;
     border: 1px solid var(--cb-line); background: #fff;
     border-radius: 20px; padding: 4px 10px;
     font-size: 11.5px; font-weight: 700; font-family: inherit;
