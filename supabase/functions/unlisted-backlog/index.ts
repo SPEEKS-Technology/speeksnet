@@ -9,15 +9,21 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //
 // Everything here is measured, not modelled. The pile comes from the weekly
 // sales summary; how fast it moves is the difference between two readings of it;
-// what a store lists is the 4-week running average off the Weekly KPI. Only
-// INTAKE is derived, and deliberately so:
+// what a store lists is the 4-week running average off the Weekly KPI.
 //
-//     taking in = 4-week average listed + weekly pile growth
+// NOTHING is derived any more. This used to infer intake as
+// "4-week average listed + weekly pile growth" and report the listing rate that
+// held the pile flat. That figure read as a throughput target while actually
+// being an inferred one, and because it came out by subtraction, any pile
+// movement that was not a listing — a recount, a write-off, a correction to the
+// reading itself — silently reappeared as "less stock arrived". A corrected
+// reading on 2026-08-17 pushed one store's intake to 36/wk against ~188 bought.
 //
-// Deriving it that way means the arithmetic can never disagree with the measured
-// pile — which matters, because the KPI device count DOES disagree with it (BAL's
-// pile grew 20 in a week the device count said should shrink 8). Whatever that
-// discrepancy turns out to be, this report is insulated from it.
+// Weeks-to-clear replaces it and needs no intake term at all: listing pace minus
+// intake IS the pile's own movement, so the measured change already carries both
+// halves. It also keeps the old guarantee — the arithmetic cannot disagree with
+// the measured pile — which matters because the KPI device count DOES disagree
+// with it (BAL's pile grew 20 in a week the device count said should shrink 8).
 //
 // Verdicts are measured against each store's own BEST ACTUAL WEEK, not against
 // the modelled capacity ceiling. Stores beat that ceiling in 7 of 30 store-weeks
