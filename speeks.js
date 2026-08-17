@@ -10108,40 +10108,25 @@ function _lvChime() {
     } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
 }
 
-// One note that SLIDES rather than steps. The sale chime is two struck notes
-// with a gap between them, so a continuous fall cannot be mistaken for it even
-// at the edge of hearing -- which two struck notes in the other order could be,
-// and were.
-function _lvSlide(bus, type, from, to, at, peak, attack, decay) {
-    const t = _lvAudio.currentTime + at;
-    const osc = _lvAudio.createOscillator(), gain = _lvAudio.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(from, t);
-    // Exponential, not linear: pitch is heard logarithmically, and a linear
-    // sweep sounds like it slows down as it falls.
-    osc.frequency.exponentialRampToValueAtTime(to, t + attack + decay * 0.8);
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(peak, t + attack);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
-    osc.connect(gain); gain.connect(bus);
-    osc.start(t); osc.stop(t + attack + decay + 0.06);
-}
-
-// A REFUND: a soft downward swoop an octave below the sale, over a low thump.
+// A REFUND: the sale chime, two octaves down and falling instead of rising.
 //
-// It used to be the sale chime backwards -- same timbre, same register, same
-// two struck notes, just reordered. That is only distinguishable if you are
-// listening for the ORDER of two pitches, which across a shop floor nobody is.
-// Three things separate it now, any one of which would do on its own: it is an
-// octave lower, it slides instead of stepping, and it lands on a thump the sale
-// does not have. The low-pass sits far below the sale's so it stays dull where
-// the sale is bright -- money going out should not sparkle.
+// Same instrument, same wooden knock, same length -- deliberately the same
+// FAMILY of sound rather than a different one. A refund is ordinary business,
+// not a fault, and the shapes that separate hardest from a chime (a buzz, a
+// swoop, a thud) all say something went wrong. Depth and a falling interval
+// carry "money going out" without ever sounding like an alarm, and two octaves
+// is far enough apart that no one confuses the two across a shop floor.
+//
+// The low-pass sits well under the sale's: the same notes through a brighter
+// filter would ring close enough to the sale to blur with it.
 function _lvRefundChime() {
     try {
-        const bus = _lvBus(1100, 0.5);
+        const bus = _lvBus(1400, 0.55);
         if (!bus) return;
-        _lvSlide(bus, 'triangle', 392.0, 196.0, 0, 0.26, 0.010, 0.42);   // G4 down to G3
-        _lvNote(bus, 'sine', 98.0, 0.02, 0.22, 0.012, 0.30);              // the thump under it
+        [[261.6, 0], [196.0, 0.085]].forEach(([freq, at]) => {   // C4 falling to G3
+            _lvNote(bus, 'sine', freq, at, 0.30, 0.005, 0.34);
+            _lvNote(bus, 'sine', freq * 4, at, 0.05, 0.004, 0.12);
+        });
     } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
 }
 
