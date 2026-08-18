@@ -681,6 +681,10 @@ type Evidence = {
   price: string | null;
   image: string | null;
   images: number;
+  // THE ANSWER IS OFTEN ONLY IN THE PICTURE. A slab says CGC across the top and
+  // the spec table never mentions it, so "check the item" meant leaving the
+  // panel. The prompt shows them instead.
+  photos: string[];
   specs: [string, string][];
   condition: { read: string | null; source: string | null; allowedHere: string[] } | null;
 };
@@ -707,6 +711,8 @@ function buildEvidence(
     price: c.price ?? null,
     image: (c.imageUrls || [])[0] || null,
     images: c.images || 0,
+    // Eight is every angle anybody shoots and still a bounded column.
+    photos: (c.imageUrls || []).slice(0, 8),
     specs: rows,
     condition: {
       // The word the product gave us, recognised or not — an unrecognised one is
@@ -968,13 +974,58 @@ function fromOtherSpecs(
 // the value is "Professional Sports Authenticator (PSA)" and every title on the
 // shelf says "PSA 10". Matching only the full string found nothing on a card
 // whose title names the grader twice.
+// ABBREVIATIONS THAT ARE NOT GRADERS, IN TITLES THAT ARE MADE OF THEM.
+//
+// eBay's grading-company list contains "Trading Card Grading (TCG)", and every
+// Pokémon title on the shelf begins "Pokémon TCG". Three cards went live at MPL
+// naming TCG as the company that graded them — cards CGC had graded — because
+// the letters matched and nothing asked whether it made sense. A wrong grading
+// company is not a cosmetic error; it is a misdescribed item on a graded card,
+// which is the field the price is built on.
+const NOT_GRADER_ABBREV = new Set([
+  "tcg", "ccg", "ocg", "gx", "ex", "vmax", "vstar", "holo", "nm", "jpn", "eng",
+]);
+
 function matchByAbbrev(title: string, allowed: string[]): string | null {
-  const t = " " + String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ";
+  const t = " " + String(title || "").toLowerCase().replace(/[^a-z0-9.]+/g, " ") + " ";
   for (const a of allowed) {
     const m = String(a).match(/\(([^)]{2,12})\)/);
     if (!m) continue;
     const abbr = m[1].toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    if (abbr.length >= 2 && t.includes(" " + abbr + " ")) return a;
+    if (abbr.length < 2 || NOT_GRADER_ABBREV.has(abbr)) continue;
+    // A GRADER IS NAMED NEXT TO THE GRADE IT GAVE. "PSA 10", "CGC 9.5",
+    // "BGS 9.5" is how every one of these titles is written, so the number is
+    // free corroboration — and without it a bare three letters in a sentence is
+    // a coincidence. "Gem Mint"/"Pristine" are allowed in between because CGC
+    // titles say "CGC Gem Mint 10".
+    const re = new RegExp("\\b" + abbr.replace(/\s+/g, "\\s*")
+      + "\\s+(?:gem\\s+)?(?:mint\\s+|pristine\\s+)?[0-9]{1,2}(?:\\.5)?\\b");
+    if (re.test(t)) return a;
+  }
+  return null;
+}
+
+// WHY "LIKE NEW" IS THE RIGHT ANSWER FOR A GRADED CARD, AND WHY NOBODY KNOWS.
+//
+// eBay calls condition 2750 "Graded" on its own listing form, but the API name
+// for it is LIKE_NEW — so the panel offers "Like New", and somebody holding a
+// CGC 10 has no reason on earth to think that is the right choice. It is. And
+// the product almost always says it is graded in plain sight: a "Graded" row,
+// a "Card Grade" with something in it, or a grading company beside a number in
+// the title. That is evidence about the ITEM, not the value eBay just refused,
+// which is what makes it safe to offer here.
+const GRADER_WITH_GRADE =
+  /\b(?:PSA|BGS|BVG|BCCG|CGC|SGC|HGA|TAG|GMA|KSA|MNT|ACE)\s*[0-9]{1,2}(?:\.5)?\b/i;
+
+function gradedEvidence(c: Candidate, specs: Record<string, string>): string | null {
+  const g = String(specs["Graded"] || specs["Graded?"] || "").trim();
+  if (/^y(es)?$/i.test(g)) return `the product's "Graded" row (${g})`;
+  // A "Graded: No" is a statement, not an absence — believe it and stop.
+  if (/^n(o)?$/i.test(g)) return null;
+  const cg = String(specs["Card Grade"] || "").trim();
+  if (cg) return `the product's "Card Grade" row ("${cg}")`;
+  if (GRADER_WITH_GRADE.test(String(c.title || ""))) {
+    return "the grading company named beside the grade in the title";
   }
   return null;
 }
@@ -1015,7 +1066,16 @@ function suggestFor(
     if (snapped) return { ...f, suggestion: snapped, source: "Shopify's Vendor field" };
   }
 
-  // 3. Our own Condition, and only the damaged end of it.
+  // 3. A graded card, which this category takes as "Like New".
+  if (f.kind === "condition") {
+    const like = (f.allowed || []).find(v => /^like\s*new$/i.test(String(v)));
+    const graded = gradedEvidence(c, specs);
+    if (like && graded) {
+      return { ...f, suggestion: like,
+               source: `${graded}; eBay calls a graded card "Like New" here` };
+    }
+  }
+  // 3b. Our own Condition, and only the damaged end of it.
   if (f.kind === "condition") {
     if (DAMAGED_RE.test(c.title || "")) {
       const snapped = snapToAllowed("Broken / For Parts", f.allowed);
@@ -2117,9 +2177,15 @@ Deno.serve(async (req: Request) => {
       + `as the condition in ${categoryName || "this category"} — the grade on the product is `
       + `not one this category allows. It will take: ${condWords.join(", ")}. Set the `
       + `Condition on the Shopify product to one of those and upload again.`;
-    const condMissing: MissingField[] = [
-      { name: "Condition", allowed: condWords, kind: "condition" },
-    ];
+    // THIS USED TO OFFER NOTHING, ON THE GROUND THAT THE PRODUCT'S OWN VALUE IS
+    // THE ONE eBAY JUST REFUSED. That reasoning still holds for the refused
+    // value — and it is not what the graded rule uses. "Card Grade: CGC 10" is
+    // evidence about the ITEM, arrived at independently of the condition field
+    // that failed, so offering "Like New" off the back of it is not handing the
+    // rejected answer back. Twenty-one cards sat here with an empty dropdown and
+    // no way for anyone to know that "Like New" is what eBay calls Graded.
+    const condMissing: MissingField[] = withSuggestions(
+      [{ name: "Condition", allowed: condWords, kind: "condition" }], c, specs);
     if (!dry) {
       await recordFailure(store, c, categoryId, msg, undefined, categoryName, condMissing,
                           evidence);
@@ -2259,12 +2325,13 @@ Deno.serve(async (req: Request) => {
     // it matches none of the missing-aspect shapes, so the row sat failed with
     // no Fix button and nothing a person could type. It is a question now.
     //
-    // NOTHING IS SUGGESTED HERE. Every other field suggests from the product,
-    // and the product's condition is the exact value eBay just refused —
-    // offering it back would be pre-filling the wrong answer.
+    // THE REFUSED VALUE IS NEVER OFFERED BACK — but a graded card says what it
+    // is in its own rows, and that is a different fact from the one eBay just
+    // rejected. suggestFor draws the line; see gradedEvidence.
     const words = conditionWordsAllowed(allowedConditions);
     if (words.length && /\b25059\b|not a valid condition/i.test(errText(b))) {
-      return [{ name: "Condition", allowed: words, kind: "condition" as const }];
+      return withSuggestions(
+        [{ name: "Condition", allowed: words, kind: "condition" as const }], c, specs);
     }
     return [];
   };

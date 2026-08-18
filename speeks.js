@@ -41312,7 +41312,9 @@ function _ecEvHead(row) {
     const meta = (ev.price ? "$" + _ecEsc(ev.price) + " &middot; " : "")
         + photos + " &middot; " + _ecEsc(row.sku);
     const img = ev.image
-        ? '<img class="ec-ev-img" src="' + _ecEsc(ev.image) + '" alt="">'
+        ? '<img class="ec-ev-img" src="' + _ecEsc(ev.image) + '" alt="" '
+          + 'onerror="this.style.display=&quot;none&quot;" '
+          + 'onclick="openAuditPhotoLightbox(\'' + _ecEsc(ev.image) + '\')">'
         : "";
     const head = [
         '<div class="ec-ev-head">', img,
@@ -41322,7 +41324,20 @@ function _ecEvHead(row) {
         '</div></div>',
     ].join("");
 
-    return '<div class="ec-ev">' + head + '</div>';
+    // THE ANSWER IS OFTEN ONLY IN THE PICTURE.
+    // A slab says CGC across the top of it and no row on the product mentions
+    // that anywhere — which is how three cards went live at MPL naming the wrong
+    // grading company. openAuditPhotoLightbox is the audit tool's viewer, reused
+    // whole: same behaviour, and Escape already knows to peel it off first.
+    const shots = (ev.photos || []).length > 1
+        ? '<div class="ec-ev-shots">' + ev.photos.map(u =>
+            '<img src="' + _ecEsc(u) + '" alt="" loading="lazy" '
+            + 'onerror="this.style.display=&quot;none&quot;" '
+            + 'onclick="openAuditPhotoLightbox(\'' + _ecEsc(u) + '\')">').join("")
+          + '</div>'
+        : "";
+
+    return '<div class="ec-ev">' + head + shots + '</div>';
 }
 
 // The part you open only when the answer is not already obvious: every row on
@@ -41414,7 +41429,9 @@ function ecFix(sku, note) {
             ? `<span class="ec-fix-src">Suggested from ${_ecEsc(fld.source || 'the product')} — change it if that is wrong</span>`
             : condWhy
             ? `<span class="ec-fix-src ec-fix-src-cond">${_ecEsc(condWhy)}</span>`
-            : '<span class="ec-fix-src ec-fix-src-none">Not on the product — you will need to check the item</span>';
+            // "Check the item" is true and useless. The two places the answer
+            // is actually hiding are both already on this screen.
+            : `<span class="ec-fix-src ec-fix-src-none">Not written on the product — check the photos above and the rows below, or look at the item itself</span>`;
         return `<label class="ec-fix-row" for="${id}">
                   <span class="ec-fix-lbl">${_ecEsc(fld.name)}</span>
                   ${control}
@@ -41465,7 +41482,19 @@ function ecFix(sku, note) {
 }
 window.ecFix = ecFix;
 
-function _ecFixEsc(ev) { if (ev.key === 'Escape') ecFixClose(); }
+// This listener is registered with capture:true, so it runs BEFORE the global
+// Escape handler that peels the lightbox. Without this, Escape over an enlarged
+// photo closed the whole prompt and threw away a half-typed answer.
+function _ecFixEsc(ev) {
+    if (ev.key !== 'Escape') return;
+    const lb = document.getElementById('auditPhotoLightbox');
+    if (lb && lb.style.display === 'flex') {
+        lb.style.display = 'none';
+        ev.stopPropagation();
+        return;
+    }
+    ecFixClose();
+}
 
 let _ecFixLocked = false;
 let _ecFixScrollY = 0;

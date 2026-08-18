@@ -16592,6 +16592,20 @@ body.tv-body { display: block; background: #eef1f5; }
   font-size: 12px; font-weight: 700; color: var(--slate-charcoal); line-height: 1.35;
 }
 .ec-ev-meta { margin-top: 3px; font-size: 11px; color: var(--cb-faint); }
+.ec-ev-img { cursor: zoom-in; }
+/* Every angle of the item, along the bottom of its own header. Scrolls rather
+   than wrapping: a second row pushes the question off the screen, and the
+   question is the reason anybody is here. */
+.ec-ev-shots {
+  display: flex; gap: 6px; margin-top: 8px;
+  overflow-x: auto; padding-bottom: 2px;
+}
+.ec-ev-shots img {
+  width: 46px; height: 46px; flex: 0 0 46px; object-fit: cover;
+  border-radius: 6px; border: 1px solid var(--cb-line); background: #fff;
+  cursor: zoom-in;
+}
+.ec-ev-shots img:hover { border-color: var(--cb-sage); }
 .ec-ev-none { margin-top: 8px; font-size: 11.5px; color: #8a6212; font-style: italic; }
 
 .ec-ev-more { margin-top: 8px; }
