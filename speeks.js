@@ -41290,6 +41290,93 @@ async function ecListOne(sku, btn) {
  * the item and leave the product exactly as blank as it was, so the next person
  * to open it — and the storefront, and every other tool — would learn nothing.
  */
+// WHAT WE READ, SHOWN NEXT TO WHAT WE CONCLUDED.
+//
+// The prompt used to be a dropdown and a sentence naming its source, which is
+// enough to trust an answer but not enough to CHECK one — checking meant opening
+// the product in Shopify in another tab, which is the exact cost this prompt
+// exists to remove. The server already had all of it at the moment eBay refused,
+// so now it keeps it and this shows it.
+//
+// The spec table is the part that pays for itself twice: when the answer is in
+// there under a name we did not look for, a person spots it instantly; and when
+// it is genuinely NOT in there, they can see that it is not, which is the real
+// answer to "do I need to go and look at the item?"
+function _ecEvHead(row) {
+    const ev = row && row.evidence;
+    if (!ev) return "";
+
+
+    const photos = ev.images > 1 ? ev.images + " photos"
+        : ev.images === 1 ? "1 photo" : "no photos";
+    const meta = (ev.price ? "$" + _ecEsc(ev.price) + " &middot; " : "")
+        + photos + " &middot; " + _ecEsc(row.sku);
+    const img = ev.image
+        ? '<img class="ec-ev-img" src="' + _ecEsc(ev.image) + '" alt="">'
+        : "";
+    const head = [
+        '<div class="ec-ev-head">', img,
+        '<div class="ec-ev-headtxt">',
+        '<div class="ec-ev-title">', _ecEsc(ev.title || row.title || row.sku), '</div>',
+        '<div class="ec-ev-meta">', meta, '</div>',
+        '</div></div>',
+    ].join("");
+
+    return '<div class="ec-ev">' + head + '</div>';
+}
+
+// The part you open only when the answer is not already obvious: every row on
+// the product, and eBay's own words. Folded shut, because most of the time the
+// title and the suggestion are enough and this is just noise in the way.
+function _ecEvMore(row, fields) {
+    const ev = row && row.evidence;
+    if (!ev) return "";
+    const cited = new Set(["condition"]);
+    (fields || []).forEach(f => {
+        const m = /"([^"]+)"\s+row/.exec(String(f.source || ""));
+        if (m) cited.add(m[1].toLowerCase());
+    });
+    const rows = Array.isArray(ev.specs) ? ev.specs : [];
+    const body = rows.map(pair => {
+        const k = pair[0], v = pair[1];
+        const hit = cited.has(String(k).toLowerCase()) ? ' class="ec-ev-hit"' : "";
+        return "<tr" + hit + "><th>" + _ecEsc(k) + "</th><td>" + _ecEsc(v) + "</td></tr>";
+    }).join("");
+    const specs = rows.length
+        ? '<details class="ec-ev-more"><summary>What Is On The Product ('
+          + rows.length + (rows.length === 1 ? " Row" : " Rows") + ')</summary>'
+          + '<table class="ec-ev-tbl"><tbody>' + body + '</tbody></table></details>'
+        : '<div class="ec-ev-none">This product has no spec rows at all.</div>';
+
+    // eBay's own words, verbatim and folded away. The panel paraphrases by
+    // default because eBay writes for the developer who made the call — but when
+    // the paraphrase is wrong, this is the only way anyone can tell.
+    const raw = row.errorRaw
+        ? '<details class="ec-ev-more"><summary>What eBay Said</summary>'
+          + '<div class="ec-ev-raw">' + _ecEsc(row.errorRaw) + '</div></details>'
+        : "";
+
+    return '<div class="ec-ev ec-ev-foot">' + specs + raw + '</div>';
+}
+
+// THE CONDITION CASE IS NOT "WE FOUND NOTHING".
+// Every other field is missing; a refused condition was PRESENT and rejected,
+// and the difference matters — "not on the product" sends somebody looking for a
+// blank that is not blank. Worse, the value usually comes from a metafield the
+// buyer-facing spec table never shows, so the one screen they would think to
+// check disagrees with the refusal. Naming the field is the whole fix.
+function _ecCondWhy(row, fld) {
+    const cond = row && row.evidence && row.evidence.condition;
+    if (fld.kind !== "condition" || !cond) return null;
+    if (!cond.read) {
+        return "This product has no Condition on it at all — nothing to read, so "
+             + "pick the grade that matches the item in your hand.";
+    }
+    const word = String(cond.read).replace(/_/g, " ").toLowerCase();
+    return 'We read "' + word + '"' + (cond.source ? " from " + cond.source : "")
+         + ", and eBay will not take it in this category. Pick one it will.";
+}
+
 let _ecFixSku = null;
 
 function ecFix(sku, note) {
@@ -41322,8 +41409,11 @@ function ecFix(sku, note) {
             : `<input id="${id}" class="ec-fix-in" data-name="${_ecEsc(fld.name)}"
                      autocomplete="off" placeholder="Type The Answer"
                      value="${_ecEsc(sug)}">`;
+        const condWhy = _ecCondWhy(row, fld);
         const why = sug
             ? `<span class="ec-fix-src">Suggested from ${_ecEsc(fld.source || 'the product')} — change it if that is wrong</span>`
+            : condWhy
+            ? `<span class="ec-fix-src ec-fix-src-cond">${_ecEsc(condWhy)}</span>`
             : '<span class="ec-fix-src ec-fix-src-none">Not on the product — you will need to check the item</span>';
         return `<label class="ec-fix-row" for="${id}">
                   <span class="ec-fix-lbl">${_ecEsc(fld.name)}</span>
@@ -41346,7 +41436,9 @@ function ecFix(sku, note) {
         </div>
         <div class="ec-fix-body">
           ${note ? `<div class="ec-fix-note ec-fix-note-warn">${_ecEsc(note)}</div>` : ''}
+          ${_ecEvHead(row)}
           ${inputs}
+          ${_ecEvMore(row, fields)}
           <div class="ec-fix-note">Saved onto the product in Shopify, then uploaded again.</div>
           <div class="ec-fix-err" id="ecFixErr"></div>
         </div>
@@ -41382,6 +41474,7 @@ function ecFixClose() {
     document.removeEventListener('keydown', _ecFixEsc, true);
     document.getElementById('ecFixWrap')?.remove();
     _ecFixSku = null;
+    _ecBulk = null;
     if (_ecFixLocked) {
         _ecFixLocked = false;
         document.body.classList.remove('no-scroll');
@@ -41392,6 +41485,177 @@ function ecFixClose() {
     }
 }
 window.ecFixClose = ecFixClose;
+
+// ONE ANSWER, TWENTY CARDS.
+//
+// A batch of graded cards arrives from one intake, so it fails as a batch too:
+// 21 Pokémon cards at MPL all stopped on the same refused condition, from the
+// same wrong metafield, in the same category. Answering that 21 times is not
+// 21 decisions — it is one decision and 20 pieces of typing. This offers the
+// answer to the rest once the first one has actually worked.
+//
+// AFTER, NEVER BEFORE. The offer only appears once eBay has accepted the answer
+// on a real listing, so what gets copied is a value proven to work rather than a
+// guess about to be made twenty times over.
+//
+// A TICK IS A CLAIM ABOUT ANOTHER ITEM, SO A DISAGREEMENT UNTICKS IT.
+// Where a card carries its own suggestion for the field and it differs from the
+// answer being spread — one card reads PSA 9 where this one read PSA 10 — the
+// row still appears, still can be ticked by hand, but is not ticked for you.
+// Silently overwriting the one card that disagreed is how a bulk action turns
+// into a misdescribed item.
+let _ecBulk = null;
+
+function _ecBulkOffer(sku, fields) {
+    const names = Object.keys(fields || {});
+    const items = (_ecData && _ecData.items) || [];
+    const src = items.find(i => _ecSame(i.sku, sku));
+    const catId = src && src.categoryId;
+
+    // Same category or nothing. The allowed values for a field are the
+    // category's, so "Condition = Like New" is not even the same sentence in a
+    // category that never offered Like New.
+    const rows = !catId ? [] : items.filter(i =>
+        i.state === "failed" && !_ecSame(i.sku, sku) && i.categoryId === catId
+        && names.every(n => (i.missingFields || []).some(m => m.name === n)),
+    ).map(i => {
+        const clash = [];
+        names.forEach(n => {
+            const mine = (i.missingFields || []).find(m => m.name === n);
+            const own = String((mine && mine.suggestion) || "").trim();
+            const val = String(fields[n] || "").trim();
+            if (own && own.toLowerCase() !== val.toLowerCase()) {
+                clash.push(n + ': this one reads "' + own + '"');
+            }
+        });
+        return { sku: i.sku, title: i.title || i.sku, price: i.price, clash: clash.join("; ") };
+    });
+
+    if (!rows.length) { ecFixClose(); ecRender(); return; }
+
+    const wrap = document.getElementById("ecFixWrap");
+    const box = wrap && wrap.querySelector(".ec-fix");
+    if (!box) { ecFixClose(); ecRender(); return; }
+    _ecBulk = { fields: fields, catName: (src && src.category) || "this category" };
+
+    const answers = names.map(n =>
+        '<span class="ec-bulk-kv"><b>' + _ecEsc(n) + '</b> = ' + _ecEsc(fields[n]) + '</span>',
+    ).join("");
+    const list = rows.map(r => {
+        const on = r.clash ? "" : " checked";
+        return '<label class="ec-bulk-row' + (r.clash ? " ec-bulk-clash" : "") + '">'
+            + '<input type="checkbox" class="ec-bulk-ck" data-sku="' + _ecEsc(r.sku) + '"' + on + '>'
+            + '<span class="ec-bulk-txt"><span class="ec-bulk-title">' + _ecEsc(r.title) + '</span>'
+            + '<span class="ec-bulk-meta">' + _ecEsc(r.sku)
+            + (r.price ? " &middot; $" + _ecEsc(r.price) : "") + '</span>'
+            + (r.clash ? '<span class="ec-bulk-why">' + _ecEsc(r.clash) + '</span>' : "")
+            + '</span></label>';
+    }).join("");
+    const ticked = rows.filter(r => !r.clash).length;
+
+    box.innerHTML = [
+        '<div class="ec-fix-head"><div class="ec-fix-headtxt">',
+        '<div class="ec-fix-t">That Worked — Same Answer For The Rest?</div>',
+        '<div class="ec-fix-s">' + rows.length + ' more failed '
+          + (rows.length === 1 ? "card is" : "cards are") + ' waiting on the same field in '
+          + _ecEsc(_ecBulk.catName) + '</div>',
+        '</div><button class="ec-x" onclick="ecFixClose()" aria-label="Close">&times;</button></div>',
+        '<div class="ec-fix-body">',
+        '<div class="ec-bulk-ans">' + answers + '</div>',
+        '<div class="ec-fix-note">Each one is saved onto its Shopify product and uploaded, '
+          + 'exactly as this one was. Untick anything you want to look at yourself.</div>',
+        list,
+        '<div class="ec-fix-err" id="ecBulkProg"></div>',
+        '</div>',
+        '<div class="ec-fix-foot">',
+        '<button class="ec-btn ec-btn-sm" onclick="ecFixClose()">Not Now</button>',
+        '<button class="ec-btn ec-btn-sm ec-btn-on" id="ecBulkGo" onclick="_ecBulkRun()">'
+          + "Save &amp; Upload " + ticked + (ticked === 1 ? " Card" : " Cards") + '</button>',
+        '</div>',
+    ].join("");
+
+    box.querySelectorAll(".ec-bulk-ck").forEach(el =>
+        el.addEventListener("change", _ecBulkCount));
+}
+
+// The button says how many it will do, so it has to keep saying it.
+function _ecBulkCount() {
+    const wrap = document.getElementById("ecFixWrap");
+    const go = document.getElementById("ecBulkGo");
+    if (!wrap || !go) return;
+    const n = wrap.querySelectorAll(".ec-bulk-ck:checked").length;
+    go.disabled = !n;
+    go.innerHTML = n ? "Save &amp; Upload " + n + (n === 1 ? " Card" : " Cards")
+                     : "Nothing Ticked";
+}
+
+// ONE AT A TIME, AND IT KEEPS GOING WHEN ONE FAILS.
+// Each of these is a write to Shopify followed by a publish to eBay; firing
+// twenty at once would rate-limit both and make the failures meaningless. A card
+// that refuses is collected and named at the end rather than stopping the run —
+// the whole point is that the other nineteen get done.
+async function _ecBulkRun() {
+    if (!_ecBulk) return;
+    const wrap = document.getElementById("ecFixWrap");
+    if (!wrap) return;
+    const picked = Array.prototype.slice
+        .call(wrap.querySelectorAll(".ec-bulk-ck:checked")).map(el => el.dataset.sku);
+    if (!picked.length) return;
+
+    const go = document.getElementById("ecBulkGo");
+    if (go) { go.disabled = true; go.textContent = "Uploading…"; }
+    wrap.querySelectorAll(".ec-bulk-ck").forEach(el => { el.disabled = true; });
+
+    const done = [], failed = [];
+    for (let n = 0; n < picked.length; n++) {
+        const s = picked[n];
+        // Re-queried every pass: closing the dialog mid-run must not throw, and
+        // must not stop the uploads already promised either.
+        const prog = document.getElementById("ecBulkProg");
+        if (prog) {
+            prog.style.display = "block";
+            prog.textContent = "Uploading " + (n + 1) + " of " + picked.length + " — " + s;
+        }
+        const res = await _ecPost({ action: "fix", store: _ecStore, sku: s,
+                                    fields: _ecBulk.fields });
+        const b = res.body || {};
+        if (res.ok) done.push(s);
+        else failed.push({ sku: s, why: b.error || (b.item && b.item.error) || "eBay refused it" });
+    }
+
+    // The panel is rebuilt from the server rather than patched row by row: after
+    // twenty uploads the local copy has twenty chances to be subtly wrong.
+    await ecLoad();
+    _ecBulkDone(done, failed);
+}
+
+function _ecBulkDone(done, failed) {
+    const wrap = document.getElementById("ecFixWrap");
+    const box = wrap && wrap.querySelector(".ec-fix");
+    if (!box) { _ecBulk = null; return; }
+    const bad = failed.map(f =>
+        '<div class="ec-bulk-bad"><b>' + _ecEsc(f.sku) + '</b> ' + _ecEsc(f.why) + '</div>',
+    ).join("");
+    box.innerHTML = [
+        '<div class="ec-fix-head"><div class="ec-fix-headtxt">',
+        '<div class="ec-fix-t">' + done.length + (done.length === 1 ? " Card Listed" : " Cards Listed")
+          + '</div>',
+        '<div class="ec-fix-s">' + (failed.length
+            ? failed.length + (failed.length === 1 ? " still needs something" : " still need something")
+            : "Every one of them went up.") + '</div>',
+        '</div><button class="ec-x" onclick="ecFixClose()" aria-label="Close">&times;</button></div>',
+        '<div class="ec-fix-body">',
+        failed.length ? bad + '<div class="ec-fix-note">These are back in the list with '
+            + 'their own Fix button — eBay asked them for something different.</div>'
+          : '<div class="ec-fix-note">Nothing left to do.</div>',
+        '</div>',
+        '<div class="ec-fix-foot">',
+        '<button class="ec-btn ec-btn-sm ec-btn-on" onclick="ecFixClose()">Done</button>',
+        '</div>',
+    ].join("");
+    _ecBulk = null;
+}
+window._ecBulkRun = _ecBulkRun;
 
 async function ecFixSubmit() {
     const sku = _ecFixSku;
@@ -41424,7 +41688,8 @@ async function ecFixSubmit() {
     // this time, which is not what opened this form.
     if (b.item) _ecApply(sku, { ...b.item, conflict: !!b.conflict });
 
-    if (res.ok) { ecFixClose(); ecRender(); return; }
+    // The answer is only worth spreading once eBay has taken it here.
+    if (res.ok) { _ecBulkOffer(sku, fields); return; }
 
     // ONE FIELD AT A TIME IS HOW eBay ANSWERS.
     // It reports the first thing it objects to, so a fix can genuinely reveal the

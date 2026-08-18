@@ -16543,7 +16543,7 @@ body.tv-body { display: block; background: #eef1f5; }
   background: rgba(23, 34, 28, 0.34);
 }
 .ec-fix {
-  width: 420px; max-width: 100%; max-height: calc(100vh - 32px);
+  width: 480px; max-width: 100%; max-height: calc(100vh - 32px);
   background: #fff; border: 1px solid var(--cb-line); border-radius: 14px;
   box-shadow: 0 18px 46px rgba(20, 35, 25, 0.22);
   display: flex; flex-direction: column; overflow: hidden;
@@ -16566,6 +16566,94 @@ body.tv-body { display: block; background: #eef1f5; }
    before the button is pressed, not compete with the value itself. */
 .ec-fix-src { display: block; margin-top: 4px; font-size: 11.5px; color: var(--sage-deep, #178048); }
 .ec-fix-src-none { color: #8a94a3; font-style: italic; }
+
+/* A refused condition is not a missing one, so it does not get the grey
+   "we found nothing" treatment — it is a statement about a value that IS on the
+   product, and the person needs to read it. */
+.ec-fix-src-cond { color: #8a6212; font-style: normal; }
+
+/* --- the evidence block: what the answer was read from ------------------- */
+.ec-ev {
+  border: 1px solid var(--cb-line); border-radius: 10px;
+  background: var(--cb-panel-2); padding: 9px 10px; margin-bottom: 13px;
+}
+/* The reference half sits under the question and reads as a footnote to it,
+   not as another thing to fill in. */
+.ec-ev-foot { margin-top: 2px; }
+.ec-ev-head { display: flex; gap: 10px; align-items: flex-start; }
+.ec-ev-img {
+  width: 52px; height: 52px; flex: 0 0 52px; object-fit: cover;
+  border-radius: 7px; border: 1px solid var(--cb-line); background: #fff;
+}
+/* min-width:0 or a long unbroken title pushes the dialog wider than its own
+   max-width and the whole modal starts scrolling sideways. */
+.ec-ev-headtxt { min-width: 0; }
+.ec-ev-title {
+  font-size: 12px; font-weight: 700; color: var(--slate-charcoal); line-height: 1.35;
+}
+.ec-ev-meta { margin-top: 3px; font-size: 11px; color: var(--cb-faint); }
+.ec-ev-none { margin-top: 8px; font-size: 11.5px; color: #8a6212; font-style: italic; }
+
+.ec-ev-more { margin-top: 8px; }
+.ec-ev-more > summary {
+  cursor: pointer; font-size: 11.5px; font-weight: 700; color: var(--cb-muted);
+  list-style: none; padding: 3px 0; user-select: none;
+}
+.ec-ev-more > summary::-webkit-details-marker { display: none; }
+.ec-ev-more > summary::before { content: "\25B8 "; color: var(--cb-faint); }
+.ec-ev-more[open] > summary::before { content: "\25BE "; }
+
+.ec-ev-tbl { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.ec-ev-tbl th, .ec-ev-tbl td {
+  text-align: left; vertical-align: top; padding: 3px 6px 3px 0;
+  font-size: 11.5px; line-height: 1.4; border-top: 1px solid var(--cb-line-2);
+}
+.ec-ev-tbl th {
+  width: 38%; font-weight: 600; color: var(--cb-muted); white-space: nowrap;
+}
+/* A free-text spec value in a nowrap cell is what blew the audit tables wide.
+   Values wrap; only the name column stays on one line. */
+.ec-ev-tbl td { color: var(--slate-charcoal); word-break: break-word; }
+.ec-ev-hit th, .ec-ev-hit td { background: #eefaf2; }
+.ec-ev-hit th { color: var(--sage-deep, #178048); }
+
+.ec-ev-raw {
+  margin-top: 5px; padding: 7px 8px; border-radius: 7px;
+  background: #fff; border: 1px solid var(--cb-line);
+  font-size: 11px; line-height: 1.45; color: var(--cb-muted);
+  white-space: pre-wrap; word-break: break-word; max-height: 190px; overflow: auto;
+}
+
+/* --- one answer, the rest of the batch ----------------------------------- */
+.ec-bulk-ans { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 9px; }
+.ec-bulk-kv {
+  font-size: 11.5px; color: var(--sage-deep, #178048);
+  background: #eefaf2; border: 1px solid #bfe3cd;
+  border-radius: 999px; padding: 3px 10px;
+}
+.ec-bulk-kv b { color: var(--slate-charcoal); font-weight: 700; }
+.ec-bulk-row {
+  display: flex; gap: 9px; align-items: flex-start;
+  padding: 7px 8px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent;
+}
+.ec-bulk-row:hover { background: var(--cb-panel-2); }
+.ec-bulk-row input { margin-top: 2px; flex: 0 0 auto; }
+.ec-bulk-txt { min-width: 0; }
+.ec-bulk-title {
+  display: block; font-size: 12px; font-weight: 600; color: var(--slate-charcoal);
+  line-height: 1.35;
+}
+.ec-bulk-meta { display: block; margin-top: 2px; font-size: 11px; color: var(--cb-faint); }
+/* The card that disagrees is not hidden and not disabled — it is just not
+   ticked for you, and it says why. */
+.ec-bulk-clash { background: #fdf6e7; border-color: #f0dfae; }
+.ec-bulk-why { display: block; margin-top: 2px; font-size: 11px; color: #8a6212; font-weight: 600; }
+.ec-bulk-bad {
+  font-size: 11.5px; color: var(--cb-muted); padding: 5px 0;
+  border-top: 1px solid var(--cb-line-2); word-break: break-word;
+}
+.ec-bulk-bad b { color: var(--slate-charcoal); }
 
 .ec-fix-row { display: block; margin-bottom: 11px; }
 .ec-fix-lbl {

@@ -664,6 +664,60 @@ const EBAY_CONDITION_BY_ID: Record<string, string> = {
   "7000": "FOR_PARTS_OR_NOT_WORKING",
 };
 
+// WHAT THE PROMPT SHOWS ITS WORKING FROM.
+//
+// A dropdown with a pre-filled answer and no evidence is a value nobody can
+// check, and checking it meant opening the product in Shopify in another tab —
+// which is the whole cost the Fix prompt exists to remove. Everything needed is
+// already in hand at the moment of failure, so it is kept.
+//
+// THE CONDITION BLOCK IS THE POINT. A spec table cannot explain a refusal whose
+// cause is a metafield the table never shows: 21 graded cards at MPL stopped on
+// an `ebay_condition` of 1500 while their spec tables happily read "CGC 10".
+// Naming the field that was actually read is the difference between "why is it
+// saying that?" and "ah, that metafield is wrong".
+type Evidence = {
+  title: string;
+  price: string | null;
+  image: string | null;
+  images: number;
+  specs: [string, string][];
+  condition: { read: string | null; source: string | null; allowedHere: string[] } | null;
+};
+
+// Bounded on the way in, not on the way out. This lands in a jsonb column on
+// every failure, and one product with a 4,000-character "I/O Ports" row should
+// not be able to decide how big that column gets.
+const EV_ROWS = 40, EV_LEN = 240;
+
+function buildEvidence(
+  c: Candidate, specs: Record<string, string>,
+  picked: { value: string; unknown: string | null; missing: boolean; source?: string },
+  condWords: string[],
+): Evidence {
+  const rows: [string, string][] = [];
+  for (const [k, v] of Object.entries(specs || {})) {
+    if (rows.length >= EV_ROWS) break;
+    const val = String(v ?? "").replace(/\s+/g, " ").trim();
+    if (!val) continue;
+    rows.push([String(k).slice(0, 60), val.slice(0, EV_LEN)]);
+  }
+  return {
+    title: c.title,
+    price: c.price ?? null,
+    image: (c.imageUrls || [])[0] || null,
+    images: c.images || 0,
+    specs: rows,
+    condition: {
+      // The word the product gave us, recognised or not — an unrecognised one is
+      // the most useful thing on the screen, because it is the thing to change.
+      read: picked.missing ? null : (picked.unknown || picked.value),
+      source: picked.source || null,
+      allowedHere: condWords,
+    },
+  };
+}
+
 function conditionFrom(
   specs: Record<string, string>, fallback: string,
   metafields: Record<string, string> = {},
@@ -698,11 +752,18 @@ function conditionFrom(
              source: `ebay_condition metafield (${declared})` };
   }
   const text = (specs["Condition"] || "").trim();
+  // No source when there is nothing to cite. "We read no field" is the honest
+  // answer, and the prompt says so in its own words rather than naming a row
+  // that was never there.
   if (!text) return { value: fallback, unknown: null, missing: true };
   for (const [re, value] of CONDITION_BY_TEXT) {
-    if (re.test(text)) return { value, unknown: null, missing: false };
+    if (re.test(text)) {
+      return { value, unknown: null, missing: false,
+               source: `the "Condition" row in the spec table ("${text}")` };
+    }
   }
-  return { value: fallback, unknown: text, missing: false };
+  return { value: fallback, unknown: text, missing: false,
+           source: `the "Condition" row in the spec table ("${text}")` };
 }
 
 // The one place the accepted vocabulary is written down, so the refusal message
@@ -2007,6 +2068,13 @@ Deno.serve(async (req: Request) => {
   const conditionPolicy = await conditionPolicyFor(api, categoryId);
   const allowedConditions = conditionIdsOf(conditionPolicy);
   const picked = conditionFrom(specs, condition, c.metafields || {});
+  // Hoisted above the first refusal that can use it: the unsupported-condition
+  // branch below needs the same list, and computing it twice invites the two
+  // copies to drift.
+  const condWords = conditionWordsAllowed(allowedConditions);
+  // One object, every failure path. Nothing after this point changes the
+  // product, so a single snapshot is honest for all of them.
+  const evidence = buildEvidence(c, specs, picked, condWords);
 
   // An unrecognised condition word stops the listing. Guessing here would mean
   // publishing a grade nobody chose, and the grade is the field a buyer leans on
@@ -2029,7 +2097,8 @@ Deno.serve(async (req: Request) => {
       c, specs,
     );
     if (!dry) {
-      await recordFailure(store, c, categoryId, msg, undefined, categoryName, condMissing);
+      await recordFailure(store, c, categoryId, msg, undefined, categoryName, condMissing,
+                          evidence);
     }
     return json({ store, sku, step: "condition", error: msg, missing: condMissing,
                   conditionFound: picked.unknown, conditionMissing: picked.missing }, 422);
@@ -2043,7 +2112,6 @@ Deno.serve(async (req: Request) => {
   // there is no neighbour it hands back `unsupported`, and we would go on to
   // send a value the category has already told us it does not take. That round
   // trip buys nothing and costs the store a 25059 to read.
-  const condWords = conditionWordsAllowed(allowedConditions);
   if (cond.unsupported && condWords.length) {
     const msg = OURS + `eBay will not take "${wantedCondition.replace(/_/g, " ").toLowerCase()}" `
       + `as the condition in ${categoryName || "this category"} — the grade on the product is `
@@ -2053,7 +2121,8 @@ Deno.serve(async (req: Request) => {
       { name: "Condition", allowed: condWords, kind: "condition" },
     ];
     if (!dry) {
-      await recordFailure(store, c, categoryId, msg, undefined, categoryName, condMissing);
+      await recordFailure(store, c, categoryId, msg, undefined, categoryName, condMissing,
+                          evidence);
     }
     return json({ store, sku, step: "condition", error: msg, missing: condMissing,
                   conditionWanted: wantedCondition, allowedHere: condWords }, 422);
@@ -2077,7 +2146,8 @@ Deno.serve(async (req: Request) => {
       name: m.name, allowed: m.allowed, kind: "descriptor" as const,
     })), c, specs);
     if (!dry) {
-      await recordFailure(store, c, categoryId, msg, undefined, categoryName, descMissing);
+      await recordFailure(store, c, categoryId, msg, undefined, categoryName, descMissing,
+                          evidence);
     }
     return json({ store, sku, step: "conditionDescriptors", error: msg,
                   missing: descMissing }, 422);
@@ -2201,7 +2271,7 @@ Deno.serve(async (req: Request) => {
 
   if (put.status >= 300) {
     await recordFailure(store, c, categoryId, `inventory_item: ${errText(put.body)}`,
-                        undefined, categoryName, missingFrom(put.body));
+                        undefined, categoryName, missingFrom(put.body), evidence);
     return json({ step: "inventory_item", status: put.status, error: errText(put.body),
                   missing: missingFrom(put.body) }, 502);
   }
@@ -2221,7 +2291,7 @@ Deno.serve(async (req: Request) => {
     offerId = existing.body?.offers?.[0]?.offerId;
     if (!offerId) {
       await recordFailure(store, c, categoryId, `offer: ${errText(offerRes.body)}`,
-                          undefined, categoryName, missingFrom(offerRes.body));
+                          undefined, categoryName, missingFrom(offerRes.body), evidence);
       return json({ step: "offer", status: offerRes.status, error: errText(offerRes.body),
                     missing: missingFrom(offerRes.body) }, 502);
     }
@@ -2236,7 +2306,7 @@ Deno.serve(async (req: Request) => {
     });
     if (upd.status >= 300) {
       await recordFailure(store, c, categoryId, `offer update: ${errText(upd.body)}`,
-                          offerId, categoryName, missingFrom(upd.body));
+                          offerId, categoryName, missingFrom(upd.body), evidence);
       return json({ step: "offer update", status: upd.status, error: errText(upd.body),
                     missing: missingFrom(upd.body) }, 502);
     }
@@ -2250,7 +2320,7 @@ Deno.serve(async (req: Request) => {
   if (pub.status >= 300) {
     const pubMissing = missingFrom(pub.body);
     await recordFailure(store, c, categoryId, `publish: ${errText(pub.body)}`,
-                        offerId, categoryName, pubMissing);
+                        offerId, categoryName, pubMissing, evidence);
     return json({
       step: "publish",
       status: pub.status,
@@ -2342,10 +2412,15 @@ async function upsertListing(
 async function recordFailure(
   store: string, c: Candidate, categoryId: string, error: string, offerId?: string,
   categoryName: string | null = null, missingFields: MissingField[] | null = null,
+  evidence: Evidence | null = null,
 ) {
   await upsertListing(store, c, categoryId, {
     status: "failed",
     last_error: error,
+    // Rewritten on every failure, like missing_fields and for the same reason:
+    // evidence from a refusal two edits ago would explain a listing nobody is
+    // looking at.
+    evidence: evidence || null,
     // Written on EVERY failure, including as null. A row that failed last time
     // on a missing Grade and this time on something else must not keep offering
     // a Fix form for a field eBay has stopped asking about.

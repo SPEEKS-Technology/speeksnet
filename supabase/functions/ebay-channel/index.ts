@@ -199,7 +199,7 @@ const ageMinutes = (iso: string | null | undefined) =>
 // scope this panel reports on.
 const LISTING_COLS = "sku,title,price,quantity,status,ebay_listing_id,shopify_product_id,"
   + "category_id,category_name,last_error,attempts,last_attempt_at,published_at,updated_at,"
-  + "missing_fields";
+  + "missing_fields,evidence";
 
 // --- saying what went wrong, to the person holding the item -----------------
 //
@@ -365,6 +365,11 @@ function mapListing(store: string, l: any) {
     // it could not help with.
     missingFields: Array.isArray(l.missing_fields) && l.missing_fields.length
       ? l.missing_fields : null,
+    // What the answer would be read FROM: the full title, the picture, the spec
+    // rows, and which field the condition actually came out of. Passed through
+    // untouched — the Fix prompt decides what is worth showing, and shaping it
+    // here would mean two places to change when it does.
+    evidence: l.evidence || null,
     category: l.category_name || null,
     categoryId: l.category_id || null,
     attempts: l.attempts || 0,
