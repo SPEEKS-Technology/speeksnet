@@ -41418,7 +41418,11 @@ async function ecGiveUp(sku, btn) {
     const b = res.body || {};
     if (!res.ok) {
         if (btn) { btn.disabled = false; btn.textContent = 'Remove'; }
-        alert(b.error || 'Could not remove it.');
+        // `error` is often the generic word the edge function's catch-all uses
+        // ("failed"); `detail` is the sentence that says what actually went
+        // wrong. Showing the first alone turned a constraint violation into a
+        // one-word dead end.
+        alert(b.detail || b.error || 'Could not remove it.');
         return;
     }
     // Drop the badge here rather than refetching the whole view: the count is

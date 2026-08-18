@@ -352,6 +352,7 @@ function mapListing(store: string, l: any) {
     itemId: l.ebay_listing_id,
     state: l.status === "failed" ? "failed"
          : l.status === "disabled" ? "disabled"
+         : l.status === "dismissed" ? "dismissed"
          : l.status === "published" ? "live"
          : l.ebay_listing_id ? "ended" : "failed",
     // Plain English for the person holding the item; eBay's exact words kept
@@ -387,8 +388,11 @@ async function itemFor(store: string, sku: string) {
 }
 
 async function listingsFor(store: string) {
+  // DISMISSED ROWS ARE KEPT IN THE TABLE AND OUT OF THE PANEL. Remove means
+  // "stop showing me this", so filtering here is what makes the row go and the
+  // "Did Not Upload" badge fall — the counts below are derived from this list.
   const mine = await allRows(
-    `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
+    `ebay_listings?store_code=eq.${encodeURIComponent(store)}&status=neq.dismissed`
     + `&select=${LISTING_COLS}&order=updated_at.desc`);
 
   // STATE COMES FROM OUR OWN COLUMN, NOT FROM THE SWEEP. The first version of
@@ -708,6 +712,10 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
   // The row is kept, not deleted: what we tried and why it failed is worth
   // more than a tidy table, and re-uploading the SKU later just overwrites
   // this status. Only a FAILED row can be dismissed — never a live listing.
+  //
+  // 'dismissed' HAS TO BE IN THE status CHECK CONSTRAINT. It was not when this
+  // shipped, so every Remove was refused by Postgres, came back through the
+  // catch-all as {error:"failed"}, and reached the person as a one-word alert.
   if (action === "dismiss") {
     const cur = await rows(
       `ebay_listings?store_code=eq.${encodeURIComponent(store)}`

@@ -121,13 +121,16 @@ Deno.serve(async (req: Request) => {
   for (const m of mineRows) mine[m.sku] = m;
 
   const now = Date.now();
-  const skipped = { alreadyLive: 0, noPhoto: 0, noPrice: 0, backoff: 0 };
+  const skipped = { alreadyLive: 0, noPhoto: 0, noPrice: 0, backoff: 0, dismissed: 0 };
 
   const eligible = catalog.filter((c: any) => {
     if (live.has(c.sku)) { skipped.alreadyLive += 1; return false; }
     if (!c.image_count) { skipped.noPhoto += 1; return false; }
     if (!(Number(c.price) > 0)) { skipped.noPrice += 1; return false; }
     const own = mine[c.sku];
+    // Somebody pressed Remove on this SKU. Backoff alone would hand it back to
+    // the queue once the timer ran out, which is the opposite of giving up.
+    if (own?.status === 'dismissed') { skipped.dismissed = (skipped.dismissed || 0) + 1; return false; }
     if (own?.last_attempt_at) {
       const due = Date.parse(own.last_attempt_at) + backoffMinutes(own.attempts || 1) * 60000;
       if (now < due) { skipped.backoff += 1; return false; }
