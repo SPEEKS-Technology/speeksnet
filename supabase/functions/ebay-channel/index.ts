@@ -198,7 +198,8 @@ const ageMinutes = (iso: string | null | undefined) =>
 // row here is something SPEEKS Connect tried to publish — which is exactly the
 // scope this panel reports on.
 const LISTING_COLS = "sku,title,price,quantity,status,ebay_listing_id,shopify_product_id,"
-  + "category_id,category_name,last_error,attempts,last_attempt_at,published_at,updated_at";
+  + "category_id,category_name,last_error,attempts,last_attempt_at,published_at,updated_at,"
+  + "missing_fields";
 
 // --- saying what went wrong, to the person holding the item -----------------
 //
@@ -357,6 +358,12 @@ function mapListing(store: string, l: any) {
     // alongside it for whoever they escalate to.
     error: humanError(l.last_error),
     errorRaw: l.last_error ? stripMarkup(l.last_error).slice(0, 1200) : null,
+    // The structured twin of `error`: which fields eBay is waiting for, and for
+    // each one whether it is a closed list or free text. Null on any failure that
+    // is not about a missing field, which is what keeps the Fix button off rows
+    // it could not help with.
+    missingFields: Array.isArray(l.missing_fields) && l.missing_fields.length
+      ? l.missing_fields : null,
     category: l.category_name || null,
     categoryId: l.category_id || null,
     attempts: l.attempts || 0,
@@ -454,9 +461,18 @@ async function summaryFor(store: string) {
 // Every action calls a function that already exists, with the operator secret
 // this one holds. Nothing about eBay is reimplemented here; the point is only
 // that a role check stands in front of it.
-async function callFn(path: string): Promise<{ status: number; body: any }> {
+async function callFn(
+  path: string, init: RequestInit = {},
+): Promise<{ status: number; body: any }> {
   const url = `${FN_BASE}/${path}${path.includes("?") ? "&" : "?"}secret=${OPS_SECRET}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${SERVICE_KEY}` } });
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...(init.headers || {}),
+    },
+  });
   const text = await res.text();
   try { return { status: res.status, body: text ? JSON.parse(text) : null }; }
   catch { return { status: res.status, body: text.slice(0, 800) }; }
@@ -565,7 +581,39 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
     return json({ ok: r.status < 300, ...r.body }, r.status < 300 ? 200 : r.status);
   }
 
-  if (action === "list" || action === "retry") {
+  // Answer what eBay asked for, in Shopify, and then upload again.
+  //
+  // "Add a Compatible Brand row to the product" is a trip into another system
+  // for somebody standing at a counter holding the item, and it is the reason a
+  // failed row could sit failed for days. The answer is written into the Shopify
+  // product itself rather than into a SPEEKS-side override, so the field is
+  // filled in for everything that reads the product afterwards — the storefront,
+  // the next tool, the next person — and not only for this one upload.
+  if (action === "fix") {
+    const fields = (body.fields && typeof body.fields === "object" && !Array.isArray(body.fields))
+      ? body.fields as Record<string, unknown> : null;
+    const clean = Object.entries(fields || {})
+      .map(([k, v]) => [String(k).trim(), String(v ?? "").trim()])
+      .filter(([k, v]) => k && v);
+    if (!clean.length) return json({ error: `pass fields: { "Grade": "10" }` }, 400);
+
+    const w = await callFn(
+      `ebay-sync?store=${store}&sku=${encodeURIComponent(sku)}&fix=1`,
+      { method: "POST", body: JSON.stringify({ fields: Object.fromEntries(clean) }) },
+    );
+    // NOTHING IS RETRIED IF THE WRITE DID NOT LAND.
+    // Uploading anyway would fail on the very field we just failed to save, and
+    // that refusal reads exactly like "the answer you typed was wrong" — which
+    // is the one conclusion it must not lead anybody to.
+    if (w.status >= 300) {
+      return json({ ok: false, ...w.body, item: await itemFor(store, sku) }, w.status);
+    }
+    // Falls through into the list path below on purpose: an item fixed here has
+    // to go up through the same code as every other upload, or "it listed after a
+    // Fix" and "it listed" stop meaning the same thing.
+  }
+
+  if (action === "list" || action === "retry" || action === "fix") {
     // THE ALREADY-LIVE GUARD MOVED INTO ebay-sync, AND IS NOT REPEATED HERE.
     // This route used to run its own ebay_live lookup and refuse before ever
     // calling ebay-sync. Two problems. It was a second copy of a rule that
@@ -650,6 +698,34 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
     return json({ ok: r.status < 300, ...r.body }, r.status < 300 ? 200 : r.status);
   }
 
+  // Give up on a SKU that will not list.
+  //
+  // A failed row is counted by the "N Did Not Upload" badge and mailed by
+  // ebay-alert, so a listing nobody intends to fix nags forever. The panel's
+  // x only ever cleared the LOCAL list (ecRemoveOne, speeks.js) — the row and
+  // therefore the count survived a reload, which is what made it feel stuck.
+  //
+  // The row is kept, not deleted: what we tried and why it failed is worth
+  // more than a tidy table, and re-uploading the SKU later just overwrites
+  // this status. Only a FAILED row can be dismissed — never a live listing.
+  if (action === "dismiss") {
+    const cur = await rows(
+      `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
+      + `&sku=eq.${encodeURIComponent(sku)}&select=status`);
+    if (!cur.length) return json({ error: `no listing row for ${store} / ${sku}` }, 404);
+    const st = String(cur[0].status || "");
+    if (st !== "failed") {
+      return json({ error: `only a failed listing can be dismissed — ${sku} is "${st}"` }, 409);
+    }
+    await sb(
+      `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
+      + `&sku=eq.${encodeURIComponent(sku)}`, {
+      method: "PATCH",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ status: "dismissed", updated_at: new Date().toISOString() }),
+    });
+    return json({ ok: true, store, sku, status: "dismissed" });
+  }
   return json({ error: `unknown action "${action}"` }, 400);
 }
 

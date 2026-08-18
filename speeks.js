@@ -142,6 +142,41 @@ function _usageSessionId() {
     return id;
 }
 
+// What device this session is being used on.
+//
+// This is the field the beacon never had, which is why usage_events.meta is null
+// on every row written before today and why "is anyone actually on a phone" was
+// unanswerable. Session-level, so it rides the flush envelope rather than being
+// repeated on each event row.
+//
+// kind keys off POINTER TYPE, not width — deliberately. A narrow desktop window
+// is not a phone, and counting it as one would report mobile adoption that is not
+// happening. (That exact confusion cost real time during the Phase 1 layout work,
+// where headless Chrome at 390px wide behaved nothing like a phone.) It also keys
+// off the SHORT edge, so a phone held sideways is still a phone.
+//
+// mob answers the separate, project-specific question: was the mobile LAYER
+// actually engaged — i.e. <=900px, the compact breakpoint in styles.css? Someone
+// on a half-width desktop window sees the mobile layout without being on a mobile
+// device, and that is worth knowing on its own.
+function _usageDevice() {
+    try {
+        const w = Math.round(window.innerWidth || 0);
+        const h = Math.round(window.innerHeight || 0);
+        const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+        const short = Math.min(w, h) || 0;
+        return {
+            w, h,
+            dpr: Math.round((window.devicePixelRatio || 1) * 100) / 100,
+            touch: coarse,
+            kind: !coarse ? 'desktop' : (short < 500 ? 'phone' : 'tablet'),
+            mob: w > 0 && w <= 900,
+        };
+    } catch (_) {
+        return null;   // telemetry must never break a flush
+    }
+}
+
 // Record that this person was on the site today.
 //
 // ⚠️ This exists because 'signin' fires ONLY where the PIN is typed, and
@@ -237,6 +272,7 @@ async function _usageFlush() {
             role: sessionStorage.getItem('speeksUserRole') || '',
             store: sessionStorage.getItem('speeksUserStore') || '',
             sessionId: _usageSessionId(),
+            device: _usageDevice(),
             events
         });
     } catch (_) {
@@ -623,6 +659,10 @@ async function loadCMS() {
 
                 const markReadBtn = (!isRead && !isHidden && cleanUser) ? `<button class="hub-markread" onclick="hubMarkRead('${annId}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Mark as read</button>` : '';
 
+                // Receipt lives in the card HEADER, matching patch notes, so the
+                // "Read by" list drops into the card body instead of out of the
+                // bottom of the card (Ethan, 2026-08-18). Header placement also
+                // keeps it clear of the reaction row it used to sit beside.
                 const readBy = item.readBy || [];
                 const readReceiptHtml = isPrivileged ? `
                     <div class="read-receipt" id="receipt_${annId}">
@@ -647,11 +687,11 @@ async function loadCMS() {
                         <div class="hub-row">
                             <span class="hub-tico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"></path></svg></span>
                             <div class="hub-col">
-                                <div class="hub-item-top">${parsed.priority ? '<span class="hub-prio-pill">Priority</span>' : ''}<span class="hub-item-title">${escapeHtml(parsed.title)}</span><span class="hub-meta-r">${metaR}</span></div>
+                                <div class="hub-item-top">${parsed.priority ? '<span class="hub-prio-pill">Priority</span>' : ''}<span class="hub-item-title">${escapeHtml(parsed.title)}</span>${readReceiptHtml}<span class="hub-meta-r">${metaR}</span></div>
                                 <div class="hub-kind-meta"><span class="hub-kind">${kindLabel}</span>${item.author ? ' · ' + escapeHtml(item.author) : ''}</div>
                                 <div class="hub-item-body">${parsed.bodyHtml}</div>
                                 ${docLinkHtml}
-                                <div class="hub-foot">${reactionsHtml}${readReceiptHtml}${markReadBtn}</div>
+                                <div class="hub-foot">${reactionsHtml}${markReadBtn}</div>
                             </div>
                         </div>
                     </div>`;
@@ -1352,18 +1392,62 @@ document.addEventListener('click', (e) => {
     }
 });
 
+// THE CARD IS WHAT CLIPS THE "READ BY" LIST, NOT THE FEED.
+// #notifDropdown .hub-item is overflow:hidden (it rounds its own corners), and
+// a hub card is often only ~120px tall while this popover is ~190px. So a
+// receipt in the card FOOTER gets cut off a few pixels down no matter which
+// way it opens — flipping it upward inside a 120px card just clips the other
+// end. An earlier pass measured the popover against .hub-feed and looked
+// correct; .hub-item is a NEARER ancestor and was the real clipper all along.
+//
+// So the popover is let OUT of the card first (.rr-unclip, removed on close),
+// and only then is the direction measured — against the nearest genuinely
+// SCROLLING ancestor, which is the feed. The feed has to keep clipping: it
+// scrolls. The card does not, so its clipping is pure decoration and can be
+// dropped for as long as the popover is open.
+//
+// Do not hard-code a direction. The announcements receipt sits in a card
+// footer (down is tight) and the patch-note receipt in a card header (up is
+// tight); one constant cannot be right for both.
+function _rrCloseAll() {
+    document.querySelectorAll('.read-receipt-popover.show').forEach(p => {
+        p.classList.remove('show', 'rr-up');
+    });
+    document.querySelectorAll('.rr-unclip').forEach(n => n.classList.remove('rr-unclip'));
+}
+
 window.toggleReadReceipt = function(id) {
     const popover = document.getElementById('receipt-popover_' + id);
     if (!popover) return;
     const isOpen = popover.classList.contains('show');
-    document.querySelectorAll('.read-receipt-popover.show').forEach(p => p.classList.remove('show'));
-    if (!isOpen) popover.classList.add('show');
+    _rrCloseAll();
+    if (isOpen) return;
+
+    const anchor = popover.parentElement;
+    if (anchor) {
+        let clip = null;
+        for (let n = anchor.parentElement; n && n !== document.body; n = n.parentElement) {
+            const cs = getComputedStyle(n);
+            if (cs.overflowY === 'auto' || cs.overflowY === 'scroll') { clip = n; break; }
+            // A non-scrolling ancestor that hides overflow is only decoration.
+            if (cs.overflowY !== 'visible' || cs.overflowX !== 'visible') n.classList.add('rr-unclip');
+        }
+        const box = clip ? clip.getBoundingClientRect()
+            : { top: 0, bottom: window.innerHeight };
+        const r = anchor.getBoundingClientRect();
+        // 6px is the gap the stylesheet leaves on whichever side it opens.
+        const below = box.bottom - r.bottom - 6;
+        const above = r.top - box.top - 6;
+        // visibility:hidden still lays the popover out, so it can be measured
+        // before it is shown. max-height caps it at 200.
+        const need = Math.min(popover.scrollHeight || 0, 200) + 8;
+        if (below < need && above > below) popover.classList.add('rr-up');
+    }
+    popover.classList.add('show');
 };
 
 document.addEventListener('click', (e) => {
-    if (!e.target.closest('.read-receipt')) {
-        document.querySelectorAll('.read-receipt-popover.show').forEach(p => p.classList.remove('show'));
-    }
+    if (!e.target.closest('.read-receipt')) _rrCloseAll();
 });
 
 // --- REACTION LIVE POLLING ---
@@ -12479,22 +12563,47 @@ function _lvStoreRow(v, d, foot, rev) {
         + (cols.tail ? '<td>' + tail + '</td>' : '') + '</tr>';
 }
 
-// The phone view of the selling table.
+// The phone view of the live dashboard.
 //
-// This is a REDUCTION, not a reflow. The table carries ten columns and a 390px
-// screen can hold three, so rather than shrink all ten into unreadability it
-// shows the three figures that answer "how is each store doing right now":
-// sell value, sell margin, and progress against the month's goal.
+// A REDUCTION, not a reflow. The desktop table carries ten columns; the phone
+// shows the three figures that answer "how are we doing right now" from the
+// sofa: net sales, gross profit, and progress against goal. It rides the same
+// Today / Yesterday / Month toggle as the table, because _lvView() has already
+// switched the fields to the selected mode by the time a card is built.
 //
-// One honesty note on the third figure. pctOfGoal is `mtdGp / goal * 100` — it
-// measures GROSS PROFIT against the monthly GP goal, and it stays month-scoped
-// even when the panel is set to Today or Yesterday (see the field list above
-// _lvView). So it is labelled "to GP goal · month" rather than a bare "to goal",
-// which on a Today view would read as a claim about today.
+// SCOPE IS NARROWER THAN DESKTOP, deliberately. On a computer a manager opening
+// the Command Center Live tab gets the whole district board (see the note in
+// renderLiveDashboard). On a phone a manager gets THEIR STORE ONLY — comparing
+// five stores is a table, and a table is the one shape a phone cannot show.
+// District Managers and the CEO still get the company view, because for them the
+// comparison IS the job.
 //
-// Emitted next to the table, not instead of it: CSS shows exactly one of the two,
-// so the desktop table is untouched and this cannot regress it.
+// One honesty note on the percentage: pctOfGoal is mtdGp / goal * 100 — gross
+// profit against the MONTHLY goal. It stays month-scoped on the Today and
+// Yesterday tabs too, since goals are monthly and there is no daily goal to
+// measure against. The legend says so rather than letting a bare "% to goal" be
+// read as a claim about today.
+const _LV_COMPANY_ROLES = new Set(["district manager", "ceo"]);
+
 function _lvCards(stores, d, rollup, rollupLabel) {
+    const role = (sessionStorage.getItem("speeksUserRole") || "").toLowerCase().trim();
+    const company = _LV_COMPANY_ROLES.has(role);
+    // A Multi-Store Manager runs two stores and is handed exactly those two, so
+    // "their store" is both of them plus the combined line — not one of the pair.
+    const msm = sessionStorage.getItem("speeksMultiStore") === "true";
+
+    let list, roll;
+    if (company || msm) {
+        list = stores;
+        roll = rollup;
+    } else {
+        list = stores.filter(m => m && m.code === _lvOwnCode);
+        roll = null;   // no district total for a single store — it would be the same number
+    }
+    if (!list.length) {
+        return '<p class="lv-cards-legend">No live figures for your store yet.</p>';
+    }
+
     function card(v, isRoll) {
         const tint = (!isRoll && STORE_TINTS[v.code])
             ? '<i class="lv-tint" style="background:' + STORE_TINTS[v.code] + '"></i>' : '';
@@ -12506,29 +12615,29 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         const pct = v.pctOfGoal;
         const has = !(pct === null || pct === undefined);
         // Same three-band read as the pace column: at or past goal, within reach,
-        // or behind. Colour carries it so the row is scannable without reading.
+        // or behind. Colour carries it so a card is scannable without reading.
         const band = !has ? '' : (Number(pct) >= 100 ? ' good' : (Number(pct) >= 75 ? ' near' : ' low'));
         return '<li class="lvc' + (isRoll ? ' lvc-roll' : '') + '">'
             + head + '<span class="lvc-goal' + band + '">' + _lvPct(pct) + '</span></div>'
             + '<div class="lvc-figs">'
-            + '<div class="lvc-f"><span class="lvc-k">Sell value</span>'
+            + '<div class="lvc-f"><span class="lvc-k">Net Sales</span>'
             + '<span class="lvc-v">' + _lvMoney(v.netToday, false) + '</span></div>'
-            + '<div class="lvc-f"><span class="lvc-k">Margin</span>'
-            + '<span class="lvc-v">' + _lvPct(v.marginToday) + '</span></div>'
+            + '<div class="lvc-f"><span class="lvc-k">Gross Profit</span>'
+            + '<span class="lvc-v">' + _lvMoney(v.gpToday, false) + '</span></div>'
             + '</div>'
-            // Only the exception is worth a per-card line. Stating "to GP goal"
-            // on every card repeats the same six words six times; it is said once
-            // in the legend below instead.
             + (has ? '' : '<div class="lvc-goal-lab">no goal set</div>')
             + '</li>';
     }
 
-    let html = '<p class="lv-cards-legend">Percentage is month-to-date gross profit against goal.</p>'
+    // The company line leads for a DM: the district number is the headline and the
+    // stores underneath are the breakdown, which is the order they are read in.
+    let html = '<p class="lv-cards-legend">' + escapeHtml(_lvModeName())
+        + ' &middot; percentage is month-to-date gross profit against goal.</p>'
         + '<ul class="lv-cards">';
-    stores.forEach(m => { html += card(_lvView(m), false); });
-    if (rollup) {
-        html += card(Object.assign({}, _lvView(rollup), { code: rollupLabel, name: '' }), true);
+    if (roll) {
+        html += card(Object.assign({}, _lvView(roll), { code: rollupLabel, name: '' }), true);
     }
+    list.forEach(m => { html += card(_lvView(m), false); });
     return html + '</ul>';
 }
 
@@ -20641,6 +20750,21 @@ function _setUserGreeting() {
     if (el) el.innerText = `Welcome ${sessionStorage.getItem('speeksUserName') || 'User'}!`;
 }
 
+// The one breakpoint the JS has to agree with the stylesheet about. Must stay in
+// step with the MOBILE LAYER in styles.css, where <=900px is the compact build.
+function _isMobileLayout() {
+    try { return window.matchMedia("(max-width: 900px)").matches; } catch (_) { return false; }
+}
+
+// Rotating a tablet or dragging a window across 900px changes which surfaces
+// belong on screen, and the inline display written by applyRoleBasedUI does not
+// re-evaluate on its own. Re-run it on the crossing, not on every resize tick.
+try {
+    window.matchMedia("(max-width: 900px)").addEventListener("change", function () {
+        if (document.body.classList.contains("is-authenticated")) applyRoleBasedUI();
+    });
+} catch (_) { /* older browsers: the initial pass still applies */ }
+
 function applyRoleBasedUI() {
     const userRole = sessionStorage.getItem('speeksUserRole') || 'employee';
     const userStore = sessionStorage.getItem('speeksUserStore') || 'ALL';
@@ -20675,6 +20799,14 @@ function applyRoleBasedUI() {
             if (ov !== null) visible = ov;
         }
 
+        // A surface cut from the phone build stays cut even when the role check
+        // passes. This CANNOT be done in CSS: the branch below writes an inline
+        // display with !important, which outranks every stylesheet rule — so
+        // [data-mobile="hide"] silently lost to it on all 11 role-gated elements
+        // that were supposed to be hidden (found with scripts/mobile-check.js).
+        if (visible && module.getAttribute('data-mobile') === 'hide' && _isMobileLayout()) {
+            visible = false;
+        }
         if (visible) {
             let displayType = module.classList.contains('dynamic-module-flex') ? 'flex' : 'block';
             module.style.setProperty('display', displayType, 'important');
@@ -27628,6 +27760,10 @@ function buildPatchGroups(entries) {
     return Object.values(groups).sort((a, b) => parsePatchDate(b.date) - parsePatchDate(a.date));
 }
 
+// DEAD as of 2026-08-18: nothing creates #patchNotesList and nothing calls
+// renderPatchNotes(). The hub feed draws patch notes — see _hubPatchItems().
+// Left in place rather than deleted, but do not add to it: a read receipt was
+// built here first and would never have appeared on screen.
 function buildPatchCardHTML(group, isLatest) {
     const versionLabel = group.title;
     const catOrder = ['New Features', 'Improvements', 'Bug Fixes'];
@@ -30295,7 +30431,14 @@ function _applySectionNavVisibility(userRoleClass, userName) {
     Object.keys(_SECTION_TABS).forEach(href => {
         const link = document.querySelector(`.nav-bar a.nav-link[href="${href}"]`);
         if (!link) return;
-        const vis = _SECTION_TABS[href].some(k => _featureEffectiveVisible(k, userRoleClass, userName));
+        // This writer runs LAST and with !important, so on the phone build it has
+        // to honour the cut list itself — otherwise it re-shows a whole section
+        // that data-mobile="hide" had already removed. _featureEffectiveVisible
+        // resolves roles and overrides off the catalog, not the DOM, so it cannot
+        // see the tag on its own.
+        const cutOnMobile = link.getAttribute('data-mobile') === 'hide' && _isMobileLayout();
+        const vis = !cutOnMobile
+            && _SECTION_TABS[href].some(k => _featureEffectiveVisible(k, userRoleClass, userName));
         link.style.setProperty('display', vis ? 'flex' : 'none', 'important');
     });
 }
@@ -36254,6 +36397,12 @@ function _hubPatchItems() {
     const _pu = sessionStorage.getItem('speeksUserName');
     const _pcu = _pu ? String(_pu).trim().toLowerCase() : null;
     const patchUnseen = !!(_pcu && localStorage.getItem('speeksUnseenPatchNotes_' + _pcu) === 'true');
+    // WHO HAS READ THIS RELEASE, for the DM and the CEO — the same eye control,
+    // classes and toggle the announcements items in this very feed already use.
+    // One read-receipt widget on the site, not two that drift apart.
+    const _pRole = (sessionStorage.getItem('speeksUserRole') || '').trim().toLowerCase();
+    const _pPriv = _pRole === 'ceo' || _pRole === 'district manager';
+    const _pReads = (data && data.reads) || {};
     return groups.map((g, i) => {
         const sections = catOrder.map(cat => {
             const items = g.items.filter(it => it.category === cat);
@@ -36264,6 +36413,23 @@ function _hubPatchItems() {
         const dateMs = (d && !isNaN(d.getTime())) ? d.getTime() : (Date.now() - i);
         // Only the newest unread version gets the button — older groups are history.
         const isUnread = patchUnseen && i === 0;
+        // A version key is "v3.2.0|2026-08-16"; neither the dot nor the pipe
+        // belongs in an element id or inside an onclick string, so the popover is
+        // keyed by position instead.
+        const _pNames = _pReads[g.title + '|' + g.date] || [];
+        const _pRid = 'pn' + i;
+        const _pReceipt = _pPriv ? `
+            <div class="read-receipt" id="receipt_${_pRid}">
+                <button class="read-receipt-btn" onclick="event.stopPropagation(); toggleReadReceipt('${_pRid}')">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    ${_pNames.length} read
+                </button>
+                <div class="read-receipt-popover" id="receipt-popover_${_pRid}">
+                    <div class="rr-title">Read by</div>
+                    ${_pNames.length === 0 ? '<div class="rr-empty">No reads yet</div>'
+                      : _pNames.map(u => `<div class="rr-name">${escapeHtml(u)}</div>`).join('')}
+                </div>
+            </div>` : '';
         const markReadBtn = isUnread
             ? `<div class="hub-foot"><button class="hub-markread" onclick="hubMarkPatchRead()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Mark as read</button></div>`
             : '';
@@ -36272,7 +36438,7 @@ function _hubPatchItems() {
                 <div class="hub-row">
                     <span class="hub-tico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg></span>
                     <div class="hub-col">
-                        <div class="hub-patch-head"><span class="hub-kind">Patch Notes</span><span class="hub-patch-ver">${escapeHtml(g.title)}</span>${i === 0 ? '<span class="hub-latest">Latest</span>' : ''}<span class="hub-meta-r">${formatPatchDate(g.date)}</span></div>
+                        <div class="hub-patch-head"><span class="hub-kind">Patch Notes</span><span class="hub-patch-ver">${escapeHtml(g.title)}</span>${i === 0 ? '<span class="hub-latest">Latest</span>' : ''}${_pReceipt}<span class="hub-meta-r">${formatPatchDate(g.date)}</span></div>
                         ${sections}
                         ${markReadBtn}
                     </div>
@@ -40453,7 +40619,7 @@ function _ecQuickHtml() {
     // read the other way.
     return `
     <div class="ec-quick">
-      <input id="ecSkuInput" placeholder="Scan Or Type a SKU Or Barcode"
+      <input id="ecSkuInput" placeholder="Scan or Type a SKU or Barcode"
              onpaste="ecPasteSkus(event)"
              onkeydown="if(event.key==='Enter')ecListTyped()">
       <button class="ec-btn ec-btn-go" onclick="ecListTyped()">Upload To eBay</button>
@@ -40528,6 +40694,26 @@ function _ecRow(i) {
                   i.state === 'disabled' ? 'Enable'
                   : i.state === 'failed' ? 'Try Again' : 'Upload Again'}</button>`;
 
+    // A REFUSAL OVER A MISSING FIELD IS A QUESTION, SO ASK IT.
+    // Try Again on its own would fail on the same field, and the only fix on
+    // offer was a trip into Shopify to find a product and type into a spec
+    // table — which is why a failed row could sit failed for days. This is the
+    // same answer, asked for here and written back to the product.
+    const fixable = !pending && _ecScope?.canList && !i.conflict
+        && i.state === 'failed' && (i.missingFields || []).length > 0;
+    const fixBtn = fixable
+        ? `<button class="ec-btn ec-btn-sm ec-btn-fix" data-sku="${sku}"
+             title="Fill in what eBay is missing and upload again"
+             onclick="ecFix(this.dataset.sku)">Fix</button>`
+        : '';
+
+    // Beside Try Again, and only on a failed row: the way to stop trying.
+    const giveUp = (!pending && _ecScope?.canList && i.state === 'failed')
+        ? `<button class="ec-btn ec-btn-sm ec-btn-off" data-sku="${sku}"
+             title="Stop counting this one — it comes off the Did Not Upload badge"
+             onclick="ecGiveUp(this.dataset.sku, this)">Remove</button>`
+        : '';
+
     // eBay picks the category from the title, not the store — so it is the one
     // part of a listing nobody here chose and nobody could see. Worth showing on
     // every row: when it lands somewhere odd, the refusal that follows reads as
@@ -40561,7 +40747,7 @@ function _ecRow(i) {
       <td class="cb-cell-status ec-money">${_ecMoney(i.price)}</td>
       <td class="cb-cell-status">${chip}</td>
       <td class="cb-cell-status"><div class="ec-pills">${links}</div></td>
-      <td><div class="ec-acts">${acts}</div></td>
+      <td><div class="ec-acts">${fixBtn}${acts}${giveUp}</div></td>
     </tr>`;
 
     // The reason sits open under the row it belongs to. Collapsing it would hide
@@ -41081,6 +41267,169 @@ async function ecListOne(sku, btn) {
 // Off eBay, and staying off. Worth a confirm: the unit is still on the shelf
 // and still for sale in Shopify, so this is a decision about the listing rather
 // than about the item, and nothing automatic will put it back.
+// Give up on a SKU that will not list.
+//
+/* --- answering eBay without leaving the panel ------------------------------
+ *
+ * eBay refuses a listing by naming a field: "Professional Grader (27501) is a
+ * required field", "Compatible Brand is a required field". Every one of those
+ * used to end the same way — go and open the product in Shopify, find the spec
+ * table, type the value, come back, upload again — which is a trip into another
+ * system for somebody standing at a counter holding the item.
+ *
+ * The edge function already knows the answer's SHAPE: which fields, and for each
+ * one whether eBay will take free text or only one of a fixed list. So the panel
+ * asks, writes the answer onto the Shopify product, and uploads again.
+ *
+ * WRITTEN TO SHOPIFY, NOT KEPT HERE. Storing the answer on our side would list
+ * the item and leave the product exactly as blank as it was, so the next person
+ * to open it — and the storefront, and every other tool — would learn nothing.
+ */
+let _ecFixSku = null;
+
+function ecFix(sku, note) {
+    const row = _ecFeed.find(e => _ecSame(e.sku, sku))
+        || (_ecData?.items || []).find(e => _ecSame(e.sku, sku));
+    const fields = (row?.missingFields || []);
+    if (!fields.length) return;
+    ecFixClose();
+    _ecFixSku = sku;
+
+    const inputs = fields.map((fld, n) => {
+        const id = `ecFixF${n}`;
+        // A CLOSED LIST IS ALWAYS A DROPDOWN.
+        // Free-typing into a field eBay will only accept 29 exact strings for is
+        // a guaranteed second refusal, and the second refusal reads as if the
+        // answer was wrong rather than the spelling.
+        const control = (fld.allowed || []).length
+            ? `<select id="${id}" class="ec-fix-in" data-name="${_ecEsc(fld.name)}">
+                 <option value="">Choose…</option>
+                 ${fld.allowed.map(v => `<option value="${_ecEsc(v)}">${_ecEsc(v)}</option>`).join('')}
+               </select>`
+            : `<input id="${id}" class="ec-fix-in" data-name="${_ecEsc(fld.name)}"
+                     autocomplete="off" placeholder="Type The Answer">`;
+        return `<label class="ec-fix-row" for="${id}">
+                  <span class="ec-fix-lbl">${_ecEsc(fld.name)}</span>
+                  ${control}
+                </label>`;
+    }).join('');
+
+    const wrap = document.createElement('div');
+    wrap.id = 'ecFixWrap';
+    wrap.className = 'ec-fix-wrap';
+    wrap.innerHTML = `
+      <div class="ec-fix" role="dialog" aria-modal="true">
+        <div class="ec-fix-head">
+          <div class="ec-fix-headtxt">
+            <div class="ec-fix-t">eBay Needs A Little More</div>
+            <div class="ec-fix-s" title="${_ecEsc(row.title || sku)}">${_ecEsc(row.title || sku)}</div>
+          </div>
+          <button class="ec-x" onclick="ecFixClose()" aria-label="Close">&times;</button>
+        </div>
+        <div class="ec-fix-body">
+          ${note ? `<div class="ec-fix-note ec-fix-note-warn">${_ecEsc(note)}</div>` : ''}
+          ${inputs}
+          <div class="ec-fix-note">Saved onto the product in Shopify, then uploaded again.</div>
+          <div class="ec-fix-err" id="ecFixErr"></div>
+        </div>
+        <div class="ec-fix-foot">
+          <button class="ec-btn ec-btn-sm" onclick="ecFixClose()">Cancel</button>
+          <button class="ec-btn ec-btn-sm ec-btn-on" id="ecFixGo"
+                  onclick="ecFixSubmit()">Save &amp; Upload</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    document.addEventListener('keydown', _ecFixEsc, true);
+    wrap.querySelector('.ec-fix-in')?.focus();
+}
+window.ecFix = ecFix;
+
+function _ecFixEsc(ev) { if (ev.key === 'Escape') ecFixClose(); }
+
+function ecFixClose() {
+    document.removeEventListener('keydown', _ecFixEsc, true);
+    document.getElementById('ecFixWrap')?.remove();
+    _ecFixSku = null;
+}
+window.ecFixClose = ecFixClose;
+
+async function ecFixSubmit() {
+    const sku = _ecFixSku;
+    const wrap = document.getElementById('ecFixWrap');
+    const err = document.getElementById('ecFixErr');
+    if (!wrap || !sku || !err) return;
+
+    const fields = {};
+    let blank = null;
+    wrap.querySelectorAll('.ec-fix-in').forEach(el => {
+        const v = String(el.value || '').trim();
+        if (!v) { blank = blank || el.dataset.name; return; }
+        fields[el.dataset.name] = v;
+    });
+    // A blank would be written to Shopify as nothing and refused by eBay for the
+    // same field, one round trip later.
+    if (blank) {
+        err.textContent = `${blank} still needs an answer.`;
+        err.style.display = 'block';
+        return;
+    }
+
+    const go = document.getElementById('ecFixGo');
+    if (go) { go.disabled = true; go.textContent = 'Saving…'; }
+    err.style.display = 'none';
+
+    const res = await _ecPost({ action: 'fix', store: _ecStore, sku, fields });
+    const b = res.body || {};
+    // The server row has moved on either way — it now carries whatever eBay said
+    // this time, which is not what opened this form.
+    if (b.item) _ecApply(sku, { ...b.item, conflict: !!b.conflict });
+
+    if (res.ok) { ecFixClose(); ecRender(); return; }
+
+    // ONE FIELD AT A TIME IS HOW eBay ANSWERS.
+    // It reports the first thing it objects to, so a fix can genuinely reveal the
+    // next missing field. Re-asking beats sending somebody back to the row to
+    // press Fix again to find out.
+    const next = b.item?.missingFields || [];
+    if (next.length) {
+        ecFix(sku, 'That saved. eBay then asked for this as well.');
+        return;
+    }
+    if (go) { go.disabled = false; go.textContent = 'Save & Upload'; }
+    err.textContent = b.error || b.detail || b.item?.error || 'Could not save that.';
+    err.style.display = 'block';
+}
+window.ecFixSubmit = ecFixSubmit;
+
+// ecRemoveOne (the x beside the title) only ever cleared THIS BROWSER's list.
+// The ebay_listings row stayed "failed", so the "N Did Not Upload" badge — which
+// is a server count, not a local one — came straight back on the next load, and
+// ebay-alert kept mailing about it nightly. This is the one that stops both.
+//
+// The row is kept on the server, just marked dismissed: what was tried and why
+// it failed is worth more than a tidy table, and uploading the SKU again later
+// simply starts it over.
+async function ecGiveUp(sku, btn) {
+    if (!confirm(`Remove ${sku}?\n\n`
+        + 'It comes off the Did Not Upload count and stops the error emails. '
+        + 'Nothing on eBay changes, and uploading it again later starts it over.')) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Removing…'; }
+    const res = await _ecPost({ action: 'dismiss', store: _ecStore, sku });
+    const b = res.body || {};
+    if (!res.ok) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Remove'; }
+        alert(b.error || 'Could not remove it.');
+        return;
+    }
+    // Drop the badge here rather than refetching the whole view: the count is
+    // the thing the person is watching, and a round trip to see it fall by one
+    // is the difference between "that worked" and "did that work?".
+    if (_ecData?.summary?.counts?.failed > 0) _ecData.summary.counts.failed--;
+    ecRemoveOne(sku);   // clears the local row and re-renders
+    ecRender();
+}
+window.ecGiveUp = ecGiveUp;
+
 async function ecDisable(sku, btn) {
     if (!confirm(`Take ${sku} off eBay?\n\n`
         + 'It stays for sale in the store — this ends the eBay listing only, '

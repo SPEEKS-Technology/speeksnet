@@ -345,9 +345,22 @@ function clampHtml(html: string, max: number): string {
 // table — Platform, Game Name, Release Year, UPC, Condition and so on. Those
 // are precisely the fields eBay demands as item aspects, so parse them out
 // rather than guessing from the title.
+// THE WRITER AND THE READER HAVE TO AGREE ABOUT ENTITIES.
+// &nbsp; and &amp; were decoded and the rest were not, so a spec value holding
+// a < or a > came back out as the literal text "&lt;" and went to eBay that way.
+// It matters more now that upsertSpecRows() writes rows itself: it must escape
+// what it writes — a raw < from a typed answer would otherwise land as markup in
+// a storefront description — and an escape the reader cannot undo is a value
+// that changes every time it makes the round trip.
+//
+// &amp; stays LAST. Decoding it first would turn a literal "&amp;lt;" into "<".
 const stripTags = (html: string) =>
   html.replace(/<[^>]*>/g, " ")
     .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;|&apos;/g, "'")
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
@@ -432,6 +445,108 @@ function parseSpecs(html: string): Record<string, string> {
   return specs;
 }
 
+// --- writing an answer back into Shopify ------------------------------------
+//
+// THE POINT IS THAT THE FIX LANDS WHERE THE FIELD WAS MISSING.
+// Keeping the answer in SPEEKS would list the item and leave the Shopify product
+// exactly as blank as it was, so the next person to open it — or the next tool
+// to read it — learns nothing. Both places the reader looks get written: the
+// description spec table (buyer-facing, and what parseSpecs reads) and a
+// metafield (what specsFromMetafields reads).
+
+// Our own namespace. Writing into PayMore's filter_attributes instead would put
+// us inside a field their listing tool owns and rewrites, so a fix would survive
+// exactly until the next time that tool touched the product.
+const SPEC_MF_NS = "speeks";
+
+// Shopify keys are lowercase, 3-64 chars, letters/digits/_/-. titleCaseKey()
+// turns them back into "Professional Grader" on the way in, so the round trip
+// has to survive: write professional_grader, read back Professional Grader, and
+// match the name eBay asked for.
+function metafieldKey(name: string): string {
+  const k = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return k.length >= 3 ? k.slice(0, 64) : `${k}_spec`;
+}
+
+const escHtml = (v: string) => String(v)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;");
+
+// AN EXISTING ROW IS REPLACED, NEVER DUPLICATED.
+// parseSpecs() takes the LAST <tr> it sees for a label, so two rows sharing one
+// label would decide the listing by document order — not a thing to leave to
+// accident. Where the label is already there only the value cell changes, which
+// also leaves the template's own markup and styling on the label alone.
+function upsertSpecRows(html: string, entries: [string, string][]) {
+  let out = String(html || "");
+  const added: string[] = [];
+  const replaced: string[] = [];
+  for (const [name, value] of entries) {
+    let hit = false;
+    out = out.replace(/<tr[\s\S]*?<\/tr>/gi, (row) => {
+      if (hit) return row;
+      const cells = row.match(/<td[\s\S]*?<\/td>/gi) || [];
+      if (cells.length !== 2) return row;
+      const label = stripTags(cells[0]).replace(/[?:]+$/, "").trim();
+      if (label.toLowerCase() !== name.toLowerCase()) return row;
+      hit = true;
+      // Spliced at the LAST occurrence, not replaced by string match: a row
+      // whose label and value happen to be identical would otherwise have its
+      // label cell rewritten instead of its value.
+      const at = row.lastIndexOf(cells[1]);
+      return row.slice(0, at) + `<td>${escHtml(value)}</td>`
+           + row.slice(at + cells[1].length);
+    });
+    if (hit) { replaced.push(name); continue; }
+    const newRow = `<tr><td>${escHtml(name)}</td><td>${escHtml(value)}</td></tr>`;
+    // Into the last table on the page, which is where the template puts specs.
+    let close = out.lastIndexOf("</tbody>");
+    if (close < 0) close = out.lastIndexOf("</table>");
+    out = close >= 0
+      ? out.slice(0, close) + newRow + out.slice(close)
+      : out + `<table>${newRow}</table>`;
+    added.push(name);
+  }
+  return { html: out, added, replaced };
+}
+
+// One mutation for both halves, so a fix cannot half-land: either the product
+// gains the row AND the metafield, or it gains neither.
+async function writeSpecsToShopify(
+  shop: string, token: string, c: Candidate, entries: [string, string][],
+) {
+  const spec = upsertSpecRows(c.descriptionHtml || "", entries);
+  const metafields = entries.map(([name, value]) => ({
+    namespace: SPEC_MF_NS,
+    key: metafieldKey(name),
+    type: "single_line_text_field",
+    // specsFromMetafields() discards anything over 65 characters as prose, and
+    // eBay caps an aspect value at 65 too — writing more would be writing
+    // something our own reader then skips.
+    value: String(value).slice(0, 65),
+  }));
+  const data = await shopifyGql(
+    shop, token,
+    `mutation($product: ProductUpdateInput!) {
+       productUpdate(product: $product) {
+         product { id }
+         userErrors { field message }
+       }
+     }`,
+    { product: { id: c.productId, descriptionHtml: spec.html, metafields } },
+  );
+  const errs = data?.productUpdate?.userErrors || [];
+  if (errs.length) {
+    throw new Error("shopify refused the fix: " + errs
+      .map((e: any) => `${(e.field || []).join(".")}: ${e.message}`).join("; "));
+  }
+  return {
+    rowsAdded: spec.added,
+    rowsReplaced: spec.replaced,
+    metafieldsWritten: metafields.map(m => `${m.namespace}.${m.key}`),
+  };
+}
+
 // Their condition vocabulary maps cleanly onto eBay's used-condition enums.
 //
 // DAMAGE IS TESTED FIRST, AND IT IS TESTED FOR PROPERLY.
@@ -504,6 +619,11 @@ const EBAY_CONDITION_BY_ID: Record<string, string> = {
   "2020": "VERY_GOOD_REFURBISHED",
   "2030": "GOOD_REFURBISHED",
   "2500": "SELLER_REFURBISHED",
+  // 2750 was missing, and it is the ONE id some categories insist on: eBay's
+  // trading-card categories call it "Graded". Without this row the ebay_condition
+  // metafield could not express a graded card at all — setting it to 2750 fell
+  // silently through to the text mapping and sent 3000, which publish rejects.
+  "2750": "LIKE_NEW",
   "3000": "USED_EXCELLENT",
   "4000": "USED_VERY_GOOD",
   "5000": "USED_GOOD",
@@ -530,8 +650,15 @@ function conditionFrom(
 
 // The one place the accepted vocabulary is written down, so the refusal message
 // and any future validator cannot drift apart.
-const CONDITION_WORDS = "New, Like New, Flawless, Excellent, Very Good, Good, "
-  + "Acceptable, Used, or Broken / For Parts";
+// The prose form is what a refusal message reads out; the array is what the
+// panel's Fix prompt turns into a dropdown. Built from one list so the sentence
+// and the dropdown cannot come to disagree about what is accepted.
+const CONDITION_CHOICES = [
+  "New", "Like New", "Flawless", "Excellent", "Very Good", "Good",
+  "Acceptable", "Used", "Broken / For Parts",
+];
+const CONDITION_WORDS = CONDITION_CHOICES.slice(0, -1).join(", ")
+  + ", or " + CONDITION_CHOICES[CONDITION_CHOICES.length - 1];
 
 // A REFUSAL WE WROTE OURSELVES IS NOT A REFUSAL TO TRANSLATE.
 // ebay-channel runs every stored error through humanError(), which pattern-matches
@@ -541,6 +668,84 @@ const CONDITION_WORDS = "New, Like New, Flawless, Excellent, Very Good, Good, "
 // useful half — the list of conditions to actually type — cut off the end. This
 // prefix marks a message as ours; the channel strips it and passes the rest
 // through whole, no rules and no cap.
+// --- what is eBay actually waiting for? -------------------------------------
+//
+// A refusal is a sentence, and a sentence is only useful to somebody who can go
+// and edit Shopify. A form needs a list: which fields, and for each one whether
+// it is a closed set of legal values or free text. That is what this type is —
+// the structured twin of the message, stored on the row so the panel can ask
+// for the answer instead of sending somebody off to find it.
+type MissingField = {
+  name: string;
+  allowed: string[];          // empty means free text
+  kind: "aspect" | "descriptor" | "condition";
+};
+
+// eBay names the offending field in two places and NEITHER IS SAFE ALONE: the
+// message prose ("Professional Grader (27501) is a required field") and the
+// parameters array. The prose has no stable grammar, so a name lifted out of it
+// is only accepted here if it ALSO matches the category's own vocabulary — the
+// aspects and condition descriptors already fetched for this listing.
+//
+// Matching against a known list is the whole point. A regex looking for field
+// names in free text will happily pull "Type" or "Color" out of an unrelated
+// sentence and put a made-up question in front of a person, which is worse than
+// showing them the raw error.
+function missingFromEbayError(
+  body: any, aspectDefs: any[], condEntry: any,
+): MissingField[] {
+  const errs = Array.isArray(body?.errors) ? body.errors : [];
+  if (!errs.length) return [];
+
+  const candidates: string[] = [];
+  for (const e of errs) {
+    const msg = String(e?.message || "");
+    // The shape eBay uses for both aspects and condition descriptors.
+    for (const m of msg.matchAll(
+      /([A-Za-z][\w &.'\/-]{1,48}?)\s*(?:\(\d+\))?\s+is (?:a |an )?required/gi)) {
+      candidates.push(m[1]);
+    }
+    // "The item aspect Compatible Brand is missing", and its invalid-value twin.
+    for (const m of msg.matchAll(
+      /aspects?\s+["']?([A-Za-z][\w &.'\/-]{1,48}?)["']?\s+(?:is|has|was)/gi)) {
+      candidates.push(m[1]);
+    }
+    for (const p of (e?.parameters || [])) {
+      const v = String(p?.value ?? "").trim();
+      if (v) candidates.push(v);
+    }
+  }
+  if (!candidates.length) return [];
+  const wanted = new Set(candidates.map(c => c.trim().toLowerCase()).filter(Boolean));
+
+  const out: MissingField[] = [];
+  const seen = new Set<string>();
+  const take = (name: string, allowed: string[], kind: MissingField["kind"]) => {
+    const k = name.toLowerCase();
+    if (!name || seen.has(k)) return;
+    seen.add(k);
+    out.push({ name, allowed: allowed.slice(0, 60), kind });
+  };
+
+  // Descriptors first: they are the narrower vocabulary, and where a name
+  // appears in both lists the descriptor is the one eBay is asking about.
+  for (const d of (condEntry?.conditionDescriptors || [])) {
+    const name = String(d.conditionDescriptorName || "");
+    if (wanted.has(name.toLowerCase())) {
+      take(name, (d.conditionDescriptorValues || [])
+        .map((v: any) => String(v.conditionDescriptorValueName)), "descriptor");
+    }
+  }
+  for (const def of (aspectDefs || [])) {
+    const name = String(def.localizedAspectName || "");
+    if (wanted.has(name.toLowerCase())) {
+      take(name, (def.aspectValues || [])
+        .map((v: any) => String(v.localizedValue)), "aspect");
+    }
+  }
+  return out;
+}
+
 const OURS = "SPEEKS: ";
 
 // THE USED TIERS ARE NOT UNIVERSAL.
@@ -565,10 +770,16 @@ const ID_TO_CONDITION: Record<number, string> = Object.fromEntries(
 const conditionFamily = (id: number) =>
   id < 2000 ? "new" : id < 2750 ? "refurbished" : id < 7000 ? "used" : "parts";
 
-async function allowedConditionIds(
+// Returns the category's full itemConditions array, NOT just the ids.
+//
+// The ids were all this ever kept, and the descriptors nested inside each
+// condition were thrown away with the rest of the response — which is why every
+// trading card died at publish with 25064 naming a field that does not exist as
+// an aspect. See descriptorsFor() below.
+async function conditionPolicyFor(
   api: (p: string, i?: RequestInit) => Promise<{ status: number; body: any }>,
   categoryId: string,
-): Promise<number[] | null> {
+): Promise<any[] | null> {
   const res = await api(
     `/sell/metadata/v1/marketplace/${MARKETPLACE}/get_item_condition_policies`
     + `?filter=categoryIds:{${encodeURIComponent(categoryId)}}`);
@@ -576,10 +787,83 @@ async function allowedConditionIds(
   // resolved from the spec table and let eBay have the last word.
   if (res.status >= 300) return null;
   const policy = (res.body?.itemConditionPolicies || [])[0];
-  const ids = (policy?.itemConditions || [])
+  const conditions = policy?.itemConditions || [];
+  return conditions.length ? conditions : null;
+}
+
+const conditionIdsOf = (policy: any[] | null): number[] | null => {
+  const ids = (policy || [])
     .map((c: any) => Number(c.conditionId))
     .filter((n: number) => Number.isFinite(n) && n > 0);
   return ids.length ? ids : null;
+};
+
+// CONDITION DESCRIPTORS ARE NOT ASPECTS.
+//
+// eBay returns them nested inside each condition in the condition policy, and
+// they never appear in get_item_aspects_for_category. A Graded trading card must
+// carry Professional Grader (27501) and Grade (27502); an Ungraded one must carry
+// Card Condition (40001). Miss them and publish fails with
+// "25064: Professional Grader (27501) is a required field" — naming something no
+// amount of filling in the spec table could have supplied, because nothing here
+// was sending the field at all.
+const DESCRIPTOR_SPEC_KEYS: Record<string, string[]> = {
+  "professional grader": ["Professional Grader", "Grader", "Grading Company", "Graded By"],
+  "grade": ["Grade", "Card Grade"],
+  "certification number": ["Certification Number", "Cert Number", "Cert No", "Cert #",
+                           "Certificate Number", "Serial Number"],
+  // Deliberately NOT aliased to the plain "Condition" row: that one already means
+  // the eBay condition, and "Like New" is not one of eBay's card grades.
+  "card condition": ["Card Condition"],
+};
+
+// "Professional Sports Authenticator (PSA)" has to match a spec row that just
+// says PSA — the abbreviation in the brackets is what anybody actually writes.
+function descriptorValueMatches(spec: string, name: string): boolean {
+  const s = spec.trim().toLowerCase();
+  const n = String(name || "").trim().toLowerCase();
+  if (!s || !n) return false;
+  if (s === n) return true;
+  const abbr = /\(([^)]+)\)\s*$/.exec(n);
+  if (abbr && s === abbr[1].trim()) return true;
+  if (s === n.replace(/\s*\([^)]*\)\s*$/, "").trim()) return true;
+  // Grades arrive as "10", "9.5", "PSA 10", "Gem Mint 10" — compare the number.
+  const sn = /(\d+(?:\.\d+)?)/.exec(s);
+  const nn = /^(\d+(?:\.\d+)?)$/.exec(n);
+  if (sn && nn && Number(sn[1]) === Number(nn[1])) return true;
+  return false;
+}
+
+// Never defaults. eBay offers one (PSA, grade 10) and taking it would stamp a
+// grade nobody chose onto a listing — the same reason conditionFrom() refuses to
+// guess a condition. A missing required descriptor is reported instead, so the
+// refusal can name the field and list its legal values.
+function descriptorsFor(entry: any, specs: Record<string, string>) {
+  const values: { name: string; values: string[] }[] = [];
+  const missing: { name: string; allowed: string[] }[] = [];
+  for (const d of (entry?.conditionDescriptors || [])) {
+    const dName = String(d.conditionDescriptorName || "");
+    const constraint = d.conditionDescriptorConstraint || {};
+    const required = String(constraint.usage || "").toUpperCase() === "REQUIRED";
+    const legal = d.conditionDescriptorValues || [];
+    const allowed = legal.map((v: any) => String(v.conditionDescriptorValueName));
+    const keys = DESCRIPTOR_SPEC_KEYS[dName.toLowerCase()] || [dName];
+    let raw = "";
+    for (const k of keys) {
+      const hit = Object.keys(specs).find(x => x.toLowerCase() === k.toLowerCase());
+      if (hit && !isPlaceholder(specs[hit])) { raw = String(specs[hit]).trim(); break; }
+    }
+    if (!raw) { if (required) missing.push({ name: dName, allowed }); continue; }
+    if (String(constraint.mode || "") === "SELECTION_ONLY") {
+      const hit = legal.find((v: any) => descriptorValueMatches(raw, v.conditionDescriptorValueName));
+      if (!hit) { if (required) missing.push({ name: dName, allowed }); continue; }
+      values.push({ name: String(d.conditionDescriptorId),
+                    values: [String(hit.conditionDescriptorValueId)] });
+    } else {
+      values.push({ name: String(d.conditionDescriptorId), values: [raw.slice(0, 60)] });
+    }
+  }
+  return { values, missing };
 }
 
 function adjustCondition(wanted: string, allowed: number[] | null) {
@@ -843,6 +1127,7 @@ function inventoryItemPayload(
   specs: Record<string, string>,
   aspectDefs: any[],
   requiredAspects: string[],
+  conditionDescriptors: { name: string; values: string[] }[] = [],
 ) {
   // Only send aspects eBay actually declares for the category. Unrecognised
   // aspect names are a rejection risk, and the spec table carries plenty of
@@ -898,6 +1183,8 @@ function inventoryItemPayload(
   return {
     availability: { shipToLocationAvailability: { quantity: Math.max(c.quantity, 0) } },
     condition: resolvedCondition,
+    // Sibling of condition, not part of product — see descriptorsFor().
+    ...(conditionDescriptors.length ? { conditionDescriptors } : {}),
     product: {
       title: ebayTitle(c.title),
       description: clampHtml(c.descriptionHtml || c.title, EBAY_ITEM_DESCRIPTION_MAX),
@@ -1124,6 +1411,50 @@ Deno.serve(async (req: Request) => {
   if (!row) return json({ error: `no ebay_stores row for ${store}` }, 404);
 
   const { shop, token: shopToken } = await shopFor(store);
+
+  // --- fix: take the answer, write it into Shopify --------------------------
+  // POST { fields: { "Professional Grader": "PSA", "Grade": "10" } }
+  //
+  // Listing is deliberately NOT done here. ebay-channel calls this and then runs
+  // its own list path, so the retry goes through exactly the same code as any
+  // other upload — a fixed listing that behaved differently from a normal one
+  // would be a second route to maintain and a second one to get wrong.
+  if (url.searchParams.get("fix") === "1") {
+    if (!sku) return json({ error: "pass &sku=" }, 400);
+    let raw: any = null;
+    try { raw = await req.json(); } catch { /* no body */ }
+    const entries = Object.entries((raw && raw.fields) || {})
+      .map(([k, v]) => [String(k).trim(), String(v ?? "").trim()] as [string, string])
+      .filter(([k, v]) => k && v);
+    if (!entries.length) {
+      return json({ error: `pass a JSON body: { "fields": { "Grade": "10" } }` }, 400);
+    }
+
+    const found = await findProducts(shop, shopToken, `sku:${sku}`, 10);
+    const c = found.find(m => m.sku === sku);
+    if (!c) return json({ error: `sku ${sku} not found in ${shop}` }, 404);
+
+    try {
+      const written = await writeSpecsToShopify(shop, shopToken, c, entries);
+      return json({ store, sku, fixed: true, fields: Object.fromEntries(entries), ...written });
+    } catch (e) {
+      // A SCOPE PROBLEM MUST NOT READ AS A BAD ANSWER.
+      // Every token here was granted read_products only, so until the app is
+      // re-installed with write_products this is the error that comes back — and
+      // "shopify refused the fix" in front of somebody who typed a correct grade
+      // sends them looking in the wrong place entirely.
+      const detail = String((e as Error)?.message || e);
+      const denied = /access denied|not approved|scope|unauthorized|permission/i.test(detail);
+      return json({
+        store, sku, error: denied
+          ? OURS + "SPEEKS Connect can read this Shopify store but cannot write to it "
+            + "yet, so the answer could not be saved. The Shopify app has to be "
+            + "re-installed with permission to edit products before Fix will work."
+          : `could not write to Shopify: ${detail}`,
+        detail, needsWriteScope: denied,
+      }, denied ? 403 : 502);
+    }
+  }
 
   // --- category search: type words, get categories --------------------------
   // eBay publishes no "list every category" endpoint worth calling from a
@@ -1408,7 +1739,8 @@ Deno.serve(async (req: Request) => {
   const specs = { ...specsFromMetafields(c.metafields || {}), ...parseSpecs(c.descriptionHtml) };
 
   // Ask the category which conditions it will accept BEFORE building the item.
-  const allowedConditions = await allowedConditionIds(api, categoryId);
+  const conditionPolicy = await conditionPolicyFor(api, categoryId);
+  const allowedConditions = conditionIdsOf(conditionPolicy);
   const picked = conditionFrom(specs, condition, c.metafields || {});
 
   // An unrecognised condition word stops the listing. Guessing here would mean
@@ -1425,14 +1757,43 @@ Deno.serve(async (req: Request) => {
         + `SPEEKS Connect recognises, so it will not guess one — guessing here would put a grade `
         + `on eBay that nobody chose. Set the Condition on the Shopify product to one of: `
         + `${CONDITION_WORDS}.`);
-    if (!dry) await recordFailure(store, c, categoryId, msg, undefined, categoryName);
-    return json({ store, sku, step: "condition", error: msg,
+    // Condition is ours, not eBay's — it is the Condition row in the spec table
+    // that the whole mapping reads from, so the prompt offers our vocabulary.
+    const condMissing: MissingField[] = [
+      { name: "Condition", allowed: CONDITION_CHOICES, kind: "condition" },
+    ];
+    if (!dry) {
+      await recordFailure(store, c, categoryId, msg, undefined, categoryName, condMissing);
+    }
+    return json({ store, sku, step: "condition", error: msg, missing: condMissing,
                   conditionFound: picked.unknown, conditionMissing: picked.missing }, 422);
   }
 
   const wantedCondition = picked.value;
   const cond = adjustCondition(wantedCondition, allowedConditions);
-  const item = inventoryItemPayload(c, cond.condition, specs, aspectDefs, required);
+  // Descriptors hang off the CHOSEN condition, so this can only run once the
+  // condition is settled — Graded and Ungraded demand different fields.
+  const condEntry = (conditionPolicy || [])
+    .find((e: any) => Number(e.conditionId) === CONDITION_IDS[cond.condition]);
+  const desc = descriptorsFor(condEntry, specs);
+  if (desc.missing.length) {
+    const lines = desc.missing.map(m =>
+      m.name + (m.allowed.length ? ` — one of: ${m.allowed.slice(0, 24).join(", ")}` : ""));
+    const many = desc.missing.length > 1;
+    const msg = OURS + `eBay needs ${many ? "more fields" : "one more field"} before it will `
+      + `take this as "${condEntry?.conditionDescription || cond.condition}" in `
+      + `${categoryName || "this category"}. Add ${many ? "these rows" : "this row"} to the `
+      + `product's spec table in Shopify, then upload again: ${lines.join("  |  ")}`;
+    const descMissing: MissingField[] = desc.missing.map(m => ({
+      name: m.name, allowed: m.allowed, kind: "descriptor" as const,
+    }));
+    if (!dry) {
+      await recordFailure(store, c, categoryId, msg, undefined, categoryName, descMissing);
+    }
+    return json({ store, sku, step: "conditionDescriptors", error: msg,
+                  missing: descMissing }, 422);
+  }
+  const item = inventoryItemPayload(c, cond.condition, specs, aspectDefs, required, desc.values);
 
   // The branded wrapper. Without it a listing we publish looks nothing like the
   // hundreds Marketplace Connect already has live, which is the whole point of
@@ -1522,9 +1883,16 @@ Deno.serve(async (req: Request) => {
     method: "PUT",
     body: JSON.stringify(item),
   });
+  // Everything below can fail on a field eBay wants and the product does not
+  // carry. condEntry and aspectDefs are the category's own vocabulary, which is
+  // what turns eBay's wording into a field somebody can be asked for.
+  const missingFrom = (b: any) => missingFromEbayError(b, aspectDefs, condEntry);
+
   if (put.status >= 300) {
-    await recordFailure(store, c, categoryId, `inventory_item: ${errText(put.body)}`, undefined, categoryName);
-    return json({ step: "inventory_item", status: put.status, error: errText(put.body) }, 502);
+    await recordFailure(store, c, categoryId, `inventory_item: ${errText(put.body)}`,
+                        undefined, categoryName, missingFrom(put.body));
+    return json({ step: "inventory_item", status: put.status, error: errText(put.body),
+                  missing: missingFrom(put.body) }, 502);
   }
 
   // --- 2. offer -------------------------------------------------------------
@@ -1541,8 +1909,10 @@ Deno.serve(async (req: Request) => {
     );
     offerId = existing.body?.offers?.[0]?.offerId;
     if (!offerId) {
-      await recordFailure(store, c, categoryId, `offer: ${errText(offerRes.body)}`, undefined, categoryName);
-      return json({ step: "offer", status: offerRes.status, error: errText(offerRes.body) }, 502);
+      await recordFailure(store, c, categoryId, `offer: ${errText(offerRes.body)}`,
+                          undefined, categoryName, missingFrom(offerRes.body));
+      return json({ step: "offer", status: offerRes.status, error: errText(offerRes.body),
+                    missing: missingFrom(offerRes.body) }, 502);
     }
     // Reusing the id is not enough. Without this PUT the existing offer keeps
     // whatever price and description it was created with, so a re-push would
@@ -1554,8 +1924,10 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify(mutable0),
     });
     if (upd.status >= 300) {
-      await recordFailure(store, c, categoryId, `offer update: ${errText(upd.body)}`, offerId, categoryName);
-      return json({ step: "offer update", status: upd.status, error: errText(upd.body) }, 502);
+      await recordFailure(store, c, categoryId, `offer update: ${errText(upd.body)}`,
+                          offerId, categoryName, missingFrom(upd.body));
+      return json({ step: "offer update", status: upd.status, error: errText(upd.body),
+                    missing: missingFrom(upd.body) }, 502);
     }
     updatedExisting = true;
   }
@@ -1565,13 +1937,16 @@ Deno.serve(async (req: Request) => {
     method: "POST",
   });
   if (pub.status >= 300) {
-    await recordFailure(store, c, categoryId, `publish: ${errText(pub.body)}`, offerId, categoryName);
+    const pubMissing = missingFrom(pub.body);
+    await recordFailure(store, c, categoryId, `publish: ${errText(pub.body)}`,
+                        offerId, categoryName, pubMissing);
     return json({
       step: "publish",
       status: pub.status,
       error: errText(pub.body),
       categoryId,
       requiredAspects: required,
+      missing: pubMissing,
       hint: "publish failures are almost always missing required aspects for this category",
     }, 502);
   }
@@ -1604,6 +1979,7 @@ Deno.serve(async (req: Request) => {
     ebay_listing_id: listingId,
     status: "published",
     last_error: null,
+    missing_fields: null,
     published_at: new Date().toISOString(),
   }, categoryName);
 
@@ -1654,11 +2030,15 @@ async function upsertListing(
 
 async function recordFailure(
   store: string, c: Candidate, categoryId: string, error: string, offerId?: string,
-  categoryName: string | null = null,
+  categoryName: string | null = null, missingFields: MissingField[] | null = null,
 ) {
   await upsertListing(store, c, categoryId, {
     status: "failed",
     last_error: error,
+    // Written on EVERY failure, including as null. A row that failed last time
+    // on a missing Grade and this time on something else must not keep offering
+    // a Fix form for a field eBay has stopped asking about.
+    missing_fields: (missingFields && missingFields.length) ? missingFields : null,
     ...(offerId ? { ebay_offer_id: offerId } : {}),
   }, categoryName);
 }

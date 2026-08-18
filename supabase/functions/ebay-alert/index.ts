@@ -114,7 +114,11 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
   // few hundred rows and quietly stops working at a thousand.
   const listings = await read("ebay_listings", sb.from("ebay_listings")
     .select("store_code, sku, status, last_error, attempts, last_attempt_at, title")
-    .or("status.eq.failed,status.eq.pending,last_error.not.is.null"));
+    .or("status.eq.failed,status.eq.pending,last_error.not.is.null")
+        // A row someone deliberately gave up on must stop nagging. status is no
+        // longer "failed" once dismissed, but last_error is kept on purpose — and
+        // the not-null arm of the OR above would otherwise keep matching it.
+        .neq("status", "dismissed"));
   for (const l of listings) {
     const st = String(l.status || "");
     const systemic = SYSTEMIC.test(String(l.last_error || ""));
