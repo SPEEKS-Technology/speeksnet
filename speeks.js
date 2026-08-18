@@ -9578,48 +9578,83 @@ const _lvCols = () => ({
     tail:   _lvIsToday(),
 });
 // A finished DAY is what the day columns mean in both of the other two modes, so
-// the third one is the same trick a second time: month-to-date figures copied
-// over the day fields. Everything month-scoped (mtdGp, goal, pctOfGoal,
-// paceIndex) is deliberately left alone — on this view the "GP this month"
-// column and the Gross profit column really are the same number, which is the
-// price of the three tabs staying one readable table.
+// the third one is the same trick a second time: the month's figures copied over
+// the day fields.
+//
+// THE MONTH RUNS TO THE LAST COMPLETE DAY, not to this minute (user's call
+// 2026-08-17). Today's half-finished trading is what the Today tab is for; a
+// month that includes it cannot be compared with anything, which is the whole
+// reason the month-over-month and year-over-year band underneath can state a
+// percentage at all rather than a percentage plus a caveat.
+//
+// So the source is `m.prev` — and note what that is: the edge function's
+// month-to-date AT YESTERDAY'S CLOSE, derived by subtracting the days after it
+// from the running total rather than by re-summing. The two can therefore never
+// disagree about which days they include. It also means "through yesterday" cost
+// no backend work at all; the numbers were already in the payload, keyed for the
+// Yesterday tab's goal bar.
+//
+// Unlike the other two modes this ALSO moves the month-scoped fields (mtdNet,
+// mtdGp, pctOfGoal, paceIndex). It has to: the goal bar, the "GP this month"
+// column and the pace pill read those directly, and leaving them live would put
+// a figure that counts today beside four that stop at yesterday — on the one tab
+// whose entire promise is that everything on it covers the same days.
 function _lvView(m) {
     if (!m) return m;
     if (_lvIsPrev() && m.prev) return Object.assign({}, m, m.prev);
     if (_lvIsMtd()) {
+        // No closed-out day to show. Only reachable on the 1st, and the Month tab
+        // is not offered then (see _lvMtdReady) — but a payload mid-rollover can
+        // land here, and falling through live is better than rendering zeros.
+        const p = m.prev;
+        if (!p || p.mtdNet === null || p.mtdNet === undefined) return m;
         // mtdCogs is only missing on district payloads written before the roll-up
         // learned to sum it. Deriving it from net minus profit is exact, so an
         // older cached payload renders correctly rather than showing $0 cost.
-        const cogs = (m.mtdCogs === null || m.mtdCogs === undefined)
-            ? (Number(m.mtdNet) || 0) - (Number(m.mtdGp) || 0) : m.mtdCogs;
+        const cogs = (p.mtdCogs === null || p.mtdCogs === undefined)
+            ? (Number(p.mtdNet) || 0) - (Number(p.mtdGp) || 0) : p.mtdCogs;
         return Object.assign({}, m, {
-            netToday: m.mtdNet, cogsToday: cogs, gpToday: m.mtdGp,
-            ordersToday: m.mtdOrders, marginToday: m.mtdMargin,
+            netToday: p.mtdNet, cogsToday: cogs, gpToday: p.mtdGp,
+            ordersToday: p.mtdOrders, marginToday: p.mtdMargin,
             // null, not 0, when the payload predates mtdReturns — a cache written
             // by the old function would otherwise report every store as having
             // refunded nothing all month, which is a wrong number rather than a
             // missing one. The column dashes until the first refresh lands.
-            returnsToday: (m.mtdReturns === null || m.mtdReturns === undefined)
-                ? null : m.mtdReturns,
-            aov: m.mtdOrders > 0 ? m.mtdNet / m.mtdOrders : null,
+            returnsToday: (p.mtdReturns === null || p.mtdReturns === undefined)
+                ? null : p.mtdReturns,
+            aov: p.mtdOrders > 0 ? p.mtdNet / p.mtdOrders : null,
+            mtdNet: p.mtdNet, mtdCogs: cogs, mtdGp: p.mtdGp, mtdOrders: p.mtdOrders,
+            mtdReturns: p.mtdReturns, mtdMargin: p.mtdMargin,
+            pctOfGoal: p.pctOfGoal, paceIndex: p.paceIndex,
         });
     }
     return m;
 }
 // How many days the selected view covers — the divisor behind "average per day".
+// Both finished views now measure the same thing: COMPLETE days. Only Today
+// counts itself.
 function _lvDays(d) {
-    if (_lvIsPrev()) return (d.prev && d.prev.daysElapsed) || 1;
-    return (d.month && d.month.daysElapsed) || 1;
+    if (_lvIsToday()) return (d.month && d.month.daysElapsed) || 1;
+    return (d.prev && d.prev.daysElapsed) || 1;
 }
-// True whenever month-to-date figures mean something. On the 1st the previous
-// open day belongs to LAST month, so its "this month" numbers would all be zero —
-// which reads as a catastrophe rather than as a new month.
+// True whenever month figures mean something. On the 1st the previous day belongs
+// to LAST month, so "this month" would be zero everywhere — which reads as a
+// catastrophe rather than as a month that has not started. That now rules out the
+// Month tab as well as the month half of Yesterday, because both are built from
+// the same closed-out block.
 function _lvHasMonth(d) {
-    return !_lvIsPrev() || !!(d && d.prev && d.prev.inMonth);
+    if (_lvIsToday()) return true;
+    return !!(d && d.prev && d.prev.inMonth);
+}
+// Is there a Month tab to offer at all? On the 1st there is no complete day yet,
+// so the tab is withheld rather than shown full of zeros — cheaper and more honest
+// than an empty state threaded through six renderers.
+function _lvMtdReady(d) {
+    return !!(d && d.prev && d.prev.inMonth && d.prev.daysElapsed);
 }
 function _lvElapsedPct(d) {
-    if (_lvIsPrev()) return (d.prev && d.prev.elapsedPct) || 0;
-    return (d.month && d.month.elapsedPct) || 0;
+    if (_lvIsToday()) return (d.month && d.month.elapsedPct) || 0;
+    return (d.prev && d.prev.elapsedPct) || 0;
 }
 // Built from the date components, never from Date.parse of a bare ISO string —
 // that parses as UTC and renders as the day before for anyone west of Greenwich.
@@ -9635,7 +9670,7 @@ function _lvToggle(d) {
         + (_lvMode === mode ? ' on' : '') + '" onclick="setLiveMode(\'' + mode + '\')">'
         + escapeHtml(label) + '</button>';
     return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', 'Yesterday')
-        + btn('mtd', 'Month') + '</span>';
+        + (_lvMtdReady(d) ? btn('mtd', 'Month') : '') + '</span>';
 }
 const _LV_MODES = ['today', 'prev', 'mtd'];
 function setLiveMode(mode) {
@@ -9643,6 +9678,12 @@ function setLiveMode(mode) {
     if (next === _lvMode) return;
     _lvMode = next;
     renderLiveDashboard();
+}
+// Called at the top of every render. Somebody sitting on the Month tab as midnight
+// on the 1st rolls past would otherwise be left on a tab whose button has just
+// been withdrawn, reading a month of zeros.
+function _lvGuardMode(d) {
+    if (_lvMode === 'mtd' && !_lvMtdReady(d)) _lvMode = 'today';
 }
 // What the selected view is called in the eyebrow, and the date line beside the
 // title. Both are rewritten on every render so a past day or a whole month can
@@ -9656,8 +9697,12 @@ function _lvHeadStamp(d) {
         // Built from the date parts, never Date.parse of the bare string — that
         // reads as UTC and names the wrong month for anyone west of Greenwich on
         // the 1st.
-        const p = String(d.asOfCentral || '').slice(0, 10).split('-');
-        if (p.length !== 3) return 'Month To Date';
+        //
+        // Off d.prev.date, NOT asOfCentral: the span ends at the last complete day,
+        // so on the 17th this has to read "August 1–16". Taking it from today's
+        // date would name a span a day longer than every figure under it.
+        const p = String((d.prev && d.prev.date) || '').split('-');
+        if (p.length !== 3) return 'Month So Far';
         return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString('en-US', { month: 'long' })
             + ' 1–' + (+p[2]);
     }
@@ -9669,9 +9714,12 @@ function _lvHeadStamp(d) {
 function _lvStamp(d) {
     if (_lvIsPrev()) return 'Final &middot; ' + escapeHtml(_lvDayName(d.prev.date, false));
     if (_lvIsMtd()) {
+        // _lvDays, not month.daysElapsed: the span stops at the last complete day,
+        // so on the 17th this is 16 of 31 and the average-per-day figures beside it
+        // divide by the same 16.
         return d.month
-            ? d.month.daysElapsed + ' Of ' + d.month.daysTotal + ' Days'
-            : 'Month To Date';
+            ? _lvDays(d) + ' Of ' + d.month.daysTotal + ' Days'
+            : 'Month So Far';
     }
     return 'Last Change ' + _lvClock(d.asOfCentral);
 }
@@ -11482,12 +11530,30 @@ function _lvMineRow(code) {
     return (_lvOwnCode && code === _lvOwnCode) ? 'lv-row-mine' : '';
 }
 
-function _lvTile(k, v, sub, accent, cls) {
+// `cmp` is an optional list of comparison rows ({k, v, d}) shown to the RIGHT of
+// the figure, in the Daily Breakdown's shape and sharing its CSS. Two different
+// KINDS of number: the figure with its own sub-line on the left, other periods on
+// the right — stacked in one column there was nothing to say which was which.
+// Nulls in the list are dropped, so a caller can hand over a fixed-length array
+// and let a missing month simply not appear.
+//
+// With no `cmp` the markup is byte-identical to what it was, which is what keeps
+// the other forty-odd _lvTile callers out of this change.
+function _lvTile(k, v, sub, accent, cls, cmp) {
+    const rows = (cmp || []).filter(Boolean).map(c =>
+        '<div class="bd-cmp"><span class="bd-cmp-k">' + c.k + '</span>'
+        + '<span class="bd-cmp-v">' + c.v + '</span>'
+        + '<span class="bd-cmp-d">' + (c.d || '') + '</span></div>').join('');
+    const body = '<div class="sh-v">' + v + '</div>'
+        + '<div class="sh-sub">' + (sub || '&nbsp;') + '</div>';
     return '<div class="cc-cell' + (accent ? ' lv-accent' : '') + (cls || '') + '">'
         + '<span class="sh-stripe g"></span>'
         + '<div class="sh-k">' + k + '</div>'
-        + '<div class="sh-v">' + v + '</div>'
-        + '<div class="sh-sub">' + (sub || '&nbsp;') + '</div></div>';
+        + (rows
+            ? '<div class="bd-tile-row"><div class="bd-tile-main">' + body + '</div>'
+              + '<div class="bd-tile-cmp">' + rows + '</div></div>'
+            : body)
+        + '</div>';
 }
 
 function _lvChip(k, v) {
@@ -11649,8 +11715,18 @@ function _lvBuySpan(d) {
         const day = +String(d.prev.date).slice(8, 10);
         return day > 0 ? { from: day, to: day } : null;
     }
+    if (_lvIsMtd()) {
+        // 1st through the last COMPLETE day, matching the selling half exactly.
+        // This also retires a mismatch the two feeds used to have here: a day's
+        // purchases are keyed the following morning, so buying never had today
+        // anyway — it was being weighed against a Shopify month that did, which
+        // read LEE 15 points low. Both sides now stop on the same day by
+        // construction rather than by _lvBuyFor trimming afterwards.
+        if (!_lvMtdReady(d)) return null;
+        return { from: 1, to: d.prev.daysElapsed };
+    }
     if (!elapsed) return null;
-    return _lvIsMtd() ? { from: 1, to: elapsed } : { from: elapsed, to: elapsed };
+    return { from: elapsed, to: elapsed };
 }
 function _lvBuyFor(code, d) {
     const span = _lvBuySpan(d);
@@ -11979,6 +12055,111 @@ function _lvFcSum(views) {
     };
 }
 
+// --- against last month and last year ---------------------------------------
+// Shown as comparison ROWS on the Tracking tiles, in the same shape the Daily
+// Breakdown popout uses: the period's name, its figure, and the change beside it.
+// The two surfaces share the .bd-cmp CSS deliberately — a reader who has seen one
+// should not have to learn the other, and a second set of classes would drift.
+//
+// WHAT THE DELTA MEASURES: this month's PROJECTION against that month's actual.
+// The tiles these hang off are month-end projections, so that is the comparison
+// they are about — "will this month beat last month?" — and it is what both the
+// Daily Breakdown and the Sales Summary workbook's own YoY line compute.
+// Whole finished months come from the edge function; see cmpSpans there.
+
+// Percentage change, or '' when there is no baseline to change FROM. Same rule and
+// the same markup as _bdDelta, so the arrows and colours match across the two.
+function _lvDelta(now, then, tone) {
+    const b = Number(then) || 0;
+    if (b <= 0 || now === null || now === undefined || !(Number(now) > 0)) return '';
+    const pct = (Number(now) / b - 1) * 100;
+    const up = pct >= 0;
+    const a = Math.abs(pct);
+    // A delta off a tiny baseline is arithmetically true and useless to read: a
+    // store whose first Shopify month was $265 of online orders would read
+    // +40,000%. Capped, so the direction still shows.
+    const txt = a > 999 ? '>999%' : a.toFixed(1) + '%';
+    return '<span class="bd-mom' + (tone === 'good' ? (up ? ' up' : ' down') : '') + '">'
+        + (up ? '&#9650;' : '&#9660;') + ' ' + txt + '</span>';
+}
+// How a comparison month is named on the tile. Last month is the month name alone
+// ("July") — it is unambiguous next to a tile about this one. Last year needs its
+// year ("Aug 2025"), which is the whole point of that row. Both are built from the
+// span's own parts, never Date.parse of the bare string.
+function _lvCmpName(span, thisYear) {
+    const p = String((span && span.from) || '').split('-');
+    if (p.length !== 3) return '';
+    const d = new Date(+p[0], +p[1] - 1, 1);
+    return +p[0] === thisYear
+        ? d.toLocaleDateString('en-US', { month: 'long' })
+        : d.toLocaleDateString('en-US', { month: 'short' }) + ' ' + p[0];
+}
+/**
+ * One comparison month, summed across the stores on screen — on a SAME-STORE basis.
+ *
+ * Only stores that traded in that month are counted, and the PROJECTION side is
+ * summed over exactly those same stores; that second half is the one that is easy
+ * to get wrong. Maplewood and Ballwin opened in April and May 2026, so a district
+ * year-over-year putting all five stores' projection against the three that existed
+ * last August would read like enormous growth that is really two shop openings.
+ * `has` is derived from the data by the edge function, not from a list of store
+ * codes, so this corrects itself as each store's history catches up.
+ *
+ * `key` is 'lastMonth' or 'lastYear'. Returns null when no store on screen has that
+ * month at all, which is how a missing comparison renders as no row rather than as
+ * a zero — a store that did not exist is missing data, not a store in decline.
+ */
+function _lvCmpSum(views, key) {
+    const all = (views || []).filter(v => v && v.cmp && v.cmp[key]);
+    const parts = all.filter(v => v.cmp[key].has);
+    if (!parts.length) return null;
+    const then = k => parts.reduce((a, v) => a + (Number(v.cmp[key][k]) || 0), 0);
+    // Buying has its own coverage: the sheet can be missing a month Shopify has.
+    const buyParts = all.filter(v => v.cmp[key].resale > 0);
+    const buySum = k => buyParts.reduce((a, v) => a + (Number(v.cmp[key][k]) || 0), 0);
+    return {
+        span: parts[0].cmp[key],
+        codes: parts.map(v => v.code),
+        missing: all.filter(v => !v.cmp[key].has).map(v => v.code),
+        total: all.length,
+        partial: all.length > parts.length,
+        thenNet: then('net'), thenGp: then('gp'),
+        // Net profit is gross profit less 21% of sales, the same constant the
+        // Tracking tile and the Daily Breakdown use, so the three cannot disagree.
+        thenNetGp: then('gp') - then('net') * BD_NET_GP_RATE,
+        // The projections for the SAME stores, through the one function the
+        // Tracking tiles are built from.
+        fc: _lvFcSum(parts),
+        thenResale: buyParts.length ? buySum('resale') : null,
+        buyFc: buyParts.length ? _lvFcSum(buyParts) : null,
+    };
+}
+// The rows for one Tracking tile: last month above last year, each naming its
+// month. `pick` pulls the pair to compare out of a summed month — the projected
+// figure and that month's actual.
+//
+// A row whose month is PARTIAL says so where the figure would otherwise imply five
+// stores: "3 Of 5" replaces nothing, it is appended to the name, because the
+// alternative is a district total that quietly means something narrower than the
+// tile above it.
+function _lvCmpRows(views, d, pick) {
+    const yr = +String((d && d.prev && d.prev.date) || '').slice(0, 4) || 0;
+    return ['lastMonth', 'lastYear'].map(key => {
+        const sum = _lvCmpSum(views, key);
+        if (!sum) return null;
+        const pair = pick(sum);
+        if (!pair || pair[1] === null || !(Number(pair[1]) > 0)) return null;
+        return {
+            k: _lvCmpName(sum.span, yr)
+                + (sum.partial && views.length > 1
+                    ? ' <span class="lv-cmp-part">' + sum.codes.length + ' Of ' + sum.total + '</span>' : ''),
+            v: _lvMoney(pair[1], false),
+            d: _lvDelta(pair[0], pair[1], 'good'),
+        };
+    });
+}
+
+
 // Sits at the TOP of the detail, immediately under the four headline tiles —
 // Month only, so every caller can ask for it unconditionally.
 //
@@ -12048,15 +12229,34 @@ function _lvForecast(views, d) {
             ? '<span class="lv-rev-flat-n">Nothing New Yesterday</span>'
             : '<span class="lv-rev-flat-n">Nothing New Yesterday</span>'
               + flat.map(c => '<span class="lv-rev-pill">' + escapeHtml(c) + '</span>').join('');
+    // AGAINST LAST MONTH AND LAST YEAR, on the tiles rather than in a section of
+    // its own (user's call 2026-08-17). Each row names its month, shows what that
+    // month did, and measures this month's PROJECTION against it — the tile it sits
+    // on is a projection, so that is the comparison it is about.
+    //
+    // Buying compares against the sheet's own tables and selling against Shopify,
+    // which is the same split the tiles themselves already have; each takes its
+    // figure from the source that owns it. Reviews get no comparison: the sheet has
+    // only ever carried this month's count.
+    const cmpRev = _lvCmpRows(views, d, s => [s.fc && s.fc.trackRev, s.thenNet]);
+    const cmpGp = _lvCmpRows(views, d, s => [s.fc && s.fc.trackGp, s.thenGp]);
+    const cmpNet = _lvCmpRows(views, d, s => [
+        (s.fc && s.fc.trackGp > 0 && s.fc.trackRev > 0)
+            ? s.fc.trackGp - s.fc.trackRev * BD_NET_GP_RATE : null,
+        s.thenNetGp,
+    ]);
+    const cmpBuy = _lvCmpRows(views, d, s => [s.buyFc && s.buyFc.buyProj, s.thenResale]);
     return _lvSplit('Tracking to month-end', '')
         + '<div class="lv-strip lv-fc-strip ' + (hasReviews ? 's4' : 's3') + '">'
         + _lvTile('Tracking Buying', _lvMoney(f.buyProj, false),
-            mtdBuy === null ? 'Projected Month-End' : soFar(mtdBuy))
-        + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), soFar(mtdRev))
+            mtdBuy === null ? 'Projected Month-End' : soFar(mtdBuy), false, '', cmpBuy)
+        + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), soFar(mtdRev),
+            false, '', cmpRev)
         + (trackNet === null ? '' : _lvTile('Tracking Net Profit',
-            _lvMoney(trackNet, false), soFar(mtdNet)))
+            _lvMoney(trackNet, false), soFar(mtdNet), false, '', cmpNet))
         + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
-            soFar(mtdGp) + (f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''))
+            soFar(mtdGp) + (f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''),
+            false, '', cmpGp)
         // The only tile whose sub-line carries figures rather than a caption, and
         // deliberately: the projection alone ("45") is the one number here nobody
         // can sanity-check by eye, because unlike revenue there is no running total
@@ -12154,7 +12354,8 @@ function _lvCombine(stores) {
 
 function _lvRollupTiles(r, d, label, views) {
     const prev = _lvIsPrev();
-    const elapsed = prev ? (d.prev && d.prev.daysElapsed) : (d.month && d.month.daysElapsed);
+    // Complete days on both finished views; only Today counts itself.
+    const elapsed = _lvIsToday() ? (d.month && d.month.daysElapsed) : (d.prev && d.prev.daysElapsed);
     const days = d.month && elapsed !== null && elapsed !== undefined
         ? elapsed + ' Of ' + d.month.daysTotal + ' Days'
         : '';
@@ -12400,10 +12601,11 @@ function _lvFreshness(d) {
     // A finished day is not live and must never wear the pulsing dot — the whole
     // point of that dot is that it means "these numbers are still moving".
     if (_lvIsPrev()) return '<span class="lv-fresh closed">final</span>';
-    // A month with today still in it IS moving, so it keeps the dot — but calling
-    // it "open" would be read as the shop's trading state, which on this view is
-    // a question about one day, not thirty-one.
-    if (_lvIsMtd()) return '<span class="lv-fresh"><span class="lv-dot"></span>in progress</span>';
+    // The Month view used to carry the pulsing dot, because it included today and
+    // so was genuinely still moving. It stops at the last complete day now, so the
+    // dot would be a lie — every figure on the tab is closed out, and the dot means
+    // "these numbers are still changing".
+    if (_lvIsMtd()) return '<span class="lv-fresh closed">final</span>';
     return d.open
         ? '<span class="lv-fresh"><span class="lv-dot"></span>open</span>'
         : '<span class="lv-fresh closed">closed</span>';
@@ -12453,6 +12655,9 @@ function renderLiveDashboard() {
     const d = _lvData;
     const stores = d.stores || [];
     _lvFillDistrictMtd(d, stores);
+    // Before anything reads _lvMode: on the 1st there is no complete day, so the
+    // Month tab is withdrawn and anyone left standing on it is moved to Today.
+    _lvGuardMode(d);
     // Before ANY table is built — every row renderer reads it. Reset each pass
     // rather than set once: the payload can change scope on a re-login without a
     // reload, and a stale code would mark somebody else's store as yours.

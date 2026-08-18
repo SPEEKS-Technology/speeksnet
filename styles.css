@@ -10766,6 +10766,30 @@ body.sam-active .hotbar-btn:hover {
    both tables' left edge, right edge and first data column land on the same x at
    every width. Widening one breaks that for a column that does not need it. */
 
+/* --- Against last month and last year --------------------------------------
+   The comparison rows on the Tracking tiles reuse the Daily Breakdown's .bd-cmp
+   grid and .bd-tile-row layout wholesale — same shape, same arrows, same colours,
+   because a reader who has seen one surface should not have to learn the other.
+   Only three things are needed on top of that.
+
+   The tiles' column floor is raised where that property is DEFINED (search for
+   minmax further down) rather than re-declared here: two rules of equal
+   specificity for the same property mean the later one silently wins, so setting
+   it here would have done nothing at all. */
+/* A partial month is named "July 3 Of 5" — the count is a qualifier on the month,
+   not part of it, so it is set quieter and cannot be read as more of the label. */
+.lv-cmp-part { font-weight: 750; letter-spacing: 0; text-transform: none; opacity: .8; }
+/* On a narrow screen the tile has no room for a column BESIDE the figure, so the
+   comparison rows drop underneath it and align left with everything else. Hiding
+   them was the alternative and the wrong one: the comparison is the thing that was
+   asked for, and it is the projection that already has a second home in the table
+   below. */
+@media (max-width: 900px) {
+    .lv-fc-strip .bd-tile-row { display: block; }
+    .lv-fc-strip .bd-tile-cmp { margin: 6px 0 0; gap: 1px; }
+    .lv-fc-strip .bd-cmp { justify-content: start; }
+}
+
 /* Bought against sold. Three states, not the pace pill's two: at 90-99% a store
    is drifting rather than failing, and the gap is worth seeing before it opens. */
 .lv-ratio {
@@ -10792,7 +10816,10 @@ body.sam-active .hotbar-btn:hover {
 /* The forecast band is four tiles now that Net Profit is in it, and five where
    a store carries Google Reviews. auto-fit rather than a hard four so the fifth
    does not drop onto a row of its own with three empty columns beside it. */
-.lv-fc-strip { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+/* 232px, not 180: each of these tiles now carries a column of comparison rows to
+   the right of its figure (see _lvTile's `cmp`), and at 180 the amount and the
+   rows fought over the same space and wrapped mid-figure. */
+.lv-fc-strip { grid-template-columns: repeat(auto-fit, minmax(232px, 1fr)); }
 /* Tracking to Goal moved up to the headline strip, so this band sits under the
    tiles of the strip at the top of the card, which is what lines the two up. The
    1px side padding is the top strip's 1px border — without it these would each
@@ -10805,6 +10832,20 @@ body.sam-active .hotbar-btn:hover {
 .lv-fc-strip.s3, .lv-fc-strip.s4 { padding: 0 1px; }
 @media (max-width: 760px) {
     .lv-buy-strip, .lv-fc-strip { grid-template-columns: repeat(2, 1fr); }
+}
+/* ONE Tracking tile per row on a phone. A comparison row cannot wrap — "Aug 2025
+   3 Of 5  $290,508  ▲ 28.0%" is 182px of nowrap text — and two tiles across a
+   390px phone leaves each a 138px content box, so the row ran out of the card and
+   took the whole page's horizontal scroll with it. The buying strip keeps its two
+   across: it carries no comparison rows and does not have the problem.
+
+   .lv-strip.lv-fc-strip, not .lv-fc-strip alone. These strips carry BOTH classes,
+   and there is a `.lv-strip, .lv-dist-strip { 1fr 1fr }` rule ~900 lines further
+   down (in the ≤720px block) with exactly equal specificity — so the plain
+   selector lost on document order and this rule did nothing, twice. Two classes
+   settle it wherever either rule ends up sitting. */
+@media (max-width: 620px) {
+    .lv-strip.lv-fc-strip { grid-template-columns: 1fr; }
 }
 
 /* Sales and refunds as they land, newest at the left, each shifting the rest along
