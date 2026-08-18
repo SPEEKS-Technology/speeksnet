@@ -41395,13 +41395,79 @@ function _ecCondWhy(row, fld) {
 
 let _ecFixSku = null;
 
-function ecFix(sku, note) {
+// GOING BACK IS NOT UNDOING, AND THE BUTTON HAS TO BE HONEST ABOUT THAT.
+//
+// Each round of this form WRITES to the Shopify product and uploads before the
+// next question exists — that is the only way eBay reveals the next missing
+// field. So by the time you are looking at "Professional Grader", the Condition
+// you typed a moment ago is already saved and already accepted. Back cannot
+// take it away; what it can do is bring the question back so a wrong answer is
+// written over, which is what somebody who clicked too fast actually wants.
+//
+// The trail is the questions this card has been asked, in order, with whatever
+// was typed into each. It lives as long as the prompt does.
+let _ecFixTrail = [];
+let _ecFixAt = 0;
+
+// What has been typed anywhere in this trail. A value a PERSON entered outranks
+// a suggestion when the same field comes round again — they have already
+// considered it once, and re-suggesting over the top would quietly discard that.
+function _ecFixTyped() {
+    const out = {};
+    _ecFixTrail.forEach(s => Object.assign(out, s.answers || {}));
+    return out;
+}
+
+// Reads the boxes on screen into the step being displayed, so nothing is lost
+// by navigating away from it.
+function _ecFixCapture() {
+    const wrap = document.getElementById('ecFixWrap');
+    const step = _ecFixTrail[_ecFixAt];
+    if (!wrap || !step) return;
+    step.answers = step.answers || {};
+    wrap.querySelectorAll('.ec-fix-in').forEach(el => {
+        step.answers[el.dataset.name] = String(el.value || '').trim();
+    });
+}
+
+function ecFixBack() {
+    if (_ecFixAt <= 0) return;
+    _ecFixCapture();
+    _ecFixAt--;
+    ecFix(_ecFixSku, null, true);
+}
+window.ecFixBack = ecFixBack;
+
+function ecFix(sku, note, replay) {
     const row = _ecFeed.find(e => _ecSame(e.sku, sku))
         || (_ecData?.items || []).find(e => _ecSame(e.sku, sku));
-    const fields = (row?.missingFields || []);
-    if (!fields.length) return;
+
+    // ecFixClose() wipes the trail, and this calls it on every render, so the
+    // trail is carried across by hand. A DIFFERENT card starts a fresh one:
+    // answers to one item are not history for another.
+    const sameCard = _ecSame(_ecFixSku, sku);
+    let trail = sameCard ? _ecFixTrail.slice() : [];
+    let at = sameCard ? _ecFixAt : 0;
+
+    if (!replay) {
+        const asking = (row?.missingFields || []);
+        if (!asking.length) return;
+        const key = asking.map(f => f.name).join('|');
+        // eBay re-asking something already on the trail is the SAME question,
+        // not a new one — appending it would grow the trail every round trip
+        // and make Back walk through duplicates.
+        const seen = trail.findIndex(s => s.key === key);
+        at = seen >= 0 ? seen : trail.push({ key: key, fields: asking, answers: {} }) - 1;
+    }
+    const step = trail[at];
+    if (!step) return;
+    const fields = step.fields;
+
     ecFixClose();
     _ecFixSku = sku;
+    _ecFixTrail = trail;
+    _ecFixAt = at;
+    const typed = _ecFixTyped();
 
     const inputs = fields.map((fld, n) => {
         const id = `ecFixF${n}`;
@@ -41415,7 +41481,11 @@ function ecFix(sku, note) {
         // to eBay. So the line underneath always names where it came from —
         // and when we could not work it out, it says that instead of going
         // quiet, because "we did not find this" is itself useful.
-        const sug = fld.suggestion || '';
+        // AN ANSWER A PERSON GAVE IS NOT A SUGGESTION, AND MUST NOT WEAR ITS
+        // LABEL. Coming back to a field to find your own answer described as
+        // "suggested from the product" reads as the tool having overwritten you.
+        const mine = typed[fld.name] || '';
+        const sug = mine || fld.suggestion || '';
         const sel = v => (sug && v === sug) ? ' selected' : '';
         const control = (fld.allowed || []).length
             ? `<select id="${id}" class="ec-fix-in" data-name="${_ecEsc(fld.name)}">
@@ -41426,7 +41496,9 @@ function ecFix(sku, note) {
                      autocomplete="off" placeholder="Type The Answer"
                      value="${_ecEsc(sug)}">`;
         const condWhy = _ecCondWhy(row, fld);
-        const why = sug
+        const why = mine
+            ? `<span class="ec-fix-src">This is the answer you gave — change it if it was wrong</span>`
+            : sug
             ? `<span class="ec-fix-src">Suggested from ${_ecEsc(fld.source || 'the product')} — change it if that is wrong</span>`
             : condWhy
             ? `<span class="ec-fix-src ec-fix-src-cond">${_ecEsc(condWhy)}</span>`
@@ -41454,6 +41526,7 @@ function ecFix(sku, note) {
         </div>
         <div class="ec-fix-body">
           ${note ? `<div class="ec-fix-note ec-fix-note-warn">${_ecEsc(note)}</div>` : ''}
+          ${replay ? `<div class="ec-fix-note ec-fix-note-warn">You already answered this one and it was saved to Shopify. Changing it here writes over that answer and uploads again.</div>` : ''}
           ${_ecEvHead(row)}
           ${inputs}
           ${_ecEvMore(row, fields)}
@@ -41461,6 +41534,8 @@ function ecFix(sku, note) {
           <div class="ec-fix-err" id="ecFixErr"></div>
         </div>
         <div class="ec-fix-foot">
+          ${at > 0 ? `<button class="ec-btn ec-btn-sm ec-fix-back"
+                  onclick="ecFixBack()">&larr; Back</button>` : ''}
           <button class="ec-btn ec-btn-sm" onclick="ecFixClose()">Cancel</button>
           <button class="ec-btn ec-btn-sm ec-btn-on" id="ecFixGo"
                   onclick="ecFixSubmit()">Save &amp; Upload</button>
@@ -41504,6 +41579,8 @@ function ecFixClose() {
     document.removeEventListener('keydown', _ecFixEsc, true);
     document.getElementById('ecFixWrap')?.remove();
     _ecFixSku = null;
+    _ecFixTrail = [];
+    _ecFixAt = 0;
     if (_ecFixLocked) {
         _ecFixLocked = false;
         document.body.classList.remove('no-scroll');
@@ -41520,6 +41597,10 @@ async function ecFixSubmit() {
     const wrap = document.getElementById('ecFixWrap');
     const err = document.getElementById('ecFixErr');
     if (!wrap || !sku || !err) return;
+
+    // Written to the step before anything else so that a refusal, or a Back
+    // straight afterwards, still finds what was typed.
+    _ecFixCapture();
 
     const fields = {};
     let blank = null;

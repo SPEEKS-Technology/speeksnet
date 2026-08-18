@@ -16665,6 +16665,9 @@ body.tv-body { display: block; background: #eef1f5; }
   background: #fdf4f4; border: 1px solid #e0a9a4; border-radius: 8px;
   padding: 8px 10px; margin-bottom: 10px;
 }
+/* Hard left, away from the pair that end the job. Back is navigation, not a
+   decision about this card, and sitting it beside Cancel invites the wrong one. */
+.ec-fix-back { margin-right: auto; }
 .ec-fix-foot {
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 13px 20px 15px; border-top: 1px solid var(--cb-line-2);
