@@ -40707,11 +40707,16 @@ function _ecRow(i) {
              onclick="ecFix(this.dataset.sku)">Fix</button>`
         : '';
 
-    // Beside Try Again, and only on a failed row: the way to stop trying.
-    const giveUp = (!pending && _ecScope?.canList && i.state === 'failed')
-        ? `<button class="ec-btn ec-btn-sm ec-btn-off" data-sku="${sku}"
-             title="Stop counting this one — it comes off the Did Not Upload badge"
-             onclick="ecGiveUp(this.dataset.sku, this)">Remove</button>`
+    // ON EVERY ROW, NOT JUST A FAILED ONE. This is the way out for a listing
+    // that should never have been started, and that is realised just as often
+    // after it goes live as before. On a live row it ends the eBay listing
+    // first; the confirm below says so, because the two cases are not the same
+    // decision and must not share a sentence.
+    const giveUp = (!pending && _ecScope?.canList && !i.conflict)
+        ? `<button class="ec-btn ec-btn-sm ec-btn-off" data-sku="${sku}" data-state="${i.state}"
+             title="${i.state === 'live' ? 'End this eBay listing and take it off the list'
+                     : 'Take this off the list'}"
+             onclick="ecGiveUp(this.dataset.sku, this, this.dataset.state)">Remove</button>`
         : '';
 
     // eBay picks the category from the title, not the store — so it is the one
@@ -41409,10 +41414,18 @@ window.ecFixSubmit = ecFixSubmit;
 // The row is kept on the server, just marked dismissed: what was tried and why
 // it failed is worth more than a tidy table, and uploading the SKU again later
 // simply starts it over.
-async function ecGiveUp(sku, btn) {
-    if (!confirm(`Remove ${sku}?\n\n`
-        + 'It comes off the Did Not Upload count and stops the error emails. '
-        + 'Nothing on eBay changes, and uploading it again later starts it over.')) return;
+// THE CONFIRM HAS TO MATCH WHAT WILL HAPPEN. Removing a failed row changes
+// nothing outside this panel; removing a LIVE row ends a real eBay listing and
+// cannot be undone into the same listing. One sentence covering both would be
+// wrong in the case that matters.
+async function ecGiveUp(sku, btn, state) {
+    const live = state === 'live';
+    if (!confirm(`Remove ${sku}?\n\n` + (live
+        ? 'This ENDS the eBay listing and takes it off this list. It stays for sale '
+          + 'in the store, nothing will put it back on eBay automatically, and it '
+          + 'cannot go back up under the same listing.'
+        : 'It comes off the list and stops the error emails. '
+          + 'Nothing on eBay changes, and uploading it again later starts it over.'))) return;
     if (btn) { btn.disabled = true; btn.textContent = 'Removing…'; }
     const res = await _ecPost({ action: 'dismiss', store: _ecStore, sku });
     const b = res.body || {};
@@ -41425,10 +41438,17 @@ async function ecGiveUp(sku, btn) {
         alert(b.detail || b.error || 'Could not remove it.');
         return;
     }
-    // Drop the badge here rather than refetching the whole view: the count is
+    // Drop the count here rather than refetching the whole view: the number is
     // the thing the person is watching, and a round trip to see it fall by one
     // is the difference between "that worked" and "did that work?".
-    if (_ecData?.summary?.counts?.failed > 0) _ecData.summary.counts.failed--;
+    // Whichever bucket the row was in is the one that falls — decrementing
+    // `failed` for a live removal would leave both numbers wrong at once.
+    const counts = _ecData?.summary?.counts;
+    if (counts) {
+        const bucket = state === 'live' ? 'live' : state;
+        if (counts[bucket] > 0) counts[bucket]--;
+        if (counts.total > 0) counts.total--;
+    }
     ecRemoveOne(sku);   // clears the local row and re-renders
     ecRender();
 }

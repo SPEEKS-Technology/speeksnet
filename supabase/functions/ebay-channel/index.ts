@@ -4,7 +4,7 @@
 //
 //   GET  ?view=listings&store=OVL     what SPEEKS Connect has listed, and what failed
 //   GET  ?view=health                 per-store: live count, error count (DM/CEO)
-//   POST {action, store, sku}         preview | list | retry | end | resync
+//   POST {action, store, sku}         preview | list | retry | end | resync | dismiss
 //
 // SPEEKS CONNECT IS ITS OWN CHANNEL. It runs independently of Marketplace
 // Connect: a SKU listed here is not listed by MC, and this panel reports on
@@ -689,8 +689,10 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
     return json({ ...r.body, ok: r.status < 300 }, r.status < 300 ? 200 : r.status);
   }
 
-  // Take it off eBay and leave it off. ebay-inventory holds the logic and the
-  // reasoning; see the note on its ?end=1 route for why 'ended' would not hold.
+  // Take it off eBay and leave it off, KEEPING the row so it can be switched
+  // back on. ebay-inventory holds the logic and the reasoning; see the note on
+  // its ?end=1 route for why 'ended' would not hold. Remove (dismiss) is the
+  // other half of this: same effect on eBay, but the row goes too.
   if (action === "end") {
     const r = await callFn(`ebay-inventory?store=${store}&end=1&sku=${encodeURIComponent(sku)}`);
     return json({ ...r.body, ok: r.status < 300, item: await itemFor(store, sku) },
@@ -702,7 +704,7 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
     return json({ ok: r.status < 300, ...r.body }, r.status < 300 ? 200 : r.status);
   }
 
-  // Give up on a SKU that will not list.
+  // Get rid of a listing that should not be there.
   //
   // A failed row is counted by the "N Did Not Upload" badge and mailed by
   // ebay-alert, so a listing nobody intends to fix nags forever. The panel's
@@ -711,7 +713,12 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
   //
   // The row is kept, not deleted: what we tried and why it failed is worth
   // more than a tidy table, and re-uploading the SKU later just overwrites
-  // this status. Only a FAILED row can be dismissed — never a live listing.
+  // this status.
+  //
+  // ANY row can be dismissed, not just a failed one. The button exists for
+  // listings that should never have been started, and that mistake is just as
+  // likely to be caught after it went live as before. A live one is ended on
+  // eBay first — see below.
   //
   // 'dismissed' HAS TO BE IN THE status CHECK CONSTRAINT. It was not when this
   // shipped, so every Remove was refused by Postgres, came back through the
@@ -719,12 +726,29 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
   if (action === "dismiss") {
     const cur = await rows(
       `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
-      + `&sku=eq.${encodeURIComponent(sku)}&select=status`);
+      + `&sku=eq.${encodeURIComponent(sku)}&select=status,ebay_listing_id`);
     if (!cur.length) return json({ error: `no listing row for ${store} / ${sku}` }, 404);
     const st = String(cur[0].status || "");
-    if (st !== "failed") {
-      return json({ error: `only a failed listing can be dismissed — ${sku} is "${st}"` }, 409);
+
+    // A LIVE LISTING IS ENDED BEFORE IT IS HIDDEN, AND ONLY IF THAT WORKS.
+    // Hiding a row that is still live on eBay is the one outcome worse than
+    // leaving it on screen: this panel is the only place we track what we put
+    // up, so a hidden live listing is a listing nobody is watching, against
+    // stock the store still has. If eBay refuses, the row stays exactly as it
+    // is and the refusal is passed back.
+    if (st === "published" && cur[0].ebay_listing_id) {
+      const e = await callFn(`ebay-inventory?store=${store}&end=1&sku=${encodeURIComponent(sku)}`);
+      if (e.status >= 300) {
+        return json({
+          ok: false,
+          error: "could not end it on eBay",
+          detail: `${sku} is still live on eBay, so it has been left on the list. `
+                + `eBay said: ${errorOf(e.body)}`,
+          item: await itemFor(store, sku),
+        }, e.status);
+      }
     }
+
     await sb(
       `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
       + `&sku=eq.${encodeURIComponent(sku)}`, {
@@ -732,7 +756,7 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
       headers: { Prefer: "return=minimal" },
       body: JSON.stringify({ status: "dismissed", updated_at: new Date().toISOString() }),
     });
-    return json({ ok: true, store, sku, status: "dismissed" });
+    return json({ ok: true, store, sku, was: st, status: "dismissed" });
   }
   return json({ error: `unknown action "${action}"` }, 400);
 }
