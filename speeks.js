@@ -41506,11 +41506,37 @@ window.ecFixClose = ecFixClose;
 // into a misdescribed item.
 let _ecBulk = null;
 
-function _ecBulkOffer(sku, fields) {
+// THE SERVER LIST IS NOT THE WHOLE LIST.
+//
+// _ecData.items is whatever ecLoad() last fetched; _ecFeed is what THIS SESSION
+// uploaded. Paste a shelf of SKUs in, watch them fail, fix one — and every row
+// you just created exists only in the feed, because nothing re-fetched the
+// server list in between. Reading _ecData alone found nothing to offer and shut
+// the dialog without a word, on the exact batch the feature was built for.
+//
+// The feed wins on collision: it is the newer of the two by definition.
+function _ecAllRows() {
+    const by = new Map();
+    ((_ecData && _ecData.items) || []).forEach(i => by.set(String(i.sku).toUpperCase(), i));
+    (_ecFeed || []).forEach(i => {
+        const k = String(i.sku).toUpperCase();
+        by.set(k, Object.assign({}, by.get(k) || {}, i));
+    });
+    // Array.from, NOT slice.call — a Map iterator has no length, so slice hands
+    // back an empty array and the offer silently finds nothing to offer.
+    return Array.from(by.values());
+}
+
+// Why the offer did not appear, kept for the next time it does not appear.
+let _ecBulkLast = null;
+window._dbgBulk = () => _ecBulkLast;
+
+function _ecBulkOffer(sku, fields, item) {
     const names = Object.keys(fields || {});
-    const items = (_ecData && _ecData.items) || [];
+    const items = _ecAllRows();
     const src = items.find(i => _ecSame(i.sku, sku));
-    const catId = src && src.categoryId;
+    // The server's word from this very moment beats either cached list.
+    const catId = (item && item.categoryId) || (src && src.categoryId) || null;
 
     // Same category or nothing. The allowed values for a field are the
     // category's, so "Condition = Like New" is not even the same sentence in a
@@ -41531,6 +41557,11 @@ function _ecBulkOffer(sku, fields) {
         return { sku: i.sku, title: i.title || i.sku, price: i.price, clash: clash.join("; ") };
     });
 
+    _ecBulkLast = {
+        sku: sku, fields: fields, category: catId, scanned: items.length,
+        failedInCategory: items.filter(i => i.state === "failed" && i.categoryId === catId).length,
+        offered: rows.length,
+    };
     if (!rows.length) { ecFixClose(); ecRender(); return; }
 
     const wrap = document.getElementById("ecFixWrap");
@@ -41689,7 +41720,7 @@ async function ecFixSubmit() {
     if (b.item) _ecApply(sku, { ...b.item, conflict: !!b.conflict });
 
     // The answer is only worth spreading once eBay has taken it here.
-    if (res.ok) { _ecBulkOffer(sku, fields); return; }
+    if (res.ok) { _ecBulkOffer(sku, fields, b.item); return; }
 
     // ONE FIELD AT A TIME IS HOW eBay ANSWERS.
     // It reports the first thing it objects to, so a fix can genuinely reveal the
