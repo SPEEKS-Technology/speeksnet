@@ -472,6 +472,30 @@ const escHtml = (v: string) => String(v)
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;");
 
+// The opening tag of a cell or row, with whatever attributes it carries, so a
+// rewrite can put the content back inside the original markup.
+function openTagOf(html: string, tag: string): string {
+  const m = String(html).match(new RegExp(`^<${tag}[^>]*>`, "i"));
+  return m ? m[0] : `<${tag}>`;
+}
+
+// The last two-cell row in the markup, as three opening tags to build from.
+// Falls back to plain tags when the description has no spec table yet, which is
+// the only case where there is nothing to copy.
+function lastSpecRow(html: string): { tr: string; td0: string; td1: string } {
+  const rows = String(html || "").match(/<tr[\s\S]*?<\/tr>/gi) || [];
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const cells = rows[i].match(/<td[\s\S]*?<\/td>/gi) || [];
+    if (cells.length !== 2) continue;
+    return {
+      tr: openTagOf(rows[i], "tr"),
+      td0: openTagOf(cells[0], "td"),
+      td1: openTagOf(cells[1], "td"),
+    };
+  }
+  return { tr: "<tr>", td0: "<td>", td1: "<td>" };
+}
+
 // AN EXISTING ROW IS REPLACED, NEVER DUPLICATED.
 // parseSpecs() takes the LAST <tr> it sees for a label, so two rows sharing one
 // label would decide the listing by document order — not a thing to leave to
@@ -494,14 +518,23 @@ function upsertSpecRows(html: string, entries: [string, string][]) {
       // whose label and value happen to be identical would otherwise have its
       // label cell rewritten instead of its value.
       const at = row.lastIndexOf(cells[1]);
-      return row.slice(0, at) + `<td>${escHtml(value)}</td>`
+      // The cell's own opening tag is kept, not rewritten: a template whose
+      // value cells carry a class would otherwise lose it on the one row a fix
+      // touched, leaving a single odd-looking line in the middle of the table.
+      return row.slice(0, at) + openTagOf(cells[1], "td") + escHtml(value) + "</td>"
            + row.slice(at + cells[1].length);
     });
     if (hit) { replaced.push(name); continue; }
-    const newRow = `<tr><td>${escHtml(name)}</td><td>${escHtml(value)}</td></tr>`;
     // Into the last table on the page, which is where the template puts specs.
     let close = out.lastIndexOf("</tbody>");
     if (close < 0) close = out.lastIndexOf("</table>");
+    // A ROW WE ADD HAS TO LOOK LIKE THE ROWS ALREADY THERE. Bare <td> markup is
+    // structurally fine and visibly wrong — the one row a person did not type by
+    // hand is the one that stands out. So the shape is copied from the last
+    // two-cell row above the insertion point, attributes and all.
+    const like = lastSpecRow(close >= 0 ? out.slice(0, close) : out);
+    const newRow = `${like.tr}${like.td0}${escHtml(name)}</td>`
+                 + `${like.td1}${escHtml(value)}</td></tr>`;
     out = close >= 0
       ? out.slice(0, close) + newRow + out.slice(close)
       : out + `<table>${newRow}</table>`;
