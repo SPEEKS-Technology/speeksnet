@@ -41558,6 +41558,19 @@ function _ecAllRows() {
 }
 
 // Why the offer did not appear, kept for the next time it does not appear.
+// WHY THE OFFER NEVER ONCE APPEARED.
+//
+// eBay names one problem at a time, so a graded card takes three rounds:
+// Condition, then Professional Grader, then Game. Only the LAST of those
+// returns ok — and the offer was built from that round's answer alone, so it
+// went looking for other cards stuck on "Game" while all twenty-one of them
+// were still stuck on "Condition". The match could never succeed, on any batch,
+// ever. Two rounds of debugging went into the lookup before the arithmetic.
+//
+// Answers accumulate per SKU across rounds instead, so walking ONE card all the
+// way through teaches the other twenty-one every answer it learned.
+let _ecFixAnswers = {};
+
 let _ecBulkLast = null;
 window._dbgBulk = () => _ecBulkLast;
 
@@ -41571,20 +41584,26 @@ function _ecBulkOffer(sku, fields, item) {
     // Same category or nothing. The allowed values for a field are the
     // category's, so "Condition = Like New" is not even the same sentence in a
     // category that never offered Like New.
+    // ANY answer it needs, not ALL of them. Cards in a batch stop at different
+    // points, and one that only needs the Condition should not be excluded
+    // because we also happen to know its Game.
     const rows = !catId ? [] : items.filter(i =>
         i.state === "failed" && !_ecSame(i.sku, sku) && i.categoryId === catId
-        && names.every(n => (i.missingFields || []).some(m => m.name === n)),
+        && (i.missingFields || []).some(m => fields[m.name] != null),
     ).map(i => {
         const clash = [];
-        names.forEach(n => {
-            const mine = (i.missingFields || []).find(m => m.name === n);
-            const own = String((mine && mine.suggestion) || "").trim();
-            const val = String(fields[n] || "").trim();
+        const wants = [];
+        (i.missingFields || []).forEach(m => {
+            if (fields[m.name] == null) return;
+            wants.push(m.name);
+            const own = String(m.suggestion || "").trim();
+            const val = String(fields[m.name] || "").trim();
             if (own && own.toLowerCase() !== val.toLowerCase()) {
-                clash.push(n + ': this one reads "' + own + '"');
+                clash.push(m.name + ': this one reads "' + own + '"');
             }
         });
-        return { sku: i.sku, title: i.title || i.sku, price: i.price, clash: clash.join("; ") };
+        return { sku: i.sku, title: i.title || i.sku, price: i.price,
+                 wants: wants, clash: clash.join("; ") };
     });
 
     _ecBulkLast = {
@@ -41608,7 +41627,10 @@ function _ecBulkOffer(sku, fields, item) {
             + '<input type="checkbox" class="ec-bulk-ck" data-sku="' + _ecEsc(r.sku) + '"' + on + '>'
             + '<span class="ec-bulk-txt"><span class="ec-bulk-title">' + _ecEsc(r.title) + '</span>'
             + '<span class="ec-bulk-meta">' + _ecEsc(r.sku)
-            + (r.price ? " &middot; $" + _ecEsc(r.price) : "") + '</span>'
+            + (r.price ? " &middot; $" + _ecEsc(r.price) : "")
+            + (r.wants.length < names.length
+                ? ' &middot; <span class="ec-bulk-gets">gets ' + _ecEsc(r.wants.join(", ")) + '</span>'
+                : "") + '</span>'
             + (r.clash ? '<span class="ec-bulk-why">' + _ecEsc(r.clash) + '</span>' : "")
             + '</span></label>';
     }).join("");
@@ -41623,8 +41645,10 @@ function _ecBulkOffer(sku, fields, item) {
         '</div><button class="ec-x" onclick="ecFixClose()" aria-label="Close">&times;</button></div>',
         '<div class="ec-fix-body">',
         '<div class="ec-bulk-ans">' + answers + '</div>',
-        '<div class="ec-fix-note">Each one is saved onto its Shopify product and uploaded, '
-          + 'exactly as this one was. Untick anything you want to look at yourself.</div>',
+        '<div class="ec-fix-note">Each card gets the answers it is actually waiting on, '
+          + 'saved onto its Shopify product and uploaded — and if eBay then asks for '
+          + 'something else answered here, it keeps going rather than stopping. '
+          + 'Untick anything you would rather look at yourself.</div>',
         list,
         '<div class="ec-fix-err" id="ecBulkProg"></div>',
         '</div>',
@@ -41655,6 +41679,35 @@ function _ecBulkCount() {
 // twenty at once would rate-limit both and make the failures meaningless. A card
 // that refuses is collected and named at the end rather than stopping the run —
 // the whole point is that the other nineteen get done.
+// ONE CARD, AS MANY ROUNDS AS WE HAVE ANSWERS FOR.
+// eBay reveals the next missing field only after the last one is filled, so a
+// single POST per card would leave every one of them one step further along and
+// still failed — which looks exactly like the bulk apply not working. It stops
+// the moment eBay asks for something we were not taught.
+async function _ecBulkOne(sku, answers) {
+    let missing = ((_ecAllRows().find(i => _ecSame(i.sku, sku)) || {}).missingFields) || [];
+    for (let round = 0; round < 3; round++) {
+        const need = {};
+        missing.forEach(m => { if (answers[m.name] != null) need[m.name] = answers[m.name]; });
+        if (!Object.keys(need).length) {
+            return { ok: false, why: missing.length
+                ? "needs " + missing.map(m => m.name).join(", ") + ", which nobody has answered yet"
+                : "eBay did not say what it wanted" };
+        }
+        const res = await _ecPost({ action: "fix", store: _ecStore, sku: sku, fields: need });
+        const b = res.body || {};
+        if (b.item) _ecApply(sku, Object.assign({}, b.item));
+        if (res.ok) return { ok: true };
+        missing = (b.item && b.item.missingFields) || [];
+        if (!missing.some(m => answers[m.name] != null)) {
+            return { ok: false, why: missing.length
+                ? "eBay then asked for " + missing.map(m => m.name).join(", ")
+                : (b.error || (b.item && b.item.error) || "eBay refused it") };
+        }
+    }
+    return { ok: false, why: "still asking after three rounds" };
+}
+
 async function _ecBulkRun() {
     if (!_ecBulk) return;
     const wrap = document.getElementById("ecFixWrap");
@@ -41677,11 +41730,9 @@ async function _ecBulkRun() {
             prog.style.display = "block";
             prog.textContent = "Uploading " + (n + 1) + " of " + picked.length + " — " + s;
         }
-        const res = await _ecPost({ action: "fix", store: _ecStore, sku: s,
-                                    fields: _ecBulk.fields });
-        const b = res.body || {};
-        if (res.ok) done.push(s);
-        else failed.push({ sku: s, why: b.error || (b.item && b.item.error) || "eBay refused it" });
+        const r = await _ecBulkOne(s, _ecBulk.fields);
+        if (r.ok) done.push(s);
+        else failed.push({ sku: s, why: r.why });
     }
 
     // The panel is rebuilt from the server rather than patched row by row: after
@@ -41749,8 +41800,18 @@ async function ecFixSubmit() {
     // this time, which is not what opened this form.
     if (b.item) _ecApply(sku, { ...b.item, conflict: !!b.conflict });
 
-    // The answer is only worth spreading once eBay has taken it here.
-    if (res.ok) { _ecBulkOffer(sku, fields, b.item); return; }
+    // Kept per SKU: the answers to a DIFFERENT card are not evidence about this
+    // one, and carrying them over would spread a value nobody meant to spread.
+    const key = String(sku).toUpperCase();
+    _ecFixAnswers[key] = Object.assign({}, _ecFixAnswers[key], fields);
+
+    // Only worth spreading once eBay has taken the whole card.
+    if (res.ok) {
+        const learned = _ecFixAnswers[key];
+        delete _ecFixAnswers[key];
+        _ecBulkOffer(sku, learned, b.item);
+        return;
+    }
 
     // ONE FIELD AT A TIME IS HOW eBay ANSWERS.
     // It reports the first thing it objects to, so a fix can genuinely reveal the
