@@ -14748,6 +14748,58 @@ const B2B_ACTIONS = {
     listing:          { cta: 'Open Listing',    why: 'List the items for resale',       kind: 'listing' },
 };
 
+// How the goods got here. The pipeline is identical either way -- same stages,
+// same gates, same signature rule (see migration 0038) -- so everything below is
+// vocabulary plus which questions the intake screen still has to ask.
+//
+// A walk-in knows two of the three intake facts before anyone types anything:
+// the date is today, and the person who received the goods is the person signing
+// for them. Only a collection run has a hand-off worth recording, because only a
+// collection run has two ends to it.
+//
+// What a walk-in does NOT skip is the signature and the name of whoever released
+// the items. The client is standing at the counter, which makes that the easiest
+// signature we will ever collect and the exact moment their property becomes
+// ours to hold -- which is the thing the signature is evidence of.
+const B2B_INTAKE = {
+    pickup: {
+        key:   'pickup',
+        stage: 'Pickup Sign-Off',
+        title: 'Pickup Sign-Off',
+        sub:   'Record what was collected and have the client acknowledge it.',
+        cta:   'Sign Off Pickup',
+        why:   'Pickup needs signing off',
+        go:    'Sign &amp; Mark Picked Up',
+        was:   'Picked up',
+        items: 'Items Picked Up',
+        hint:  'A general description is enough here — the itemized list comes later, at pricing.',
+        ack:   'The client confirms the items above were collected by SPEEKS Technology on the date shown.',
+    },
+    walkin: {
+        key:   'walkin',
+        stage: 'Walk-In Intake',
+        title: 'Walk-In Intake',
+        sub:   'They brought it to the counter. Record what came in and have them acknowledge it.',
+        cta:   'Sign Off Intake',
+        why:   'Walk-in needs signing off',
+        go:    'Sign &amp; Take It In',
+        was:   'Brought in',
+        items: 'What They Brought In',
+        hint:  'A general description is enough here — the itemized list comes later, at pricing.',
+        ack:   'The client confirms the items above were left with SPEEKS Technology today.',
+    },
+};
+// Anything that isn't explicitly a walk-in is a pickup, which is what every deal
+// created before 0038 is and what the column defaults to.
+function _b2bIntake(deal) { return B2B_INTAKE[deal?.intake_kind === 'walkin' ? 'walkin' : 'pickup']; }
+// B2B_ACTIONS is keyed by stage alone, which is right at every stage but pickup
+// -- there the wording depends on how the goods arrived, not on where they are.
+function _b2bActionWords(deal, a) {
+    if (!a || deal.stage !== 'pickup') return a;
+    const i = _b2bIntake(deal);
+    return { ...a, cta: i.cta, why: i.why };
+}
+
 const B2B_CORP_ROLES   = ['district manager', 'ceo', 'mocd'];
 const B2B_ACCEPT_ROLES = ['ceo', 'mocd', 'district manager'];   // may lock a quote
 const B2B_STORE_ROLES  = ['manager', 'owner (manager)', 'owner manager', 'assistant manager'];
@@ -14884,6 +14936,18 @@ function _b2bIsDM()      { return _b2bRole() === 'district manager' || _b2bHasCo
 // Accepting a quote is deliberately NOT delegable -- it locks the money.
 function _b2bCanAccept()  { return B2B_ACCEPT_ROLES.includes(_b2bRole()); }
 function _b2bCanClients() { return ['ceo', 'district manager', 'mocd'].includes(_b2bRole()); }
+// Raising a deal. Corp has always been able to; a store manager can too, and
+// theirs holds at their own store from the moment it exists (see b2bCreateDeal).
+// A store role with no store attached is excluded rather than left to fail at
+// the server: there is nowhere to put the goods.
+//
+// Assistant managers are in B2B_STORE_ROLES and so are included -- they already
+// price and list their store's pickups, and creating a deal commits less than
+// either. Narrowing this to managers alone is a one-line edit here.
+function _b2bCanCreate() {
+    if (_b2bIsCorp()) return true;
+    return B2B_STORE_ROLES.includes(_b2bRole()) && _b2bMyStores().length > 0;
+}
 // CRM notification setup (cadences + who gets the reach-out emails) is CEO-only.
 function _b2bCanCrm() { return _b2bRole() === 'ceo'; }
 function _b2bCanOverview(){ return ['ceo', 'district manager'].includes(_b2bRole()); }
@@ -14919,6 +14983,19 @@ function _b2bActionFor(deal) {
         return (st === 'pricing' && mine.includes(deal.pricing_store)) ? B2B_ACTIONS.pricing : null;
     }
 
+    if (st === 'pickup') {
+        // A pickup with a store already on it was raised BY that store, so the
+        // sign-off is theirs -- corp neither has the client in front of them nor
+        // wants every store's walk-in sitting in their queue. Otherwise it is
+        // corp's own pickup and reads exactly as it always has. Same shape as
+        // the pricing branch below, deliberately: it is the same question.
+        if (deal.pricing_store) {
+            if (deal.pricing_store === 'CORP') return _b2bIsCorp() ? B2B_ACTIONS.pickup : null;
+            if (mine.includes(deal.pricing_store)) return B2B_ACTIONS.pickup;
+            return _b2bIsDM() ? B2B_ACTIONS.pickup : null;   // DM can always step in
+        }
+        return _b2bIsCorp() ? B2B_ACTIONS.pickup : null;
+    }
     if (st === 'pricing') {
         // CORP prices its own pickups; everything else belongs to the store.
         if (deal.pricing_store === 'CORP') return _b2bIsCorp() ? B2B_ACTIONS.pricing : null;
@@ -15017,14 +15094,16 @@ function _b2bDaysIn(deal) {
 }
 function _b2bAgeTone(days) { return days >= 7 ? 'crit' : days >= 4 ? 'warn' : 'ok'; }
 
-// The `deal` argument used to matter here: the quote stage covered two
-// situations and the send count was what told them apart. They are separate
-// stages now, each with its own label and tone in B2B_STAGES, so the chip is a
-// plain lookup. The parameter stays because a dozen call sites pass it and it
-// costs nothing to keep the signature.
-function _b2bStageChip(stage, _deal) {
+// The `deal` argument used to matter here for the quote stage, which covered two
+// situations told apart by the send count; those are separate stages now. It
+// matters again for `pickup`, which covers two situations that are NOT separate
+// stages and shouldn't be: a collection run and a walk-in move through the
+// pipeline identically, so splitting the stage would double the state machine to
+// change one noun. The chip says which one it is; everything else stays shared.
+function _b2bStageChip(stage, deal) {
     const s = B2B_STAGE[stage] || { label: stage, tone: 'neu' };
-    return `<span class="b2b-chip b2b-chip-${s.tone}">${escapeHtml(s.label)}</span>`;
+    const label = stage === 'pickup' ? _b2bIntake(deal).stage : s.label;
+    return `<span class="b2b-chip b2b-chip-${s.tone}">${escapeHtml(label)}</span>`;
 }
 function _b2bStoreTag(code) {
     if (!code) return '<span class="b2b-store b2b-store-none">Unassigned</span>';
@@ -15164,6 +15243,22 @@ function _b2bFetchScope() {
     return mine.length === 1 ? mine[0] : 'ALL';
 }
 
+// The client directory, or as much of it as this user has business seeing.
+//
+// A store manager needs the list to raise a deal at all -- you cannot pick a
+// business off a list you were never sent -- but asks with scope=store, which
+// comes back as company + acronym + counts and nothing else. Contact details,
+// notes and the outreach cadence stay corp's, the same way the board withholds
+// them from a store-scoped fetch.
+//
+// Anyone who can neither create nor manage clients (employees, trainees) still
+// fetches nothing at all.
+function _b2bClientsFetch(keep) {
+    if (_b2bCanClients() || _b2bIsCorp()) return _b2bGet('clients=1');
+    if (_b2bCanCreate()) return _b2bGet('clients=1&scope=store');
+    return Promise.resolve(keep || []);
+}
+
 async function b2bLoad() {
     const body = document.getElementById('b2bBody');
     if (!body) return;
@@ -15172,7 +15267,7 @@ async function b2bLoad() {
     try {
         const [deals, clients] = await Promise.all([
             _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=${_b2bArchiveDepth}`),
-            _b2bCanClients() || _b2bIsCorp() ? _b2bGet('clients=1') : Promise.resolve([]),
+            _b2bClientsFetch(),
         ]);
         _b2bDeals   = deals.map(_b2bShapeDeal);
         _b2bClients = clients;
@@ -15197,7 +15292,7 @@ async function b2bRefresh() {
     try {
         const [deals, clients] = await Promise.all([
             _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=${_b2bArchiveDepth}`),
-            _b2bCanClients() || _b2bIsCorp() ? _b2bGet('clients=1') : Promise.resolve(_b2bClients),
+            _b2bClientsFetch(_b2bClients),
         ]);
         _b2bDeals = deals.map(_b2bShapeDeal);
         _b2bClients = clients;
@@ -15454,7 +15549,9 @@ function b2bRender() {
     if (sub) {
         sub.textContent = _b2bIsCorp()
             ? 'Bulk business deals across every store, from pickup through listing.'
-            : "Your store's B2B deals — price them, then list them.";
+            : _b2bCanCreate()
+                ? "Your store's B2B deals — raise them, price them, then list them."
+                : "Your store's B2B deals — price them, then list them.";
     }
 
     if (_b2bView === 'pipeline')      body.innerHTML = _b2bRenderPipeline(scoped);
@@ -15470,13 +15567,13 @@ function _b2bRenderQueue(scoped, queue) {
     const rest = scoped.filter(d => !_b2bActionFor(d) && d.stage !== 'completed' && d.stage !== 'declined');
 
     const cards = queue.length ? queue.map(d => {
-        const a     = _b2bActionFor(d);
+        const a     = _b2bActionWords(d, _b2bActionFor(d));
         const quick = _b2bQuickAction(d);
         const days  = _b2bDaysIn(d);
         const meta = [
             d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : null,
             d.total_offer ? `${_b2bMoney(_b2bNetOffer(d))} offer` : null,
-            d.pickup_date ? `Picked up ${_b2bDate(d.pickup_date)}` : null,
+            d.pickup_date ? `${_b2bIntake(d).was} ${_b2bDate(d.pickup_date)}` : null,
         ].filter(Boolean).map(t => `<span>${escapeHtml(t)}</span>`).join('');
         const bar = (d.stage === 'listing')
             ? `<div class="b2b-q-bar"><div class="b2b-pace-bar"><i style="width:${_b2bListedPct(d)}%"></i></div>
@@ -16423,15 +16520,105 @@ function _b2bRenderOverview(scoped) {
 // ---------------------------------------------------------------------------
 
 function b2bOpenCreate() {
+    // The header button is role-gated in the markup, but the markup gate is a
+    // CSS class -- this is what makes it true. The one way a permitted role gets
+    // here and still can't create is having no store on their profile, which is
+    // worth saying out loud rather than opening a modal that cannot be finished.
+    if (!_b2bCanCreate()) {
+        if (B2B_STORE_ROLES.includes(_b2bRole())) {
+            alert("Your profile has no store on it, so there's nowhere to hold a new deal.\n\n"
+                + 'Ask a DM to set your store, or have them raise the deal.');
+        }
+        return;
+    }
     _b2bCreateClientId = null;
+    // Corp routes its pickups at pricing_location, so it picks nothing here. A
+    // store is raising the deal for itself: one store means there is nothing to
+    // decide, two (an MSM covers both of theirs) means there is.
+    const mine = _b2bIsCorp() ? [] : _b2bMyStores();
+    _b2bCreateStore = mine.length === 1 ? mine[0] : null;
+    // A collection run is still the common case, and it is the one that asks for
+    // the most, so it is the safe default: nobody is landed on a shorter form
+    // than the situation deserves by not reading the screen.
+    _b2bCreateIntake = 'pickup';
     _b2bRenderCreate();
     toggleModal('b2bCreateModal');
+}
+
+// Where a store-raised deal will be held. Null for corp, whose deals are routed
+// a stage later by whoever assigns the pricing location.
+let _b2bCreateStore = null;
+// How it arrived -- see B2B_INTAKE. Set once here and never derived afterwards.
+let _b2bCreateIntake = 'pickup';
+
+function b2bPickCreateStore(code) {
+    _b2bCreateStore = code;
+    document.querySelectorAll('#b2bCreateStorePick .b2b-loc')
+        .forEach(b => b.classList.toggle('on', b.dataset.loc === code));
+    _b2bPaintPicklist();   // the Create button waits on this
+}
+
+function b2bPickCreateIntake(kind) {
+    _b2bCreateIntake = B2B_INTAKE[kind] ? kind : 'pickup';
+    document.querySelectorAll('#b2bCreateIntakePick .b2b-intake')
+        .forEach(b => b.classList.toggle('on', b.dataset.kind === _b2bCreateIntake));
+    _b2bPaintPicklist();   // the selection line spells out what will happen
+}
+
+// Offered to everyone who can create, not just stores: a store gets walk-ins at
+// the counter, and corp gets the business that would rather drive to CORP than
+// wait for a collection. Neither is rare enough to have no way of saying so.
+function _b2bCreateIntakeBlock() {
+    const opt = (key, title, sub) => `
+        <button class="b2b-intake ${_b2bCreateIntake === key ? 'on' : ''}" data-kind="${key}"
+            onclick="b2bPickCreateIntake('${key}')">
+            <span class="b2b-intake-t">${title}</span>
+            <span class="b2b-intake-s">${sub}</span>
+        </button>`;
+    return `
+        <label class="form-label-caps" style="margin-top:14px;">How It Came In</label>
+        <div class="b2b-intake-pick" id="b2bCreateIntakePick">
+            ${opt('pickup', 'We collect it',
+                  'A pickup run — records the date, who handed it over and who took it in.')}
+            ${opt('walkin', 'In-store walk-in',
+                  'They are at the counter now. No pickup date and no hand-off to record — describe it, sign for it, done.')}
+        </div>`;
+}
+
+// The store half of the new-deal screen. Corp gets nothing: it has always
+// chosen the location at the next stage, and asking twice would let the two
+// answers disagree.
+function _b2bCreateStoreBlock() {
+    const mine = _b2bIsCorp() ? [] : _b2bMyStores();
+    if (!mine.length) return '';
+    if (mine.length === 1) {
+        return `<div class="b2b-note">
+            <span class="b2b-note-k">Holding at ${escapeHtml(mine[0])}</span>
+            The goods stay with you to itemize and price. A DM, MOCD or the CEO
+            can move it to another store at any point.</div>`;
+    }
+    return `
+        <label class="form-label-caps" style="margin-top:14px;">Holding At</label>
+        <div class="b2b-loc-pick" id="b2bCreateStorePick">
+            ${mine.map(c => `
+                <button class="b2b-loc ${c === _b2bCreateStore ? 'on' : ''}" data-loc="${c}"
+                    onclick="b2bPickCreateStore('${c}')">
+                    <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
+                    <span class="b2b-loc-c">${c}</span>
+                </button>`).join('')}
+        </div>
+        <p class="b2b-hint">Which of your stores is taking these in — it is where they
+            will be priced.</p>`;
 }
 
 function _b2bRenderCreate() {
     const body = document.getElementById('b2bCreateBody');
     if (!body) return;
-    const addForm = _b2bCanClients() ? `
+    // Anyone who may raise a deal may add the business it is for: a walk-in is
+    // usually a company we have never dealt with, and a deal you cannot name the
+    // client of is not one you can raise. The directory itself, the contact
+    // details and the outreach cadence stay corp's.
+    const addForm = _b2bCanCreate() ? `
         <details class="b2b-newclient" ${_b2bClients.length ? '' : 'open'}>
             <summary>Add a new client</summary>
             <div class="b2b-grid2">
@@ -16450,11 +16637,21 @@ function _b2bRenderCreate() {
     body.innerHTML = `
         <label class="form-label-caps">Client</label>
         <input id="b2bClientSearch" class="form-input-lg" autocomplete="off"
-            placeholder="Search by company, acronym or contact…" oninput="_b2bPaintPicklist()">
+            placeholder="Search by company, acronym${_b2bIsCorp() ? ' or contact' : ''}…" oninput="_b2bPaintPicklist()">
         <div class="b2b-picklist" id="b2bPickList"></div>
         <div id="b2bPickSel"></div>
+        ${_b2bCreateIntakeBlock()}
+        ${_b2bCreateStoreBlock()}
         ${addForm}`;
     _b2bPaintPicklist();
+}
+
+// Corp answers "where" a stage later; a store answers it here, and until it has
+// there is nothing to create.
+function _b2bCreateReady() {
+    if (!_b2bCreateClientId) return false;
+    if (_b2bIsCorp()) return true;
+    return !!_b2bCreateStore;
 }
 
 function _b2bPaintPicklist() {
@@ -16475,19 +16672,21 @@ function _b2bPaintPicklist() {
             <span class="b2b-pick-sub">${_b2bIsCorp() ? escapeHtml([c.contact, c.contact_email].filter(Boolean).join(' · ')) : ''}</span>
             ${c.open_count ? `<span class="b2b-pick-n">${c.open_count} open</span>` : ''}
         </button>`).join('')
-        : `<div class="b2b-pick-empty">No clients match${_b2bCanClients() ? ' — add one below.' : ' — ask a DM or CEO to add one.'}</div>`;
+        : `<div class="b2b-pick-empty">No clients match${_b2bCanCreate() ? ' — add one below.' : ' — ask a DM or CEO to add one.'}</div>`;
 
     const chosen = _b2bClients.find(c => c.id === _b2bCreateClientId);
     if (sel) {
         sel.innerHTML = chosen
-            ? `<div class="b2b-selected"><b>${escapeHtml(chosen.acronym)}</b> · ${escapeHtml(chosen.company)} — this will be deal <b class="b2b-mono">${escapeHtml(chosen.acronym)}-${String((chosen.deal_count || 0) + 1).padStart(3, '0')}</b></div>`
+            ? `<div class="b2b-selected"><b>${escapeHtml(chosen.acronym)}</b> · ${escapeHtml(chosen.company)} — this will be deal <b class="b2b-mono">${escapeHtml(chosen.acronym)}-${String((chosen.deal_count || 0) + 1).padStart(3, '0')}</b>${
+                _b2bCreateStore ? `, held at <b>${escapeHtml(_b2bCreateStore)}</b>` : ''}${
+                _b2bCreateIntake === 'walkin' ? ', taken in over the counter' : ''}</div>`
             : '';
     }
     const foot = document.getElementById('b2bCreateFooter');
     if (foot) {
         foot.innerHTML = `
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
-            <button class="b2b-btn b2b-btn-primary" ${_b2bCreateClientId ? '' : 'disabled'} onclick="b2bCreateDeal()">Create Deal</button>`;
+            <button class="b2b-btn b2b-btn-primary" ${_b2bCreateReady() ? '' : 'disabled'} onclick="b2bCreateDeal()">Create Deal</button>`;
     }
 }
 
@@ -16507,15 +16706,23 @@ async function b2bCreateClientInline() {
         contact_email: document.getElementById('b2bNcEmail')?.value.trim(),
         contact_phone: document.getElementById('b2bNcPhone')?.value.trim(),
     }, "Couldn't add the client");
-    _b2bClients = await _b2bGet('clients=1');
+    // Through the same scope gate as every other read, so a store manager who
+    // just added a client gets it back stripped rather than in full.
+    _b2bClients = await _b2bClientsFetch(_b2bClients);
     _b2bCreateClientId = out.id;
     _b2bRenderCreate();
 }
 
 async function b2bCreateDeal() {
-    if (!_b2bCreateClientId) return;
+    if (!_b2bCreateReady()) return;
     const out = await _b2bPost({
         action: 'create', client_id: _b2bCreateClientId, created_by: _b2bUser(),
+        // Corp sends nothing and the deal routes at pricing_location as it
+        // always has. A store names itself, and the deal is holding there from
+        // the moment it exists -- which is also what puts it on that store's
+        // board, since scope is read off pricing_store.
+        pricing_store: _b2bCreateStore || undefined,
+        intake_kind: _b2bCreateIntake,
     }, "Couldn't create the deal");
     closeAllModals();
     await b2bRefresh();
@@ -16592,14 +16799,18 @@ function _b2bSummary(deal) {
         if (deal.client?.contact_phone) rows.push(['Phone', escapeHtml(deal.client.contact_phone)]);
     }
     rows.push(
-        ['Picked up', deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'],
+        [_b2bIntake(deal).was, deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'],
         ['Pricing',   _b2bStoreTag(deal.pricing_store)],
     );
     if (deal.listing_store) rows.push(['Listing', _b2bStoreTag(deal.listing_store)]);
     if (deal.signed_by)     rows.push(['Signed by', escapeHtml(deal.signed_by)]);
     if (deal.delivered_by || deal.received_by) {
         // Reads in the order it happened: who handed it over, then who took it in.
-        const handoff = deal.pricing_store === 'CORP' ? 'Dropped off by' : 'Picked up by';
+        // A walk-in has no first half -- nobody collected it -- so it only ever
+        // shows the second, and the label for a hand-off that never happened
+        // would be a small lie on every one of them.
+        const handoff = _b2bIntake(deal).key === 'walkin' ? 'Brought in by'
+            : deal.pricing_store === 'CORP' ? 'Dropped off by' : 'Picked up by';
         rows.push(['Custody', escapeHtml([deal.delivered_by ? `${handoff} ${deal.delivered_by}` : '',
                                           deal.received_by ? `received by ${deal.received_by}` : ''].filter(Boolean).join(', '))]);
     }
@@ -16615,31 +16826,52 @@ function _b2bStagePickup(deal) {
     const draft = (_b2bPickupDraft && _b2bPickupDraft.id === deal.id) ? _b2bPickupDraft : null;
     const puDesc = draft ? (draft.desc || '') : (deal.pickup_desc || '');
     const puName = draft ? (draft.name || '') : (deal.signed_by || '');
+    const recv   = draft ? (draft.recv || '') : (deal.received_by || '');
+    // A pickup that already knows where it is holding was raised by that store,
+    // and signing it off drops it straight into pricing there -- there is no
+    // routing stage in between, so this screen is the only place its custody
+    // gets recorded.
+    const holding = deal.pricing_store;
+    const w = _b2bIntake(deal);
+    const walkIn = w.key === 'walkin';
     _b2bShowDeal({
         stage: 'pickup',
         eyebrow: deal.ref,
-        title: 'Pickup Sign-Off',
-        sub: 'Record what was collected and have the client acknowledge it.',
+        title: w.title,
+        sub: holding ? `${w.sub.replace(/\.$/, '')} — then straight into pricing at ${holding}.` : w.sub,
         body: `
             ${_b2bSummary(deal)}
-            <label class="form-label-caps">Items Picked Up</label>
+            <label class="form-label-caps">${w.items}</label>
             <textarea id="b2bPuDesc" class="form-input-lg" rows="3"
                 placeholder="e.g. ~40 laptops, 12 monitors, 3 pallets of misc peripherals">${escapeHtml(puDesc)}</textarea>
-            <p class="b2b-hint">A general description is enough here — the itemized list comes later, at pricing.</p>
-            <div class="b2b-grid2" style="margin-top:14px;">
+            <p class="b2b-hint">${w.hint}</p>
+            <div class="${walkIn ? '' : 'b2b-grid2'}" style="margin-top:14px;">
                 <div>
                     <label class="form-label-caps">Client Name *</label>
                     <input id="b2bPuSigned" class="form-input-lg" value="${escapeHtml(puName)}" placeholder="Full name of whoever released the items">
                 </div>
+                ${walkIn ? '' : `
                 <div>
                     <label class="form-label-caps">Pickup Date *</label>
                     <input id="b2bPuDate" type="date" class="form-input-lg" value="${today}">
-                </div>
+                </div>`}
             </div>
+            ${walkIn ? `
+            <p class="b2b-hint">Dated today, ${escapeHtml(_b2bDate(today))}, and recorded as received
+                by you — they are standing at the counter, so there is nothing to ask.</p>`
+            : holding ? `
+            <div style="margin-top:14px;">
+                <label class="form-label-caps">Received By</label>
+                <input id="b2bPuRecv" class="form-input-lg" value="${escapeHtml(recv)}"
+                    placeholder="Who took these in at ${escapeHtml(holding)}">
+                <p class="b2b-hint">A deal picked up by corp records this when it is dropped at
+                    its pricing location. This one never leaves ${escapeHtml(holding)}, so it is
+                    recorded here instead.</p>
+            </div>` : ''}
             ${_b2bSignBlock(deal)}
             <label class="b2b-ack">
                 <input type="checkbox" id="b2bPuAck" onchange="document.getElementById('b2bPuGo').disabled=!this.checked">
-                <span>The client confirms the items above were collected by SPEEKS Technology on the date shown.</span>
+                <span>${w.ack}</span>
             </label>`,
         after: () => {
             // Only worth drawing when there is nothing signed yet.
@@ -16651,19 +16883,27 @@ function _b2bStagePickup(deal) {
         footer: `
             <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
                 onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
+            ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
-            <button class="b2b-btn b2b-btn-primary" id="b2bPuGo" disabled onclick="b2bSignPickup('${deal.id}',this)">Sign &amp; Mark Picked Up</button>`,
+            <button class="b2b-btn b2b-btn-primary" id="b2bPuGo" disabled onclick="b2bSignPickup('${deal.id}',this)">${w.go}</button>`,
     });
 }
 
 async function b2bSignPickup(id) {
     const signed = document.getElementById('b2bPuSigned')?.value.trim();
-    const date   = document.getElementById('b2bPuDate')?.value;
+    // A walk-in renders no date field at all, so the requirement is on the field
+    // existing rather than on the stage: the server dates it today for exactly
+    // the deals this screen doesn't ask about, and demanding a value the form
+    // never offered would make the button dead on those.
+    const dateEl = document.getElementById('b2bPuDate');
     if (!signed) return alert("Enter the name of the person releasing the items.");
-    if (!date)   return alert('Pick the date the items were collected.');
+    if (dateEl && !dateEl.value) return alert('Pick the date the items were collected.');
     await _b2bPost({
-        action: 'sign_pickup', id, signed_by: signed, pickup_date: date,
+        action: 'sign_pickup', id, signed_by: signed, pickup_date: dateEl?.value,
         pickup_desc: document.getElementById('b2bPuDesc')?.value.trim(),
+        // Only rendered on a store-origin pickup; absent everywhere else, and
+        // the server fills it (walk-in) or leaves the column alone (corp pickup).
+        received_by: document.getElementById('b2bPuRecv')?.value.trim(),
     }, "Couldn't sign off the pickup");
     closeAllModals();
     await b2bRefresh();
@@ -16680,7 +16920,7 @@ function _b2bStageAssign(deal) {
         sub: 'Pick who itemizes and prices this pickup, and record the hand-off.',
         body: `
             ${_b2bSummary(deal)}
-            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
+            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             <label class="form-label-caps" style="margin-top:14px;">Price It At</label>
             <div class="b2b-loc-pick">
                 ${B2B_LOCATIONS.map(c => `
@@ -17009,6 +17249,7 @@ function b2bSignHere(id) {
         id,
         desc: document.getElementById('b2bPuDesc')?.value,
         name: document.getElementById('b2bPuSigned')?.value,
+        recv: document.getElementById('b2bPuRecv')?.value,
     };
     b2bOpenSign(id, true);
 }
@@ -17134,6 +17375,11 @@ async function b2bSaveSign(id, btn) {
 // button says which hand-off it is about, because "Move" alone is ambiguous on
 // a deal that has both a pricing store and a listing store.
 function _b2bTransferKind(deal) {
+    // A pickup a store raised for itself already has a store on it, and moving
+    // it is how corp overrides that choice -- before it is signed off as much as
+    // after. A corp-created pickup has no store to move it off: it gets one at
+    // pricing_location, which is an assignment, not a move.
+    if (deal.stage === 'pickup') return deal.pricing_store ? 'pricing' : null;
     if (['pricing', 'review', 'quote'].includes(deal.stage)) return 'pricing';
     if (['listing_location', 'listing'].includes(deal.stage)) return 'listing';
     return null;
@@ -18230,7 +18476,7 @@ function _b2bStagePricing(deal) {
         body: `
             ${_b2bSummary(deal)}
             ${_b2bSendbackNote(deal)}
-            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
+            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
@@ -19392,7 +19638,7 @@ function _b2bStageView(deal) {
         body: `
             ${_b2bSummary(deal)}
             ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
-            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
+            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${deal.declined_reason ? `<div class="b2b-note bad">
                 <span class="b2b-note-k">Declined</span>
                 <span>${escapeHtml(deal.declined_reason)}
@@ -19635,7 +19881,7 @@ function b2bPrintHoldingLabel(dealId) {
       ${_b2bBarcodeSvg(deal.ref)}
       <div class="rf">${escapeHtml(deal.ref)}</div>
       <div class="gr">
-        <div><div class="k">Picked Up</div><div class="v">${escapeHtml(picked)}</div></div>
+        <div><div class="k">${escapeHtml(_b2bIntake(deal).was)}</div><div class="v">${escapeHtml(picked)}</div></div>
         <div><div class="k">Price It At</div><div class="v">${escapeHtml(where)}</div></div>
         <div><div class="k">Released By</div><div class="v">${escapeHtml(deal.signed_by || '—')}</div></div>
       </div>
@@ -19855,10 +20101,10 @@ function b2bPrintPickup() {
     <button class="go" onclick="window.print()">Print</button>
   </div>
   <div class="page"><div class="top">
-    <div class="eyebrow">B2B Pickup</div>
+    <div class="eyebrow">B2B ${escapeHtml(_b2bIntake(deal).key === 'walkin' ? 'Intake' : 'Pickup')}</div>
     <div class="sku" style="font-size:${size}pt;">${escapeHtml(ref)}</div>
     ${company ? `<div class="co">${escapeHtml(company)}</div>` : ''}
-    ${when ? `<div class="meta">Picked up ${escapeHtml(when)}</div>` : ''}
+    ${when ? `<div class="meta">${escapeHtml(_b2bIntake(deal).was)} ${escapeHtml(when)}</div>` : ''}
   </div></div>
 </body></html>`;
 

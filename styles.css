@@ -12262,6 +12262,30 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-loc-dot { width: 12px; height: 12px; border-radius: 999px; display: block; }
 .b2b-loc-c { font-size: 12px; font-weight: 800; color: #1a1c1e; letter-spacing: .03em; }
 
+/* --- intake picker (new deal) ---------------------------------------------
+   Two cards rather than a tickbox. "How did this arrive" changes what the very
+   next screen asks for, and a checkbox labelled "in-store" reads as an
+   afterthought on a pickup form instead of the fork it actually is. Each card
+   carries a line of consequence, so the choice is made on what happens next
+   rather than on which noun sounds closer. */
+.b2b-intake-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 8px; }
+.b2b-intake {
+    display: flex; flex-direction: column; gap: 3px; text-align: left;
+    padding: 12px 14px; cursor: pointer; font: inherit;
+    border-radius: 12px; border: 1px solid var(--b2b-line); background: #fff;
+    transition: all .14s ease;
+}
+.b2b-intake:hover { border-color: var(--sage-professional); }
+.b2b-intake.on {
+    border-color: var(--sage-professional); background: var(--b2b-accent-tint);
+    box-shadow: 0 0 0 3px rgba(31,157,87,.12);
+}
+.b2b-intake-t { font-size: 12.5px; font-weight: 800; color: #1a1c1e; }
+.b2b-intake-s { font-size: 11px; color: var(--b2b-faint); line-height: 1.4; }
+/* Side by side is the whole point of the comparison, but two cards this wordy
+   below ~560px leave three words per line. */
+@media (max-width: 560px) { .b2b-intake-pick { grid-template-columns: 1fr; } }
+
 /* --- pricing / quote line items ------------------------------------------- */
 .b2b-totals {
     display: flex; flex-wrap: wrap; gap: 22px; padding: 13px 16px; margin-bottom: 14px;
@@ -13440,7 +13464,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .b2b-q-card, .b2b-card, .b2b-loc { transition: none; }
+    .b2b-q-card, .b2b-card, .b2b-loc, .b2b-intake { transition: none; }
     .b2b-q-card:hover, .b2b-card:hover, .b2b-loc:hover { transform: none; }
     .b2b-lrow.hit, .b2b-cel-ring { animation: none; }
 }

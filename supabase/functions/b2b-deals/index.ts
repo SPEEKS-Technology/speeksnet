@@ -13,7 +13,12 @@ const corsHeaders = {
 // Pipeline (each stage has exactly one owner, so "needs you" is derivable from
 // the stage alone):
 //   pickup            corp    typed-name sign-off + pickup date
-//   pricing_location  corp    route to OVL/LEE/WSP/MPL/BAL/CORP
+//                     store   ...unless the store raised the deal itself, in
+//                             which case it owns its own sign-off — see
+//                             "store-origin deals" below
+//   pricing_location  corp    route to OVL/LEE/WSP/MPL/BAL/CORP. SKIPPED for a
+//                             store-origin deal: the store that took the goods
+//                             in is already holding them
 //   pricing           store   itemize and price: type, specs, one serial per
 //                             unit, a disposition, and whether it needs a
 //                             certified data wipe
@@ -43,6 +48,28 @@ const corsHeaders = {
 //                             before listing, since once a quote is accepted
 //                             the goods are already ours
 //
+// STORE-ORIGIN DEALS
+// ------------------
+// A business can walk into a store as easily as it can call corp. When a store
+// manager raises the deal, `create` stamps pricing_store with their own store
+// straight away, which does two things: the deal is in that store's scope from
+// the moment it exists (every scope test in the app keys off pricing_store /
+// listing_store, so a deal with neither is invisible to everyone but corp), and
+// sign_pickup can route it directly to `pricing` — there is no routing decision
+// left for corp to make, the goods are already in the building.
+//
+// Corp is not cut out of it: transfer_location moves a store-origin deal to any
+// other store or to CORP, including while it is still at `pickup`, and that is
+// the ONLY way its store changes. Nothing a store sends can retarget another
+// store's board.
+//
+// intake_kind (0038) is a separate axis and stays separate on purpose. It says
+// whether the goods were collected on a run or carried to a counter, which is
+// what decides whether `pickup` still has to ask for a date and a hand-off. It
+// does NOT decide where the deal holds, and where it holds does not decide it:
+// a store can raise a collection it is about to drive out on, and corp can take
+// a drop-off at CORP. Deriving either from the other misreports both.
+//
 // Reads come from the b2b_deal_list / b2b_client_list views, which roll the
 // line items up in Postgres. Summing them here meant transferring every item
 // on every board draw, which does not survive thousands of them.
@@ -58,6 +85,10 @@ const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const PRICING_LOCATIONS = [...STORES, "CORP"];
+// How the goods arrived. `pickup` is a collection run; `walkin` is a business
+// that carried them to a counter. See 0038 -- the pipeline is identical, the
+// difference is only which intake questions still have answers worth asking for.
+const INTAKE_KINDS = ["pickup", "walkin"];
 const ACCEPT_ROLES = ["ceo", "mocd", "tom", "district manager"];
 // 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
 // spelling stays recognised here: existing rows were migrated, but a row saved
@@ -88,7 +119,7 @@ const OPEN_STAGES = ["pricing", "review", "quote"];
 // along everything; naming them keeps the payload predictable.
 const DEAL_COLS = [
   "id", "client_id", "deal_no", "ref", "stage", "stage_rank", "is_terminal",
-  "pickup_desc", "signed_by", "signed_at", "pickup_date",
+  "intake_kind", "pickup_desc", "signed_by", "signed_at", "pickup_date",
   "pricing_store", "listing_store", "delivered_by", "received_by",
   "priced_by", "quote_sent_at", "quote_send_count", "accepted_at", "accepted_by",
   "declined_at", "declined_by", "declined_reason", "declined_category",
@@ -110,6 +141,14 @@ const DEAL_COLS = [
 const CONTACT_COLS = ["contact", "contact_email", "contact_phone"];
 const SCOPED_DEAL_COLS = DEAL_COLS.split(",")
   .filter((c) => !CONTACT_COLS.includes(c)).join(",");
+
+// The client directory as a store may see it: enough to find the business you
+// are raising a deal for and nothing else. b2b_client_list is `c.*` plus
+// rollups, so it carries contact details, internal notes and the whole outreach
+// cadence -- selecting * for a store would hand over the CRM. Named columns
+// rather than a filter, so a column added to b2b_clients later is private by
+// default instead of leaking the day it lands.
+const CLIENT_PICK_COLS = "id,company,acronym,deal_count,open_count";
 
 const ITEM_COLS = [
   "id", "deal_id", "line_no", "sku", "make", "model", "condition",
@@ -201,6 +240,13 @@ function isoDate(v: unknown, label: string, required = false): string | null {
     throw new Invalid(`${label} must be a real date.`);
   }
   return s;
+}
+
+// Today at the stores, not at the edge. A walk-in signed for at 7pm Central is
+// that day's intake; a UTC "today" would file it as tomorrow's for five hours
+// every evening, and pickup_date is what the whole deal is dated by.
+function todayCentral(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
 }
 
 function oneOf(v: unknown, allowed: string[], label: string, required = true): string | null {
@@ -456,6 +502,28 @@ Deno.serve(async (req: Request) => {
           .select("id, acronym").eq("id", clientId).maybeSingle();
         if (!client) return jsonResponse({ success: false, error: "That client no longer exists." }, 404);
 
+        // A store raising its own deal names itself here, and the deal is
+        // holding at that store from this moment on. Only a real store: CORP is
+        // not a place a walk-in gets left, and corp's own deals go the long way
+        // round through pricing_location precisely because where they land is a
+        // decision rather than a fact. Absent means the old flow, unchanged.
+        //
+        // No CHECK stops pricing_store being set this early --
+        // b2b_deals_pricing_located only requires one from rank 3 (`pricing`)
+        // onward, so filling it at rank 1 satisfies that constraint early rather
+        // than conflicting with it.
+        const originStore = oneOf(
+          String(body.pricing_store ?? "").toUpperCase(), STORES, "Store", false);
+
+        // Settled once, here, and never inferred later: it decides which
+        // questions the intake screen asks, and a deal that changed its mind
+        // about that halfway through would be asking for answers it had already
+        // filled in. Absent means `pickup`, which is what every deal predating
+        // 0038 is and what the column defaults to.
+        const intakeKind = oneOf(
+          String(body.intake_kind ?? "").toLowerCase(), INTAKE_KINDS, "Intake type", false)
+          || "pickup";
+
         // Per-client counter. The unique index is the real guard; on a race we
         // recompute and retry, which is plenty for this volume.
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -467,12 +535,20 @@ Deno.serve(async (req: Request) => {
             client_id: clientId,
             deal_no: dealNo,
             stage: "pickup",
+            pricing_store: originStore,
+            intake_kind: intakeKind,
             pickup_desc: str(body.pickup_desc, 2000, "Pickup description"),
             created_by: str(body.created_by, 120, "Created by") || "Unknown",
           }).select("id").single();
           if (!error) {
-            await broadcastChange("b2b", null);
-            return jsonResponse({ success: true, id: data.id, deal_no: dealNo, ref: `${client.acronym}-${pad(dealNo, 3)}` });
+            // Scoped to the origin store so its board notices the new deal
+            // without every other store being pinged about it.
+            await broadcastChange("b2b", originStore);
+            return jsonResponse({
+              success: true, id: data.id, deal_no: dealNo,
+              ref: `${client.acronym}-${pad(dealNo, 3)}`,
+              pricing_store: originStore, intake_kind: intakeKind,
+            });
           }
           if (!String(error.message).toLowerCase().includes("duplicate")) {
             return jsonResponse({ success: false, error: error.message }, 500);
@@ -498,16 +574,40 @@ Deno.serve(async (req: Request) => {
             error: "This pickup needs the client's signature — or a recorded reason for going without one.",
           }, 409);
         }
+        // A deal that already knows where it is holding has no routing decision
+        // left, so it skips pricing_location entirely -- that stage exists to
+        // ask "where do these goods go", and for a store-origin deal the answer
+        // was settled when the store took them in. Read off the row rather than
+        // from a flag in the request: corp may have moved it since it was
+        // created, and the row is the only thing that knows where it ended up.
+        const holding = deal.pricing_store;
+        // A walk-in was carried to a counter, so two of the three intake facts
+        // are already known and the screen doesn't ask for them: the date is the
+        // day it is signed for, and the person who received it is the person
+        // signing. Defaulted here rather than left to the browser so a tab left
+        // open overnight still dates the deal correctly -- and still honouring
+        // anything actually sent, since the fallback is a default, not an
+        // override.
+        const walkIn = deal.intake_kind === "walkin";
         const { error } = await supabase.from("b2b_deals").update({
-          stage: "pricing_location",
+          stage: holding ? "pricing" : "pricing_location",
           pickup_desc: str(body.pickup_desc, 2000, "Pickup description"),
           signed_by: str(body.signed_by, 120, "The client's name", true),
           signed_at: new Date().toISOString(),
-          pickup_date: isoDate(body.pickup_date, "Pickup date", true),
+          pickup_date: isoDate(body.pickup_date, "Pickup date", !walkIn)
+            || (walkIn ? todayCentral() : null),
+          // Whoever took the goods in. Corp-created pickups capture this at
+          // assign_pricing instead; neither a store-origin deal nor a walk-in
+          // ever visits that stage, so this is their only chance to record it.
+          received_by: walkIn
+            ? (str(body.received_by, 120, "Received by") || str(body.user, 120, "User"))
+            : holding
+            ? str(body.received_by, 120, "Received by")
+            : deal.received_by,
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", null);
-        return jsonResponse({ success: true });
+        await broadcastChange("b2b", holding);
+        return jsonResponse({ success: true, next_stage: holding ? "pricing" : "pricing_location" });
       }
 
       // ========================================================== signature
@@ -726,7 +826,15 @@ Deno.serve(async (req: Request) => {
         }
 
         // pricing while it is being priced or quoted; listing once it is there.
-        const kind = OPEN_STAGES.includes(deal.stage) ? "pricing"
+        //
+        // `pickup` counts as pricing too, but ONLY once the deal has a store to
+        // move it off -- that is a store-origin deal, and reassigning it is the
+        // one corrective corp has before it is signed off. A corp-created deal
+        // at pickup has no pricing_store yet and is not being moved anywhere: it
+        // is routed at pricing_location, by assign_pricing, which is a different
+        // act with a different record.
+        const kind = (OPEN_STAGES.includes(deal.stage)
+                      || (deal.stage === "pickup" && deal.pricing_store)) ? "pricing"
           : (deal.stage === "listing_location" || deal.stage === "listing") ? "listing"
           : null;
         if (!kind) {
@@ -1177,8 +1285,14 @@ Deno.serve(async (req: Request) => {
           // last remaining read of quote_send_count as a state, and it is the
           // right one: reopening must put the deal back where it died.
           : deal.priced_by ? ((deal.quote_send_count || 0) > 0 ? "quote" : "review")
-          : deal.pricing_store ? "pricing"
-          : deal.signed_at ? "pricing_location"
+          // signed_at is tested BEFORE pricing_store, and the order is load-
+          // bearing. A store-origin deal carries a pricing_store from the moment
+          // it is created, so "has a store" no longer implies "has been picked
+          // up" -- reading the store first would resume an unsigned deal at
+          // `pricing`, which b2b_deals_pickup_recorded refuses (rank >= 2 demands
+          // signed_by, signed_at and pickup_date) and the reopen would fail with
+          // a constraint error instead of putting the deal back where it died.
+          : deal.signed_at ? (deal.pricing_store ? "pricing" : "pricing_location")
           : "pickup";
         const { error } = await supabase.from("b2b_deals").update({
           stage, declined_at: null, declined_by: null,
@@ -1219,10 +1333,19 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ?clients=1 → the directory, with deal counts rolled up in the view
+    // ?clients=1              → the directory, with deal counts rolled up
+    // ?clients=1&scope=store  → the same list stripped to what a store needs to
+    //                           pick a business off, no contact details
+    //
+    // Exactly the same shape of decision the board makes with ?store= below: the
+    // request says which side it is asking from, and the columns follow. That is
+    // the PIN trust model this whole app runs on -- what it buys is that the
+    // browser of someone who never asks for corp's view never receives it.
     if (url.searchParams.get("clients")) {
+      const forStore = url.searchParams.get("scope") === "store";
       const { data, error } = await supabase.from("b2b_client_list")
-        .select("*").order("company", { ascending: true }).limit(2000);
+        .select(forStore ? CLIENT_PICK_COLS : "*")
+        .order("company", { ascending: true }).limit(2000);
       if (error) return jsonResponse({ success: false, error: error.message }, 500);
       return jsonResponse({ success: true, data: data || [] });
     }
