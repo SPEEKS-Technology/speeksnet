@@ -41311,13 +41311,12 @@ function _ecEvHead(row) {
         : ev.images === 1 ? "1 photo" : "no photos";
     const meta = (ev.price ? "$" + _ecEsc(ev.price) + " &middot; " : "")
         + photos + " &middot; " + _ecEsc(row.sku);
-    const img = ev.image
-        ? '<img class="ec-ev-img" src="' + _ecEsc(ev.image) + '" alt="" '
-          + 'onerror="this.style.display=&quot;none&quot;" '
-          + 'onclick="openAuditPhotoLightbox(\'' + _ecEsc(ev.image) + '\')">'
-        : "";
+    // Older rows failed before photos were kept; the single image they do have
+    // is still worth showing rather than nothing.
+    const pics = (ev.photos && ev.photos.length) ? ev.photos
+        : ev.image ? [ev.image] : [];
     const head = [
-        '<div class="ec-ev-head">', img,
+        '<div class="ec-ev-head">',
         '<div class="ec-ev-headtxt">',
         '<div class="ec-ev-title">', _ecEsc(ev.title || row.title || row.sku), '</div>',
         '<div class="ec-ev-meta">', meta, '</div>',
@@ -41329,13 +41328,15 @@ function _ecEvHead(row) {
     // that anywhere — which is how three cards went live at MPL naming the wrong
     // grading company. openAuditPhotoLightbox is the audit tool's viewer, reused
     // whole: same behaviour, and Escape already knows to peel it off first.
-    const shots = (ev.photos || []).length > 1
-        ? '<div class="ec-ev-shots">' + ev.photos.map(u =>
+    const shots = pics.length
+        ? '<div class="ec-ev-shot-wrap"><div class="ec-ev-shots">' + pics.map(u =>
             '<img src="' + _ecEsc(u) + '" alt="" loading="lazy" '
             + 'onerror="this.style.display=&quot;none&quot;" '
             + 'onclick="openAuditPhotoLightbox(\'' + _ecEsc(u) + '\')">').join("")
-          + '</div>'
-        : "";
+          + '</div><div class="ec-ev-shot-hint">' + (pics.length === 1
+              ? 'Click the photo to enlarge it'
+              : 'Click any photo to enlarge it') + '</div></div>'
+        : '<div class="ec-ev-none">This product has no photos on it.</div>';
 
     return '<div class="ec-ev">' + head + shots + '</div>';
 }

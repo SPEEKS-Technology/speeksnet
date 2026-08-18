@@ -16543,14 +16543,14 @@ body.tv-body { display: block; background: #eef1f5; }
   background: rgba(23, 34, 28, 0.34);
 }
 .ec-fix {
-  width: 480px; max-width: 100%; max-height: calc(100vh - 32px);
+  width: 620px; max-width: 100%; max-height: calc(100vh - 32px);
   background: #fff; border: 1px solid var(--cb-line); border-radius: 14px;
   box-shadow: 0 18px 46px rgba(20, 35, 25, 0.22);
   display: flex; flex-direction: column; overflow: hidden;
 }
 .ec-fix-head {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
-  padding: 12px 12px 11px 15px; border-bottom: 1px solid var(--cb-line-2);
+  padding: 14px 14px 13px 20px; border-bottom: 1px solid var(--cb-line-2);
   background: var(--cb-panel-2);
 }
 /* min-width:0 so the title below can actually ellipsize instead of stretching
@@ -16561,7 +16561,7 @@ body.tv-body { display: block; background: #eef1f5; }
   margin-top: 2px; font-size: 11.5px; color: var(--cb-muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.ec-fix-body { padding: 13px 15px 4px; overflow: auto; }
+.ec-fix-body { padding: 16px 20px 6px; overflow: auto; }
 /* The provenance line under a Fix field. Quiet on purpose: it has to be read
    before the button is pressed, not compete with the value itself. */
 .ec-fix-src { display: block; margin-top: 4px; font-size: 11.5px; color: var(--sage-deep, #178048); }
@@ -16575,7 +16575,7 @@ body.tv-body { display: block; background: #eef1f5; }
 /* --- the evidence block: what the answer was read from ------------------- */
 .ec-ev {
   border: 1px solid var(--cb-line); border-radius: 10px;
-  background: var(--cb-panel-2); padding: 9px 10px; margin-bottom: 13px;
+  background: var(--cb-panel-2); padding: 12px 13px; margin-bottom: 15px;
 }
 /* The reference half sits under the question and reads as a footnote to it,
    not as another thing to fill in. */
@@ -16592,7 +16592,8 @@ body.tv-body { display: block; background: #eef1f5; }
   font-size: 12px; font-weight: 700; color: var(--slate-charcoal); line-height: 1.35;
 }
 .ec-ev-meta { margin-top: 3px; font-size: 11px; color: var(--cb-faint); }
-.ec-ev-img { cursor: zoom-in; }
+.ec-ev-shot-wrap { margin-top: 10px; }
+.ec-ev-shot-hint { margin-top: 5px; font-size: 11px; color: var(--cb-faint); }
 /* Every angle of the item, along the bottom of its own header. Scrolls rather
    than wrapping: a second row pushes the question off the screen, and the
    question is the reason anybody is here. */
@@ -16601,7 +16602,7 @@ body.tv-body { display: block; background: #eef1f5; }
   overflow-x: auto; padding-bottom: 2px;
 }
 .ec-ev-shots img {
-  width: 46px; height: 46px; flex: 0 0 46px; object-fit: cover;
+  width: 72px; height: 72px; flex: 0 0 72px; object-fit: cover;
   border-radius: 6px; border: 1px solid var(--cb-line); background: #fff;
   cursor: zoom-in;
 }
@@ -16619,7 +16620,7 @@ body.tv-body { display: block; background: #eef1f5; }
 
 .ec-ev-tbl { width: 100%; border-collapse: collapse; margin-top: 4px; }
 .ec-ev-tbl th, .ec-ev-tbl td {
-  text-align: left; vertical-align: top; padding: 3px 6px 3px 0;
+  text-align: left; vertical-align: top; padding: 5px 8px 5px 0;
   font-size: 11.5px; line-height: 1.4; border-top: 1px solid var(--cb-line-2);
 }
 .ec-ev-tbl th {
@@ -16669,7 +16670,7 @@ body.tv-body { display: block; background: #eef1f5; }
 }
 .ec-bulk-bad b { color: var(--slate-charcoal); }
 
-.ec-fix-row { display: block; margin-bottom: 11px; }
+.ec-fix-row { display: block; margin-bottom: 15px; }
 .ec-fix-lbl {
   display: block; margin-bottom: 4px;
   font-size: 11.5px; font-weight: 700; color: var(--cb-muted);
@@ -16696,7 +16697,7 @@ body.tv-body { display: block; background: #eef1f5; }
 }
 .ec-fix-foot {
   display: flex; justify-content: flex-end; gap: 8px;
-  padding: 11px 15px 13px; border-top: 1px solid var(--cb-line-2);
+  padding: 13px 20px 15px; border-top: 1px solid var(--cb-line-2);
   background: var(--cb-panel-2);
 }
 .ec-ok { color: #178048; }
