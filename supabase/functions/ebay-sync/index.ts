@@ -668,6 +668,30 @@ function conditionFrom(
   specs: Record<string, string>, fallback: string,
   metafields: Record<string, string> = {},
 ): { value: string; unknown: string | null; missing: boolean; source?: string } {
+  // AN ANSWER A PERSON GAVE OUTRANKS THE AUTOMATED ONE.
+  //
+  // `speeks.condition` is written by ONE thing: the Fix prompt, after eBay
+  // refused the listing and somebody read the refusal and chose a value. So its
+  // presence means a human looked at this item BECAUSE the automated grade did
+  // not work. Letting ebay_condition win in that situation would send the
+  // rejected value again and put the same refusal back on the screen, which
+  // reads as the person's answer being wrong.
+  //
+  // This is the one case that beats ebay_condition, and it is narrow on purpose:
+  // the namespaced key is read, never the bare `condition`, which PayMore also
+  // writes and which would hand every product's ordinary spec data the same
+  // authority. Trading cards are why this matters — a graded card needs 2750
+  // where the tool has written 3000, and nothing else can express that.
+  const ours = String(metafields["speeks.condition"] || "").trim();
+  if (ours) {
+    for (const [re, value] of CONDITION_BY_TEXT) {
+      if (re.test(ours)) {
+        return { value, unknown: null, missing: false,
+                 source: `speeks.condition metafield ("${ours}", chosen in the panel)` };
+      }
+    }
+  }
+
   const declared = String(metafields["ebay_condition"] || "").trim();
   if (EBAY_CONDITION_BY_ID[declared]) {
     return { value: EBAY_CONDITION_BY_ID[declared], unknown: null, missing: false,
@@ -690,6 +714,28 @@ const CONDITION_CHOICES = [
   "New", "Like New", "Flawless", "Excellent", "Very Good", "Good",
   "Acceptable", "Used", "Broken / For Parts",
 ];
+// The words from OUR vocabulary that this category will actually take.
+//
+// Built by round-tripping every choice — word -> enum -> id -> is it allowed —
+// rather than by hand-mapping ids back to words. A hand map has to invent an
+// answer for ids our vocabulary cannot express (NEW_OTHER, the refurbished
+// tiers), and inventing one means offering a value that maps to a DIFFERENT id
+// and fails all over again. Round-tripping can only ever offer a word that
+// lands on an id the category listed.
+function conditionWordsAllowed(allowed: number[] | null): string[] {
+  if (!allowed || !allowed.length) return [];
+  const out: string[] = [];
+  for (const word of CONDITION_CHOICES) {
+    for (const [re, value] of CONDITION_BY_TEXT) {
+      if (!re.test(word)) continue;
+      const id = CONDITION_IDS[value];
+      if (id && allowed.includes(id)) out.push(word);
+      break;
+    }
+  }
+  return out;
+}
+
 const CONDITION_WORDS = CONDITION_CHOICES.slice(0, -1).join(", ")
   + ", or " + CONDITION_CHOICES[CONDITION_CHOICES.length - 1];
 
@@ -717,6 +763,9 @@ type MissingField = {
   // person confirming it is the only safeguard against putting a guess on eBay.
   suggestion?: string;
   source?: string;
+  // Set when the allowed list was too long to store whole, so the panel can say
+  // so rather than letting a missing value read as "eBay does not accept it".
+  truncated?: boolean;
 };
 
 // eBay names the offending field in two places and NEITHER IS SAFE ALONE: the
@@ -762,7 +811,12 @@ function missingFromEbayError(
     const k = name.toLowerCase();
     if (!name || seen.has(k)) return;
     seen.add(k);
-    out.push({ name, allowed: allowed.slice(0, 60), kind });
+    // THE WHOLE LIST. Trimming here to 60 quietly dropped "Pokémon TCG" from a
+    // Game aspect with 168 values: the dropdown could not offer it, and the
+    // suggester rejected it as "not in eBay's list" — a value we had, thrown
+    // away, then blamed on eBay. Capping happens once, at the end, in
+    // withSuggestions(), where the suggestion can be protected from the cut.
+    out.push({ name, allowed: allowed.slice(), kind });
   };
 
   // Descriptors first: they are the narrower vocabulary, and where a name
@@ -828,6 +882,53 @@ function fromTitle(title: string, allowed: string[]): string | null {
   return null;
 }
 
+// THE ANSWER IS OFTEN IN A ROW WITH THE WRONG NAME ON IT.
+// eBay wants "Game"; the product has no Game row, but it does have
+// `Collection: "Pokémon TCG Card"`. Reading spec NAMES alone walks straight
+// past that. So every spec VALUE is searched for something the category will
+// accept, the same way the title is.
+//
+// Last of all the text sources, and only for closed lists: this is the loosest
+// match we make, and it should never beat the title or a row that is actually
+// named after the field. The closed list is what keeps it honest — a value has
+// to be one eBay named, so a stray word cannot become an answer.
+function fromOtherSpecs(
+  specs: Record<string, string>, allowed: string[],
+): { value: string; from: string } | null {
+  if (!allowed.length) return null;
+  for (const [k, v] of Object.entries(specs || {})) {
+    const hit = fromTitle(String(v), allowed);
+    if (hit) return { value: hit, from: k };
+  }
+  return null;
+}
+
+// eBay spells its graders out in full and the world writes the abbreviation:
+// the value is "Professional Sports Authenticator (PSA)" and every title on the
+// shelf says "PSA 10". Matching only the full string found nothing on a card
+// whose title names the grader twice.
+function matchByAbbrev(title: string, allowed: string[]): string | null {
+  const t = " " + String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ";
+  for (const a of allowed) {
+    const m = String(a).match(/\(([^)]{2,12})\)/);
+    if (!m) continue;
+    const abbr = m[1].toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (abbr.length >= 2 && t.includes(" " + abbr + " ")) return a;
+  }
+  return null;
+}
+
+// A NUMBER IN A CARD TITLE IS USUALLY THE CARD NUMBER, NOT THE GRADE.
+// "Pikachu V 045/184" would hand a Grade field 045 or 184 with a straight
+// match, and a wrong grade is not a cosmetic error — it is a misdescribed item
+// and a return. So a grade is only ever read when it sits directly after the
+// name of a grading company, which is exactly how these titles are written.
+const GRADE_AFTER_GRADER =
+  /\b(?:PSA|BGS|BVG|BCCG|CGC|SGC|HGA|TAG|GMA|KSA|MNT|ACE)\s*([0-9]{1,2}(?:\.5)?)\b/i;
+
+const allNumeric = (allowed: string[]) => allowed.length > 0
+  && allowed.every(v => /^[0-9]{1,2}(\.[05])?$/.test(String(v).trim()));
+
 // The one condition worth suggesting. A grade is a judgement about the physical
 // item and guessing it is exactly what this function refuses to do elsewhere —
 // but a seller who typed "broken" in their own title has already told us.
@@ -862,16 +963,53 @@ function suggestFor(
     return f;   // never guess a grade
   }
 
-  // 4. A closed-list value said out loud in the title.
+  // 4. A grade, and only where a grader vouches for it. Ahead of the plain
+  //    title match on purpose: that one would happily read a card number.
+  if (allNumeric(f.allowed)) {
+    const m = String(c.title || "").match(GRADE_AFTER_GRADER);
+    const snapped = m ? snapToAllowed(m[1], f.allowed) : null;
+    if (snapped) {
+      return { ...f, suggestion: snapped,
+               source: "the grade written beside the grader in the title" };
+    }
+    return f;
+  }
+
+  // 5. A closed-list value said out loud in the title.
   const fromT = fromTitle(c.title || "", f.allowed);
   if (fromT) return { ...f, suggestion: fromT, source: "the product title" };
 
+  // 6. The same, by the abbreviation eBay hides in brackets.
+  const abbr = matchByAbbrev(c.title || "", f.allowed);
+  if (abbr) return { ...f, suggestion: abbr, source: "the abbreviation in the title" };
+
+  // 7. Last resort: an accepted value sitting inside some other row.
+  const other = fromOtherSpecs(specs, f.allowed);
+  if (other) {
+    return { ...f, suggestion: other.value,
+             source: `the product's "${other.from}" row (a different field)` };
+  }
+
+  // Nothing in the text answers it. The panel says so and asks the person,
+  // which is the right end state — not a guess dressed up as an answer.
   return f;
 }
 
+// Long enough for every list seen so far (Game is 168, the big Brand lists run
+// to a few hundred) while still bounding what goes into a jsonb column from an
+// HTTP response. The suggestion is carried across the cut, because the one
+// value we are most sure about is the one that must not be lost to it.
+const ALLOWED_CAP = 1200;
+
 const withSuggestions = (
   fields: MissingField[], c: Candidate, specs: Record<string, string>,
-) => fields.map(f => suggestFor(f, c, specs));
+) => fields.map(f => {
+  const out = suggestFor(f, c, specs);
+  if (out.allowed.length <= ALLOWED_CAP) return out;
+  const kept = out.allowed.slice(0, ALLOWED_CAP);
+  if (out.suggestion && !kept.includes(out.suggestion)) kept[kept.length - 1] = out.suggestion;
+  return { ...out, allowed: kept, truncated: true };
+});
 
 const OURS = "SPEEKS: ";
 
@@ -1899,6 +2037,27 @@ Deno.serve(async (req: Request) => {
 
   const wantedCondition = picked.value;
   const cond = adjustCondition(wantedCondition, allowedConditions);
+
+  // ASK BEFORE eBay REFUSES, WHEN WE ALREADY KNOW IT WILL.
+  // adjustCondition nudges a condition to a neighbour in the same family; when
+  // there is no neighbour it hands back `unsupported`, and we would go on to
+  // send a value the category has already told us it does not take. That round
+  // trip buys nothing and costs the store a 25059 to read.
+  const condWords = conditionWordsAllowed(allowedConditions);
+  if (cond.unsupported && condWords.length) {
+    const msg = OURS + `eBay will not take "${wantedCondition.replace(/_/g, " ").toLowerCase()}" `
+      + `as the condition in ${categoryName || "this category"} — the grade on the product is `
+      + `not one this category allows. It will take: ${condWords.join(", ")}. Set the `
+      + `Condition on the Shopify product to one of those and upload again.`;
+    const condMissing: MissingField[] = [
+      { name: "Condition", allowed: condWords, kind: "condition" },
+    ];
+    if (!dry) {
+      await recordFailure(store, c, categoryId, msg, undefined, categoryName, condMissing);
+    }
+    return json({ store, sku, step: "condition", error: msg, missing: condMissing,
+                  conditionWanted: wantedCondition, allowedHere: condWords }, 422);
+  }
   // Descriptors hang off the CHOSEN condition, so this can only run once the
   // condition is settled — Graded and Ungraded demand different fields.
   const condEntry = (conditionPolicy || [])
@@ -1912,9 +2071,11 @@ Deno.serve(async (req: Request) => {
       + `take this as "${condEntry?.conditionDescription || cond.condition}" in `
       + `${categoryName || "this category"}. Add ${many ? "these rows" : "this row"} to the `
       + `product's spec table in Shopify, then upload again: ${lines.join("  |  ")}`;
-    const descMissing: MissingField[] = desc.missing.map(m => ({
+    // Descriptors are ABSENT rather than rejected, so unlike the condition case
+    // above there is no wrong answer to accidentally offer back.
+    const descMissing: MissingField[] = withSuggestions(desc.missing.map(m => ({
       name: m.name, allowed: m.allowed, kind: "descriptor" as const,
-    }));
+    })), c, specs);
     if (!dry) {
       await recordFailure(store, c, categoryId, msg, undefined, categoryName, descMissing);
     }
@@ -2017,8 +2178,26 @@ Deno.serve(async (req: Request) => {
   // Suggestions are attached here rather than inside missingFromEbayError,
   // which only knows the CATEGORY. What the product itself says is the other
   // half of the answer, and it lives out here.
-  const missingFrom = (b: any) =>
-    withSuggestions(missingFromEbayError(b, aspectDefs, condEntry), c, specs);
+  const missingFrom = (b: any) => {
+    const found = withSuggestions(
+      missingFromEbayError(b, aspectDefs, condEntry), c, specs);
+    if (found.length) return found;
+
+    // 25059 NAMES NO FIELD, WHICH IS WHY IT USED TO BE A DEAD END.
+    // "Condition information 3000 does not exist or is not a valid condition
+    // for category X" is answerable — the category told us what it takes — but
+    // it matches none of the missing-aspect shapes, so the row sat failed with
+    // no Fix button and nothing a person could type. It is a question now.
+    //
+    // NOTHING IS SUGGESTED HERE. Every other field suggests from the product,
+    // and the product's condition is the exact value eBay just refused —
+    // offering it back would be pre-filling the wrong answer.
+    const words = conditionWordsAllowed(allowedConditions);
+    if (words.length && /\b25059\b|not a valid condition/i.test(errText(b))) {
+      return [{ name: "Condition", allowed: words, kind: "condition" as const }];
+    }
+    return [];
+  };
 
   if (put.status >= 300) {
     await recordFailure(store, c, categoryId, `inventory_item: ${errText(put.body)}`,

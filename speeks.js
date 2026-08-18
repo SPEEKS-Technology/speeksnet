@@ -41358,16 +41358,38 @@ function ecFix(sku, note) {
       </div>`;
     document.body.appendChild(wrap);
     document.addEventListener('keydown', _ecFixEsc, true);
+    // The page behind a modal must not scroll — every other modal here goes
+    // through lockAndBlurScreen(). This one is its own overlay rather than a
+    // .modal-menu, so it locks and releases itself. The flag means we only
+    // release a lock WE took: closing this while a modal underneath is still
+    // open would otherwise unpin the page behind it.
+    if (!document.body.classList.contains('no-scroll')) {
+        _ecFixLocked = true;
+        _ecFixScrollY = window.scrollY || window.pageYOffset || 0;
+        document.body.style.top = `-${_ecFixScrollY}px`;
+        document.body.classList.add('no-scroll');
+    }
     wrap.querySelector('.ec-fix-in')?.focus();
 }
 window.ecFix = ecFix;
 
 function _ecFixEsc(ev) { if (ev.key === 'Escape') ecFixClose(); }
 
+let _ecFixLocked = false;
+let _ecFixScrollY = 0;
+
 function ecFixClose() {
     document.removeEventListener('keydown', _ecFixEsc, true);
     document.getElementById('ecFixWrap')?.remove();
     _ecFixSku = null;
+    if (_ecFixLocked) {
+        _ecFixLocked = false;
+        document.body.classList.remove('no-scroll');
+        document.body.style.top = '';
+        // .no-scroll pins the body with position:fixed, so releasing it drops the
+        // page back to the top unless the old offset is put back by hand.
+        window.scrollTo(0, _ecFixScrollY);
+    }
 }
 window.ecFixClose = ecFixClose;
 
