@@ -41306,16 +41306,29 @@ function ecFix(sku, note) {
         // Free-typing into a field eBay will only accept 29 exact strings for is
         // a guaranteed second refusal, and the second refusal reads as if the
         // answer was wrong rather than the spelling.
+        // THE SUGGESTION IS PRE-FILLED, AND SO IS ITS SOURCE.
+        // A box that fills itself in from nowhere is a value nobody can check,
+        // and the whole safeguard here is that a person reads it before it goes
+        // to eBay. So the line underneath always names where it came from —
+        // and when we could not work it out, it says that instead of going
+        // quiet, because "we did not find this" is itself useful.
+        const sug = fld.suggestion || '';
+        const sel = v => (sug && v === sug) ? ' selected' : '';
         const control = (fld.allowed || []).length
             ? `<select id="${id}" class="ec-fix-in" data-name="${_ecEsc(fld.name)}">
                  <option value="">Choose…</option>
-                 ${fld.allowed.map(v => `<option value="${_ecEsc(v)}">${_ecEsc(v)}</option>`).join('')}
+                 ${fld.allowed.map(v => `<option value="${_ecEsc(v)}"${sel(v)}>${_ecEsc(v)}</option>`).join('')}
                </select>`
             : `<input id="${id}" class="ec-fix-in" data-name="${_ecEsc(fld.name)}"
-                     autocomplete="off" placeholder="Type The Answer">`;
+                     autocomplete="off" placeholder="Type The Answer"
+                     value="${_ecEsc(sug)}">`;
+        const why = sug
+            ? `<span class="ec-fix-src">Suggested from ${_ecEsc(fld.source || 'the product')} — change it if that is wrong</span>`
+            : '<span class="ec-fix-src ec-fix-src-none">Not on the product — you will need to check the item</span>';
         return `<label class="ec-fix-row" for="${id}">
                   <span class="ec-fix-lbl">${_ecEsc(fld.name)}</span>
                   ${control}
+                  ${why}
                 </label>`;
     }).join('');
 

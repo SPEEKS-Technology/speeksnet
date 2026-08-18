@@ -679,6 +679,11 @@ type MissingField = {
   name: string;
   allowed: string[];          // empty means free text
   kind: "aspect" | "descriptor" | "condition";
+  // What we think the answer is, and where it came from. Both or neither: a
+  // pre-filled box with no stated source is a value nobody can check, and the
+  // person confirming it is the only safeguard against putting a guess on eBay.
+  suggestion?: string;
+  source?: string;
 };
 
 // eBay names the offending field in two places and NEITHER IS SAFE ALONE: the
@@ -745,6 +750,95 @@ function missingFromEbayError(
   }
   return out;
 }
+
+// --- suggesting the answer ---------------------------------------------------
+//
+// A BLANK BOX IS AN ANSWER WE ALREADY HAD. eBay asks for "Manufacturer Color"
+// while the product carries "Color"; it asks for Brand while Shopify holds a
+// Vendor; it asks for a colour from a fixed list of sixteen while the title
+// says the word. Making somebody go and look all that up is asking them to
+// retype what is already on the screen.
+//
+// NOTHING IS EVER FILLED IN SILENTLY. Every suggestion is offered with the
+// place it came from, and the person still presses the button. A wrong aspect
+// on eBay is a return and a dispute, so the human stays in the loop — the
+// suggestion only removes the typing, never the decision.
+
+// "Compatible Brand" vs "Brand", "Model Number" vs "Model". Token containment
+// rather than string containment, so "Brand" does not match "Brandy" and
+// "Color" does not match "Colorway".
+const nameTokens = (s: string) =>
+  new Set(String(s).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+
+const tokensCover = (a: Set<string>, b: Set<string>) =>
+  a.size > 0 && b.size > 0 && [...a].every(t => b.has(t));
+
+// A suggestion eBay would refuse is worse than no suggestion: it reads as our
+// answer being wrong rather than the spelling. So on a closed list the value
+// must BE one of the allowed strings, and it is returned in eBay's own casing.
+function snapToAllowed(value: string, allowed: string[]): string | null {
+  const v = String(value || "").trim().toLowerCase();
+  if (!v) return null;
+  if (!allowed.length) return String(value).trim();
+  return allowed.find(a => String(a).trim().toLowerCase() === v) || null;
+}
+
+// Longest first, so "Rose Gold" wins over "Gold" in a title carrying both.
+function fromTitle(title: string, allowed: string[]): string | null {
+  if (!allowed.length) return null;
+  const t = " " + String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ";
+  const sorted = [...allowed].sort((a, b) => b.length - a.length);
+  for (const a of sorted) {
+    const needle = " " + String(a).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() + " ";
+    if (needle.trim() && t.includes(needle)) return a;
+  }
+  return null;
+}
+
+// The one condition worth suggesting. A grade is a judgement about the physical
+// item and guessing it is exactly what this function refuses to do elsewhere —
+// but a seller who typed "broken" in their own title has already told us.
+const DAMAGED_RE = /\b(broken|cracked|for parts|parts only|not working|no charge|damaged)\b/i;
+
+function suggestFor(
+  f: MissingField, c: Candidate, specs: Record<string, string>,
+): MissingField {
+  const want = nameTokens(f.name);
+
+  // 1. The product already answers it under a different name.
+  for (const [k, v] of Object.entries(specs || {})) {
+    const have = nameTokens(k);
+    if (!tokensCover(have, want) && !tokensCover(want, have)) continue;
+    const snapped = snapToAllowed(v, f.allowed);
+    if (snapped) return { ...f, suggestion: snapped, source: `the product's "${k}" row` };
+  }
+
+  // 2. Shopify's Vendor is the brand, and is the one product field that is not
+  //    a spec row.
+  if (c.vendor && (want.has("brand") || want.has("manufacturer"))) {
+    const snapped = snapToAllowed(c.vendor, f.allowed);
+    if (snapped) return { ...f, suggestion: snapped, source: "Shopify's Vendor field" };
+  }
+
+  // 3. Our own Condition, and only the damaged end of it.
+  if (f.kind === "condition") {
+    if (DAMAGED_RE.test(c.title || "")) {
+      const snapped = snapToAllowed("Broken / For Parts", f.allowed);
+      if (snapped) return { ...f, suggestion: snapped, source: "the wording of the title" };
+    }
+    return f;   // never guess a grade
+  }
+
+  // 4. A closed-list value said out loud in the title.
+  const fromT = fromTitle(c.title || "", f.allowed);
+  if (fromT) return { ...f, suggestion: fromT, source: "the product title" };
+
+  return f;
+}
+
+const withSuggestions = (
+  fields: MissingField[], c: Candidate, specs: Record<string, string>,
+) => fields.map(f => suggestFor(f, c, specs));
 
 const OURS = "SPEEKS: ";
 
@@ -1759,9 +1853,10 @@ Deno.serve(async (req: Request) => {
         + `${CONDITION_WORDS}.`);
     // Condition is ours, not eBay's — it is the Condition row in the spec table
     // that the whole mapping reads from, so the prompt offers our vocabulary.
-    const condMissing: MissingField[] = [
-      { name: "Condition", allowed: CONDITION_CHOICES, kind: "condition" },
-    ];
+    const condMissing: MissingField[] = withSuggestions(
+      [{ name: "Condition", allowed: CONDITION_CHOICES, kind: "condition" }],
+      c, specs,
+    );
     if (!dry) {
       await recordFailure(store, c, categoryId, msg, undefined, categoryName, condMissing);
     }
@@ -1886,7 +1981,11 @@ Deno.serve(async (req: Request) => {
   // Everything below can fail on a field eBay wants and the product does not
   // carry. condEntry and aspectDefs are the category's own vocabulary, which is
   // what turns eBay's wording into a field somebody can be asked for.
-  const missingFrom = (b: any) => missingFromEbayError(b, aspectDefs, condEntry);
+  // Suggestions are attached here rather than inside missingFromEbayError,
+  // which only knows the CATEGORY. What the product itself says is the other
+  // half of the answer, and it lives out here.
+  const missingFrom = (b: any) =>
+    withSuggestions(missingFromEbayError(b, aspectDefs, condEntry), c, specs);
 
   if (put.status >= 300) {
     await recordFailure(store, c, categoryId, `inventory_item: ${errText(put.body)}`,
