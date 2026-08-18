@@ -16639,39 +16639,6 @@ body.tv-body { display: block; background: #eef1f5; }
   white-space: pre-wrap; word-break: break-word; max-height: 190px; overflow: auto;
 }
 
-/* --- one answer, the rest of the batch ----------------------------------- */
-.ec-bulk-ans { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 9px; }
-.ec-bulk-kv {
-  font-size: 12.5px; color: var(--sage-deep, #178048);
-  background: #eefaf2; border: 1px solid #bfe3cd;
-  border-radius: 999px; padding: 3px 10px;
-}
-.ec-bulk-kv b { color: var(--slate-charcoal); font-weight: 700; }
-.ec-bulk-row {
-  display: flex; gap: 9px; align-items: flex-start;
-  padding: 7px 8px; border-radius: 8px; cursor: pointer;
-  border: 1px solid transparent;
-}
-.ec-bulk-row:hover { background: var(--cb-panel-2); }
-.ec-bulk-row input { margin-top: 2px; flex: 0 0 auto; }
-.ec-bulk-txt { min-width: 0; }
-.ec-bulk-title {
-  display: block; font-size: 12px; font-weight: 600; color: var(--slate-charcoal);
-  line-height: 1.35;
-}
-.ec-bulk-meta { display: block; margin-top: 2px; font-size: 12px; color: var(--cb-faint); }
-/* The card that disagrees is not hidden and not disabled — it is just not
-   ticked for you, and it says why. */
-/* Cards in a batch stop at different points, so a row says which of the
-   answers it is actually waiting on. */
-.ec-bulk-gets { color: var(--sage-deep, #178048); font-weight: 600; }
-.ec-bulk-clash { background: #fdf6e7; border-color: #f0dfae; }
-.ec-bulk-why { display: block; margin-top: 2px; font-size: 12px; color: #8a6212; font-weight: 600; }
-.ec-bulk-bad {
-  font-size: 12.5px; color: var(--cb-muted); padding: 5px 0;
-  border-top: 1px solid var(--cb-line-2); word-break: break-word;
-}
-.ec-bulk-bad b { color: var(--slate-charcoal); }
 
 .ec-fix-row { display: block; margin-bottom: 15px; }
 .ec-fix-lbl {
