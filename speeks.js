@@ -27931,8 +27931,14 @@ async function savePatchEntry() {
 
     if (!allValid || !items.length) { status.textContent = 'Each item needs a category and summary.'; status.className = 'pn-save-status pn-save-error'; return; }
 
-    const [y, m, d] = dateRaw.split('-');
-    const date = `${m}/${d}/${y}`;
+    // ISO all the way through, deliberately. This used to convert to m/d/yyyy for
+    // the wire and the edge function's toISODate converted it straight back -- but
+    // the read key below was built from the CONVERTED value, so the author's
+    // "seen" key read "v3.3.0|08/18/2026" while every fetched note said
+    // "v3.3.0|2026-08-18". Those never compare equal, so the one person who had
+    // certainly read the release was the one person badged about it.
+    // toISODate passes an ISO date straight through; there is nothing to convert.
+    const date = dateRaw;
 
     btn.disabled = true;
     status.textContent = 'Saving...';
@@ -27949,6 +27955,7 @@ async function savePatchEntry() {
         // and had to click Mark as read on something they had just typed.
         // The key is built exactly as buildPatchGroups builds it (title|date), so
         // checkPatchNotesBadge's equality test against _latestPatchKey matches.
+        // That includes the date FORMAT, which is the half that used to be wrong.
         // Writing the key rather than clearing the flag outright keeps this honest:
         // if the note being saved is back-dated and something NEWER is still
         // unread, the seen key won't equal the latest and the badge correctly stays.
