@@ -26,6 +26,12 @@ const LIST_KEYS = new Set([
   // inserted straight into the table and is therefore invisible to the DM's
   // Email Recipients tool — an orphan nobody can edit without SQL.
   "sales_import_alert",
+  // summary_weekly_alert: the Saturday sales-summary import. Deliberately a
+  // narrower list than the daily one above, which also carries the CEO.
+  "summary_weekly_alert",
+  // connect_alerts: SPEEKS Connect error watch — mails only when the eBay
+  // integration is broken, so this list is who gets woken up.
+  "connect_alerts",
   "usage_report",
   // cash_report: the 7am cash-on-hand table (Paul).
   "cash_report",

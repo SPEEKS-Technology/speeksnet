@@ -87,7 +87,12 @@ const GOALS_OFF = 'OFF';
 // other either goes uncounted or shows as permanently untouched.
 const GROUPS = ['Announcements & Updates', 'Operational Tools', 'Tools & Resources', 'Pages & Charts'];
 const SURFACES: [string, string, string][] = [
-  ['patchNotesModal', 'Patch Notes', GROUPS[0]],
+  // PATCH NOTES IS NOT HERE ANY MORE, AND MUST NOT COME BACK.
+  // `patchNotesModal` is only ever sent by togglePatchNotes() — a button nobody
+  // presses, because people reach the notes through the announcements modal.
+  // Zero events all-time, so the row sat permanently red and "Cold" while
+  // patch_note_reads was quietly recording 24 people keeping up. It is built
+  // from those read receipts instead, next to the announcements rows.
   ['annDocsModal', 'Documents', GROUPS[0]],
   // One row each, and it counts USE rather than arrival (Ethan 2026-08-08).
   // Margin Guide = a category and an item picked; Processes & Policies = a
@@ -135,6 +140,26 @@ function plainText(s: unknown, max: number): string {
 const annExcerpt = (message: unknown, max: number) =>
   plainText(String(message ?? '')
     .replace(/<span[^>]*>[^<]*HIGH\s+PRIORITY[^<]*<\/span>\s*(<br\s*\/?>)?/i, ' '), max);
+
+// POSTGREST RETURNS AT MOST 1000 ROWS AND DOES NOT SAY SO.
+// A short response is indistinguishable from "that is all there is", which is
+// how 954 of 1954 announcement read receipts went missing: the fetch was
+// unfiltered, the cap took an arbitrary slice that skewed old, and every
+// announcement in the report came back "Nobody Read It" while ten people had
+// read each one. `build` has to make a FRESH builder per page — a PostgREST
+// builder is single-use.
+async function fetchAllRows(build: () => any, pageSize = 1000): Promise<{ data: any[] }> {
+  const out: any[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await build().range(from, from + pageSize - 1);
+    // Thrown, not swallowed. A report that silently reports nothing is worse
+    // than one that fails loudly enough to be noticed and re-run.
+    if (error) throw new Error(`usage-report: ${error.message || error}`);
+    const rows = data || [];
+    out.push(...rows);
+    if (rows.length < pageSize) return { data: out };
+  }
+}
 
 const norm = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 const firstName = (s: unknown) => String(s ?? '').trim().split(' ')[0];
@@ -237,31 +262,59 @@ async function gather(sb: any, endDay: string, mode: Mode) {
 
   const [
     usersQ, goalsQ, monthGoalsQ, tasksQ, auditItemsQ, eventsQ, priorEventsQ,
-    annQ, annReadsQ, commentsQ, commentReadsQ, checklistQ, auditQ, snapsQ,
+    annQ, annReadsQ, patchNotesQ, priorPatchQ, patchReadsQ,
+    commentsQ, commentReadsQ, checklistQ, auditQ, snapsQ,
   ] = await Promise.all([
-    sb.from('users').select('name, role, store, pin'),
-    sb.from('listing_goals').select('store, employee, role, date').in('date', days),
+    fetchAllRows(() => sb.from('users').select('name, role, store, pin')),
+    fetchAllRows(() => sb.from('listing_goals').select('store, employee, role, date').in('date', days)),
     // Monthly team goals. `year_month` also carries a literal 'initiatives' row
     // (Company Projects), which the .in excludes for free.
-    sb.from('goals').select('store, title, year_month').in('year_month', months),
+    fetchAllRows(() => sb.from('goals').select('store, title, year_month').in('year_month', months)),
     // The checklist's denominators. Mirrors the `or()` the checklist fn builds
     // for a retail store: a legacy RETAIL broadcast, or a task flagged for this
     // store. Personal tasks (assigned_user set, is_global false) are excluded —
     // they belong to one person, not to the store's list.
-    sb.from('checklist_tasks').select('id, tab, store, is_global, assigned_user, applies_ovl, applies_lee, applies_wsp, applies_mpl, applies_bal'),
-    sb.from('audit_items').select('id, period, active'),
-    sb.from('usage_events').select('user_name, store, event, feature, opens, occurred_at, day')
-      .in('day', days).lt('occurred_at', rangeEnd),
+    fetchAllRows(() => sb.from('checklist_tasks').select('id, tab, store, is_global, assigned_user, applies_ovl, applies_lee, applies_wsp, applies_mpl, applies_bal')),
+    fetchAllRows(() => sb.from('audit_items').select('id, period, active')),
+    fetchAllRows(() => sb.from('usage_events')
+      .select('user_name, store, event, feature, opens, occurred_at, day')
+      .in('day', days).lt('occurred_at', rangeEnd)),
     // The seven days before the range, used only to tell "untouched" from "cold".
-    sb.from('usage_events').select('feature').gte('occurred_at', weekBefore.toISOString()).lt('occurred_at', rangeStart),
-    sb.from('announcements').select('id, message, author, date, high_priority, doc_only').in('date', days),
-    sb.from('announcement_reads').select('announcement_id, user_pin, read_at'),
-    sb.from('store_comments').select('id, store, author, message, date').in('date', days),
-    sb.from('store_comment_reads').select('comment_id, user_name, read_at'),
-    sb.from('checklist_completions').select('task_id, user_name, store, completed_at').gte('completed_at', rangeStart).lt('completed_at', rangeEnd),
+    fetchAllRows(() => sb.from('usage_events').select('feature').gte('occurred_at', weekBefore.toISOString()).lt('occurred_at', rangeStart)),
+    // PUBLISHING IS NOT STAFFING.
+    // `days` deliberately drops Sundays — there is no roster to measure against
+    // one — but a post can absolutely go out on a Sunday, and .in(date, days)
+    // silently dropped it along with everyone who read it. Four announcements
+    // sit on Sundays, one of them HIGH PRIORITY (2026-07-26), so July's monthly
+    // report quietly lost a red row and its readers. Content is read by RANGE.
+    fetchAllRows(() => sb.from('announcements')
+      .select('id, message, author, date, high_priority, doc_only')
+      .gte('date', days[0]).lte('date', endDay)),
+    // Bounded at the top end so a re-run of an old day cannot pick up reads that
+    // happened after that day's report went out, and paged so the 1000-row cap
+    // cannot quietly eat the recent ones.
+    fetchAllRows(() => sb.from('announcement_reads')
+      .select('announcement_id, user_pin, read_at').lt('read_at', rangeEnd)),
+    // PATCH NOTES ARE READ RECEIPTS TOO — see the row built further down.
+    // Same trap, and it had already sprung: v3.2.0 shipped on Sunday 2026-08-16,
+    // vanished from the month, and took its seven readers with it.
+    fetchAllRows(() => sb.from('patch_notes').select('id, title, date')
+      .gte('date', days[0]).lte('date', endDay)),
+    // The release people were ON when the period opened. Not paged — the
+    // .limit(1) is the point.
+    sb.from('patch_notes').select('title, date')
+      .lt('date', days[0]).order('date', { ascending: false }).limit(1),
+    fetchAllRows(() => sb.from('patch_note_read_log').select('version_key, user_name, read_at')
+      .gte('read_at', rangeStart).lt('read_at', rangeEnd)),
+    fetchAllRows(() => sb.from('store_comments').select('id, store, author, message, date')
+      .gte('date', days[0]).lte('date', endDay)),
+    fetchAllRows(() => sb.from('store_comment_reads').select('comment_id, user_name, read_at')),
+    fetchAllRows(() => sb.from('checklist_completions').select('task_id, user_name, store, completed_at').gte('completed_at', rangeStart).lt('completed_at', rangeEnd)),
     // Audit ticks carry their own period stamp, so they are read by period_start
     // rather than by clock time — that is the field the store's board checks.
-    sb.from('audit_completions').select('item_id, store, period_start, user_name').in('period_start', [...days, ...mondays]),
+    fetchAllRows(() => sb.from('audit_completions').select('item_id, store, period_start, user_name').in('period_start', [...days, ...mondays])),
+    // NOT paged on purpose: the .limit(7) here is the point, and .range()
+    // would override it and drag back every snapshot ever written.
     sb.from('usage_daily_snapshots').select('day, store, payload').eq('store', 'ALL').lt('day', days[0]).order('day', { ascending: false }).limit(7),
   ]);
 
@@ -589,9 +642,61 @@ async function gather(sb: any, endDay: string, mode: Mode) {
       emptyKind: (list.length ? 'bad' : 'plain') as 'bad' | 'plain',
     };
   };
+  // Patch notes now carry real per-version receipts (patch_note_read_log), the
+  // same shape as announcement_reads. The watermark they replaced could only
+  // describe the present — one row per person, overwritten — so re-running an
+  // old day found the newest read and reported nobody for the day in question.
+  //
+  // Counted as READS THAT HAPPENED IN THE PERIOD rather than as chances to read
+  // a version posted in it. Releases land about once a week, so scoping to
+  // "posted in this period" would print "None Posted" on almost every daily
+  // report — including one where eight people sat down and caught up, which is
+  // precisely the thing worth reporting. A release IN the period still
+  // sharpens the empty state below from "Not Today" to "Nobody Read It".
+  const patchReaders = new Set<string>();
+  const patchPerStore: Record<string, number> = {};
+  STORES.forEach(s => { patchPerStore[s] = 0; });
+  // One row per person per version, so the same person catching up on three
+  // releases at once is three rows — deduplicated into people here, and left as
+  // separate chances in the per-store cells below, exactly like announcements.
+  // A READ ONLY COUNTS IF THE RELEASE WAS STILL CURRENT (Ethan, 2026-08-18).
+  // Somebody going back to a superseded changelog is not news and should not
+  // move this number — what is being measured is whether people picked up what
+  // just shipped.
+  //
+  // "Posted in this period" ALONE would be too tight, and would lose most of
+  // what it is meant to catch: a release lands one day and gets read the next.
+  // v3.2.0 went out on the 16th and eight people read it on the 17th — scoped
+  // strictly, the 16th would report nobody and the 17th "None Posted", and all
+  // eight reads would appear in no report at all. So the release that was
+  // already current when the period opened counts too. Anything older does not.
+  const postedVersions = new Set<string>();
+  (patchNotesQ.data || []).forEach((n: any) => postedVersions.add(`${n.title}|${n.date}`));
+  const relevantVersions = new Set(postedVersions);
+  const priorCurrent = (priorPatchQ.data || [])[0];
+  if (priorCurrent) relevantVersions.add(`${priorCurrent.title}|${priorCurrent.date}`);
+
+  (patchReadsQ.data || []).forEach((r: any) => {
+    if (!relevantVersions.has(String(r.version_key))) return;   // superseded release
+    const k = norm(r.user_name);
+    const ss = storesForPerson.get(k);
+    if (!ss) return;   // CORP and the boards are not the audience
+    patchReaders.add(k);
+    ss.forEach(s => { patchPerStore[s]++; });
+  });
+  const patchPosted = postedVersions.size;
+  const patchRow = {
+    key: 'patchNotes', label: 'Patch Notes', group: GROUPS[0],
+    users: patchReaders.size, counts: patchPerStore, denom: rosterSize,
+    offShift: 0,
+    empty: patchPosted ? 'Nobody Read It' : (mode === 'day' ? 'Not Today' : 'Not Once'),
+    emptyKind: (patchPosted ? 'bad' : 'plain') as 'bad' | 'plain',
+  };
+
   const annTools = [
     annRow('Announcements', posted.filter((a: any) => !a.doc_only && !a.high_priority)),
     annRow('High Priority Announcements', posted.filter((a: any) => !a.doc_only && a.high_priority)),
+    patchRow,
   ];
 
   // The worst-read posts of the period, for the week and month reports.
@@ -609,15 +714,43 @@ async function gather(sb: any, endDay: string, mode: Mode) {
   // opened these" block meant reading the same names across two tables to work
   // out what happened to any one tool. Grouped in GROUPS order; inside a group
   // the busiest first, and everything untouched sinks to the bottom.
+  // THE HEADLINE AND THE STORE CELLS HAVE TO COUNT THE SAME PEOPLE.
+  // They did not. The headline counted anyone on a roster who touched the tool;
+  // the cells only count people who were ON THE SCHEDULE that day, because the
+  // denominator beside them is who was staffed. So "4 people used Quick
+  // Messages" sat next to store cells adding up to 2 — on 2026-08-17 Joseph
+  // Ortega was OFF at both his stores and Dan Ohanesian was OFF at OVL, and all
+  // three used it from home. Nothing was double counted; two different things
+  // were being counted in one row.
+  //
+  // The headline now counts the staffed people, so it agrees with the cells, and
+  // off-shift use is reported beside it rather than folded in or thrown away.
+  const staffedUsersOf = (key: string) => {
+    const used = usedPairs.get(key);
+    const names = new Set<string>();
+    if (!used) return names;
+    STORES.forEach(s => rows[s].staffedPairs.forEach((p: string) => {
+      if (used.has(p)) names.add(p.slice(p.indexOf('|') + 1));
+    }));
+    return names;
+  };
+
   const beaconTools = SURFACES.map(([k, label, group]) => {
     const t = toolUse.get(k);
+    const staffed = staffedUsersOf(k);
     const cold = haveHistory && !t && !warmBefore.has(k);
     return {
       key: k, label, group,
-      users: t ? t.users.size : 0,
+      users: staffed.size,
+      offShift: Math.max(0, (t ? t.users.size : 0) - staffed.size),
       counts: pairsAtStore(k), denom: personDays,
-      empty: cold ? 'Cold · 8 Days' : mode === 'day' ? 'Not Today' : 'Not Once',
-      emptyKind: (cold ? 'bad' : 'plain') as 'bad' | 'plain',
+      // Used, but only by people who were off that day: five 0/4 cells would
+      // read as nobody touching it, which is not what happened.
+      empty: (t && t.users.size > staffed.size)
+        ? 'Off Shift Only'
+        : cold ? 'Cold · 8 Days' : mode === 'day' ? 'Not Today' : 'Not Once',
+      emptyKind: ((t && t.users.size > staffed.size) ? 'plain'
+        : cold ? 'bad' : 'plain') as 'bad' | 'plain',
     };
   })
     // Documents only earns a row when there is something to say: a document was
@@ -972,12 +1105,15 @@ function buildReport(d: any) {
     const head = `<tr><td colspan="3" style="padding:8px 12px;background:${C.soft};border-bottom:1px solid ${C.line};font-size:10px;font-weight:900;letter-spacing:.5px;text-transform:uppercase;color:${C.muted};">${esc(g.group)}</td></tr>`;
     const body = g.rows.map((t: any) => {
       const on = t.users > 0;
+      const off = t.offShift > 0
+        ? `<div style="font-size:10px;font-weight:700;color:${C.faint};margin-top:2px;">+${t.offShift} off shift</div>`
+        : '';
       // Nothing at all gets the reason instead of five zeroes: "cold", "not once"
       // and "none posted" say different things, and a row of 0/4s says none of them.
       const right = on ? storeCells(t.counts, t.denom) : chip(t.empty, t.emptyKind);
       return `<tr>
         <td style="padding:11px 12px;border-bottom:1px solid ${C.line2};font-size:12.5px;font-weight:${on ? 700 : 600};color:${on ? C.charcoal : C.faint};">${esc(t.label)}</td>
-        <td align="center" valign="middle" style="padding:11px 8px;border-bottom:1px solid ${C.line2};font-size:13px;font-weight:900;color:${on ? C.charcoal : C.faint};">${on ? t.users : '—'}</td>
+        <td align="center" valign="middle" style="padding:11px 8px;border-bottom:1px solid ${C.line2};font-size:13px;font-weight:900;color:${on ? C.charcoal : C.faint};">${on ? t.users : '—'}${off}</td>
         <td align="right" valign="middle" width="290" style="padding:9px 12px;border-bottom:1px solid ${C.line2};">${right}</td>
       </tr>`;
     }).join('');
@@ -985,7 +1121,7 @@ function buildReport(d: any) {
   }).join('');
   parts.push(sectionLabel('Tool Usage',
     `${d.usedTools.length} of ${d.usedTools.length + d.untouched.length} used ${noun}. ${isDay
-      ? 'Each store shows how many of its people used it, against how many were on the floor.'
+      ? 'Each store shows how many of its people used it, against how many were on the floor. Someone who used it on a day off is counted under off shift rather than under a store.'
       : 'Each store is counted the same way its coverage is — days on the floor with the tool used on them, against every day it could have been. Announcements count chances to read a post rather than days.'} A tool counts once someone has actually used it — opened it, activated it, or done something with it. Reaching the page or tab an interactive tool sits on is not use, and is not recorded.`) +
     rowsBox(`<tr>${th('Tool', 'left')}${th('People')}${th('By Store', 'right')}</tr>${toolRows}`));
 

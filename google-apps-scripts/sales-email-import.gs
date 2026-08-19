@@ -629,6 +629,10 @@ function ingestSalesEmails(opts) {
         if (rng.getFormula()) {
           report.skipped.push({
             store: f.store, date: _iso(f.date), field: cell.label,
+            // A formula here is somebody deliberately protecting a hand-keyed
+            // figure Shopify will never report (see the archive filter below).
+            // It is not a failure, so it must not hold the thread in the inbox.
+            deliberate: true,
             reason: 'cell holds a formula (' + rng.getFormula() + ') — not overwriting'
           });
           continue;
@@ -694,6 +698,11 @@ function ingestSalesEmails(opts) {
     if (ARCHIVE_AFTER_IMPORT && !opts.dryRun) {
       var problem = {};
       report.skipped.forEach(function (s) {
+        // A deliberate skip is a decision, not a problem. Protecting a cost cell
+        // with a formula used to hold its email unread in the inbox every single
+        // day, for the life of the override -- noise that trained people to
+        // ignore the one signal that means something.
+        if (s.deliberate) return;
         if (s.store && s.date) problem[s.store + '|' + s.date] = true;
       });
       Object.keys(thrObj).forEach(function (tid) {
@@ -1323,6 +1332,10 @@ function ingestBuyingEmails(opts) {
         if (rng.getFormula()) {
           report.skipped.push({
             store: f.store, date: _iso(f.date), field: cell.label,
+            // A formula here is somebody deliberately protecting a hand-keyed
+            // figure Shopify will never report (see the archive filter below).
+            // It is not a failure, so it must not hold the thread in the inbox.
+            deliberate: true,
             reason: 'cell holds a formula (' + rng.getFormula() + ') — not overwriting'
           });
           continue;
@@ -1400,6 +1413,11 @@ function ingestBuyingEmails(opts) {
     if (ARCHIVE_AFTER_IMPORT && !opts.dryRun) {
       var problem = {};
       report.skipped.forEach(function (s) {
+        // A deliberate skip is a decision, not a problem. Protecting a cost cell
+        // with a formula used to hold its email unread in the inbox every single
+        // day, for the life of the override -- noise that trained people to
+        // ignore the one signal that means something.
+        if (s.deliberate) return;
         if (s.store && s.date) problem[s.store + '|' + s.date] = true;
       });
       Object.keys(thrObj).forEach(function (tid) {

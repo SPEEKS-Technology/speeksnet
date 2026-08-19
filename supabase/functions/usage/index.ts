@@ -42,6 +42,34 @@ function clean(v: unknown, max = 120): string {
   return String(v ?? "").trim().slice(0, max);
 }
 
+
+// Device facts for the session, stamped onto every row of the flush.
+//
+// Built field by field with clamps rather than storing the client object as-is.
+// This endpoint is unauthenticated by design (see the header note), so nothing
+// arbitrary off the wire is allowed to reach the database — an attacker who can
+// post here can already forge a user name, but they should not also be able to
+// write unbounded JSON into a jsonb column.
+const DEVICE_KINDS = new Set(["phone", "tablet", "desktop"]);
+
+function deviceMeta(d: any): Record<string, unknown> | null {
+  if (!d || typeof d !== "object" || Array.isArray(d)) return null;
+  const px = (v: unknown) => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) && n > 0 && n <= 20000 ? n : null;
+  };
+  const dpr = Number(d.dpr);
+  const kind = clean(d.kind, 10).toLowerCase();
+  return {
+    w: px(d.w),
+    h: px(d.h),
+    dpr: Number.isFinite(dpr) && dpr > 0 && dpr <= 10 ? Math.round(dpr * 100) / 100 : null,
+    touch: d.touch === true,
+    kind: DEVICE_KINDS.has(kind) ? kind : null,
+    mob: d.mob === true,
+  };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
@@ -61,6 +89,7 @@ Deno.serve(async (req: Request) => {
   const role = clean(body.role, 60).toLowerCase();
   const store = clean(body.store, 10).toUpperCase();
   const events = Array.isArray(body.events) ? body.events.slice(0, MAX_EVENTS) : [];
+  const meta = deviceMeta(body.device);
   if (!events.length) return json({ success: true, n: 0 });
 
   const day = centralToday();
@@ -84,6 +113,7 @@ Deno.serve(async (req: Request) => {
         feature,
         label: clean(e.label, 120) || null,
         opens: Math.max(1, Math.min(9999, Number(e.opens) || 1)),
+        ...(meta ? { meta } : {}),
       };
     })
     .filter(Boolean);

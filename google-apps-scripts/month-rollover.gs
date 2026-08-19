@@ -502,11 +502,15 @@ function _mrBuildTab(ss, src, targetYm, opts) {
         // A formula is written back verbatim, to the cell it already occupies,
         // so its references are unchanged. A typed value is cleared: that is
         // last month's figure and this month has not happened yet.
-        row.push(f ? f : '');
+        // A bare-number formula ("=1100") counts as typed, not as a formula — see
+        // _mrIsBareNumberFormula. It is an import-protection trick, and it belongs
+        // to the month it was keyed in.
+        row.push(f && !_mrIsBareNumberFormula(f) ? f : '');
       }
       grid.push(row);
       for (var c2 = base + 1; c2 < end; c2++) {
-        if (!(formulas[r] || [])[c2]) {
+        var f2 = (formulas[r] || [])[c2];
+        if (!f2 || _mrIsBareNumberFormula(f2)) {
           var v = (values[r] || [])[c2];
           if (v !== '' && v !== null && v !== undefined) rep.cleared++;
         }
@@ -695,6 +699,30 @@ function _mrApplyFooters(tab, plan) {
 
 // How many typed-in cells the day grid is carrying — what a real run would
 // clear. Counted for the dry run so the diagnostic can say so out loud.
+// A formula with no cell reference and no function call — "=1100" — is not a
+// formula in any meaningful sense. It is a typed figure someone disguised so the
+// daily Shopify import would not overwrite it (the importer skips any cell whose
+// getFormula() is non-empty, which is the documented way to protect a hand-keyed
+// cost). That disguise must NOT survive into next month: carried over verbatim it
+// would pre-fill, say, September 15th with August's 1,100 cost.
+//
+// Anything containing a letter is a real formula (=A1, =SUM(...), =Sheet2!B3) and
+// is carried over untouched, exactly as before.
+function _mrIsBareNumberFormula(f) {
+  if (!f) return false;
+  var body = String(f).replace(/^=/, '');
+  if (!body.trim()) return false;
+  if (/[A-Za-z]/.test(body)) return false;        // a reference or a function
+  // Every remaining character must be a digit or simple arithmetic. Written as
+  // a whitelist walk rather than a character class on purpose: this file is
+  // pasted between editors, and a mangled backslash in a regex fails silently.
+  var ALLOWED = '0123456789 .,+-*/()';
+  for (var i = 0; i < body.length; i++) {
+    if (ALLOWED.indexOf(body.charAt(i)) < 0) return false;
+  }
+  return true;
+}
+
 function _mrCountTyped(values, formulas, bases, dayRows, firstRow, lastCol, width) {
   var n = 0;
   Object.keys(bases).forEach(function (code) {
@@ -703,7 +731,10 @@ function _mrCountTyped(values, formulas, bases, dayRows, firstRow, lastCol, widt
     for (var d in dayRows) {
       var r = dayRows[d];
       for (var col = base + 1; col < end; col++) {
-        if ((formulas[r] || [])[col]) continue;
+        var f = (formulas[r] || [])[col];
+        // Same rule the clearing loop uses. If these two disagree, the dry run
+        // under-reports and somebody approves a rollover on a wrong number.
+        if (f && !_mrIsBareNumberFormula(f)) continue;
         var v = (values[r] || [])[col];
         if (v !== '' && v !== null && v !== undefined) n++;
       }
