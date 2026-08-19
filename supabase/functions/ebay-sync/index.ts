@@ -1785,7 +1785,12 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   if (!opsAuthed(url)) return json({ error: "unauthorised" }, 401);
   const store = (url.searchParams.get("store") || "").toUpperCase().trim();
-  const sku = (url.searchParams.get("sku") || "").trim();
+  // NOT const: once the Shopify product has been found, `sku` is reassigned to
+  // the sku eBay knows it by, which is not always the one Shopify shows. See
+  // the &ebaySku= block further down. Every use of `sku` after that point is an
+  // eBay call or an ebay_listings key, so the reassignment is what makes them
+  // all correct at once.
+  let sku = (url.searchParams.get("sku") || "").trim();
   const preview = url.searchParams.get("preview") === "1";
   const dry = url.searchParams.get("dry") === "1";
   const q = url.searchParams.get("q") || "";
@@ -1975,6 +1980,51 @@ Deno.serve(async (req: Request) => {
     }, 409);
   }
   const c = exact[0];
+
+  // ⚠️ PUBLISHING SOMETHING WITH NO STOCK PRODUCES A LISTING NOBODY CAN BUY.
+  // eBay takes the quantity we send, and we send Math.max(c.quantity, 0) into
+  // both the inventory item and the offer. At zero the listing goes live
+  // instantly OUT_OF_STOCK: it is not an oversell, it is worse in a quieter way
+  // — the panel shows a green Live row, the store believes the item is working
+  // for them, and nothing will ever correct it. Nothing *can* correct it,
+  // because the withdraw path is driven by inventory_levels/update and no stock
+  // change follows a publish that was already at zero, so no webhook ever
+  // arrives. Three of these were found live on 2026-08-19 (LEE MO01-5318A-F1R1,
+  // WSP MO02-4567B-E10, WSP MO02-4614A-E3), and two of the three had already
+  // sold in Shopify before anyone listed them.
+  //
+  // The listable filter used on the preview route has always checked this, but
+  // that filter never runs on a real publish, which is how the gap survived.
+  // &force=1 still overrides, in line with the other guards here.
+  if (c.quantity <= 0 && url.searchParams.get("force") !== "1") {
+    return json({
+      error: "this item shows 0 in stock in Shopify, so listing it would create "
+        + "an eBay listing nobody can buy",
+      sku,
+      title: c.title,
+      shopifyQuantity: c.quantity,
+      likelyCause: "the item has probably already sold",
+      fix: "check the unit is physically on the shelf and Shopify shows at least 1 "
+        + "in stock, then upload it again",
+    }, 409);
+  }
+
+  // PUBLISH UNDER THE SKU EBAY ALREADY KNOWS, NOT THE ONE SHOPIFY NOW SHOWS.
+  // eBay keys an inventory item by its SKU and that key is frozen for the life
+  // of the listing; Shopify's SKU is an editable field that stores rewrite when
+  // a unit changes shelf. A re-push of a renamed item therefore has to read
+  // Shopify under the CURRENT name and write eBay under the ORIGINAL one.
+  // Without this, a re-push would create a second inventory item under the new
+  // name — a duplicate listing of an item we already have live.
+  //
+  // Reassigning `sku` rather than threading a second variable is deliberate:
+  // everything below this line is an eBay call or an ebay_listings key, and
+  // they must move together or not at all.
+  const ebaySkuOverride = (url.searchParams.get("ebaySku") || "").trim();
+  if (ebaySkuOverride && ebaySkuOverride !== c.sku) {
+    sku = ebaySkuOverride;
+    c.sku = ebaySkuOverride;
+  }
 
   const host = HOSTS[row.environment];
   const api = ebayClient(host, await accessTokenFor(row));
