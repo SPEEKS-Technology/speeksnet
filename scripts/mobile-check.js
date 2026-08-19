@@ -66,23 +66,24 @@ const shot = (args.find(a => a.startsWith('--shot=')) || '').split('=')[1]
     // for the real thing.
     const fake = fakeRole;
     if (fake) {
-        await page.evaluate((roleClass) => {
-            const ov = document.getElementById('authOverlay');
-            if (ov) ov.style.display = 'none';
-            document.documentElement.classList.remove('no-scroll');
-            document.body.classList.remove('no-scroll', 'preload');
-            document.body.classList.add('is-authenticated');
-            document.body.style.overflow = '';
-            document.body.style.position = '';
-            document.querySelectorAll('.dynamic-module-flex, .dynamic-module-block, .dynamic-module')
-                .forEach(m => {
-                    const cls = Array.from(m.classList);
-                    const roles = cls.filter(c => c.startsWith('role-'));
-                    const ok = roles.length === 0 || roles.includes(roleClass);
-                    const type = m.classList.contains('dynamic-module-flex') ? 'flex' : 'block';
-                    m.style.setProperty('display', ok ? type : 'none', 'important');
-                });
-        }, fake);
+        await page.evaluate(() => {
+            const ov = document.getElementById("authOverlay");
+            if (ov) ov.style.display = "none";
+            document.documentElement.classList.remove("no-scroll");
+            document.body.classList.remove("no-scroll", "preload");
+            document.body.classList.add("is-authenticated");
+            document.body.style.overflow = "";
+            document.body.style.position = "";
+            // Call the APP's own role pass. An earlier version of this harness
+            // simulated it by writing display:flex onto every .dynamic-module-*
+            // element — which ran AFTER the real applyRoleBasedUI and silently
+            // undid the mobile cut list, so the harness reported surfaces as
+            // visible that the real site correctly hides. Never re-simulate what
+            // the page can do itself.
+            if (typeof applyRoleBasedUI === "function") {
+                try { applyRoleBasedUI(); } catch (e) { console.error("applyRoleBasedUI threw", e); }
+            }
+        });
         await new Promise(r => setTimeout(r, 800));
     }
 

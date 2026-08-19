@@ -9,15 +9,21 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //
 // Everything here is measured, not modelled. The pile comes from the weekly
 // sales summary; how fast it moves is the difference between two readings of it;
-// what a store lists is the 4-week running average off the Weekly KPI. Only
-// INTAKE is derived, and deliberately so:
+// what a store lists is the 4-week running average off the Weekly KPI.
 //
-//     taking in = 4-week average listed + weekly pile growth
+// NOTHING is derived any more. This used to infer intake as
+// "4-week average listed + weekly pile growth" and report the listing rate that
+// held the pile flat. That figure read as a throughput target while actually
+// being an inferred one, and because it came out by subtraction, any pile
+// movement that was not a listing — a recount, a write-off, a correction to the
+// reading itself — silently reappeared as "less stock arrived". A corrected
+// reading on 2026-08-17 pushed one store's intake to 36/wk against ~188 bought.
 //
-// Deriving it that way means the arithmetic can never disagree with the measured
-// pile — which matters, because the KPI device count DOES disagree with it (BAL's
-// pile grew 20 in a week the device count said should shrink 8). Whatever that
-// discrepancy turns out to be, this report is insulated from it.
+// Weeks-to-clear replaces it and needs no intake term at all: listing pace minus
+// intake IS the pile's own movement, so the measured change already carries both
+// halves. It also keeps the old guarantee — the arithmetic cannot disagree with
+// the measured pile — which matters because the KPI device count DOES disagree
+// with it (BAL's pile grew 20 in a week the device count said should shrink 8).
 //
 // Verdicts are measured against each store's own BEST ACTUAL WEEK, not against
 // the modelled capacity ceiling. Stores beat that ceiling in 7 of 30 store-weeks
@@ -154,14 +160,25 @@ async function gather(sb: any, weekEnd: Date) {
     const prior = pileAt(priorAt, store);
     const changePerWeek = (pile != null && prior != null) ? (pile - prior) / weeksBetween : null;
 
-    // Derived so it always reconciles with the measured pile (see the header).
-    const intake = changePerWeek == null ? null : avgListed + changePerWeek;
-    // The weekly listing rate that would hold the pile flat.
-    const breakEven = intake;
-    const gap = (breakEven == null || !bestWeek) ? null : (breakEven - bestWeek) / bestWeek * 100;
+    // How many weeks until this store's pile reaches zero, at the rate the pile
+    // is ACTUALLY moving. Break-even used to sit here: the listing rate that
+    // holds the pile flat, derived as avgListed + changePerWeek. It was dropped
+    // because it read as a throughput target when it was really an inferred
+    // intake figure, and because deriving it by subtraction meant any pile
+    // movement that was not a listing -- a recount, a write-off, a correction to
+    // the reading itself -- silently became "less stock arrived".
+    //
+    // Weeks-to-clear is the same measurement asked a question people can act on.
+    // Note it needs no separate intake term: listing pace minus intake IS the
+    // pile's own movement, so the measured change already carries both.
+    // Null means the pile is flat or growing, i.e. this store never clears at
+    // its current pace -- which is the finding, not a gap in the data.
+    const weeksToClear = (changePerWeek != null && changePerWeek < 0 && pile != null && pile > 0)
+      ? pile / -changePerWeek
+      : null;
 
     return {
-      store, pile, prior, changePerWeek, avgListed, bestWeek, breakEven, gap,
+      store, pile, prior, changePerWeek, avgListed, bestWeek, weeksToClear,
       lastWeekListed, goal: goalFor[store] ?? null,
     };
   });
@@ -295,22 +312,33 @@ function build(d: any) {
     ${td(x.goal == null ? "—" : `<span style="color:${C.muted};">${x.goal}</span>`)}
   </tr>`).join("");
 
-  // Closest to their own best first — the ones with the shortest reach.
+  // Soonest to clear first. Stores that never clear sort to the bottom, where
+  // the eye lands last — the top of this table is the good news.
   const clearRows = d.rows.slice()
-    .sort((a: Row, b: Row) => (a.gap ?? 999) - (b.gap ?? 999))
+    .sort((a: Row, b: Row) => (a.weeksToClear ?? Infinity) - (b.weeksToClear ?? Infinity))
     .map((x: Row) => {
-      let verdict = `<span style="font-size:11px;font-weight:700;color:${C.faint};">No reading yet</span>`;
-      if (x.gap != null) {
-        verdict = x.gap <= 0 ? chip("Beaten once", "ok")
-          : x.gap <= 2 ? chip(`Within ${Math.max(1, r0(x.gap))}%`, "ok")
-          : x.gap <= 15 ? chip(`Needs +${r0(x.gap)}%`, "warn")
-          : chip(`Needs +${r0(x.gap)}%`, "bad");
+      const w = x.weeksToClear;
+      let verdict: string;
+      if (x.changePerWeek == null) {
+        verdict = `<span style="font-size:11px;font-weight:700;color:${C.faint};">No reading yet</span>`;
+      } else if (w == null) {
+        // Flat and growing are different failures: one is holding the line and
+        // not gaining, the other is falling behind. Saying both "Never" without
+        // the distinction hides which stores are actually getting worse.
+        verdict = (x.changePerWeek ?? 0) > 0 ? chip("Losing ground", "bad")
+                                             : chip("Not gaining", "warn");
+      } else {
+        verdict = w <= 8 ? chip("On track", "ok")
+          : w <= 20 ? chip("Slow", "warn")
+          : chip("Very slow", "bad");
       }
+      const weeksCell = x.changePerWeek == null ? "—"
+        : w == null ? `<span style="color:${C.muted};font-weight:700;">Never</span>`
+        : `<b style="font-weight:900;">${r0(w)} ${r0(w) === 1 ? "wk" : "wks"}</b>`;
       return `<tr>
         ${td(badge(x.store))}
-        ${td(x.breakEven == null ? "—" : `<b style="font-weight:900;">${r0(x.breakEven)}</b>`)}
-        ${td(!x.bestWeek ? "—" :
-          `<span style="${x.gap != null && x.gap <= 0 ? `color:${C.green};font-weight:900;` : ""}">${x.bestWeek}</span>`)}
+        ${td(weeksCell)}
+        ${td(!x.bestWeek ? "—" : `<span>${x.bestWeek}</span>`)}
         ${td(verdict)}
       </tr>`;
     }).join("");
@@ -344,12 +372,16 @@ function build(d: any) {
     }).join("");
 
   const growing = d.rows.filter((x: Row) => (x.changePerWeek ?? 0) > 0).length;
-  const beaten = d.rows.filter((x: Row) => x.gap != null && x.gap <= 0).map((x: Row) => x.store);
+  // Named off weeks-to-clear, not the old break-even gap. The previous sentence
+  // listed every store that had once out-listed its break-even, which on a week
+  // where most piles shrank meant naming all five — including the store that had
+  // just grown — directly after saying one of them grew.
+  const clearing = d.rows.filter((x: Row) => x.weeksToClear != null).map((x: Row) => x.store);
   const caption = growing === 0
     ? "Every store's pile is shrinking."
     : `${growing} of ${d.rows.length} store${d.rows.length === 1 ? "" : "s"} grew again this week.` +
-      (beaten.length
-        ? ` <b>${beaten.join(", ")}</b> ${beaten.length === 1 ? "has" : "have"} already listed above the rate needed to clear — the problem is repeating it, not reaching it.`
+      (clearing.length
+        ? ` <b>${clearing.join(", ")}</b> ${clearing.length === 1 ? "is" : "are"} on track to clear at the pace ${clearing.length === 1 ? "it is" : "they are"} holding.`
         : "");
 
   // Totals for the glance tiles — the same three numbers the roll-call repeats
@@ -393,9 +425,9 @@ function build(d: any) {
     `<col style="width:16%"><col style="width:19%"><col style="width:21%"><col style="width:22%"><col style="width:22%">`,
   )}
 
-  ${sectionLabel("What it would take to clear", "The weekly listing rate that holds the pile flat, against each store's own best week.")}
+  ${sectionLabel("How long to clear", "Weeks until each pile reaches zero at the rate it is moving now, against each store's own best week.")}
   ${boxed(
-    `<thead><tr>${th("Store")}${th("Break-even", "Per Week")}${th("Best Week", `Last ${BEST_WEEKS}`)}${th("Verdict")}</tr></thead>
+    `<thead><tr>${th("Store")}${th("Weeks To Clear", "At Current Pace")}${th("Best Week", `Last ${BEST_WEEKS}`)}${th("Verdict")}</tr></thead>
      <tbody>${clearRows}</tbody>`,
     `<col style="width:16%"><col style="width:26%"><col style="width:24%"><col style="width:34%">`,
   )}

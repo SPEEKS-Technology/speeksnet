@@ -59,8 +59,27 @@
 // tolerate it, but a scope list that depends on the other side being forgiving
 // is not something to leave in place — and the same paste habit put literal
 // line breaks inside SHOPIFY_APPS.
+// THIS DEFAULT IS NOT WHAT THE STORES ACTUALLY GRANTED.
+// SHOPIFY_SCOPES is set as a project secret, so the string below has never been
+// the one sent — the five installed stores carry write_orders, read_fulfillments
+// and read_locations, none of which appear here. It is written out in full now
+// so the fallback matches reality rather than quietly asking for less.
+//
+// write_products is what SPEEKS Connect's Fix prompt needs: it writes the
+// missing spec row and metafield onto the Shopify product before uploading
+// again. Without it Shopify answers productUpdate with
+//   ACCESS_DENIED ... Required access: `write_products` access scope
+// and the panel says so in plain English rather than blaming the answer.
+//
+// CHANGING THIS FILE GRANTS NOTHING. A scope is only granted when a store
+// re-installs the app and someone accepts the new permission screen, and the
+// scope must also be declared on the app itself in the Shopify Partner
+// dashboard — Shopify refuses an authorize call asking for more than the app
+// declares. Update the SHOPIFY_SCOPES secret, then re-run the install link for
+// each store (see the header comment above).
 const SCOPES = (Deno.env.get("SHOPIFY_SCOPES")
-  || "read_orders,read_products,read_inventory,read_analytics,read_reports")
+  || "write_orders,read_products,write_products,read_inventory,read_analytics,"
+   + "read_reports,read_fulfillments,read_locations")
   .split(",").map(s => s.trim()).filter(Boolean).join(",");
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";

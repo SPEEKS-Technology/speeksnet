@@ -1,0 +1,232 @@
+{
+  "asOfCentral": "2026-08-17 16:58",
+  "open": true,
+  "month": {
+    "daysTotal": 31,
+    "daysElapsed": 17,
+    "elapsedPct": 54.84
+  },
+  "prev": {
+    "date": "2026-08-16",
+    "inMonth": true,
+    "daysElapsed": 16,
+    "elapsedPct": 51.61
+  },
+  "cmpThrough": "2026-08-16",
+  "scope": {
+    "role": "district manager",
+    "store": "",
+    "district": true
+  },
+  "goals": {
+    "OVL": 77000,
+    "LEE": 62000,
+    "WSP": 80000,
+    "MPL": 60000,
+    "BAL": 53000
+  },
+  "distGoal": 332000,
+  "distPrev": {
+    "aov": 178.37,
+    "mtdGp": 174971.57,
+    "mtdNet": 315892.31,
+    "gpToday": 18668.59,
+    "mtdCogs": 140920.74,
+    "netToday": 31393.11,
+    "cogsToday": 12724.52,
+    "mtdMargin": 55.39,
+    "mtdOrders": 1539,
+    "paceIndex": 102,
+    "pctOfGoal": 52.7,
+    "mtdReturns": 38286.86,
+    "marginToday": 59.47,
+    "ordersToday": 176,
+    "returnsToday": 0
+  },
+  "prevs": {
+    "OVL": {
+      "mtdGp": 41402.16,
+      "mtdNet": 80008.92,
+      "mtdCogs": 38606.76,
+      "mtdMargin": 51.75,
+      "mtdOrders": 403,
+      "paceIndex": 104,
+      "pctOfGoal": 53.77,
+      "mtdReturns": 10151.65
+    },
+    "LEE": {
+      "mtdGp": 25206.35,
+      "mtdNet": 47439.03,
+      "mtdCogs": 22232.68,
+      "mtdMargin": 53.13,
+      "mtdOrders": 297,
+      "paceIndex": 79,
+      "pctOfGoal": 40.66,
+      "mtdReturns": 3826.12
+    },
+    "WSP": {
+      "mtdGp": 40868.28,
+      "mtdNet": 67606.6,
+      "mtdCogs": 26738.32,
+      "mtdMargin": 60.45,
+      "mtdOrders": 266,
+      "paceIndex": 99,
+      "pctOfGoal": 51.09,
+      "mtdReturns": 6940.68
+    },
+    "MPL": {
+      "mtdGp": 38438.61,
+      "mtdNet": 68858.29,
+      "mtdCogs": 30419.68,
+      "mtdMargin": 55.82,
+      "mtdOrders": 335,
+      "paceIndex": 124,
+      "pctOfGoal": 64.06,
+      "mtdReturns": 10792.49
+    },
+    "BAL": {
+      "mtdGp": 29056.17,
+      "mtdNet": 51979.47,
+      "mtdCogs": 22923.3,
+      "mtdMargin": 55.9,
+      "mtdOrders": 238,
+      "paceIndex": 106,
+      "pctOfGoal": 54.82,
+      "mtdReturns": 6575.92
+    }
+  },
+  "cmp": {
+    "OVL": {
+      "lm": {
+        "ym": "2026-07",
+        "net": 130482.88,
+        "gp": 71104.03,
+        "orders": 728,
+        "resale": 135450.99,
+        "paid": 64526,
+        "has": true
+      },
+      "ly": {
+        "ym": "2025-08",
+        "net": 105562.09,
+        "gp": 53529.48,
+        "orders": 680,
+        "resale": 137545,
+        "paid": 63741,
+        "has": true
+      }
+    },
+    "LEE": {
+      "lm": {
+        "ym": "2026-07",
+        "net": 119523.74,
+        "gp": 67490.9,
+        "orders": 662,
+        "resale": 116449,
+        "paid": 56226,
+        "has": true
+      },
+      "ly": {
+        "ym": "2025-08",
+        "net": 51629.75,
+        "gp": 26312.67,
+        "orders": 340,
+        "resale": 70094,
+        "paid": 32617,
+        "has": true
+      }
+    },
+    "WSP": {
+      "lm": {
+        "ym": "2026-07",
+        "net": 172340.23,
+        "gp": 93195.32,
+        "orders": 635,
+        "resale": 130882,
+        "paid": 60106,
+        "has": true
+      },
+      "ly": {
+        "ym": "2025-08",
+        "net": 61892.07,
+        "gp": 30885.01,
+        "orders": 292,
+        "resale": 82869,
+        "paid": 39156,
+        "has": true
+      }
+    },
+    "MPL": {
+      "lm": {
+        "ym": "2026-07",
+        "net": 101536.16,
+        "gp": 57437.02,
+        "orders": 483,
+        "resale": 165589,
+        "paid": 69120,
+        "has": true
+      },
+      "ly": {
+        "ym": "2025-08",
+        "net": 0,
+        "gp": 0,
+        "orders": 0,
+        "resale": null,
+        "paid": null,
+        "has": false
+      }
+    },
+    "BAL": {
+      "lm": {
+        "ym": "2026-07",
+        "net": 83962.09,
+        "gp": 47400.34,
+        "orders": 509,
+        "resale": 112968,
+        "paid": 48319,
+        "has": true
+      },
+      "ly": {
+        "ym": "2025-08",
+        "net": 0,
+        "gp": 0,
+        "orders": 0,
+        "resale": null,
+        "paid": null,
+        "has": false
+      }
+    }
+  },
+  "hub": {
+    "ovlGoal": 77000,
+    "leeGoal": 62000,
+    "wspGoal": 80000,
+    "mplGoal": 60000,
+    "balGoal": 53000,
+    "ovlBuyProj": 137598,
+    "leeBuyProj": 113770,
+    "wspBuyProj": 120380,
+    "mplBuyProj": 166844,
+    "balBuyProj": 130746,
+    "ovlTrackGP": 80216.68,
+    "leeTrackGP": 48837.3,
+    "wspTrackGP": 77051.04,
+    "mplTrackGP": 74474.81,
+    "balTrackGP": 56296.33,
+    "ovlTrackRev": 155017.28,
+    "leeTrackRev": 91913.12,
+    "wspTrackRev": 130987.79,
+    "mplTrackRev": 133412.94,
+    "balTrackRev": 100710.22,
+    "ovlReviews": 10,
+    "leeReviews": 19,
+    "wspReviews": 18,
+    "mplReviews": 13,
+    "balReviews": 22,
+    "ovlReviewsGoal": 40,
+    "leeReviewsGoal": 30,
+    "wspReviewsGoal": 40,
+    "mplReviewsGoal": 30,
+    "balReviewsGoal": 30
+  }
+}
