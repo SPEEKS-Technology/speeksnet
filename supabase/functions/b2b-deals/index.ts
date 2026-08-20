@@ -96,10 +96,9 @@ const PREVAL_STATUSES = ["draft", "sent", "accepted", "converted", "declined"];
 // a figure, changing it and then converting would produce a deal built on
 // numbers they never agreed to -- the same reason a deal freezes at acceptance.
 const PREVAL_OPEN = ["draft", "sent"];
-// Reachable by hand. "converted" is not: it is set by b2b_preval_to_deal
-// and
-// only ever by it, because it is the half of the row that has to agree with a
-// deal that now exists.
+// Reachable by hand. "converted" is not: b2b_preval_to_deal sets it and only
+// ever it, because that half of the row has to agree with a deal that now
+// exists.
 const PREVAL_SETTABLE = ["draft", "sent", "accepted", "declined"];
 const ACCEPT_ROLES = ["ceo", "mocd", "tom", "district manager"];
 // 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
@@ -189,7 +188,7 @@ const PREVAL_ITEM_COLS = [
   "id", "preval_id", "line_no", "sort_order", "make", "model", "condition",
   "staff_notes", "client_notes", "quantity", "value", "offer", "shipping_cost",
   "item_type", "cpu", "ram", "storage", "gpu", "battery_health",
-  "disposition", "wipe_required", "wipe_fee", "created_at",
+  "disposition", "wipe_required", "wipe_fee", "created_at", "listing_info",
 ].join(",");
 
 const ITEM_COLS = [
@@ -198,6 +197,10 @@ const ITEM_COLS = [
   "disposition", "listed_qty", "recycled_qty", "created_at",
   "item_type", "cpu", "ram", "storage", "gpu", "battery_health", "serials",
   "wipe_required", "wipe_fee", "wiped_qty", "shipping_cost", "sort_order",
+  // Written while pricing, read while listing -- see 0047. Deliberately not
+  // folded into staff_notes: whoever is listing should not have to pan through
+  // pricing chatter to find the one line addressed to them.
+  "listing_info", "label_printed_at", "label_printed_by",
 ].join(",");
 
 // `computer` folds the old laptop/desktop split into one type; the legacy two
@@ -447,6 +450,7 @@ async function prevalItemFields(sb: any, body: any) {
     condition: str(body.condition, 40, "Condition"),
     staff_notes: str(body.staff_notes, 1000, "Staff notes"),
     client_notes: str(body.client_notes, 1000, "Client notes"),
+    listing_info: str(body.listing_info, 2000, "Listing info"),
     quantity: count(body.quantity, 1, 100000, "Quantity", 1),
     item_type: itemType,
     ...specs,
@@ -852,6 +856,7 @@ Deno.serve(async (req: Request) => {
           condition: str(body.condition, 40, "Condition"),
           staff_notes: str(body.staff_notes, 1000, "Staff notes"),
           client_notes: str(body.client_notes, 1000, "Client notes"),
+          listing_info: str(body.listing_info, 2000, "Listing info"),
           quantity: count(body.quantity, 1, 100000, "Quantity", 1),
           item_type: itemType,
           ...specs,
@@ -911,6 +916,29 @@ Deno.serve(async (req: Request) => {
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
         return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sku: data.sku, sort_order: data.sort_order });
+      }
+
+      // Ethan asked for printing the barcode to be REQUIRED. A hard block was
+      // rejected -- a printer that is down must never strand pricing -- so this
+      // records the fact and submit_pricing warns about whatever is missing.
+      //
+      // Recorded on the row rather than in the tab, because pricing a pallet
+      // spans refreshes, two people and sometimes two days, and a counter held
+      // in one browser would quietly forget everything the other one printed.
+      //
+      // Idempotent by design: printing a label twice is a normal thing to do
+      // (they peel, they tear), and the second print is not an error. The stamp
+      // simply moves to the most recent one.
+      if (action === "mark_label_printed") {
+        const ids = Array.isArray(body.ids) ? body.ids.map((v: unknown) => String(v || "")).filter(Boolean) : [];
+        if (!ids.length) return jsonResponse({ success: false, error: "No lines were named." }, 400);
+        if (ids.length > 5000) return jsonResponse({ success: false, error: "That is too many lines at once." }, 400);
+        const { error } = await supabase.from("b2b_deal_items").update({
+          label_printed_at: new Date().toISOString(),
+          label_printed_by: str(body.user, 120, "User") || "Unknown",
+        }).in("id", ids);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true, marked: ids.length });
       }
 
       // Move a deal to another store mid-flight.

@@ -18621,6 +18621,7 @@ function b2bItemSave(id) {
         action: _b2bCtx().update, id,
         make: it.make, model: it.model, condition: it.condition,
         staff_notes: it.staff_notes, client_notes: it.client_notes,
+        listing_info: it.listing_info,
         quantity: it.quantity, value: it.value, offer: it.offer, shipping_cost: it.shipping_cost || 0,
         item_type: it.item_type || 'other',
         cpu: it.cpu, ram: it.ram, storage: it.storage, gpu: it.gpu, battery_health: it.battery_health,
@@ -18831,6 +18832,7 @@ async function b2bAddItem(dealId, btn) {
             id: out.id, line_no: out.line_no, sku: out.sku, make: '', model: '', condition: '',
             staff_notes: '', client_notes: '', quantity: 1, value: 0, offer: 0,
             item_type: 'other', cpu: null, ram: null, storage: null, gpu: null, battery_health: null, shipping_cost: 0,
+            listing_info: '',
             sort_order: out.sort_order,
             serials: '', disposition: 'purchase',
             wipe_required: false, wipe_fee: 0, wiped_qty: 0,
@@ -18861,6 +18863,7 @@ async function b2bCopyItem(id, btn) {
         const copy = {
             make: src.make, model: src.model, condition: src.condition,
             staff_notes: src.staff_notes, client_notes: src.client_notes,
+            listing_info: src.listing_info,
             quantity: src.quantity, value: src.value, offer: src.offer, shipping_cost: src.shipping_cost || 0,
             item_type: src.item_type || 'other',
             cpu: src.cpu, ram: src.ram, storage: src.storage,
@@ -18928,6 +18931,17 @@ function _b2bRepaintItems() {
 // reason is forced open, because hiding the thing blocking submission would be
 // the one case where collapsing costs more than it saves.
 const _b2bNotesOpen = new Set();
+// Which spreadsheet rows have their inline panel expanded. Separate from
+// _b2bNotesOpen, which belongs to the card grid: the two grids are different
+// shapes and sharing the set made a line opened in one appear open in the other.
+const _b2bRowOpen = new Set();
+function b2bToggleRow(id) {
+    if (_b2bRowOpen.has(id)) _b2bRowOpen.delete(id); else _b2bRowOpen.add(id);
+    _b2bRepaintItems();
+    if (_b2bRowOpen.has(id)) {
+        document.querySelector(`#b2bPline-${id} .b2b-rowpanel textarea`)?.focus();
+    }
+}
 
 function b2bToggleNotes(id) {
     if (_b2bNotesOpen.has(id)) _b2bNotesOpen.delete(id); else _b2bNotesOpen.add(id);
@@ -19143,6 +19157,52 @@ const _B2B_ICO_X = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2=
 const _B2B_ICO_COPY = '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
     + '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>';
 
+// Everything a line needs that will not fit on the row, in flow underneath it
+// rather than in a modal on top of it. Wide boxes, because these are sentences:
+// the old popup gave them a single-line input in a 260px drawer.
+//
+// Serials are absent on an evaluation -- nobody has held these units -- and so is
+// the label, which is minted at conversion.
+function _b2bRowPanel(it) {
+    const need    = Number(it.quantity) || 1;
+    const serials = _b2bSerials(it);
+    const left    = need - serials.length;
+    const gpu     = B2B_SPEC_FIELDS.find(f => f.key === 'gpu');
+    const carries = (B2B_SPECS_FOR[it.item_type || 'other'] || []).includes('gpu');
+    return `
+        <div class="b2b-rowpanel">
+            ${_b2bIsPreval() ? '' : `
+            <div class="b2b-rp-f b2b-rp-serials">
+                <label>Serials
+                    <span class="b2b-serial-count ${serials.length === need ? '' : 'miss'}">${serials.length} of ${need}</span>
+                </label>
+                <div class="b2b-rp-serialrow">
+                    <input value="${escapeHtml(it.serials || '')}" placeholder="C02X1234, C02X5678 — one per unit, comma separated"
+                        oninput="b2bItemSerials('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
+                    ${left > 0 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',false)" title="This unit has no serial you can read">No Visible Serial</button>` : ''}
+                    ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true)" title="Fill every remaining slot">Fill All ${left}</button>` : ''}
+                </div>
+            </div>`}
+            ${carries ? `
+            <div class="b2b-rp-f b2b-rp-gpu">
+                <label>${escapeHtml(gpu.label)}</label>
+                <input value="${escapeHtml(it.gpu || '')}" placeholder="${escapeHtml(gpu.hint)}" list="b2bdl-gpu"
+                    oninput="b2bItemSpec('${it.id}','gpu',this.value)" onchange="b2bItemSave('${it.id}')">
+            </div>` : ''}
+            <div class="b2b-rp-f">
+                <label>Listing info <span class="b2b-tag-int">for whoever lists it</span></label>
+                <textarea rows="2" placeholder="Anything the lister needs that no other field covers — a missing charger, a cracked bezel, which port is dead"
+                    oninput="b2bItemInput('${it.id}','listing_info',this.value)" onchange="b2bItemSave('${it.id}')">${escapeHtml(it.listing_info || '')}</textarea>
+            </div>
+            <div class="b2b-rp-f">
+                <label>Staff notes <span class="b2b-tag-int">internal</span></label>
+                <textarea rows="2" placeholder="Anything the team should know — never leaves the building"
+                    oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')">${escapeHtml(it.staff_notes || '')}</textarea>
+            </div>
+            ${_b2bIsPreval() ? '' : `<div class="b2b-rp-foot">${_b2bLabelBtn(it, 'b2b-mini')}</div>`}
+        </div>`;
+}
+
 function _b2bItemSheet() {
     if (!_b2bModalItems.length) {
         return `<div class="b2b-empty sm">
@@ -19154,17 +19214,24 @@ function _b2bItemSheet() {
     // The three required specs (CPU / RAM / Storage) are columns, not a detail
     // view -- a keyboard pricer tabs straight across them. GPU and battery stay
     // optional, so they live behind the ⋯ with serials and notes.
-    const reqSpecs = B2B_SPEC_FIELDS.filter(f => f.req);
+    // Battery health joins CPU/RAM/Storage on the row. It is not required -- a
+    // dead battery reports nothing -- but it changes what a machine is worth, and
+    // hiding it behind the ⋯ meant you could not tell at a glance whether a
+    // quantity line was worth having.
+    const sheetSpecs = B2B_SPEC_FIELDS.filter(f => f.req || f.key === 'battery_health');
 
     const head = `
         <div class="b2b-prow b2b-phead">
             <span>Line</span><span>Type</span><span>Brand</span><span>Model</span>
-            ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
+            ${sheetSpecs.map(f => `<span>${escapeHtml(f.label)}${
+                f.req ? '<i class="b2b-req-star" title="Required before this can be quoted">*</i>' : ''}</span>`).join('')}
             <span>Condition</span>
             <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span>
             <span class="r" title="What it costs us to move one of these, per unit. Never shown to the client.">Ship</span>
             <span class="r">Margin</span>
-            <span>Handling</span><span class="c">Wipe</span><span class="r">Total</span><span></span>
+            <span>Handling</span><span class="c">Wipe</span>
+            <span title="Prints on the client's quote. Required on a Fair or Broken line.">Client Notes</span>
+            <span class="r">Total</span><span></span>
         </div>`;
 
     const rows = _b2bModalItems.map(it => {
@@ -19178,19 +19245,25 @@ function _b2bItemSheet() {
         // A line "has detail" if the ⋯ sheet holds anything worth reopening for --
         // serials, notes, or an optional spec (GPU/battery). The required specs
         // are inline now, so they don't count toward the dot.
-        const hasDetail = !!(String(it.staff_notes || '').trim() || String(it.client_notes || '').trim()
-            || _b2bSerials(it).length || carries.some(f => !f.req && String(it[f.key] ?? '').trim()));
+        const hasDetail = !!(String(it.staff_notes || '').trim() || String(it.listing_info || '').trim()
+            || _b2bSerials(it).length || String(it.gpu || '').trim());
+        // Anything blocking the line pops its panel open unasked -- the point of
+        // the flag is that you can see what to fix, not hunt for it.
+        const rowOpen = _b2bRowOpen.has(it.id) || (blocked.length > 0 && !_b2bIsPreval());
 
         // CPU / RAM / Storage cells: an editable field for a type that carries
         // them, a dash for one that doesn't (e.g. Other), each with a one-tap ∅
         // that stamps NO CPU / NO RAM / NO STORAGE.
-        const specCells = reqSpecs.map(f => {
+        const specCells = sheetSpecs.map(f => {
             if (!carries.some(s => s.key === f.key)) {
                 return `<span class="b2b-pcell b2b-pc-spec" data-k="${escapeHtml(f.label)}"><span class="b2b-f-off">—</span></span>`;
             }
-            const miss = !String(it[f.key] ?? '').trim();
+            // Only a REQUIRED spec can be missing. Battery health left blank is a
+            // fact about the battery, not a gap in the pricing, so it never gets
+            // flagged and never blocks a submit.
+            const miss = f.req && !String(it[f.key] ?? '').trim();
             return `<span class="b2b-pcell b2b-pc-spec" data-k="${escapeHtml(f.label)}">
-                <input data-req-spec="${f.key}" class="${miss ? 'b2b-spec-miss' : ''}" value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}"
+                <input ${f.req ? `data-req-spec="${f.key}"` : ''} class="${miss ? 'b2b-spec-miss' : ''}" value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}"
                     ${f.pick ? `list="b2bdl-${f.key}"` : ''}
                     oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
                 <button class="b2b-spec-none" tabindex="-1" title="No ${escapeHtml(f.label)} — fills NO ${escapeHtml(f.label.toUpperCase())}"
@@ -19258,21 +19331,36 @@ function _b2bItemSheet() {
                 <span class="b2b-pcell b2b-pc-wipe" data-k="Wipe">
                     <label class="b2b-ss-wipe" title="Certified data wipe · ${_b2bMoney(fee, 2)}/unit">
                         <input type="checkbox" ${it.wipe_required ? 'checked' : ''} onchange="b2bItemWipe('${it.id}',this.checked)"></label></span>
+                <!-- The one note that reaches the client, on the row rather than
+                     two clicks away. It is required on a Fair or Broken line, and
+                     a required field you cannot see is the reason lines kept
+                     reaching the approver unready. -->
+                <span class="b2b-pcell b2b-pc-note" data-k="Client Notes">
+                    <input class="${_b2bMissingReason(it) ? 'b2b-note-miss' : ''}"
+                        value="${escapeHtml(it.client_notes || '')}"
+                        title="${escapeHtml(it.client_notes || '')}"
+                        placeholder="${_b2bNeedsReason(it) ? 'Why is it ' + escapeHtml(it.condition) + '?' : 'Prints on the quote'}"
+                        oninput="b2bItemClientNote('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Total">
                     ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
                     <button class="b2b-notes-btn b2b-ss-copy" title="Copy this line — everything but the serials"
                         onclick="b2bCopyItem('${it.id}',this)">${_b2bIco(_B2B_ICO_COPY)}</button>
-                    <button class="b2b-notes-btn b2b-ss-more ${hasDetail ? 'has' : ''} ${blocked.length ? 'req' : ''}"
-                        title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Specs, serials, notes & label'}"
-                        onclick="b2bItemDetail('${it.id}')">
-                        ${_b2bIco(_B2B_ICO_DETAIL)}
+                    <!-- Expands in place. It used to open a modal over the sheet,
+                         which is the "separate button" nobody liked: it covered
+                         the row you were working on, trapped focus, and threw
+                         itself away if a drag-select strayed past its edge. -->
+                    <button class="b2b-notes-btn b2b-ss-more ${hasDetail ? 'has' : ''} ${blocked.length ? 'req' : ''} ${rowOpen ? 'on' : ''}"
+                        title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Serials, listing info & staff notes'}"
+                        aria-expanded="${rowOpen ? 'true' : 'false'}"
+                        onclick="b2bToggleRow('${it.id}')">
+                        <span class="b2b-rowtoggle">${rowOpen ? '−' : '+'}</span>
                         ${hasDetail ? '<i class="b2b-notes-dot"></i>' : ''}
                     </button>
                     <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">${_b2bIco(_B2B_ICO_X)}</button>
                 </span>
             </div>
-            ${_b2bNoteLine(it)}
+            ${rowOpen ? _b2bRowPanel(it) : ''}
             <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
         </div>`;
     }).join('');

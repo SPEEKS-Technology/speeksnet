@@ -12327,6 +12327,46 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-loc-dot { width: 12px; height: 12px; border-radius: 999px; display: block; }
 .b2b-loc-c { font-size: 12px; font-weight: 800; color: #1a1c1e; letter-spacing: .03em; }
 
+/* --- the inline row panel -------------------------------------------------
+   What used to be a modal over the sheet. It opens in flow beneath its own row,
+   so the line you are working on stays visible, focus is never trapped, and a
+   drag-select that strays past the edge cannot throw the whole thing away.
+   Boxes are wide because these fields hold sentences -- the old drawer gave them
+   a single-line input about 260px across. */
+.b2b-rowpanel {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px 18px; padding: 13px var(--b2b-prow-pad) 15px;
+    border-top: 1px dashed var(--b2b-line-2); background: #fbfcfd;
+}
+/* Serials get the full width: a qty-20 line is a long comma-separated string and
+   wrapping it into a 280px box makes it unreadable. */
+.b2b-rowpanel .b2b-rp-serials { grid-column: 1 / -1; }
+.b2b-rp-f { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.b2b-rp-f > label {
+    font-size: 10px; font-weight: 800; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--b2b-faint);
+    display: flex; align-items: center; gap: 7px;
+}
+.b2b-rp-f input, .b2b-rp-f textarea {
+    font: inherit; font-size: 12.5px; width: 100%;
+    padding: 7px 9px; border-radius: 8px; border: 1px solid var(--b2b-line);
+    background: #fff; color: #1a1c1e; resize: vertical;
+}
+.b2b-rp-f input:focus, .b2b-rp-f textarea:focus {
+    outline: none; border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px rgba(31,157,87,.12);
+}
+.b2b-rp-serialrow { display: flex; gap: 7px; align-items: center; }
+.b2b-rp-serialrow input { flex: 1; }
+.b2b-rp-foot { grid-column: 1 / -1; display: flex; justify-content: flex-end; }
+/* + / − in the actions cell. Sized to the other two buttons in that cell so the
+   row does not change height when a panel opens. */
+.b2b-rowtoggle { font-size: 15px; font-weight: 800; line-height: 1; }
+.b2b-ss-more.on { background: var(--b2b-accent-tint); border-color: var(--sage-professional); }
+/* The client-note cell is a plain text column; it should not look like a money
+   field sitting next to Total. */
+.b2b-pc-note input { font-size: 12px; }
+
 /* --- evaluations ----------------------------------------------------------
    The list reuses .b2b-q-card wholesale: an evaluation row answers the same
    question a queue card does -- what is this, whose is it, what is it worth --
@@ -12464,8 +12504,14 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    saturated tone, not the pale chip background, and using the chip's own colour
    is what makes the legend swatch and the client-facing chip read as one system
    rather than three near-misses. */
-.b2b-pline.b2b-scrap { box-shadow: inset 3px 0 0 #0d8a7d; }
-.b2b-pline.b2b-nrv   { box-shadow: inset 3px 0 0 #3a6ea8; }
+/* The whole line is tinted, not just a 3px strip on its edge. A pallet is
+   thirty near-identical rows and the strip was invisible unless you already knew
+   to look for it -- which defeats the point of marking the two dispositions that
+   must not be treated like a purchase. The strip stays as the second signal. */
+.b2b-pline.b2b-scrap { box-shadow: inset 3px 0 0 #0d8a7d; background: #fff5f3; }
+.b2b-pline.b2b-scrap:hover { background: #ffeeea; }
+.b2b-pline.b2b-nrv   { box-shadow: inset 3px 0 0 #3a6ea8; background: #fffdf0; }
+.b2b-pline.b2b-nrv:hover { background: #fffbe6; }
 .b2b-pline.needs-reason { background: #fffdf7; box-shadow: inset 3px 0 0 #e0b970; }
 .b2b-pline.needs-reason:hover { background: #fffbf1; }
 
@@ -12875,7 +12921,14 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
        "$12,000.00" is ten characters. Handling at 150px is simply what
        "No Residual Value" plus a select arrow measures -- at 138px it truncated
        to "No Residual Valu". */
-    --b2b-pcols: 56px 100px minmax(64px, 1fr) minmax(84px, 1.2fr) 90px 70px 90px 88px 58px 76px 76px 72px 58px 122px 36px 96px 102px;
+    /* Nineteen columns now: Battery earned one (it moves the price and was
+       invisible behind the ⋯) and Client Notes earned one (it PRINTS, and is
+       required on a Fair or Broken line -- a required field two clicks away is
+       why lines kept reaching the approver unready).
+       The sheet no longer pretends it fits a laptop screen. It is a spreadsheet;
+       it scrolls sideways, which is what was asked for, and every column is cut
+       to its real content rather than shaved to avoid the scrollbar. */
+    --b2b-pcols: 56px 100px minmax(64px, 1fr) minmax(84px, 1.2fr) 90px 70px 90px 84px 88px 58px 76px 76px 72px 58px 122px 36px minmax(150px, 1.1fr) 96px 102px;
 }
 /* True grid: drop the inter-cell gap and draw a hairline down every column
    boundary. The row's own bottom border is the horizontal line, so together they
@@ -13011,7 +13064,16 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-spec-row .b2b-mini { flex: 0 0 auto; height: var(--b2b-h-md); white-space: nowrap; }
 /* Client notes is now a free-text area, no chips. */
 .b2b-isheet-sec textarea.b2b-tag-free { resize: vertical; min-height: 46px; line-height: 1.5; }
-.b2b-spec-miss { border-color: #e0b970 !important; background: #fffdf7; }
+/* Red, not amber. Amber read as a hint and got scrolled past; these are the
+   fields that stop a line being quoted at all. Same treatment for the client
+   note when the condition demands a reason, so "still required" looks identical
+   wherever it appears. */
+.b2b-spec-miss,
+.b2b-pc-note input.b2b-note-miss { border-color: #dc2626 !important; background: #fef2f2; }
+.b2b-pc-note input.b2b-note-miss::placeholder { color: #b91c1c; }
+/* The asterisk in the header, so which columns are required is answerable
+   without failing a submit to find out. */
+.b2b-req-star { color: #dc2626; font-style: normal; font-weight: 800; margin-left: 2px; }
 /* The serial tally sits in the section heading here, not inside .b2b-serialf, so
    give it the same pill treatment on its own. */
 .b2b-isheet-sec .b2b-serial-count {
