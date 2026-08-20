@@ -12327,6 +12327,88 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-loc-dot { width: 12px; height: 12px; border-radius: 999px; display: block; }
 .b2b-loc-c { font-size: 12px; font-weight: 800; color: #1a1c1e; letter-spacing: .03em; }
 
+/* --- the client-facing preview, beside the work ---------------------------
+   MOCD asked to watch the customer-facing side build itself while pricing,
+   rather than pricing blind and seeing it a stage later. <details> so it folds
+   away when the sheet needs the height, and so it is keyboard-operable without
+   a hand-rolled toggle. */
+.b2b-cust {
+    margin: 14px 0; border: 1px solid var(--b2b-line); border-radius: 12px;
+    background: #fff; overflow: hidden;
+}
+.b2b-cust > summary {
+    cursor: pointer; padding: 11px 15px; display: flex; align-items: baseline; gap: 10px;
+    background: var(--b2b-accent-tint); border-bottom: 1px solid transparent;
+    list-style: none;
+}
+.b2b-cust[open] > summary { border-bottom-color: var(--b2b-line); }
+.b2b-cust > summary::-webkit-details-marker { display: none; }
+/* A caret drawn from the disclosure state, so it cannot fall out of step with
+   whether the panel is actually open. */
+.b2b-cust > summary::before {
+    content: '▸'; font-size: 11px; color: var(--sage-deep);
+    transition: transform .14s ease; display: inline-block;
+}
+.b2b-cust[open] > summary::before { transform: rotate(90deg); }
+.b2b-cust-t { font-size: 12.5px; font-weight: 800; color: var(--sage-deep); }
+.b2b-cust-s { font-size: 11px; color: var(--b2b-faint); }
+.b2b-cust-body { padding: 14px; max-height: 460px; overflow-y: auto; background: #f7f9fa; }
+
+/* --- the review screen ----------------------------------------------------
+   Approving a quote is a different job from pricing one and now has a different
+   screen. Two columns: what is being approved on the left, what the client will
+   receive on the right, so the two are read against each other rather than one
+   being imagined from the other. */
+.b2b-rvw-wrap {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr);
+    gap: 18px; align-items: start; margin-top: 14px;
+}
+/* Below ~1150px the two columns each become too narrow to read, and a quote is
+   a document -- it wants width more than it wants adjacency. */
+@media (max-width: 1150px) { .b2b-rvw-wrap { grid-template-columns: 1fr; } }
+.b2b-rvw-cap {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+    font-size: 11px; font-weight: 800; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--b2b-faint);
+}
+.b2b-rvw-cap .b2b-mini { margin-left: auto; }
+.b2b-rvw-doc > div:last-child {
+    max-height: 620px; overflow-y: auto;
+    border: 1px solid var(--b2b-line); border-radius: 12px; background: #f7f9fa; padding: 12px;
+}
+.b2b-rvw { border: 1px solid var(--b2b-line); border-radius: 12px; background: #fff; overflow: hidden; }
+.b2b-rvw-head, .b2b-rvw-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) 46px 62px 96px 92px;
+    gap: 10px; align-items: center; padding: 9px 13px;
+}
+.b2b-rvw-head {
+    font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--b2b-faint); background: #f7f9fa; border-bottom: 1px solid var(--b2b-line);
+}
+.b2b-rvw-head .c, .b2b-rvw-qty { text-align: center; }
+.b2b-rvw-head .r, .b2b-rvw-mgn, .b2b-rvw-tot { text-align: right; }
+.b2b-rvw-row { border-bottom: 1px solid var(--b2b-line-2); }
+.b2b-rvw-row:last-child { border-bottom: 0; }
+/* Same two tints the sheet uses, so a scrap line looks like a scrap line
+   wherever it is being read. */
+.b2b-rvw-row.b2b-scrap { background: #fff5f3; }
+.b2b-rvw-row.b2b-nrv   { background: #fffdf0; }
+.b2b-rvw-name { font-size: 13px; font-weight: 700; color: #1a1c1e; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.b2b-rvw-spec { font-size: 11.5px; color: var(--b2b-faint); margin-top: 2px; }
+/* The note that prints on the quote, quoted back so it is checked rather than
+   assumed -- it is the half of the line the client actually reads. */
+.b2b-rvw-note { font-size: 11.5px; color: #475569; margin-top: 3px; font-style: italic; }
+.b2b-rvw-qty { font-size: 13px; font-weight: 700; color: var(--b2b-faint); }
+.b2b-rvw-tot { font-size: 13.5px; font-weight: 800; color: #1a1c1e; }
+.b2b-rvw-offer input {
+    font: inherit; font-size: 13px; font-weight: 700; text-align: right; width: 100%;
+    padding: 6px 8px; border-radius: 8px; border: 1px solid var(--b2b-line); background: #fff;
+}
+.b2b-rvw-offer input:focus {
+    outline: none; border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px rgba(31,157,87,.12);
+}
+
 /* --- the inline row panel -------------------------------------------------
    What used to be a modal over the sheet. It opens in flow beneath its own row,
    so the line you are working on stays visible, focus is never trapped, and a

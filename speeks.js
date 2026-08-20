@@ -17429,6 +17429,7 @@ function _b2bStagePreval(v) {
             ${frozen}${expiredNote}
             ${dates}
             ${_b2bTotalsBar(true)}
+            ${_b2bCustPanel(_b2bQuoteSubject_src())}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             ${open ? `<button class="b2b-btn b2b-btn-secondary b2b-add"
@@ -19602,6 +19603,7 @@ function _b2bStagePricing(deal) {
             ${_b2bPrevalOriginNote(deal)}
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${_b2bTotalsBar(true)}
+            ${_b2bCustPanel(deal)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
@@ -19690,7 +19692,133 @@ function _b2bWhereLine(deal) {
         </div>`;
 }
 
+// Approving a quote is not the same job as pricing one, and it had the same
+// screen. MOCD, on Paul's behalf: only the essential context, easy on the eyes,
+// "instead of being able to change each and everything. Especially if something
+// is wrong he is just going to send it back to the previous phase anyways. Still
+// make it so he can adjust pricing of course though."
+//
+// So: the client-facing document is the main object on the screen, the lines
+// below it are read-only EXCEPT the offer, and everything else that could be
+// wrong is a reason to send it back rather than a field to fix here. The full
+// sheet is one click away for the times that judgement is wrong.
+let _b2bReviewFull = false;
+function b2bReviewFull(on) { _b2bReviewFull = !!on; b2bOpenDeal('quote', _b2bModalDeal.id); }
+
+// The lines, as something to check rather than something to fill in. Offer is
+// the one editable cell -- it is the number being approved, and a typo there is
+// the one correction not worth a whole round trip through pricing.
+function _b2bReviewLines() {
+    if (!_b2bModalItems.length) {
+        return '<div class="b2b-empty sm"><div class="b2b-empty-t">No lines on this quote</div></div>';
+    }
+    const rows = _b2bModalItems.map(it => {
+        const qty  = Number(it.quantity) || 1;
+        const buy  = _b2bIsBuy(it);
+        const disp = _b2bDispOf(it);
+        const spec = _b2bQuoteDesc(it);
+        return `
+        <div class="b2b-rvw-row ${_b2bIsScrap(it) ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''}">
+            <div class="b2b-rvw-what">
+                <div class="b2b-rvw-name">${escapeHtml(_b2bItemName(it))}
+                    ${it.condition ? `<span class="b2b-chip b2b-chip-${_b2bCondChip(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
+                    ${!buy ? `<span class="b2b-chip b2b-chip-neu">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
+                    ${it.wipe_required ? '<span class="b2b-chip b2b-chip-info">Certified wipe</span>' : ''}
+                </div>
+                ${spec ? `<div class="b2b-rvw-spec">${escapeHtml(spec)}</div>` : ''}
+                ${it.client_notes ? `<div class="b2b-rvw-note">${escapeHtml(it.client_notes)}</div>` : ''}
+            </div>
+            <div class="b2b-rvw-qty">×${qty}</div>
+            <div class="b2b-rvw-mgn">${_b2bLineMarginHtml(it)}</div>
+            <div class="b2b-rvw-offer">
+                ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
+                        aria-label="Offer per unit"
+                        oninput="b2bItemInput('${it.id}','offer',this.value)"
+                        onchange="b2bItemSave('${it.id}');_b2bPaintQuoteDoc();_b2bRepaintReview()">`
+                      : '<span class="b2b-f-off">—</span>'}
+            </div>
+            <div class="b2b-rvw-tot">${buy ? _b2bMoney((Number(it.offer) || 0) * qty, 2) : '—'}</div>
+        </div>`;
+    }).join('');
+    return `
+        <div class="b2b-rvw">
+            <div class="b2b-rvw-head">
+                <span>Item</span><span class="c">Qty</span><span class="r">Margin</span>
+                <span class="r">Offer ea.</span><span class="r">Line total</span>
+            </div>
+            ${rows}
+        </div>`;
+}
+
+// Repaint the list in place after a price edit, so the line total and the margin
+// beside it move with the number that was just typed.
+function _b2bRepaintReview() {
+    const el = document.getElementById('b2bReviewLines');
+    if (!el) return;
+    const spot = document.activeElement?.closest?.('.b2b-rvw-offer') ? _b2bModalItems.findIndex(
+        it => document.activeElement.closest('.b2b-rvw-row') ===
+              el.querySelectorAll('.b2b-rvw-row')[_b2bModalItems.indexOf(it)]) : -1;
+    el.innerHTML = _b2bReviewLines();
+    _b2bPaintTotals();
+    if (spot >= 0) el.querySelectorAll('.b2b-rvw-offer input')[spot]?.focus();
+}
+
+function _b2bStageReview(deal) {
+    const canAccept = _b2bCanAccept();
+    const sent = deal.quote_send_count
+        ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}`
+        : 'Not sent yet';
+    _b2bShowDeal({
+        stage: deal.stage,
+        eyebrow: deal.ref,
+        title: 'Approve & Send',
+        sub: 'Everything the client will see. Adjust a price if you need to — anything else goes back to pricing.',
+        full: true,
+        body: `
+            ${_b2bSummary(deal)}
+            ${_b2bWhereLine(deal)}
+            ${_b2bPrevalOriginNote(deal)}
+            <div class="b2b-note warn b2b-approve">
+                <span class="b2b-note-k">Waiting on you</span>
+                ${canAccept
+                    ? 'Nothing has gone to the client yet. Send it from your own mailbox, or send it back to pricing with a note.'
+                    : 'A CEO, MOCD or District Manager sends it out.'}
+            </div>
+            ${_b2bTotalsBar(true)}
+            <div class="b2b-rvw-wrap">
+                <div class="b2b-rvw-lines">
+                    <div class="b2b-rvw-cap">
+                        <span>What you're approving</span>
+                        <button class="b2b-mini" onclick="b2bReviewFull(true)">Open the full pricing sheet</button>
+                    </div>
+                    <div id="b2bReviewLines">${_b2bReviewLines()}</div>
+                </div>
+                <div class="b2b-rvw-doc">
+                    <div class="b2b-rvw-cap"><span>What the client sees</span></div>
+                    <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
+                </div>
+            </div>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            ${_b2bMoveBtn(deal)}
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
+            ${canAccept ? `
+                <button class="b2b-btn b2b-btn-danger" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>
+                <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
+                    value="${escapeHtml(deal.client?.contact_email || '')}">
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
+                <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>`
+                : `<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">${escapeHtml(sent)}</span>`}`,
+        after: _b2bPaintTotals,
+    });
+}
+
 function _b2bStageQuote(deal) {
+    // A quote still awaiting approval gets the calm review screen instead of the
+    // full spreadsheet -- see _b2bStageReview. Opening the sheet explicitly is
+    // the way past it, and re-entering resets that so the next deal starts calm.
+    if (_b2bAwaitingApproval(deal) && !_b2bReviewFull) return _b2bStageReview(deal);
+    _b2bReviewFull = false;
     // Same dense spreadsheet as pricing for editing the lines; the client-facing
     // quote preview below it is what they review before emailing.
     _b2bGridMode = 'sheet';
@@ -19804,9 +19932,52 @@ async function b2bConfirmSendBack(id, btn) {
 }
 
 // Keep the preview in step with the grid without stealing focus from it.
+//
+// Now painted on the pricing screen as well as the quote, and on an evaluation
+// as well as a deal -- MOCD asked to watch the client-facing side build itself
+// in real time while filling the sheet in, rather than pricing blind and finding
+// out what it looks like a stage later.
 function _b2bPaintQuoteDoc() {
     const el = document.getElementById('b2bQuoteDoc');
-    if (el && _b2bModalDeal) el.innerHTML = _b2bQuoteDoc(_b2bModalDeal, _b2bModalItems);
+    const src = _b2bQuoteSubject_src();
+    if (el && src) el.innerHTML = _b2bQuoteDoc(src, _b2bModalItems);
+}
+
+// _b2bQuoteDoc was written against a deal. An evaluation is the same document
+// with a different name on it and no pickup yet, so it is adapted here rather
+// than teaching the document about a second shape -- one renderer means the
+// client sees the same layout whether the figures came from an evaluation or a
+// deal, which is the whole point of previewing it.
+function _b2bQuoteSubject_src() {
+    if (_b2bModalDeal) return _b2bModalDeal;
+    const v = _b2bModalPreval;
+    if (!v) return null;
+    return {
+        ...v,
+        client: { company: v.company, acronym: v.acronym,
+                  contact: v.contact, contact_email: v.contact_email },
+        // An evaluation has collected nothing, so the document's "equipment
+        // collected" line has no date to show and says so rather than inventing
+        // one.
+        pickup_date: null,
+    };
+}
+
+// The client-facing side, foldable, wherever lines are being edited. <details>
+// rather than a hand-rolled toggle so it is keyboard-operable for free; the open
+// state is remembered across repaints because collapsing it every time a cell
+// changed would make it useless.
+let _b2bCustOpen = true;
+function b2bToggleCust(el) { _b2bCustOpen = !!el.open; }
+function _b2bCustPanel(subject) {
+    return `
+        <details class="b2b-cust" ${_b2bCustOpen ? 'open' : ''} ontoggle="b2bToggleCust(this)">
+            <summary>
+                <span class="b2b-cust-t">What the client will see</span>
+                <span class="b2b-cust-s">Updates as you price</span>
+            </summary>
+            <div class="b2b-cust-body"><div id="b2bQuoteDoc">${_b2bQuoteDoc(subject, _b2bModalItems)}</div></div>
+        </details>`;
 }
 
 // Condition earns a tinted chip on the quote, using the same semantic tones as
@@ -19824,6 +19995,12 @@ const B2B_COND_TONE = {
     'For Parts': { bg: '#fcecec', fg: '#d1443b' },
 };
 const _b2bCondTone = c => B2B_COND_TONE[c] || { bg: '#f1f5f9', fg: '#647082' };
+// _b2bCondClass speaks the quote document dialect (ok/warn/bad/neu) and the
+// chips speak the app dialect (ok/warn/crit/neu). One word differs, so it is
+// translated once here rather than a second condition map being written that
+// would drift the first time a condition is added.
+const _b2bCondChip = c => ({ bad: 'crit' }[_b2bCondClass(c)] || _b2bCondClass(c));
+
 const _b2bCondClass = c => ({
     'New': 'ok', 'Like New': 'ok', 'Good': 'ok', 'Fair': 'warn',
     'Broken': 'bad', 'For Parts': 'bad',
