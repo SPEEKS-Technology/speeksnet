@@ -3,3 +3,8 @@
 
 # Supabase CLI local state (project ref, session scratch) — not repo content
 supabase/.temp/
+
+# Screenshots written by the layout harnesses in scripts/. They are evidence for
+# one run, not repo content — every harness rewrites its own on the next pass.
+*.png
+!docs/**/*.png
