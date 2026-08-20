@@ -22,12 +22,22 @@
 // Whoever can open the site can read those numbers.
 //
 // REFRESH WINDOW (America/Chicago, computed here so DST needs no second cron)
-//   Stores open 10-7 Mon-Fri, 10-4 Sat, closed Sun. A two-hour buffer each side
-//   covers people arriving early and closing late:
-//       Mon-Fri 08:00-21:00   Sat 08:00-18:00   Sun: closed
-//   Inside the window: refresh every minute.
-//   Outside it: refresh only if the cache is over 5 minutes stale, which is what
-//   "every five minutes after close" means without a second schedule.
+//   TWO SEPARATE QUESTIONS, and conflating them is what put an "open" pill on a
+//   Sunday morning. isRefreshWindow() is about how often we do work;
+//   isTrading() is about whether the shop has its doors open. They were one
+//   function until Ethan spotted the pill (20 Aug).
+//
+//       isRefreshWindow  every day 08:00-21:00   (trading + a 2h buffer either
+//                        side, so early arrivals and late closers are covered)
+//       isTrading        Mon-Fri 10:00-19:00, Sat 10:00-16:00, never Sunday
+//
+//   Inside the refresh window: refresh every minute.
+//   Outside it: refresh only if the cache is over an hour stale. That is the
+//   overnight pause — 11 refreshes between close and open instead of 660 — done
+//   with the staleness check rather than a second cron, so DST needs no care.
+//   A long heartbeat rather than a hard stop, on purpose: nothing scheduled reads
+//   this cache overnight, but a manager opening the app at 07:30 should not be
+//   looking at last night 9pm numbers. CLOSED_STALE_MS = Infinity for a true stop.
 //
 // COST: one ShopifyQL query plus one recent-orders query per store, ~10 points
 // each against a 2000-point bucket restoring at 100/s — and each store is its own
@@ -53,7 +63,7 @@ const CACHE_KEY = "shopify_live";
 const TZ = "America/Chicago";
 
 // Stale threshold for the closed-hours cadence.
-const CLOSED_STALE_MS = 5 * 60 * 1000;
+const CLOSED_STALE_MS = 60 * 60 * 1000;   // overnight heartbeat — see the header
 
 // shop domain -> the store code used everywhere else on the site.
 const SHOP_TO_CODE: Record<string, string> = {
@@ -118,11 +128,33 @@ function centralNow(now: Date): Central {
   };
 }
 
-/** Is the buffered trading window open right now? */
-function isOpen(c: Central): boolean {
-  if (c.dow === 0) return false;                       // closed Sunday
-  if (c.dow === 6) return c.hour >= 8 && c.hour < 18;  // Sat 10-4 + buffer
-  return c.hour >= 8 && c.hour < 21;                   // Mon-Fri 10-7 + buffer
+/**
+ * How often we do work: the buffered window, seven days a week. Nothing about
+ * this is shown to anyone — it only decides whether this pass calls Shopify or
+ * skips on a fresh cache.
+ */
+function isRefreshWindow(c: Central): boolean {
+  return c.hour >= 8 && c.hour < 21;
+}
+
+/**
+ * Whether the shop is actually trading. THIS is what the dashboard shows.
+ *
+ * It drives two things: the freshness pill (a green pulsing "open" against the
+ * grey "closed"), and whether the activity strip pins recent sales instead of
+ * running as a ticker. Both are claims about the shop floor, so both have to
+ * follow the real hours — a pill reading "open" at 08:15 on a Sunday is simply
+ * false, however busy the webstore is.
+ *
+ * Note what "closed" does NOT mean here: finished. The Today tab keeps taking
+ * online orders after the doors shut, so it stays grey-but-live; only the
+ * Yesterday and Month tabs say "final", and they decide that for themselves
+ * (see _lvFreshness) without consulting this.
+ */
+function isTrading(c: Central): boolean {
+  if (c.dow === 0) return false;                        // closed Sunday
+  if (c.dow === 6) return c.hour >= 10 && c.hour < 16;  // Sat 10-4
+  return c.hour >= 10 && c.hour < 19;                   // Mon-Fri 10-7
 }
 
 /**
@@ -619,7 +651,9 @@ function rollPrev(healthy: StoreMetrics[], goal: number, elapsedPct: number): Da
 
 async function refresh(sb: any, now: Date, force: boolean) {
   const c = centralNow(now);
-  const open = isOpen(c);
+  // The cadence question and the display question, kept apart.
+  const refreshing = isRefreshWindow(c);
+  const open = isTrading(c);
 
   const { data: cached } = await sb.from("app_cache").select("payload, synced_at")
     .eq("key", CACHE_KEY).maybeSingle();
@@ -628,8 +662,11 @@ async function refresh(sb: any, now: Date, force: boolean) {
 
   // The whole closed-hours cadence, in one condition: outside the window we only
   // work if the cache has gone stale.
-  if (!force && !open && ageMs < CLOSED_STALE_MS) {
-    return { ok: true, skipped: "closed and cache is fresh", open, ageSeconds: Math.round(ageMs / 1000) };
+  if (!force && !refreshing && ageMs < CLOSED_STALE_MS) {
+    return {
+      ok: true, skipped: "outside the refresh window and the cache is fresh",
+      open, refreshing, ageSeconds: Math.round(ageMs / 1000),
+    };
   }
 
   const { data: stores } = await sb.from("shopify_stores").select("shop, access_token");
@@ -781,7 +818,7 @@ async function refresh(sb: any, now: Date, force: boolean) {
   }
 
   return {
-    ok: true, open, changed: !same,
+    ok: true, open, refreshing, changed: !same,
     storesReporting: district.storesReporting,
     errors: ordered.filter(m => m.error).map(m => ({ store: m.code, error: m.error })),
     asOfCentral: payload.asOfCentral,
