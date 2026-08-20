@@ -453,7 +453,10 @@ async function prevalItemFields(sb: any, body: any) {
     disposition,
     value: disposition === "recycle" ? 0 : money(body.value, "Unit value"),
     offer: disposition === "purchase" ? money(body.offer, "Unit offer") : 0,
-    shipping_cost: money(body.shipping_cost, "Shipping cost"),
+    // Zero on recycle, matching value and offer: the three money columns on a
+    // scrap line now agree that nothing is owed and nothing is spent. Mirrors
+    // the CHECK on the table.
+    shipping_cost: disposition === "recycle" ? 0 : money(body.shipping_cost, "Shipping cost"),
     wipe_required: wipeRequired,
     // Same snapshot rule as a deal line, and it matters more here: the figure
     // quoted on an evaluation is the one that converts into the deal months
@@ -858,10 +861,15 @@ Deno.serve(async (req: Request) => {
           // value to us either. Mirrors the two disposition CHECKs exactly.
           value: disposition === "recycle" ? 0 : money(body.value, "Unit value"),
           offer: disposition === "purchase" ? money(body.offer, "Unit offer") : 0,
-          // Ours, per unit, and NOT conditional on disposition: a pallet of scrap
-          // still costs money to move. It never reaches the client -- it reduces
-          // what the deal is worth to us, not what we pay them.
-          shipping_cost: money(body.shipping_cost, "Shipping cost"),
+          // Zero on recycle, matching value and offer.
+          //
+          // This used to be unconditional, on the reasoning that a pallet of
+          // scrap still costs money to move -- which is true, and the margin now
+          // understates it. It lost anyway: a live money box on a line the client
+          // is paid nothing for was read as a bug every time it was seen, and the
+          // three money columns disagreeing cost more than the freight figure was
+          // worth. Mirrors b2b_deal_items_recycle_no_freight.
+          shipping_cost: disposition === "recycle" ? 0 : money(body.shipping_cost, "Shipping cost"),
           wipe_required: wipeRequired,
           // Snapshotted per line rather than read live at render time: changing
           // the global fee must not silently reprice a quote already sent. Kept

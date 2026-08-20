@@ -17759,7 +17759,13 @@ function _b2bStagePickup(deal) {
                 ${walkIn ? '' : `
                 <div>
                     <label class="form-label-caps">Pickup Date *</label>
-                    <input id="b2bPuDate" type="date" class="form-input-lg" value="${today}">
+                    <!-- Deliberately NOT pre-filled with today. It used to be, and a
+                         collection that happened last week got silently recorded as
+                         today by anyone who did not think to change it -- a wrong
+                         answer that looks like a considered one. Blank forces the
+                         choice; the required check below catches it. max stops a
+                         collection being dated into the future. -->
+                    <input id="b2bPuDate" type="date" class="form-input-lg" max="${today}">
                 </div>`}
             </div>
             ${walkIn ? `
@@ -18090,6 +18096,17 @@ async function b2bSkipSign(id) {
     if (reason === null) return;
     if (!reason.trim()) return alert('A reason is required to skip the signature.');
     try {
+        // Hold what is on the form. Recording the skip round-trips to the
+        // server and reopens the pickup screen from the stored row, so the
+        // description, the client's name and the received-by all vanished --
+        // typed, unsaved, and gone the moment you explained why there was no
+        // signature. b2bSignHere has always done this for the same reason.
+        _b2bPickupDraft = {
+            id,
+            desc: document.getElementById('b2bPuDesc')?.value,
+            name: document.getElementById('b2bPuSigned')?.value,
+            recv: document.getElementById('b2bPuRecv')?.value,
+        };
         await _b2bSend({ action: 'skip_signature', id, reason: reason.trim() });
         await b2bRefresh();
         b2bOpenDeal('pickup', id);
@@ -18586,6 +18603,11 @@ function b2bItemInput(id, field, value) {
     it[field] = (field === 'quantity') ? Math.max(1, parseInt(value, 10) || 1)
               : (field === 'value' || field === 'offer' || field === 'shipping_cost') ? (parseFloat(value) || 0)
               : value;
+    // Quantity is the one field here that changes whether the LINE is ready:
+    // five units need five serials. _b2bSyncReady owns that badge and the
+    // blocked flags, so without this the row went on claiming it was fine and
+    // the requirement only appeared once some other edit happened to sync it.
+    if (field === 'quantity') _b2bSyncReady(it);
     _b2bPaintTotals();
 }
 
@@ -18632,7 +18654,7 @@ function b2bItemDisposition(id, value) {
     it.disposition = value;
     // Only a purchase pays the client; only recycle is worthless to us as well.
     if (value !== 'purchase') it.offer = 0;
-    if (value === 'recycle')  it.value = 0;
+    if (value === 'recycle')  { it.value = 0; it.shipping_cost = 0; }
     _b2bRepaintItems();
     b2bItemSave(id);
 }
@@ -19218,13 +19240,16 @@ function _b2bItemSheet() {
                     ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
-                <!-- Priced even on a recycle line: scrap costs the same to move,
-                     and Paul is reading this to work out what the pallet is
-                     really worth to us. -->
+                <!-- Blank on a recycle line, like Value and Offer. Scrap genuinely
+                     does cost freight, so this loses that from the margin -- but a
+                     live money box on a line the client is paid nothing for read as
+                     an error every time, and consistency across the three money
+                     columns won. -->
                 <span class="b2b-pcell n" data-k="Ship">
-                    <input type="number" min="0" step="0.01" value="${Number(it.shipping_cost) || 0}"
+                    ${scrap ? '<span class="b2b-f-off">—</span>'
+                          : `<input type="number" min="0" step="0.01" value="${Number(it.shipping_cost) || 0}"
                         title="Our freight cost per unit — never shown to the client"
-                        oninput="b2bItemInput('${it.id}','shipping_cost',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                        oninput="b2bItemInput('${it.id}','shipping_cost',this.value)" onchange="b2bItemSave('${it.id}')">`}</span>
                 <span class="b2b-pcell n b2b-pc-mgn" data-k="Margin">
                     ${_b2bLineMarginHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-disp" data-k="Handling">
@@ -19272,7 +19297,18 @@ function b2bItemDetail(id) {
         el.id = 'b2bItemSheet';
         document.body.appendChild(el);
         // Click the dimmed area (never the panel) to close.
-        el.addEventListener('click', e => { if (e.target === el) b2bCloseItemSheet(); });
+        //
+        // Both ends of the click have to land on the backdrop. `click` fires on
+        // the nearest common ancestor of mousedown and mouseup, so dragging to
+        // select text inside a field and releasing beyond the panel edge -- which
+        // is what anyone highlighting a serial does -- reported the backdrop as
+        // the target and threw the sheet away mid-edit.
+        let pressedOnBackdrop = false;
+        el.addEventListener('mousedown', e => { pressedOnBackdrop = e.target === el; });
+        el.addEventListener('click', e => {
+            if (e.target === el && pressedOnBackdrop) b2bCloseItemSheet();
+            pressedOnBackdrop = false;
+        });
     }
     _b2bPaintItemSheet();
     // Land the cursor on whatever is blocking the line, else the first field.
@@ -19752,7 +19788,7 @@ function _b2bQuoteDoc(deal, items) {
         </div>
         <div class="b2b-doc-parties">
             <div><span class="b2b-doc-k">Prepared for</span><b>${escapeHtml(c.company || '')}</b>${c.contact ? `<div>${escapeHtml(c.contact)}</div>` : ''}</div>
-            <div class="r"><span class="b2b-doc-k">Equipment collected</span><b>${escapeHtml(picked || 'Not recorded')}</b><div>by SPEEKS Technology, authorized PayMore franchisee</div></div>
+            <div class="r"><span class="b2b-doc-k">Equipment collected</span><b>${escapeHtml(picked || 'Not recorded')}</b><div>By SPEEKS Technology, authorized PayMore franchisee</div></div>
         </div>
         <table class="b2b-doc-t">
             <thead><tr><th>Description</th><th class="c">Qty</th><th class="r">Unit offer</th><th class="r">Line total</th></tr></thead>
@@ -19840,7 +19876,7 @@ function _b2bQuoteInlineHtml(deal, items) {
       <td align="right" style="font-size:12.5px;color:#1a1c1e;vertical-align:top;">
         <div style="font-size:10px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Equipment collected</div>
         <div style="margin-top:4px;font-size:14px;font-weight:bold;">${escapeHtml(picked || 'Not recorded')}</div>
-        <div style="margin-top:2px;color:#647082;">by SPEEKS Technology, authorized PayMore franchisee</div></td>
+        <div style="margin-top:2px;color:#647082;">By SPEEKS Technology, authorized PayMore franchisee</div></td>
     </tr></table></td></tr>
   <tr><td style="padding:14px 24px 0;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
