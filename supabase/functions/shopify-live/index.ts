@@ -192,6 +192,46 @@ function prevDay(c: Central): PrevDay {
   };
 }
 
+// --- comparison periods ------------------------------------------------------
+// Month-over-month and year-over-year, as WHOLE FINISHED MONTHS.
+//
+// Whole months rather than the same span of days, because of what these figures
+// are read against: the Tracking band's tiles are month-END PROJECTIONS, and the
+// question a projection answers is "will this month beat last month?". So the
+// delta measures this month's projection against that month's actual — which is
+// exactly what the Daily Breakdown popout does, and what the Sales Summary
+// workbook's own YoY line does (verified there to the dollar on OVL August:
+// a $145,167 projection against $105,622.08 for August 2025 gives its 37.44%).
+// Two surfaces quoting the same comparison must not compute it two ways.
+//
+// An earlier build used matched day-of-month spans (Aug 1-16 vs Jul 1-16) against
+// the banked figures instead. That is a coherent comparison too, but it is not the
+// one the tiles carrying it are about, and it left the site with two different
+// definitions of "vs last month".
+type Span = { from: string; to: string; days: number; ym: string };
+
+const ymd = (y: number, m: number, d: number) =>
+  `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+const daysInMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+const wholeMonth = (y: number, m: number): Span => ({
+  from: ymd(y, m, 1),
+  to: ymd(y, m, daysInMonth(y, m)),
+  days: daysInMonth(y, m),
+  ym: `${y}-${String(m).padStart(2, "0")}`,
+});
+
+function cmpSpans(c: Central, pd: PrevDay): { cur: Span; lastMonth: Span; lastYear: Span } | null {
+  // On the 1st there is no complete day in this month yet, so the Month tab is not
+  // offered and there is nothing to compare.
+  if (!pd.inMonth) return null;
+  return {
+    cur: wholeMonth(c.y, c.m),
+    lastMonth: c.m === 1 ? wholeMonth(c.y - 1, 12) : wholeMonth(c.y, c.m - 1),
+    lastYear: wholeMonth(c.y - 1, c.m),
+  };
+}
+
 // --- Shopify ----------------------------------------------------------------
 
 async function gql(shop: string, token: string, query: string) {
@@ -218,6 +258,138 @@ const num = (v: unknown) => {
   return Number.isFinite(n) ? n : 0;
 };
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// One finished comparison month for one store. Selling comes from Shopify;
+// `resale` and `paid` are the BUYING half and come from the sheet's own tables —
+// Shopify knows nothing about what was bought over the counter.
+type CmpFigures = Span & {
+  net: number; cogs: number; gp: number; orders: number; returns: number;
+  // Resale value of goods bought, and the cash actually paid out. Null when the
+  // sheet has no figures for that month, which is a different thing from zero —
+  // see the naming inversion note on loadBuyCompare.
+  resale: number | null; paid: number | null;
+  // Did this store trade at all in the window? Maplewood and Ballwin did not
+  // exist in August 2025 — Shopify's first real month for them is April and May
+  // 2026 — and a store with no history has to read as "no last year" rather than
+  // as a month in which it sold nothing. The first is an absence of data, the
+  // second is a business result, and showing one as the other would put a
+  // meaningless +51% on the district tile. This flag is what keeps the district
+  // year-over-year on a same-store basis, and it is derived from the data rather
+  // than from a list of store codes, so it corrects itself the month a store's
+  // history catches up.
+  has: boolean;
+};
+type StoreCompare = { through: string; days: number; lastMonth: CmpFigures; lastYear: CmpFigures };
+
+/**
+ * The two comparison windows for one store: one request, both spans, no GROUP BY
+ * — each answers with a single summary row.
+ *
+ * Runs at most ONCE A DAY. Both windows are finished days, so they can only move
+ * when a back-dated refund lands against them or when the span itself rolls over
+ * at midnight; refresh() carries the answer forward on every other pass, which
+ * keeps this off the per-minute Shopify call entirely.
+ */
+async function fetchCompare(
+  shop: string, token: string, spans: { cur: Span; lastMonth: Span; lastYear: Span },
+): Promise<StoreCompare | null> {
+  const q = (s: Span) =>
+    `FROM sales SHOW net_sales, cost_of_goods_sold, orders, returns SINCE ${s.from} UNTIL ${s.to}`;
+  try {
+    const data = await gql(shop, token, `{
+      lm: shopifyqlQuery(query: "${q(spans.lastMonth)}") { parseErrors tableData { rows } }
+      ly: shopifyqlQuery(query: "${q(spans.lastYear)}") { parseErrors tableData { rows } }
+    }`);
+    const read = (key: string, span: Span): CmpFigures => {
+      const node = (data as any)?.[key];
+      if (node?.parseErrors?.length) throw new Error(`ShopifyQL: ${node.parseErrors.join("; ")}`);
+      const row = (node?.tableData?.rows ?? [])[0] ?? null;
+      const net = round2(num(row?.net_sales));
+      const cogs = round2(num(row?.cost_of_goods_sold));
+      const orders = num(row?.orders);
+      return {
+        ...span,
+        net, cogs, gp: round2(net - cogs), orders,
+        // Returns come back NEGATIVE here exactly as they do on the daily rows.
+        returns: round2(Math.abs(num(row?.returns))),
+        // Filled in by loadBuyCompare, from the sheet's tables rather than Shopify.
+        resale: null, paid: null,
+        has: !!row && orders > 0,
+      };
+    };
+    return {
+      through: spans.cur.to,
+      days: spans.cur.days,
+      lastMonth: read("lm", spans.lastMonth),
+      lastYear: read("ly", spans.lastYear),
+    };
+  } catch (_) {
+    // A comparison that cannot be fetched is DROPPED, never zeroed. The Month tab
+    // then shows its month as usual with nothing to compare it against, which is
+    // honest; a zeroed window would read as a store that took no money last year.
+    // The next pass retries, because the carry-forward key still will not match.
+    return null;
+  }
+}
+
+/**
+ * The BUYING half of both comparison months, per store code.
+ *
+ * Shopify has no idea what was bought over the counter, so this comes from the two
+ * tables the sheet feeds — the same sources the Daily Breakdown popout reads, so
+ * the two surfaces cannot quote different figures for the same month:
+ *   last month     -> daily_buysell (daily rows, 2026-01 onward)
+ *   last year      -> buysell_monthly_history (month totals; 2025 has no days
+ *                     anywhere in the database, only these totals)
+ *
+ * ⚠️ THE NAMING INVERSION. The sheet's column headings are backwards from this
+ * codebase's vocabulary and swapping them is a silent ~2x error:
+ *   sheet "Sell" column = resale value of goods BOUGHT = daily_buysell.buy -> resale
+ *   sheet "Buy"  column = cash actually paid out = resale x (1 - buy_margin_pct) -> paid
+ * daily_buysell.buy is therefore the ESTIMATED VALUE, not the cash. Renamed here at
+ * the boundary so no caller has to remember.
+ */
+async function loadBuyCompare(
+  sb: any, spans: { lastMonth: Span; lastYear: Span },
+): Promise<Record<string, { lastMonth: [number, number] | null; lastYear: [number, number] | null }>> {
+  const out: Record<string, { lastMonth: [number, number] | null; lastYear: [number, number] | null }> = {};
+  for (const code of STORE_ORDER) out[code] = { lastMonth: null, lastYear: null };
+
+  try {
+    const { data } = await sb.from("daily_buysell")
+      .select("store, buy, buy_margin_pct")
+      .gte("date", spans.lastMonth.from).lte("date", spans.lastMonth.to);
+    const acc: Record<string, [number, number]> = {};
+    for (const r of (data ?? [])) {
+      const code = String(r.store || "").toUpperCase();
+      if (!out[code]) continue;
+      const resale = num(r.buy);
+      if (!resale) continue;                         // a closed day, or one not keyed yet
+      // Cash paid is SUMMED per day, never derived from a mean of the daily
+      // margins: margins cannot be averaged across days of different size.
+      const paid = resale * (1 - num(r.buy_margin_pct));
+      acc[code] = acc[code] ?? [0, 0];
+      acc[code][0] += resale;
+      acc[code][1] += paid;
+    }
+    for (const code of Object.keys(acc)) {
+      out[code].lastMonth = [round2(acc[code][0]), round2(acc[code][1])];
+    }
+  } catch (_) { /* no buying comparison rather than a wrong one */ }
+
+  try {
+    const { data } = await sb.from("buysell_monthly_history")
+      .select("store, resale, paid").eq("ym", spans.lastYear.ym);
+    for (const r of (data ?? [])) {
+      const code = String(r.store || "").toUpperCase();
+      if (!out[code]) continue;
+      const resale = num(r.resale);
+      if (resale > 0) out[code].lastYear = [round2(resale), round2(num(r.paid))];
+    }
+  } catch (_) { /* same */ }
+
+  return out;
+}
 
 // The closed-out numbers for the previous open day. Field names deliberately
 // MIRROR the live ones (netToday, mtdNet, …) so the frontend can overlay this
@@ -246,6 +418,12 @@ type StoreMetrics = {
   // all morning. This is the same list the strip would have built for itself.
   recentOrders: { at: string; amount: number }[];
   prev: DayMetrics | null;
+  // Month-over-month and year-over-year for the month-through-yesterday span.
+  // Filled in by refresh() rather than by fetchStore: it is fetched once a day and
+  // carried forward the rest of the time, so it does not belong on the per-minute
+  // path. Null means "no comparison available", which the UI states rather than
+  // filling with zeros.
+  cmp?: StoreCompare | null;
   error?: string;
 };
 
@@ -468,6 +646,43 @@ async function refresh(sb: any, now: Date, force: boolean) {
     stores.map((s: any) => fetchStore(s.shop, s.access_token, c, goals[SHOP_TO_CODE[s.shop]] ?? 0, pd)),
   );
 
+  // --- month-over-month / year-over-year --------------------------------------
+  // Both windows are FINISHED days, so they only move when the span itself rolls
+  // over at midnight (or when a back-dated refund lands against one). Fetching
+  // them on the per-minute pass would be ten extra Shopify queries a minute for
+  // numbers that change once a day, so the stored payload's answer is carried
+  // forward and `cmpThrough` is the key that says whether it is still current.
+  //
+  // A store whose carried answer is MISSING is fetched even on a carry-forward
+  // pass: a store that errored yesterday, or one connected since, would otherwise
+  // wait until tomorrow's rollover for a comparison the others already have.
+  const spans = cmpSpans(c, pd);
+  const cmpThrough = spans ? spans.cur.to : null;
+  const carried: Record<string, StoreCompare> = {};
+  for (const s of (prev?.stores ?? [])) {
+    if (s?.code && s.cmp && s.cmp.through === cmpThrough) carried[s.code] = s.cmp;
+  }
+  if (spans) {
+    await Promise.all(metrics.map(async (m) => {
+      if (m.error) return;
+      if (carried[m.code]) { m.cmp = carried[m.code]; return; }
+      const s = stores.find((x: any) => SHOP_TO_CODE[x.shop] === m.code);
+      m.cmp = s ? await fetchCompare(s.shop, s.access_token, spans) : null;
+    }));
+    // The buying half, only when at least one store actually needed a fetch —
+    // otherwise the carried figures already have it.
+    if (metrics.some(m => !m.error && m.cmp && !carried[m.code])) {
+      const buy = await loadBuyCompare(sb, spans);
+      for (const m of metrics) {
+        if (!m.cmp) continue;
+        const b = buy[m.code];
+        if (!b) continue;
+        if (b.lastMonth) { m.cmp.lastMonth.resale = b.lastMonth[0]; m.cmp.lastMonth.paid = b.lastMonth[1]; }
+        if (b.lastYear) { m.cmp.lastYear.resale = b.lastYear[0]; m.cmp.lastYear.paid = b.lastYear[1]; }
+      }
+    }
+  }
+
   // Goal progress against SELLING-day progress, so "17% of goal" on day 5 reads
   // as slightly ahead rather than alarming. No forecast involved.
   const elapsedPct = sd.total > 0 ? sd.elapsed / sd.total * 100 : 0;
@@ -537,6 +752,10 @@ async function refresh(sb: any, now: Date, force: boolean) {
         elapsedPct: round2(prevElapsedPct),
       }
       : null,
+    // Which day both comparison windows run to. Doubles as the carry-forward key
+    // above: when this no longer matches the span the clock says it should, the
+    // comparisons are refetched.
+    cmpThrough,
     district,
     stores: ordered,
   };
@@ -705,6 +924,10 @@ Deno.serve(async (req: Request) => {
     open: p.open,
     month: p.month,
     prev: p.prev ?? null,
+    // Null on a cache written before the comparisons existed, and on the 1st of a
+    // month. Either way the Month tab renders without them rather than dashing out
+    // a band that looks broken.
+    cmpThrough: p.cmpThrough ?? null,
     // Everyone gets the roll-up now — see scopeFor. Still routed through `scope`
     // rather than reading p.district directly, so re-introducing a gate is a
     // change to one function and not to this response shape.

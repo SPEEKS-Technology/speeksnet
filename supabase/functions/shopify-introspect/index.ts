@@ -105,6 +105,44 @@ Deno.serve(async (req: Request) => {
                   errors: body.errors ?? null });
   }
 
+  // WHAT IS THE ARGUMENT ACTUALLY CALLED?
+  // ?mutation=productUpdate  ->  productUpdate(product: ProductUpdateInput!)
+  //
+  // Shopify renamed productUpdate's argument from `input` to `product`, and both
+  // ProductInput and ProductUpdateInput still exist in 2026-07 — so introspecting
+  // the types cannot tell you which one the mutation takes. Guessing wrong is a
+  // query that fails validation at runtime, which is a poor way to find out.
+  const mutationName = (url.searchParams.get("mutation") || "").trim();
+  if (mutationName) {
+    const mBody = await gql(
+      `query {
+         __schema { mutationType { fields {
+           name
+           args { name type { name kind ofType { name kind ofType { name kind } } } }
+         } } }
+       }`,
+    );
+    const all = mBody.data?.__schema?.mutationType?.fields || [];
+    const hit = all.find((m: any) => m.name === mutationName);
+    if (!hit) {
+      return json({ store, mutationName, error: "mutation not found",
+                    near: all.map((m: any) => m.name)
+                      .filter((n: string) => n.toLowerCase().includes(mutationName.toLowerCase()))
+                      .slice(0, 20) }, 404);
+    }
+    const flat = (x: any): string =>
+      !x ? "?" : x.kind === "NON_NULL" ? flat(x.ofType) + "!"
+        : x.kind === "LIST" ? "[" + flat(x.ofType) + "]"
+        : x.name || flat(x.ofType);
+    return json({
+      store,
+      mutation: hit.name,
+      signature: `${hit.name}(${(hit.args || [])
+        .map((a: any) => `${a.name}: ${flat(a.type)}`).join(", ")})`,
+      args: (hit.args || []).map((a: any) => ({ name: a.name, type: flat(a.type) })),
+    });
+  }
+
   const typeName = url.searchParams.get("type") || "OrderCreateOrderInput";
   const body = await gql(
     `query($n: String!) {

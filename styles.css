@@ -1011,6 +1011,17 @@ input, textarea, select,
     white-space: nowrap;
 }
 .read-receipt-btn:hover { background: #dcfce7; border-color: #4ade80; }
+/* Set by toggleReadReceipt() when there is no room below — see the note there.
+   Only the vertical anchor changes; everything else about the popover is the
+   same object opening the other way. */
+.read-receipt-popover.rr-up { top: auto; bottom: calc(100% + 6px); }
+/* Held on a card only while its "Read by" list is open, then removed. The hub
+   card is overflow:hidden purely to round its own corners, and at ~120px tall
+   it cuts the popover off; it does not scroll, so nothing is lost by letting
+   the popover out. z-index lifts the card over the ones below it — .hub-item.read
+   is opacity:.72, which makes its own stacking context. */
+.rr-unclip { overflow: visible !important; position: relative; z-index: 60; }
+
 .read-receipt-popover {
     position: absolute;
     top: calc(100% + 6px);
@@ -7662,7 +7673,10 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .cb-head-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 /* View toggle (reuses .mb-view-toggle) — add icons */
-.cb-view-toggle .mb-view-btn { display: inline-flex; align-items: center; gap: 6px; }
+.cb-view-toggle .mb-view-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-width: 112px; box-sizing: border-box;
+}
 .cb-view-toggle .mb-view-btn svg { width: 14px; height: 14px; }
 
 .cb-store-filter { height: 34px; }
@@ -9463,6 +9477,7 @@ body.sam-active .hotbar-btn:hover {
    from the DOM would silently kill the feed's deadline cards.
    ========================================================= */
 #dailyMessageBubble,
+#dailyBriefAlertBubble,
 #claimAlertBubble,
 #recycleAlertBubble,
 #varianceAlertBubble,
@@ -10317,8 +10332,11 @@ body.sam-active .hotbar-btn:hover {
 /* The district card has no .cc-strip of its own, so its tile row is bordered here
    instead of relying on the strip band above it. (The employee widget used to be
    the other case; it now shares the Command Center's strip band.) */
+/* Five tiles since Net Profit joined, and four before it. auto-fit rather
+   than a hard count so the strip cannot be broken by adding a sixth, and so
+   the Yesterday view -- which has one tile fewer -- does not leave a gap. */
 .lv-strip, .lv-dist-strip {
-    display: grid; grid-template-columns: repeat(4, 1fr);
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
     gap: 1px; background: #eef2f6;
 }
 .lv-dist-strip {
@@ -10760,6 +10778,30 @@ body.sam-active .hotbar-btn:hover {
    both tables' left edge, right edge and first data column land on the same x at
    every width. Widening one breaks that for a column that does not need it. */
 
+/* --- Against last month and last year --------------------------------------
+   The comparison rows on the Tracking tiles reuse the Daily Breakdown's .bd-cmp
+   grid and .bd-tile-row layout wholesale — same shape, same arrows, same colours,
+   because a reader who has seen one surface should not have to learn the other.
+   Only three things are needed on top of that.
+
+   The tiles' column floor is raised where that property is DEFINED (search for
+   minmax further down) rather than re-declared here: two rules of equal
+   specificity for the same property mean the later one silently wins, so setting
+   it here would have done nothing at all. */
+/* A partial month is named "July 3 Of 5" — the count is a qualifier on the month,
+   not part of it, so it is set quieter and cannot be read as more of the label. */
+.lv-cmp-part { font-weight: 750; letter-spacing: 0; text-transform: none; opacity: .8; }
+/* On a narrow screen the tile has no room for a column BESIDE the figure, so the
+   comparison rows drop underneath it and align left with everything else. Hiding
+   them was the alternative and the wrong one: the comparison is the thing that was
+   asked for, and it is the projection that already has a second home in the table
+   below. */
+@media (max-width: 900px) {
+    .lv-fc-strip .bd-tile-row { display: block; }
+    .lv-fc-strip .bd-tile-cmp { margin: 6px 0 0; gap: 1px; }
+    .lv-fc-strip .bd-cmp { justify-content: start; }
+}
+
 /* Bought against sold. Three states, not the pace pill's two: at 90-99% a store
    is drifting rather than failing, and the gap is worth seeing before it opens. */
 .lv-ratio {
@@ -10783,16 +10825,39 @@ body.sam-active .hotbar-btn:hover {
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
     background: transparent;
 }
-/* Tracking to Goal moved up to the headline strip, so the forecast is three tiles
-   on a FOUR-column grid: they sit under the first three tiles of the strip at the
-   top of the card, which is what lines the two bands up. The 1px side padding is
-   the top strip's 1px border — without it these would each start a pixel left of
-   the tile above and the columns would be a pixel wide. */
-   With Google Reviews the band is four tiles and fills the row; the padding is
-   still what lines column one up with the tile above it, so both counts take it. */
+/* The forecast band is four tiles now that Net Profit is in it, and five where
+   a store carries Google Reviews. auto-fit rather than a hard four so the fifth
+   does not drop onto a row of its own with three empty columns beside it. */
+/* 232px, not 180: each of these tiles now carries a column of comparison rows to
+   the right of its figure (see _lvTile's `cmp`), and at 180 the amount and the
+   rows fought over the same space and wrapped mid-figure. */
+.lv-fc-strip { grid-template-columns: repeat(auto-fit, minmax(232px, 1fr)); }
+/* Tracking to Goal moved up to the headline strip, so this band sits under the
+   tiles of the strip at the top of the card, which is what lines the two up. The
+   1px side padding is the top strip's 1px border — without it these would each
+   start a pixel left of the tile above and the columns would be a pixel out.
+   Every tile count takes it, for the same reason.
+
+   This comment used to close early and reopen, which left a sentence of English
+   parsed as a selector — and a bad selector takes the rule after it down too, so
+   the padding below has not been applying since. */
 .lv-fc-strip.s3, .lv-fc-strip.s4 { padding: 0 1px; }
 @media (max-width: 760px) {
     .lv-buy-strip, .lv-fc-strip { grid-template-columns: repeat(2, 1fr); }
+}
+/* ONE Tracking tile per row on a phone. A comparison row cannot wrap — "Aug 2025
+   3 Of 5  $290,508  ▲ 28.0%" is 182px of nowrap text — and two tiles across a
+   390px phone leaves each a 138px content box, so the row ran out of the card and
+   took the whole page's horizontal scroll with it. The buying strip keeps its two
+   across: it carries no comparison rows and does not have the problem.
+
+   .lv-strip.lv-fc-strip, not .lv-fc-strip alone. These strips carry BOTH classes,
+   and there is a `.lv-strip, .lv-dist-strip { 1fr 1fr }` rule ~900 lines further
+   down (in the ≤720px block) with exactly equal specificity — so the plain
+   selector lost on document order and this rule did nothing, twice. Two classes
+   settle it wherever either rule ends up sitting. */
+@media (max-width: 620px) {
+    .lv-strip.lv-fc-strip { grid-template-columns: 1fr; }
 }
 
 /* Sales and refunds as they land, newest at the left, each shifting the rest along
@@ -16488,6 +16553,150 @@ body.tv-body { display: block; background: #eef1f5; }
   color: #8a6212; background: #fdf6e7; border-color: #f0dfae; font-weight: 700;
 }
 .ec-btn-fix:hover { background: #f9ecd0; border-color: #e3ce93; }
+
+/* --- the Fix prompt --------------------------------------------------------
+ * Centred rather than anchored to its row, unlike the category picker: this is
+ * a short form with its own Save, and a form that follows a scrolling row while
+ * being filled in is a form that moves under the cursor.
+ * Inserted here and NOT at the end of the file — the MOBILE LAYER has to stay
+ * last in source order, which is the whole reason it wins without !important.
+ */
+.ec-fix-wrap {
+  position: fixed; inset: 0; z-index: 1400;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: rgba(23, 34, 28, 0.34);
+}
+.ec-fix {
+  width: 720px; max-width: 100%; max-height: calc(100vh - 32px);
+  background: #fff; border: 1px solid var(--cb-line); border-radius: 14px;
+  box-shadow: 0 18px 46px rgba(20, 35, 25, 0.22);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.ec-fix-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  padding: 14px 14px 13px 20px; border-bottom: 1px solid var(--cb-line-2);
+  background: var(--cb-panel-2);
+}
+/* min-width:0 so the title below can actually ellipsize instead of stretching
+   the dialog to the width of a 70-character product name. */
+.ec-fix-headtxt { min-width: 0; }
+.ec-fix-t { font-size: 15px; font-weight: 800; color: var(--slate-charcoal); }
+.ec-fix-s {
+  margin-top: 2px; font-size: 12.5px; color: var(--cb-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ec-fix-body { padding: 16px 20px 6px; overflow: auto; }
+/* The provenance line under a Fix field. Quiet on purpose: it has to be read
+   before the button is pressed, not compete with the value itself. */
+.ec-fix-src { display: block; margin-top: 4px; font-size: 12.5px; color: var(--sage-deep, #178048); }
+.ec-fix-src-none { color: #8a94a3; font-style: italic; }
+
+/* A refused condition is not a missing one, so it does not get the grey
+   "we found nothing" treatment — it is a statement about a value that IS on the
+   product, and the person needs to read it. */
+.ec-fix-src-cond { color: #8a6212; font-style: normal; }
+
+/* --- the evidence block: what the answer was read from ------------------- */
+.ec-ev {
+  border: 1px solid var(--cb-line); border-radius: 10px;
+  background: var(--cb-panel-2); padding: 12px 13px; margin-bottom: 15px;
+}
+/* The reference half sits under the question and reads as a footnote to it,
+   not as another thing to fill in. */
+.ec-ev-foot { margin-top: 2px; }
+.ec-ev-head { display: flex; gap: 10px; align-items: flex-start; }
+.ec-ev-img {
+  width: 52px; height: 52px; flex: 0 0 52px; object-fit: cover;
+  border-radius: 7px; border: 1px solid var(--cb-line); background: #fff;
+}
+/* min-width:0 or a long unbroken title pushes the dialog wider than its own
+   max-width and the whole modal starts scrolling sideways. */
+.ec-ev-headtxt { min-width: 0; }
+.ec-ev-title {
+  font-size: 13.5px; font-weight: 700; color: var(--slate-charcoal); line-height: 1.35;
+}
+.ec-ev-meta { margin-top: 3px; font-size: 12px; color: var(--cb-faint); }
+.ec-ev-shot-wrap { margin-top: 10px; }
+.ec-ev-shot-hint { margin-top: 5px; font-size: 12px; color: var(--cb-faint); }
+/* Every angle of the item, along the bottom of its own header. Scrolls rather
+   than wrapping: a second row pushes the question off the screen, and the
+   question is the reason anybody is here. */
+.ec-ev-shots {
+  display: flex; gap: 6px; margin-top: 8px;
+  overflow-x: auto; padding-bottom: 2px;
+}
+.ec-ev-shots img {
+  width: 72px; height: 72px; flex: 0 0 72px; object-fit: cover;
+  border-radius: 6px; border: 1px solid var(--cb-line); background: #fff;
+  cursor: zoom-in;
+}
+.ec-ev-shots img:hover { border-color: var(--cb-sage); }
+.ec-ev-none { margin-top: 8px; font-size: 12.5px; color: #8a6212; font-style: italic; }
+
+.ec-ev-more { margin-top: 8px; }
+.ec-ev-more > summary {
+  cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--cb-muted);
+  list-style: none; padding: 3px 0; user-select: none;
+}
+.ec-ev-more > summary::-webkit-details-marker { display: none; }
+.ec-ev-more > summary::before { content: "\25B8 "; color: var(--cb-faint); }
+.ec-ev-more[open] > summary::before { content: "\25BE "; }
+
+.ec-ev-tbl { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.ec-ev-tbl th, .ec-ev-tbl td {
+  text-align: left; vertical-align: top; padding: 5px 8px 5px 0;
+  font-size: 12.5px; line-height: 1.4; border-top: 1px solid var(--cb-line-2);
+}
+.ec-ev-tbl th {
+  width: 38%; font-weight: 600; color: var(--cb-muted); white-space: nowrap;
+}
+/* A free-text spec value in a nowrap cell is what blew the audit tables wide.
+   Values wrap; only the name column stays on one line. */
+.ec-ev-tbl td { color: var(--slate-charcoal); word-break: break-word; }
+.ec-ev-hit th, .ec-ev-hit td { background: #eefaf2; }
+.ec-ev-hit th { color: var(--sage-deep, #178048); }
+
+.ec-ev-raw {
+  margin-top: 5px; padding: 7px 8px; border-radius: 7px;
+  background: #fff; border: 1px solid var(--cb-line);
+  font-size: 12px; line-height: 1.45; color: var(--cb-muted);
+  white-space: pre-wrap; word-break: break-word; max-height: 190px; overflow: auto;
+}
+
+
+.ec-fix-row { display: block; margin-bottom: 15px; }
+.ec-fix-lbl {
+  display: block; margin-bottom: 4px;
+  font-size: 12.5px; font-weight: 700; color: var(--cb-muted);
+}
+.ec-fix-in {
+  width: 100%; box-sizing: border-box;
+  border: 1px solid var(--cb-line); border-radius: 8px; padding: 8px 10px;
+  font-size: 12.5px; font-family: inherit; color: var(--slate-charcoal);
+  background: #fff;
+}
+.ec-fix-in:focus {
+  outline: none; border-color: var(--cb-sage);
+  box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15);
+}
+.ec-fix-note { font-size: 12px; color: var(--cb-faint); margin: 2px 0 10px; }
+.ec-fix-note-warn {
+  color: #8a6212; background: #fdf6e7; border: 1px solid #f0dfae;
+  border-radius: 8px; padding: 7px 9px; font-weight: 600; margin-bottom: 12px;
+}
+.ec-fix-err {
+  display: none; font-size: 12.5px; font-weight: 600; color: #d1443b;
+  background: #fdf4f4; border: 1px solid #e0a9a4; border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 10px;
+}
+/* Hard left, away from the pair that end the job. Back is navigation, not a
+   decision about this card, and sitting it beside Cancel invites the wrong one. */
+.ec-fix-back { margin-right: auto; }
+.ec-fix-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 13px 20px 15px; border-top: 1px solid var(--cb-line-2);
+  background: var(--cb-panel-2);
+}
 .ec-ok { color: #178048; }
 .ec-warn { color: #b7791f; }
 .ec-off { color: var(--cb-faint); }
@@ -16567,9 +16776,16 @@ body.tv-body { display: block; background: #eef1f5; }
    see the listing as a buyer does, Shopify to fix whatever eBay complained
    about. Outline pills rather than filled ones — they are destinations, and
    they must not out-shout the status chip sitting next to them. */
-.ec-pills { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+/* Centred under the "Open" header, which is text-align:center like every other
+   .cb-col-status heading -- right-aligned pills left the column reading crooked.
+   Both pills share a min-width so eBay and Shopify are the same size: they are
+   the same kind of thing, and two different widths read as two different weights
+   of action. 82px clears the wider label ("Shopify" + icon) at 11.5px Inter 700,
+   so neither pill ever grows past it and the pair stays matched. */
+.ec-pills { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
 .ec-pill {
-    display: inline-flex; align-items: center; gap: 5px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    min-width: 82px; box-sizing: border-box;
     border: 1px solid var(--cb-line); background: #fff;
     border-radius: 20px; padding: 4px 10px;
     font-size: 11.5px; font-weight: 700; font-family: inherit;
@@ -16591,6 +16807,72 @@ body.tv-body { display: block; background: #eef1f5; }
 .ec-btn-off:hover { border-color: #e0a9a4; color: #d1443b; background: #fdf4f4; }
 .ec-btn-on { color: #178048; }
 .ec-btn-on:hover { border-color: var(--cb-sage); color: #178048; background: var(--cb-sage-tint); }
+
+
+
+/* =========================================================
+   EMAIL RECIPIENTS — SEARCH + ACCORDION
+   Eleven reports across nineteen lists. Open at once they ran
+   several screens of near-identical address boxes, so: one
+   group open at a time, and a search over report names AND
+   the addresses themselves. Same shape as the Margin Guide
+   rebuttal accordion (.mg-racc) so the two read alike.
+   ========================================================= */
+.er-acc {
+    border: 1px solid #e2e8f0; border-radius: 11px; background: #fff;
+    margin-bottom: 6px; overflow: hidden;
+}
+.er-acc:last-child { margin-bottom: 0; }
+.er-acc.open { border-color: #cbd5e1; box-shadow: 0 2px 10px rgba(16, 24, 40, .07); }
+
+.er-bar {
+    display: flex; align-items: center; gap: 11px; width: 100%;
+    text-align: left; font: inherit; cursor: pointer;
+    background: none; border: 0; padding: 11px 13px;
+}
+.er-bar:hover { background: #f8fafc; }
+.er-bar:focus-visible { outline: 2px solid var(--sage-professional); outline-offset: -2px; }
+
+.er-cv { display: flex; flex-shrink: 0; color: #94a3b8; transition: transform .16s ease; }
+.er-cv svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2.4; }
+.er-acc.open .er-cv { transform: rotate(90deg); color: var(--sage-professional); }
+
+.er-bar-t { flex: 1; min-width: 0; }
+.er-bar-n { display: block; font-size: 13px; font-weight: 900; color: var(--slate-charcoal); }
+.er-bar-d {
+    display: block; font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-top: 1px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* An empty list is not an error — every report keeps a built-in fallback
+   address — but it is worth seeing from the closed bar, because "nobody is
+   getting this" is the one thing you cannot tell from the outside. */
+.er-count {
+    flex-shrink: 0; font-size: 10.5px; font-weight: 800; color: #64748b;
+    background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 2px 9px;
+}
+.er-count.er-none { color: #b45309; background: #fef3c7; border-color: #fde68a; }
+
+.er-body { border-top: 1px solid #e2e8f0; padding: 11px 13px 12px; }
+.er-body > div:last-child { margin-bottom: 0; }
+.er-empty { text-align: center; color: #94a3b8; font-weight: 600; font-size: 12.5px; padding: 22px 0; }
+/* THE PANEL SCROLLS; NOTHING IN IT SHRINKS.
+   #emailRecipientsBody IS .manage-content — a flex column — so every bar is a
+   flex ITEM, and a flex item's default is to shrink to fit rather than let its
+   container overflow. Open one group and the closed bars were squeezed thinner
+   to make room: descriptions clipped out, count badges pushed through the
+   bottom edge, and no scrollbar, because nothing had overflowed. The panel is
+   already overflow-y:auto; it just needed permission to use it. */
+#emailRecipientsBody { gap: 0; }
+#emailRecipientsBody > * { flex-shrink: 0; }
+
+/* Worth keeping in reach: the search is how you get back out of a long open
+   group, and it is useless once it has scrolled off. The negative offsets let
+   it cover the panel's own 20px padding as it pins, so nothing slides under. */
+#emailRecipientsBody .kb-search-bar {
+    position: sticky; top: -20px; z-index: 4;
+    background: #f9fafb; padding: 20px 0 10px; margin: -20px 0 0;
+}
 
 
 /* ============================================================================
@@ -16732,6 +17014,17 @@ body.tv-body { display: block; background: #eef1f5; }
         right: 16px;
         padding: 13px 20px;
     }
+}
+
+/* Bringing Have an Idea? and Quick Messages back onto the phone bar (Ethan kept
+   both) put five action icons + Tools + Sign Out beside the wordmark, which does
+   not fit in 390px. The logo mark still identifies the site, so the WORDMARK is
+   the cheapest thing to drop — Sign Out is not negotiable, it is the only one on
+   the site. Caught by scripts/mobile-check.js, not by eye. */
+@media (max-width: 640px) {
+    .top-nav .brand-wordmark { display: none; }
+    .top-actions .action-btn { width: 34px; height: 34px; }
+    .top-actions .action-btn svg { width: 17px; height: 17px; }
 }
 
 /* --- Side panels become full-height sheets ----------------------------------- */

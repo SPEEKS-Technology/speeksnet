@@ -142,6 +142,41 @@ function _usageSessionId() {
     return id;
 }
 
+// What device this session is being used on.
+//
+// This is the field the beacon never had, which is why usage_events.meta is null
+// on every row written before today and why "is anyone actually on a phone" was
+// unanswerable. Session-level, so it rides the flush envelope rather than being
+// repeated on each event row.
+//
+// kind keys off POINTER TYPE, not width — deliberately. A narrow desktop window
+// is not a phone, and counting it as one would report mobile adoption that is not
+// happening. (That exact confusion cost real time during the Phase 1 layout work,
+// where headless Chrome at 390px wide behaved nothing like a phone.) It also keys
+// off the SHORT edge, so a phone held sideways is still a phone.
+//
+// mob answers the separate, project-specific question: was the mobile LAYER
+// actually engaged — i.e. <=900px, the compact breakpoint in styles.css? Someone
+// on a half-width desktop window sees the mobile layout without being on a mobile
+// device, and that is worth knowing on its own.
+function _usageDevice() {
+    try {
+        const w = Math.round(window.innerWidth || 0);
+        const h = Math.round(window.innerHeight || 0);
+        const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+        const short = Math.min(w, h) || 0;
+        return {
+            w, h,
+            dpr: Math.round((window.devicePixelRatio || 1) * 100) / 100,
+            touch: coarse,
+            kind: !coarse ? 'desktop' : (short < 500 ? 'phone' : 'tablet'),
+            mob: w > 0 && w <= 900,
+        };
+    } catch (_) {
+        return null;   // telemetry must never break a flush
+    }
+}
+
 // Record that this person was on the site today.
 //
 // ⚠️ This exists because 'signin' fires ONLY where the PIN is typed, and
@@ -237,6 +272,7 @@ async function _usageFlush() {
             role: sessionStorage.getItem('speeksUserRole') || '',
             store: sessionStorage.getItem('speeksUserStore') || '',
             sessionId: _usageSessionId(),
+            device: _usageDevice(),
             events
         });
     } catch (_) {
@@ -623,6 +659,10 @@ async function loadCMS() {
 
                 const markReadBtn = (!isRead && !isHidden && cleanUser) ? `<button class="hub-markread" onclick="hubMarkRead('${annId}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Mark as read</button>` : '';
 
+                // Receipt lives in the card HEADER, matching patch notes, so the
+                // "Read by" list drops into the card body instead of out of the
+                // bottom of the card (Ethan, 2026-08-18). Header placement also
+                // keeps it clear of the reaction row it used to sit beside.
                 const readBy = item.readBy || [];
                 const readReceiptHtml = isPrivileged ? `
                     <div class="read-receipt" id="receipt_${annId}">
@@ -647,11 +687,11 @@ async function loadCMS() {
                         <div class="hub-row">
                             <span class="hub-tico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"></path></svg></span>
                             <div class="hub-col">
-                                <div class="hub-item-top">${parsed.priority ? '<span class="hub-prio-pill">Priority</span>' : ''}<span class="hub-item-title">${escapeHtml(parsed.title)}</span><span class="hub-meta-r">${metaR}</span></div>
+                                <div class="hub-item-top">${parsed.priority ? '<span class="hub-prio-pill">Priority</span>' : ''}<span class="hub-item-title">${escapeHtml(parsed.title)}</span>${readReceiptHtml}<span class="hub-meta-r">${metaR}</span></div>
                                 <div class="hub-kind-meta"><span class="hub-kind">${kindLabel}</span>${item.author ? ' · ' + escapeHtml(item.author) : ''}</div>
                                 <div class="hub-item-body">${parsed.bodyHtml}</div>
                                 ${docLinkHtml}
-                                <div class="hub-foot">${reactionsHtml}${readReceiptHtml}${markReadBtn}</div>
+                                <div class="hub-foot">${reactionsHtml}${markReadBtn}</div>
                             </div>
                         </div>
                     </div>`;
@@ -1352,18 +1392,62 @@ document.addEventListener('click', (e) => {
     }
 });
 
+// THE CARD IS WHAT CLIPS THE "READ BY" LIST, NOT THE FEED.
+// #notifDropdown .hub-item is overflow:hidden (it rounds its own corners), and
+// a hub card is often only ~120px tall while this popover is ~190px. So a
+// receipt in the card FOOTER gets cut off a few pixels down no matter which
+// way it opens — flipping it upward inside a 120px card just clips the other
+// end. An earlier pass measured the popover against .hub-feed and looked
+// correct; .hub-item is a NEARER ancestor and was the real clipper all along.
+//
+// So the popover is let OUT of the card first (.rr-unclip, removed on close),
+// and only then is the direction measured — against the nearest genuinely
+// SCROLLING ancestor, which is the feed. The feed has to keep clipping: it
+// scrolls. The card does not, so its clipping is pure decoration and can be
+// dropped for as long as the popover is open.
+//
+// Do not hard-code a direction. The announcements receipt sits in a card
+// footer (down is tight) and the patch-note receipt in a card header (up is
+// tight); one constant cannot be right for both.
+function _rrCloseAll() {
+    document.querySelectorAll('.read-receipt-popover.show').forEach(p => {
+        p.classList.remove('show', 'rr-up');
+    });
+    document.querySelectorAll('.rr-unclip').forEach(n => n.classList.remove('rr-unclip'));
+}
+
 window.toggleReadReceipt = function(id) {
     const popover = document.getElementById('receipt-popover_' + id);
     if (!popover) return;
     const isOpen = popover.classList.contains('show');
-    document.querySelectorAll('.read-receipt-popover.show').forEach(p => p.classList.remove('show'));
-    if (!isOpen) popover.classList.add('show');
+    _rrCloseAll();
+    if (isOpen) return;
+
+    const anchor = popover.parentElement;
+    if (anchor) {
+        let clip = null;
+        for (let n = anchor.parentElement; n && n !== document.body; n = n.parentElement) {
+            const cs = getComputedStyle(n);
+            if (cs.overflowY === 'auto' || cs.overflowY === 'scroll') { clip = n; break; }
+            // A non-scrolling ancestor that hides overflow is only decoration.
+            if (cs.overflowY !== 'visible' || cs.overflowX !== 'visible') n.classList.add('rr-unclip');
+        }
+        const box = clip ? clip.getBoundingClientRect()
+            : { top: 0, bottom: window.innerHeight };
+        const r = anchor.getBoundingClientRect();
+        // 6px is the gap the stylesheet leaves on whichever side it opens.
+        const below = box.bottom - r.bottom - 6;
+        const above = r.top - box.top - 6;
+        // visibility:hidden still lays the popover out, so it can be measured
+        // before it is shown. max-height caps it at 200.
+        const need = Math.min(popover.scrollHeight || 0, 200) + 8;
+        if (below < need && above > below) popover.classList.add('rr-up');
+    }
+    popover.classList.add('show');
 };
 
 document.addEventListener('click', (e) => {
-    if (!e.target.closest('.read-receipt')) {
-        document.querySelectorAll('.read-receipt-popover.show').forEach(p => p.classList.remove('show'));
-    }
+    if (!e.target.closest('.read-receipt')) _rrCloseAll();
 });
 
 // --- REACTION LIVE POLLING ---
@@ -9557,49 +9641,104 @@ function _lvCentralDay(iso) {
 // goal, error — falls through from the live row.
 const _lvIsPrev = () => _lvMode === 'prev';
 const _lvIsMtd  = () => _lvMode === 'mtd';
+const _lvIsToday = () => _lvMode === 'today';
+
+
+// WHICH COLUMNS EACH TAB CARRIES.
+// Every mode used to draw all ten and fill the ones that did not apply with a
+// dash or with a figure nobody reads. Kept in ONE place because the header and
+// the row are built by different functions, and a disagreement between them
+// shifts every cell in the table one column right.
+//
+// Cost is gone from the table: Margin states the same fact as a ratio, in a
+// column that is comparable between two stores of different size. Orders is
+// off the Month, where a whole month's order count is nothing anybody acts on;
+// the block at the top still has it. The tail column is gone from both
+// finished views: on the Month it was Net sales over a constant, and on
+// Yesterday Net over Orders -- each a division of two figures already there.
+const _lvCols = () => ({
+    cost:   false,
+    orders: !_lvIsMtd(),
+    tail:   _lvIsToday(),
+});
 // A finished DAY is what the day columns mean in both of the other two modes, so
-// the third one is the same trick a second time: month-to-date figures copied
-// over the day fields. Everything month-scoped (mtdGp, goal, pctOfGoal,
-// paceIndex) is deliberately left alone — on this view the "GP this month"
-// column and the Gross profit column really are the same number, which is the
-// price of the three tabs staying one readable table.
+// the third one is the same trick a second time: the month's figures copied over
+// the day fields.
+//
+// THE MONTH RUNS TO THE LAST COMPLETE DAY, not to this minute (user's call
+// 2026-08-17). Today's half-finished trading is what the Today tab is for; a
+// month that includes it cannot be compared with anything, which is the whole
+// reason the month-over-month and year-over-year band underneath can state a
+// percentage at all rather than a percentage plus a caveat.
+//
+// So the source is `m.prev` — and note what that is: the edge function's
+// month-to-date AT YESTERDAY'S CLOSE, derived by subtracting the days after it
+// from the running total rather than by re-summing. The two can therefore never
+// disagree about which days they include. It also means "through yesterday" cost
+// no backend work at all; the numbers were already in the payload, keyed for the
+// Yesterday tab's goal bar.
+//
+// Unlike the other two modes this ALSO moves the month-scoped fields (mtdNet,
+// mtdGp, pctOfGoal, paceIndex). It has to: the goal bar, the "GP this month"
+// column and the pace pill read those directly, and leaving them live would put
+// a figure that counts today beside four that stop at yesterday — on the one tab
+// whose entire promise is that everything on it covers the same days.
 function _lvView(m) {
     if (!m) return m;
     if (_lvIsPrev() && m.prev) return Object.assign({}, m, m.prev);
     if (_lvIsMtd()) {
+        // No closed-out day to show. Only reachable on the 1st, and the Month tab
+        // is not offered then (see _lvMtdReady) — but a payload mid-rollover can
+        // land here, and falling through live is better than rendering zeros.
+        const p = m.prev;
+        if (!p || p.mtdNet === null || p.mtdNet === undefined) return m;
         // mtdCogs is only missing on district payloads written before the roll-up
         // learned to sum it. Deriving it from net minus profit is exact, so an
         // older cached payload renders correctly rather than showing $0 cost.
-        const cogs = (m.mtdCogs === null || m.mtdCogs === undefined)
-            ? (Number(m.mtdNet) || 0) - (Number(m.mtdGp) || 0) : m.mtdCogs;
+        const cogs = (p.mtdCogs === null || p.mtdCogs === undefined)
+            ? (Number(p.mtdNet) || 0) - (Number(p.mtdGp) || 0) : p.mtdCogs;
         return Object.assign({}, m, {
-            netToday: m.mtdNet, cogsToday: cogs, gpToday: m.mtdGp,
-            ordersToday: m.mtdOrders, marginToday: m.mtdMargin,
+            netToday: p.mtdNet, cogsToday: cogs, gpToday: p.mtdGp,
+            ordersToday: p.mtdOrders, marginToday: p.mtdMargin,
             // null, not 0, when the payload predates mtdReturns — a cache written
             // by the old function would otherwise report every store as having
             // refunded nothing all month, which is a wrong number rather than a
             // missing one. The column dashes until the first refresh lands.
-            returnsToday: (m.mtdReturns === null || m.mtdReturns === undefined)
-                ? null : m.mtdReturns,
-            aov: m.mtdOrders > 0 ? m.mtdNet / m.mtdOrders : null,
+            returnsToday: (p.mtdReturns === null || p.mtdReturns === undefined)
+                ? null : p.mtdReturns,
+            aov: p.mtdOrders > 0 ? p.mtdNet / p.mtdOrders : null,
+            mtdNet: p.mtdNet, mtdCogs: cogs, mtdGp: p.mtdGp, mtdOrders: p.mtdOrders,
+            mtdReturns: p.mtdReturns, mtdMargin: p.mtdMargin,
+            pctOfGoal: p.pctOfGoal, paceIndex: p.paceIndex,
         });
     }
     return m;
 }
 // How many days the selected view covers — the divisor behind "average per day".
+// Both finished views now measure the same thing: COMPLETE days. Only Today
+// counts itself.
 function _lvDays(d) {
-    if (_lvIsPrev()) return (d.prev && d.prev.daysElapsed) || 1;
-    return (d.month && d.month.daysElapsed) || 1;
+    if (_lvIsToday()) return (d.month && d.month.daysElapsed) || 1;
+    return (d.prev && d.prev.daysElapsed) || 1;
 }
-// True whenever month-to-date figures mean something. On the 1st the previous
-// open day belongs to LAST month, so its "this month" numbers would all be zero —
-// which reads as a catastrophe rather than as a new month.
+// True whenever month figures mean something. On the 1st the previous day belongs
+// to LAST month, so "this month" would be zero everywhere — which reads as a
+// catastrophe rather than as a month that has not started. That now rules out the
+// Month tab as well as the month half of Yesterday, because both are built from
+// the same closed-out block.
 function _lvHasMonth(d) {
-    return !_lvIsPrev() || !!(d && d.prev && d.prev.inMonth);
+    if (_lvIsToday()) return true;
+    return !!(d && d.prev && d.prev.inMonth);
+}
+// Is there a Month tab to offer at all? On the 1st there is no complete day yet,
+// so the tab is withheld rather than shown full of zeros — cheaper and more honest
+// than an empty state threaded through six renderers.
+function _lvMtdReady(d) {
+    return !!(d && d.prev && d.prev.inMonth && d.prev.daysElapsed);
 }
 function _lvElapsedPct(d) {
-    if (_lvIsPrev()) return (d.prev && d.prev.elapsedPct) || 0;
-    return (d.month && d.month.elapsedPct) || 0;
+    if (_lvIsToday()) return (d.month && d.month.elapsedPct) || 0;
+    return (d.prev && d.prev.elapsedPct) || 0;
 }
 // Built from the date components, never from Date.parse of a bare ISO string —
 // that parses as UTC and renders as the day before for anyone west of Greenwich.
@@ -9615,7 +9754,7 @@ function _lvToggle(d) {
         + (_lvMode === mode ? ' on' : '') + '" onclick="setLiveMode(\'' + mode + '\')">'
         + escapeHtml(label) + '</button>';
     return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', 'Yesterday')
-        + btn('mtd', 'Month') + '</span>';
+        + (_lvMtdReady(d) ? btn('mtd', 'Month') : '') + '</span>';
 }
 const _LV_MODES = ['today', 'prev', 'mtd'];
 function setLiveMode(mode) {
@@ -9623,6 +9762,12 @@ function setLiveMode(mode) {
     if (next === _lvMode) return;
     _lvMode = next;
     renderLiveDashboard();
+}
+// Called at the top of every render. Somebody sitting on the Month tab as midnight
+// on the 1st rolls past would otherwise be left on a tab whose button has just
+// been withdrawn, reading a month of zeros.
+function _lvGuardMode(d) {
+    if (_lvMode === 'mtd' && !_lvMtdReady(d)) _lvMode = 'today';
 }
 // What the selected view is called in the eyebrow, and the date line beside the
 // title. Both are rewritten on every render so a past day or a whole month can
@@ -9636,8 +9781,12 @@ function _lvHeadStamp(d) {
         // Built from the date parts, never Date.parse of the bare string — that
         // reads as UTC and names the wrong month for anyone west of Greenwich on
         // the 1st.
-        const p = String(d.asOfCentral || '').slice(0, 10).split('-');
-        if (p.length !== 3) return 'Month To Date';
+        //
+        // Off d.prev.date, NOT asOfCentral: the span ends at the last complete day,
+        // so on the 17th this has to read "August 1–16". Taking it from today's
+        // date would name a span a day longer than every figure under it.
+        const p = String((d.prev && d.prev.date) || '').split('-');
+        if (p.length !== 3) return 'Month So Far';
         return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString('en-US', { month: 'long' })
             + ' 1–' + (+p[2]);
     }
@@ -9649,9 +9798,12 @@ function _lvHeadStamp(d) {
 function _lvStamp(d) {
     if (_lvIsPrev()) return 'Final &middot; ' + escapeHtml(_lvDayName(d.prev.date, false));
     if (_lvIsMtd()) {
+        // _lvDays, not month.daysElapsed: the span stops at the last complete day,
+        // so on the 17th this is 16 of 31 and the average-per-day figures beside it
+        // divide by the same 16.
         return d.month
-            ? d.month.daysElapsed + ' Of ' + d.month.daysTotal + ' Days'
-            : 'Month To Date';
+            ? _lvDays(d) + ' Of ' + d.month.daysTotal + ' Days'
+            : 'Month So Far';
     }
     return 'Last Change ' + _lvClock(d.asOfCentral);
 }
@@ -10088,15 +10240,25 @@ function _lvChime() {
     } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
 }
 
-// A REFUND: the mirror image — B5 falling to E5, quieter and with a longer tail.
-// Deliberately the same shape as the sale chime played backwards, so which one
-// just happened is readable from across the room without looking up.
+// A REFUND: the sale chime, two octaves down and falling instead of rising.
+//
+// Same instrument, same wooden knock, same length -- deliberately the same
+// FAMILY of sound rather than a different one. A refund is ordinary business,
+// not a fault, and the shapes that separate hardest from a chime (a buzz, a
+// swoop, a thud) all say something went wrong. Depth and a falling interval
+// carry "money going out" without ever sounding like an alarm, and two octaves
+// is far enough apart that no one confuses the two across a shop floor.
+//
+// The low-pass sits well under the sale's: the same notes through a brighter
+// filter would ring close enough to the sale to blur with it.
 function _lvRefundChime() {
     try {
-        const bus = _lvBus(3200, 0.45);
+        const bus = _lvBus(1400, 0.55);
         if (!bus) return;
-        _lvNote(bus, 'triangle', 987.8, 0,    0.20, 0.008, 0.34);
-        _lvNote(bus, 'triangle', 659.3, 0.11, 0.20, 0.008, 0.44);
+        [[261.6, 0], [196.0, 0.085]].forEach(([freq, at]) => {   // C4 falling to G3
+            _lvNote(bus, 'sine', freq, at, 0.30, 0.005, 0.34);
+            _lvNote(bus, 'sine', freq * 4, at, 0.05, 0.004, 0.12);
+        });
     } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
 }
 
@@ -10982,9 +11144,9 @@ function _bdGoalChip(store, t, proj, isCurrent) {
     // "Tracking" is a word about the future, and a closed month has none. The
     // running month says what it is heading for; a finished one says what it
     // came to.
-    const verb = isCurrent ? ' tracking to ' : ' of ';
+    const verb = isCurrent ? ' Tracking To ' : ' Of ';
     return '<span class="bd-h-goal' + tone + '">'
-        + '<b>' + _lvPct(pct) + '</b>' + verb + _lvMoney(goal, false) + ' goal</span>';
+        + '<b>' + _lvPct(pct) + '</b>' + verb + _lvMoney(goal, false) + ' Goal</span>';
 }
 
 // The block on screen, store or company. Every reader goes through this so the
@@ -11162,15 +11324,24 @@ function _bdRender() {
           + '<span class="bd-cmp-v">' + c.v + '</span>'
           + '<span class="bd-cmp-d">' + (c.d || '') + '</span></div>'
         : '';
+    // THE PROJECTION IS THE HEADLINE, the month so far is the footnote (user's
+    // call). Mid-month the banked figure is always the smaller and always the
+    // less useful of the two -- on the 12th it reads like a disaster next to a
+    // goal the month is comfortably on pace to beat. Swapped here rather than at
+    // each call site so no tile can end up the other way round; a tile with no
+    // projection at all (a finished month, a figure that cannot be projected)
+    // keeps its own value as the headline and shows no second line.
     const tile = (k, v, o) => {
         o = o || {};
         const rows = (o.cmp || []).map(cmpRow).join('');
+        const big = o.track || v;
+        const small = o.track ? 'Current ' + v : '';
         return '<div class="cc-cell bd-tile' + (o.accent ? ' lv-accent' : '') + '">'
             + '<span class="sh-stripe g"></span>'
-            + '<div class="sh-k">' + k + '</div>'
+            + '<div class="sh-k">' + k + (o.track ? ' <span class="bd-k-sub">- Tracking</span>' : '') + '</div>'
             + '<div class="bd-tile-row">'
-            + '<div class="bd-tile-main"><div class="sh-v">' + v + '</div>'
-            + (o.track ? '<div class="bd-track">Tracking ' + o.track + '</div>' : '')
+            + '<div class="bd-tile-main"><div class="sh-v">' + big + '</div>'
+            + (small ? '<div class="bd-track">' + small + '</div>' : '')
             + (o.note ? '<div class="bd-track bd-note">' + o.note + '</div>' : '')
             + '</div>'
             + (rows ? '<div class="bd-tile-cmp">' + rows + '</div>' : '')
@@ -11443,12 +11614,30 @@ function _lvMineRow(code) {
     return (_lvOwnCode && code === _lvOwnCode) ? 'lv-row-mine' : '';
 }
 
-function _lvTile(k, v, sub, accent, cls) {
+// `cmp` is an optional list of comparison rows ({k, v, d}) shown to the RIGHT of
+// the figure, in the Daily Breakdown's shape and sharing its CSS. Two different
+// KINDS of number: the figure with its own sub-line on the left, other periods on
+// the right — stacked in one column there was nothing to say which was which.
+// Nulls in the list are dropped, so a caller can hand over a fixed-length array
+// and let a missing month simply not appear.
+//
+// With no `cmp` the markup is byte-identical to what it was, which is what keeps
+// the other forty-odd _lvTile callers out of this change.
+function _lvTile(k, v, sub, accent, cls, cmp) {
+    const rows = (cmp || []).filter(Boolean).map(c =>
+        '<div class="bd-cmp"><span class="bd-cmp-k">' + c.k + '</span>'
+        + '<span class="bd-cmp-v">' + c.v + '</span>'
+        + '<span class="bd-cmp-d">' + (c.d || '') + '</span></div>').join('');
+    const body = '<div class="sh-v">' + v + '</div>'
+        + '<div class="sh-sub">' + (sub || '&nbsp;') + '</div>';
     return '<div class="cc-cell' + (accent ? ' lv-accent' : '') + (cls || '') + '">'
         + '<span class="sh-stripe g"></span>'
         + '<div class="sh-k">' + k + '</div>'
-        + '<div class="sh-v">' + v + '</div>'
-        + '<div class="sh-sub">' + (sub || '&nbsp;') + '</div></div>';
+        + (rows
+            ? '<div class="bd-tile-row"><div class="bd-tile-main">' + body + '</div>'
+              + '<div class="bd-tile-cmp">' + rows + '</div></div>'
+            : body)
+        + '</div>';
 }
 
 function _lvChip(k, v) {
@@ -11610,8 +11799,18 @@ function _lvBuySpan(d) {
         const day = +String(d.prev.date).slice(8, 10);
         return day > 0 ? { from: day, to: day } : null;
     }
+    if (_lvIsMtd()) {
+        // 1st through the last COMPLETE day, matching the selling half exactly.
+        // This also retires a mismatch the two feeds used to have here: a day's
+        // purchases are keyed the following morning, so buying never had today
+        // anyway — it was being weighed against a Shopify month that did, which
+        // read LEE 15 points low. Both sides now stop on the same day by
+        // construction rather than by _lvBuyFor trimming afterwards.
+        if (!_lvMtdReady(d)) return null;
+        return { from: 1, to: d.prev.daysElapsed };
+    }
     if (!elapsed) return null;
-    return _lvIsMtd() ? { from: 1, to: elapsed } : { from: elapsed, to: elapsed };
+    return { from: elapsed, to: elapsed };
 }
 function _lvBuyFor(code, d) {
     const span = _lvBuySpan(d);
@@ -11940,6 +12139,111 @@ function _lvFcSum(views) {
     };
 }
 
+// --- against last month and last year ---------------------------------------
+// Shown as comparison ROWS on the Tracking tiles, in the same shape the Daily
+// Breakdown popout uses: the period's name, its figure, and the change beside it.
+// The two surfaces share the .bd-cmp CSS deliberately — a reader who has seen one
+// should not have to learn the other, and a second set of classes would drift.
+//
+// WHAT THE DELTA MEASURES: this month's PROJECTION against that month's actual.
+// The tiles these hang off are month-end projections, so that is the comparison
+// they are about — "will this month beat last month?" — and it is what both the
+// Daily Breakdown and the Sales Summary workbook's own YoY line compute.
+// Whole finished months come from the edge function; see cmpSpans there.
+
+// Percentage change, or '' when there is no baseline to change FROM. Same rule and
+// the same markup as _bdDelta, so the arrows and colours match across the two.
+function _lvDelta(now, then, tone) {
+    const b = Number(then) || 0;
+    if (b <= 0 || now === null || now === undefined || !(Number(now) > 0)) return '';
+    const pct = (Number(now) / b - 1) * 100;
+    const up = pct >= 0;
+    const a = Math.abs(pct);
+    // A delta off a tiny baseline is arithmetically true and useless to read: a
+    // store whose first Shopify month was $265 of online orders would read
+    // +40,000%. Capped, so the direction still shows.
+    const txt = a > 999 ? '>999%' : a.toFixed(1) + '%';
+    return '<span class="bd-mom' + (tone === 'good' ? (up ? ' up' : ' down') : '') + '">'
+        + (up ? '&#9650;' : '&#9660;') + ' ' + txt + '</span>';
+}
+// How a comparison month is named on the tile. Last month is the month name alone
+// ("July") — it is unambiguous next to a tile about this one. Last year needs its
+// year ("Aug 2025"), which is the whole point of that row. Both are built from the
+// span's own parts, never Date.parse of the bare string.
+function _lvCmpName(span, thisYear) {
+    const p = String((span && span.from) || '').split('-');
+    if (p.length !== 3) return '';
+    const d = new Date(+p[0], +p[1] - 1, 1);
+    return +p[0] === thisYear
+        ? d.toLocaleDateString('en-US', { month: 'long' })
+        : d.toLocaleDateString('en-US', { month: 'short' }) + ' ' + p[0];
+}
+/**
+ * One comparison month, summed across the stores on screen — on a SAME-STORE basis.
+ *
+ * Only stores that traded in that month are counted, and the PROJECTION side is
+ * summed over exactly those same stores; that second half is the one that is easy
+ * to get wrong. Maplewood and Ballwin opened in April and May 2026, so a district
+ * year-over-year putting all five stores' projection against the three that existed
+ * last August would read like enormous growth that is really two shop openings.
+ * `has` is derived from the data by the edge function, not from a list of store
+ * codes, so this corrects itself as each store's history catches up.
+ *
+ * `key` is 'lastMonth' or 'lastYear'. Returns null when no store on screen has that
+ * month at all, which is how a missing comparison renders as no row rather than as
+ * a zero — a store that did not exist is missing data, not a store in decline.
+ */
+function _lvCmpSum(views, key) {
+    const all = (views || []).filter(v => v && v.cmp && v.cmp[key]);
+    const parts = all.filter(v => v.cmp[key].has);
+    if (!parts.length) return null;
+    const then = k => parts.reduce((a, v) => a + (Number(v.cmp[key][k]) || 0), 0);
+    // Buying has its own coverage: the sheet can be missing a month Shopify has.
+    const buyParts = all.filter(v => v.cmp[key].resale > 0);
+    const buySum = k => buyParts.reduce((a, v) => a + (Number(v.cmp[key][k]) || 0), 0);
+    return {
+        span: parts[0].cmp[key],
+        codes: parts.map(v => v.code),
+        missing: all.filter(v => !v.cmp[key].has).map(v => v.code),
+        total: all.length,
+        partial: all.length > parts.length,
+        thenNet: then('net'), thenGp: then('gp'),
+        // Net profit is gross profit less 21% of sales, the same constant the
+        // Tracking tile and the Daily Breakdown use, so the three cannot disagree.
+        thenNetGp: then('gp') - then('net') * BD_NET_GP_RATE,
+        // The projections for the SAME stores, through the one function the
+        // Tracking tiles are built from.
+        fc: _lvFcSum(parts),
+        thenResale: buyParts.length ? buySum('resale') : null,
+        buyFc: buyParts.length ? _lvFcSum(buyParts) : null,
+    };
+}
+// The rows for one Tracking tile: last month above last year, each naming its
+// month. `pick` pulls the pair to compare out of a summed month — the projected
+// figure and that month's actual.
+//
+// A row whose month is PARTIAL says so where the figure would otherwise imply five
+// stores: "3 Of 5" replaces nothing, it is appended to the name, because the
+// alternative is a district total that quietly means something narrower than the
+// tile above it.
+function _lvCmpRows(views, d, pick) {
+    const yr = +String((d && d.prev && d.prev.date) || '').slice(0, 4) || 0;
+    return ['lastMonth', 'lastYear'].map(key => {
+        const sum = _lvCmpSum(views, key);
+        if (!sum) return null;
+        const pair = pick(sum);
+        if (!pair || pair[1] === null || !(Number(pair[1]) > 0)) return null;
+        return {
+            k: _lvCmpName(sum.span, yr)
+                + (sum.partial && views.length > 1
+                    ? ' <span class="lv-cmp-part">' + sum.codes.length + ' Of ' + sum.total + '</span>' : ''),
+            v: _lvMoney(pair[1], false),
+            d: _lvDelta(pair[0], pair[1], 'good'),
+        };
+    });
+}
+
+
 // Sits at the TOP of the detail, immediately under the four headline tiles —
 // Month only, so every caller can ask for it unconditionally.
 //
@@ -11987,6 +12291,15 @@ function _lvForecast(views, d) {
     const buys = d ? views.map(v => _lvBuyFor(v.code, d)).filter(Boolean) : [];
     const mtdBuy = buys.length ? _lvBuySum(buys).bought : null;
     const soFar = n => _lvMoney(n, false) + ' So Far';
+    // TRACKING NET PROFIT, derived from the two projections beside it rather
+    // than projected on its own: net is gross profit less 21% of sales, so a
+    // separately-projected net could disagree with the GP and Revenue tiles it
+    // sits between, which is the one thing a band of four figures must not do.
+    // Same constant as the Daily Breakdown (BD_NET_GP_RATE), so the boards
+    // cannot quote different net figures for one month.
+    const trackNet = (f.trackGp > 0 && f.trackRev > 0)
+        ? f.trackGp - f.trackRev * BD_NET_GP_RATE : null;
+    const mtdNet = mtdGp - mtdRev * BD_NET_GP_RATE;
 
     // Stores that got through a whole open day without a new review. Computed
     // once: it drives both the tile's class and its sub-line.
@@ -12000,13 +12313,34 @@ function _lvForecast(views, d) {
             ? '<span class="lv-rev-flat-n">Nothing New Yesterday</span>'
             : '<span class="lv-rev-flat-n">Nothing New Yesterday</span>'
               + flat.map(c => '<span class="lv-rev-pill">' + escapeHtml(c) + '</span>').join('');
+    // AGAINST LAST MONTH AND LAST YEAR, on the tiles rather than in a section of
+    // its own (user's call 2026-08-17). Each row names its month, shows what that
+    // month did, and measures this month's PROJECTION against it — the tile it sits
+    // on is a projection, so that is the comparison it is about.
+    //
+    // Buying compares against the sheet's own tables and selling against Shopify,
+    // which is the same split the tiles themselves already have; each takes its
+    // figure from the source that owns it. Reviews get no comparison: the sheet has
+    // only ever carried this month's count.
+    const cmpRev = _lvCmpRows(views, d, s => [s.fc && s.fc.trackRev, s.thenNet]);
+    const cmpGp = _lvCmpRows(views, d, s => [s.fc && s.fc.trackGp, s.thenGp]);
+    const cmpNet = _lvCmpRows(views, d, s => [
+        (s.fc && s.fc.trackGp > 0 && s.fc.trackRev > 0)
+            ? s.fc.trackGp - s.fc.trackRev * BD_NET_GP_RATE : null,
+        s.thenNetGp,
+    ]);
+    const cmpBuy = _lvCmpRows(views, d, s => [s.buyFc && s.buyFc.buyProj, s.thenResale]);
     return _lvSplit('Tracking to month-end', '')
         + '<div class="lv-strip lv-fc-strip ' + (hasReviews ? 's4' : 's3') + '">'
         + _lvTile('Tracking Buying', _lvMoney(f.buyProj, false),
-            mtdBuy === null ? 'Projected Month-End' : soFar(mtdBuy))
-        + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), soFar(mtdRev))
+            mtdBuy === null ? 'Projected Month-End' : soFar(mtdBuy), false, '', cmpBuy)
+        + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), soFar(mtdRev),
+            false, '', cmpRev)
+        + (trackNet === null ? '' : _lvTile('Tracking Net Profit',
+            _lvMoney(trackNet, false), soFar(mtdNet), false, '', cmpNet))
         + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
-            soFar(mtdGp) + (f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''))
+            soFar(mtdGp) + (f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''),
+            false, '', cmpGp)
         // The only tile whose sub-line carries figures rather than a caption, and
         // deliberately: the projection alone ("45") is the one number here nobody
         // can sanity-check by eye, because unlike revenue there is no running total
@@ -12104,7 +12438,8 @@ function _lvCombine(stores) {
 
 function _lvRollupTiles(r, d, label, views) {
     const prev = _lvIsPrev();
-    const elapsed = prev ? (d.prev && d.prev.daysElapsed) : (d.month && d.month.daysElapsed);
+    // Complete days on both finished views; only Today counts itself.
+    const elapsed = _lvIsToday() ? (d.month && d.month.daysElapsed) : (d.prev && d.prev.daysElapsed);
     const days = d.month && elapsed !== null && elapsed !== undefined
         ? elapsed + ' Of ' + d.month.daysTotal + ' Days'
         : '';
@@ -12183,13 +12518,19 @@ function _lvStoreRow(v, d, foot, rev) {
     // Last column: a live clock only means something today. On a finished day it
     // holds what an average order was worth; over a month, what an average day
     // looked like — the figure that makes two stores of different size comparable.
-    const orders = Number(v.ordersToday) || 0;
-    const tail = _lvIsMtd()
-        ? _lvMoney((Number(v.netToday) || 0) / _lvDays(d), false)
-        : _lvIsPrev()
-            ? (orders > 0 ? _lvMoney((Number(v.netToday) || 0) / orders, true) : '—')
-            : (v.lastOrderAt && _lvCentralDay(v.lastOrderAt) === String(asOf || '').slice(0, 10)
-                ? _lvOrderClock(v.lastOrderAt) : '—');
+    const cols = _lvCols();
+    const tail = (v.lastOrderAt && _lvCentralDay(v.lastOrderAt) === String(asOf || '').slice(0, 10))
+        ? _lvOrderClock(v.lastOrderAt) : '—';
+    // Per-store month-end projections come off the hub, the same numbers the
+    // Tracking strip above the table is built from -- NOT recomputed here, or the
+    // row and the tile would drift apart the first time the sheet changed how it
+    // projects. The roll-up is handed its own summed projection (fcSum) by the
+    // table: with the banked figure no longer printed beside each projection,
+    // a total that stayed banked would sit under five projections and simply
+    // look wrong -- five figures around $130k over a total of $330k.
+    const fc = _lvIsMtd() ? (v.fcSum || _lvFcFor(v.code)) : null;
+    const trackCell = (proj, actual, strong) =>
+        (proj > 0) ? _lvMoney(proj, strong) : _lvMoney(actual, strong);
     const gp = _lvHasMonth(d)
         ? _lvMoney(v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
         : '—';
@@ -12200,44 +12541,69 @@ function _lvStoreRow(v, d, foot, rev) {
     return '<tr' + (rowCls ? ' class="' + rowCls + '"' : '') + '><td><span class="lv-store">' + tint
         + '<b>' + escapeHtml(v.code) + '</b><span class="lv-store-nm">'
         + escapeHtml(v.name || '') + '</span></span></td>'
-        + '<td class="lv-strongnum">' + _lvMoney(v.netToday, true) + '</td>'
+        + '<td class="lv-strongnum">' + trackCell(fc && fc.trackRev, v.netToday, true) + '</td>'
         // Cost and gross profit for the day itself. The single-store view has had
         // these all along (cost under the margin tile, GP as a chip); the table did
         // not, so the district read sales without the money actually made on them.
-        + '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>'
-        + '<td class="lv-strongnum">' + _lvMoney(v.gpToday, false) + '</td>'
+        + (cols.cost ? '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>' : '')
+        + '<td class="lv-strongnum">' + trackCell(fc && fc.trackGp, v.gpToday, false) + '</td>'
         // Refunds sits beside Orders because it is the other half of the same
         // count — what came back out of the till against what went in.
         + '<td class="lv-quietnum"' + (v.returnsToday === null || v.returnsToday === undefined
             ? ' title="This cache was written before the feed carried month-to-date'
               + ' refunds — it fills in on the next refresh."' : '') + '>'
         + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
-        + '<td>' + v.ordersToday + '</td>'
+        + (cols.orders ? '<td>' + v.ordersToday + '</td>' : '')
         + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
         + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex + '%') + '</span></td>'
         + (rev === null || rev === undefined ? ''
             : '<td class="lv-boldnum">' + (rev > 0 ? _lvNum(rev) : '—') + '</td>')
-        + '<td>' + tail + '</td></tr>';
+        + (cols.tail ? '<td>' + tail + '</td>' : '') + '</tr>';
 }
 
-// The phone view of the selling table.
+// The phone view of the live dashboard.
 //
-// This is a REDUCTION, not a reflow. The table carries ten columns and a 390px
-// screen can hold three, so rather than shrink all ten into unreadability it
-// shows the three figures that answer "how is each store doing right now":
-// sell value, sell margin, and progress against the month's goal.
+// A REDUCTION, not a reflow. The desktop table carries ten columns; the phone
+// shows the three figures that answer "how are we doing right now" from the
+// sofa: net sales, gross profit, and progress against goal. It rides the same
+// Today / Yesterday / Month toggle as the table, because _lvView() has already
+// switched the fields to the selected mode by the time a card is built.
 //
-// One honesty note on the third figure. pctOfGoal is `mtdGp / goal * 100` — it
-// measures GROSS PROFIT against the monthly GP goal, and it stays month-scoped
-// even when the panel is set to Today or Yesterday (see the field list above
-// _lvView). So it is labelled "to GP goal · month" rather than a bare "to goal",
-// which on a Today view would read as a claim about today.
+// SCOPE IS NARROWER THAN DESKTOP, deliberately. On a computer a manager opening
+// the Command Center Live tab gets the whole district board (see the note in
+// renderLiveDashboard). On a phone a manager gets THEIR STORE ONLY — comparing
+// five stores is a table, and a table is the one shape a phone cannot show.
+// District Managers and the CEO still get the company view, because for them the
+// comparison IS the job.
 //
-// Emitted next to the table, not instead of it: CSS shows exactly one of the two,
-// so the desktop table is untouched and this cannot regress it.
+// One honesty note on the percentage: pctOfGoal is mtdGp / goal * 100 — gross
+// profit against the MONTHLY goal. It stays month-scoped on the Today and
+// Yesterday tabs too, since goals are monthly and there is no daily goal to
+// measure against. The legend says so rather than letting a bare "% to goal" be
+// read as a claim about today.
+const _LV_COMPANY_ROLES = new Set(["district manager", "ceo"]);
+
 function _lvCards(stores, d, rollup, rollupLabel) {
+    const role = (sessionStorage.getItem("speeksUserRole") || "").toLowerCase().trim();
+    const company = _LV_COMPANY_ROLES.has(role);
+    // A Multi-Store Manager runs two stores and is handed exactly those two, so
+    // "their store" is both of them plus the combined line — not one of the pair.
+    const msm = sessionStorage.getItem("speeksMultiStore") === "true";
+
+    let list, roll;
+    if (company || msm) {
+        list = stores;
+        roll = rollup;
+    } else {
+        list = stores.filter(m => m && m.code === _lvOwnCode);
+        roll = null;   // no district total for a single store — it would be the same number
+    }
+    if (!list.length) {
+        return '<p class="lv-cards-legend">No live figures for your store yet.</p>';
+    }
+
     function card(v, isRoll) {
         const tint = (!isRoll && STORE_TINTS[v.code])
             ? '<i class="lv-tint" style="background:' + STORE_TINTS[v.code] + '"></i>' : '';
@@ -12249,29 +12615,29 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         const pct = v.pctOfGoal;
         const has = !(pct === null || pct === undefined);
         // Same three-band read as the pace column: at or past goal, within reach,
-        // or behind. Colour carries it so the row is scannable without reading.
+        // or behind. Colour carries it so a card is scannable without reading.
         const band = !has ? '' : (Number(pct) >= 100 ? ' good' : (Number(pct) >= 75 ? ' near' : ' low'));
         return '<li class="lvc' + (isRoll ? ' lvc-roll' : '') + '">'
             + head + '<span class="lvc-goal' + band + '">' + _lvPct(pct) + '</span></div>'
             + '<div class="lvc-figs">'
-            + '<div class="lvc-f"><span class="lvc-k">Sell value</span>'
+            + '<div class="lvc-f"><span class="lvc-k">Net Sales</span>'
             + '<span class="lvc-v">' + _lvMoney(v.netToday, false) + '</span></div>'
-            + '<div class="lvc-f"><span class="lvc-k">Margin</span>'
-            + '<span class="lvc-v">' + _lvPct(v.marginToday) + '</span></div>'
+            + '<div class="lvc-f"><span class="lvc-k">Gross Profit</span>'
+            + '<span class="lvc-v">' + _lvMoney(v.gpToday, false) + '</span></div>'
             + '</div>'
-            // Only the exception is worth a per-card line. Stating "to GP goal"
-            // on every card repeats the same six words six times; it is said once
-            // in the legend below instead.
             + (has ? '' : '<div class="lvc-goal-lab">no goal set</div>')
             + '</li>';
     }
 
-    let html = '<p class="lv-cards-legend">Percentage is month-to-date gross profit against goal.</p>'
+    // The company line leads for a DM: the district number is the headline and the
+    // stores underneath are the breakdown, which is the order they are read in.
+    let html = '<p class="lv-cards-legend">' + escapeHtml(_lvModeName())
+        + ' &middot; percentage is month-to-date gross profit against goal.</p>'
         + '<ul class="lv-cards">';
-    stores.forEach(m => { html += card(_lvView(m), false); });
-    if (rollup) {
-        html += card(Object.assign({}, _lvView(rollup), { code: rollupLabel, name: '' }), true);
+    if (roll) {
+        html += card(Object.assign({}, _lvView(roll), { code: rollupLabel, name: '' }), true);
     }
+    list.forEach(m => { html += card(_lvView(m), false); });
     return html + '</ul>';
 }
 
@@ -12281,7 +12647,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     // on Yesterday — carries the day's average order instead. A live "last order"
     // clock means nothing on a finished day, which is why that slot was never
     // Last order here.
-    const tailHead = _lvIsMtd() ? 'Avg / day' : (prev ? 'Avg order' : 'Last order');
+    const cols = _lvCols();
     // Named, the same way Buying below it is. Unlabelled, the table read as "the
     // dashboard" and Buying as an appendix to it; they are two halves of the same
     // question, so both get a header. Lives here so every surface that draws this
@@ -12294,11 +12660,17 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     let html = _lvSplit('Selling', '')
         + _lvCards(stores, d, rollup, rollupLabel)
         + '<div class="lv-tbl-scroll lv-sell-wrap"><table class="lv-tbl"><thead><tr>'
-        + '<th>Store</th><th>' + (_lvMode === 'today' ? 'Net today' : 'Net sales') + '</th>'
-        + '<th>Cost</th><th>Gross profit</th>'
-        + '<th>Refunds</th><th>Orders</th><th>Margin</th>'
-        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
-        + '<th>' + tailHead + '</th>'
+        + '<th>Store</th>'
+        // The Month view is a forecast of a month that has not finished, so its
+        // two money columns forecast too and say so. Each cell keeps the banked
+        // figure underneath, the same shape as the tiles above the table.
+        + '<th>' + (_lvIsMtd() ? 'Tracking net sales'
+            : (_lvIsToday() ? 'Net today' : 'Net sales')) + '</th>'
+        + (cols.cost ? '<th>Cost</th>' : '')
+        + '<th>' + (_lvIsMtd() ? 'Tracking gross profit' : 'Gross profit') + '</th>'
+        + '<th>Refunds</th>' + (cols.orders ? '<th>Orders</th>' : '') + '<th>Margin</th>'
+        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>% to goal</th>'
+        + (cols.tail ? '<th>Last order</th>' : '')
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
     // this list by position, so re-sorting it worst-first would cost more than the
@@ -12311,6 +12683,9 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         const rv = _lvView(rollup);
         const r = Object.assign({}, rv, {
             code: rollupLabel, name: '',
+            // Its own projection, summed from the stores above it by the one
+            // function the Tracking tiles also use.
+            fcSum: _lvIsMtd() ? _lvFcSum(stores.map(_lvView)) : null,
             paceIndex: _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
@@ -12335,10 +12710,11 @@ function _lvFreshness(d) {
     // A finished day is not live and must never wear the pulsing dot — the whole
     // point of that dot is that it means "these numbers are still moving".
     if (_lvIsPrev()) return '<span class="lv-fresh closed">final</span>';
-    // A month with today still in it IS moving, so it keeps the dot — but calling
-    // it "open" would be read as the shop's trading state, which on this view is
-    // a question about one day, not thirty-one.
-    if (_lvIsMtd()) return '<span class="lv-fresh"><span class="lv-dot"></span>in progress</span>';
+    // The Month view used to carry the pulsing dot, because it included today and
+    // so was genuinely still moving. It stops at the last complete day now, so the
+    // dot would be a lie — every figure on the tab is closed out, and the dot means
+    // "these numbers are still changing".
+    if (_lvIsMtd()) return '<span class="lv-fresh closed">final</span>';
     return d.open
         ? '<span class="lv-fresh"><span class="lv-dot"></span>open</span>'
         : '<span class="lv-fresh closed">closed</span>';
@@ -12388,6 +12764,9 @@ function renderLiveDashboard() {
     const d = _lvData;
     const stores = d.stores || [];
     _lvFillDistrictMtd(d, stores);
+    // Before anything reads _lvMode: on the 1st there is no complete day, so the
+    // Month tab is withdrawn and anyone left standing on it is moved to Today.
+    _lvGuardMode(d);
     // Before ANY table is built — every row renderer reads it. Reset each pass
     // rather than set once: the payload can change scope on a re-login without a
     // reload, and a stale code would mark somebody else's store as yours.
@@ -20617,6 +20996,21 @@ function _setUserGreeting() {
     if (el) el.innerText = `Welcome ${sessionStorage.getItem('speeksUserName') || 'User'}!`;
 }
 
+// The one breakpoint the JS has to agree with the stylesheet about. Must stay in
+// step with the MOBILE LAYER in styles.css, where <=900px is the compact build.
+function _isMobileLayout() {
+    try { return window.matchMedia("(max-width: 900px)").matches; } catch (_) { return false; }
+}
+
+// Rotating a tablet or dragging a window across 900px changes which surfaces
+// belong on screen, and the inline display written by applyRoleBasedUI does not
+// re-evaluate on its own. Re-run it on the crossing, not on every resize tick.
+try {
+    window.matchMedia("(max-width: 900px)").addEventListener("change", function () {
+        if (document.body.classList.contains("is-authenticated")) applyRoleBasedUI();
+    });
+} catch (_) { /* older browsers: the initial pass still applies */ }
+
 function applyRoleBasedUI() {
     const userRole = sessionStorage.getItem('speeksUserRole') || 'employee';
     const userStore = sessionStorage.getItem('speeksUserStore') || 'ALL';
@@ -20651,6 +21045,14 @@ function applyRoleBasedUI() {
             if (ov !== null) visible = ov;
         }
 
+        // A surface cut from the phone build stays cut even when the role check
+        // passes. This CANNOT be done in CSS: the branch below writes an inline
+        // display with !important, which outranks every stylesheet rule — so
+        // [data-mobile="hide"] silently lost to it on all 11 role-gated elements
+        // that were supposed to be hidden (found with scripts/mobile-check.js).
+        if (visible && module.getAttribute('data-mobile') === 'hide' && _isMobileLayout()) {
+            visible = false;
+        }
         if (visible) {
             let displayType = module.classList.contains('dynamic-module-flex') ? 'flex' : 'block';
             module.style.setProperty('display', displayType, 'important');
@@ -23670,6 +24072,11 @@ function submitNewScorecard() {
         date: date,
         scores,
         notes: noteEl ? noteEl.value.trim() : '',
+        // Who is saving this. The scorecard function has always passed it on as
+        // excludeUser so the submitter is left out of the alert, but this payload
+        // never sent it — so excludeUser was null every time and the DM got
+        // emailed about the score he had just entered himself.
+        submittedBy: sessionStorage.getItem('speeksUserName') || null,
     };
 
     fetch(SCORECARD_URL, {
@@ -24129,7 +24536,12 @@ async function submitNewAudit() {
         const res = await fetch(SCORECARD_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, time, results, sectionNotes, sectionPhotos })
+            // submittedBy is the logged-in person, deliberately separate from
+            // auditor: auditor is typed and names who walked the store, which may
+            // be somebody else. Only the person clicking Save should be dropped
+            // from the alert.
+            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, time, results, sectionNotes, sectionPhotos,
+                submittedBy: sessionStorage.getItem('speeksUserName') || null })
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
@@ -27594,6 +28006,10 @@ function buildPatchGroups(entries) {
     return Object.values(groups).sort((a, b) => parsePatchDate(b.date) - parsePatchDate(a.date));
 }
 
+// DEAD as of 2026-08-18: nothing creates #patchNotesList and nothing calls
+// renderPatchNotes(). The hub feed draws patch notes — see _hubPatchItems().
+// Left in place rather than deleted, but do not add to it: a read receipt was
+// built here first and would never have appeared on screen.
 function buildPatchCardHTML(group, isLatest) {
     const versionLabel = group.title;
     const catOrder = ['New Features', 'Improvements', 'Bug Fixes'];
@@ -27761,15 +28177,48 @@ async function savePatchEntry() {
 
     if (!allValid || !items.length) { status.textContent = 'Each item needs a category and summary.'; status.className = 'pn-save-status pn-save-error'; return; }
 
-    const [y, m, d] = dateRaw.split('-');
-    const date = `${m}/${d}/${y}`;
+    // ISO all the way through, deliberately. This used to convert to m/d/yyyy for
+    // the wire and the edge function's toISODate converted it straight back -- but
+    // the read key below was built from the CONVERTED value, so the author's
+    // "seen" key read "v3.3.0|08/18/2026" while every fetched note said
+    // "v3.3.0|2026-08-18". Those never compare equal, so the one person who had
+    // certainly read the release was the one person badged about it.
+    // toISODate passes an ISO date straight through; there is nothing to convert.
+    const date = dateRaw;
 
     btn.disabled = true;
     status.textContent = 'Saving...';
     status.className = 'pn-save-status';
 
     try {
-        await postWrite(PATCH_NOTES_URL, { action: 'addEntries', title, date, items });
+        await postWrite(PATCH_NOTES_URL, { action: 'addEntries', title, date, items,
+            // Keeps the release out of its own author's inbox; the function passes
+            // this through as excludeUser. Separate from the read-marking below,
+            // which only clears the in-app badge.
+            submittedBy: sessionStorage.getItem('speeksUserName') || null });
+        // Whoever wrote the notes has, by definition, read them. Without this the
+        // author published a version and then got badged about their own words,
+        // and had to click Mark as read on something they had just typed.
+        // The key is built exactly as buildPatchGroups builds it (title|date), so
+        // checkPatchNotesBadge's equality test against _latestPatchKey matches.
+        // That includes the date FORMAT, which is the half that used to be wrong.
+        // Writing the key rather than clearing the flag outright keeps this honest:
+        // if the note being saved is back-dated and something NEWER is still
+        // unread, the seen key won't equal the latest and the badge correctly stays.
+        try {
+            const _pnUser = sessionStorage.getItem('speeksUserName');
+            const _pnClean = _pnUser ? String(_pnUser).trim().toLowerCase() : null;
+            if (_pnClean) {
+                const _pnKey = title + '|' + date;
+                localStorage.setItem('speeksPatchNotesSeen_' + _pnClean, _pnKey);
+                localStorage.removeItem('speeksUnseenPatchNotes_' + _pnClean);
+                postWrite(PATCH_NOTES_URL, { action: 'markPatchRead', user: _pnClean, lastSeenKey: _pnKey }).catch(() => {});
+            }
+        } catch (_) {}
+        // Re-read so _latestPatchKey and the badges reflect what was just written.
+        try { await loadPatchNotes(); } catch (_) {}
+        try { checkPatchNotesBadge(); } catch (_) {}
+        try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (_) {}
         status.textContent = `${items.length} item${items.length !== 1 ? 's' : ''} saved!`;
         status.className = 'pn-save-status pn-save-ok';
         document.getElementById('pnEntryTitle').value = '';
@@ -29558,59 +30007,60 @@ function _recipientsFor(key, fallback) {
 }
 
 // ---- the DM/CEO management tool ----
+// FOUR groups, not one per report. Eleven bars for twenty lists meant most of
+// the panel was bars, and half of them opened onto a single address box. They
+// are grouped by what the mail IS — a scheduled performance report, an
+// operations report, an alert that fires only when something is wrong, or a
+// supplier address — because that is what you know when you come looking.
+//
+// Every list a report READS must appear here as well as in the edge fn's
+// LIST_KEYS, or it becomes an orphan only SQL can change — which is what had
+// happened to sales_import_alert, summary_weekly_alert and connect_alerts.
 const EMAIL_LIST_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const EMAIL_LIST_GROUPS = [
     {
-        title: 'Recycle Month-End Report',
-        desc: 'Who the month-end recycle report email is addressed to.',
-        lists: [{ key: 'recycle_report', label: 'Recipients' }],
+        title: 'Store Performance Reports',
+        desc: 'Monday morning performance emails, sent automatically.',
+        lists: [
+            { key: 'weekly_leadership', label: 'Leadership Report', desc: 'The district-wide roll-up.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} Manager Report` })),
+        ],
+    },
+    {
+        title: 'Operations Reports',
+        desc: 'Scheduled reports on how the stores are running.',
+        lists: [
+            { key: 'unlisted_report', label: 'Unlisted Inventory Weekly Update',
+              desc: 'Monday 9am — the pile per store, and what it would take to clear it.' },
+            { key: 'cash_report', label: 'Cash On Hand',
+              desc: '7am closing-cash table, read off each store\'s Day End Report.' },
+            { key: 'usage_report', label: 'Site Usage',
+              desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
+            { key: 'recycle_report', label: 'Recycle Month-End Report',
+              desc: 'Who the month-end recycle report email is addressed to.' },
+            { key: 'expense_report', label: 'Expense Reports',
+              desc: 'Where a monthly expense report goes when the DM or MSM sends one.' },
+        ],
+    },
+    {
+        title: 'System Alerts',
+        desc: 'Silent unless something is broken or a decision is waiting.',
+        lists: [
+            { key: 'connect_alerts', label: 'SPEEKS Connect Errors',
+              desc: 'Checked every 15 minutes; mails only when the eBay integration is actually broken.' },
+            { key: 'sales_import_alert', label: 'Sales Import',
+              desc: 'The nightly Shopify sales email failing to reach the Sales Summary sheet.' },
+            { key: 'summary_weekly_alert', label: 'Weekly Summary Import',
+              desc: 'The same, for the Saturday summary. Deliberately narrower than the daily list above.' },
+            { key: 'b2b_quote_ready', label: 'B2B Quote Ready',
+              desc: 'A pickup has been priced and a quote is waiting on approval. '
+                  + 'Leave this empty and it falls back to the single address in CRM Settings.' },
+        ],
     },
     {
         title: 'Box Orders',
         desc: 'Supplier address each store\'s box order email opens to.',
         lists: EMAIL_LIST_STORES.map(s => ({ key: `box_order_${s}`, label: s })),
-    },
-    {
-        title: 'Expense Reports',
-        desc: 'Who a monthly expense report is emailed to when the DM or MSM sends it.',
-        lists: [{ key: 'expense_report', label: 'Recipients' }],
-    },
-    {
-        title: 'Weekly SPEEKS Reports',
-        desc: 'Monday morning performance emails (sent automatically).',
-        lists: [
-            { key: 'weekly_leadership', label: 'Leadership report' },
-            ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} manager report` })),
-        ],
-    },
-    {
-        title: 'Unlisted Inventory Weekly Update',
-        desc: 'Monday 9am backlog report — the pile per store, and what it would take to clear it.',
-        lists: [{ key: 'unlisted_report', label: 'Recipients' }],
-    },
-    // Every list a report READS must appear here as well as in the edge fn's
-    // LIST_KEYS, or it becomes an orphan only SQL can change — which is exactly
-    // what happened to sales_import_alert. The backend has allowed usage_report
-    // since day one; this row is what makes it editable.
-    {
-        title: 'Site Usage Reports',
-        desc: 'Nightly 8pm usage email, plus the Saturday and month-end summaries (sent automatically).',
-        lists: [{ key: 'usage_report', label: 'Recipients' }],
-    },
-    {
-        title: 'Cash On Hand',
-        desc: '7am closing-cash table, read off each store\'s Day End Report.',
-        lists: [{ key: 'cash_report', label: 'Recipients' }],
-    },
-    // Last because it is the one operational alert here rather than a scheduled
-    // report. b2b_quote_ready had to be added to LIST_KEYS in the same breath:
-    // the allowlist arrived on another branch, and without it this row would
-    // render and then refuse every address with "Unknown list".
-    {
-        title: 'B2B Quote Ready',
-        desc: 'Told the moment a pickup is priced and a quote is waiting on approval. '
-            + 'Leave this empty and it falls back to the single address in CRM Settings.',
-        lists: [{ key: 'b2b_quote_ready', label: 'Recipients' }],
     },
 ];
 
@@ -29618,8 +30068,47 @@ async function openEmailRecipients() {
     closeAllModals();
     toggleModal('emailRecipientsModal');
     const body = document.getElementById('emailRecipientsBody');
+    _erOpen = null; _erQuery = '';   // a fresh open starts collapsed and unfiltered
     if (body) body.innerHTML = '<div class="status-message">Loading recipients…</div>';
     await _fetchEmailLists(true);
+    renderEmailRecipients();
+}
+
+// ---- the collapsible list, its search, and which bar is open ----
+// Four groups over twenty lists: fully expanded this ran several screens and
+// the one you came for was never the one on screen. One group open at a time,
+// same shape as the Margin Guide rebuttal accordion.
+//
+// The search matches ADDRESSES as well as report names on purpose — you
+// usually arrive here knowing the person you want to remove, not which of the
+// twenty lists they happen to sit on.
+let _erOpen = null;     // title of the open group, or null for all closed
+let _erQuery = '';
+
+// Narrow to the LIST, not just the group. Searching "expense" should leave one
+// address box on screen, not the five in Operations Reports — same as every
+// other search on the site. The group heading stays, because a bare address box
+// with no idea which report it feeds is worse than one extra line.
+//
+// A query matching the GROUP (its title or blurb) keeps all of its lists: if
+// you searched "box orders" you meant all five stores, not none of them.
+function _erFilterGroup(group, q) {
+    if (!q) return group;
+    const has = (s) => String(s || '').toLowerCase().indexOf(q) >= 0;
+    if (has(group.title) || has(group.desc)) return group;
+    const lists = group.lists.filter(l =>
+        has(l.label) || has(l.desc) || has(l.key) ||
+        _recipientsFor(l.key, []).some(has));
+    return lists.length ? { ...group, lists } : null;
+}
+
+function filterEmailRecipients(value) {
+    _erQuery = value || '';
+    renderEmailRecipients();
+}
+
+function emailRecipientsToggle(title) {
+    _erOpen = (_erOpen === title) ? null : title;
     renderEmailRecipients();
 }
 
@@ -29631,37 +30120,77 @@ function renderEmailRecipients() {
         return;
     }
 
-    let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
-        These lists control where each tool's emails go. Changes apply immediately —
-        the recycle report and box orders read them when composing, and the weekly
-        report reads them on every send.</p>`;
+    // Keep the caret where the user left it: every keystroke re-renders, and
+    // rebuilding the input would otherwise send the cursor to the end of it.
+    const active = document.activeElement;
+    const hadFocus = active && active.id === 'emailRecipientSearch';
+    const caret = hadFocus ? active.selectionStart : null;
 
-    EMAIL_LIST_GROUPS.forEach(group => {
-        html += `<div style="margin-bottom: 18px;">
-            <div style="font-size: 13.5px; font-weight: 900; color: var(--slate-charcoal);">${group.title}</div>
-            <div style="font-size: 11.5px; color: #94a3b8; font-weight: 600; margin: 1px 0 8px;">${group.desc}</div>`;
-        group.lists.forEach(l => {
-            const emails = _recipientsFor(l.key, []);
-            const chips = emails.length
-                ? emails.map(e => `<span style="display: inline-flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 12px; font-weight: 700; color: var(--slate-charcoal); margin: 0 6px 6px 0;">
-                        ${escapeHtml(e)}
-                        <button data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove" style="border: none; background: #e2e8f0; color: #64748b; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 900; cursor: pointer; line-height: 1;">✕</button>
-                    </span>`).join('')
-                : '<span style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px;">None — the built-in default applies.</span>';
-            const inputId = `email-add-${l.key}`;
-            html += `<div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;">
-                <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: 7px;">${escapeHtml(l.label)}</div>
-                <div>${chips}</div>
-                <div style="display: flex; gap: 6px; margin-top: 6px;">
-                    <input type="email" id="${inputId}" placeholder="name@company.com" style="flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px;"
-                        onkeydown="if(event.key==='Enter'){event.preventDefault(); emailRecipientAdd('${l.key}', '${inputId}', this.nextElementSibling);}">
-                    <button class="btn-secondary" style="padding: 6px 14px; font-size: 12px;" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
-                </div>
-            </div>`;
-        });
+    const q = _erQuery.trim().toLowerCase();
+    const groups = EMAIL_LIST_GROUPS.map(g => _erFilterGroup(g, q)).filter(Boolean);
+
+    // A search narrow enough to have found something should show it. Leaving it
+    // shut would mean typing an address and still having to click to see it.
+    if (q && groups.length && !groups.some(g => g.title === _erOpen)) _erOpen = groups[0].title;
+
+    let html = `<div class="kb-search-bar doc-search-wrapper" style="margin-bottom: 12px;">
+        <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+        <input type="text" id="emailRecipientSearch" class="kb-search-input doc-search-input"
+            placeholder="Search reports & addresses..." value="${escapeHtml(_erQuery)}"
+            oninput="filterEmailRecipients(this.value)">
+    </div>`;
+
+    if (!groups.length) {
+        html += `<div class="er-empty">No report or address matches “${escapeHtml(_erQuery.trim())}”.</div>`;
+    }
+
+    groups.forEach(group => {
+        const open = group.title === _erOpen;
+        const total = group.lists.reduce((n, l) => n + _recipientsFor(l.key, []).length, 0);
+        const hidden = (EMAIL_LIST_GROUPS.find(g => g.title === group.title) || group).lists.length - group.lists.length;
+        html += `<div class="er-acc${open ? ' open' : ''}">
+            <button type="button" class="er-bar" data-group="${escapeHtml(group.title)}"
+                aria-expanded="${open ? 'true' : 'false'}" onclick="emailRecipientsToggle(this.dataset.group)">
+                <span class="er-cv"><svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg></span>
+                <span class="er-bar-t">
+                    <span class="er-bar-n">${escapeHtml(group.title)}</span>
+                    <span class="er-bar-d">${escapeHtml(group.desc)}</span>
+                </span>
+                <span class="er-count${total ? '' : ' er-none'}">${hidden ? `${group.lists.length} of ${group.lists.length + hidden}` : (total ? `${total} email${total === 1 ? '' : 's'}` : 'None')}</span>
+            </button>`;
+        if (open) {
+            html += `<div class="er-body">`;
+            group.lists.forEach(l => {
+                const emails = _recipientsFor(l.key, []);
+                const chips = emails.length
+                    ? emails.map(e => `<span style="display: inline-flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 12px; font-weight: 700; color: var(--slate-charcoal); margin: 0 6px 6px 0;">
+                            ${escapeHtml(e)}
+                            <button data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove" style="border: none; background: #e2e8f0; color: #64748b; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 900; cursor: pointer; line-height: 1;">✕</button>
+                        </span>`).join('')
+                    : '<span style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px;">None — the built-in default applies.</span>';
+                const inputId = `email-add-${l.key}`;
+                html += `<div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;">
+                    <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: ${l.desc ? '3px' : '7px'};">${escapeHtml(l.label)}</div>
+                    ${l.desc ? `<div style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 8px;">${escapeHtml(l.desc)}</div>` : ''}
+                    <div>${chips}</div>
+                    <div style="display: flex; gap: 6px; margin-top: 6px;">
+                        <input type="email" id="${inputId}" placeholder="name@company.com" style="flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px;"
+                            onkeydown="if(event.key==='Enter'){event.preventDefault(); emailRecipientAdd('${l.key}', '${inputId}', this.nextElementSibling);}">
+                        <button class="btn-secondary" style="padding: 6px 14px; font-size: 12px;" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
+                    </div>
+                </div>`;
+            });
+            html += `</div>`;
+        }
         html += `</div>`;
     });
+
     body.innerHTML = html;
+
+    if (hadFocus) {
+        const el = document.getElementById('emailRecipientSearch');
+        if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch (e) { /* older browsers */ } }
+    }
 }
 
 async function _emailRecipientsPost(payload) {
@@ -30155,7 +30684,14 @@ function _applySectionNavVisibility(userRoleClass, userName) {
     Object.keys(_SECTION_TABS).forEach(href => {
         const link = document.querySelector(`.nav-bar a.nav-link[href="${href}"]`);
         if (!link) return;
-        const vis = _SECTION_TABS[href].some(k => _featureEffectiveVisible(k, userRoleClass, userName));
+        // This writer runs LAST and with !important, so on the phone build it has
+        // to honour the cut list itself — otherwise it re-shows a whole section
+        // that data-mobile="hide" had already removed. _featureEffectiveVisible
+        // resolves roles and overrides off the catalog, not the DOM, so it cannot
+        // see the tag on its own.
+        const cutOnMobile = link.getAttribute('data-mobile') === 'hide' && _isMobileLayout();
+        const vis = !cutOnMobile
+            && _SECTION_TABS[href].some(k => _featureEffectiveVisible(k, userRoleClass, userName));
         link.style.setProperty('display', vis ? 'flex' : 'none', 'important');
     });
 }
@@ -35691,14 +36227,13 @@ function _samReminderCfg() {
         due: _dbFailed ? 'Broken' : 'Approve',
         cls: _dbFailed ? 'sam-due-amber' : 'sam-due-red',
         noSnooze: true, action: "openDailyBriefReview()" });
-    // DM ONLY (checkListingGoalReminders gates it — the CEO does not set these).
-    // Snoozable — unlike the KPI deadlines this is the DM's own admin task, and
-    // the card comes straight back if a store is still unset tomorrow (the sig is
-    // the pending-store list, so it also breaks through early whenever that list
-    // changes).
-    cfg.push({ key: 'listingGoals', id: 'listingGoalAlertBubble', text: 'listingGoalAlertBubbleText',
-        title: 'Set This Week’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-amber',
-        action: "openDmListingGoals()" });
+    // RETIRED 2026-08-17 — the weekly per-store totals are now set by the system
+    // every week, so nagging the DM to do it by hand asked for work that was
+    // already done. The bubble and checkListingGoalReminders are left in place
+    // (harmless, and they still carry the pending-store state); only the feed
+    // card is gone. The DAILY store-side card below is a different reminder —
+    // that one is the manager/ASM dividing the week's total into roles, which
+    // nothing automates, so it stays.
     // Store side, daily from 9am. Shared across the store: the card is derived from
     // the saved rows, so whoever sets them clears it for the manager AND the ASM.
     // noSnooze: the goals have to actually be entered — there is no "later" for
@@ -35740,6 +36275,13 @@ function _samSetDismissedRem(map) { try { localStorage.setItem(_samDismKey(), JS
 function _samGatherReminders() {
     const dismissed = _samGetDismissedRem();
     const out = [];
+    // ONE clock reading for the whole pass. dateMs used to be Date.now() read
+    // per reminder, which made the feed order depend on whether the millisecond
+    // happened to tick mid-loop: urgency only offsets by 1-3, so a single tick
+    // outweighed it and two cards traded places on re-render for no reason.
+    // Sharing one base makes urgency the only thing that separates them, and
+    // equal-urgency cards tie -- Array.sort is stable, so they keep config order.
+    const nowBase = Date.now();
     _samReminderCfg().forEach(c => {
         const el = document.getElementById(c.id);
         if (!el) return;
@@ -35812,7 +36354,7 @@ function _samGatherReminders() {
         }
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
-            due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: Date.now() + c.urgency,
+            due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: nowBase + c.urgency,
             action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, readAction: c.readAction || '',
             doneAction: c.doneAction || '', doneLabel: c.doneLabel || ''
         });
@@ -36108,6 +36650,12 @@ function _hubPatchItems() {
     const _pu = sessionStorage.getItem('speeksUserName');
     const _pcu = _pu ? String(_pu).trim().toLowerCase() : null;
     const patchUnseen = !!(_pcu && localStorage.getItem('speeksUnseenPatchNotes_' + _pcu) === 'true');
+    // WHO HAS READ THIS RELEASE, for the DM and the CEO — the same eye control,
+    // classes and toggle the announcements items in this very feed already use.
+    // One read-receipt widget on the site, not two that drift apart.
+    const _pRole = (sessionStorage.getItem('speeksUserRole') || '').trim().toLowerCase();
+    const _pPriv = _pRole === 'ceo' || _pRole === 'district manager';
+    const _pReads = (data && data.reads) || {};
     return groups.map((g, i) => {
         const sections = catOrder.map(cat => {
             const items = g.items.filter(it => it.category === cat);
@@ -36118,6 +36666,23 @@ function _hubPatchItems() {
         const dateMs = (d && !isNaN(d.getTime())) ? d.getTime() : (Date.now() - i);
         // Only the newest unread version gets the button — older groups are history.
         const isUnread = patchUnseen && i === 0;
+        // A version key is "v3.2.0|2026-08-16"; neither the dot nor the pipe
+        // belongs in an element id or inside an onclick string, so the popover is
+        // keyed by position instead.
+        const _pNames = _pReads[g.title + '|' + g.date] || [];
+        const _pRid = 'pn' + i;
+        const _pReceipt = _pPriv ? `
+            <div class="read-receipt" id="receipt_${_pRid}">
+                <button class="read-receipt-btn" onclick="event.stopPropagation(); toggleReadReceipt('${_pRid}')">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    ${_pNames.length} read
+                </button>
+                <div class="read-receipt-popover" id="receipt-popover_${_pRid}">
+                    <div class="rr-title">Read by</div>
+                    ${_pNames.length === 0 ? '<div class="rr-empty">No reads yet</div>'
+                      : _pNames.map(u => `<div class="rr-name">${escapeHtml(u)}</div>`).join('')}
+                </div>
+            </div>` : '';
         const markReadBtn = isUnread
             ? `<div class="hub-foot"><button class="hub-markread" onclick="hubMarkPatchRead()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Mark as read</button></div>`
             : '';
@@ -36126,7 +36691,7 @@ function _hubPatchItems() {
                 <div class="hub-row">
                     <span class="hub-tico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg></span>
                     <div class="hub-col">
-                        <div class="hub-patch-head"><span class="hub-kind">Patch Notes</span><span class="hub-patch-ver">${escapeHtml(g.title)}</span>${i === 0 ? '<span class="hub-latest">Latest</span>' : ''}<span class="hub-meta-r">${formatPatchDate(g.date)}</span></div>
+                        <div class="hub-patch-head"><span class="hub-kind">Patch Notes</span><span class="hub-patch-ver">${escapeHtml(g.title)}</span>${i === 0 ? '<span class="hub-latest">Latest</span>' : ''}${_pReceipt}<span class="hub-meta-r">${formatPatchDate(g.date)}</span></div>
                         ${sections}
                         ${markReadBtn}
                     </div>
@@ -40052,6 +40617,7 @@ window.saveNotifySettings = saveNotifySettings;
  * ========================================================================== */
 
 const EBAY_CHANNEL_URL = `${_BASE}/ebay-channel`;
+const EBAY_LOOKUP_URL  = `${_BASE}/ebay-lookup`;
 
 // Session-scoped, and per store so a DM switching stores does not inherit
 // somebody else's shelf. One key, so sign-out clears it with one removeItem.
@@ -40306,7 +40872,7 @@ function _ecQuickHtml() {
     // read the other way.
     return `
     <div class="ec-quick">
-      <input id="ecSkuInput" placeholder="Scan Or Type a SKU"
+      <input id="ecSkuInput" placeholder="Scan or Type a SKU or Barcode"
              onpaste="ecPasteSkus(event)"
              onkeydown="if(event.key==='Enter')ecListTyped()">
       <button class="ec-btn ec-btn-go" onclick="ecListTyped()">Upload To eBay</button>
@@ -40381,6 +40947,31 @@ function _ecRow(i) {
                   i.state === 'disabled' ? 'Enable'
                   : i.state === 'failed' ? 'Try Again' : 'Upload Again'}</button>`;
 
+    // A REFUSAL OVER A MISSING FIELD IS A QUESTION, SO ASK IT.
+    // Try Again on its own would fail on the same field, and the only fix on
+    // offer was a trip into Shopify to find a product and type into a spec
+    // table — which is why a failed row could sit failed for days. This is the
+    // same answer, asked for here and written back to the product.
+    const fixable = !pending && _ecScope?.canList && !i.conflict
+        && i.state === 'failed' && (i.missingFields || []).length > 0;
+    const fixBtn = fixable
+        ? `<button class="ec-btn ec-btn-sm ec-btn-fix" data-sku="${sku}"
+             title="Fill in what eBay is missing and upload again"
+             onclick="ecFix(this.dataset.sku)">Fix</button>`
+        : '';
+
+    // ON EVERY ROW, NOT JUST A FAILED ONE. This is the way out for a listing
+    // that should never have been started, and that is realised just as often
+    // after it goes live as before. On a live row it ends the eBay listing
+    // first; the confirm below says so, because the two cases are not the same
+    // decision and must not share a sentence.
+    const giveUp = (!pending && _ecScope?.canList && !i.conflict)
+        ? `<button class="ec-btn ec-btn-sm ec-btn-off" data-sku="${sku}" data-state="${i.state}"
+             title="${i.state === 'live' ? 'End this eBay listing and take it off the list'
+                     : 'Take this off the list'}"
+             onclick="ecGiveUp(this.dataset.sku, this, this.dataset.state)">Remove</button>`
+        : '';
+
     // eBay picks the category from the title, not the store — so it is the one
     // part of a listing nobody here chose and nobody could see. Worth showing on
     // every row: when it lands somewhere odd, the refusal that follows reads as
@@ -40414,7 +41005,7 @@ function _ecRow(i) {
       <td class="cb-cell-status ec-money">${_ecMoney(i.price)}</td>
       <td class="cb-cell-status">${chip}</td>
       <td class="cb-cell-status"><div class="ec-pills">${links}</div></td>
-      <td><div class="ec-acts">${acts}</div></td>
+      <td><div class="ec-acts">${fixBtn}${acts}${giveUp}</div></td>
     </tr>`;
 
     // The reason sits open under the row it belongs to. Collapsing it would hide
@@ -40861,10 +41452,44 @@ function ecClearList() {
 }
 window.ecClearList = ecClearList;
 
+// SCANNING THE BOX. The label on a unit carries the Shopify barcode, not the
+// SKU, so a scanner pointed at it used to produce a string Shopify had never
+// heard of and the item had to be found by hand first.
+//
+// Anything that comes back mapped is SWAPPED for its SKU before it becomes a
+// row: the feed, the retry button and the listing itself are all keyed by SKU,
+// and a row keyed by a barcode would look right and then fail on every retry.
+// Anything unresolved is left exactly as typed — it is probably a SKU already,
+// and if it is not, the normal "not found in Shopify" path says so.
+//
+// A failure here is not a failure to upload: if the lookup is down, the tokens
+// go through untouched and a real SKU still lists.
+async function _ecResolveCodes(tokens) {
+    if (!tokens.length) return tokens;
+    try {
+        const pin = sessionStorage.getItem('speeksUserPin') || '';
+        const r = await fetch(EBAY_LOOKUP_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ store: _ecStore, codes: tokens }),
+        });
+        const b = await r.json().catch(() => ({}));
+        const map = (b && b.map) || {};
+        if (!Object.keys(map).length) return tokens;
+        return tokens.map(t => map[t] || t);
+    } catch (e) {
+        return tokens;
+    }
+}
+
 async function ecListTyped() {
     const input = document.getElementById('ecSkuInput');
-    const skus = _ecSkus(input?.value);
-    if (!skus.length) return;
+    const typed = _ecSkus(input?.value);
+    if (!typed.length) return;
+
+    // Barcodes become SKUs before anything else happens, so what the
+    // confirm box lists is what will actually be uploaded.
+    const skus = await _ecResolveCodes(typed);
 
     if (skus.length > 1
         && !confirm(`Upload ${skus.length} items to eBay?\n\n${skus.join('\n')}`)) return;
@@ -40900,6 +41525,426 @@ async function ecListOne(sku, btn) {
 // Off eBay, and staying off. Worth a confirm: the unit is still on the shelf
 // and still for sale in Shopify, so this is a decision about the listing rather
 // than about the item, and nothing automatic will put it back.
+// Give up on a SKU that will not list.
+//
+/* --- answering eBay without leaving the panel ------------------------------
+ *
+ * eBay refuses a listing by naming a field: "Professional Grader (27501) is a
+ * required field", "Compatible Brand is a required field". Every one of those
+ * used to end the same way — go and open the product in Shopify, find the spec
+ * table, type the value, come back, upload again — which is a trip into another
+ * system for somebody standing at a counter holding the item.
+ *
+ * The edge function already knows the answer's SHAPE: which fields, and for each
+ * one whether eBay will take free text or only one of a fixed list. So the panel
+ * asks, writes the answer onto the Shopify product, and uploads again.
+ *
+ * WRITTEN TO SHOPIFY, NOT KEPT HERE. Storing the answer on our side would list
+ * the item and leave the product exactly as blank as it was, so the next person
+ * to open it — and the storefront, and every other tool — would learn nothing.
+ */
+// WHAT WE READ, SHOWN NEXT TO WHAT WE CONCLUDED.
+//
+// The prompt used to be a dropdown and a sentence naming its source, which is
+// enough to trust an answer but not enough to CHECK one — checking meant opening
+// the product in Shopify in another tab, which is the exact cost this prompt
+// exists to remove. The server already had all of it at the moment eBay refused,
+// so now it keeps it and this shows it.
+//
+// The spec table is the part that pays for itself twice: when the answer is in
+// there under a name we did not look for, a person spots it instantly; and when
+// it is genuinely NOT in there, they can see that it is not, which is the real
+// answer to "do I need to go and look at the item?"
+function _ecEvHead(row) {
+    const ev = row && row.evidence;
+    if (!ev) return "";
+
+
+    const photos = ev.images > 1 ? ev.images + " photos"
+        : ev.images === 1 ? "1 photo" : "no photos";
+    const meta = (ev.price ? "$" + _ecEsc(ev.price) + " &middot; " : "")
+        + photos + " &middot; " + _ecEsc(row.sku);
+    // Older rows failed before photos were kept; the single image they do have
+    // is still worth showing rather than nothing.
+    const pics = (ev.photos && ev.photos.length) ? ev.photos
+        : ev.image ? [ev.image] : [];
+    const head = [
+        '<div class="ec-ev-head">',
+        '<div class="ec-ev-headtxt">',
+        '<div class="ec-ev-title">', _ecEsc(ev.title || row.title || row.sku), '</div>',
+        '<div class="ec-ev-meta">', meta, '</div>',
+        '</div></div>',
+    ].join("");
+
+    // THE ANSWER IS OFTEN ONLY IN THE PICTURE.
+    // A slab says CGC across the top of it and no row on the product mentions
+    // that anywhere — which is how three cards went live at MPL naming the wrong
+    // grading company. openAuditPhotoLightbox is the audit tool's viewer, reused
+    // whole: same behaviour, and Escape already knows to peel it off first.
+    const shots = pics.length
+        ? '<div class="ec-ev-shot-wrap"><div class="ec-ev-shots">' + pics.map(u =>
+            '<img src="' + _ecEsc(u) + '" alt="" loading="lazy" '
+            + 'onerror="this.style.display=&quot;none&quot;" '
+            + 'onclick="openAuditPhotoLightbox(\'' + _ecEsc(u) + '\')">').join("")
+          + '</div><div class="ec-ev-shot-hint">' + (pics.length === 1
+              ? 'Click the photo to enlarge it'
+              : 'Click any photo to enlarge it') + '</div></div>'
+        : '<div class="ec-ev-none">This product has no photos on it.</div>';
+
+    return '<div class="ec-ev">' + head + shots + '</div>';
+}
+
+// The part you open only when the answer is not already obvious: every row on
+// the product, and eBay's own words. Folded shut, because most of the time the
+// title and the suggestion are enough and this is just noise in the way.
+function _ecEvMore(row, fields) {
+    const ev = row && row.evidence;
+    if (!ev) return "";
+    const cited = new Set(["condition"]);
+    (fields || []).forEach(f => {
+        const m = /"([^"]+)"\s+row/.exec(String(f.source || ""));
+        if (m) cited.add(m[1].toLowerCase());
+    });
+    const rows = Array.isArray(ev.specs) ? ev.specs : [];
+    const body = rows.map(pair => {
+        const k = pair[0], v = pair[1];
+        const hit = cited.has(String(k).toLowerCase()) ? ' class="ec-ev-hit"' : "";
+        return "<tr" + hit + "><th>" + _ecEsc(k) + "</th><td>" + _ecEsc(v) + "</td></tr>";
+    }).join("");
+    const specs = rows.length
+        ? '<details class="ec-ev-more"><summary>What Is On The Product ('
+          + rows.length + (rows.length === 1 ? " Row" : " Rows") + ')</summary>'
+          + '<table class="ec-ev-tbl"><tbody>' + body + '</tbody></table></details>'
+        : '<div class="ec-ev-none">This product has no spec rows at all.</div>';
+
+    // eBay's own words, verbatim and folded away. The panel paraphrases by
+    // default because eBay writes for the developer who made the call — but when
+    // the paraphrase is wrong, this is the only way anyone can tell.
+    const raw = row.errorRaw
+        ? '<details class="ec-ev-more"><summary>What eBay Said</summary>'
+          + '<div class="ec-ev-raw">' + _ecEsc(row.errorRaw) + '</div></details>'
+        : "";
+
+    return '<div class="ec-ev ec-ev-foot">' + specs + raw + '</div>';
+}
+
+// THE CONDITION CASE IS NOT "WE FOUND NOTHING".
+// Every other field is missing; a refused condition was PRESENT and rejected,
+// and the difference matters — "not on the product" sends somebody looking for a
+// blank that is not blank. Worse, the value usually comes from a metafield the
+// buyer-facing spec table never shows, so the one screen they would think to
+// check disagrees with the refusal. Naming the field is the whole fix.
+function _ecCondWhy(row, fld) {
+    const cond = row && row.evidence && row.evidence.condition;
+    if (fld.kind !== "condition" || !cond) return null;
+    if (!cond.read) {
+        return "This product has no Condition on it at all — nothing to read, so "
+             + "pick the grade that matches the item in your hand.";
+    }
+    const word = String(cond.read).replace(/_/g, " ").toLowerCase();
+    return 'We read "' + word + '"' + (cond.source ? " from " + cond.source : "")
+         + ", and eBay will not take it in this category. Pick one it will.";
+}
+
+let _ecFixSku = null;
+
+// GOING BACK IS NOT UNDOING, AND THE BUTTON HAS TO BE HONEST ABOUT THAT.
+//
+// Each round of this form WRITES to the Shopify product and uploads before the
+// next question exists — that is the only way eBay reveals the next missing
+// field. So by the time you are looking at "Professional Grader", the Condition
+// you typed a moment ago is already saved and already accepted. Back cannot
+// take it away; what it can do is bring the question back so a wrong answer is
+// written over, which is what somebody who clicked too fast actually wants.
+//
+// The trail is the questions this card has been asked, in order, with whatever
+// was typed into each. It lives as long as the prompt does.
+let _ecFixTrail = [];
+let _ecFixAt = 0;
+
+// What has been typed anywhere in this trail. A value a PERSON entered outranks
+// a suggestion when the same field comes round again — they have already
+// considered it once, and re-suggesting over the top would quietly discard that.
+function _ecFixTyped() {
+    const out = {};
+    _ecFixTrail.forEach(s => Object.assign(out, s.answers || {}));
+    return out;
+}
+
+// Reads the boxes on screen into the step being displayed, so nothing is lost
+// by navigating away from it.
+function _ecFixCapture() {
+    const wrap = document.getElementById('ecFixWrap');
+    const step = _ecFixTrail[_ecFixAt];
+    if (!wrap || !step) return;
+    step.answers = step.answers || {};
+    wrap.querySelectorAll('.ec-fix-in').forEach(el => {
+        step.answers[el.dataset.name] = String(el.value || '').trim();
+    });
+}
+
+function ecFixBack() {
+    if (_ecFixAt <= 0) return;
+    _ecFixCapture();
+    _ecFixAt--;
+    ecFix(_ecFixSku, null, true);
+}
+window.ecFixBack = ecFixBack;
+
+function ecFix(sku, note, replay) {
+    const row = _ecFeed.find(e => _ecSame(e.sku, sku))
+        || (_ecData?.items || []).find(e => _ecSame(e.sku, sku));
+
+    // ecFixClose() wipes the trail, and this calls it on every render, so the
+    // trail is carried across by hand. A DIFFERENT card starts a fresh one:
+    // answers to one item are not history for another.
+    const sameCard = _ecSame(_ecFixSku, sku);
+    let trail = sameCard ? _ecFixTrail.slice() : [];
+    let at = sameCard ? _ecFixAt : 0;
+
+    if (!replay) {
+        const asking = (row?.missingFields || []);
+        if (!asking.length) return;
+        const key = asking.map(f => f.name).join('|');
+        // eBay re-asking something already on the trail is the SAME question,
+        // not a new one — appending it would grow the trail every round trip
+        // and make Back walk through duplicates.
+        const seen = trail.findIndex(s => s.key === key);
+        at = seen >= 0 ? seen : trail.push({ key: key, fields: asking, answers: {} }) - 1;
+    }
+    const step = trail[at];
+    if (!step) return;
+    const fields = step.fields;
+
+    ecFixClose();
+    _ecFixSku = sku;
+    _ecFixTrail = trail;
+    _ecFixAt = at;
+    const typed = _ecFixTyped();
+
+    const inputs = fields.map((fld, n) => {
+        const id = `ecFixF${n}`;
+        // A CLOSED LIST IS ALWAYS A DROPDOWN.
+        // Free-typing into a field eBay will only accept 29 exact strings for is
+        // a guaranteed second refusal, and the second refusal reads as if the
+        // answer was wrong rather than the spelling.
+        // THE SUGGESTION IS PRE-FILLED, AND SO IS ITS SOURCE.
+        // A box that fills itself in from nowhere is a value nobody can check,
+        // and the whole safeguard here is that a person reads it before it goes
+        // to eBay. So the line underneath always names where it came from —
+        // and when we could not work it out, it says that instead of going
+        // quiet, because "we did not find this" is itself useful.
+        // AN ANSWER A PERSON GAVE IS NOT A SUGGESTION, AND MUST NOT WEAR ITS
+        // LABEL. Coming back to a field to find your own answer described as
+        // "suggested from the product" reads as the tool having overwritten you.
+        const mine = typed[fld.name] || '';
+        const sug = mine || fld.suggestion || '';
+        const sel = v => (sug && v === sug) ? ' selected' : '';
+        const control = (fld.allowed || []).length
+            ? `<select id="${id}" class="ec-fix-in" data-name="${_ecEsc(fld.name)}">
+                 <option value="">Choose…</option>
+                 ${fld.allowed.map(v => `<option value="${_ecEsc(v)}"${sel(v)}>${_ecEsc(v)}</option>`).join('')}
+               </select>`
+            : `<input id="${id}" class="ec-fix-in" data-name="${_ecEsc(fld.name)}"
+                     autocomplete="off" placeholder="Type The Answer"
+                     value="${_ecEsc(sug)}">`;
+        const condWhy = _ecCondWhy(row, fld);
+        const why = mine
+            ? `<span class="ec-fix-src">This is the answer you gave — change it if it was wrong</span>`
+            : sug
+            ? `<span class="ec-fix-src">Suggested from ${_ecEsc(fld.source || 'the product')} — change it if that is wrong</span>`
+            : condWhy
+            ? `<span class="ec-fix-src ec-fix-src-cond">${_ecEsc(condWhy)}</span>`
+            // "Check the item" is true and useless. The two places the answer
+            // is actually hiding are both already on this screen.
+            : `<span class="ec-fix-src ec-fix-src-none">Not written on the product — check the photos above and the rows below, or look at the item itself</span>`;
+        return `<label class="ec-fix-row" for="${id}">
+                  <span class="ec-fix-lbl">${_ecEsc(fld.name)}</span>
+                  ${control}
+                  ${why}
+                </label>`;
+    }).join('');
+
+    const wrap = document.createElement('div');
+    wrap.id = 'ecFixWrap';
+    wrap.className = 'ec-fix-wrap';
+    wrap.innerHTML = `
+      <div class="ec-fix" role="dialog" aria-modal="true">
+        <div class="ec-fix-head">
+          <div class="ec-fix-headtxt">
+            <div class="ec-fix-t">eBay Needs A Little More</div>
+            <div class="ec-fix-s" title="${_ecEsc(row.title || sku)}">${_ecEsc(row.title || sku)}</div>
+          </div>
+          <button class="ec-x" onclick="ecFixClose()" aria-label="Close">&times;</button>
+        </div>
+        <div class="ec-fix-body">
+          ${note ? `<div class="ec-fix-note ec-fix-note-warn">${_ecEsc(note)}</div>` : ''}
+          ${replay ? `<div class="ec-fix-note ec-fix-note-warn">You already answered this one and it was saved to Shopify. Changing it here writes over that answer and uploads again.</div>` : ''}
+          ${_ecEvHead(row)}
+          ${inputs}
+          ${_ecEvMore(row, fields)}
+          <div class="ec-fix-note">Saved onto the product in Shopify, then uploaded again.</div>
+          <div class="ec-fix-err" id="ecFixErr"></div>
+        </div>
+        <div class="ec-fix-foot">
+          ${at > 0 ? `<button class="ec-btn ec-btn-sm ec-fix-back"
+                  onclick="ecFixBack()">&larr; Back</button>` : ''}
+          <button class="ec-btn ec-btn-sm" onclick="ecFixClose()">Cancel</button>
+          <button class="ec-btn ec-btn-sm ec-btn-on" id="ecFixGo"
+                  onclick="ecFixSubmit()">Save &amp; Upload</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    document.addEventListener('keydown', _ecFixEsc, true);
+    // The page behind a modal must not scroll — every other modal here goes
+    // through lockAndBlurScreen(). This one is its own overlay rather than a
+    // .modal-menu, so it locks and releases itself. The flag means we only
+    // release a lock WE took: closing this while a modal underneath is still
+    // open would otherwise unpin the page behind it.
+    if (!document.body.classList.contains('no-scroll')) {
+        _ecFixLocked = true;
+        _ecFixScrollY = window.scrollY || window.pageYOffset || 0;
+        document.body.style.top = `-${_ecFixScrollY}px`;
+        document.body.classList.add('no-scroll');
+    }
+    wrap.querySelector('.ec-fix-in')?.focus();
+}
+window.ecFix = ecFix;
+
+// This listener is registered with capture:true, so it runs BEFORE the global
+// Escape handler that peels the lightbox. Without this, Escape over an enlarged
+// photo closed the whole prompt and threw away a half-typed answer.
+function _ecFixEsc(ev) {
+    if (ev.key !== 'Escape') return;
+    const lb = document.getElementById('auditPhotoLightbox');
+    if (lb && lb.style.display === 'flex') {
+        lb.style.display = 'none';
+        ev.stopPropagation();
+        return;
+    }
+    ecFixClose();
+}
+
+let _ecFixLocked = false;
+let _ecFixScrollY = 0;
+
+function ecFixClose() {
+    document.removeEventListener('keydown', _ecFixEsc, true);
+    document.getElementById('ecFixWrap')?.remove();
+    _ecFixSku = null;
+    _ecFixTrail = [];
+    _ecFixAt = 0;
+    if (_ecFixLocked) {
+        _ecFixLocked = false;
+        document.body.classList.remove('no-scroll');
+        document.body.style.top = '';
+        // .no-scroll pins the body with position:fixed, so releasing it drops the
+        // page back to the top unless the old offset is put back by hand.
+        window.scrollTo(0, _ecFixScrollY);
+    }
+}
+window.ecFixClose = ecFixClose;
+
+async function ecFixSubmit() {
+    const sku = _ecFixSku;
+    const wrap = document.getElementById('ecFixWrap');
+    const err = document.getElementById('ecFixErr');
+    if (!wrap || !sku || !err) return;
+
+    // Written to the step before anything else so that a refusal, or a Back
+    // straight afterwards, still finds what was typed.
+    _ecFixCapture();
+
+    const fields = {};
+    let blank = null;
+    wrap.querySelectorAll('.ec-fix-in').forEach(el => {
+        const v = String(el.value || '').trim();
+        if (!v) { blank = blank || el.dataset.name; return; }
+        fields[el.dataset.name] = v;
+    });
+    // A blank would be written to Shopify as nothing and refused by eBay for the
+    // same field, one round trip later.
+    if (blank) {
+        err.textContent = `${blank} still needs an answer.`;
+        err.style.display = 'block';
+        return;
+    }
+
+    const go = document.getElementById('ecFixGo');
+    if (go) { go.disabled = true; go.textContent = 'Saving…'; }
+    err.style.display = 'none';
+
+    const res = await _ecPost({ action: 'fix', store: _ecStore, sku, fields });
+    const b = res.body || {};
+    // The server row has moved on either way — it now carries whatever eBay said
+    // this time, which is not what opened this form.
+    if (b.item) _ecApply(sku, { ...b.item, conflict: !!b.conflict });
+
+    if (res.ok) { ecFixClose(); ecRender(); return; }
+
+    // ONE FIELD AT A TIME IS HOW eBay ANSWERS.
+    // It reports the first thing it objects to, so a fix can genuinely reveal the
+    // next missing field. Re-asking beats sending somebody back to the row to
+    // press Fix again to find out.
+    const next = b.item?.missingFields || [];
+    if (next.length) {
+        ecFix(sku, 'That saved. eBay then asked for this as well.');
+        return;
+    }
+    if (go) { go.disabled = false; go.textContent = 'Save & Upload'; }
+    err.textContent = b.error || b.detail || b.item?.error || 'Could not save that.';
+    err.style.display = 'block';
+}
+window.ecFixSubmit = ecFixSubmit;
+
+// ecRemoveOne (the x beside the title) only ever cleared THIS BROWSER's list.
+// The ebay_listings row stayed "failed", so the "N Did Not Upload" badge — which
+// is a server count, not a local one — came straight back on the next load, and
+// ebay-alert kept mailing about it nightly. This is the one that stops both.
+//
+// The row is kept on the server, just marked dismissed: what was tried and why
+// it failed is worth more than a tidy table, and uploading the SKU again later
+// simply starts it over.
+// THE CONFIRM HAS TO MATCH WHAT WILL HAPPEN. Removing a failed row changes
+// nothing outside this panel; removing a LIVE row ends a real eBay listing and
+// cannot be undone into the same listing. One sentence covering both would be
+// wrong in the case that matters.
+async function ecGiveUp(sku, btn, state) {
+    const live = state === 'live';
+    if (!confirm(`Remove ${sku}?\n\n` + (live
+        ? 'This ENDS the eBay listing and takes it off this list. It stays for sale '
+          + 'in the store, nothing will put it back on eBay automatically, and it '
+          + 'cannot go back up under the same listing.'
+        : 'It comes off the list and stops the error emails. '
+          + 'Nothing on eBay changes, and uploading it again later starts it over.'))) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Removing…'; }
+    const res = await _ecPost({ action: 'dismiss', store: _ecStore, sku });
+    const b = res.body || {};
+    if (!res.ok) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Remove'; }
+        // `error` is often the generic word the edge function's catch-all uses
+        // ("failed"); `detail` is the sentence that says what actually went
+        // wrong. Showing the first alone turned a constraint violation into a
+        // one-word dead end.
+        alert(b.detail || b.error || 'Could not remove it.');
+        return;
+    }
+    // Drop the count here rather than refetching the whole view: the number is
+    // the thing the person is watching, and a round trip to see it fall by one
+    // is the difference between "that worked" and "did that work?".
+    // Whichever bucket the row was in is the one that falls — decrementing
+    // `failed` for a live removal would leave both numbers wrong at once.
+    const counts = _ecData?.summary?.counts;
+    if (counts) {
+        const bucket = state === 'live' ? 'live' : state;
+        if (counts[bucket] > 0) counts[bucket]--;
+        if (counts.total > 0) counts.total--;
+    }
+    ecRemoveOne(sku);   // clears the local row and re-renders
+    ecRender();
+}
+window.ecGiveUp = ecGiveUp;
+
 async function ecDisable(sku, btn) {
     if (!confirm(`Take ${sku} off eBay?\n\n`
         + 'It stays for sale in the store — this ends the eBay listing only, '

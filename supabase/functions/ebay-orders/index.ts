@@ -290,7 +290,7 @@ function ebayCustomAttributes(o: any, ebayAccount: string | null) {
 const CARRIER_CODES: [RegExp, string][] = [
   [/usps|united states postal|postal service/i, "USPS"],
   [/fedex|federal express/i, "FEDEX"],
-  [/ups|united parcel/i, "UPS"],
+  [/\bups\b|united parcel/i, "UPS"],
   [/dhl/i, "DHL"],
 ];
 
@@ -370,7 +370,55 @@ async function shopifyOrderTracking(shop: string, token: string, orderId: string
   return null;
 }
 
-async function variantIdForSku(shop: string, token: string, sku: string): Promise<string | null> {
+// THE SKU ON AN EBAY ORDER IS EBAY'S KEY, NOT SHOPIFY'S.
+//
+// eBay keys an inventory item by the SKU we published it under, and that string
+// is frozen the moment the listing goes live — it is what comes back on the
+// order months later. The Shopify SKU is an ordinary editable field, and stores
+// edit it: the location tail gets rewritten every time a unit moves shelf. The
+// moment that happens a SKU lookup finds nothing and a real, paid sale stops
+// importing, silently, forever. OVL KS01-6613C-R1R2 was renamed to
+// KS01-6613C-R10R2, sold on eBay for $140 on 2026-08-18, and failed every
+// two-minute poll after that with "sku not uniquely resolvable".
+//
+// ebay_listings already records shopify_variant_id, and a variant id survives
+// any amount of SKU editing, so ask our own record FIRST. The Shopify search
+// stays as a fallback for listings published before this row was written.
+//
+// ORDER MATTERS, and not only for convenience: the fallback would also happily
+// find a DIFFERENT product that has since been given the old SKU, and attaching
+// a real sale to the wrong item is worse than not importing it at all.
+async function variantIdForSku(
+  store: string, shop: string, token: string, sku: string,
+): Promise<string | null> {
+  if (!sku) return null;
+
+  // Wrapped whole. This runs inside the per-order loop, and both sb() and
+  // shopifyGql() THROW — sb on any non-2xx, shopifyGql on a top-level GraphQL
+  // error. An exception escaping here would take the entire poll down: every
+  // other order in the batch skipped, the tracking sweep never reached, and no
+  // ebay_orders row written, which is exactly how the ACCESS_DENIED outage
+  // behaved. Nothing in this block is worth that; a failure here just means
+  // "fall back to searching Shopify by sku".
+  try {
+    const rows = await (await sb(
+      `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
+      + `&sku=eq.${encodeURIComponent(sku)}&select=shopify_variant_id&limit=1`)).json();
+    const stored = rows[0]?.shopify_variant_id || null;
+    if (stored) {
+      // Confirm the variant is still there. It can be deleted outright, and
+      // orderCreate against a dead id fails with a message about the id rather
+      // than about the product — a poor thing to hand a store to debug from.
+      const live = await shopifyGql(shop, token,
+        `query($id: ID!) { node(id: $id) { ... on ProductVariant { id } } }`,
+        { id: stored },
+      );
+      if (live.node?.id) return live.node.id;
+    }
+  } catch (err) {
+    console.error("ebay-orders: stored variant lookup failed", store, sku, String(err));
+  }
+
   const data = await shopifyGql(shop, token,
     `query($q: String!) { productVariants(first: 5, query: $q) { edges { node { id sku } } } }`,
     { q: `sku:${sku}` },
@@ -650,7 +698,7 @@ Deno.serve(async (req: Request) => {
     const priceNotes: string[] = [];
 
     for (const li of lines) {
-      const variantId = await variantIdForSku(shop, shopToken, li.sku || "");
+      const variantId = await variantIdForSku(store, shop, shopToken, li.sku || "");
       if (!variantId) {
         unresolved = li.sku || "(no sku)";
         break;
@@ -687,8 +735,12 @@ Deno.serve(async (req: Request) => {
 
     if (unresolved) {
       // Better to leave it visible and unimported than to attach a real sale to
-      // the wrong product.
-      report.push({ ebayOrderId, action: "skipped", reason: `sku not uniquely resolvable: ${unresolved}` });
+      // the wrong product. Name the likely causes: this string is what lands in
+      // the alert mail, and "not uniquely resolvable" does not tell anyone to go
+      // and look at whether the SKU was edited in Shopify — which it usually was.
+      const why = `cannot match eBay sku ${unresolved} to a Shopify variant `
+        + `(renamed SKU, deleted product, or the SKU now sits on more than one product)`;
+      report.push({ ebayOrderId, action: "skipped", reason: why });
       if (!dry) {
         await sb("ebay_orders?on_conflict=store_code,ebay_order_id", {
           method: "POST",
@@ -700,7 +752,7 @@ Deno.serve(async (req: Request) => {
             total: o.pricingSummary?.total?.value ?? null,
             sold_at: o.creationDate || null,
             status: "failed",
-            last_error: `sku not uniquely resolvable: ${unresolved}`,
+            last_error: why,
             updated_at: new Date().toISOString(),
           }]),
         });
