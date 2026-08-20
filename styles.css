@@ -12409,6 +12409,15 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     box-shadow: 0 0 0 3px rgba(31,157,87,.12);
 }
 
+/* A unit on this line has no label printed. Deliberately quieter than the
+   red not-ready flag beside it: an untagged unit is a job still to do, not a
+   thing stopping the quote -- printing is warned about at submit, never
+   blocked. Amber, hollow, and it disappears the moment the count is met. */
+.b2b-ss-untagged {
+    width: 7px; height: 7px; border-radius: 999px; display: inline-block;
+    border: 1.5px solid #d97706; background: transparent; flex: 0 0 auto;
+}
+
 /* --- the inline row panel -------------------------------------------------
    What used to be a modal over the sheet. It opens in flow beneath its own row,
    so the line you are working on stays visible, focus is never trapped, and a

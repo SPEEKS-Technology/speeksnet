@@ -18537,6 +18537,17 @@ const B2B_MARKETPLACE_FEE = 0.08;
 // nothing -- recycle contributes no fee, and neither does an unpriced line.
 function _b2bFeeOn(value) { return Math.round(value * B2B_MARKETPLACE_FEE * 100) / 100; }
 
+// How many units on this line still have no label. Clamped at zero: reprinting
+// a torn tag is normal, so a line can legitimately have had more labels than it
+// has units, and that is not a negative shortfall -- it is nothing owed.
+//
+// An evaluation has no labels at all; nothing has been seen, let alone tagged.
+function _b2bLabelsShort(it) {
+    if (_b2bIsPreval()) return 0;
+    return Math.max(0, (Number(it.quantity) || 1) - (Number(it.label_printed_qty) || 0));
+}
+function _b2bUnlabelled() { return _b2bModalItems.filter(it => _b2bLabelsShort(it) > 0); }
+
 // What a line costs us in certified wipes.
 function _b2bWipeTotal(it) {
     return it.wipe_required ? (Number(it.wipe_fee) || 0) * (Number(it.quantity) || 1) : 0;
@@ -18874,7 +18885,7 @@ async function b2bAddItem(dealId, btn) {
             id: out.id, line_no: out.line_no, sku: out.sku, make: '', model: '', condition: '',
             staff_notes: '', client_notes: '', quantity: 1, value: 0, offer: 0,
             item_type: 'other', cpu: null, ram: null, storage: null, gpu: null, battery_health: null, shipping_cost: 0,
-            listing_info: '',
+            listing_info: '', label_printed_qty: 0,
             sort_order: out.sort_order,
             serials: '', disposition: 'purchase',
             wipe_required: false, wipe_fee: 0, wiped_qty: 0,
@@ -18901,6 +18912,17 @@ async function b2bAddItem(dealId, btn) {
 async function b2bCopyItem(id, btn) {
     const src = _b2bLocalItem(id);
     if (!src) return;
+    // MOCD: finishing a line and hitting copy drops you straight into the next
+    // one, and the unit you just described walks off the bench untagged. Offered
+    // here rather than enforced -- a printer that is down must not stop pricing.
+    const short = _b2bLabelsShort(src);
+    if (short > 0 && !_b2bIsPreval() && src.sku) {
+        if (confirm(`Print ${short} label${short === 1 ? '' : 's'} for "${_b2bItemName(src)}" first?\n\n`
+            + 'Tag it now and it cannot be the box nobody can identify later. '
+            + 'Cancel to carry on without printing.')) {
+            b2bPrintLabels(_b2bEditParent()?.id, id, short);
+        }
+    }
     await _b2bBusy(btn, '', async () => {
         const copy = {
             make: src.make, model: src.model, condition: src.condition,
@@ -19322,6 +19344,8 @@ function _b2bItemSheet() {
                     ondragover="b2bDragOver(event,'${it.id}')" ondrop="b2bDrop(event,'${it.id}')"`}>
                     <span class="b2b-mono">${escapeHtml(_b2bIsPreval() ? String(it.line_no) : _b2bLineNo(it))}</span>
                     ${blocked.length ? `<i class="b2b-ss-flag" title="${escapeHtml(blocked.join(', '))}"></i>` : ''}
+                    ${_b2bLabelsShort(it) ? `<i class="b2b-ss-untagged" title="${
+                        _b2bLabelsShort(it)} unit${_b2bLabelsShort(it) === 1 ? '' : 's'} on this line still have no label printed"></i>` : ''}
                 </span>
                 <span class="b2b-pcell" data-k="Type">
                     <select onchange="b2bItemType('${it.id}',this.value)">
@@ -19644,8 +19668,21 @@ async function b2bSubmitPricing(id, btn) {
         }
         return _b2bSay(gaps.map(it => `${_b2bItemName(it)} (${_b2bItemBlocked(it).join(', ')})`).join(' · '), true);
     }
+    // Warn about untagged units, and let it through anyway. Ethan asked for the
+    // print to be REQUIRED; a hard block was rejected because a printer that is
+    // down would strand the whole pallet. So this is the last moment it can be
+    // said, said plainly, with the count -- and the decision stays with whoever
+    // is holding the goods.
+    const short = _b2bUnlabelled();
+    const shortNote = short.length
+        ? `\n\n${short.reduce((n, it) => n + _b2bLabelsShort(it), 0)} unit${
+            short.reduce((n, it) => n + _b2bLabelsShort(it), 0) === 1 ? '' : 's'} across ${
+            short.length} line${short.length === 1 ? '' : 's'} have no label printed yet:\n  · ${
+            short.slice(0, 8).map(it => `${_b2bItemName(it)} (${_b2bLabelsShort(it)})`).join('\n  · ')}${
+            short.length > 8 ? `\n  · …and ${short.length - 8} more` : ''}\n\nYou can still submit.`
+        : '';
     if (!confirm('Submit this pricing? SKUs get assigned now so labels can be printed, '
-        + 'and the approver is emailed that a quote is ready to send.')) return;
+        + 'and the approver is emailed that a quote is ready to send.' + shortNote)) return;
     await _b2bBusy(btn, 'Submitting…', async () => {
         await _b2bPost({ action: 'submit_pricing', id, priced_by: _b2bUser() }, "Couldn't submit the pricing");
         _b2bDirty = false;
@@ -21307,21 +21344,32 @@ function b2bPrintLabels(dealId, itemId, count) {
         if (it && it.sku) {
             const qty  = Math.max(1, Number(it.quantity) || 1);
             const done = (Number(it.listed_qty) || 0) + (Number(it.recycled_qty) || 0);
-            const left = Math.max(1, qty - done);
+            // Default to the units that have no tag yet, not to the whole line.
+            // Ethan: adding quantity to an existing line and then printing "more
+            // labels" reprinted everything, so you either wasted a sheet or
+            // hand-counted the difference. Falls back to what is left to handle
+            // when the line is fully tagged already, which is the reprint case.
+            const short = _b2bLabelsShort(it);
+            const left  = Math.max(1, short || (qty - done));
             let n = Number(count) || 0;
             if (!n) {
-                if (qty === 1) {
+                if (qty === 1 && !it.label_printed_qty) {
                     n = 1;
                 } else {
+                    const printed = Number(it.label_printed_qty) || 0;
                     const raw = prompt(
                         `How many labels for "${_b2bItemName(it)}"?\n\n`
                         + `${qty} unit${qty === 1 ? '' : 's'} on the line`
-                        + `${done ? `, ${left} still to handle` : ''}.`, String(left));
+                        + `${printed ? `, ${printed} label${printed === 1 ? '' : 's'} printed so far` : ', none printed yet'}`
+                        + `${short ? ` — ${short} still untagged` : ''}.`, String(left));
                     if (raw === null) return;
                     n = parseInt(raw, 10) || 0;
                 }
             }
-            n = Math.min(qty, Math.max(1, n));
+            // Upper bound is generous rather than the line quantity: reprinting
+            // a torn tag on a fully-tagged line is a normal thing to want, and
+            // clamping to qty silently refused it.
+            n = Math.min(1000, Math.max(1, n));
             for (let i = 0; i < n; i++) labels.push(it);
         }
     } else {
@@ -21431,6 +21479,26 @@ function b2bPrintLabels(dealId, itemId, count) {
 </body></html>`;
 
     _b2bOpenSheet(doc, 'unit labels');
+
+    // Record what was printed. Fire-and-forget on purpose: the labels are
+    // already coming out of the printer, and a failed write here must not throw
+    // an error over a job that physically happened. Worst case the line still
+    // reads as short and somebody prints one more.
+    const tally = new Map();
+    labels.forEach(it => tally.set(it.id, (tally.get(it.id) || 0) + 1));
+    if (tally.size) {
+        _b2bSend({ action: 'mark_label_printed',
+                   lines: [...tally].map(([id, qty]) => ({ id, qty })) })
+            .then(() => {
+                // Keep the open sheet honest without a refetch.
+                tally.forEach((qty, id) => {
+                    const it = _b2bLocalItem(id);
+                    if (it) it.label_printed_qty = (Number(it.label_printed_qty) || 0) + qty;
+                });
+                _b2bRepaintItems();
+            })
+            .catch(() => {});
+    }
 }
 
 // The same pallet tag once the deal is being worked: priced, quoted, listed or

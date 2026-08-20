@@ -200,7 +200,7 @@ const ITEM_COLS = [
   // Written while pricing, read while listing -- see 0047. Deliberately not
   // folded into staff_notes: whoever is listing should not have to pan through
   // pricing chatter to find the one line addressed to them.
-  "listing_info", "label_printed_at", "label_printed_by",
+  "listing_info", "label_printed_at", "label_printed_by", "label_printed_qty",
 ].join(",");
 
 // `computer` folds the old laptop/desktop split into one type; the legacy two
@@ -930,15 +930,34 @@ Deno.serve(async (req: Request) => {
       // (they peel, they tear), and the second print is not an error. The stamp
       // simply moves to the most recent one.
       if (action === "mark_label_printed") {
-        const ids = Array.isArray(body.ids) ? body.ids.map((v: unknown) => String(v || "")).filter(Boolean) : [];
-        if (!ids.length) return jsonResponse({ success: false, error: "No lines were named." }, 400);
-        if (ids.length > 5000) return jsonResponse({ success: false, error: "That is too many lines at once." }, 400);
-        const { error } = await supabase.from("b2b_deal_items").update({
-          label_printed_at: new Date().toISOString(),
-          label_printed_by: str(body.user, 120, "User") || "Unknown",
-        }).in("id", ids);
-        if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        return jsonResponse({ success: true, marked: ids.length });
+        // [{ id, qty }] -- how many labels came off the printer for each line,
+        // not merely that some did. A quantity-3 line raised to 6 has been
+        // printed and is still three tags short, and only a count can say so.
+        const rows = Array.isArray(body.lines) ? body.lines : [];
+        if (!rows.length) return jsonResponse({ success: false, error: "No lines were named." }, 400);
+        if (rows.length > 5000) return jsonResponse({ success: false, error: "That is too many lines at once." }, 400);
+        const now = new Date().toISOString();
+        const who = str(body.user, 120, "User") || "Unknown";
+        let marked = 0;
+        for (const r of rows) {
+          const id = String(r?.id || "");
+          if (!id) continue;
+          const add = count(r?.qty, 1, 100000, "Labels", 1);
+          // Read-then-add rather than a bare increment: supabase-js has no
+          // atomic += , and two people printing the same line at once is not a
+          // thing that happens -- they are standing at one printer.
+          const { data: cur } = await supabase.from("b2b_deal_items")
+            .select("label_printed_qty").eq("id", id).maybeSingle();
+          if (!cur) continue;
+          const { error } = await supabase.from("b2b_deal_items").update({
+            label_printed_qty: (Number(cur.label_printed_qty) || 0) + add,
+            label_printed_at: now,
+            label_printed_by: who,
+          }).eq("id", id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          marked++;
+        }
+        return jsonResponse({ success: true, marked });
       }
 
       // Move a deal to another store mid-flight.
