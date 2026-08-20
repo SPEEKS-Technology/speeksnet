@@ -824,6 +824,37 @@ function toggleCalendar() {
     }
     toggleModal('calendarDropdown');
 }
+// Where an idea goes if the recipient list has not loaded (or is empty). Same
+// fallback pattern as every other emailing tool: the address that was hardcoded
+// into the form before the list existed, so a failed fetch sends the idea to the
+// person it has always gone to rather than nowhere.
+const IDEA_FALLBACK_TO = ['ethan.kushnir@speekstechnology.com'];
+
+// formsubmit.co takes ONE address in the URL and the rest through a _cc field,
+// so the list is split rather than joined. Called on open, not at inject time:
+// the recipient list is fetched lazily and a modal built at page load would keep
+// whatever address was current then for the rest of the session.
+async function _ideaSyncRecipients() {
+    const form = document.getElementById('ideaForm');
+    if (!form) return;
+    await _fetchEmailLists();
+    const to = _recipientsFor('idea_submissions', IDEA_FALLBACK_TO)
+        .map(a => String(a || '').trim()).filter(Boolean);
+    const list = to.length ? to : IDEA_FALLBACK_TO;
+    form.action = 'https://formsubmit.co/' + encodeURIComponent(list[0]);
+    // _cc is rewritten every open, including to empty — an address removed in the
+    // tool has to actually stop receiving ideas, and a stale hidden field would
+    // keep copying them in forever.
+    let cc = form.querySelector('input[name="_cc"]');
+    if (!cc) {
+        cc = document.createElement('input');
+        cc.type = 'hidden';
+        cc.name = '_cc';
+        form.appendChild(cc);
+    }
+    cc.value = list.slice(1).join(',');
+}
+
 function toggleIdeaModal() {
     // Pre-fill the submitter's name from their session so they don't retype it.
     const nameEl = document.getElementById('ideaName');
@@ -831,6 +862,10 @@ function toggleIdeaModal() {
         const u = sessionStorage.getItem('speeksUserName');
         if (u && u.trim()) nameEl.value = u.trim();
     }
+    // Not awaited: the address only has to be right by the time Submit is
+    // pressed, and blocking the modal open on a network call to show a form
+    // would be a worse trade. The form carries the fallback until it resolves.
+    _ideaSyncRecipients();
     toggleModal('ideaModal');
 }
 
@@ -1380,17 +1415,73 @@ window.toggleReaction = function(id, emoji) {
     }
 };
 
+// THE EMOJI PICKER IS CUT OFF BY THE CARD, not by the feed — the same thing that
+// sent the "Read by" receipt into the card header a few rows below this. A hub
+// card is `overflow: hidden` (it rounds its own corners), the picker is ~230px of
+// six emoji hanging off a button that sits at the right-hand end of the footer,
+// and an absolutely positioned popover inside that card is simply sheared off at
+// its edge. On a phone the card is the screen width, so it loses the last emoji
+// or two every time.
+//
+// Same answer as the dropdowns and the store picker: while it is open it lives on
+// <body> as position:fixed, placed by hand against the button. That escapes the
+// card's clipping AND any transformed ancestor, and it is the only fix that does
+// not depend on knowing which ancestor is doing the clipping.
+function _rxPlacePicker(p, btn) {
+    const r = btn.getBoundingClientRect();
+    const w = p.offsetWidth, h = p.offsetHeight;
+    // Left-aligned with the button, then pulled back inside the window. The
+    // button is near the right edge far more often than not, which is exactly
+    // the case that was losing emoji.
+    p.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - w - 8))) + 'px';
+    // Above by preference — it is a menu hanging off a button at the bottom of a
+    // card — but below when there is no room above.
+    const above = r.top - 8 - h;
+    p.style.top = Math.round(above >= 8 ? above : Math.min(r.bottom + 8, window.innerHeight - h - 8)) + 'px';
+    p.style.bottom = 'auto';
+}
+
+function _rxClosePicker(p) {
+    p.classList.remove('show', 'rx-float');
+    p.style.left = p.style.top = p.style.bottom = '';
+    // Home again. A feed re-render can destroy the wrapper while the picker is
+    // parked on <body>, which would leave it orphaned there forever — so if home
+    // is gone, so is the picker.
+    const home = p._rxHome;
+    if (!home) return;
+    if (home.isConnected) home.appendChild(p); else p.remove();
+    p._rxHome = null;
+}
+function _rxCloseAll() {
+    document.querySelectorAll('.reaction-picker-popover.show').forEach(_rxClosePicker);
+}
+
 window.toggleReactionPicker = function(id) {
     const picker = document.getElementById('picker_' + id);
-    if (picker) picker.classList.toggle('show');
+    if (!picker) return;
+    if (picker.classList.contains('show')) { _rxClosePicker(picker); return; }
+    _rxCloseAll();
+    const wrap = picker.closest('.reaction-picker-wrapper');
+    const btn = wrap && wrap.querySelector('.add-reaction-btn');
+    if (!btn) { picker.classList.add('show'); return; }
+    picker._rxHome = picker.parentNode;
+    document.body.appendChild(picker);
+    picker.classList.add('rx-float', 'show');
+    _rxPlacePicker(picker, btn);
 };
 
-// Close all open pickers if clicked outside
+// Close all open pickers if clicked outside. The picker itself is on <body> while
+// open, so it no longer answers .closest('.reaction-picker-wrapper') — its own
+// buttons are checked directly rather than relying on where it is parented.
 document.addEventListener('click', (e) => {
-    if (!e.target.closest('.reaction-picker-wrapper')) {
-        document.querySelectorAll('.reaction-picker-popover.show').forEach(p => p.classList.remove('show'));
-    }
+    if (e.target.closest('.reaction-picker-wrapper')) return;
+    if (e.target.closest('.reaction-picker-popover')) return;
+    _rxCloseAll();
 });
+// A fixed popover does not travel with the button it hangs off. Capturing,
+// because the scroll happens inside the feed, not on the window.
+window.addEventListener('scroll', _rxCloseAll, true);
+window.addEventListener('resize', _rxCloseAll);
 
 // THE CARD IS WHAT CLIPS THE "READ BY" LIST, NOT THE FEED.
 // #notifDropdown .hub-item is overflow:hidden (it rounds its own corners), and
@@ -8642,12 +8733,12 @@ function renderQMTab(tab) {
     } else if (tab === 'reviews') {
         // --- NEW BANNER FOR NON-5-STAR REVIEWS ---
         html += `
-        <div style="margin-bottom: 15px; background: #fffbeb; border: 1px solid #fde68a; padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; flex-direction: column; gap: 4px;">
-                <span style="font-size: 13px; font-weight: 900; color: #92400e;">Handling a Sub-5-Star Review?</span>
-                <span style="font-size: 11px; font-weight: 700; color: #b45309;">Follow the SOP for mixed or negative feedback before replying.</span>
+        <div class="qm-sop-banner" style="margin-bottom: 15px; background: #fffbeb; border: 1px solid #fde68a; padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+            <div class="qm-sop-copy" style="display: flex; flex-direction: column; gap: 4px;">
+                <span class="qm-sop-t" style="font-size: 13px; font-weight: 900; color: #92400e;">Handling a Sub-5-Star Review?</span>
+                <span class="qm-sop-s" style="font-size: 11px; font-weight: 700; color: #b45309;">Follow the SOP for mixed or negative feedback before replying.</span>
             </div>
-            <a href="https://drive.google.com/file/d/1D4VBM5nSD0KpK-bzE3_O9OOncFCsk80w/view?usp=sharing" target="_blank" class="mini-action-btn" style="background: white; border-color: #fde68a; color: #92400e; box-shadow: 0 2px 4px rgba(251,191,36,0.15);">View Process ↗</a>
+            <a href="https://drive.google.com/file/d/1D4VBM5nSD0KpK-bzE3_O9OOncFCsk80w/view?usp=sharing" target="_blank" class="mini-action-btn qm-sop-cta" style="background: white; border-color: #fde68a; color: #92400e; box-shadow: 0 2px 4px rgba(251,191,36,0.15);">View Process ↗</a>
         </div>`;
 
         html += '<div class="qm-category-items open" style="margin-left: 0; padding-left: 0; border: none; background: transparent; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start;">';
@@ -9802,7 +9893,7 @@ function _lvStamp(d) {
         // so on the 17th this is 16 of 31 and the average-per-day figures beside it
         // divide by the same 16.
         return d.month
-            ? _lvDays(d) + ' Of ' + d.month.daysTotal + ' Days'
+            ? _lvDays(d) + ' of ' + d.month.daysTotal + ' Days'
             : 'Month So Far';
     }
     return 'Last Change ' + _lvClock(d.asOfCentral);
@@ -11144,7 +11235,7 @@ function _bdGoalChip(store, t, proj, isCurrent) {
     // "Tracking" is a word about the future, and a closed month has none. The
     // running month says what it is heading for; a finished one says what it
     // came to.
-    const verb = isCurrent ? ' Tracking To ' : ' Of ';
+    const verb = isCurrent ? ' Tracking To ' : ' of ';
     return '<span class="bd-h-goal' + tone + '">'
         + '<b>' + _lvPct(pct) + '</b>' + verb + _lvMoney(goal, false) + ' Goal</span>';
 }
@@ -11437,7 +11528,7 @@ function _bdRender() {
     //
     // The captions stay. They are not decoration: the sheet's "Sell" column is
     // the resale value of goods BOUGHT and its "Buy" column is the cash paid, so
-    // "Resale Value" and "Out Of The Till" are what stop the two being read the
+    // "Resale Value" and "Out of The Till" are what stop the two being read the
     // wrong way round.
     const dRes = pt && _bdDelta(at(t.resale), pt.resale, 'good');
     html += '<div class="bd-strip bd-strip2">'
@@ -11451,7 +11542,7 @@ function _bdRender() {
         // is already in the two tiles beside it — the resale value carries the
         // month-end picture and the buy margin carries the ratio between them —
         // so three periods of cash-out was the same story told a third time.
-        + tile('Cash Paid <span class="bd-k-sub">&middot; Out Of The Till</span>', _lvMoney(t.paid, false), {})
+        + tile('Cash Paid <span class="bd-k-sub">&middot; Out of The Till</span>', _lvMoney(t.paid, false), {})
         + tile('Buy Margin <span class="bd-k-sub">&middot; On Purchases</span>', _lvPct(t.buyMargin), {
             cmp: [lastMo((pt && pt.buyMargin !== null) ? _lvPct(pt.buyMargin) : '', ''), lastYr('buyMargin')],
         })
@@ -11987,7 +12078,7 @@ function _lvSumReviews(id, fc, codes) {
 // second thing to disagree.
 function _lvReviewSub(f) {
     const banked = _lvNum(f.reviews)
-        + (f.reviewsGoal > 0 ? ' Of ' + _lvNum(f.reviewsGoal) : '');
+        + (f.reviewsGoal > 0 ? ' of ' + _lvNum(f.reviewsGoal) : '');
     // Title Case, like every other sub-line on the strip ("$5,768 So Far") and
     // like the rest of the email and the boards.
     if (!(f.reviewsGoal > 0)) return banked + ' So Far';
@@ -12056,7 +12147,7 @@ function _lvBuyBlock(d, views) {
         const r = rows[0];
         html += '<div class="lv-strip lv-buy-strip">'
             + _lvTile('Bought', _lvMoney(r.b.bought, false), 'Resale Value', true)
-            + _lvTile('Cash Paid', _lvMoney(r.b.paid, false), 'Out Of The Till')
+            + _lvTile('Cash Paid', _lvMoney(r.b.paid, false), 'Out of The Till')
             + _lvTile('Buy Margin', _lvPct(r.b.margin), 'On Purchases')
             + _lvTile('Bought vs Sold', _lvRatio(r.b.bought, r.b.sold), 'Stock In Against Out')
             + '</div>';
@@ -12223,7 +12314,7 @@ function _lvCmpSum(views, key) {
 // figure and that month's actual.
 //
 // A row whose month is PARTIAL says so where the figure would otherwise imply five
-// stores: "3 Of 5" replaces nothing, it is appended to the name, because the
+// stores: "3 of 5" replaces nothing, it is appended to the name, because the
 // alternative is a district total that quietly means something narrower than the
 // tile above it.
 function _lvCmpRows(views, d, pick) {
@@ -12236,7 +12327,7 @@ function _lvCmpRows(views, d, pick) {
         return {
             k: _lvCmpName(sum.span, yr)
                 + (sum.partial && views.length > 1
-                    ? ' <span class="lv-cmp-part">' + sum.codes.length + ' Of ' + sum.total + '</span>' : ''),
+                    ? ' <span class="lv-cmp-part">' + sum.codes.length + ' of ' + sum.total + '</span>' : ''),
             v: _lvMoney(pair[1], false),
             d: _lvDelta(pair[0], pair[1], 'good'),
         };
@@ -12441,7 +12532,7 @@ function _lvRollupTiles(r, d, label, views) {
     // Complete days on both finished views; only Today counts itself.
     const elapsed = _lvIsToday() ? (d.month && d.month.daysElapsed) : (d.prev && d.prev.daysElapsed);
     const days = d.month && elapsed !== null && elapsed !== undefined
-        ? elapsed + ' Of ' + d.month.daysTotal + ' Days'
+        ? elapsed + ' of ' + d.month.daysTotal + ' Days'
         : '';
     // The fourth tile answers "and where does that leave the month?". On the Month
     // view the first tile IS the month, so repeating it there would waste the slot —
@@ -12586,6 +12677,10 @@ function _lvStoreRow(v, d, foot, rev) {
 const _LV_COMPANY_ROLES = new Set(["district manager", "ceo"]);
 
 function _lvCards(stores, d, rollup, rollupLabel) {
+    // Kept so setLiveCard can rebuild just this zone. Which branch of
+    // renderLiveDashboard called us decides what "the deck" is, and there is no
+    // way to work that out again from the DOM.
+    _lvCardArgs = { stores, d, rollup, rollupLabel };
     const role = (sessionStorage.getItem("speeksUserRole") || "").toLowerCase().trim();
     const company = _LV_COMPANY_ROLES.has(role);
     // A Multi-Store Manager runs two stores and is handed exactly those two, so
@@ -12598,13 +12693,35 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         roll = rollup;
     } else {
         list = stores.filter(m => m && m.code === _lvOwnCode);
+        // The edge function already scoped this payload to one store, so that row
+        // IS theirs whether or not _lvOwnStore managed to match a code. Without
+        // this the phone showed "no live figures yet" over a payload that had them.
+        if (!list.length && stores.length === 1) list = stores;
         roll = null;   // no district total for a single store — it would be the same number
     }
     if (!list.length) {
-        return '<p class="lv-cards-legend">No live figures for your store yet.</p>';
+        return '<div class="lv-cardzone"><p class="lv-cards-none">No live figures for your store yet.</p></div>';
     }
 
-    function card(v, isRoll) {
+    // Buying is keyed the FOLLOWING morning, so Today has none to show — the same
+    // reason _lvBuyBlock draws nothing on that tab. Asking for it anyway would
+    // print $0 against every store and read as a district that bought nothing.
+    // A CLOSED DAY buys nothing, and printing "Bought Value $0" against it is the
+    // exact bug _lvBuyBlock already refuses to ship: every Monday the Yesterday tab
+    // would report the district as having had a catastrophic day when the stores
+    // were simply shut. Suppressed on Yesterday only — a $0 MONTH is a real number
+    // worth seeing, a $0 Sunday is just Sunday.
+    const buyFor = code => {
+        if (_lvMode === 'today') return null;
+        const b = _lvBuyFor(code, d);
+        if (_lvIsPrev() && b && !b.bought) return null;
+        return b;
+    };
+
+    const fig = (k, v) => '<div class="lvc-f"><span class="lvc-k">' + k + '</span>'
+        + '<span class="lvc-v">' + v + '</span></div>';
+
+    function card(v, isRoll, buy) {
         const tint = (!isRoll && STORE_TINTS[v.code])
             ? '<i class="lv-tint" style="background:' + STORE_TINTS[v.code] + '"></i>' : '';
         const head = '<div class="lvc-h">' + tint + '<b>' + escapeHtml(String(v.code || '')) + '</b>';
@@ -12612,33 +12729,183 @@ function _lvCards(stores, d, rollup, rollupLabel) {
             return '<li class="lvc lvc-err">' + head + '</div>'
                 + '<p class="lvc-errmsg">not reporting &middot; ' + escapeHtml(v.error) + '</p></li>';
         }
-        const pct = v.pctOfGoal;
+        // THE SAME FIGURE THE DESKTOP TABLE'S "% to goal" COLUMN SHOWS, which is
+        // paceIndex — NOT pctOfGoal. The two are different numbers and the card
+        // had the wrong one: pctOfGoal is banked GP over the whole monthly goal,
+        // so halfway through August OVL read 53.8% on the phone against 104% on
+        // the table everybody actually works from. paceIndex divides that by how
+        // much of the SELLING month has gone (Sundays excluded upstream), so 100
+        // means exactly on track. _lvPaceCls, not a band of my own, so the colour
+        // agrees with the table too: at or above 100 green, under it red.
+        const pct = v.paceIndex;
         const has = !(pct === null || pct === undefined);
-        // Same three-band read as the pace column: at or past goal, within reach,
-        // or behind. Colour carries it so a card is scannable without reading.
-        const band = !has ? '' : (Number(pct) >= 100 ? ' good' : (Number(pct) >= 75 ? ' near' : ' low'));
+        const band = has ? ' ' + _lvPaceCls(pct) : '';
         return '<li class="lvc' + (isRoll ? ' lvc-roll' : '') + '">'
-            + head + '<span class="lvc-goal' + band + '">' + _lvPct(pct) + '</span></div>'
+            + head + '<span class="lvc-goal' + band + '">'
+            + '<span class="lvc-goal-k">% to Goal</span>'
+            // "No Goal" in place of the figure, not on a line of its own underneath:
+            // the extra row was 32px that only some cards had, so the card grew and
+            // shrank as the picker moved between stores.
+            + (has ? Math.round(Number(pct)) + '%' : 'No Goal') + '</span></div>'
             + '<div class="lvc-figs">'
-            + '<div class="lvc-f"><span class="lvc-k">Net Sales</span>'
-            + '<span class="lvc-v">' + _lvMoney(v.netToday, false) + '</span></div>'
-            + '<div class="lvc-f"><span class="lvc-k">Gross Profit</span>'
-            + '<span class="lvc-v">' + _lvMoney(v.gpToday, false) + '</span></div>'
+            // The five figures the phone build carries, in the order they are read:
+            // what came in, what was kept, the rate it was kept at, and what went
+            // back out to buy stock. The fifth — % to goal — is on the header line
+            // above, because it is the one figure a column of cards is scanned for.
+            + fig('Net Sales', _lvMoney(v.netToday, false))
+            + fig('Gross Profit', _lvMoney(v.gpToday, false))
+            + fig('Margin', _lvPct(v.marginToday))
+            + (buy ? fig('Bought Value', _lvMoney(buy.bought, false)) : '')
             + '</div>'
-            + (has ? '' : '<div class="lvc-goal-lab">no goal set</div>')
             + '</li>';
     }
 
+    // Per store first, so the roll-up line can be summed out of exactly the rows
+    // shown underneath it rather than read from a separate call that could cover a
+    // different set of stores.
+    const buys = list.map(m => buyFor(m && m.code));
+    // every(Boolean), not some(): a roll-up built from four stores out of five is a
+    // district total that quietly means something narrower than the label says.
+    const rollBuy = buys.length && buys.every(Boolean) ? _lvBuySum(buys) : null;
+
     // The company line leads for a DM: the district number is the headline and the
     // stores underneath are the breakdown, which is the order they are read in.
-    let html = '<p class="lv-cards-legend">' + escapeHtml(_lvModeName())
-        + ' &middot; percentage is month-to-date gross profit against goal.</p>'
-        + '<ul class="lv-cards">';
+    //
+    // ONE AT A TIME on a phone (user's call, 19 Aug). Six stacked cards is a
+    // scroll, and a scroll is not a glance — so the roll-up is what opens and the
+    // pills below the day toggle switch to a single store. The desktop table
+    // underneath still shows all five at once, which is why the pills carry the
+    // same `display:none` above 900px that .lv-cards does: this state has no
+    // meaning there and the row would just be chrome.
+    const deck = [];
     if (roll) {
-        html += card(Object.assign({}, _lvView(roll), { code: rollupLabel, name: '' }), true);
+        // paceIndex is computed server-side per store; a district or MSM roll-up
+        // has none, so it is derived here the same way _lvTable derives it for its
+        // own total row — otherwise the District card would be the one card on the
+        // phone with a blank percentage.
+        const rollView = _lvView(roll);
+        deck.push({ key: '_roll', label: rollupLabel,
+            view: Object.assign({}, rollView, { code: rollupLabel, name: '',
+                paceIndex: _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
+            buy: rollBuy, isRoll: true });
     }
-    list.forEach(m => { html += card(_lvView(m), false); });
-    return html + '</ul>';
+    list.forEach((m, i) => {
+        deck.push({ key: String((m && m.code) || ''), label: String((m && m.code) || ''),
+            view: _lvView(m), buy: buys[i], isRoll: false });
+    });
+
+    // A pick that is no longer in the deck — a role change, a store that dropped
+    // out of the payload — falls back to the first card rather than rendering an
+    // empty list under a lit pill.
+    let picked = deck.find(c => c.key === _lvCardPick);
+    if (!picked) { picked = deck[0]; _lvCardPick = picked.key; }
+
+    // A dropdown, not a pill row: six pills do not fit across a phone, and a
+    // horizontal scroller hides stores off an edge nobody thinks to swipe.
+    //
+    // Built rather than a native <select>, because the popup a <select> opens is
+    // drawn by the OS and cannot be styled — on desktop Chrome that is a squared
+    // white box with hairlines down two edges, which is what it looked like in
+    // review. This is a button and a list, so it matches the day toggle beside it
+    // on every platform instead of looking like whichever platform you are on.
+    let html = '<div class="lv-cardzone">';
+    if (deck.length > 1) {
+        const dot = c => (!c.isRoll && STORE_TINTS[c.key])
+            ? '<i class="lv-pdot" style="background:' + STORE_TINTS[c.key] + '"></i>' : '';
+        html += '<div class="lv-picks">'
+            + '<div class="lv-pickwrap">'
+            + '<button type="button" class="lv-pickbtn" aria-haspopup="listbox"'
+            + ' aria-expanded="false" onclick="lvTogglePickList(event)">'
+            + dot(picked) + '<span class="lv-pickcur">' + escapeHtml(picked.label) + '</span>'
+            + '<svg class="lv-pickchev" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+            + ' stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+            + '<path d="M6 9l6 6 6-6"/></svg></button>'
+            + '<ul class="lv-picklist" role="listbox">'
+            + deck.map(c => '<li><button type="button" role="option" class="lv-pickopt'
+                + (c.key === picked.key ? ' on' : '') + '"'
+                + ' aria-selected="' + (c.key === picked.key ? 'true' : 'false') + '"'
+                + ' onclick="setLiveCard(' + JSON.stringify(c.key).replace(/"/g, '&quot;') + ')">'
+                + dot(c) + escapeHtml(c.label) + '</button></li>').join('')
+            + '</ul></div></div>';
+    }
+
+    // No legend paragraph. It carried the day name (already on the toggle), what
+    // the percentage measures, and on Today a line explaining why Bought Value is
+    // absent — three sentences of italics above three numbers, cut 19 Aug. The
+    // Today tab now simply shows the figures it has.
+    html += '<ul class="lv-cards">' + card(picked.view, picked.isRoll, picked.buy) + '</ul>';
+    return html + '</div>';
+}
+
+// Which card the phone is showing. Module-level and NOT persisted: it is a
+// glance, and the next time somebody opens the dashboard the roll-up is the
+// right thing to be looking at again.
+function lvTogglePickList(ev) {
+    ev.stopPropagation();
+    const wrap = ev.currentTarget.closest('.lv-pickwrap');
+    if (!wrap) return;
+    const open = wrap.classList.toggle('open');
+    ev.currentTarget.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) _lvPlacePickList(wrap);
+}
+// The list is position:fixed, so it has to be placed by hand every time it opens.
+// It has to be: .cc-widget is overflow:hidden and an absolutely positioned list
+// was sheared off at the card's bottom edge — with six stores the last one was
+// half a row of text. Mirrors _ddPlace in the DROPDOWNS module, including the
+// flip-above when the button is nearer the bottom of the screen than the top.
+function _lvPlacePickList(wrap) {
+    const btn = wrap.querySelector('.lv-pickbtn');
+    const list = wrap.querySelector('.lv-picklist');
+    if (!btn || !list) return;
+    const r = btn.getBoundingClientRect();
+    list.style.minWidth = Math.max(Math.round(r.width), 132) + 'px';
+    list.style.left = Math.round(r.left) + 'px';
+    const below = window.innerHeight - r.bottom;
+    const want = Math.min(list.scrollHeight + 12, 300);
+    if (below < want && r.top > below) {
+        list.style.top = '';
+        list.style.bottom = Math.round(window.innerHeight - r.top + 5) + 'px';
+    } else {
+        list.style.bottom = '';
+        list.style.top = Math.round(r.bottom + 5) + 'px';
+    }
+}
+// A fixed list does not travel with the button it hangs off, so a scroll has to
+// close it rather than leave it floating over the page. Capturing, because the
+// scroll may happen inside the panel rather than on the window.
+window.addEventListener('scroll', function () {
+    document.querySelectorAll('.lv-pickwrap.open').forEach(function (w) {
+        w.classList.remove('open');
+        const b = w.querySelector('.lv-pickbtn');
+        if (b) b.setAttribute('aria-expanded', 'false');
+    });
+}, true);
+// One listener for every mount. Not an Escape handler as well: closeAllModals
+// already owns that key and peels its own layers in a set order, and a second
+// opinion about Escape is how that ordering breaks.
+document.addEventListener('click', function (ev) {
+    if (ev.target.closest && ev.target.closest('.lv-pickwrap')) return;
+    document.querySelectorAll('.lv-pickwrap.open').forEach(function (w) {
+        w.classList.remove('open');
+        const b = w.querySelector('.lv-pickbtn');
+        if (b) b.setAttribute('aria-expanded', 'false');
+    });
+});
+
+let _lvCardPick = null;
+let _lvCardArgs = null;
+function setLiveCard(key) {
+    if (key === _lvCardPick) return;
+    _lvCardPick = key;
+    // Only the picker and the card can have changed. renderLiveDashboard() rewrites
+    // the whole mount — freshness pill, date, day toggle, tables and all — and on a
+    // phone that reflow was visible as the header and the card jumping as you moved
+    // between stores. Falls back to the full render if no zone has been built yet.
+    const zones = document.querySelectorAll('.lv-cardzone');
+    if (!zones.length || !_lvCardArgs) { renderLiveDashboard(); return; }
+    const a = _lvCardArgs;
+    const html = _lvCards(a.stores, a.d, a.rollup, a.rollupLabel);
+    zones.forEach(z => { z.outerHTML = html; });
 }
 
 function _lvTable(stores, d, rollup, rollupLabel) {
@@ -12772,6 +13039,15 @@ function renderLiveDashboard() {
     // reload, and a stale code would mark somebody else's store as yours.
     _lvOwnCode = (_lvOwnStore(d, stores) || {}).code || null;
 
+    // On a phone the summary strip is hidden and every tab either side of Live is
+    // too, so a COLLAPSED board is a lone tab pill above nothing at all. Both
+    // _ccOpenDefaultTab and _dcOpenDefaultTab were written for this and then never
+    // called from anywhere — this is their one caller. _openDefaultTab picks the
+    // first tab whose computed display is not none, which on a phone is Live, and
+    // the _..DefaultOpened flags mean somebody who taps the open tab shut keeps it
+    // shut rather than having it forced back open on the next payload.
+    if (_isMobileLayout()) { _ccOpenDefaultTab(); _dcOpenDefaultTab(); }
+
     // ---- DM / CEO: the five-store table ----
     if (dDetail) {
         if (d.district) {
@@ -12863,7 +13139,12 @@ function renderLiveDashboard() {
     } else if (stores.length === 1) {
         const m = stores[0];
         tiles = _lvStoreTiles(_lvView(m), d);
-        detail = m.error ? _lvStoreError(m) : _lvStoreDetail(d, _lvView(m));
+        // The cards ride in front of the desktop detail the same way they do in
+        // _lvTable — one of the two is ever visible, cards below 900px. This branch
+        // draws no table, so without them the phone had nothing left once the
+        // headline tiles were hidden.
+        detail = m.error ? _lvStoreError(m)
+            : _lvCards(stores, d, null, null) + _lvStoreDetail(d, _lvView(m));
     } else {
         // Multi-Store Manager: both stores stacked, exactly as their checklist and
         // Listing Goals already do — no dashboard switch to see the other one.
@@ -20761,7 +21042,12 @@ function _isMobileLayout() {
 // re-evaluate on its own. Re-run it on the crossing, not on every resize tick.
 try {
     window.matchMedia("(max-width: 900px)").addEventListener("change", function () {
-        if (document.body.classList.contains("is-authenticated")) applyRoleBasedUI();
+        if (!document.body.classList.contains("is-authenticated")) return;
+        applyRoleBasedUI();
+        // The feed cap is a measured pixel height, so it is wrong the moment the
+        // breakpoint moves in either direction: stale-tight going wide, unset
+        // going narrow. Re-measured here rather than left until the next payload.
+        if (typeof _samCapFeed === "function") _samCapFeed();
     });
 } catch (_) { /* older browsers: the initial pass still applies */ }
 
@@ -21295,6 +21581,16 @@ function _tipPlaceAtCursor(e) {
 }
 
 document.addEventListener('mouseover', function(e) {
+    // TOUCH DEVICES GET NO TOOLTIP. A tap on a phone fires a synthetic mouseover,
+    // so every data-tip on the site — "SPEEKS Tools", "Snooze", the nav icons —
+    // popped a white card over the thing you had just tapped and then sat there,
+    // because there is no matching mouseout coming. Checked live rather than
+    // cached, so Chrome's device-toolbar toggle behaves like a real device.
+    if (window.matchMedia && window.matchMedia('(hover: none), (pointer: coarse)').matches) {
+        customTooltip.classList.remove('show', 'anchored');
+        _tipAnchored = false;
+        return;
+    }
     // Reset the anchored state each pass; the top-nav branch re-arms it below.
     customTooltip.classList.remove('anchored'); _tipAnchored = false;
     // Inside the redesigned tool modals (and the Tools side panel), upgrade any
@@ -26704,7 +27000,10 @@ async function loadChecklist() {
     const qTab = document.getElementById('cl-tab-quarterly');
     if (qTab) {
         if (!isASM && (store === 'CORP' || store === 'ALL')) {
-            qTab.style.display = 'inline-flex';
+            // Empty string, NOT 'inline-flex': the stylesheet sizes these four tabs as
+            // equal flex children, and an inline display opts this one out of that —
+            // which is why Quarterly sat at a different size to its three siblings.
+            qTab.style.display = '';
         } else {
             qTab.style.display = 'none';
             if (currentChecklistTab === 'quarterly') switchChecklistTab('daily');
@@ -29782,7 +30081,8 @@ const EMAIL_LIST_GROUPS = [
     },
     {
         title: 'Operations Reports',
-        desc: 'Scheduled reports on how the stores are running.',
+        desc: 'Scheduled reports on how the stores are running, plus the mail the '
+            + 'site sends on someone else\'s behalf.',
         lists: [
             { key: 'unlisted_report', label: 'Unlisted Inventory Weekly Update',
               desc: 'Monday 9am — the pile per store, and what it would take to clear it.' },
@@ -29794,6 +30094,9 @@ const EMAIL_LIST_GROUPS = [
               desc: 'Who the month-end recycle report email is addressed to.' },
             { key: 'expense_report', label: 'Expense Reports',
               desc: 'Where a monthly expense report goes when the DM or MSM sends one.' },
+            { key: 'idea_submissions', label: 'Submit an Idea',
+              desc: 'Who receives an idea from the lightbulb in the top bar. '
+                  + 'The first address is the To; any others are copied in.' },
         ],
     },
     {
@@ -35260,7 +35563,85 @@ function _samIsMSM() {
 // One "everything" feed. Announcements + store notes get a permanent read;
 // reminders get a per-day dismiss (they re-surface tomorrow if still due). The
 // header's Mark-all-read clears whatever is currently active.
+// Two rows and then a scroll, on a phone only (user's call, 19 Aug). The deck is
+// a glance; twenty notifications turn the home page into a page of notifications.
+//
+// MEASURED rather than a fixed max-height in the stylesheet, because a feed row
+// is one line or five depending on the card — a snoozeable reminder with a
+// three-line body is nearly triple the height of a patch-note line, so any
+// px value that shows two of one shows half of the other.
+function _samCapFeed() {
+    const feed = document.getElementById('samFeed');
+    if (!feed) return;
+    // Desktop puts the feed in a fixed-height card beside the rail and has its own
+    // scroll; releasing the cap here is what makes this safe to call unconditionally.
+    if (!_isMobileLayout()) { feed.style.maxHeight = ''; return; }
+    const rows = feed.querySelectorAll('.sam-ann');
+    if (rows.length <= 2) { feed.style.maxHeight = ''; return; }
+    const top = feed.getBoundingClientRect().top;
+    const cut = rows[1].getBoundingClientRect().bottom;
+    const pad = parseFloat(getComputedStyle(feed).paddingBottom) || 0;
+    // + scrollTop, and this is the whole bug: getBoundingClientRect is measured
+    // against the VIEWPORT, so once somebody has scrolled the feed to the bottom
+    // row two has travelled up and the same arithmetic returns a smaller number.
+    // The next re-render then locked that in and the feed shrank to one row.
+    // Adding the scroll offset back makes the measurement independent of where
+    // the feed happens to be scrolled to.
+    const h = Math.round(cut - top + pad + feed.scrollTop);
+    // A row mid-enter-animation measures short and would lock the cap in too tight.
+    if (h <= 0) return;
+    feed.style.maxHeight = h + 'px';
+}
+
+// TWENTY-FIVE PLACES CALL THIS, and on a fresh load most of them fire — every
+// async check paints the moment it resolves, staggered across the first couple
+// of seconds. Each paint that adds a card reflows everything under it, and on a
+// phone _samCapFeed() then re-measures the two-row cap from whichever cards
+// happen to be on top: a reminder row is ~50px and an announcement ~98px, so an
+// item arriving and sorting above the others resizes the whole deck. Five
+// notifications arriving meant the deck changing height four or five times, the
+// feed's own scrollbar resizing with it, and the page jumping under your thumb.
+//
+// So the calls are coalesced. Nothing here needs to be synchronous — every one
+// of those 25 sites is fire-and-forget — and one frame is imperceptible.
+//
+//   · normally: one paint per animation frame, which collapses the bursts;
+//   · for the first few seconds after the deck initialises: a trailing debounce,
+//     which collapses the whole staggered arrival into a single settle.
+//
+// The immediate first paint is kept in both cases, so the deck is never blank
+// while waiting — it fills once and then stops moving.
+const SAM_SETTLE_MS = 2500;   // how long a load counts as "still arriving"
+const SAM_SETTLE_WAIT = 320;  // trailing debounce during that window
+// On window rather than a module-level let: a top-level `let` is NOT a property
+// of the global object, so nothing outside this file — the harness, or the
+// console during a live debug — can see or extend the window.
+window._samSettleUntil = 0;
+let _samRaf = null, _samDebounce = null, _samPainted = false;
+
 function renderActionFeed() {
+    // First paint of a load goes straight through: something on screen beats a
+    // tidy one 300ms later.
+    if (!_samPainted) { _samPainted = true; return _samRenderFeedNow(); }
+    if (Date.now() < window._samSettleUntil) {
+        if (_samRaf) { cancelAnimationFrame(_samRaf); _samRaf = null; }
+        clearTimeout(_samDebounce);
+        _samDebounce = setTimeout(_samRenderFeedNow, SAM_SETTLE_WAIT);
+        return;
+    }
+    if (_samRaf) return;
+    _samRaf = requestAnimationFrame(() => { _samRaf = null; _samRenderFeedNow(); });
+}
+// For the rare caller that must see the DOM updated on the next line.
+function renderActionFeedNow() {
+    if (_samRaf) { cancelAnimationFrame(_samRaf); _samRaf = null; }
+    clearTimeout(_samDebounce);
+    _samRenderFeedNow();
+}
+
+function _samRenderFeedNow() {
+    if (_samRaf) { cancelAnimationFrame(_samRaf); _samRaf = null; }
+    clearTimeout(_samDebounce);
     const feed = document.getElementById('samFeed');
     if (!feed) return; // not a manager / menu not present
 
@@ -35503,6 +35884,10 @@ function _samReconcileFeed(feed, desired) {
         }
         prev = el;
     });
+
+    // After the reconcile, never before it: the cap is measured off the second row
+    // and the second row is whatever this pass just put there.
+    _samCapFeed();
 }
 
 // ONE RULE, everywhere: you may only mark something read if you can actually read
@@ -35530,7 +35915,22 @@ function _samAddReadFull() {
             ev.stopPropagation();   // don't double-fire the row's own handler
             openHubTo(row.dataset.hubTarget || '');
         };
-        el.insertAdjacentElement('afterend', btn);
+        // "Read full" belongs on the byline, not on a line of its own: the two
+        // together were three stacked rows under a one-line snippet. The meta line
+        // becomes a flex row and the link sits immediately to its right.
+        const meta = row.querySelector('.sam-a-meta');
+        if (meta) {
+            let foot = row.querySelector('.sam-a-foot');
+            if (!foot) {
+                foot = document.createElement('div');
+                foot.className = 'sam-a-foot';
+                meta.parentNode.insertBefore(foot, meta);
+                foot.appendChild(meta);
+            }
+            foot.appendChild(btn);
+        } else {
+            el.insertAdjacentElement('afterend', btn);
+        }
     });
 }
 
@@ -36006,6 +36406,33 @@ function _samReminderCfg() {
     return cfg;
 }
 
+// Does this card's action lead somewhere that does not exist on a phone?
+// If it does, the card still shows — the work is still outstanding and the person
+// still needs telling — but it stops pretending to be a button. Tapping "Aging
+// Inventory Replies Overdue" used to navigate to workspace.html, whose every tab
+// is cut on mobile, and the B2B card landed on Operations' only surviving tab,
+// SPEEKS Connect, which is not what it said it would open.
+//
+// Both halves are ASKED, not listed:
+//   · Workspace and Operations have no tab left on a phone (their nav links carry
+//     data-mobile="hide" too), so any navigation to either page is a dead end.
+//   · Tool modals are answered by the Tools side panel, which is in all five
+//     shells — so the same data-mobile markup that hides the tool from the panel
+//     is what tells us the card should not open it. Nothing to keep in sync.
+function _samDestDead(action) {
+    if (!action || !_isMobileLayout()) return false;
+    if (/\b(workspace|operations)\.html/.test(action)) return true;
+    const fn = (String(action).match(/([A-Za-z_$][\w$]*)\s*\(/) || [])[1];
+    if (!fn) return false;
+    const items = document.querySelectorAll('.tools-side-panel .tools-item[onclick]');
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].getAttribute('onclick').indexOf(fn + '(') >= 0) {
+            return items[i].getAttribute('data-mobile') === 'hide';
+        }
+    }
+    return false;
+}
+
 function _samDismKey() {
     const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
     const day = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
@@ -36094,7 +36521,7 @@ function _samGatherReminders() {
         // while he's on the other store's dashboard — without switching dashboards.
         // A both-store alert stamps two, so nothing is set and the tool opens on the
         // active dashboard store (the user's chosen rule).
-        let action = c.action || '';
+        let action = _samDestDead(c.action) ? '' : (c.action || '');
         if (action && t && t.dataset && t.dataset.stores) {
             const stores = t.dataset.stores.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
             const roleLc = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
@@ -36292,6 +36719,9 @@ function samInit() {
             .some(b => window.getComputedStyle(b).display !== 'none');
         menu.classList.toggle('sam-norail', !anyItem);
     }
+    // Open the settle window BEFORE the first paint, so everything arriving
+    // during the load is collapsed into one.
+    if (!window._samInited) window._samSettleUntil = Date.now() + SAM_SETTLE_MS;
     renderActionFeed();
     samRefreshListing();
     samCleanHotbar();
@@ -36483,7 +36913,15 @@ function renderHubFeed() {
 
     const labels = { all: 'updates', unread: 'unread', ann: 'announcements', note: 'comments', due: 'deadlines', patch: 'patch notes', arch: 'archived' };
     const countEl = document.getElementById('hubCount');
-    if (countEl) countEl.textContent = `${shown.length} ${labels[filter] || 'updates'}`;
+    // The noun is in its own span so the phone can drop it. The filter row holds
+    // the control, this count and the Documents button, and the count is the only
+    // one of the three whose WIDTH changes with the filter — "34 updates" is 24px
+    // narrower than "24 announcements", which was enough to push Documents onto a
+    // second line the moment you filtered. Beside a control that already says
+    // "Announcements", the number alone says everything the phrase did.
+    // Labels come from a fixed map above, so no escaping is needed here.
+    if (countEl) countEl.innerHTML = shown.length
+        + ' <span class="hub-count-w">' + (labels[filter] || 'updates') + '</span>';
 
     feed.innerHTML = shown.length ? shown.map(it => it.html).join('') : '<div class="hub-empty">Nothing here right now.</div>';
     // A rebuild throws away the card a pending jump was scrolling to (and can add
@@ -38313,7 +38751,7 @@ function _dccLine(r) {
     // through to the neutral summary instead.
     const cand = [
         [ebayOff >= 3 ? (ebayBad >= 3 ? 'b' : 'w') : null,
-         'eBay Health Failing On ' + ebayOff + ' Of 4'],
+         'eBay Health Failing On ' + ebayOff + ' of 4'],
         [_dccState(r, 'track'),   'eBay Tracking ' + _dccEbayPct(r.track)],
         [_dccState(r, 'conv'),    'Conversion ' + r.conv + '%'],
         [_dccState(r, 'time'),    'Transaction Time ' + r.time + ' Min'],
@@ -38437,7 +38875,7 @@ function _dccEbayBlock(r) {
         return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>All Four Within Threshold</em></div>'
             + '<div class="dcc-clear">' + _DCC_ICO.g + (bits || 'No data reported yet') + '</div></div>';
     }
-    return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>' + off + ' Of 4 Over Threshold</em></div>'
+    return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>' + off + ' of 4 Over Threshold</em></div>'
         + '<div class="dcc-g4">' + four.map(function (f) {
             const val = f[1] == null ? '—' : f[1].replace('%', '');
             return '<div class="dcc-cell' + (f[2] ? ' ' + f[2] : '') + '">'
@@ -41542,7 +41980,7 @@ function ecFix(sku, note, replay) {
         </div>
         <div class="ec-fix-foot">
           ${at > 0 ? `<button class="ec-btn ec-btn-sm ec-fix-back"
-                  onclick="ecFixBack()">&larr; Back</button>` : ''}
+                  onclick="ecFixBack()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>Back</button>` : ''}
           <button class="ec-btn ec-btn-sm" onclick="ecFixClose()">Cancel</button>
           <button class="ec-btn ec-btn-sm ec-btn-on" id="ecFixGo"
                   onclick="ecFixSubmit()">Save &amp; Upload</button>
@@ -41726,4 +42164,419 @@ async function ecRefresh() {
         _ecBusy = false;
         if (btn) btn.disabled = false;
     }
+}
+
+// ============================================================================
+// MODULE: DROPDOWNS — one look for every <select> on the site
+// ============================================================================
+// A native <select> renders its popup in the OPERATING SYSTEM, not the page, so
+// CSS cannot touch it: on Windows Chrome that is a squared white list with black
+// hairlines down two edges, which is nothing like the rest of this site. The
+// store picker on the phone dashboard was rebuilt as a button-and-list for that
+// reason, and this generalises it to every select rather than leaving one
+// dropdown that matches the design and a hundred that do not.
+//
+// THE NATIVE SELECT STAYS IN THE DOM AND STAYS AUTHORITATIVE. It is only hidden
+// from view. Every `document.getElementById('x').value` read, every `.value = y`
+// write, every `onchange=` attribute and every form serialisation across the
+// site keeps working untouched — this draws a face over the control, it does not
+// replace it. That is the whole reason it is safe to apply site-wide.
+//
+// Opt out with data-dd="off" on the select.
+const _DD_SKIP = 'bs-hidden-select';
+let _ddSeq = 0;
+
+function _ddOptions(sel) {
+    return Array.from(sel.options).filter(o => !o.disabled || o.selected);
+}
+function _ddLabel(sel) {
+    const o = sel.options[sel.selectedIndex];
+    return o ? o.text : '';
+}
+
+// Redrawn from the native select every time, so a caller that repopulated the
+// options or set .value behind our back is picked up rather than remembered wrong.
+// A CONTROL SHOULD BE AT LEAST AS WIDE AS THE LONGEST THING IT CAN SAY.
+// Now that the open list matches the button to the pixel, a button narrower than
+// its own options truncates them — the workspace month picker was 107px wide and
+// ellipsised every single month in the list. Two controls on the whole site were
+// in that state, and both were already too narrow before this: the wider list
+// just hid it.
+//
+// Measured with canvas rather than a probe element: no layout, no reflow, and it
+// runs on every repopulation. Guarded three ways so a long option cannot blow up
+// a row — never past the space the parent actually has, never past 280px, and
+// never below a floor the page set on the select itself.
+function _ddFit(host) {
+    const btn = host._ddBtn, sel = host._ddSel;
+    if (!btn || !sel || !sel.options.length) return;
+    const cs = getComputedStyle(btn);
+    const cv = _ddFit._c || (_ddFit._c = document.createElement('canvas'));
+    const ctx = cv.getContext('2d');
+    // MEASURED TWICE, because the two halves of this control are not set in the
+    // same type. .dd-opt is a flat 13.5px/650 while the button wears whichever
+    // site class the select brought with it — .metric-dropdown is 12px — so
+    // sizing the control off the button alone left the OPTIONS clipped in a
+    // button that looked roomy. Both are measured and the wider wins.
+    const measure = (font, pad) => {
+        ctx.font = font;
+        let t = 0;
+        for (let i = 0; i < sel.options.length; i++) {
+            const w = ctx.measureText(sel.options[i].text).width;
+            if (w > t) t = w;
+        }
+        return Math.ceil(t + pad) + 1;
+    };
+    const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)
+               + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
+    // Button: padding, borders, the chevron and its gap.
+    const asBtn = measure(cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily,
+                          padX + 15 + 8);
+    // Option: the list's 5px either side, plus the option's own padding — which
+    // _ddPlace derives from the button's, so it tracks the same number.
+    const asOpt = measure('650 13.5px ' + cs.fontFamily,
+                          10 + Math.max(parseFloat(cs.paddingLeft) - 5, 4) + 11);
+    // A floor the page set on the select is a FLOOR, not an override: it was
+    // being applied last, so it beat the room clamp below. That is how the feed's
+    // filter kept a 200px width from a desktop rule on a 320px phone.
+    let want = Math.max(asBtn, asOpt, host._ddNativeMin || 0);
+    want = Math.min(want, 280);
+    // NO PARENT CLAMP. There was one — "never past the space the parent actually
+    // has" — and it was circular: a shrink-to-fit parent's width IS this
+    // control's width, so it pinned the control to whatever it already happened
+    // to be and it could never grow back to fit its own options. That is why the
+    // feed's filter measured 112px with "All updates" showing and then jumped to
+    // 141px on "Announcements", moving the whole row under your finger.
+    //
+    // Trying to detect a shrink-to-fit parent by its `display` does not work
+    // either: .hub-select-wrap computes to `flex`, not `inline-flex`, and a flex
+    // ITEM with `flex: 0 1 auto` is just as content-driven. Overflow is held back
+    // by `.dd-host { max-width: 100% }` in CSS, which resolves against the
+    // containing block rather than against this control, plus the two caps below.
+    want = Math.min(want, Math.max(120, window.innerWidth - 24));
+    host.style.minWidth = want + 'px';
+}
+
+function _ddSync(host) {
+    const sel = host._ddSel;
+    if (!sel) return;
+    host._ddBtnLabel.textContent = _ddLabel(sel) || '—';
+    host.classList.toggle('dd-empty', !sel.options.length);
+    _ddFit(host);
+    if (!host.classList.contains('open')) return;
+    _ddFillList(host);
+}
+
+function _ddFillList(host) {
+    const sel = host._ddSel;
+    const list = host._ddList;
+    list.innerHTML = '';
+    _ddOptions(sel).forEach(o => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'dd-opt' + (o.selected ? ' on' : '') + (o.disabled ? ' dd-dis' : '');
+        b.setAttribute('role', 'option');
+        b.setAttribute('aria-selected', o.selected ? 'true' : 'false');
+        b.textContent = o.text;
+        if (o.disabled) b.disabled = true;
+        b.addEventListener('click', ev => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            _ddChoose(host, o.value);
+        });
+        list.appendChild(b);
+    });
+}
+
+// The one place a value is written. Writing through the native select and then
+// dispatching a real 'change' is what keeps every existing handler on the page
+// firing exactly as it did before this module existed.
+function _ddChoose(host, value) {
+    const sel = host._ddSel;
+    _ddClose(host);
+    if (sel.value === value) return;
+    sel.value = value;
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    _ddSync(host);
+}
+
+// position: fixed, placed on open. Half the selects on this site sit inside
+// modals and panels with overflow:hidden, and an absolutely positioned list gets
+// clipped by them — the menu would open and be invisible.
+function _ddPlace(host) {
+    const r = host._ddBtn.getBoundingClientRect();
+    const list = host._ddList;
+    // EXACTLY AS WIDE AS THE BUTTON (user's call, 20 Aug). It was min-width with a
+    // 130px floor, so a narrow control opened a list wider than itself on two
+    // counts at once: the floor, and its own longest option. The feed's "All
+    // updates" is 105px and opened at 130. The list reads as the control
+    // continuing, and a control that changes width when you touch it does not.
+    list.style.width = Math.round(r.width) + 'px';
+    list.style.minWidth = '0';
+    list.style.left = Math.round(r.left) + 'px';
+    // Line the option labels up with the label on the button, so the open list
+    // reads as the control continuing rather than as a panel beside it. The
+    // button's padding varies by whichever site class it inherited (12px bare,
+    // 13-14px on .form-input), so it is measured rather than assumed; the list's
+    // own 5px of padding is subtracted out.
+    const padL = parseFloat(getComputedStyle(host._ddBtn).paddingLeft);
+    list.style.setProperty('--dd-opt-pad',
+        Math.max((isFinite(padL) ? padL : 12) - 5, 4) + 'px');
+    // Keep it inside the window. A list that matches its button can only leave the
+    // viewport if the button already has, but the pickers and this share a
+    // placement idiom and only one of them was clamped.
+    const w = Math.round(r.width);
+    const maxL = window.innerWidth - w - 6;
+    list.style.left = Math.round(Math.max(6, Math.min(r.left, maxL))) + 'px';
+    // A label that no longer fits the button's width gets the full text on hover.
+    // Set here rather than at fill time because whether it fits is a measurement,
+    // and a title on every option would put a browser tooltip on all of them.
+    Array.from(list.children).forEach(o => {
+        if (o.scrollWidth > o.clientWidth + 1) o.title = o.textContent;
+        else o.removeAttribute('title');
+    });
+    // Flip above the button when there is more room up than down.
+    const below = window.innerHeight - r.bottom;
+    const h = Math.min(list.scrollHeight + 12, 280);
+    if (below < h && r.top > below) {
+        list.style.top = '';
+        list.style.bottom = Math.round(window.innerHeight - r.top + 5) + 'px';
+    } else {
+        list.style.bottom = '';
+        list.style.top = Math.round(r.bottom + 5) + 'px';
+    }
+}
+
+function _ddClose(host) {
+    if (!host.classList.contains('open')) return;
+    host.classList.remove('open');
+    host._ddList.classList.remove('dd-open');
+    // Put it back where it belongs. Leaving every list parked in <body> would
+    // slowly fill the document with 127 detached menus, and anything walking the
+    // host's subtree (the harness does) would stop finding it.
+    if (host._ddList.parentNode !== host) host.appendChild(host._ddList);
+    host._ddBtn.setAttribute('aria-expanded', 'false');
+}
+function _ddCloseAll(except) {
+    document.querySelectorAll('.dd-host.open').forEach(h => { if (h !== except) _ddClose(h); });
+}
+function _ddOpen(host) {
+    if (host._ddSel.disabled) return;
+    _ddCloseAll(host);
+    _ddFillList(host);
+    host.classList.add('open');
+    host._ddBtn.setAttribute('aria-expanded', 'true');
+    // MOVED TO <body> WHILE OPEN. position:fixed is resolved against the nearest
+    // ancestor with a transform, not against the viewport — and .modal-menu is
+    // `transform: translate(-50%,-50%) scale(.95)`, so every dropdown inside a
+    // modal opened 121px right and 91px below where it belonged. Half the selects
+    // on this site live in modals. Re-parenting to <body> removes the transformed
+    // ancestor entirely, which is the only fix that does not depend on knowing
+    // which ancestor is transformed.
+    document.body.appendChild(host._ddList);
+    host._ddList.classList.add('dd-open');
+    _ddPlace(host);
+    const on = host._ddList.querySelector('.dd-opt.on') || host._ddList.querySelector('.dd-opt');
+    if (on) on.focus({ preventScroll: true });
+}
+
+function _ddKey(host, ev) {
+    const opts = Array.from(host._ddList.querySelectorAll('.dd-opt:not([disabled])'));
+    const i = opts.indexOf(document.activeElement);
+    if (ev.key === 'Escape') {
+        // Only while OPEN, and stopped here so it never reaches closeAllModals —
+        // Escape should peel this list before the modal it is sitting in.
+        ev.stopPropagation();
+        ev.preventDefault();
+        _ddClose(host);
+        host._ddBtn.focus();
+    } else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        const next = ev.key === 'ArrowDown' ? Math.min(i + 1, opts.length - 1) : Math.max(i - 1, 0);
+        if (opts[next]) opts[next].focus({ preventScroll: true });
+    }
+}
+
+// SOME SELECTS WERE ALREADY DRESSED BY HAND before this module existed: the
+// native arrow suppressed with appearance:none and a chevron drawn beside the
+// control as a sibling — #notifDropdown .hub-chev is `position:absolute;
+// right:12px`. The face brings its own chevron, so both showed, a couple of
+// pixels apart. That is the "up and down arrow" on the announcements filter.
+//
+// Matched on being a TEXT-FREE sibling that draws a chevron — either by class
+// name or by the path data itself — so a search icon or a real label beside a
+// select is left alone. Hidden rather than removed: it is the page's markup, not
+// ours, and a re-render would put it back anyway.
+const _DD_CHEV_SHAPE = /^(m6 9l6 6 6-6|6 9 12 15 18 9|m6 9 12 15 18 9|m19 9l-7 7-7-7)$/;
+
+function _ddHideOwnChevron(sel, wrap) {
+    if (!wrap || wrap.nodeType !== 1) return;
+    Array.from(wrap.children).forEach(el => {
+        if (el === sel || el.classList.contains('dd-host')) return;
+        if (el.textContent.trim()) return;
+        const svg = el.tagName.toLowerCase() === 'svg' ? el : el.querySelector('svg');
+        if (!svg) return;
+        const byName = /chev|caret|arrow/i.test(el.className + ' ' + (svg.getAttribute('class') || ''));
+        const geom = ((svg.querySelector('path') || {}).getAttribute
+                        ? svg.querySelector('path').getAttribute('d') : '')
+                  || ((svg.querySelector('polyline') || {}).getAttribute
+                        ? svg.querySelector('polyline').getAttribute('points') : '');
+        if (!byName && !_DD_CHEV_SHAPE.test(String(geom).trim().toLowerCase())) return;
+        el.classList.add('dd-dupe-chev');
+    });
+}
+
+function _ddEnhance(sel) {
+    if (!sel || sel._ddDone) return;
+    if (sel.multiple || (sel.size && sel.size > 1)) return;
+    if (sel.dataset.dd === 'off') return;
+    if (sel.classList.contains(_DD_SKIP)) return;
+    sel._ddDone = true;
+
+    const host = document.createElement('div');
+    host.className = 'dd-host';
+    // The select keeps every class it had: the site sizes these controls with
+    // .form-input / .idea-input / .kpi-select and the face has to inherit that
+    // width, so the HOST copies the layout classes and the native one keeps them
+    // too for any CSS that reads them.
+    host.dataset.ddFor = sel.id || ('dd' + (++_ddSeq));
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'dd-btn ' + sel.className;
+    btn.setAttribute('aria-haspopup', 'listbox');
+    btn.setAttribute('aria-expanded', 'false');
+    if (sel.id) btn.setAttribute('aria-labelledby', sel.id + '-ddlab');
+    const lab = document.createElement('span');
+    lab.className = 'dd-cur';
+    lab.id = (sel.id || host.dataset.ddFor) + '-ddlab';
+    btn.appendChild(lab);
+    const chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    chev.setAttribute('class', 'dd-chev');
+    chev.setAttribute('viewBox', '0 0 24 24');
+    chev.innerHTML = '<path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>';
+    btn.appendChild(chev);
+
+    const list = document.createElement('div');
+    list.className = 'dd-list';
+    list.setAttribute('role', 'listbox');
+
+    // Before the select is moved: once it lives in the host, its old siblings are
+    // no longer reachable from it.
+    const origParent = sel.parentNode;
+    _ddHideOwnChevron(sel, origParent);
+    origParent.insertBefore(host, sel);
+    host.appendChild(sel);
+    host.appendChild(btn);
+    host.appendChild(list);
+
+    // CARRY OVER A WIDTH THE PAGE SET ON THE SELECT ITSELF. The face inherits the
+    // select's CLASSES, which covers .form-input and friends — but a good deal of
+    // this site sizes its selects by ELEMENT (`#notifDropdown .hub-select-wrap
+    // select { min-width: 200px }`), and no class copying can reach a rule like
+    // that. Those controls silently shrank to their label when the face went on,
+    // which is how the feed's filter ended up a 105px button under a 130px list.
+    // Read now, while the native control is still laid out, and only when it is a
+    // real positive floor — a width or a flex basis is the page's business and is
+    // left alone.
+    const nativeMin = parseFloat(getComputedStyle(sel).minWidth);
+    if (isFinite(nativeMin) && nativeMin > 1) host._ddNativeMin = nativeMin;
+
+    sel.classList.add('dd-native');
+
+    host._ddSel = sel;
+    host._ddBtn = btn;
+    host._ddBtnLabel = lab;
+    host._ddList = list;
+
+    btn.addEventListener('click', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        // Re-read before opening: plenty of callers set .value without dispatching
+        // anything, and the label would otherwise show the previous choice.
+        _ddSync(host);
+        host.classList.contains('open') ? _ddClose(host) : _ddOpen(host);
+    });
+    list.addEventListener('keydown', ev => _ddKey(host, ev));
+    // A caller that dispatches change (or the user, via the hidden native control
+    // on a platform that still surfaces it) keeps the face in step.
+    sel.addEventListener('change', () => _ddSync(host));
+    // Repopulated options — store lists, user lists, month lists — are the common
+    // case on this site, so watch for them rather than reading once at startup.
+    new MutationObserver(() => _ddSync(host)).observe(sel, { childList: true, subtree: true });
+    // And the case nothing can observe: `sel.value = x` fires no event and mutates
+    // no attribute — .value moves the IDL selected property, not the markup — so a
+    // caller that sets a store and does not dispatch change leaves the face showing
+    // the old one. dmChartStoreSelector and mbStoreSelect both do exactly that.
+    // The real descriptor is called through, so behaviour is unchanged; this only
+    // adds the redraw. Instance-level, so no other <select> on the page is touched.
+    _ddWatchValue(sel, host, "value");
+    _ddWatchValue(sel, host, "selectedIndex");
+
+    _ddSync(host);
+}
+
+function _ddWatchValue(sel, host, prop) {
+    const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, prop);
+    if (!desc || !desc.get || !desc.set) return;
+    Object.defineProperty(sel, prop, {
+        configurable: true,
+        enumerable: false,
+        get() { return desc.get.call(this); },
+        set(v) { desc.set.call(this, v); _ddSync(host); },
+    });
+}
+
+function _ddScan(root) {
+    (root || document).querySelectorAll('select:not(.dd-native)').forEach(_ddEnhance);
+}
+
+document.addEventListener('click', () => _ddCloseAll());
+let _ddFitTimer = null;
+window.addEventListener('resize', () => {
+    _ddCloseAll();
+    // Debounced: a rotation fires this a dozen times.
+    clearTimeout(_ddFitTimer);
+    _ddFitTimer = setTimeout(() => {
+        document.querySelectorAll('.dd-host').forEach(h => {
+            if (!h._ddSel || !h._ddBtn) return;
+            // Re-read the floor: it lives in CSS, so crossing a breakpoint
+            // changes it. The hidden select still reports its own min-width —
+            // .dd-native sets width, not min-width.
+            const nm = parseFloat(getComputedStyle(h._ddSel).minWidth);
+            h._ddNativeMin = (isFinite(nm) && nm > 1) ? nm : 0;
+            _ddFit(h);
+        });
+    }, 150);
+});
+// Any scroll, including inside a modal body: a fixed-position list does not move
+// with its button, so it has to close rather than float off on its own.
+window.addEventListener('scroll', () => _ddCloseAll(), true);
+
+// Selects arrive with rendered HTML all day on this site, so scanning once at
+// startup would cover a fraction of them. Debounced: several renderers rebuild
+// a panel's innerHTML a few times in a row.
+let _ddTimer = null;
+function _ddQueueScan() {
+    clearTimeout(_ddTimer);
+    _ddTimer = setTimeout(() => _ddScan(), 60);
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { _ddScan(); _ddWatch(); });
+} else {
+    _ddScan(); _ddWatch();
+}
+function _ddWatch() {
+    new MutationObserver(muts => {
+        for (const m of muts) {
+            for (const n of m.addedNodes) {
+                if (n.nodeType !== 1) continue;
+                if (n.tagName === 'SELECT' || n.querySelector && n.querySelector('select')) {
+                    _ddQueueScan();
+                    return;
+                }
+            }
+        }
+    }).observe(document.body, { childList: true, subtree: true });
 }

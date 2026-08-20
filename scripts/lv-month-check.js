@@ -340,7 +340,7 @@ if (args.indexOf('--first') >= 0) {
         ok('last year carries its year', /Aug 2025/.test((byTile['TRACKING REVENUE'] || []).join(' ')),
             (byTile['TRACKING REVENUE'] || []).join(' / '));
         ok('a partial year-over-year says how many stores',
-            /3 Of 5/.test((byTile['TRACKING REVENUE'] || []).join(' ')),
+            /3 of 5/.test((byTile['TRACKING REVENUE'] || []).join(' ')),
             (byTile['TRACKING REVENUE'] || []).join(' / '));
         ok('reviews get no comparison row',
             !byTile['TRACKING GOOGLE REVIEWS'] || byTile['TRACKING GOOGLE REVIEWS'].length === 0);

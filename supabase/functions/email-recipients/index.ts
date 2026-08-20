@@ -42,6 +42,10 @@ const LIST_KEYS = new Set([
   // waiting on approval. Read by b2b-outreach's sendQuoteReady, which falls back
   // to the single CRM Settings address while this list is empty.
   "b2b_quote_ready",
+  // idea_submissions: who receives a Submit an Idea form. The form posts through
+  // formsubmit.co, which takes ONE address in its URL and the rest as _cc, so the
+  // order of this list matters: the first address is the To.
+  "idea_submissions",
   ...STORES.map((s) => `box_order_${s}`),
   ...STORES.map((s) => `weekly_store_${s}`),
 ]);
