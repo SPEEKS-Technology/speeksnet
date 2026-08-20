@@ -328,6 +328,63 @@ function ebayTitle(raw: string): string {
   return (lastSpace > 40 ? cut.slice(0, lastSpace) : cut).trim();
 }
 
+// eBay REFUSES a listing whose description contains anything that looks like
+// script, and it does a plain SUBSTRING scan of the HTML:
+//
+//   25002: Your listing cannot contain javascript (".cookie", "cookie(",
+//   "replace(", IFRAME, META, or includes), cookies or base href. [0=DESCRIPTION]
+//
+// This is not hypothetical tidying. LEE's MO01-5115C-F1R1 (Apple Watch Ultra 3)
+// sat failed for seven attempts because its SHOPIFY DESCRIPTION had a <script>
+// block pasted into it — a getElementById('Titleeditor').addEventListener(...)
+// handler that leaked out of whatever tool wrote the product. Nobody standing at
+// a counter can be expected to find that, and Try Again could never clear it.
+//
+// A <script> in a product description is never listing copy, so it is removed
+// rather than reported. What CANNOT be silently rewritten is prose: "replace("
+// or ".cookie" inside a sentence is real text, so a zero-width space is put
+// inside the token instead — it reads identically and eBay's scan no longer
+// matches. Nothing legible is deleted either way.
+//
+// Note what is NOT stripped: <meta> inside an HTML comment, which every one of
+// the five learned templates carries and which 325 live listings published
+// through without complaint. eBay's scanner evidently tolerates it, and removing
+// it would be changing the branded wrapper on a guess.
+const ZWSP = "\u200b";
+
+function sanitiseForEbay(html: string): { html: string; removed: string[] } {
+  const removed: string[] = [];
+  let out = html;
+  const drop = (re: RegExp, label: string) => {
+    const before = out;
+    out = out.replace(re, "");
+    if (out !== before) removed.push(label);
+  };
+  // Whole elements, content and all. Each of these is markup, never copy.
+  drop(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "<script> block");
+  drop(/<script\b[^>]*\/?>/gi, "stray <script> tag");
+  drop(/<iframe\b[^>]*>[\s\S]*?<\/iframe\s*>/gi, "<iframe> block");
+  drop(/<iframe\b[^>]*\/?>/gi, "stray <iframe> tag");
+  drop(/<object\b[^>]*>[\s\S]*?<\/object\s*>/gi, "<object> block");
+  drop(/<embed\b[^>]*\/?>/gi, "<embed> tag");
+  drop(/<base\b[^>]*\/?>/gi, "<base href>");
+  // Inline handlers and javascript: URLs — attributes, so the element survives.
+  drop(/\son[a-z]+\s*=\s*"[^"]*"/gi, "inline on* handler");
+  drop(/\son[a-z]+\s*=\s*'[^']*'/gi, "inline on* handler");
+  out = out.replace(/javascript\s*:/gi, () => { removed.push("javascript: URL"); return ""; });
+
+  // Whatever is left is prose. Break the token rather than delete the words.
+  const soften = (re: RegExp, insertAt: number, label: string) => {
+    if (!re.test(out)) return;
+    out = out.replace(re, m => m.slice(0, insertAt) + ZWSP + m.slice(insertAt));
+    removed.push(label + " (softened, text kept)");
+  };
+  soften(/\.cookie/gi, 1, '".cookie"');
+  soften(/cookie\s*\(/gi, 3, '"cookie("');
+  soften(/replace\s*\(/gi, 4, '"replace("');
+  return { html: out, removed: [...new Set(removed)] };
+}
+
 // Cutting HTML at a character count can land inside a tag, which turns the tail
 // of the description into visible junk. Back up to the last completed tag so the
 // markup we send is at least well-formed up to the cut. Unclosed containers are
@@ -1573,7 +1630,10 @@ function inventoryItemPayload(
     ...(conditionDescriptors.length ? { conditionDescriptors } : {}),
     product: {
       title: ebayTitle(c.title),
-      description: clampHtml(c.descriptionHtml || c.title, EBAY_ITEM_DESCRIPTION_MAX),
+      // Sanitised here as well as at the call site: this payload is built from
+      // the candidate, and the item description is a second field eBay scans.
+      description: clampHtml(
+        sanitiseForEbay(c.descriptionHtml || c.title).html, EBAY_ITEM_DESCRIPTION_MAX),
       imageUrls: c.imageUrls.slice(0, EBAY_MAX_IMAGES),
       // A valid UPC lets eBay match its own catalog entry and fill aspects we
       // never sent, which is far more reliable than our parsing.
@@ -1752,8 +1812,27 @@ async function recommendCategory(
   // words of THIS item, while the market only matched on items that mention it.
   // The market data still rides along in the response, so the picker keeps
   // showing the reasoning and a person can override on sight of the item.
+  // "Appears in the market at all" was too weak a test, and it produced exactly
+  // the mistake it was written to prevent, with the roles reversed.
+  //
+  // LEE's Apple Watch Ultra 3: the market sample was 92% Smart Watches (46 of
+  // 50) and 4% Watch Bands (2 of 50) — and eBay's taxonomy suggested WATCH
+  // BANDS, off the words "Black Braided Loop" in the title. Watch Bands appeared
+  // in the sample, so suggestedInMarket was true, so the taxonomy won and a $500
+  // watch was filed under bands. Here the taxonomy is the accessory and the
+  // market is the device.
+  //
+  // So the taxonomy keeps its veto only while its own answer has real support.
+  // The iPad case this guard was built for is unaffected: cases held 70% and
+  // Tablets & eBook Readers — the taxonomy's answer — still held 30%, well over
+  // the floor, so the taxonomy still wins there. The market only takes over when
+  // it is overwhelming AND the taxonomy's pick is all but absent.
   const suggestedInMarket = !!suggested && ranked.some(r => r.id === suggested.id);
-  const useMarket = confident && !suggestedInMarket;
+  const suggestedShare = suggested
+    ? (ranked.find(r => r.id === suggested.id)?.n ?? 0) / (sampled || 1) : 0;
+  const bestShare = best ? best.n / (sampled || 1) : 0;
+  const marketOverwhelms = bestShare >= 0.60 && suggestedShare < 0.15;
+  const useMarket = confident && (!suggestedInMarket || marketOverwhelms);
 
   return {
     query: q,
@@ -1762,7 +1841,12 @@ async function recommendCategory(
     market: ranked.slice(0, 5).map(r => ({ ...r, share: Math.round((r.n / (sampled || 1)) * 100) })),
     sampled,
     recommended: useMarket ? { id: best!.id, name: best!.name } : suggested,
-    basis: useMarket ? "market"
+    suggestedShare: Math.round(suggestedShare * 100),
+    basis: useMarket
+      ? (marketOverwhelms && suggestedInMarket
+          ? "market (taxonomy pick had " + Math.round(suggestedShare * 100)
+            + "% of the sample against " + Math.round(bestShare * 100) + "%)"
+          : "market")
       : suggestedInMarket ? "taxonomy (confirmed by market)"
       : "taxonomy",
   };
@@ -2141,14 +2225,48 @@ Deno.serve(async (req: Request) => {
   // sample is thin. A person's explicit &category= always beats both — they are
   // holding the item.
   const chosenCategory = url.searchParams.get("category");
+
+  // A CATEGORY A PERSON PICKED HAS TO SURVIVE THE NEXT UPLOAD.
+  // Only &category= was ever read, and Try Again sends none — so a store that
+  // moved LEE's Apple Watch Ultra 3 out of Watch Bands and into Smart Watches
+  // watched the recommender put it straight back on the retry. The choice was
+  // already stored on the row; nothing read it.
+  //
+  // Gated on category_locked, not on "the row has a category_id": every
+  // automatic run writes category_id too, so reusing it unconditionally would
+  // freeze the recommender's own first guess forever and hide every later
+  // improvement to it. Only a human pick sets the flag.
+  const lockRow = chosenCategory ? null : (await (await sb(
+    `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
+    + `&sku=eq.${encodeURIComponent(sku)}&select=category_id,category_name,category_locked`
+  )).json())[0];
+  const lockedCategory = (lockRow?.category_locked && lockRow?.category_id)
+    ? { id: String(lockRow.category_id), name: lockRow.category_name || null } : null;
+
+  // Locked the moment it is PICKED, not when the upload succeeds. The whole
+  // reason this exists is a pick made on a row that then failed to publish —
+  // and every failure path writes the row through recordFailure, which is
+  // module-level and cannot see these variables. Setting it here means the
+  // choice survives whatever the upload does next, including a crash.
+  // UPDATE, not upsert: if there is no row yet there is nothing to protect, and
+  // the success path sets the flag for that case.
+  if (chosenCategory) {
+    await sb(`ebay_listings?store_code=eq.${encodeURIComponent(store)}`
+      + `&sku=eq.${encodeURIComponent(sku)}`, {
+      method: "PATCH",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ category_locked: true }),
+    }).catch(() => { /* best effort — never block an upload on the flag */ });
+  }
+
   const rec = await recommendCategory(api, c.title);
-  const categoryId = chosenCategory || rec.recommended?.id;
+  const categoryId = chosenCategory || lockedCategory?.id || rec.recommended?.id;
   // The picker sends the name it showed, so an overridden category is not left
   // nameless in the panel. Without an override the name comes from whichever
   // source won.
   const categoryName: string | null = chosenCategory
     ? (url.searchParams.get("categoryName") || null)
-    : (rec.recommended?.name || null);
+    : (lockedCategory ? lockedCategory.name : (rec.recommended?.name || null));
 
   if (!categoryId) {
     return json({
@@ -2273,7 +2391,14 @@ Deno.serve(async (req: Request) => {
   // The branded wrapper. Without it a listing we publish looks nothing like the
   // hundreds Marketplace Connect already has live, which is the whole point of
   // matching. &noTemplate=1 falls back to the bare Shopify description.
-  const rawDescription = c.descriptionHtml || c.title;
+  // Cleaned ONCE, here, so the inventory item, the first publish and the
+  // re-render after the item id is known all carry the same text. See
+  // sanitiseForEbay: a <script> pasted into a Shopify description is what eBay
+  // refuses as "cannot contain javascript", and it is not something a store can
+  // find or fix from behind the counter.
+  const cleaned = sanitiseForEbay(c.descriptionHtml || c.title);
+  const rawDescription = cleaned.html;
+  const descriptionCleaned = cleaned.removed;
   const template = url.searchParams.get("noTemplate") === "1"
     ? null : await loadTemplate(store);
   const listingDescription = template
@@ -2301,7 +2426,11 @@ Deno.serve(async (req: Request) => {
       category: {
         id: categoryId,
         name: categoryName,
-        fromSuggestion: !chosenCategory,
+        fromSuggestion: !chosenCategory && !lockedCategory,
+        // Set when a person's earlier pick is being honoured rather than the
+        // recommender's answer. The recommendation still rides along below, so
+        // the two can be compared.
+        lockedByPerson: lockedCategory,
         // How the category was arrived at, and what the live market looked
         // like. This is the part that makes a wrong category arguable instead
         // of mysterious.
@@ -2319,6 +2448,9 @@ Deno.serve(async (req: Request) => {
       // it behind "<omitted>" is what let a 4000-character overflow reach the
       // live publish undetected — the length is the part that can fail.
       description: {
+        // What sanitiseForEbay took out, if anything. Empty on the overwhelming
+        // majority of products; the whole point is that it is visible when not.
+        cleaned: descriptionCleaned,
         shopifyChars: (c.descriptionHtml || c.title).length,
         itemDescriptionChars: item.product.description.length,
         itemLimit: EBAY_ITEM_DESCRIPTION_MAX,
@@ -2479,6 +2611,11 @@ Deno.serve(async (req: Request) => {
     last_error: null,
     missing_fields: null,
     published_at: new Date().toISOString(),
+    // Sticky from here on: an explicit pick this time, or one already made
+    // earlier. Passed through `extra` because chosenCategory and lockedCategory
+    // are local to this handler — writing it inside upsertListing, which is
+    // module-level, is a ReferenceError on every publish.
+    ...(chosenCategory || lockedCategory ? { category_locked: true } : {}),
   }, categoryName);
 
   return json({
@@ -2498,6 +2635,10 @@ Deno.serve(async (req: Request) => {
   });
 });
 
+// categoryLocked is passed in rather than read here: this is a module-level
+// helper and the two things that decide it — an explicit &category= and the
+// stored flag — are both local to the request handler. Writing it here directly
+// is what put a ReferenceError on every publish.
 async function upsertListing(
   store: string, c: Candidate, categoryId: string, extra: Record<string, unknown>,
   categoryName: string | null = null,
