@@ -568,7 +568,20 @@ input, textarea, select,
 }
 
 .category-title .cat-ico { display: grid; place-items: center; color: var(--sage-professional); }
-.category-title .cat-ico svg { width: 13px; height: 13px; }
+/* fill:none + stroke is what makes DOC_ICONS a line icon. Without it the pin
+   rendered as a solid black blob — the paths default to fill:black, no stroke —
+   which read as a smudge rather than as the pin the rail beside it draws in
+   green. Copied from .doc-pin svg, which had it right all along. */
+.category-title .cat-ico svg {
+    width: 14px; height: 14px;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* The accordion chevron renderDocs() writes into every category head. It exists
+   only below 900px, where the heads become collapsible bars — see the MOBILE
+   LAYER. On desktop every section is open and there is nothing for it to say. */
+.category-title .cat-chev { display: none; }
 
 .category-title.pinned { color: var(--sage-professional); border-bottom-color: rgba(90, 141, 59, 0.22); }
 .category-title.pinned .cat-count { color: var(--sage-professional); background: var(--dp-sage-tint); }
@@ -971,6 +984,9 @@ input, textarea, select,
     width: 100%;
 }
 .fa-tabs .tab-btn { padding-left: 6px; padding-right: 6px; text-align: center; white-space: nowrap; }
+/* Was an inline style on the wrapper <div>; same value, moved here so the
+   phone block can reach it. */
+.fa-tabs-wrap { padding: 14px 18px; }
 
 .notif-content { padding: 20px; max-height: 70vh; overflow-y: auto; } /* Expanded height to match calendar */
 .notif-item { margin-bottom: 20px; }
@@ -6392,6 +6408,12 @@ input.vr-up-input[type="file"] {
 
 /* Inline pulsing "new" dot for recycle requests — marks exactly what changed
    (a whole line vs a specific note). Same ripple as the KPI due-dot. */
+/* Dot + control on ONE line. The Review cell's <select> became a .dd-host, which
+   is display:block, so an inline dot in front of it was pushed onto a line of its
+   own and floated above the control. */
+.recycle-review-cell { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+.recycle-review-cell .dd-host { flex: 1 1 auto; }
+
 .recycle-new-dot {
     position: relative;
     display: inline-block;
@@ -8062,6 +8084,25 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     border-radius: 9px;
     margin-bottom: 8px;
 }
+/* Was inline style on the three <div>s in renderBoxAdminList — same values,
+   moved here so the phone block below can reach them. */
+.box-admin-item .bai-text { min-width: 0; }
+.bai-cat { font-weight: 800; font-size: 12px; color: #64748b; margin: 12px 0 6px; }
+.bai-name { font-weight: 800; color: var(--slate-charcoal); font-size: 13px; }
+.bai-meta { font-size: 11px; color: #94a3b8; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* "Units per bundle" and "Unit word" sit in one row and have to read as one
+   pair. Two separate reasons they did not:
+
+   HEIGHT — a bare .form-input-lg computes to 40px and the dropdown face to
+   41, so they were a pixel apart at every width.
+
+   BASELINE — the input is an inline-block, so its 6px top margin does NOT
+   collapse with the label's 6px bottom margin (12px of gap); the dropdown's
+   face is a block inside .dd-host, so the same two margins DO collapse (6px),
+   and the two controls started 6px apart. display:block on the input puts
+   both columns under the same collapsing rule. */
+#boxOrderManagePage input.form-input-lg { display: block; min-height: 41px; }
+
 .box-admin-item .bai-del {
     flex-shrink: 0;
     width: 32px; height: 32px;
@@ -8308,7 +8349,11 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .mcl-allbtn { background: #eef2ff; color: #4338ca; border: none; border-radius: 6px; padding: 3px 8px; font-size: 10px; font-weight: 700; cursor: pointer; }
 .mcl-allbtn:hover { background: #e0e7ff; }
 .mcl-store-checks { display: flex; flex-wrap: wrap; gap: 8px; }
-.mcl-store-checks label { display: flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 11px; font-size: 12px; font-weight: 700; color: #475569; cursor: pointer; user-select: none; }
+/* Fixed box, not padding. Six store names of three different lengths ("OVL"
+   against "Corp") came out six different widths, so what is one set of equal
+   choices read as a ragged row. 78px is the widest of them plus room, on both
+   widths (user's call, 20 Aug). */
+.mcl-store-checks label { display: flex; align-items: center; justify-content: center; width: 78px; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 8px; font-size: 12px; font-weight: 700; color: #475569; cursor: pointer; user-select: none; }
 .mcl-store-checks label:has(input:checked) { background: #eef2ff; border-color: #a5b4fc; color: #4338ca; }
 .mcl-store-checks input { cursor: pointer; width: 14px; height: 14px; }
 .mcl-add-btn { align-self: flex-start; }
@@ -8318,7 +8363,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .mcl-row-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .mcl-row-text { font-size: 13px; font-weight: 600; color: #1e293b; }
 .mcl-row-badges { display: flex; flex-wrap: wrap; gap: 4px; }
-.mcl-badge { font-size: 9px; font-weight: 800; letter-spacing: .3px; background: #eef2ff; color: #4338ca; border-radius: 5px; padding: 2px 6px; }
+.mcl-badge { font-size: 9px; font-weight: 800; letter-spacing: .3px; background: #eef2ff; color: #4338ca; border-radius: 5px; padding: 2px 6px; min-width: 34px; text-align: center; }
 .mcl-badge-none { background: #fef2f2; color: #dc2626; }
 .mcl-row-actions { display: flex; gap: 6px; flex: 0 0 auto; }
 .mcl-edit-btn, .mcl-del-btn { width: 26px; height: 26px; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 700; line-height: 1; }
@@ -8654,16 +8699,44 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 
 #listingGoalsModal .goals-title-wrapper {
     order: 2; display: inline-flex; align-items: center;
-    background: #ffffff; border: 1px solid rgba(90,141,59,.35); border-radius: 20px; padding: 5px 13px;
+    background: #ffffff; border: 1px solid rgba(90,141,59,.35); border-radius: 20px; padding: 7.5px 13px;
     box-shadow: 0 1px 2px rgba(16,24,40,.06);
 }
 #listingGoalsModal .district-kpi-title {
     color: #3d6822 !important; font-size: 12px !important; font-weight: 800 !important;
     letter-spacing: .05em !important; opacity: 1 !important;
 }
+/* VERTICAL centring of all-caps text in a pill is not what `align-items: center`
+   gives you. That centres the LINE box, and a line box carries a descender's
+   worth of space no capital ever occupies plus half the leading at each end — so
+   the box lands in the middle and the ink does not. Measured with
+   scripts/mobile-round16-check.js, the date sat 2.5px low at both widths, which
+   is what "still not centred" was.
+
+   Two changes, in this order:
+     line-height: 1   the text box becomes the font's own em box, so the only
+                      asymmetry left is the FONT's (ascender-above-caps against
+                      descender-below-baseline) rather than the leading's.
+     padding-bottom   .22em, half of which is the shift. In em, not px, so the
+                      12px desktop pill and the 10px phone one both land — the
+                      residual is a font metric and scales with the type.
+   The wrapper's own padding went 5px -> 7.5px (and 3 -> 5 on the phone) purely
+   to hold the pill at the height it already had; line-height 1 took 5px out of
+   it. Re-measure if any of the three numbers is touched. */
+#listingGoalsModal .goals-title-wrapper .district-kpi-title {
+    line-height: 1 !important;
+    padding-bottom: .22em;
+}
 #listingGoalsModal #goals-date-display {
     color: #3d6822 !important; font-weight: 800 !important; font-size: 12px !important;
     text-transform: uppercase; letter-spacing: .05em; opacity: 1 !important;
+    /* .widget-date-display is inline-flex for the dashboard headers, where it sits
+       beside a title. An atomic inline box aligns on ITS baseline inside the
+       parent's line box, which is the other half of the vertical problem the
+       block above describes — as a block it simply is the line box.
+       !important because .widget-date-display sets display with !important too,
+       and an id selector does not beat that. */
+    display: block !important; line-height: 1 !important;
     /* .widget-date-display carries `margin-left: 8px !important` for the dashboard
        headers it was written for, where it sits after a title. In a pill of its
        own there is nothing to be spaced away from, and that 8px was the other
@@ -8900,6 +8973,28 @@ body.sam-active .hotbar-btn:hover {
     font-size: 13px !important; padding: 9px 16px !important; border-radius: 8px !important; cursor: pointer;
 }
 .checklist-side-panel .cl-add-btn:hover { background: #178048 !important; }
+
+/* The Multi-Store Manager's per-store add rows. Same control as the footer above,
+   different markup: renderChecklistMS writes one .ms-add-row inside each store
+   section instead of the single .cl-input-area at the foot of the panel, so none
+   of the rules above reach it. It was drawn the other way round — a grey pill
+   AROUND a borderless input — which beside a manager's boxed field read as a
+   different control rather than the same one twice. Matched here (20 Aug).
+
+   The row itself keeps no box of its own: .cl-input-area gets one because it is a
+   panel footer with a border-top above it, and this one sits INSIDE a store card
+   that already draws the edges. Only the field and the button carry chrome. */
+.checklist-side-panel .ms-add-row {
+    background: transparent; border: 0; border-radius: 0;
+    padding: 12px 0 2px; gap: 8px; margin-top: 0;
+}
+.checklist-side-panel .ms-add-row input {
+    flex: 1; border: 1px solid #e3e8ee; background: #f6f8fa; border-radius: 8px;
+    padding: 9px 12px; font-family: inherit; font-size: 13px; color: #1c1f23;
+}
+.checklist-side-panel .ms-add-row input:focus {
+    outline: none; border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(90,141,59,.12);
+}
 
 /* ---------- Goals & Initiatives ---------- */
 .goals-side-panel { background: #ffffff; }
@@ -11344,7 +11439,10 @@ input[type="date"]::-webkit-datetime-edit,
 input[type="month"]::-webkit-datetime-edit,
 input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase; }
 
-.gp-add-date { flex: 0 0 auto; width: 165px; }
+/* height, because a date input's content box is taller than a text input's at
+   the same padding (it holds three spin fields and a picker button) — the two
+   sat in one row at 46 and 44. The phone block does the same at 34. */
+.gp-add-date { flex: 0 0 auto; width: 165px; height: 44px; }
 .gp-add-date::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .6; }
 .gp-add-date::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 
@@ -11362,7 +11460,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .gp-chip-none { font-size: 12px; color: #a8b3c0; font-weight: 600; }
 .gp-add { display: flex; gap: 8px; align-items: center; margin-top: 11px; flex-wrap: wrap; }
 .gp-add .mg-input { flex: 1 1 170px; min-width: 150px; }
-.gp-add-btn { padding: 9px 16px; flex: 0 0 auto; }
+.gp-add-btn { padding: 9px 16px; flex: 0 0 auto; min-height: 44px; }
 /* SIX tiles, and its own grid rather than .lv-strip's. Two reasons, one cosmetic
    and one load-bearing: .lv-strip is a hard repeat(4), and — far more
    importantly — renderLiveDashboard() fills every .lv-strip on the page by
@@ -15462,7 +15560,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    strip, a light control row, then a table per tab.
    ========================================================= */
 .exp-controls {
-    display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap;
+    /* CENTRE, not flex-end. Nothing in this row stacks a label above its control —
+       every .exp-ctl is its own inline flex row — so bottom-aligning them left the
+       read-only "Mileage rate $0.72/mi" sitting on the floor of a row whose other
+       item is a 34px dropdown. Both widths (user's call, 20 Aug). */
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
     padding: 0 0 14px; border-bottom: 1px solid #eef1f5; margin-bottom: 14px;
 }
 .exp-controls-sp { flex: 1 1 auto; }
@@ -15487,6 +15589,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     width: 100%; box-sizing: border-box;
 }
 .exp-input:focus { outline: none; border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(31,157,87,.12); }
+/* A date input's content box is taller than a text input's at the same padding —
+   three spin fields and a picker button — so the DATE in Add A Trip stood 2px
+   above the four fields beside it at every width. Height is the only lever
+   (the same fix .gp-add-date carries). */
+input[type="date"].exp-input { height: 36px; padding-top: 0; padding-bottom: 0; }
 
 /* Small primary button — the site's established compact .btn-primary (12px /
    7px 16px), so it reads as the same button as everything else, just smaller. */
@@ -16916,8 +17023,56 @@ body.tv-body { display: block; background: #eef1f5; }
    it cover the panel's own 20px padding as it pins, so nothing slides under. */
 #emailRecipientsBody .kb-search-bar {
     position: sticky; top: -20px; z-index: 4;
-    background: #f9fafb; padding: 20px 0 10px; margin: -20px 0 0;
+    /* The 12px bottom was an inline style on the markup until the list moved to
+       classes; kept here so the search still clears the first group bar. */
+    background: #f9fafb; padding: 20px 0 10px; margin: -20px 0 12px;
 }
+
+/* One list inside an open group: its name, its addresses as pills, and the row
+   that adds another. These were inline style="" attributes on the markup
+   renderEmailRecipients() writes — which is why the tool sat out the phone pass
+   every other tool got; no stylesheet can reach past an inline style. Lifted here
+   verbatim, so desktop is pixel-for-pixel what it was, and the MOBILE LAYER now
+   has something to size. */
+.er-card {
+    border: 1px solid #e2e8f0; border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 8px;
+}
+.er-card-t {
+    font-size: 11px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: .4px; color: #64748b; margin-bottom: 3px;
+}
+/* No description under it, so the gap to the pills is its own. */
+.er-card-t-solo { margin-bottom: 7px; }
+.er-card-d { font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 8px; }
+
+.er-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px;
+    padding: 3px 6px 3px 10px;
+    font-size: 12px; font-weight: 700; color: var(--slate-charcoal);
+    margin: 0 6px 6px 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;      /* a long address wraps rather than widening the card */
+}
+.er-chip-x {
+    border: none; background: #e2e8f0; color: #64748b;
+    width: 18px; height: 18px; min-width: 18px; border-radius: 50%;
+    font-size: 11px; font-weight: 900; cursor: pointer; line-height: 1;
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0;
+}
+.er-chip-x:hover { background: #fecaca; color: #b91c1c; }
+.er-chip-none { font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px; }
+
+.er-add { display: flex; gap: 6px; margin-top: 6px; }
+.er-add-input {
+    flex: 1; min-width: 0;
+    border: 1px solid #e2e8f0; border-radius: 8px;
+    padding: 6px 10px; font-size: 12.5px; font-family: inherit;
+}
+.er-add-btn { padding: 6px 14px; font-size: 12px; flex: 0 0 auto; }
 
 
 /* =========================================================
@@ -16990,9 +17145,24 @@ select.dd-native {
     font-weight: 650;
     line-height: 1.2;
 }
+/* A dropdown is a control, not prose: click-dragging across the face or an
+   option used to paint a text selection over it, which is the desktop half of
+   "why does this highlight when I click it" (user's report, 20 Aug). */
+.dd-btn, .dd-opt, .dd-cur { -webkit-user-select: none; user-select: none; }
 /* The label reads the button's own type, whichever of the two above won. */
 .dd-cur { font: inherit; }
 .dd-btn:disabled, .dd-host.dd-empty .dd-btn { opacity: .6; cursor: not-allowed; }
+/* LOCKED: disabled, or a single option and therefore nothing to choose (the class
+   is set in _ddSync). A chevron is a promise that something opens; on these it
+   opens nothing, so it goes and the face reads as the value it is rather than as a
+   control that ignores you. The single-store manager's Store field in the recycle
+   tool is the case this was written for. */
+.dd-host.dd-locked .dd-chev { display: none; }
+.dd-host.dd-locked .dd-btn {
+    cursor: default;
+    background-color: #f1f5f9 !important;
+    color: #647082;
+}
 .dd-cur { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dd-chev { width: 15px; height: 15px; flex: 0 0 auto; color: #94a3b8; transition: transform .15s ease; }
 .dd-host.open .dd-chev { transform: rotate(180deg); }
@@ -17386,6 +17556,657 @@ select.dd-native {
     .checklist-side-panel .cl-add-btn {
         min-height: 32px; padding: 4px 14px !important; font-size: 11.5px !important;
     }
+    /* The Multi-Store Manager gets a DIFFERENT add row: renderChecklistMS writes
+       one .ms-add-row under each store section instead of the single
+       .cl-input-area footer, so none of the rules above reach it and its input
+       fell back to the blanket 44px tap floor — a 62px row where every other
+       role has a 50px one. The pair is kept identical on purpose: whatever the
+       single-store field and button are given here, this one is given too. */
+    .checklist-side-panel .ms-add-row { padding: 8px 0 2px !important; gap: 8px; }
+    .checklist-side-panel .ms-add-row input {
+        min-height: 32px; padding: 4px 11px !important;
+    }
+}
+
+/* --- Stats & Awards header on a phone -----------------------------------------
+   The blurb under the title is curated away below 900px, and what it left behind
+   was its spacing: the h2 keeps an 8px bottom margin meant to separate it from a
+   paragraph that is no longer there, on top of the 40px the header reserves for
+   the section under it. 48px of nothing between the title and the tab strip, at
+   the top of the screen where it costs the most (20 Aug).
+
+   Scoped by the .stats-header class rather than to .page-header at large: the
+   other three pages still show their blurb on a phone, and the 8px is doing its
+   job there. */
+@media (max-width: 900px) {
+    .page-header.stats-header { margin-bottom: 16px; }
+    .page-header.stats-header h2 { margin-bottom: 0; }
+}
+
+/* --- SPEEKS Tools on a phone ---------------------------------------------------
+   Every tool modal wears the same chrome — a .tool-head, a .notif-tabs strip,
+   .form-label-caps over .form-input-lg fields, a .manage-footer — and all of it
+   was still at desktop scale inside a 390px sheet: a 90px header, a 44px tab
+   strip, 44px fields and a 44px submit slab. Sized here rather than per tool, so
+   the ones nobody has looked at yet come down with the rest (user's call, 20 Aug:
+   "make the assets smaller like we did for other aspects of the site").
+
+   The 16px on inputs stays — anything smaller and iOS Safari zooms the viewport
+   on focus and never zooms back. Fields come down by their padding instead. */
+/* Selectors here MIRROR the airy tool-modal block above (.modal-menu.manage-menu
+   ..., which is (0,3,x)) rather than reaching for !important — a plain
+   .modal-menu .tool-head loses to it however late in the file it sits, which is
+   the first version of this block and why it half-worked. */
+@media (max-width: 900px) {
+    .modal-menu.manage-menu > .modal-header.tool-head { padding: 12px 14px; }
+    .tool-head .tool-head-main { gap: 10px; }
+    .tool-head-ico { width: 34px; height: 34px; border-radius: 10px; }
+    .tool-head-ico svg { width: 17px; height: 17px; }
+    .tool-head-eyebrow { font-size: 9px; }
+    .tool-head-title { font-size: 15px; }
+    .tool-head-sub { font-size: 11px; }
+
+    /* The same 30px the Checklist's Daily/Weekly/Monthly strip sits at — one
+       three-way switch height on the whole phone. */
+    .modal-menu .notif-tabs { gap: 3px; padding: 2px; }
+    .modal-menu .notif-tabs .tab-btn {
+        min-height: 30px; height: 30px; padding: 0 12px; font-size: 11.5px;
+    }
+
+    .modal-menu.manage-menu .form-label-caps { font-size: 9.5px; margin-bottom: 4px; }
+    .modal-menu.manage-menu .form-input-lg {
+        min-height: 38px; padding: 8px 11px;
+    }
+    .modal-menu.manage-menu textarea.form-input-lg { min-height: 52px; }
+    /* Part of why the fields looked "massive" was never the size — it was the
+       font. A <textarea> with no font-family set falls back to the browser's
+       MONOSPACE default, and a bare <input> to Arial, so the recycle description
+       and the box-order notes were rendering in Courier next to Inter everywhere
+       else. */
+    .modal-menu.manage-menu input,
+    .modal-menu.manage-menu textarea,
+    .modal-menu.manage-menu select { font-family: inherit; }
+
+    /* AND THE SIZE, after all. 16px is the iOS Safari focus-zoom floor and the
+       rest of the mobile layer holds that line — but asked for twice, measured
+       against the red disclaimer under it (10.5px) and set a step above at 12.5px
+       (user's call, 20 Aug, with the trade-off stated). The consequence is real
+       and confined to these fields: tapping into one on an iPhone zooms the sheet
+       slightly. Put 16px back on this one selector to undo it.
+
+       Scoped to TOOL modals: every other input on the site keeps the floor. */
+    .modal-menu.manage-menu .form-input-lg,
+    .modal-menu.manage-menu input,
+    .modal-menu.manage-menu textarea,
+    .modal-menu.manage-menu select,
+    .modal-menu.manage-menu input.form-input-lg,
+    .modal-menu.manage-menu textarea.form-input-lg { font-size: 12.5px !important; }
+    .modal-menu.manage-menu ::placeholder { font-size: 12.5px; }
+
+    /* One dropdown face across every tool — the recycle month picker, the expense
+       month and person pickers, the box-order store picker. They were three
+       different heights because each inherited whatever class its <select> carried
+       (user's call, 20 Aug: "standardize this with the recycle tool"). */
+    .modal-menu.manage-menu .dd-btn {
+        min-height: 34px;
+        font-size: 12.5px !important;
+        padding: 0 11px;
+    }
+    .modal-menu.manage-menu .dd-chev { width: 13px; height: 13px; }
+    .dd-list .dd-opt { font-size: 12.5px; }
+    #boxOrderNotes { min-height: 52px; }
+    .box-order-disclaimer { font-size: 10.5px; padding: 10px 8px 2px; }
+
+    /* Footer actions. The blanket 44px tap floor made these slabs; they run the
+       full width of a sheet, so 38 is still an easy target. */
+    .modal-menu.manage-menu > .manage-footer { padding: 10px 14px; }
+    .modal-menu.manage-menu .btn-primary,
+    .modal-menu.manage-menu .btn-secondary {
+        min-height: 38px; font-size: 12.5px; padding: 8px 14px;
+    }
+    .manage-footer > button, .modal-footer > button {
+        min-height: 38px; font-size: 12.5px; padding: 8px 14px;
+    }
+    /* Box Order's own footer sets its font, padding and min-width with
+       !important (see .box-order-footer button), so Back / Copy / Send Email
+       need it back to come down — and the 110px floor has to go or three
+       buttons will not fit a 390px row. */
+    .box-order-footer button {
+        font-size: 12.5px !important;
+        padding: 8px 12px !important;
+        min-height: 38px;
+        min-width: 0;
+        gap: 5px;
+    }
+    #boxOrderModal .box-order-footer button svg { width: 13px; height: 13px; }
+
+    /* Box Order's steppers. width:28px against the blanket min-height:44px turned
+       a circle into a tall oval — border-radius:50% on a 28x44 box. Square first,
+       then it is a circle again. */
+    .box-stepper-btn {
+        width: 34px; height: 34px;
+        min-width: 34px; min-height: 34px;
+        flex: 0 0 auto;
+        font-size: 17px;
+    }
+
+    /* The mailto explainer beside Copy / Send Email. Its text is Windows-specific
+       ("go to Windows Settings → Apps → Default apps"), which on a phone is not
+       merely clutter but wrong, so it goes rather than shrinks. */
+    .box-order-footer .goals-info-i,
+    /* The recycle report and the expense report both carry the SAME control with
+       the SAME text beside their Copy / Send Email pair — all three are
+       RECYCLE_MAIL_TIP. Hidden together rather than one at a time. */
+    #recycleInvModal .goals-info-i,
+    #expensesModal .goals-info-i { display: none; }
+
+    /* --- the announcement composer ------------------------------------------
+       Three separate complaints, one block (20 Aug). */
+
+    /* B / I / U were sized by their own glyph — a "B" is wider than an "I", so
+       three buttons that do the same KIND of thing were three different widths.
+       Equal squares, and one gap value across the row so the spacing reads as
+       even with the bullet button on the end. */
+    #manageAnnouncementsDropdown .editor-toolbar { gap: 8px; padding: 7px; }
+    #manageAnnouncementsDropdown .rt-btn {
+        min-height: 34px; padding: 0 12px; font-size: 13px;
+        display: inline-flex; align-items: center; justify-content: center;
+    }
+    #manageAnnouncementsDropdown #btn-fmt-bold,
+    #manageAnnouncementsDropdown #btn-fmt-italic,
+    #manageAnnouncementsDropdown #btn-fmt-underline {
+        width: 38px; min-width: 38px; flex: 0 0 38px; padding: 0;
+    }
+    #manageAnnouncementsDropdown .toolbar-divider { margin: 0 2px; }
+
+    /* "Mark as High Priority (Highlights in Red for all Stores)" is 56 characters
+       beside a checkbox in a 390px sheet; at 14px it wrapped to two lines and the
+       row grew with it. */
+    #manageAnnouncementsDropdown .checkbox-wrapper { padding: 9px 10px; gap: 8px; }
+    #manageAnnouncementsDropdown .checkbox-label { font-size: 10.5px; line-height: 1.3; }
+
+    /* --- Email Recipients on a phone -----------------------------------------
+       An address is 20-30 characters of prose in a pill, and at 12px two of them
+       filled the width. Everything here is a step down; the parts that were
+       inline styles until now are listed in the .er-card block above. */
+    #emailRecipientsBody .er-card { padding: 8px 10px; margin-bottom: 7px; }
+    #emailRecipientsBody .er-card-t { font-size: 10px; }
+    #emailRecipientsBody .er-card-d { font-size: 10.5px; margin-bottom: 6px; }
+    #emailRecipientsBody .er-chip {
+        font-size: 10.5px; gap: 5px;
+        padding: 2px 4px 2px 8px; margin: 0 5px 5px 0;
+    }
+    #emailRecipientsBody .er-chip-none { font-size: 10.5px; }
+    /* THE X. width:18px against the blanket 44px tap floor is what made it a tall
+       oval — the same shape bug the box-order steppers had. Squared, and a touch
+       bigger than desktop's 18 to stay hittable inside a smaller pill. */
+    #emailRecipientsBody .er-chip-x {
+        width: 20px; height: 20px;
+        min-width: 20px; min-height: 20px;
+        font-size: 10px;
+    }
+    /* The add row, at the 32px the checklist's add row and the tool fields sit at. */
+    #emailRecipientsBody .er-add { gap: 6px; margin-top: 5px; }
+    #emailRecipientsBody .er-add-input {
+        min-height: 32px; padding: 5px 9px;
+    }
+    #emailRecipientsBody .er-add-btn {
+        min-height: 32px; padding: 5px 12px !important;
+        font-size: 11.5px !important; min-width: 0;
+    }
+
+    /* The group bars above them come down with the cards. */
+    #emailRecipientsBody .er-bar-n { font-size: 12.5px; }
+    #emailRecipientsBody .er-bar-d { font-size: 10.5px; }
+    #emailRecipientsBody .er-count { font-size: 10px; }
+}
+
+@media (max-width: 640px) {
+    /* Recycle Inventory's My Requests list. One record per row with a paragraph
+       and a note thread in it, so it stacks into cards rather than scrolling
+       sideways — see .tbl-stack above; the data-labels come from renderMyRecycleTable.
+       Prose does not right-align, so Description takes the full width of the card
+       under its own label instead of sharing a line with it. */
+    .recycle-tbl td[data-label="Description"] {
+        display: block;
+        text-align: left;
+    }
+    .recycle-tbl td[data-label="Description"]::before {
+        display: block;
+        margin-bottom: 5px;
+    }
+    .recycle-tbl .site-note, .recycle-tbl .site-note-reply { text-align: left; }
+    /* The reply/delete cell has no label, so space-between had nothing to push
+       against and threw the two icon buttons to opposite edges of the card. They
+       are a pair of controls, not a row of columns — group them at the left. Their
+       inline width:30px loses to the blanket 44px tap floor on height only, which
+       is what stretched them into rectangles; matching the width squares them. */
+    .recycle-tbl td[data-label=""] { justify-content: flex-start; gap: 8px; }
+    /* 38, not the blanket 44: they sit in a row with nothing beside them to
+       mis-hit, and at 44 they were the biggest thing on the card (user's call,
+       20 Aug). Width has to be set too — their inline width:30px against a 44px
+       min-height is what stretched them into rectangles. */
+    .recycle-tbl td[data-label=""] button {
+        min-width: 38px; min-height: 38px; width: 38px; height: 38px;
+    }
+}
+
+/* --- Expense Report on a phone -------------------------------------------------
+   Same treatment as the other tools, on the parts this one draws itself: a 20px
+   figure in each summary cell, a full-width Email Report slab, 44px tabs and a
+   five-field Add A Trip panel at desktop scale. Nothing is restructured — every
+   part keeps its place and its colour, a step smaller (user's call, 20 Aug).
+
+   The DM and the manager open the SAME modal (the edge function decides the
+   powers from the caller's PIN, see the Tools panel's two rows), so there is no
+   per-role block here: sizing the tool sizes both. */
+@media (max-width: 900px) {
+    #expensesModal .exp-controls { gap: 10px; padding-bottom: 11px; margin-bottom: 11px; }
+    #expensesModal .exp-ctl { font-size: 10px; gap: 6px; }
+    /* MONTH and PERSON share a line. Their pickers are sized to their longest
+       option — "September 2026", "Nick Vandenberghe" — which is 145 + 164 of a
+       360px row: they fit side by side, and the 85px of caps labels beside them
+       is what did not (user's call, 20 Aug). So the labels go rather than the
+       pickers shrinking, because a picker narrowed to fit clips the very names
+       you are choosing between. A month picker showing "August 2026" and a person
+       picker showing a person's name say what they are.
+
+       :nth-child(-n+2) rather than a class, because the second control is Person
+       for a reviewer and the read-only Mileage rate for everyone else, and both
+       want the same treatment. */
+    #expensesModal .exp-controls > .exp-ctl:nth-child(-n+2) > span:first-child { display: none; }
+    /* The spacer exists to push Email Report to the right of a desktop row; on a
+       phone the button is full width and the spacer only forces a line break. */
+    #expensesModal .exp-controls-sp { display: none; }
+    #expensesModal .exp-ctl-ro b { font-size: 12px; }
+    /* It goes full width at 700px already (see the block by .exp-view-foot); this
+       only takes the slab height off it. */
+    #expensesModal .exp-btn-mail { font-size: 12px; padding: 8px 14px; min-height: 38px; }
+
+    #expensesModal .exp-strip { gap: 8px; margin-bottom: 12px; }
+    #expensesModal .exp-cell { padding: 9px 11px; flex: 1 1 130px; }
+    #expensesModal .exp-cell-l { font-size: 9.5px; }
+    #expensesModal .exp-cell-v { font-size: 16px; }
+    #expensesModal .exp-cell-s { font-size: 10px; }
+
+    /* The 30px every other three-way switch on the phone sits at. */
+    #expensesModal .exp-tabs { gap: 5px; margin-bottom: 10px; }
+    #expensesModal .exp-tab {
+        font-size: 11.5px; padding: 0 14px; min-height: 30px; height: 30px;
+    }
+
+    /* Genuinely tabular — six columns of dates and money — so it keeps its
+       columns and scrolls, with a floor so they are not starved into mush. */
+    #expensesModal .exp-table { min-width: 560px; }
+    #expensesModal .exp-table th { font-size: 9.5px; padding: 7px 10px; }
+    #expensesModal .exp-table td { padding: 7px 10px; font-size: 12px; }
+
+    #expensesModal .exp-add { padding: 11px 12px; margin-top: 11px; }
+    #expensesModal .exp-add-t { font-size: 11.5px; margin-bottom: 8px; }
+    #expensesModal .exp-add-grid { gap: 8px; }
+    #expensesModal .exp-add-grid label { font-size: 9.5px; gap: 4px; }
+    #expensesModal .exp-add-note { font-size: 10px; margin-top: 7px; }
+    /* 16px stays on the input itself — the iOS focus-zoom floor — so it comes
+       down by its padding, the same way every other field on the phone does. */
+    /* 12.5px and 34px: the size every other field in every other tool modal sits
+       at on a phone. This one kept 16px (the iOS focus-zoom floor) long after the
+       tool block traded that floor away — so the Expense Report's fields were the
+       largest type of any tool's, which is what "correctly sized relative to the
+       rest of the mobile site" was asking about (user, 20 Aug). */
+    #expensesModal .exp-input { font-size: 12.5px; padding: 6px 9px; min-height: 34px; }
+    #expensesModal input[type="date"].exp-input { height: 34px; }
+    /* 32px, and the padding written as 0 + line-height so the height is the height
+       asked for. Six of these stack down the categories panel (Save + Delete on
+       every row) and three sit in the control row beside the rate field. */
+    #expensesModal .exp-btn-sm {
+        font-size: 11.5px; padding: 0 12px; min-height: 32px; line-height: 1;
+        border-radius: 9px;
+    }
+    /* Manage carries a whole panel behind it, so it gets more than its text's
+       width — the room the row saved by dropping "categories" (user's call,
+       20 Aug). Still leaves the line 40px short of wrapping. */
+    #expensesModal .exp-btn-cats { padding: 0 22px; }
+    /* The rate field is 86px inline, sized for a desktop row. "Manage" has to fit
+       on the same line as MILEAGE RATE and Save. */
+    #expensesModal #exp-rate { width: 62px !important; }
+    #expensesModal .exp-ico { width: 32px; height: 32px; min-height: 32px; }
+    #expensesModal .exp-cats { padding: 11px 12px; }
+    #expensesModal .exp-cats-sub { font-size: 10.5px; margin-bottom: 9px; }
+    #expensesModal .exp-cat-row { gap: 6px; margin-bottom: 5px; }
+    #expensesModal .exp-cat-tag { font-size: 9px; }
+    #expensesModal .exp-msg { font-size: 10px; }
+    #expensesModal .exp-view-h { font-size: 12px; }
+
+    /* EDITING A LINE. The inline edit row is eight fields laid across a table
+       that is 560px wide on a phone — 70px each, which is a date picker you
+       cannot read and a From box showing 'OF (user's report, 20 Aug).
+       renderExpenses() marks the wrap while a row is open, and here that row
+       becomes a stacked, labelled card taking the full width.
+
+       The other rows and the header are hidden while it is open, on purpose: you
+       are editing one line, and leaving four starved columns behind it is the
+       problem, not the context. Save or Cancel brings the table back. */
+    #expensesModal .exp-table-wrap.editing { overflow-x: visible; background: none; }
+    #expensesModal .exp-table-wrap.editing .exp-table { min-width: 0; }
+    #expensesModal .exp-table-wrap.editing thead,
+    #expensesModal .exp-table-wrap.editing tbody tr:not(.exp-editing) { display: none; }
+    #expensesModal tr.exp-editing { display: block; padding: 4px 2px 8px; }
+    #expensesModal tr.exp-editing td {
+        display: block; width: auto; border: 0;
+        padding: 5px 0; text-align: left;
+    }
+    #expensesModal tr.exp-editing td::before {
+        content: attr(data-label);
+        display: block; margin-bottom: 4px;
+        font-size: 9.5px; font-weight: 800; letter-spacing: .04em;
+        text-transform: uppercase; color: #647082;
+    }
+    #expensesModal tr.exp-editing td:not([data-label])::before { content: none; }
+    #expensesModal tr.exp-editing .exp-input { width: 100%; }
+    #expensesModal tr.exp-editing .exp-edit-actions {
+        display: flex; gap: 8px; padding-top: 10px;
+    }
+    #expensesModal tr.exp-editing .exp-btn-sm { flex: 1 1 auto; }
+}
+
+/* --- Feature Access on a phone -------------------------------------------------
+   The one tool nobody had looked at, and the only one whose SHAPE could not
+   survive the trip: an eight-column role matrix. At 390 the eight chips claim
+   304px of a 330px row, so the feature label was handed a 0px column and its
+   text spilled straight through them — the "Insurance C___ (Store)" overlap in
+   the screenshot (user's report, 20 Aug).
+
+   So the row breaks in two rather than shrinking: the label takes its own line
+   and the eight chips share the width beneath it, with the CEO…MOCD head row
+   kept in register above them. Nothing is hidden and no role is dropped —
+   flex:1 1 0 divides whatever width there is, so it fits any phone. */
+@media (max-width: 900px) {
+    /* Five tabs at 11.5px need 437px and the strip has 352, so the fifth was
+       clipped by the sheet edge. Three per row, wrapping — a tab you cannot see
+       is a tab nobody presses.
+
+       FLEX rather than the grid desktop uses: a 3-column grid leaves the second
+       row as two 1/3 tabs and a hole, and the row is a set of five, not a table.
+       flex:1 1 28% fits three (84% + gaps) and no more, and lets a short last row
+       stretch to fill the bar (user's call, 20 Aug). */
+    #featureAccessModal .fa-tabs { display: flex !important; flex-wrap: wrap; }
+    #featureAccessModal .fa-tabs .tab-btn {
+        flex: 1 1 28%; min-width: 0; padding: 0 6px; font-size: 11px;
+    }
+
+    /* ...and the strip scrolls away with the content rather than sitting frozen
+       over it. There were two nested scrollers here — a 60vh .manage-content
+       inside a 92vh sheet — so the header and two rows of tabs held a third of
+       the screen for the whole session (user's call, 20 Aug). One scroller now:
+       the sheet itself. The header keeps its sticky pin, because Close has to
+       stay reachable; nothing else does. */
+    /* The sheet carries the body colour now, because the body no longer reaches
+       the bottom of it: at its content height a short tab (Per-User with nobody
+       picked is four rows) would otherwise end in a white cliff. Header and tab
+       strip keep their white, so the sheet looks exactly as it did.  */
+    #featureAccessModal { overflow-y: auto; -webkit-overflow-scrolling: touch; background: #f9fafb; }
+    #featureAccessModal > .modal-header { position: sticky; top: 0; z-index: 3; }
+    #featureAccessModal .fa-tabs-wrap { padding: 10px 14px 12px; background: #fff; }
+    /* flex:0 and height:auto is what moves the scroll up to the sheet: the body
+       stands at its full content height instead of clipping at 60vh, so it is the
+       SHEET that has something to scroll, and the tab strip above it travels. */
+    #featureAccessModal > .manage-content {
+        flex: 0 0 auto; height: auto; min-height: 0; overflow: visible;
+    }
+
+    #featureAccessModal .fa-hint {
+        font-size: 10.5px; line-height: 1.45;
+        padding: 8px 10px; margin-bottom: 10px;
+    }
+    #featureAccessModal .fa-group { padding: 2px 10px 8px; margin-bottom: 9px; }
+    #featureAccessModal .fa-group-head { font-size: 10px; padding: 9px 2px 4px; }
+    #featureAccessModal .fa-subhead { font-size: 10px; margin: 12px 2px 6px; }
+
+    /* THE ROW, in two lines. */
+    #featureAccessModal .fa-row { flex-wrap: wrap; gap: 4px; padding: 7px 2px 8px; }
+    #featureAccessModal .fa-feat-label {
+        flex: 0 0 100%; font-size: 11.5px; line-height: 1.3; margin-bottom: 5px;
+    }
+    /* The head row's label cell is empty — left full-width it would open a hole
+       above the first row of every card. */
+    #featureAccessModal .fa-row-head .fa-feat-label { display: none; }
+    #featureAccessModal .fa-row-head { padding: 2px 2px 4px; }
+    /* Chips and their column heads divide the width together, so the two stay in
+       register whatever the phone is. min-width:0 is what lets them go under
+       their 38px desktop track. */
+    #featureAccessModal .fa-chip,
+    #featureAccessModal .fa-col-head { flex: 1 1 0; width: auto; min-width: 0; }
+    /* height alone loses to the blanket 44px tap floor on buttons — it is a
+       min-height, so it has to be answered with one. */
+    #featureAccessModal .fa-chip { height: 30px; min-height: 30px; border-radius: 7px; }
+    #featureAccessModal .fa-chip svg { width: 12px; height: 12px; }
+    #featureAccessModal .fa-col-head { font-size: 8.5px; }
+
+    /* Per-User tab, same shape: the feature above, its Default/On/Off switch
+       across the width beneath, instead of three buttons squeezed against prose. */
+    #featureAccessModal .fa-ugroup-head { padding: 9px 11px; font-size: 10px; gap: 8px; }
+    #featureAccessModal .fa-ugroup-body { padding: 0 11px 6px; }
+    #featureAccessModal .fa-ugroup-count,
+    #featureAccessModal .fa-ugroup-set { font-size: 9.5px; padding: 3px 7px; }
+    #featureAccessModal .fa-urow { flex-wrap: wrap; gap: 6px; padding: 8px 2px; }
+    #featureAccessModal .fa-urow-label { flex: 0 0 100%; font-size: 11.5px; }
+    #featureAccessModal .fa-urow-label .fa-role-def { font-size: 10px; }
+    #featureAccessModal .fa-seg-group { width: 100%; }
+    /* Smaller than the site's 30px switch, deliberately: this one is not a tab
+       strip you navigate with, it is the value of ONE row, and there is a stack
+       of forty of them down the tab. 26px keeps the row light and stays an easy
+       target at full width (user's call, 20 Aug — "smaller in size"). */
+    #featureAccessModal .fa-seg { flex: 1 1 0; min-height: 26px; padding: 0 6px; font-size: 10.5px; }
+    #featureAccessModal .fa-seg-group { border-width: 1px; }
+
+    /* Delegation tab. Its pills are written inline in _faCoverageHtml, so this is
+       the one place here that needs !important — an author !important still beats
+       an inline declaration. Same for the two buttons the body draws (Delegate
+       tools, Clear all N overrides): both carry their own font-size, so the tool
+       block above never reached them. */
+    #featureAccessModal .fa-cover-pick {
+        min-height: 0; font-size: 11.5px !important; padding: 6px 9px !important;
+    }
+    #featureAccessModal .manage-content .btn-primary,
+    #featureAccessModal .manage-content .btn-secondary {
+        font-size: 12.5px !important; padding: 8px 14px !important; min-height: 38px;
+    }
+}
+
+/* --- Manager Checklist admin on a phone ----------------------------------------
+   The DM half of the checklist: add a required task, say which stores it lands
+   on, then the list of what is already set (user's call, 20 Aug). */
+@media (max-width: 900px) {
+    /* Required Task and Time Period are one control each side of a row, and they
+       were two heights — the field at .form-input-lg's 38 and the dropdown face
+       at the tools' 34. The field comes down to the dropdown rather than the
+       other way about: 34 is what every picker on the phone already sits at. */
+    #managerChecklistDropdown .mcl-add-row { gap: 8px; }
+    #managerChecklistDropdown #mcl-text { min-height: 34px; padding: 6px 11px; }
+    #managerChecklistDropdown .mcl-field { gap: 4px; }
+
+    #managerChecklistDropdown .mcl-store-checks { gap: 6px; }
+    #managerChecklistDropdown .mcl-store-checks label {
+        width: 74px; font-size: 11.5px; padding: 5px 6px; min-height: 30px;
+    }
+    #managerChecklistDropdown .mcl-store-checks input { width: 13px; height: 13px; }
+    #managerChecklistDropdown .mcl-allbtn { min-height: 0; padding: 3px 8px; }
+
+    #managerChecklistDropdown .mcl-row { padding: 7px 9px; gap: 8px; }
+    #managerChecklistDropdown .mcl-row-text { font-size: 12px; }
+    #managerChecklistDropdown .mcl-existing-label,
+    #managerChecklistDropdown .mcl-group-label { font-size: 9.5px; }
+    /* The edit/delete pair: 26px wide against the blanket 44px tap floor is the
+       same tall-rectangle bug the box-order steppers and the recipients X had.
+       Squared at 32 — what the Expense Report's identical pair (.exp-ico, which
+       was copied from this one) sits at on a phone, so the two tools match. */
+    #managerChecklistDropdown .mcl-edit-btn,
+    #managerChecklistDropdown .mcl-del-btn {
+        width: 32px; height: 32px; min-width: 32px; min-height: 32px; font-size: 13px;
+    }
+}
+
+/* --- Box Order: the DM's own half, on a phone -----------------------------------
+   The order flow came down with the rest of the tools; these are the two parts
+   only a DM or the CEO ever sees — the Order / Manage Items switch at the top,
+   and the catalog editor behind it (user's call, 20 Aug). */
+@media (max-width: 900px) {
+    /* The switch sits OUTSIDE .manage-content, so it has never had the sheet's
+       side padding — on a desktop modal that reads as a full-width segmented
+       control, on a 390px sheet as two slabs jammed against the edges. Both
+       values are inline on the element, so both need answering. */
+    #boxOrderTabs { gap: 6px !important; padding: 4px 14px 10px !important; }
+    #boxOrderModal .box-order-tab {
+        padding: 0 10px; min-height: 34px; height: 34px; font-size: 12px; border-radius: 9px;
+    }
+
+    /* The Add An Item form is eight label/field pairs down a phone sheet; the
+       fields themselves already came down with the tools, so the height left to
+       take is the air between them (the 12px is inline on the labels). */
+    #boxOrderManagePage .form-label-caps { margin-top: 9px !important; }
+    #boxOrderManagePage .form-input-lg { margin-top: 4px; }
+    /* 34, the dropdown height, not .form-input-lg's 38: "Units per bundle" sits
+       in a row beside the "Unit word" picker and the pair read as two different
+       controls at two different heights (user's call, 20 Aug). Applied to every
+       field in the form so the whole thing is one height, not two.  */
+    #boxOrderManagePage input.form-input-lg { min-height: 34px; padding: 6px 11px; }
+
+    #boxOrderModal .box-admin-item { padding: 8px 10px; gap: 8px; margin-bottom: 6px; }
+    #boxOrderModal .bai-cat { font-size: 10px; margin: 10px 0 5px; }
+    #boxOrderModal .bai-name { font-size: 12px; }
+    #boxOrderModal .bai-meta { font-size: 10px; }
+    #boxOrderModal .bai-del {
+        width: 30px; height: 30px; min-width: 30px; min-height: 30px; font-size: 13px;
+    }
+    #boxOrderModal .box-order-preview-label { font-size: 10px; padding-bottom: 4px; }
+}
+
+/* --- Month Setup on a phone ----------------------------------------------------
+   Two cards — the five gross-profit goals and the derived buying-day count —
+   both still at desktop scale in a 390px sheet: a 30px figure in the count
+   tile, 150px money fields on rows with 12px of padding, and a closures form
+   whose date box alone was 165px. Everything comes down to the sizes the other
+   tools now sit at; nothing is restructured or hidden (user's call, 20 Aug). */
+@media (max-width: 900px) {
+    /* The intro paragraph is inline-styled at 12.5px. */
+    #gpGoalsModal .manage-content > p { font-size: 11px !important; margin-bottom: 11px !important; }
+
+    #gpGoalsModal .gp-sec { padding: 12px 12px 11px; border-radius: 12px; margin-bottom: 11px; }
+    #gpGoalsModal .gp-sec-head { margin-bottom: 9px; gap: 8px; }
+    #gpGoalsModal .gp-sec-t { font-size: 12px; }
+    #gpGoalsModal .gp-sec-s { font-size: 10px; }
+
+    /* The five goal rows. */
+    #gpGoalsModal .gp-goal-rows { gap: 6px; }
+    #gpGoalsModal .gp-goal-row { padding: 6px 9px; gap: 9px; border-radius: 9px; }
+    #gpGoalsModal .gp-goal-store { font-size: 12px; }
+    #gpGoalsModal .gp-goal-field { width: 124px; }
+    /* .mg-input is the Margin Guide's field — 14px type in 10px of padding. The
+       tool block's 12.5px reaches it (it is an input inside .manage-menu) but the
+       padding is its own, and 34px is the phone's field height. */
+    #gpGoalsModal .mg-input { padding: 6px 9px; min-height: 34px; border-radius: 8px; }
+    #gpGoalsModal .mg-money .mg-input { padding-left: 21px; }
+    #gpGoalsModal .mg-money::before { font-size: 12px; left: 9px; }
+    #gpGoalsModal .gp-goal-total { margin-top: 11px; padding-top: 9px; font-size: 11px; }
+    #gpGoalsModal .gp-goal-total b { font-size: 14px; }
+    #gpGoalsModal .gp-goal-by { font-size: 10px; }
+
+    /* The derived count and its arithmetic. The figure is the one thing here that
+       is meant to be big, so it stays the biggest thing on the card — just not at
+       30px in a 360px column. */
+    #gpGoalsModal .gp-bd { gap: 12px; }
+    #gpGoalsModal .gp-bd-num { min-width: 84px; padding: 9px 12px; border-radius: 10px; }
+    #gpGoalsModal .gp-bd-num b { font-size: 24px; }
+    #gpGoalsModal .gp-bd-num span { font-size: 9px; margin-top: 4px; }
+    #gpGoalsModal .gp-bd-calc { font-size: 11.5px; }
+    #gpGoalsModal .gp-bd-calc td:first-child { padding-right: 12px; }
+    #gpGoalsModal .gp-bd-calc td:last-child { min-width: 30px; }
+
+    /* Closures: the chips, and the add row. The date box keeps a floor because a
+       date input draws MM/DD/YYYY plus a picker icon and cannot be squeezed under
+       it — but it no longer holds 165px of a 336px card. */
+    #gpGoalsModal .gp-closed { margin-top: 11px; padding-top: 10px; }
+    #gpGoalsModal .gp-closed-t { font-size: 10px; margin-bottom: 7px; }
+    #gpGoalsModal .gp-chips { gap: 6px; }
+    #gpGoalsModal .gp-chip { font-size: 10.5px; padding: 4px 6px 4px 9px; }
+    #gpGoalsModal .gp-chip-none { font-size: 10.5px; }
+    #gpGoalsModal .gp-add { gap: 6px; margin-top: 9px; }
+    /* A date input's content box is taller than a text input's at the same padding
+       (it holds three spin fields and a picker button), so the pair came out 36 and
+       34. Height, not padding, is the only way to make them equal. */
+    #gpGoalsModal .gp-add-date { width: 140px; height: 34px; min-height: 34px; padding-top: 0; padding-bottom: 0; }
+    /* min-width:150 on a 336px card is what forced the label field onto its own
+       line; at 0 it shares one with Add. */
+    #gpGoalsModal .gp-add .mg-input { flex: 1 1 120px; min-width: 0; }
+    #gpGoalsModal .gp-add-btn { padding: 0 12px; min-height: 34px; font-size: 11.5px; }
+
+    /* Save Month goes full width, like every other tool's primary action on a
+       phone (Email Report, + Add item, + Add Required Task). */
+    #gpGoalsModal .gp-save { margin-top: 12px; }
+    #gpGoalsModal .gp-save .btn-primary { flex: 1 1 auto; justify-content: center; }
+}
+
+/* --- Processes & Policies on a phone -------------------------------------------
+   Two problems with one answer. The rail of category chips wraps to four rows at
+   390px — most of a screenful of navigation above the first document — and under
+   it every category is expanded at once, so the page is one long scroll through
+   forty cards. So: drop the chips, and let the categories themselves be the
+   navigation, one open at a time (user's call, 20 Aug).
+
+   `dp-open` is toggled by toggleDocCategory() at EVERY width; it only means
+   anything in here, which is what keeps 900px written down once — in this file —
+   rather than in a matchMedia in speeks.js as well.
+
+   The header loses its eyebrow and its blurb to data-mobile="hide", and the
+   margins that were holding their places come off here, the same way the Stats
+   header above does it. */
+@media (max-width: 900px) {
+    .page-header.docs-header { margin-bottom: 14px; }
+    .page-header.docs-header h2 { margin-bottom: 10px; }
+
+    .dp-rail { display: none; }
+    .dp-layout { gap: 0; }
+    .category-section {
+        margin-bottom: 8px;
+        scroll-margin-top: 66px;      /* the phone nav is 52px, not the desktop 64 */
+    }
+
+    /* The closed bar is drawn as a .doc-card, because that is what sits under it
+       when it opens — one row shape down the whole page. */
+    .category-title {
+        margin-bottom: 0;
+        padding: 14px 15px;
+        background: #fff;
+        border: 1px solid var(--dp-line);
+        border-radius: 12px;
+        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+        cursor: pointer;
+    }
+    .category-section.dp-open .category-title {
+        border-radius: 12px 12px 0 0;
+        border-bottom-color: transparent;
+        box-shadow: none;
+    }
+    /* The chevron is the only thing on the bar that says it opens. */
+    .category-title .cat-chev {
+        display: grid;
+        place-items: center;
+        margin-left: auto;
+        color: var(--dp-faint);
+        transition: transform 0.18s ease;
+    }
+    .category-title .cat-chev svg { width: 15px; height: 15px; }
+    .category-section.dp-open .cat-chev { transform: rotate(180deg); }
+
+    .category-section:not(.dp-open) .docs-grid { display: none; }
+    .category-section.dp-open .docs-grid {
+        padding: 8px;
+        gap: 8px;
+        background: #f6f8fa;
+        border: 1px solid var(--dp-line);
+        border-top: 0;
+        border-radius: 0 0 12px 12px;
+    }
 }
 
 /* --- Submit an Idea on a phone -------------------------------------------------
@@ -17441,7 +18262,9 @@ select.dd-native {
        has to be centred explicitly — left-aligned inside a wider pill read as a
        mistake (user's call, 19 Aug). */
     #listingGoalsModal .goals-title-wrapper {
-        padding: 3px 10px;
+        /* 3 -> 5: line-height 1 on the date (see the desktop block) took the pill
+           down to 18px, and it is meant to read as the same chip it always was. */
+        padding: 5px 10px;
         justify-content: center;
         text-align: center;
     }
@@ -17767,18 +18590,25 @@ select.dd-native {
        !important because the sheet rule above uses it: individual modals set
        their own transforms and both of these have to reach past that. */
     #ideaModal, #quickMsgDropdown, #notifDropdown, #annDocsModal,
-    #hotkeysDropdown, #calendarDropdown, #settingsModal {
+    #hotkeysDropdown, #calendarDropdown, #settingsModal,
+    /* ...and so does every SPEEKS Tool (user's call, 20 Aug). The class is put on
+       by the init in speeks.js, on any .modal-menu whose header is a .tool-head —
+       so this covers all 32 of them and whatever is built next, without a list of
+       ids here that would go stale the first time a tool is added. */
+    .modal-menu.tool-modal {
         transform: translateX(100%) scale(1) !important;
         transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 0.3s ease,
                     visibility 0.3s;
     }
     #ideaModal.show, #quickMsgDropdown.show, #notifDropdown.show, #annDocsModal.show,
-    #hotkeysDropdown.show, #calendarDropdown.show, #settingsModal.show {
+    #hotkeysDropdown.show, #calendarDropdown.show, #settingsModal.show,
+    .modal-menu.tool-modal.show {
         transform: translateX(0) scale(1) !important;
     }
     @media (prefers-reduced-motion: reduce) {
         #ideaModal, #quickMsgDropdown, #notifDropdown, #annDocsModal,
-        #hotkeysDropdown, #calendarDropdown, #settingsModal { transition: opacity .15s ease; }
+        #hotkeysDropdown, #calendarDropdown, #settingsModal,
+        .modal-menu.tool-modal { transition: opacity .15s ease; }
     }
 
     .modal-header {
@@ -18432,9 +19262,19 @@ select.dd-native {
     .sam-card:hover, .doc-card:hover, .hotbar-btn:hover, .manage-fab:hover {
         transform: none;
     }
-    a, button, .nav-link, .hotbar-btn, .tool-link {
-        -webkit-tap-highlight-color: rgba(90, 141, 59, 0.15);
-    }
+    /* NOTHING flashes on tap. This was the OS default blue, then sage for a day,
+       and the answer wanted was neither: a filled rectangle behind a rounded
+       control is a mobile-browser artefact, not a design (user's call, 20 Aug).
+       Controls that should respond to a press say so with :active, which is a
+       decision each control makes; this is the browser painting over all of them.
+
+       EVERY element, not a list of the obviously clickable ones: the browser paints
+       this box on anything with a click handler, and on this site that means a
+       <label> wrapping a checkbox (the Delegation picks, the Checklist store
+       bubbles), the docs category bars, the box-order section heads, a checklist
+       row. A list would have to be kept in step with every new handler; the
+       universal selector cannot fall behind. */
+    *, *::before, *::after { -webkit-tap-highlight-color: transparent; }
 }
 
 /* --- Login screen -------------------------------------------------------------

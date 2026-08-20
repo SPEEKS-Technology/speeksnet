@@ -2522,6 +2522,7 @@ function renderDocs(docs) {
                     ${isPin ? `<span class="cat-ico"><svg viewBox="0 0 24 24" aria-hidden="true">${DOC_ICONS.pin}</svg></span>` : ''}
                     <span class="cat-name">${cat}</span>
                     <span class="cat-count">${items.length}</span>
+                    <span class="cat-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
                 </div>`;
 
         const cards = items.map(item => {
@@ -2564,7 +2565,44 @@ function renderDocs(docs) {
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }));
 
+    // The category heads are accordion handles. Bound on EVERY width and the
+    // breakpoint is left to CSS: `dp-open` only means anything inside the phone
+    // block (which is what hides a closed section's grid), so on desktop this
+    // toggles a class nothing reads. That keeps 900px written down in one place
+    // instead of in a matchMedia here as well.
+    container.querySelectorAll('.category-title').forEach(t => t.addEventListener('click', () => {
+        toggleDocCategory(t.closest('.category-section'));
+    }));
+
     filterDocs();
+}
+
+// One open at a time — clicking the open one shuts it. On a phone the rail of
+// category chips is hidden (six chips across a 390px screen was most of a
+// screenful before a single document), and these bars replace it: the list of
+// categories IS the navigation (user's call, 20 Aug).
+function toggleDocCategory(sec) {
+    if (!sec) return;
+    const wasOpen = sec.classList.contains('dp-open');
+    document.querySelectorAll('.category-section.dp-open').forEach(s => s.classList.remove('dp-open'));
+    if (!wasOpen) sec.classList.add('dp-open');
+}
+
+// Which section is open after the visible set changes.
+//   searching  — every section that still has a match opens. A page of shut bars
+//                hiding the results you just asked for is not a search.
+//   otherwise  — back to one: whichever is already open if it survived the
+//                filter, else the first visible one (Pinned, on arrival).
+function _docSyncAccordion(search) {
+    const secs = [...document.querySelectorAll('.category-section')];
+    if (!secs.length) return;
+    if (search) {
+        secs.forEach(s => s.classList.toggle('dp-open', !s.classList.contains('hidden')));
+        return;
+    }
+    const vis = secs.filter(s => !s.classList.contains('hidden'));
+    const open = vis.find(s => s.classList.contains('dp-open')) || vis[0];
+    secs.forEach(s => s.classList.toggle('dp-open', s === open));
 }
 
 async function loadDocs() {
@@ -2627,6 +2665,7 @@ function filterDocs() {
     const noResults = document.getElementById('noResults');
     if (noResults) noResults.classList.toggle('hidden', hasVis || search === '');
     _docSyncRailActive();
+    _docSyncAccordion(search);
 }
 
 
@@ -12683,12 +12722,32 @@ function _lvCards(stores, d, rollup, rollupLabel) {
     _lvCardArgs = { stores, d, rollup, rollupLabel };
     const role = (sessionStorage.getItem("speeksUserRole") || "").toLowerCase().trim();
     const company = _LV_COMPANY_ROLES.has(role);
-    // A Multi-Store Manager runs two stores and is handed exactly those two, so
-    // "their store" is both of them plus the combined line — not one of the pair.
+    // A Multi-Store Manager runs two stores, so "their store" is both of them plus
+    // the combined line — not one of the pair. They are no longer HANDED just those
+    // two (the payload is district-wide for everyone), so the pair is filtered out
+    // of it below.
     const msm = sessionStorage.getItem("speeksMultiStore") === "true";
 
-    let list, roll;
-    if (company || msm) {
+    let list, roll, rollLabel = rollupLabel;
+    if (msm) {
+        // The payload is the whole district for EVERYBODY now (see scopeFor in
+        // shopify-live), so "their stores" has to be applied here rather than
+        // trusted from the server: the picker offers BAL, MPL and the pair, not
+        // the five-store district deck a DM gets (user's call, 19 Aug). Only the
+        // deck is narrowed — the desktop table underneath still shows all five,
+        // which is the same district-for-context decision every store gets.
+        list = stores.filter(m => m && MULTISTORE_MANAGER_STORES.includes(String(m.code || '').toUpperCase()));
+        // A payload that somehow carries neither of their stores falls back to
+        // what it does carry rather than to the empty state.
+        if (!list.length) list = stores;
+        // Built here, not taken from `rollup`: the caller is the district branch,
+        // whose roll-up is the five-store total. The pair line has to be summed
+        // out of exactly the two rows the picker can reach or it means something
+        // wider than its label says.
+        const healthy = list.filter(m => !m.error);
+        roll = list.length > 1 ? _lvCombine((healthy.length ? healthy : list).map(m => _lvView(m))) : null;
+        rollLabel = 'Both';
+    } else if (company) {
         list = stores;
         roll = rollup;
     } else {
@@ -12784,8 +12843,8 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         // own total row — otherwise the District card would be the one card on the
         // phone with a blank percentage.
         const rollView = _lvView(roll);
-        deck.push({ key: '_roll', label: rollupLabel,
-            view: Object.assign({}, rollView, { code: rollupLabel, name: '',
+        deck.push({ key: '_roll', label: rollLabel,
+            view: Object.assign({}, rollView, { code: rollLabel, name: '',
                 paceIndex: _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
             buy: rollBuy, isRoll: true });
     }
@@ -12797,6 +12856,10 @@ function _lvCards(stores, d, rollup, rollupLabel) {
     // A pick that is no longer in the deck — a role change, a store that dropped
     // out of the payload — falls back to the first card rather than rendering an
     // empty list under a lit pill.
+    // An MSM opens on Both, not on the store whose dashboard they are on (asked for
+    // on 19 Aug, reversed on 20 Aug): the pair total is the glance, and the two
+    // stores are one tap away in the list either way. Same as every other role —
+    // deck[0] is the roll-up wherever there is one.
     let picked = deck.find(c => c.key === _lvCardPick);
     if (!picked) { picked = deck[0]; _lvCardPick = picked.key; }
 
@@ -12883,13 +12946,16 @@ window.addEventListener('scroll', function () {
 // One listener for every mount. Not an Escape handler as well: closeAllModals
 // already owns that key and peels its own layers in a set order, and a second
 // opinion about Escape is how that ordering breaks.
-document.addEventListener('click', function (ev) {
-    if (ev.target.closest && ev.target.closest('.lv-pickwrap')) return;
+function _lvClosePickLists() {
     document.querySelectorAll('.lv-pickwrap.open').forEach(function (w) {
         w.classList.remove('open');
         const b = w.querySelector('.lv-pickbtn');
         if (b) b.setAttribute('aria-expanded', 'false');
     });
+}
+document.addEventListener('click', function (ev) {
+    if (ev.target.closest && ev.target.closest('.lv-pickwrap')) return;
+    _lvClosePickLists();
 });
 
 let _lvCardPick = null;
@@ -12970,7 +13036,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
 // cron only writes when a number MOVES, so a quiet morning produced the same
 // pill as a broken feed and it fired often enough to stop meaning anything.
 //
-// Nothing is lost: the header beside this pill still reads "last change 1:42 pm",
+// Nothing is lost: the header beside this pill still reads "Last change 1:42 pm",
 // which is the same information stated as a fact rather than as an alarm — a
 // genuinely stalled feed shows up there as a timestamp that stops advancing.
 function _lvFreshness(d) {
@@ -13158,7 +13224,7 @@ function renderLiveDashboard() {
     }
 
     const stamp = _lvMode === 'today'
-        ? 'last change ' + _lvClock(d.asOfCentral) + ' Central'
+        ? 'Last change ' + _lvClock(d.asOfCentral) + ' Central'
         : escapeHtml(_lvHeadStamp(d));
     details.forEach(el => {
         // Two mounts don't offer the full-screen button: the one already inside
@@ -15180,7 +15246,7 @@ async function fetchAndRenderEmployeeGoals() {
             <div class="emp-week-section">
                 <div class="emp-week-head">
                     <span class="emp-goal-label">THIS WEEK'S GOALS
-                        <span class="goals-info-i" data-tip-title="Your weekly goal" data-tip-desc="The sum of your daily listing goals so far this week — across whatever roles you've had each day.">i</span>
+                        <span class="goals-info-i m-hide" data-tip-title="Your weekly goal" data-tip-desc="The sum of your daily listing goals so far this week — across whatever roles you've had each day.">i</span>
                     </span>
                     <span class="emp-week-total" title="Your goal so far this week">${weekGoalTotal || 0}</span>
                 </div>
@@ -21441,6 +21507,17 @@ function initDashboardData() {
 // --- INIT LISTENERS ---
 document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => document.body.classList.remove('preload'), 150);
+
+    // Every SPEEKS Tools modal is marked so the MOBILE LAYER can give it the same
+    // slide-in-from-the-right entrance the Tools panel and the Checklist already
+    // use — they are all "the thing behind that button", and two entrances from
+    // one strip of controls read as two different kinds of surface (user's call,
+    // 20 Aug). Derived from the header the tool modals already carry rather than
+    // from a list of 32 ids: a new tool gets the entrance by having a tool head,
+    // which is one less thing to remember. Modals opened from inside a page have
+    // no .tool-head and keep the bottom sheet, which is right for those.
+    document.querySelectorAll('.modal-menu > .modal-header.tool-head')
+        .forEach(h => h.parentElement.classList.add('tool-modal'));
 
     if (localStorage.getItem('speeksSidebar') === 'collapsed') { 
         document.querySelector('.sidebar')?.classList.add('collapsed'); 
@@ -28607,7 +28684,7 @@ function renderBoxAdminList() {
     cats.forEach(cat => {
         const group = items.filter(i => i.category === cat);
         if (!group.length) return;
-        html += `<div style="font-weight:800;font-size:12px;color:#64748b;margin:12px 0 6px;">${label[cat]}</div>`;
+        html += `<div class="bai-cat">${label[cat]}</div>`;
         group.forEach(it => {
             const meta = [
                 _boxStoresToMarket(it.stores),
@@ -28616,9 +28693,9 @@ function renderBoxAdminList() {
                 it.order_name ? `“${escapeHtml(it.order_name)}”` : ''
             ].filter(Boolean).join(' · ');
             html += `<div class="box-admin-item">
-                <div style="min-width:0;">
-                    <div style="font-weight:800;color:var(--slate-charcoal);font-size:13px;">${escapeHtml(it.name)}</div>
-                    <div style="font-size:11px;color:#94a3b8;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${meta}</div>
+                <div class="bai-text">
+                    <div class="bai-name">${escapeHtml(it.name)}</div>
+                    <div class="bai-meta">${meta}</div>
                 </div>
                 <button class="bai-del" title="Remove item" onclick="boxAdminDeleteItem('${it.id}', this)">🗑</button>
             </div>`;
@@ -29386,7 +29463,11 @@ function renderMyRecycleTable() {
     const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
 
     const th = (t, extra = '') => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap; ${extra}">${t}</th>`;
-    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+    // data-label is what lights up .tbl-stack below 640px: the table stops being a
+    // table and each row becomes a card with its column name beside each value. Ten
+    // columns squeezed into 360px is what the phone had before — a Description
+    // wrapping one word per line beside four starved columns.
+    const td = (c, extra = '', label = '') => `<td data-label="${label}" style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
     // Report preview "page" (DM/CEO) — mirrors the Box Order flow: Send Email
     // first shows the composed email, and the actual send happens from there.
     if (canReview && _recycleReportPreviewing) {
@@ -29425,7 +29506,7 @@ function renderMyRecycleTable() {
     // inside a ~908px modal, and Description collapsed to 97px — every column
     // from Description rightward was pushed off-screen and one long description
     // wrapped into a 739px-tall empty band. See siteSkuSpan().
-    html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+    html += `<div style="overflow-x:auto;"><table class="tbl-stack recycle-tbl" style="width:100%; border-collapse:collapse; font-size:12.5px;">
         <thead><tr>${canReview ? th('Review') : th('Status')}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description', 'width:100%;')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
     rows.forEach(r => {
         // A line with a pending delete request is LOCKED — no reviewing, no
@@ -29464,13 +29545,13 @@ function renderMyRecycleTable() {
         if (canReview) {
             const vColor = verdict === 'against' ? '#dc2626' : verdict === 'for' ? '#059669' : verdict === 'ignore' ? '#475569' : verdict === 'denied' ? '#b91c1c' : '#94a3b8';
             const vBorder = verdict === 'against' ? '#fecaca' : verdict === 'for' ? '#a7f3d0' : verdict === 'ignore' ? '#94a3b8' : verdict === 'denied' ? '#fca5a5' : '#cbd5e1';
-            firstCell = td(`${lineIsNew ? NEW_DOT : ''}<select ${delPending ? 'disabled' : ''} onchange="setRecycleReviewed('${r.id}', this.value)" title="${delPending ? 'Locked — a delete request is pending on this line' : r.reviewed_at ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Against = out of inventory · For = store-use tool · Ignore = cost moved to another SKU · Deny = do not recycle'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:${delPending ? 'not-allowed' : 'pointer'};${delPending ? ' opacity:0.55;' : ''}">
+            firstCell = td(`<span class="recycle-review-cell">${lineIsNew ? NEW_DOT : ''}<select ${delPending ? 'disabled' : ''} onchange="setRecycleReviewed('${r.id}', this.value)" title="${delPending ? 'Locked — a delete request is pending on this line' : r.reviewed_at ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Against = out of inventory · For = store-use tool · Ignore = cost moved to another SKU · Deny = do not recycle'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:${delPending ? 'not-allowed' : 'pointer'};${delPending ? ' opacity:0.55;' : ''}">
                 <option value=""${verdict ? '' : ' selected'}>— Review —</option>
                 <option value="against"${verdict === 'against' ? ' selected' : ''}>Against Store</option>
                 <option value="for"${verdict === 'for' ? ' selected' : ''}>For Store</option>
                 <option value="ignore"${verdict === 'ignore' ? ' selected' : ''}>Ignore</option>
                 <option value="denied"${verdict === 'denied' ? ' selected' : ''}>Deny</option>
-            </select>`, 'text-align:center; white-space:nowrap;');
+            </select></span>`, 'text-align:center; white-space:nowrap;', 'Review');
         } else {
             // Manager-facing status: any verdict except "denied" means the DM
             // approved the recycle; no verdict yet = pending.
@@ -29479,7 +29560,7 @@ function renderMyRecycleTable() {
                 : verdict
                 ? `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:3px 10px; white-space:nowrap;">✓ Approved</span>`
                 : `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; padding:3px 10px; white-space:nowrap;">⏳ Pending</span>`;
-            firstCell = td((lineIsNew ? NEW_DOT : '') + chip, 'white-space:nowrap;');
+            firstCell = td('<span class="recycle-review-cell">' + (lineIsNew ? NEW_DOT : '') + chip + '</span>', 'white-space:nowrap;', 'Status');
         }
         const struck = verdict === 'ignore' || verdict === 'denied';
         const struckTitle = verdict === 'ignore' ? 'Not counted — cost was moved into another SKU' : 'Not counted — the request was denied, item stays in inventory';
@@ -29520,16 +29601,16 @@ function renderMyRecycleTable() {
         }).join('');
         html += `<tr style="${rowBg}">
             ${firstCell}
-            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
-            ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
-            ${td(`${siteSkuSpan(r.sku || '', 'font-weight:700; color:var(--slate-charcoal);')}${siteCopyBtn(r.sku, 'SKU')}`, 'min-width:110px;')}
-            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`)}
-            ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
-            ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`, '', 'Date')}
+            ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`, '', 'Store') : ''}
+            ${td(`${siteSkuSpan(r.sku || '', 'font-weight:700; color:var(--slate-charcoal);')}${siteCopyBtn(r.sku, 'SKU')}`, 'min-width:110px;', 'SKU')}
+            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`, '', 'Description')}
+            ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;', 'Qty')}
+            ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;', 'Unit Cost')}
             ${td(struck
                 ? `<span style="text-decoration:line-through; color:#94a3b8;" title="${struckTitle}">${_fmtRecycleMoney(_recycleLineTotal(r))}</span>`
-                : _fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;')}
-            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
+                : _fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;', 'Total Cost')}
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`, '', 'By')}
             ${td(noteBtn + delBtn, 'text-align:right; white-space:nowrap;')}
         </tr>`;
         if (_recycleNoteOpen.has(r.id) && !delPending) {
@@ -30190,7 +30271,7 @@ function renderEmailRecipients() {
     // shut would mean typing an address and still having to click to see it.
     if (q && groups.length && !groups.some(g => g.title === _erOpen)) _erOpen = groups[0].title;
 
-    let html = `<div class="kb-search-bar doc-search-wrapper" style="margin-bottom: 12px;">
+    let html = `<div class="kb-search-bar doc-search-wrapper">
         <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
         <input type="text" id="emailRecipientSearch" class="kb-search-input doc-search-input"
             placeholder="Search reports & addresses..." value="${escapeHtml(_erQuery)}"
@@ -30219,21 +30300,25 @@ function renderEmailRecipients() {
             html += `<div class="er-body">`;
             group.lists.forEach(l => {
                 const emails = _recipientsFor(l.key, []);
+                // CLASSES, not inline styles. Every part of this list used to carry
+                // its own style="" attribute, which no stylesheet can reach past —
+                // so this tool sat out the phone pass that every other tool got, and
+                // its remove button inherited the blanket 44px tap floor against an
+                // 18px width and rendered as a tall oval (user's report, 20 Aug).
+                // The look is unchanged on desktop; see the .er-chip block in
+                // styles.css, which reproduces exactly what was inline here.
                 const chips = emails.length
-                    ? emails.map(e => `<span style="display: inline-flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 12px; font-weight: 700; color: var(--slate-charcoal); margin: 0 6px 6px 0;">
-                            ${escapeHtml(e)}
-                            <button data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove" style="border: none; background: #e2e8f0; color: #64748b; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 900; cursor: pointer; line-height: 1;">✕</button>
-                        </span>`).join('')
-                    : '<span style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px;">None — the built-in default applies.</span>';
+                    ? emails.map(e => `<span class="er-chip">${escapeHtml(e)}<button class="er-chip-x" data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove">✕</button></span>`).join('')
+                    : '<span class="er-chip-none">None — the built-in default applies.</span>';
                 const inputId = `email-add-${l.key}`;
-                html += `<div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;">
-                    <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: ${l.desc ? '3px' : '7px'};">${escapeHtml(l.label)}</div>
-                    ${l.desc ? `<div style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 8px;">${escapeHtml(l.desc)}</div>` : ''}
-                    <div>${chips}</div>
-                    <div style="display: flex; gap: 6px; margin-top: 6px;">
-                        <input type="email" id="${inputId}" placeholder="name@company.com" style="flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px;"
+                html += `<div class="er-card">
+                    <div class="er-card-t${l.desc ? '' : ' er-card-t-solo'}">${escapeHtml(l.label)}</div>
+                    ${l.desc ? `<div class="er-card-d">${escapeHtml(l.desc)}</div>` : ''}
+                    <div class="er-chips">${chips}</div>
+                    <div class="er-add">
+                        <input type="email" id="${inputId}" class="er-add-input" placeholder="name@company.com"
                             onkeydown="if(event.key==='Enter'){event.preventDefault(); emailRecipientAdd('${l.key}', '${inputId}', this.nextElementSibling);}">
-                        <button class="btn-secondary" style="padding: 6px 14px; font-size: 12px;" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
+                        <button class="btn-secondary er-add-btn" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
                     </div>
                 </div>`;
             });
@@ -31013,6 +31098,16 @@ function switchFaTab(tab) {
     _faTab = tab;
     _faSyncTabButtons();
     renderFaBody();
+    // Land at the top of the new tab. Switching from halfway down the 40-row
+    // Widgets list used to drop you halfway down Per-User (user's call, 20 Aug).
+    // BOTH containers: the desktop modal scrolls its .manage-content, the phone
+    // sheet scrolls itself (see the Feature Access block in the mobile layer).
+    const modal = document.getElementById('featureAccessModal');
+    if (modal) {
+        modal.scrollTop = 0;
+        const body = modal.querySelector('.manage-content');
+        if (body) body.scrollTop = 0;
+    }
 }
 
 function _faSyncTabButtons() {
@@ -31363,7 +31458,7 @@ function _faUserRowsHtml() {
                 return `<button class="fa-seg${cls}" onclick="faSetUser('${f.key}', '${val}')">${txt}</button>`;
             };
             return `<div class="fa-urow">
-                <span class="fa-urow-label">${escapeHtml(f.label)}${inherited !== null ? `<span class="fa-role-def"> · role default: ${inherited ? 'visible' : 'hidden'}</span>` : ''}</span>
+                <span class="fa-urow-label">${escapeHtml(f.label)}${inherited !== null ? `<span class="fa-role-def"> · Role Default: ${inherited ? 'Visible' : 'Hidden'}</span>` : ''}</span>
                 <div class="fa-seg-group">${seg('default', 'Default')}${seg('on', 'On')}${seg('off', 'Off')}</div>
             </div>`;
         }).join('');
@@ -39800,7 +39895,7 @@ function renderExpenses() {
     if (sub) {
         sub.textContent = _expMonthLabel(_expMonth) + ' · ' + _expMoney(mileage + expense) + ' total'
             + (_expIsReviewer()
-                ? (_expIsAll() ? ' · everyone' : ' · reviewing ' + _expPerson)
+                ? (_expIsAll() ? ' · Everyone' : ' · Reviewing ' + _expPerson)
                 : '');
     }
 
@@ -39860,8 +39955,8 @@ function _expControlsHtml() {
         : '<span class="exp-ctl exp-ctl-ro"><span>Mileage rate</span><b>$' + _expRate(rate) + '/mi</b></span>';
 
     const cats = _expCanManageCats()
-        ? '<button type="button" class="exp-btn-sm" onclick="expToggleCats()">'
-            + (_expCatsOpen ? 'Close categories' : 'Manage categories') + '</button>'
+        ? '<button type="button" class="exp-btn-sm exp-btn-cats" onclick="expToggleCats()">'
+            + (_expCatsOpen ? 'Close' : 'Manage') + '</button>'
         : '';
 
     return '<div class="exp-controls">'
@@ -39891,7 +39986,7 @@ function _expMileageHtml() {
     const rows = _expRows('mileage');
     const canEdit = _expCanEdit();
     const all = _expIsAll();
-    let html = '<div class="exp-table-wrap"><table class="exp-table"><thead><tr>'
+    let html = '<div class="exp-table-wrap' + (_expEditId ? ' editing' : '') + '"><table class="exp-table"><thead><tr>'
         + '<th>Date</th>' + (all ? '<th>Person</th>' : '') + '<th>Purpose</th><th>From</th><th>To</th>'
         + '<th class="num">Miles</th><th class="num">Rate</th><th class="num">Amount</th>'
         + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>';
@@ -39923,7 +40018,7 @@ function _expExpenseHtml() {
     const rows = _expRows('expense');
     const canEdit = _expCanEdit();
     const all = _expIsAll();
-    let html = '<div class="exp-table-wrap"><table class="exp-table"><thead><tr>'
+    let html = '<div class="exp-table-wrap' + (_expEditId ? ' editing' : '') + '"><table class="exp-table"><thead><tr>'
         + '<th>Date</th>' + (all ? '<th>Person</th>' : '') + '<th>Category</th><th>Description</th><th class="num">Amount</th>'
         + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>';
 
@@ -39995,13 +40090,13 @@ function _expMileageEditRow(e) {
     const i = (id, v, type, step) => '<input type="' + type + '" id="exp-ed-' + id + '" class="exp-input"'
         + (step ? ' step="' + step + '" min="0"' : '') + ' value="' + escapeHtml(v == null ? '' : String(v)) + '">';
     return '<tr class="exp-editing">'
-        + '<td>' + i('date', String(e.entry_date).slice(0, 10), 'date') + '</td>'
-        + '<td>' + i('desc', e.description, 'text') + '</td>'
-        + '<td>' + i('from', e.from_loc, 'text') + '</td>'
-        + '<td>' + i('to', e.to_loc, 'text') + '</td>'
-        + '<td class="num">' + i('miles', e.miles, 'number', '0.1') + '</td>'
-        + '<td class="num muted">$' + _expRate(e.rate) + '</td>'
-        + '<td class="num muted">recalculated</td>'
+        + '<td data-label="Date">' + i('date', String(e.entry_date).slice(0, 10), 'date') + '</td>'
+        + '<td data-label="Purpose">' + i('desc', e.description, 'text') + '</td>'
+        + '<td data-label="From">' + i('from', e.from_loc, 'text') + '</td>'
+        + '<td data-label="To">' + i('to', e.to_loc, 'text') + '</td>'
+        + '<td class="num" data-label="Miles">' + i('miles', e.miles, 'number', '0.1') + '</td>'
+        + '<td class="num muted" data-label="Rate">$' + _expRate(e.rate) + '</td>'
+        + '<td class="num muted" data-label="Amount">recalculated</td>'
         + '<td class="num exp-edit-actions">'
             + '<button type="button" class="exp-btn-sm" onclick="expSaveEdit(\'' + e.id + '\',\'mileage\')">Save</button>'
             + '<button type="button" class="exp-btn-sm ghost" onclick="expCancelEdit()">Cancel</button>'
@@ -40010,10 +40105,10 @@ function _expMileageEditRow(e) {
 
 function _expExpenseEditRow(e) {
     return '<tr class="exp-editing">'
-        + '<td><input type="date" id="exp-ed-date" class="exp-input" value="' + String(e.entry_date).slice(0, 10) + '"></td>'
-        + '<td><select id="exp-ed-cat" class="exp-input">' + _expCatOptions(e.category) + '</select></td>'
-        + '<td><input type="text" id="exp-ed-desc" class="exp-input" value="' + escapeHtml(e.description || '') + '"></td>'
-        + '<td class="num"><input type="number" id="exp-ed-amt" class="exp-input" step="0.01" min="0" value="' + (Number(e.amount) || 0) + '"></td>'
+        + '<td data-label="Date"><input type="date" id="exp-ed-date" class="exp-input" value="' + String(e.entry_date).slice(0, 10) + '"></td>'
+        + '<td data-label="Category"><select id="exp-ed-cat" class="exp-input">' + _expCatOptions(e.category) + '</select></td>'
+        + '<td data-label="Description"><input type="text" id="exp-ed-desc" class="exp-input" value="' + escapeHtml(e.description || '') + '"></td>'
+        + '<td class="num" data-label="Amount"><input type="number" id="exp-ed-amt" class="exp-input" step="0.01" min="0" value="' + (Number(e.amount) || 0) + '"></td>'
         + '<td class="num exp-edit-actions">'
             + '<button type="button" class="exp-btn-sm" onclick="expSaveEdit(\'' + e.id + '\',\'expense\')">Save</button>'
             + '<button type="button" class="exp-btn-sm ghost" onclick="expCancelEdit()">Cancel</button>'
@@ -40128,7 +40223,7 @@ function _expCatsHtml() {
         + '</div>').join('');
     // Own view, so it carries its own heading and Back, exactly like the preview.
     return '<div class="exp-view">'
-        + '<div class="exp-view-h">Expense categories</div>'
+        + '<div class="exp-view-h">Expense Categories</div>'
         + '<div class="exp-cats">'
         + '<div class="exp-cats-sub">Renaming a category also relabels every line already filed under it. '
         + 'Deleting one that is still in use retires it instead, so old reports keep their labels.</div>'
@@ -40241,7 +40336,7 @@ function _expCompose() {
 function _expPreviewHtml() {
     const { email, subject, body } = _expCompose();
     return '<div class="exp-view">'
-        + '<div class="exp-view-h">Email preview</div>'
+        + '<div class="exp-view-h">Email Preview</div>'
         + '<div class="box-order-email-preview">'
         + escapeHtml('To: ' + email + '\nSubject: ' + subject + '\n\n' + body)
         + '</div>'
@@ -42262,6 +42357,18 @@ function _ddSync(host) {
     if (!sel) return;
     host._ddBtnLabel.textContent = _ddLabel(sel) || '—';
     host.classList.toggle('dd-empty', !sel.options.length);
+    // The face is a separate <button>, so a disabled <select> does not disable it
+    // on its own — `.dd-btn:disabled` never matched, and a locked control kept a
+    // chevron, a pointer cursor and full contrast while doing nothing. That is the
+    // single-store manager's Store field in the recycle tool: the page disables it,
+    // and on a phone it still read as something you could open (user's call,
+    // 20 Aug: "don't make it seem like there is a dropdown there").
+    //
+    // LOCKED is wider than disabled: one option is nothing to choose either, and a
+    // chevron is a promise that something opens. Re-evaluated on every sync, so a
+    // list that fills in later gets its chevron back.
+    host._ddBtn.disabled = !!sel.disabled;
+    host.classList.toggle('dd-locked', !!sel.disabled || sel.options.length <= 1);
     _ddFit(host);
     if (!host.classList.contains('open')) return;
     _ddFillList(host);
@@ -42360,6 +42467,24 @@ function _ddClose(host) {
 }
 function _ddCloseAll(except) {
     document.querySelectorAll('.dd-host.open').forEach(h => { if (h !== except) _ddClose(h); });
+    // ORPHANS — the reason a menu could get stuck open (user's report, 20 Aug:
+    // "it doesn't go away if I click something else, I have to select a choice").
+    //
+    // _ddOpen moves the list into <body>. If the host's container is re-rendered
+    // while it is open — which every table on this site does, the recycle list on
+    // a poll and on every note toggle — the host is destroyed and the list is left
+    // behind in <body>, still .dd-open and still painted over the new table. The
+    // sweep above walks `.dd-host.open`, and that host is no longer in the
+    // document, so nothing closed it. Picking an option DID work, because
+    // _ddChoose holds a JS reference to the detached host — which is exactly the
+    // shape of the report.
+    //
+    // Removed rather than re-parented: there is nothing left to re-parent it to.
+    document.querySelectorAll('body > .dd-list.dd-open').forEach(l => {
+        if (except && l === except._ddList) return;
+        l.classList.remove('dd-open');
+        l.remove();
+    });
 }
 function _ddOpen(host) {
     if (host._ddSel.disabled) return;
@@ -42533,6 +42658,24 @@ function _ddScan(root) {
 }
 
 document.addEventListener('click', () => _ddCloseAll());
+// A `click` never fires if the pointer MOVES between press and release — a small
+// drag with a mouse, or a tap that slides a pixel on a touchscreen, which is most
+// taps. The list then stayed open until you picked something out of it. pointerdown
+// always fires, and CAPTURE means no descendant that calls stopPropagation() on its
+// own click can swallow the close either — the other way this can happen, and the
+// one that cannot be proved absent by testing.
+//
+// Both custom dropdowns close from this one listener so they cannot drift apart.
+// The click handlers above stay: a keyboard-driven click (Enter on a focused
+// control) fires no pointer event at all.
+document.addEventListener('pointerdown', (ev) => {
+    const t = ev.target;
+    if (!t || !t.closest) return;
+    // .dd-list as well as .dd-host: the list is re-parented to <body> while it is
+    // open, so it is no longer inside its own host (see _ddOpen).
+    if (!t.closest('.dd-host') && !t.closest('.dd-list')) _ddCloseAll();
+    if (!t.closest('.lv-pickwrap')) _lvClosePickLists();
+}, true);
 let _ddFitTimer = null;
 window.addEventListener('resize', () => {
     _ddCloseAll();
@@ -42552,7 +42695,18 @@ window.addEventListener('resize', () => {
 });
 // Any scroll, including inside a modal body: a fixed-position list does not move
 // with its button, so it has to close rather than float off on its own.
-window.addEventListener('scroll', () => _ddCloseAll(), true);
+//
+// EXCEPT the list scrolling ITSELF. .dd-list is capped at 280px and scrolls
+// inside, and this listener is in CAPTURE — so dragging a long list (the
+// Feature Access user picker is 40-odd people) fired scroll, closed the list
+// mid-drag, and it read as "I cannot scroll this dropdown" (user's report, 20
+// Aug). The list does not move relative to its button when it scrolls its own
+// contents, which is the whole reason this closer exists.
+window.addEventListener('scroll', (ev) => {
+    const t = ev.target;
+    if (t && t.nodeType === 1 && t.closest && t.closest('.dd-list')) return;
+    _ddCloseAll();
+}, true);
 
 // Selects arrive with rendered HTML all day on this site, so scanning once at
 // startup would cover a fraction of them. Debounced: several renderers rebuild

@@ -96,6 +96,10 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
                     font: parseFloat(f.fontSize),
                     weight: parseInt(f.fontWeight, 10),
                     inModal: !!h.closest('.modal-menu'),
+                    // A locked face (disabled, or one option — the single-store
+                    // roles’ store picker) deliberately draws NO chevron: it is not a
+                    // choice, so it must not look like one.
+                    locked: h.classList.contains('dd-locked'),
                     // How many arrows are painted OVER the control. Several selects
                     // on this site were dressed by hand before the skin existed —
                     // a chevron drawn as a sibling (#notifDropdown .hub-chev) —
@@ -151,8 +155,9 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
         ok(!rows.some(r => r.font > 14.5 || r.weight < 500), 'every face uses control type, not body type',
             rows.filter(r => r.font > 14.5 || r.weight < 500).map(r => r.id + ' ' + r.font + '/' + r.weight).join(', ')
             || 'all <= 14.5px and >= 500 weight');
-        ok(!rows.some(r => r.arrows !== 1), 'exactly one arrow is drawn on each control',
-            rows.filter(r => r.arrows !== 1).map(r => r.id + ' has ' + r.arrows).join(', ') || 'all single');
+        const wrongArrows = r => r.locked ? r.arrows !== 0 : r.arrows !== 1;
+        ok(!rows.some(wrongArrows), 'exactly one arrow per control, and none on a locked one',
+            rows.filter(wrongArrows).map(r => r.id + ' has ' + r.arrows).join(', ') || 'all single');
         ok(!rows.some(r => Math.abs(r.textAlign) > 1), 'option labels line up with the button label',
             rows.filter(r => Math.abs(r.textAlign) > 1).map(r => r.id + ' off by ' + r.textAlign).join(', ') || 'all flush');
         ok(errs.length === 0, 'no page errors', errs.join(' | ') || 'none');
