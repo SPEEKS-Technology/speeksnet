@@ -15251,9 +15251,16 @@ const B2B_SPEC_FIELDS = [
              'Apple M1', 'Apple M2', 'Apple M3', 'Celeron', 'Pentium', 'Xeon'] },
     { key: 'ram',            label: 'RAM',            req: true,  hint: '16GB',
       pick: ['4GB', '8GB', '12GB', '16GB', '24GB', '32GB', '64GB', 'NO RAM'] },
-    { key: 'storage',        label: 'Storage',        req: true,  hint: '512GB NVMe',
-      pick: ['128GB', '256GB', '512GB', '1TB', '2TB', '256GB NVMe', '512GB NVMe',
-             '1TB NVMe', '500GB HDD', '1TB HDD', 'NO STORAGE'] },
+    // Ethan: an SSD and an HDD of the same size are not worth the same, so the
+    // distinction has to be sayable. Kept in this field rather than given a
+    // column of its own -- the sheet is already nineteen wide and the ask was
+    // for fewer cramped columns, not more -- but every suggestion now names the
+    // drive type, so the bare sizes stop being the path of least resistance.
+    { key: 'storage',        label: 'Storage',        req: true,  hint: '512GB SSD',
+      pick: ['128GB SSD', '256GB SSD', '512GB SSD', '1TB SSD', '2TB SSD',
+             '256GB NVMe', '512GB NVMe', '1TB NVMe', '2TB NVMe',
+             '500GB HDD', '1TB HDD', '2TB HDD',
+             '64GB eMMC', '128GB eMMC', 'NO STORAGE'] },
     { key: 'gpu',            label: 'GPU',            req: false, hint: 'Iris Xe / RTX 3060',
       pick: ['Integrated', 'Iris Xe', 'UHD Graphics', 'Radeon', 'GTX 1650',
              'RTX 3050', 'RTX 3060', 'RTX 4060', 'Quadro'] },
@@ -17992,20 +17999,27 @@ function _b2bLineMargin(it) {
     // costs us, which is the offer plus the freight. If these two used different
     // definitions the sheet would disagree with its own totals bar.
     const ship = (Number(it.shipping_cost) || 0) * q;
-    const outlay = offer + ship;
+    // The marketplace takes its cut before we see any of it, so it belongs in
+    // what the line costs us alongside the offer and the freight.
+    const fee = _b2bFeeOn(value);
+    const outlay = offer + ship + fee;
     if (value <= 0) {
         return { cls: 'b2b-f-off', text: '—',
                  tip: _b2bIsScrap(it) ? 'Recycled — no resale value to measure against'
                                       : 'Set a unit value to see the margin' };
     }
     const pct = Math.round(((value - outlay) / value) * 100);
-    const shipNote = ship ? ` (incl. ${_b2bMoney(ship, 2)} shipping)` : '';
+    const parts = [
+        ship ? `${_b2bMoney(ship, 2)} shipping` : '',
+        fee  ? `${_b2bMoney(fee, 2)} marketplace fee` : '',
+    ].filter(Boolean);
+    const note = parts.length ? ` (incl. ${parts.join(' + ')})` : '';
     return {
         cls: pct < 0 ? 'b2b-f-mgn bad' : 'b2b-f-mgn',
         text: `${pct}%`,
         tip: pct < 0
-            ? `This line costs us ${_b2bMoney(outlay, 2)}${shipNote} and is worth ${_b2bMoney(value, 2)}`
-            : `${_b2bMoney(value - outlay, 2)} of ${_b2bMoney(value, 2)} resale value${shipNote}`,
+            ? `This line costs us ${_b2bMoney(outlay, 2)}${note} and is worth ${_b2bMoney(value, 2)}`
+            : `${_b2bMoney(value - outlay, 2)} of ${_b2bMoney(value, 2)} resale value${note}`,
     };
 }
 function _b2bLineMarginHtml(it) {
@@ -18506,6 +18520,22 @@ function _b2bItemBlocked(it) {
 }
 function _b2bNotReady() { return _b2bModalItems.filter(it => _b2bItemBlocked(it).length); }
 
+// What a marketplace takes out of a sale, as a share of the resale value.
+//
+// Ethan: "eBay fees should also be calculated on pricing. It can just be a
+// formula of 8% of revenue, so we get accurate assume net margin." Applied to
+// every line rather than only the ones bound for eBay, because at pricing time
+// nobody knows yet where a unit will sell -- and a margin that flatters half the
+// pallet is worse than one that is evenly, knowably conservative.
+//
+// A named constant, not a literal in two formulas: the line margin and the deal
+// margin have to agree, and the last time those two drifted apart the sheet
+// disagreed with its own totals bar.
+const B2B_MARKETPLACE_FEE = 0.08;
+// Charged on what the goods SELL for, so a line with no resale value owes
+// nothing -- recycle contributes no fee, and neither does an unpriced line.
+function _b2bFeeOn(value) { return Math.round(value * B2B_MARKETPLACE_FEE * 100) / 100; }
+
 // What a line costs us in certified wipes.
 function _b2bWipeTotal(it) {
     return it.wipe_required ? (Number(it.wipe_fee) || 0) * (Number(it.quantity) || 1) : 0;
@@ -18537,7 +18567,12 @@ function _b2bItemTotals() {
     // move their number. `outlay` is what the deal costs US, which is the figure
     // margin is measured against.
     const net = Math.max(0, offer - wipe);
-    return { value, offer, wipe, ship, net, outlay: net + ship,
+    // Same definition as the per-line margin, deliberately: the fee is charged
+    // on resale value, and `value` here already excludes recycle and
+    // no-residual lines, so the deal-level fee lands on exactly the units the
+    // line-level one did.
+    const fee = _b2bFeeOn(value);
+    return { value, offer, wipe, ship, fee, net, outlay: net + ship + fee,
              units, lines: _b2bModalItems.length };
 }
 
@@ -18549,9 +18584,9 @@ function _b2bPaintTotals() {
     set('b2bTotOffer', _b2bMoney(t.net, 2));
     set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
     // Margin is against what the deal actually costs us: the wipe discount
-    // improves it, shipping erodes it. Measuring against the offer alone was
-    // fine until shipping existed, and would now overstate every deal we have
-    // to pay freight on -- which is the number Paul asked to see.
+    // improves it, shipping and the marketplace fee erode it. Measuring against
+    // the offer alone was fine until shipping existed, and would now overstate
+    // every deal we pay freight on -- which is the number Paul asked to see.
     const margin = t.value - t.outlay;
     const pct = t.value > 0 ? Math.round((margin / t.value) * 100) : 0;
     set('b2bTotMargin', `${_b2bMoney(margin, 2)} (${pct}%)`);
@@ -18566,6 +18601,12 @@ function _b2bPaintTotals() {
         // above reads "−". The two sit next to each other and pull opposite ways.
         shipEl.textContent = t.ship ? `+${_b2bMoney(t.ship, 2)}` : '—';
         shipEl.closest('.b2b-tot')?.classList.toggle('muted', !t.ship);
+    }
+    const feeEl = document.getElementById('b2bTotFee');
+    if (feeEl) {
+        // "+" like shipping: another cost between us and the resale value.
+        feeEl.textContent = t.fee ? `+${_b2bMoney(t.fee, 2)}` : '—';
+        feeEl.closest('.b2b-tot')?.classList.toggle('muted', !t.fee);
     }
     _b2bModalItems.forEach(it => {
         const el = document.getElementById(`b2bLn-${it.id}`);
@@ -19508,6 +19549,11 @@ function _b2bTotalsBar(showMargin) {
         <!-- Sits after "We pay" deliberately: it is a cost of ours that lands
              on top of the offer, not a deduction from it like the wipes. -->
         <div class="b2b-tot muted"><span class="b2b-tot-k">Shipping</span><span class="b2b-tot-v" id="b2bTotShip">—</span></div>
+        <!-- Sits with shipping, not with the wipe: both are costs that stand
+             between the resale value and us, where the wipe is money the client
+             does not receive. -->
+        <div class="b2b-tot muted" title="Assumed marketplace cut, ${Math.round(B2B_MARKETPLACE_FEE * 100)}% of resale value">
+            <span class="b2b-tot-k">Selling fees</span><span class="b2b-tot-v" id="b2bTotFee">—</span></div>
         ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross margin</span><span class="b2b-tot-v" id="b2bTotMargin">—</span></div>' : ''}
     </div>`;
 }
@@ -20242,6 +20288,23 @@ const B2B_SCAN_SVG = '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0
     + '<path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>'
     + '<line x1="7" y1="12" x2="7" y2="12"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="17" y1="8" x2="17" y2="16"/>';
 
+// Ethan: "on the listing side, we should throw a disclaimer that we should
+// review pricing because we play conservative."
+//
+// On the listing screen rather than at pricing, because it is advice for the
+// person about to put a price on Shopify, and it is only true at that moment:
+// what a line was valued at during pricing was a buying decision made to protect
+// the deal, not a resale price anyone committed to.
+function _b2bConservativeNote() {
+    return `
+        <div class="b2b-note warn">
+            <span class="b2b-note-k">Check the price before you list</span>
+            The values on this deal were set to price the BUY, and we deliberately
+            price a buy conservatively. They are a floor, not a resale price —
+            look each line up before it goes live.
+        </div>`;
+}
+
 function _b2bStageListing(deal) {
     _b2bPendingUnit = null;
     _b2bShowDeal({
@@ -20252,6 +20315,7 @@ function _b2bStageListing(deal) {
         full: true,
         body: `
             ${_b2bSummary(deal)}
+            ${_b2bConservativeNote()}
             ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
             <div id="b2bScanWrap">${_b2bScanBar(deal)}</div>
             <div id="b2bListProg">${_b2bListProgress()}</div>
