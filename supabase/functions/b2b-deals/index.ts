@@ -89,6 +89,18 @@ const PRICING_LOCATIONS = [...STORES, "CORP"];
 // that carried them to a counter. See 0038 -- the pipeline is identical, the
 // difference is only which intake questions still have answers worth asking for.
 const INTAKE_KINDS = ["pickup", "walkin"];
+// Pre-evaluation lifecycle. See 0039 -- an evaluation is the pricing half on its
+// own, before there are any goods to sign for.
+const PREVAL_STATUSES = ["draft", "sent", "accepted", "converted", "declined"];
+// The only statuses whose lines may still be edited. Once a client has accepted
+// a figure, changing it and then converting would produce a deal built on
+// numbers they never agreed to -- the same reason a deal freezes at acceptance.
+const PREVAL_OPEN = ["draft", "sent"];
+// Reachable by hand. "converted" is not: it is set by b2b_preval_to_deal
+// and
+// only ever by it, because it is the half of the row that has to agree with a
+// deal that now exists.
+const PREVAL_SETTABLE = ["draft", "sent", "accepted", "declined"];
 const ACCEPT_ROLES = ["ceo", "mocd", "tom", "district manager"];
 // 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
 // spelling stays recognised here: existing rows were migrated, but a row saved
@@ -131,6 +143,10 @@ const DEAL_COLS = [
   "line_count", "total_units", "listed_units", "recycled_units", "outstanding_units",
   "wiped_units", "total_value", "total_offer", "total_cost", "total_wipe_fee", "net_offer",
   "total_shipping", "wipe_units",
+  // Where this deal came from, when it came from an evaluation. Carried on
+  // the board so a pricer can see the figures were quoted in advance without
+  // a second fetch per row.
+  "preval_id", "preval_ref",
 ].join(",");
 
 // Who to ring at the client. Corp business: a store prices and lists the goods,
@@ -149,6 +165,32 @@ const SCOPED_DEAL_COLS = DEAL_COLS.split(",")
 // rather than a filter, so a column added to b2b_clients later is private by
 // default instead of leaking the day it lands.
 const CLIENT_PICK_COLS = "id,company,acronym,deal_count,open_count";
+
+// The evaluation list. Same shape of decision DEAL_COLS makes: name the columns
+// so the payload is predictable, and drop the client's contact details for a
+// store-scoped request -- a store prices an enquiry, it does not ring the client.
+const PREVAL_COLS = [
+  "id", "client_id", "eval_no", "ref", "status", "is_terminal",
+  "eval_date", "valid_until", "title", "summary", "notes", "store",
+  "created_by", "evaluated_by", "sent_at", "sent_by",
+  "accepted_at", "accepted_by", "declined_at", "declined_by", "declined_reason",
+  "converted_at", "converted_by", "converted_deal_id", "deal_ref", "deal_stage",
+  "created_at", "updated_at", "status_changed_at",
+  "company", "acronym", "contact", "contact_email", "contact_phone",
+  "line_count", "total_units", "total_value", "total_offer",
+  "total_wipe_fee", "total_shipping", "net_offer",
+].join(",");
+const SCOPED_PREVAL_COLS = PREVAL_COLS.split(",")
+  .filter((c) => !CONTACT_COLS.includes(c)).join(",");
+
+// A pre-evaluation line carries no sku, no serials, no cost and no progress
+// counters: we have not seen these units. Everything else is a deal item.
+const PREVAL_ITEM_COLS = [
+  "id", "preval_id", "line_no", "sort_order", "make", "model", "condition",
+  "staff_notes", "client_notes", "quantity", "value", "offer", "shipping_cost",
+  "item_type", "cpu", "ram", "storage", "gpu", "battery_health",
+  "disposition", "wipe_required", "wipe_fee", "created_at",
+].join(",");
 
 const ITEM_COLS = [
   "id", "deal_id", "line_no", "sku", "make", "model", "condition",
@@ -375,6 +417,65 @@ async function getDeal(sb: any, id: string) {
 }
 
 const dealStore = (d: any) => d?.listing_store || d?.pricing_store || null;
+
+async function getPreval(sb: any, id: string) {
+  if (!id) throw new Invalid("An evaluation id is required.");
+  const { data, error } = await sb.from("b2b_prevals")
+    .select("*, client:b2b_clients(id, company, acronym, contact, contact_email)")
+    .eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+// The field set shared by adding and updating an evaluation line. Mirrors the
+// deal-item builder exactly, minus the fields a pre-evaluation cannot have --
+// which is why the two tables carry the same CHECK constraints: a line that is
+// valid here must still be valid the moment it converts, or an accepted
+// evaluation would strand with no way forward.
+async function prevalItemFields(sb: any, body: any) {
+  const itemType = oneOf(String(body.item_type ?? "other"), ITEM_TYPES, "Item type")!;
+  const disposition = oneOf(String(body.disposition ?? "purchase"), DISPOSITIONS, "Disposition")!;
+  const wipeRequired = body.wipe_required === true;
+  const carries = SPECS_FOR[itemType] || [];
+  const specs: Record<string, string | null> = {};
+  for (const f of ["cpu", "ram", "storage", "gpu", "battery_health"]) {
+    specs[f] = carries.includes(f) ? str(body[f], 60, f.toUpperCase()) : null;
+  }
+  return {
+    make: str(body.make, 120, "Brand"),
+    model: str(body.model, 200, "Model"),
+    condition: str(body.condition, 40, "Condition"),
+    staff_notes: str(body.staff_notes, 1000, "Staff notes"),
+    client_notes: str(body.client_notes, 1000, "Client notes"),
+    quantity: count(body.quantity, 1, 100000, "Quantity", 1),
+    item_type: itemType,
+    ...specs,
+    disposition,
+    value: disposition === "recycle" ? 0 : money(body.value, "Unit value"),
+    offer: disposition === "purchase" ? money(body.offer, "Unit offer") : 0,
+    shipping_cost: money(body.shipping_cost, "Shipping cost"),
+    wipe_required: wipeRequired,
+    // Same snapshot rule as a deal line, and it matters more here: the figure
+    // quoted on an evaluation is the one that converts into the deal months
+    // later, so re-reading the global fee would reprice something the client
+    // has already agreed to.
+    wipe_fee: wipeRequired
+      ? (Number(body.keep_wipe_fee) > 0 ? money(body.keep_wipe_fee, "Wipe fee") : await wipeFeeNow(sb))
+      : 0,
+  };
+}
+
+// Lines are editable while the evaluation is still a draft or out with the
+// client, and frozen the moment it is accepted. One place, so the add, update
+// and delete paths cannot disagree about it.
+function prevalEditable(preval: any): string | null {
+  if (!PREVAL_OPEN.includes(preval.status)) {
+    return preval.status === "converted"
+      ? "This evaluation has already become a deal — change the lines on the deal instead."
+      : "This evaluation is " + preval.status + ", so its lines are locked. Reopen it as a draft to change them.";
+  }
+  return null;
+}
 
 const lineName = (it: any) =>
   [it.make, it.model].filter(Boolean).join(" ") || `Line ${it.line_no}`;
@@ -1303,6 +1404,239 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, stage });
       }
 
+
+      // ===================================================== pre-evaluations
+      // A client wants a number before we drive out. See 0039: this is the
+      // pricing half on its own, and if they accept it converts into a real deal
+      // with every line already filled in.
+
+      if (action === "preval_create") {
+        const clientId = str(body.client_id, 64, "Client", true)!;
+        const { data: client } = await supabase.from("b2b_clients")
+          .select("id, acronym").eq("id", clientId).maybeSingle();
+        if (!client) return jsonResponse({ success: false, error: "That client no longer exists." }, 404);
+
+        // Only a real store, exactly as on a store-origin deal. An evaluation
+        // has no goods yet, so this says whose enquiry it is, not where
+        // anything sits.
+        const store = oneOf(String(body.store ?? "").toUpperCase(), STORES, "Store", false);
+        const evalDate = isoDate(body.eval_date, "Evaluation date") || todayCentral();
+        const validUntil = isoDate(body.valid_until, "Valid until");
+        if (validUntil && validUntil < evalDate) {
+          throw new Invalid("The valid-until date can't be before the evaluation date.");
+        }
+
+        // Per-client counter, same retry as deals: the unique index is the real
+        // guard and a recompute is plenty at this volume.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const { data: last } = await supabase.from("b2b_prevals")
+            .select("eval_no").eq("client_id", clientId)
+            .order("eval_no", { ascending: false }).limit(1).maybeSingle();
+          const evalNo = (last?.eval_no || 0) + 1;
+          const { data, error } = await supabase.from("b2b_prevals").insert({
+            client_id: clientId,
+            eval_no: evalNo,
+            status: "draft",
+            eval_date: evalDate,
+            valid_until: validUntil,
+            title: str(body.title, 160, "Title"),
+            summary: str(body.summary, 4000, "What they have"),
+            notes: str(body.notes, 4000, "Notes"),
+            store,
+            created_by: str(body.created_by, 120, "Created by") || "Unknown",
+            evaluated_by: str(body.created_by, 120, "Evaluated by"),
+          }).select("id").single();
+          if (!error) {
+            await broadcastChange("b2b", store);
+            return jsonResponse({
+              success: true, id: data.id, eval_no: evalNo,
+              ref: `${client.acronym}-PE-${pad(evalNo, 3)}`,
+            });
+          }
+          if (!String(error.message).toLowerCase().includes("duplicate")) {
+            return jsonResponse({ success: false, error: error.message }, 500);
+          }
+        }
+        return jsonResponse({ success: false, error: "Couldn't assign an evaluation number — try again." }, 409);
+      }
+
+      if (action === "preval_update") {
+        const preval = await getPreval(supabase, String(body.id || ""));
+        if (!preval) return jsonResponse({ success: false, error: "Evaluation not found." }, 404);
+        if (preval.status === "converted") {
+          return jsonResponse({ success: false, error: "This evaluation has already become a deal." }, 409);
+        }
+        const evalDate = isoDate(body.eval_date, "Evaluation date") || preval.eval_date;
+        const validUntil = isoDate(body.valid_until, "Valid until");
+        if (validUntil && validUntil < evalDate) {
+          throw new Invalid("The valid-until date can't be before the evaluation date.");
+        }
+        const { error } = await supabase.from("b2b_prevals").update({
+          eval_date: evalDate,
+          valid_until: validUntil,
+          title: str(body.title, 160, "Title"),
+          summary: str(body.summary, 4000, "What they have"),
+          notes: str(body.notes, 4000, "Notes"),
+          evaluated_by: str(body.evaluated_by, 120, "Evaluated by") || preval.evaluated_by,
+        }).eq("id", preval.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", preval.store);
+        return jsonResponse({ success: true });
+      }
+
+      if (action === "preval_delete") {
+        const preval = await getPreval(supabase, String(body.id || ""));
+        if (!preval) return jsonResponse({ success: false, error: "Evaluation not found." }, 404);
+        // A converted evaluation is the origin record of a live deal. Deleting
+        // it would null that deal's preval_id and destroy the only account of
+        // where its figures came from.
+        if (preval.status === "converted") {
+          return jsonResponse({
+            success: false,
+            error: "This evaluation became a deal — it's the record of where that deal's prices came from, so it can't be deleted.",
+          }, 409);
+        }
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can delete an evaluation." }, 403);
+        }
+        const { error } = await supabase.from("b2b_prevals").delete().eq("id", preval.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", preval.store);
+        return jsonResponse({ success: true });
+      }
+
+      // Moving an evaluation along. Sending, accepting and declining are the
+      // same authority that sends and accepts a quote -- these are numbers a
+      // client acts on. Reopening to a draft is how a mistake gets fixed after
+      // acceptance, and is the only way back.
+      if (action === "preval_status") {
+        const preval = await getPreval(supabase, String(body.id || ""));
+        if (!preval) return jsonResponse({ success: false, error: "Evaluation not found." }, 404);
+        if (preval.status === "converted") {
+          return jsonResponse({ success: false, error: "This evaluation has already become a deal." }, 409);
+        }
+        const to = oneOf(String(body.status ?? "").toLowerCase(), PREVAL_SETTABLE, "Status")!;
+        if (to === preval.status) {
+          return jsonResponse({ success: false, error: `This evaluation is already ${to}.` }, 409);
+        }
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can change an evaluation's status." }, 403);
+        }
+        // Nothing goes to a client empty, and nothing gets accepted empty
+        // either -- an accepted evaluation with no lines converts to a deal with
+        // no lines, which is a dead end somebody has to unpick by hand.
+        if (to === "sent" || to === "accepted") {
+          const { count } = await supabase.from("b2b_preval_items")
+            .select("id", { count: "exact", head: true }).eq("preval_id", preval.id);
+          if (!count) return jsonResponse({ success: false, error: "Add at least one line before sending this evaluation." }, 400);
+        }
+        const now = new Date().toISOString();
+        const who = str(body.user, 120, "User") || "Unknown";
+        const patch: Record<string, unknown> = { status: to };
+        if (to === "sent") { patch.sent_at = now; patch.sent_by = who; }
+        if (to === "accepted") { patch.accepted_at = now; patch.accepted_by = who; }
+        if (to === "declined") {
+          patch.declined_at = now;
+          patch.declined_by = who;
+          patch.declined_reason = str(body.reason, 1000, "Reason", true);
+        }
+        // Reopening clears the outcome that is no longer true. Leaving a
+        // declined_at on a row that is back in draft would misreport it forever,
+        // the same reason signing clears an earlier signature skip.
+        if (to === "draft") {
+          patch.accepted_at = null; patch.accepted_by = null;
+          patch.declined_at = null; patch.declined_by = null; patch.declined_reason = null;
+        }
+        const { error } = await supabase.from("b2b_prevals").update(patch).eq("id", preval.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", preval.store, { by: who });
+        return jsonResponse({ success: true, status: to });
+      }
+
+      // The hinge. Everything happens inside b2b_preval_to_deal so a failure
+      // halfway cannot leave a deal with no lines or an evaluation that can be
+      // converted twice -- see 0039.
+      if (action === "preval_convert") {
+        const preval = await getPreval(supabase, String(body.id || ""));
+        if (!preval) return jsonResponse({ success: false, error: "Evaluation not found." }, 404);
+        const store = oneOf(String(body.pricing_store ?? "").toUpperCase(), STORES, "Store", false);
+        const intake = oneOf(String(body.intake_kind ?? "").toLowerCase(), INTAKE_KINDS, "Intake type", false) || "pickup";
+        const { data, error } = await supabase.rpc("b2b_preval_to_deal", {
+          p_preval_id: preval.id,
+          p_pricing_store: store || "",
+          p_intake_kind: intake,
+          p_user: str(body.user, 120, "User") || "Unknown",
+        });
+        if (error) {
+          // The function raises its own sentences for the states worth
+          // explaining (already converted, not accepted), so they are surfaced
+          // as-is rather than wrapped in a 500.
+          const msg = String(error.message || "");
+          const known = msg.includes("evaluation");
+          return jsonResponse({ success: false, error: known ? msg : "Couldn't convert that evaluation: " + msg }, known ? 409 : 500);
+        }
+        const row = Array.isArray(data) ? data[0] : data;
+        await broadcastChange("b2b", store, { deal: row?.out_deal_id, by: str(body.user, 80, "User") });
+        return jsonResponse({
+          success: true,
+          deal_id: row?.out_deal_id, deal_no: row?.out_deal_no,
+          ref: row?.out_ref, lines: row?.out_lines,
+        });
+      }
+
+      // ------------------------------------------------ evaluation line items
+
+      if (action === "preval_add_item" || action === "preval_update_item" || action === "preval_delete_item") {
+        const itemId = String(body.id || "");
+        let preval: any;
+        if (action === "preval_add_item") {
+          preval = await getPreval(supabase, String(body.preval_id || ""));
+        } else {
+          const { data: it } = await supabase.from("b2b_preval_items")
+            .select("preval_id").eq("id", itemId).maybeSingle();
+          if (!it) return jsonResponse({ success: false, error: "Line item not found." }, 404);
+          preval = await getPreval(supabase, it.preval_id);
+        }
+        if (!preval) return jsonResponse({ success: false, error: "Evaluation not found." }, 404);
+        const locked = prevalEditable(preval);
+        if (locked) return jsonResponse({ success: false, error: locked }, 409);
+
+        if (action === "preval_delete_item") {
+          const { error } = await supabase.from("b2b_preval_items").delete().eq("id", itemId);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          await broadcastChange("b2b", preval.store, { by: str(body.user, 80, "User") });
+          return jsonResponse({ success: true });
+        }
+
+        const fields = await prevalItemFields(supabase, body);
+
+        if (action === "preval_update_item") {
+          const { error } = await supabase.from("b2b_preval_items").update(fields).eq("id", itemId);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          await broadcastChange("b2b", preval.store, { by: str(body.user, 80, "User") });
+          return jsonResponse({ success: true });
+        }
+
+        // No SKU is minted here, unlike a deal line: there is no unit to label
+        // yet. SKUs get created for real when the evaluation converts.
+        const { data: last } = await supabase.from("b2b_preval_items")
+          .select("line_no").eq("preval_id", preval.id)
+          .order("line_no", { ascending: false }).limit(1).maybeSingle();
+        const lineNo = (last?.line_no || 0) + 1;
+        const { data: lastSort } = await supabase.from("b2b_preval_items")
+          .select("sort_order").eq("preval_id", preval.id)
+          .order("sort_order", { ascending: false }).limit(1).maybeSingle();
+        const sortOrder = (Number(lastSort?.sort_order) || 0) + 10;
+        const { data, error } = await supabase.from("b2b_preval_items").insert({
+          ...fields, preval_id: preval.id, line_no: lineNo, sort_order: sortOrder,
+        }).select("id, line_no, sort_order").single();
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", preval.store, { by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sort_order: data.sort_order });
+      }
+
       return jsonResponse({ success: false, error: "Unknown action" }, 400);
     } catch (err: any) {
       if (err instanceof Invalid) return jsonResponse({ success: false, error: err.message }, 400);
@@ -1348,6 +1682,50 @@ Deno.serve(async (req: Request) => {
         .order("company", { ascending: true }).limit(2000);
       if (error) return jsonResponse({ success: false, error: error.message }, 500);
       return jsonResponse({ success: true, data: data || [] });
+    }
+
+    // ?prevals=1[&store=<CODE>] → the evaluation list.
+    //
+    // Unbounded in principle but tiny in practice, and unlike the board there is
+    // no open/finished split worth paging: an evaluation is a page of numbers,
+    // not a pipeline. A store-scoped request gets only its own -- an evaluation
+    // belongs to whoever is having the conversation.
+    if (url.searchParams.get("prevals")) {
+      const pStore = String(url.searchParams.get("store") || "ALL").toUpperCase();
+      const pOne = !!pStore && pStore !== "ALL";
+      let q = supabase.from("b2b_preval_list")
+        .select(pOne ? SCOPED_PREVAL_COLS : PREVAL_COLS)
+        .order("created_at", { ascending: false }).limit(2000);
+      if (pOne) q = q.eq("store", pStore);
+      const { data, error } = await q;
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({ success: true, data: data || [], meta: { wipe_fee: await wipeFeeNow(supabase) } });
+    }
+
+    // ?preval_id=<uuid> → that evaluation's lines, shaped exactly like deal line
+    // items so the one item editor can render either without knowing which.
+    const prevalId = url.searchParams.get("preval_id");
+    if (prevalId) {
+      const { data, error } = await supabase.from("b2b_preval_items")
+        .select(PREVAL_ITEM_COLS).eq("preval_id", prevalId)
+        .order("sort_order", { ascending: true })
+        .order("line_no", { ascending: true }).limit(5000);
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({
+        success: true,
+        data: (data || []).map((it: any) => ({
+          ...it,
+          // The fields a deal line has and an evaluation line cannot. Present
+          // and empty rather than absent: the shared renderer reads them, and
+          // undefined would paint as the string "undefined".
+          sku: null, serials: "", serial_list: [], listings: [],
+          listed_qty: 0, recycled_qty: 0, wiped_qty: 0,
+          qty_value_total: it.disposition === "recycle" ? 0 : it.value * it.quantity,
+          qty_offer_total: it.offer * it.quantity,
+          qty_wipe_total: it.wipe_required ? it.wipe_fee * it.quantity : 0,
+          qty_shipping_total: it.shipping_cost * it.quantity,
+        })),
+      });
     }
 
     // ?deal_id=<uuid> → that deal's line items, each with the Shopify listings

@@ -12327,6 +12327,23 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-loc-dot { width: 12px; height: 12px; border-radius: 999px; display: block; }
 .b2b-loc-c { font-size: 12px; font-weight: 800; color: #1a1c1e; letter-spacing: .03em; }
 
+/* --- evaluations ----------------------------------------------------------
+   The list reuses .b2b-q-card wholesale: an evaluation row answers the same
+   question a queue card does -- what is this, whose is it, what is it worth --
+   so giving it its own card would be two designs for one job. Only the two
+   things a queue card has no place for are added here. */
+.b2b-pv-money { font-size: 15px; font-weight: 800; color: var(--sage-deep); white-space: nowrap; }
+/* Pushed to the right of the section heading rather than up into the header
+   bar: New Deal lives up there and belongs to the whole pane, while this one
+   only makes sense inside the list it adds to. */
+.b2b-sec-h .b2b-pv-new { margin-left: auto; }
+/* The evaluation a deal was priced from. Violet, matching the quote stage chip,
+   because both mean "a number the client has already been shown". */
+.b2b-note.b2b-from-pv {
+    border-color: #ddd6fe; background: #f5f3ff;
+}
+.b2b-note.b2b-from-pv .b2b-note-k { color: #6d28d9; }
+
 /* --- intake picker (new deal) ---------------------------------------------
    Two cards rather than a tickbox. "How did this arrive" changes what the very
    next screen asks for, and a checkbox labelled "in-store" reads as an

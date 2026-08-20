@@ -15179,6 +15179,29 @@ function _b2bActionWords(deal, a) {
     return { ...a, cta: i.cta, why: i.why };
 }
 
+// PRE-EVALUATIONS
+// ---------------
+// A client wants a number before we drive out: we price a list they describe,
+// and if they accept, that priced list becomes a deal with every line already
+// filled in. It is the pricing half of a deal, standing on its own, with no
+// goods and therefore no pickup, no SKUs and no serials.
+//
+// Statuses mirror the deal's own shape closely enough to be learnable at a
+// glance and no further -- there is deliberately no separate approval step,
+// because sending IS the approval, exactly as it is on a quote.
+const B2B_PREVAL_STATUSES = [
+    { key: 'draft',     label: 'Draft',        tone: 'neu',    why: 'Still being priced' },
+    { key: 'sent',      label: 'With Client',  tone: 'violet', why: 'Waiting on their answer' },
+    { key: 'accepted',  label: 'Accepted',     tone: 'ok',     why: 'Ready to become a deal' },
+    { key: 'converted', label: 'Converted',    tone: 'info',   why: 'Became a deal' },
+    { key: 'declined',  label: 'Declined',     tone: 'crit',   why: 'They passed' },
+];
+const B2B_PREVAL_STATUS = Object.fromEntries(B2B_PREVAL_STATUSES.map(x => [x.key, x]));
+// While the lines may still be edited. They freeze at 'accepted' on purpose:
+// changing a figure a client has agreed to and then converting would produce a
+// deal built on numbers they never saw.
+const B2B_PREVAL_OPEN = ['draft', 'sent'];
+
 const B2B_CORP_ROLES   = ['district manager', 'ceo', 'mocd'];
 const B2B_ACCEPT_ROLES = ['ceo', 'mocd', 'district manager'];   // may lock a quote
 const B2B_STORE_ROLES  = ['manager', 'owner (manager)', 'owner manager', 'assistant manager'];
@@ -15295,6 +15318,8 @@ let _b2bModalItems   = [];
 let _b2bEditingClient = null;
 let _b2bCreateClientId = null;      // client chosen in the new-deal modal
 let _b2bAssignPick   = null;        // location picked but not yet submitted
+let _b2bPrevals      = [];          // pre-evaluations in scope
+let _b2bModalPreval  = null;        // the evaluation open in the editor
 
 // --- identity -------------------------------------------------------------
 
@@ -15327,6 +15352,18 @@ function _b2bCanCreate() {
     if (_b2bIsCorp()) return true;
     return B2B_STORE_ROLES.includes(_b2bRole()) && _b2bMyStores().length > 0;
 }
+// Raising and pricing an evaluation is the same permission as raising a deal:
+// the enquiry usually arrives at whoever picks up the phone or is on the counter.
+// Sending it, accepting it and converting it are separately gated below.
+function _b2bCanPreval() { return _b2bCanCreate(); }
+// The stores this user may raise an evaluation for; empty for corp, who raise
+// them unscoped.
+function _b2bPrevalStore() {
+    if (_b2bIsCorp()) return null;
+    const mine = _b2bMyStores();
+    return mine.length === 1 ? mine[0] : null;
+}
+
 // CRM notification setup (cadences + who gets the reach-out emails) is CEO-only.
 function _b2bCanCrm() { return _b2bRole() === 'ceo'; }
 function _b2bCanOverview(){ return ['ceo', 'district manager'].includes(_b2bRole()); }
@@ -15610,6 +15647,10 @@ async function _b2bBusy(btn, label, fn) {
 let _b2bDirty = false;
 function b2bCloseDeal() {
     closeAllModals();
+    // Back to the default owner of the item editor, so the next screen to open
+    // starts from a known state rather than whatever the last one left behind.
+    _b2bItemMode = 'deal';
+    _b2bModalPreval = null;
     if (_b2bDirty) { _b2bDirty = false; b2bRefresh(); }
 }
 
@@ -15632,6 +15673,14 @@ function _b2bFetchScope() {
 //
 // Anyone who can neither create nor manage clients (employees, trainees) still
 // fetches nothing at all.
+// Evaluations, scoped the same way the board is: corp sees every one, a store
+// sees the enquiries it raised. Anyone who cannot raise one fetches nothing.
+function _b2bPrevalsFetch(keep) {
+    if (!_b2bCanPreval()) return Promise.resolve(keep || []);
+    const store = _b2bIsCorp() ? 'ALL' : (_b2bPrevalStore() || 'ALL');
+    return _b2bGet(`prevals=1&store=${encodeURIComponent(store)}`);
+}
+
 function _b2bClientsFetch(keep) {
     if (_b2bCanClients() || _b2bIsCorp()) return _b2bGet('clients=1');
     if (_b2bCanCreate()) return _b2bGet('clients=1&scope=store');
@@ -15644,12 +15693,14 @@ async function b2bLoad() {
     if (!_b2bLoading) body.innerHTML = '<div class="status-message">Loading B2B Deals…</div>';
     _b2bLoading = true;
     try {
-        const [deals, clients] = await Promise.all([
+        const [deals, clients, prevals] = await Promise.all([
             _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=${_b2bArchiveDepth}`),
             _b2bClientsFetch(),
+            _b2bPrevalsFetch(),
         ]);
         _b2bDeals   = deals.map(_b2bShapeDeal);
         _b2bClients = clients;
+        _b2bPrevals = prevals;
         b2bRender();
         // A signing QR was scanned. Consume it before opening, so a refresh
         // doesn't reopen the pad over a deal that has since been signed off.
@@ -15669,12 +15720,14 @@ async function b2bLoad() {
 // Background refresh after a write -- no spinner, no scroll jump.
 async function b2bRefresh() {
     try {
-        const [deals, clients] = await Promise.all([
+        const [deals, clients, prevals] = await Promise.all([
             _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=${_b2bArchiveDepth}`),
             _b2bClientsFetch(_b2bClients),
+            _b2bPrevalsFetch(_b2bPrevals),
         ]);
         _b2bDeals = deals.map(_b2bShapeDeal);
         _b2bClients = clients;
+        _b2bPrevals = prevals;
         b2bRender();
         if (typeof crmRefreshBadge === 'function') crmRefreshBadge();
     } catch (_) { /* keep what's on screen */ }
@@ -15885,6 +15938,7 @@ async function _b2bSyncOpenDeal(ping) {
 function b2bSetView(view) {
     if (view === 'clients'  && !_b2bCanClients())  view = 'queue';
     if (view === 'overview' && !_b2bCanOverview()) view = 'queue';
+    if (view === 'prevals'  && !_b2bCanPreval())   view = 'queue';
     _b2bView = view;
     b2bRender();
 }
@@ -15896,6 +15950,7 @@ function b2bRender() {
     if (!body) return;
     if (_b2bView === 'clients'  && !_b2bCanClients())  _b2bView = 'queue';
     if (_b2bView === 'overview' && !_b2bCanOverview()) _b2bView = 'queue';
+    if (_b2bView === 'prevals'  && !_b2bCanPreval())   _b2bView = 'queue';
 
     const scoped = _b2bDeals.filter(_b2bInScope);
     const queue  = scoped.filter(d => _b2bActionFor(d));
@@ -15903,8 +15958,20 @@ function b2bRender() {
     // Header chrome
     document.querySelectorAll('.b2b-view-toggle .mb-view-btn').forEach(b => b.classList.remove('active'));
     const btn = { queue: 'b2bViewQueueBtn', pipeline: 'b2bViewPipelineBtn', finished: 'b2bViewFinishedBtn',
-                  clients: 'b2bViewClientsBtn', overview: 'b2bViewOverviewBtn' }[_b2bView];
+                  clients: 'b2bViewClientsBtn', overview: 'b2bViewOverviewBtn',
+                  prevals: 'b2bViewPrevalsBtn' }[_b2bView];
     document.getElementById(btn)?.classList.add('active');
+
+    // Evaluations waiting on somebody. Not folded into the Needs You queue: that
+    // queue derives ownership from a deal's stage, and an evaluation has no
+    // stage, no store to own it and no pipeline position. A count on the tab is
+    // the honest version of the same signal.
+    const pvPip = document.getElementById('b2bPrevalPip');
+    if (pvPip) {
+        const live = _b2bPrevals.filter(v => !['converted', 'declined'].includes(v.status)).length;
+        pvPip.textContent = live;
+        pvPip.style.display = live ? 'inline-flex' : 'none';
+    }
 
     const pip = document.getElementById('b2bQueuePip');
     if (pip) {
@@ -15934,6 +16001,7 @@ function b2bRender() {
     }
 
     if (_b2bView === 'pipeline')      body.innerHTML = _b2bRenderPipeline(scoped);
+    else if (_b2bView === 'prevals')  body.innerHTML = _b2bRenderPrevals();
     else if (_b2bView === 'finished') body.innerHTML = _b2bRenderFinished(scoped);
     else if (_b2bView === 'clients')  body.innerHTML = _b2bRenderClients();
     else if (_b2bView === 'overview') body.innerHTML = _b2bRenderOverview(scoped);
@@ -16898,7 +16966,10 @@ function _b2bRenderOverview(scoped) {
 // NEW DEAL
 // ---------------------------------------------------------------------------
 
-function b2bOpenCreate() {
+// Raise an evaluation instead of a deal. Same modal, same picker.
+function b2bOpenPrevalCreate() { b2bOpenCreate('preval'); }
+
+function b2bOpenCreate(kind) {
     // The header button is role-gated in the markup, but the markup gate is a
     // CSS class -- this is what makes it true. The one way a permitted role gets
     // here and still can't create is having no store on their profile, which is
@@ -16910,6 +16981,7 @@ function b2bOpenCreate() {
         }
         return;
     }
+    _b2bCreateKind = kind === 'preval' ? 'preval' : 'deal';
     _b2bCreateClientId = null;
     // Corp routes its pickups at pricing_location, so it picks nothing here. A
     // store is raising the deal for itself: one store means there is nothing to
@@ -16927,6 +16999,11 @@ function b2bOpenCreate() {
 // Where a store-raised deal will be held. Null for corp, whose deals are routed
 // a stage later by whoever assigns the pricing location.
 let _b2bCreateStore = null;
+// Which thing the create modal is raising. The client picker, the search box and
+// the inline add-client form are identical either way -- only the fields below
+// them and the button differ -- so the modal is shared rather than cloned.
+let _b2bCreateKind = 'deal';
+const _b2bCreatingPreval = () => _b2bCreateKind === 'preval';
 // How it arrived -- see B2B_INTAKE. Set once here and never derived afterwards.
 let _b2bCreateIntake = 'pickup';
 
@@ -17019,16 +17096,45 @@ function _b2bRenderCreate() {
             placeholder="Search by company, acronym${_b2bIsCorp() ? ' or contact' : ''}…" oninput="_b2bPaintPicklist()">
         <div class="b2b-picklist" id="b2bPickList"></div>
         <div id="b2bPickSel"></div>
-        ${_b2bCreateIntakeBlock()}
-        ${_b2bCreateStoreBlock()}
+        ${_b2bCreatingPreval() ? _b2bCreatePrevalBlock() : _b2bCreateIntakeBlock() + _b2bCreateStoreBlock()}
         ${addForm}`;
     _b2bPaintPicklist();
+}
+
+// The evaluation half of the create modal. No intake kind and no holding store:
+// nothing has been collected, so there is nothing to say about how it arrived or
+// where it is sitting. Both questions get asked at conversion instead, when they
+// have answers.
+function _b2bCreatePrevalBlock() {
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    return `
+        <div class="b2b-grid2" style="margin-top:14px;">
+            <div>
+                <label class="form-label-caps">Evaluated On *</label>
+                <input id="b2bPvDate" type="date" class="form-input-lg" value="${today}">
+            </div>
+            <div>
+                <label class="form-label-caps">Good Until</label>
+                <input id="b2bPvUntil" type="date" class="form-input-lg">
+            </div>
+        </div>
+        <p class="b2b-hint">The date the figures are good as of — it prints on what the client
+            sees. Leave "good until" blank if the quote does not expire.</p>
+        <label class="form-label-caps" style="margin-top:14px;">Reference</label>
+        <input id="b2bPvTitle" class="form-input-lg" placeholder="e.g. Q3 laptop refresh" maxlength="160">
+        <label class="form-label-caps" style="margin-top:14px;">What They Say They Have</label>
+        <textarea id="b2bPvSummary" class="form-input-lg" rows="3"
+            placeholder="e.g. ~40 laptops, 12 monitors, a pallet of misc peripherals"></textarea>
+        <p class="b2b-hint">Their own description, before anyone has seen it. This carries over
+            to become the pickup description if the evaluation turns into a deal.</p>`;
 }
 
 // Corp answers "where" a stage later; a store answers it here, and until it has
 // there is nothing to create.
 function _b2bCreateReady() {
     if (!_b2bCreateClientId) return false;
+    // An evaluation holds nothing, so there is no store to choose yet.
+    if (_b2bCreatingPreval()) return true;
     if (_b2bIsCorp()) return true;
     return !!_b2bCreateStore;
 }
@@ -17056,16 +17162,19 @@ function _b2bPaintPicklist() {
     const chosen = _b2bClients.find(c => c.id === _b2bCreateClientId);
     if (sel) {
         sel.innerHTML = chosen
-            ? `<div class="b2b-selected"><b>${escapeHtml(chosen.acronym)}</b> · ${escapeHtml(chosen.company)} — this will be deal <b class="b2b-mono">${escapeHtml(chosen.acronym)}-${String((chosen.deal_count || 0) + 1).padStart(3, '0')}</b>${
+            ? (_b2bCreatingPreval()
+                ? `<div class="b2b-selected"><b>${escapeHtml(chosen.acronym)}</b> · ${escapeHtml(chosen.company)} — this will be evaluation <b class="b2b-mono">${escapeHtml(chosen.acronym)}-PE-${String(_b2bNextEvalNo(chosen.id)).padStart(3, '0')}</b></div>`
+                : `<div class="b2b-selected"><b>${escapeHtml(chosen.acronym)}</b> · ${escapeHtml(chosen.company)} — this will be deal <b class="b2b-mono">${escapeHtml(chosen.acronym)}-${String((chosen.deal_count || 0) + 1).padStart(3, '0')}</b>${
                 _b2bCreateStore ? `, held at <b>${escapeHtml(_b2bCreateStore)}</b>` : ''}${
-                _b2bCreateIntake === 'walkin' ? ', taken in over the counter' : ''}</div>`
+                _b2bCreateIntake === 'walkin' ? ', taken in over the counter' : ''}</div>`)
             : '';
     }
     const foot = document.getElementById('b2bCreateFooter');
     if (foot) {
         foot.innerHTML = `
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
-            <button class="b2b-btn b2b-btn-primary" ${_b2bCreateReady() ? '' : 'disabled'} onclick="b2bCreateDeal()">Create Deal</button>`;
+            <button class="b2b-btn b2b-btn-primary" ${_b2bCreateReady() ? '' : 'disabled'} onclick="b2bCreateDeal()">${
+                _b2bCreatingPreval() ? 'Create Evaluation' : 'Create Deal'}</button>`;
     }
 }
 
@@ -17094,6 +17203,7 @@ async function b2bCreateClientInline() {
 
 async function b2bCreateDeal() {
     if (!_b2bCreateReady()) return;
+    if (_b2bCreatingPreval()) return _b2bCreatePreval();
     const out = await _b2bPost({
         action: 'create', client_id: _b2bCreateClientId, created_by: _b2bUser(),
         // Corp sends nothing and the deal routes at pricing_location as it
@@ -17107,6 +17217,410 @@ async function b2bCreateDeal() {
     await b2bRefresh();
     // Straight into the pickup form -- that's the whole point of creating it.
     b2bOpenDeal('pickup', out.id);
+}
+
+
+// ===========================================================================
+// PRE-EVALUATIONS
+// ---------------------------------------------------------------------------
+// A client wants a number before we drive out. We price the list they describe;
+// if they accept, it converts into a real deal with every line already filled
+// in and a reference back to where those figures came from.
+//
+// The line editor is not rebuilt here. _b2bItemMode hands the existing pricing
+// spreadsheet -- the inline saves, the totals, the margin, the detail sheet --
+// straight to an evaluation, so the two screens cannot drift apart. What lives
+// below is only what an evaluation has that a deal does not: a status, a pair of
+// dates, and the conversion.
+// ===========================================================================
+
+function _b2bPrevalById(id) { return _b2bPrevals.find(v => v.id === id) || null; }
+function _b2bPrevalMeta(v)  { return B2B_PREVAL_STATUS[v?.status] || B2B_PREVAL_STATUS.draft; }
+function _b2bPrevalOpen(v)  { return B2B_PREVAL_OPEN.includes(v?.status); }
+
+// Expired is derived, never stored: a stored flag would need a nightly job to
+// stay true and would then have to argue with 'accepted' about which one the row
+// is really in. Only meaningful while the client could still act on it.
+function _b2bPrevalExpired(v) {
+    if (!v?.valid_until) return false;
+    if (['converted', 'declined'].includes(v.status)) return false;
+    return v.valid_until < new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+}
+
+// What the next evaluation for this client will be called. Counted off what is
+// already on screen -- it is a preview for the create modal, and the server
+// mints the real one.
+function _b2bNextEvalNo(clientId) {
+    const mine = _b2bPrevals.filter(v => v.client_id === clientId);
+    return mine.reduce((n, v) => Math.max(n, Number(v.eval_no) || 0), 0) + 1;
+}
+
+async function _b2bCreatePreval() {
+    const date = document.getElementById('b2bPvDate')?.value;
+    if (!date) return alert('Pick the date this evaluation is good as of.');
+    const until = document.getElementById('b2bPvUntil')?.value || '';
+    if (until && until < date) return alert('"Good until" can\'t be before the evaluation date.');
+    const out = await _b2bPost({
+        action: 'preval_create',
+        client_id: _b2bCreateClientId,
+        eval_date: date,
+        valid_until: until || undefined,
+        title: document.getElementById('b2bPvTitle')?.value.trim(),
+        summary: document.getElementById('b2bPvSummary')?.value.trim(),
+        // Store users raise it for their own store, exactly as they raise a
+        // deal; corp raises it unscoped.
+        store: _b2bPrevalStore() || undefined,
+        created_by: _b2bUser(),
+    }, "Couldn't create the evaluation");
+    closeAllModals();
+    await b2bRefresh();
+    // Straight into pricing it -- that is the whole point of raising one.
+    b2bOpenPreval(out.id);
+}
+
+// --- view: Evaluations ------------------------------------------------------
+
+function _b2bRenderPrevals() {
+    const rows = _b2bPrevals;
+    const live = rows.filter(v => !['converted', 'declined'].includes(v.status));
+    const done = rows.filter(v => ['converted', 'declined'].includes(v.status));
+
+    const card = (v) => {
+        const meta    = _b2bPrevalMeta(v);
+        const expired = _b2bPrevalExpired(v);
+        const bits = [
+            v.line_count ? `${v.line_count} line${v.line_count === 1 ? '' : 's'}` : 'No lines yet',
+            v.total_units ? `${v.total_units} unit${v.total_units === 1 ? '' : 's'}` : null,
+            `Evaluated ${_b2bDate(v.eval_date)}`,
+            v.valid_until ? `${expired ? 'Expired' : 'Good until'} ${_b2bDate(v.valid_until)}` : null,
+        ].filter(Boolean).map(t => `<span>${escapeHtml(t)}</span>`).join('');
+        return `
+        <div class="b2b-q-card" onclick="b2bOpenPreval('${v.id}')">
+            <div class="b2b-q-main">
+                <div class="b2b-q-top">
+                    <span class="b2b-q-ref">${escapeHtml(v.ref)}</span>
+                    <span class="b2b-q-co">${escapeHtml(v.company || 'Unknown client')}</span>
+                    <span class="b2b-chip b2b-chip-${meta.tone}">${escapeHtml(meta.label)}</span>
+                    ${expired ? '<span class="b2b-chip b2b-chip-crit">Expired</span>' : ''}
+                    ${v.store ? _b2bStoreTag(v.store) : ''}
+                </div>
+                <div class="b2b-q-meta">${bits}${
+                    v.title ? `<span>${escapeHtml(v.title)}</span>` : ''}</div>
+            </div>
+            <div class="b2b-q-act">
+                <span class="b2b-q-why">${escapeHtml(
+                    v.status === 'converted' && v.deal_ref ? `Became ${v.deal_ref}` : meta.why)}</span>
+                <div class="b2b-q-btns">
+                    <span class="b2b-pv-money">${_b2bMoney(v.net_offer)}</span>
+                </div>
+            </div>
+        </div>`;
+    };
+
+    const empty = `
+        <div class="b2b-empty">
+            ${_b2bIco('<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>')}
+            <div class="b2b-empty-t">No evaluations yet</div>
+            <div class="b2b-empty-s">When a business wants a number before we collect anything,
+                raise one here. Price their list, send it, and if they accept it becomes a deal
+                with every line already filled in.</div>
+        </div>`;
+
+    return `
+        <div class="b2b-sec">
+            <div class="b2b-sec-h">
+                <span>Open Evaluations</span><span class="b2b-sec-n">${live.length}</span>
+                ${_b2bCanPreval() ? `<button class="b2b-btn b2b-btn-primary b2b-mini b2b-pv-new"
+                    onclick="b2bOpenPrevalCreate()">＋ New Evaluation</button>` : ''}
+            </div>
+            <div class="b2b-queue">${live.length ? live.map(card).join('') : empty}</div>
+        </div>
+        ${done.length ? `
+        <div class="b2b-sec">
+            <div class="b2b-sec-h"><span>Closed</span><span class="b2b-sec-n">${done.length}</span></div>
+            <div class="b2b-queue">${done.map(card).join('')}</div>
+        </div>` : ''}`;
+}
+
+// --- the editor -------------------------------------------------------------
+
+async function b2bOpenPreval(id) {
+    const v = _b2bPrevalById(id);
+    if (!v) return;
+    // Claim the shared item editor before anything renders, so every inline save
+    // on this screen posts preval_* rather than the deal actions.
+    _b2bItemMode = 'preval';
+    _b2bModalPreval = v;
+    _b2bModalDeal = null;
+    _b2bModalItems = [];
+    try {
+        _b2bModalItems = await _b2bGet(`preval_id=${encodeURIComponent(id)}`);
+    } catch (e) {
+        _b2bItemMode = 'deal';
+        return alert(`Couldn't load the evaluation: ${e.message}`);
+    }
+    _b2bStagePreval(v);
+}
+
+function _b2bStagePreval(v) {
+    _b2bGridMode = 'sheet';
+    const meta    = _b2bPrevalMeta(v);
+    const open    = _b2bPrevalOpen(v);
+    const expired = _b2bPrevalExpired(v);
+    const canMove = _b2bCanAccept();
+
+    const dates = `
+        <div class="b2b-grid2" style="margin-top:4px;">
+            <div>
+                <label class="form-label-caps">Evaluated On</label>
+                <input id="b2bPvDate" type="date" class="form-input-lg" value="${escapeHtml(v.eval_date || '')}"
+                    ${open ? '' : 'disabled'} onchange="b2bPrevalSaveMeta('${v.id}')">
+            </div>
+            <div>
+                <label class="form-label-caps">Good Until</label>
+                <input id="b2bPvUntil" type="date" class="form-input-lg" value="${escapeHtml(v.valid_until || '')}"
+                    ${open ? '' : 'disabled'} onchange="b2bPrevalSaveMeta('${v.id}')">
+            </div>
+        </div>
+        <label class="form-label-caps" style="margin-top:12px;">Reference</label>
+        <input id="b2bPvTitle" class="form-input-lg" maxlength="160" value="${escapeHtml(v.title || '')}"
+            placeholder="e.g. Q3 laptop refresh" ${open ? '' : 'disabled'}
+            onchange="b2bPrevalSaveMeta('${v.id}')">
+        <label class="form-label-caps" style="margin-top:12px;">What They Say They Have</label>
+        <textarea id="b2bPvSummary" class="form-input-lg" rows="2" ${open ? '' : 'disabled'}
+            placeholder="Their own description, before anyone has seen it"
+            onchange="b2bPrevalSaveMeta('${v.id}')">${escapeHtml(v.summary || '')}</textarea>`;
+
+    // Why the sheet is read-only, when it is. Said once and plainly, because the
+    // alternative is a screen full of disabled inputs with no explanation.
+    const frozen = open ? '' : `
+        <div class="b2b-note ${v.status === 'declined' ? '' : 'ok'}">
+            <span class="b2b-note-k">${escapeHtml(meta.label)}${
+                v.status === 'converted' && v.deal_ref ? ` — became ${escapeHtml(v.deal_ref)}` : ''}</span>
+            ${v.status === 'accepted'
+                ? 'The client has agreed to these figures, so the lines are locked. Reopen it as a draft if something has to change before it becomes a deal.'
+                : v.status === 'converted'
+                ? 'This became a deal. Change the lines on the deal itself — this record is what says where its prices came from.'
+                : escapeHtml(v.declined_reason || 'This evaluation is closed.')}
+        </div>`;
+
+    const expiredNote = expired ? `
+        <div class="b2b-note warn">
+            <span class="b2b-note-k">Past its date</span>
+            This was only good until ${escapeHtml(_b2bDate(v.valid_until))}. Re-price it or move
+            the date before treating it as live.
+        </div>` : '';
+
+    _b2bShowDeal({
+        stage: 'pricing',
+        noPrint: true,
+        eyebrow: v.ref,
+        title: 'Pre-Evaluation',
+        sub: `${v.company || 'Client'} — priced before we collect anything.`,
+        full: true,
+        body: `
+            ${frozen}${expiredNote}
+            ${dates}
+            ${_b2bTotalsBar(true)}
+            <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
+            ${_b2bDispLegend()}
+            ${open ? `<button class="b2b-btn b2b-btn-secondary b2b-add"
+                onclick="b2bAddItem('${v.id}',this)">＋ Add Line Item</button>` : ''}`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            ${_b2bPrevalActions(v, canMove)}
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
+        after: _b2bPaintTotals,
+    });
+}
+
+// The one action this evaluation is waiting on, plus the way back. Mirrors the
+// deal footers: the forward move is primary, the way back is quiet.
+function _b2bPrevalActions(v, canMove) {
+    const id = v.id;
+    if (v.status === 'converted') {
+        return v.converted_deal_id
+            ? `<button class="b2b-btn b2b-btn-primary" onclick="b2bOpenPrevalDeal('${id}')">Open ${escapeHtml(v.deal_ref || 'Deal')}</button>`
+            : '';
+    }
+    if (!canMove) {
+        return `<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">A CEO, MOCD or DM sends and accepts evaluations.</span>`;
+    }
+    if (v.status === 'draft') {
+        return `<button class="b2b-btn b2b-btn-primary" onclick="b2bPrevalStatus('${id}','sent',this)">Send To Client</button>`;
+    }
+    if (v.status === 'sent') {
+        return `
+            <button class="b2b-btn b2b-btn-secondary" onclick="b2bPrevalStatus('${id}','draft',this)">Back To Draft</button>
+            <button class="b2b-btn b2b-btn-danger" onclick="b2bPrevalStatus('${id}','declined',this)">They Passed</button>
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bPrevalStatus('${id}','accepted',this)">They Accepted</button>`;
+    }
+    if (v.status === 'accepted') {
+        return `
+            <button class="b2b-btn b2b-btn-secondary" onclick="b2bPrevalStatus('${id}','draft',this)">Reopen For Changes</button>
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bOpenPrevalConvert('${id}')">Turn Into A Deal</button>`;
+    }
+    // declined
+    return `<button class="b2b-btn b2b-btn-secondary" onclick="b2bPrevalStatus('${id}','draft',this)">Reopen</button>`;
+}
+
+function b2bOpenPrevalDeal(id) {
+    const v = _b2bPrevalById(id);
+    if (!v?.converted_deal_id) return;
+    const deal = _b2bDealById(v.converted_deal_id);
+    if (!deal) return alert('That deal is not on your board — it may belong to another store.');
+    b2bOpenDeal(_b2bClickKind(deal), deal.id);
+}
+
+// Header fields save on blur, the same fire-and-forget the line grid uses.
+async function b2bPrevalSaveMeta(id) {
+    const date  = document.getElementById('b2bPvDate')?.value;
+    const until = document.getElementById('b2bPvUntil')?.value || '';
+    if (until && date && until < date) {
+        return _b2bSay('"Good until" can\'t be before the evaluation date.', true);
+    }
+    try {
+        await _b2bSend({
+            action: 'preval_update', id,
+            eval_date: date,
+            valid_until: until || undefined,
+            title: document.getElementById('b2bPvTitle')?.value.trim(),
+            summary: document.getElementById('b2bPvSummary')?.value.trim(),
+            evaluated_by: _b2bUser(),
+        });
+        _b2bDirty = true;
+    } catch (e) {
+        _b2bSay(`Couldn't save that: ${e.message}`, true);
+    }
+}
+
+async function b2bPrevalStatus(id, to, btn) {
+    const v = _b2bPrevalById(id);
+    if (!v) return;
+    let reason = null;
+    if (to === 'declined') {
+        reason = prompt('Why did they pass?\n\nThis is recorded against the evaluation so the '
+            + 'next conversation with this client starts from what happened last time.');
+        if (reason === null) return;
+        if (!reason.trim()) return alert('A reason is required.');
+    }
+    if (to === 'accepted' && !confirm(
+        `Mark ${v.ref} accepted?\n\nThe lines lock at these figures — they are what will convert `
+        + 'into the deal. You can reopen it as a draft if something has to change.')) return;
+    if (to === 'sent' && !confirm(
+        `Send ${v.ref} to the client?\n\nThis records that the figures went out. `
+        + 'The lines stay editable while they think about it.')) return;
+
+    try {
+        await _b2bBusy(btn, 'Saving…', () =>
+            _b2bSend({ action: 'preval_status', id, status: to, reason: reason || undefined }));
+        await b2bRefresh();
+        const fresh = _b2bPrevalById(id);
+        if (fresh) b2bOpenPreval(id); else closeAllModals();
+    } catch (e) {
+        alert(`Couldn't update the evaluation: ${e.message}`);
+    }
+}
+
+// --- conversion -------------------------------------------------------------
+// The same two questions New Deal asks, asked here for the first time: an
+// evaluation had no goods, so where they will sit and how they will arrive only
+// become answerable now.
+
+let _b2bConvStore  = null;
+let _b2bConvIntake = 'pickup';
+
+function b2bOpenPrevalConvert(id) {
+    const v = _b2bPrevalById(id);
+    if (!v) return;
+    const mine = _b2bIsCorp() ? [] : _b2bMyStores();
+    _b2bConvStore  = v.store || (mine.length === 1 ? mine[0] : null);
+    _b2bConvIntake = 'pickup';
+    const options = _b2bIsCorp() ? STORE_CODES : (mine.length ? mine : STORE_CODES);
+
+    _b2bShowDeal({
+        stage: 'pickup',
+        noPrint: true,
+        eyebrow: v.ref,
+        title: 'Turn Into A Deal',
+        sub: `${v.line_count} line${v.line_count === 1 ? '' : 's'} carry straight over, already priced.`,
+        body: `
+            <div class="b2b-note ok">
+                <span class="b2b-note-k">What happens</span>
+                A new deal opens at pickup for ${escapeHtml(v.company || 'this client')} with every
+                line from this evaluation already on it, priced as quoted. It still needs collecting
+                and signing for — and the lines stay editable once it reaches pricing, so anything
+                that turns out different in person can be corrected there.
+            </div>
+            <label class="form-label-caps" style="margin-top:14px;">Holding At</label>
+            <div class="b2b-loc-pick" id="b2bConvStorePick">
+                ${options.map(c => `
+                    <button class="b2b-loc ${c === _b2bConvStore ? 'on' : ''}" data-loc="${c}"
+                        onclick="b2bPickConvStore('${c}')">
+                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
+                        <span class="b2b-loc-c">${c}</span>
+                    </button>`).join('')}
+            </div>
+            <p class="b2b-hint">Which store takes these in. ${_b2bIsCorp()
+                ? 'Leave it unpicked and the deal routes at the pricing-location stage as usual.'
+                : 'This is where the goods will be priced.'}</p>
+            ${_b2bConvIntakeBlock()}`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bOpenPreval('${v.id}')">Cancel</button>
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bDoPrevalConvert('${v.id}',this)">Create The Deal</button>`,
+    });
+}
+
+function _b2bConvIntakeBlock() {
+    const opt = (key, title, sub) => `
+        <button class="b2b-intake ${_b2bConvIntake === key ? 'on' : ''}" data-kind="${key}"
+            onclick="b2bPickConvIntake('${key}')">
+            <span class="b2b-intake-t">${title}</span>
+            <span class="b2b-intake-s">${sub}</span>
+        </button>`;
+    return `
+        <label class="form-label-caps" style="margin-top:14px;">How It Will Come In</label>
+        <div class="b2b-intake-pick" id="b2bConvIntakePick">
+            ${opt('pickup', 'We collect it', 'A pickup run — records the date and the hand-off.')}
+            ${opt('walkin', 'They bring it in', 'Straight to a counter. No pickup date, no hand-off.')}
+        </div>`;
+}
+
+function b2bPickConvStore(code) {
+    _b2bConvStore = (_b2bConvStore === code) ? null : code;
+    document.querySelectorAll('#b2bConvStorePick .b2b-loc')
+        .forEach(b => b.classList.toggle('on', b.dataset.loc === _b2bConvStore));
+}
+function b2bPickConvIntake(kind) {
+    _b2bConvIntake = kind;
+    document.querySelectorAll('#b2bConvIntakePick .b2b-intake')
+        .forEach(b => b.classList.toggle('on', b.dataset.kind === kind));
+}
+
+async function b2bDoPrevalConvert(id, btn) {
+    const v = _b2bPrevalById(id);
+    if (!v) return;
+    // A store user has to say where, for the same reason they do on a new deal:
+    // without a store the deal is invisible to the people holding the goods.
+    if (!_b2bIsCorp() && !_b2bConvStore) {
+        return _b2bSay('Pick which store is taking these in.', true);
+    }
+    try {
+        const out = await _b2bBusy(btn, 'Creating…', () => _b2bSend({
+            action: 'preval_convert', id,
+            pricing_store: _b2bConvStore || undefined,
+            intake_kind: _b2bConvIntake,
+        }));
+        _b2bDirty = false;
+        closeAllModals();
+        await b2bRefresh();
+        alert(`${v.ref} is now deal ${out.ref} — ${out.lines} line${out.lines === 1 ? '' : 's'} carried over.`);
+        const deal = _b2bDealById(out.deal_id);
+        if (deal) b2bOpenDeal('pickup', deal.id);
+    } catch (e) {
+        alert(`Couldn't turn that into a deal: ${e.message}`);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -17123,8 +17637,15 @@ function _b2bShowDeal(cfg) {
     document.getElementById('b2bDealFooter').innerHTML    = cfg.footer || '';
     // SKU label print becomes available once the pickup is dropped at its
     // assigned pricing location — i.e. from the pricing stage onward.
+    // ...and never on a screen that has no deal behind it: b2bPrintPickup reads
+    // _b2bModalDeal, so an evaluation borrowing this shell would print the last
+    // deal somebody happened to open.
     const pb = document.getElementById('b2bDealPrintBtn');
-    if (pb) pb.style.display = ['pricing', 'review', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage) ? '' : 'none';
+    if (pb) {
+        pb.style.display = (!cfg.noPrint
+            && ['pricing', 'review', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage))
+            ? '' : 'none';
+    }
     const modal = document.getElementById('b2bDealModal');
     modal.classList.toggle('b2b-modal-wide', !!cfg.wide);
     // Pricing runs near-full-screen so a long pickup reads as one dense sheet.
@@ -17138,6 +17659,11 @@ function _b2bShowDeal(cfg) {
 async function b2bOpenDeal(kind, id) {
     const deal = _b2bDealById(id);
     if (!deal) return;
+    // Claim the shared item editor for deals. Never inherited: an evaluation
+    // opened earlier in the session would otherwise still own it, and every save
+    // on this screen would go to the wrong table.
+    _b2bItemMode = 'deal';
+    _b2bModalPreval = null;
     _b2bModalDeal = deal;
     _b2bModalItems = [];
     // Default every screen to the card grid; only pricing opts into the sheet.
@@ -17220,6 +17746,7 @@ function _b2bStagePickup(deal) {
         sub: holding ? `${w.sub.replace(/\.$/, '')} — then straight into pricing at ${holding}.` : w.sub,
         body: `
             ${_b2bSummary(deal)}
+            ${_b2bPrevalOriginNote(deal)}
             <label class="form-label-caps">${w.items}</label>
             <textarea id="b2bPuDesc" class="form-input-lg" rows="3"
                 placeholder="e.g. ~40 laptops, 12 monitors, 3 pallets of misc peripherals">${escapeHtml(puDesc)}</textarea>
@@ -17374,6 +17901,29 @@ function _b2bLabelBtn(it, cls) {
         data-tip="${n === 1 ? `Print the label for ${escapeHtml(it.sku)}`
                             : `Print labels for ${escapeHtml(it.sku)} — it asks how many`}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
 }
+// WHAT THE ITEM EDITOR IS EDITING
+// -------------------------------
+// Everything below -- the inline saves, the totals, the margin, the detail
+// sheet, the spreadsheet itself -- was already generic over _b2bModalItems. The
+// only thing that was ever deal-specific was the name of the action it posted.
+// So a pre-evaluation reuses the whole editor and differs by three strings,
+// rather than getting a second renderer that would drift from this one within a
+// release.
+//
+// The handful of places that genuinely differ (no SKU, no drag-to-reorder, no
+// serials -- we have not seen these units) each test _b2bItemMode explicitly.
+const B2B_ITEM_CTX = {
+    deal:   { add: 'add_item',        update: 'update_item',        del: 'delete_item',
+              parent: 'deal_id',   fetch: 'deal_id' },
+    preval: { add: 'preval_add_item', update: 'preval_update_item', del: 'preval_delete_item',
+              parent: 'preval_id', fetch: 'preval_id' },
+};
+let _b2bItemMode = 'deal';
+function _b2bCtx() { return B2B_ITEM_CTX[_b2bItemMode] || B2B_ITEM_CTX.deal; }
+function _b2bIsPreval() { return _b2bItemMode === 'preval'; }
+// Whichever record the open editor belongs to.
+function _b2bEditParent() { return _b2bIsPreval() ? _b2bModalPreval : _b2bModalDeal; }
+
 function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
 
 // --- item shape helpers ----------------------------------------------------
@@ -17929,7 +18479,12 @@ function _b2bItemBlocked(it) {
     const why = [];
     if (_b2bMissingReason(it))     why.push(`${it.condition} needs a reason`);
     if (_b2bMissingSpecs(it).length) why.push(_b2bMissingSpecs(it).map(f => f.label).join(', ') + ' missing');
-    if (!_b2bSerialsOk(it))        why.push(`${_b2bSerials(it).length} of ${Number(it.quantity) || 1} serials`);
+    // Serials are per physical unit, and a pre-evaluation has no units -- the
+    // client has described what they have, nobody has held it. Demanding them
+    // here would make every evaluation permanently unsendable.
+    if (!_b2bIsPreval() && !_b2bSerialsOk(it)) {
+        why.push(`${_b2bSerials(it).length} of ${Number(it.quantity) || 1} serials`);
+    }
     return why;
 }
 function _b2bNotReady() { return _b2bModalItems.filter(it => _b2bItemBlocked(it).length); }
@@ -18041,7 +18596,7 @@ function b2bItemSave(id) {
     if (!it) return Promise.resolve();
     _b2bDirty = true;
     return _b2bEnqueue(id, () => _b2bSend({
-        action: 'update_item', id,
+        action: _b2bCtx().update, id,
         make: it.make, model: it.model, condition: it.condition,
         staff_notes: it.staff_notes, client_notes: it.client_notes,
         quantity: it.quantity, value: it.value, offer: it.offer, shipping_cost: it.shipping_cost || 0,
@@ -18100,9 +18655,10 @@ async function b2bItemWipe(id, on) {
 function _b2bWipeFee() { return Number(_b2bMeta?.wipe_fee ?? 8); }
 
 async function _b2bRefreshItemFee(id) {
-    if (!_b2bModalDeal) return;
+    const parent = _b2bEditParent();
+    if (!parent) return;
     try {
-        const rows = await _b2bGet(`deal_id=${encodeURIComponent(_b2bModalDeal.id)}`);
+        const rows = await _b2bGet(`${_b2bCtx().fetch}=${encodeURIComponent(parent.id)}`);
         const fresh = rows.find(r => r.id === id);
         const it = _b2bLocalItem(id);
         if (!fresh || !it) return;
@@ -18243,8 +18799,9 @@ function _b2bSyncReady(it) {
 // button says so rather than just sitting there.
 async function b2bAddItem(dealId, btn) {
     await _b2bBusy(btn, 'Adding…', async () => {
+        const ctx = _b2bCtx();
         const out = await _b2bPost({
-            action: 'add_item', deal_id: dealId, quantity: 1, value: 0, offer: 0,
+            action: ctx.add, [ctx.parent]: dealId, quantity: 1, value: 0, offer: 0,
         }, "Couldn't add a line");
         // Must carry every field the grid reads: the optimistic row is what gets
         // painted, and anything missing here reads as undefined until a refetch.
@@ -18288,7 +18845,8 @@ async function b2bCopyItem(id, btn) {
             gpu: src.gpu, battery_health: src.battery_health,
             disposition: _b2bDispOf(src), wipe_required: !!src.wipe_required,
         };
-        const out = await _b2bPost({ action: 'add_item', deal_id: _b2bModalDeal.id, ...copy },
+        const ctx = _b2bCtx();
+        const out = await _b2bPost({ action: ctx.add, [ctx.parent]: _b2bEditParent().id, ...copy },
             "Couldn't copy that line");
         // Same rule as b2bAddItem: the optimistic row is what gets painted, so it
         // has to carry every field the grid reads.
@@ -18301,8 +18859,10 @@ async function b2bCopyItem(id, btn) {
         _b2bRepaintItems();
         _b2bPaintTotals();
         // Straight to the serials, because that is the one thing a copy cannot
-        // fill in and the one thing that blocks submitting.
-        b2bItemDetail(out.id);
+        // fill in and the one thing that blocks submitting. An evaluation has no
+        // serials, so a copy there is already complete and the sheet would open
+        // on nothing.
+        if (!_b2bIsPreval()) b2bItemDetail(out.id);
     });
 }
 
@@ -18314,7 +18874,7 @@ function b2bDeleteItem(id) {
     _b2bModalItems.splice(at, 1);
     _b2bDirty = true;
     _b2bRepaintItems();
-    _b2bEnqueue(id, () => _b2bSend({ action: 'delete_item', id }))
+    _b2bEnqueue(id, () => _b2bSend({ action: _b2bCtx().del, id }))
         .catch(e => {
             _b2bModalItems.splice(at, 0, it);   // put it back where it was
             _b2bRepaintItems();
@@ -18619,11 +19179,11 @@ function _b2bItemSheet() {
         return `
         <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
             <div class="b2b-prow">
-                <span class="b2b-pcell b2b-pc-sku b2b-pc-grab" draggable="true"
-                    title="${escapeHtml(it.sku || '')} — drag to reorder"
-                    ondragstart="b2bDragStart(event,'${it.id}')" ondragend="b2bDragEnd()"
-                    ondragover="b2bDragOver(event,'${it.id}')" ondrop="b2bDrop(event,'${it.id}')">
-                    <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
+                <span class="b2b-pcell b2b-pc-sku ${_b2bIsPreval() ? '' : 'b2b-pc-grab'}" ${_b2bIsPreval() ? '' : 'draggable="true"'}
+                    title="${_b2bIsPreval() ? 'Line ' + escapeHtml(String(it.line_no)) : escapeHtml(it.sku || '') + ' — drag to reorder'}"
+                    ${_b2bIsPreval() ? '' : `ondragstart="b2bDragStart(event,'${it.id}')" ondragend="b2bDragEnd()"
+                    ondragover="b2bDragOver(event,'${it.id}')" ondrop="b2bDrop(event,'${it.id}')"`}>
+                    <span class="b2b-mono">${escapeHtml(_b2bIsPreval() ? String(it.line_no) : _b2bLineNo(it))}</span>
                     ${blocked.length ? `<i class="b2b-ss-flag" title="${escapeHtml(blocked.join(', '))}"></i>` : ''}
                 </span>
                 <span class="b2b-pcell" data-k="Type">
@@ -18767,20 +19327,21 @@ function _b2bItemSheetBody(it) {
     return `
         <div class="b2b-isheet-head">
             <div class="b2b-isheet-id">
-                <span class="b2b-isheet-sku b2b-mono">${escapeHtml(it.sku || _b2bLineNo(it))}</span>
+                <span class="b2b-isheet-sku b2b-mono">${escapeHtml(_b2bIsPreval() ? 'Line ' + it.line_no : (it.sku || _b2bLineNo(it)))}</span>
                 <div>
                     <div class="b2b-isheet-name">${escapeHtml(_b2bItemName(it))}</div>
                     <div class="b2b-isheet-meta">${escapeHtml(typeLabel)} · Qty ${need}${it.condition ? ' · ' + escapeHtml(it.condition) : ''} · ${escapeHtml(B2B_DISP[_b2bDispOf(it)].label)}</div>
                 </div>
             </div>
             <div class="b2b-isheet-actions">
-                ${_b2bLabelBtn(it)}
+                ${_b2bIsPreval() ? '' : _b2bLabelBtn(it)}
                 <button class="modal-close-btn" onclick="b2bCloseItemSheet()" aria-label="Close">${_b2bIco(_B2B_ICO_X)}</button>
             </div>
         </div>
         ${blocked.length ? `<div class="b2b-note warn b2b-isheet-block"><span class="b2b-note-k">Not ready</span>${escapeHtml(blocked.join(' · '))}</div>` : ''}
         <div class="b2b-isheet-body">
             ${specBlock}
+            ${_b2bIsPreval() ? '' : `
             <div class="b2b-isheet-sec">
                 <h5>Serial numbers <span class="b2b-serial-count ${serials.length === need ? '' : 'miss'}">${serials.length} of ${need}</span> <span class="b2b-tag-int">one per unit</span></h5>
                 <div class="b2b-f b2b-serialf">
@@ -18791,7 +19352,7 @@ function _b2bItemSheetBody(it) {
                         ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true)" title="Fill every remaining slot">Fill All ${left}</button>` : ''}
                     </div>
                 </div>
-            </div>
+            </div>`}
             <div class="b2b-isheet-sec">
                 <h5>Staff notes <span class="b2b-tag-int">internal</span></h5>
                 <div class="b2b-f">
@@ -18833,6 +19394,20 @@ function _b2bTotalsBar(showMargin) {
 // A deal that came back from the approver leads with why. Whoever re-prices it
 // may not be whoever priced it the first time, so this has to be the first thing
 // on the screen rather than a line in a history somewhere.
+// A deal that came from an evaluation was priced before anyone saw the goods,
+// and the client has already agreed to those figures. Whoever prices it now is
+// often not whoever quoted it, so this has to be on the screen rather than
+// buried in a field: changing a number here changes a number they accepted.
+function _b2bPrevalOriginNote(deal) {
+    if (!deal.preval_ref) return '';
+    return `
+        <div class="b2b-note b2b-from-pv">
+            <span class="b2b-note-k">Priced in advance — evaluation ${escapeHtml(deal.preval_ref)}</span>
+            These lines came from an evaluation the client accepted. Correct anything that turns
+            out different in person, but a change here is a change to a figure they were quoted.
+        </div>`;
+}
+
 function _b2bSendbackNote(deal) {
     if (!deal.sendback_note) return '';
     const who = [deal.sendback_by, deal.sendback_at ? _b2bDate(deal.sendback_at) : '']
@@ -18855,6 +19430,7 @@ function _b2bStagePricing(deal) {
         body: `
             ${_b2bSummary(deal)}
             ${_b2bSendbackNote(deal)}
+            ${_b2bPrevalOriginNote(deal)}
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
@@ -20171,39 +20747,60 @@ function _b2bBarcodeSvg(data) {
     return `<svg class="bc" viewBox="0 0 ${enc.width} ${H}" preserveAspectRatio="none" shape-rendering="crispEdges">${rects}</svg>`;
 }
 
-// One label per physical unit: a qty-5 line prints 5 identical labels, so each
-// scan during listing ticks that line up by one.
-// A tag for the pallet itself, for the stretch between "we collected it" and
-// "it has been priced".
+// ---------------------------------------------------------------------------
+// FULL-PAGE PALLET TAGS — one standard, two sheets
 //
-// The per-unit labels can't cover this: b2bPrintLabels keys off it.sku, and
-// SKUs are not minted until pricing is submitted, so a pickup waiting to be
-// routed has nothing printable at all -- it sits in a back room identified by
-// nothing. deal.ref exists from creation, which is what this prints.
+// The holding tag and the SKU tag are the same object at two points in the
+// pipeline: a sheet taped to a pallet saying which deal it is. They had drifted
+// into two unrelated documents -- one a bordered tag with a barcode, a meta grid
+// and a handling note, the other centred type on a fold line with no barcode at
+// all -- so the same pallet got identified two different ways depending only on
+// how far along it happened to be. Someone reading a stack of them had to learn
+// two layouts to read one fact.
 //
-// Two formats. The letter sheet is the one that matters: this gets taped to a
-// skid and read from across a room, which is a different job from a device
-// label. The 2.25in version is there for when the label printer is what's to
-// hand -- it's the same stock the item labels use.
-function b2bPrintHoldingLabel(dealId) {
-    const deal = _b2bDealById(dealId) || _b2bModalDeal;
-    if (!deal) return;
+// The document is built once, by _b2bTagSheet. Each sheet supplies only what is
+// genuinely different: the status band, three meta cells, and the sentence at
+// the bottom saying what to do with it.
+//
+// THE STANDARD, top to bottom. Adding a sheet means filling these in, not
+// inventing a layout:
+//   band      what is happening to this pallet right now
+//   company   who it came from
+//   barcode   Code 128 of deal.ref -- scannable, and now on BOTH sheets
+//   ref       the reference, auto-sized to fill the width; this is the thing
+//             read from across a room, so it gets whatever space is left
+//   meta      exactly three cells, so the grid never reflows
+//   contents  what is on the pallet, when we know
+//   note      what NOT to do with it
+//
+// Both print full-page portrait, and both offer the same 2.25x1in fallback for
+// when the label printer is what is to hand. b2bPrintLabels is deliberately not
+// part of this: a per-unit device label is a different physical object, not a
+// smaller version of the same one.
+// ---------------------------------------------------------------------------
 
-    const client = deal.client?.company || '—';
-    const acr    = deal.client?.acronym || '';
-    const where  = deal.pricing_store || 'Not yet assigned';
-    const picked = deal.pickup_date ? _b2bDate(deal.pickup_date) : '—';
-    const desc   = deal.pickup_desc || 'No description recorded';
+// Monospace runs about 0.62em per character and the tracking below adds another
+// 0.06em, against ~470pt of usable width inside the tag's padding. Capped at
+// both ends so a two-character ref isn't absurd and a long one stays readable.
+function _b2bTagRefSize(ref) {
+    return Math.max(36, Math.min(90, Math.floor(470 / (Math.max(1, String(ref || '').length) * 0.68))));
+}
 
-    const doc = `<!doctype html><html><head><meta charset="utf-8">
-<title>Holding ${escapeHtml(deal.ref)}</title>
-<style id="pageSize">@page { size: letter; margin: 0.4in; }</style>
+function _b2bTagSheet(cfg) {
+    const ref = String(cfg.ref || '');
+    // Always three, padded if a caller has fewer: the grid is a fixed rhythm
+    // across both sheets, and a short row would read as a different layout.
+    const cells = [...(cfg.meta || []), ['', ''], ['', ''], ['', '']].slice(0, 3);
+    return `<!doctype html><html><head><meta charset="utf-8">
+<title>${escapeHtml(cfg.docTitle || ref)}</title>
+<style id="pageSize">@page { size: letter portrait; margin: 0.4in; }</style>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; font-family: 'Inter','Segoe UI',Arial,sans-serif; background: #f4f7f9; }
   .bar { position: sticky; top: 0; display: flex; gap: 8px; align-items: center;
          padding: 12px 16px; background: #fff; border-bottom: 1px solid #e6ebf1; }
   .bar b { font-size: 13px; font-weight: 800; color: #1a1c1e; margin-right: 6px; }
+  .bar span { font-size: 12px; color: #94a3b8; }
   .bar button { font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
                 padding: 7px 13px; border-radius: 9px; border: 1px solid #e6ebf1;
                 background: #fff; color: #647082; }
@@ -20211,31 +20808,38 @@ function b2bPrintHoldingLabel(dealId) {
   .bar button.go { background: #1f9d57; border-color: #1f9d57; color: #fff; margin-left: auto; }
   .sheet { padding: 20px; display: flex; justify-content: center; }
 
-  .tag { width: 7.7in; background: #fff; border: 2px solid #111; padding: 0.34in 0.4in; }
-  .tag .hd { font-size: 15pt; font-weight: 800; letter-spacing: .22em;
-             text-transform: uppercase; border-bottom: 2px solid #111; padding-bottom: 0.1in; }
-  .tag .co { font-size: 34pt; font-weight: 800; line-height: 1.05; margin-top: 0.16in; }
+  /* The ref size rides on a custom property rather than an inline font-size, so
+     the 2.25in rules below can override it without !important. */
+  .tag { width: 7.7in; background: #fff; border: 2px solid #111;
+         padding: 0.36in 0.42in; --ref: 60pt; }
+  .tag .band { font-size: 14pt; font-weight: 800; letter-spacing: .2em;
+               text-transform: uppercase; border-bottom: 2px solid #111; padding-bottom: 0.1in; }
+  .tag .co { font-size: 30pt; font-weight: 800; line-height: 1.05; margin-top: 0.16in;
+             max-width: 100%; overflow-wrap: anywhere; }
   .tag .bc { display: block; width: 100%; height: 1.15in; fill: #000; margin-top: 0.16in; }
-  .tag .rf { font-family: 'Consolas','SFMono-Regular',monospace; font-size: 26pt;
-             font-weight: 700; letter-spacing: .1em; text-align: center; margin-top: 0.02in; }
-  .tag .gr { display: flex; gap: 0.4in; margin-top: 0.2in; border-top: 1px solid #111; padding-top: 0.14in; }
-  .tag .gr > div { flex: 1; }
+  .tag .rf { font-family: 'Consolas','SFMono-Regular','Menlo',monospace; font-size: var(--ref);
+             font-weight: 800; letter-spacing: .06em; line-height: 1; text-align: center;
+             margin-top: 0.06in; white-space: nowrap; }
+  .tag .gr { display: flex; gap: 0.4in; margin-top: 0.22in;
+             border-top: 1px solid #111; padding-top: 0.14in; }
+  .tag .gr > div { flex: 1; min-width: 0; }
   .tag .k { font-size: 9pt; font-weight: 800; letter-spacing: .12em;
             text-transform: uppercase; color: #444; }
-  .tag .v { font-size: 15pt; font-weight: 700; margin-top: 0.03in; }
-  .tag .ds { font-size: 12pt; margin-top: 0.16in; line-height: 1.35; }
+  .tag .v { font-size: 15pt; font-weight: 700; margin-top: 0.03in; overflow-wrap: anywhere; }
+  .tag .ds { font-size: 12pt; margin-top: 0.18in; line-height: 1.35; }
   .tag .ft { font-size: 9.5pt; color: #444; margin-top: 0.2in;
              border-top: 1px solid #ccc; padding-top: 0.1in; }
 
   /* Label-printer stock: only what identifies the pallet survives the shrink. */
   body.sm .sheet { padding: 16px; }
   body.sm .tag { width: 2.25in; height: 1in; padding: 0.05in 0.07in; border-width: 1px;
+                 --ref: 9pt;
                  display: flex; flex-direction: column; align-items: center; justify-content: center; }
-  body.sm .tag .hd { font-size: 6pt; letter-spacing: .14em; border: 0; padding: 0; }
+  body.sm .tag .band { font-size: 6pt; letter-spacing: .14em; border: 0; padding: 0; }
   body.sm .tag .co { font-size: 7.5pt; margin: 0; max-width: 100%;
                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body.sm .tag .bc { height: 0.34in; margin-top: 0.02in; }
-  body.sm .tag .rf { font-size: 9pt; margin: 0; letter-spacing: .04em; }
+  body.sm .tag .rf { margin: 0; letter-spacing: .04em; }
   body.sm .tag .gr, body.sm .tag .ds, body.sm .tag .ft { display: none; }
 
   @media print {
@@ -20248,25 +20852,24 @@ function b2bPrintHoldingLabel(dealId) {
 </style></head>
 <body>
   <div class="bar">
-    <b>${escapeHtml(deal.ref)}</b>
+    <b>${escapeHtml(ref)}</b>
     <button id="b1" class="on" onclick="setSize(false)">Full page</button>
     <button id="b2" onclick="setSize(true)">2.25 × 1 in</button>
+    ${cfg.hint ? `<span>${escapeHtml(cfg.hint)}</span>` : ''}
     <button class="go" onclick="window.print()">Print</button>
   </div>
   <div class="sheet">
-    <div class="tag">
-      <div class="hd">Holding — Awaiting Pricing</div>
-      <div class="co">${escapeHtml(client)}${acr ? ` (${escapeHtml(acr)})` : ''}</div>
-      ${_b2bBarcodeSvg(deal.ref)}
-      <div class="rf">${escapeHtml(deal.ref)}</div>
+    <div class="tag" style="--ref:${_b2bTagRefSize(ref)}pt;">
+      <div class="band">${escapeHtml(cfg.band || 'B2B')}</div>
+      <div class="co">${escapeHtml(cfg.company || '—')}</div>
+      ${_b2bBarcodeSvg(ref)}
+      <div class="rf">${escapeHtml(ref)}</div>
       <div class="gr">
-        <div><div class="k">${escapeHtml(_b2bIntake(deal).was)}</div><div class="v">${escapeHtml(picked)}</div></div>
-        <div><div class="k">Price It At</div><div class="v">${escapeHtml(where)}</div></div>
-        <div><div class="k">Released By</div><div class="v">${escapeHtml(deal.signed_by || '—')}</div></div>
+        ${cells.map(([k, v]) => `
+        <div><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(k ? (v || '—') : '')}</div></div>`).join('')}
       </div>
-      <div class="ds"><b>Contents:</b> ${escapeHtml(desc)}</div>
-      <div class="ft">Do not process or list these items until this deal has been priced and the
-        client has accepted the quote. Look the reference up in Operations &rarr; Business-to-Business.</div>
+      ${cfg.contents ? `<div class="ds"><b>Contents:</b> ${escapeHtml(cfg.contents)}</div>` : ''}
+      ${cfg.note ? `<div class="ft">${escapeHtml(cfg.note)}</div>` : ''}
     </div>
   </div>
 <script>
@@ -20276,15 +20879,52 @@ function b2bPrintHoldingLabel(dealId) {
     document.getElementById('b2').className = small ? 'on' : '';
     document.getElementById('pageSize').textContent = small
       ? '@page { size: 2.25in 1in; margin: 0; }'
-      : '@page { size: letter; margin: 0.4in; }';
+      : '@page { size: letter portrait; margin: 0.4in; }';
   }
 <\/script>
 </body></html>`;
+}
 
+// Every print path opens the same way, and the only thing that differed was the
+// noun in the pop-up warning.
+function _b2bOpenSheet(doc, what) {
     const w = window.open('', '_blank');
-    if (!w) return alert('Allow pop-ups for this site to print the holding label.');
+    if (!w) return alert(`Allow pop-ups for this site to print the ${what}.`);
     w.document.write(doc);
     w.document.close();
+}
+
+// Company plus acronym, which is how the tag names a client on both sheets.
+function _b2bTagCompany(deal) {
+    const co  = deal.client?.company || deal.company || '—';
+    const acr = deal.client?.acronym || deal.acronym || '';
+    return acr ? `${co} (${acr})` : co;
+}
+
+// A tag for the pallet itself, for the stretch between "we took it in" and
+// "it has been priced".
+//
+// The per-unit labels can't cover this: b2bPrintLabels keys off it.sku, and
+// SKUs are not minted until a line exists, so a pickup waiting to be routed has
+// nothing printable at all -- it sits in a back room identified by nothing.
+// deal.ref exists from creation, which is what this prints.
+function b2bPrintHoldingLabel(dealId) {
+    const deal = _b2bDealById(dealId) || _b2bModalDeal;
+    if (!deal) return;
+    _b2bOpenSheet(_b2bTagSheet({
+        docTitle: `Holding ${deal.ref}`,
+        band: 'Holding — Awaiting Pricing',
+        ref: deal.ref,
+        company: _b2bTagCompany(deal),
+        meta: [
+            [_b2bIntake(deal).was, deal.pickup_date ? _b2bDate(deal.pickup_date) : '—'],
+            ['Price It At', deal.pricing_store || 'Not yet assigned'],
+            ['Released By', deal.signed_by || '—'],
+        ],
+        contents: deal.pickup_desc || 'No description recorded',
+        note: 'Do not process or list these items until this deal has been priced and the client '
+            + 'has accepted the quote. Look the reference up in Operations → Business-to-Business.',
+    }), 'holding label');
 }
 
 function b2bPrintLabels(dealId, itemId, count) {
@@ -20426,71 +21066,37 @@ function b2bPrintLabels(dealId, itemId, count) {
 <\/script>
 </body></html>`;
 
-    const w = window.open('', '_blank');
-    if (!w) return alert('Allow pop-ups for this site to print labels.');
-    w.document.write(doc);
-    w.document.close();
+    _b2bOpenSheet(doc, 'unit labels');
 }
 
-// Full-page SKU label for a whole pickup: the deal ref, sized to fill the top
-// half of a portrait Letter page so it folds in half into a tent/hang tag.
+// The same pallet tag once the deal is being worked: priced, quoted, listed or
+// done. It used to be its own document -- centred type on a fold line, no
+// barcode -- which meant the pallet that had been scannable while it sat in
+// holding stopped being scannable the moment someone priced it. Now it is the
+// standard tag with a different band and a different bottom line.
 function b2bPrintPickup() {
     const deal = _b2bModalDeal;
     if (!deal) return;
-    const ref = deal.ref || '';
-    if (!ref) return alert('This pickup has no SKU yet — it gets one when it reaches pricing.');
-    const company = deal.company || deal.client?.company || '';
-    const when = deal.pickup_date ? _b2bDate(deal.pickup_date) : '';
-
-    // Size the ref to fit the usable width (~6.7in ≈ 480pt); monospace runs about
-    // 0.62em/char. Capped so short refs don't get comically large.
-    const size = Math.max(40, Math.min(150, Math.floor(480 / (ref.length * 0.62))));
-
-    const doc = `<!doctype html><html><head><meta charset="utf-8">
-<title>SKU ${escapeHtml(ref)}</title>
-<style>
-  @page { size: letter portrait; margin: 0; }
-  * { box-sizing: border-box; }
-  body { margin: 0; font-family: 'Inter','Segoe UI',Arial,sans-serif; background: #f4f7f9; }
-  .bar { position: sticky; top: 0; display: flex; gap: 12px; align-items: center;
-         padding: 12px 16px; background: #fff; border-bottom: 1px solid #e6ebf1; }
-  .bar b { font-size: 13px; font-weight: 800; color: #1a1c1e; }
-  .bar span { font-size: 12px; color: #94a3b8; }
-  .bar button.go { margin-left: auto; background: #1f9d57; border: 1px solid #1f9d57;
-         color: #fff; font: inherit; font-size: 12px; font-weight: 700; padding: 8px 15px;
-         border-radius: 9px; cursor: pointer; }
-  .page { width: 8.5in; height: 11in; margin: 0 auto; background: #fff; }
-  .top { height: 5.5in; padding: 0.55in 0.9in; display: flex; flex-direction: column;
-         align-items: center; justify-content: center; text-align: center;
-         border-bottom: 2px dashed #c7ced6; position: relative; }
-  .eyebrow { font-size: 26pt; font-weight: 800; letter-spacing: .22em;
-             text-transform: uppercase; color: #5a6b7b; }
-  .sku { font-family: 'Consolas','SFMono-Regular','Menlo',monospace; font-weight: 800;
-         letter-spacing: .01em; line-height: 1; color: #0f1720; margin: 0.22in 0;
-         white-space: nowrap; }
-  .co { font-size: 30pt; font-weight: 700; color: #1a1c1e; max-width: 100%;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .meta { font-size: 15pt; font-weight: 600; color: #6b7280; margin-top: 0.08in; }
-  @media print { body { background: #fff; } .bar { display: none; } .page { margin: 0; } }
-</style></head>
-<body>
-  <div class="bar">
-    <b>${escapeHtml(ref)}</b>
-    <span>Prints on the top half of a portrait page — fold in half and tape up.</span>
-    <button class="go" onclick="window.print()">Print</button>
-  </div>
-  <div class="page"><div class="top">
-    <div class="eyebrow">B2B ${escapeHtml(_b2bIntake(deal).key === 'walkin' ? 'Intake' : 'Pickup')}</div>
-    <div class="sku" style="font-size:${size}pt;">${escapeHtml(ref)}</div>
-    ${company ? `<div class="co">${escapeHtml(company)}</div>` : ''}
-    ${when ? `<div class="meta">${escapeHtml(_b2bIntake(deal).was)} ${escapeHtml(when)}</div>` : ''}
-  </div></div>
-</body></html>`;
-
-    const w = window.open('', '_blank');
-    if (!w) return alert('Allow pop-ups for this site to print the label.');
-    w.document.write(doc);
-    w.document.close();
+    if (!deal.ref) return alert('This deal has no reference yet.');
+    // Where the goods are NOW: the listing store once one is set, otherwise
+    // wherever they were priced. Those are the same place for every deal that
+    // did not go through CORP, and where they differ the listing store is the
+    // one the tag is standing in.
+    const listing = !!deal.listing_store;
+    _b2bOpenSheet(_b2bTagSheet({
+        docTitle: `SKU ${deal.ref}`,
+        band: `B2B ${_b2bIntake(deal).key === 'walkin' ? 'Intake' : 'Pickup'}`,
+        ref: deal.ref,
+        company: _b2bTagCompany(deal),
+        meta: [
+            [_b2bIntake(deal).was, deal.pickup_date ? _b2bDate(deal.pickup_date) : '—'],
+            [listing ? 'Listing At' : 'Priced At', (listing ? deal.listing_store : deal.pricing_store) || 'Not yet assigned'],
+            ['Stage', B2B_STAGE[deal.stage]?.label || deal.stage],
+        ],
+        contents: deal.pickup_desc || '',
+        note: 'Every unit on this deal carries its own SKU label — this sheet identifies the '
+            + 'pallet they came off. Look the reference up in Operations → Business-to-Business.',
+    }), 'label');
 }
 
 // ============================================================================
