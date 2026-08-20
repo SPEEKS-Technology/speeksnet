@@ -18,6 +18,25 @@
 -- Named to sit beside b2b_deal_items_recycle_worthless, which is the same idea
 -- applied to value.
 --
+-- ---------------------------------------------------------------------------
+-- ORDERING: THIS MUST NOT LAND BEFORE THE EDGE FUNCTION THAT SATISFIES IT
+--
+-- Applied once, on 19 Aug, and immediately rolled back off production -- because
+-- the deployed b2b-deals still wrote shipping_cost unconditionally and the
+-- deployed frontend never zeroed it when a line was switched to Recycle. So the
+-- constraint was live while the only two things that write to the column still
+-- violated it: type a shipping cost, choose Recycle, and the save came back a
+-- 500 instead of a save. Six deals were in flight at the time.
+--
+-- Re-apply this AFTER `b2b-deals` ships with
+-- `shipping_cost: disposition === "recycle" ? 0 : money(...)` in both item
+-- builders. Not before.
+--
+-- The general rule this is an instance of: a CHECK that narrows what a column
+-- may hold is a deploy-ordering problem, not just a schema change. The writers
+-- have to agree with it first. `intake_kind` went out the safe way round -- the
+-- column landed before the code that used it -- and this one went out backwards.
+--
 -- Applied via Supabase MCP `apply_migration`.
 -- ============================================================================
 
