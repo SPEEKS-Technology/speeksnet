@@ -1,27 +1,19 @@
 -- ============================================================================
 -- A recycle line carries no shipping cost, matching value and offer.
 --
--- This reverses a deliberate earlier choice, so it is worth saying why rather
--- than leaving the next reader to assume the old reasoning was never considered.
+-- We do not pay to ship scrap. So zero is not a simplification or a tradeoff --
+-- it is the true figure, and the column being editable on a recycle line was
+-- simply wrong. Value and Offer already rendered a dash there because the client
+-- is paid nothing; freight sat between them as a live money box and was read as
+-- a bug every time somebody saw it, which is how this surfaced.
 --
--- Freight was priced on scrap lines because a pallet of scrap genuinely does
--- cost money to move, and that figure fed the deal margin. The argument was
--- sound and it still lost on the floor: Value and Offer both render a dash on a
--- recycle line, because the client is paid nothing for scrap, so a live money
--- box sitting between the two of them was read as a bug every single time
--- somebody saw it. Three money columns disagreeing about what a scrap line means
--- cost more than the freight number was worth.
---
--- THE PRICE OF THIS CHANGE, recorded so nobody rediscovers it as a defect: the
--- margin on a recycle line now understates what that line costs us to move. If
--- freight on scrap ever needs to be visible again, it wants its own internal-only
--- column rather than this one, so it cannot be mistaken for a client-facing
--- figure a second time.
+-- All three money columns now agree that a recycle line costs nothing and earns
+-- nothing.
 --
 -- Safe to add: 30 recycle lines exist across b2b_deal_items and not one carries
--- a shipping cost, so this validates against live data without destroying a
--- single figure. Verified before applying, and the constraint was then proven to
--- fire by an UPDATE inside a rolled-back transaction.
+-- a shipping cost -- which is itself the evidence that nobody has ever had cause
+-- to put freight on scrap. Verified before applying, and the constraint was then
+-- proven to fire by an UPDATE inside a rolled-back transaction.
 --
 -- Named to sit beside b2b_deal_items_recycle_worthless, which is the same idea
 -- applied to value.

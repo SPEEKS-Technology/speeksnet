@@ -19240,11 +19240,10 @@ function _b2bItemSheet() {
                     ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
-                <!-- Blank on a recycle line, like Value and Offer. Scrap genuinely
-                     does cost freight, so this loses that from the margin -- but a
-                     live money box on a line the client is paid nothing for read as
-                     an error every time, and consistency across the three money
-                     columns won. -->
+                <!-- Blank on a recycle line, like Value and Offer: we do not pay
+                     to ship scrap, so zero is the true figure rather than a
+                     rounding of one. All three money columns now agree that a
+                     recycle line costs nothing and earns nothing. -->
                 <span class="b2b-pcell n" data-k="Ship">
                     ${scrap ? '<span class="b2b-f-off">—</span>'
                           : `<input type="number" min="0" step="0.01" value="${Number(it.shipping_cost) || 0}"
