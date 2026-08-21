@@ -118,6 +118,44 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     btn = await page.$eval('#rcFileBtn', b => ({ text: b.textContent.trim(), disabled: b.disabled }));
     ok(btn.disabled, 'and clearing it disarms the button', btn.text);
 
+    console.log('\n== Choosing a different shelf ==');
+    const proposed = await page.$eval('.rc-table tbody tr .rc-shelf .rc-to', e => e.textContent.trim());
+    await page.click('.rc-table tbody tr .rc-shelf');
+    await new Promise(r => setTimeout(r, 400));
+    const opts = await page.$$eval('#ecCatPop .ec-catopt', bs => bs.length).catch(() => 0);
+    ok(opts > 20, 'the picker lists every shelf', `${opts} options`);
+    const marked = await page.$eval('#ecCatPop .ec-catopt-on .rc-optnow', e => e.textContent.trim()).catch(() => '');
+    ok(marked === 'Current', 'and marks the one it is on now', marked || 'NOT MARKED');
+
+    await page.type('#ecCatQ', 'Networking');
+    await new Promise(r => setTimeout(r, 350));
+    const filtered = await page.$$eval('#ecCatPop .ec-catopt', bs => bs.map(b => b.textContent.trim()));
+    ok(filtered.length === 1 && /Networking/.test(filtered[0]), 'and searches by name', filtered.join(', '));
+
+    await page.click('#ecCatPop .ec-catopt');
+    await new Promise(r => setTimeout(r, 600));
+    const after1 = await page.$eval('.rc-table tbody tr .rc-shelf', e => ({
+        to: e.querySelector('.rc-to').textContent.trim(),
+        picked: e.classList.contains('rc-shelf-picked'),
+    }));
+    ok(after1.to === 'Networking' && after1.to !== proposed,
+        'the row takes the chosen shelf', `${proposed} → ${after1.to}`);
+    ok(after1.picked, 'and shows that a person chose it, not the rule');
+    ok(!(await page.$('#ecCatPop')), 'the picker closes on choosing');
+
+    // Put it back, so the harness leaves no opinion behind for the next reader.
+    await page.click('.rc-table tbody tr .rc-shelf');
+    await new Promise(r => setTimeout(r, 400));
+    await page.type('#ecCatQ', proposed);
+    await new Promise(r => setTimeout(r, 350));
+    await page.click('#ecCatPop .ec-catopt');
+    await new Promise(r => setTimeout(r, 500));
+    const back = await page.$eval('.rc-table tbody tr .rc-shelf', e => ({
+        to: e.querySelector('.rc-to').textContent.trim(),
+        picked: e.classList.contains('rc-shelf-picked'),
+    }));
+    ok(back.to === proposed && !back.picked, 'choosing the rule\'s own answer clears the override', back.to);
+
     console.log('\n== Nothing was written ==');
     const after = await page.$$eval('.rc-table tbody tr', rs => rs.length);
     ok(after === before, 'the queue is the length it started', `${before} → ${after}`);

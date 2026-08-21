@@ -41828,6 +41828,12 @@ const RECAT_URL = `${_BASE}/shopify-recat`;
 
 let _rcData = null;
 let _rcSel = new Set();
+// 'other'    — the junk drawer: stock with no real category at all
+// 'misfiled' — stock on a real shelf that its own title disagrees with. Scored
+//              by STRONG rules only: the full rule set flags 421 products and
+//              is wrong about most of them, because every laptop title recites
+//              an SSD and every gaming PC a GPU.
+let _rcMode = 'other';
 
 async function _rcFetch(path) {
     const pin = sessionStorage.getItem('speeksUserPin') || '';
@@ -41850,11 +41856,15 @@ async function _rcPost(payload) {
 }
 
 async function rcLoad() {
-    _rcData = await _rcFetch(`?view=review${_ecStore ? `&store=${_ecStore}` : ''}`);
+    _rcData = await _rcFetch(`?view=review&mode=${_rcMode}${_ecStore ? `&store=${_ecStore}` : ''}`);
     _ecStore = _rcData.store;
     // A selection belongs to the store it was made in. Carrying it across a
     // store switch would file another store's products on the next click.
     _rcSel = new Set();
+    // Overrides for rows that are no longer in the queue are dead weight, and
+    // an id that came back around would silently inherit an old decision.
+    const live = new Set((_rcData.queue || []).map(q => q.productId));
+    for (const id of [..._rcOver.keys()]) if (!live.has(id)) _rcOver.delete(id);
 }
 
 function _rcHtml() {
@@ -41872,10 +41882,29 @@ function _rcHtml() {
           <span class="rc-chip-n">${n}</span>
         </button>`).join('')}</div>` : '';
 
+    // Two different questions, so two queues rather than one mixed list: "this
+    // has no category" and "this has the wrong one" are agreed to differently,
+    // and the second one takes something OFF a shelf a person chose.
+    const misfiled = _rcData?.misfiledTotal ?? 0;
+    const modes = `
+      <div class="rc-modes">
+        <button type="button" class="rc-mode${_rcMode === 'other' ? ' rc-mode-on' : ''}"
+                onclick="rcSetMode('other')">In Other</button>
+        <button type="button" class="rc-mode${_rcMode === 'misfiled' ? ' rc-mode-on' : ''}"
+                onclick="rcSetMode('misfiled')">Possibly Misfiled${
+                  misfiled ? ` <span class="rc-chip-n">${misfiled}</span>` : ''}</button>
+      </div>`;
+
     if (!queue.length) {
-        return strip + `<div class="ec-empty">Nothing left to file at ${_ecEsc(_ecStore)}.<br>
-          <span style="font-weight:600;color:var(--cb-faint);">Every in-stock item here is on a real shelf${
-            skipped.length ? `, and ${skipped.length} were skipped` : ''}.</span></div>`;
+        return strip + modes + `<div class="ec-empty">${
+          _rcMode === 'misfiled'
+            ? `Nothing looks misfiled at ${_ecEsc(_ecStore)}.`
+            : `Nothing left to file at ${_ecEsc(_ecStore)}.`}<br>
+          <span style="font-weight:600;color:var(--cb-faint);">${
+            _rcMode === 'misfiled'
+              ? 'Every item here sits on a shelf its own title agrees with.'
+              : `Every in-stock item here is on a real shelf${
+                  skipped.length ? `, and ${skipped.length} were skipped` : ''}.`}</span></div>`;
     }
 
     const n = _rcSel.size;
@@ -41893,6 +41922,14 @@ function _rcHtml() {
 
     const rows = queue.map(q => {
         const id = _ecEsc(q.productId);
+        // A shelf somebody picked wins over the one the rule proposed, and says
+        // so — an overridden row that looked identical to a proposed one would
+        // make the reviewer wonder whether their click registered.
+        const chosen = _rcOver.has(q.productId);
+        const target = _rcTargetOf(q);
+        const toTitle = chosen
+            ? ((_rcData?.shelves || []).find(s => s.handle === target)?.title || target)
+            : q.toTitle;
         // The rule that decided is shown on every row on purpose: it is the
         // only way to tell a good match from a lucky one, and the wrong ones
         // are always obvious once you can see which word won.
@@ -41910,9 +41947,14 @@ function _rcHtml() {
           </td>
           <td class="cb-col-status"><span class="rc-rule">${_ecEsc(q.rule)}</span></td>
           <td class="cb-col-status">
-            <span class="rc-move"><span class="rc-from">Other</span>
+            <span class="rc-move"><span class="rc-from">${_ecEsc((q.from || ['Other']).join(' + '))}</span>
               <svg class="rc-arr" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-              <span class="rc-to">${_ecEsc(q.toTitle)}</span></span>
+              <button type="button" class="rc-shelf${chosen ? ' rc-shelf-picked' : ''}" data-id="${id}"
+                      title="${chosen ? 'You chose this shelf — click to change it' : 'Click to file it somewhere else'}"
+                      onclick="rcOpenShelf(this.dataset.id, this)">
+                <span class="rc-to">${_ecEsc(toTitle)}</span>
+                <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+              </button></span>
           </td>
           <td class="cb-col-status rc-acts">
             <button class="ec-btn ec-btn-sm ec-btn-on" data-id="${id}"
@@ -41938,18 +41980,97 @@ function _rcHtml() {
           </div>`).join('')}
       </details>` : '';
 
-    return strip + bar + `
+    return strip + modes + bar + `
       <table class="cb-table rc-table">
         <thead><tr>
           <th style="width:4%;"></th>
-          <th style="width:42%;">Item</th>
-          <th style="width:16%;" class="cb-col-status">Matched On</th>
-          <th style="width:20%;" class="cb-col-status">Move To</th>
+          <th style="width:38%;">Item</th>
+          <th style="width:14%;" class="cb-col-status">Matched On</th>
+          <th style="width:26%;" class="cb-col-status">Move To</th>
           <th style="width:18%;" class="cb-col-status"></th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>` + skips;
 }
+
+// --- choosing a different shelf ---------------------------------------------
+//
+// The rule's answer is a DEFAULT, not a verdict. It is right about four titles
+// in five and wrong about the fifth in a way only somebody who knows the item
+// can see — "Viture Luma XR Projector Smart Glasses" is not a projector, and no
+// keyword was ever going to work that out.
+//
+// This reuses the eBay category popover wholesale: same element id, same
+// placement, same outside-click and Escape handling. A second popover with its
+// own idea of where the viewport ends is how two of them end up on screen.
+const _rcOver = new Map();   // productId → chosen handle, until it is filed
+
+function _rcTargetOf(q) { return _rcOver.get(q.productId) || q.to; }
+
+function rcOpenShelf(id, btn) {
+    if (_ecCatSku === id) { ecCloseCategory(); return; }
+    ecCloseCategory();
+    _ecCatSku = id;
+
+    const q = (_rcData?.queue || []).find(x => x.productId === id);
+    const shelves = _rcData?.shelves || [];
+    const current = q ? _rcTargetOf(q) : '';
+
+    const pop = document.createElement('div');
+    pop.id = 'ecCatPop';
+    pop.className = 'ec-catpop';
+    pop.innerHTML = `
+      <div class="ec-catpop-head">
+        <span class="ec-catpop-sku">${_ecEsc(q?.sku || 'Choose A Shelf')}</span>
+        <button class="ec-x" onclick="ecCloseCategory()" aria-label="Close">&times;</button>
+      </div>
+      <input class="ec-catpop-q" id="ecCatQ" placeholder="Search Categories"
+             oninput="rcShelfSearch(this.value)" autocomplete="off">
+      <div class="ec-catpop-list" id="ecCatList">${_rcShelfListHtml(shelves, current, '')}</div>`;
+    document.body.appendChild(pop);
+    _ecCatAnchor = btn;
+    _ecCatPlace();
+
+    document.addEventListener('mousedown', _ecCatOutside, true);
+    document.addEventListener('keydown', _ecCatEsc, true);
+    document.addEventListener('scroll', _ecCatReflow, true);
+    window.addEventListener('resize', _ecCatReflow);
+    document.getElementById('ecCatQ')?.focus();
+}
+window.rcOpenShelf = rcOpenShelf;
+
+function _rcShelfListHtml(shelves, current, q) {
+    const needle = String(q || '').toLowerCase().trim();
+    const hits = needle ? shelves.filter(s => s.title.toLowerCase().includes(needle)) : shelves;
+    if (!hits.length) return '<div class="ec-catpop-note">No category by that name.</div>';
+    return hits.map(s => `
+      <button type="button" class="ec-catopt${s.handle === current ? ' ec-catopt-on' : ''}"
+              data-h="${_ecEsc(s.handle)}" onclick="rcPickShelf(this.dataset.h)">
+        ${_ecEsc(s.title)}${s.handle === current ? '<span class="rc-optnow">Current</span>' : ''}
+      </button>`).join('');
+}
+
+function rcShelfSearch(q) {
+    const list = document.getElementById('ecCatList');
+    if (!list) return;
+    const row = (_rcData?.queue || []).find(x => x.productId === _ecCatSku);
+    list.innerHTML = _rcShelfListHtml(_rcData?.shelves || [], row ? _rcTargetOf(row) : '', q);
+    _ecCatPlace();
+}
+window.rcShelfSearch = rcShelfSearch;
+
+// Choosing does NOT file. It changes where this row would go, and File It (or
+// the bulk button) carries the choice — so somebody can correct three rows and
+// then send all three, rather than being committed by the act of looking.
+function rcPickShelf(handle) {
+    const id = _ecCatSku;
+    if (!id) return;
+    const q = (_rcData?.queue || []).find(x => x.productId === id);
+    if (q && handle === q.to) _rcOver.delete(id); else _rcOver.set(id, handle);
+    ecCloseCategory();
+    ecRender();
+}
+window.rcPickShelf = rcPickShelf;
 
 // The bar is repainted in place rather than through ecRender, because a full
 // rebuild would replace the checkbox the person is still clicking through.
@@ -41968,11 +42089,30 @@ function rcSelectAll(on) {
 }
 window.rcSelectAll = rcSelectAll;
 
+async function rcSetMode(mode) {
+    if (_rcMode === mode) return;
+    _rcMode = mode;
+    _rcData = null;
+    const body = document.getElementById('ecBody');
+    if (body) body.innerHTML = '<div class="status-message">Loading…</div>';
+    try { await rcLoad(); } catch (e) {
+        if (body) body.innerHTML = `<div class="ec-empty">Could not load that list.<br>
+            <span style="font-weight:600;color:var(--cb-faint);">${_ecEsc(e.message)}</span></div>`;
+        return;
+    }
+    ecRender();
+}
+window.rcSetMode = rcSetMode;
+
 async function _rcRun(ids, btn) {
     if (!ids.length) return;
     const label = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = 'Filing…'; }
-    const res = await _rcPost({ action: 'apply', store: _ecStore, productIds: ids });
+    // Each row carries its own destination, which is the rule's unless somebody
+    // changed it. The server checks both: the product must be in the queue and
+    // the shelf must be one anything may be filed on.
+    const items = ids.map(id => ({ productId: id, to: _rcOver.get(id) }));
+    const res = await _rcPost({ action: 'apply', store: _ecStore, mode: _rcMode, items });
     if (!res.ok) {
         if (btn) { btn.disabled = false; btn.textContent = label; }
         alert(res.body?.detail || res.body?.error || 'Could not file that.');
@@ -41994,8 +42134,13 @@ window.rcFileOne = rcFileOne;
 async function rcFileSelected() {
     const ids = [..._rcSel];
     if (!ids.length) return;
+    // The two queues do different things to the storefront, so they get
+    // different sentences. "Leaves Other" is reassuring; "comes off the shelf
+    // somebody put it on" is the one worth reading twice.
     if (!confirm(`File ${ids.length} item${ids.length === 1 ? '' : 's'} at ${_ecStore}?\n\n`
-        + 'Each one joins its new collection and leaves Other on the live store.')) return;
+        + (_rcMode === 'misfiled'
+            ? 'Each one joins its new collection and COMES OFF the collection it is on now, on the live store.'
+            : 'Each one joins its new collection and leaves Other on the live store.'))) return;
     await _rcRun(ids, document.getElementById('rcFileBtn'));
 }
 window.rcFileSelected = rcFileSelected;
@@ -42026,7 +42171,7 @@ window.rcUnskip = rcUnskip;
 // fetch failed, the view flipped back, or there is genuinely nothing to file.
 window.rcLoad = rcLoad;
 window._dbgRecat = () => ({
-    view: _ecView, store: _ecStore, loaded: !!_rcData,
+    view: _ecView, store: _ecStore, loaded: !!_rcData, mode: _rcMode,
     queue: (_rcData?.queue || []).length, skipped: (_rcData?.skipped || []).length,
     selected: _rcSel.size, totals: _rcData?.totals || null,
 });

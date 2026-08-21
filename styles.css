@@ -17077,6 +17077,38 @@ body.tv-body { display: block; background: #eef1f5; }
 }
 .rc-skiprow .ec-btn { margin-left: auto; }
 
+/* The shelf is a BUTTON, because the rule's answer is a default and the row has
+   to look changeable. Picked ones get the sage outline so an overridden row is
+   distinguishable from a proposed one at a glance. */
+.rc-shelf {
+    display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+    background: none; border: 1px solid transparent; border-radius: 7px;
+    padding: 2px 6px; font-family: inherit; font-size: 12px; font-weight: 700;
+    color: inherit; transition: border-color .12s, background .12s;
+}
+.rc-shelf:hover { border-color: var(--cb-line); background: var(--cb-card); }
+.rc-shelf svg { width: 11px; height: 11px; flex: none; stroke: var(--cb-faint); stroke-width: 2.4; fill: none; }
+.rc-shelf-picked { border-color: var(--cb-sage); background: var(--cb-sage-tint); }
+.rc-shelf-picked svg { stroke: #178048; }
+.rc-optnow {
+    float: right; font-size: 10px; font-weight: 800; color: #178048;
+    background: var(--cb-sage-tint); border-radius: 4px; padding: 1px 5px;
+}
+.ec-catopt-on { border-color: var(--cb-sage); background: var(--cb-sage-tint); }
+
+/* Two queues, two questions. Segmented rather than a dropdown because the
+   counts matter: 'Possibly Misfiled 21' is the whole reason to look. */
+.rc-modes { display: flex; gap: 6px; margin-bottom: 12px; }
+.rc-mode {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    border: 1px solid var(--cb-line); background: var(--cb-card); border-radius: 8px;
+    padding: 6px 13px; font-family: inherit; font-size: 12px; font-weight: 700;
+    color: var(--cb-muted); transition: border-color .12s, color .12s, background .12s;
+}
+.rc-mode:hover { border-color: var(--cb-sage); color: var(--cb-ink); }
+.rc-mode-on { border-color: var(--cb-sage); background: var(--cb-sage-tint); color: var(--cb-ink); }
+.rc-mode-on .rc-chip-n { background: #fff; color: #178048; }
+
 /* --- The session feed ---------------------------------------------------- *
    One row per SKU somebody scanned, and it changes state under them: amber
    while eBay is being asked, green when it is up, red when it is refused. The

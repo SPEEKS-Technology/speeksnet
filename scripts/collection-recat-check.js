@@ -94,6 +94,19 @@ const get = async (u) => (await fetch(u)).json();
         const bogus = await post({ action: 'apply', store: 'OVL', productIds: ['gid://shopify/Product/999999'] });
         ok(!!bogus.body.error, 'a product that is not in the queue cannot be filed', bogus.body.error);
 
+        // The second queue: stock on a real shelf its own title disagrees with.
+        const mis = await (await fetch(`${BASE}/shopify-recat?view=review&store=BAL&mode=misfiled`,
+            { headers: { 'x-user-pin': PIN } })).json();
+        ok(mis.mode === 'misfiled', 'the misfiled queue loads', `${mis.queue?.length} rows at BAL`);
+        ok((mis.queue || []).every(q => (q.from || []).length && !q.from.includes('Other')),
+            'and every row names the shelf it would COME OFF — never Other',
+            (mis.queue || [])[0]?.from?.join(' + ') || 'empty');
+        ok((mis.queue || []).every(q => q.to && !q.from.includes(q.toTitle)),
+            'and never proposes a shelf it is already on');
+        // The counts have to follow the mode, or "WSP 97" sits above a list of two.
+        ok(!!mis.totals && Object.values(mis.totals).every(n => n < 30),
+            'the store counts follow the mode', JSON.stringify(mis.totals));
+
         const victim = r0.queue?.[0]?.productId;
         if (victim) {
             const sk = await post({ action: 'skip', store: 'OVL', productId: victim, reason: 'harness' });

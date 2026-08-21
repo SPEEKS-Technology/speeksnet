@@ -153,6 +153,10 @@ async function collectionIds(shop: string, token: string): Promise<Record<string
 type Proposal = {
   store_code: string; product_id: string; sku: string | null;
   title: string; product_handle: string | null; keyword: string; target_handle: string;
+  // What filing it makes the product LEAVE. `other` for the junk-drawer queue;
+  // for a misfiled product it is whatever shelf it is wrongly on, which is why
+  // this cannot be a constant.
+  wrong_handles?: string[];
 };
 
 async function proposalsFor(store: string): Promise<Proposal[]> {
@@ -161,6 +165,19 @@ async function proposalsFor(store: string): Promise<Proposal[]> {
     `&select=store_code,product_id,sku,title,product_handle,keyword,target_handle` +
     `&order=target_handle,title`);
 }
+
+// The second queue: stock that is already on a real shelf, and on the wrong
+// one. Scored by STRONG rules only — see the 0054 migration for why pointing
+// the whole rule set at filed stock produces 421 flags and ~20 truths.
+async function misfiledFor(store: string): Promise<Proposal[]> {
+  return await rows(
+    `collection_misfiled?store_code=eq.${store}` +
+    `&select=store_code,product_id,sku,title,product_handle,keyword,target_handle,wrong_handles` +
+    `&order=target_handle,title`);
+}
+
+const queueFor = (store: string, mode: string) =>
+  mode === "misfiled" ? misfiledFor(store) : proposalsFor(store);
 
 // Shelf handles are not what a person reading a queue wants to see, and the
 // panel should not carry its own copy of 63 titles that a sweep can rename.
@@ -171,13 +188,21 @@ async function shelfTitles(): Promise<Record<string, string>> {
   return out;
 }
 
+// Every shelf a person may choose instead of the one the rule proposed. Sent
+// with the queue so the picker opens instantly, and used to VALIDATE what comes
+// back — a handle posted by a browser is checked against this list before it
+// reaches Shopify, so the picker cannot be used to file stock anywhere else.
+async function matchableShelves(): Promise<{ handle: string; title: string }[]> {
+  const all = await rows(
+    `shopify_collections?matchable=is.true&select=handle,title&order=title`);
+  return all.map((c: any) => ({ handle: c.handle, title: c.title }));
+}
+
 // Applies exactly these products. Shared by the panel and the sweep so there
 // is one place where a write to a live catalogue happens.
 async function applyProducts(store: string, todo: Proposal[], who: string) {
   const { shop, token } = await shopFor(store);
   const ids = await collectionIds(shop, token);
-  const fromId = ids[FROM_HANDLE];
-  if (!fromId) throw new Error(`${store}: no '${FROM_HANDLE}' collection`);
 
   const moved: Proposal[] = [];
   const failed: { title: string; why: string }[] = [];
@@ -190,10 +215,18 @@ async function applyProducts(store: string, todo: Proposal[], who: string) {
     batch.forEach((p, n) => {
       const toId = ids[p.target_handle];
       if (!toId) { failed.push({ title: p.title, why: `no collection ${p.target_handle}` }); return; }
+      // ⚠️ EVERY ID HERE COMES FROM THE LIVE handle→id MAP, never from anything
+      // remembered or guessed. Shopify accepts a collectionsToLeave id that the
+      // product is not in — and that is not a userError, it is a silent no-op —
+      // so a wrong id leaves the product on both shelves and reports success.
+      const leave = (p.wrong_handles?.length ? p.wrong_handles : [FROM_HANDLE])
+        .map(h => ids[h]).filter(Boolean);
+      if (!leave.length) { failed.push({ title: p.title, why: `nothing to leave` }); return; }
       usable.push(p);
       parts.push(
         `m${n}: productUpdate(product: { id: "${p.product_id}", ` +
-        `collectionsToJoin: ["${toId}"], collectionsToLeave: ["${fromId}"] }) ` +
+        `collectionsToJoin: ["${toId}"], ` +
+        `collectionsToLeave: [${leave.map(id => `"${id}"`).join(", ")}] }) ` +
         `{ userErrors { field message } }`);
     });
     if (!parts.length) continue;
@@ -216,7 +249,8 @@ async function applyProducts(store: string, todo: Proposal[], who: string) {
       headers: { Prefer: "return=minimal" },
       body: JSON.stringify(moved.map(p => ({
         store_code: store, product_id: p.product_id, sku: p.sku, title: p.title,
-        added_handle: p.target_handle, removed_handle: FROM_HANDLE,
+        added_handle: p.target_handle,
+        removed_handle: (p.wrong_handles?.length ? p.wrong_handles : [FROM_HANDLE]).join(", "),
         rule_keyword: who ? `${p.keyword} · ${who}` : p.keyword,
       }))),
     });
@@ -252,12 +286,38 @@ async function handlePost(req: Request, scope: Scope) {
   }
 
   if (action === "apply") {
-    const wanted = new Set((Array.isArray(body.productIds) ? body.productIds : []).map(String));
-    if (!wanted.size) return json({ error: "productIds required" }, 400);
+    // Two shapes: bare ids (file where the rule said) or {productId, to} pairs
+    // (file where the PERSON said). The rule's answer is a default, not a
+    // verdict — it is right about four titles in five and wrong about the fifth
+    // in a way only somebody who knows the item can see.
+    const items: { productId: string; to?: string }[] =
+      Array.isArray(body.items) ? body.items.map((i: any) => ({ productId: String(i.productId), to: i.to ? String(i.to) : undefined }))
+      : (Array.isArray(body.productIds) ? body.productIds : []).map((id: any) => ({ productId: String(id) }));
+    if (!items.length) return json({ error: "productIds or items required" }, 400);
+
+    const chosen = new Map(items.map(i => [i.productId, i.to]));
     // Only ever act on what the QUEUE says — a product id posted by a browser
-    // is a request to file a proposal, not a licence to move anything.
-    const todo = (await proposalsFor(store)).filter(p => wanted.has(p.product_id));
+    // is a request to file a proposal, not a licence to move anything. Which
+    // queue matters: the misfiled one carries the shelves to LEAVE, and filing
+    // a misfiled product against the junk-drawer queue would try to take it out
+    // of `other`, where it never was.
+    const queue = await queueFor(store, String(body.mode || ""));
+    let todo = queue.filter(p => chosen.has(p.product_id));
     if (!todo.length) return json({ error: "nothing in the queue matched those products" }, 400);
+
+    // And a chosen shelf is checked against the real, matchable collections
+    // for the same reason: the picker may not file stock somewhere arbitrary.
+    const allowed = new Set((await matchableShelves()).map(s => s.handle));
+    const badShelf = items.find(i => i.to && !allowed.has(i.to));
+    if (badShelf) return json({ error: `not a shelf anything may be filed on: ${badShelf.to}` }, 400);
+
+    todo = todo.map(p => {
+      const to = chosen.get(p.product_id);
+      return to && to !== p.target_handle
+        ? { ...p, target_handle: to, keyword: `${p.keyword} → chosen` }
+        : p;
+    });
+
     const { moved, failed } = await applyProducts(store, todo, scope.name);
     return json({
       ok: true, store, requested: wanted.size,
@@ -289,21 +349,31 @@ Deno.serve(async (req) => {
 
       const asked = (url.searchParams.get("store") || "").toUpperCase();
       const store = scope.stores.includes(asked) ? asked : scope.stores[0];
-      const [queue, titles] = await Promise.all([proposalsFor(store), shelfTitles()]);
+      const mode = url.searchParams.get("mode") === "misfiled" ? "misfiled" : "other";
+      const [queue, titles, shelves] = await Promise.all([
+        queueFor(store, mode), shelfTitles(), matchableShelves()]);
       const skipped = await rows(
         `collection_skips?store_code=eq.${store}&select=product_id,reason,skipped_by,created_at`);
       return json({
         scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
-        store,
+        store, mode,
         queue: queue.map(p => ({
           productId: p.product_id, sku: p.sku, title: p.title, handle: p.product_handle,
           rule: p.keyword, to: p.target_handle, toTitle: titles[p.target_handle] || p.target_handle,
+          // What it leaves. `Other` for the junk drawer; the shelves it is
+          // wrongly on for a misfiled one — and the panel has to show that,
+          // because "join Car Electronics" and "leave Digital Cameras" are two
+          // different things to agree with.
+          from: (p.wrong_handles?.length ? p.wrong_handles : [FROM_HANDLE])
+                  .map(h => titles[h] || h),
           shop: SHOP_BY_STORE[store],
         })),
         skipped,
+        shelves,
         // Counted per store so the panel can say what is left everywhere
         // without loading five queues.
-        totals: await queueTotals(scope.stores),
+        totals: await queueTotals(scope.stores, mode),
+        misfiledTotal: (await rows(`collection_misfiled?select=product_id`)).length,
       });
     }
 
@@ -369,8 +439,12 @@ Deno.serve(async (req) => {
 // ONE query, tallied here, rather than one count per store. The view is not
 // free — it scores every unfiled product against every rule — and asking it
 // five separate times for five numbers is what made the panel look hung.
-async function queueTotals(stores: string[]): Promise<Record<string, number>> {
-  const all = await rows(`collection_proposals?select=store_code`);
+//
+// The counts follow the MODE. Showing the junk-drawer totals above a misfiled
+// queue puts "WSP 97" on a chip that opens a list of two.
+async function queueTotals(stores: string[], mode: string): Promise<Record<string, number>> {
+  const view = mode === "misfiled" ? "collection_misfiled" : "collection_proposals";
+  const all = await rows(`${view}?select=store_code`);
   const out: Record<string, number> = {};
   for (const s of stores) out[s] = 0;
   for (const r of all) if (r.store_code in out) out[r.store_code] += 1;
