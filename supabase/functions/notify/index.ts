@@ -1402,11 +1402,16 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
       const a = pile[store] || 0, b = mis[store] || 0;
       if (!a && !b) continue;
       const bits: string[] = [];
-      if (a) bits.push(`${a} listing${a === 1 ? "" : "s"} with no category`);
-      if (b) bits.push(`${b} on a shelf that looks wrong`);
+      // The panel calls them the “Other” collection and the wrong category, so
+      // this does too — an email that names things differently from the screen
+      // it sends you to is one more thing to translate.
+      if (a) bits.push(`${a} listing${a === 1 ? "" : "s"} in “Other”`);
+      if (b) bits.push(`${b} in the wrong category`);
       due.push({
         slug: "recatQueue", period: weekStamp(t.date), cat: "categories", store,
-        title: `Listings need a category — ${STORE_NAME[store] || store}`,
+        // Names the half that is actually there, the same way the feed card does.
+        title: (a ? `Listings need a category` : `Listings in the wrong category`)
+          + ` — ${STORE_NAME[store] || store}`,
         // LEADS WITH A WORD, not a number. The mailer sentence-cases the first
         // WORD of a body, skipping leading digits — so "83 listing" came out as
         // "83 Listings with no category", which reads like a typo.

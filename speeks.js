@@ -36311,7 +36311,7 @@ function _samRenderFeedNow() {
             desired.push({ key: 'note:' + (it.id || ('d' + it.dateMs)), html: `<div class="sam-ann note" data-hub-target="note-${_samEsc(String(it.id || ''))}" onclick="openHubTo('note-${_samEsc(String(it.id || ''))}','unread')">
                 <span class="sam-adot"></span>
                 <div class="sam-a-body">
-                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${chip}<span class="sam-a-flag gold">Store note</span></div>
+                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${chip}</div>
                     <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
                     <div class="sam-a-meta">${it.dateObj ? _samFmtDate(it.dateObj) : 'Store note'}</div>
                 </div>
@@ -36926,14 +36926,17 @@ function _samReminderCfg() {
     // has a phone call worth making. It clears itself once the match is answered
     // or the unit sells, and a NEW match breaks through the snooze (data-sig).
     cfg.push({ key: 'cbMatch', id: 'cbMatchAlertBubble', text: 'cbMatchAlertBubbleText',
-        title: 'Call Back Item In Stock', urgency: 2, due: 'Call', cls: 'sam-due-amber',
+        title: 'Call Back Item In Stock', urgency: 2, due: 'Action', cls: 'sam-due-amber',
         action: "window.location.href='operations.html#callbacks'" });
     // Listings with no category, or on a shelf their own title disagrees with.
     // An opportunity, not a deadline — nothing is late, the storefront is just
     // untidier than it should be — so it is amber and snoozeable, and the counts
     // in data-sig break a snooze when new stock arrives.
+    const _rqT = document.getElementById('recatAlertBubbleText');
+    const _rcOnly = (_rqT && _rqT.dataset && _rqT.dataset.only) || '';
     cfg.push({ key: 'recatQueue', id: 'recatAlertBubble', text: 'recatAlertBubbleText',
-        title: 'Listings Need A Category', urgency: 1, due: 'Sort', cls: 'sam-due-amber',
+        title: _rcOnly === 'wrong' ? 'Listings In The Wrong Category' : 'Listings Need A Category',
+        urgency: 1, due: 'Action', cls: 'sam-due-amber',
         action: "window.location.href='operations.html#categories'" });
     return cfg;
 }
@@ -41456,6 +41459,10 @@ async function ecLoad() {
     try {
         if (_ecView === 'health') {
             _ecHealth = await _ecFetch('?view=health');
+            // Best-effort and never blocking: a 401 here (a role that may see
+            // eBay across stores but not file stock) must leave the eBay
+            // numbers on screen, not replace them with an error.
+            _rcCounts = await _rcFetch(`?view=counts`).catch(() => null);
             _ecScope = _ecHealth.scope;
         } else if (_ecView === 'cats') {
             // Its own function, its own scope. shopify-recat decides who may
@@ -41514,7 +41521,7 @@ function _ecSyncChrome() {
         const errs = _ecFeed.filter(e => e.state === 'failed').length;
         const toFile = (_rcData?.queue || []).length;
         sub.textContent = _ecView === 'cats'
-            ? `${_ecStore || ''} · ${toFile ? `${toFile} Item${toFile === 1 ? '' : 's'} To File` : 'Everything Is Filed'}`
+            ? `${_ecStore || ''} · ${toFile ? `${toFile} Item${toFile === 1 ? '' : 's'} To Submit` : 'Everything Is Filed'}`
             : _ecView === 'health' ? 'Every store, at a glance'
             : !_ecData?.summary?.connected ? `${_ecStore || ''} · Not connected to eBay yet`
             : !_ecFeed.length ? `${_ecStore} · Scan a SKU to list it on eBay`
@@ -41837,10 +41844,50 @@ function _ecHealthHtml() {
                   : _ecAgo(new Date(Date.now() - s.freshness.liveMinutes * 60000).toISOString()),
                   s.freshness.liveMinutes == null ? 'ec-off'
                   : s.freshness.liveMinutes > 90 ? 'ec-warn' : 'ec-ok')}
+            ${_ecHealthCats(s.store)}
           </div>
         </div>`;
     }).join('')}</div>`;
 }
+
+// The two Categories numbers, on the All Stores card. This is where the store
+// chips used to live inside the queue — "where is the work" is a whole-district
+// question, and it belongs next to the other whole-district numbers rather than
+// above a list of one store's rows.
+//
+// Each is a BUTTON when it is non-zero, for the same reason "Did Not Upload"
+// is: a count nobody can open is a dead end. It lands on that store's queue in
+// that mode.
+//
+// Absent, not zeroed, when the counts have not arrived — shopify-recat answers
+// separately from the health view (different function, narrower role list), and
+// drawing "0" for a request that failed would be a lie about a tidy storefront.
+function _ecHealthCats(store) {
+    if (!_rcCounts) return '';
+    const other = _rcCounts.other?.[store] ?? null;
+    const wrong = _rcCounts.misfiled?.[store] ?? null;
+    if (other == null && wrong == null) return '';
+    const cell = (n, mode) => n
+        ? `<button type="button" class="ec-hbtn" onclick="rcOpenFrom('${_ecEsc(store)}','${mode}')"
+             title="Open this store's queue">${n}</button>`
+        : (n === 0 ? '0' : '—');
+    const row = (k, v, cls) => `<div class="ec-hrow"><span class="ec-hk">${k}</span><span class="ec-hv ${cls || ''}">${v}</span></div>`;
+    return row('In &ldquo;Other&rdquo;', cell(other, 'other'), other ? 'ec-warn' : 'ec-ok')
+         + row('Wrong Category', cell(wrong, 'misfiled'), wrong ? 'ec-warn' : 'ec-ok');
+}
+
+// Open one store's queue from somewhere else — the All Stores card today. Sets
+// the state and loads once, rather than going through ecSetView (which would
+// load the store it was already on first).
+async function rcOpenFrom(store, mode) {
+    _ecStore = store;
+    _rcMode = mode === 'misfiled' ? 'misfiled' : 'other';
+    _rcData = null;
+    _ecView = 'cats';
+    _ecMarkView('cats');
+    await ecLoad();
+}
+window.rcOpenFrom = rcOpenFrom;
 
 // --- Categories: filing the `other` pile ------------------------------------
 //
@@ -41869,6 +41916,11 @@ let _rcSel = new Set();
 //              by STRONG rules only: the full rule set flags 421 products and
 //              is wrong about most of them, because every laptop title recites
 //              an SSD and every gaming PC a GPU.
+// The Categories counts, per store, for the All Stores card. Its own request:
+// the health view comes from ebay-channel and these come from shopify-recat,
+// which answers a narrower role list. Null until one arrives, so the card can
+// leave the rows out rather than drawing a reassuring zero.
+let _rcCounts = null;
 let _rcMode = 'other';
 // BOTH QUEUES ONLY EVER SHOW LISTINGS THAT ARE LIVE ON THE ONLINE STORE.
 // PayMore's storefront is the whole point of a collection, so an unpublished
@@ -41913,41 +41965,37 @@ async function rcLoad() {
 function _rcHtml() {
     const queue = _rcData?.queue || [];
     const skipped = _rcData?.skipped || [];
-    const totals = _rcData?.totals || {};
 
-    // What is left everywhere, so a DM can see where the work is without
-    // opening five queues. The current store is the one already on screen.
-    const strip = Object.keys(totals).length > 1 ? `
-      <div class="rc-strip">${Object.entries(totals).map(([s, n]) => `
-        <button type="button" class="rc-chip${s === _ecStore ? ' rc-chip-on' : ''}"
-                onclick="ecSetStore('${_ecEsc(s)}')">
-          <span class="rc-chip-s">${_ecEsc(s)}</span>
-          <span class="rc-chip-n">${n}</span>
-        </button>`).join('')}</div>` : '';
+    // NO PER-STORE CHIPS. Everybody who could see more than one store here also
+    // has the store dropdown in the panel header, and two controls for one
+    // choice is one too many. Where the work is across all five is a question
+    // the All Stores tab answers now, next to the eBay numbers.
 
     // Two different questions, so two queues rather than one mixed list: "this
     // has no category" and "this has the wrong one" are agreed to differently,
     // and the second one takes something OFF a shelf a person chose.
+    // Named for what a person sees in Shopify — the Other collection, and a
+    // category that is wrong — not for the mechanism.
     const misfiled = _rcData?.misfiledTotal ?? 0;
     const modes = `
       <div class="rc-modes">
         <button type="button" class="rc-mode${_rcMode === 'other' ? ' rc-mode-on' : ''}"
-                onclick="rcSetMode('other')">In Other</button>
+                onclick="rcSetMode('other')">&ldquo;Other&rdquo; Collection</button>
         <button type="button" class="rc-mode${_rcMode === 'misfiled' ? ' rc-mode-on' : ''}"
-                onclick="rcSetMode('misfiled')">Possibly Misfiled${
+                onclick="rcSetMode('misfiled')">Wrong Category${
                   misfiled ? ` <span class="rc-chip-n">${misfiled}</span>` : ''}</button>
       </div>
       <div class="rc-note">Live On The Online Store Only — Unpublished Stock Is Not Listed Here</div>`;
 
     if (!queue.length) {
-        return strip + modes + `<div class="ec-empty">${
+        return modes + `<div class="ec-empty">${
           _rcMode === 'misfiled'
-            ? `Nothing looks misfiled at ${_ecEsc(_ecStore)}.`
+            ? `Nothing looks miscategorised at ${_ecEsc(_ecStore)}.`
             : `Nothing left to file at ${_ecEsc(_ecStore)}.`}<br>
           <span style="font-weight:600;color:var(--cb-faint);">${
             _rcMode === 'misfiled'
-              ? 'Every listing on the online store sits on a shelf its own title agrees with.'
-              : `Every listing on the online store here is on a real shelf${
+              ? 'Every listing on the online store sits in a category its own title agrees with.'
+              : `Every listing on the online store here is in a real category${
                   skipped.length ? `, and ${skipped.length} were skipped` : ''}.`}</span></div>`;
     }
 
@@ -41961,7 +42009,7 @@ function _rcHtml() {
         </label>
         <button class="ec-btn ec-btn-go" id="rcFileBtn" ${n ? '' : 'disabled'}
                 onclick="rcFileSelected()">Submit ${n ? n + ' ' : ''}Selected</button>
-        <span class="rc-count">${queue.length} To File At ${_ecEsc(_ecStore)}</span>
+        <span class="rc-count">${queue.length} To Submit At ${_ecEsc(_ecStore)}</span>
       </div>`;
 
     const rows = queue.map(q => {
@@ -41986,9 +42034,11 @@ function _rcHtml() {
           <td>
             <div class="rc-title">${_ecEsc(q.title)}</div>
             <div class="rc-sub">${_ecEsc(q.sku || '')}</div>
+          </td>
+          <td class="cb-col-status">
             <div class="ec-pills rc-links">
               ${q.handle ? `<a class="ec-pill ec-pill-store" href="https://${_ecEsc(q.shop)}/products/${_ecEsc(q.handle)}"
-                   target="_blank" rel="noopener">Online Store${_EC_ICON_LINK}</a>` : ''}
+                   target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}
               ${q.productId ? `<a class="ec-pill ec-pill-shopify" href="https://${_ecEsc(q.shop)}/admin/products/${_ecEsc(String(q.productId).split('/').pop())}"
                    target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
             </div>
@@ -42028,14 +42078,22 @@ function _rcHtml() {
           </div>`).join('')}
       </details>` : '';
 
-    return strip + modes + bar + `
+    return modes + bar + `
       <table class="cb-table rc-table">
         <thead><tr>
           <th style="width:4%;"></th>
-          <th style="width:38%;">Item</th>
-          <th style="width:14%;" class="cb-col-status">Matched On</th>
-          <th style="width:26%;" class="cb-col-status">Move To</th>
-          <th style="width:18%;" class="cb-col-status"></th>
+          <!-- The links get their own column, exactly as they do on the Upload
+               table next door. Beside the title rather than under it, and — the
+               reason it is a column and not a flex row — always at the same x,
+               whatever the title's length. Sharing the title's line meant the
+               pills sat inline on short titles and dropped to a second line on
+               long ones, which reads as a rendering accident. Nothing truncates:
+               the title is how somebody judges the category. -->
+          <th style="width:36%;">Item</th>
+          <th style="width:15%;" class="cb-col-status">Open</th>
+          <th style="width:12%;" class="cb-col-status">Matched On</th>
+          <th style="width:20%;" class="cb-col-status">Move To</th>
+          <th style="width:13%;" class="cb-col-status"></th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>` + skips;
@@ -42301,15 +42359,19 @@ async function checkCategoryQueueReminders() {
     if (!b) return;
     const t = document.getElementById('recatAlertBubbleText');
     if (t) {
-        // Two different problems, and only the halves that exist: "no category"
-        // is stock in Other, "a shelf that looks wrong" is stock somebody filed
-        // somewhere its own title disagrees with.
+        // Two problems, and only the halves that exist. The words are the panel's:
+        // in "Other" means no category at all, the wrong category means somebody
+        // filed it somewhere its own title disagrees with.
         const bits = [];
-        if (other) bits.push(other + ' listing' + (other === 1 ? '' : 's') + ' with no category');
-        if (mis) bits.push(mis + ' on a shelf that looks wrong');
+        if (other) bits.push(other + ' listing' + (other === 1 ? '' : 's') + " in “Other”");
+        if (mis) bits.push(mis + ' in the wrong category');
         const where = stores.length > 1 ? stores.join(' & ') : (stores[0] || 'Your store');
         t.dataset.summary = where + ' has ' + bits.join(' and ')
             + ' on the online store — open Categories to sort them.';
+        // Which halves exist, so the card title can name the one that is really
+        // there — "Listings Need A Category" over three miscategorised items is
+        // the wrong sentence.
+        t.dataset.only = other ? (mis ? '' : 'other') : 'wrong';
         // The counts ARE the identity. File some and the rest is new information
         // worth surfacing again; file them all and the card leaves on its own.
         t.dataset.sig = 'recat:' + other + ':' + mis;

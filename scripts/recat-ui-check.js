@@ -118,6 +118,43 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     const note = await page.$eval(".rc-note", e => e.textContent.trim()).catch(() => "");
     ok(/online store/i.test(note), "the panel says what it is showing", note || "NO NOTE");
 
+
+    console.log('');
+    console.log('== The two queues, and what is not on screen ==');
+    const pills = await page.$$eval('.rc-modes .rc-mode', bs => bs.map(b => ({
+        text: b.textContent.replace(/\s+/g, ' ').trim(),
+        w: Math.round(b.getBoundingClientRect().width),
+    })));
+    ok(pills.length === 2, 'two queue pills', pills.map(p => p.text).join(' | '));
+    ok(/“?Other”? Collection/.test(pills[0]?.text || ''), 'the first is named for the collection', pills[0]?.text);
+    ok(/^Wrong Category/.test(pills[1]?.text || ''), 'the second says what is wrong', pills[1]?.text);
+    // Same kind of control, so the same box. Measured, not trusted to a min-width
+    // that a longer label or a 3-digit count could quietly outgrow.
+    ok(pills[0]?.w === pills[1]?.w, 'and both are the same size', `${pills[0]?.w}px / ${pills[1]?.w}px`);
+    // The per-store chips are gone: everybody who saw them also has the dropdown.
+    ok(await page.$('.rc-strip') === null, 'no per-store chips above the queue');
+
+
+    console.log('');
+    console.log('== The links sit beside the title, in their own column ==');
+    const geom = await page.evaluate(() => {
+        const rows = [...document.querySelectorAll('.rc-table tbody tr')].slice(0, 8);
+        const xs = new Set();
+        let sameLine = 0;
+        rows.forEach(tr => {
+            const t = tr.querySelector('.rc-title').getBoundingClientRect();
+            const p = tr.querySelector('.rc-links').getBoundingClientRect();
+            xs.add(Math.round(p.left));
+            // Beside, not under: the pills start after the title ends and overlap
+            // its line vertically.
+            if (p.left > t.right - 2 && p.top < t.bottom && p.bottom > t.top) sameLine += 1;
+        });
+        return { rows: rows.length, sameLine, columns: xs.size };
+    });
+    ok(geom.sameLine === geom.rows, 'every row has them beside its title', geom.sameLine + '/' + geom.rows);
+    // A column, not a flex row: the whole point is that they do not move with the
+    // length of the title, so every row lines up.
+    ok(geom.columns === 1, 'and all at the same x, however long the title', geom.columns + ' distinct x');
     console.log('');
     console.log('== The two destinations ==');
     // One listing lives in two places and a reviewer needs both: the storefront
@@ -219,9 +256,43 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     const after = await page.$$eval('.rc-table tbody tr', rs => rs.length);
     ok(after === before, 'the queue is the length it started', `${before} → ${after}`);
     const sub = await page.$eval('#ecSubtitle', e => e.textContent.trim());
-    ok(/To File/.test(sub), 'the header counts what is left', sub);
+    ok(/To Submit/.test(sub), 'the header counts what is left', sub);
 
     ok(errs.length === 0, 'no console errors', errs.length ? errs.slice(0, 3).join(' | ') : 'clean');
+
+    console.log('');
+    console.log('== The All Stores tab carries the same two numbers ==');
+    await page.click('#ecViewHealthBtn');
+    await page.waitForFunction(() => document.querySelectorAll('.ec-hcard').length > 0, { timeout: 20000 }).catch(() => {});
+    // The counts come from shopify-recat, not from the health view, so they land
+    // a beat later than the eBay rows.
+    await page.waitForFunction(
+        () => [...document.querySelectorAll('.ec-hk')].some(k => /Wrong Category/.test(k.textContent)),
+        { timeout: 20000 }).catch(() => {});
+    const cards = await page.$$eval('.ec-hcard', cs => cs.map(c => ({
+        store: c.querySelector('.ec-hstore')?.textContent?.trim(),
+        keys: [...c.querySelectorAll('.ec-hk')].map(k => k.textContent.trim()),
+        vals: [...c.querySelectorAll('.ec-hrow')].map(r => r.querySelector('.ec-hv')?.textContent?.trim()),
+    })));
+    ok(cards.length === 5, 'a card per store', cards.map(c => c.store).join(' '));
+    ok(cards.every(c => c.keys.some(k => /Other/.test(k)) && c.keys.some(k => /Wrong Category/.test(k))),
+        'each one now names both category queues', JSON.stringify(cards[0]?.keys));
+    ok(cards.every(c => c.vals.length === 5), 'five rows on every card', String(cards[0]?.vals.length));
+    // A count nobody can open is a dead end — the same rule the "To Fix" count follows.
+    const jumped = await page.evaluate(async () => {
+        const btn = [...document.querySelectorAll('.ec-hcard')]
+            .map(c => ({ store: c.querySelector('.ec-hstore').textContent.trim(),
+                         b: [...c.querySelectorAll('.ec-hbtn')].pop() }))
+            .find(x => x.b && /rcOpenFrom/.test(x.b.getAttribute('onclick') || ''));
+        if (!btn) return null;
+        btn.b.click();
+        await new Promise(r => setTimeout(r, 3500));
+        return { asked: btn.store, ...(window._dbgRecat ? window._dbgRecat() : {}) };
+    });
+    ok(!!jumped && jumped.view === 'cats' && jumped.store === jumped.asked,
+        'clicking one opens that store in that queue',
+        jumped ? `${jumped.asked} → ${jumped.store} / ${jumped.mode}` : 'no button');
+    ok(!!jumped && jumped.mode === 'misfiled', 'and in the mode the number was for', jumped && jumped.mode);
 
 
     // ── The manager route, and the nag ────────────────────────────────────────
@@ -315,10 +386,12 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
                 await checkCategoryQueueReminders();
                 const b = document.getElementById('recatAlertBubble');
                 const t = document.getElementById('recatAlertBubbleText');
+                const vis = b ? getComputedStyle(b).visibility : null;
                 const card = (typeof _samGatherReminders === 'function'
                     ? _samGatherReminders() : []).find(r => r.key === 'recatQueue');
                 return {
                     shown: !!b && getComputedStyle(b).display !== 'none',
+                    vis,
                     summary: t && t.dataset ? t.dataset.summary : null,
                     sig: t && t.dataset ? t.dataset.sig : null,
                     card: card ? { title: card.title, due: card.due, snippet: card.snippet, action: card.action } : null,
@@ -328,6 +401,11 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
             ok(res.shown === who.want, `[${tag}] the bubble ${who.want ? 'lights' : 'stays dark'}`, 'shown=' + res.shown);
             if (who.want) {
                 ok(!!res.card, `[${tag}] the feed picks the card up`, res.card ? res.card.title + ' / ' + res.card.due : 'missing');
+                ok(res.card?.due === 'Action', `[${tag}] the badge says what it is — something to do`, res.card && res.card.due);
+                // The bubble is a STATE CARRIER, never a toast: a new id is not
+                // covered by the retired-toast CSS until it is listed there, and
+                // mine shipped visible. The feed is the surface.
+                ok(res.vis === 'hidden', `[${tag}] and no floating toast`, res.vis);
                 ok(!!res.card && /categor/i.test(res.card.snippet || ''),
                     `[${tag}] with a readable line`, res.card && res.card.snippet);
                 ok(/operations\.html#categories/.test(res.card?.action || ''),

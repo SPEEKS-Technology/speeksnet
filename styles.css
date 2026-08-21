@@ -8634,7 +8634,11 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-ann + .sam-ann { border-top: 1px solid var(--sam-line-2); }
 .speeks-action-menu .sam-adot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; background: var(--sage-professional); }
 .speeks-action-menu .sam-ann.read .sam-adot { background: var(--sam-faint); }
-.speeks-action-menu .sam-ann.note .sam-adot { background: var(--idea-gold); box-shadow: 0 0 0 4px var(--sam-gold-tint); }
+/* GREEN, not gold. A message from your manager is not a warning, and the amber
+   dot sat next to genuinely amber things (a reply overdue, a queue to sort)
+   claiming the same urgency. The ring stays, so it is still the card your eye
+   lands on first. */
+.speeks-action-menu .sam-ann.note .sam-adot { background: var(--sage-professional); box-shadow: 0 0 0 4px var(--sam-sage-tint); }
 .speeks-action-menu .sam-a-body { min-width: 0; flex: 1; }
 .speeks-action-menu .sam-a-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .speeks-action-menu .sam-a-title { font-size: 13px; font-weight: 700; color: var(--text-dark); }
@@ -9780,7 +9784,11 @@ body.sam-active .hotbar-btn:hover {
 #listingGoalsDailyAlertBubble,
 #expenseFileAlertBubble,
 #gpGoalAlertBubble,
-#cbMatchAlertBubble {
+#cbMatchAlertBubble,
+/* Added 2026-08-21 with the Categories nag. A new bubble id is NOT covered by
+   this rule until it is listed here — mine shipped visible, and a floating
+   teal toast is exactly what the feed replaced. */
+#recatAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -17097,11 +17105,12 @@ body.tv-body { display: block; background: #eef1f5; }
    class — so every column read as though it had slipped one notch left. */
 .rc-table td.cb-col-status { text-align: center; }
 
-/* The two places one listing lives: the storefront a shopper sees, and the
-   admin page where a title or a collection gets fixed by hand when no rule can.
-   Left under the SKU rather than centred like the eBay panel pair, because here
-   they belong to the item beside them, not to a column of their own. */
-.rc-links { justify-content: flex-start; margin-top: 6px; }
+/* The two places one listing lives: the storefront a shopper sees, and the admin
+   page where a title or a category gets fixed by hand when no rule can. Their
+   own column, beside the title rather than stacked under it — see the thead
+   comment for why a column and not a flex row on the title line. */
+.rc-links { justify-content: center; margin-top: 0; }
+.rc-links .ec-pill { min-width: 74px; padding: 3px 9px; font-size: 11px; }
 .ec-pill-store { color: #0f766e; }
 .ec-pill-store:hover { border-color: #0f766e; background: #eefaf7; }
 .rc-optnow {
@@ -17114,6 +17123,11 @@ body.tv-body { display: block; background: #eef1f5; }
    counts matter: 'Possibly Misfiled 21' is the whole reason to look. */
 .rc-modes { display: flex; gap: 6px; margin-bottom: 12px; }
 .rc-mode {
+    /* MATCHED, like the eBay pills: they are the same kind of control, and two
+       widths read as two weights of thing. Wide enough for the longer label
+       plus its count badge, measured rather than guessed (the UI harness
+       asserts the two boxes are identical). */
+    min-width: 186px; box-sizing: border-box; justify-content: center;
     display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
     border: 1px solid var(--cb-line); background: var(--cb-card); border-radius: 8px;
     padding: 6px 13px; font-family: inherit; font-size: 12px; font-weight: 700;
