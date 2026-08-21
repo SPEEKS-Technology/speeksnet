@@ -315,21 +315,26 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     ok(cards.every(c => c.keys.some(k => /Other/.test(k)) && c.keys.some(k => /Wrong Category/.test(k))),
         'each one now names both category queues', JSON.stringify(cards[0]?.keys));
     ok(cards.every(c => c.vals.length === 5), 'five rows on every card', String(cards[0]?.vals.length));
-    // A count nobody can open is a dead end — the same rule the "To Fix" count follows.
-    const jumped = await page.evaluate(async () => {
-        const btn = [...document.querySelectorAll('.ec-hcard')]
-            .map(c => ({ store: c.querySelector('.ec-hstore').textContent.trim(),
-                         b: [...c.querySelectorAll('.ec-hbtn')].pop() }))
-            .find(x => x.b && /rcOpenFrom/.test(x.b.getAttribute('onclick') || ''));
-        if (!btn) return null;
-        btn.b.click();
-        await new Promise(r => setTimeout(r, 3500));
-        return { asked: btn.store, ...(window._dbgRecat ? window._dbgRecat() : {}) };
+    // Text, not controls: the pills invited a click they did not need to own.
+    // Asserted, because "make it text" is easy to undo by accident the next time
+    // somebody copies the To Fix row above it.
+    const catCells = await page.evaluate(() => {
+        const out = [];
+        document.querySelectorAll('.ec-hcard').forEach(c => {
+            [...c.querySelectorAll('.ec-hrow')].forEach(r => {
+                const k = r.querySelector('.ec-hk')?.textContent?.trim() || '';
+                if (!/Other|Wrong Category/.test(k)) return;
+                const v = r.querySelector('.ec-hv');
+                out.push({ k, text: v?.textContent?.trim(), btn: !!r.querySelector('button'),
+                           colour: v ? getComputedStyle(v).color : null });
+            });
+        });
+        return out;
     });
-    ok(!!jumped && jumped.view === 'cats' && jumped.store === jumped.asked,
-        'clicking one opens that store in that queue',
-        jumped ? `${jumped.asked} → ${jumped.store} / ${jumped.mode}` : 'no button');
-    ok(!!jumped && jumped.mode === 'misfiled', 'and in the mode the number was for', jumped && jumped.mode);
+    ok(catCells.length === 10, 'both numbers on all five cards', String(catCells.length));
+    ok(catCells.every(c => !c.btn), 'they are text, not buttons');
+    ok(catCells.filter(c => Number(c.text) > 0).every(c => c.colour === 'rgb(183, 121, 31)'),
+        'and amber when there is something to do', catCells[0]?.colour);
 
 
     // ── The manager route, and the nag ────────────────────────────────────────

@@ -41855,9 +41855,10 @@ function _ecHealthHtml() {
 // question, and it belongs next to the other whole-district numbers rather than
 // above a list of one store's rows.
 //
-// Each is a BUTTON when it is non-zero, for the same reason "Did Not Upload"
-// is: a count nobody can open is a dead end. It lands on that store's queue in
-// that mode.
+// Amber TEXT, not a control (user's call, 21 Aug). The "Did Not Upload" count
+// next to it is a button because the rows behind it are session-scoped and
+// otherwise unreachable; these two are three clicks away in the panel's own
+// store dropdown, so a pill invited a click it did not need to own.
 //
 // Absent, not zeroed, when the counts have not arrived — shopify-recat answers
 // separately from the health view (different function, narrower role list), and
@@ -41867,27 +41868,10 @@ function _ecHealthCats(store) {
     const other = _rcCounts.other?.[store] ?? null;
     const wrong = _rcCounts.misfiled?.[store] ?? null;
     if (other == null && wrong == null) return '';
-    const cell = (n, mode) => n
-        ? `<button type="button" class="ec-hbtn" onclick="rcOpenFrom('${_ecEsc(store)}','${mode}')"
-             title="Open this store's queue">${n}</button>`
-        : (n === 0 ? '0' : '—');
-    const row = (k, v, cls) => `<div class="ec-hrow"><span class="ec-hk">${k}</span><span class="ec-hv ${cls || ''}">${v}</span></div>`;
-    return row('In &ldquo;Other&rdquo;', cell(other, 'other'), other ? 'ec-warn' : 'ec-ok')
-         + row('Wrong Category', cell(wrong, 'misfiled'), wrong ? 'ec-warn' : 'ec-ok');
+    const row = (k, n) => `<div class="ec-hrow"><span class="ec-hk">${k}</span>`
+        + `<span class="ec-hv ${n ? 'ec-warn' : 'ec-ok'}">${n == null ? '—' : n}</span></div>`;
+    return row('In &ldquo;Other&rdquo;', other) + row('Wrong Category', wrong);
 }
-
-// Open one store's queue from somewhere else — the All Stores card today. Sets
-// the state and loads once, rather than going through ecSetView (which would
-// load the store it was already on first).
-async function rcOpenFrom(store, mode) {
-    _ecStore = store;
-    _rcMode = mode === 'misfiled' ? 'misfiled' : 'other';
-    _rcData = null;
-    _ecView = 'cats';
-    _ecMarkView('cats');
-    await ecLoad();
-}
-window.rcOpenFrom = rcOpenFrom;
 
 // --- Categories: filing the `other` pile ------------------------------------
 //
