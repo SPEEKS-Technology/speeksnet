@@ -41976,14 +41976,18 @@ function _rcHtml() {
     // and the second one takes something OFF a shelf a person chose.
     // Named for what a person sees in Shopify — the Other collection, and a
     // category that is wrong — not for the mechanism.
-    const misfiled = _rcData?.misfiledTotal ?? 0;
+    //
+    // BOTH counts are THIS STORE'S. The misfiled badge used to carry the whole
+    // scope, so a DM looking at OVL read 17 above a list of one.
+    const cOther = _rcData?.counts?.other ?? null;
+    const cWrong = _rcData?.counts?.misfiled ?? null;
+    const badge = n => (n == null ? '' : ` <span class="rc-chip-n">${n}</span>`);
     const modes = `
       <div class="rc-modes">
         <button type="button" class="rc-mode${_rcMode === 'other' ? ' rc-mode-on' : ''}"
-                onclick="rcSetMode('other')">&ldquo;Other&rdquo; Collection</button>
+                onclick="rcSetMode('other')">&ldquo;Other&rdquo; Collection${badge(cOther)}</button>
         <button type="button" class="rc-mode${_rcMode === 'misfiled' ? ' rc-mode-on' : ''}"
-                onclick="rcSetMode('misfiled')">Wrong Category${
-                  misfiled ? ` <span class="rc-chip-n">${misfiled}</span>` : ''}</button>
+                onclick="rcSetMode('misfiled')">Wrong Category${badge(cWrong)}</button>
       </div>
       <div class="rc-note">Live On The Online Store Only — Unpublished Stock Is Not Listed Here</div>`;
 
@@ -42066,13 +42070,26 @@ function _rcHtml() {
 
     // Skips are shown, not hidden: a queue that silently swallows decisions is
     // one nobody trusts, and a skip made in error has to be findable.
+    //
+    // With the title, the SKU and WHERE IT IS NOW, because that is the whole
+    // question. A skip is right when the item is already in the category it
+    // belongs in and wrong when it is still sitting in Other — and an id on its
+    // own cannot tell you which of those you did.
     const skips = skipped.length ? `
       <details class="rc-skips">
         <summary>${skipped.length} Skipped At ${_ecEsc(_ecStore)}</summary>
         ${skipped.map(s => `
           <div class="rc-skiprow">
-            <span class="rc-skipt">${_ecEsc(String(s.product_id).split('/').pop())}</span>
-            <span class="rc-sub">${_ecEsc(s.skipped_by || '')}${s.reason ? ' · ' + _ecEsc(s.reason) : ''}</span>
+            <div class="rc-skipmain">
+              <div class="rc-title">${_ecEsc(s.title || 'This listing is no longer in the catalogue')}</div>
+              <div class="rc-sub">${[
+                  s.sku ? _ecEsc(s.sku) : '',
+                  _ecEsc(String(s.product_id).split('/').pop()),
+                  (s.in && s.in.length) ? 'Now In ' + _ecEsc(s.in.join(' + ')) : '',
+                  _ecEsc(s.skipped_by || ''),
+                  s.reason ? _ecEsc(s.reason) : '',
+                ].filter(Boolean).join(' · ')}</div>
+            </div>
             <button class="ec-btn ec-btn-sm" data-id="${_ecEsc(s.product_id)}"
                     onclick="rcUnskip(this.dataset.id)">Put It Back</button>
           </div>`).join('')}
@@ -42089,10 +42106,16 @@ function _rcHtml() {
                pills sat inline on short titles and dropped to a second line on
                long ones, which reads as a rendering accident. Nothing truncates:
                the title is how somebody judges the category. -->
-          <th style="width:36%;">Item</th>
+          <th style="width:33%;">Item</th>
           <th style="width:15%;" class="cb-col-status">Open</th>
           <th style="width:12%;" class="cb-col-status">Matched On</th>
-          <th style="width:20%;" class="cb-col-status">Move To</th>
+          <!-- Move To carries the DECISION, and in the Wrong Category queue both
+               halves are real category names ("Speakers & Audio -> DJ & Recording
+               Equipment"), which cannot share one line at any width this table can
+               spare. So it takes 3% back off Item to keep each NAME whole on its
+               own line rather than breaking one of them across three. A title that
+               no longer fits wraps into the second line it already has for its SKU. -->
+          <th style="width:23%;" class="cb-col-status">Move To</th>
           <th style="width:13%;" class="cb-col-status"></th>
         </tr></thead>
         <tbody>${rows}</tbody>
@@ -42285,7 +42308,7 @@ window.rcLoad = rcLoad;
 window._dbgRecat = () => ({
     view: _ecView, store: _ecStore, loaded: !!_rcData, mode: _rcMode,
     queue: (_rcData?.queue || []).length, skipped: (_rcData?.skipped || []).length,
-    selected: _rcSel.size, totals: _rcData?.totals || null,
+    selected: _rcSel.size, counts: _rcData?.counts || null,
 });
 
 // --- The nag: listings waiting on a category --------------------------------

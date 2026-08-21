@@ -90,8 +90,10 @@ const get = async (u) => (await fetch(u)).json();
             { headers: { 'x-user-pin': PIN } })).json());
 
         const r0 = await review('OVL');
-        ok(Array.isArray(r0.queue), 'the queue loads for a corp PIN', `${r0.queue?.length} rows`);
-        ok(!!r0.totals && Object.keys(r0.totals).length === 5, 'and counts every store', JSON.stringify(r0.totals));
+        // The two tab counts, and they are THIS STORE'S — the misfiled badge used
+        // to carry the whole scope, so a DM on OVL read 17 above a list of one.
+        ok(r0.counts && r0.counts.other === r0.queue.length,
+            'the open tab count is the list it sits above', JSON.stringify(r0.counts));
         ok((r0.queue || []).every(q => q.toTitle && !/^[a-z-]+$/.test(q.toTitle)),
             'every row names its shelf in words, not handles');
 
@@ -113,8 +115,17 @@ const get = async (u) => (await fetch(u)).json();
         ok((mis.queue || []).every(q => q.to && !q.from.includes(q.toTitle)),
             'and never proposes a shelf it is already on');
         // The counts have to follow the mode, or "WSP 97" sits above a list of two.
-        ok(!!mis.totals && Object.values(mis.totals).every(n => n < 30),
-            'the store counts follow the mode', JSON.stringify(mis.totals));
+        ok(mis.counts && mis.counts.misfiled === (mis.queue || []).length,
+            'and it follows the mode', JSON.stringify(mis.counts));
+
+        const counts = await (await fetch(`${BASE}/shopify-recat?view=counts`,
+            { headers: { 'x-user-pin': PIN } })).json();
+        ok(Object.keys(counts.other || {}).length === 5 && Object.keys(counts.misfiled || {}).length === 5,
+            'the district counts cover every store', JSON.stringify(counts.other));
+        // The All Stores card reads this, and a card is per store — one total
+        // would put the same number on five different shops.
+        ok(new Set(Object.values(counts.other || {})).size > 1,
+            'per store, not one number repeated', JSON.stringify(counts.misfiled));
 
         // THE STOREFRONT IS THE ORACLE. Both queues promise to show only
         // stock a shopper can actually reach, and the only way to check that

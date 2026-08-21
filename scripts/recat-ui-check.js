@@ -135,6 +135,43 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     ok(await page.$('.rc-strip') === null, 'no per-store chips above the queue');
 
 
+
+    console.log('');
+    console.log('== Both tabs carry this store\'s number ==');
+    const tabN = await page.$$eval('.rc-modes .rc-mode .rc-chip-n', ns => ns.map(n => Number(n.textContent.trim())));
+    const state = await page.evaluate(() => window._dbgRecat());
+    ok(tabN.length === 2, 'both tabs show a count', JSON.stringify(tabN));
+    // The one that matters: the badge on the tab you are NOT on used to carry the
+    // whole scope, so a DM on OVL read 17 above a list of one.
+    ok(tabN[0] === state.queue, 'the open tab agrees with the list under it', `${tabN[0]} / ${state.queue}`);
+    ok(tabN[1] === state.counts.misfiled && tabN[1] < 10,
+        'and the other tab is this store, not all five', `${tabN[1]}`);
+
+    console.log('');
+    console.log('== A skipped row says what it was ==');
+    const skip = await page.evaluate(() => {
+        const d = document.querySelector('.rc-skips');
+        if (!d) return null;
+        d.open = true;
+        const r = d.querySelector('.rc-skiprow');
+        if (!r) return null;
+        const btn = r.querySelector('.ec-btn').getBoundingClientRect();
+        const rm = [...document.querySelectorAll('.rc-table tbody tr .rc-acts .ec-btn')].pop().getBoundingClientRect();
+        return {
+            title: r.querySelector('.rc-title')?.textContent?.trim() || '',
+            sub: r.querySelector('.rc-sub')?.textContent?.trim() || '',
+            dRight: Math.abs(btn.right - rm.right),
+        };
+    });
+    if (skip) {
+        // The question a skip has to answer is "was I right", and the answer is
+        // where the item sits NOW — an id alone cannot tell you.
+        ok(!!skip.title, 'it names the item', skip.title.slice(0, 44));
+        ok(/·/.test(skip.sub) && /Now In/i.test(skip.sub), 'and the SKU, the id and where it is now', skip.sub.slice(0, 80));
+        ok(skip.dRight <= 1, 'Put It Back squares up with Remove', `${skip.dRight.toFixed(1)}px apart`);
+    } else {
+        console.log('  SKIPPED (nothing skipped at this store)');
+    }
     console.log('');
     console.log('== The links sit beside the title, in their own column ==');
     const geom = await page.evaluate(() => {
@@ -332,8 +369,8 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
             const mState = await mp.evaluate(() => window._dbgRecat());
             ok(mState.store === 'OVL', 'and the queue is their own store', mState.store);
             ok(mState.queue > 0, 'with rows in it', String(mState.queue));
-            ok(Object.keys(mState.totals || {}).length === 1,
-                'and the store chips do not name anybody else', JSON.stringify(mState.totals));
+            ok(mState.counts && mState.counts.other === mState.queue,
+                'and the tab count matches the list under it', JSON.stringify(mState.counts));
         }
 
         // The card's destination, which is a VIEW of a tab rather than a tab —

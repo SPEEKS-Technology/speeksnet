@@ -17075,14 +17075,16 @@ body.tv-body { display: block; background: #eef1f5; }
 .rc-skips summary::-webkit-details-marker { display: none; }
 .rc-skips summary:before { content: "▸ "; color: var(--cb-faint); }
 .rc-skips[open] summary:before { content: "▾ "; }
+/* The right edge has to agree with the table above it: .cb-table td carries
+   12px of side padding, so 2px here left Put It Back sticking out past every
+   Remove button on the page. And the answers column is right-aligned for the
+   same reason — centred in its cell, Remove sat wherever the cell width put
+   it, which is not a line anything else could be squared up to. */
 .rc-skiprow {
-    display: flex; align-items: center; gap: 10px; padding: 7px 2px;
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px 8px 2px;
     border-top: 1px solid var(--cb-line-2);
 }
-.rc-skipt {
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 11px; font-weight: 700; color: var(--cb-muted);
-}
+.rc-skipmain { min-width: 0; flex: 1; }
 .rc-skiprow .ec-btn { margin-left: auto; }
 
 /* The shelf is a BUTTON, because the rule's answer is a default and the row has
@@ -17104,6 +17106,7 @@ body.tv-body { display: block; background: #eef1f5; }
    not — only .cb-cell-status carries that rule, and these rows use the width
    class — so every column read as though it had slipped one notch left. */
 .rc-table td.cb-col-status { text-align: center; }
+.rc-table td.rc-acts { text-align: right; }
 
 /* The two places one listing lives: the storefront a shopper sees, and the admin
    page where a title or a category gets fixed by hand when no rule can. Their

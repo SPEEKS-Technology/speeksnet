@@ -230,6 +230,47 @@ async function shelfTitles(): Promise<Record<string, string>> {
   return out;
 }
 
+// The skipped list, with enough on it to tell whether the skip was right.
+//
+// `collection_skips` stores a decision, not a product: store, product id, who,
+// why. A row showing only the numeric id asked somebody to audit their own
+// judgement against a number — so this reads the product back out of
+// ebay_catalog and adds the title, the SKU and the category it is sitting in
+// TODAY. That last one is the point: a skip is correct when the item is already
+// where it belongs, and wrong when it is still in Other.
+//
+// A product with several variants has several catalog rows; the first wins,
+// since title and collections are per product. A product that has since sold or
+// been deleted has no row at all, and keeps just its id — the skip is still real
+// and still undoable.
+async function skippedFor(store: string, titles: Record<string, string>) {
+  const skips = await rows(
+    `collection_skips?store_code=eq.${store}&select=product_id,reason,skipped_by,created_at`
+    + `&order=created_at.desc`);
+  if (!skips.length) return skips;
+  // gids carry no comma or quote, so they need no escaping inside in.(...) —
+  // and capped, because this becomes a URL.
+  const ids = skips.slice(0, 200).map((s: any) => `"${s.product_id}"`).join(",");
+  const cat = await rows(
+    `ebay_catalog?store_code=eq.${store}&product_id=in.(${ids})`
+    + `&select=product_id,sku,title,collections`);
+  const byId = new Map<string, any>();
+  for (const c of cat) if (!byId.has(c.product_id)) byId.set(c.product_id, c);
+  return skips.map((s: any) => {
+    const c = byId.get(s.product_id);
+    return {
+      ...s,
+      sku: c?.sku ?? null,
+      title: c?.title ?? null,
+      // Where it is now, in words, `newly-listed-devices` excepted — that one is
+      // every product at every store and says nothing about a category.
+      in: (c?.collections || [])
+        .filter((h: string) => h !== "newly-listed-devices")
+        .map((h: string) => titles[h] || h),
+    };
+  });
+}
+
 // Every shelf a person may choose instead of the one the rule proposed. Sent
 // with the queue so the picker opens instantly, and used to VALIDATE what comes
 // back — a handle posted by a browser is checked against this list before it
@@ -404,8 +445,11 @@ Deno.serve(async (req) => {
       const mode = url.searchParams.get("mode") === "misfiled" ? "misfiled" : "other";
       const [queue, titles, shelves] = await Promise.all([
         queueFor(store, mode), shelfTitles(), matchableShelves()]);
-      const skipped = await rows(
-        `collection_skips?store_code=eq.${store}&select=product_id,reason,skipped_by,created_at`);
+      const skipped = await skippedFor(store, titles);
+      // BOTH counts, for THIS STORE — they are the numbers on the two tabs, and a
+      // tab that says 17 above a list of one is worse than no number at all. The
+      // queue in hand is one of the two, so only the other mode costs a query.
+      const otherModeTotal = (await queueTotals([store], mode === "other" ? "misfiled" : "other"))[store] || 0;
       return json({
         scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
         store, mode,
@@ -422,14 +466,10 @@ Deno.serve(async (req) => {
         })),
         skipped,
         shelves,
-        // Counted per store so the panel can say what is left everywhere
-        // without loading five queues.
-        totals: await queueTotals(scope.stores, mode),
-        // The BADGE on the Misfiled tab, scoped like the queue behind it. An
-        // unscoped count put all five stores on a manager's tab, so a badge
-        // reading 17 opened a list of 5.
-        misfiledTotal: (await rows(`collection_misfiled?select=store_code`))
-          .filter((r: any) => scope.stores.includes(r.store_code)).length,
+        counts: {
+          other: mode === "other" ? queue.length : otherModeTotal,
+          misfiled: mode === "misfiled" ? queue.length : otherModeTotal,
+        },
       });
     }
 
