@@ -218,8 +218,33 @@ async function misfiledFor(store: string): Promise<Proposal[]> {
     `&order=target_handle,title`);
 }
 
+// The third queue: the SAME Other pile, minus every row a rule had a guess
+// for. This is the one nobody could see — the panel only ever listed
+// proposals, so 48 listings across the five stores sat in Other on the live
+// storefront and appeared on no screen at all. There is no keyword and no
+// target here on purpose: the row is a question, and the answer is whatever a
+// person picks in the shelf popover.
+async function unmatchedFor(store: string): Promise<Proposal[]> {
+  const all = await rows(
+    `collection_unmatched?store_code=eq.${store}` +
+    `&select=store_code,product_id,sku,title,product_handle,wrong_handles` +
+    `&order=title`);
+  // "no match" rather than an empty keyword, so the ledger reads honestly once
+  // it is filed: "no match -> chosen · Ethan Kushnir".
+  return all.map((p: any) => ({ ...p, keyword: "no match", target_handle: "" }));
+}
+
 const queueFor = (store: string, mode: string) =>
-  mode === "misfiled" ? misfiledFor(store) : proposalsFor(store);
+  mode === "misfiled" ? misfiledFor(store)
+  : mode === "unmatched" ? unmatchedFor(store)
+  : proposalsFor(store);
+
+// One spelling of the three modes, because the panel, the counts and the apply
+// path all have to agree on which queue a request is about.
+const modeOf = (v: unknown) => {
+  const m = String(v || "");
+  return m === "misfiled" || m === "unmatched" ? m : "other";
+};
 
 // Shelf handles are not what a person reading a queue wants to see, and the
 // panel should not carry its own copy of 63 titles that a sweep can rename.
@@ -384,7 +409,7 @@ async function handlePost(req: Request, scope: Scope) {
     // queue matters: the misfiled one carries the shelves to LEAVE, and filing
     // a misfiled product against the junk-drawer queue would try to take it out
     // of `other`, where it never was.
-    const queue = await queueFor(store, String(body.mode || ""));
+    const queue = await queueFor(store, modeOf(body.mode));
     let todo = queue.filter(p => chosen.has(p.product_id));
     if (!todo.length) return json({ error: "nothing in the queue matched those products" }, 400);
 
@@ -400,6 +425,16 @@ async function handlePost(req: Request, scope: Scope) {
         ? { ...p, target_handle: to, keyword: `${p.keyword} → chosen` }
         : p;
     });
+
+    // An unmatched row arrives with no target, because nothing proposed one. If
+    // the picker was never opened there is no shelf to file it on, and the only
+    // honest answer is to refuse — filing it "somewhere" is how stock ends up on
+    // a shelf nobody chose.
+    const noShelf = todo.filter(p => !p.target_handle);
+    if (noShelf.length) {
+      return json({ error: `no category chosen for ${noShelf.length} listing(s)`,
+                    titles: noShelf.slice(0, 5).map(p => p.title) }, 400);
+    }
 
     const { moved, failed } = await applyProducts(store, todo, scope.name);
     return json({
@@ -434,22 +469,26 @@ Deno.serve(async (req) => {
       // on a timer. The review payload carries a whole store queue with it —
       // 90 rows to answer "is there anything to do", on every page, forever.
       if (view === "counts") {
-        const [other, misfiled] = await Promise.all([
-          queueTotals(scope.stores, "other"), queueTotals(scope.stores, "misfiled")]);
+        const [other, misfiled, unmatched] = await Promise.all([
+          queueTotals(scope.stores, "other"), queueTotals(scope.stores, "misfiled"),
+          queueTotals(scope.stores, "unmatched")]);
         return json({ scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
-                      other, misfiled });
+                      other, misfiled, unmatched });
       }
 
       const asked = (url.searchParams.get("store") || "").toUpperCase();
       const store = scope.stores.includes(asked) ? asked : scope.stores[0];
-      const mode = url.searchParams.get("mode") === "misfiled" ? "misfiled" : "other";
+      const mode = modeOf(url.searchParams.get("mode"));
       const [queue, titles, shelves] = await Promise.all([
         queueFor(store, mode), shelfTitles(), matchableShelves()]);
       const skipped = await skippedFor(store, titles);
-      // BOTH counts, for THIS STORE — they are the numbers on the two tabs, and a
-      // tab that says 17 above a list of one is worse than no number at all. The
-      // queue in hand is one of the two, so only the other mode costs a query.
-      const otherModeTotal = (await queueTotals([store], mode === "other" ? "misfiled" : "other"))[store] || 0;
+      // ALL THREE counts, for THIS STORE — they are the numbers on the three tabs,
+      // and a tab that says 17 above a list of one is worse than no number at all.
+      // The queue in hand is one of the three, so only the other two cost a query.
+      const totals: Record<string, number> = {};
+      for (const m of ["other", "misfiled", "unmatched"]) {
+        totals[m] = m === mode ? queue.length : (await queueTotals([store], m))[store] || 0;
+      }
       return json({
         scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
         store, mode,
@@ -467,8 +506,9 @@ Deno.serve(async (req) => {
         skipped,
         shelves,
         counts: {
-          other: mode === "other" ? queue.length : otherModeTotal,
-          misfiled: mode === "misfiled" ? queue.length : otherModeTotal,
+          other: totals.other,
+          misfiled: totals.misfiled,
+          unmatched: totals.unmatched,
         },
       });
     }
@@ -539,7 +579,9 @@ Deno.serve(async (req) => {
 // The counts follow the MODE. Showing the junk-drawer totals above a misfiled
 // queue puts "WSP 97" on a chip that opens a list of two.
 async function queueTotals(stores: string[], mode: string): Promise<Record<string, number>> {
-  const view = mode === "misfiled" ? "collection_misfiled" : "collection_proposals";
+  const view = mode === "misfiled" ? "collection_misfiled"
+             : mode === "unmatched" ? "collection_unmatched"
+             : "collection_proposals";
   const all = await rows(`${view}?select=store_code`);
   const out: Record<string, number> = {};
   for (const s of stores) out[s] = 0;

@@ -41523,7 +41523,8 @@ function _ecSyncChrome() {
         // in it the old line read "Everything Is Filed" over a store with 64
         // sitting in Other — the header is about the STORE, not about the tab.
         const cats = _rcData?.counts;
-        const toFile = cats ? (cats.other || 0) + (cats.misfiled || 0) : (_rcData?.queue || []).length;
+        const toFile = cats ? (cats.other || 0) + (cats.misfiled || 0) + (cats.unmatched || 0)
+                            : (_rcData?.queue || []).length;
         sub.textContent = _ecView === 'cats'
             ? `${_ecStore || ''} · ${toFile ? `${toFile} Item${toFile === 1 ? '' : 's'} To Submit` : 'Everything Is Filed'}`
             : _ecView === 'health' ? 'Every store, at a glance'
@@ -41871,10 +41872,15 @@ function _ecHealthCats(store) {
     if (!_rcCounts) return '';
     const other = _rcCounts.other?.[store] ?? null;
     const wrong = _rcCounts.misfiled?.[store] ?? null;
-    if (other == null && wrong == null) return '';
+    // The pile is Other, and the split inside it is "we have a guess" versus
+    // "somebody has to pick" — two different jobs, so two numbers rather than
+    // one that hides the harder half.
+    const none = _rcCounts.unmatched?.[store] ?? null;
+    if (other == null && wrong == null && none == null) return '';
     const row = (k, n) => `<div class="ec-hrow"><span class="ec-hk">${k}</span>`
         + `<span class="ec-hv ${n ? 'ec-warn' : 'ec-ok'}">${n == null ? '—' : n}</span></div>`;
-    return row('In &ldquo;Other&rdquo;', other) + row('Wrong Category', wrong);
+    return row('In &ldquo;Other&rdquo;', other) + row('No Suggestion', none)
+         + row('Wrong Category', wrong);
 }
 
 // --- Categories: filing the `other` pile ------------------------------------
@@ -41969,6 +41975,13 @@ function _rcHtml() {
     // scope, so a DM looking at OVL read 17 above a list of one.
     const cOther = _rcData?.counts?.other ?? null;
     const cWrong = _rcData?.counts?.misfiled ?? null;
+    // THE THIRD TAB IS THE REST OF THE SAME PILE. The first two tabs are lists
+    // of SUGGESTIONS, and for months that is all this panel could ever show —
+    // so 48 listings across the five stores sat in Other on the live storefront
+    // and appeared on no screen anywhere, because no keyword reached them.
+    // "Xreal One Pro Smart Glasses", "Roland V-60HD HD Video Switcher". They
+    // are not edge cases, they are just the ones a rule was never going to get.
+    const cNone = _rcData?.counts?.unmatched ?? null;
     const badge = n => (n == null ? '' : ` <span class="rc-chip-n">${n}</span>`);
     const modes = `
       <div class="rc-modes">
@@ -41976,6 +41989,9 @@ function _rcHtml() {
                 onclick="rcSetMode('other')">&ldquo;Other&rdquo; Collection${badge(cOther)}</button>
         <button type="button" class="rc-mode${_rcMode === 'misfiled' ? ' rc-mode-on' : ''}"
                 onclick="rcSetMode('misfiled')">Wrong Category${badge(cWrong)}</button>
+        <button type="button" class="rc-mode${_rcMode === 'unmatched' ? ' rc-mode-on' : ''}"
+                title="Also in Other, but nothing matched — you pick the category"
+                onclick="rcSetMode('unmatched')">No Suggestion${badge(cNone)}</button>
       </div>
       <div class="rc-note">Live On The Online Store Only — Unpublished Stock Is Not Listed Here</div>`;
 
@@ -42025,10 +42041,14 @@ function _rcHtml() {
         return modes + `<div class="ec-empty">${
           _rcMode === 'misfiled'
             ? `Nothing looks miscategorised at ${_ecEsc(_ecStore)}.`
+            : _rcMode === 'unmatched'
+            ? `Nothing at ${_ecEsc(_ecStore)} is waiting on a hand-picked category.`
             : `Nothing left to file at ${_ecEsc(_ecStore)}.`}<br>
           <span style="font-weight:600;color:var(--cb-faint);">${
             _rcMode === 'misfiled'
               ? 'Every listing on the online store sits in a category its own title agrees with.'
+              : _rcMode === 'unmatched'
+              ? 'Every listing still in Other has a suggested category — see the first tab.'
               : 'Every listing on the online store here is in a real category.'}</span></div>` + skips;
     }
 
@@ -42037,12 +42057,14 @@ function _rcHtml() {
       <div class="ec-quick rc-bar">
         <label class="rc-all">
           <input type="checkbox" id="rcAll" onchange="rcSelectAll(this.checked)"
-                 ${n === queue.length ? 'checked' : ''}>
+                 ${n && n === _rcReady().length ? 'checked' : ''}>
           Select All
         </label>
         <button class="ec-btn ec-btn-go" id="rcFileBtn" ${n ? '' : 'disabled'}
                 onclick="rcFileSelected()">Submit ${n ? n + ' ' : ''}Selected</button>
-        <span class="rc-count">${queue.length} To Submit At ${_ecEsc(_ecStore)}</span>
+        <span class="rc-count">${_rcMode === 'unmatched'
+            ? `${queue.length} Waiting On A Category At ${_ecEsc(_ecStore)}`
+            : `${queue.length} To Submit At ${_ecEsc(_ecStore)}`}</span>
       </div>`;
 
     const rows = queue.map(q => {
@@ -42052,8 +42074,13 @@ function _rcHtml() {
         // make the reviewer wonder whether their click registered.
         const chosen = _rcOver.has(q.productId);
         const target = _rcTargetOf(q);
-        const toTitle = chosen
-            ? ((_rcData?.shelves || []).find(s => s.handle === target)?.title || target)
+        // A No Suggestion row arrives with no shelf, so there is nothing to
+        // agree with yet and nothing to submit. It still has to be READABLE —
+        // being on screen at all is the whole point — so it shows the item, the
+        // links and an ask. Ticking and Submit stay shut until somebody answers.
+        const ready = !!target;
+        const toTitle = !ready ? 'Choose A Category'
+            : chosen ? ((_rcData?.shelves || []).find(s => s.handle === target)?.title || target)
             : q.toTitle;
         // The rule that decided is shown on every row on purpose: it is the
         // only way to tell a good match from a lucky one, and the wrong ones
@@ -42061,8 +42088,9 @@ function _rcHtml() {
         return `
         <tr class="cb-row">
           <td class="rc-pick">
-            <label class="rc-tick">
+            <label class="rc-tick"${ready ? '' : ' title="Pick a category first"'}>
               <input type="checkbox" data-id="${id}" ${_rcSel.has(q.productId) ? 'checked' : ''}
+                     ${ready ? '' : 'disabled'}
                      onchange="rcToggle(this.dataset.id, this.checked)">
             </label>
           </td>
@@ -42078,19 +42106,23 @@ function _rcHtml() {
                    target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
             </div>
           </td>
-          <td class="cb-col-status"><span class="rc-rule">${_ecEsc(q.rule)}</span></td>
+          <td class="cb-col-status">${q.rule === 'no match'
+            ? '<span class="rc-nomatch">Nothing Matched</span>'
+            : `<span class="rc-rule">${_ecEsc(q.rule)}</span>`}</td>
           <td class="cb-col-status">
             <span class="rc-move"><span class="rc-from">${_ecEsc((q.from || ['Other']).join(' + '))}</span>
               <svg class="rc-arr" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-              <button type="button" class="rc-shelf${chosen ? ' rc-shelf-picked' : ''}" data-id="${id}"
-                      title="${chosen ? 'You chose this shelf — click to change it' : 'Click to file it somewhere else'}"
+              <button type="button" class="rc-shelf${chosen ? ' rc-shelf-picked' : ''}${ready ? '' : ' rc-shelf-empty'}" data-id="${id}"
+                      title="${!ready ? 'Nothing matched this title — pick the category it belongs in'
+                              : chosen ? 'You chose this shelf — click to change it' : 'Click to file it somewhere else'}"
                       onclick="rcOpenShelf(this.dataset.id, this)">
                 <span class="rc-to">${_ecEsc(toTitle)}</span>
                 <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
               </button></span>
           </td>
           <td class="cb-col-status rc-acts">
-            <button class="ec-btn ec-btn-sm ec-btn-on" data-id="${id}"
+            <button class="ec-btn ec-btn-sm ec-btn-on" data-id="${id}" ${ready ? '' : 'disabled'}
+                    ${ready ? '' : 'title="Pick a category first"'}
                     onclick="rcFileOne(this.dataset.id, this)">Submit</button>
             <button class="ec-btn ec-btn-sm ec-btn-off" data-id="${id}"
                     title="${_rcMode === 'misfiled' ? 'Leave it on the shelf it is on and stop offering it' : 'Leave it in Other and stop offering it'}"
@@ -42212,17 +42244,25 @@ window.rcPickShelf = rcPickShelf;
 
 // The bar is repainted in place rather than through ecRender, because a full
 // rebuild would replace the checkbox the person is still clicking through.
+// The rows that could actually be submitted right now. In the first two tabs
+// that is all of them; in No Suggestion it is only the ones somebody has picked
+// a category for, and Select All has to mean THAT — a Select All that ticks 13
+// rows and then fails on 11 of them is worse than no Select All.
+function _rcReady() {
+    return (_rcData?.queue || []).filter(q => _rcTargetOf(q));
+}
+
 function rcToggle(id, on) {
     if (on) _rcSel.add(id); else _rcSel.delete(id);
     const btn = document.getElementById('rcFileBtn');
     if (btn) { btn.disabled = !_rcSel.size; btn.textContent = `Submit ${_rcSel.size ? _rcSel.size + ' ' : ''}Selected`; }
     const all = document.getElementById('rcAll');
-    if (all) all.checked = _rcSel.size === (_rcData?.queue || []).length && _rcSel.size > 0;
+    if (all) all.checked = _rcSel.size === _rcReady().length && _rcSel.size > 0;
 }
 window.rcToggle = rcToggle;
 
 function rcSelectAll(on) {
-    _rcSel = on ? new Set((_rcData?.queue || []).map(q => q.productId)) : new Set();
+    _rcSel = on ? new Set(_rcReady().map(q => q.productId)) : new Set();
     ecRender();
 }
 window.rcSelectAll = rcSelectAll;
@@ -42280,6 +42320,8 @@ async function rcFileSelected() {
     if (!confirm(`Submit ${ids.length} item${ids.length === 1 ? '' : 's'} at ${_ecStore}?\n\n`
         + (_rcMode === 'misfiled'
             ? 'Each one joins its new collection and COMES OFF the collection it is on now, on the live store.'
+            : _rcMode === 'unmatched'
+            ? 'Each one joins the category YOU picked and leaves Other on the live store.'
             : 'Each one joins its new collection and leaves Other on the live store.'))) return;
     await _rcRun(ids, document.getElementById('rcFileBtn'));
 }
@@ -42382,7 +42424,11 @@ async function checkCategoryQueueReminders() {
     const stores = d.scope?.stores || [];
     const other = stores.reduce((n, s) => n + (d.other?.[s] || 0), 0);
     const mis = stores.reduce((n, s) => n + (d.misfiled?.[s] || 0), 0);
-    if (!other && !mis) { _rcHideNag(); return; }
+    // The No Suggestion pile counts here too, and it is the half that had NO
+    // screen at all until now. Leaving it out of the nag would be the same bug
+    // one level up: work that exists and nothing that says so.
+    const unm = stores.reduce((n, s) => n + (d.unmatched?.[s] || 0), 0);
+    if (!other && !mis && !unm) { _rcHideNag(); return; }
     const b = _rcNagBubbleEl();
     if (!b) return;
     const t = document.getElementById('recatAlertBubbleText');
@@ -42390,8 +42436,14 @@ async function checkCategoryQueueReminders() {
         // Two problems, and only the halves that exist. The words are the panel's:
         // in "Other" means no category at all, the wrong category means somebody
         // filed it somewhere its own title disagrees with.
+        // Both halves of the Other pile are the same pile, so they are one
+        // number — with the hand-pick count in brackets, because "we suggested a
+        // shelf, confirm it" and "nothing matched, you decide" are the same
+        // errand but not the same amount of thinking.
+        const pile = other + unm;
         const bits = [];
-        if (other) bits.push(other + ' listing' + (other === 1 ? '' : 's') + " in “Other”");
+        if (pile) bits.push(pile + ' listing' + (pile === 1 ? '' : 's') + " in “Other”"
+            + (unm ? ' (' + unm + ' with nothing matched)' : ''));
         if (mis) bits.push(mis + ' in the wrong category');
         const where = stores.length > 1 ? stores.join(' & ') : (stores[0] || 'Your store');
         t.dataset.summary = where + ' has ' + bits.join(' and ')
@@ -42399,10 +42451,10 @@ async function checkCategoryQueueReminders() {
         // Which halves exist, so the card title can name the one that is really
         // there — "Listings Need A Category" over three miscategorised items is
         // the wrong sentence.
-        t.dataset.only = other ? (mis ? '' : 'other') : 'wrong';
+        t.dataset.only = pile ? (mis ? '' : 'other') : 'wrong';
         // The counts ARE the identity. File some and the rest is new information
         // worth surfacing again; file them all and the card leaves on its own.
-        t.dataset.sig = 'recat:' + other + ':' + mis;
+        t.dataset.sig = 'recat:' + other + ':' + mis + ':' + unm;
         t.dataset.stores = stores.join(',');
         t.textContent = t.dataset.summary;
     }

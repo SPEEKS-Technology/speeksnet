@@ -1385,9 +1385,12 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // signing them up for email they never asked for.
   {
     const CAT_ROLES = new Set(["manager", "owner (manager)", "owner manager"]);
-    const [pileRes, misRes] = await Promise.all([
+    const [pileRes, misRes, noneRes] = await Promise.all([
       sb.from("collection_proposals").select("store_code"),
       sb.from("collection_misfiled").select("store_code"),
+      // The third queue: also in Other, but nothing matched, so nobody could see
+      // it at all until 0058 gave it a screen. It belongs in the same sentence.
+      sb.from("collection_unmatched").select("store_code"),
     ]);
     const tally = (rows: any[] | null) => {
       const m: Record<string, number> = {};
@@ -1397,15 +1400,20 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
       }
       return m;
     };
-    const pile = tally(pileRes.data), mis = tally(misRes.data);
+    const pile = tally(pileRes.data), mis = tally(misRes.data), none = tally(noneRes.data);
     for (const store of STORES) {
-      const a = pile[store] || 0, b = mis[store] || 0;
+      const suggested = pile[store] || 0, b = mis[store] || 0, unm = none[store] || 0;
+      // One pile, one number — with the hand-pick count in brackets, because
+      // confirming a suggestion and deciding from scratch are the same errand
+      // but not the same amount of thinking.
+      const a = suggested + unm;
       if (!a && !b) continue;
       const bits: string[] = [];
       // The panel calls them the “Other” collection and the wrong category, so
       // this does too — an email that names things differently from the screen
       // it sends you to is one more thing to translate.
-      if (a) bits.push(`${a} listing${a === 1 ? "" : "s"} in “Other”`);
+      if (a) bits.push(`${a} listing${a === 1 ? "" : "s"} in “Other”`
+        + (unm ? ` (${unm} with nothing matched)` : ""));
       if (b) bits.push(`${b} in the wrong category`);
       due.push({
         slug: "recatQueue", period: weekStamp(t.date), cat: "categories", store,

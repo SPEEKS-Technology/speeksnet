@@ -118,10 +118,31 @@ const get = async (u) => (await fetch(u)).json();
         ok(mis.counts && mis.counts.misfiled === (mis.queue || []).length,
             'and it follows the mode', JSON.stringify(mis.counts));
 
+        // The third queue: also in Other, but nothing matched — so there is no
+        // shelf on the row and the server must refuse to file it blind. This is
+        // the pile that had no screen at all before 0058.
+        const none = await (await fetch(`${BASE}/shopify-recat?view=review&store=OVL&mode=unmatched`,
+            { headers: { 'x-user-pin': PIN } })).json();
+        ok(none.mode === 'unmatched', 'the No Suggestion queue loads', `${none.queue?.length} rows at OVL`);
+        ok((none.queue || []).every(q => !q.to && q.rule === 'no match'),
+            'and every row arrives with NO shelf on it — that is the whole point');
+        ok(none.counts && none.counts.unmatched === (none.queue || []).length,
+            'and its count follows the mode', JSON.stringify(none.counts));
+        if ((none.queue || []).length) {
+            // THE ONE THAT MATTERS HERE. A row with no category chosen is a
+            // question, not an instruction, and filing it "somewhere" would put
+            // stock on a shelf nobody picked.
+            const blind = await post({ action: 'apply', store: 'OVL', mode: 'unmatched',
+                items: [{ productId: none.queue[0].productId }] });
+            ok(blind.status === 400 && /no category chosen/.test(blind.body.error || ''),
+                'and it cannot be filed without one', blind.body.error || `HTTP ${blind.status}`);
+        }
+
         const counts = await (await fetch(`${BASE}/shopify-recat?view=counts`,
             { headers: { 'x-user-pin': PIN } })).json();
-        ok(Object.keys(counts.other || {}).length === 5 && Object.keys(counts.misfiled || {}).length === 5,
-            'the district counts cover every store', JSON.stringify(counts.other));
+        ok(Object.keys(counts.other || {}).length === 5 && Object.keys(counts.misfiled || {}).length === 5
+            && Object.keys(counts.unmatched || {}).length === 5,
+            'the district counts cover every store, in all three queues', JSON.stringify(counts.unmatched));
         // The All Stores card reads this, and a card is per store — one total
         // would put the same number on five different shops.
         ok(new Set(Object.values(counts.other || {})).size > 1,

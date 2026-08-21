@@ -17108,6 +17108,16 @@ body.tv-body { display: block; background: #eef1f5; }
 .rc-shelf svg { width: 11px; height: 11px; flex: none; stroke: var(--cb-faint); stroke-width: 2.4; fill: none; }
 .rc-shelf-picked { border-color: var(--cb-sage); background: var(--cb-sage-tint); }
 .rc-shelf-picked svg { stroke: #178048; }
+/* A No Suggestion row has no shelf to show, so the button is the ASK. Dashed,
+   because an unanswered question should not look like a filled-in answer, and
+   it is the only thing on the row that can be clicked next. */
+.rc-shelf-empty { border-style: dashed; border-color: var(--cb-line); }
+.rc-shelf-empty .rc-to { color: var(--cb-muted); }
+.rc-shelf-empty:hover { border-color: var(--cb-sage); background: var(--cb-sage-tint); }
+/* Not a keyword, because there wasn't one. Said in words rather than left blank:
+   an empty cell reads as a rendering fault, and this is the reason the row is
+   in this tab at all. */
+.rc-nomatch { font-size: 11px; font-weight: 700; color: var(--cb-faint); font-style: italic; }
 
 /* Matched On, Move To and the two answers sit UNDER their headings. The
    headings were already centred (.cb-table th.cb-col-status) but the cells were
