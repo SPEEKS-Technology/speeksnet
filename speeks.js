@@ -42043,7 +42043,7 @@ function _rcHtml() {
             ? `Nothing looks miscategorised at ${_ecEsc(_ecStore)}.`
             : _rcMode === 'unmatched'
             ? `Nothing at ${_ecEsc(_ecStore)} is waiting on a hand-picked category.`
-            : `Nothing left to file at ${_ecEsc(_ecStore)}.`}<br>
+            : `Nothing left to edit at ${_ecEsc(_ecStore)}.`}<br>
           <span style="font-weight:600;color:var(--cb-faint);">${
             _rcMode === 'misfiled'
               ? 'Every listing on the online store sits in a category its own title agrees with.'
