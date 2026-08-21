@@ -161,14 +161,19 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
             title: r.querySelector('.rc-title')?.textContent?.trim() || '',
             sub: r.querySelector('.rc-sub')?.textContent?.trim() || '',
             dRight: Math.abs(btn.right - rm.right),
+            label: r.querySelector('.ec-btn').textContent.trim(),
+            catBold: !!r.querySelector('.rc-skipcat'),
         };
     });
     if (skip) {
         // The question a skip has to answer is "was I right", and the answer is
         // where the item sits NOW — an id alone cannot tell you.
         ok(!!skip.title, 'it names the item', skip.title.slice(0, 44));
-        ok(/·/.test(skip.sub) && /Now In/i.test(skip.sub), 'and the SKU, the id and where it is now', skip.sub.slice(0, 80));
-        ok(skip.dRight <= 1, 'Put It Back squares up with Remove', `${skip.dRight.toFixed(1)}px apart`);
+        ok(/·/.test(skip.sub) && /Category/.test(skip.sub) && !/Now In/.test(skip.sub),
+            'and the SKU, the id and the category it is in', skip.sub.slice(0, 80));
+        ok(skip.label === 'Edit', 'and it is the Edit button', skip.label);
+        ok(skip.catBold, 'with the category as the one bold thing on the line');
+        ok(skip.dRight <= 1, 'Edit squares up with Remove', `${skip.dRight.toFixed(1)}px apart`);
     } else {
         console.log('  SKIPPED (nothing skipped at this store)');
     }
@@ -221,6 +226,36 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     ok(align.h2 === align.c2, 'Matched On sits under its heading', `${align.h2} / ${align.c2}`);
     ok(align.h3 === align.c3, 'Move To sits under its heading', `${align.h3} / ${align.c3}`);
 
+
+    console.log('');
+    console.log('== An empty queue still shows what was skipped ==');
+    // The reading of the skipped list that matters most is the one where there is
+    // nothing else on screen, and that was the one path that dropped it.
+    const emptyView = await page.evaluate(async () => {
+        await rcSetMode('misfiled');
+        await new Promise(r => setTimeout(r, 2500));
+        const st = window._dbgRecat();
+        return {
+            queue: st.queue, skipped: st.skipped,
+            hasEmpty: !!document.querySelector('#ecBody .ec-empty'),
+            hasSkips: !!document.querySelector('#ecBody .rc-skips'),
+            sub: document.getElementById('ecSubtitle').textContent.trim(),
+            counts: st.counts,
+        };
+    });
+    if (emptyView.queue === 0 && emptyView.skipped > 0) {
+        ok(emptyView.hasEmpty && emptyView.hasSkips,
+            'an empty queue keeps the skipped list', `empty=${emptyView.hasEmpty} skips=${emptyView.hasSkips}`);
+    } else {
+        console.log(`  SKIPPED (queue ${emptyView.queue}, skips ${emptyView.skipped} — needs an empty one with a skip)`);
+    }
+    // The header is about the STORE, not the open tab: sitting on an empty Wrong
+    // Category tab it used to say "Everything Is Filed" over 64 in Other.
+    const total = (emptyView.counts.other || 0) + (emptyView.counts.misfiled || 0);
+    ok(total ? emptyView.sub.includes(String(total)) : /Everything Is Filed/.test(emptyView.sub),
+        'and the header counts both queues, not the open one', emptyView.sub);
+    await page.evaluate(async () => { await rcSetMode('other'); });
+    await new Promise(r => setTimeout(r, 2500));
     console.log('');
     console.log('== The picker leaves with its row ==');
     // The reported glitch: _ecCatPlace ends in a clamp that keeps the popover on

@@ -17085,6 +17085,10 @@ body.tv-body { display: block; background: #eef1f5; }
     border-top: 1px solid var(--cb-line-2);
 }
 .rc-skipmain { min-width: 0; flex: 1; }
+/* The category is what somebody scanning the skipped list is reading FOR — it is
+   the difference between a skip that was right and one that was a mis-click — so
+   it is the one thing on a faint grey line that is not faint or grey. */
+.rc-skipcat { font-weight: 800; color: var(--cb-ink); }
 .rc-skiprow .ec-btn { margin-left: auto; }
 
 /* The shelf is a BUTTON, because the rule's answer is a default and the row has

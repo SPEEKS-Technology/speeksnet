@@ -41519,7 +41519,11 @@ function _ecSyncChrome() {
     }
     if (sub) {
         const errs = _ecFeed.filter(e => e.state === 'failed').length;
-        const toFile = (_rcData?.queue || []).length;
+        // BOTH queues, not the open one. In the Wrong Category tab with nothing
+        // in it the old line read "Everything Is Filed" over a store with 64
+        // sitting in Other — the header is about the STORE, not about the tab.
+        const cats = _rcData?.counts;
+        const toFile = cats ? (cats.other || 0) + (cats.misfiled || 0) : (_rcData?.queue || []).length;
         sub.textContent = _ecView === 'cats'
             ? `${_ecStore || ''} · ${toFile ? `${toFile} Item${toFile === 1 ? '' : 's'} To Submit` : 'Everything Is Filed'}`
             : _ecView === 'health' ? 'Every store, at a glance'
@@ -41975,7 +41979,49 @@ function _rcHtml() {
       </div>
       <div class="rc-note">Live On The Online Store Only — Unpublished Stock Is Not Listed Here</div>`;
 
+    // Skips are shown, not hidden: a queue that silently swallows decisions is
+    // one nobody trusts, and a skip made in error has to be findable.
+    //
+    // With the title, the SKU and WHERE IT IS NOW, because that is the whole
+    // question. A skip is right when the item is already in the category it
+    // belongs in and wrong when it is still sitting in Other — and an id on its
+    // own cannot tell you which of those you did. So the category is the one bold
+    // thing on the line: it is what somebody is actually reading for.
+    //
+    // Edit rather than Put It Back, and it is the same action either way — the row
+    // goes back in the queue, which is the only place its category can be changed.
+    const catOf = s => {
+        const c = s.in || [];
+        if (!c.length) return '';
+        return `<strong class="rc-skipcat">${_ecEsc(c.join(' + '))}`
+             + ` ${c.length > 1 ? 'Categories' : 'Category'}</strong>`;
+    };
+    const skips = skipped.length ? `
+      <details class="rc-skips">
+        <summary>${skipped.length} Skipped At ${_ecEsc(_ecStore)}</summary>
+        ${skipped.map(s => `
+          <div class="rc-skiprow">
+            <div class="rc-skipmain">
+              <div class="rc-title">${_ecEsc(s.title || 'This listing is no longer in the catalogue')}</div>
+              <div class="rc-sub">${[
+                  s.sku ? _ecEsc(s.sku) : '',
+                  _ecEsc(String(s.product_id).split('/').pop()),
+                  catOf(s),
+                  _ecEsc(s.skipped_by || ''),
+                  s.reason ? _ecEsc(s.reason) : '',
+                ].filter(Boolean).join(' · ')}</div>
+            </div>
+            <button class="ec-btn ec-btn-sm" data-id="${_ecEsc(s.product_id)}"
+                    title="Puts it back in the queue, where its category can be changed"
+                    onclick="rcUnskip(this.dataset.id)">Edit</button>
+          </div>`).join('')}
+      </details>` : '';
+
     if (!queue.length) {
+        // The skipped list belongs HERE TOO, and this is the reading of it that
+        // matters most: an empty queue with two skips in it is not the same thing
+        // as an empty queue, and hiding them exactly when there is nothing else
+        // on screen is how a decision gets forgotten.
         return modes + `<div class="ec-empty">${
           _rcMode === 'misfiled'
             ? `Nothing looks miscategorised at ${_ecEsc(_ecStore)}.`
@@ -41983,8 +42029,7 @@ function _rcHtml() {
           <span style="font-weight:600;color:var(--cb-faint);">${
             _rcMode === 'misfiled'
               ? 'Every listing on the online store sits in a category its own title agrees with.'
-              : `Every listing on the online store here is in a real category${
-                  skipped.length ? `, and ${skipped.length} were skipped` : ''}.`}</span></div>`;
+              : 'Every listing on the online store here is in a real category.'}</span></div>` + skips;
     }
 
     const n = _rcSel.size;
@@ -42052,32 +42097,6 @@ function _rcHtml() {
         </tr>`;
     }).join('');
 
-    // Skips are shown, not hidden: a queue that silently swallows decisions is
-    // one nobody trusts, and a skip made in error has to be findable.
-    //
-    // With the title, the SKU and WHERE IT IS NOW, because that is the whole
-    // question. A skip is right when the item is already in the category it
-    // belongs in and wrong when it is still sitting in Other — and an id on its
-    // own cannot tell you which of those you did.
-    const skips = skipped.length ? `
-      <details class="rc-skips">
-        <summary>${skipped.length} Skipped At ${_ecEsc(_ecStore)}</summary>
-        ${skipped.map(s => `
-          <div class="rc-skiprow">
-            <div class="rc-skipmain">
-              <div class="rc-title">${_ecEsc(s.title || 'This listing is no longer in the catalogue')}</div>
-              <div class="rc-sub">${[
-                  s.sku ? _ecEsc(s.sku) : '',
-                  _ecEsc(String(s.product_id).split('/').pop()),
-                  (s.in && s.in.length) ? 'Now In ' + _ecEsc(s.in.join(' + ')) : '',
-                  _ecEsc(s.skipped_by || ''),
-                  s.reason ? _ecEsc(s.reason) : '',
-                ].filter(Boolean).join(' · ')}</div>
-            </div>
-            <button class="ec-btn ec-btn-sm" data-id="${_ecEsc(s.product_id)}"
-                    onclick="rcUnskip(this.dataset.id)">Put It Back</button>
-          </div>`).join('')}
-      </details>` : '';
 
     return modes + bar + `
       <table class="cb-table rc-table">
