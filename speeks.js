@@ -41520,13 +41520,13 @@ function _ecSyncChrome() {
     if (sub) {
         const errs = _ecFeed.filter(e => e.state === 'failed').length;
         // BOTH queues, not the open one. In the Wrong Category tab with nothing
-        // in it the old line read "Everything Is Filed" over a store with 64
+        // in it the old line called the store clear over 64 still
         // sitting in Other — the header is about the STORE, not about the tab.
         const cats = _rcData?.counts;
         const toFile = cats ? (cats.other || 0) + (cats.misfiled || 0) + (cats.unmatched || 0)
                             : (_rcData?.queue || []).length;
         sub.textContent = _ecView === 'cats'
-            ? `${_ecStore || ''} · ${toFile ? `${toFile} Item${toFile === 1 ? '' : 's'} To Submit` : 'Everything Is Filed'}`
+            ? `${_ecStore || ''} · ${toFile ? `${toFile} Item${toFile === 1 ? '' : 's'} To Submit` : 'Everything Is Fixed'}`
             : _ecView === 'health' ? 'Every store, at a glance'
             : !_ecData?.summary?.connected ? `${_ecStore || ''} · Not connected to eBay yet`
             : !_ecFeed.length ? `${_ecStore} · Scan a SKU to list it on eBay`

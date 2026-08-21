@@ -173,7 +173,7 @@ const PAYLOAD = {
     console.log('== The header is about the store, not the tab ==');
     const sub = await page.$eval('#ecSubtitle', e => e.textContent.trim()).catch(() => '');
     // 64 + 3 + 13. A header that counted the open tab said "13 To Submit" over a
-    // store with 80 outstanding, and "Everything Is Filed" over one with 64.
+    // store with 80 outstanding, and said a store with 64 in Other was clear.
     ok(/80 Items To Submit/.test(sub), 'all three queues, added up', sub);
 
     await page.screenshot({ path: SHOT + '/recat-nomatch.png', fullPage: false });

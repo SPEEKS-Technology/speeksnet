@@ -269,9 +269,9 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
         console.log(`  SKIPPED (queue ${emptyView.queue}, skips ${emptyView.skipped} — needs an empty one with a skip)`);
     }
     // The header is about the STORE, not the open tab: sitting on an empty Wrong
-    // Category tab it used to say "Everything Is Filed" over 64 in Other.
+    // Category tab it used to say the store was clear over 64 in Other.
     const total = (emptyView.counts.other || 0) + (emptyView.counts.misfiled || 0);
-    ok(total ? emptyView.sub.includes(String(total)) : /Everything Is Filed/.test(emptyView.sub),
+    ok(total ? emptyView.sub.includes(String(total)) : /Everything Is Fixed/.test(emptyView.sub),
         'and the header counts both queues, not the open one', emptyView.sub);
     await page.evaluate(async () => { await rcSetMode('other'); });
     await new Promise(r => setTimeout(r, 2500));
