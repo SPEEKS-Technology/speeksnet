@@ -75,6 +75,29 @@ const json = (b: unknown, s = 200) =>
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 
+// Realtime "ping" — the same broadcast-as-ping every other tool uses: say that
+// this changed, and let the client re-run its own check through the function
+// that owns the data. No row ever travels over realtime, so the RLS-locked
+// tables stay shut to the anon client. Fired only when the SET actually moved,
+// because a sweep that finds the same 21 matches is not news to anybody.
+async function broadcastChange(): Promise<void> {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{
+          topic: "speeks-notify",
+          event: "changed",
+          payload: { tool: "callbackMatch", store: null, ts: Date.now() },
+        }],
+      }),
+    });
+  } catch (_) { /* the write already succeeded; realtime is best-effort */ }
+}
+
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
@@ -319,12 +342,23 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // --- pairs a human already rejected -------------------------------------
-  // Permanent for that (row, item) pair, by decision. Loading them up front is
+  // --- what a human already decided ---------------------------------------
+  // One read, two different needs.
+  //
+  // `vetoed` is a permanent NO for that (row, item) pair. Loading it up front is
   // what stops the sweep re-offering something somebody already dismissed.
-  const { data: rejected } = await sb
-    .from("callback_matches").select("callback_id, store_code, sku").eq("state", "rejected");
-  const vetoed = new Set((rejected ?? []).map((r: any) => `${r.callback_id}|${r.store_code}|${r.sku}`));
+  //
+  // `stateByKey` is the opposite problem, and it is the reason this read is no
+  // longer filtered to rejected: the upsert below writes a `state` for EVERY row
+  // in the batch, so with no knowledge of the current one it would demote a
+  // CONFIRMED match back to `suggested` three times a day — a manager's "yes,
+  // that's it" undone by the next sweep. A `sold` row whose unit is back in
+  // stock deliberately does return to `suggested`: it is available again.
+  const { data: decided } = await sb
+    .from("callback_matches").select("callback_id, store_code, sku, state");
+  const keyOf = (r: any) => `${r.callback_id}|${r.store_code}|${r.sku}`;
+  const vetoed = new Set((decided ?? []).filter((r: any) => r.state === "rejected").map(keyOf));
+  const stateByKey = new Map((decided ?? []).map((r: any) => [keyOf(r), r.state]));
 
   // --- match ---------------------------------------------------------------
   const byStore: Record<string, Item[]> = {};
@@ -380,8 +414,14 @@ Deno.serve(async (req: Request) => {
         score: f.score,
         match_reason: f.reason,
         found_via: f.foundVia,
-        state: "suggested",
-        found_at: new Date().toISOString(),
+        // Never demote a decision. See stateByKey above.
+        state: stateByKey.get(`${cb.id}|${f.item.store_code}|${f.item.sku}`) === "confirmed"
+          ? "confirmed" : "suggested",
+        // found_at is DELIBERATELY absent. The column defaults to now() on
+        // insert, and a column missing from an upsert payload is left alone on
+        // conflict — so it keeps meaning "when we first spotted this", which is
+        // what the panel shows. Sending it would reset the age three times a day
+        // and no match would ever look older than the last sweep.
       });
     }
   }
@@ -415,8 +455,8 @@ Deno.serve(async (req: Request) => {
 
   // --- write ---------------------------------------------------------------
   // Upsert on (callback_id, store_code, sku): the sweep runs three times a day
-  // and must refresh a score rather than pile up duplicates. `state` is NOT
-  // overwritten for a row a human already confirmed — see the do-nothing guard.
+  // and must refresh a score rather than pile up duplicates. The `state` in each
+  // row was already resolved against stateByKey, so a confirmed match survives.
   let written = 0;
   for (let i = 0; i < deduped.length; i += 500) {
     const chunk = deduped.slice(i, i + 500);
@@ -426,20 +466,44 @@ Deno.serve(async (req: Request) => {
     written += chunk.length;
   }
 
-  // --- retire what sold ----------------------------------------------------
-  // A matched unit that sells has to stop being green, and the row should say so
-  // rather than the flag just vanishing.
-  const live = new Set(deduped.map((r) => `${r.callback_id}|${r.store_code}|${r.sku}`));
-  const { data: stale } = await sb
-    .from("callback_matches").select("id, callback_id, store_code, sku, title").neq("state", "rejected");
+  // --- what left the shelf -------------------------------------------------
+  // A matched unit that sells has to stop being green. What HAPPENS to the row
+  // depends on whether a human ever acted on it:
+  //
+  //   * a bare `suggested` row is deleted — it was never news, and keeping it
+  //     would make the panel a graveyard;
+  //   * a `confirmed` one becomes `sold`, because "we had it and it went" is the
+  //     answer to "why is this not green any more" and a deleted row cannot
+  //     give it. `rejected` is never touched: that veto has to outlive the unit.
+  //
+  // SCOPED TO THE STORES WE ACTUALLY SWEPT. With ?store=WSP the batch only ever
+  // contains WSP items, so an unscoped retire reads every other store's matches
+  // as vanished and clears the lot.
+  let live = new Set(deduped.map((r) => `${r.callback_id}|${r.store_code}|${r.sku}`));
+  let q = sb.from("callback_matches")
+    .select("id, callback_id, store_code, sku, state").neq("state", "rejected");
+  if (only) q = q.eq("store_code", only);
+  const { data: stale } = await q;
   const gone = (stale ?? []).filter((m: any) =>
     !live.has(`${m.callback_id}|${m.store_code}|${m.sku}`));
-  let retired = 0;
-  if (gone.length) {
+
+  const toDelete = gone.filter((g: any) => g.state === "suggested").map((g: any) => g.id);
+  const toSell = gone.filter((g: any) => g.state === "confirmed").map((g: any) => g.id);
+  let retired = 0, markedSold = 0;
+  if (toDelete.length) {
+    const { error } = await sb.from("callback_matches").delete().in("id", toDelete);
+    if (!error) retired = toDelete.length;
+  }
+  if (toSell.length) {
     const { error } = await sb.from("callback_matches")
-      .delete().in("id", gone.map((g: any) => g.id));
-    if (!error) retired = gone.length;
+      .update({ state: "sold" }).in("id", toSell);
+    if (!error) markedSold = toSell.length;
   }
 
-  return json({ ok: true, summary: { ...summary, written, retired } });
+  // A pair we had never seen before is the only thing worth waking a client for.
+  const newMatches = deduped.filter((r) =>
+    !stateByKey.has(`${r.callback_id}|${r.store_code}|${r.sku}`)).length;
+  if (newMatches || retired || markedSold) await broadcastChange();
+
+  return json({ ok: true, summary: { ...summary, written, newMatches, retired, markedSold } });
 });

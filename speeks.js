@@ -20683,6 +20683,113 @@ function _cbDaysAgo(n) {
     return d.toISOString().slice(0, 10);
 }
 
+// ============================================================================
+// SHOPIFY MATCHING — "somebody already has what that customer asked for"
+// ---------------------------------------------------------------------------
+// The direction is the opposite of the obvious one: each store's OWN stock is
+// matched against EVERY store's open call backs, so the green row and the feed
+// card go to the store that HAS the item. That store rings the customer and
+// sells it from its own online store; the store that logged the customer finds
+// out through the attribution line already on the row.
+//
+// Category (a Shopify collection) is the matcher's GATE, which is why it is a
+// required field rather than a nicety: a row without one can never be answered.
+// Type narrows inside the category and is optional. "Any Model" says the
+// customer is not fussy, and is what lets a bare "Playstation 5" match.
+// ============================================================================
+
+// The storefront a match is actually sold from. These are the .myshopify.com
+// domains rather than the public ones because they always resolve, and a link
+// that 404s on a customer call is worse than no link — see cbMatchListingUrl,
+// which only offers one for a unit that is genuinely published.
+const CB_SHOP_DOMAINS = {
+    OVL: 'paymore-overland-park.myshopify.com',
+    LEE: 'paymore-lees-summit.myshopify.com',
+    WSP: 'paymore-westport.myshopify.com',
+    MPL: 'paymore-maplewood.myshopify.com',
+    BAL: 'paymore-ballwin.myshopify.com'
+};
+
+// Roles that may answer a match. Mirrors DECIDER_ROLES in the customer-callbacks
+// edge function — an employee can see the green row and ring the customer, but
+// "That's It" / "Not It" permanently changes what the sweep offers, so it needs
+// a manager. Corp roles pass through cbCanDecide separately.
+const CB_DECIDER_ROLES = ['manager', 'assistant manager', 'multi-store manager', 'owner (manager)'];
+
+// 62 categories and ~193 types is one small payload that changes when somebody
+// seeds a new type, not while a manager is typing — so it is fetched once per
+// page load and shared by the quick-add and the edit row.
+let _cbVocab = null;
+let _cbVocabPromise = null;
+function cbVocab() {
+    if (_cbVocab) return Promise.resolve(_cbVocab);
+    if (!_cbVocabPromise) {
+        _cbVocabPromise = fetch(`${CALLBACKS_URL}?vocab=1`)
+            .then(r => r.ok ? r.json() : { categories: [] })
+            .then(d => { _cbVocab = (d && d.categories) || []; return _cbVocab; })
+            // Null the promise so a failed first load is retried rather than
+            // cached as "there are no categories" for the rest of the session.
+            .catch(() => { _cbVocabPromise = null; return []; });
+    }
+    return _cbVocabPromise;
+}
+
+function _cbCatByHandle(handle) {
+    return (_cbVocab || []).find(c => c.handle === handle) || null;
+}
+
+// Which stores' stock counts as "ours" for the green row. A corp role holds no
+// stock at all, so it gets null — every match is information rather than an
+// instruction, and nothing turns green.
+function _cbMatchScope() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    if (CB_CORP_ROLES.includes(role) || store === 'ALL') return null;
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return [...MULTISTORE_MANAGER_STORES];
+    return STORE_CODES.includes(store) ? [store] : [];
+}
+
+// A match still worth acting on. `sold` rows ship from the server so a row that
+// was green can say why it stopped, but they are not an answer to anything.
+function _cbLiveMatches(entry) {
+    return (entry.matches || []).filter(m => m.state === 'suggested' || m.state === 'confirmed');
+}
+
+function _cbSplitMatches(entry) {
+    const scope = _cbMatchScope();
+    const live = _cbLiveMatches(entry);
+    if (!scope) return { mine: [], theirs: live };
+    return {
+        mine:   live.filter(m => scope.includes(m.store_code)),
+        theirs: live.filter(m => !scope.includes(m.store_code))
+    };
+}
+
+// Only the holding store's management may answer. The server enforces the same
+// rule; this is here so a button that would 403 is never offered in the first place.
+function cbCanDecide(match) {
+    const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase().trim();
+    const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    if (CB_CORP_ROLES.includes(role) || store === 'ALL') return true;
+    if (!CB_DECIDER_ROLES.includes(role)) return false;
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return MULTISTORE_MANAGER_STORES.includes(match.store_code);
+    return match.store_code === store;
+}
+
+// A link only when there is genuinely something to open. 114 of the in-stock
+// items the matcher can reach are not published to the online store, and a
+// storefront URL for one of those is a 404 handed to somebody mid-phone-call.
+function cbMatchListingUrl(m) {
+    if (!m.online_published || !m.product_handle) return null;
+    const shop = CB_SHOP_DOMAINS[m.store_code];
+    return shop ? `https://${shop}/products/${encodeURIComponent(m.product_handle)}` : null;
+}
+
+function _cbMoney(v) {
+    const n = Number(v);
+    return isFinite(n) ? '$' + n.toFixed(2) : '';
+}
+
 async function cbFetch(view, store) {
     const res = await fetch(`${CALLBACKS_URL}?view=${view === 'archived' ? 'archived' : 'active'}&store=${store}&v=${Date.now()}`);
     if (!res.ok) throw new Error('Fetch failed');
@@ -20801,7 +20908,13 @@ async function cbLoad() {
     if (body && !_cbCache.length) body.innerHTML = '<div class="status-message">Loading Call Backs…</div>';
     try {
         // Fetch everything once; view filtering happens client-side in cbRender.
-        _cbCache = await cbFetch(_cbView === 'archived' ? 'archived' : 'active', 'ALL');
+        // The vocabulary rides along on the first load so the quick-add's Category
+        // select is never briefly empty — after that cbVocab() resolves instantly.
+        const [rows] = await Promise.all([
+            cbFetch(_cbView === 'archived' ? 'archived' : 'active', 'ALL'),
+            cbVocab()
+        ]);
+        _cbCache = rows;
         cbRender();
     } catch (e) {
         // Only surface the error when there's nothing on screen — a failed
@@ -20889,14 +21002,98 @@ function _cbQuickAddHtml() {
     const storePicker = addStores
         ? `<select id="cbAddStore" class="kpi-select cb-add-store">${addStores.map(s => `<option value="${s}" ${s === dflt ? 'selected' : ''}>${s}</option>`).join('')}</select>`
         : '';
+    // Two lines rather than one: who called and what they want, then how we find
+    // it. Nine controls on a single row put the Category select somewhere nobody
+    // would look for it, and it is the field the whole match depends on.
     return `<div class="cb-quickadd">
-        ${storePicker}
-        <input type="text" id="cbAddName"  placeholder="Customer name" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-        <input type="tel"  id="cbAddPhone" placeholder="Phone" inputmode="numeric" oninput="cbPhoneInput(this)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-        <input type="text" id="cbAddItem"  placeholder="Item they're looking for" class="cb-add-item" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-        <input type="text" id="cbAddNoteTxt" placeholder="Notes (optional)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-        <button class="btn-primary cb-add-btn" onclick="cbQuickAdd()">${CB_ICONS.plus}Add</button>
+        <div class="cb-qa-line">
+            ${storePicker}
+            <input type="text" id="cbAddName"  placeholder="Customer name" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+            <input type="tel"  id="cbAddPhone" placeholder="Phone" inputmode="numeric" oninput="cbPhoneInput(this)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+            <input type="text" id="cbAddItem"  placeholder="Item they're looking for" class="cb-add-item" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+        </div>
+        <div class="cb-qa-line cb-qa-match">
+            ${_cbCategorySelectHtml('cbAddCategory', '', 'cbAddType')}
+            ${_cbTypeSelectHtml('cbAddType', '', [])}
+            <label class="cb-anymodel" data-cb-tip="Tick when the customer isn't fussy — any model in this category counts. Without it, something they actually said has to match the listing.">
+                <input type="checkbox" id="cbAddAnyModel"><span>Any Model</span>
+            </label>
+            <input type="text" id="cbAddNoteTxt" placeholder="Notes (optional)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+            <button class="btn-primary cb-add-btn" onclick="cbQuickAdd()">${CB_ICONS.plus}Add</button>
+        </div>
     </div>`;
+}
+
+// The Category select. Sorted by how much stock the category actually holds, so
+// the six that cover most of a shift are at the top of the list rather than
+// alphabetised among 62.
+function _cbCategorySelectHtml(id, selected, typeSelectId) {
+    const opts = (_cbVocab || []).map(c =>
+        `<option value="${escapeHtml(c.handle)}" ${c.handle === selected ? 'selected' : ''}>${escapeHtml(c.title)}</option>`
+    ).join('');
+    return `<select id="${id}" class="kpi-select cb-cat-select" data-cb-tip="Which shelf it lives on. This is what the search is limited to, so it's required."
+            onchange="cbCategoryChanged('${id}','${typeSelectId}')">
+        <option value="">Category…</option>${opts}
+    </select>`;
+}
+
+// The Type select — optional, and disabled until a category with types is
+// chosen. A chosen type is a REQUIREMENT on the match, not a hint, which is why
+// the empty option says "Any type" rather than looking like a blank field.
+function _cbTypeSelectHtml(id, selected, types) {
+    const list = types || [];
+    const opts = list.map(t =>
+        `<option value="${t.id}" ${String(t.id) === String(selected) ? 'selected' : ''}>${escapeHtml(t.name)}</option>`
+    ).join('');
+    return `<select id="${id}" class="kpi-select cb-type-select" ${list.length ? '' : 'disabled'}
+            data-cb-tip="Optional. Narrows the search inside the category — a platform, a model or a shape.">
+        <option value="">${list.length ? 'Any type' : 'Type…'}</option>${opts}
+    </select>`;
+}
+
+// Repopulating the Type select in place rather than re-rendering the pane: a
+// re-render would wipe the name and phone somebody has already typed.
+function cbCategoryChanged(catId, typeId) {
+    const cat = _cbCatByHandle(document.getElementById(catId)?.value || '');
+    const sel = document.getElementById(typeId);
+    if (!sel) return;
+    const types = cat ? (cat.types || []) : [];
+    sel.innerHTML = `<option value="">${types.length ? 'Any type' : 'Type…'}</option>`
+        + types.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+    sel.disabled = !types.length;
+}
+
+// What the row was filed under, plus the two tags that explain its behaviour.
+// "Any Model" is why a bare "Playstation 5" matches; "Needs Detail" is why a row
+// with a category still never will — the customer named nothing specific and the
+// type is only a shelf, so there is nothing for the matcher to land on.
+function _cbItemMetaHtml(e) {
+    const bits = [];
+    if (e.category_title) {
+        const cat = _cbCatByHandle(e.category_handle);
+        const ty = (cat && e.type_id) ? (cat.types || []).find(t => String(t.id) === String(e.type_id)) : null;
+        bits.push(`<span class="cb-cat">${escapeHtml(e.category_title)}${ty ? ' · ' + escapeHtml(ty.name) : ''}</span>`);
+    }
+    if (e.any_model) bits.push('<span class="cb-tag cb-tag-any" data-cb-tip="Any model in this category counts.">Any Model</span>');
+    if (e.needs_detail) bits.push('<span class="cb-tag cb-tag-detail" data-cb-tip="Nothing here is specific enough to match against stock. Edit the row and say which model, or tick Any Model.">Needs Detail</span>');
+    return bits.join('');
+}
+
+// The chip that carries the whole point of the feature. Green and first-person
+// when the stock is OURS — that is an instruction, ring the customer. Neutral
+// when it is another store's, because that is information: they will be told.
+function _cbMatchChipHtml(mine, theirs) {
+    if (mine.length) {
+        const n = mine.length;
+        // The count is how many of OUR listings fit, not how many units we own —
+        // the matcher surfaces the best three per store, so LEE's five PS5s read
+        // as three. Claiming "you have 3 in stock" would be understating it.
+        return `<span class="cb-tag cb-tag-hasit" data-cb-tip="${n === 1 ? 'One of your listings fits' : n + ' of your listings fit'} — open the row to see ${n === 1 ? 'it' : 'them'}.">You Have It${n > 1 ? ' · ' + n : ''}</span>`;
+    }
+    if (!theirs.length) return '';
+    const stores = [...new Set(theirs.map(m => m.store_code))];
+    const label = stores.length === 1 ? `${stores[0]} Has It` : `${stores.length} Stores Have It`;
+    return `<span class="cb-tag cb-tag-elsewhere" data-cb-tip="${escapeHtml(stores.join(', '))} ${stores.length === 1 ? 'has' : 'have'} one in stock. Their store rings the customer.">${escapeHtml(label)}</span>`;
 }
 
 function cbRowHtml(e, showStore) {
@@ -20905,6 +21102,8 @@ function cbRowHtml(e, showStore) {
     const isArchived = _cbView === 'archived';
     const editing = _cbEditingId === e.id;
     const expanded = _cbExpandedId === e.id || editing;
+    const { mine, theirs } = _cbSplitMatches(e);
+    const matchChip = isArchived ? '' : _cbMatchChipHtml(mine, theirs);
 
     // Status is clickable for EVERYONE — another store marking Contacted is the
     // cross-store "we have this item" signal. The change is attributed under the chip.
@@ -20931,7 +21130,14 @@ function cbRowHtml(e, showStore) {
             ${showStore ? `<td class="cb-col-store">${escapeHtml(e.store)}</td>` : ''}
             <td><input class="cb-edit-input" id="cbEditName" value="${escapeHtml(e.customer_name)}"></td>
             <td><input class="cb-edit-input" id="cbEditPhone" type="tel" inputmode="numeric" oninput="cbPhoneInput(this)" value="${escapeHtml(String(e.phone || '').replace(/\D/g, '').slice(0, 10))}"></td>
-            <td class="cb-col-item"><input class="cb-edit-input" id="cbEditItem" value="${escapeHtml(e.item)}"></td>
+            <td class="cb-col-item">
+                <input class="cb-edit-input" id="cbEditItem" value="${escapeHtml(e.item)}">
+                <div class="cb-edit-match">
+                    ${_cbCategorySelectHtml('cbEditCategory', e.category_handle || '', 'cbEditType')}
+                    ${_cbTypeSelectHtml('cbEditType', e.type_id || '', (_cbCatByHandle(e.category_handle) || {}).types || [])}
+                    <label class="cb-anymodel"><input type="checkbox" id="cbEditAnyModel" ${e.any_model ? 'checked' : ''}><span>Any Model</span></label>
+                </div>
+            </td>
             <td class="cb-cell-status">${chip}</td>
             <td class="cb-cell-timer"><input class="cb-edit-input cb-edit-date" id="cbEditDate" type="date" value="${e.date_of_call}" data-cb-tip="Date of call (resets the 30-day timer)"></td>
             <td class="cb-col-notes"></td>
@@ -20942,11 +21148,14 @@ function cbRowHtml(e, showStore) {
             </td>
         </tr>`;
     } else {
-        row = `<tr class="cb-row ${expanded ? 'cb-row-open' : ''} ${e.status === 'completed' ? 'cb-row-done' : ''}" data-id="${e.id}" onclick="cbToggleRow('${e.id}')">
+        row = `<tr class="cb-row ${expanded ? 'cb-row-open' : ''} ${e.status === 'completed' ? 'cb-row-done' : ''} ${mine.length ? 'cb-row-hasit' : ''}" data-id="${e.id}" onclick="cbToggleRow('${e.id}')">
             ${showStore ? `<td class="cb-col-store">${escapeHtml(e.store)}</td>` : ''}
             <td class="cb-customer">${escapeHtml(e.customer_name)}</td>
             <td>${phone}</td>
-            <td class="cb-col-item cb-item">${escapeHtml(e.item)}</td>
+            <td class="cb-col-item cb-item">
+                <div class="cb-item-text">${escapeHtml(e.item)}</div>
+                <div class="cb-item-meta">${_cbItemMetaHtml(e)}${matchChip}</div>
+            </td>
             <td class="cb-cell-status">${chip}</td>
             <td class="cb-cell-timer">${_cbDaysBadge(e)}</td>
             <td class="cb-col-notes">${e.notes.length ? `<span class="cb-note-count">${CB_ICONS.note}${e.notes.length}</span>` : ''}</td>
@@ -20960,6 +21169,7 @@ function cbRowHtml(e, showStore) {
             `<div class="cb-note">${escapeHtml(n.text)} <span class="cb-note-meta">— ${escapeHtml(n.user)} (${escapeHtml(n.store)}) · ${_cbShortDate(n.at)}</span></div>`
         ).join('') || '<div class="cb-note cb-note-none">No notes yet.</div>';
         row += `<tr class="cb-row-detail"><td colspan="${showStore ? 9 : 8}">
+            ${_cbMatchPanelHtml(e, mine, theirs)}
             <div class="cb-notes-thread">${noteItems}</div>
             <div class="cb-note-add">
                 <input type="text" class="cb-note-input" id="cbNoteInput-${e.id}" placeholder="Details about what they're looking for — condition, budget, timing…"
@@ -20969,6 +21179,81 @@ function cbRowHtml(e, showStore) {
         </td></tr>`;
     }
     return row;
+}
+
+// --- The match panel --------------------------------------------------------
+// Ours first and under its own heading, because the two halves are different
+// kinds of fact: our stock is a call to make, another store's is context. A
+// `sold` row is kept visible on purpose — a match that was there yesterday and
+// has gone should say so rather than silently disappear.
+function _cbMatchPanelHtml(e, mine, theirs) {
+    const sold = (e.matches || []).filter(m => m.state === 'sold');
+    if (!mine.length && !theirs.length && !sold.length) return '';
+    const sect = (label, list, cls) => list.length
+        ? `<div class="cb-match-group ${cls || ''}">
+               <div class="cb-match-head">${label}</div>
+               ${list.map(m => _cbMatchHtml(e, m)).join('')}
+           </div>` : '';
+    return `<div class="cb-match-panel">
+        ${sect(mine.length === 1 ? 'You Have This — Call The Customer' : `You Have ${mine.length} That Fit — Call The Customer`, mine, 'is-mine')}
+        ${sect(theirs.length === 1 ? 'Another Store Has One' : 'Other Stores Have These', theirs)}
+        ${sect('No Longer In Stock', sold, 'is-sold')}
+    </div>`;
+}
+
+function _cbMatchHtml(e, m) {
+    const url = cbMatchListingUrl(m);
+    const decided = m.state === 'confirmed';
+    const isSold = m.state === 'sold';
+    const bits = [];
+    if (m.price != null) bits.push(_cbMoney(m.price));
+    if (m.sku) bits.push('SKU ' + escapeHtml(m.sku));
+    // found_via='other' is worth saying out loud: the unit is filed under Other
+    // rather than the category asked for, so the title is the only evidence and
+    // it is worth a second look before ringing anybody.
+    if (m.found_via === 'other') bits.push('<span class="cb-m-via">filed under Other</span>');
+    if (!m.online_published && !isSold) bits.push('<span class="cb-m-via">not listed online</span>');
+
+    let actions = '';
+    if (isSold) {
+        actions = '<span class="cb-m-state">Sold</span>';
+    } else if (decided) {
+        actions = `<span class="cb-m-state is-yes">That's It${m.decided_by ? ' · ' + escapeHtml(m.decided_by) : ''}</span>`;
+    } else if (cbCanDecide(m)) {
+        actions = `<button class="cb-m-btn is-yes" onclick="event.stopPropagation();cbMatchDecide('${e.id}',${m.id},'confirm')" data-cb-tip="This is what they asked for — keeps it on the row.">That's It</button>
+                   <button class="cb-m-btn is-no" onclick="event.stopPropagation();cbMatchDecide('${e.id}',${m.id},'reject')" data-cb-tip="Wrong item. Permanent — this pairing is never offered again.">Not It</button>`;
+    }
+    const link = url
+        ? `<a class="cb-m-btn is-link" href="${escapeHtml(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Listing</a>`
+        : '';
+
+    return `<div class="cb-match ${decided ? 'is-confirmed' : ''} ${isSold ? 'is-gone' : ''}">
+        <span class="cb-m-store" style="background:${STORE_TINTS[m.store_code] || '#647082'}">${escapeHtml(m.store_code)}</span>
+        <div class="cb-m-body">
+            <div class="cb-m-title">${escapeHtml(m.title || '')}</div>
+            <div class="cb-m-meta">${bits.join(' · ')}${m.match_reason ? `<span class="cb-m-why" data-cb-tip="${escapeHtml(m.match_reason)}">why?</span>` : ''}</div>
+        </div>
+        <div class="cb-m-actions">${link}${actions}</div>
+    </div>`;
+}
+
+// Optimistic, like every other action here. A rejection is permanent by design,
+// so it leaves the panel immediately rather than sitting there greyed out.
+function cbMatchDecide(entryId, matchId, decision) {
+    const e = _cbCache.find(x => x.id === entryId);
+    if (!e) return;
+    const m = (e.matches || []).find(x => String(x.id) === String(matchId));
+    if (!m) return;
+    if (decision === 'reject') {
+        if (!confirm(`Not it? "${m.title}" will never be suggested for this call back again.`)) return;
+        e.matches = e.matches.filter(x => String(x.id) !== String(matchId));
+    } else {
+        m.state = 'confirmed';
+        m.decided_by = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    }
+    cbRender();
+    cbPost({ action: decision === 'reject' ? 'match_reject' : 'match_confirm', matchId })
+        .catch(err => { alert('Could not save that: ' + err.message); cbLoad(); });
 }
 
 // --- Actions (optimistic: mutate cache, render, POST in background)
@@ -20983,25 +21268,42 @@ async function cbQuickAdd() {
     const phone = (document.getElementById('cbAddPhone')?.value || '').replace(/\D/g, '');
     const item  = document.getElementById('cbAddItem')?.value.trim();
     const note  = document.getElementById('cbAddNoteTxt')?.value.trim();
+    const catHandle = document.getElementById('cbAddCategory')?.value || '';
+    const typeId    = document.getElementById('cbAddType')?.value || '';
+    const anyModel  = !!document.getElementById('cbAddAnyModel')?.checked;
     if (!name || !phone || !item) { alert('Customer name, phone, and item are required.'); return; }
     if (phone.length !== 10) { alert('Phone number must be exactly 10 digits.'); return; }
+    // Required because it is the matcher's gate, and said plainly for the same
+    // reason: without it the row is logged and then never answered by anything.
+    if (!catHandle) { alert('Pick a category — it is what we search, so a call back without one will never be matched to stock.'); return; }
 
     const store = document.getElementById('cbAddStore')?.value || _cbHomeStore();
     const user  = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const cat   = _cbCatByHandle(catHandle);
     const entry = {
         id: 'tmp-' + Date.now(), store, customer_name: name, phone, item,
         status: 'open', date_of_call: _cbDaysAgo(0), created_by: user,
         archived_at: null,
+        category_handle: catHandle, category_title: cat ? cat.title : catHandle,
+        type_id: typeId ? Number(typeId) : null, any_model: anyModel,
+        needs_detail: false, matches: [],
         notes: note ? [{ text: note, user, store, at: _cbDaysAgo(0) }] : []
     };
     _cbCache.unshift(entry);
     cbRender();
     document.getElementById('cbAddName')?.focus();
     try {
-        const out = await cbPost({ action: 'add', entry: { store, customer_name: name, phone, item, note: note || null, created_by: user } });
+        const out = await cbPost({ action: 'add', entry: {
+            store, customer_name: name, phone, item, note: note || null, created_by: user,
+            category_handle: catHandle, type_id: typeId || null, any_model: anyModel
+        } });
         // Reconcile the optimistic row with the server's (real uuid, server-side
         // defaults) — row onclick handlers embed the id, so re-render after.
         if (out.entry) { Object.assign(entry, out.entry); cbRender(); }
+        // The add kicks a match sweep server-side rather than waiting for the next
+        // scheduled one, so the answer to "does anybody have this" lands a few
+        // seconds later. Re-fetch once instead of making the person reload.
+        setTimeout(() => { if (!_cbEditingId) cbLoad(); }, 5000);
     } catch (e) {
         _cbCache = _cbCache.filter(x => x.id !== entry.id);
         cbRender();
@@ -21052,16 +21354,32 @@ function cbSaveEdit(id) {
     if (!e) return;
     const editedPhone = (document.getElementById('cbEditPhone')?.value || '').replace(/\D/g, '');
     if (editedPhone && editedPhone.length !== 10) { alert('Phone number must be exactly 10 digits.'); return; }
+    const catHandle = document.getElementById('cbEditCategory')?.value || '';
+    if (!catHandle) { alert('Pick a category — it is what we search, so a call back without one will never be matched to stock.'); return; }
+    const typeId = document.getElementById('cbEditType')?.value || '';
     const fields = {
         customer_name: document.getElementById('cbEditName')?.value.trim()  || e.customer_name,
         phone:         editedPhone || e.phone,
         item:          document.getElementById('cbEditItem')?.value.trim()  || e.item,
-        date_of_call:  document.getElementById('cbEditDate')?.value         || e.date_of_call
+        date_of_call:  document.getElementById('cbEditDate')?.value         || e.date_of_call,
+        category_handle: catHandle,
+        type_id:         typeId || null,
+        any_model:       !!document.getElementById('cbEditAnyModel')?.checked
     };
-    Object.assign(e, fields);
+    const cat = _cbCatByHandle(catHandle);
+    Object.assign(e, fields, {
+        type_id: typeId ? Number(typeId) : null,
+        category_title: cat ? cat.title : catHandle
+    });
+    // What the row asks for has changed, so the server bins the old suggestions
+    // and re-runs the match. Clear them here too rather than leaving answers to
+    // the previous question sitting under the row.
+    e.matches = (e.matches || []).filter(m => m.state === 'confirmed');
     _cbEditingId = null;
     cbRender();
-    cbPost({ action: 'edit', id, fields }).catch(() => cbLoad());
+    cbPost({ action: 'edit', id, fields })
+        .then(() => setTimeout(() => { if (!_cbEditingId) cbLoad(); }, 5000))
+        .catch(() => cbLoad());
 }
 
 function cbDeleteEntry(id) {
@@ -21082,6 +21400,98 @@ function cbRestoreEntry(id) {
     _cbCache = _cbCache.filter(x => x.id !== id);   // leaves the archived view
     cbRender();
     cbPost({ action: 'restore', id }).catch(() => cbLoad());
+}
+
+// ============================================================================
+// FEED REMINDER — "you have what somebody's customer asked for"
+// ---------------------------------------------------------------------------
+// Same hidden-bubble idiom as B2B above: the QuickPortal feed decides a card is
+// live by reading this element's COMPUTED DISPLAY, so it stays in the DOM and
+// merely goes invisible. Removing it would silently kill the card.
+//
+// Scoped to the store that HOLDS the stock, which is the whole direction of the
+// feature — a card at WSP about a customer LEE logged. Corp roles are skipped on
+// purpose: a DM holds no stock, so twenty of these would be noise, and the
+// oversight they want is the tab itself.
+// ============================================================================
+
+function _cbMatchBubbleEl() {
+    let b = document.getElementById('cbMatchAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'cbMatchAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; '
+        + 'background:linear-gradient(135deg, #1f9d57, #178048); color:white; '
+        + 'padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; '
+        + 'font-size:13px; box-shadow:0 10px 28px rgba(23,128,72,.38); '
+        + 'max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span style="font-size:16px; flex-shrink:0; margin-top:2px;">📞</span>
+        <span id="cbMatchAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="closeCbMatchAlertBubble()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+function closeCbMatchAlertBubble() {
+    const b = document.getElementById('cbMatchAlertBubble');
+    if (b) b.style.display = 'none';
+}
+
+async function checkCallbackMatchReminders() {
+    const scope = _cbMatchScope();
+    if (!scope || !scope.length) return;    // corp, or no store to hold anything
+    const b = _cbMatchBubbleEl();
+    if (!b) return;
+    try {
+        const rows = await cbFetch('active', 'ALL');
+        // `suggested` only. A confirmed match is already being worked, and
+        // nagging about work in progress is how a feed stops being read.
+        const hits = [];
+        rows.forEach(e => {
+            if (e.status === 'completed' || e.archived_at) return;
+            const n = (e.matches || []).filter(m =>
+                m.state === 'suggested' && scope.includes(m.store_code)).length;
+            if (n) hits.push({ entry: e, count: n });
+        });
+        if (!hits.length) { b.style.display = 'none'; return; }
+
+        const t = document.getElementById('cbMatchAlertBubbleText');
+        if (t) {
+            const lead = hits[0];
+            const more = hits.length - 1;
+            const line = `${lead.entry.store}'s customer wants "${lead.entry.item}" — you have `
+                + `${lead.count === 1 ? 'one' : lead.count}`;
+            t.innerHTML = `<b>You have a call back item</b><br>${escapeHtml(line)}`
+                + (more ? ` · ${more} more ${more === 1 ? 'call back' : 'call backs'} you can answer.` : '.');
+            t.dataset.summary = `${hits.length} call back${hits.length === 1 ? '' : 's'} you can answer · ${line}`;
+            // Identity for the snooze: the actual set of matches. A new one
+            // breaking through a snooze is the point — the old ones staying quiet
+            // for the day is too.
+            t.dataset.sig = hits.map(h => h.entry.id + ':' + h.count).sort().join('|');
+            // MSM routing: if every hit is at one of their stores only, the card
+            // opens that store's tool without switching dashboards.
+            const stores = [...new Set(hits.flatMap(h =>
+                (h.entry.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code))
+                    .map(m => m.store_code)))];
+            t.dataset.stores = stores.join(',');
+        }
+        b.style.display = 'flex';
+    } catch (_) {
+        // a failed poll leaves the bubble exactly as it was
+    }
+}
+
+// Realtime: the matcher broadcasts when the SET of matches moves, so a sweep
+// that finds something new lights the card and repaints an open pane without a
+// reload. No-op when the pane isn't showing.
+function _cbRealtimeRefresh() {
+    const pane = document.getElementById('ops-pane-callbacks');
+    if (!pane || !pane.classList.contains('active') || _cbEditingId) return;
+    return cbLoad();
 }
 
 // ============================================================================
@@ -21469,7 +21879,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -36498,6 +36908,13 @@ function _samReminderCfg() {
     cfg.push({ key: 'listingGoalsDaily', id: 'listingGoalsDailyAlertBubble', text: 'listingGoalsDailyAlertBubbleText',
         title: 'Set Today’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-red', noSnooze: true,
         action: "openListingGoals()" });
+    // Call Back matches — the store that HAS the item. An opportunity rather than
+    // a deadline, so it is amber and snoozeable: nothing is late, somebody just
+    // has a phone call worth making. It clears itself once the match is answered
+    // or the unit sells, and a NEW match breaks through the snooze (data-sig).
+    cfg.push({ key: 'cbMatch', id: 'cbMatchAlertBubble', text: 'cbMatchAlertBubbleText',
+        title: 'Call Back Item In Stock', urgency: 2, due: 'Call', cls: 'sam-due-amber',
+        action: "window.location.href='operations.html#callbacks'" });
     return cfg;
 }
 
@@ -36689,6 +37106,9 @@ const _RT_TOOL_CHECKS = {
     gpGoals:       ['checkGpGoalReminder'],
     preferred:     ['checkPreferredReminders'],
     b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders'],
+    // callback-match broadcasts when the SET of matches moves — a new one lights
+    // the card, a sold unit clears it, both without a reload.
+    callbackMatch: ['checkCallbackMatchReminders', '_cbRealtimeRefresh'],
     // Command Center + Listing Goals sources. Each re-fetches through its edge
     // fn and recomputes its update signature, so the pulsing dot / bar lights the
     // moment a write lands — no refresh or re-login. (scorecard fn, ebay-alerts

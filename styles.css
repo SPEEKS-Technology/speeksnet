@@ -2415,6 +2415,7 @@ select.bs-hidden-select:focus {
    this block were retired by the mobile layer at the end of this file. This
    block predates the 2026 redesign and only survives for the widgets the new
    layer hasn't reached yet — do NOT add to it. See "MOBILE LAYER" below. */
+
 @media (max-width: 768px) {
     body { flex-direction: column; }
 
@@ -3763,6 +3764,7 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
 .manager-bs-header { border-radius: 12px 12px 0 0; }
 .manager-bs-controls { display: flex; gap: 10px; align-items: center; }
 
+
 @media (max-width: 768px) {
     .bs-widget-container { grid-template-columns: 1fr !important; }
     .bs-col-left { border-right: none !important; border-bottom: 1px solid #e2e8f0; padding-right: 0 !important; padding-bottom: 20px; }
@@ -3881,6 +3883,7 @@ body:not(.is-authenticated) .main-content {
     .employee-widget-card { flex: 1 1 100% !important; max-width: 100% !important; }
     .district-split-row { grid-template-columns: 1fr !important; }
 }
+
 
 @media (max-width: 768px) {
     .district-kpi-header, .master-card-header {
@@ -4778,6 +4781,7 @@ button.dc-audit:hover { background: #fff; }
     .ceo-rings-grid { flex-wrap: wrap !important; }
     .ceo-ring-col { flex: 1 1 calc(33.333% - 15px) !important; }
 }
+
 @media (max-width: 768px) {
     .ceo-ring-col { flex: 1 1 calc(50% - 15px) !important; }
 }
@@ -7227,6 +7231,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .kpi-entry-save-btn:hover { background: #4a7a2f; }
 .kpi-entry-save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
+
 @media (max-width: 768px) {
     .kpi-entry-wrapper { grid-template-columns: 1fr; }
     .kpi-entry-computed { grid-template-columns: 1fr; }
@@ -7658,6 +7663,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 }
 .ann-docs-back-btn:hover, .mg-back:hover { background: rgba(0,0,0,0.06); }
 
+
 @media (max-width: 768px) {
     .ws-titlebar { flex-direction: column; align-items: stretch; }
     .ws-subtabs { overflow-x: auto; }
@@ -7949,11 +7955,123 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     padding: 60px 24px;
 }
 
+
+/* --- Shopify matching ------------------------------------------------------
+   The quick-add is two lines now: who called and what they want, then how we
+   find it. Nine controls on one row put Category — the field the whole match
+   depends on — somewhere nobody would look for it. */
+.cb-quickadd { flex-direction: column; align-items: stretch; gap: 9px; }
+.cb-qa-line { display: flex; gap: 9px; align-items: center; }
+/* The second line is subordinate to the first: same controls, quieter ground,
+   so the eye starts at the customer's name and not at a dropdown. */
+.cb-qa-match { padding-top: 9px; border-top: 1px dashed var(--cb-line); }
+.cb-cat-select  { flex: 1.3; min-width: 0; }
+.cb-type-select { flex: 1.3; min-width: 0; }
+.cb-qa-match .kpi-select:disabled { opacity: 0.55; cursor: not-allowed; }
+.cb-anymodel {
+    display: inline-flex; align-items: center; gap: 6px;
+    flex: 0 0 auto; white-space: nowrap; cursor: pointer;
+    font-size: 12.5px; font-weight: 600; color: var(--cb-muted);
+    padding: 8px 11px; border: 1px solid var(--cb-line);
+    border-radius: 8px; background: #fff;
+    transition: border-color 0.15s ease, color 0.15s ease;
+}
+.cb-anymodel:hover { border-color: var(--cb-sage); color: var(--slate-charcoal); }
+.cb-anymodel input { flex: 0 0 auto; margin: 0; accent-color: var(--cb-sage); cursor: pointer; }
+
+/* --- Item cell: the wanted item, then what it was filed under --- */
+.cb-item-text { font-weight: 600; font-size: 13.5px; color: var(--slate-charcoal); overflow-wrap: break-word; }
+.cb-item-meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    margin-top: 4px;
+}
+.cb-item-meta:empty { display: none; margin-top: 0; }
+.cb-cat { font-size: 11.5px; font-weight: 600; color: var(--cb-faint); }
+.cb-tag {
+    display: inline-flex; align-items: center;
+    font-size: 10.5px; font-weight: 800; letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 2px 7px; border-radius: 5px; white-space: nowrap;
+}
+.cb-tag-any       { background: var(--cb-blue-tint); color: #2563a8; }
+.cb-tag-detail    { background: var(--cb-red-tint);  color: #d1443b; }
+.cb-tag-elsewhere { background: var(--cb-line-2);    color: var(--cb-muted); }
+/* The only tag that is an instruction rather than a label, so it is the only
+   one that carries the sage fill. */
+.cb-tag-hasit     { background: var(--cb-sage); color: #fff; }
+
+/* A row whose stock is OURS. The tint has to survive :hover and the completed
+   row's own styling, hence the border rather than a background swap. */
+.cb-row-hasit > td:first-child { box-shadow: inset 3px 0 0 var(--cb-sage); }
+.cb-row-hasit { background: rgba(31, 157, 87, 0.045); }
+.cb-row-hasit:hover { background: rgba(31, 157, 87, 0.085); }
+
+/* --- Category / type editors inside the inline edit row --- */
+.cb-edit-match { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.cb-edit-match .kpi-select { flex: 1 1 42%; min-width: 0; font-size: 12px; padding: 6px 8px; }
+.cb-edit-match .cb-anymodel { font-size: 11.5px; padding: 5px 9px; }
+
+/* --- The match panel, in the expanded row --- */
+.cb-match-panel { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+.cb-match-group { display: flex; flex-direction: column; gap: 6px; }
+.cb-match-head {
+    font-size: 10.5px; font-weight: 900; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--cb-faint);
+}
+.cb-match-group.is-mine .cb-match-head { color: var(--cb-sage); }
+.cb-match {
+    display: flex; align-items: center; gap: 10px;
+    background: #fff; border: 1px solid var(--cb-line);
+    border-radius: 10px; padding: 9px 11px;
+}
+.cb-match-group.is-mine .cb-match { border-color: rgba(31, 157, 87, 0.4); background: var(--cb-sage-tint); }
+.cb-match.is-confirmed { border-color: var(--cb-sage); }
+.cb-match.is-gone { opacity: 0.6; }
+.cb-m-store {
+    flex: 0 0 auto; min-width: 40px; text-align: center;
+    font-size: 10.5px; font-weight: 900; letter-spacing: 0.04em;
+    color: #fff; padding: 3px 7px; border-radius: 5px;
+}
+.cb-m-body { flex: 1; min-width: 0; }
+.cb-m-title {
+    font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal);
+    line-height: 1.4; overflow-wrap: break-word;
+}
+.cb-m-meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    font-size: 11.5px; color: var(--cb-muted); margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+}
+/* Two different admissions, both worth making out loud: the unit is filed under
+   Other so the title is the only evidence, or it isn't published so there is no
+   listing to send. Quiet, but present. */
+.cb-m-via { font-style: italic; color: var(--cb-faint); }
+.cb-m-why { color: var(--cb-faint); text-decoration: underline dotted; cursor: help; }
+.cb-m-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+.cb-m-btn {
+    font-family: inherit; font-size: 11.5px; font-weight: 700;
+    padding: 6px 11px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--cb-line); background: #fff;
+    color: var(--cb-muted); white-space: nowrap; text-decoration: none;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.cb-m-btn:hover { border-color: var(--cb-muted); color: var(--slate-charcoal); }
+.cb-m-btn.is-link:hover { border-color: #2563a8; color: #2563a8; }
+.cb-m-btn.is-yes { border-color: rgba(31, 157, 87, 0.5); color: #178048; }
+.cb-m-btn.is-yes:hover { background: var(--cb-sage); border-color: var(--cb-sage); color: #fff; }
+.cb-m-btn.is-no:hover { background: var(--cb-red-tint); border-color: #d1443b; color: #d1443b; }
+.cb-m-state {
+    font-size: 11px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.03em; color: var(--cb-faint); white-space: nowrap;
+}
+.cb-m-state.is-yes { color: #178048; }
+
 @media (max-width: 768px) {
     .cb-head { align-items: flex-start; }
     .cb-head-controls { width: 100%; }
-    .cb-quickadd { flex-wrap: wrap; }
-    .cb-quickadd input { flex-basis: 45%; }
+    .cb-qa-line { flex-wrap: wrap; }
+    .cb-qa-line input { flex-basis: 45%; }
+    .cb-cat-select, .cb-type-select { flex-basis: 45%; }
     .cb-logged, .cb-col-notes { display: none; }
 }
 
@@ -9334,6 +9452,7 @@ body.sam-active .hotbar-btn:hover {
 /* --- exception: Submit Scores keeps its wider grid --- */
 #scorecardSubmitModal { height: 84vh; max-height: 84vh; }
 
+
 @media (max-width: 768px) {
     .modal-menu { height: 88vh; max-height: 88vh; }
     #ideaModal { height: auto; }
@@ -9660,7 +9779,8 @@ body.sam-active .hotbar-btn:hover {
 #listingGoalAlertBubble,
 #listingGoalsDailyAlertBubble,
 #expenseFileAlertBubble,
-#gpGoalAlertBubble {
+#gpGoalAlertBubble,
+#cbMatchAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -9929,6 +10049,7 @@ body.sam-active .hotbar-btn:hover {
 .ws-head-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .ws-head-meta { font-size: 11px; font-weight: 700; color: var(--wsh-faint); white-space: nowrap; }
 .ws-head-meta:empty { display: none; }
+
 
 @media (max-width: 768px) {
     .ws-head { align-items: flex-start; }
