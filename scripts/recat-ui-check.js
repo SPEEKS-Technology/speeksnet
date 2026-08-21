@@ -102,6 +102,12 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
         rs.filter(r => r.querySelector('.rc-rule')?.textContent?.trim()).length);
     ok(ruled === before, 'every row shows its rule', `${ruled}/${before}`);
 
+    // The queue is a subset and has to say so. A reviewer who knows the store
+    // holds 500 unfiled units reads a queue of 52 as the panel being broken,
+    // not as the 448 nobody can buy online being left out of it.
+    const note = await page.$eval(".rc-note", e => e.textContent.trim()).catch(() => "");
+    ok(/online store/i.test(note), "the panel says what it is showing", note || "NO NOTE");
+
     console.log('\n== Selecting ==');
     await page.$eval('.rc-table tbody tr .rc-pick input', el => el.click());
     await new Promise(r => setTimeout(r, 250));

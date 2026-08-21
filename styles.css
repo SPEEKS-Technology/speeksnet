@@ -17109,6 +17109,14 @@ body.tv-body { display: block; background: #eef1f5; }
 .rc-mode-on { border-color: var(--cb-sage); background: var(--cb-sage-tint); color: var(--cb-ink); }
 .rc-mode-on .rc-chip-n { background: #fff; color: #178048; }
 
+/* The scope of both queues, stated once under the tabs. Without it a reviewer
+   who knows the store has 500 unfiled units reads "52" as the panel being
+   broken, rather than as the 448 nobody can buy online being left out. */
+.rc-note {
+    font-size: 11px; font-weight: 700; letter-spacing: .01em;
+    color: var(--cb-faint); margin: -6px 0 12px;
+}
+
 /* --- The session feed ---------------------------------------------------- *
    One row per SKU somebody scanned, and it changes state under them: amber
    while eBay is being asked, green when it is up, red when it is refused. The

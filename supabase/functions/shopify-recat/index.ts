@@ -23,6 +23,19 @@
 // DRY RUN IS THE DEFAULT because this is the only function in the estate that
 // writes to somebody's product catalogue.
 //
+// WHAT IT DOES NOT SEE. Both queues are scoped to products that are LIVE ON
+// THE ONLINE STORE — ebay_catalog.online_published, which is Shopify's
+// `onlineStoreUrl` being non-null. 967 in-stock units are unpublished, and the
+// collection an unpublished product sits in is a shelf no shopper can reach.
+// The scope is in the views so this function and the sweep cannot disagree
+// about it.
+//
+// AND THE SHELVES ARE PAYMORE'S. Corp runs the storefront, so the 63
+// collections are the ones we get; a rule may only target a collection that
+// exists in shopify_collections (a foreign key since 0056), and the picker only
+// ever offers matchable ones. We do not invent a 64th — one was created here on
+// 2026-08-21 and deleted the next hour.
+//
 // WHAT IT MOVES. `collection_proposals` (the view) is the whole decision: it
 // scores a title against `collection_rules`, longest keyword first, and only
 // ever considers a product whose ONLY real collection is `other`. So this can
@@ -320,7 +333,7 @@ async function handlePost(req: Request, scope: Scope) {
 
     const { moved, failed } = await applyProducts(store, todo, scope.name);
     return json({
-      ok: true, store, requested: wanted.size,
+      ok: true, store, requested: items.length,
       moved: moved.length, failed: failed.length, errors: failed.slice(0, 20),
       products: moved.map(p => ({ title: p.title, to: p.target_handle })),
     });

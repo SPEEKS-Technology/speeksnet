@@ -16,7 +16,16 @@
 //      matcher no better.
 //   5. every category holding in-stock units has a type vocabulary, `other`
 //      excepted — it is reachable by multi-word keyword only, by design
-//   6. the matcher still answers, and still loads every type
+//   6. THE QUEUE ONLY SHOWS WHAT A SHOPPER CAN REACH. Both queues are scoped
+//      to products live on the Online Store channel, and the storefront is
+//      the oracle: an unpublished product 404s at /products/<handle> and a
+//      published one 200s, measured both ways. So a sample of queue rows is
+//      fetched from the real shop. It is the same URL as the View link on
+//      every row, so this checks that too.
+//   7. no shelf exists that PayMore does not have. Corp runs the storefront,
+//      63 collections is what we get, and since 0056 a rule that targets
+//      anything else is a foreign-key violation rather than a quiet misfile.
+//   8. the matcher still answers, and still loads every type
 //
 // Read-only. It never passes apply=1 with a real secret.
 
@@ -107,6 +116,25 @@ const get = async (u) => (await fetch(u)).json();
         ok(!!mis.totals && Object.values(mis.totals).every(n => n < 30),
             'the store counts follow the mode', JSON.stringify(mis.totals));
 
+        // THE STOREFRONT IS THE ORACLE. Both queues promise to show only
+        // stock a shopper can actually reach, and the only way to check that
+        // from outside is to go and look: an unpublished product answers 404
+        // at /products/<handle> (measured on two BAL units), a published one
+        // 302s to the custom domain and 200s. This is also the exact URL
+        // behind the View link on every row, so a pass means nobody is handed
+        // a 404 mid-review.
+        console.log("");
+        console.log("== every queued row is live on the online store ==");
+        const sample = [...(r0.queue || []).slice(0, 3), ...(mis.queue || []).slice(0, 2)]
+            .filter(q => q.handle && q.shop);
+        ok(sample.length > 0, "there are rows to check", String(sample.length));
+        for (const q of sample) {
+            const url = "https://" + q.shop + "/products/" + q.handle;
+            const res = await fetch(url, { redirect: "follow" }).catch(() => null);
+            ok(res?.status === 200, "on the storefront: " + q.title.slice(0, 46),
+                res ? String(res.status) : "no answer");
+        }
+
         const victim = r0.queue?.[0]?.productId;
         if (victim) {
             const sk = await post({ action: 'skip', store: 'OVL', productId: victim, reason: 'harness' });
@@ -121,6 +149,17 @@ const get = async (u) => (await fetch(u)).json();
     } else {
         console.log('\n== the panel API ==\n  SKIPPED (set SPEEKS_TEST_PIN to a corp PIN)');
     }
+    // A shelf we invent is a shelf no shopper can reach, no franchise report
+    // knows about, and nobody but us can maintain. PayMore has 63; 62 can
+    // hold filed stock, because `newly-listed-devices` is a smart collection
+    // holding every product at every store rather than a category, and it is
+    // the one shelf the picker and the matcher both leave out.
+    console.log("\n== the shelves are the ones PayMore has ==");
+    ok(cats.length === 62, 'the vocabulary offers exactly the shelves PayMore has, less the smart one',
+        String(cats.length) + ' of 63');
+    ok(!known.has('projectors'),
+        'and no Projectors shelf — that one was ours, and it was deleted');
+
 
     console.log('\n== the matcher still answers ==');
     const sweep = await get(`${BASE}/callback-match?sweep=1&dryRun=1&secret=${SECRET}`);

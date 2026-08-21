@@ -41834,6 +41834,13 @@ let _rcSel = new Set();
 //              is wrong about most of them, because every laptop title recites
 //              an SSD and every gaming PC a GPU.
 let _rcMode = 'other';
+// BOTH QUEUES ONLY EVER SHOW LISTINGS THAT ARE LIVE ON THE ONLINE STORE.
+// PayMore's storefront is the whole point of a collection, so an unpublished
+// product's shelf is a shelf no shopper can arrive at — reviewing it spends
+// somebody's attention and changes nothing anyone sees. 967 of the in-stock
+// units are unpublished. The filter lives in the views (0056), not here: the
+// panel must not be the only thing that knows, or the scripted sweep would
+// happily file everything the panel no longer shows.
 
 async function _rcFetch(path) {
     const pin = sessionStorage.getItem('speeksUserPin') || '';
@@ -41893,7 +41900,8 @@ function _rcHtml() {
         <button type="button" class="rc-mode${_rcMode === 'misfiled' ? ' rc-mode-on' : ''}"
                 onclick="rcSetMode('misfiled')">Possibly Misfiled${
                   misfiled ? ` <span class="rc-chip-n">${misfiled}</span>` : ''}</button>
-      </div>`;
+      </div>
+      <div class="rc-note">Live On The Online Store Only — Unpublished Stock Is Not Listed Here</div>`;
 
     if (!queue.length) {
         return strip + modes + `<div class="ec-empty">${
@@ -41902,8 +41910,8 @@ function _rcHtml() {
             : `Nothing left to file at ${_ecEsc(_ecStore)}.`}<br>
           <span style="font-weight:600;color:var(--cb-faint);">${
             _rcMode === 'misfiled'
-              ? 'Every item here sits on a shelf its own title agrees with.'
-              : `Every in-stock item here is on a real shelf${
+              ? 'Every listing on the online store sits on a shelf its own title agrees with.'
+              : `Every listing on the online store here is on a real shelf${
                   skipped.length ? `, and ${skipped.length} were skipped` : ''}.`}</span></div>`;
     }
 
