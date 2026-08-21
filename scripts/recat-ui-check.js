@@ -178,6 +178,25 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
         console.log('  SKIPPED (nothing skipped at this store)');
     }
     console.log('');
+    console.log('== The tick is big enough to hit ==');
+    const tick = await page.evaluate(() => {
+        const box = document.querySelector('.rc-table tbody .rc-pick input');
+        const wrap = box?.closest('.rc-tick');
+        if (!box) return null;
+        const b = box.getBoundingClientRect();
+        const w = wrap ? wrap.getBoundingClientRect() : b;
+        return { w: b.width, h: b.height, hitW: w.width, hitH: w.height };
+    });
+    ok(!!tick, 'a row tick exists');
+    if (tick) {
+        // 15px was a coin-flip on a trackpad. Bigger, but still a checkbox.
+        ok(tick.w >= 17 && tick.w <= 20, 'the box is bigger than it was',
+            `${tick.w.toFixed(0)}x${tick.h.toFixed(0)}px`);
+        // What actually gets clicked is the label, which is wider than the box.
+        ok(tick.hitW > tick.w && tick.hitH > tick.h, 'and the hit area is wider still',
+            `${tick.hitW.toFixed(0)}x${tick.hitH.toFixed(0)}px`);
+    }
+    console.log('');
     console.log('== The links sit beside the title, in their own column ==');
     const geom = await page.evaluate(() => {
         const rows = [...document.querySelectorAll('.rc-table tbody tr')].slice(0, 8);

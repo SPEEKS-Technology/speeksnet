@@ -42061,8 +42061,10 @@ function _rcHtml() {
         return `
         <tr class="cb-row">
           <td class="rc-pick">
-            <input type="checkbox" data-id="${id}" ${_rcSel.has(q.productId) ? 'checked' : ''}
-                   onchange="rcToggle(this.dataset.id, this.checked)">
+            <label class="rc-tick">
+              <input type="checkbox" data-id="${id}" ${_rcSel.has(q.productId) ? 'checked' : ''}
+                     onchange="rcToggle(this.dataset.id, this.checked)">
+            </label>
           </td>
           <td>
             <div class="rc-title">${_ecEsc(q.title)}</div>

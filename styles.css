@@ -17043,10 +17043,14 @@ body.tv-body { display: block; background: #eef1f5; }
     display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
     font-size: 12px; font-weight: 700; color: var(--cb-muted); white-space: nowrap;
 }
-.rc-all input, .rc-pick input { width: 15px; height: 15px; accent-color: var(--cb-sage); cursor: pointer; }
+.rc-all input, .rc-pick input { width: 18px; height: 18px; accent-color: var(--cb-sage); cursor: pointer; }
 .rc-count { font-size: 12px; font-weight: 700; color: var(--cb-faint); margin-left: auto; white-space: nowrap; }
 
 .rc-pick { text-align: center; }
+/* The tick is the one thing on a row you HAVE to hit, so the hit area is
+   bigger than the box: the label takes the padding, and a click anywhere in
+   the cell lands. */
+.rc-tick { display: block; padding: 4px 6px; line-height: 0; cursor: pointer; }
 .rc-title { font-size: 13px; font-weight: 700; color: var(--cb-ink); line-height: 1.35; }
 .rc-sub { font-size: 11px; font-weight: 600; color: var(--cb-faint); margin-top: 2px; }
 .rc-link { color: var(--cb-muted); text-decoration: underline; }
