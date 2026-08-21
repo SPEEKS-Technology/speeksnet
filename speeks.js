@@ -41437,6 +41437,12 @@ async function ecLoad() {
         if (_ecView === 'health') {
             _ecHealth = await _ecFetch('?view=health');
             _ecScope = _ecHealth.scope;
+        } else if (_ecView === 'cats') {
+            // Its own function, its own scope. shopify-recat decides who may
+            // file stock — a narrower list than who may list on eBay — so the
+            // eBay scope is left exactly as it was rather than overwritten
+            // with an answer from a different question.
+            await rcLoad();
         } else {
             _ecData = await _ecFetch(`?view=listings${_ecStore ? `&store=${_ecStore}` : ''}`);
             _ecScope = _ecData.scope;
@@ -41460,6 +41466,8 @@ function _ecSyncChrome() {
     const sel = document.getElementById('ecStoreFilter');
     const health = document.getElementById('ecViewHealthBtn');
     if (health) health.style.display = _ecScope?.allStores ? '' : 'none';
+    const cats = document.getElementById('ecViewCatsBtn');
+    if (cats) cats.style.display = _ecScope?.allStores ? '' : 'none';
     // Everyone but the DM and the CEO has exactly one view. A toggle offering
     // a single option is a button that does nothing, so it goes with the
     // second view rather than sitting there inviting a click.
@@ -41476,7 +41484,10 @@ function _ecSyncChrome() {
     }
     if (sub) {
         const errs = _ecFeed.filter(e => e.state === 'failed').length;
-        sub.textContent = _ecView === 'health' ? 'Every store, at a glance'
+        const toFile = (_rcData?.queue || []).length;
+        sub.textContent = _ecView === 'cats'
+            ? `${_ecStore || ''} · ${toFile ? `${toFile} Item${toFile === 1 ? '' : 's'} To File` : 'Everything Is Filed'}`
+            : _ecView === 'health' ? 'Every store, at a glance'
             : !_ecData?.summary?.connected ? `${_ecStore || ''} · Not connected to eBay yet`
             : !_ecFeed.length ? `${_ecStore} · Scan a SKU to list it on eBay`
             : `${_ecStore} · ${_ecFeed.length} Uploaded this session`
@@ -41493,7 +41504,7 @@ function _ecSyncChrome() {
 
 function ecSetView(view) {
     _ecView = view;
-    ['listings', 'health'].forEach(v => {
+    ['listings', 'health', 'cats'].forEach(v => {
         const b = document.getElementById('ecView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
         if (b) b.classList.toggle('active', v === view);
     });
@@ -41536,8 +41547,12 @@ async function ecShowFailed(store) {
 function ecSetStore(store) {
     _ecStore = store;
     _ecData = null;
+    // The filing queue is per store too, and a stale one would draw the last
+    // store's rows under the new store's name for as long as the fetch takes.
+    _rcData = null;
     ecLoad();
 }
+window.ecSetStore = ecSetStore;
 
 // --- render -----------------------------------------------------------------
 
@@ -41547,6 +41562,7 @@ function ecRender() {
     _ecSyncChrome();
 
     if (_ecView === 'health') { body.innerHTML = _ecHealthHtml(); return; }
+    if (_ecView === 'cats') { body.innerHTML = _rcHtml(); return; }
 
     const s = _ecData?.summary;
     if (!s) { body.innerHTML = '<div class="ec-empty">No store selected.</div>'; return; }
@@ -41789,6 +41805,231 @@ function _ecHealthHtml() {
         </div>`;
     }).join('')}</div>`;
 }
+
+// --- Categories: filing the `other` pile ------------------------------------
+//
+// Every category collection at all five stores is hand-filed by a lister, so
+// anything unobvious lands in `Other` — 457 in-stock units were sitting there
+// and in nothing else, while Networking and eleven other shelves held zero
+// products. The shopify-recat rules propose a shelf for each one; this is
+// where a person says yes.
+//
+// IT IS A QUEUE OF SUGGESTIONS, NOT A REPORT. Nothing here has happened yet.
+// File It writes to Shopify (join the new collection, leave Other, one
+// mutation) and the row leaves the queue. Not This One records a skip against
+// that product so the queue stops offering it — per PRODUCT, never per rule,
+// because the rule may be right about the other forty titles it caught.
+//
+// The queue is served by shopify-recat?view=review, which authenticates on the
+// person's PIN exactly as ebay-channel does. The sync secret in this file is
+// not a secret — it ships to every browser — so it is never what guards a
+// write to a live catalogue.
+const RECAT_URL = `${_BASE}/shopify-recat`;
+
+let _rcData = null;
+let _rcSel = new Set();
+
+async function _rcFetch(path) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(`${RECAT_URL}${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`,
+        { headers: { 'x-user-pin': pin } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || body.error || `Request failed (${r.status})`);
+    return body;
+}
+
+async function _rcPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(RECAT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok && body.ok !== false, status: r.status, body };
+}
+
+async function rcLoad() {
+    _rcData = await _rcFetch(`?view=review${_ecStore ? `&store=${_ecStore}` : ''}`);
+    _ecStore = _rcData.store;
+    // A selection belongs to the store it was made in. Carrying it across a
+    // store switch would file another store's products on the next click.
+    _rcSel = new Set();
+}
+
+function _rcHtml() {
+    const queue = _rcData?.queue || [];
+    const skipped = _rcData?.skipped || [];
+    const totals = _rcData?.totals || {};
+
+    // What is left everywhere, so a DM can see where the work is without
+    // opening five queues. The current store is the one already on screen.
+    const strip = Object.keys(totals).length > 1 ? `
+      <div class="rc-strip">${Object.entries(totals).map(([s, n]) => `
+        <button type="button" class="rc-chip${s === _ecStore ? ' rc-chip-on' : ''}"
+                onclick="ecSetStore('${_ecEsc(s)}')">
+          <span class="rc-chip-s">${_ecEsc(s)}</span>
+          <span class="rc-chip-n">${n}</span>
+        </button>`).join('')}</div>` : '';
+
+    if (!queue.length) {
+        return strip + `<div class="ec-empty">Nothing left to file at ${_ecEsc(_ecStore)}.<br>
+          <span style="font-weight:600;color:var(--cb-faint);">Every in-stock item here is on a real shelf${
+            skipped.length ? `, and ${skipped.length} were skipped` : ''}.</span></div>`;
+    }
+
+    const n = _rcSel.size;
+    const bar = `
+      <div class="ec-quick rc-bar">
+        <label class="rc-all">
+          <input type="checkbox" id="rcAll" onchange="rcSelectAll(this.checked)"
+                 ${n === queue.length ? 'checked' : ''}>
+          Select All
+        </label>
+        <button class="ec-btn ec-btn-go" id="rcFileBtn" ${n ? '' : 'disabled'}
+                onclick="rcFileSelected()">File ${n ? n + ' ' : ''}Selected</button>
+        <span class="rc-count">${queue.length} To File At ${_ecEsc(_ecStore)}</span>
+      </div>`;
+
+    const rows = queue.map(q => {
+        const id = _ecEsc(q.productId);
+        // The rule that decided is shown on every row on purpose: it is the
+        // only way to tell a good match from a lucky one, and the wrong ones
+        // are always obvious once you can see which word won.
+        return `
+        <tr class="cb-row">
+          <td class="rc-pick">
+            <input type="checkbox" data-id="${id}" ${_rcSel.has(q.productId) ? 'checked' : ''}
+                   onchange="rcToggle(this.dataset.id, this.checked)">
+          </td>
+          <td>
+            <div class="rc-title">${_ecEsc(q.title)}</div>
+            <div class="rc-sub">${_ecEsc(q.sku || '')}${q.handle
+              ? ` · <a class="rc-link" href="https://${_ecEsc(q.shop)}/products/${_ecEsc(q.handle)}"
+                     target="_blank" rel="noopener">View</a>` : ''}</div>
+          </td>
+          <td class="cb-col-status"><span class="rc-rule">${_ecEsc(q.rule)}</span></td>
+          <td class="cb-col-status">
+            <span class="rc-move"><span class="rc-from">Other</span>
+              <svg class="rc-arr" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+              <span class="rc-to">${_ecEsc(q.toTitle)}</span></span>
+          </td>
+          <td class="cb-col-status rc-acts">
+            <button class="ec-btn ec-btn-sm ec-btn-on" data-id="${id}"
+                    onclick="rcFileOne(this.dataset.id, this)">File It</button>
+            <button class="ec-btn ec-btn-sm ec-btn-off" data-id="${id}"
+                    title="Leave it in Other and stop offering it"
+                    onclick="rcSkip(this.dataset.id, this)">Not This One</button>
+          </td>
+        </tr>`;
+    }).join('');
+
+    // Skips are shown, not hidden: a queue that silently swallows decisions is
+    // one nobody trusts, and a skip made in error has to be findable.
+    const skips = skipped.length ? `
+      <details class="rc-skips">
+        <summary>${skipped.length} Skipped At ${_ecEsc(_ecStore)}</summary>
+        ${skipped.map(s => `
+          <div class="rc-skiprow">
+            <span class="rc-skipt">${_ecEsc(String(s.product_id).split('/').pop())}</span>
+            <span class="rc-sub">${_ecEsc(s.skipped_by || '')}${s.reason ? ' · ' + _ecEsc(s.reason) : ''}</span>
+            <button class="ec-btn ec-btn-sm" data-id="${_ecEsc(s.product_id)}"
+                    onclick="rcUnskip(this.dataset.id)">Put It Back</button>
+          </div>`).join('')}
+      </details>` : '';
+
+    return strip + bar + `
+      <table class="cb-table rc-table">
+        <thead><tr>
+          <th style="width:4%;"></th>
+          <th style="width:42%;">Item</th>
+          <th style="width:16%;" class="cb-col-status">Matched On</th>
+          <th style="width:20%;" class="cb-col-status">Move To</th>
+          <th style="width:18%;" class="cb-col-status"></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` + skips;
+}
+
+// The bar is repainted in place rather than through ecRender, because a full
+// rebuild would replace the checkbox the person is still clicking through.
+function rcToggle(id, on) {
+    if (on) _rcSel.add(id); else _rcSel.delete(id);
+    const btn = document.getElementById('rcFileBtn');
+    if (btn) { btn.disabled = !_rcSel.size; btn.textContent = `File ${_rcSel.size ? _rcSel.size + ' ' : ''}Selected`; }
+    const all = document.getElementById('rcAll');
+    if (all) all.checked = _rcSel.size === (_rcData?.queue || []).length && _rcSel.size > 0;
+}
+window.rcToggle = rcToggle;
+
+function rcSelectAll(on) {
+    _rcSel = on ? new Set((_rcData?.queue || []).map(q => q.productId)) : new Set();
+    ecRender();
+}
+window.rcSelectAll = rcSelectAll;
+
+async function _rcRun(ids, btn) {
+    if (!ids.length) return;
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Filing…'; }
+    const res = await _rcPost({ action: 'apply', store: _ecStore, productIds: ids });
+    if (!res.ok) {
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+        alert(res.body?.detail || res.body?.error || 'Could not file that.');
+        return;
+    }
+    // A partial failure is the interesting case: some products moved and some
+    // did not, and saying "done" would bury the ones that did not.
+    if (res.body.failed) {
+        alert(`${res.body.moved} filed. ${res.body.failed} could not be:\n`
+            + (res.body.errors || []).map(e => `· ${e.title}: ${e.why}`).join('\n'));
+    }
+    await rcLoad();
+    ecRender();
+}
+
+async function rcFileOne(id, btn) { await _rcRun([id], btn); }
+window.rcFileOne = rcFileOne;
+
+async function rcFileSelected() {
+    const ids = [..._rcSel];
+    if (!ids.length) return;
+    if (!confirm(`File ${ids.length} item${ids.length === 1 ? '' : 's'} at ${_ecStore}?\n\n`
+        + 'Each one joins its new collection and leaves Other on the live store.')) return;
+    await _rcRun(ids, document.getElementById('rcFileBtn'));
+}
+window.rcFileSelected = rcFileSelected;
+
+async function rcSkip(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Skipping…'; }
+    const res = await _rcPost({ action: 'skip', store: _ecStore, productId: id });
+    if (!res.ok) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Not This One'; }
+        alert(res.body?.detail || res.body?.error || 'Could not skip that.');
+        return;
+    }
+    await rcLoad();
+    ecRender();
+}
+window.rcSkip = rcSkip;
+
+async function rcUnskip(id) {
+    const res = await _rcPost({ action: 'unskip', store: _ecStore, productId: id });
+    if (!res.ok) { alert(res.body?.detail || res.body?.error || 'Could not undo that.'); return; }
+    await rcLoad();
+    ecRender();
+}
+window.rcUnskip = rcUnskip;
+
+// The panel's own state is script-scoped, so neither the console nor a harness
+// can read it — which turns "the queue is empty" into a guess about whether the
+// fetch failed, the view flipped back, or there is genuinely nothing to file.
+window.rcLoad = rcLoad;
+window._dbgRecat = () => ({
+    view: _ecView, store: _ecStore, loaded: !!_rcData,
+    queue: (_rcData?.queue || []).length, skipped: (_rcData?.skipped || []).length,
+    selected: _rcSel.size, totals: _rcData?.totals || null,
+});
 
 // --- actions ----------------------------------------------------------------
 

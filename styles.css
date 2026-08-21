@@ -17009,6 +17009,74 @@ body.tv-body { display: block; background: #eef1f5; }
 
 .ec-empty { padding: 34px 10px; text-align: center; color: var(--cb-muted); font-size: 13px; font-weight: 600; }
 
+/* --- Categories: the filing queue ---------------------------------------- *
+   A queue of SUGGESTIONS, so it is deliberately quieter than the eBay feed
+   next door: no state colour on the row, because nothing has happened to it
+   yet. The only colour is on the shelf it would move to and on the two
+   answers. Everything else reuses the calm .cb-table/.ec-btn set.            */
+
+.rc-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.rc-chip {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    border: 1px solid var(--cb-line); background: var(--cb-card); border-radius: 999px;
+    padding: 5px 12px; font-family: inherit; font-size: 12px; font-weight: 700;
+    color: var(--cb-muted); transition: border-color .12s, color .12s, background .12s;
+}
+.rc-chip:hover { border-color: var(--cb-sage); color: var(--cb-ink); }
+.rc-chip-on { border-color: var(--cb-sage); background: var(--cb-sage-tint); color: var(--cb-ink); }
+.rc-chip-n {
+    background: var(--cb-line-2); color: var(--cb-muted); border-radius: 20px;
+    padding: 1px 7px; min-width: 20px; text-align: center; font-size: 11px; font-weight: 800;
+}
+.rc-chip-on .rc-chip-n { background: #fff; color: #178048; }
+
+.rc-bar { align-items: center; gap: 14px; }
+.rc-all {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    font-size: 12px; font-weight: 700; color: var(--cb-muted); white-space: nowrap;
+}
+.rc-all input, .rc-pick input { width: 15px; height: 15px; accent-color: var(--cb-sage); cursor: pointer; }
+.rc-count { font-size: 12px; font-weight: 700; color: var(--cb-faint); margin-left: auto; white-space: nowrap; }
+
+.rc-pick { text-align: center; }
+.rc-title { font-size: 13px; font-weight: 700; color: var(--cb-ink); line-height: 1.35; }
+.rc-sub { font-size: 11px; font-weight: 600; color: var(--cb-faint); margin-top: 2px; }
+.rc-link { color: var(--cb-muted); text-decoration: underline; }
+.rc-link:hover { color: var(--cb-sage); }
+
+/* The word that decided. Monospaced because it is a literal — reading it as a
+   phrase is exactly how a lucky match gets mistaken for a good one. */
+.rc-rule {
+    display: inline-block; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px; font-weight: 700; color: var(--cb-muted);
+    background: var(--cb-line-2); border-radius: 5px; padding: 2px 7px;
+}
+
+.rc-move { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; }
+.rc-from { color: var(--cb-faint); }
+.rc-to { color: #178048; }
+.rc-arr { width: 13px; height: 13px; flex: none; stroke: var(--cb-faint); stroke-width: 2.2; fill: none; }
+.rc-acts { white-space: nowrap; }
+.rc-acts .ec-btn + .ec-btn { margin-left: 6px; }
+
+.rc-skips { margin-top: 16px; border-top: 1px solid var(--cb-line); padding-top: 12px; }
+.rc-skips summary {
+    cursor: pointer; font-size: 12px; font-weight: 700; color: var(--cb-muted);
+    list-style: none; padding: 4px 0;
+}
+.rc-skips summary::-webkit-details-marker { display: none; }
+.rc-skips summary:before { content: "▸ "; color: var(--cb-faint); }
+.rc-skips[open] summary:before { content: "▾ "; }
+.rc-skiprow {
+    display: flex; align-items: center; gap: 10px; padding: 7px 2px;
+    border-top: 1px solid var(--cb-line-2);
+}
+.rc-skipt {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px; font-weight: 700; color: var(--cb-muted);
+}
+.rc-skiprow .ec-btn { margin-left: auto; }
+
 /* --- The session feed ---------------------------------------------------- *
    One row per SKU somebody scanned, and it changes state under them: amber
    while eBay is being asked, green when it is up, red when it is refused. The

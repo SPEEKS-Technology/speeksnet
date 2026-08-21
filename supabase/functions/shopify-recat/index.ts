@@ -1,19 +1,36 @@
 // ============================================================================
 // shopify-recat — files the `other` pile onto the right shelf.
 //
-//   ?store=OVL                       DRY RUN: what would move, and by which rule
-//   ?store=OVL&apply=1&secret=...    do it
-//   ?apply=1&secret=...              every store
-//   ?limit=25                        cap the products touched in one run
+// TWO WAYS IN, and they authenticate differently on purpose.
 //
-// DRY RUN IS THE DEFAULT AND `apply=1` NEEDS THE SECRET, because this is the
-// only function in the estate that writes to somebody's product catalogue.
+//   THE PANEL (SPEEKS Connect → Categories), x-user-pin:
+//     GET  ?view=review&store=OVL      the queue, one row per product
+//     POST {action:"apply", store, productIds:[...]}
+//     POST {action:"skip",  store, productId, reason}
+//     POST {action:"unskip", store, productId}
+//
+//   THE SWEEP, ?secret= :
+//     ?store=OVL                       DRY RUN: what would move, and by which rule
+//     ?store=OVL&apply=1&secret=...    write it
+//     ?apply=1&secret=...&ids=gid,gid  write exactly these products
+//     ?limit=25                        cap the products touched in one run
+//
+// The secret in speeks.js is not a secret — it ships to every browser — so the
+// panel cannot use it. It sends the person's PIN and the function decides from
+// their role, the same posture as ebay-channel. The secret path stays for the
+// scripted runs, which nobody's browser makes.
+//
+// DRY RUN IS THE DEFAULT because this is the only function in the estate that
+// writes to somebody's product catalogue.
 //
 // WHAT IT MOVES. `collection_proposals` (the view) is the whole decision: it
 // scores a title against `collection_rules`, longest keyword first, and only
 // ever considers a product whose ONLY real collection is `other`. So this can
 // put something on the wrong shelf, but it can never take a product out of a
-// collection a human chose. Every add and remove lands in `collection_moves`.
+// collection a human chose. Every add and remove lands in `collection_moves`,
+// and the view drops what it has already moved — ebay_catalog keeps the stale
+// collection list until the next full sweep, so without that the queue would
+// re-offer its own finished work.
 //
 // HOW SHOPIFY DOES IT NOW. `collectionAddProducts` / `collectionRemoveProducts`
 // are gone in 2026-07 — checked by introspection rather than assumed, because
@@ -49,13 +66,20 @@ const SHOP_BY_STORE: Record<string, string> = {
   BAL: "paymore-ballwin.myshopify.com",
 };
 
+// Filing stock is a merchandising decision, so it sits with the people who
+// answer for the storefront: corp everywhere, a manager at their own store.
+// An ASM or an employee may not — this writes to a live catalogue.
+const CORP_ROLES = ["district manager", "ceo", "mocd"];
+const STORE_ROLES = ["manager", "owner (manager)", "owner manager", "multi-store manager"];
+const MSM_STORES = ["BAL", "MPL"];
+
 // The junk drawer we are emptying. A proposal always leaves this one.
 const FROM_HANDLE = "other";
 const BATCH_SIZE = 10;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-user-pin",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
@@ -77,12 +101,29 @@ async function sb(path: string, init: RequestInit = {}) {
   if (!res.ok) throw new Error(`supabase ${path}: ${res.status} ${await res.text()}`);
   return res;
 }
+const rows = async (path: string) => await (await sb(path)).json();
+
+type Scope = { name: string; role: string; stores: string[]; corp: boolean };
+
+async function scopeFor(pin: string): Promise<Scope | null> {
+  if (!pin) return null;
+  const found = await rows(`users?pin=eq.${encodeURIComponent(pin)}&select=name,role,store&limit=1`);
+  const user = found?.[0];
+  if (!user) return null;
+  const role = String(user.role || "").toLowerCase().trim();
+  const corp = CORP_ROLES.includes(role);
+  if (!corp && !STORE_ROLES.includes(role)) return null;
+  const stores = corp ? STORES
+    : role === "multi-store manager" ? MSM_STORES
+    : [String(user.store || "").toUpperCase()].filter(s => STORES.includes(s));
+  if (!stores.length) return null;
+  return { name: user.name || "", role, stores, corp };
+}
 
 async function shopFor(store: string): Promise<{ shop: string; token: string }> {
-  const res = await sb(`shopify_stores?select=shop,store_code,access_token`);
-  const rows: { shop: string; store_code: string | null; access_token: string }[] = await res.json();
-  const target = rows.find(r => r.store_code === store)
-    || rows.find(r => r.shop === SHOP_BY_STORE[store]);
+  const all = await rows(`shopify_stores?select=shop,store_code,access_token`);
+  const target = all.find((r: any) => r.store_code === store)
+    || all.find((r: any) => r.shop === SHOP_BY_STORE[store]);
   if (!target) throw new Error(`no shopify_stores row for ${store}`);
   return { shop: target.shop, token: target.access_token };
 }
@@ -111,14 +152,121 @@ async function collectionIds(shop: string, token: string): Promise<Record<string
 
 type Proposal = {
   store_code: string; product_id: string; sku: string | null;
-  title: string; keyword: string; target_handle: string;
+  title: string; product_handle: string | null; keyword: string; target_handle: string;
 };
 
 async function proposalsFor(store: string): Promise<Proposal[]> {
-  const res = await sb(
+  return await rows(
     `collection_proposals?store_code=eq.${store}` +
-    `&select=store_code,product_id,sku,title,keyword,target_handle&order=target_handle,title`);
-  return await res.json();
+    `&select=store_code,product_id,sku,title,product_handle,keyword,target_handle` +
+    `&order=target_handle,title`);
+}
+
+// Shelf handles are not what a person reading a queue wants to see, and the
+// panel should not carry its own copy of 63 titles that a sweep can rename.
+async function shelfTitles(): Promise<Record<string, string>> {
+  const all = await rows(`shopify_collections?select=handle,title`);
+  const out: Record<string, string> = {};
+  for (const c of all) out[c.handle] = c.title;
+  return out;
+}
+
+// Applies exactly these products. Shared by the panel and the sweep so there
+// is one place where a write to a live catalogue happens.
+async function applyProducts(store: string, todo: Proposal[], who: string) {
+  const { shop, token } = await shopFor(store);
+  const ids = await collectionIds(shop, token);
+  const fromId = ids[FROM_HANDLE];
+  if (!fromId) throw new Error(`${store}: no '${FROM_HANDLE}' collection`);
+
+  const moved: Proposal[] = [];
+  const failed: { title: string; why: string }[] = [];
+
+  for (let i = 0; i < todo.length; i += BATCH_SIZE) {
+    const batch = todo.slice(i, i + BATCH_SIZE);
+    const parts: string[] = [];
+    const usable: Proposal[] = [];
+
+    batch.forEach((p, n) => {
+      const toId = ids[p.target_handle];
+      if (!toId) { failed.push({ title: p.title, why: `no collection ${p.target_handle}` }); return; }
+      usable.push(p);
+      parts.push(
+        `m${n}: productUpdate(product: { id: "${p.product_id}", ` +
+        `collectionsToJoin: ["${toId}"], collectionsToLeave: ["${fromId}"] }) ` +
+        `{ userErrors { field message } }`);
+    });
+    if (!parts.length) continue;
+
+    const data = await shopifyGql(shop, token, `mutation { ${parts.join("\n")} }`);
+
+    // A userErrors array is Shopify saying no while answering 200. Each alias
+    // is its own product, so one refusal must not discredit the nine that
+    // worked — hence the per-alias read rather than a batch verdict.
+    usable.forEach((p, n) => {
+      const errs = data?.[`m${n}`]?.userErrors ?? [];
+      if (errs.length) failed.push({ title: p.title, why: errs.map((e: any) => e.message).join("; ") });
+      else moved.push(p);
+    });
+  }
+
+  if (moved.length) {
+    await sb("collection_moves", {
+      method: "POST",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify(moved.map(p => ({
+        store_code: store, product_id: p.product_id, sku: p.sku, title: p.title,
+        added_handle: p.target_handle, removed_handle: FROM_HANDLE,
+        rule_keyword: who ? `${p.keyword} · ${who}` : p.keyword,
+      }))),
+    });
+  }
+  return { moved, failed };
+}
+
+// --- the panel --------------------------------------------------------------
+
+async function handlePost(req: Request, scope: Scope) {
+  const body = await req.json().catch(() => ({}));
+  const action = String(body.action || "");
+  const store = String(body.store || "").toUpperCase();
+  if (!scope.stores.includes(store)) return json({ error: "forbidden", detail: `not your store: ${store}` }, 403);
+
+  if (action === "skip" || action === "unskip") {
+    const productId = String(body.productId || "");
+    if (!productId) return json({ error: "productId required" }, 400);
+    if (action === "unskip") {
+      await sb(`collection_skips?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`,
+        { method: "DELETE" });
+      return json({ ok: true, unskipped: productId });
+    }
+    await sb("collection_skips", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({
+        store_code: store, product_id: productId,
+        skipped_by: scope.name, reason: String(body.reason || "").slice(0, 300) || null,
+      }),
+    });
+    return json({ ok: true, skipped: productId });
+  }
+
+  if (action === "apply") {
+    const wanted = new Set((Array.isArray(body.productIds) ? body.productIds : []).map(String));
+    if (!wanted.size) return json({ error: "productIds required" }, 400);
+    // Only ever act on what the QUEUE says — a product id posted by a browser
+    // is a request to file a proposal, not a licence to move anything.
+    const todo = (await proposalsFor(store)).filter(p => wanted.has(p.product_id));
+    if (!todo.length) return json({ error: "nothing in the queue matched those products" }, 400);
+    const { moved, failed } = await applyProducts(store, todo, scope.name);
+    return json({
+      ok: true, store, requested: wanted.size,
+      moved: moved.length, failed: failed.length, errors: failed.slice(0, 20),
+      products: moved.map(p => ({ title: p.title, to: p.target_handle })),
+    });
+  }
+
+  return json({ error: `unknown action: ${action}` }, 400);
 }
 
 Deno.serve(async (req) => {
@@ -126,9 +274,44 @@ Deno.serve(async (req) => {
 
   try {
     const url = new URL(req.url);
+    const pin = req.headers.get("x-user-pin") || "";
+    const view = url.searchParams.get("view") || "";
+
+    // --- panel ---------------------------------------------------------------
+    if (req.method === "POST" || view === "review") {
+      const scope = await scopeFor(pin);
+      // A stale sessionStorage PIN outlives a PIN change and lands exactly here.
+      if (!scope) {
+        return json({ error: "unauthorized",
+                      detail: "no matching user, or your role may not file stock" }, 401);
+      }
+      if (req.method === "POST") return await handlePost(req, scope);
+
+      const asked = (url.searchParams.get("store") || "").toUpperCase();
+      const store = scope.stores.includes(asked) ? asked : scope.stores[0];
+      const [queue, titles] = await Promise.all([proposalsFor(store), shelfTitles()]);
+      const skipped = await rows(
+        `collection_skips?store_code=eq.${store}&select=product_id,reason,skipped_by,created_at`);
+      return json({
+        scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
+        store,
+        queue: queue.map(p => ({
+          productId: p.product_id, sku: p.sku, title: p.title, handle: p.product_handle,
+          rule: p.keyword, to: p.target_handle, toTitle: titles[p.target_handle] || p.target_handle,
+          shop: SHOP_BY_STORE[store],
+        })),
+        skipped,
+        // Counted per store so the panel can say what is left everywhere
+        // without loading five queues.
+        totals: await queueTotals(scope.stores),
+      });
+    }
+
+    // --- sweep ---------------------------------------------------------------
     const apply = url.searchParams.get("apply") === "1";
     const wanted = (url.searchParams.get("store") || "").toUpperCase();
     const limit = Math.max(0, parseInt(url.searchParams.get("limit") || "0", 10)) || 0;
+    const only = new Set((url.searchParams.get("ids") || "").split(",").map(s => s.trim()).filter(Boolean));
     const stores = STORES.includes(wanted) ? [wanted] : STORES;
 
     if (apply && url.searchParams.get("secret") !== SECRET) {
@@ -139,7 +322,8 @@ Deno.serve(async (req) => {
     let movedTotal = 0, proposedTotal = 0;
 
     for (const store of stores) {
-      const proposals = await proposalsFor(store);
+      let proposals = await proposalsFor(store);
+      if (only.size) proposals = proposals.filter(p => only.has(p.product_id));
       proposedTotal += proposals.length;
 
       // What this store would do, by shelf — the useful shape for a human
@@ -158,58 +342,13 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      const { shop, token } = await shopFor(store);
-      const ids = await collectionIds(shop, token);
-      const fromId = ids[FROM_HANDLE];
-      if (!fromId) throw new Error(`${store}: no '${FROM_HANDLE}' collection`);
-
       const todo = limit ? proposals.slice(0, limit) : proposals;
-      const moved: Proposal[] = [];
-      const failed: { title: string; why: string }[] = [];
-
-      for (let i = 0; i < todo.length; i += BATCH_SIZE) {
-        const batch = todo.slice(i, i + BATCH_SIZE);
-        const parts: string[] = [];
-        const usable: Proposal[] = [];
-
-        batch.forEach((p, n) => {
-          const toId = ids[p.target_handle];
-          if (!toId) { failed.push({ title: p.title, why: `no collection ${p.target_handle}` }); return; }
-          usable.push(p);
-          parts.push(
-            `m${n}: productUpdate(product: { id: "${p.product_id}", ` +
-            `collectionsToJoin: ["${toId}"], collectionsToLeave: ["${fromId}"] }) ` +
-            `{ userErrors { field message } }`);
-        });
-        if (!parts.length) continue;
-
-        const data = await shopifyGql(shop, token, `mutation { ${parts.join("\n")} }`);
-
-        // A userErrors array is Shopify saying no while answering 200. Each
-        // alias is its own product, so one refusal must not discredit the nine
-        // that worked — hence the per-alias read rather than a batch verdict.
-        usable.forEach((p, n) => {
-          const errs = data?.[`m${n}`]?.userErrors ?? [];
-          if (errs.length) failed.push({ title: p.title, why: errs.map((e: any) => e.message).join("; ") });
-          else moved.push(p);
-        });
-      }
-
-      if (moved.length) {
-        await sb("collection_moves", {
-          method: "POST",
-          headers: { Prefer: "return=minimal" },
-          body: JSON.stringify(moved.map(p => ({
-            store_code: store, product_id: p.product_id, sku: p.sku, title: p.title,
-            added_handle: p.target_handle, removed_handle: FROM_HANDLE, rule_keyword: p.keyword,
-          }))),
-        });
-      }
-
+      const { moved, failed } = await applyProducts(store, todo, "");
       movedTotal += moved.length;
       report[store] = {
         proposed: proposals.length, moved: moved.length, failed: failed.length,
         by_shelf: byShelf, errors: failed.slice(0, 20),
+        products: moved.map(p => ({ title: p.title, to: p.target_handle })),
       };
     }
 
@@ -226,3 +365,14 @@ Deno.serve(async (req) => {
     return json({ error: String(e) }, 500);
   }
 });
+
+// ONE query, tallied here, rather than one count per store. The view is not
+// free — it scores every unfiled product against every rule — and asking it
+// five separate times for five numbers is what made the panel look hung.
+async function queueTotals(stores: string[]): Promise<Record<string, number>> {
+  const all = await rows(`collection_proposals?select=store_code`);
+  const out: Record<string, number> = {};
+  for (const s of stores) out[s] = 0;
+  for (const r of all) if (r.store_code in out) out[r.store_code] += 1;
+  return out;
+}

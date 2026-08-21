@@ -21,6 +21,7 @@
 // Read-only. It never passes apply=1 with a real secret.
 
 const BASE = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1';
+const PIN = process.env.SPEEKS_TEST_PIN || '';
 const SECRET = process.env.SPEEKS_SYNC_SECRET || 'sp33ks-sync-k3y-2026-x9mq';
 const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
@@ -63,6 +64,50 @@ const get = async (u) => (await fetch(u)).json();
     ok(wordless.length === 0,
         'every proposed shelf has a type vocabulary',
         wordless.length ? `NOBODY CAN ASK FOR: ${wordless.join(', ')}` : `${shelves.size}/${shelves.size} askable`);
+
+    // The panel's own API, if a corp PIN was supplied. Nothing here writes to
+    // Shopify: a skip is ours to undo, and the two refusals are the point.
+    if (PIN) {
+        console.log('\n== the panel API ==');
+        const post = async (body, pin = PIN) => {
+            const r = await fetch(`${BASE}/shopify-recat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+                body: JSON.stringify(body),
+            });
+            return { status: r.status, body: await r.json().catch(() => ({})) };
+        };
+        const review = async (store) => (await (await fetch(`${BASE}/shopify-recat?view=review&store=${store}`,
+            { headers: { 'x-user-pin': PIN } })).json());
+
+        const r0 = await review('OVL');
+        ok(Array.isArray(r0.queue), 'the queue loads for a corp PIN', `${r0.queue?.length} rows`);
+        ok(!!r0.totals && Object.keys(r0.totals).length === 5, 'and counts every store', JSON.stringify(r0.totals));
+        ok((r0.queue || []).every(q => q.toTitle && !/^[a-z-]+$/.test(q.toTitle)),
+            'every row names its shelf in words, not handles');
+
+        const noPin = await post({ action: 'apply', store: 'OVL', productIds: ['gid://shopify/Product/1'] }, '');
+        ok(noPin.status === 401, 'apply with no PIN is refused', String(noPin.status));
+
+        // THE ONE THAT MATTERS: a product id posted by a browser is a request to
+        // file a PROPOSAL, not a licence to move any product in the catalogue.
+        const bogus = await post({ action: 'apply', store: 'OVL', productIds: ['gid://shopify/Product/999999'] });
+        ok(!!bogus.body.error, 'a product that is not in the queue cannot be filed', bogus.body.error);
+
+        const victim = r0.queue?.[0]?.productId;
+        if (victim) {
+            const sk = await post({ action: 'skip', store: 'OVL', productId: victim, reason: 'harness' });
+            ok(sk.body.ok === true, 'a row can be skipped');
+            const mid = await review('OVL');
+            ok(mid.queue.length === r0.queue.length - 1, 'and leaves the queue', `${r0.queue.length} → ${mid.queue.length}`);
+            const un = await post({ action: 'unskip', store: 'OVL', productId: victim });
+            ok(un.body.ok === true, 'and the skip can be undone');
+            const back = await review('OVL');
+            ok(back.queue.length === r0.queue.length, 'which puts it back', `${back.queue.length}`);
+        }
+    } else {
+        console.log('\n== the panel API ==\n  SKIPPED (set SPEEKS_TEST_PIN to a corp PIN)');
+    }
 
     console.log('\n== the matcher still answers ==');
     const sweep = await get(`${BASE}/callback-match?sweep=1&dryRun=1&secret=${SECRET}`);
