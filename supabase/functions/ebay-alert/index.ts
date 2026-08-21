@@ -27,10 +27,28 @@ const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL") ||
 const RECIPIENT_LIST = "connect_alerts";
 const TO_DEFAULT = ["ethan.kushnir@speekstechnology.com"];
 
+const SHOPIFY_API_VERSION = Deno.env.get("SHOPIFY_API_VERSION") || "2026-07";
+// shopify_stores.store_code is NULL on all five rows, so the shop domain is the
+// only thing that identifies a store there. Same map the other functions carry.
+const SHOP_TO_CODE: Record<string, string> = {
+  "paymore-overland-park.myshopify.com": "OVL",
+  "paymore-lees-summit.myshopify.com": "LEE",
+  "paymore-westport.myshopify.com": "WSP",
+  "paymore-maplewood.myshopify.com": "MPL",
+  "paymore-ballwin.myshopify.com": "BAL",
+};
+
 // Thresholds. Each is deliberately looser than the thing it watches, so a single
 // slow run never pages anybody.
 const RENAG_HOURS         = 24;  // an unfixed problem is raised again after this
 const SWEEP_STALE_MIN     = 90;  // live sweep runs every 20 min per store
+// How far back the duplicate scan reads Shopify. This bounds only the SECOND
+// copy's creation date, never ours — our side comes from the ebay_orders ledger,
+// which has no window at all. Five days because Shopify caps a page at 250 and
+// the busiest store books ~37 eBay orders a day.
+const DUP_WINDOW_DAYS     = 5;
+const DUP_PAGE            = 250; // orders read per store per duplicate scan
+const DUP_LEDGER_DAYS     = 90;  // how much of our own import history to load
 const CRON_STALE_MIN      = 30;  // order poll runs every 2 min per store
 const LISTING_STUCK_MIN   = 60;  // pending longer than this is not "in flight"
 const TRACKING_STUCK_MIN  = 60;  // tracking known but never pushed back to eBay
@@ -81,6 +99,88 @@ const short = (s: unknown, n = 180) => {
 // An unrecognised error is treated as the store's, which is the quiet failure --
 // the loud one would be nagging about work already being done.
 const SYSTEMIC = /HTTP *(401|403|429|5[0-9][0-9])|"statusCode" *: *(401|403|429|5[0-9][0-9])|unauthor|invalid_grant|invalid_token|token (has )?expired|expired token|refresh token|rate limit|call limit|quota|throttl|internal error|service unavailable|temporarily unavailable|timed out|time out|ECONNRESET|network error/i;
+
+// The duplicate scan's one Shopify call per store. The eBay order id lives in a
+// custom attribute, not a tag, and Shopify cannot search attributes — so the
+// query narrows to eBay-tagged orders in the window and the grouping happens
+// here. Both importers stamp the attribute, which is what makes the check
+// source-blind.
+async function shopifyEbayOrders(shop: string, token: string, sinceDay: string) {
+  const res = await fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+    body: JSON.stringify({
+      query: `{
+        orders(first: ${DUP_PAGE}, query: "tag:eBay created_at:>=${sinceDay}", sortKey: CREATED_AT, reverse: true) {
+          edges { node {
+            id name cancelledAt
+            totalPriceSet { shopMoney { amount } }
+            totalRefundedSet { shopMoney { amount } }
+            customAttributes { key value }
+          } }
+          pageInfo { hasNextPage }
+        }
+      }`,
+    }),
+  });
+  if (!res.ok) throw new Error(`Shopify HTTP ${res.status}`);
+  const body = await res.json();
+  // A GraphQL error arrives as a 200 with an errors array, which is exactly how
+  // a broken query would otherwise read as "this store has no duplicates".
+  if (body.errors) throw new Error(JSON.stringify(body.errors).slice(0, 200));
+  const conn = body?.data?.orders;
+  const orders = ((conn?.edges || []) as any[]).map((e) => {
+    const n = e.node || {};
+    const total = Number(n.totalPriceSet?.shopMoney?.amount ?? 0);
+    const refunded = Number(n.totalRefundedSet?.shopMoney?.amount ?? 0);
+    return {
+      // ebay_orders.shopify_order_id holds the bare numeric id, not the gid, so
+      // the prefix comes off here rather than at every comparison.
+      id: String(n.id ?? "").replace("gid://shopify/Order/", ""),
+      name: String(n.name ?? ""),
+      cancelled: !!n.cancelledAt,
+      // Fully refunded IS the cleaned-up state. Compared with a half-cent of
+      // slack so rounding cannot keep a cleaned copy in the count forever.
+      refunded: total > 0 && refunded >= total - 0.005,
+      ebayId: ((n.customAttributes || []) as any[])
+        .find((a) => a?.key === "eBay Order Id")?.value ?? null,
+    };
+  });
+  return { orders, truncated: !!conn?.pageInfo?.hasNextPage };
+}
+
+// The state of specific orders by id. Needed because a duplicate is only a
+// duplicate while BOTH copies are live: on one pair in the 2026-08-20 burst it
+// was OUR copy that got reversed and the foreign one kept, which leaves correct
+// books and would otherwise be reported as a duplicate forever. Our copy is
+// usually older than the scan window, so its state cannot come from the same
+// read — hence one extra call, and only when there are suspects at all.
+async function shopifyOrderStates(shop: string, token: string, ids: string[]) {
+  const gids = ids.map((i) => `"gid://shopify/Order/${i}"`).join(", ");
+  const res = await fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+    body: JSON.stringify({
+      query: `{ nodes(ids: [${gids}]) { ... on Order {
+        id cancelledAt
+        totalPriceSet { shopMoney { amount } }
+        totalRefundedSet { shopMoney { amount } }
+      } } }`,
+    }),
+  });
+  if (!res.ok) throw new Error(`Shopify HTTP ${res.status}`);
+  const body = await res.json();
+  if (body.errors) throw new Error(JSON.stringify(body.errors).slice(0, 200));
+  const live: Record<string, boolean> = {};
+  for (const n of (body?.data?.nodes || []) as any[]) {
+    if (!n?.id) continue;
+    const total = Number(n.totalPriceSet?.shopMoney?.amount ?? 0);
+    const refunded = Number(n.totalRefundedSet?.shopMoney?.amount ?? 0);
+    live[String(n.id).replace("gid://shopify/Order/", "")] =
+      !n.cancelledAt && !(total > 0 && refunded >= total - 0.005);
+  }
+  return live;
+}
 
 // ---------------------------------------------------------------------------
 async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<string, number> }> {
@@ -281,6 +381,129 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
         key: `cron_failing:${c.jobname}`, store: null, severity: "critical",
         title: `Scheduled job failing — ${c.jobname}`,
         detail: `${c.failures_1h} failed run(s) in the last hour.`,
+      });
+    }
+  }
+
+  // --- 7. the same eBay order imported into Shopify twice -------------------
+  // On 2026-08-20 Marketplace Connect back-filled four days of eBay sales that
+  // SPEEKS Connect had already imported: 76 duplicate Shopify orders across BAL
+  // and MPL, $16.7k of revenue counted twice, and every affected unit
+  // decremented twice, which put 72 variants on negative stock. It ran from
+  // 1:41pm unnoticed, because every other check in this file reads OUR tables
+  // and the duplicate only ever existed in Shopify.
+  //
+  // WHY THIS IS NOT JUST A DATE WINDOW OVER SHOPIFY. A back-fill runs BACKWARDS
+  // in time: the second copy is created today against a sale that landed days
+  // ago. Grouping a single N-day window of Shopify orders therefore drops our
+  // own copy of the oldest pairs and undercounts the burst — measured at 23 and
+  // 18 against a true 26 and 31 on the day this was written.
+  //
+  // So the two halves are bounded differently. The FOREIGN copy has to be
+  // recent, because that is the thing we want to hear about quickly. OUR copy
+  // comes from the ebay_orders ledger, which records the one Shopify order we
+  // created for each eBay sale and needs no window at all.
+  //
+  // Identity, not tags: a copy counts as foreign when its eBay order id is one
+  // we already imported and its Shopify order id is not the one we created.
+  // That catches a second copy whoever made it, which a rule keyed on
+  // Marketplace Connect's own tags would not.
+  //
+  // ONE ISSUE PER STORE, not per order — a burst is forty orders, and forty
+  // mails is zero mails read. The count stays OUT of the issue key on purpose:
+  // a cleanup in progress walks 26 -> 25 -> 24, and a key carrying the count
+  // would mail again on every single decrement.
+  const shops = await read("shopify_stores", sb.from("shopify_stores").select("shop, access_token"));
+  const ledgerFloor = new Date(Date.now() - DUP_LEDGER_DAYS * 86400_000).toISOString();
+  const ledger = await read("ebay_orders_ledger", sb.from("ebay_orders")
+    .select("store_code, ebay_order_id, shopify_order_id, shopify_order_name")
+    .not("shopify_order_id", "is", null)
+    .gte("sold_at", ledgerFloor));
+  const ours: Record<string, { id: string; name: string }> = {};
+  for (const r of ledger) {
+    ours[`${r.store_code}:${r.ebay_order_id}`] =
+      { id: String(r.shopify_order_id), name: String(r.shopify_order_name || "") };
+  }
+
+  const dupSince = new Date(Date.now() - DUP_WINDOW_DAYS * 86400_000).toISOString().slice(0, 10);
+  for (const s of shops) {
+    const code = SHOP_TO_CODE[String(s.shop)] || String(s.shop);
+    let recent: Array<{ id: string; name: string; cancelled: boolean; refunded: boolean; ebayId: string | null }>;
+    let truncated = false;
+    try {
+      const r = await shopifyEbayOrders(String(s.shop), String(s.access_token), dupSince);
+      recent = r.orders;
+      truncated = r.truncated;
+    } catch (err) {
+      // A Shopify call that fails must not read as "no duplicates" — that is
+      // the same silent false negative the read() wrapper above exists to stop.
+      push({
+        key: `dup_scan_failed:${code}`, store: code, severity: "warning",
+        title: `Duplicate-order scan could not reach Shopify — ${code}`,
+        detail: `${short(err)}. Until this clears, a double import at ${code} would go unnoticed.`,
+      });
+      continue;
+    }
+    counts[`shopify_ebay_orders_${code}`] = recent.length;
+
+    // A cancelled or fully-refunded copy is a cleaned-up copy, and counting it
+    // would keep the alert lit forever after the cleanup is done.
+    const live = recent.filter((o) => !o.cancelled && !o.refunded && o.ebayId);
+    const extras: Record<string, Set<string>> = {};
+    const note = (ebayId: string, name: string) => (extras[ebayId] ||= new Set()).add(name);
+
+    // Suspects first, then one call to ask whether OUR copy of each is still
+    // live. Reversing either copy fixes the books, so a pair where ours is the
+    // one that went is not a duplicate and must not be reported as one.
+    const suspects = live
+      .map((o) => ({ o, mine: ours[`${code}:${o.ebayId}`] }))
+      .filter((x) => x.mine && x.mine.id !== x.o.id);
+    if (suspects.length) {
+      let mineLive: Record<string, boolean> = {};
+      try {
+        mineLive = await shopifyOrderStates(String(s.shop), String(s.access_token),
+          [...new Set(suspects.map((x) => x.mine!.id))]);
+      } catch (err) {
+        // Unverifiable is not the same as clean. Report the suspects and say so,
+        // rather than going quiet on the exact condition this check exists for.
+        push({
+          key: `dup_verify_failed:${code}`, store: code, severity: "warning",
+          title: `Could not confirm duplicate copies at ${code}`,
+          detail: `${short(err)}. ${suspects.length} suspected duplicate(s) are reported below unverified.`,
+        });
+        mineLive = Object.fromEntries(suspects.map((x) => [x.mine!.id, true]));
+      }
+      for (const x of suspects) {
+        if (mineLive[x.mine!.id] !== false) note(x.o.ebayId!, x.o.name);
+      }
+    }
+    // And the case the ledger cannot see: the same eBay sale imported twice by
+    // somebody who is not us at all.
+    const seen: Record<string, string> = {};
+    for (const o of live) {
+      const prev = seen[o.ebayId!];
+      if (prev && prev !== o.name) { note(o.ebayId!, o.name); note(o.ebayId!, prev); }
+      else seen[o.ebayId!] = o.name;
+    }
+
+    const ids = Object.keys(extras);
+    if (ids.length) {
+      const worst = ids.slice(0, 3)
+        .map((id) => `${id} on ${[...extras[id]].join(" and ")}`).join("; ");
+      push({
+        key: `dup_orders:${code}`, store: code, severity: "critical",
+        title: `Same eBay order imported twice — ${code}`,
+        detail: `${ids.length} eBay sale(s) at ${code} exist as more than one live Shopify order. `
+          + `The extra copies include ${worst}${ids.length > 3 ? ", and more" : ""}. Sales, gross profit `
+          + `and stock are all counted twice until the extra copy of each is reversed.`,
+      });
+    }
+    if (truncated) {
+      push({
+        key: `dup_scan_truncated:${code}`, store: code, severity: "warning",
+        title: `Duplicate-order scan hit its page limit — ${code}`,
+        detail: `${code} booked more than ${DUP_PAGE} eBay orders in ${DUP_WINDOW_DAYS} days, so the scan `
+          + `read only the newest. A copy created before that is invisible to this check.`,
       });
     }
   }
