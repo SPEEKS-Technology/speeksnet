@@ -67,7 +67,7 @@ const corsHeaders = {
 
 const CATEGORIES = [
   "announcements", "store_messages", "requests",
-  "claims", "variance_aging", "deadlines", "scores",
+  "claims", "variance_aging", "deadlines", "scores", "categories",
 ] as const;
 type Category = typeof CATEGORIES[number];
 
@@ -86,6 +86,9 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   variance_aging: { label: "Variance & Aging Inventory",  blurb: "New sheets and notes, plus the reply deadlines on both." },
   deadlines:      { label: "My Deadlines",               blurb: "Store KPIs, listing goals, store goals, expense reports." },
   scores:         { label: "Scores & Audits"  ,            blurb: "A SPEEKS scorecard or a PayMore audit being submitted." },
+  // Named for the queue, not the mechanism: a manager knows what "a listing
+  // with no category" is and has never heard of the `other` collection.
+  categories:     { label: "Listing Categories",         blurb: "Online-store listings with no category, or on a shelf that looks wrong." },
 };
 
 // PER-ROLE LABEL OVERRIDES.
@@ -227,6 +230,10 @@ const SUBS: Record<Category, Sub[]> = {
     { key: "scorecard", label: "SPEEKS Scorecard", blurb: "The Online & Marketing categories being scored.",
       kinds: ["scorecard_submitted"], roles: new Set(["district manager", "ceo", "mocd"]) },
   ],
+  // One reminder, one toggle. Splitting "no category" from "wrong shelf" would
+  // be two switches over one weekly email — subsFor hides a single-sub split
+  // for that reason.
+  categories: [],
 };
 
 // The subs worth showing this role. Fewer than two is not a split worth drawing.
@@ -322,6 +329,10 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
     "district manager", "ceo",
     "manager", "owner (manager)", "owner manager", "assistant manager",
   ]),
+  // The store roles that own their own storefront tidiness. Corp is out on
+  // purpose: the DM lives in this panel and their queue is a standing backlog
+  // across five stores, which is not news once a week.
+  categories: new Set(["manager", "owner (manager)", "owner manager"]),
 };
 
 // The categories worth showing THIS person, in the canonical order.
@@ -903,7 +914,11 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
 // ============================================================================
 type Due = {
   slug: string; period: string; cat: Category;
-  title: string; body: string; link: string; tone: "red" | "amber";
+  // "sage" is in the union because five due entries already use it — a reply
+  // window closing is news, not a deadline — and itemCard and the outbox have
+  // always accepted it. The narrower type was simply wrong, and quietly: Deno
+  // Deploy does not type-check, so the file ran and only `deno check` knew.
+  title: string; body: string; link: string; tone: "red" | "amber" | "sage";
   for: (p: Person) => boolean;      // who owes this
   store?: string;
   // The feature_overrides key of the surface this chases, so somebody the tool
@@ -1347,6 +1362,59 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         for: (p) => ["manager", "owner (manager)", "owner manager", "assistant manager"].includes(p.role)
           && covers(p, store),
         feature: "widget-aging-inventory",
+      });
+    }
+  }
+
+
+  // ---- Listings with no category, or on a shelf that looks wrong ----------
+  // The SPEEKS Connect Categories queue. Unlike everything else in this
+  // function there is no event to hang this on: a product is created in Shopify
+  // with no collection and the queue notices at the next catalogue sweep, so
+  // the standing state IS the news. Both queues are already scoped to listings
+  // live on the online store — an unpublished product's shelf is a shelf no
+  // shopper can reach, and nagging a store about it would be work for nothing.
+  //
+  // WEEKLY, not daily: this is a backlog, and a backlog mailed every morning is
+  // a filter rule. `period` is the week stamp, so a store gets one of these a
+  // week however many times the sweep runs.
+  //
+  // The roles here are the tool's DEFAULT roles, deliberately. `feature` below
+  // is revoke-only in this path, so hiding Categories from somebody stops the
+  // mail — but GRANTING it to an ASM shows them the card on the site without
+  // signing them up for email they never asked for.
+  {
+    const CAT_ROLES = new Set(["manager", "owner (manager)", "owner manager"]);
+    const [pileRes, misRes] = await Promise.all([
+      sb.from("collection_proposals").select("store_code"),
+      sb.from("collection_misfiled").select("store_code"),
+    ]);
+    const tally = (rows: any[] | null) => {
+      const m: Record<string, number> = {};
+      for (const r of rows || []) {
+        const s = String(r.store_code || "").toUpperCase();
+        m[s] = (m[s] ?? 0) + 1;
+      }
+      return m;
+    };
+    const pile = tally(pileRes.data), mis = tally(misRes.data);
+    for (const store of STORES) {
+      const a = pile[store] || 0, b = mis[store] || 0;
+      if (!a && !b) continue;
+      const bits: string[] = [];
+      if (a) bits.push(`${a} listing${a === 1 ? "" : "s"} with no category`);
+      if (b) bits.push(`${b} on a shelf that looks wrong`);
+      due.push({
+        slug: "recatQueue", period: weekStamp(t.date), cat: "categories", store,
+        title: `Listings need a category — ${STORE_NAME[store] || store}`,
+        // LEADS WITH A WORD, not a number. The mailer sentence-cases the first
+        // WORD of a body, skipping leading digits — so "83 listing" came out as
+        // "83 Listings with no category", which reads like a typo.
+        body: `On the online store: ${bits.join(" and ")}. `
+          + `Open SPEEKS Connect, then Categories, to sort them.`,
+        link: "operations.html#categories", tone: "amber",
+        for: (p) => CAT_ROLES.has(p.role) && covers(p, store),
+        feature: "ec-view-categories",
       });
     }
   }

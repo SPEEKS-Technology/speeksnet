@@ -7555,7 +7555,11 @@ function initOperations() {
     // cannot be looked up yet -- this runs before the first fetch.
     const sign = hash.match(/^b2b-sign-([A-Za-z0-9-]{6,})$/);
     if (sign) _b2bPendingSign = sign[1];
+    // #categories is the feed card's destination: the Categories view inside
+    // SPEEKS Connect, which is a view of a tab rather than a tab of its own.
+    if (hash === 'categories') { _ecView = 'cats'; }
     let initial = sign ? 'b2b'
+        : hash === 'categories' ? 'ebay'
         : ['marginguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
     if (!tabVisible('ops-tab-' + initial)) {
@@ -7564,6 +7568,7 @@ function initOperations() {
         if (firstVisible) initial = firstVisible.id.replace('ops-tab-', '');
     }
     switchOperationsTab(initial);
+    if (hash === 'categories') _ecMarkView('cats');
 }
 
 function _kpiStartEdit(periodDate) {
@@ -21879,7 +21884,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -31039,6 +31044,14 @@ const FEATURE_CATALOG = [
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
     { key: 'widget-ops-ebay',          label: 'SPEEKS Connect (Tab)',          tab: 'widgets', group: 'Operations', def: 'all' },
+    // The Categories queue inside SPEEKS Connect. Managers and the DM to start —
+    // it writes to the live storefront, so it is not something to hand out by
+    // accident. This switch is the WHOLE gate, not a cosmetic one: shopify-recat
+    // reads the same feature_overrides row before it will file anything, so
+    // turning it on for somebody genuinely grants them the tool and turning it
+    // off genuinely takes it away. See the KPI role gate for what happens when a
+    // frontend switch and a backend allow-list disagree.
+    { key: 'ec-view-categories',       label: 'SPEEKS Connect · Categories tab', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -36915,6 +36928,13 @@ function _samReminderCfg() {
     cfg.push({ key: 'cbMatch', id: 'cbMatchAlertBubble', text: 'cbMatchAlertBubbleText',
         title: 'Call Back Item In Stock', urgency: 2, due: 'Call', cls: 'sam-due-amber',
         action: "window.location.href='operations.html#callbacks'" });
+    // Listings with no category, or on a shelf their own title disagrees with.
+    // An opportunity, not a deadline — nothing is late, the storefront is just
+    // untidier than it should be — so it is amber and snoozeable, and the counts
+    // in data-sig break a snooze when new stock arrives.
+    cfg.push({ key: 'recatQueue', id: 'recatAlertBubble', text: 'recatAlertBubbleText',
+        title: 'Listings Need A Category', urgency: 1, due: 'Sort', cls: 'sam-due-amber',
+        action: "window.location.href='operations.html#categories'" });
     return cfg;
 }
 
@@ -41467,12 +41487,20 @@ function _ecSyncChrome() {
     const health = document.getElementById('ecViewHealthBtn');
     if (health) health.style.display = _ecScope?.allStores ? '' : 'none';
     const cats = document.getElementById('ecViewCatsBtn');
-    if (cats) cats.style.display = _ecScope?.allStores ? '' : 'none';
+    // NOT SET HERE. Feature Access owns this button (data-feature
+    // ec-view-categories), so writing a display on it would undo whatever the
+    // DM chose the moment the panel refreshed. Read it instead — the inline
+    // style is exactly what _applyFeatureOverridesToPlainEls left behind, and
+    // reading the COMPUTED style would be useless while the toggle around it
+    // is still hidden.
+    const catsOn = !!cats && cats.style.display !== 'none';
     // Everyone but the DM and the CEO has exactly one view. A toggle offering
     // a single option is a button that does nothing, so it goes with the
     // second view rather than sitting there inviting a click.
     const toggle = document.getElementById('ecViewToggle');
-    if (toggle) toggle.style.display = _ecScope?.allStores ? '' : 'none';
+    // A manager sees Upload + Categories: two real options, so the toggle earns
+    // its place. One option is a button that does nothing, so it stays hidden.
+    if (toggle) toggle.style.display = (_ecScope?.allStores || catsOn) ? '' : 'none';
 
     if (sel) {
         const many = (_ecScope?.stores || []).length > 1;
@@ -41502,12 +41530,20 @@ function _ecSyncChrome() {
     }
 }
 
-function ecSetView(view) {
-    _ecView = view;
+// Which pill is lit. Its own function because the #categories deep link opens
+// the view WITHOUT going through ecSetView — that would load the panel before
+// the tab it lives on exists — and a panel showing Categories under a lit
+// Upload pill is just a bug with extra steps.
+function _ecMarkView(view) {
     ['listings', 'health', 'cats'].forEach(v => {
         const b = document.getElementById('ecView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
         if (b) b.classList.toggle('active', v === view);
     });
+}
+
+function ecSetView(view) {
+    _ecView = view;
+    _ecMarkView(view);
     ecLoad();
 }
 
@@ -41815,8 +41851,8 @@ function _ecHealthHtml() {
 // where a person says yes.
 //
 // IT IS A QUEUE OF SUGGESTIONS, NOT A REPORT. Nothing here has happened yet.
-// File It writes to Shopify (join the new collection, leave Other, one
-// mutation) and the row leaves the queue. Not This One records a skip against
+// Submit writes to Shopify (join the new collection, leave Other, one
+// mutation) and the row leaves the queue. Remove records a skip against
 // that product so the queue stops offering it — per PRODUCT, never per rule,
 // because the rule may be right about the other forty titles it caught.
 //
@@ -41924,7 +41960,7 @@ function _rcHtml() {
           Select All
         </label>
         <button class="ec-btn ec-btn-go" id="rcFileBtn" ${n ? '' : 'disabled'}
-                onclick="rcFileSelected()">File ${n ? n + ' ' : ''}Selected</button>
+                onclick="rcFileSelected()">Submit ${n ? n + ' ' : ''}Selected</button>
         <span class="rc-count">${queue.length} To File At ${_ecEsc(_ecStore)}</span>
       </div>`;
 
@@ -41949,9 +41985,13 @@ function _rcHtml() {
           </td>
           <td>
             <div class="rc-title">${_ecEsc(q.title)}</div>
-            <div class="rc-sub">${_ecEsc(q.sku || '')}${q.handle
-              ? ` · <a class="rc-link" href="https://${_ecEsc(q.shop)}/products/${_ecEsc(q.handle)}"
-                     target="_blank" rel="noopener">View</a>` : ''}</div>
+            <div class="rc-sub">${_ecEsc(q.sku || '')}</div>
+            <div class="ec-pills rc-links">
+              ${q.handle ? `<a class="ec-pill ec-pill-store" href="https://${_ecEsc(q.shop)}/products/${_ecEsc(q.handle)}"
+                   target="_blank" rel="noopener">Online Store${_EC_ICON_LINK}</a>` : ''}
+              ${q.productId ? `<a class="ec-pill ec-pill-shopify" href="https://${_ecEsc(q.shop)}/admin/products/${_ecEsc(String(q.productId).split('/').pop())}"
+                   target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
+            </div>
           </td>
           <td class="cb-col-status"><span class="rc-rule">${_ecEsc(q.rule)}</span></td>
           <td class="cb-col-status">
@@ -41966,10 +42006,10 @@ function _rcHtml() {
           </td>
           <td class="cb-col-status rc-acts">
             <button class="ec-btn ec-btn-sm ec-btn-on" data-id="${id}"
-                    onclick="rcFileOne(this.dataset.id, this)">File It</button>
+                    onclick="rcFileOne(this.dataset.id, this)">Submit</button>
             <button class="ec-btn ec-btn-sm ec-btn-off" data-id="${id}"
-                    title="Leave it in Other and stop offering it"
-                    onclick="rcSkip(this.dataset.id, this)">Not This One</button>
+                    title="${_rcMode === 'misfiled' ? 'Leave it on the shelf it is on and stop offering it' : 'Leave it in Other and stop offering it'}"
+                    onclick="rcSkip(this.dataset.id, this)">Remove</button>
           </td>
         </tr>`;
     }).join('');
@@ -42012,6 +42052,9 @@ function _rcHtml() {
 // placement, same outside-click and Escape handling. A second popover with its
 // own idea of where the viewport ends is how two of them end up on screen.
 const _rcOver = new Map();   // productId → chosen handle, until it is filed
+// Which of the two panels opened the shared popover. They want opposite things
+// when the page scrolls — see _ecCatReflow.
+let _rcPickerOn = false;
 
 function _rcTargetOf(q) { return _rcOver.get(q.productId) || q.to; }
 
@@ -42037,6 +42080,7 @@ function rcOpenShelf(id, btn) {
       <div class="ec-catpop-list" id="ecCatList">${_rcShelfListHtml(shelves, current, '')}</div>`;
     document.body.appendChild(pop);
     _ecCatAnchor = btn;
+    _rcPickerOn = true;
     _ecCatPlace();
 
     document.addEventListener('mousedown', _ecCatOutside, true);
@@ -42067,7 +42111,7 @@ function rcShelfSearch(q) {
 }
 window.rcShelfSearch = rcShelfSearch;
 
-// Choosing does NOT file. It changes where this row would go, and File It (or
+// Choosing does NOT file. It changes where this row would go, and Submit (or
 // the bulk button) carries the choice — so somebody can correct three rows and
 // then send all three, rather than being committed by the act of looking.
 function rcPickShelf(handle) {
@@ -42085,7 +42129,7 @@ window.rcPickShelf = rcPickShelf;
 function rcToggle(id, on) {
     if (on) _rcSel.add(id); else _rcSel.delete(id);
     const btn = document.getElementById('rcFileBtn');
-    if (btn) { btn.disabled = !_rcSel.size; btn.textContent = `File ${_rcSel.size ? _rcSel.size + ' ' : ''}Selected`; }
+    if (btn) { btn.disabled = !_rcSel.size; btn.textContent = `Submit ${_rcSel.size ? _rcSel.size + ' ' : ''}Selected`; }
     const all = document.getElementById('rcAll');
     if (all) all.checked = _rcSel.size === (_rcData?.queue || []).length && _rcSel.size > 0;
 }
@@ -42115,7 +42159,7 @@ window.rcSetMode = rcSetMode;
 async function _rcRun(ids, btn) {
     if (!ids.length) return;
     const label = btn ? btn.textContent : '';
-    if (btn) { btn.disabled = true; btn.textContent = 'Filing…'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
     // Each row carries its own destination, which is the rule's unless somebody
     // changed it. The server checks both: the product must be in the queue and
     // the shelf must be one anything may be filed on.
@@ -42133,6 +42177,8 @@ async function _rcRun(ids, btn) {
             + (res.body.errors || []).map(e => `· ${e.title}: ${e.why}`).join('\n'));
     }
     await rcLoad();
+    // No card to clear from here: the feed deck is on the dashboard, and this
+    // panel is on Operations. Going back to the dashboard re-runs the check.
     ecRender();
 }
 
@@ -42145,7 +42191,7 @@ async function rcFileSelected() {
     // The two queues do different things to the storefront, so they get
     // different sentences. "Leaves Other" is reassuring; "comes off the shelf
     // somebody put it on" is the one worth reading twice.
-    if (!confirm(`File ${ids.length} item${ids.length === 1 ? '' : 's'} at ${_ecStore}?\n\n`
+    if (!confirm(`Submit ${ids.length} item${ids.length === 1 ? '' : 's'} at ${_ecStore}?\n\n`
         + (_rcMode === 'misfiled'
             ? 'Each one joins its new collection and COMES OFF the collection it is on now, on the live store.'
             : 'Each one joins its new collection and leaves Other on the live store.'))) return;
@@ -42154,10 +42200,10 @@ async function rcFileSelected() {
 window.rcFileSelected = rcFileSelected;
 
 async function rcSkip(id, btn) {
-    if (btn) { btn.disabled = true; btn.textContent = 'Skipping…'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Removing…'; }
     const res = await _rcPost({ action: 'skip', store: _ecStore, productId: id });
     if (!res.ok) {
-        if (btn) { btn.disabled = false; btn.textContent = 'Not This One'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Remove'; }
         alert(res.body?.detail || res.body?.error || 'Could not skip that.');
         return;
     }
@@ -42183,6 +42229,97 @@ window._dbgRecat = () => ({
     queue: (_rcData?.queue || []).length, skipped: (_rcData?.skipped || []).length,
     selected: _rcSel.size, totals: _rcData?.totals || null,
 });
+
+// --- The nag: listings waiting on a category --------------------------------
+//
+// Nothing "happens" when a listing needs filing — a product is created in
+// Shopify with no collection, and the queue notices at the next catalogue
+// sweep. There is no write handler to hook, so this is a data-derived reminder
+// like the KPI ones: ask for the counts, carry them on a hidden bubble, and let
+// _samGatherReminders turn that into the feed card.
+//
+// STORE ROLES ONLY, and the SERVER decides which those are (scope.corp). The DM
+// lives in this panel and their queue is a standing backlog of 289 across five
+// stores; a card saying so every morning is a card nobody reads. A manager has
+// a handful at their own store, which is a thing you can actually finish.
+//
+// Snoozeable, because nothing here is late — a shelf is untidy, not overdue.
+// data-sig carries the counts, so a snooze holds only until the numbers move
+// and new stock breaks through it (see [[feed-suppression-keys]]).
+const RECAT_NAG_MS = 30 * 60 * 1000;
+let _rcNagStarted = false;
+
+function _rcHideNag() {
+    const b = document.getElementById('recatAlertBubble');
+    if (b) b.style.display = 'none';
+}
+window._rcHideNag = _rcHideNag;
+
+function _rcNagBubbleEl() {
+    let b = document.getElementById('recatAlertBubble');
+    if (b) return b;
+    // Same anchor and stacking context as every other bubble, and absent on the
+    // pages with no deck — which is exactly where there is nothing to show.
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'recatAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #0f766e, #134e4a); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(19, 78, 74, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span style="font-size:16px; flex-shrink:0; margin-top:2px;">📁</span>
+        <span id="recatAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="_rcHideNag()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+async function checkCategoryQueueReminders() {
+    // THE DECK IS THE ONLY PLACE THIS IS EVER SEEN. The bubble is an invisible
+    // state-carrier for _samGatherReminders, and the feed lives on the dashboard
+    // alone — so checking on the other four shells spends a request per page
+    // load to update something nobody can look at, and hands every role the
+    // panel is closed to a 401 in their console on every page.
+    if (!document.getElementById('samFeed')) return;
+    // The same switch as the button: no tool, no nag about the tool.
+    if (typeof _jumpFeatureVisible === 'function' && !_jumpFeatureVisible('ec-view-categories')) {
+        _rcHideNag(); return;
+    }
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) { _rcHideNag(); return; }
+    if (!_rcNagStarted) { _rcNagStarted = true; setInterval(checkCategoryQueueReminders, RECAT_NAG_MS); }
+    // ?view=counts, not ?view=review: the review payload carries a whole store
+    // queue with it, and this runs on a timer on every page.
+    let d = null;
+    try { d = await _rcFetch('?view=counts'); } catch (_) { return; }  // a 401 is a role answer, not an error to show
+    if (!d || d.scope?.corp) { _rcHideNag(); return; }
+    const stores = d.scope?.stores || [];
+    const other = stores.reduce((n, s) => n + (d.other?.[s] || 0), 0);
+    const mis = stores.reduce((n, s) => n + (d.misfiled?.[s] || 0), 0);
+    if (!other && !mis) { _rcHideNag(); return; }
+    const b = _rcNagBubbleEl();
+    if (!b) return;
+    const t = document.getElementById('recatAlertBubbleText');
+    if (t) {
+        // Two different problems, and only the halves that exist: "no category"
+        // is stock in Other, "a shelf that looks wrong" is stock somebody filed
+        // somewhere its own title disagrees with.
+        const bits = [];
+        if (other) bits.push(other + ' listing' + (other === 1 ? '' : 's') + ' with no category');
+        if (mis) bits.push(mis + ' on a shelf that looks wrong');
+        const where = stores.length > 1 ? stores.join(' & ') : (stores[0] || 'Your store');
+        t.dataset.summary = where + ' has ' + bits.join(' and ')
+            + ' on the online store — open Categories to sort them.';
+        // The counts ARE the identity. File some and the rest is new information
+        // worth surfacing again; file them all and the card leaves on its own.
+        t.dataset.sig = 'recat:' + other + ':' + mis;
+        t.dataset.stores = stores.join(',');
+        t.textContent = t.dataset.summary;
+    }
+    b.style.display = 'flex';
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+window.checkCategoryQueueReminders = checkCategoryQueueReminders;
 
 // --- actions ----------------------------------------------------------------
 
@@ -42304,7 +42441,12 @@ function _ecCatAnchorEl() {
     const sel = (window.CSS && CSS.escape)
         ? CSS.escape(_ecCatSku)
         : String(_ecCatSku).replace(/["\\]/g, '\\$&');
-    const el = document.querySelector(`#ecBody .ec-catbtn[data-sku="${sel}"]`);
+    // Two kinds of anchor, because two panels share this popover: an eBay row
+    // keys on its SKU, a Categories row on its product id. Without the second
+    // selector the picker lost its anchor on every re-render and fell back to
+    // measuring itself, which is how it ended up floating mid-page.
+    const el = document.querySelector(`#ecBody .ec-catbtn[data-sku="${sel}"]`)
+        || document.querySelector(`#ecBody .rc-shelf[data-id="${sel}"]`);
     if (el) _ecCatAnchor = el;
     return el;
 }
@@ -42379,6 +42521,16 @@ function _ecCatReflow(ev) {
     const pop = document.getElementById('ecCatPop');
     if (!pop) return;
     if (ev?.target && pop.contains(ev.target.nodeType ? ev.target : pop)) return;
+    // THE SHELF PICKER BELONGS TO ONE ROW. _ecCatPlace ends in a clamp that
+    // keeps the popover on screen whatever the arithmetic said. That is right
+    // for the eBay panel and wrong here: scroll the queue and the list stays
+    // parked over the middle of the page with the row it applies to gone, over
+    // rows it would not file. So it closes with its row instead.
+    if (_rcPickerOn) {
+        const a = _ecCatAnchorEl();
+        const r = a ? a.getBoundingClientRect() : null;
+        if (!r || r.bottom < 8 || r.top > window.innerHeight - 8) { ecCloseCategory(); return; }
+    }
     _ecCatPlace();
 }
 
@@ -42398,6 +42550,7 @@ function ecCloseCategory() {
     _ecCatSku = null;
     _ecCatAnchor = null;
     _ecCatChrome = null;
+    _rcPickerOn = false;
 }
 window.ecCloseCategory = ecCloseCategory;
 

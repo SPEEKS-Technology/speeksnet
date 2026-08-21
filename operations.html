@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260821e">
+  <link rel="stylesheet" href="styles.css?v=20260821f">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260821e" defer></script>
+  <script src="speeks.js?v=20260821f" defer></script>
 </head>
 <body class="preload">
 
@@ -748,12 +748,15 @@
                            the edge function returns — never from the browser's own
                            idea of the role. -->
                       <button id="ecViewHealthBtn" class="mb-view-btn" style="display:none;" onclick="ecSetView('health')"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>All Stores</button>
-                      <!-- Filing the Other pile. Revealed by _ecSyncChrome from
-                           the same corp scope as All Stores; shopify-recat is
-                           the one that actually decides, and it also allows a
-                           manager at their own store — that route just has no
-                           button yet. -->
-                      <button id="ecViewCatsBtn" class="mb-view-btn" style="display:none;" onclick="ecSetView('cats')"><svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Categories</button>
+                      <!-- Managers and the DM to start, per the role classes, and
+                           Feature Access can hand it to anyone else without a
+                           deploy. _ecSyncChrome deliberately does NOT touch this
+                           one: _applyFeatureOverridesToPlainEls owns its display,
+                           and two owners means whichever ran last wins. The inline
+                           none is the safe state before that pass runs.
+                           shopify-recat reads the same overrides, so granting the
+                           button grants the API too. -->
+                      <button id="ecViewCatsBtn" class="mb-view-btn role-district-manager role-ceo role-mocd role-manager role-owner-manager" data-feature="ec-view-categories" style="display:none;" onclick="ecSetView('cats')"><svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Categories</button>
                   </div>
                   <select id="ecStoreFilter" class="kpi-select cb-store-filter" onchange="ecSetStore(this.value)" style="display:none;"></select>
                   <button id="ecRefreshBtn" class="ec-btn" onclick="ecRefresh()" title="Re-read Shopify and eBay now">

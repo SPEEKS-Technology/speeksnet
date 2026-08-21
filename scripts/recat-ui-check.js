@@ -12,16 +12,26 @@
 //      takes the whole queue
 //   5. NOTHING IS WRITTEN BY LOADING OR SELECTING. The queue length at the end
 //      equals the queue length at the start — the panel is a suggestion until
-//      somebody clicks File It, and this harness never does.
-//   6. no console errors
+//      somebody clicks Submit, and this harness never does.
+//   6. the two destinations on every row — the storefront and the Shopify admin
+//      — with the admin link built from the numeric product id, not the handle
+//   7. the two middle columns sit under their own headings
+//   8. THE PICKER LEAVES WITH ITS ROW. Scroll the queue with a shelf list open
+//      and it used to stay parked mid-page, over rows it would not file
+//   9. a MANAGER is offered the tab (Feature Access owns that button now), sees
+//      only their own store, and lands right with #categories
+//  10. the feed card fires for a manager and NOT for corp, and its snooze is
+//      keyed to the counts so new stock breaks through
+//  11. no console errors
 //
-// SPEEKS_TEST_PIN must be a corp PIN. NODE_PATH must point at a node_modules
-// with puppeteer-core.
+// SPEEKS_TEST_PIN must be a corp PIN. SPEEKS_TEST_PIN_MGR is optional and adds
+// checks 9 and 10. NODE_PATH must point at a node_modules with puppeteer-core.
 const puppeteer = require('puppeteer-core');
 
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
 const PIN = process.env.SPEEKS_TEST_PIN || '';
+const MGR_PIN = process.env.SPEEKS_TEST_PIN_MGR || '';
 
 let fails = 0;
 // Two noises that are the harness's own fault, not the panel's:
@@ -96,7 +106,7 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     ok(first?.from === 'Other' && !!first?.to, 'and reads Other → a shelf', `${first?.from} → ${first?.to}`);
     ok(/[a-z]/.test(first?.to || '') && !(first?.to || '').includes('-'),
         'the shelf is a title, not a handle', first?.to);
-    ok(first?.acts.join(' / ') === "File It / Not This One", 'both answers are offered', first?.acts.join(' / '));
+    ok(first?.acts.join(' / ') === "Submit / Remove", 'both answers are offered', first?.acts.join(' / '));
 
     const ruled = await page.$$eval('.rc-table tbody tr', rs =>
         rs.filter(r => r.querySelector('.rc-rule')?.textContent?.trim()).length);
@@ -108,16 +118,59 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     const note = await page.$eval(".rc-note", e => e.textContent.trim()).catch(() => "");
     ok(/online store/i.test(note), "the panel says what it is showing", note || "NO NOTE");
 
+    console.log('');
+    console.log('== The two destinations ==');
+    // One listing lives in two places and a reviewer needs both: the storefront
+    // to see what a shopper sees, the admin to fix a title by hand. Asserting the
+    // shape of the URLs, not just that two pills exist — an admin link built from
+    // the product HANDLE instead of the numeric id 404s, and looks fine until
+    // somebody clicks it.
+    const links = await page.$eval('.rc-table tbody tr .rc-links', el =>
+        [...el.querySelectorAll('a')].map(a => ({ label: a.textContent.trim(), href: a.href }))
+    ).catch(() => []);
+    ok(links.length === 2, 'every row offers both links', links.map(l => l.label).join(' / '));
+    ok(/\/products\//.test(links[0]?.href || ''), 'the first goes to the storefront', (links[0]?.href || '').slice(0, 72));
+    ok(/\/admin\/products\/\d+$/.test(links[1]?.href || ''), 'the second goes to the Shopify admin, by numeric id',
+        (links[1]?.href || '').slice(-46));
+
+    console.log('');
+    console.log('== The columns line up ==');
+    // The headings were centred and the cells were not, so every column read as
+    // though it had slipped a notch left.
+    const align = await page.evaluate(() => {
+        const tr = document.querySelector('.rc-table tbody tr');
+        const th = document.querySelectorAll('.rc-table thead th');
+        const td = tr.querySelectorAll('td');
+        const get = el => getComputedStyle(el).textAlign;
+        return { h2: get(th[2]), c2: get(td[2]), h3: get(th[3]), c3: get(td[3]) };
+    });
+    ok(align.h2 === align.c2, 'Matched On sits under its heading', `${align.h2} / ${align.c2}`);
+    ok(align.h3 === align.c3, 'Move To sits under its heading', `${align.h3} / ${align.c3}`);
+
+    console.log('');
+    console.log('== The picker leaves with its row ==');
+    // The reported glitch: _ecCatPlace ends in a clamp that keeps the popover on
+    // screen whatever the arithmetic said, so scrolling the queue left a list of
+    // shelves parked mid-page over rows it would not file.
+    await page.click('.rc-table tbody tr .rc-shelf');
+    await new Promise(r => setTimeout(r, 350));
+    ok(await page.$('#ecCatPop') !== null, 'the picker opens');
+    await page.evaluate(() => window.scrollBy(0, 1200));
+    await new Promise(r => setTimeout(r, 350));
+    ok(await page.$('#ecCatPop') === null, 'and closes once its row has scrolled away');
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await new Promise(r => setTimeout(r, 250));
+
     console.log('\n== Selecting ==');
     await page.$eval('.rc-table tbody tr .rc-pick input', el => el.click());
     await new Promise(r => setTimeout(r, 250));
     let btn = await page.$eval('#rcFileBtn', b => ({ text: b.textContent.trim(), disabled: b.disabled }));
-    ok(!btn.disabled && /File 1 Selected/.test(btn.text), 'one row arms the bulk button', btn.text);
+    ok(!btn.disabled && /Submit 1 Selected/.test(btn.text), 'one row arms the bulk button', btn.text);
 
     await page.$eval('#rcAll', el => el.click());
     await new Promise(r => setTimeout(r, 400));
     btn = await page.$eval('#rcFileBtn', b => ({ text: b.textContent.trim(), disabled: b.disabled }));
-    ok(btn.text === `File ${before} Selected`, 'Select All takes the whole queue', btn.text);
+    ok(btn.text === `Submit ${before} Selected`, 'Select All takes the whole queue', btn.text);
 
     await page.$eval('#rcAll', el => el.click());
     await new Promise(r => setTimeout(r, 400));
@@ -169,6 +222,127 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     ok(/To File/.test(sub), 'the header counts what is left', sub);
 
     ok(errs.length === 0, 'no console errors', errs.length ? errs.slice(0, 3).join(' | ') : 'clean');
+
+
+    // ── The manager route, and the nag ────────────────────────────────────────
+    // Two new things at once, and they have to agree: a manager is now offered the
+    // Categories tab (Feature Access owns that button, not the eBay corp scope),
+    // and a manager — never corp — gets the feed card telling them there is
+    // something to sort. If the card lit for the DM it would say 289 across five
+    // stores every morning, which is how a reminder stops being read.
+    if (MGR_PIN) {
+        console.log('');
+        console.log('== As an OVL manager ==');
+        const mp = await browser.newPage();
+        const mErrs = [];
+        mp.on('pageerror', e => { const m = String(e.message || e); if (!IGNORE.test(m)) mErrs.push(m); });
+        await mp.setViewport({ width: 1500, height: 1000 });
+        await mp.evaluateOnNewDocument(pin => {
+            sessionStorage.setItem('speeksUnlocked', 'true');
+            sessionStorage.setItem('speeksUserPin', pin);
+            sessionStorage.setItem('speeksUserName', 'Nick Hettinger');
+            sessionStorage.setItem('speeksUserRole', 'manager');
+            sessionStorage.setItem('speeksUserStore', 'OVL');
+        }, MGR_PIN);
+        await mp.goto('file:///' + REPO + '/operations.html', { waitUntil: 'networkidle2' }).catch(() => {});
+        await new Promise(r => setTimeout(r, 2500));
+        const mgrTab = await mp.waitForFunction(
+            () => { const b = document.getElementById('ecViewCatsBtn'); return b && b.style.display !== 'none'; },
+            { timeout: 15000 }).then(() => true).catch(() => false);
+        ok(mgrTab, 'a manager is offered the Categories tab');
+        // A single tab is a button that does nothing; two is a real choice.
+        const toggleShown = await mp.$eval('#ecViewToggle', e => e.style.display !== 'none').catch(() => false);
+        ok(toggleShown, 'and the view toggle appears to carry it');
+        if (mgrTab) {
+            await mp.click('#ecViewCatsBtn');
+            await mp.waitForFunction(
+                () => window._dbgRecat && window._dbgRecat().view === 'cats' && window._dbgRecat().loaded,
+                { timeout: 25000 }).catch(() => {});
+            const mState = await mp.evaluate(() => window._dbgRecat());
+            ok(mState.store === 'OVL', 'and the queue is their own store', mState.store);
+            ok(mState.queue > 0, 'with rows in it', String(mState.queue));
+            ok(Object.keys(mState.totals || {}).length === 1,
+                'and the store chips do not name anybody else', JSON.stringify(mState.totals));
+        }
+
+        // The card's destination, which is a VIEW of a tab rather than a tab —
+        // so it opens through initOperations rather than ecSetView, and the lit
+        // pill has to be set separately or the panel shows Categories under a
+        // highlighted Upload.
+        const dp = await browser.newPage();
+        await dp.setViewport({ width: 1500, height: 1000 });
+        await dp.evaluateOnNewDocument(pin => {
+            sessionStorage.setItem('speeksUnlocked', 'true');
+            sessionStorage.setItem('speeksUserPin', pin);
+            sessionStorage.setItem('speeksUserName', 'Nick Hettinger');
+            sessionStorage.setItem('speeksUserRole', 'manager');
+            sessionStorage.setItem('speeksUserStore', 'OVL');
+        }, MGR_PIN);
+        await dp.goto('file:///' + REPO + '/operations.html#categories', { waitUntil: 'networkidle2' }).catch(() => {});
+        const landed = await dp.waitForFunction(
+            () => window._dbgRecat && window._dbgRecat().view === 'cats' && window._dbgRecat().loaded,
+            { timeout: 25000 }).then(() => true).catch(() => false);
+        ok(landed, '#categories lands on the Categories queue');
+        ok(await dp.$eval('#ecViewCatsBtn', b => b.classList.contains('active')).catch(() => false),
+            'and lights its own pill, not Upload');
+        await dp.close();
+        ok(mErrs.length === 0, 'no console errors', mErrs.slice(0, 2).join(' / ') || 'clean');
+        await mp.close();
+
+        console.log('');
+        console.log('== The feed card ==');
+        for (const who of [{ name: 'Nick Hettinger', role: 'manager', store: 'OVL', pin: MGR_PIN, want: true },
+                           { name: 'Ethan Kushnir', role: 'district manager', store: 'CORP', pin: PIN, want: false }]) {
+            const page2 = await browser.newPage();
+            const e2 = [];
+            page2.on('pageerror', e => { const m = String(e.message || e); if (!IGNORE.test(m)) e2.push(m); });
+            await page2.setViewport({ width: 1500, height: 1000 });
+            await page2.evaluateOnNewDocument(w => {
+                sessionStorage.setItem('speeksUnlocked', 'true');
+                sessionStorage.setItem('speeksUserName', w.name);
+                sessionStorage.setItem('speeksUserRole', w.role);
+                sessionStorage.setItem('speeksUserStore', w.store);
+                sessionStorage.setItem('speeksUserPin', w.pin);
+            }, who);
+            await page2.goto('file:///' + REPO + '/index.html', { waitUntil: 'networkidle2' }).catch(() => {});
+            await page2.evaluate(() => {
+                const o = document.getElementById('authOverlay'); if (o) o.style.display = 'none';
+                document.body.classList.add('is-authenticated');
+                document.body.classList.remove('preload', 'no-scroll');
+                if (typeof applyRoleBasedUI === 'function') { try { applyRoleBasedUI(); } catch (e) {} }
+            });
+            const res = await page2.evaluate(async () => {
+                await checkCategoryQueueReminders();
+                const b = document.getElementById('recatAlertBubble');
+                const t = document.getElementById('recatAlertBubbleText');
+                const card = (typeof _samGatherReminders === 'function'
+                    ? _samGatherReminders() : []).find(r => r.key === 'recatQueue');
+                return {
+                    shown: !!b && getComputedStyle(b).display !== 'none',
+                    summary: t && t.dataset ? t.dataset.summary : null,
+                    sig: t && t.dataset ? t.dataset.sig : null,
+                    card: card ? { title: card.title, due: card.due, snippet: card.snippet, action: card.action } : null,
+                };
+            });
+            const tag = who.role === 'manager' ? 'MGR' : 'DM';
+            ok(res.shown === who.want, `[${tag}] the bubble ${who.want ? 'lights' : 'stays dark'}`, 'shown=' + res.shown);
+            if (who.want) {
+                ok(!!res.card, `[${tag}] the feed picks the card up`, res.card ? res.card.title + ' / ' + res.card.due : 'missing');
+                ok(!!res.card && /categor/i.test(res.card.snippet || ''),
+                    `[${tag}] with a readable line`, res.card && res.card.snippet);
+                ok(/operations\.html#categories/.test(res.card?.action || ''),
+                    `[${tag}] and it opens the panel it is about`, res.card && res.card.action);
+                // The counts are the identity, so a snooze lifts when they move.
+                ok(/^recat:\d+:\d+$/.test(res.sig || ''), `[${tag}] the snooze is keyed to the counts`, res.sig);
+            }
+            ok(e2.length === 0, `[${tag}] no console errors`, e2.slice(0, 2).join(' / ') || 'clean');
+            await page2.close();
+        }
+    } else {
+        console.log('');
+        console.log('== As an OVL manager ==');
+        console.log('  SKIPPED (set SPEEKS_TEST_PIN_MGR to a store manager PIN)');
+    }
 
     await browser.close();
     console.log(fails ? `\n${fails} check(s) failed` : '\nall checks passed');

@@ -5,6 +5,8 @@
 //
 //   THE PANEL (SPEEKS Connect → Categories), x-user-pin:
 //     GET  ?view=review&store=OVL      the queue, one row per product
+//     GET  ?view=counts                per-store totals for both queues, and
+//                                      nothing else — what the feed card polls
 //     POST {action:"apply", store, productIds:[...]}
 //     POST {action:"skip",  store, productId, reason}
 //     POST {action:"unskip", store, productId}
@@ -79,14 +81,20 @@ const SHOP_BY_STORE: Record<string, string> = {
   BAL: "paymore-ballwin.myshopify.com",
 };
 
-// Filing stock is a merchandising decision, so it sits with the people who
-// answer for the storefront: corp everywhere, a manager at their own store.
-// An ASM or an employee may not — this writes to a live catalogue.
+// Filing stock is a merchandising decision that writes to a live catalogue, so
+// it starts with the people who answer for the storefront: corp everywhere, a
+// manager at their own store. Everyone else is refused BY DEFAULT — and only by
+// default. FEATURE_KEY below is the same switch the Categories button reads, so
+// the DM can hand the tool to an ASM in Feature Access and have it actually
+// work, rather than granting a button that 403s (see [[kpi-role-gate]]).
 const CORP_ROLES = ["district manager", "ceo", "mocd"];
 const STORE_ROLES = ["manager", "owner (manager)", "owner manager", "multi-store manager"];
 const MSM_STORES = ["BAL", "MPL"];
 
 // The junk drawer we are emptying. A proposal always leaves this one.
+// The Feature Access key of the Categories tab. One string, read by the button
+// and by this function, so a grant cannot be half-made.
+const FEATURE_KEY = "ec-view-categories";
 const FROM_HANDLE = "other";
 const BATCH_SIZE = 10;
 
@@ -118,6 +126,22 @@ const rows = async (path: string) => await (await sb(path)).json();
 
 type Scope = { name: string; role: string; stores: string[]; corp: boolean };
 
+// An override row for this feature, resolved the way the site resolves it:
+// the person beats their role, and neither existing means "use the default".
+// Returns null for "nothing said".
+async function featureSays(role: string, name: string): Promise<boolean | null> {
+  const list = await rows(`feature_overrides?feature_key=eq.${FEATURE_KEY}`
+    + `&select=subject_type,subject,enabled`);
+  const lc = (v: unknown) => String(v || "").toLowerCase().trim();
+  // "Owner (Manager)" -> "owner-manager", the slug the tool writes.
+  const slug = lc(role).replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "-");
+  const forUser = list.find((r: any) => lc(r.subject_type) === "user" && lc(r.subject) === lc(name));
+  if (forUser) return !!forUser.enabled;
+  const forRole = list.find((r: any) => lc(r.subject_type) === "role" && lc(r.subject) === slug);
+  if (forRole) return !!forRole.enabled;
+  return null;
+}
+
 async function scopeFor(pin: string): Promise<Scope | null> {
   if (!pin) return null;
   const found = await rows(`users?pin=eq.${encodeURIComponent(pin)}&select=name,role,store&limit=1`);
@@ -125,7 +149,12 @@ async function scopeFor(pin: string): Promise<Scope | null> {
   if (!user) return null;
   const role = String(user.role || "").toLowerCase().trim();
   const corp = CORP_ROLES.includes(role);
-  if (!corp && !STORE_ROLES.includes(role)) return null;
+  const byRole = corp || STORE_ROLES.includes(role);
+  const said = await featureSays(role, String(user.name || ""));
+  if (!(said === null ? byRole : said)) return null;
+  // A granted role still only gets ITS OWN stock. Feature Access answers "may
+  // this person file", never "whose catalogue" — that stays the store on their
+  // user row, and corp is the only thing that means all five.
   const stores = corp ? STORES
     : role === "multi-store manager" ? MSM_STORES
     : [String(user.store || "").toUpperCase()].filter(s => STORES.includes(s));
@@ -351,7 +380,7 @@ Deno.serve(async (req) => {
     const view = url.searchParams.get("view") || "";
 
     // --- panel ---------------------------------------------------------------
-    if (req.method === "POST" || view === "review") {
+    if (req.method === "POST" || view === "review" || view === "counts") {
       const scope = await scopeFor(pin);
       // A stale sessionStorage PIN outlives a PIN change and lands exactly here.
       if (!scope) {
@@ -359,6 +388,16 @@ Deno.serve(async (req) => {
                       detail: "no matching user, or your role may not file stock" }, 401);
       }
       if (req.method === "POST") return await handlePost(req, scope);
+
+      // JUST THE NUMBERS, for the notification check that every manager runs
+      // on a timer. The review payload carries a whole store queue with it —
+      // 90 rows to answer "is there anything to do", on every page, forever.
+      if (view === "counts") {
+        const [other, misfiled] = await Promise.all([
+          queueTotals(scope.stores, "other"), queueTotals(scope.stores, "misfiled")]);
+        return json({ scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
+                      other, misfiled });
+      }
 
       const asked = (url.searchParams.get("store") || "").toUpperCase();
       const store = scope.stores.includes(asked) ? asked : scope.stores[0];
@@ -386,7 +425,11 @@ Deno.serve(async (req) => {
         // Counted per store so the panel can say what is left everywhere
         // without loading five queues.
         totals: await queueTotals(scope.stores, mode),
-        misfiledTotal: (await rows(`collection_misfiled?select=product_id`)).length,
+        // The BADGE on the Misfiled tab, scoped like the queue behind it. An
+        // unscoped count put all five stores on a manager's tab, so a badge
+        // reading 17 opened a list of 5.
+        misfiledTotal: (await rows(`collection_misfiled?select=store_code`))
+          .filter((r: any) => scope.stores.includes(r.store_code)).length,
       });
     }
 

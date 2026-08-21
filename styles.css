@@ -17090,6 +17090,20 @@ body.tv-body { display: block; background: #eef1f5; }
 .rc-shelf svg { width: 11px; height: 11px; flex: none; stroke: var(--cb-faint); stroke-width: 2.4; fill: none; }
 .rc-shelf-picked { border-color: var(--cb-sage); background: var(--cb-sage-tint); }
 .rc-shelf-picked svg { stroke: #178048; }
+
+/* Matched On, Move To and the two answers sit UNDER their headings. The
+   headings were already centred (.cb-table th.cb-col-status) but the cells were
+   not — only .cb-cell-status carries that rule, and these rows use the width
+   class — so every column read as though it had slipped one notch left. */
+.rc-table td.cb-col-status { text-align: center; }
+
+/* The two places one listing lives: the storefront a shopper sees, and the
+   admin page where a title or a collection gets fixed by hand when no rule can.
+   Left under the SKU rather than centred like the eBay panel pair, because here
+   they belong to the item beside them, not to a column of their own. */
+.rc-links { justify-content: flex-start; margin-top: 6px; }
+.ec-pill-store { color: #0f766e; }
+.ec-pill-store:hover { border-color: #0f766e; background: #eefaf7; }
 .rc-optnow {
     float: right; font-size: 10px; font-weight: 800; color: #178048;
     background: var(--cb-sage-tint); border-radius: 4px; padding: 1px 5px;
