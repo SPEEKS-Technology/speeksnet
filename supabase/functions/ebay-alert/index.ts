@@ -54,9 +54,29 @@ const LISTING_STUCK_MIN   = 60;  // pending longer than this is not "in flight"
 const TRACKING_STUCK_MIN  = 60;  // tracking known but never pushed back to eBay
 const TOKEN_WARN_DAYS     = 30;  // refresh token; access token renews itself
 
+// WHO CAN ACTUALLY FIX IT, on every single line. Asked for directly on
+// 2026-08-21 after an "order.lineItems: Line items Unable to reserve inventory"
+// mail that was, in plain English, "the shelf and Shopify disagree" — a
+// thirty-second job for the store, indistinguishable in that wording from a
+// broken integration. Every alert now says whose job it is, so nobody has to
+// decode a Shopify error string to find out whether to act or to forward it.
+//
+//   "store"  — the shop floor fixes it: count something, cancel something,
+//              correct a listing. No code involved.
+//   "ethan"  — a decision or a reconnect only the DM/CEO can make.
+//   "claude" — the tool itself is broken. Forward it; nobody on the floor can
+//              do anything about it.
+type Fixer = "store" | "ethan" | "claude";
+
 type Issue = {
   key: string; store: string | null; severity: "critical" | "warning";
-  title: string; detail: string;
+  title: string; detail: string; fix: Fixer;
+};
+
+const FIX_LABEL: Record<Fixer, string> = {
+  store: "Store Can Fix",
+  ethan: "You Can Fix",
+  claude: "Needs Claude",
 };
 
 const json = (b: unknown, s = 200) =>
@@ -199,8 +219,11 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     if (error) {
       push({
         key: `watchdog_read:${name}`, store: null, severity: "critical",
-        title: `Error watch cannot read ${name}`,
-        detail: `${short(error.message)} — until this is fixed, problems in ${name} will go unreported.`,
+        title: `This error check is partly blind`,
+        detail: `We cannot read ${name}, so any problem in it goes unreported — meaning a quiet `
+          + `inbox no longer proves everything is fine. Our end, and it is the most important one `
+          + `on this list. The error: ${short(error.message, 110)}`,
+        fix: "claude",
       });
       counts[name] = -1;
       return [];
@@ -225,16 +248,23 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     if (st === "failed" && systemic) {
       push({
         key: `listing_blocked:${l.store_code}:${l.sku}`, store: l.store_code, severity: "critical",
-        title: `eBay refused a listing — ${l.sku}`,
-        detail: `Not a data problem, so the store cannot clear it: ${short(l.last_error)}`,
+        title: `Can't list on eBay — ${l.sku}`,
+        detail: `eBay is turning this listing away for a reason the store cannot change `
+          + `(the connection, a rate limit, or eBay itself). ${l.sku}`
+          + `${l.title ? ` — ${short(l.title, 60)}` : ""} is not on eBay and won't get there `
+          + `without a fix at our end. eBay's words: ${short(l.last_error, 110)}`,
+        fix: "claude",
       });
     } else if (st === "pending") {
       const m = minsAgo(l.last_attempt_at);
       if (m !== null && m > LISTING_STUCK_MIN) {
         push({
           key: `listing_stuck:${l.store_code}:${l.sku}`, store: l.store_code, severity: "critical",
-          title: `Listing stuck pending — ${l.sku}`,
-          detail: `No progress for ${m} minutes${l.attempts ? ` after ${l.attempts} attempts` : ""}.`,
+          title: `Listing stuck halfway — ${l.sku}`,
+          detail: `We started putting ${l.sku} on eBay ${m} minutes ago and it never finished`
+            + `${l.attempts ? `, after ${l.attempts} tries` : ""}. It is not live and not `
+            + `failed either, so nothing will retry it on its own.`,
+          fix: "claude",
         });
       }
     }
@@ -254,18 +284,46 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
   for (const o of orders) {
     const label = o.shopify_order_name || o.ebay_order_id;
     if (o.last_error) {
-      push({
-        key: `order_error:${o.store_code}:${o.ebay_order_id}`, store: o.store_code, severity: "critical",
-        title: `Order error — ${label}`, detail: short(o.last_error),
-      });
+      // THE COMMON ONE, AND IT IS NOT A TOOL FAULT. Shopify says
+      // "Unable to reserve inventory" when it holds zero of the thing eBay just
+      // sold, so the sale cannot be written down. That is the shelf and Shopify
+      // disagreeing, which only somebody standing in the store can settle —
+      // and the raw Shopify wording gives no hint of that. Named explicitly so
+      // it reads as a job rather than a breakage.
+      const noStock = /unable to reserve inventory|insufficient inventory/i.test(String(o.last_error));
+      if (noStock) {
+        push({
+          key: `order_error:${o.store_code}:${o.ebay_order_id}`, store: o.store_code, severity: "critical",
+          title: `Sold on eBay but Shopify says we have none — ${label}`,
+          detail: `eBay sold this and took the customer's money, but Shopify has zero in stock, `
+            + `so the sale cannot be recorded and nothing will ship. Go and look for it: `
+            + `if it IS on the shelf, set its Shopify quantity to 1 and this fixes itself within `
+            + `a couple of minutes. If it is NOT, cancel the order on eBay and refund the buyer, `
+            + `then tell Claude so the listing comes down.`,
+          fix: "store",
+        });
+      } else {
+        push({
+          key: `order_error:${o.store_code}:${o.ebay_order_id}`, store: o.store_code, severity: "critical",
+          title: `An eBay sale did not reach Shopify — ${label}`,
+          detail: `The sale is real and paid on eBay, but writing it into Shopify keeps failing, `
+            + `so it is missing from sales, stock and the day's numbers. Nothing the floor can do. `
+            + `The error: ${short(o.last_error, 120)}`,
+          fix: "claude",
+        });
+      }
     }
     if (o.tracking_number && !o.tracking_pushed_at) {
       const m = minsAgo(o.updated_at);
       if (m !== null && m > TRACKING_STUCK_MIN) {
         push({
           key: `tracking_unpushed:${o.store_code}:${o.ebay_order_id}`, store: o.store_code, severity: "critical",
-          title: `Tracking not sent to eBay — ${label}`,
-          detail: `Tracking ${o.tracking_number} has been on this order for ${m} minutes and eBay still has not been told.`,
+          title: `eBay has not been told this shipped — ${label}`,
+          detail: `The store did its job ${m} minutes ago: it is packed and tracking `
+            + `${o.tracking_number} is on the order. We have not passed that to eBay, so the buyer `
+            + `sees no tracking and eBay's late-shipment clock is still running against the store. `
+            + `That is our end, not theirs.`,
+          fix: "claude",
         });
       }
     }
@@ -289,7 +347,11 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
       seen.add(k);
       push({
         key: k, store: r.store_code, severity: "critical",
-        title: `${r.store_code} ${name} failing`, detail: short(r.error),
+        title: `${r.store_code}: the ${name} keeps erroring`,
+        detail: `The job that keeps ${r.store_code}'s eBay listings and stock in step with Shopify `
+          + `is failing every time it runs, so what eBay shows for ${r.store_code} is drifting out `
+          + `of date. Nothing the floor can do. The error: ${short(r.error, 120)}`,
+        fix: "claude",
       });
     }
   }
@@ -316,7 +378,11 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     if (missing.length) {
       push({
         key: `store_config:${s.store_code}`, store: s.store_code, severity: "critical",
-        title: `${s.store_code} cannot publish`, detail: `Not set up: ${missing.join(", ")}.`,
+        title: `${s.store_code} cannot list anything on eBay yet`,
+        detail: `eBay will not accept a listing from ${s.store_code} until these are chosen: `
+          + `${missing.join(", ")}. Set them on the SPEEKS Connect tab and listing starts working. `
+          + `Nothing else is wrong.`,
+        fix: "ethan",
       });
     }
     if (s.refresh_token_expires_at) {
@@ -325,8 +391,11 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
         push({
           key: `token_expiring:${s.store_code}`, store: s.store_code,
           severity: days < 7 ? "critical" : "warning",
-          title: `${s.store_code} eBay connection expires in ${Math.floor(days)} days`,
-          detail: `Reconnect the store from SPEEKS Connect before it lapses; every listing and order stops when it does.`,
+          title: `${s.store_code}'s eBay connection expires in ${Math.floor(days)} days`,
+          detail: `Reconnect ${s.store_code} on the SPEEKS Connect tab — it takes a minute and only `
+            + `you can do it. If the day passes, everything eBay stops at that store: no new `
+            + `listings, no orders coming in, no tracking going out.`,
+          fix: "ethan",
         });
       }
     }
@@ -334,14 +403,19 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     if (m === null) {
       push({
         key: `sweep_never:${s.store_code}`, store: s.store_code, severity: "warning",
-        title: `${s.store_code} has never reported live listings`,
-        detail: `No rows in ebay_live for this store.`,
+        title: `We cannot see what ${s.store_code} has live on eBay`,
+        detail: `We have never managed to read ${s.store_code}'s live eBay listings, so we cannot `
+          + `tell whether a sold item is still up for sale there. Our end.`,
+        fix: "claude",
       });
     } else if (m > SWEEP_STALE_MIN) {
       push({
         key: `sweep_stale:${s.store_code}`, store: s.store_code, severity: "critical",
-        title: `${s.store_code} live sweep has stopped`,
-        detail: `Last successful sweep was ${m} minutes ago; it should run every 20.`,
+        title: `${s.store_code}'s eBay listings are not being checked`,
+        detail: `The check that pulls sold-out items off eBay last worked ${m} minutes ago and it `
+          + `should run every 20. Until it does, ${s.store_code} can sell something it no longer `
+          + `has, and eBay counts that cancellation against the store. Our end.`,
+        fix: "claude",
       });
     }
   }
@@ -358,8 +432,11 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
   for (const d of dups) {
     push({
       key: `dup_live:${d.store_code}:${d.sku}`, store: d.store_code, severity: "critical",
-      title: `Same SKU live twice — ${d.sku}`,
-      detail: `eBay items ${d.item_ids} are both live for one unit. End all but one.`,
+      title: `One item is for sale twice on eBay — ${d.sku}`,
+      detail: `${d.sku} has ${d.item_ids} listed at the same time and there is only one of it. `
+        + `Whoever buys second gets cancelled, and eBay counts that against the store. `
+        + `End all but one of those listings on eBay.`,
+      fix: "store",
     });
   }
 
@@ -367,20 +444,48 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
   // Everything above measures what the jobs PRODUCED. This measures the jobs.
   // A poll that stops finding orders looks identical to a poll that stopped
   // running, and only one of those is an emergency.
-  const crons = await read("ebay_cron_health", sb.from("ebay_cron_health").select("jobname, last_run, failures_1h"));
+  //
+  // THE THRESHOLD IS PER JOB. CRON_STALE_MIN is right for an order poll that
+  // runs every two minutes and nonsense for anything slower, and the view used
+  // to pick up jobs by matching `command ILIKE '%ebay%'` — the SQL text, not
+  // ownership. So when the Call Back jobs were added on 2026-08-21 and two of
+  // them called ebay-catalog three times a day, this watchdog adopted them on
+  // creation and mailed "Scheduled job stopped" fifteen minutes later. They were
+  // not stopped; they had not reached their first fire.
+  //
+  // `cron_expectations` carries an allowance per job. `watching_since` is what
+  // stops a brand-new job being called dead in the gap between being scheduled
+  // and running for the first time. Migration 0044 also filters healthy slow
+  // jobs out of the view — belt and braces, and the two agree by construction.
+  const crons = await read("ebay_cron_health",
+    sb.from("ebay_cron_health").select("jobname, last_run, failures_1h, stale_after_min, watching_since"));
   for (const c of crons) {
-    const m = minsAgo(c.last_run);
-    if (m === null || m > CRON_STALE_MIN) {
+    const limit = Number(c.stale_after_min) > 0 ? Number(c.stale_after_min) : CRON_STALE_MIN;
+    const ran = minsAgo(c.last_run);
+    const m = ran ?? minsAgo(c.watching_since);
+    if (m === null || m > limit) {
+      const hrs = (n: number) => n >= 120 ? `${Math.floor(n / 60)} hours` : `${n} minutes`;
       push({
         key: `cron_stale:${c.jobname}`, store: null, severity: "critical",
-        title: `Scheduled job stopped — ${c.jobname}`,
-        detail: m === null ? "It has no recorded run at all." : `Last ran ${m} minutes ago.`,
+        title: `An automatic job has stopped running — ${c.jobname}`,
+        // Two different facts, and the old copy told the second as the first: a
+        // job that has never run does not have a "last ran".
+        detail: ran !== null
+          ? `It last ran ${hrs(ran)} ago and should run at least every ${hrs(limit)}. `
+            + `Whatever it keeps up to date is now going stale. Our end.`
+          : m === null
+            ? `It has never run since it was set up, so whatever it was meant to do has never `
+              + `happened. Our end.`
+            : `It has not run once in the ${hrs(m)} since it was set up. Our end.`,
+        fix: "claude",
       });
     } else if (Number(c.failures_1h) > 0) {
       push({
         key: `cron_failing:${c.jobname}`, store: null, severity: "critical",
-        title: `Scheduled job failing — ${c.jobname}`,
-        detail: `${c.failures_1h} failed run(s) in the last hour.`,
+        title: `An automatic job keeps erroring — ${c.jobname}`,
+        detail: `It failed ${c.failures_1h} time(s) in the last hour. It is still running, it is `
+          + `just not working. Our end.`,
+        fix: "claude",
       });
     }
   }
@@ -439,8 +544,10 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
       // the same silent false negative the read() wrapper above exists to stop.
       push({
         key: `dup_scan_failed:${code}`, store: code, severity: "warning",
-        title: `Duplicate-order scan could not reach Shopify — ${code}`,
-        detail: `${short(err)}. Until this clears, a double import at ${code} would go unnoticed.`,
+        title: `Cannot check ${code} for double-counted sales`,
+        detail: `Shopify would not answer, so if a sale got imported twice at ${code} today we `
+          + `would not have spotted it. Our end. The error: ${short(err, 110)}`,
+        fix: "claude",
       });
       continue;
     }
@@ -468,8 +575,11 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
         // rather than going quiet on the exact condition this check exists for.
         push({
           key: `dup_verify_failed:${code}`, store: code, severity: "warning",
-          title: `Could not confirm duplicate copies at ${code}`,
-          detail: `${short(err)}. ${suspects.length} suspected duplicate(s) are reported below unverified.`,
+          title: `Could not double-check ${code}'s suspected duplicates`,
+          detail: `${suspects.length} sale(s) at ${code} look double-counted, but Shopify would not `
+            + `confirm it, so treat the line below as unconfirmed rather than certain. Our end. `
+            + `The error: ${short(err, 100)}`,
+          fix: "claude",
         });
         mineLive = Object.fromEntries(suspects.map((x) => [x.mine!.id, true]));
       }
@@ -492,18 +602,23 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
         .map((id) => `${id} on ${[...extras[id]].join(" and ")}`).join("; ");
       push({
         key: `dup_orders:${code}`, store: code, severity: "critical",
-        title: `Same eBay order imported twice — ${code}`,
-        detail: `${ids.length} eBay sale(s) at ${code} exist as more than one live Shopify order. `
-          + `The extra copies include ${worst}${ids.length > 3 ? ", and more" : ""}. Sales, gross profit `
-          + `and stock are all counted twice until the extra copy of each is reversed.`,
+        title: `${code} is counting ${ids.length} sale(s) twice`,
+        detail: `${ids.length} eBay sale(s) at ${code} landed in Shopify as two orders instead of `
+          + `one, so ${code}'s revenue, gross profit and % to goal are all overstated and the stock `
+          + `is double-decremented. This is the Marketplace Connect problem from 20 Aug. `
+          + `Do not cancel anything by hand — send this to Claude, who reverses the extra copy `
+          + `without touching the real one. Affected: ${worst}${ids.length > 3 ? ", and more" : ""}.`,
+        fix: "claude",
       });
     }
     if (truncated) {
       push({
         key: `dup_scan_truncated:${code}`, store: code, severity: "warning",
-        title: `Duplicate-order scan hit its page limit — ${code}`,
-        detail: `${code} booked more than ${DUP_PAGE} eBay orders in ${DUP_WINDOW_DAYS} days, so the scan `
-          + `read only the newest. A copy created before that is invisible to this check.`,
+        title: `${code} sold too much for the duplicate check to read it all`,
+        detail: `${code} booked more than ${DUP_PAGE} eBay orders in ${DUP_WINDOW_DAYS} days — good `
+          + `news in itself — but the check only read the newest of them, so an older double-counted `
+          + `sale could be hiding behind that. Our end: the limit needs raising.`,
+        fix: "claude",
       });
     }
   }
@@ -523,6 +638,17 @@ function build(issues: Issue[], firstSeen: Record<string, string>) {
   const crit = issues.filter((i) => i.severity === "critical");
   const warn = issues.filter((i) => i.severity === "warning");
 
+  // WHOSE JOB IT IS, as a badge on the card rather than something to infer from
+  // the wording. Green for the two anybody can act on, grey for the ones only a
+  // code change clears — so the mail can be triaged without reading it closely.
+  const fixBadge = (f: Fixer) => {
+    const mine = f === "claude";
+    return `<span style="display:inline-block;background:${mine ? "#eceff1" : "#e8f7ee"};`
+      + `color:${mine ? C.muted : "#178048"};border-radius:5px;padding:2px 7px;`
+      + `font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;`
+      + `white-space:nowrap;">${esc(FIX_LABEL[f])}</span>`;
+  };
+
   const card = (i: Issue) => {
     const bad = i.severity === "critical";
     const since = firstSeen[i.key];
@@ -536,7 +662,7 @@ function build(issues: Issue[], firstSeen: Record<string, string>) {
             ${i.store ? `<span style="display:inline-block;background:#ffffff;border:1px solid ${bad ? C.redRing : C.amberRing};border-radius:5px;padding:1px 6px;font-size:10.5px;margin-right:7px;">${esc(i.store)}</span>` : ""}${esc(i.title)}
           </div>
           <div style="font-size:12.5px;line-height:1.5;color:${C.muted};margin-top:4px;">${esc(capFirst(i.detail))}</div>
-          ${age > 0 ? `<div style="font-size:10.5px;color:${C.faint};margin-top:5px;">Open for ${ageTxt}</div>` : ""}
+          <div style="margin-top:7px;">${fixBadge(i.fix)}${age > 0 ? `<span style="font-size:10.5px;color:${C.faint};margin-left:8px;">Open for ${ageTxt}</span>` : ""}</div>
         </td></tr>
       </table></td></tr>`;
   };
@@ -561,7 +687,14 @@ function build(issues: Issue[], firstSeen: Record<string, string>) {
     ${section("Fix Now", crit)}
     ${section("Worth A Look", warn)}
   </td></tr>
-  <tr><td style="padding:14px;text-align:center;color:${C.faint};font-size:10.5px;line-height:1.6;border-top:1px solid ${C.line};background:#f7faf8;">
+  <tr><td style="padding:12px 20px;border-top:1px solid ${C.line};background:#f7faf8;color:${C.muted};font-size:11px;line-height:1.7;">
+    <b style="color:${C.charcoal};">The tag on each one says who can fix it.</b><br>
+    <b>Store Can Fix</b> — the shop floor sorts it out: count something, cancel something,
+    correct a listing. No code needed.<br>
+    <b>You Can Fix</b> — a setting or a reconnect only you can do, and the mail says where.<br>
+    <b>Needs Claude</b> — the tool itself is broken. Nobody on the floor can help; forward it.
+  </td></tr>
+  <tr><td style="padding:12px 14px;text-align:center;color:${C.faint};font-size:10.5px;line-height:1.6;border-top:1px solid ${C.line};background:#f7faf8;">
     Checked every 15 minutes. You only get this mail when something is wrong, and
     each problem is reported once until it is fixed.
   </td></tr>
@@ -589,22 +722,30 @@ Deno.serve(async (req: Request) => {
   // change to the layout actually did until something breaks for real.
   if (q("sample") === "1") {
     const t0 = Date.now();
+    // One of each FIXER on purpose: the point of a preview is to see whether the
+    // mail can be triaged at a glance, and that only shows with all three badges
+    // side by side.
     const fake: Issue[] = [
-      { key: "s1", store: "WSP", severity: "critical",
-        title: "eBay is refusing listings",
-        detail: "6 Listings failed in the last hour, all with the same error: HTTP 429 rate limit exceeded. This is not a data problem — the store cannot clear it." },
+      { key: "s1", store: "MPL", severity: "critical",
+        title: "Sold on eBay but Shopify says we have none — 08-15063-71239",
+        detail: "eBay sold this and took the customer's money, but Shopify has zero in stock, so the sale cannot be recorded and nothing will ship. Go and look for it: if it IS on the shelf, set its Shopify quantity to 1 and this fixes itself within a couple of minutes. If it is NOT, cancel the order on eBay and refund the buyer, then tell Claude so the listing comes down.",
+        fix: "store" },
       { key: "s2", store: "LEE", severity: "critical",
-        title: "Order poll has stopped",
-        detail: "Scheduled job ebay-orders-lee last ran 3h 12m ago; it should run every 2 minutes. Orders placed since then are not in SPEEKS Connect." },
+        title: "LEE's eBay connection expires in 5 days",
+        detail: "Reconnect LEE on the SPEEKS Connect tab — it takes a minute and only you can do it. If the day passes, everything eBay stops at that store: no new listings, no orders coming in, no tracking going out.",
+        fix: "ethan" },
       { key: "s3", store: null, severity: "critical",
-        title: "Error watch cannot read ebay_orders",
-        detail: "Permission denied for relation ebay_orders — until this is fixed, problems in ebay_orders will go unreported." },
-      { key: "s4", store: "MPL", severity: "warning",
-        title: "Tracking not pushed back to eBay",
-        detail: "2 Orders have been shipped with tracking in Shopify for over an hour but eBay has not been told, so the buyer sees no tracking." },
+        title: "This error check is partly blind",
+        detail: "We cannot read ebay_orders, so any problem in it goes unreported — meaning a quiet inbox no longer proves everything is fine. Our end, and it is the most important one on this list. The error: permission denied for relation ebay_orders",
+        fix: "claude" },
+      { key: "s4", store: "WSP", severity: "critical",
+        title: "One item is for sale twice on eBay — MO02-4518A-E10",
+        detail: "MO02-4518A-E10 has 2 listings at the same time and there is only one of it. Whoever buys second gets cancelled, and eBay counts that against the store. End all but one of those listings on eBay.",
+        fix: "store" },
       { key: "s5", store: "OVL", severity: "warning",
-        title: "Live sweep is behind",
-        detail: "Last successful sweep was 2h 41m ago; it runs every 20 minutes. Sold-out items may still show as available on eBay." },
+        title: "OVL's eBay listings are not being checked",
+        detail: "The check that pulls sold-out items off eBay last worked 161 minutes ago and it should run every 20. Until it does, OVL can sell something it no longer has, and eBay counts that cancellation against the store. Our end.",
+        fix: "claude" },
     ];
     const fs2: Record<string, string> = {};
     const ages = [95, 192, 41, 1500, 168];
