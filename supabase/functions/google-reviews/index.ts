@@ -6,6 +6,7 @@
 //   ?snap=1&secret=...            today's snapshot per store (idempotent)
 //   ?report=1&secret=...          what the surfaces read: total, today, MTD
 //   ?report=1&store=LEE           one store
+//   ?probe=1&store=LEE            can we see INDIVIDUAL reviews? read-only
 //
 // WHY THIS EXISTS. The review figure the whole site shows arrives through the
 // POS in the nightly Day End Report, and it lags by days: LEE stood at 29 on the
@@ -13,12 +14,38 @@
 // has stopped earning reviews, so it cost us the review signal in the daily store
 // messages (daily-brief v25 dropped it entirely). Google knows the real number.
 //
-// ⚠️ THE METRIC IS ALL REVIEWS, NOT FIVE-STAR ONLY. Places returns
-// `userRatingCount` across every rating, and the star split cannot be recovered:
-// `rating` is rounded to one decimal, so rating x count carries an error of up to
-// 0.05 x count, which at a store with hundreds of reviews is tens of stars. The
-// four surfaces already say "Google Reviews", so this makes the label true — but
-// the sheet's manual goal row was written as a five-star target.
+// ⚠️ `userRatingCount` IS ALL REVIEWS, NOT FIVE-STAR ONLY, and the star split
+// cannot be recovered from it by arithmetic: `rating` is rounded to one decimal,
+// so rating x count carries an error of up to 0.05 x count, which at a store with
+// hundreds of reviews is tens of stars. The four surfaces already say "Google
+// Reviews", so counting all of them makes the label true — but the sheet's manual
+// goal row was written as a five-star target.
+//
+// FIVE-STAR COUNTING MIGHT STILL BE POSSIBLE, and ?probe=1 is what settles it.
+// Place Details also returns up to FIVE individual reviews, each with its own
+// `rating`, `publishTime` and a stable resource `name`. Measured against 55
+// store-days of Day End history, these stores average 1.1 to 1.6 reviews a day
+// and only ONE day in 55 went past five (WSP, 7 — and that spike is probably the
+// lagging POS catching up on three days at once, so true daily volume is likely
+// lower). A daily poll would therefore see essentially every review individually
+// and could count the five-star ones exactly.
+//
+// The one thing that decides it: whether Google hands back the NEWEST five or the
+// most RELEVANT five. Newest is usable; "most relevant" would silently miss new
+// reviews, which is the same class of quiet wrongness this whole feature exists
+// to remove. ?probe=1 dumps what Google actually returns, including whether the
+// publish times come back in descending order, so this is answered by measurement
+// rather than by reading documentation.
+//
+// If it works, the design is: keep seen reviews by resource `name`, count five-star
+// per month exactly, AND reconcile the count of reviews seen against the movement
+// in `userRatingCount` — so a day that overflowed the five-review window reports
+// "saw 5 of 7" instead of quietly under-counting.
+//
+// If it does not, the exact answer is the Google Business Profile API
+// (`accounts.locations.reviews.list`), which returns every review with a
+// `starRating` and `createTime`. PayMore owns the listings, so it is available to
+// them; it needs an access request to Google and OAuth as the owner.
 //
 // ⚠️ ONE SNAPSHOT A DAY IS THE WHOLE MECHANISM. Places only ever reports the
 // all-time count, so a month's reviews is the difference between today's snapshot
@@ -140,6 +167,71 @@ Deno.serve(async (req: Request) => {
 
   const only = (url.searchParams.get("store") || "").toUpperCase().trim();
   const stores = only ? STORES.filter((s) => s === only) : STORES;
+
+  // --- can we count FIVE-STAR reviews? -----------------------------------
+  //
+  // Read-only, writes nothing, and its whole job is to answer one question:
+  // does Google hand back the NEWEST five reviews, or the most RELEVANT five?
+  // Newest means we can count five-star reviews exactly at this volume; "most
+  // relevant" means we cannot, and the honest answer becomes the Business
+  // Profile API. `descending` is the verdict.
+  //
+  // Kept out of ?snap= deliberately: the reviews field is a larger field mask
+  // and therefore a dearer billing SKU, so the daily job should not pay for it
+  // until we know it is worth having.
+  if (url.searchParams.get("probe") === "1") {
+    const places = await (await sb("google_places?select=store,place_id")).json();
+    const byStore = new Map<string, string>(places.map((p: any) => [p.store, p.place_id]));
+    const out: any[] = [];
+    for (const store of stores) {
+      const pid = byStore.get(store);
+      if (!pid) { out.push({ store, skipped: "no place_id — run ?find=1&save=1 first" }); continue; }
+      try {
+        const res = await fetch(
+          `https://places.googleapis.com/v1/places/${encodeURIComponent(pid)}`, {
+            headers: {
+              "X-Goog-Api-Key": PLACES_KEY,
+              "X-Goog-FieldMask": "id,displayName,rating,userRatingCount,reviews",
+            },
+          });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) { out.push({ store, error: `${res.status}: ${JSON.stringify(body).slice(0, 300)}` }); continue; }
+        const revs = (body.reviews || []) as any[];
+        const times = revs.map((r) => r.publishTime).filter(Boolean);
+        // Newest-first is the property we need. Checked rather than assumed.
+        let descending: boolean | null = null;
+        if (times.length > 1) {
+          descending = times.every((t, i) =>
+            i === 0 || Date.parse(times[i - 1]) >= Date.parse(t));
+        }
+        out.push({
+          store,
+          totalReviews: body.userRatingCount ?? null,
+          rating: body.rating ?? null,
+          returned: revs.length,
+          descending,
+          fiveStarAmongThem: revs.filter((r) => Number(r.rating) === 5).length,
+          reviews: revs.map((r) => ({
+            // The resource name is stable, so it is what a "have we already
+            // counted this one" table would key on.
+            name: r.name ?? null,
+            rating: r.rating ?? null,
+            publishTime: r.publishTime ?? null,
+            relative: r.relativePublishTimeDescription ?? null,
+          })),
+        });
+      } catch (e) {
+        out.push({ store, error: String(e) });
+      }
+    }
+    return json({
+      ok: true,
+      question: "Does Google return the NEWEST five reviews (usable) or the most RELEVANT five (not usable)?",
+      readThis: "If `descending` is true and the newest publishTime is recent, five-star counting works. "
+        + "If the times are out of order or stale, it does not, and the exact route is the Business Profile API.",
+      results: out,
+    });
+  }
 
   // --- find the listings -------------------------------------------------
   //
@@ -272,5 +364,5 @@ Deno.serve(async (req: Request) => {
     return json({ ok: true, date, stores: out });
   }
 
-  return json({ ok: false, error: "pass ?find=1, ?snap=1 or ?report=1" }, 400);
+  return json({ ok: false, error: "pass ?find=1, ?probe=1, ?snap=1 or ?report=1" }, 400);
 });
