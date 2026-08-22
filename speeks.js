@@ -20678,7 +20678,7 @@ const CB_ACTIVE_DAYS  = 30;   // days an entry stays on the sheet
 const CB_PURGE_DAYS   = 120;  // days from date_of_call until permanent deletion
 
 let _cbCache = [];
-let _cbView = null;           // 'mine' | 'all' | 'archived'
+let _cbView = null;           // 'mine' | 'all' | 'completed' | 'archived'
 let _cbExpandedId = null;
 let _cbEditingId = null;
 let _cbLoading = false;
@@ -20822,6 +20822,21 @@ async function cbPost(payload) {
 // Edit/delete/restore: own store only (MSM covers both of theirs, corp covers all).
 // Status changes are deliberately NOT gated — any store marking an entry Contacted
 // is the cross-store "we've got this" signal, and the change is attributed below.
+// WHO MAY DELETE. Management and above; an ASM or below asks instead. A delete
+// takes the customer's request and the whole note thread with it and there is no
+// undo — that is a different weight of action from editing a phone number, which
+// is why it is a different list from cbCanModify.
+// Mirrored by DELETE_ROLES in the customer-callbacks function, which is what
+// actually enforces it.
+const CB_DELETE_ROLES = ['manager', 'owner (manager)', 'owner manager',
+    'multi-store manager', 'district manager', 'ceo', 'mocd'];
+
+function cbCanDelete(entry) {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (!CB_DELETE_ROLES.includes(role)) return false;
+    return cbCanModify(entry);
+}
+
 function cbCanModify(entry) {
     const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase().trim();
     const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
@@ -20939,7 +20954,7 @@ function cbSetView(view) {
 }
 
 function _cbSyncControls() {
-    ['mine', 'all', 'archived'].forEach(v => {
+    ['mine', 'all', 'completed', 'archived'].forEach(v => {
         const btn = document.getElementById('cbView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
         if (btn) btn.classList.toggle('active', _cbView === v);
     });
@@ -20952,10 +20967,15 @@ function _cbSyncControls() {
 function _cbVisibleEntries() {
     const filter = document.getElementById('cbStoreFilter');
     const filterStore = (_cbView === 'mine') ? _cbHomeStore() : (filter ? filter.value : 'ALL');
-    const showCompleted = document.getElementById('cbShowCompleted')?.checked;
+    // Completed is its own list now. Mixed into the open ones behind a tick box it
+    // was either clutter or invisible, and the box re-rendered the quick-add above
+    // it on every toggle.
+    const keep = e => _cbView === 'archived' ? true
+        : _cbView === 'completed' ? e.status === 'completed'
+        : e.status !== 'completed';
     return _cbCache
         .filter(e => filterStore === 'ALL' || e.store === filterStore)
-        .filter(e => _cbView === 'archived' || showCompleted || e.status !== 'completed')
+        .filter(keep)
         .sort((a, b) => (b.date_of_call || '').localeCompare(a.date_of_call || ''));
 }
 
@@ -20973,15 +20993,20 @@ function cbRender() {
     const sub = document.getElementById('cbSubtitle');
     if (sub) sub.textContent = _cbView === 'archived'
         ? `${entries.length} archived`
+        : _cbView === 'completed'
+        ? `${entries.length} completed`
         : `${open} open${expiring ? ` · ${expiring} expiring soon` : ''}`;
 
     let html = '';
-    if (_cbView !== 'archived') html += _cbQuickAddHtml();
+    // No quick-add on the two backward-looking lists: nothing is logged from a
+    // list of things that are already done.
+    if (_cbView !== 'archived' && _cbView !== 'completed') html += _cbQuickAddHtml();
 
     if (!entries.length) {
         const msgs = {
             mine:     'No call backs yet. When a customer wants something you don\'t have, log it above ↑',
             all:      'No open call backs across stores.',
+            completed: 'Nothing completed yet.',
             archived: 'Nothing archived in the last 90 days.'
         };
         html += `<div class="cb-empty">${msgs[_cbView]}</div>`;
@@ -21087,7 +21112,18 @@ function _cbItemMetaHtml(e) {
 // The chip that carries the whole point of the feature. Green and first-person
 // when the stock is OURS — that is an instruction, ring the customer. Neutral
 // when it is another store's, because that is information: they will be told.
+//
+// EXCEPT FOR CORP. A DM has no stock of their own, so _cbMatchScope returns null
+// and every match landed in `theirs` and came out grey — which made the district
+// view the one place you could not see, at a glance, that a store had something
+// to act on. Green there means "somebody has to ring a customer about this", and
+// the label names who: the point of the district view is checking they did.
 function _cbMatchChipHtml(mine, theirs) {
+    if (!_cbMatchScope() && theirs.length) {
+        const stores = [...new Set(theirs.map(m => m.store_code))];
+        const label = stores.length === 1 ? `${stores[0]} Has It` : `${stores.length} Stores Have It`;
+        return `<span class="cb-tag cb-tag-hasit" data-cb-tip="${escapeHtml(stores.join(', '))} ${stores.length === 1 ? 'has' : 'have'} one in stock and should be ringing the customer. Open the row to see what they have and whether they have answered.">${escapeHtml(label)}</span>`;
+    }
     if (mine.length) {
         const n = mine.length;
         // The count is how many of OUR listings fit, not how many units we own —
@@ -21113,7 +21149,14 @@ function cbRowHtml(e, showStore) {
     // Status is clickable for EVERYONE — another store marking Contacted is the
     // cross-store "we have this item" signal. The change is attributed under the chip.
     // The attribution line always renders (blank when unset) so row heights never shift.
-    const statusBy = `<div class="cb-status-by">${(e.status !== 'open' && e.status_by) ? `${escapeHtml(e.status_by)} · ${escapeHtml(e.status_store || '')}` : '&nbsp;'}</div>`;
+    // Once somebody has acted this slot carries WHO, which is the more useful
+    // thing. Until then it says what to do with the pill above it — the pill has
+    // always been clickable and nothing on the row said so, so the status sat at
+    // Open on rows that had plainly been dealt with.
+    const statusBy = `<div class="cb-status-by">${
+        (e.status !== 'open' && e.status_by) ? `${escapeHtml(e.status_by)} · ${escapeHtml(e.status_store || '')}`
+        : (!isArchived && e.status === 'open') ? '<span class="cb-status-hint">click to change</span>'
+        : '&nbsp;'}</div>`;
     const chip = isArchived
         ? `<span class="cb-chip cb-chip-expired">Expired</span>`
         : `<span class="cb-chip cb-chip-${e.status} cb-chip-clickable" onclick="event.stopPropagation();cbCycleStatus('${e.id}')" data-cb-tip="Click to mark ${CB_STATUS_META[meta.next].label}">${meta.label}</span>${statusBy}`;
@@ -21126,7 +21169,13 @@ function cbRowHtml(e, showStore) {
         actions = isArchived
             ? `<button class="cb-icon-btn" data-cb-tip="Restore to active" onclick="event.stopPropagation();cbRestoreEntry('${e.id}')">${CB_ICONS.restore}</button>`
             : `<button class="cb-icon-btn" data-cb-tip="Edit" onclick="event.stopPropagation();cbEditEntry('${e.id}')">${CB_ICONS.edit}</button>`;
-        actions += `<button class="cb-icon-btn cb-btn-danger" data-cb-tip="Delete" onclick="event.stopPropagation();cbDeleteEntry('${e.id}')">${CB_ICONS.trash}</button>`;
+        // A delete is the one action here that destroys a customer's request
+        // outright, and there is no undo — the row and its whole note thread go.
+        // So management deletes, and everybody else ASKS: the request lands in the
+        // note thread, where it is attributed and a manager can act on it.
+        actions += cbCanDelete(e)
+            ? `<button class="cb-icon-btn cb-btn-danger" data-cb-tip="Delete" onclick="event.stopPropagation();cbDeleteEntry('${e.id}')">${CB_ICONS.trash}</button>`
+            : `<button class="cb-icon-btn" data-cb-tip="Ask a manager to delete this" onclick="event.stopPropagation();cbRequestDelete('${e.id}')">${CB_ICONS.trash}</button>`;
     }
 
     let row;
@@ -21170,17 +21219,25 @@ function cbRowHtml(e, showStore) {
     }
 
     if (expanded && !editing) {
+        // A deletion request is a note with a flag on it, so it is attributed and
+        // sits in the same thread as everything else said about the row.
         const noteItems = e.notes.map(n =>
-            `<div class="cb-note">${escapeHtml(n.text)} <span class="cb-note-meta">— ${escapeHtml(n.user)} (${escapeHtml(n.store)}) · ${_cbShortDate(n.at)}</span></div>`
+            `<div class="cb-note${n.kind === 'delete_request' ? ' cb-note-del' : ''}">${
+                n.kind === 'delete_request' ? '<span class="cb-note-tag">Delete requested</span> ' : ''
+            }${escapeHtml(n.text)} <span class="cb-note-meta">— ${escapeHtml(n.user)} (${escapeHtml(n.store)}) · ${_cbShortDate(n.at)}</span></div>`
         ).join('') || '<div class="cb-note cb-note-none">No notes yet.</div>';
+        // NOTES FIRST. "Needs it by the 12th" is the thing you have to know before
+        // you ring anybody, and under a list of nine matching consoles it was off
+        // the bottom of the screen — the longer the match list, the further the
+        // reason for the call sank.
         row += `<tr class="cb-row-detail"><td colspan="${showStore ? 9 : 8}">
-            ${_cbMatchPanelHtml(e, mine, theirs)}
             <div class="cb-notes-thread">${noteItems}</div>
             <div class="cb-note-add">
                 <input type="text" class="cb-note-input" id="cbNoteInput-${e.id}" placeholder="Details about what they're looking for — condition, budget, timing…"
                        onclick="event.stopPropagation()" onkeydown="if(event.key==='Enter')cbAddNote('${e.id}')">
                 <button class="btn-secondary cb-note-btn" onclick="event.stopPropagation();cbAddNote('${e.id}')">Add note</button>
             </div>
+            ${_cbMatchPanelHtml(e, mine, theirs)}
         </td></tr>`;
     }
     return row;
@@ -21395,6 +21452,33 @@ function cbDeleteEntry(id) {
     cbRender();
     cbPost({ action: 'delete', id }).catch(() => cbLoad());
 }
+
+// The ASM-and-below path. A reason is asked for and not required: "duplicate" is
+// most of them, and a manager reading a bare request can see the row for
+// themselves. The row STAYS — the whole point is that nothing is destroyed until
+// somebody who may destroy it says so.
+function cbRequestDelete(id) {
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    const why = prompt(`Ask a manager to delete the call back for ${e.customer_name}?\n\n`
+        + 'Why should it go? (optional — duplicate, customer cancelled, logged in error)');
+    if (why === null) return;
+    const who = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const note = {
+        text: String(why).trim() || 'No reason given.',
+        kind: 'delete_request',
+        user: who,
+        store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase(),
+        at: new Date().toISOString().slice(0, 10),
+    };
+    // Optimistic, like every other action here, and the row is opened so the
+    // request is visible the moment it is made rather than hidden one click deep.
+    e.notes = [...(e.notes || []), note];
+    _cbExpandedId = id;
+    cbRender();
+    cbPost({ action: 'delete_request', id, note }).catch(() => cbLoad());
+}
+window.cbRequestDelete = cbRequestDelete;
 
 function cbRestoreEntry(id) {
     const e = _cbCache.find(x => x.id === id);
@@ -43483,19 +43567,19 @@ function _ddSync(host) {
     _ddFillList(host);
 }
 
-// SEARCH, on the long lists only. Native type-ahead is PREFIX-ONLY: on a list of
-// 63 Shopify categories, typing "video" reaches nothing useful, because what
-// somebody knows about an item is rarely the first word of the shelf it lives on.
-// So: substring, and every word has to hit somewhere, in any order — "game
-// video" finds "Video Games" too.
+// TYPE TO JUMP. No box, nothing on screen to aim at: the list opens and you
+// start typing, exactly as a native select behaves — except native type-ahead is
+// PREFIX-ONLY, and what somebody knows about an item is rarely the first word of
+// the shelf it lives on. Typing "video" on the 63-shelf category list moved the
+// cursor nowhere, because it matched on "V" and stopped.
 //
-// A threshold rather than everywhere. A search box over five stores or three
-// periods is a control asking to be used where scanning is faster, and it costs
-// a keystroke and a row of height on every one of those.
+// So the jump is a SUBSTRING match, first hit wins, and the letters keep
+// narrowing until you stop typing for DD_TYPE_RESET. Prefix matches are still
+// preferred, so a list where two options contain "con" but one starts with it
+// lands where a native select would have.
+const DD_TYPE_RESET = 1100;
+// Only worth having on a list too long to scan. Below this, the eye is faster.
 const DD_SEARCH_MIN = 10;
-// Enough to read a typed word back. Only ever applied to a list that has the
-// filter row, so no dropdown that worked before changes width.
-const DD_SEARCH_MIN_W = 240;
 
 const _ddSearchable = sel => _ddOptions(sel).length >= DD_SEARCH_MIN;
 
@@ -43507,51 +43591,17 @@ function _ddHay(o) {
     return (g + o.text).toLowerCase();
 }
 
-function _ddFillList(host, query) {
+function _ddFillList(host) {
     const sel = host._ddSel;
     const list = host._ddList;
-    const q = String(query == null ? (host._ddQuery || '') : query);
-    host._ddQuery = q;
-    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-
     list.innerHTML = '';
-
-    if (host._ddHasSearch) {
-        const wrap = document.createElement('div');
-        wrap.className = 'dd-search';
-        const inp = document.createElement('input');
-        inp.type = 'text';
-        inp.className = 'dd-search-in';
-        // Not "Search" — the part a person cannot tell from looking at a search
-        // box is that any word will do, not just the first one.
-        inp.placeholder = 'Type any word...';
-        inp.setAttribute('aria-label', 'Filter the list');
-        inp.value = q;
-        // The list is rebuilt on every keystroke, so the input is a NEW element
-        // each time; restoring focus and caret here is what keeps typing smooth.
-        inp.addEventListener('input', () => {
-            const at = inp.selectionStart;
-            _ddFillList(host, inp.value);
-            const next = list.querySelector('.dd-search-in');
-            if (next) { next.focus({ preventScroll: true }); next.setSelectionRange(at, at); }
-            _ddPlace(host);
-        });
-        wrap.appendChild(inp);
-        list.appendChild(wrap);
-    }
-
-    let shown = 0;
     _ddOptions(sel).forEach(o => {
-        if (terms.length) {
-            const hay = _ddHay(o);
-            if (!terms.every(t => hay.includes(t))) return;
-        }
-        shown += 1;
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'dd-opt' + (o.selected ? ' on' : '') + (o.disabled ? ' dd-dis' : '');
         b.setAttribute('role', 'option');
         b.setAttribute('aria-selected', o.selected ? 'true' : 'false');
+        b.dataset.ddHay = _ddHay(o);
         b.textContent = o.text;
         if (o.disabled) b.disabled = true;
         b.addEventListener('click', ev => {
@@ -43561,15 +43611,49 @@ function _ddFillList(host, query) {
         });
         list.appendChild(b);
     });
+}
 
-    // An empty list with a search box in it looks like the dropdown broke. Say
-    // what happened instead, and leave the box so the word can be corrected.
-    if (!shown && terms.length) {
-        const none = document.createElement('div');
-        none.className = 'dd-none';
-        none.textContent = 'Nothing matches "' + q + '"';
-        list.appendChild(none);
+// The letters so far, shown small in the corner of the list. Native selects give
+// no feedback at all, which is fine for two letters and confusing for six — if
+// the jump lands somewhere unexpected there is otherwise no way to tell a typo
+// from a list that has nothing matching.
+function _ddTypeHint(host, text) {
+    const list = host._ddList;
+    let hint = list.querySelector('.dd-typed');
+    if (!text) { if (hint) hint.remove(); return; }
+    if (!hint) {
+        hint = document.createElement('div');
+        hint.className = 'dd-typed';
+        list.appendChild(hint);
     }
+    hint.textContent = text;
+    hint.classList.toggle('dd-typed-miss', !!host._ddTypeMiss);
+}
+
+function _ddClearType(host) {
+    host._ddType = '';
+    host._ddTypeMiss = false;
+    clearTimeout(host._ddTypeT);
+    _ddTypeHint(host, '');
+}
+
+function _ddJump(host, ch) {
+    host._ddType = (host._ddType || '') + ch.toLowerCase();
+    clearTimeout(host._ddTypeT);
+    host._ddTypeT = setTimeout(() => _ddClearType(host), DD_TYPE_RESET);
+
+    const q = host._ddType;
+    const opts = Array.from(host._ddList.querySelectorAll('.dd-opt:not([disabled])'));
+    // Prefix first, so short queries land where a native select would; then
+    // anywhere in the label, which is the part native could never do.
+    const hit = opts.find(o => (o.dataset.ddHay || '').startsWith(q))
+             || opts.find(o => (o.dataset.ddHay || '').includes(q));
+    host._ddTypeMiss = !hit;
+    _ddTypeHint(host, host._ddType);
+    // A miss leaves the cursor exactly where it was rather than jumping to
+    // something that does not match — the same as a native select ignoring a
+    // letter nothing starts with.
+    if (hit) hit.focus({ preventScroll: false });
 }
 
 // The one place a value is written. Writing through the native select and then
@@ -43596,14 +43680,7 @@ function _ddPlace(host) {
     // counts at once: the floor, and its own longest option. The feed's "All
     // updates" is 105px and opened at 130. The list reads as the control
     // continuing, and a control that changes width when you touch it does not.
-    // ...UNLESS IT HAS A FILTER ROW. "As wide as the button" is right for a list
-    // of five stores; a search box inside a 105px control is not a box you can
-    // read what you typed in. So a searchable list gets a floor, and only a
-    // searchable list — every dropdown that behaved before still behaves.
-    const wantW = host._ddHasSearch
-        ? Math.max(Math.round(r.width), DD_SEARCH_MIN_W)
-        : Math.round(r.width);
-    list.style.width = wantW + 'px';
+    list.style.width = Math.round(r.width) + 'px';
     list.style.minWidth = '0';
     list.style.left = Math.round(r.left) + 'px';
     // Line the option labels up with the label on the button, so the open list
@@ -43617,15 +43694,14 @@ function _ddPlace(host) {
     // Keep it inside the window. A list that matches its button can only leave the
     // viewport if the button already has, but the pickers and this share a
     // placement idiom and only one of them was clamped.
-    const w = wantW;
+    const w = Math.round(r.width);
     const maxL = window.innerWidth - w - 6;
     list.style.left = Math.round(Math.max(6, Math.min(r.left, maxL))) + 'px';
     // A label that no longer fits the button's width gets the full text on hover.
     // Set here rather than at fill time because whether it fits is a measurement,
     // and a title on every option would put a browser tooltip on all of them.
-    // .dd-opt only: the search row and the no-matches line are not labels that
-    // can outgrow the button, and a browser tooltip over the input would sit on
-    // top of the list while somebody typed.
+    // .dd-opt only: the typed-letters hint is not a label that can outgrow the
+    // button, and a browser tooltip on it would sit over the list.
     Array.from(list.querySelectorAll('.dd-opt')).forEach(o => {
         if (o.scrollWidth > o.clientWidth + 1) o.title = o.textContent;
         else o.removeAttribute('title');
@@ -43676,10 +43752,11 @@ function _ddCloseAll(except) {
 function _ddOpen(host) {
     if (host._ddSel.disabled) return;
     _ddCloseAll(host);
-    // A new open starts with the whole list — a filter left over from last time
-    // would read as options having gone missing.
+    // Letters left over from last time would send the next open somewhere nobody
+    // asked for, so the buffer is cleared here rather than on close.
+    _ddClearType(host);
     host._ddHasSearch = _ddSearchable(host._ddSel);
-    _ddFillList(host, '');
+    _ddFillList(host);
     host.classList.add('open');
     host._ddBtn.setAttribute('aria-expanded', 'true');
     // MOVED TO <body> WHILE OPEN. position:fixed is resolved against the nearest
@@ -43692,11 +43769,6 @@ function _ddOpen(host) {
     document.body.appendChild(host._ddList);
     host._ddList.classList.add('dd-open');
     _ddPlace(host);
-    // The caret goes in the box on a searchable list — the whole point is that
-    // typing works the moment it opens, without aiming at anything first. On a
-    // short list, focus lands on the current choice exactly as it did before.
-    const box = host._ddList.querySelector('.dd-search-in');
-    if (box) { box.focus({ preventScroll: true }); return; }
     const on = host._ddList.querySelector('.dd-opt.on') || host._ddList.querySelector('.dd-opt');
     if (on) on.focus({ preventScroll: true });
 }
@@ -43704,8 +43776,6 @@ function _ddOpen(host) {
 function _ddKey(host, ev) {
     const opts = Array.from(host._ddList.querySelectorAll('.dd-opt:not([disabled])'));
     const i = opts.indexOf(document.activeElement);
-    const inBox = document.activeElement
-        && document.activeElement.classList.contains('dd-search-in');
     if (ev.key === 'Escape') {
         // Only while OPEN, and stopped here so it never reaches closeAllModals —
         // Escape should peel this list before the modal it is sitting in.
@@ -43713,26 +43783,32 @@ function _ddKey(host, ev) {
         ev.preventDefault();
         _ddClose(host);
         host._ddBtn.focus();
-    } else if (ev.key === 'Enter' && inBox) {
-        // Three letters, Enter, done — without reaching for the mouse or arrowing
-        // down to the only thing left on screen.
-        ev.preventDefault();
-        if (opts.length) opts[0].click();
     } else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
         ev.preventDefault();
-        // Down from the box goes to the first match rather than nowhere; Up from
-        // the first option goes back to the box, so the filter stays reachable
-        // without the mouse.
-        if (inBox) {
-            if (ev.key === 'ArrowDown' && opts[0]) opts[0].focus({ preventScroll: true });
-            return;
-        }
-        if (ev.key === 'ArrowUp' && i === 0) {
-            const box = host._ddList.querySelector('.dd-search-in');
-            if (box) { box.focus({ preventScroll: true }); return; }
-        }
+        // Arrowing is a deliberate move away from what was typed, so the letters
+        // go with it — otherwise the next keystroke jumps back.
+        _ddClearType(host);
         const next = ev.key === 'ArrowDown' ? Math.min(i + 1, opts.length - 1) : Math.max(i - 1, 0);
         if (opts[next]) opts[next].focus({ preventScroll: true });
+    } else if (ev.key === 'Enter' || ev.key === ' ') {
+        // The focused option is the answer. Space included because the list is a
+        // row of buttons and a button takes Space — without this it scrolled the
+        // page behind the open list.
+        ev.preventDefault();
+        if (document.activeElement && document.activeElement.classList.contains('dd-opt')) {
+            document.activeElement.click();
+        }
+    } else if (ev.key === 'Backspace') {
+        ev.preventDefault();
+        const q = (host._ddType || '').slice(0, -1);
+        _ddClearType(host);
+        for (const c of q) _ddJump(host, c);
+    } else if (host._ddHasSearch && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+        // One printable character. Only on the long lists — on five stores the
+        // browser's own prefix jump is already the right behaviour and a second
+        // one fighting it is worse than neither.
+        ev.preventDefault();
+        _ddJump(host, ev.key);
     }
 }
 
@@ -43925,9 +44001,30 @@ window.addEventListener('scroll', (ev) => {
 // startup would cover a fraction of them. Debounced: several renderers rebuild
 // a panel's innerHTML a few times in a row.
 let _ddTimer = null;
+// BEFORE THE NEXT PAINT, not 60ms after it. The 60ms debounce meant every
+// re-render that contains a <select> painted the raw native control first and
+// swapped in the face a frame or four later — a visible flash of unstyled
+// dropdowns at a different width. On Call Backs, where toggling a filter rebuilt
+// the quick-add row underneath it, that was the "visual glitch in the top
+// section": three native selects appearing and then jumping.
+//
+// requestAnimationFrame runs after the mutation and before the paint, and
+// coalesces every mutation in the same frame, which is what the debounce was
+// for. The timeout stays as a backstop: rAF does not fire in a background tab,
+// and a panel rendered there must still be enhanced when nobody is looking.
+let _ddRaf = 0;
 function _ddQueueScan() {
+    if (_ddRaf) return;
+    const run = () => {
+        if (!_ddRaf) return;
+        _ddRaf = 0;
+        clearTimeout(_ddTimer);
+        _ddScan();
+    };
+    _ddRaf = 1;
+    requestAnimationFrame(run);
     clearTimeout(_ddTimer);
-    _ddTimer = setTimeout(() => _ddScan(), 60);
+    _ddTimer = setTimeout(run, 120);
 }
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => { _ddScan(); _ddWatch(); });

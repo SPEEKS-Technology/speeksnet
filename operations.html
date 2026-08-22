@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260821o">
+  <link rel="stylesheet" href="styles.css?v=20260821p">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260821o" defer></script>
+  <script src="speeks.js?v=20260821p" defer></script>
 </head>
 <body class="preload">
 
@@ -673,6 +673,11 @@
                       <!-- Corp roles (DM/CEO/MOCD) get no My Store view — hidden pre-paint by applyRoleBasedUI so it never flashes -->
                       <button id="cbViewMineBtn" class="mb-view-btn active dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-employee role-training" onclick="cbSetView('mine')"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>My Store</button>
                       <button id="cbViewAllBtn" class="mb-view-btn" onclick="cbSetView('all')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>All Stores</button>
+                      <!-- Completed is a TAB, not a checkbox. It is a list you go
+                           and look at, the same as Archived — a tick box beside
+                           the view buttons mixed finished rows into the open ones
+                           and re-rendered the quick-add underneath it. -->
+                      <button id="cbViewCompletedBtn" class="mb-view-btn" onclick="cbSetView('completed')"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Completed</button>
                       <button id="cbViewArchivedBtn" class="mb-view-btn" onclick="cbSetView('archived')"><svg viewBox="0 0 24 24"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>Archived</button>
                   </div>
                   <select id="cbStoreFilter" class="kpi-select cb-store-filter" onchange="cbRender()" style="display:none;">
@@ -683,7 +688,6 @@
                       <option value="MPL">MPL</option>
                       <option value="BAL">BAL</option>
                   </select>
-                  <label class="cb-completed-toggle"><input type="checkbox" id="cbShowCompleted" onchange="cbRender()"> Show completed</label>
               </div>
           </div>
           <div class="cb-scroll ws-scroll" id="cbBody">

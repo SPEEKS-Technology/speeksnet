@@ -38,6 +38,15 @@ const CORP_ROLES = new Set(["district manager", "ceo", "mocd"]);
 const DECIDER_ROLES = new Set([
   "manager", "assistant manager", "multi-store manager", "owner (manager)",
 ]);
+// WHO MAY DELETE. A delete takes the customer's request and its whole note
+// thread with it, and there is no undo — a different weight of action from
+// editing a phone number, so a different list from canModify. An ASM or below
+// posts `delete_request` instead, which lands in the note thread.
+// Mirrored by CB_DELETE_ROLES in speeks.js; THIS is what enforces it.
+const DELETE_ROLES = new Set([
+  "manager", "owner (manager)", "owner manager", "multi-store manager",
+  "district manager", "ceo", "mocd",
+]);
 const STATUSES = new Set(["open", "contacted", "completed"]);
 const MATCH_STATES = new Set(["suggested", "confirmed", "rejected", "sold"]);
 
@@ -393,7 +402,37 @@ Deno.serve(async (req: Request) => {
       if (!canModify(entry.store, role, store, multi)) {
         return json({ error: "You can only delete your own store's call backs" }, 403);
       }
+      // Store scope is not enough on its own here: an ASM at the right store
+      // still may not destroy the row. Hiding the button is not a rule, this is.
+      if (!DELETE_ROLES.has((role || "").toLowerCase().trim())) {
+        return json({ error: "Ask a manager to delete this call back",
+                      detail: "A manager or above deletes; anyone else can request it." }, 403);
+      }
       const { error } = await supabase.from("customer_callbacks").delete().eq("id", id);
+      if (error) return json({ error: error.message }, 500);
+      return json({ success: true });
+    }
+
+    // The ASM-and-below path: nothing is destroyed, a flagged note is appended.
+    // Deliberately as ungated as `note` is — asking is not an action that needs
+    // permission, and a request nobody may make is a rule with no way to comply.
+    if (action === "delete_request") {
+      if (!id) return json({ error: "Missing id" }, 400);
+      const entry = await getEntry();
+      if (!entry) return json({ error: "Not found" }, 404);
+      const n = body.note || {};
+      const notes = Array.isArray(entry.notes) ? entry.notes : [];
+      notes.push({
+        text: String(n.text || "").trim() || "No reason given.",
+        kind: "delete_request",
+        user: String(n.user || body.user || "Unknown"),
+        store: String(n.store || store || "").toUpperCase(),
+        at: n.at || todayCentral(),
+      });
+      const { error } = await supabase
+        .from("customer_callbacks")
+        .update({ notes, updated_at: new Date().toISOString() })
+        .eq("id", id);
       if (error) return json({ error: error.message }, 500);
       return json({ success: true });
     }

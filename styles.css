@@ -7755,6 +7755,20 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 
 .cb-store-filter { height: 34px; }
 
+/* Under the status pill, in the slot the attribution line uses once somebody has
+   acted. The pill has always been clickable and nothing said so. */
+.cb-status-hint { font-size: 10px; font-weight: 650; color: var(--cb-faint); font-style: italic; }
+
+/* A deletion request, sitting in the note thread where it is attributed. Red
+   enough to be found, quiet enough not to look like the row itself is a problem. */
+.cb-note-del { background: var(--cb-red-tint); border-radius: 7px; padding: 5px 8px; }
+.cb-note-tag {
+    display: inline-block; font-size: 9.5px; font-weight: 900;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    color: #d1443b; border: 1px solid rgba(209, 68, 59, .35);
+    border-radius: 4px; padding: 1px 5px; margin-right: 4px;
+}
+
 .cb-completed-toggle {
     display: inline-flex; align-items: center; gap: 7px;
     font-size: 12px; font-weight: 600; color: var(--cb-muted);
@@ -17504,30 +17518,22 @@ select.dd-native {
     text-overflow: ellipsis;
     cursor: pointer;
 }
-/* The search row on a long list. STICKY, because the list scrolls: a filter box
-   that scrolls off the top the moment you look down the results is a box you
-   have to go back for. Same white as the list so the options appear to slide
-   under it. */
-.dd-search {
-    position: sticky; top: -5px; z-index: 1;
-    background: #fff; padding: 3px 3px 6px;
-    margin: -2px -2px 2px;
-    border-bottom: 1px solid #eef4f0;
+/* The letters typed so far, on a long list only. There is no search box — this
+   is a native select's type-to-jump, made substring — so this is the only
+   feedback there is, and without it a jump that lands somewhere unexpected is
+   indistinguishable from a typo. Pinned to the bottom corner of the list so it
+   never covers the option the letters just found. */
+.dd-typed {
+    position: sticky; bottom: -5px; float: right;
+    margin: 2px -2px -2px 0;
+    padding: 3px 8px; border-radius: 6px;
+    background: var(--slate-charcoal, #17201c); color: #fff;
+    font-size: 11px; font-weight: 800; letter-spacing: .02em;
+    pointer-events: none;
 }
-.dd-search-in {
-    display: block; width: 100%; box-sizing: border-box;
-    padding: 8px 10px; border: 1px solid #dce6e0; border-radius: 8px;
-    font: inherit; font-size: 13px; font-weight: 600; color: #2c3a33;
-    background: #f7faf8;
-}
-.dd-search-in::placeholder { color: #9aa8a1; font-weight: 600; }
-.dd-search-in:focus { outline: none; border-color: #1f9d57; background: #fff; }
-/* Said, not left blank — an empty list under a search box reads as a broken
-   dropdown rather than as a word that matched nothing. */
-.dd-none {
-    padding: 10px 11px; font-size: 12.5px; font-weight: 600;
-    color: #9aa8a1; white-space: normal;
-}
+/* Nothing matched: the letters stay on screen (so the typo is visible) and the
+   cursor stays where it was rather than jumping somewhere wrong. */
+.dd-typed-miss { background: #d1443b; }
 
 .dd-opt:hover, .dd-opt:focus-visible { background: #eef4f0; outline: none; }
 .dd-opt.on { background: var(--slate-charcoal, #17201c); color: #fff; }
