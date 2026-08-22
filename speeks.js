@@ -21236,7 +21236,7 @@ function _cbMatchHtml(e, m) {
         <span class="cb-m-store" style="background:${STORE_TINTS[m.store_code] || '#647082'}">${escapeHtml(m.store_code)}</span>
         <div class="cb-m-body">
             <div class="cb-m-title">${escapeHtml(m.title || '')}</div>
-            <div class="cb-m-meta">${bits.join(' · ')}${m.match_reason ? `<span class="cb-m-why" data-cb-tip="${escapeHtml(m.match_reason)}">why?</span>` : ''}</div>
+            <div class="cb-m-meta">${bits.join(' · ')}</div>
         </div>
         <div class="cb-m-actions">${link}${actions}</div>
     </div>`;
@@ -43483,11 +43483,70 @@ function _ddSync(host) {
     _ddFillList(host);
 }
 
-function _ddFillList(host) {
+// SEARCH, on the long lists only. Native type-ahead is PREFIX-ONLY: on a list of
+// 63 Shopify categories, typing "video" reaches nothing useful, because what
+// somebody knows about an item is rarely the first word of the shelf it lives on.
+// So: substring, and every word has to hit somewhere, in any order — "game
+// video" finds "Video Games" too.
+//
+// A threshold rather than everywhere. A search box over five stores or three
+// periods is a control asking to be used where scanning is faster, and it costs
+// a keystroke and a row of height on every one of those.
+const DD_SEARCH_MIN = 10;
+// Enough to read a typed word back. Only ever applied to a list that has the
+// filter row, so no dropdown that worked before changes width.
+const DD_SEARCH_MIN_W = 240;
+
+const _ddSearchable = sel => _ddOptions(sel).length >= DD_SEARCH_MIN;
+
+// Matched against the option's own text AND its group's label, so a shelf found
+// by its group lands even when its own name does not say so.
+function _ddHay(o) {
+    const g = o.parentElement && o.parentElement.tagName === 'OPTGROUP'
+        ? o.parentElement.label + ' ' : '';
+    return (g + o.text).toLowerCase();
+}
+
+function _ddFillList(host, query) {
     const sel = host._ddSel;
     const list = host._ddList;
+    const q = String(query == null ? (host._ddQuery || '') : query);
+    host._ddQuery = q;
+    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+
     list.innerHTML = '';
+
+    if (host._ddHasSearch) {
+        const wrap = document.createElement('div');
+        wrap.className = 'dd-search';
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.className = 'dd-search-in';
+        // Not "Search" — the part a person cannot tell from looking at a search
+        // box is that any word will do, not just the first one.
+        inp.placeholder = 'Type any word...';
+        inp.setAttribute('aria-label', 'Filter the list');
+        inp.value = q;
+        // The list is rebuilt on every keystroke, so the input is a NEW element
+        // each time; restoring focus and caret here is what keeps typing smooth.
+        inp.addEventListener('input', () => {
+            const at = inp.selectionStart;
+            _ddFillList(host, inp.value);
+            const next = list.querySelector('.dd-search-in');
+            if (next) { next.focus({ preventScroll: true }); next.setSelectionRange(at, at); }
+            _ddPlace(host);
+        });
+        wrap.appendChild(inp);
+        list.appendChild(wrap);
+    }
+
+    let shown = 0;
     _ddOptions(sel).forEach(o => {
+        if (terms.length) {
+            const hay = _ddHay(o);
+            if (!terms.every(t => hay.includes(t))) return;
+        }
+        shown += 1;
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'dd-opt' + (o.selected ? ' on' : '') + (o.disabled ? ' dd-dis' : '');
@@ -43502,6 +43561,15 @@ function _ddFillList(host) {
         });
         list.appendChild(b);
     });
+
+    // An empty list with a search box in it looks like the dropdown broke. Say
+    // what happened instead, and leave the box so the word can be corrected.
+    if (!shown && terms.length) {
+        const none = document.createElement('div');
+        none.className = 'dd-none';
+        none.textContent = 'Nothing matches "' + q + '"';
+        list.appendChild(none);
+    }
 }
 
 // The one place a value is written. Writing through the native select and then
@@ -43528,7 +43596,14 @@ function _ddPlace(host) {
     // counts at once: the floor, and its own longest option. The feed's "All
     // updates" is 105px and opened at 130. The list reads as the control
     // continuing, and a control that changes width when you touch it does not.
-    list.style.width = Math.round(r.width) + 'px';
+    // ...UNLESS IT HAS A FILTER ROW. "As wide as the button" is right for a list
+    // of five stores; a search box inside a 105px control is not a box you can
+    // read what you typed in. So a searchable list gets a floor, and only a
+    // searchable list — every dropdown that behaved before still behaves.
+    const wantW = host._ddHasSearch
+        ? Math.max(Math.round(r.width), DD_SEARCH_MIN_W)
+        : Math.round(r.width);
+    list.style.width = wantW + 'px';
     list.style.minWidth = '0';
     list.style.left = Math.round(r.left) + 'px';
     // Line the option labels up with the label on the button, so the open list
@@ -43542,13 +43617,16 @@ function _ddPlace(host) {
     // Keep it inside the window. A list that matches its button can only leave the
     // viewport if the button already has, but the pickers and this share a
     // placement idiom and only one of them was clamped.
-    const w = Math.round(r.width);
+    const w = wantW;
     const maxL = window.innerWidth - w - 6;
     list.style.left = Math.round(Math.max(6, Math.min(r.left, maxL))) + 'px';
     // A label that no longer fits the button's width gets the full text on hover.
     // Set here rather than at fill time because whether it fits is a measurement,
     // and a title on every option would put a browser tooltip on all of them.
-    Array.from(list.children).forEach(o => {
+    // .dd-opt only: the search row and the no-matches line are not labels that
+    // can outgrow the button, and a browser tooltip over the input would sit on
+    // top of the list while somebody typed.
+    Array.from(list.querySelectorAll('.dd-opt')).forEach(o => {
         if (o.scrollWidth > o.clientWidth + 1) o.title = o.textContent;
         else o.removeAttribute('title');
     });
@@ -43598,7 +43676,10 @@ function _ddCloseAll(except) {
 function _ddOpen(host) {
     if (host._ddSel.disabled) return;
     _ddCloseAll(host);
-    _ddFillList(host);
+    // A new open starts with the whole list — a filter left over from last time
+    // would read as options having gone missing.
+    host._ddHasSearch = _ddSearchable(host._ddSel);
+    _ddFillList(host, '');
     host.classList.add('open');
     host._ddBtn.setAttribute('aria-expanded', 'true');
     // MOVED TO <body> WHILE OPEN. position:fixed is resolved against the nearest
@@ -43611,6 +43692,11 @@ function _ddOpen(host) {
     document.body.appendChild(host._ddList);
     host._ddList.classList.add('dd-open');
     _ddPlace(host);
+    // The caret goes in the box on a searchable list — the whole point is that
+    // typing works the moment it opens, without aiming at anything first. On a
+    // short list, focus lands on the current choice exactly as it did before.
+    const box = host._ddList.querySelector('.dd-search-in');
+    if (box) { box.focus({ preventScroll: true }); return; }
     const on = host._ddList.querySelector('.dd-opt.on') || host._ddList.querySelector('.dd-opt');
     if (on) on.focus({ preventScroll: true });
 }
@@ -43618,6 +43704,8 @@ function _ddOpen(host) {
 function _ddKey(host, ev) {
     const opts = Array.from(host._ddList.querySelectorAll('.dd-opt:not([disabled])'));
     const i = opts.indexOf(document.activeElement);
+    const inBox = document.activeElement
+        && document.activeElement.classList.contains('dd-search-in');
     if (ev.key === 'Escape') {
         // Only while OPEN, and stopped here so it never reaches closeAllModals —
         // Escape should peel this list before the modal it is sitting in.
@@ -43625,8 +43713,24 @@ function _ddKey(host, ev) {
         ev.preventDefault();
         _ddClose(host);
         host._ddBtn.focus();
+    } else if (ev.key === 'Enter' && inBox) {
+        // Three letters, Enter, done — without reaching for the mouse or arrowing
+        // down to the only thing left on screen.
+        ev.preventDefault();
+        if (opts.length) opts[0].click();
     } else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
         ev.preventDefault();
+        // Down from the box goes to the first match rather than nowhere; Up from
+        // the first option goes back to the box, so the filter stays reachable
+        // without the mouse.
+        if (inBox) {
+            if (ev.key === 'ArrowDown' && opts[0]) opts[0].focus({ preventScroll: true });
+            return;
+        }
+        if (ev.key === 'ArrowUp' && i === 0) {
+            const box = host._ddList.querySelector('.dd-search-in');
+            if (box) { box.focus({ preventScroll: true }); return; }
+        }
         const next = ev.key === 'ArrowDown' ? Math.min(i + 1, opts.length - 1) : Math.max(i - 1, 0);
         if (opts[next]) opts[next].focus({ preventScroll: true });
     }

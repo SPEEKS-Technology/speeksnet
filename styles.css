@@ -7336,6 +7336,22 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     background: #fff; border-bottom: 1px solid #eef2f6;
 }
 
+/* Customer Call Backs gets the Aging treatment for the same reason again: a row
+   here is not a row. It carries the customer, the attribution line and a whole
+   match panel — every matching unit at every store, each with its own title,
+   price, SKU and two decisions — so the shared calc(100vh - 250px) showed a
+   couple and put the rest behind an inner scrollbar. Worse than the others,
+   because the panel is where the title lives: squeezed into the fixed box the
+   product name was the first thing to give. Grows to fit, page scrolls, header
+   pinned under the fixed .top-nav at 60px so the store picker and the view
+   toggle do not scroll away. */
+.ws-panel-calls { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.ws-panel-calls .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+.ws-panel-calls .cb-head {
+    position: sticky; top: 60px; z-index: 4;
+    background: #fff; border-bottom: 1px solid var(--cb-line-2);
+}
+
 /* Monthly Brief pane flows as part of the page too: natural height, no inner scrollbar */
 .ws-panel-brief { height: auto !important; min-height: 0 !important; overflow: visible !important; }
 .ws-panel-brief .ws-scroll { overflow: visible; flex: none; min-height: 0; }
@@ -8046,7 +8062,6 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    Other so the title is the only evidence, or it isn't published so there is no
    listing to send. Quiet, but present. */
 .cb-m-via { font-style: italic; color: var(--cb-faint); }
-.cb-m-why { color: var(--cb-faint); text-decoration: underline dotted; cursor: help; }
 .cb-m-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
 .cb-m-btn {
     font-family: inherit; font-size: 11.5px; font-weight: 700;
@@ -17489,6 +17504,31 @@ select.dd-native {
     text-overflow: ellipsis;
     cursor: pointer;
 }
+/* The search row on a long list. STICKY, because the list scrolls: a filter box
+   that scrolls off the top the moment you look down the results is a box you
+   have to go back for. Same white as the list so the options appear to slide
+   under it. */
+.dd-search {
+    position: sticky; top: -5px; z-index: 1;
+    background: #fff; padding: 3px 3px 6px;
+    margin: -2px -2px 2px;
+    border-bottom: 1px solid #eef4f0;
+}
+.dd-search-in {
+    display: block; width: 100%; box-sizing: border-box;
+    padding: 8px 10px; border: 1px solid #dce6e0; border-radius: 8px;
+    font: inherit; font-size: 13px; font-weight: 600; color: #2c3a33;
+    background: #f7faf8;
+}
+.dd-search-in::placeholder { color: #9aa8a1; font-weight: 600; }
+.dd-search-in:focus { outline: none; border-color: #1f9d57; background: #fff; }
+/* Said, not left blank — an empty list under a search box reads as a broken
+   dropdown rather than as a word that matched nothing. */
+.dd-none {
+    padding: 10px 11px; font-size: 12.5px; font-weight: 600;
+    color: #9aa8a1; white-space: normal;
+}
+
 .dd-opt:hover, .dd-opt:focus-visible { background: #eef4f0; outline: none; }
 .dd-opt.on { background: var(--slate-charcoal, #17201c); color: #fff; }
 .dd-opt.dd-dis { opacity: .45; cursor: not-allowed; }

@@ -74,6 +74,19 @@ const get = async (u) => (await fetch(u)).json();
         'every proposed shelf has a type vocabulary',
         wordless.length ? `NOBODY CAN ASK FOR: ${wordless.join(', ')}` : `${shelves.size}/${shelves.size} askable`);
 
+    // EVERY shelf a person can PICK, not just the ones a rule proposes. The No
+    // Suggestion queue has no proposal on the row, so the picker offers all of
+    // them — and the old assertion above was watching 26 of 62. Filing the Elan
+    // AV controller onto a wordless shelf tidies the storefront and leaves the
+    // matcher exactly as blind as it was.
+    // `other` is the one deliberate exception: it is reachable by multi-word
+    // keyword only, by design (fact 2 in the matcher's header).
+    const noWords = cats.filter(c => c.handle !== 'other' && !(c.types || []).length);
+    ok(noWords.length === 0,
+        'and so does every shelf the picker offers',
+        noWords.length ? `NOBODY CAN ASK FOR: ${noWords.map(c => c.handle).join(', ')}`
+                       : `${cats.length - 1}/${cats.length - 1} askable`);
+
     // The panel's own API, if a corp PIN was supplied. Nothing here writes to
     // Shopify: a skip is ours to undo, and the two refusals are the point.
     if (PIN) {
