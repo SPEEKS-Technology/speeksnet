@@ -31127,7 +31127,14 @@ const FEATURE_CATALOG = [
     { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
-    { key: 'widget-ops-ebay',          label: 'SPEEKS Connect (Tab)',          tab: 'widgets', group: 'Operations', def: 'all' },
+    // SPEEKS CONNECT HAS NO TAB SWITCH OF ITS OWN, on purpose. It had three
+    // toggles for two things — Upload, Categories, and the tab that contains
+    // them — and a parent switch that can contradict its children is a way to
+    // turn a tool half-off: Categories granted, tab revoked, nothing on screen
+    // and nothing saying why. The tab is DERIVED (data-feature-any on the
+    // button): grant either sub-tab and the tab appears carrying it, revoke both
+    // and the tab goes. One fact, one switch.
+    { key: 'ec-upload',                label: 'SPEEKS Connect · Upload tab',   tab: 'widgets', group: 'Operations', def: 'all' },
     // The Categories queue inside SPEEKS Connect. Managers and the DM to start —
     // it writes to the live storefront, so it is not something to hand out by
     // accident. This switch is the WHOLE gate, not a cosmetic one: shopify-recat
@@ -31326,7 +31333,8 @@ const _SECTION_TABS = {
     // 'widget-margin-replies' is intentionally omitted — see the parked block in
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
-    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks', 'widget-ops-b2b', 'widget-ops-ebay'],
+    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks',
+                        'widget-ops-b2b', 'ec-upload', 'ec-view-categories'],
 };
 
 function _applySectionNavVisibility(userRoleClass, userName) {
@@ -31385,6 +31393,18 @@ function _applyFeatureOverridesToPlainEls(userRoleClass, userName) {
         if (el.classList.contains('dynamic-module') || el.classList.contains('dynamic-module-flex') || el.classList.contains('dynamic-module-block')) return;
         const ov = _featureOverrideFor(el.getAttribute('data-feature'), userRoleClass, userName);
         const allowed = ov === null ? _passesRoleClasses(el.classList, userRoleClass) : ov;
+        if (allowed) el.style.removeProperty('display');
+        else el.style.setProperty('display', 'none', 'important');
+    });
+    // A CONTAINER WITH NO SWITCH OF ITS OWN. Its visibility is the OR of the
+    // sub-tabs inside it, which is the only way a parent and its children cannot
+    // contradict each other — the failure being avoided is "Categories granted,
+    // the tab that holds it revoked", which shows nothing and explains nothing.
+    // Same resolution _SECTION_TABS already uses one level up for the page nav
+    // link, so a tab and the link that reaches it can never disagree either.
+    document.querySelectorAll('[data-feature-any]').forEach(el => {
+        const keys = el.getAttribute('data-feature-any').split(',').map(s => s.trim()).filter(Boolean);
+        const allowed = keys.some(k => _featureEffectiveVisible(k, userRoleClass, userName));
         if (allowed) el.style.removeProperty('display');
         else el.style.setProperty('display', 'none', 'important');
     });
@@ -32063,7 +32083,8 @@ const JUMP_KEYWORDS = {
     'widget-ops-marginguide':    'margin guide buy ladder buying percentages offer ceiling rebuttals condition testing tips projection what should i offer',
     'widget-ops-callbacks':      'callback sheet call back call backs customer calls waiting hold looking for item phone',
     'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
-    'widget-ops-ebay':           'speeks connect ebay listings upload list publish online marketplace sku',
+    'ec-upload':                 'speeks connect ebay listings upload list publish online marketplace sku',
+    'ec-view-categories':        'speeks connect categories other collection wrong category shelf file shopify',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
     'widget-variance-replies':   'variance replies gm notes dm notes markdown discount negative',
@@ -32122,7 +32143,7 @@ const JUMP_PLACES = [
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
-    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: 'widget-ops-ebay',             page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
+    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
     // card are separate Feature Access keys, and a single row would be invisible to
@@ -32248,7 +32269,12 @@ function _jumpPlaceItems() {
             const link = document.querySelector('.nav-bar a.nav-link[href="' + p.page + '"]');
             return !link || link.style.display !== 'none';
         }
-        return _jumpFeatureVisible(p.feature);
+        // An array means the destination is a CONTAINER whose visibility is the
+        // OR of what it holds — SPEEKS Connect has no switch of its own, it has
+        // Upload and Categories. Same rule as data-feature-any in the DOM.
+        return Array.isArray(p.feature)
+            ? p.feature.some(k => _jumpFeatureVisible(k))
+            : _jumpFeatureVisible(p.feature);
     }).map(p => ({
         id: p.id,
         label: p.label,
@@ -41539,6 +41565,16 @@ function _ecFeedReconcile() {
 async function ecLoad() {
     const body = document.getElementById('ecBody');
     if (!body) return;
+    // BEFORE the fetch, not after. _ecSyncChrome corrects the view too, but it
+    // runs once the request is already in flight — so a person with Upload
+    // revoked would fetch a listings payload they may not see, then switch. The
+    // two buttons with a switch are resolved in the DOM by page load, so this is
+    // knowable here; All Stores is not (it needs the server's scope) and is left
+    // to _ecSyncChrome.
+    if (_ecView === 'listings') {
+        const v = _ecViewsOn();
+        if (!v.listings && v.cats) { _ecView = 'cats'; _ecMarkView('cats'); }
+    }
     if (!_ecData) body.innerHTML = '<div class="status-message">Loading SPEEKS Connect…</div>';
     try {
         if (_ecView === 'health') {
@@ -41572,26 +41608,48 @@ async function ecLoad() {
 // Store picker and the All Stores tab come from the scope the SERVER returned,
 // never from the browser's own idea of the role. This only avoids drawing a
 // control that would 403; the edge function is what actually decides.
+// Which sub-tabs this person actually has. Upload and Categories are Feature
+// Access's to decide and All Stores is the SERVER's (the scope it returned), so
+// this reads all three rather than deciding any of them.
+//
+// NOT SET HERE, for the two with a switch. Feature Access owns those buttons
+// (data-feature ec-upload / ec-view-categories), so writing a display on one
+// would undo whatever the DM chose the moment the panel refreshed. Read it
+// instead — the inline style is exactly what _applyFeatureOverridesToPlainEls
+// left behind, and reading the COMPUTED style would be useless while the toggle
+// around it is still hidden.
+function _ecViewsOn() {
+    const on = id => {
+        const b = document.getElementById(id);
+        return !!b && b.style.display !== 'none';
+    };
+    return {
+        listings: on('ecViewListingsBtn'),
+        health: !!_ecScope?.allStores,
+        cats: on('ecViewCatsBtn'),
+    };
+}
+
 function _ecSyncChrome() {
     const sub = document.getElementById('ecSubtitle');
     const sel = document.getElementById('ecStoreFilter');
     const health = document.getElementById('ecViewHealthBtn');
     if (health) health.style.display = _ecScope?.allStores ? '' : 'none';
-    const cats = document.getElementById('ecViewCatsBtn');
-    // NOT SET HERE. Feature Access owns this button (data-feature
-    // ec-view-categories), so writing a display on it would undo whatever the
-    // DM chose the moment the panel refreshed. Read it instead — the inline
-    // style is exactly what _applyFeatureOverridesToPlainEls left behind, and
-    // reading the COMPUTED style would be useless while the toggle around it
-    // is still hidden.
-    const catsOn = !!cats && cats.style.display !== 'none';
-    // Everyone but the DM and the CEO has exactly one view. A toggle offering
-    // a single option is a button that does nothing, so it goes with the
-    // second view rather than sitting there inviting a click.
+    const views = _ecViewsOn();
+    const n = ['listings', 'health', 'cats'].filter(v => views[v]).length;
+    // A toggle offering a single option is a button that does nothing, so it
+    // goes with the second view rather than sitting there inviting a click.
     const toggle = document.getElementById('ecViewToggle');
-    // A manager sees Upload + Categories: two real options, so the toggle earns
-    // its place. One option is a button that does nothing, so it stays hidden.
-    if (toggle) toggle.style.display = (_ecScope?.allStores || catsOn) ? '' : 'none';
+    if (toggle) toggle.style.display = n > 1 ? '' : 'none';
+
+    // LAND ON SOMETHING THAT EXISTS. With Upload revoked and Categories granted,
+    // the panel opened on Upload — a blank pane behind a hidden button, which
+    // reads as the tool being broken rather than as a permission. The tab is
+    // derived from these two, so by the time this runs at least one is on.
+    if (!views[_ecView]) {
+        const first = ['listings', 'cats', 'health'].find(v => views[v]);
+        if (first) { _ecView = first; _ecMarkView(first); }
+    }
 
     if (sel) {
         const many = (_ecScope?.stores || []).length > 1;

@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260821p">
+  <link rel="stylesheet" href="styles.css?v=20260821q">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260821p" defer></script>
+  <script src="speeks.js?v=20260821q" defer></script>
 </head>
 <body class="preload">
 
@@ -591,7 +591,7 @@
 
     <div class="ws-layout">
       <div class="ws-subtabs">
-        <button class="ws-tab active" data-mobile="hide" data-feature="widget-ops-ebay" id="ops-tab-ebay" onclick="switchOperationsTab('ebay')"><svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg> SPEEKS Connect</button>
+        <button class="ws-tab active" data-mobile="hide" data-feature-any="ec-upload,ec-view-categories" id="ops-tab-ebay" onclick="switchOperationsTab('ebay')"><svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg> SPEEKS Connect</button>
         <button class="ws-tab" data-mobile="hide" data-feature="widget-ops-marginguide" id="ops-tab-marginguide" onclick="switchOperationsTab('marginguide')"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg> Margin Guide</button>
         <button class="ws-tab" data-mobile="hide" data-feature="widget-ops-callbacks" id="ops-tab-callbacks" onclick="switchOperationsTab('callbacks')"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.81.36 1.6.7 2.34a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.74-1.74a2 2 0 0 1 2.11-.45c.74.34 1.53.57 2.34.7A2 2 0 0 1 22 16.92z"/></svg> Customer Call Backs</button>
         <button class="ws-tab dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager role-employee role-training" data-mobile="hide" data-feature="widget-ops-b2b" id="ops-tab-b2b" onclick="switchOperationsTab('b2b')"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Business-to-Business</button>
@@ -747,7 +747,7 @@
               </div>
               <div class="cb-head-controls">
                   <div class="mb-view-toggle cb-view-toggle" id="ecViewToggle">
-                      <button id="ecViewListingsBtn" class="mb-view-btn active" onclick="ecSetView('listings')"><svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Upload<span class="b2b-pip" id="ecFailPip" style="display:none;">0</span></button>
+                      <button id="ecViewListingsBtn" class="mb-view-btn active" data-feature="ec-upload" onclick="ecSetView('listings')"><svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>Upload<span class="b2b-pip" id="ecFailPip" style="display:none;">0</span></button>
                       <!-- Corp only, and revealed by _ecSyncChrome() from the scope
                            the edge function returns — never from the browser's own
                            idea of the role. -->
