@@ -15620,9 +15620,25 @@ async function _b2bPost(payload, errLabel) {
 // A delta-based endpoint is order-sensitive: +1 +1 -1 arriving out of order
 // gives the wrong count.
 const _b2bQueues = {};
+// How many writes are in flight for each line. A realtime sync that arrives
+// while a save is still travelling would otherwise read the server's older copy
+// as the truth and patch our newer one away -- the edit vanishes from the screen
+// having genuinely been made, which is close to the worst failure this module
+// can have. Counted rather than a boolean: rapid edits queue several deep.
+const _b2bInFlight = new Map();
+function _b2bBusyLine(id) { return (_b2bInFlight.get(id) || 0) > 0; }
+
 function _b2bEnqueue(key, fn) {
+    _b2bInFlight.set(key, (_b2bInFlight.get(key) || 0) + 1);
+    const done = () => {
+        const n = (_b2bInFlight.get(key) || 1) - 1;
+        if (n > 0) _b2bInFlight.set(key, n); else _b2bInFlight.delete(key);
+    };
     const prev = _b2bQueues[key] || Promise.resolve();
     const next = prev.then(fn, fn);
+    // Cleared on both paths: a failed save still stops being in flight, and
+    // leaving the count up would freeze that line's syncing for the session.
+    next.then(done, done);
     _b2bQueues[key] = next.catch(() => {});
     return next;
 }
@@ -15789,6 +15805,13 @@ function _startB2bSync() {
 const _B2B_SYNC_CELL = {
     item_type: 'Type', make: 'Brand', model: 'Model', condition: 'Condition',
     cpu: 'CPU', ram: 'RAM', storage: 'Storage',
+    // Both of these got a column of their own in the sheet rework, and this map
+    // is what decides whether an incoming change is PATCHED into the cell (and
+    // skipped while you are typing in it) or written blindly into the model.
+    // Leaving them off the map after giving them cells meant a sync could
+    // overwrite what you were typing and not even repaint it -- so the row and
+    // the model disagreed, and the next save posted the stale value back.
+    battery_health: 'Battery health', client_notes: 'Client Notes',
     quantity: 'Qty', value: 'Value', offer: 'Offer',
     shipping_cost: 'Ship', disposition: 'Handling',
 };
@@ -15915,6 +15938,18 @@ async function _b2bSyncOpenDeal(ping) {
     _b2bModalItems.forEach(local => {
         const remote = byId.get(local.id);
         if (!remote) return;
+        // Leave a line alone entirely while it has a write in flight. The server
+        // copy we just fetched predates that write by definition, so every field
+        // on it is a candidate for undoing an edit that was genuinely made.
+        if (_b2bBusyLine(local.id)) return;
+        // ...and while the cursor is anywhere in it. The per-field guard below
+        // only protects the ONE input that has focus, which was enough when
+        // every other field lived in a popup. The row now carries an expandable
+        // panel -- serials, listing info, staff notes, GPU -- and those are
+        // inside the row but outside any .b2b-pcell, so a change landing while
+        // someone typed in the panel used to overwrite it silently.
+        const rowEl = document.getElementById(`b2bPline-${local.id}`);
+        if (rowEl && active && rowEl.contains(active)) return;
         _B2B_SYNC_FIELDS.forEach(f => {
             if (String(remote[f] ?? '') === String(local[f] ?? '')) return;
             const cell = _b2bCellFor(local.id, f);
@@ -15929,14 +15964,30 @@ async function _b2bSyncOpenDeal(ping) {
         });
         // Fields with no cell of their own still have to track, or the next save
         // from this browser would post them back stale.
-        ['serials', 'staff_notes', 'client_notes', 'wipe_required', 'wipe_fee',
-         'gpu', 'battery_health', 'listed_qty', 'recycled_qty', 'wiped_qty'].forEach(f => {
+        //
+        // client_notes and battery_health are NOT in this list any more -- they
+        // have columns now and go through the guarded patch above, which checks
+        // whether you are typing in them and repaints the input. They were left
+        // here after the sheet rework and were being overwritten mid-edit.
+        //
+        // The panel fields (serials, staff_notes, listing_info, gpu) stay here
+        // because they have no .b2b-pcell to patch, and they are safe now only
+        // because the whole row is skipped while the cursor is inside it.
+        ['serials', 'staff_notes', 'listing_info', 'gpu',
+         'wipe_required', 'wipe_fee', 'label_printed_qty',
+         'listed_qty', 'recycled_qty', 'wiped_qty'].forEach(f => {
             if (String(remote[f] ?? '') !== String(local[f] ?? '')) { local[f] = remote[f]; changed++; }
         });
     });
 
     if (!changed) return;
     _b2bPaintTotals();
+    _b2bPaintQuoteDoc();
+    // A field that lives in the row panel has no cell to patch, so if a panel is
+    // open its inputs are still showing the old value. Nobody's cursor is in an
+    // open panel here -- the guard above returned early if it were -- so a
+    // repaint cannot interrupt anyone.
+    if (_b2bRowOpen.size) _b2bRepaintItems();
     _b2bSay(`${changed} change${changed === 1 ? '' : 's'} came in${who}.`);
 }
 
