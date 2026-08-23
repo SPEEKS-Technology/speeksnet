@@ -15670,6 +15670,9 @@ async function _b2bBusy(btn, label, fn) {
 let _b2bDirty = false;
 function b2bCloseDeal() {
     closeAllModals();
+    // Asking for the full sheet lasts as long as the deal is open and no longer,
+    // so the next quote to be approved starts on the calm screen again.
+    _b2bReviewFull = false;
     // Back to the default owner of the item editor, so the next screen to open
     // starts from a known state rather than whatever the last one left behind.
     _b2bItemMode = 'deal';
@@ -15987,7 +15990,7 @@ async function _b2bSyncOpenDeal(ping) {
     // open its inputs are still showing the old value. Nobody's cursor is in an
     // open panel here -- the guard above returned early if it were -- so a
     // repaint cannot interrupt anyone.
-    if (_b2bRowOpen.size) _b2bRepaintItems();
+    if (_b2bModalItems.some(_b2bRowIsOpen)) _b2bRepaintItems();
     _b2bSay(`${changed} change${changed === 1 ? '' : 's'} came in${who}.`);
 }
 
@@ -19050,12 +19053,27 @@ const _b2bNotesOpen = new Set();
 // _b2bNotesOpen, which belongs to the card grid: the two grids are different
 // shapes and sharing the set made a line opened in one appear open in the other.
 const _b2bRowOpen = new Set();
+// Explicitly collapsed, which has to outrank "blocked, so opened for you".
+// Without it the auto-open won every render and the + was inert on exactly the
+// rows people most want to tidy away.
+const _b2bRowShut = new Set();
+
+// One answer, shared by the renderer and the toggle. When these two disagreed
+// about whether a row was open, the button toggled a state the sheet ignored.
+function _b2bRowIsOpen(it) {
+    if (_b2bRowShut.has(it.id)) return false;
+    if (_b2bRowOpen.has(it.id)) return true;
+    return _b2bItemBlocked(it).length > 0 && !_b2bIsPreval();
+}
+
 function b2bToggleRow(id) {
-    if (_b2bRowOpen.has(id)) _b2bRowOpen.delete(id); else _b2bRowOpen.add(id);
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    const open = _b2bRowIsOpen(it);
+    if (open) { _b2bRowOpen.delete(id); _b2bRowShut.add(id); }
+    else      { _b2bRowShut.delete(id); _b2bRowOpen.add(id); }
     _b2bRepaintItems();
-    if (_b2bRowOpen.has(id)) {
-        document.querySelector(`#b2bPline-${id} .b2b-rowpanel textarea`)?.focus();
-    }
+    if (!open) document.querySelector(`#b2bPline-${id} .b2b-rowpanel textarea`)?.focus();
 }
 
 function b2bToggleNotes(id) {
@@ -19363,8 +19381,9 @@ function _b2bItemSheet() {
         const hasDetail = !!(String(it.staff_notes || '').trim() || String(it.listing_info || '').trim()
             || _b2bSerials(it).length || String(it.gpu || '').trim());
         // Anything blocking the line pops its panel open unasked -- the point of
-        // the flag is that you can see what to fix, not hunt for it.
-        const rowOpen = _b2bRowOpen.has(it.id) || (blocked.length > 0 && !_b2bIsPreval());
+        // the flag is that you can see what to fix, not hunt for it -- unless it
+        // has been collapsed by hand, which outranks that.
+        const rowOpen = _b2bRowIsOpen(it);
 
         // CPU / RAM / Storage cells: an editable field for a type that carries
         // them, a dash for one that doesn't (e.g. Other), each with a one-tap ∅
@@ -19593,6 +19612,19 @@ function _b2bItemSheetBody(it) {
                     </div>
                 </div>
             </div>`}
+            <!-- Present here as well as in the spreadsheet's row panel: the card
+                 grid is what the quote and view screens use, and a field you can
+                 only reach from one of the two grids is a field people will
+                 swear does not exist. -->
+            <div class="b2b-isheet-sec">
+                <h5>Listing info <span class="b2b-tag-int">for whoever lists it</span></h5>
+                <div class="b2b-f">
+                    <textarea class="b2b-tag-free" rows="2"
+                        placeholder="Anything the lister needs that no other field covers"
+                        oninput="b2bItemInput('${it.id}','listing_info',this.value)"
+                        onchange="b2bItemSave('${it.id}')">${escapeHtml(it.listing_info || '')}</textarea>
+                </div>
+            </div>
             <div class="b2b-isheet-sec">
                 <h5>Staff notes <span class="b2b-tag-int">internal</span></h5>
                 <div class="b2b-f">
@@ -19710,8 +19742,18 @@ async function b2bSubmitPricing(id, btn) {
             const line = document.getElementById(`b2bPline-${g.id}`);
             line?.scrollIntoView({ block: 'center' });
             const missSpec = _b2bMissingSpecs(g)[0];
-            if (missSpec) line?.querySelector(`[data-req-spec="${missSpec.key}"]`)?.focus();
-            else b2bItemDetail(g.id);
+            if (missSpec) {
+                line?.querySelector(`[data-req-spec="${missSpec.key}"]`)?.focus();
+            } else if (_b2bMissingReason(g)) {
+                // The client note is a column now, so the reason is right there.
+                line?.querySelector('.b2b-pc-note input')?.focus();
+            } else {
+                // Serials, which live in the row panel.
+                _b2bRowOpen.add(g.id);
+                _b2bRowShut.delete(g.id);
+                _b2bRepaintItems();
+                document.querySelector(`#b2bPline-${g.id} .b2b-rp-serialrow input`)?.focus();
+            }
         } else {
             // Cards mode fixes lines in the inline drawer.
             gaps.forEach(it => _b2bNotesOpen.add(it.id));
@@ -19806,7 +19848,7 @@ function _b2bReviewLines() {
         const disp = _b2bDispOf(it);
         const spec = _b2bQuoteDesc(it);
         return `
-        <div class="b2b-rvw-row ${_b2bIsScrap(it) ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''}">
+        <div class="b2b-rvw-row ${_b2bIsScrap(it) ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''}" data-rvw="${it.id}">
             <div class="b2b-rvw-what">
                 <div class="b2b-rvw-name">${escapeHtml(_b2bItemName(it))}
                     ${it.condition ? `<span class="b2b-chip b2b-chip-${_b2bCondChip(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
@@ -19822,7 +19864,7 @@ function _b2bReviewLines() {
                 ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         aria-label="Offer per unit"
                         oninput="b2bItemInput('${it.id}','offer',this.value)"
-                        onchange="b2bItemSave('${it.id}');_b2bPaintQuoteDoc();_b2bRepaintReview()">`
+                        onchange="b2bReviewOffer('${it.id}')">`
                       : '<span class="b2b-f-off">—</span>'}
             </div>
             <div class="b2b-rvw-tot">${buy ? _b2bMoney((Number(it.offer) || 0) * qty, 2) : '—'}</div>
@@ -19840,15 +19882,25 @@ function _b2bReviewLines() {
 
 // Repaint the list in place after a price edit, so the line total and the margin
 // beside it move with the number that was just typed.
-function _b2bRepaintReview() {
+// A price changed: save it, move the client's copy with it, and redraw the row
+// so the line total and the margin beside it agree with the number just typed.
+function b2bReviewOffer(id) {
+    // The local model is already current (oninput), so redraw first and let the
+    // save travel behind it -- the same order the spreadsheet uses.
+    b2bItemSave(id);
+    _b2bPaintQuoteDoc();
+    _b2bRepaintReview(id);
+}
+
+function _b2bRepaintReview(focusId) {
     const el = document.getElementById('b2bReviewLines');
     if (!el) return;
-    const spot = document.activeElement?.closest?.('.b2b-rvw-offer') ? _b2bModalItems.findIndex(
-        it => document.activeElement.closest('.b2b-rvw-row') ===
-              el.querySelectorAll('.b2b-rvw-row')[_b2bModalItems.indexOf(it)]) : -1;
     el.innerHTML = _b2bReviewLines();
     _b2bPaintTotals();
-    if (spot >= 0) el.querySelectorAll('.b2b-rvw-offer input')[spot]?.focus();
+    // Found by id, never by position: a recycle or no-residual line renders a
+    // dash instead of a field, so the inputs and the items are different-length
+    // lists and any index into one is the wrong line in the other.
+    if (focusId) el.querySelector(`[data-rvw="${focusId}"] input`)?.focus();
 }
 
 function _b2bStageReview(deal) {
@@ -19906,7 +19958,6 @@ function _b2bStageQuote(deal) {
     // full spreadsheet -- see _b2bStageReview. Opening the sheet explicitly is
     // the way past it, and re-entering resets that so the next deal starts calm.
     if (_b2bAwaitingApproval(deal) && !_b2bReviewFull) return _b2bStageReview(deal);
-    _b2bReviewFull = false;
     // Same dense spreadsheet as pricing for editing the lines; the client-facing
     // quote preview below it is what they review before emailing.
     _b2bGridMode = 'sheet';
@@ -20058,6 +20109,10 @@ function _b2bQuoteSubject_src() {
 let _b2bCustOpen = true;
 function b2bToggleCust(el) { _b2bCustOpen = !!el.open; }
 function _b2bCustPanel(subject) {
+    // Nothing open, nothing to preview. Reachable only if a screen renders the
+    // panel before claiming the editor, which is a bug -- but it should surface
+    // as a missing panel, not as a thrown render that blanks the whole modal.
+    if (!subject) return '';
     return `
         <details class="b2b-cust" ${_b2bCustOpen ? 'open' : ''} ontoggle="b2bToggleCust(this)">
             <summary>
