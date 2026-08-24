@@ -94,6 +94,24 @@ var NMC_NOTE = 'New-MC adoption dupe fix — real figure. Locked from the daily 
 // removed by SHOPIFY'S OWN day attribution — not by ebay_orders.sold_at, which
 // disagrees for back-dated copies. Same method that reproduced the pre-
 // contamination email to the cent, 8 of 8, on the Aug 16-20 fix.
+// ---------------------------------------------------------------------------
+// VERIFIED AGAINST THE SHEET, 2026-08-24 11:16 (nmcFixPreview)
+// ---------------------------------------------------------------------------
+// Aug 23 held 3535.86 / 1543.4 -- IDENTICAL to the reconstruction, to the cent,
+// derived independently. That is the proof the method is right: same standard as
+// the Aug 16-20 fix, which reproduced the pre-contamination email 8 of 8.
+//
+// Aug 22 held 5818.07 / 2526.09, which is 49.99 / 10.00 BELOW the figure here.
+// Fully explained, and it is not a missed duplicate: #MO03-3042 is a REAL eBay
+// sale (20-15049-68792) that SPEEKS Connect never imported -- one Shopify copy
+// only, absent from ebay_orders -- which the new system imported at 15:06 and
+// Shopify correctly booked to its Aug 22 sale date. The 06:00 email predated it
+// by five hours, so the sheet was stale rather than wrong.
+//
+//   5818.07 + 49.99 = 5868.06      2526.09 + 10.00 = 2536.09
+//
+// Re-checked for new duplicates at the same time: none. All 15 partially-refunded
+// phantoms were already staged; the new system had created no further copies.
 var NMC_FIX = [
   { store: 'MPL', day: 22, sales: 5868.06, cost: 2536.09 },
   { store: 'MPL', day: 23, sales: 3535.86, cost: 1543.40 }
