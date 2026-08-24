@@ -20258,6 +20258,7 @@ function _b2bStageReview(deal) {
         ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}`
         : 'Not sent yet';
     _b2bShowDeal({
+        delDeal: deal,
         stage: deal.stage,
         eyebrow: deal.ref,
         title: 'Approve & Send',
@@ -20292,8 +20293,9 @@ function _b2bStageReview(deal) {
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
+            ${_b2bIsCorp() ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
             ${canAccept ? `
-                <button class="b2b-btn b2b-btn-danger" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>
                 <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
                     value="${escapeHtml(deal.client?.contact_email || '')}">
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
