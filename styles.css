@@ -13009,7 +13009,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
        sheet panned sideways on the commonest desktop size for the sake of 20px.
        This is a full-bleed working surface -- it already takes 92vh -- so the
        margin is better spent on the grid than on the backdrop. */
-    width: min(1480px, 99vw); max-width: 99vw;
+    width: min(1650px, 99vw); max-width: 99vw;
     height: 92vh; max-height: 92vh;
 }
 /* Never clip the acts column on a narrow laptop -- scroll the body instead. */
@@ -14565,6 +14565,10 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-delreq-meta { min-width: 0; font-size: 13px; color: #1a1c1e; overflow-wrap: anywhere; }
 .b2b-delreq-sub { font-size: 11px; color: var(--b2b-muted); margin-top: 2px; }
 .b2b-delreq-acts { display: flex; gap: 6px; flex-shrink: 0; }
+/* Header trashcan on every deal screen: neutral to request, amber once pending. */
+.b2b-deal-del:hover { color: #dc2626; border-color: #fca5a5; }
+.b2b-deal-del.pending { color: #b45309; border-color: #fde68a; background: #fffbeb; }
+.b2b-deal-del.pending:hover { background: #fef3c7; }
 
 .crm-help { font-size: 13px; color: #64707c; font-weight: 500; line-height: 1.5; margin: 2px 0 14px; }
 .crm-search { margin-bottom: 14px; }
