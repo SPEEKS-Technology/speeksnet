@@ -385,7 +385,7 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
 
   // --- 4. stores: config, tokens, and a sweep that has gone quiet ------------
   const stores = await read("ebay_stores", sb.from("ebay_stores")
-    .select("store_code, merchant_location_key, payment_policy_id, return_policy_id, fulfillment_policy_id, refresh_token_expires_at"));
+    .select("store_code, merchant_location_key, payment_policy_id, return_policy_id, fulfillment_policy_id, refresh_token_expires_at, channel_mode"));
   for (const s of stores) {
     const missing = [
       !s.merchant_location_key ? "location" : null,
@@ -417,6 +417,17 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
         });
       }
     }
+    // A PARKED STORE IS NOT BEING SWEPT ON PURPOSE. Marketplace Connect owns its
+    // listings, our own rows sit at `disabled`, and nothing reads ebay_live for it:
+    // auto-listing is off, reconcile and reprice act on published/ended only. The
+    // sweep was costing 432 eBay calls a day across MPL+BAL+LEE for data no code
+    // consumes, so those crons are off — and a check that shouts about that every
+    // 15 minutes is how this email stops being read.
+    //
+    // The token warning above is deliberately NOT skipped: break-glass is the whole
+    // reason the channel still exists, and it needs a live connection to work.
+    if (String((s as any).channel_mode || "active") === "standby") continue;
+
     const m = minsAgo(freshest[s.store_code] || null);
     if (m === null) {
       push({
