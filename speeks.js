@@ -3777,12 +3777,60 @@ function _kpiAddSelfRowHtml(p, isEditing) {
         '</td></tr>';
 }
 
+// ⚠️ TYPED NUMBERS LIVE ONLY IN THE DOM UNTIL SAVE. _kpiSavePeriod reads them
+// straight out of the inputs by id, so nothing puts them back into
+// _kpiPeriodsData — and every re-render rebuilds the grid FROM
+// _kpiPeriodsData. So any re-render mid-edit silently wiped a whole week of
+// entry: fill in the roster, click "+ Add Ethan (DM)", and the grid came back
+// blank from the server.
+//
+// This reads the inputs back into the data before a re-render can throw them
+// away. It is keyed on the same ids the save path uses, and those ids embed the
+// PERIOD, so a period whose inputs are not on screen is untouched — which is
+// what makes it safe to call before any render rather than only some.
+//
+// An empty box harvests as null, exactly as it SAVES as null: emptying a figure
+// is an instruction ("there is no number here"), not an absence of one.
+function _kpiHarvestInputs(periodDate) {
+    if (!periodDate) return 0;
+    const p = (_kpiPeriodsData || []).find(function(x) { return x.period_end_date === periodDate; });
+    if (!p) return 0;
+    const pk = periodDate.replace(/-/g, '');
+    let rows = 0;
+    (p.entries || []).forEach(function(entry, empIdx) {
+        let onScreen = false;
+        _KPI_INPUT_FIELDS.forEach(function(f) {
+            const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + f);
+            if (!el) return;
+            onScreen = true;
+            if (el.value !== '') {
+                entry[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
+            } else if (Object.prototype.hasOwnProperty.call(entry, f)) {
+                // An emptied box on a row that HAD a figure is a deletion, and
+                // the save path already reads it that way. But writing null onto
+                // a key that was never there is not the same thing: the Store
+                // Total row filters on `!= null`, and Number(null) is 0, so a
+                // roster of untouched rows would start totalling "$0" where it
+                // correctly showed "—".
+                entry[f] = null;
+            }
+        });
+        // The computed columns are only ever written to the DOM by
+        // _kpiUpdateRow, never to the entry, so without this the Est. GP and
+        // margin cells would come back stale next to fresh inputs.
+        if (onScreen) { rows++; Object.assign(entry, _kpiCalcDerived(entry)); }
+    });
+    return rows;
+}
+
 // who: 'self' (DM/CEO adds themselves) or 'dm' (a store editor adds the DM).
 function _kpiAddSelf(periodDate, who) {
     const name = who === 'dm' ? _kpiDmName() : sessionStorage.getItem('speeksUserName');
     if (!name) return;
     const p = (_kpiPeriodsData || []).find(function(x) { return x.period_end_date === periodDate; });
     if (!p || p.entries.some(function(e) { return e.employee_name === name; })) return;
+    // BEFORE the push, or adding a row costs everything typed above it.
+    _kpiHarvestInputs(periodDate);
     // _selfAdded marks the row as a local, not-yet-saved addition so cancelling
     // the edit can remove it again (saved rows have an id and are kept).
     p.entries.push({ employee_name: name, _selfAdded: true });
@@ -5968,6 +6016,7 @@ async function checkKpiDueReminders() {
 function kpiHeaderStartEdit() {
     const ep = (_kpiPeriodsData || []).find(function(p) { return p.is_editable; }) || (_kpiPeriodsData || [])[0];
     if (!ep) return;
+    _kpiHarvestInputs(_kpiEditingPeriod);
     _kpiEditingPeriod = ep.period_end_date;
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
@@ -7573,6 +7622,9 @@ function initOperations() {
 
 function _kpiStartEdit(periodDate) {
     if (_kpiEditingPeriod === periodDate) return;
+    // Opening a second week for edit re-renders the first one back to view mode,
+    // which used to take its unsaved numbers with it.
+    _kpiHarvestInputs(_kpiEditingPeriod);
     _kpiEditingPeriod = periodDate;
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
