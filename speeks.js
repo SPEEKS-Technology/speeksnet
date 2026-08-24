@@ -18028,6 +18028,27 @@ function _b2bShowDeal(cfg) {
             && ['pricing', 'review', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage))
             ? '' : 'none';
     }
+    // The deletion trashcan -- shown on every deal screen (cfg.delDeal), hidden on
+    // non-deal modals (the decline form, the Delete Requests queue, evaluations).
+    // Not pending -> a request button; pending -> an amber 'Delete requested' that
+    // opens the queue so CORP can approve or deny.
+    const db = document.getElementById('b2bDealDeleteBtn');
+    if (db) {
+        const dd = cfg.delDeal;
+        if (dd && dd.id) {
+            const pending = !!dd.delete_requested_at;
+            db.style.display = '';
+            db.classList.toggle('pending', pending);
+            db.title = pending
+                ? `Delete requested${dd.delete_requested_by ? ' by ' + dd.delete_requested_by : ''} — a CEO, MOCD or DM approves it in Delete Requests`
+                : 'Request this deal be deleted — a CEO, MOCD or DM must approve';
+            const lbl = document.getElementById('b2bDealDeleteLbl');
+            if (lbl) lbl.textContent = pending ? 'Delete requested' : 'Request deletion';
+        } else {
+            db.style.display = 'none';
+            db.classList.remove('pending');
+        }
+    }
     const modal = document.getElementById('b2bDealModal');
     modal.classList.toggle('b2b-modal-wide', !!cfg.wide);
     // Pricing runs near-full-screen so a long pickup reads as one dense sheet.
@@ -18127,6 +18148,7 @@ function _b2bStagePickup(deal) {
     const w = _b2bIntake(deal);
     const walkIn = w.key === 'walkin';
     _b2bShowDeal({
+        delDeal: deal,
         stage: 'pickup',
         eyebrow: deal.ref,
         title: w.title,
@@ -18213,6 +18235,7 @@ async function b2bSignPickup(id) {
 function _b2bStageAssign(deal) {
     _b2bAssignPick = null;
     _b2bShowDeal({
+        delDeal: deal,
         stage: 'pricing_location',
         eyebrow: deal.ref,
         title: 'Assign Pricing Location',
@@ -20024,6 +20047,7 @@ function _b2bSendbackNote(deal) {
 function _b2bStagePricing(deal) {
     _b2bGridMode = 'sheet';
     _b2bShowDeal({
+        delDeal: deal,
         stage: 'pricing',
         eyebrow: deal.ref,
         title: 'Price The Pickup',
@@ -20302,6 +20326,7 @@ function _b2bStageQuote(deal) {
         </div>` : '';
 
     _b2bShowDeal({
+        delDeal: deal,
         // The deal's own stage, so the header icon matches and the print
         // whitelist sees review as well as quote.
         stage: deal.stage,
@@ -20892,6 +20917,7 @@ async function b2bAcceptQuote(id, btn) {
 function _b2bStageListingLocation(deal) {
     _b2bAssignPick = null;
     _b2bShowDeal({
+        delDeal: deal,
         stage: 'listing_location',
         eyebrow: deal.ref,
         title: 'Assign Listing Store',
@@ -20956,6 +20982,7 @@ function _b2bConservativeNote() {
 function _b2bStageListing(deal) {
     _b2bPendingUnit = null;
     _b2bShowDeal({
+        delDeal: deal,
         stage: 'listing',
         eyebrow: deal.ref,
         title: 'Listing',
@@ -21419,10 +21446,11 @@ function _b2bStageView(deal) {
 
     const canDecline = _b2bIsCorp() && !['listing', 'completed', 'declined'].includes(deal.stage);
     // Reopen is gone -- a declined deal is final (see the edge fn). Deletion is
-    // the only way a deal leaves the record now, and it goes through CORP.
-    const delPending = !!deal.delete_requested_at;
+    // the only way a deal leaves the record now; the trashcan in the modal header
+    // (every stage, via delDeal) raises the request and CORP approves it.
     _b2bShowDeal({
         stage: deal.stage,
+        delDeal: deal,
         eyebrow: deal.ref,
         title: deal.client?.company || 'Deal',
         sub: `${B2B_STAGE[deal.stage]?.label || deal.stage}${deal.accepted_at ? ` · accepted ${_b2bDate(deal.accepted_at)}` : ''}`,
@@ -21447,13 +21475,6 @@ function _b2bStageView(deal) {
                 <tfoot><tr><td colspan="5" class="r">Total</td><td class="r accent">${_b2bMoney(t.offer, 2)}</td><td></td></tr></tfoot>
             </table>` : '<div class="b2b-empty sm"><div class="b2b-empty-t">No line items yet</div></div>'}`,
         footer: `
-            ${delPending
-                ? `<span class="b2b-del-pending" title="A deletion request is waiting on CORP" style="margin-right:auto;">🗑 Delete requested${deal.delete_requested_by ? ` · ${escapeHtml(deal.delete_requested_by)}` : ''}</span>
-                   ${_b2bCanAccept()
-                        ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bApproveDelete('${deal.id}',this)">Approve deletion</button>
-                           <button class="b2b-btn b2b-btn-secondary" onclick="b2bDenyDelete('${deal.id}',this)">Deny</button>`
-                        : ''}`
-                : `<button class="b2b-btn b2b-del-req" title="Request this deal be deleted — a CEO, MOCD or DM must approve before anything is removed" onclick="b2bRequestDelete('${deal.id}')" style="margin-right:auto;">🗑 Request deletion</button>`}
             ${canDecline ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
     });
@@ -21524,6 +21545,15 @@ async function b2bConfirmDecline(id, btn) {
 // request from the trashcan (any stage); a CEO/MOCD/DM approves or denies it,
 // either on the deal itself or from the Delete Requests modal off the B2B tab.
 // Same shape as the claims / recycle delete flow.
+// The header trashcan. With no request pending it raises one; once one is
+// pending it opens the Delete Requests queue, where CORP approves or denies.
+function b2bDealDeleteClick() {
+    const deal = _b2bModalDeal;
+    if (!deal) return;
+    if (deal.delete_requested_at) b2bDeleteRequests();
+    else b2bRequestDelete(deal.id);
+}
+
 async function b2bRequestDelete(id) {
     const deal = _b2bDealById(id) || _b2bModalDeal;
     const ref = deal?.ref || 'this deal';
