@@ -467,7 +467,7 @@ async function approvalOnRecord(sb: any, col: "deal_id" | "preval_id", id: strin
 }
 
 const NEEDS_PROOF =
-  "The client's approval isn't on record yet \u2014 attach the email or a screenshot of it, " +
+  "The client's approval isn't on record yet — attach the email or a screenshot of it, " +
   "or record why there isn't one. This is what answers them later if they say they never agreed.";
 
 // The field set shared by adding and updating an evaluation line. Mirrors the
@@ -1779,7 +1779,7 @@ Deno.serve(async (req: Request) => {
           if (!ext) {
             return jsonResponse({
               success: false,
-              error: `${mime} isn't a file type we can store \u2014 use a PNG, JPEG, PDF or saved email.`,
+              error: `${mime} isn't a file type we can store — use a PNG, JPEG, PDF or saved email.`,
             }, 400);
           }
           let bytes: Uint8Array;
@@ -1792,7 +1792,7 @@ Deno.serve(async (req: Request) => {
           if (bytes.length > PROOF_MAX_BYTES) {
             return jsonResponse({
               success: false,
-              error: `That file is ${Math.round(bytes.length / 1e6)}MB \u2014 the limit is 6MB. A screenshot of the relevant part is usually enough.`,
+              error: `That file is ${Math.round(bytes.length / 1e6)}MB — the limit is 6MB. A screenshot of the relevant part is usually enough.`,
             }, 400);
           }
           size = bytes.length;
@@ -1805,7 +1805,7 @@ Deno.serve(async (req: Request) => {
         }
 
         if (!filePath && !bodyText) {
-          throw new Invalid("Paste the email or attach a file \u2014 one or the other.");
+          throw new Invalid("Paste the email or attach a file — one or the other.");
         }
 
         const { data, error } = await supabase.from("b2b_approval_proofs").insert({
