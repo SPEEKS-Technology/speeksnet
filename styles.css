@@ -12458,6 +12458,41 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    field sitting next to Total. */
 .b2b-pc-note input { font-size: 12px; }
 
+/* --- approval evidence ----------------------------------------------------
+   Sits on the quote and review screens and stays on the deal afterwards. Green
+   once something is on record, amber while nothing is -- the same two states
+   the pickup signature block uses, because it answers the same question. */
+.b2b-proofwrap { display: flex; flex-direction: column; gap: 9px; }
+.b2b-proof {
+    display: flex; gap: 12px; align-items: flex-start;
+    padding: 10px 12px; border-radius: 10px;
+    background: #fff; border: 1px solid var(--b2b-line);
+}
+/* A withdrawn entry stays visible but reads as struck from the record rather
+   than as evidence. It is deliberately still legible: hiding it would defeat
+   the point of keeping the tombstone. */
+.b2b-proof.gone { opacity: .6; background: #f7f9fa; }
+.b2b-proof-main { flex: 1; min-width: 0; }
+.b2b-proof-t { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; font-size: 12.5px; }
+.b2b-proof-from { font-size: 11.5px; color: var(--b2b-faint); }
+/* The pasted email, as sent. Monospace and pre-wrapped so headers line up and
+   nothing is silently reflowed -- this is the part somebody reads closely in an
+   argument, so it should look like the original, not like prose. */
+.b2b-proof-body {
+    margin: 7px 0 0; padding: 9px 11px; max-height: 230px; overflow: auto;
+    font-family: 'Consolas','SFMono-Regular',monospace; font-size: 11.5px;
+    line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+    background: #f7f9fa; border: 1px solid var(--b2b-line-2); border-radius: 8px; color: #1a1c1e;
+}
+.b2b-proof-meta { font-size: 11px; color: var(--b2b-faint); margin-top: 6px; }
+.b2b-proof-acts { display: flex; flex-direction: column; gap: 5px; flex: 0 0 auto; }
+.b2b-proof-acts .b2b-mini { text-decoration: none; text-align: center; }
+.b2b-proof-waived { font-size: 12.5px; margin-bottom: 4px; }
+.b2b-proof-gone > summary {
+    cursor: pointer; font-size: 11px; font-weight: 700; color: var(--b2b-faint);
+}
+.b2b-proof-add { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 3px; }
+
 /* --- evaluations ----------------------------------------------------------
    The list reuses .b2b-q-card wholesale: an evaluation row answers the same
    question a queue card does -- what is this, whose is it, what is it worth --

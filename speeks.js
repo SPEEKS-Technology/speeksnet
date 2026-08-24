@@ -15327,6 +15327,7 @@ let _b2bCreateClientId = null;      // client chosen in the new-deal modal
 let _b2bAssignPick   = null;        // location picked but not yet submitted
 let _b2bPrevals      = [];          // pre-evaluations in scope
 let _b2bModalPreval  = null;        // the evaluation open in the editor
+let _b2bProofs       = [];          // approval evidence on whatever is open
 
 // --- identity -------------------------------------------------------------
 
@@ -15464,6 +15465,15 @@ function _b2bQuickAction(d) {
 async function b2bQuickAccept(id, btn) {
     const d = _b2bDealById(id);
     if (!d) return;
+    // The board card has no proof panel, so the check reads the rollup the view
+    // carries rather than the rows -- same answer, no extra fetch.
+    //
+    // `proof_count` being undefined means the board came from a server that does
+    // not know about evidence yet, which is not the same as a deal having none.
+    // Undefined lets it through; zero does not.
+    if (d.proof_count !== undefined && !d.approval_waived_by && !Number(d.proof_count)) {
+        return _b2bApprovalGate({ approval_waived_by: null });
+    }
     const msg = `Accept ${d.client?.company || 'this'} quote at ${_b2bMoney(_b2bNetOffer(d), 2)}?\n\n`
         + 'The offers lock in as our cost and the items become inventory to list. This cannot be undone.';
     if (!confirm(msg)) return;
@@ -17414,6 +17424,8 @@ async function b2bOpenPreval(id) {
     _b2bModalPreval = v;
     _b2bModalDeal = null;
     _b2bModalItems = [];
+    _b2bProofs = [];
+    await _b2bLoadProofs(id);
     try {
         _b2bModalItems = await _b2bGet(`preval_id=${encodeURIComponent(id)}`);
     } catch (e) {
@@ -17685,6 +17697,306 @@ async function b2bDoPrevalConvert(id, btn) {
     }
 }
 
+// ===========================================================================
+// APPROVAL EVIDENCE
+// ---------------------------------------------------------------------------
+// The dispute this exists for: a client says they never agreed to the price, and
+// the only thing on file is that somebody here ticked "accepted". That tick is
+// our word. This holds theirs -- their email, or a screenshot of it.
+//
+// Modelled on the pickup signature, which answers the same question one stage
+// earlier: evidence, or an attributed reason for going without, never silently
+// neither. Accepting a quote now checks for one of the two.
+//
+// Attaches to a deal OR an evaluation. An accepted evaluation converts into a
+// deal at exactly its prices, so it carries the same argument.
+// ===========================================================================
+
+const B2B_PROOF_KINDS = [
+    { key: 'email',      label: 'Their email',   hint: 'Paste it whole, headers and all — that is the strongest version of it' },
+    { key: 'screenshot', label: 'Screenshot',    hint: 'A picture of the email, or of a text message' },
+    { key: 'document',   label: 'Document',      hint: 'A signed PDF, a purchase order' },
+    { key: 'note',       label: 'Written note',  hint: 'Approved over the phone or across the counter — say who, when and what they said' },
+];
+const _b2bProofKind = (k) => B2B_PROOF_KINDS.find(x => x.key === k) || B2B_PROOF_KINDS[0];
+
+// Live evidence only. A withdrawn entry stays on the record so the removal is
+// visible, but it stops counting toward "is this approved".
+function _b2bLiveProofs() { return _b2bProofs.filter(p => !p.removed_at); }
+function _b2bApprovalOnRecord(owner) {
+    return !!owner?.approval_waived_by || _b2bLiveProofs().length > 0;
+}
+
+// Whether the last fetch actually told us anything. This is not bookkeeping for
+// its own sake -- the acceptance gate reads it, and a gate that cannot tell
+// "there is no approval on file" from "I could not find out" is a gate that
+// stops the business every time the network hiccups.
+let _b2bProofsOk = false;
+
+async function _b2bLoadProofs(ownerId) {
+    _b2bProofs = [];
+    _b2bProofsOk = false;
+    try {
+        const rows = await _b2bGet(`proofs=${encodeURIComponent(ownerId)}`);
+        // Shape-checked, not just awaited. A server that predates this feature
+        // does not 404 on ?proofs= -- the parameter is simply unrecognised and
+        // the request falls through to the board read, which answers 200 with a
+        // list of DEALS. Taking that at face value would paint deals as
+        // evidence. Every real proof row carries added_by.
+        if (!Array.isArray(rows)) return;
+        if (rows.length && !('added_by' in rows[0])) return;
+        _b2bProofs = rows;
+        _b2bProofsOk = true;
+    } catch (_) {
+        // Left as "we do not know", which the gate treats as permission to
+        // proceed rather than as an absence of approval.
+    }
+}
+
+// The panel that sits on the quote and review screens, and stays on the deal
+// forever afterwards -- the argument it exists for happens months later.
+function _b2bProofPanel(owner) {
+    if (!owner) return '';
+    const live = _b2bLiveProofs();
+    const gone = _b2bProofs.filter(p => p.removed_at);
+    const waived = owner.approval_waived_by;
+    const ok = live.length > 0 || waived;
+
+    const row = (p) => {
+        const k = _b2bProofKind(p.kind);
+        const who = [p.from_addr, p.sent_on ? _b2bDate(p.sent_on) : ''].filter(Boolean).join(' · ');
+        return `
+        <div class="b2b-proof ${p.removed_at ? 'gone' : ''}">
+            <div class="b2b-proof-main">
+                <div class="b2b-proof-t">
+                    <span class="b2b-chip b2b-chip-${p.removed_at ? 'neu' : 'ok'}">${escapeHtml(k.label)}</span>
+                    ${p.label ? `<b>${escapeHtml(p.label)}</b>` : ''}
+                    ${who ? `<span class="b2b-proof-from">${escapeHtml(who)}</span>` : ''}
+                </div>
+                ${p.body_text ? `<pre class="b2b-proof-body">${escapeHtml(p.body_text)}</pre>` : ''}
+                <div class="b2b-proof-meta">
+                    Added by ${escapeHtml(p.added_by)} · ${escapeHtml(_b2bDate(p.added_at))}
+                    ${p.removed_at ? ` · withdrawn by ${escapeHtml(p.removed_by || '')}: ${escapeHtml(p.removed_reason || '')}` : ''}
+                </div>
+            </div>
+            <div class="b2b-proof-acts">
+                ${p.file_path ? `<a class="b2b-mini" target="_blank" rel="noopener"
+                    href="${B2B_URL}?proof_file=${encodeURIComponent(p.id)}">Open file</a>` : ''}
+                ${!p.removed_at && _b2bCanAccept()
+                    ? `<button class="b2b-mini" onclick="b2bRemoveProof('${p.id}')">Withdraw</button>` : ''}
+            </div>
+        </div>`;
+    };
+
+    const ownerAttr = owner.eval_no !== undefined
+        ? `'${owner.id}','preval'` : `'${owner.id}','deal'`;
+
+    return `
+        <div class="b2b-note b2b-proofwrap ${ok ? 'ok' : 'warn'}">
+            <span class="b2b-note-k">${ok ? "The client's approval is on record" : "No approval on record yet"}</span>
+            ${waived ? `<div class="b2b-proof-waived">Accepted without written approval by
+                ${escapeHtml(waived)} — ${escapeHtml(owner.approval_waived_reason || '')}</div>` : ''}
+            ${!ok ? `<div>Attach the client's email or a screenshot of it before this is accepted.
+                It is what answers them later if they say they never agreed to the price.</div>` : ''}
+            ${live.map(row).join('')}
+            ${gone.length ? `<details class="b2b-proof-gone"><summary>${gone.length} withdrawn</summary>${gone.map(row).join('')}</details>` : ''}
+            <div class="b2b-proof-add">
+                <button class="b2b-btn b2b-btn-secondary b2b-mini" onclick="b2bOpenProofAdd(${ownerAttr})">＋ Attach approval</button>
+                ${!ok && _b2bCanAccept()
+                    ? `<button class="b2b-mini" onclick="b2bWaiveApproval(${ownerAttr})">No written approval — record why</button>` : ''}
+            </div>
+        </div>`;
+}
+
+// --- attaching -------------------------------------------------------------
+
+let _b2bProofOwner = null;      // { id, kind: 'deal' | 'preval' }
+let _b2bProofKindPick = 'email';
+let _b2bProofFile = null;       // { name, mime, dataUri, bytes }
+
+function b2bOpenProofAdd(ownerId, ownerKind) {
+    _b2bProofOwner = { id: ownerId, kind: ownerKind };
+    _b2bProofKindPick = 'email';
+    _b2bProofFile = null;
+    _b2bPaintProofModal();
+    toggleModal('b2bProofModal');
+}
+
+function b2bPickProofKind(k) {
+    _b2bProofKindPick = k;
+    _b2bPaintProofModal();
+}
+
+function _b2bPaintProofModal() {
+    const body = document.getElementById('b2bProofBody');
+    if (!body) return;
+    const k = _b2bProofKind(_b2bProofKindPick);
+    // Kept: whatever has been typed already, so switching kind mid-entry does
+    // not throw the work away.
+    const keepLabel = document.getElementById('b2bPfLabel')?.value || '';
+    const keepFrom  = document.getElementById('b2bPfFrom')?.value || '';
+    const keepDate  = document.getElementById('b2bPfDate')?.value || '';
+    const keepBody  = document.getElementById('b2bPfBody')?.value || '';
+
+    body.innerHTML = `
+        <label class="form-label-caps">What is it</label>
+        <div class="b2b-intake-pick" id="b2bPfKinds">
+            ${B2B_PROOF_KINDS.map(x => `
+                <button class="b2b-intake ${x.key === _b2bProofKindPick ? 'on' : ''}" data-kind="${x.key}"
+                    onclick="b2bPickProofKind('${x.key}')">
+                    <span class="b2b-intake-t">${escapeHtml(x.label)}</span>
+                    <span class="b2b-intake-s">${escapeHtml(x.hint)}</span>
+                </button>`).join('')}
+        </div>
+        <div class="b2b-grid2" style="margin-top:14px;">
+            <div><label class="form-label-caps">From</label>
+                <input id="b2bPfFrom" class="form-input-lg" placeholder="dana@acme.com" value="${escapeHtml(keepFrom)}"></div>
+            <div><label class="form-label-caps">Dated</label>
+                <input id="b2bPfDate" type="date" class="form-input-lg" value="${escapeHtml(keepDate)}"></div>
+        </div>
+        <label class="form-label-caps" style="margin-top:12px;">Label</label>
+        <input id="b2bPfLabel" class="form-input-lg" maxlength="200" value="${escapeHtml(keepLabel)}"
+            placeholder="e.g. Dana confirming the revised numbers">
+        <label class="form-label-caps" style="margin-top:12px;">${
+            _b2bProofKindPick === 'note' ? 'What was said' : 'Paste the email'}</label>
+        <textarea id="b2bPfBody" class="form-input-lg" rows="7" placeholder="${
+            _b2bProofKindPick === 'note'
+                ? 'Who approved it, when, and what they actually said.'
+                : 'Paste the whole thing including the From / Sent / Subject lines — the headers are the part that proves it came from them.'
+        }">${escapeHtml(keepBody)}</textarea>
+        <p class="b2b-hint">${escapeHtml(k.hint)}</p>
+        <label class="form-label-caps" style="margin-top:12px;">Or attach a file</label>
+        <input id="b2bPfFile" type="file" class="form-input-lg"
+            accept="image/png,image/jpeg,image/webp,application/pdf,message/rfc822,.eml,text/plain"
+            onchange="b2bProofFilePicked(this)">
+        <p class="b2b-hint">PNG, JPEG, PDF or a saved .eml, up to 6MB. You can paste the text, attach
+            a file, or both — one of the two is enough.</p>
+        <div id="b2bPfFileState"></div>`;
+
+    const foot = document.getElementById('b2bProofFooter');
+    if (foot) {
+        foot.innerHTML = `
+            <span class="b2b-msg" id="b2bPfMsg"></span>
+            <button class="kpi-cancel-btn" onclick="closeAllModals()">Cancel</button>
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bSaveProof(this)">Attach</button>`;
+    }
+    if (_b2bProofFile) _b2bPaintProofFile();
+}
+
+function _b2bPaintProofFile() {
+    const el = document.getElementById('b2bPfFileState');
+    if (!el) return;
+    el.innerHTML = _b2bProofFile
+        ? `<div class="b2b-note ok"><span class="b2b-note-k">Attached</span>
+             ${escapeHtml(_b2bProofFile.name)} · ${Math.max(1, Math.round(_b2bProofFile.bytes / 1024))} KB</div>`
+        : '';
+}
+
+// Read once, here, rather than at save time: a file input's contents can be
+// gone by the time an async save runs if the dialog has been touched since.
+function b2bProofFilePicked(input) {
+    const f = input.files && input.files[0];
+    if (!f) { _b2bProofFile = null; _b2bPaintProofFile(); return; }
+    if (f.size > 6_000_000) {
+        _b2bProofFile = null;
+        _b2bPaintProofFile();
+        return alert(`That file is ${Math.round(f.size / 1e6)}MB — the limit is 6MB.\n\n`
+            + 'A screenshot of the relevant part is usually enough.');
+    }
+    const r = new FileReader();
+    r.onload = () => {
+        _b2bProofFile = { name: f.name, mime: f.type || 'application/octet-stream',
+                          dataUri: String(r.result || ''), bytes: f.size };
+        _b2bPaintProofFile();
+    };
+    r.onerror = () => { _b2bProofFile = null; alert("Couldn't read that file."); };
+    r.readAsDataURL(f);
+}
+
+async function b2bSaveProof(btn) {
+    if (!_b2bProofOwner) return;
+    const text = document.getElementById('b2bPfBody')?.value.trim() || '';
+    if (!text && !_b2bProofFile) {
+        return _b2bSay('Paste the email or attach a file — one or the other.', true);
+    }
+    const payload = {
+        action: 'add_proof',
+        kind: _b2bProofKindPick,
+        label: document.getElementById('b2bPfLabel')?.value.trim(),
+        from_addr: document.getElementById('b2bPfFrom')?.value.trim(),
+        sent_on: document.getElementById('b2bPfDate')?.value || undefined,
+        body_text: text || undefined,
+        file: _b2bProofFile?.dataUri,
+    };
+    payload[_b2bProofOwner.kind === 'preval' ? 'preval_id' : 'deal_id'] = _b2bProofOwner.id;
+    try {
+        await _b2bBusy(btn, 'Attaching…', () => _b2bSend(payload));
+        const owner = _b2bProofOwner;
+        closeAllModals();
+        await _b2bLoadProofs(owner.id);
+        await b2bRefresh();
+        // Straight back to whatever it was attached to, so the panel shows it.
+        if (owner.kind === 'preval') b2bOpenPreval(owner.id);
+        else { const d = _b2bDealById(owner.id); if (d) b2bOpenDeal(_b2bClickKind(d), d.id); }
+    } catch (e) {
+        alert(`Couldn't attach that: ${e.message}`);
+    }
+}
+
+async function b2bRemoveProof(id) {
+    const reason = prompt('Withdraw this piece of evidence.\n\nSay why — the entry stays on the '
+        + 'record with your name against it, because an evidence log that can be quietly '
+        + 'pruned is worth much less in the argument it exists for.');
+    if (reason === null) return;
+    if (!reason.trim()) return alert('A reason is required.');
+    try {
+        await _b2bSend({ action: 'remove_proof', id, reason: reason.trim() });
+        const owner = _b2bEditParent();
+        if (owner) { await _b2bLoadProofs(owner.id); }
+        await b2bRefresh();
+        if (_b2bModalPreval) b2bOpenPreval(_b2bModalPreval.id);
+        else if (_b2bModalDeal) b2bOpenDeal(_b2bClickKind(_b2bModalDeal), _b2bModalDeal.id);
+    } catch (e) {
+        alert(`Couldn't withdraw that: ${e.message}`);
+    }
+}
+
+async function b2bWaiveApproval(ownerId, ownerKind) {
+    const reason = prompt('Accept WITHOUT the client\'s written approval.\n\n'
+        + 'Say how they approved — who said it, when, and by what means. This is recorded '
+        + 'against your name and it is what stands in for their email if they ever say '
+        + 'they never agreed.');
+    if (reason === null) return;
+    if (!reason.trim()) return alert('A reason is required.');
+    const payload = { action: 'waive_approval', reason: reason.trim() };
+    payload[ownerKind === 'preval' ? 'preval_id' : 'deal_id'] = ownerId;
+    try {
+        await _b2bSend(payload);
+        await b2bRefresh();
+        if (ownerKind === 'preval') b2bOpenPreval(ownerId);
+        else { const d = _b2bDealById(ownerId); if (d) b2bOpenDeal(_b2bClickKind(d), d.id); }
+    } catch (e) {
+        alert(`Couldn't record that: ${e.message}`);
+    }
+}
+
+// The one gate, shared by every path that accepts. Returns true when it is safe
+// to go ahead; otherwise it has already told the user what is missing.
+function _b2bApprovalGate(owner) {
+    // Fail OPEN when we could not read the evidence. The server enforces this
+    // too, and it is the authority; this copy exists to explain the rule before
+    // somebody hits it, not to be the thing that stops them. Blocking on a
+    // failed fetch would mean a deploy window, or one bad request, halts every
+    // acceptance in the company.
+    if (!_b2bProofsOk) return true;
+    if (_b2bApprovalOnRecord(owner)) return true;
+    alert("The client's approval isn't on record yet.\n\n"
+        + 'Open the deal and attach their email or a screenshot of it — or, if they approved '
+        + 'by phone or in person, record that instead. This is what answers them later if '
+        + 'they say they never agreed to the price.');
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // DEAL MODAL -- one shell, one renderer per stage
 // ---------------------------------------------------------------------------
@@ -17730,6 +18042,11 @@ async function b2bOpenDeal(kind, id) {
     _b2bModalItems = [];
     // Default every screen to the card grid; only pricing opts into the sheet.
     _b2bGridMode = 'cards';
+    // The approval evidence rides along with the deal from the quote stage on:
+    // that is where it is captured, and it stays visible forever afterwards
+    // because the argument it exists for happens months later.
+    _b2bProofs = [];
+    if (['quote', 'listing', 'view'].includes(kind)) await _b2bLoadProofs(deal.id);
     // Every stage past pricing needs the line items; fetch once up front.
     if (['pricing', 'quote', 'listing', 'view'].includes(kind)) {
         try {
@@ -19924,6 +20241,7 @@ function _b2bStageReview(deal) {
                     ? 'Nothing has gone to the client yet. Send it from your own mailbox, or send it back to pricing with a note.'
                     : 'A CEO, MOCD or District Manager sends it out.'}
             </div>
+            ${_b2bProofPanel(deal)}
             ${_b2bTotalsBar(true)}
             <div class="b2b-rvw-wrap">
                 <div class="b2b-rvw-lines">
@@ -19997,6 +20315,7 @@ function _b2bStageQuote(deal) {
                 <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
                 <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
             </div>
+            ${_b2bProofPanel(deal)}
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
@@ -20527,6 +20846,7 @@ async function b2bOpenDraft(id, to, copied) {
 }
 
 async function b2bAcceptQuote(id, btn) {
+    if (!_b2bApprovalGate(_b2bDealById(id) || _b2bModalDeal)) return;
     // The same readiness gate as submitting, because the server runs the same
     // one here -- checking only the reasons would let a line with two of five
     // serials get all the way to a 400 from the accept call.

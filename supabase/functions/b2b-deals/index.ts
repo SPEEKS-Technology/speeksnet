@@ -100,6 +100,22 @@ const PREVAL_OPEN = ["draft", "sent"];
 // ever it, because that half of the row has to agree with a deal that now
 // exists.
 const PREVAL_SETTABLE = ["draft", "sent", "accepted", "declined"];
+
+// What a piece of approval evidence can be. A plain note is the odd one out and is
+// deliberately allowed: a typed account of a phone call is weak evidence, but it
+// is evidence, and forcing it to masquerade as an email would be worse.
+const PROOF_KINDS = ["email", "screenshot", "document", "note"];
+// Mirrors the b2b-proofs bucket's allowlist. Refused here as well as there so a
+// bad upload gets a sentence instead of a storage error.
+const PROOF_MIMES: Record<string, string> = {
+  "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
+  "application/pdf": "pdf", "message/rfc822": "eml", "text/plain": "txt",
+};
+// The bucket caps at 10MB. This is the decoded ceiling, lower because the base64
+// has to survive a JSON request body on the way in.
+const PROOF_MAX_BYTES = 6_000_000;
+const PROOF_COLS = "id,deal_id,preval_id,kind,label,from_addr,sent_on,body_text," +
+  "file_path,mime,bytes,added_by,added_at,removed_at,removed_by,removed_reason";
 const ACCEPT_ROLES = ["ceo", "mocd", "tom", "district manager"];
 // 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
 // spelling stays recognised here: existing rows were migrated, but a row saved
@@ -146,6 +162,9 @@ const DEAL_COLS = [
   // the board so a pricer can see the figures were quoted in advance without
   // a second fetch per row.
   "preval_id", "preval_ref",
+  // Whether the client's approval is on record, and if it is not, the reason
+  // somebody gave for accepting anyway.
+  "approval_waived_by", "approval_waived_reason", "proof_count",
 ].join(",");
 
 // Who to ring at the client. Corp business: a store prices and lists the goods,
@@ -178,6 +197,7 @@ const PREVAL_COLS = [
   "company", "acronym", "contact", "contact_email", "contact_phone",
   "line_count", "total_units", "total_value", "total_offer",
   "total_wipe_fee", "total_shipping", "net_offer",
+  "approval_waived_by", "approval_waived_reason", "proof_count",
 ].join(",");
 const SCOPED_PREVAL_COLS = PREVAL_COLS.split(",")
   .filter((c) => !CONTACT_COLS.includes(c)).join(",");
@@ -429,6 +449,26 @@ async function getPreval(sb: any, id: string) {
   if (error) throw new Error(error.message);
   return data;
 }
+
+// Is the client's approval on record for this thing? Either a live piece of
+// evidence, or an attributed reason for going without -- exactly the shape the
+// pickup signature already uses, because it is exactly the same question asked
+// one stage earlier.
+//
+// Removed proofs do not count. They are kept as tombstones so the record shows
+// something was withdrawn, but a deal whose only evidence was withdrawn is in
+// the same position as one that never had any.
+async function approvalOnRecord(sb: any, col: "deal_id" | "preval_id", id: string, row: any) {
+  if (row?.approval_waived_by) return true;
+  const { count } = await sb.from("b2b_approval_proofs")
+    .select("id", { count: "exact", head: true })
+    .eq(col, id).is("removed_at", null);
+  return (count || 0) > 0;
+}
+
+const NEEDS_PROOF =
+  "The client's approval isn't on record yet \u2014 attach the email or a screenshot of it, " +
+  "or record why there isn't one. This is what answers them later if they say they never agreed.";
 
 // The field set shared by adding and updating an evaluation line. Mirrors the
 // deal-item builder exactly, minus the fields a pre-evaluation cannot have --
@@ -1157,6 +1197,16 @@ Deno.serve(async (req: Request) => {
         if (!ACCEPT_ROLES.includes(role)) {
           return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can accept a quote." }, 403);
         }
+        // Either the client's approval is on file, or somebody has said in
+        // writing why it is not. Never silently neither -- this is the moment
+        // the money is committed, and it is the moment a dispute will point at.
+        //
+        // Enforced on the transition rather than as a CHECK on the table, the
+        // same way the pickup signature is: deals accepted before this shipped
+        // have neither, and must not be rewritten or retroactively invalidated.
+        if (!await approvalOnRecord(supabase, "deal_id", deal.id, deal)) {
+          return jsonResponse({ success: false, error: NEEDS_PROOF }, 409);
+        }
 
         const { data: items } = await supabase.from("b2b_deal_items")
           .select("id, line_no, sku, offer, make, model, condition, client_notes, quantity, serials, item_type, cpu, ram, storage")
@@ -1585,6 +1635,11 @@ Deno.serve(async (req: Request) => {
             .select("id", { count: "exact", head: true }).eq("preval_id", preval.id);
           if (!count) return jsonResponse({ success: false, error: "Add at least one line before sending this evaluation." }, 400);
         }
+        // An accepted evaluation converts into a deal at exactly these prices,
+        // so it carries the same dispute and the same requirement.
+        if (to === "accepted" && !await approvalOnRecord(supabase, "preval_id", preval.id, preval)) {
+          return jsonResponse({ success: false, error: NEEDS_PROOF }, 409);
+        }
         const now = new Date().toISOString();
         const who = str(body.user, 120, "User") || "Unknown";
         const patch: Record<string, unknown> = { status: to };
@@ -1690,6 +1745,132 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sort_order: data.sort_order });
       }
 
+      // ==================================================== approval evidence
+      // Why this exists: a client says they never agreed to the price, and the
+      // only thing on file is that somebody here ticked "accepted". That tick is
+      // our word. This stores theirs. See 0050.
+
+      if (action === "add_proof") {
+        const dealId = str(body.deal_id, 64, "Deal");
+        const prevalId = str(body.preval_id, 64, "Evaluation");
+        if (!!dealId === !!prevalId) {
+          throw new Invalid("A proof attaches to exactly one deal or one evaluation.");
+        }
+        // The owner must exist before anything is uploaded, so a typo'd id
+        // cannot leave an orphan file in the bucket.
+        const owner = dealId ? await getDeal(supabase, dealId) : await getPreval(supabase, prevalId!);
+        if (!owner) return jsonResponse({ success: false, error: "That record no longer exists." }, 404);
+
+        const kind = oneOf(String(body.kind ?? "email").toLowerCase(), PROOF_KINDS, "Kind")!;
+        const bodyText = str(body.body_text, 100000, "Pasted email");
+        let filePath: string | null = null;
+        let mime: string | null = null;
+        let size: number | null = null;
+
+        // A data URI, same shape the signature pad posts. Refused rather than
+        // coerced if the type is not on the allowlist: the bucket would reject
+        // it anyway, later and far less helpfully.
+        const raw = String(body.file || "");
+        if (raw) {
+          const m = raw.match(/^data:([a-z0-9.+\/-]+);base64,([A-Za-z0-9+\/=]+)$/i);
+          if (!m) return jsonResponse({ success: false, error: "That file didn't arrive in a readable form." }, 400);
+          mime = m[1].toLowerCase();
+          const ext = PROOF_MIMES[mime];
+          if (!ext) {
+            return jsonResponse({
+              success: false,
+              error: `${mime} isn't a file type we can store \u2014 use a PNG, JPEG, PDF or saved email.`,
+            }, 400);
+          }
+          let bytes: Uint8Array;
+          try {
+            bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+          } catch (_) {
+            return jsonResponse({ success: false, error: "That file was malformed." }, 400);
+          }
+          if (!bytes.length) return jsonResponse({ success: false, error: "That file is empty." }, 400);
+          if (bytes.length > PROOF_MAX_BYTES) {
+            return jsonResponse({
+              success: false,
+              error: `That file is ${Math.round(bytes.length / 1e6)}MB \u2014 the limit is 6MB. A screenshot of the relevant part is usually enough.`,
+            }, 400);
+          }
+          size = bytes.length;
+          // Foldered by owner and timestamped, like a signature: nothing is ever
+          // overwritten, so a re-upload cannot quietly replace evidence.
+          filePath = `${dealId || prevalId}/${Date.now()}.${ext}`;
+          const up = await supabase.storage.from("b2b-proofs")
+            .upload(filePath, bytes, { contentType: mime, upsert: false });
+          if (up.error) return jsonResponse({ success: false, error: up.error.message }, 500);
+        }
+
+        if (!filePath && !bodyText) {
+          throw new Invalid("Paste the email or attach a file \u2014 one or the other.");
+        }
+
+        const { data, error } = await supabase.from("b2b_approval_proofs").insert({
+          deal_id: dealId, preval_id: prevalId,
+          kind, label: str(body.label, 200, "Label"),
+          from_addr: str(body.from_addr, 200, "From"),
+          sent_on: isoDate(body.sent_on, "Date sent"),
+          body_text: bodyText, file_path: filePath, mime, bytes: size,
+          added_by: str(body.user, 120, "User") || "Unknown",
+        }).select("id, added_at").single();
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealId ? dealStore(owner) : owner.store,
+          { deal: dealId, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, id: data.id, added_at: data.added_at });
+      }
+
+      // A tombstone, not a delete. The row stays and the file stays; what
+      // changes is that it stops counting as evidence and says who withdrew it
+      // and why. An evidence log that can be quietly pruned is worth much less
+      // in the argument it exists for.
+      if (action === "remove_proof") {
+        const id = str(body.id, 64, "Proof", true)!;
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can withdraw a piece of evidence." }, 403);
+        }
+        const { data: cur } = await supabase.from("b2b_approval_proofs")
+          .select("id, deal_id, preval_id, removed_at").eq("id", id).maybeSingle();
+        if (!cur) return jsonResponse({ success: false, error: "That entry no longer exists." }, 404);
+        if (cur.removed_at) return jsonResponse({ success: false, error: "That entry has already been withdrawn." }, 409);
+        const { error } = await supabase.from("b2b_approval_proofs").update({
+          removed_at: new Date().toISOString(),
+          removed_by: str(body.user, 120, "User") || "Unknown",
+          removed_reason: str(body.reason, 1000, "A reason for withdrawing this", true),
+        }).eq("id", id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null, { deal: cur.deal_id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true });
+      }
+
+      // Accepting without evidence, on the record. Same authority that accepts
+      // the quote, because it is the same decision: this is the sentence that
+      // stands in for the client's email if it is ever questioned.
+      if (action === "waive_approval") {
+        const dealId = str(body.deal_id, 64, "Deal");
+        const prevalId = str(body.preval_id, 64, "Evaluation");
+        if (!!dealId === !!prevalId) {
+          throw new Invalid("A waiver applies to exactly one deal or one evaluation.");
+        }
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can accept without the client's approval on record." }, 403);
+        }
+        const patch = {
+          approval_waived_by: str(body.user, 120, "User") || "Unknown",
+          approval_waived_reason: str(body.reason, 1000, "A reason for going without written approval", true),
+        };
+        const { error } = dealId
+          ? await supabase.from("b2b_deals").update(patch).eq("id", dealId)
+          : await supabase.from("b2b_prevals").update(patch).eq("id", prevalId!);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null, { deal: dealId, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true });
+      }
+
       return jsonResponse({ success: false, error: "Unknown action" }, 400);
     } catch (err: any) {
       if (err instanceof Invalid) return jsonResponse({ success: false, error: err.message }, 400);
@@ -1735,6 +1916,45 @@ Deno.serve(async (req: Request) => {
         .order("company", { ascending: true }).limit(2000);
       if (error) return jsonResponse({ success: false, error: error.message }, 500);
       return jsonResponse({ success: true, data: data || [] });
+    }
+
+    // ?proofs=<deal or evaluation id> → the approval evidence on it.
+    //
+    // One parameter for both owners: the ids are UUIDs, so matching either
+    // column is unambiguous and the caller does not have to say which kind of
+    // thing it is holding.
+    //
+    // body_text comes back in full here, unlike on the list views, because this
+    // is the screen where somebody is actually reading the email.
+    const proofsFor = url.searchParams.get("proofs");
+    if (proofsFor) {
+      const { data, error } = await supabase.from("b2b_approval_proofs")
+        .select(PROOF_COLS)
+        .or(`deal_id.eq.${proofsFor},preval_id.eq.${proofsFor}`)
+        .order("added_at", { ascending: true }).limit(500);
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({ success: true, data: data || [] });
+    }
+
+    // ?proof_file=<proof id> → the attachment itself.
+    //
+    // Streamed through here rather than handed out as a signed URL, for the same
+    // reason the signature is: a signed URL keeps working after it leaves the
+    // page, and this is evidence about a named client.
+    const proofFile = url.searchParams.get("proof_file");
+    if (proofFile) {
+      const { data: pr } = await supabase.from("b2b_approval_proofs")
+        .select("file_path, mime").eq("id", proofFile).maybeSingle();
+      if (!pr?.file_path) return jsonResponse({ success: false, error: "That entry has no attachment." }, 404);
+      const dl = await supabase.storage.from("b2b-proofs").download(pr.file_path);
+      if (dl.error || !dl.data) return jsonResponse({ success: false, error: "Couldn't read that attachment." }, 500);
+      return new Response(await dl.data.arrayBuffer(), {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": pr.mime || "application/octet-stream",
+          "Cache-Control": "private, max-age=60",
+        },
+      });
     }
 
     // ?prevals=1[&store=<CODE>] → the evaluation list.

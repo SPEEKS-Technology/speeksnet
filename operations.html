@@ -72,7 +72,7 @@
       <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v3.3.0</span>
+            <span class="version-tag">v3.4.0</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -795,6 +795,27 @@
     </div>
     <div class="manage-content" id="b2bCreateBody"></div>
     <div class="manage-footer flex-end" id="b2bCreateFooter"></div>
+</div>
+
+<!-- ===== B2B APPROVAL EVIDENCE MODAL =====
+     Its own modal rather than a section of the deal screen: attaching the
+     client's email is a deliberate, one-at-a-time act, and the deal screen is
+     already the densest thing in the app. Body and footer are painted by
+     _b2bPaintProofModal(). -->
+<div class="modal-menu manage-menu" id="b2bProofModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">Attach The Client's Approval</span>
+                <span class="tool-head-sub">What answers them later if they say they never agreed.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="b2bProofBody"></div>
+    <div class="manage-footer flex-end" id="b2bProofFooter"></div>
 </div>
 
 <!-- ===== B2B DEAL MODAL (title / body / footer all driven by b2bOpenDeal) ===== -->
