@@ -1,6 +1,7 @@
 // ============================================================================
-// newmc-mpl-fix.gs — restore MPL's real Aug 22 / Aug 23 figures after the
-// PayMore new-Marketplace-Connect adoption produced 22 duplicate Shopify orders.
+// newmc-store-fix.gs — restore the real daily figures for each store as it moves
+// onto PayMore new Marketplace Connect and its adoption duplicates that store
+// Shopify orders. MPL and BAL are done; add each further store as it moves.
 //
 // THIS IS A DIFFERENT INCIDENT FROM mpc-dupe-fix.gs. That one covers Aug 16-20
 // (the 2026-08-20 MC back-fill). This one covers Aug 22-23 (the 2026-08-24
@@ -46,18 +47,20 @@
 // out, because last week's refund credits landed there; that is expected and is
 // NOT what the sheet should say. Leave it alone.
 //
-// AUG 21 has zero phantom involvement, so the importer's own figure is right.
+// WHICH DAYS ARE HIT DIFFERS PER STORE. MPL Aug 21 has zero phantom
+// involvement, so the importer figure is right there. BAL Aug 21 IS hit and is
+// in the list. Derive the days for every store; never copy another store range.
 //
 // ---------------------------------------------------------------------------
 // AUG 24 STILL HAS TO BE DONE — TOMORROW MORNING
 // ---------------------------------------------------------------------------
-// Aug 24 currently carries the ENTIRE -6709.79 reversal, so until it is locked at
-// its true value the August month total is understated by that amount. Today's
-// true figure so far is 507.61 / 186.00, but the day is not over.
+// Aug 24 carries the ENTIRE reversal for each store, so until it is locked at its
+// true value that store August month total is understated by it:
+//   MPL 6709.79     BAL 3529.84
 //
-// Tomorrow: take the real final Aug 24 figure, uncomment the row at the bottom of
-// NMC_FIX, put the number in, re-run preview then apply. Month total is then
-// correct and the day-by-day split is correct.
+// Tomorrow: take each real final Aug 24 figure, uncomment the rows at the bottom
+// of NMC_FIX, put the numbers in, re-run preview then apply. Month totals are
+// then correct and so is the day-by-day split.
 //
 // ---------------------------------------------------------------------------
 // HOW TO RUN — no deployment, this is a Run-from-the-editor script
@@ -114,12 +117,34 @@ var NMC_NOTE = 'New-MC adoption dupe fix — real figure. Locked from the daily 
 // phantoms were already staged; the new system had created no further copies.
 var NMC_FIX = [
   { store: 'MPL', day: 22, sales: 5868.06, cost: 2536.09 },
-  { store: 'MPL', day: 23, sales: 3535.86, cost: 1543.40 }
+  { store: 'MPL', day: 23, sales: 3535.86, cost: 1543.40 },
 
-  // TOMORROW (2026-08-25), once Aug 24's real final figure is known. Uncomment,
-  // replace both numbers, re-run nmcFixPreview then nmcFixApply. Until this is
-  // done the August month total is understated by 6709.79.
+  // BAL, added 2026-08-24. 17 duplicate orders, all refunded (3584.83), all
+  // reversed to net_sales 0 / cogs 0, and all 17 of ours left intact.
+  //
+  // WARNING: BAL IS HIT ON AUG 21 AS WELL, WHICH MPL WAS NOT. Do not assume the
+  // two stores share a day range -- derive each one.
+  //
+  // BAL Aug 20 is deliberately absent: mpc-dupe-fix.gs locked it at
+  // 2461.83 / 1079.25 before these phantoms existed, so it is already true and
+  // the formula lock protects it. Shopify reads BAL Aug 20 as -7152.73 once the
+  // new phantoms come out, because last week refund credits landed there. That
+  // is expected and is NOT what the sheet should say.
+  { store: 'BAL', day: 21, sales: 1204.38, cost:  551.01 },
+  { store: 'BAL', day: 22, sales: 2818.92, cost: 1191.00 },
+  { store: 'BAL', day: 23, sales: 2379.14, cost: 1108.01 }
+
+  // TOMORROW (2026-08-25), once Aug 24 real final figures are known. Uncomment,
+  // replace the numbers, re-run nmcFixPreview then nmcFixApply.
+  // Until Aug 24 is locked, each store August month total is understated by the
+  // reversal its Aug 24 is carrying: MPL 6709.79, BAL 3529.84.
+  //
+  // Measured 11:30 today and still moving: MPL 507.61 / 186.00.
+  // BAL true Aug 24 is NEGATIVE (-1344.99 / -578.00) and that is REAL -- BAL has
+  // genuine returns exceeding sales so far today, nothing to do with the
+  // duplicates. Take the final figure whatever its sign.
   // , { store: 'MPL', day: 24, sales: 0.00, cost: 0.00 }
+  // , { store: 'BAL', day: 24, sales: 0.00, cost: 0.00 }
 ];
 
 function nmcFixPreview() { _nmcRun(true); }
