@@ -186,9 +186,23 @@ function _nmcRun(dryRun) {
         refused++;
         return;
       }
-      if (curF === want) {
+      // ⚠️ COMPARE THE VALUE, NOT THE FORMULA STRING.
+      // Sheets normalises a stored formula: "=1543.40" comes back as "=1543.4".
+      // A string test therefore never matches, so the cell is rewritten on every
+      // run, Sheets re-normalises it, and the script can never report clean --
+      // which is exactly how a fix script stops being trusted. Seen live on
+      // AL27 (MPL day 23 cost) after the first apply: correct value, reported as
+      // still needing a write.
+      //
+      // Compares the cell VALUE, which Sheets has already computed, so it holds
+      // for "=1543.4", "=1543.40" and a plain typed 1543.4 alike. Guarded on
+      // blank, because Number("") is 0 and would read an empty cell as a match
+      // for a wanted 0.
+      var already_ok = (curV !== "" && curV !== null && curV !== undefined
+                        && Math.abs(Number(curV) - c.want) < 0.005);
+      if (already_ok && curF) {
         already++;
-        return;   // idempotent: already locked to the right number
+        return;   // right number AND locked as a formula: nothing to do
       }
 
       Logger.log(_nmcPad(a1, 8) + _nmcPad(f.store, 6) + _nmcPad(f.day, 5) + _nmcPad(c.label, 7)
