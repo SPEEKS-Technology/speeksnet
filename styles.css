@@ -14544,6 +14544,28 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .crm-tab.active { color: #178048; border-bottom-color: #1f9d57; }
 .crm-tab .crm-badge { background: #dc2626; }
 
+/* --- B2B delete requests -------------------------------------------------- */
+/* The red-dot badge on the Delete Requests head button + the deal footer's
+   request/pending controls, and the rows in the Delete Requests modal. */
+.b2b-delreq-badge { background: #dc2626; }
+.b2b-del-req { color: var(--b2b-muted); }
+.b2b-del-req:hover { color: #dc2626; border-color: #fca5a5; background: #fff5f5; }
+.b2b-del-pending {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 800; color: #b45309;
+    background: #fffbeb; border: 1.5px solid #fde68a; border-radius: 9px;
+    padding: 6px 10px; white-space: nowrap;
+}
+.b2b-delreq-list { display: flex; flex-direction: column; gap: 8px; }
+.b2b-delreq-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 11px 13px; border: 1px solid var(--b2b-line); border-radius: 11px;
+    background: #fff;
+}
+.b2b-delreq-meta { min-width: 0; font-size: 13px; color: #1a1c1e; overflow-wrap: anywhere; }
+.b2b-delreq-sub { font-size: 11px; color: var(--b2b-muted); margin-top: 2px; }
+.b2b-delreq-acts { display: flex; gap: 6px; flex-shrink: 0; }
+
 .crm-help { font-size: 13px; color: #64707c; font-weight: 500; line-height: 1.5; margin: 2px 0 14px; }
 .crm-search { margin-bottom: 14px; }
 .crm-clist { display: flex; flex-direction: column; gap: 10px; }
