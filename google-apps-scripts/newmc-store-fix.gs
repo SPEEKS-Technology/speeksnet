@@ -12,7 +12,7 @@
 // WHY THESE DAYS ARE WRONG, AND WHY IT IS URGENT
 // ---------------------------------------------------------------------------
 // On 2026-08-24 the new system re-imported eBay sales that SPEEKS Connect had
-// already imported: 22 phantoms at MPL, 18 at BAL. The duplicate orders were
+// already imported: 22 phantoms at MPL, 18 at BAL, 81 at LEE. The duplicate orders were
 // CREATED on Aug 24 — but Shopify's sales dataset attributes their revenue to the
 // ORIGINAL SALE DAY, so the money landed on Aug 20, 21, 22 and 23. Every phantom
 // has since been refunded, and a refund is credited to the REFUND day, so the
@@ -39,6 +39,17 @@
 //   Aug 22   3843.89 /  1601.00   1724.96 /  710.00   2118.93 /  891.00  <-- fix
 //   Aug 23   4124.08 /  1801.01   1744.94 /  693.00   2379.14 / 1108.01  <-- fix
 //   Aug 24     moving             (18 phantoms)       re-derive tomorrow
+//
+//   LEE   Shopify shows        TRUE                 phantoms
+//   Aug 16   8243.35            5716.50 / 2236.49     14   <-- fix
+//   Aug 17   2684.80            2612.83 / 1138.00      3   <-- fix
+//   Aug 18   6794.43            5392.50 / 2261.36      7   <-- fix
+//   Aug 19   6797.50            4775.67 / 1988.92     11   <-- fix
+//   Aug 20   8686.85            5301.95 / 2367.63     10   <-- fix
+//   Aug 21   8312.68            6122.77 / 2996.32      8   <-- fix
+//   Aug 22   8859.64            4904.82 / 2051.50     17   <-- fix
+//   Aug 23   4401.52            3074.61 / 1603.89      9   <-- fix
+//   Aug 24     moving           re-derive tomorrow    81 rows land here
 //
 // Three of BAL's six cells already hold the right value; they are in the list
 // anyway, because an unlocked cell is what tomorrow's import overwrites.
@@ -157,21 +168,41 @@ var NMC_FIX = [
   // is expected and is NOT what the sheet should say.
   { store: 'BAL', day: 21, sales: 1204.38, cost:  551.01 },
   { store: 'BAL', day: 22, sales: 2118.93, cost:  891.00 },   // see AUG 22 note
-  { store: 'BAL', day: 23, sales: 2379.14, cost: 1108.01 }
+  { store: 'BAL', day: 23, sales: 2379.14, cost: 1108.01 },
+
+  // LEE, added 2026-08-24. 81 phantom orders, 16939.10, all refunded here.
+  //
+  // ⚠️ LEE REACHES BACK TO AUG 16 -- FOUR DAYS FURTHER THAN MPL OR BAL. The new
+  // system back-filled nine days at LEE, not three. This is the clearest proof
+  // that the day range must be derived per store and never copied.
+  //
+  // ⚠️ AUG 16-20 ARE NOT PROTECTED AT LEE. mpc-dupe-fix.gs locked Aug 16-20 for
+  // MPL and BAL only -- LEE was not in that incident, so those cells are bare
+  // numbers the importer will happily restate tomorrow. They are in this list.
+  { store: 'LEE', day: 16, sales: 5716.50, cost: 2236.49 },
+  { store: 'LEE', day: 17, sales: 2612.83, cost: 1138.00 },
+  { store: 'LEE', day: 18, sales: 5392.50, cost: 2261.36 },
+  { store: 'LEE', day: 19, sales: 4775.67, cost: 1988.92 },
+  { store: 'LEE', day: 20, sales: 5301.95, cost: 2367.63 },
+  { store: 'LEE', day: 21, sales: 6122.77, cost: 2996.32 },
+  { store: 'LEE', day: 22, sales: 4904.82, cost: 2051.50 },
+  { store: 'LEE', day: 23, sales: 3074.61, cost: 1603.89 }
 
   // TOMORROW (2026-08-25), once Aug 24 real final figures are known. Uncomment,
   // replace the numbers, re-run nmcFixPreview then nmcFixApply.
   // Until Aug 24 is locked, each store August month total is understated by the
-  // reversal its Aug 24 is carrying: MPL 6709.79, BAL 4229.83.
+  // reversal its Aug 24 is carrying: MPL 6709.79, BAL 4229.83, LEE 16879.12.
   //
-  // Measured 11:35 today and still moving: MPL 957.59 / 371.00,
-  // BAL -984.99 / -428.00. Do not use these -- re-derive after midnight.
+  // Measured midday and still moving: MPL 957.59 / 371.00,
+  // BAL -984.99 / -428.00, LEE 1466.90 / 662.43.
+  // Do not use these -- re-derive after midnight.
   //
   // BAL's true Aug 24 is NEGATIVE and that is REAL: BAL has genuine returns
   // exceeding sales today, nothing to do with the duplicates. Take the final
   // figure whatever its sign, and do not "correct" a negative day.
   // , { store: 'MPL', day: 24, sales: 0.00, cost: 0.00 }
   // , { store: 'BAL', day: 24, sales: 0.00, cost: 0.00 }
+  // , { store: 'LEE', day: 24, sales: 0.00, cost: 0.00 }
 ];
 
 function nmcFixPreview() { _nmcRun(true); }
