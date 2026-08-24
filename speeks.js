@@ -43824,28 +43824,9 @@ function _ddFillList(host) {
     });
 }
 
-// The letters so far, shown small in the corner of the list. Native selects give
-// no feedback at all, which is fine for two letters and confusing for six — if
-// the jump lands somewhere unexpected there is otherwise no way to tell a typo
-// from a list that has nothing matching.
-function _ddTypeHint(host, text) {
-    const list = host._ddList;
-    let hint = list.querySelector('.dd-typed');
-    if (!text) { if (hint) hint.remove(); return; }
-    if (!hint) {
-        hint = document.createElement('div');
-        hint.className = 'dd-typed';
-        list.appendChild(hint);
-    }
-    hint.textContent = text;
-    hint.classList.toggle('dd-typed-miss', !!host._ddTypeMiss);
-}
-
 function _ddClearType(host) {
     host._ddType = '';
-    host._ddTypeMiss = false;
     clearTimeout(host._ddTypeT);
-    _ddTypeHint(host, '');
 }
 
 function _ddJump(host, ch) {
@@ -43859,11 +43840,11 @@ function _ddJump(host, ch) {
     // anywhere in the label, which is the part native could never do.
     const hit = opts.find(o => (o.dataset.ddHay || '').startsWith(q))
              || opts.find(o => (o.dataset.ddHay || '').includes(q));
-    host._ddTypeMiss = !hit;
-    _ddTypeHint(host, host._ddType);
     // A miss leaves the cursor exactly where it was rather than jumping to
     // something that does not match — the same as a native select ignoring a
-    // letter nothing starts with.
+    // letter nothing starts with. There is no longer a badge showing the letters:
+    // the black on the option they found is the feedback, so a hit is obvious and
+    // a miss is the cursor not moving.
     if (hit) hit.focus({ preventScroll: false });
 }
 
@@ -43911,8 +43892,7 @@ function _ddPlace(host) {
     // A label that no longer fits the button's width gets the full text on hover.
     // Set here rather than at fill time because whether it fits is a measurement,
     // and a title on every option would put a browser tooltip on all of them.
-    // .dd-opt only: the typed-letters hint is not a label that can outgrow the
-    // button, and a browser tooltip on it would sit over the list.
+    // .dd-opt only, so nothing else the list may hold picks up a browser tooltip.
     Array.from(list.querySelectorAll('.dd-opt')).forEach(o => {
         if (o.scrollWidth > o.clientWidth + 1) o.title = o.textContent;
         else o.removeAttribute('title');

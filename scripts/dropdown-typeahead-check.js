@@ -14,8 +14,11 @@
 //      select would have
 //   3. the letters keep narrowing, and Backspace walks them back
 //   4. a miss leaves the cursor where it was — it does not jump somewhere wrong
-//   5. the letters typed are VISIBLE, because otherwise a typo and a list with
-//      nothing matching look identical
+//   5. THE OPTION THE LETTERS FOUND IS PAINTED THE SAME BLACK AS THE CHOSEN one.
+//      There is no badge showing the letters any more (asked for, 24 Aug), so the
+//      black IS the feedback: a hit is obvious, and a miss is the cursor not
+//      moving. Asserted against the chosen row's own computed colour rather than
+//      a hard-coded hex, so a theme change cannot make this pass wrongly.
 //   6. Enter takes the focused option, through the native select, firing exactly
 //      one change — every inline onchange= on the site depends on that
 //   7. short lists are left entirely alone: the browser's own prefix jump is
@@ -87,9 +90,26 @@ const IGNORE = /calendar\.google\.com|toDataURL|[Tt]ainted canvas|Failed to fetc
     const focused = () => page.evaluate(() =>
         (document.activeElement && document.activeElement.classList.contains('dd-opt'))
             ? document.activeElement.textContent : '(not an option)');
-    const typed = () => page.evaluate(() => {
-        const h = document.querySelector('body > .dd-list.dd-open .dd-typed');
-        return h ? { text: h.textContent, miss: h.classList.contains('dd-typed-miss') } : null;
+    // The letters are no longer on screen, so the buffer itself is the observable.
+    const buf = () => page.evaluate(() => {
+        const h = document.querySelector('#ddTestWrap .dd-host.open');
+        return h ? (h._ddType || '') : null;
+    });
+    // What the option you are ON looks like, against what the CHOSEN one looks
+    // like. Equality is the requirement; a hex would only prove today's theme.
+    const bgs = () => page.evaluate(() => {
+        const list = document.querySelector('body > .dd-list.dd-open');
+        if (!list) return null;
+        const a = document.activeElement;
+        const on = list.querySelector('.dd-opt.on');
+        const plain = Array.from(list.querySelectorAll('.dd-opt'))
+            .find(o => o !== a && !o.classList.contains('on'));
+        const bg = el => el ? getComputedStyle(el).backgroundColor : null;
+        return {
+            focused: (a && a.classList.contains('dd-opt')) ? bg(a) : null,
+            chosen: bg(on), plain: bg(plain),
+            badge: !!document.querySelector('.dd-typed'),
+        };
     });
     const close = () => page.evaluate(() => document.body.click());
 
@@ -102,15 +122,19 @@ const IGNORE = /calendar\.google\.com|toDataURL|[Tt]ainted canvas|Failed to fetc
     // Accessories" only because V happens to be unique here; on the real list it
     // stops on the first V-word and stays there.
     ok(/^Video Game/.test(await focused()), 'five letters and it is there', await focused());
-    const t1 = await typed();
-    ok(t1 && t1.text === 'video' && !t1.miss, 'the letters are on screen', t1 ? t1.text : '(none)');
+    ok((await buf()) === 'video', 'the buffer holds what was typed', await buf());
+    const c1 = await bgs();
+    ok(!!c1 && c1.focused === c1.chosen,
+        'and it is painted the same black as the chosen row', c1 ? c1.focused + ' vs ' + c1.chosen : '(none)');
+    ok(!!c1 && c1.focused !== c1.plain,
+        'which a plain row is not', c1 ? c1.plain : '(none)');
+    ok(!!c1 && !c1.badge, 'and no letters badge is drawn');
 
     console.log('');
     console.log('== Backspace walks it back ==');
     await page.keyboard.press('Backspace');
     await page.keyboard.press('Backspace');
-    const t2 = await typed();
-    ok(t2 && t2.text === 'vid', 'two off the end', t2 ? t2.text : '(none)');
+    ok((await buf()) === 'vid', 'two off the end', await buf());
     ok(/^Video Game/.test(await focused()), 'and it is still on a video shelf', await focused());
     await close();
 
@@ -135,8 +159,12 @@ const IGNORE = /calendar\.google\.com|toDataURL|[Tt]ainted canvas|Failed to fetc
     ok(before === 'Laptops', 'on Laptops', before);
     await page.keyboard.press('z');
     ok((await focused()) === before, 'a letter nothing matches does not move the cursor', await focused());
-    const t3 = await typed();
-    ok(t3 && t3.miss === true, 'and the letters go red so the typo is visible', t3 ? t3.text : '(none)');
+    // The badge used to go red here. With it gone, what has to stay true is that
+    // the letter was RECORDED (so Backspace walks it off) while the cursor did
+    // not move -- otherwise a typo would silently strand you.
+    ok((await buf()) === 'lapz', 'the stray letter is still recorded', await buf());
+    await page.keyboard.press('Backspace');
+    ok((await focused()) === 'Laptops', 'and Backspace recovers', await focused());
     await close();
 
     console.log('');
@@ -161,7 +189,7 @@ const IGNORE = /calendar\.google\.com|toDataURL|[Tt]ainted canvas|Failed to fetc
     for (const ch of 'tab') await page.keyboard.press(ch);
     ok((await focused()) === 'Tablets', 'typed to Tablets', await focused());
     await page.keyboard.press('ArrowDown');
-    ok((await typed()) === null, 'arrowing clears them', 'cleared');
+    ok((await buf()) === '', 'arrowing clears them', 'cleared');
     // Without the clear, this "l" would append to "tab" and jump back.
     await page.keyboard.press('l');
     ok((await focused()) === 'Laptops', 'so the next letter starts fresh', await focused());
@@ -173,10 +201,10 @@ const IGNORE = /calendar\.google\.com|toDataURL|[Tt]ainted canvas|Failed to fetc
     await new Promise(r => setTimeout(r, 200));
     await page.keyboard.press('w');
     const shortState = await page.evaluate(() => ({
-        hint: !!document.querySelector('body > .dd-list.dd-open .dd-typed'),
+        buf: (document.querySelector('#ddTestWrap .dd-host.open') || {})._ddType || '',
         opts: document.querySelectorAll('body > .dd-list.dd-open .dd-opt').length,
     }));
-    ok(!shortState.hint, 'no typed-letters hint on five stores');
+    ok(shortState.buf === '', 'nothing is captured on five stores', JSON.stringify(shortState.buf));
     ok(shortState.opts === 5, 'and all five options', String(shortState.opts));
     await close();
 

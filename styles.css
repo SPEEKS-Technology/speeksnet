@@ -17556,24 +17556,16 @@ select.dd-native {
     text-overflow: ellipsis;
     cursor: pointer;
 }
-/* The letters typed so far, on a long list only. There is no search box — this
-   is a native select's type-to-jump, made substring — so this is the only
-   feedback there is, and without it a jump that lands somewhere unexpected is
-   indistinguishable from a typo. Pinned to the bottom corner of the list so it
-   never covers the option the letters just found. */
-.dd-typed {
-    position: sticky; bottom: -5px; float: right;
-    margin: 2px -2px -2px 0;
-    padding: 3px 8px; border-radius: 6px;
-    background: var(--slate-charcoal, #17201c); color: #fff;
-    font-size: 11px; font-weight: 800; letter-spacing: .02em;
-    pointer-events: none;
+.dd-opt:hover { background: #eef4f0; }
+/* THE OPTION YOU ARE ON WEARS THE SAME BLACK AS THE ONE THAT IS CHOSEN. Typing
+   moves focus, and the pale green tint sat too close to the plain rows to see at
+   a glance which one the letters had found. The question being asked while you
+   type is "what am I on", and the answer should look like an answer.
+   :focus-visible rather than :focus, so a mouse click does not paint a row black
+   on its way to closing the list. */
+.dd-opt:focus-visible {
+    background: var(--slate-charcoal, #17201c); color: #fff; outline: none;
 }
-/* Nothing matched: the letters stay on screen (so the typo is visible) and the
-   cursor stays where it was rather than jumping somewhere wrong. */
-.dd-typed-miss { background: #d1443b; }
-
-.dd-opt:hover, .dd-opt:focus-visible { background: #eef4f0; outline: none; }
 .dd-opt.on { background: var(--slate-charcoal, #17201c); color: #fff; }
 .dd-opt.dd-dis { opacity: .45; cursor: not-allowed; }
 
