@@ -21202,7 +21202,13 @@ function cbRowHtml(e, showStore) {
             </td>
         </tr>`;
     } else {
-        row = `<tr class="cb-row ${expanded ? 'cb-row-open' : ''} ${e.status === 'completed' ? 'cb-row-done' : ''} ${mine.length ? 'cb-row-hasit' : ''}" data-id="${e.id}" onclick="cbToggleRow('${e.id}')">
+        // The green row, and it follows the green CHIP rather than `mine` — corp
+        // has no stock of its own, so `mine` is always empty for a DM and the
+        // district view was the one place the rows all looked the same. Green
+        // means "there is stock somebody has to ring about", which is exactly
+        // what a DM is scanning the list for.
+        const hasIt = mine.length || (!_cbMatchScope() && theirs.length);
+        row = `<tr class="cb-row ${expanded ? 'cb-row-open' : ''} ${e.status === 'completed' ? 'cb-row-done' : ''} ${hasIt ? 'cb-row-hasit' : ''}" data-id="${e.id}" onclick="cbToggleRow('${e.id}')">
             ${showStore ? `<td class="cb-col-store">${escapeHtml(e.store)}</td>` : ''}
             <td class="cb-customer">${escapeHtml(e.customer_name)}</td>
             <td>${phone}</td>

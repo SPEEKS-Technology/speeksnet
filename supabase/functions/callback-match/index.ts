@@ -124,6 +124,44 @@ const BROKEN_ITEM = /\b(broken|cracked|bad imei|bad battery|no face id|for parts
 // BROKEN_ITEM: the customer says "for parts" or "to fix", not "bad IMEI".
 const WANTS_BROKEN = /\b(broken|cracked|for parts|parts only|repair|fix|fixer|as-?is|recycle|damaged|dead|not working|does ?n[o']t work|salvage|junk|scrap)\b/i;
 
+// A YEAR THE CUSTOMER NAMED IS A CONSTRAINT, NOT A HINT.
+//
+// "MacBook Air (2017-2019) with i7/8GB Ram" came back with a 2014, a 2020 and a
+// 2026 alongside the 2017. The type gate was satisfied outright — `MacBook Air`
+// is seeded needs_item_text:false, so ANY MacBook Air answered it — and nothing
+// afterwards read the years at all. Four machines eleven years apart, offered as
+// if they were the same answer, on a row that had said exactly which ones.
+//
+// PayMore titles lead with the model year ("2017 Apple MacBook Air 13.3\"…"), so
+// this is cheap and reliable: take the years from the customer's words, take the
+// year from the title, and drop the ones outside the range. A title with NO year
+// is kept — we cannot disprove it, and silently dropping unlabelled stock is a
+// worse failure than showing one extra row.
+const YEAR_RE = /\b(19[89]\d|20[0-4]\d)\b/g;
+
+// ...EXCEPT WHEN IT IS A BUDGET. "PS5 under 2000" would otherwise demand a title
+// from the year 2000 and throw away every console in the district. Rare, and
+// cheap to rule out: a number reached for by a price word is not a model year.
+const PRICE_LEAD = /(?:\$|under|below|less than|up to|max|budget|around|about|~)\s*$/i;
+
+function yearsWanted(text: string): { lo: number; hi: number } | null {
+  const s = String(text || "");
+  const ys: number[] = [];
+  for (const m of s.matchAll(YEAR_RE)) {
+    if (PRICE_LEAD.test(s.slice(0, m.index ?? 0))) continue;
+    ys.push(Number(m[1]));
+  }
+  if (!ys.length) return null;
+  return { lo: Math.min(...ys), hi: Math.max(...ys) };
+}
+
+// The FIRST year in a title, because that is where the model year sits. A later
+// one is usually a spec or a bundled game.
+function titleYear(title: string): number | null {
+  const m = String(title || "").match(YEAR_RE);
+  return m ? Number(m[0]) : null;
+}
+
 const norm = (s: unknown) =>
   String(s ?? "").toLowerCase().replace(/[^a-z0-9#/+.\- ]+/g, " ").replace(/\s+/g, " ").trim();
 
@@ -235,6 +273,15 @@ function score(cb: Cb, ty: TypeDef | null, it: Item, wantsBroken: boolean): Scor
   // "Enchanted Portals" hit Disney Princess Enchanted JOURNEY on the strength of
   // "enchanted" alone. Rambling rows get a floor of two instead, so a sentence
   // with an aside is not held to every word of it.
+  // Before anything else about the model: a year they named rules out a year
+  // they did not. This runs even when the type IS the answer, which is the whole
+  // point — that is the path that let four MacBook Airs through.
+  const wantYears = yearsWanted(cb.item || "");
+  if (wantYears) {
+    const ty2 = titleYear(it.title);
+    if (ty2 !== null && (ty2 < wantYears.lo || ty2 > wantYears.hi)) return null;
+  }
+
   const typeIsTheAnswer = !!hit && !ty?.needsItemText;
   if (!anyModel && !typeIsTheAnswer) {
     // Nothing specific said and the type is only a shelf: unmatchable by
@@ -259,6 +306,10 @@ function score(cb: Cb, ty: TypeDef | null, it: Item, wantsBroken: boolean): Scor
     why.push(`words ${matchedTokens.map((t) => `"${t}"`).join(", ")}`);
   }
   if (anyModel && hit) { s += 0.4; why.push("any model"); }
+  if (wantYears) {
+    why.push(wantYears.lo === wantYears.hi
+      ? `year ${wantYears.lo}` : `years ${wantYears.lo}-${wantYears.hi}`);
+  }
   // The point is to sell it today, so a unit already live on the store beats one
   // that would need publishing first.
   if (it.online_published) s += 0.15;

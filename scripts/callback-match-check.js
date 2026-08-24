@@ -144,7 +144,15 @@ const rowProbe = item => {
     console.log('\n== As a LEE manager (holds five PS5s) ==');
     {
         const { page, errs } = await openOps(browser, { name: 'Match Harness', role: 'manager', store: 'LEE' });
-        const ps5 = await page.evaluate(rowProbe, 'Playstation 5');
+        // ALL STORES, not the default My Store. Which store LOGGED the PS5 want
+        // moves with whoever last took the call — it was LEE's, it is OVL's now —
+        // and this section is not about that. It is about the store that HOLDS
+        // the stock seeing green on somebody else's row, which is the whole
+        // direction of the feature and only visible from the cross-store list.
+        await page.evaluate(() => cbSetView('all'));
+        await page.waitForFunction(() => window._cbView === 'all' || true, { timeout: 5000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 1400));
+        const ps5 = await page.evaluate(rowProbe, 'PS5');
         ok(!!ps5 && ps5.green, 'LEE\'s PS5 row is green');
         ok(!!ps5 && ps5.tags.some(t => /You Have It · \d/.test(t)), 'the chip counts them', ps5 && JSON.stringify(ps5.tags));
         ok(!!ps5 && ps5.tags.some(t => /Any Model/i.test(t)), 'and the Any Model tag is shown');

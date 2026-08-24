@@ -91,6 +91,13 @@ async function asRole(browser, role, store) {
         });
         const green = !!chip && /cb-tag-hasit/.test(chip.cls);
         ok(green === want, why, chip ? chip.text + '  [' + chip.cls.replace('cb-tag ', '') + ']' : '(no chip)');
+        // AND THE ROW ITSELF, not only the chip. cb-row-hasit followed `mine`,
+        // which is always empty for corp — so the district list, the one place
+        // somebody is scanning for "who owes a call", was uniformly white.
+        const rowGreen = await page.evaluate(() =>
+            !!document.querySelector('.cb-row') &&
+            document.querySelector('.cb-row').classList.contains('cb-row-hasit'));
+        ok(rowGreen === want, '   ...and the whole row is tinted to match', String(rowGreen));
         await page.close();
     }
 
