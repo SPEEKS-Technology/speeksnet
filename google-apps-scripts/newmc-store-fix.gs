@@ -11,20 +11,37 @@
 // ---------------------------------------------------------------------------
 // WHY THESE DAYS ARE WRONG, AND WHY IT IS URGENT
 // ---------------------------------------------------------------------------
-// On 2026-08-24 the new system imported 22 eBay sales that SPEEKS Connect had
-// already imported. The duplicate orders were CREATED on Aug 24 — but Shopify's
-// sales dataset attributes their revenue to the ORIGINAL SALE DAY, so the money
-// landed on Aug 20, 22 and 23. All 22 have since been refunded, and a refund is
-// credited to the REFUND day, so the whole reversal sits on Aug 24.
+// On 2026-08-24 the new system re-imported eBay sales that SPEEKS Connect had
+// already imported: 22 phantoms at MPL, 18 at BAL. The duplicate orders were
+// CREATED on Aug 24 — but Shopify's sales dataset attributes their revenue to the
+// ORIGINAL SALE DAY, so the money landed on Aug 20, 21, 22 and 23. Every phantom
+// has since been refunded, and a refund is credited to the REFUND day, so the
+// whole reversal sits on Aug 24.
 //
 // Net effect: Aug 22 and Aug 23 are OVERSTATED in Shopify and will stay that way.
 //
-//   day     Shopify shows      phantom in it      TRUE
-//   Aug 20  -2324.86 / -1038.01   1043.94 / 403.00    (see note below)
-//   Aug 21   4018.86 /  1647.00      0.00 /   0.00    clean, no phantom
+// A phantom is an order the new system created (tagged only "eBay", no
+// ebay-<id> tag) for which one of OURS exists on the same day for the same
+// item. TRUE = the day total with every phantom order removed entirely -- which
+// takes out both its backdated sale and its Aug 24 refund credit, so the same
+// rule gives the right answer on every day including Aug 24.
+//
+//   MPL   Shopify shows        phantom in it      TRUE
+//   Aug 20  -2324.86 / -1038.01   1043.94 /  403.00   (see note below)
+//   Aug 21   4018.86 /  1647.00      0.00 /    0.00   clean, no phantom
 //   Aug 22   9712.97 /  4242.99   3844.91 / 1706.90   5868.06 / 2536.09  <-- fix
 //   Aug 23   5356.80 /  2263.80   1820.94 /  720.40   3535.86 / 1543.40  <-- fix
-//   Aug 24  -6202.18 / -2644.30  -6709.79 /-2830.30    507.61 /  186.00  <-- tomorrow
+//   Aug 24     moving             (9 phantoms)        re-derive tomorrow
+//
+//   BAL   Shopify shows        phantom in it      TRUE
+//   Aug 20  -6757.77 / -2551.75    394.96 /  193.00   (see note below)
+//   Aug 21   1569.35 /   710.01    364.97 /  159.00   1204.38 /  551.01  <-- fix
+//   Aug 22   3843.89 /  1601.00   1724.96 /  710.00   2118.93 /  891.00  <-- fix
+//   Aug 23   4124.08 /  1801.01   1744.94 /  693.00   2379.14 / 1108.01  <-- fix
+//   Aug 24     moving             (18 phantoms)       re-derive tomorrow
+//
+// Three of BAL's six cells already hold the right value; they are in the list
+// anyway, because an unlocked cell is what tomorrow's import overwrites.
 //
 // ⚠️ THE SHEET IS PROBABLY STILL CORRECT AS YOU READ THIS, AND THAT IS THE
 // PROBLEM. The duplicates were created around 10am Central, AFTER the Aug 24
@@ -119,11 +136,19 @@ var NMC_FIX = [
   { store: 'MPL', day: 22, sales: 5868.06, cost: 2536.09 },
   { store: 'MPL', day: 23, sales: 3535.86, cost: 1543.40 },
 
-  // BAL, added 2026-08-24. 17 duplicate orders, all refunded (3584.83), all
-  // reversed to net_sales 0 / cogs 0, and all 17 of ours left intact.
+  // BAL, added 2026-08-24. 18 phantom orders. 17 were refunded here (3584.83);
+  // the 18th, #MO04-2844, was already refunded from outside this work. All are
+  // reversed to net_sales 0 / cogs 0 and every one of ours is left intact.
   //
   // WARNING: BAL IS HIT ON AUG 21 AS WELL, WHICH MPL WAS NOT. Do not assume the
   // two stores share a day range -- derive each one.
+  //
+  // ⚠️ BAL AUG 22 IS 2118.93, NOT 2818.92. An earlier draft of this file said
+  // 2818.92 / 1191.00 and that was WRONG -- it counted the phantom #MO04-2844
+  // (699.99 / 300.00) as a real sale. Its twin #MO04-2807 was ALREADY REFUNDED
+  // when the pairing ran, so the pairing treated our copy as absent and called
+  // the phantom unique. Both carry SKU MO04-2012B-R5R3. The corrected figure
+  // equals what the sheet already held, so Aug 22 needs the formula lock only.
   //
   // BAL Aug 20 is deliberately absent: mpc-dupe-fix.gs locked it at
   // 2461.83 / 1079.25 before these phantoms existed, so it is already true and
@@ -131,18 +156,20 @@ var NMC_FIX = [
   // new phantoms come out, because last week refund credits landed there. That
   // is expected and is NOT what the sheet should say.
   { store: 'BAL', day: 21, sales: 1204.38, cost:  551.01 },
-  { store: 'BAL', day: 22, sales: 2818.92, cost: 1191.00 },
+  { store: 'BAL', day: 22, sales: 2118.93, cost:  891.00 },   // see AUG 22 note
   { store: 'BAL', day: 23, sales: 2379.14, cost: 1108.01 }
 
   // TOMORROW (2026-08-25), once Aug 24 real final figures are known. Uncomment,
   // replace the numbers, re-run nmcFixPreview then nmcFixApply.
   // Until Aug 24 is locked, each store August month total is understated by the
-  // reversal its Aug 24 is carrying: MPL 6709.79, BAL 3529.84.
+  // reversal its Aug 24 is carrying: MPL 6709.79, BAL 4229.83.
   //
-  // Measured 11:30 today and still moving: MPL 507.61 / 186.00.
-  // BAL true Aug 24 is NEGATIVE (-1344.99 / -578.00) and that is REAL -- BAL has
-  // genuine returns exceeding sales so far today, nothing to do with the
-  // duplicates. Take the final figure whatever its sign.
+  // Measured 11:35 today and still moving: MPL 957.59 / 371.00,
+  // BAL -984.99 / -428.00. Do not use these -- re-derive after midnight.
+  //
+  // BAL's true Aug 24 is NEGATIVE and that is REAL: BAL has genuine returns
+  // exceeding sales today, nothing to do with the duplicates. Take the final
+  // figure whatever its sign, and do not "correct" a negative day.
   // , { store: 'MPL', day: 24, sales: 0.00, cost: 0.00 }
   // , { store: 'BAL', day: 24, sales: 0.00, cost: 0.00 }
 ];
