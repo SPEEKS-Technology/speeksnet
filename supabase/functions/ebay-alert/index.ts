@@ -136,6 +136,7 @@ async function shopifyEbayOrders(shop: string, token: string, sinceDay: string) 
             id name cancelledAt
             totalPriceSet { shopMoney { amount } }
             totalRefundedSet { shopMoney { amount } }
+            transactions { kind status amountSet { shopMoney { amount } } }
             customAttributes { key value }
           } }
           pageInfo { hasNextPage }
@@ -153,6 +154,23 @@ async function shopifyEbayOrders(shop: string, token: string, sinceDay: string) 
     const n = e.node || {};
     const total = Number(n.totalPriceSet?.shopMoney?.amount ?? 0);
     const refunded = Number(n.totalRefundedSet?.shopMoney?.amount ?? 0);
+    // ⚠️ A COPY IS CLEANED UP WHEN THE PAYMENT IS REVERSED, NOT WHEN THE
+    // REFUND REACHES THE ORDER TOTAL. PayMore’s new Marketplace Connect writes
+    // orders whose total includes tax with NO payment transaction behind it
+    // (455.79 total against 429.99 paid). Shopify REFUSES to refund more than the
+    // payment, so refunded can never reach total on those orders — and the
+    // total-based test therefore reported 15 fully-reversed MPL duplicates as
+    // still double-counted, permanently, while the books were provably correct.
+    // A watchdog that cannot go quiet after a correct cleanup is a watchdog that
+    // hides the next real one.
+    //
+    // net_sales tracks the PAYMENT, so the payment is also what has to come back
+    // out. Falls back to the total when no payment transaction is visible, which
+    // keeps the behaviour unchanged for every ordinary order.
+    const paid = ((n.transactions ?? []) as any[])
+      .filter((t) => t?.status === "SUCCESS" && (t.kind === "SALE" || t.kind === "CAPTURE"))
+      .reduce((sum: number, t: any) => sum + Number(t?.amountSet?.shopMoney?.amount ?? 0), 0);
+    const owed = paid > 0 ? Math.min(total, paid) : total;
     return {
       // ebay_orders.shopify_order_id holds the bare numeric id, not the gid, so
       // the prefix comes off here rather than at every comparison.
@@ -161,7 +179,7 @@ async function shopifyEbayOrders(shop: string, token: string, sinceDay: string) 
       cancelled: !!n.cancelledAt,
       // Fully refunded IS the cleaned-up state. Compared with a half-cent of
       // slack so rounding cannot keep a cleaned copy in the count forever.
-      refunded: total > 0 && refunded >= total - 0.005,
+      refunded: owed > 0 && refunded >= owed - 0.005,
       ebayId: ((n.customAttributes || []) as any[])
         .find((a) => a?.key === "eBay Order Id")?.value ?? null,
     };
