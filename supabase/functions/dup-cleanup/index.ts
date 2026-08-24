@@ -163,9 +163,19 @@ function itemsFromOrders(states: Record<string, any>, ids: string[]) {
   return [...set];
 }
 
-async function auditRows(sb: any, codes: string[], onlyOrders: string[]) {
+// ⚠️ batch IS REQUIRED, AND THAT IS THE POINT. This table now holds more than
+// one incident: the 2026-08-20 Marketplace Connect back-fill (already fully
+// reversed) and the 2026-08-24 new-MC adoption. An unfiltered read would hand
+// the refund phase last week's already-refunded rows as well as this week's.
+// The refund itself is idempotent so that would not double-refund, but the
+// report becomes unreadable at exactly the moment you need to read it.
+//
+// Typed as required so the compiler names any call site that forgets it, rather
+// than one silently defaulting to every row in the table.
+async function auditRows(sb: any, codes: string[], onlyOrders: string[], batch: string) {
   const { data } = await sb.from("dup_order_cleanup").select("*");
-  let rows = (data ?? []).filter((a: any) => codes.includes(a.store_code));
+  let rows = (data ?? []).filter((a: any) =>
+    codes.includes(a.store_code) && String(a.batch ?? "") === batch);
   // A probe hook: money movement is not reversible, so the mechanics get proven
   // on one order before they are trusted on seventy-four.
   if (onlyOrders.length) {
@@ -177,8 +187,17 @@ async function auditRows(sb: any, codes: string[], onlyOrders: string[]) {
 // A deterministic idempotency key, required on refundCreate since API 2026-04.
 // Derived from the order id rather than random, so a retry after a timeout — or a
 // re-run of this phase — can never produce a second refund for the same order.
-async function idemKey(orderId: string) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("dup-refund:" + orderId));
+// ⚠️ THE AMOUNT IS PART OF THE KEY, AND IT HAS TO BE.
+// Keyed on the order alone, a retry after a REJECTED attempt replays the stored
+// rejection instead of trying again -- so the 15 MPL orders that failed with
+// "Refund amount is greater than net payment received" could never be corrected,
+// because every corrected retry would come back with the original error. Adding
+// the amount makes a different figure a different request, while a re-run of the
+// SAME figure still replays instead of double-refunding, which is the property
+// this key exists for.
+async function idemKey(orderId: string, amount: string | number = "") {
+  const buf = await crypto.subtle.digest("SHA-256",
+    new TextEncoder().encode("dup-refund:" + orderId + (amount === "" ? "" : ":" + amount)));
   const h = Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
   return [h.slice(0, 8), h.slice(8, 12), h.slice(12, 16), h.slice(16, 20), h.slice(20, 32)].join("-");
 }
@@ -190,8 +209,8 @@ const note = (ebayId: string) =>
 // ---------------------------------------------------------------------------
 // Phase: report — the phantom, measured from the dataset the dashboard reads.
 // ---------------------------------------------------------------------------
-async function phaseReport(sb: any, stores: any[], codes: string[]) {
-  const audit = await auditRows(sb, codes, []);
+async function phaseReport(sb: any, stores: any[], codes: string[], batch: string) {
+  const audit = await auditRows(sb, codes, [], batch);
   const out: any = { stores: {} };
 
   for (const s of stores) {
@@ -292,8 +311,8 @@ async function phaseReport(sb: any, stores: any[], codes: string[]) {
 // ---------------------------------------------------------------------------
 // Phase: refund — the actual correction.
 // ---------------------------------------------------------------------------
-async function phaseRefund(sb: any, stores: any[], codes: string[], dryRun: boolean, onlyOrders: string[]) {
-  const audit = await auditRows(sb, codes, onlyOrders);
+async function phaseRefund(sb: any, stores: any[], codes: string[], dryRun: boolean, onlyOrders: string[], batch: string) {
+  const audit = await auditRows(sb, codes, onlyOrders, batch);
   const out: any = { dryRun, stores: {} };
 
   for (const s of stores) {
@@ -330,12 +349,36 @@ async function phaseRefund(sb: any, stores: any[], codes: string[], dryRun: bool
       if (!sale) { rec.outcome = "no successful SALE/CAPTURE transaction to refund against"; log.push(rec); continue; }
       rec.parentTransaction = sale.id;
 
+      // ⚠️ REFUND THE PAYMENT, NOT THE ORDER TOTAL.
+      // PayMore's new Marketplace Connect writes orders whose total includes tax
+      // that has NO payment transaction behind it -- #MO03-3047 totalled 455.79
+      // against a recorded payment of 429.99. Asking to refund the total gets
+      // "Refund amount $455.79 is greater than net payment received $429.99" and
+      // the whole order is left untouched: 15 of MPL's 22 failed exactly here.
+      //
+      // Capping at the payment is not a compromise, it is the correct figure.
+      // Measured against the sales dataset: net_sales for these orders equals the
+      // PAYMENT (429.99), not the total -- the tax was never counted as revenue,
+      // so reversing the payment zeroes both net_sales and cost_of_goods_sold and
+      // there is nothing left over to reverse.
+      const paid = num(sale.amountSet?.shopMoney?.amount);
+      const refundable = r2(Math.min(outstanding, r2(paid - already)));
+      rec.netPayment = r2(paid);
+      rec.refundable = refundable;
+      if (refundable <= 0.005) {
+        rec.outcome = `nothing refundable: payment ${r2(paid)}, already refunded ${r2(already)}`;
+        log.push(rec); continue;
+      }
+      if (refundable < outstanding - 0.005) {
+        rec.note = `capped at the ${r2(paid)} payment; ${r2(outstanding - refundable)} of tax has no transaction behind it and was never counted as revenue`;
+      }
+
       const lines = (o.lineItems?.nodes ?? []).filter((li: any) => li?.id && li.quantity > 0);
       if (!lines.length) { rec.outcome = "no refundable line items"; log.push(rec); continue; }
       rec.lines = lines.length;
 
       if (dryRun) {
-        rec.outcome = `would refund ${outstanding} across ${lines.length} line item(s), NO_RESTOCK, notify off`;
+        rec.outcome = `would refund ${refundable} across ${lines.length} line item(s), NO_RESTOCK, notify off`;
         log.push(rec); continue;
       }
 
@@ -346,7 +389,7 @@ async function phaseRefund(sb: any, stores: any[], codes: string[], dryRun: bool
             userErrors { field message }
           }
         }`, {
-          key: await idemKey(String(a.order_id)),
+          key: await idemKey(String(a.order_id), refundable),
           input: {
             orderId: oid(a.order_id),
             currency: o.totalPriceSet?.shopMoney?.currencyCode || o.currencyCode || "USD",
@@ -361,7 +404,7 @@ async function phaseRefund(sb: any, stores: any[], codes: string[], dryRun: bool
               orderId: oid(a.order_id),
               gateway: sale.gateway,
               kind: "REFUND",
-              amount: String(outstanding),
+              amount: String(refundable),
               parentId: sale.id,
             }],
           },
@@ -408,8 +451,8 @@ async function phaseRefund(sb: any, stores: any[], codes: string[], dryRun: bool
 // ---------------------------------------------------------------------------
 // Phase: inventory — raise negatives UP TO 0. Nothing else moves.
 // ---------------------------------------------------------------------------
-async function phaseInventory(sb: any, stores: any[], codes: string[], dryRun: boolean) {
-  const audit = await auditRows(sb, codes, []);
+async function phaseInventory(sb: any, stores: any[], codes: string[], dryRun: boolean, batch: string) {
+  const audit = await auditRows(sb, codes, [], batch);
   const out: any = { dryRun, stores: {} };
 
   for (const s of stores) {
@@ -489,8 +532,8 @@ async function phaseInventory(sb: any, stores: any[], codes: string[], dryRun: b
 // Kept so that granting write_merchant_managed_fulfillment_orders is a one-call
 // finish rather than a rebuild. Financially it changes nothing (fact 2 above).
 // ---------------------------------------------------------------------------
-async function phaseOrders(sb: any, stores: any[], codes: string[], dryRun: boolean, onlyOrders: string[]) {
-  const audit = await auditRows(sb, codes, onlyOrders);
+async function phaseOrders(sb: any, stores: any[], codes: string[], dryRun: boolean, onlyOrders: string[], batch: string) {
+  const audit = await auditRows(sb, codes, onlyOrders, batch);
   const out: any = { dryRun, stores: {} };
 
   for (const s of stores) {
@@ -569,11 +612,27 @@ Deno.serve(async (req: Request) => {
   const orderFilter = (url.searchParams.get("order") || "")
     .split(",").map((x) => x.trim().replace(/^#/, "")).filter(Boolean);
 
+  // WHICH INCIDENT. No default: this table holds two of them now, and guessing
+  // which one a caller meant is not a thing money-moving code gets to do. The
+  // known labels are listed in the refusal so nobody has to go and look.
+  const batch = (url.searchParams.get("batch") || "").trim();
+  if (!batch) {
+    const { data: seen } = await sb.from("dup_order_cleanup").select("batch");
+    const labels = [...new Set((seen ?? []).map((r: any) => String(r.batch ?? "(null)")))];
+    return json({
+      ok: false,
+      error: "pass &batch= to say which duplicate-import incident to act on",
+      detail: "This table holds more than one incident. Acting on all of them at "
+            + "once would mix an already-reversed cleanup into a live one.",
+      known: labels,
+    }, 400);
+  }
+
   try {
-    if (phase === "report") return json({ ok: true, phase, ...(await phaseReport(sb, stores, only)) });
-    if (phase === "refund") return json({ ok: true, phase, ...(await phaseRefund(sb, stores, only, dryRun, orderFilter)) });
-    if (phase === "inventory") return json({ ok: true, phase, ...(await phaseInventory(sb, stores, only, dryRun)) });
-    if (phase === "orders") return json({ ok: true, phase, ...(await phaseOrders(sb, stores, only, dryRun, orderFilter)) });
+    if (phase === "report") return json({ ok: true, phase, batch, ...(await phaseReport(sb, stores, only, batch)) });
+    if (phase === "refund") return json({ ok: true, phase, batch, ...(await phaseRefund(sb, stores, only, dryRun, orderFilter, batch)) });
+    if (phase === "inventory") return json({ ok: true, phase, batch, ...(await phaseInventory(sb, stores, only, dryRun, batch)) });
+    if (phase === "orders") return json({ ok: true, phase, batch, ...(await phaseOrders(sb, stores, only, dryRun, orderFilter, batch)) });
     return json({ ok: false, error: `unknown phase ${phase}` }, 400);
   } catch (e) {
     return json({ ok: false, phase, error: String(e) }, 500);
