@@ -31636,6 +31636,13 @@ function _kickFeatureOverridesRefresh() {
 // ---- Feature Access settings modal ------------------------------------------
 let _faTab = 'tools';
 let _faUser = '';    // selected user (lowercased name) on the Per-User tab
+// Which Per-User group cards are open. Changing one setting re-renders the whole
+// tab (the badges and the per-user counts in the picker have to move with it), and
+// every card renders collapsed by default -- so the card you were working in shut
+// itself the moment you touched a toggle, and the next change meant re-opening it.
+// Held out here so the render can put it back. Not per user on purpose: going down
+// a category across several people is the reason this tab exists.
+const _faOpenGroups = new Set();
 let _faUsers = [];   // [{name, role, store}] from the auth directory
 let _faFilter = '';
 
@@ -32055,7 +32062,9 @@ function _faUserRowsHtml() {
             </div>`;
         }).join('');
         const setCount = byGroup[g].filter(f => _faUserOverride(f.key, _faUser) !== null).length;
-        const collapsed = filter ? '' : ' collapsed';
+        // A filter expands everything it matched; otherwise a card is open only if
+        // it was open before the re-render.
+        const collapsed = (filter || _faOpenGroups.has(g)) ? '' : ' collapsed';
         html += `<div class="fa-ugroup${collapsed}">
             <div class="fa-ugroup-head" onclick="faToggleUserGroup(this)">
                 ${chev}<span class="fa-ugroup-name">${escapeHtml(g)}</span>
@@ -32070,7 +32079,12 @@ function _faUserRowsHtml() {
 
 function faToggleUserGroup(head) {
     const g = head.closest('.fa-ugroup');
-    if (g) g.classList.toggle('collapsed');
+    if (!g) return;
+    const open = g.classList.toggle('collapsed') === false;
+    const name = (g.querySelector('.fa-ugroup-name') || {}).textContent || '';
+    // The name is the key the render checks, so it is read back off the card
+    // rather than threaded through the onclick -- one source of truth for it.
+    if (open) _faOpenGroups.add(name); else _faOpenGroups.delete(name);
 }
 
 async function faSetUser(key, val) {
