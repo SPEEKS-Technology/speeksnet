@@ -13633,6 +13633,12 @@ async function fetchMasterDistrictDashboard() {
 let goalsRoster = [];
 let liveGoalsData = [];
 let allDistrictGoalsData = [];
+// Whether the district goals fetch has come back AT ALL — which is not the same
+// question as whether it came back with anything. An empty week is a real,
+// common state (Monday morning, before any store has set a roster), so the
+// modal must not read "no rows" as "still loading" and sit on a spinner that
+// nothing will ever clear.
+let _dmxGoalsLoaded = false;
 let editingYesterday = false;
 let goalsTargetStore = 'OVL';
 let currentAppDate = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
@@ -15116,6 +15122,7 @@ async function fetchDmGoalsData() {
             fetchAllStoreTargets()
         ]);
         allDistrictGoalsData = goalsResults.flat();
+        _dmxGoalsLoaded = true;
         dmStoreHistory = {};
         stores.forEach(s => { dmStoreHistory[s] = weeksFor(s); });
         renderDmListingModal();
@@ -38589,7 +38596,17 @@ function renderDmListingModal() {
             + (unset ? ' · ' + unset + (unset === 1 ? ' store still needs' : ' stores still need') + ' this week’s goal' : '');
     }
 
-    if (!all.some(s => s.names.length)) {
+    // ⚠️ THIS USED TO TEST FOR ROWS, NOT FOR A RESPONSE. "Nobody in the district
+    // has a role this week" is a normal state — it is the state of every Monday
+    // morning before the first manager sets a roster — and it made the panel sit
+    // on "Syncing the district roster…" forever, because the thing it was
+    // waiting for had already arrived and was empty.
+    //
+    // The one legitimate reason to hold the whole panel back is that the fetch
+    // has not returned yet. An empty week renders: the rail, the district strip,
+    // the stretch factor and last week's Results are all still worth reading —
+    // and "5 stores still need this week's goal" is the DM's actual Monday job.
+    if (!_dmxGoalsLoaded) {
         wrap.innerHTML = '<div class="dmx-empty" style="padding:60px 0;">Syncing the district roster…</div>';
         return;
     }
@@ -38633,7 +38650,12 @@ function renderDmListingModal() {
     pane += _dmxFactorSetter(all);
 
     if (!sel.names.length) {
-        pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week.</div>';
+        // Say WHY it is blank. The goal is derived from who gets rostered, so an
+        // empty pane early in the week is the roster not being set yet — not a
+        // failure to load one. The old bare sentence read as a dead end.
+        pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week yet.'
+            + '<div class="dmx-empty-n">The days fill in here as ' + escapeHtml(sel.store)
+            + ' sets its roster. Last week is under <b>Results</b>.</div></div>';
     } else {
         // Role gets its own column rather than trailing the name. As a sibling of
         // the name its left edge moved with the length of every name above it, so
