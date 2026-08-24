@@ -16062,6 +16062,14 @@ function b2bRender() {
             chip.style.display = mine.length ? 'inline-flex' : 'none';
         }
     }
+    // Delete Requests red dot: lit for CORP whenever a store is waiting on a
+    // deletion. Drawn from the board we already loaded, so it costs nothing.
+    const delBadge = document.getElementById('b2bDelReqBadge');
+    if (delBadge) {
+        const n = _b2bIsCorp() ? _b2bDeleteRequestRows().length : 0;
+        delBadge.textContent = n;
+        delBadge.style.display = n ? 'inline-flex' : 'none';
+    }
     const sub = document.getElementById('b2bSubtitle');
     if (sub) {
         sub.textContent = _b2bIsCorp()
@@ -21410,7 +21418,9 @@ function _b2bStageView(deal) {
     }).join('');
 
     const canDecline = _b2bIsCorp() && !['listing', 'completed', 'declined'].includes(deal.stage);
-    const canReopen  = _b2bIsCorp() && deal.stage === 'declined';
+    // Reopen is gone -- a declined deal is final (see the edge fn). Deletion is
+    // the only way a deal leaves the record now, and it goes through CORP.
+    const delPending = !!deal.delete_requested_at;
     _b2bShowDeal({
         stage: deal.stage,
         eyebrow: deal.ref,
@@ -21437,8 +21447,14 @@ function _b2bStageView(deal) {
                 <tfoot><tr><td colspan="5" class="r">Total</td><td class="r accent">${_b2bMoney(t.offer, 2)}</td><td></td></tr></tfoot>
             </table>` : '<div class="b2b-empty sm"><div class="b2b-empty-t">No line items yet</div></div>'}`,
         footer: `
+            ${delPending
+                ? `<span class="b2b-del-pending" title="A deletion request is waiting on CORP" style="margin-right:auto;">🗑 Delete requested${deal.delete_requested_by ? ` · ${escapeHtml(deal.delete_requested_by)}` : ''}</span>
+                   ${_b2bCanAccept()
+                        ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bApproveDelete('${deal.id}',this)">Approve deletion</button>
+                           <button class="b2b-btn b2b-btn-secondary" onclick="b2bDenyDelete('${deal.id}',this)">Deny</button>`
+                        : ''}`
+                : `<button class="b2b-btn b2b-del-req" title="Request this deal be deleted — a CEO, MOCD or DM must approve before anything is removed" onclick="b2bRequestDelete('${deal.id}')" style="margin-right:auto;">🗑 Request deletion</button>`}
             ${canDecline ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
-            ${canReopen ? `<button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;" onclick="b2bReopenDeal('${deal.id}',this)">Reopen Deal</button>` : ''}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
     });
 }
@@ -21500,15 +21516,97 @@ async function b2bConfirmDecline(id, btn) {
     }
 }
 
-async function b2bReopenDeal(id, btn) {
-    if (!confirm('Reopen this deal? It goes back to the stage it died at and returns to the board.')) return;
+// ---------------------------------------------------------------------------
+// DELETION REQUESTS
+// ---------------------------------------------------------------------------
+// Reopen is gone: a declined deal is final. Deletion is now the only way a deal
+// leaves the record, and it always goes through CORP. Anyone at a deal raises a
+// request from the trashcan (any stage); a CEO/MOCD/DM approves or denies it,
+// either on the deal itself or from the Delete Requests modal off the B2B tab.
+// Same shape as the claims / recycle delete flow.
+async function b2bRequestDelete(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    const ref = deal?.ref || 'this deal';
+    if (!confirm(`Request that ${ref} be deleted?\n\nThis asks a CEO, MOCD or DM to approve — nothing is removed until they do. Once approved, the deal and everything on it is gone for good.`)) return;
     try {
-        await _b2bBusy(btn, 'Reopening…', () => _b2bSend({ action: 'reopen', id }));
+        await _b2bSend({ action: 'request_delete', id, requested_by: _b2bUser() });
         closeAllModals();
         await b2bRefresh();
+        alert('Delete request sent — a CEO, MOCD or DM will review it.');
     } catch (e) {
-        alert(`Couldn't reopen the deal: ${e.message}`);
+        alert(`Couldn't send the request: ${e.message}`);
     }
+}
+
+// CORP approves: the deal and everything under it is permanently removed.
+async function b2bApproveDelete(id, btn) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    const ref = deal?.ref || 'this deal';
+    if (!confirm(`Permanently delete ${ref}?\n\nThe deal, its line items, listings, transfers and approval evidence are all removed. This cannot be undone.`)) return;
+    try {
+        await _b2bBusy(btn, 'Deleting…', () => _b2bSend({ action: 'approve_delete', id, role: _b2bRole(), user: _b2bUser() }));
+        await b2bRefresh();
+        _b2bAfterDeleteAction();
+    } catch (e) {
+        alert(`Couldn't delete the deal: ${e.message}`);
+    }
+}
+
+// CORP denies: the request clears and the deal carries on.
+async function b2bDenyDelete(id, btn) {
+    try {
+        await _b2bBusy(btn, 'Denying…', () => _b2bSend({ action: 'deny_delete', id, role: _b2bRole(), user: _b2bUser() }));
+        await b2bRefresh();
+        _b2bAfterDeleteAction();
+    } catch (e) {
+        alert(`Couldn't deny the request: ${e.message}`);
+    }
+}
+
+// After approving/denying: if the Delete Requests modal is open, re-render it so
+// CORP can work through the rest; otherwise close the deal modal it came from.
+function _b2bAfterDeleteAction() {
+    if (document.getElementById('b2bDelReqList')) b2bDeleteRequests();
+    else closeAllModals();
+}
+
+// The pending delete requests, drawn from whatever the board already loaded --
+// no extra fetch. CORP-only surface: opened from the trashcan button on the B2B
+// tab, and the red dots point here.
+function _b2bDeleteRequestRows() {
+    return (_b2bDeals || [])
+        .filter(d => d.delete_requested_at)
+        .sort((a, b) => new Date(a.delete_requested_at) - new Date(b.delete_requested_at));
+}
+
+function b2bDeleteRequests() {
+    const rows = _b2bDeleteRequestRows();
+    const canAct = _b2bCanAccept();
+    const body = rows.length ? rows.map(d => `
+        <div class="b2b-delreq-row">
+            <div class="b2b-delreq-meta">
+                <b>${escapeHtml(d.ref || '')}</b> · ${escapeHtml(d.company || 'Client')}
+                <div class="b2b-delreq-sub">${escapeHtml(B2B_STAGE[d.stage]?.label || d.stage)} · asked by ${escapeHtml(d.delete_requested_by || 'someone')} · ${_b2bDate(d.delete_requested_at)}</div>
+            </div>
+            <div class="b2b-delreq-acts">
+                <button class="b2b-btn b2b-btn-secondary b2b-mini" onclick="b2bOpenDeal('${d.stage}','${d.id}')">Open</button>
+                ${canAct ? `<button class="b2b-btn b2b-btn-danger b2b-mini" onclick="b2bApproveDelete('${d.id}',this)">Delete</button>
+                            <button class="b2b-btn b2b-btn-secondary b2b-mini" onclick="b2bDenyDelete('${d.id}',this)">Keep</button>` : ''}
+            </div>
+        </div>`).join('')
+        : '<div class="b2b-empty sm"><div class="b2b-empty-t">No pending delete requests</div></div>';
+    _b2bShowDeal({
+        stage: '',
+        noPrint: true,
+        svg: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
+        eyebrow: 'B2B',
+        title: 'Delete Requests',
+        sub: canAct
+            ? 'A store asked for these deals to be removed. Deleting is permanent.'
+            : 'Deals a store has asked to remove. A CEO, MOCD or DM approves them.',
+        body: `<div id="b2bDelReqList" class="b2b-delreq-list">${body}</div>`,
+        footer: `<button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
+    });
 }
 
 // ---------------------------------------------------------------------------
