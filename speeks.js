@@ -41846,13 +41846,81 @@ function ecRender() {
         return;
     }
 
-    body.innerHTML = _ecQuickHtml() + _ecFeedHtml();
+    body.innerHTML = _ecStandbyHtml() + _ecQuickHtml() + _ecFeedHtml();
 
     // The table was just rebuilt beneath any open category picker: its anchor
     // button is a new element and the rows may have shifted. Re-place so the
     // popover follows rather than hanging over stale coordinates.
     if (document.getElementById('ecCatPop')) _ecCatPlace();
 }
+
+// --- STANDBY BANNER ---------------------------------------------------------
+// PayMore's new Marketplace Connect adopts every live eBay listing during setup,
+// ours included. Once it has, two systems manage one physical unit: both would
+// import the same sale (two Shopify orders, stock decremented twice, the variant
+// driven negative) and our republish path would put a second copy of an item on
+// eBay the moment Shopify restocked it.
+//
+// So SPEEKS Connect goes to STANDBY per store rather than being torn out. The
+// tab, the panel and every manual route stay exactly where they are — this is
+// break-glass, and glass you cannot see through is no use.
+//
+// The banner exists because the alternative is worse: a store scans a SKU, gets
+// a 409 they have never seen, and reads it as the tool being broken. Say it
+// first, on load, where the scan box is about to be.
+function _ecStandbyHtml() {
+    if ((_ecData?.summary?.channelMode || 'active') !== 'standby') return '';
+    const s = _ecData.summary;
+    const when = s.channelModeAt
+        ? new Date(s.channelModeAt).toLocaleDateString('en-US',
+            { month: 'short', day: 'numeric', year: 'numeric' })
+        : null;
+    // Only the DM and the CEO get the button. Every role here may list — but
+    // which system owns a store's eBay account is a district decision, and
+    // taking it back while MC still holds the listings is how you get two of
+    // everything. The backend enforces it too; this only avoids offering a
+    // button that would 403.
+    const canFlip = !!_ecScope?.allStores;
+    return `
+    <div class="ec-standby">
+      <div class="ec-standby-l">
+        <div class="ec-standby-t">On Standby &middot; Marketplace Connect Owns ${_ecEsc(_ecStore)}'s eBay</div>
+        <div class="ec-standby-n">Nothing is uploaded, imported or price-synced from here while MC
+          manages these listings &mdash; two systems on one item would put the same sale into
+          Shopify twice. Everything still works; it is just parked.${
+          when ? ` Parked ${_ecEsc(when)}${s.channelModeBy ? ' by ' + _ecEsc(s.channelModeBy) : ''}.` : ''}${
+          s.channelModeNote ? `<br><b>Note:</b> ${_ecEsc(s.channelModeNote)}` : ''}</div>
+      </div>
+      ${canFlip ? `<div class="ec-standby-r">
+        <button class="ec-btn ec-btn-glass" onclick="ecTakeOver()"
+          title="Hands ${_ecEsc(_ecStore)}'s eBay channel back to SPEEKS Connect">Take The Channel Back</button>
+      </div>` : ''}
+    </div>`;
+}
+
+// BREAK GLASS. Deliberately a confirm, and deliberately one that names the
+// consequence rather than asking "are you sure": the danger is not the click,
+// it is doing it while MC still holds the listings, and only the person clicking
+// knows whether that is true.
+async function ecTakeOver() {
+    const store = _ecStore;
+    if (!confirm(
+        `Hand ${store}'s eBay channel back to SPEEKS Connect?\n\n`
+        + `Only do this if Marketplace Connect is NOT managing ${store}'s listings any more.\n\n`
+        + `If it still is, both systems will import every eBay sale and each one will `
+        + `become two Shopify orders.`)) return;
+    const note = prompt(`Why is ${store} coming back on? (optional, saved with the change)`) || '';
+    try {
+        // _ecPost returns { ok, status, body } — the payload is on .body.
+        const { ok, body } = await _ecPost({ action: 'mode', store, mode: 'active', note });
+        if (!ok || body?.error) { alert(body?.detail || body?.error || 'That did not go through.'); return; }
+        alert(`${store} is active again.\n\n${body.effect || ''}`);
+        await ecLoad();
+    } catch (e) {
+        alert('Could not reach the server. Nothing changed.');
+    }
+}
+window.ecTakeOver = ecTakeOver;
 
 // The whole point of the tab: scan a SKU, send it. Several at once is allowed
 // because a store listing a shelf does not want to do this one row at a time.

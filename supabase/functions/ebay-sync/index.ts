@@ -103,6 +103,12 @@ type StoreRow = {
   payment_policy_id: string | null;
   return_policy_id: string | null;
   fulfillment_policy_id: string | null;
+  // Which system owns this store's eBay account. 'standby' means Marketplace
+  // Connect does, and nothing here may publish. Optional so the type still
+  // describes a row read before migration 0060 was applied.
+  channel_mode?: string | null;
+  channel_mode_at?: string | null;
+  channel_mode_by?: string | null;
 };
 
 async function loadStore(store: string): Promise<StoreRow | null> {
@@ -2064,6 +2070,38 @@ Deno.serve(async (req: Request) => {
     }, 409);
   }
   const c = exact[0];
+
+  // ------------------------------------------------------------------------
+  // STANDBY — the store's eBay account belongs to Marketplace Connect.
+  //
+  // Sits with the other pre-publish gates because it is the same kind of thing:
+  // a reason not to put this item on eBay right now. It goes FIRST because it is
+  // the cheapest to explain and the most absolute — the others are about this
+  // item, this one is about the whole channel.
+  //
+  // ⚠️ &force=1 DELIBERATELY DOES NOT OVERRIDE THIS. force means "skip the MC
+  // collision guard for this SKU", and stores already reach for it; if it also
+  // escaped standby, the one flag people use to get past a refusal would quietly
+  // be the flag that creates the duplicate. Break-glass is a deliberate act on
+  // the CHANNEL — flip the store to active — not a query param on one upload.
+  //
+  // Dry runs are allowed through: inspecting a listing writes nothing, and
+  // ?dry=1 is how you check what WOULD go up before breaking the glass.
+  if (!dry && String(row.channel_mode || "active") === "standby") {
+    return json({
+      store, sku, step: "standby",
+      error: OURS + `${store}'s eBay listings are managed by Marketplace Connect right now, `
+        + `so SPEEKS Connect is on standby and will not publish. Listing this here would `
+        + `put a second copy of the same physical item on eBay, and if it sold, the sale `
+        + `would be imported into Shopify twice.`,
+      // Named so the panel can offer the button rather than describe the fix.
+      channelMode: "standby",
+      since: row.channel_mode_at || null,
+      by: row.channel_mode_by || null,
+      breakGlass: `A District Manager or the CEO can take the channel back in SPEEKS `
+        + `Connect — that is what standby is for. ?dry=1 inspects without publishing.`,
+    }, 409);
+  }
 
   // ⚠️ PUBLISHING SOMETHING WITH NO STOCK PRODUCES A LISTING NOBODY CAN BUY.
   // eBay takes the quantity we send, and we send Math.max(c.quantity, 0) into

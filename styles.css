@@ -16644,6 +16644,38 @@ body.tv-body { display: block; background: #eef1f5; }
 .ec-quick input:focus { outline: none; border-color: var(--cb-sage); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
 .ec-note { font-size: 11.5px; font-weight: 600; color: var(--cb-faint); margin: 0 0 16px 2px; }
 
+/* --- STANDBY BANNER --------------------------------------------------------
+   Marketplace Connect owns this store's eBay account, so SPEEKS Connect is
+   parked. Amber, not red: nothing is broken and nothing needs fixing — this is
+   the tool working as intended, in its other mode. Red here would send stores
+   looking for a fault, which is the opposite of what the banner is for.
+
+   Sits directly above .ec-quick and shares its geometry, so the two read as one
+   stack rather than a warning bolted on top of a panel. */
+.ec-standby {
+    display: flex; gap: 14px; align-items: center; justify-content: space-between;
+    background: #fdf6e6; border: 1px solid #f0dfb4;
+    border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
+}
+.ec-standby-l { min-width: 0; }
+.ec-standby-t {
+    font-size: 13px; font-weight: 800; color: #8a5a12; letter-spacing: -0.1px;
+}
+/* The explanation is the point of the banner, so it gets real line-height
+   rather than being squeezed into a subtitle. */
+.ec-standby-n {
+    font-size: 11.5px; font-weight: 600; color: #96703a;
+    line-height: 1.55; margin-top: 4px; max-width: 78ch;
+}
+.ec-standby-r { flex: 0 0 auto; }
+/* Break-glass: outlined in the banner's own amber rather than filled. A filled
+   button reads as the recommended next step, and taking the channel back while
+   MC still holds the listings is exactly what must not feel routine. */
+.ec-btn.ec-btn-glass {
+    background: #fff; border-color: #d9a83c; color: #8a5a12;
+}
+.ec-btn.ec-btn-glass:hover { background: #fbedd0; border-color: #b8862a; color: #6d4509; }
+
 .ec-btn {
     flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
     border: 1px solid var(--cb-line); background: #fff; color: var(--cb-muted);
