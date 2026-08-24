@@ -120,6 +120,22 @@ const short = (s: unknown, n = 180) => {
 // the loud one would be nagging about work already being done.
 const SYSTEMIC = /HTTP *(401|403|429|5[0-9][0-9])|"statusCode" *: *(401|403|429|5[0-9][0-9])|unauthor|invalid_grant|invalid_token|token (has )?expired|expired token|refresh token|rate limit|call limit|quota|throttl|internal error|service unavailable|temporarily unavailable|timed out|time out|ECONNRESET|network error/i;
 
+// ⚠️ EBAY HAVING A MOMENT IS NOT A BROKEN TOOL, and saying it is costs a day.
+// Everything above is "the store cannot fix this", which was then reported as
+// Needs Claude — nobody on the floor can help. That is wrong for this subset:
+// SPEEKS Connect puts a **Try Again** button on a failed listing, and for an
+// eBay-side wobble pressing it is the whole fix.
+//
+// Measured on WSP MO02-4649A-R2R2, 2026-08-24: "inventory_item: 25001: A system
+// error has occurred. Core Inventory Service internal error". ebay-peek showed
+// the inventory item AND the offer already sitting on eBay, complete and
+// correct, with only the publish outstanding — one retry published it. That is
+// one email, one forward and one investigation for a button press.
+//
+// Rate limits and auth failures deliberately stay OUT of this: a retry into a
+// throttle makes it worse, and an expired token needs a reconnect.
+const TRANSIENT_EBAY = /\b25001\b|internal error|service unavailable|temporarily unavailable|timed out|time out|try again later|ECONNRESET|network error|HTTP *5[0-9][0-9]|"statusCode" *: *5[0-9][0-9]/i;
+
 // The duplicate scan's one Shopify call per store. The eBay order id lives in a
 // custom attribute, not a tag, and Shopify cannot search attributes — so the
 // query narrows to eBay-tagged orders in the window and the grouping happens
@@ -264,15 +280,30 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     const st = String(l.status || "");
     const systemic = SYSTEMIC.test(String(l.last_error || ""));
     if (st === "failed" && systemic) {
-      push({
-        key: `listing_blocked:${l.store_code}:${l.sku}`, store: l.store_code, severity: "critical",
-        title: `Can't list on eBay — ${l.sku}`,
-        detail: `eBay is turning this listing away for a reason the store cannot change `
-          + `(the connection, a rate limit, or eBay itself). ${l.sku}`
-          + `${l.title ? ` — ${short(l.title, 60)}` : ""} is not on eBay and won't get there `
-          + `without a fix at our end. eBay's words: ${short(l.last_error, 110)}`,
-        fix: "claude",
-      });
+      // Same key either way: it is the same problem, and a key that moved with the
+      // wording would re-mail the moment the message changed.
+      const key = `listing_blocked:${l.store_code}:${l.sku}`;
+      const named = `${l.sku}${l.title ? ` — ${short(l.title, 60)}` : ""}`;
+      push(TRANSIENT_EBAY.test(String(l.last_error || ""))
+        ? {
+          key, store: l.store_code, severity: "critical",
+          title: `eBay hiccuped putting a listing up — ${l.sku}`,
+          detail: `eBay's own systems errored while ${named} was going up, so it is not live. `
+            + `Nothing is wrong with the item, and nothing is wrong with SPEEKS Connect. `
+            + `Open SPEEKS Connect, find this SKU under Listings and press Try Again — it `
+            + `normally goes straight up. If it fails twice more, forward this. `
+            + `eBay's words: ${short(l.last_error, 110)}`,
+          fix: "store",
+        }
+        : {
+          key, store: l.store_code, severity: "critical",
+          title: `Can't list on eBay — ${l.sku}`,
+          detail: `eBay is turning this listing away for a reason the store cannot change `
+            + `(the connection, a rate limit, or the account itself). ${named} is not on eBay `
+            + `and won't get there without a fix at our end. Pressing Try Again will not help. `
+            + `eBay's words: ${short(l.last_error, 110)}`,
+          fix: "claude",
+        });
     } else if (st === "pending") {
       const m = minsAgo(l.last_attempt_at);
       if (m !== null && m > LISTING_STUCK_MIN) {
