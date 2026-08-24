@@ -72,7 +72,7 @@
       <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v3.3.0</span>
+            <span class="version-tag">v3.4.0</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -701,6 +701,10 @@
                       <button id="b2bViewQueueBtn" class="mb-view-btn active" onclick="b2bSetView('queue')"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Needs You<span class="b2b-pip" id="b2bQueuePip" style="display:none;">0</span></button>
                       <button id="b2bViewPipelineBtn" class="mb-view-btn" onclick="b2bSetView('pipeline')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="12" rx="1"/></svg>Pipeline</button>
                       <button id="b2bViewFinishedBtn" class="mb-view-btn" onclick="b2bSetView('finished')"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Completed</button>
+                      <!-- Evaluations: pricing a client's list before we collect it.
+                           Same audience as raising a deal, since the enquiry lands on
+                           whoever picks up the phone -- _b2bCanPreval() is the real gate. -->
+                      <button id="b2bViewPrevalsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" onclick="b2bSetView('prevals')"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Evaluations<span class="b2b-pip" id="b2bPrevalPip" style="display:none;">0</span></button>
                       <button id="b2bViewClientsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd" onclick="b2bSetView('clients')"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clients</button>
                       <button id="b2bViewOverviewBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo" onclick="b2bSetView('overview')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Overview</button>
                   </div>
@@ -709,7 +713,11 @@
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                       CRM Settings<span class="crm-badge" id="crmGearBadge" style="display:none;">0</span>
                   </button>
-                  <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd" onclick="b2bOpenCreate()">＋ New Deal</button>
+                  <!-- Store managers raise their own deals; theirs holds at their
+                       own store from the moment it is created, and only corp can
+                       move it elsewhere. _b2bCanCreate() is the real gate — this
+                       class list only decides what is drawn. -->
+                  <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" onclick="b2bOpenCreate()">＋ New Deal</button>
               </div>
           </div>
           <div class="cb-scroll ws-scroll" id="b2bBody">
@@ -787,6 +795,27 @@
     </div>
     <div class="manage-content" id="b2bCreateBody"></div>
     <div class="manage-footer flex-end" id="b2bCreateFooter"></div>
+</div>
+
+<!-- ===== B2B APPROVAL EVIDENCE MODAL =====
+     Its own modal rather than a section of the deal screen: attaching the
+     client's email is a deliberate, one-at-a-time act, and the deal screen is
+     already the densest thing in the app. Body and footer are painted by
+     _b2bPaintProofModal(). -->
+<div class="modal-menu manage-menu" id="b2bProofModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">Attach The Client's Approval</span>
+                <span class="tool-head-sub">What answers them later if they say they never agreed.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="b2bProofBody"></div>
+    <div class="manage-footer flex-end" id="b2bProofFooter"></div>
 </div>
 
 <!-- ===== B2B DEAL MODAL (title / body / footer all driven by b2bOpenDeal) ===== -->
