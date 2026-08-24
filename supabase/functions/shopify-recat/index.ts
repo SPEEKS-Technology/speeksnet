@@ -265,9 +265,25 @@ async function shelfTitles(): Promise<Record<string, string>> {
 // where it belongs, and wrong when it is still in Other.
 //
 // A product with several variants has several catalog rows; the first wins,
-// since title and collections are per product. A product that has since sold or
-// been deleted has no row at all, and keeps just its id — the skip is still real
-// and still undoable.
+// since title and collections are per product.
+//
+// A PRODUCT THAT IS NO LONGER IN THE CATALOGUE IS DROPPED FROM THE LIST. It used
+// to be kept with just its id, on the reasoning that the skip was still a real
+// decision and still undoable. Neither half holds up: the row rendered as "This
+// listing is no longer in the catalogue" with nothing to audit, and un-skipping it
+// puts it back in a queue built from the same catalogue, where it cannot appear.
+// So it is noise on the one list that has to stay short enough to read.
+//
+// ⚠️ FILTERED ON READ, NOT DELETED. `ebay_catalog` is a refreshed snapshot, and a
+// refresh that fails or is halfway through makes every product look gone — a
+// delete here would destroy every skip decision at a store on the strength of one
+// bad sync. Filtering costs two rows of storage and is undone by the next good
+// refresh; deleting is not undone by anything.
+//
+// NOTE THIS IS NOT A STOCK TEST. ebay_catalog keeps sold-out products with
+// quantity 0, so "gone from the catalogue" means gone from Shopify's online store
+// altogether — deleted or unpublished. Usually that is because it sold, but the
+// list is not claiming that.
 async function skippedFor(store: string, titles: Record<string, string>) {
   const skips = await rows(
     `collection_skips?store_code=eq.${store}&select=product_id,reason,skipped_by,created_at`
@@ -281,15 +297,15 @@ async function skippedFor(store: string, titles: Record<string, string>) {
     + `&select=product_id,sku,title,collections`);
   const byId = new Map<string, any>();
   for (const c of cat) if (!byId.has(c.product_id)) byId.set(c.product_id, c);
-  return skips.map((s: any) => {
+  return skips.filter((s: any) => byId.has(s.product_id)).map((s: any) => {
     const c = byId.get(s.product_id);
     return {
       ...s,
-      sku: c?.sku ?? null,
-      title: c?.title ?? null,
+      sku: c.sku ?? null,
+      title: c.title ?? null,
       // Where it is now, in words, `newly-listed-devices` excepted — that one is
       // every product at every store and says nothing about a category.
-      in: (c?.collections || [])
+      in: (c.collections || [])
         .filter((h: string) => h !== "newly-listed-devices")
         .map((h: string) => titles[h] || h),
     };
