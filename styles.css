@@ -15961,13 +15961,18 @@ body.tv-body { display: block; background: #eef1f5; }
 
 /* Two vertical rules only, grouping the eight columns into what they mean rather
    than ruling every one and turning the table into a grid:
-     Store · Hours                     | what the store IS
-     Ceiling · Goal · Listed           | the plan and the outcome
-     Staffed For · Efficiency · Result | the fair reading of it
-   Column 3 is Ceiling and column 6 is Staffed For, so each border lands in the
-   gap before its group. */
-.dmx-tbl-c th:nth-child(3), .dmx-tbl-c td:nth-child(3),
-.dmx-tbl-c th:nth-child(6), .dmx-tbl-c td:nth-child(6) {
+     Store · Hours · Staffed For | what the store HAD
+     Ceiling · Goal · Listed     | the plan and the outcome
+     Efficiency · Result         | the reading of it
+   Column 4 is Ceiling and column 7 is Efficiency, so each border lands in the
+   gap before its group.
+
+   ⚠️ THESE ARE POSITIONS, NOT COLUMNS. Reordering the table in
+   _dmxEfficiencyPane moves the rules to whatever now sits at 4 and 7 — which is
+   how they last ended up splitting Hours from Staffed For, the one pair that has
+   to be read together. Re-point them whenever that header list changes. */
+.dmx-tbl-c th:nth-child(4), .dmx-tbl-c td:nth-child(4),
+.dmx-tbl-c th:nth-child(7), .dmx-tbl-c td:nth-child(7) {
     border-left: 1px solid #e6ebf1;
 }
 

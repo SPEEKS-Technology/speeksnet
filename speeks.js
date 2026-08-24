@@ -38881,13 +38881,18 @@ function _dmxEfficiencyPane() {
     if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';
     if (!rows.length) return head + '<div class="dmx-empty">No capacity data for this week.</div>';
 
-    // Column order reads left to right as the story: who, what they had, what we
-    // asked for, what they did, then how that compares. Listed sits beside Goal
-    // because those two are the pair anyone checks first.
+    // Column order reads left to right as the story: who the store is and what it
+    // had, then the plan and the outcome, then the reading of it.
+    //
+    // Staffed For sits next to Hours because those two are the same fact in two
+    // units — contracted hours, and the listings those hours actually earned once
+    // seats were assigned. Read apart, the pair invites the units to be confused
+    // (user, 2026-08-24). Listed then closes the plan-and-outcome group, landing
+    // next to the Efficiency it feeds.
     let t = '<table class="dmx-tbl dmx-tbl-c"><thead><tr>'
-        + '<th>Store</th><th>Hours</th><th>Ceiling</th>'
-        + '<th>Goal</th><th>Listed</th>'
-        + '<th>Staffed For</th><th>Efficiency</th><th>Result</th>'
+        + '<th>Store</th><th>Hours</th><th>Staffed For</th>'
+        + '<th>Ceiling</th><th>Goal</th><th>Listed</th>'
+        + '<th>Efficiency</th><th>Result</th>'
         + '</tr></thead><tbody>';
 
     rows.forEach(r => {
@@ -38914,10 +38919,10 @@ function _dmxEfficiencyPane() {
                 + r.assignedDays + '/' + (r.people.length * 6) + ' roles</span>' : '')
             + '</td>'
             + '<td class="dmx-num">' + r.hours + '</td>'
+            + '<td class="dmx-num">' + r.adjusted + '</td>'
             + '<td class="dmx-num dmx-mute">' + r.capacity + '</td>'
             + '<td class="dmx-num">' + r.planned + '</td>'
             + '<td class="dmx-num' + (pending ? ' dmx-mute' : '') + '">' + (pending ? '–' : r.actual) + '</td>'
-            + '<td class="dmx-num">' + r.adjusted + '</td>'
             + '<td class="dmx-num">' + (pct == null ? '–' : pct + '%') + '</td>'
             + '<td>' + _dmxEffChip(pct, pending ? 'KPI not filed yet' : 'No roles set') + '</td></tr>';
     });
@@ -38929,10 +38934,10 @@ function _dmxEfficiencyPane() {
     const dPct = (dPending || !dAdj) ? null : _dmxPct(dAct, dAdj);
     t += '<tr class="dmx-tot"><td class="dmx-cl">District</td>'
         + '<td class="dmx-num">' + sum('hours') + '</td>'
+        + '<td class="dmx-num">' + dAdj + '</td>'
         + '<td class="dmx-num">' + sum('capacity') + '</td>'
         + '<td class="dmx-num">' + sum('planned') + '</td>'
         + '<td class="dmx-num' + (dPending ? ' dmx-mute' : '') + '">' + (dPending ? '–' : dAct) + '</td>'
-        + '<td class="dmx-num">' + dAdj + '</td>'
         + '<td class="dmx-num">' + (dPct == null ? '–' : dPct + '%') + '</td>'
         + '<td>' + _dmxEffChip(dPct, dPending ? 'KPI not filed yet' : 'No roles set') + '</td></tr></tbody></table>';
 
