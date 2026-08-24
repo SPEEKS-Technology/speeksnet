@@ -165,6 +165,11 @@ const DEAL_COLS = [
   // Whether the client's approval is on record, and if it is not, the reason
   // somebody gave for accepting anyway.
   "approval_waived_by", "approval_waived_reason", "proof_count",
+  // A pending deletion request waiting on CORP -- carried on the board so the
+  // client paints the pending badge, the red dots and the Delete Requests modal
+  // from one board draw. Not a contact field, so it survives into
+  // SCOPED_DEAL_COLS and a store sees the flag on its own deals too.
+  "delete_requested_at", "delete_requested_by",
 ].join(",");
 
 // Who to ring at the client. Corp business: a store prices and lists the goods,
@@ -424,6 +429,34 @@ async function notifyQuoteReady(dealId: string) {
   } catch (_) {
     // swallow — the stage change already succeeded; the email is best-effort
   }
+}
+
+// Drop a row on notify_queue for the notify function to fan out. Same shape and
+// best-effort contract as the recycle_requests / shopify-claims delete hooks --
+// a queue failure must never break the write that triggered it.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+  audienceFeature?: string | null;
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+      audience_feature: n.audienceFeature ?? null,
+    });
+  } catch (_) { /* best-effort */ }
 }
 
 // updated_at and stage_changed_at are maintained by the b2b_touch_row trigger,
@@ -1471,40 +1504,13 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
-      // A declined deal that turns out to be alive after all goes back to where
-      // it died, rather than starting over.
+      // Declines are final. A deal marked declined is archived for good -- there
+      // is no reopen path any more. A client who has passed on a quote is done,
+      // and a genuinely mistaken decline is rare enough to just re-create. The
+      // action is kept only so an old cached tab gets a clear message instead of
+      // a confusing "Unknown action"; nothing here un-declines a deal.
       if (action === "reopen") {
-        const deal = await getDeal(supabase, String(body.id || ""));
-        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "declined") return jsonResponse({ success: false, error: "Only a declined deal can be reopened." }, 409);
-        // Resume at the furthest stage its own data can satisfy. Checking
-        // listing_store as well as accepted_at matters: a CORP deal declined
-        // at listing_location has been accepted but has no listing store yet,
-        // and sending it straight to listing would trip the state-machine
-        // constraint.
-        const stage = (deal.accepted_at && deal.listing_store) ? "listing"
-          : deal.accepted_at ? "listing_location"
-          // Priced, so it is at least at review. Whether it got as far as the
-          // client is the one thing the row itself still records -- this is the
-          // last remaining read of quote_send_count as a state, and it is the
-          // right one: reopening must put the deal back where it died.
-          : deal.priced_by ? ((deal.quote_send_count || 0) > 0 ? "quote" : "review")
-          // signed_at is tested BEFORE pricing_store, and the order is load-
-          // bearing. A store-origin deal carries a pricing_store from the moment
-          // it is created, so "has a store" no longer implies "has been picked
-          // up" -- reading the store first would resume an unsigned deal at
-          // `pricing`, which b2b_deals_pickup_recorded refuses (rank >= 2 demands
-          // signed_by, signed_at and pickup_date) and the reopen would fail with
-          // a constraint error instead of putting the deal back where it died.
-          : deal.signed_at ? (deal.pricing_store ? "pricing" : "pricing_location")
-          : "pickup";
-        const { error } = await supabase.from("b2b_deals").update({
-          stage, declined_at: null, declined_by: null,
-          declined_reason: null, declined_category: null,
-        }).eq("id", deal.id);
-        if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", dealStore(deal));
-        return jsonResponse({ success: true, stage });
+        return jsonResponse({ success: false, error: "Declined deals are final and can't be reopened." }, 409);
       }
 
 
@@ -1868,6 +1874,71 @@ Deno.serve(async (req: Request) => {
           : await supabase.from("b2b_prevals").update(patch).eq("id", prevalId!);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", null, { deal: dealId, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true });
+      }
+
+      // ================================================= deletion requests
+      // A trashcan on any deal, at any stage, raises a request rather than
+      // deleting outright. request_delete stamps the deal -- which surfaces it in
+      // CORP's Delete Requests modal, lights the red dots and drops a
+      // notification -- then CORP either approve_delete (the deal and everything
+      // under it is hard-deleted: items, listings, transfers and proofs cascade
+      // via their FKs; a linked pre-eval is SET NULL and survives) or deny_delete
+      // (the flag clears and the deal carries on). Same model as the
+      // recycle_requests / shopify-claims delete flow, on b2b_deals.
+      if (action === "request_delete") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.delete_requested_at) {
+          return jsonResponse({ success: false, error: "A deletion request is already pending on this deal." }, 409);
+        }
+        const who = str(body.requested_by, 120, "Requested by");
+        const { error } = await supabase.from("b2b_deals").update({
+          delete_requested_at: new Date().toISOString(),
+          delete_requested_by: who,
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        const ref = `${deal.client?.acronym || "B2B"}-${pad(deal.deal_no, 3)}`;
+        await queueNotification({
+          category: "requests",
+          kind: "b2b_delete_request",
+          title: `Delete request — B2B deal ${ref}`,
+          body: `${who || "Someone"} asked to delete deal ${ref}${deal.client?.company ? ` (${deal.client.company})` : ""}. Nothing is removed until you approve it.`,
+          link: "operations.html",
+          audienceRoles: ["district manager", "ceo", "mocd", "tom"],
+          audienceFeature: "cap-b2b-corp",
+          excludeUser: who,
+        });
+        await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.requested_by, 80, "User") });
+        return jsonResponse({ success: true });
+      }
+
+      // CORP-only, and gated on ACCEPT_ROLES like every other final call here
+      // (send, accept): a store can ask, only corp can pull the trigger.
+      if (action === "deny_delete" || action === "approve_delete") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can act on a delete request." }, 403);
+        }
+        if (!deal.delete_requested_at) {
+          return jsonResponse({ success: false, error: "There's no delete request on this deal." }, 409);
+        }
+        if (action === "deny_delete") {
+          const { error } = await supabase.from("b2b_deals")
+            .update({ delete_requested_at: null, delete_requested_by: null }).eq("id", deal.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
+          return jsonResponse({ success: true });
+        }
+        // approve_delete -- the point of no return. The deal row goes and every
+        // child cascades with it; the signature PNG in the private bucket is
+        // orphaned rather than deleted (storage carries no FK and a protective
+        // trigger blocks the delete -- an unreferenced file is harmless).
+        const { error } = await supabase.from("b2b_deals").delete().eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
         return jsonResponse({ success: true });
       }
 
