@@ -118,7 +118,24 @@ const NOISE = new Set([
 // What makes a unit unsellable as an answer to a want. Kept separate from NOISE
 // because these are a DECISION, not just noise: they exclude the item unless the
 // call back asked for exactly this.
-const BROKEN_ITEM = /\b(broken|cracked|bad imei|bad battery|no face id|for parts|parts only|as-?is|does ?n[o']t work|not working|dead|damaged|water damage)\b/i;
+// ⚠️ "bad <part>" IS HOW PAYMORE WRITES A FAULT, and this listed only two of them.
+// A 2020 MacBook Air titled "... A2337 Bad LCD" was therefore scored as healthy
+// stock and offered to a customer who asked for a working MacBook Air — the exact
+// thing fact 4 exists to prevent. The part list is spelled out rather than using a
+// bare \bbad\b: this regex REMOVES stock from the results, so a false positive
+// hides a good unit silently, and "Bad Company" is a real game title.
+// Measured when widened: 20 in-stock titles say "bad <part>", 19 of which already
+// matched another word here, so this catches exactly the one that was slipping
+// through and nothing else.
+const BROKEN_ITEM = /\b(broken|cracked|bad (?:lcd|screen|glass|display|imei|esn|battery|port|board|camera|speaker|mic|touch|digitizer|housing|hinge|keyboard|trackpad|fan|charging)|no face id|for parts|parts only|as-?is|does ?n[o']t work|not working|dead|damaged|water damage)\b/i;
+
+// THE SHELF NOW DECLARES ITS OWN GRADE, and where it does it beats the title.
+// `ebay_catalog.condition` is read from the Condition row of the description spec
+// table (see ebay-catalog) and is filled in on 94.9% of in-stock units — against
+// a title regex that only fires when somebody happened to type the fault into the
+// name. A short curated value, so a bare `bad` is safe here in a way it is not in
+// a title: "Bad Company" is a game, "Bad" is not a grade anybody assigns.
+const BROKEN_CONDITION = /\b(broken|for parts|parts only|dead|bad|damaged|cracked|does ?n[o']t work|not working|salvage|junk|scrap)\b/i;
 
 // What "I want a broken one" looks like in a call back. Deliberately wider than
 // BROKEN_ITEM: the customer says "for parts" or "to fix", not "bad IMEI".
@@ -196,6 +213,7 @@ type Item = {
   store_code: string; sku: string; title: string; price: number | null;
   quantity: number; collections: string[]; product_handle: string | null;
   online_published: boolean; product_id: string; variant_id: string;
+  condition: string | null;
   _t: string;            // normalised title, computed once
   _broken: boolean;
 };
@@ -212,6 +230,20 @@ type Scored = {
   item: Item; score: number; reason: string; foundVia: string;
 };
 
+// What the customer said, minus the shelf words and minus anything the TYPE
+// already accounts for. "ps3 pain" reduces to ["pain"]; without this the platform
+// token "ps3" counted as if it identified the game.
+//
+// Lifted out of score() so the scorer and the constraint pass below read the SAME
+// list. Two copies of this would be two definitions of "what the customer named",
+// and they would drift.
+function residualFor(cb: Cb, ty: TypeDef | null): string[] {
+  const typeWords = new Set((ty?.keywords ?? []).flatMap((k) => k.split(" ")));
+  return tokens(cb.item)
+    .filter((t) => !SHELF.has(t) && !typeWords.has(t))
+    .filter(distinctive);
+}
+
 /**
  * Score one item against one call back. Returns null when it is not a match at
  * all, which is the common case and must stay cheap.
@@ -224,9 +256,14 @@ type Scored = {
  *                     the customer's own words must appear too
  */
 function score(cb: Cb, ty: TypeDef | null, it: Item, wantsBroken: boolean): Scored | null {
-  // Fact 4: a broken unit is not an answer unless it is the answer.
-  if (it._broken && !wantsBroken) return null;
-
+  // FACT 4 REVISED 2026-08-24, on the DM's call. A broken unit used to be dropped
+  // here outright, on the reasoning that ringing a customer about a cracked phone
+  // is worse than staying quiet. Two things changed that: the panel now SHOWS the
+  // condition on every line, and "Not This" is back — so the floor can see what it
+  // is and dismiss it permanently, which is a better answer than us deciding for
+  // them. It is still never the first thing offered: the per-store sort below
+  // pushes broken to the bottom, so with MAX_PER_STORE = 3 it surfaces mainly when
+  // there is nothing sound to show instead.
   const inCategory = !!cb.category_handle && it.collections.includes(cb.category_handle);
   const inOther = it.collections.includes("other");
   if (!inCategory && !inOther) return null;
@@ -251,13 +288,7 @@ function score(cb: Cb, ty: TypeDef | null, it: Item, wantsBroken: boolean): Scor
     foundVia = "other";
   }
 
-  // What the customer said, minus the shelf words and minus anything the TYPE
-  // already accounts for. "ps3 pain" reduces to ["pain"]; without this the
-  // platform token "ps3" counted as if it identified the game.
-  const typeWords = new Set((ty?.keywords ?? []).flatMap((k) => k.split(" ")));
-  const residual = tokens(cb.item)
-    .filter((t) => !SHELF.has(t) && !typeWords.has(t))
-    .filter(distinctive);
+  const residual = residualFor(cb, ty);
   const matchedTokens = residual.filter((t) => it._t.includes(t));
 
   const anyModel = cb.any_model === true;
@@ -371,7 +402,7 @@ Deno.serve(async (req: Request) => {
     for (let from = 0; ; from += 1000) {
       const { data, error } = await sb
         .from("ebay_catalog")
-        .select("store_code, sku, title, price, quantity, collections, product_handle, online_published, product_id, variant_id")
+        .select("store_code, sku, title, price, quantity, collections, product_handle, online_published, product_id, variant_id, condition")
         .eq("store_code", st).gt("quantity", 0)
         // ORDER BY IS LOAD-BEARING. Without it Postgres may return page 1 and
         // page 2 in overlapping order, and OVL has 1,304 in-stock rows — two
@@ -386,7 +417,11 @@ Deno.serve(async (req: Request) => {
           ...r,
           collections: r.collections ?? [],
           _t: norm(r.title),
-          _broken: BROKEN_ITEM.test(String(r.title || "")),
+          // The graded value first, the title second. Either alone is a fault:
+          // 5% of stock has no grade, and a grade of "Good" on a unit whose title
+          // says "Bad LCD" means somebody graded the shell and not the screen.
+          _broken: BROKEN_CONDITION.test(String(r.condition || ""))
+                || BROKEN_ITEM.test(String(r.title || "")),
         } as Item);
       }
       if (page.length < 1000) break;
@@ -425,6 +460,10 @@ Deno.serve(async (req: Request) => {
     const wantsBroken = WANTS_BROKEN.test(String(cb.item || ""));
     const found: Scored[] = [];
 
+    // Scored per store first and capped LATER, because the constraint below needs
+    // to see every candidate in the district before it can tell a product word
+    // from an aside.
+    const perStore: Record<string, Scored[]> = {};
     for (const st of holdingStores) {
       const hits: Scored[] = [];
       for (const it of (byStore[st] ?? [])) {
@@ -432,7 +471,44 @@ Deno.serve(async (req: Request) => {
         const sc = score(cb, ty, it, wantsBroken);
         if (sc) hits.push(sc);
       }
-      hits.sort((a, b) => b.score - a.score);
+      perStore[st] = hits;
+    }
+
+    // ⚠️ A WORD THE CUSTOMER NAMED THAT OUR CATALOGUE ALSO USES IS A CONSTRAINT.
+    //
+    // "PS5 Slim" came back with three ordinary PS5s among the Slims. The type is
+    // `Sony PlayStation 5 Console`, seeded needs_item_text:false, so the model gate
+    // was satisfied outright and "slim" only ever ADDED score — the Slims sorted
+    // first and the plain ones filled the remaining per-store slots. Which is fact
+    // 5 working as written, and wrong: the customer named the variant.
+    //
+    // Requiring every named word always would break the opposite case. "iPhone 15
+    // on the 13th" would demand a title containing "13th", and there is no such
+    // iPhone — that row would go from three matches to none. The customer's aside
+    // is not a product word.
+    //
+    // SO THE CATALOGUE DECIDES WHICH IT IS. A word that appears in at least one
+    // candidate title is a word we use for products, and it becomes required;
+    // a word that appears in none of them is an aside, and is ignored. Same shape
+    // as the year rule above, and evidence-based for the same reason.
+    //
+    // Years are excluded: the range test already owns them, and requiring "2017"
+    // literally would drop the 2018 machine that the range deliberately allows.
+    const named = residualFor(cb, ty).filter((t) => !/^(19[89]\d|20[0-4]\d)$/.test(t));
+    const pool = Object.values(perStore).flat();
+    const required = named.filter((t) => pool.some((h) => h.item._t.includes(t)));
+
+    for (const st of holdingStores) {
+      const hits = perStore[st].filter((h) => required.every((t) => h.item._t.includes(t)));
+      // BROKEN LAST, unless broken is what was asked for. This governs SELECTION,
+      // not display: it decides which three survive MAX_PER_STORE, so a sound unit
+      // is never dropped in favour of a broken one. Display order is the panel's
+      // job — customer-callbacks returns matches by score — and the panel sorts
+      // broken to the bottom of its own list for the same reason.
+      hits.sort((a, b) =>
+        (wantsBroken || a.item._broken === b.item._broken
+          ? 0 : (a.item._broken ? 1 : -1))
+        || b.score - a.score);
       found.push(...hits.slice(0, MAX_PER_STORE));
     }
 
@@ -448,6 +524,7 @@ Deno.serve(async (req: Request) => {
         store: f.item.store_code, sku: f.item.sku, title: f.item.title,
         price: f.item.price, score: f.score, why: f.reason, via: f.foundVia,
         live: f.item.online_published,
+        condition: f.item.condition, broken: f.item._broken,
       })),
     });
 
@@ -462,6 +539,10 @@ Deno.serve(async (req: Request) => {
         price: f.item.price,
         product_handle: f.item.product_handle,
         online_published: f.item.online_published,
+        // Copied onto the match, like title and price, so the panel can render a
+        // line without joining the catalogue. It is what was true when this was
+        // scored; the sweep refreshes it.
+        condition: f.item.condition ?? null,
         score: f.score,
         match_reason: f.reason,
         found_via: f.foundVia,

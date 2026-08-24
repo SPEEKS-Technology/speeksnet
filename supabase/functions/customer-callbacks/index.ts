@@ -77,9 +77,10 @@ function canModify(entryStore: string, role: string, store: string, multi: boole
   return entryStore === s;
 }
 
-// A match is answered by the HOLDING store's management. An employee can see the
-// green row and ring the customer; recording "that's it" or "not it" is a
-// decision that permanently changes what the sweep offers, so it needs a manager.
+// Is this person management OF THAT STORE. Called twice for a match — once for the
+// store holding the item, once for the store that logged the customer — because
+// either of them may veto a pairing. An employee can see the green row and ring
+// the customer; a permanent change to what the sweep offers needs a manager.
 function canDecideMatch(holdingStore: string, role: string, store: string, multi: boolean): boolean {
   const r = (role || "").toLowerCase().trim();
   const s = (store || "").toUpperCase();
@@ -194,15 +195,30 @@ Deno.serve(async (req: Request) => {
     // --- what somebody already has -----------------------------------------
     // Attached to every row for every store, deliberately: the green highlight
     // belongs to the store that HAS the item, and that store is reading the same
-    // payload as the store that logged the customer. `rejected` never ships — it
-    // is a veto, not information. `sold` does, so a row that was green and is no
-    // longer can say why instead of just going quiet.
+    // payload as the store that logged the customer.
+    //
+    // NEITHER `rejected` NOR `sold` SHIPS. rejected is a veto, not information.
+    // sold used to, on the reasoning that a match which was there yesterday should
+    // say it has gone rather than vanish — and in use that read as a third piece of
+    // stock on the panel, one of which cannot be sold. A call back panel answers
+    // "what can I sell this customer today", so out of stock is not an answer.
+    // The state is still written by the matcher; it is just not sent to anybody.
     if (entries.length) {
       const { data: matches } = await supabase
         .from("callback_matches")
-        .select("id, callback_id, store_code, sku, title, price, product_handle, online_published, score, state, found_at, match_reason, found_via, decided_by, decided_store, decided_at")
+        // product_id ships so the panel can offer a Shopify ADMIN link for a
+        // store's own stock. The storefront handle does not cover that case: the
+        // in-stock units that were never published have no public page at all,
+        // and those are exactly the ones somebody needs to go and edit.
+        //
+        // `condition` is the graded value the matcher copied off the shelf. It has
+        // to travel with the match rather than be looked up: it is what decides
+        // whether somebody rings the customer at all, and a broken unit is now
+        // OFFERED rather than hidden (see fact 4 in callback-match), so the line
+        // has to be able to say so.
+        .select("id, callback_id, store_code, sku, title, price, product_id, product_handle, online_published, condition, score, state, found_at, match_reason, found_via, decided_by, decided_store, decided_at")
         .in("callback_id", entries.map((e: any) => e.id))
-        .neq("state", "rejected")
+        .in("state", ["suggested", "confirmed"])
         .order("score", { ascending: false });
       const byCb: Record<string, unknown[]> = {};
       for (const m of (matches ?? [])) (byCb[m.callback_id] ||= []).push(m);
@@ -465,14 +481,30 @@ Deno.serve(async (req: Request) => {
     //   every later sweep (see stateByKey in callback-match).
     // 'rejected'  — permanent for this (row, item) pair, by decision. Nothing
     //   re-offers it, so a manager never dismisses the same wrong guess twice.
+    //   This is what makes it safe to OFFER a broken unit rather than hide it.
     if (action === "match_confirm" || action === "match_reject") {
       const matchId = body.matchId ?? body.match_id;
       if (!matchId) return json({ error: "Missing matchId" }, 400);
       const { data: m } = await supabase
-        .from("callback_matches").select("id, store_code, state").eq("id", matchId).maybeSingle();
+        .from("callback_matches").select("id, store_code, state, callback_id").eq("id", matchId).maybeSingle();
       if (!m) return json({ error: "Not found" }, 404);
-      if (!canDecideMatch(m.store_code, role, store, multi)) {
-        return json({ error: `Only ${m.store_code}'s managers can answer this match` }, 403);
+      // ⚠️ EITHER STORE'S MANAGEMENT. This was the HOLDING store only, which is
+      // right for a question about the stock — but the question "Not This" usually
+      // answers is about the CUSTOMER ("they would not want a broken one"), and
+      // that is known by the store that took the call. Under the old rule an OVL
+      // manager could not dismiss MPL's broken PS5 from their own customer's row.
+      // Mirrors cbCanDecide in speeks.js; see [[kpi-role-gate]] for the cost of
+      // those two drifting.
+      const { data: owner } = m.callback_id
+        ? await supabase.from("customer_callbacks").select("store").eq("id", m.callback_id).maybeSingle()
+        : { data: null };
+      const loggedBy = owner?.store ?? null;
+      const allowed = canDecideMatch(m.store_code, role, store, multi)
+        || (!!loggedBy && canDecideMatch(loggedBy, role, store, multi));
+      if (!allowed) {
+        return json({ error: loggedBy && loggedBy !== m.store_code
+          ? `Only ${m.store_code}'s or ${loggedBy}'s managers can answer this match`
+          : `Only ${m.store_code}'s managers can answer this match` }, 403);
       }
       const state = action === "match_confirm" ? "confirmed" : "rejected";
       if (!MATCH_STATES.has(state)) return json({ error: "Invalid state" }, 400);

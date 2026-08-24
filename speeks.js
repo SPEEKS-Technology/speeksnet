@@ -20737,10 +20737,34 @@ const CB_ACTIVE_DAYS  = 30;   // days an entry stays on the sheet
 const CB_PURGE_DAYS   = 120;  // days from date_of_call until permanent deletion
 
 let _cbCache = [];
-let _cbView = null;           // 'mine' | 'all' | 'completed' | 'archived'
+let _cbView = null;           // 'matches' | 'mine' | 'all' | 'history'
+// Which of the History tab's two sections is open. 'auto' means nobody has
+// clicked yet: Completed opens itself when it has rows and stays shut when it has
+// none, because leading the tab with an empty list is worse than leading it with
+// two closed headers. After a click the choice is explicit, and 'none' is a real
+// answer -- either section can be shut, neither has to be open, never both are.
+let _cbHistOpen = 'auto';   // 'auto' | 'completed' | 'archived' | 'none'
+
+// ONE CUSTOMER, SEVERAL WANTS. "Nintendo 64 full console, PS4 complete." was one
+// row asking for two things, and the matcher can only answer a row with one
+// category on it -- so it found the N64 and the PS4 was never looked for. Each
+// want is now its OWN call back: its own category, its own matches, its own
+// 30-day timer, its own status. You can sell them the N64 today and keep looking
+// for the PS4, which one row with one status cannot express.
+//
+// The only thing that needed building for that is not having to type the name and
+// number again. _cbLastAdded is who was just logged; _cbAddFor is who the form is
+// currently pre-filled for, set only when somebody ASKS for it -- silently keeping
+// the last customer in the fields is how a want gets logged against the wrong
+// person.
+let _cbLastAdded = null;   // {name, phone, store} — offers the button
+let _cbAddFor = null;      // {name, phone, store} — pre-fills the form
 let _cbExpandedId = null;
 let _cbEditingId = null;
 let _cbLoading = false;
+// A view was clicked while a fetch was in the air, so the fetch that lands is
+// answering the wrong question and one more is needed.
+let _cbReloadWanted = false;
 
 function _cbDaysAgo(n) {
     const d = new Date(); d.setDate(d.getDate() - n);
@@ -20830,14 +20854,29 @@ function _cbSplitMatches(entry) {
 }
 
 // Only the holding store's management may answer. The server enforces the same
-// rule; this is here so a button that would 403 is never offered in the first place.
-function cbCanDecide(match) {
+// rule; this was here so a button that would 403 was never offered in the first
+// place. No button calls it since the answers came off the panel on 2026-08-24 --
+// it stays as the readable statement of who the server will accept a decision
+// from, for whoever puts that control back or drives cbMatchDecide by hand.
+// ⚠️ EITHER STORE'S MANAGEMENT, and the second half was added on 2026-08-24 when
+// "Not This" came back. The rule was the HOLDING store only, which is right for a
+// question about the stock — but the question this button usually answers is about
+// the CUSTOMER: "they would not want a broken one". That is known by the store
+// that took the call, and under the old rule an OVL manager could not dismiss
+// MPL's broken PS5 from their own customer's row, which is the exact case the
+// button was brought back for.
+//
+// So a veto may come from whoever knows either half: the store holding the item,
+// or the store that logged the want. canDecideMatch in customer-callbacks mirrors
+// this — see [[kpi-role-gate]] for what happens when those two drift.
+function cbCanDecide(match, entry) {
     const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase().trim();
     const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     if (CB_CORP_ROLES.includes(role) || store === 'ALL') return true;
     if (!CB_DECIDER_ROLES.includes(role)) return false;
-    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return MULTISTORE_MANAGER_STORES.includes(match.store_code);
-    return match.store_code === store;
+    const mine = (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
+        ? MULTISTORE_MANAGER_STORES : [store];
+    return mine.includes(match.store_code) || (!!entry && mine.includes(entry.store));
 }
 
 // A link only when there is genuinely something to open. 114 of the in-stock
@@ -20847,6 +20886,24 @@ function cbMatchListingUrl(m) {
     if (!m.online_published || !m.product_handle) return null;
     const shop = CB_SHOP_DOMAINS[m.store_code];
     return shop ? `https://${shop}/products/${encodeURIComponent(m.product_handle)}` : null;
+}
+
+// The Shopify admin link, and ONLY for a store's own stock. The storefront URL
+// above is public and does not exist for the in-stock units that were never
+// published; this one always resolves, because it points at the product record
+// rather than at the listing. Own store only on purpose: whoever is reading this
+// is signed into their own Shopify and nobody else's, so another store's admin
+// link is a login screen handed to somebody mid-phone-call.
+function cbMatchAdminUrl(m) {
+    const scope = _cbMatchScope();
+    if (!scope || !scope.includes(m.store_code)) return null;
+    const shop = CB_SHOP_DOMAINS[m.store_code];
+    // product_id arrives as a gid, and the numeric id is the last segment of it.
+    // Anything that is not a bare number is not linkable, and a broken admin URL
+    // handed over mid-call is worse than no link at all.
+    const id = String(m.product_id || '').split('/').pop();
+    if (!shop || !/^[0-9]+$/.test(id)) return null;
+    return `https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/products/${id}`;
 }
 
 function _cbMoney(v) {
@@ -20946,7 +21003,9 @@ function _cbShortDate(iso) {
 
 function _cbDaysBadge(entry) {
     const { daysLeft, purgeLeft } = cbDaysInfo(entry);
-    if (_cbView === 'archived' || entry.archived_at || daysLeft <= 0) {
+    // archived_at is the fact; the view was only ever a proxy for it, and since
+    // Completed and Archived share a tab it is not even that any more.
+    if (entry.archived_at || daysLeft <= 0) {
         return `<span class="cb-days cb-days-archived">purges in ${Math.max(purgeLeft, 0)}d</span>`;
     }
     const cls = daysLeft <= 7 ? 'cb-days-urgent' : daysLeft <= 14 ? 'cb-days-warn' : 'cb-days-ok';
@@ -20977,11 +21036,28 @@ function _cbIsCorpRole() {
 
 // --- Load & render
 async function cbLoad() {
-    // Corp roles (DM/CEO/MOCD) watch the whole district — no "My Store" view;
-    // they land on All Stores and narrow with the store filter instead.
-    if (_cbView === null) _cbView = _cbIsCorpRole() ? 'all' : 'mine';
-    _cbSyncControls();   // highlight the right view button before the fetch resolves
-    if (_cbLoading) return;
+    // FIRST LOAD PICKS ITS OWN TAB, and it cannot be picked before the data is in:
+    // "is there anything to act on" is a question about the rows. So the view stays
+    // null across the fetch and is decided once the cache is filled -- which also
+    // means there is nothing for _cbSyncControls to highlight until then, and the
+    // HTML marks Matches active so the toggle is not blank while it loads.
+    if (_cbView) _cbSyncControls();   // highlight the right view button before the fetch resolves
+
+    // ⚠️ A CLICK ARRIVING MID-FETCH USED TO BE THROWN AWAY. cbSetView sets the view
+    // and calls this; a bare `if (_cbLoading) return` dropped it on the floor —
+    // nothing re-rendered, and clicking the SAME tab again hit cbSetView's equality
+    // guard and did nothing at all, so the panel looked frozen on whatever was last
+    // drawn. Arriving from another Operations tab made it easy to hit, because the
+    // first fetch is still in the air while somebody is clicking.
+    //
+    // Now the view change is drawn immediately from the cache in hand, and the load
+    // is asked to run again when the one in flight lands — which is what the History
+    // tab needs, since only that view fetches the archived rows.
+    if (_cbLoading) {
+        _cbReloadWanted = true;
+        if (_cbView) cbRender();
+        return;
+    }
     _cbLoading = true;
     const body = document.getElementById('cbBody');
     if (body && !_cbCache.length) body.innerHTML = '<div class="status-message">Loading Call Backs…</div>';
@@ -20989,11 +21065,31 @@ async function cbLoad() {
         // Fetch everything once; view filtering happens client-side in cbRender.
         // The vocabulary rides along on the first load so the quick-add's Category
         // select is never briefly empty — after that cbVocab() resolves instantly.
-        const [rows] = await Promise.all([
-            cbFetch(_cbView === 'archived' ? 'archived' : 'active', 'ALL'),
+        //
+        // ARCHIVED ROWS COME FROM A SECOND CALL, and they are MERGED into the same
+        // cache rather than held beside it. Fourteen actions in this module find
+        // their row with `_cbCache.find(x => x.id === id)`, so a second array would
+        // have broken every one of them for an archived row -- restore included,
+        // which is the only thing you can do to one. The archived call is skipped
+        // everywhere except the History tab, where it is the only way to see them.
+        const needArchived = _cbView === 'history';
+        const [rows, archived] = await Promise.all([
+            cbFetch('active', 'ALL'),
+            needArchived ? cbFetch('archived', 'ALL') : Promise.resolve([]),
             cbVocab()
         ]);
-        _cbCache = rows;
+        _cbCache = archived.length ? [...rows, ...archived] : rows;
+        // ⚠️ TESTED HERE, NOT AT ENTRY. The landing view is a default for somebody
+        // who has not chosen one — so the question is whether a view is set NOW,
+        // after the await. Reading a `firstLoad` flag captured before the fetch
+        // overwrote a tab the person had clicked while it was in the air.
+        if (_cbView === null) {
+            // Matches when this store has stock against a call back, All Stores when
+            // it does not. My Store is no longer where anyone lands: a manager who
+            // wants only their own rows is one click away, and the reason to open
+            // this tool at all is stock that can be sold today.
+            _cbView = _cbVisibleEntries('matches').length ? 'matches' : 'all';
+        }
         cbRender();
     } catch (e) {
         // Only surface the error when there's nothing on screen — a failed
@@ -21001,6 +21097,9 @@ async function cbLoad() {
         if (body && !_cbCache.length) body.innerHTML = '<div class="status-message">Could not load call backs. Try again in a minute.</div>';
     } finally {
         _cbLoading = false;
+        // Cleared before the call, so one change queues one extra round rather than
+        // a loop.
+        if (_cbReloadWanted) { _cbReloadWanted = false; cbLoad(); }
     }
 }
 
@@ -21012,93 +21111,268 @@ function cbSetView(view) {
     cbLoad();
 }
 
+// What 'auto' actually means, resolved against the data rather than guessed at
+// the moment the tab is built.
+function _cbHistResolved() {
+    if (_cbHistOpen !== 'auto') return _cbHistOpen;
+    return _cbVisibleEntries('completed').length ? 'completed' : 'none';
+}
+
+// Clicking the open section CLOSES it. Never two open at once, which is what the
+// single-value state gives for free.
+function cbSetHistory(which) {
+    _cbHistOpen = (_cbHistResolved() === which) ? 'none' : which;
+    _cbExpandedId = null;
+    _cbEditingId = null;
+    cbRender();
+}
+window.cbSetHistory = cbSetHistory;
+
 function _cbSyncControls() {
-    ['mine', 'all', 'completed', 'archived'].forEach(v => {
+    ['matches', 'mine', 'all', 'history'].forEach(v => {
         const btn = document.getElementById('cbView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
         if (btn) btn.classList.toggle('active', _cbView === v);
     });
     // (The My Store button itself is role-gated in the HTML — applyRoleBasedUI
     // hides it for corp roles before first paint, so no JS display toggling here.)
-    const filter = document.getElementById('cbStoreFilter');
-    if (filter) filter.style.display = (_cbView === 'mine') ? 'none' : '';
+    //
+    // THE STORE FILTER IS A CORP CONTROL. A store already has the only two scopes
+    // that mean anything to it -- its own rows, and everybody's -- and the dropdown
+    // was a third way of asking the same question with one more thing to leave set
+    // wrong. Corp keeps it: a DM has no My Store, so narrowing to one is the only
+    // way they get a single store's list.
+    _cbShowFilter(_cbIsCorpRole());
 }
 
-function _cbVisibleEntries() {
+// MATCHES TO THE TOP. The list is ordered by date of call, which is the same
+// thing as time left, so a row somebody can answer today sat wherever its call
+// date put it -- eleven rows down, under ten nobody can act on. Rank first and
+// date second, so inside each band the old order is untouched.
+//
+// Your OWN stock outranks another store's, because those are different things:
+// one is a call to make, the other a fact to know. A corp role holds no stock of
+// its own so every match ranks 1 for them, which changes nothing -- matched still
+// beats unmatched, which is the whole point.
+// THE MATCHES TAB IS A WORKLIST, so it holds only what this store can act on. It
+// shipped holding every matched row with your own sorted first, and an OVL manager
+// opened it onto a WSP row they can do nothing about. The store that HAS the item
+// is the one that rings the customer — another store's match is information, and
+// it is already on the All Stores list where information belongs.
+//
+// CORP IS THE EXCEPTION, and has to be: a DM holds no stock, so `mine` is empty
+// for them and this tab would be empty too. For corp every match is theirs to
+// chase up, which is the whole point of the district view.
+function _cbMatchIsMyWork(e) {
+    return _cbMatchScope() ? _cbSplitMatches(e).mine.length > 0 : _cbLiveMatches(e).length > 0;
+}
+
+function _cbMatchRank(e) {
+    const { mine, theirs } = _cbSplitMatches(e);
+    return mine.length ? 0 : theirs.length ? 1 : 2;
+}
+
+// `view` is passed in rather than read off _cbView because the History tab asks
+// for two lists in one render.
+// ⚠️ HIDING A SELECT DOES NOT HIDE A SELECT ANY MORE. Every select on the site is
+// wrapped by the custom dropdown (see _ddInit): the native one stays in the DOM and
+// stays authoritative, but it is moved inside a `.dd-host` and covered by a
+// `.dd-btn` face. So `select.style.display = 'none'` hides the half nobody can see
+// and leaves the visible half on screen. This line read
+// `filter.style.display = (_cbView === 'mine') ? 'none' : ''` for weeks and the
+// dropdown sat there on My Store the whole time.
+//
+// Both halves are set: the host is what shows, and the select is covered anyway,
+// but the enhancer may not have wrapped it yet on the very first paint.
+function _cbShowFilter(show) {
+    const sel = document.getElementById('cbStoreFilter');
+    if (!sel) return;
+    const host = sel.closest('.dd-host');
+    sel.style.display = show ? '' : 'none';
+    if (host) host.style.display = show ? '' : 'none';
+}
+
+function _cbVisibleEntries(view) {
+    const v = view || _cbView;
     const filter = document.getElementById('cbStoreFilter');
-    const filterStore = (_cbView === 'mine') ? _cbHomeStore() : (filter ? filter.value : 'ALL');
-    // Completed is its own list now. Mixed into the open ones behind a tick box it
-    // was either clutter or invisible, and the box re-rendered the quick-add above
-    // it on every toggle.
-    const keep = e => _cbView === 'archived' ? true
-        : _cbView === 'completed' ? e.status === 'completed'
-        : e.status !== 'completed';
+    // Read the dropdown only for the roles that can SEE it, so a value left behind
+    // by a role change cannot quietly narrow somebody's list to one store.
+    const filterStore = (v === 'mine') ? _cbHomeStore()
+        : (_cbIsCorpRole() && filter) ? filter.value : 'ALL';
+    // Completed and Archived are sections of one tab now, not views of their own.
+    // Every branch tests archived_at explicitly: archived rows are in the cache at
+    // all on the History tab, and an expired row must never surface in an open list.
+    const keep = v === 'archived'  ? (e => !!e.archived_at)
+        : v === 'completed' ? (e => !e.archived_at && e.status === 'completed')
+        : v === 'matches'   ? (e => !e.archived_at && e.status !== 'completed' && _cbMatchIsMyWork(e))
+        : (e => !e.archived_at && e.status !== 'completed');
+    // Matches-first on the open lists only. On the two backward-looking ones the
+    // order that matters is when it happened.
+    const byMatch = v === 'matches' || v === 'mine' || v === 'all';
     return _cbCache
         .filter(e => filterStore === 'ALL' || e.store === filterStore)
         .filter(keep)
-        .sort((a, b) => (b.date_of_call || '').localeCompare(a.date_of_call || ''));
+        .sort((a, b) => (byMatch ? _cbMatchRank(a) - _cbMatchRank(b) : 0)
+            || (b.date_of_call || '').localeCompare(a.date_of_call || ''));
+}
+
+// The table, lifted out of cbRender so the History tab's two sections can each
+// render one of their own.
+function _cbTableHtml(entries) {
+    const showStore = _cbView !== 'mine';
+    let html = `<table class="cb-table"><thead><tr>
+        ${showStore ? '<th class="cb-col-store">Store</th>' : ''}
+        <th class="cb-col-customer">Customer</th><th class="cb-col-phone">Phone</th><th class="cb-col-item">Item Wanted</th>
+        <th class="cb-col-status">Status</th><th class="cb-col-timer">Timer</th><th class="cb-col-notes">${CB_ICONS.note}</th><th class="cb-col-logged">Logged</th><th class="cb-col-actions"></th>
+    </tr></thead><tbody>`;
+    entries.forEach(e => { html += cbRowHtml(e, showStore); });
+    return html + '</tbody></table>';
+}
+
+// ONE TAB, TWO LISTS, exactly one open. Completed and Archived were two tabs and
+// they were the two nobody opened: one is the end of a call back and the other the
+// end of its clock, which is the same shelf. Only the open section renders a
+// table, so the closed one costs nothing.
+const _CB_HIST = {
+    completed: { label: 'Completed', empty: 'Nothing completed yet.',
+        icon: '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>' },
+    archived:  { label: 'Archived', empty: 'Nothing archived in the last 90 days.',
+        icon: '<svg viewBox="0 0 24 24"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>' }
+};
+
+function _cbHistoryHtml(lists) {
+    const openKey = _cbHistResolved();
+    const sect = (key) => {
+        const meta = _CB_HIST[key];
+        const list = lists[key];
+        const isOpen = openKey === key;
+        return `<button class="cb-hist-head ${isOpen ? 'is-open' : ''}" onclick="cbSetHistory('${key}')">
+                <svg class="cb-hist-chev" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+                ${meta.icon}<span class="cb-hist-label">${meta.label}</span>
+                <span class="cb-hist-n">${list.length}</span>
+            </button>` + (isOpen
+            ? `<div class="cb-hist-body">${list.length ? _cbTableHtml(list) : `<div class="cb-empty">${meta.empty}</div>`}</div>`
+            : '');
+    };
+    return `<div class="cb-hist">${sect('completed')}${sect('archived')}</div>`;
+}
+
+// The Matches tab counts what it is FOR, not how many rows are open. Every row on
+// it is now answerable by whoever is reading, so the count says so plainly; corp
+// gets the neutral wording because a DM answers none of them personally.
+function _cbMatchesSubtitle(entries) {
+    const mine = !!_cbMatchScope();
+    if (!entries.length) {
+        return mine ? 'Nothing you have is on a call back' : 'Nothing in stock for anybody';
+    }
+    return mine ? `${entries.length} you can answer` : `${entries.length} with stock`;
 }
 
 function cbRender() {
     const body = document.getElementById('cbBody');
     if (!body) return;
     _cbSyncControls();
-    const entries = _cbVisibleEntries();
 
     const filterEl = document.getElementById('cbStoreFilter');
-    const scopeStore = (_cbView === 'mine') ? _cbHomeStore() : (filterEl ? filterEl.value : 'ALL');
+    const scopeStore = (_cbView === 'mine') ? _cbHomeStore()
+        : (_cbIsCorpRole() && filterEl) ? filterEl.value : 'ALL';
     const scoped = _cbCache.filter(e => scopeStore === 'ALL' || e.store === scopeStore);
     const open = scoped.filter(e => e.status !== 'completed' && !e.archived_at).length;
     const expiring = scoped.filter(e => { const d = cbDaysInfo(e).daysLeft; return e.status !== 'completed' && !e.archived_at && d > 0 && d <= 7; }).length;
     const sub = document.getElementById('cbSubtitle');
-    if (sub) sub.textContent = _cbView === 'archived'
-        ? `${entries.length} archived`
-        : _cbView === 'completed'
-        ? `${entries.length} completed`
+
+    // History renders two lists and no quick-add, so it leaves early rather than
+    // threading two special cases through everything below.
+    if (_cbView === 'history') {
+        const lists = { completed: _cbVisibleEntries('completed'), archived: _cbVisibleEntries('archived') };
+        if (sub) sub.textContent = `${lists.completed.length} completed · ${lists.archived.length} archived`;
+        body.innerHTML = _cbHistoryHtml(lists);
+        return;
+    }
+
+    const entries = _cbVisibleEntries();
+    if (sub) sub.textContent = _cbView === 'matches'
+        ? _cbMatchesSubtitle(entries)
         : `${open} open${expiring ? ` · ${expiring} expiring soon` : ''}`;
 
     let html = '';
-    // No quick-add on the two backward-looking lists: nothing is logged from a
-    // list of things that are already done.
-    if (_cbView !== 'archived' && _cbView !== 'completed') html += _cbQuickAddHtml();
+    // No quick-add on Matches: it is a worklist you scan and act on, and the add
+    // form would push the thing you came for down the screen. Logging a new call
+    // back happens on My Store, where the row you are creating belongs.
+    if (_cbView !== 'matches') html += _cbQuickAddHtml();
 
     if (!entries.length) {
         const msgs = {
-            mine:     'No call backs yet. When a customer wants something you don\'t have, log it above ↑',
-            all:      'No open call backs across stores.',
-            completed: 'Nothing completed yet.',
-            archived: 'Nothing archived in the last 90 days.'
+            matches: _cbMatchScope()
+                ? 'Nothing you have in stock is on a call back right now. Check All Stores for what other stores are looking for.'
+                : 'Nothing anybody has in stock is on a call back right now.',
+            mine:    'No call backs yet. When a customer wants something you don\'t have, log it above ↑',
+            all:     'No open call backs across stores.'
         };
         html += `<div class="cb-empty">${msgs[_cbView]}</div>`;
         body.innerHTML = html;
         return;
     }
 
-    const showStore = _cbView !== 'mine';
-    html += `<table class="cb-table"><thead><tr>
-        ${showStore ? '<th class="cb-col-store">Store</th>' : ''}
-        <th class="cb-col-customer">Customer</th><th class="cb-col-phone">Phone</th><th class="cb-col-item">Item Wanted</th>
-        <th class="cb-col-status">Status</th><th class="cb-col-timer">Timer</th><th class="cb-col-notes">${CB_ICONS.note}</th><th class="cb-col-logged">Logged</th><th class="cb-col-actions"></th>
-    </tr></thead><tbody>`;
-    entries.forEach(e => { html += cbRowHtml(e, showStore); });
-    html += '</tbody></table>';
-    body.innerHTML = html;
+    body.innerHTML = html + _cbTableHtml(entries);
 }
+
+// Offered after a successful add, and only then: the fastest moment to log a
+// second want is while the customer is still on the phone.
+function cbAddAnotherItem() {
+    if (!_cbLastAdded) return;
+    _cbAddFor = _cbLastAdded;
+    cbRender();
+    document.getElementById('cbAddItem')?.focus();
+}
+window.cbAddAnotherItem = cbAddAnotherItem;
+
+function cbAddForClear() {
+    _cbAddFor = null;
+    _cbLastAdded = null;
+    cbRender();
+    document.getElementById('cbAddName')?.focus();
+}
+window.cbAddForClear = cbAddForClear;
 
 function _cbQuickAddHtml() {
     const home = _cbHomeStore();
     const addStores = _cbAddStores();
-    const dflt = addStores && addStores.includes(home) ? home : (addStores ? addStores[0] : home);
+    const pinned = _cbAddFor;
+    const dfltStore = pinned && pinned.store ? pinned.store : null;
+    const dflt = dfltStore || (addStores && addStores.includes(home) ? home : (addStores ? addStores[0] : home));
     const storePicker = addStores
         ? `<select id="cbAddStore" class="kpi-select cb-add-store">${addStores.map(s => `<option value="${s}" ${s === dflt ? 'selected' : ''}>${s}</option>`).join('')}</select>`
         : '';
+    // Two states, one strip. Before: "that is logged, want to add another for
+    // them?". After: "you are still adding for Mark", with the way out on it --
+    // pre-filled fields somebody has forgotten about are worse than empty ones.
+    //
+    // AND THE WAY OUT IS A CANCEL, said in that word. It read "Done — Log Someone
+    // Else", which is the same action but sounds like a save: somebody who hit Add
+    // Another Item by accident had to work out that the button finishing the thing
+    // they did not mean to start was the one marked Done. Red, an X, and the word
+    // Cancel — and it is deliberately the only red thing on the strip.
+    const strip = pinned
+        ? `<div class="cb-qa-for">
+               <span class="cb-qa-for-txt">Adding Another Item For <b>${escapeHtml(pinned.name)}</b></span>
+               <button class="cb-qa-for-btn is-cancel" onclick="cbAddForClear()"
+                       data-cb-tip="Stops adding for ${escapeHtml(pinned.name)} and empties the fields. Nothing already logged is affected.">${CB_ICONS.cancel}Cancel</button>
+           </div>`
+        : (_cbLastAdded
+        ? `<div class="cb-qa-for is-done">
+               <span class="cb-qa-for-txt">Logged For <b>${escapeHtml(_cbLastAdded.name)}</b></span>
+               <button class="cb-qa-for-btn" onclick="cbAddAnotherItem()">${CB_ICONS.plus}Add Another Item For ${escapeHtml(_cbLastAdded.name)}</button>
+           </div>`
+        : '');
     // Two lines rather than one: who called and what they want, then how we find
     // it. Nine controls on a single row put the Category select somewhere nobody
     // would look for it, and it is the field the whole match depends on.
     return `<div class="cb-quickadd">
+        ${strip}
         <div class="cb-qa-line">
             ${storePicker}
-            <input type="text" id="cbAddName"  placeholder="Customer name" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-            <input type="tel"  id="cbAddPhone" placeholder="Phone" inputmode="numeric" oninput="cbPhoneInput(this)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+            <input type="text" id="cbAddName"  placeholder="Customer name" value="${pinned ? escapeHtml(pinned.name) : ''}" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+            <input type="tel"  id="cbAddPhone" placeholder="Phone" inputmode="numeric" value="${pinned ? escapeHtml(cbFormatPhone(pinned.phone)) : ''}" oninput="cbPhoneInput(this)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
             <input type="text" id="cbAddItem"  placeholder="Item they're looking for" class="cb-add-item" onkeydown="if(event.key==='Enter')cbQuickAdd()">
         </div>
         <div class="cb-qa-line cb-qa-match">
@@ -21199,7 +21473,11 @@ function _cbMatchChipHtml(mine, theirs) {
 function cbRowHtml(e, showStore) {
     const canAct = cbCanModify(e);
     const meta = CB_STATUS_META[e.status] || CB_STATUS_META.open;
-    const isArchived = _cbView === 'archived';
+    // A FACT ABOUT THE ROW, not about the view. This read `_cbView === 'archived'`,
+    // which stopped being able to answer the question the moment Completed and
+    // Archived became two sections of one tab -- a completed row would have come
+    // out wearing the Expired chip and a Restore button.
+    const isArchived = !!e.archived_at;
     const editing = _cbEditingId === e.id;
     const expanded = _cbExpandedId === e.id || editing;
     const { mine, theirs } = _cbSplitMatches(e);
@@ -21214,7 +21492,7 @@ function cbRowHtml(e, showStore) {
     // Open on rows that had plainly been dealt with.
     const statusBy = `<div class="cb-status-by">${
         (e.status !== 'open' && e.status_by) ? `${escapeHtml(e.status_by)} · ${escapeHtml(e.status_store || '')}`
-        : (!isArchived && e.status === 'open') ? '<span class="cb-status-hint">click to change</span>'
+        : (!isArchived && e.status === 'open') ? '<span class="cb-status-hint">Click to Change</span>'
         : '&nbsp;'}</div>`;
     const chip = isArchived
         ? `<span class="cb-chip cb-chip-expired">Expired</span>`
@@ -21313,9 +21591,64 @@ function cbRowHtml(e, showStore) {
 // kinds of fact: our stock is a call to make, another store's is context. A
 // `sold` row is kept visible on purpose — a match that was there yesterday and
 // has gone should say so rather than silently disappear.
-function _cbMatchPanelHtml(e, mine, theirs) {
-    const sold = (e.matches || []).filter(m => m.state === 'sold');
-    if (!mine.length && !theirs.length && !sold.length) return '';
+// OUT OF STOCK IS NOT SHOWN. There was a "No Longer In Stock" section carrying
+// the `sold` matches, on the reasoning that a match which was there yesterday
+// should say it has gone rather than vanish. In use it read as a suggestion:
+// three lines of stock on a call back panel, one of which cannot be sold. The
+// server no longer ships `sold` either, so this cannot come back by accident.
+// A GRADE THE SHELF DECLARED, on every line, in a pill the same size whatever it
+// says. Broken stock is offered now rather than hidden (see fact 4 in
+// callback-match), so this is the thing that makes the offer safe: nobody rings a
+// customer about a cracked laptop without having been told it is cracked.
+//
+// The vocabulary is PayMore's, not ours — measured across 3,822 in-stock units:
+// Good, Acceptable, Used, Very Good, New, Broken, Like New, Fair, Flawless, and a
+// tail of one-offs like "Brown/Dead Pixels". So the tone is decided by matching
+// the value rather than by a lookup table that a new grade would fall out of, and
+// anything unrecognised still renders — in the neutral tone, spelled as written.
+//
+// 5% of stock has no Condition row at all. That says "Unknown Condition" in the
+// same pill: a missing grade is a fact about the listing, and rendering nothing
+// would read as "fine".
+// Broken is NOT in this table: _CB_COND_BAD is tested before it, because these
+// are anchored at the start of the value and a fault is often written after a
+// kind word ("Good shell, bad LCD"). A row here would be unreachable.
+const _CB_COND_BAD = /(broken|dead|bad|damag|crack|for parts|not working|salvage|junk|scrap)/i;
+const _CB_COND_TONE = [
+    [/^(new|flawless|sealed|brand new)/i,          'is-new'],
+    [/^(like new|very good|excellent|mint)/i,      'is-good'],
+    [/^(good|lightly played)/i,                    'is-good'],
+    [/^(acceptable|fair|used|played|moderately)/i, 'is-fair'],
+];
+
+function _cbConditionPill(m) {
+    const raw = String(m.condition || '').trim();
+    if (!raw) {
+        return '<span class="cb-m-cond is-unknown" data-cb-tip="This listing has no Condition row filled in, so we cannot say. Open it in Shopify to check before you ring anybody.">Unknown Condition</span>';
+    }
+    // Broken is tested FIRST: the tone table is anchored at the start of the value,
+    // and a fault is often written after a kind word ("Good shell, bad LCD"), which
+    // would otherwise come out green.
+    const tone = _CB_COND_BAD.test(raw)
+        ? 'is-broken'
+        : (_CB_COND_TONE.find(([re]) => re.test(raw)) || [null, 'is-unknown'])[1];
+    return `<span class="cb-m-cond ${tone}">${escapeHtml(raw)}</span>`;
+}
+
+// Broken to the bottom of whichever list it is in. callback-match already keeps a
+// broken unit from taking a per-store slot off a sound one; this is the other half,
+// so the first thing read is the best thing available.
+function _cbMatchOrder(list) {
+    // Title as well as grade: the 5% with no Condition row still say "Bad LCD" in
+    // the name, and that is the one place left to read it.
+    const bad = (m) => _CB_COND_BAD.test(String(m.condition || '') + ' ' + String(m.title || ''));
+    return [...list].sort((a, b) => (bad(a) ? 1 : 0) - (bad(b) ? 1 : 0)
+        || (Number(b.score) || 0) - (Number(a.score) || 0));
+}
+
+function _cbMatchPanelHtml(e, mineIn, theirsIn) {
+    const mine = _cbMatchOrder(mineIn), theirs = _cbMatchOrder(theirsIn);
+    if (!mine.length && !theirs.length) return '';
     const sect = (label, list, cls) => list.length
         ? `<div class="cb-match-group ${cls || ''}">
                <div class="cb-match-head">${label}</div>
@@ -21324,37 +21657,47 @@ function _cbMatchPanelHtml(e, mine, theirs) {
     return `<div class="cb-match-panel">
         ${sect(mine.length === 1 ? 'You Have This — Call The Customer' : `You Have ${mine.length} That Fit — Call The Customer`, mine, 'is-mine')}
         ${sect(theirs.length === 1 ? 'Another Store Has One' : 'Other Stores Have These', theirs)}
-        ${sect('No Longer In Stock', sold, 'is-sold')}
     </div>`;
 }
 
 function _cbMatchHtml(e, m) {
     const url = cbMatchListingUrl(m);
-    const decided = m.state === 'confirmed';
-    const isSold = m.state === 'sold';
+    const adminUrl = cbMatchAdminUrl(m);
     const bits = [];
     if (m.price != null) bits.push(_cbMoney(m.price));
     if (m.sku) bits.push('SKU ' + escapeHtml(m.sku));
-    // found_via='other' is worth saying out loud: the unit is filed under Other
-    // rather than the category asked for, so the title is the only evidence and
-    // it is worth a second look before ringing anybody.
-    if (m.found_via === 'other') bits.push('<span class="cb-m-via">filed under Other</span>');
-    if (!m.online_published && !isSold) bits.push('<span class="cb-m-via">not listed online</span>');
+    // The "filed under Other" admission was dropped on 2026-08-24. It explained
+    // the matcher to itself rather than telling the floor anything they could act
+    // on, and it sat on the one line that has to read at a glance mid-phone-call.
+    // found_via is still recorded on the match, so nothing is lost but the noise.
+    if (!m.online_published) bits.push('<span class="cb-m-via">Not Listed Online</span>');
+    // The condition goes on the FRONT of the meta line, before price and SKU: it is
+    // the thing that decides whether the call happens at all.
+    bits.unshift(_cbConditionPill(m));
 
-    let actions = '';
-    if (isSold) {
-        actions = '<span class="cb-m-state">Sold</span>';
-    } else if (decided) {
-        actions = `<span class="cb-m-state is-yes">That's It${m.decided_by ? ' · ' + escapeHtml(m.decided_by) : ''}</span>`;
-    } else if (cbCanDecide(m)) {
-        actions = `<button class="cb-m-btn is-yes" onclick="event.stopPropagation();cbMatchDecide('${e.id}',${m.id},'confirm')" data-cb-tip="This is what they asked for — keeps it on the row.">That's It</button>
-                   <button class="cb-m-btn is-no" onclick="event.stopPropagation();cbMatchDecide('${e.id}',${m.id},'reject')" data-cb-tip="Wrong item. Permanent — this pairing is never offered again.">Not It</button>`;
-    }
-    const link = url
-        ? `<a class="cb-m-btn is-link" href="${escapeHtml(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Listing</a>`
+    // "NOT THIS" IS BACK, and "That's It" is not. They came off together earlier
+    // on 2026-08-24 as bookkeeping, and half of that was right: confirming told
+    // nobody anything. Rejecting is the opposite — it is the control that makes it
+    // safe to OFFER a broken unit instead of hiding it, which is the whole reason
+    // fact 4 in callback-match was reversed the same day. One press and the pairing
+    // is never suggested for this customer again, so the panel gets more honest
+    // rather than noisier: everything in stock is shown, graded, and dismissable.
+    //
+    // Managers of the holding store only, mirroring the server (see cbCanDecide) —
+    // a permanent veto on somebody else's stock is not a decision to hand out.
+    const actions = cbCanDecide(m, e)
+        ? `<button class="cb-m-btn is-no" onclick="event.stopPropagation();cbMatchDecide('${e.id}',${m.id},'reject')" data-cb-tip="Not what this customer wants. Permanent: this item is never suggested for ${escapeHtml(e.customer_name || 'this call back')} again. Other customers are unaffected.">Not This</button>`
         : '';
+    // Storefront first, admin second: the public page is the one you read to the
+    // customer, the admin one is where you go to change something.
+    const link = (url
+        ? `<a class="cb-m-btn is-link" href="${escapeHtml(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" data-cb-tip="The public listing — what the customer sees.">Listing</a>`
+        : '')
+        + (adminUrl
+        ? `<a class="cb-m-btn is-admin" href="${escapeHtml(adminUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" data-cb-tip="Open this product in your own Shopify admin.">Shopify</a>`
+        : '');
 
-    return `<div class="cb-match ${decided ? 'is-confirmed' : ''} ${isSold ? 'is-gone' : ''}">
+    return `<div class="cb-match">
         <span class="cb-m-store" style="background:${STORE_TINTS[m.store_code] || '#647082'}">${escapeHtml(m.store_code)}</span>
         <div class="cb-m-body">
             <div class="cb-m-title">${escapeHtml(m.title || '')}</div>
@@ -21372,7 +21715,11 @@ function cbMatchDecide(entryId, matchId, decision) {
     const m = (e.matches || []).find(x => String(x.id) === String(matchId));
     if (!m) return;
     if (decision === 'reject') {
-        if (!confirm(`Not it? "${m.title}" will never be suggested for this call back again.`)) return;
+        // Named, because the veto is per CUSTOMER and not global — somebody
+        // dismissing a broken laptop here has not taken it off anybody else's list,
+        // and the confirm is the only place that can say so.
+        if (!confirm(`Not this?\n\n"${m.title}"\n\nwill never be suggested for ${e.customer_name || 'this call back'} again. `
+                   + `Other customers are unaffected.`)) return;
         e.matches = e.matches.filter(x => String(x.id) !== String(matchId));
     } else {
         m.state = 'confirmed';
@@ -21417,8 +21764,14 @@ async function cbQuickAdd() {
         notes: note ? [{ text: note, user, store, at: _cbDaysAgo(0) }] : []
     };
     _cbCache.unshift(entry);
+    // Read off the SUBMITTED values, not off _cbAddFor, so editing the name over a
+    // pre-filled one moves the streak to whoever was actually logged.
+    _cbLastAdded = { name, phone, store };
+    if (_cbAddFor) _cbAddFor = _cbLastAdded;
     cbRender();
-    document.getElementById('cbAddName')?.focus();
+    // Mid-streak the name and number are already right, so the cursor belongs in
+    // the only field that changes.
+    document.getElementById(_cbAddFor ? 'cbAddItem' : 'cbAddName')?.focus();
     try {
         const out = await cbPost({ action: 'add', entry: {
             store, customer_name: name, phone, item, note: note || null, created_by: user,
@@ -42327,7 +42680,7 @@ function _rcHtml() {
         ${skipped.map(s => `
           <div class="rc-skiprow">
             <div class="rc-skipmain">
-              <div class="rc-title">${_ecEsc(s.title || 'This listing is no longer in the catalogue')}</div>
+              <div class="rc-title">${_ecEsc(s.title || 'Untitled Listing')}</div>
               <div class="rc-sub">${[
                   s.sku ? _ecEsc(s.sku) : '',
                   _ecEsc(String(s.product_id).split('/').pop()),

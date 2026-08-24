@@ -129,6 +129,13 @@ const PAGE_QUERY = `
         # stock, so a sold-out product reads null. That is the wanted answer, not
         # a gap.
         onlineStoreUrl
+        # THE CONDITION LIVES IN HERE, in a two-cell <tr> of the spec table that
+        # every PayMore listing carries. descriptionHtml is a plain SCALAR, so it
+        # adds no cost points to a page — only bytes, and at PAGE=50 that is well
+        # under a megabyte a request. A metafields connection would have been the
+        # obvious alternative and is the expensive one: a connection per product,
+        # charged against the very cost bucket the header above warns about.
+        descriptionHtml
         images(first: ${IMAGES_PER_PRODUCT}) { edges { node { id } } }
         collections(first: ${COLLECTIONS_PER_PRODUCT}) { edges { node { handle } } }
         variants(first: ${VARIANTS_PER_PRODUCT}) { edges { node {
@@ -137,6 +144,34 @@ const PAGE_QUERY = `
       } }
     }
   }`;
+
+// The Condition row of the description spec table. Same shape ebay-sync's
+// parseSpecs() reads for eBay item specifics — any <tr> with exactly two cells is
+// a label/value pair — narrowed to the one label we want, so a 15KB description
+// is not fully parsed 4,000 times a sweep.
+//
+// Returns null rather than a guess. "We could not read it" and "it is Good" are
+// different answers, and the panel says Unknown Condition for the first.
+const stripCellTags = (h: string) =>
+  h.replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ")
+   .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+   .replace(/\s+/g, " ").trim();
+
+function conditionFromDescription(html: string): string | null {
+  if (!html) return null;
+  for (const row of (html.match(/<tr[\s\S]*?<\/tr>/gi) || [])) {
+    const cells = row.match(/<td[\s\S]*?<\/td>/gi) || [];
+    if (cells.length !== 2) continue;
+    const key = stripCellTags(cells[0]).replace(/[?:]+$/, "").trim();
+    if (!/^condition$/i.test(key)) continue;
+    const value = stripCellTags(cells[1]);
+    // "N/A" is what the template writes when nobody graded it, so it means the
+    // same as an empty cell and must not be shown as if it were a grade.
+    if (!value || /^(n\/?a|none|unknown|-+)$/i.test(value)) return null;
+    return value.slice(0, 60);
+  }
+  return null;
+}
 
 type Row = {
   store_code: string;
@@ -151,6 +186,7 @@ type Row = {
   collections: string[];
   product_handle: string | null;
   online_published: boolean;
+  condition: string | null;
   seen_at: string;
   updated_at: string;
 };
@@ -186,6 +222,9 @@ function rowsFrom(store: string, products: any[], stamp: string): { rows: Row[];
     // Sitting exactly on the ceiling means the list MIGHT be clipped. Counted,
     // not assumed either way — see COLLECTIONS_PER_PRODUCT.
     if (collections.length >= COLLECTIONS_PER_PRODUCT) atCollectionCap += 1;
+    // ONCE PER PRODUCT, not once per variant: the description belongs to the
+    // product, and a 15KB regex pass per variant would be paid for nothing.
+    const condition = conditionFromDescription(String(p.descriptionHtml || ""));
     for (const v of (p.variants?.edges || []).map((e: any) => e.node)) {
       // No SKU means nothing eBay can be keyed on, and nothing our own Shopify
       // orders can be matched to either. Skipping is the only honest option.
@@ -203,6 +242,7 @@ function rowsFrom(store: string, products: any[], stamp: string): { rows: Row[];
         collections,
         product_handle: p.handle || null,
         online_published: !!p.onlineStoreUrl,
+        condition,
         seen_at: stamp,
         updated_at: stamp,
       });

@@ -8031,10 +8031,83 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .cb-tag-hasit     { background: var(--cb-sage); color: #fff; }
 
 /* A row whose stock is OURS. The tint has to survive :hover and the completed
-   row's own styling, hence the border rather than a background swap. */
+   row's own styling, hence the border rather than a background swap.
+
+   FULL SAGE TINT, NOT A WASH. This was rgba(sage, 0.045) -- #f5fbf7 over white,
+   which is white with a rumour of green in it. The row only actually looked green
+   once it was CLICKED, because .cb-row-open carries the real tint, so the one
+   thing the list exists to show at a glance was the one thing you had to click to
+   see. Same tint as the open row on purpose: what makes a row worth looking at is
+   that somebody has the item, not that somebody expanded it. */
 .cb-row-hasit > td:first-child { box-shadow: inset 3px 0 0 var(--cb-sage); }
-.cb-row-hasit { background: rgba(31, 157, 87, 0.045); }
-.cb-row-hasit:hover { background: rgba(31, 157, 87, 0.085); }
+.cb-row-hasit { background: var(--cb-sage-tint); }
+.cb-row-hasit:hover { background: #ddf1e5; }
+
+/* --- "Add Another Item For Mark": one customer, several wants ------------- */
+/* Two states of one strip, sitting above the quick-add fields it describes:
+   the offer straight after a save, and the reminder that the fields are already
+   filled in for somebody. The second matters more than it looks -- a pre-filled
+   name nobody has noticed is how a want gets logged against the wrong person. */
+.cb-qa-for {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 0 0 9px; padding: 7px 11px;
+    background: var(--cb-sage-tint); border: 1px solid rgba(31, 157, 87, 0.32);
+    border-radius: 9px;
+}
+/* The offer is quieter than the live state: it is a suggestion, not a mode. */
+.cb-qa-for.is-done { background: var(--cb-panel-2); border-color: var(--cb-line); }
+.cb-qa-for-txt {
+    flex: 1; min-width: 0; font-size: 12px; font-weight: 650; color: #178048;
+    letter-spacing: 0.01em;
+}
+.cb-qa-for.is-done .cb-qa-for-txt { color: var(--cb-muted); }
+.cb-qa-for-txt b { font-weight: 850; color: var(--slate-charcoal); }
+.cb-qa-for-btn {
+    font-family: inherit; font-size: 11.5px; font-weight: 750;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 11px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+    border: 1px solid rgba(31, 157, 87, 0.45); background: #fff; color: #178048;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.cb-qa-for-btn:hover { background: var(--cb-sage); border-color: var(--cb-sage); color: #fff; }
+.cb-qa-for-btn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.4; }
+/* The cancel is red because it is the undo, and the only red thing here. Sage
+   for it would have made two buttons that look like the same kind of answer. */
+.cb-qa-for-btn.is-cancel { border-color: rgba(209, 68, 59, 0.42); color: #d1443b; }
+.cb-qa-for-btn.is-cancel:hover { background: #d1443b; border-color: #d1443b; color: #fff; }
+
+/* --- The History tab: Completed and Archived, one open at a time ---------- */
+.cb-hist { display: flex; flex-direction: column; }
+.cb-hist-head {
+    font-family: inherit; width: 100%; display: flex; align-items: center; gap: 9px;
+    background: var(--cb-panel-2); border: 1px solid var(--cb-line);
+    border-radius: 10px; padding: 11px 13px; margin-top: 10px; cursor: pointer;
+    font-size: 12px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--cb-muted); text-align: left;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.cb-hist-head:first-child { margin-top: 0; }
+.cb-hist-head:hover { border-color: var(--cb-muted); color: var(--slate-charcoal); }
+/* The open one is sage and square along the bottom, so it reads as the lid on the
+   list underneath rather than a third button floating above it. */
+.cb-hist-head.is-open {
+    background: var(--cb-sage-tint); border-color: rgba(31, 157, 87, 0.4);
+    color: #178048; border-bottom-left-radius: 0; border-bottom-right-radius: 0;
+}
+.cb-hist-head svg { width: 15px; height: 15px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2; }
+.cb-hist-chev { transition: transform 0.15s ease; }
+.cb-hist-head.is-open .cb-hist-chev { transform: rotate(90deg); }
+.cb-hist-label { flex: 1; }
+.cb-hist-n {
+    font-size: 11px; font-weight: 800; letter-spacing: 0; color: var(--cb-muted);
+    background: #fff; border: 1px solid var(--cb-line); border-radius: 999px;
+    padding: 1px 8px; font-variant-numeric: tabular-nums;
+}
+.cb-hist-head.is-open .cb-hist-n { border-color: rgba(31, 157, 87, 0.35); color: #178048; }
+.cb-hist-body {
+    border: 1px solid rgba(31, 157, 87, 0.4); border-top: none;
+    border-radius: 0 0 10px 10px; overflow: hidden;
+}
 
 /* --- Category / type editors inside the inline edit row --- */
 .cb-edit-match { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -8042,7 +8115,10 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .cb-edit-match .cb-anymodel { font-size: 11.5px; padding: 5px 9px; }
 
 /* --- The match panel, in the expanded row --- */
-.cb-match-panel { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+/* margin-top separates the panel from the note input directly above it. The two
+   are unrelated -- one is what the customer said, the other is what we have --
+   and with 0 the heading read as a label for the text box. */
+.cb-match-panel { display: flex; flex-direction: column; gap: 12px; margin: 18px 0 14px; }
 .cb-match-group { display: flex; flex-direction: column; gap: 6px; }
 .cb-match-head {
     font-size: 10.5px; font-weight: 900; letter-spacing: 0.06em;
@@ -8055,8 +8131,6 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     border-radius: 10px; padding: 9px 11px;
 }
 .cb-match-group.is-mine .cb-match { border-color: rgba(31, 157, 87, 0.4); background: var(--cb-sage-tint); }
-.cb-match.is-confirmed { border-color: var(--cb-sage); }
-.cb-match.is-gone { opacity: 0.6; }
 .cb-m-store {
     flex: 0 0 auto; min-width: 40px; text-align: center;
     font-size: 10.5px; font-weight: 900; letter-spacing: 0.04em;
@@ -8072,9 +8146,8 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     font-size: 11.5px; color: var(--cb-muted); margin-top: 2px;
     font-variant-numeric: tabular-nums;
 }
-/* Two different admissions, both worth making out loud: the unit is filed under
-   Other so the title is the only evidence, or it isn't published so there is no
-   listing to send. Quiet, but present. */
+/* One admission, worth making out loud: the unit is not published, so there is no
+   public listing to send. Quiet, but present. */
 .cb-m-via { font-style: italic; color: var(--cb-faint); }
 .cb-m-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
 .cb-m-btn {
@@ -8086,14 +8159,34 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 }
 .cb-m-btn:hover { border-color: var(--cb-muted); color: var(--slate-charcoal); }
 .cb-m-btn.is-link:hover { border-color: #2563a8; color: #2563a8; }
-.cb-m-btn.is-yes { border-color: rgba(31, 157, 87, 0.5); color: #178048; }
-.cb-m-btn.is-yes:hover { background: var(--cb-sage); border-color: var(--cb-sage); color: #fff; }
+/* Sage, not blue: the storefront link is what you show the customer, this one is
+   your own stock in your own admin. Only ever rendered for your own store. */
+.cb-m-btn.is-admin:hover { border-color: var(--cb-sage); color: #178048; }
+/* "Not This" came back the same day (see _cbMatchHtml): it is the control that
+   makes offering a broken unit safe rather than reckless. Red on hover only, so a
+   panel of five matches is not five red buttons. "That's It" did not come back,
+   so .is-yes and .cb-m-state stay retired. */
 .cb-m-btn.is-no:hover { background: var(--cb-red-tint); border-color: #d1443b; color: #d1443b; }
-.cb-m-state {
-    font-size: 11px; font-weight: 800; text-transform: uppercase;
-    letter-spacing: 0.03em; color: var(--cb-faint); white-space: nowrap;
+
+/* THE CONDITION PILL. One size whatever it says, including when it says nothing
+   is known -- a missing grade is a fact about the listing, and rendering no pill
+   at all would read as "fine". Tone carries the meaning at a glance; the text is
+   PayMore's own word, never ours, so a grade we have not seen before still shows
+   up correctly spelled in the neutral tone. */
+.cb-m-cond {
+    display: inline-block; font-size: 10.5px; font-weight: 800;
+    letter-spacing: 0.03em; text-transform: uppercase; white-space: nowrap;
+    padding: 2px 7px; border-radius: 5px; border: 1px solid transparent;
 }
-.cb-m-state.is-yes { color: #178048; }
+.cb-m-cond.is-new     { background: var(--cb-sage-tint); color: #178048; border-color: rgba(31, 157, 87, 0.35); }
+.cb-m-cond.is-good    { background: var(--cb-sage-tint); color: #178048; border-color: rgba(31, 157, 87, 0.22); }
+.cb-m-cond.is-fair    { background: #fdf3e1; color: #8a5a06; border-color: rgba(240, 220, 182, 0.9); }
+/* The only loud one, and it has to be: this is the line that stops somebody
+   ringing a customer about a cracked screen. */
+.cb-m-cond.is-broken  { background: var(--cb-red-tint); color: #b23636; border-color: rgba(209, 68, 59, 0.4); }
+.cb-m-cond.is-unknown { background: var(--cb-line-2); color: var(--cb-muted); border-color: var(--cb-line); }
+
+
 
 @media (max-width: 768px) {
     .cb-head { align-items: flex-start; }
