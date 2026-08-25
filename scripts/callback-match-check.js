@@ -1,6 +1,7 @@
 // Call Back × Shopify matching — does the front end actually work?
 //
-// Not a layout check. This drives the real Operations tab against the LIVE edge
+// Mostly not a layout check (leg 10 is the exception). This drives the real
+// Operations tab against the LIVE edge
 // functions and asserts the things that would be silently wrong:
 //
 //   1. the quick-add gets its Category vocabulary, and Type stays disabled
@@ -25,6 +26,9 @@
 //      still in the air is not thrown away
 //   8. "Add Another Item For Mark": a second want for the same customer becomes
 //      its OWN call back, and the name and number do not have to be retyped
+//  10. no tip on the sheet is cropped by the tooltip box -- the panel leans on
+//      hover text to explain who rings the customer, and a sentence that stops
+//      mid-word explains nothing
 //   9. no console errors anywhere in the above
 //
 // NODE_PATH must point at a node_modules with puppeteer-core.
@@ -724,6 +728,70 @@ const rowProbe = item => {
             ok(res.stores === 'WSP', `[${tag}] holding store stamped for MSM routing`, res.stores);
         }
         ok(errs.length === 0, `[${tag}] no console errors`, errs.slice(0, 2).join(' / ') || 'clean');
+        await page.close();
+    }
+
+    // ── 10: no hover text is cropped ────────────────────────────────────────
+    // The tooltip box is max-width:340px + overflow:hidden. A nowrap child
+    // overflows it and is CROPPED -- with no scrollbar, no ellipsis and no
+    // visible edge, so "4 Stores Have It" explained itself as far as "...and
+    // should b" and simply stopped. Nothing on screen said it had been cut.
+    //
+    // Measured as scrollWidth vs clientWidth, which is the only way to see a
+    // crop from script. And measured against EVERY tip string the module can
+    // emit rather than whatever today's rows happen to offer: the live sheet
+    // served a 69-char tip the day this was written and the broken one was 139,
+    // so a check pinned to real data would have passed while the bug was on
+    // screen. The strings are read out of speeks.js and hung on a real badge.
+    console.log('\n== Hover text is never cut off ==');
+    {
+        const src = require('fs').readFileSync(REPO + '/speeks.js', 'utf8');
+        const tips = [];
+        for (const mm of src.matchAll(/data-cb-tip="([^"]{25,})"/g)) {
+            const t = mm[1]
+                .replace(/\$\{escapeHtml\(stores\.join\(', '\)\)\}/g, 'BAL, LEE, MPL, OVL')
+                .replace(/\$\{[^}]*\}/g, 'have')
+                .replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'");
+            if (!/\$\{/.test(t)) tips.push(t);
+        }
+        tips.sort((a, b) => b.length - a.length);
+
+        const { page, errs } = await openOps(browser, { name: 'Match Harness', role: 'dm', store: 'ALL' });
+        await page.evaluate(() => cbSetView('all'));
+        await new Promise(r => setTimeout(r, 1800));
+        const spot = await page.evaluate(() => {
+            const t = document.querySelector('.cb-tag-hasit, .cb-tag-elsewhere');
+            if (!t) return null;
+            t.id = 'probeTag';
+            const r = t.getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        });
+        ok(!!spot && tips.length > 0, 'a badge to hang each tip on', tips.length + ' tip strings, longest ' + (tips[0] || '').length);
+        let bad = [];
+        if (spot) for (const tip of tips) {
+            await page.evaluate(t => { document.getElementById('probeTag').dataset.cbTip = t; }, tip);
+            // Away and back, so mouseover re-fires with the new text.
+            await page.mouse.move(5, 5);
+            await new Promise(r => setTimeout(r, 50));
+            await page.mouse.move(spot.x, spot.y);
+            await new Promise(r => setTimeout(r, 140));
+            const m = await page.evaluate(() => {
+                const t = document.querySelector('.speeks-tooltip');
+                if (!t || !t.classList.contains('show')) return null;
+                const r = t.getBoundingClientRect();
+                return { shown: t.textContent, crop: t.scrollWidth - t.clientWidth,
+                         left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+                         vw: window.innerWidth, vh: window.innerHeight };
+            });
+            if (!m) { bad.push(tip.length + ' chars: never showed'); continue; }
+            if (m.crop > 1) bad.push(tip.length + ' chars: cropped ' + m.crop + 'px');
+            else if (m.shown !== tip) bad.push(tip.length + ' chars: rendered ' + m.shown.length);
+            else if (m.left < 0 || m.right > m.vw) bad.push(tip.length + ' chars: off screen sideways');
+            else if (m.top < 0 || m.bottom > m.vh) bad.push(tip.length + ' chars: off screen vertically');
+        }
+        ok(bad.length === 0, 'every tip renders whole, inside the box and on screen',
+            bad.length ? bad.slice(0, 3).join(' / ') : tips.length + ' tips clean');
+        ok(errs.length === 0, '[tips] no console errors', errs.slice(0, 2).join(' / ') || 'clean');
         await page.close();
     }
 

@@ -22632,7 +22632,7 @@ document.addEventListener('mouseover', function(e) {
     const cbTip = e.target.closest('[data-cb-tip]');
     if (cbTip) {
         customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
-        customTooltip.innerHTML = `<strong style="display:block; color: var(--sage-professional); font-size: 13px; white-space: nowrap;">${cbTip.dataset.cbTip}</strong>`;
+        customTooltip.innerHTML = `<strong style="display:block; color: var(--sage-professional); font-size: 13px; white-space: normal;">${cbTip.dataset.cbTip}</strong>`;
         customTooltip.classList.add('show');
         return;
     }
