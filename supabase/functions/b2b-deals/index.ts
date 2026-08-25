@@ -13,7 +13,12 @@ const corsHeaders = {
 // Pipeline (each stage has exactly one owner, so "needs you" is derivable from
 // the stage alone):
 //   pickup            corp    typed-name sign-off + pickup date
-//   pricing_location  corp    route to OVL/LEE/WSP/MPL/BAL/CORP
+//                     store   ...unless the store raised the deal itself, in
+//                             which case it owns its own sign-off — see
+//                             "store-origin deals" below
+//   pricing_location  corp    route to OVL/LEE/WSP/MPL/BAL/CORP. SKIPPED for a
+//                             store-origin deal: the store that took the goods
+//                             in is already holding them
 //   pricing           store   itemize and price: type, specs, one serial per
 //                             unit, a disposition, and whether it needs a
 //                             certified data wipe
@@ -43,6 +48,28 @@ const corsHeaders = {
 //                             before listing, since once a quote is accepted
 //                             the goods are already ours
 //
+// STORE-ORIGIN DEALS
+// ------------------
+// A business can walk into a store as easily as it can call corp. When a store
+// manager raises the deal, `create` stamps pricing_store with their own store
+// straight away, which does two things: the deal is in that store's scope from
+// the moment it exists (every scope test in the app keys off pricing_store /
+// listing_store, so a deal with neither is invisible to everyone but corp), and
+// sign_pickup can route it directly to `pricing` — there is no routing decision
+// left for corp to make, the goods are already in the building.
+//
+// Corp is not cut out of it: transfer_location moves a store-origin deal to any
+// other store or to CORP, including while it is still at `pickup`, and that is
+// the ONLY way its store changes. Nothing a store sends can retarget another
+// store's board.
+//
+// intake_kind (0038) is a separate axis and stays separate on purpose. It says
+// whether the goods were collected on a run or carried to a counter, which is
+// what decides whether `pickup` still has to ask for a date and a hand-off. It
+// does NOT decide where the deal holds, and where it holds does not decide it:
+// a store can raise a collection it is about to drive out on, and corp can take
+// a drop-off at CORP. Deriving either from the other misreports both.
+//
 // Reads come from the b2b_deal_list / b2b_client_list views, which roll the
 // line items up in Postgres. Summing them here meant transferring every item
 // on every board draw, which does not survive thousands of them.
@@ -58,6 +85,37 @@ const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const PRICING_LOCATIONS = [...STORES, "CORP"];
+// How the goods arrived. `pickup` is a collection run; `walkin` is a business
+// that carried them to a counter. See 0038 -- the pipeline is identical, the
+// difference is only which intake questions still have answers worth asking for.
+const INTAKE_KINDS = ["pickup", "walkin"];
+// Pre-evaluation lifecycle. See 0039 -- an evaluation is the pricing half on its
+// own, before there are any goods to sign for.
+const PREVAL_STATUSES = ["draft", "sent", "accepted", "converted", "declined"];
+// The only statuses whose lines may still be edited. Once a client has accepted
+// a figure, changing it and then converting would produce a deal built on
+// numbers they never agreed to -- the same reason a deal freezes at acceptance.
+const PREVAL_OPEN = ["draft", "sent"];
+// Reachable by hand. "converted" is not: b2b_preval_to_deal sets it and only
+// ever it, because that half of the row has to agree with a deal that now
+// exists.
+const PREVAL_SETTABLE = ["draft", "sent", "accepted", "declined"];
+
+// What a piece of approval evidence can be. A plain note is the odd one out and is
+// deliberately allowed: a typed account of a phone call is weak evidence, but it
+// is evidence, and forcing it to masquerade as an email would be worse.
+const PROOF_KINDS = ["email", "screenshot", "document", "note"];
+// Mirrors the b2b-proofs bucket's allowlist. Refused here as well as there so a
+// bad upload gets a sentence instead of a storage error.
+const PROOF_MIMES: Record<string, string> = {
+  "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
+  "application/pdf": "pdf", "message/rfc822": "eml", "text/plain": "txt",
+};
+// The bucket caps at 10MB. This is the decoded ceiling, lower because the base64
+// has to survive a JSON request body on the way in.
+const PROOF_MAX_BYTES = 6_000_000;
+const PROOF_COLS = "id,deal_id,preval_id,kind,label,from_addr,sent_on,body_text," +
+  "file_path,mime,bytes,added_by,added_at,removed_at,removed_by,removed_reason";
 const ACCEPT_ROLES = ["ceo", "mocd", "tom", "district manager"];
 // 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
 // spelling stays recognised here: existing rows were migrated, but a row saved
@@ -88,7 +146,7 @@ const OPEN_STAGES = ["pricing", "review", "quote"];
 // along everything; naming them keeps the payload predictable.
 const DEAL_COLS = [
   "id", "client_id", "deal_no", "ref", "stage", "stage_rank", "is_terminal",
-  "pickup_desc", "signed_by", "signed_at", "pickup_date",
+  "intake_kind", "pickup_desc", "signed_by", "signed_at", "pickup_date",
   "pricing_store", "listing_store", "delivered_by", "received_by",
   "priced_by", "quote_sent_at", "quote_send_count", "accepted_at", "accepted_by",
   "declined_at", "declined_by", "declined_reason", "declined_category",
@@ -100,6 +158,18 @@ const DEAL_COLS = [
   "line_count", "total_units", "listed_units", "recycled_units", "outstanding_units",
   "wiped_units", "total_value", "total_offer", "total_cost", "total_wipe_fee", "net_offer",
   "total_shipping", "wipe_units",
+  // Where this deal came from, when it came from an evaluation. Carried on
+  // the board so a pricer can see the figures were quoted in advance without
+  // a second fetch per row.
+  "preval_id", "preval_ref",
+  // Whether the client's approval is on record, and if it is not, the reason
+  // somebody gave for accepting anyway.
+  "approval_waived_by", "approval_waived_reason", "proof_count",
+  // A pending deletion request waiting on CORP -- carried on the board so the
+  // client paints the pending badge, the red dots and the Delete Requests modal
+  // from one board draw. Not a contact field, so it survives into
+  // SCOPED_DEAL_COLS and a store sees the flag on its own deals too.
+  "delete_requested_at", "delete_requested_by",
 ].join(",");
 
 // Who to ring at the client. Corp business: a store prices and lists the goods,
@@ -111,12 +181,51 @@ const CONTACT_COLS = ["contact", "contact_email", "contact_phone"];
 const SCOPED_DEAL_COLS = DEAL_COLS.split(",")
   .filter((c) => !CONTACT_COLS.includes(c)).join(",");
 
+// The client directory as a store may see it: enough to find the business you
+// are raising a deal for and nothing else. b2b_client_list is `c.*` plus
+// rollups, so it carries contact details, internal notes and the whole outreach
+// cadence -- selecting * for a store would hand over the CRM. Named columns
+// rather than a filter, so a column added to b2b_clients later is private by
+// default instead of leaking the day it lands.
+const CLIENT_PICK_COLS = "id,company,acronym,deal_count,open_count";
+
+// The evaluation list. Same shape of decision DEAL_COLS makes: name the columns
+// so the payload is predictable, and drop the client's contact details for a
+// store-scoped request -- a store prices an enquiry, it does not ring the client.
+const PREVAL_COLS = [
+  "id", "client_id", "eval_no", "ref", "status", "is_terminal",
+  "eval_date", "valid_until", "title", "summary", "notes", "store",
+  "created_by", "evaluated_by", "sent_at", "sent_by",
+  "accepted_at", "accepted_by", "declined_at", "declined_by", "declined_reason",
+  "converted_at", "converted_by", "converted_deal_id", "deal_ref", "deal_stage",
+  "created_at", "updated_at", "status_changed_at",
+  "company", "acronym", "contact", "contact_email", "contact_phone",
+  "line_count", "total_units", "total_value", "total_offer",
+  "total_wipe_fee", "total_shipping", "net_offer",
+  "approval_waived_by", "approval_waived_reason", "proof_count",
+].join(",");
+const SCOPED_PREVAL_COLS = PREVAL_COLS.split(",")
+  .filter((c) => !CONTACT_COLS.includes(c)).join(",");
+
+// A pre-evaluation line carries no sku, no serials, no cost and no progress
+// counters: we have not seen these units. Everything else is a deal item.
+const PREVAL_ITEM_COLS = [
+  "id", "preval_id", "line_no", "sort_order", "make", "model", "condition",
+  "staff_notes", "client_notes", "quantity", "value", "offer", "shipping_cost",
+  "item_type", "cpu", "ram", "storage", "gpu", "battery_health",
+  "disposition", "wipe_required", "wipe_fee", "created_at", "listing_info",
+].join(",");
+
 const ITEM_COLS = [
   "id", "deal_id", "line_no", "sku", "make", "model", "condition",
   "staff_notes", "client_notes", "quantity", "value", "offer", "cost",
   "disposition", "listed_qty", "recycled_qty", "created_at",
   "item_type", "cpu", "ram", "storage", "gpu", "battery_health", "serials",
   "wipe_required", "wipe_fee", "wiped_qty", "shipping_cost", "sort_order",
+  // Written while pricing, read while listing -- see 0047. Deliberately not
+  // folded into staff_notes: whoever is listing should not have to pan through
+  // pricing chatter to find the one line addressed to them.
+  "listing_info", "label_printed_at", "label_printed_by", "label_printed_qty",
 ].join(",");
 
 // `computer` folds the old laptop/desktop split into one type; the legacy two
@@ -201,6 +310,13 @@ function isoDate(v: unknown, label: string, required = false): string | null {
     throw new Invalid(`${label} must be a real date.`);
   }
   return s;
+}
+
+// Today at the stores, not at the edge. A walk-in signed for at 7pm Central is
+// that day's intake; a UTC "today" would file it as tomorrow's for five hours
+// every evening, and pickup_date is what the whole deal is dated by.
+function todayCentral(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
 }
 
 function oneOf(v: unknown, allowed: string[], label: string, required = true): string | null {
@@ -315,6 +431,34 @@ async function notifyQuoteReady(dealId: string) {
   }
 }
 
+// Drop a row on notify_queue for the notify function to fan out. Same shape and
+// best-effort contract as the recycle_requests / shopify-claims delete hooks --
+// a queue failure must never break the write that triggered it.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+  audienceFeature?: string | null;
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+      audience_feature: n.audienceFeature ?? null,
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 // updated_at and stage_changed_at are maintained by the b2b_touch_row trigger,
 // so no write here has to remember them.
 async function getDeal(sb: any, id: string) {
@@ -329,6 +473,89 @@ async function getDeal(sb: any, id: string) {
 }
 
 const dealStore = (d: any) => d?.listing_store || d?.pricing_store || null;
+
+async function getPreval(sb: any, id: string) {
+  if (!id) throw new Invalid("An evaluation id is required.");
+  const { data, error } = await sb.from("b2b_prevals")
+    .select("*, client:b2b_clients(id, company, acronym, contact, contact_email)")
+    .eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+// Is the client's approval on record for this thing? Either a live piece of
+// evidence, or an attributed reason for going without -- exactly the shape the
+// pickup signature already uses, because it is exactly the same question asked
+// one stage earlier.
+//
+// Removed proofs do not count. They are kept as tombstones so the record shows
+// something was withdrawn, but a deal whose only evidence was withdrawn is in
+// the same position as one that never had any.
+async function approvalOnRecord(sb: any, col: "deal_id" | "preval_id", id: string, row: any) {
+  if (row?.approval_waived_by) return true;
+  const { count } = await sb.from("b2b_approval_proofs")
+    .select("id", { count: "exact", head: true })
+    .eq(col, id).is("removed_at", null);
+  return (count || 0) > 0;
+}
+
+const NEEDS_PROOF =
+  "The client's approval isn't on record yet — attach the email or a screenshot of it, " +
+  "or record why there isn't one. This is what answers them later if they say they never agreed.";
+
+// The field set shared by adding and updating an evaluation line. Mirrors the
+// deal-item builder exactly, minus the fields a pre-evaluation cannot have --
+// which is why the two tables carry the same CHECK constraints: a line that is
+// valid here must still be valid the moment it converts, or an accepted
+// evaluation would strand with no way forward.
+async function prevalItemFields(sb: any, body: any) {
+  const itemType = oneOf(String(body.item_type ?? "other"), ITEM_TYPES, "Item type")!;
+  const disposition = oneOf(String(body.disposition ?? "purchase"), DISPOSITIONS, "Disposition")!;
+  const wipeRequired = body.wipe_required === true;
+  const carries = SPECS_FOR[itemType] || [];
+  const specs: Record<string, string | null> = {};
+  for (const f of ["cpu", "ram", "storage", "gpu", "battery_health"]) {
+    specs[f] = carries.includes(f) ? str(body[f], 60, f.toUpperCase()) : null;
+  }
+  return {
+    make: str(body.make, 120, "Brand"),
+    model: str(body.model, 200, "Model"),
+    condition: str(body.condition, 40, "Condition"),
+    staff_notes: str(body.staff_notes, 1000, "Staff notes"),
+    client_notes: str(body.client_notes, 1000, "Client notes"),
+    listing_info: str(body.listing_info, 2000, "Listing info"),
+    quantity: count(body.quantity, 1, 100000, "Quantity", 1),
+    item_type: itemType,
+    ...specs,
+    disposition,
+    value: disposition === "recycle" ? 0 : money(body.value, "Unit value"),
+    offer: disposition === "purchase" ? money(body.offer, "Unit offer") : 0,
+    // Zero on recycle, matching value and offer: the three money columns on a
+    // scrap line now agree that nothing is owed and nothing is spent. Mirrors
+    // the CHECK on the table.
+    shipping_cost: disposition === "recycle" ? 0 : money(body.shipping_cost, "Shipping cost"),
+    wipe_required: wipeRequired,
+    // Same snapshot rule as a deal line, and it matters more here: the figure
+    // quoted on an evaluation is the one that converts into the deal months
+    // later, so re-reading the global fee would reprice something the client
+    // has already agreed to.
+    wipe_fee: wipeRequired
+      ? (Number(body.keep_wipe_fee) > 0 ? money(body.keep_wipe_fee, "Wipe fee") : await wipeFeeNow(sb))
+      : 0,
+  };
+}
+
+// Lines are editable while the evaluation is still a draft or out with the
+// client, and frozen the moment it is accepted. One place, so the add, update
+// and delete paths cannot disagree about it.
+function prevalEditable(preval: any): string | null {
+  if (!PREVAL_OPEN.includes(preval.status)) {
+    return preval.status === "converted"
+      ? "This evaluation has already become a deal — change the lines on the deal instead."
+      : "This evaluation is " + preval.status + ", so its lines are locked. Reopen it as a draft to change them.";
+  }
+  return null;
+}
 
 const lineName = (it: any) =>
   [it.make, it.model].filter(Boolean).join(" ") || `Line ${it.line_no}`;
@@ -456,6 +683,28 @@ Deno.serve(async (req: Request) => {
           .select("id, acronym").eq("id", clientId).maybeSingle();
         if (!client) return jsonResponse({ success: false, error: "That client no longer exists." }, 404);
 
+        // A store raising its own deal names itself here, and the deal is
+        // holding at that store from this moment on. Only a real store: CORP is
+        // not a place a walk-in gets left, and corp's own deals go the long way
+        // round through pricing_location precisely because where they land is a
+        // decision rather than a fact. Absent means the old flow, unchanged.
+        //
+        // No CHECK stops pricing_store being set this early --
+        // b2b_deals_pricing_located only requires one from rank 3 (`pricing`)
+        // onward, so filling it at rank 1 satisfies that constraint early rather
+        // than conflicting with it.
+        const originStore = oneOf(
+          String(body.pricing_store ?? "").toUpperCase(), STORES, "Store", false);
+
+        // Settled once, here, and never inferred later: it decides which
+        // questions the intake screen asks, and a deal that changed its mind
+        // about that halfway through would be asking for answers it had already
+        // filled in. Absent means `pickup`, which is what every deal predating
+        // 0038 is and what the column defaults to.
+        const intakeKind = oneOf(
+          String(body.intake_kind ?? "").toLowerCase(), INTAKE_KINDS, "Intake type", false)
+          || "pickup";
+
         // Per-client counter. The unique index is the real guard; on a race we
         // recompute and retry, which is plenty for this volume.
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -467,12 +716,20 @@ Deno.serve(async (req: Request) => {
             client_id: clientId,
             deal_no: dealNo,
             stage: "pickup",
+            pricing_store: originStore,
+            intake_kind: intakeKind,
             pickup_desc: str(body.pickup_desc, 2000, "Pickup description"),
             created_by: str(body.created_by, 120, "Created by") || "Unknown",
           }).select("id").single();
           if (!error) {
-            await broadcastChange("b2b", null);
-            return jsonResponse({ success: true, id: data.id, deal_no: dealNo, ref: `${client.acronym}-${pad(dealNo, 3)}` });
+            // Scoped to the origin store so its board notices the new deal
+            // without every other store being pinged about it.
+            await broadcastChange("b2b", originStore);
+            return jsonResponse({
+              success: true, id: data.id, deal_no: dealNo,
+              ref: `${client.acronym}-${pad(dealNo, 3)}`,
+              pricing_store: originStore, intake_kind: intakeKind,
+            });
           }
           if (!String(error.message).toLowerCase().includes("duplicate")) {
             return jsonResponse({ success: false, error: error.message }, 500);
@@ -498,16 +755,40 @@ Deno.serve(async (req: Request) => {
             error: "This pickup needs the client's signature — or a recorded reason for going without one.",
           }, 409);
         }
+        // A deal that already knows where it is holding has no routing decision
+        // left, so it skips pricing_location entirely -- that stage exists to
+        // ask "where do these goods go", and for a store-origin deal the answer
+        // was settled when the store took them in. Read off the row rather than
+        // from a flag in the request: corp may have moved it since it was
+        // created, and the row is the only thing that knows where it ended up.
+        const holding = deal.pricing_store;
+        // A walk-in was carried to a counter, so two of the three intake facts
+        // are already known and the screen doesn't ask for them: the date is the
+        // day it is signed for, and the person who received it is the person
+        // signing. Defaulted here rather than left to the browser so a tab left
+        // open overnight still dates the deal correctly -- and still honouring
+        // anything actually sent, since the fallback is a default, not an
+        // override.
+        const walkIn = deal.intake_kind === "walkin";
         const { error } = await supabase.from("b2b_deals").update({
-          stage: "pricing_location",
+          stage: holding ? "pricing" : "pricing_location",
           pickup_desc: str(body.pickup_desc, 2000, "Pickup description"),
           signed_by: str(body.signed_by, 120, "The client's name", true),
           signed_at: new Date().toISOString(),
-          pickup_date: isoDate(body.pickup_date, "Pickup date", true),
+          pickup_date: isoDate(body.pickup_date, "Pickup date", !walkIn)
+            || (walkIn ? todayCentral() : null),
+          // Whoever took the goods in. Corp-created pickups capture this at
+          // assign_pricing instead; neither a store-origin deal nor a walk-in
+          // ever visits that stage, so this is their only chance to record it.
+          received_by: walkIn
+            ? (str(body.received_by, 120, "Received by") || str(body.user, 120, "User"))
+            : holding
+            ? str(body.received_by, 120, "Received by")
+            : deal.received_by,
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", null);
-        return jsonResponse({ success: true });
+        await broadcastChange("b2b", holding);
+        return jsonResponse({ success: true, next_stage: holding ? "pricing" : "pricing_location" });
       }
 
       // ========================================================== signature
@@ -648,6 +929,7 @@ Deno.serve(async (req: Request) => {
           condition: str(body.condition, 40, "Condition"),
           staff_notes: str(body.staff_notes, 1000, "Staff notes"),
           client_notes: str(body.client_notes, 1000, "Client notes"),
+          listing_info: str(body.listing_info, 2000, "Listing info"),
           quantity: count(body.quantity, 1, 100000, "Quantity", 1),
           item_type: itemType,
           ...specs,
@@ -657,10 +939,13 @@ Deno.serve(async (req: Request) => {
           // value to us either. Mirrors the two disposition CHECKs exactly.
           value: disposition === "recycle" ? 0 : money(body.value, "Unit value"),
           offer: disposition === "purchase" ? money(body.offer, "Unit offer") : 0,
-          // Ours, per unit, and NOT conditional on disposition: a pallet of scrap
-          // still costs money to move. It never reaches the client -- it reduces
-          // what the deal is worth to us, not what we pay them.
-          shipping_cost: money(body.shipping_cost, "Shipping cost"),
+          // Zero on recycle, matching value and offer: we do not pay to ship
+          // scrap, so there is no freight to record. This was unconditional until
+          // testers pointed out the live money box on a line nobody pays freight
+          // for, which read as a bug every time it was seen. Nothing is lost from
+          // the margin -- zero was always the right number here.
+          // Mirrors b2b_deal_items_recycle_no_freight.
+          shipping_cost: disposition === "recycle" ? 0 : money(body.shipping_cost, "Shipping cost"),
           wipe_required: wipeRequired,
           // Snapshotted per line rather than read live at render time: changing
           // the global fee must not silently reprice a quote already sent. Kept
@@ -706,6 +991,48 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sku: data.sku, sort_order: data.sort_order });
       }
 
+      // Ethan asked for printing the barcode to be REQUIRED. A hard block was
+      // rejected -- a printer that is down must never strand pricing -- so this
+      // records the fact and submit_pricing warns about whatever is missing.
+      //
+      // Recorded on the row rather than in the tab, because pricing a pallet
+      // spans refreshes, two people and sometimes two days, and a counter held
+      // in one browser would quietly forget everything the other one printed.
+      //
+      // Idempotent by design: printing a label twice is a normal thing to do
+      // (they peel, they tear), and the second print is not an error. The stamp
+      // simply moves to the most recent one.
+      if (action === "mark_label_printed") {
+        // [{ id, qty }] -- how many labels came off the printer for each line,
+        // not merely that some did. A quantity-3 line raised to 6 has been
+        // printed and is still three tags short, and only a count can say so.
+        const rows = Array.isArray(body.lines) ? body.lines : [];
+        if (!rows.length) return jsonResponse({ success: false, error: "No lines were named." }, 400);
+        if (rows.length > 5000) return jsonResponse({ success: false, error: "That is too many lines at once." }, 400);
+        const now = new Date().toISOString();
+        const who = str(body.user, 120, "User") || "Unknown";
+        let marked = 0;
+        for (const r of rows) {
+          const id = String(r?.id || "");
+          if (!id) continue;
+          const add = count(r?.qty, 1, 100000, "Labels", 1);
+          // Read-then-add rather than a bare increment: supabase-js has no
+          // atomic += , and two people printing the same line at once is not a
+          // thing that happens -- they are standing at one printer.
+          const { data: cur } = await supabase.from("b2b_deal_items")
+            .select("label_printed_qty").eq("id", id).maybeSingle();
+          if (!cur) continue;
+          const { error } = await supabase.from("b2b_deal_items").update({
+            label_printed_qty: (Number(cur.label_printed_qty) || 0) + add,
+            label_printed_at: now,
+            label_printed_by: who,
+          }).eq("id", id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          marked++;
+        }
+        return jsonResponse({ success: true, marked });
+      }
+
       // Move a deal to another store mid-flight.
       //
       // Two different moves share this action because they are the same act at
@@ -726,7 +1053,15 @@ Deno.serve(async (req: Request) => {
         }
 
         // pricing while it is being priced or quoted; listing once it is there.
-        const kind = OPEN_STAGES.includes(deal.stage) ? "pricing"
+        //
+        // `pickup` counts as pricing too, but ONLY once the deal has a store to
+        // move it off -- that is a store-origin deal, and reassigning it is the
+        // one corrective corp has before it is signed off. A corp-created deal
+        // at pickup has no pricing_store yet and is not being moved anywhere: it
+        // is routed at pricing_location, by assign_pricing, which is a different
+        // act with a different record.
+        const kind = (OPEN_STAGES.includes(deal.stage)
+                      || (deal.stage === "pickup" && deal.pricing_store)) ? "pricing"
           : (deal.stage === "listing_location" || deal.stage === "listing") ? "listing"
           : null;
         if (!kind) {
@@ -894,6 +1229,16 @@ Deno.serve(async (req: Request) => {
         const role = String(body.role || "").toLowerCase().trim();
         if (!ACCEPT_ROLES.includes(role)) {
           return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can accept a quote." }, 403);
+        }
+        // Either the client's approval is on file, or somebody has said in
+        // writing why it is not. Never silently neither -- this is the moment
+        // the money is committed, and it is the moment a dispute will point at.
+        //
+        // Enforced on the transition rather than as a CHECK on the table, the
+        // same way the pickup signature is: deals accepted before this shipped
+        // have neither, and must not be rewritten or retroactively invalidated.
+        if (!await approvalOnRecord(supabase, "deal_id", deal.id, deal)) {
+          return jsonResponse({ success: false, error: NEEDS_PROOF }, 409);
         }
 
         const { data: items } = await supabase.from("b2b_deal_items")
@@ -1159,34 +1504,442 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
-      // A declined deal that turns out to be alive after all goes back to where
-      // it died, rather than starting over.
+      // Declines are final. A deal marked declined is archived for good -- there
+      // is no reopen path any more. A client who has passed on a quote is done,
+      // and a genuinely mistaken decline is rare enough to just re-create. The
+      // action is kept only so an old cached tab gets a clear message instead of
+      // a confusing "Unknown action"; nothing here un-declines a deal.
       if (action === "reopen") {
+        return jsonResponse({ success: false, error: "Declined deals are final and can't be reopened." }, 409);
+      }
+
+
+      // ===================================================== pre-evaluations
+      // A client wants a number before we drive out. See 0039: this is the
+      // pricing half on its own, and if they accept it converts into a real deal
+      // with every line already filled in.
+
+      if (action === "preval_create") {
+        const clientId = str(body.client_id, 64, "Client", true)!;
+        const { data: client } = await supabase.from("b2b_clients")
+          .select("id, acronym").eq("id", clientId).maybeSingle();
+        if (!client) return jsonResponse({ success: false, error: "That client no longer exists." }, 404);
+
+        // Only a real store, exactly as on a store-origin deal. An evaluation
+        // has no goods yet, so this says whose enquiry it is, not where
+        // anything sits.
+        const store = oneOf(String(body.store ?? "").toUpperCase(), STORES, "Store", false);
+        const evalDate = isoDate(body.eval_date, "Evaluation date") || todayCentral();
+        const validUntil = isoDate(body.valid_until, "Valid until");
+        if (validUntil && validUntil < evalDate) {
+          throw new Invalid("The valid-until date can't be before the evaluation date.");
+        }
+
+        // Per-client counter, same retry as deals: the unique index is the real
+        // guard and a recompute is plenty at this volume.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const { data: last } = await supabase.from("b2b_prevals")
+            .select("eval_no").eq("client_id", clientId)
+            .order("eval_no", { ascending: false }).limit(1).maybeSingle();
+          const evalNo = (last?.eval_no || 0) + 1;
+          const { data, error } = await supabase.from("b2b_prevals").insert({
+            client_id: clientId,
+            eval_no: evalNo,
+            status: "draft",
+            eval_date: evalDate,
+            valid_until: validUntil,
+            title: str(body.title, 160, "Title"),
+            summary: str(body.summary, 4000, "What they have"),
+            notes: str(body.notes, 4000, "Notes"),
+            store,
+            created_by: str(body.created_by, 120, "Created by") || "Unknown",
+            evaluated_by: str(body.created_by, 120, "Evaluated by"),
+          }).select("id").single();
+          if (!error) {
+            await broadcastChange("b2b", store);
+            return jsonResponse({
+              success: true, id: data.id, eval_no: evalNo,
+              ref: `${client.acronym}-PE-${pad(evalNo, 3)}`,
+            });
+          }
+          if (!String(error.message).toLowerCase().includes("duplicate")) {
+            return jsonResponse({ success: false, error: error.message }, 500);
+          }
+        }
+        return jsonResponse({ success: false, error: "Couldn't assign an evaluation number — try again." }, 409);
+      }
+
+      if (action === "preval_update") {
+        const preval = await getPreval(supabase, String(body.id || ""));
+        if (!preval) return jsonResponse({ success: false, error: "Evaluation not found." }, 404);
+        if (preval.status === "converted") {
+          return jsonResponse({ success: false, error: "This evaluation has already become a deal." }, 409);
+        }
+        const evalDate = isoDate(body.eval_date, "Evaluation date") || preval.eval_date;
+        const validUntil = isoDate(body.valid_until, "Valid until");
+        if (validUntil && validUntil < evalDate) {
+          throw new Invalid("The valid-until date can't be before the evaluation date.");
+        }
+        const { error } = await supabase.from("b2b_prevals").update({
+          eval_date: evalDate,
+          valid_until: validUntil,
+          title: str(body.title, 160, "Title"),
+          summary: str(body.summary, 4000, "What they have"),
+          notes: str(body.notes, 4000, "Notes"),
+          evaluated_by: str(body.evaluated_by, 120, "Evaluated by") || preval.evaluated_by,
+        }).eq("id", preval.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", preval.store);
+        return jsonResponse({ success: true });
+      }
+
+      if (action === "preval_delete") {
+        const preval = await getPreval(supabase, String(body.id || ""));
+        if (!preval) return jsonResponse({ success: false, error: "Evaluation not found." }, 404);
+        // A converted evaluation is the origin record of a live deal. Deleting
+        // it would null that deal's preval_id and destroy the only account of
+        // where its figures came from.
+        if (preval.status === "converted") {
+          return jsonResponse({
+            success: false,
+            error: "This evaluation became a deal — it's the record of where that deal's prices came from, so it can't be deleted.",
+          }, 409);
+        }
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can delete an evaluation." }, 403);
+        }
+        const { error } = await supabase.from("b2b_prevals").delete().eq("id", preval.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", preval.store);
+        return jsonResponse({ success: true });
+      }
+
+      // Moving an evaluation along. Sending, accepting and declining are the
+      // same authority that sends and accepts a quote -- these are numbers a
+      // client acts on. Reopening to a draft is how a mistake gets fixed after
+      // acceptance, and is the only way back.
+      if (action === "preval_status") {
+        const preval = await getPreval(supabase, String(body.id || ""));
+        if (!preval) return jsonResponse({ success: false, error: "Evaluation not found." }, 404);
+        if (preval.status === "converted") {
+          return jsonResponse({ success: false, error: "This evaluation has already become a deal." }, 409);
+        }
+        const to = oneOf(String(body.status ?? "").toLowerCase(), PREVAL_SETTABLE, "Status")!;
+        if (to === preval.status) {
+          return jsonResponse({ success: false, error: `This evaluation is already ${to}.` }, 409);
+        }
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can change an evaluation's status." }, 403);
+        }
+        // Nothing goes to a client empty, and nothing gets accepted empty
+        // either -- an accepted evaluation with no lines converts to a deal with
+        // no lines, which is a dead end somebody has to unpick by hand.
+        if (to === "sent" || to === "accepted") {
+          const { count } = await supabase.from("b2b_preval_items")
+            .select("id", { count: "exact", head: true }).eq("preval_id", preval.id);
+          if (!count) return jsonResponse({ success: false, error: "Add at least one line before sending this evaluation." }, 400);
+        }
+        // An accepted evaluation converts into a deal at exactly these prices,
+        // so it carries the same dispute and the same requirement.
+        if (to === "accepted" && !await approvalOnRecord(supabase, "preval_id", preval.id, preval)) {
+          return jsonResponse({ success: false, error: NEEDS_PROOF }, 409);
+        }
+        const now = new Date().toISOString();
+        const who = str(body.user, 120, "User") || "Unknown";
+        const patch: Record<string, unknown> = { status: to };
+        if (to === "sent") { patch.sent_at = now; patch.sent_by = who; }
+        if (to === "accepted") { patch.accepted_at = now; patch.accepted_by = who; }
+        if (to === "declined") {
+          patch.declined_at = now;
+          patch.declined_by = who;
+          patch.declined_reason = str(body.reason, 1000, "Reason", true);
+        }
+        // Reopening clears the outcome that is no longer true. Leaving a
+        // declined_at on a row that is back in draft would misreport it forever,
+        // the same reason signing clears an earlier signature skip.
+        if (to === "draft") {
+          patch.accepted_at = null; patch.accepted_by = null;
+          patch.declined_at = null; patch.declined_by = null; patch.declined_reason = null;
+        }
+        const { error } = await supabase.from("b2b_prevals").update(patch).eq("id", preval.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", preval.store, { by: who });
+        return jsonResponse({ success: true, status: to });
+      }
+
+      // The hinge. Everything happens inside b2b_preval_to_deal so a failure
+      // halfway cannot leave a deal with no lines or an evaluation that can be
+      // converted twice -- see 0039.
+      if (action === "preval_convert") {
+        const preval = await getPreval(supabase, String(body.id || ""));
+        if (!preval) return jsonResponse({ success: false, error: "Evaluation not found." }, 404);
+        const store = oneOf(String(body.pricing_store ?? "").toUpperCase(), STORES, "Store", false);
+        const intake = oneOf(String(body.intake_kind ?? "").toLowerCase(), INTAKE_KINDS, "Intake type", false) || "pickup";
+        const { data, error } = await supabase.rpc("b2b_preval_to_deal", {
+          p_preval_id: preval.id,
+          p_pricing_store: store || "",
+          p_intake_kind: intake,
+          p_user: str(body.user, 120, "User") || "Unknown",
+        });
+        if (error) {
+          // The function raises its own sentences for the states worth
+          // explaining (already converted, not accepted), so they are surfaced
+          // as-is rather than wrapped in a 500.
+          const msg = String(error.message || "");
+          const known = msg.includes("evaluation");
+          return jsonResponse({ success: false, error: known ? msg : "Couldn't convert that evaluation: " + msg }, known ? 409 : 500);
+        }
+        const row = Array.isArray(data) ? data[0] : data;
+        await broadcastChange("b2b", store, { deal: row?.out_deal_id, by: str(body.user, 80, "User") });
+        return jsonResponse({
+          success: true,
+          deal_id: row?.out_deal_id, deal_no: row?.out_deal_no,
+          ref: row?.out_ref, lines: row?.out_lines,
+        });
+      }
+
+      // ------------------------------------------------ evaluation line items
+
+      if (action === "preval_add_item" || action === "preval_update_item" || action === "preval_delete_item") {
+        const itemId = String(body.id || "");
+        let preval: any;
+        if (action === "preval_add_item") {
+          preval = await getPreval(supabase, String(body.preval_id || ""));
+        } else {
+          const { data: it } = await supabase.from("b2b_preval_items")
+            .select("preval_id").eq("id", itemId).maybeSingle();
+          if (!it) return jsonResponse({ success: false, error: "Line item not found." }, 404);
+          preval = await getPreval(supabase, it.preval_id);
+        }
+        if (!preval) return jsonResponse({ success: false, error: "Evaluation not found." }, 404);
+        const locked = prevalEditable(preval);
+        if (locked) return jsonResponse({ success: false, error: locked }, 409);
+
+        if (action === "preval_delete_item") {
+          const { error } = await supabase.from("b2b_preval_items").delete().eq("id", itemId);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          await broadcastChange("b2b", preval.store, { by: str(body.user, 80, "User") });
+          return jsonResponse({ success: true });
+        }
+
+        const fields = await prevalItemFields(supabase, body);
+
+        if (action === "preval_update_item") {
+          const { error } = await supabase.from("b2b_preval_items").update(fields).eq("id", itemId);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          await broadcastChange("b2b", preval.store, { by: str(body.user, 80, "User") });
+          return jsonResponse({ success: true });
+        }
+
+        // No SKU is minted here, unlike a deal line: there is no unit to label
+        // yet. SKUs get created for real when the evaluation converts.
+        const { data: last } = await supabase.from("b2b_preval_items")
+          .select("line_no").eq("preval_id", preval.id)
+          .order("line_no", { ascending: false }).limit(1).maybeSingle();
+        const lineNo = (last?.line_no || 0) + 1;
+        const { data: lastSort } = await supabase.from("b2b_preval_items")
+          .select("sort_order").eq("preval_id", preval.id)
+          .order("sort_order", { ascending: false }).limit(1).maybeSingle();
+        const sortOrder = (Number(lastSort?.sort_order) || 0) + 10;
+        const { data, error } = await supabase.from("b2b_preval_items").insert({
+          ...fields, preval_id: preval.id, line_no: lineNo, sort_order: sortOrder,
+        }).select("id, line_no, sort_order").single();
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", preval.store, { by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sort_order: data.sort_order });
+      }
+
+      // ==================================================== approval evidence
+      // Why this exists: a client says they never agreed to the price, and the
+      // only thing on file is that somebody here ticked "accepted". That tick is
+      // our word. This stores theirs. See 0050.
+
+      if (action === "add_proof") {
+        const dealId = str(body.deal_id, 64, "Deal");
+        const prevalId = str(body.preval_id, 64, "Evaluation");
+        if (!!dealId === !!prevalId) {
+          throw new Invalid("A proof attaches to exactly one deal or one evaluation.");
+        }
+        // The owner must exist before anything is uploaded, so a typo'd id
+        // cannot leave an orphan file in the bucket.
+        const owner = dealId ? await getDeal(supabase, dealId) : await getPreval(supabase, prevalId!);
+        if (!owner) return jsonResponse({ success: false, error: "That record no longer exists." }, 404);
+
+        const kind = oneOf(String(body.kind ?? "email").toLowerCase(), PROOF_KINDS, "Kind")!;
+        const bodyText = str(body.body_text, 100000, "Pasted email");
+        let filePath: string | null = null;
+        let mime: string | null = null;
+        let size: number | null = null;
+
+        // A data URI, same shape the signature pad posts. Refused rather than
+        // coerced if the type is not on the allowlist: the bucket would reject
+        // it anyway, later and far less helpfully.
+        const raw = String(body.file || "");
+        if (raw) {
+          const m = raw.match(/^data:([a-z0-9.+\/-]+);base64,([A-Za-z0-9+\/=]+)$/i);
+          if (!m) return jsonResponse({ success: false, error: "That file didn't arrive in a readable form." }, 400);
+          mime = m[1].toLowerCase();
+          const ext = PROOF_MIMES[mime];
+          if (!ext) {
+            return jsonResponse({
+              success: false,
+              error: `${mime} isn't a file type we can store — use a PNG, JPEG, PDF or saved email.`,
+            }, 400);
+          }
+          let bytes: Uint8Array;
+          try {
+            bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+          } catch (_) {
+            return jsonResponse({ success: false, error: "That file was malformed." }, 400);
+          }
+          if (!bytes.length) return jsonResponse({ success: false, error: "That file is empty." }, 400);
+          if (bytes.length > PROOF_MAX_BYTES) {
+            return jsonResponse({
+              success: false,
+              error: `That file is ${Math.round(bytes.length / 1e6)}MB — the limit is 6MB. A screenshot of the relevant part is usually enough.`,
+            }, 400);
+          }
+          size = bytes.length;
+          // Foldered by owner and timestamped, like a signature: nothing is ever
+          // overwritten, so a re-upload cannot quietly replace evidence.
+          filePath = `${dealId || prevalId}/${Date.now()}.${ext}`;
+          const up = await supabase.storage.from("b2b-proofs")
+            .upload(filePath, bytes, { contentType: mime, upsert: false });
+          if (up.error) return jsonResponse({ success: false, error: up.error.message }, 500);
+        }
+
+        if (!filePath && !bodyText) {
+          throw new Invalid("Paste the email or attach a file — one or the other.");
+        }
+
+        const { data, error } = await supabase.from("b2b_approval_proofs").insert({
+          deal_id: dealId, preval_id: prevalId,
+          kind, label: str(body.label, 200, "Label"),
+          from_addr: str(body.from_addr, 200, "From"),
+          sent_on: isoDate(body.sent_on, "Date sent"),
+          body_text: bodyText, file_path: filePath, mime, bytes: size,
+          added_by: str(body.user, 120, "User") || "Unknown",
+        }).select("id, added_at").single();
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealId ? dealStore(owner) : owner.store,
+          { deal: dealId, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, id: data.id, added_at: data.added_at });
+      }
+
+      // A tombstone, not a delete. The row stays and the file stays; what
+      // changes is that it stops counting as evidence and says who withdrew it
+      // and why. An evidence log that can be quietly pruned is worth much less
+      // in the argument it exists for.
+      if (action === "remove_proof") {
+        const id = str(body.id, 64, "Proof", true)!;
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can withdraw a piece of evidence." }, 403);
+        }
+        const { data: cur } = await supabase.from("b2b_approval_proofs")
+          .select("id, deal_id, preval_id, removed_at").eq("id", id).maybeSingle();
+        if (!cur) return jsonResponse({ success: false, error: "That entry no longer exists." }, 404);
+        if (cur.removed_at) return jsonResponse({ success: false, error: "That entry has already been withdrawn." }, 409);
+        const { error } = await supabase.from("b2b_approval_proofs").update({
+          removed_at: new Date().toISOString(),
+          removed_by: str(body.user, 120, "User") || "Unknown",
+          removed_reason: str(body.reason, 1000, "A reason for withdrawing this", true),
+        }).eq("id", id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null, { deal: cur.deal_id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true });
+      }
+
+      // Accepting without evidence, on the record. Same authority that accepts
+      // the quote, because it is the same decision: this is the sentence that
+      // stands in for the client's email if it is ever questioned.
+      if (action === "waive_approval") {
+        const dealId = str(body.deal_id, 64, "Deal");
+        const prevalId = str(body.preval_id, 64, "Evaluation");
+        if (!!dealId === !!prevalId) {
+          throw new Invalid("A waiver applies to exactly one deal or one evaluation.");
+        }
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can accept without the client's approval on record." }, 403);
+        }
+        const patch = {
+          approval_waived_by: str(body.user, 120, "User") || "Unknown",
+          approval_waived_reason: str(body.reason, 1000, "A reason for going without written approval", true),
+        };
+        const { error } = dealId
+          ? await supabase.from("b2b_deals").update(patch).eq("id", dealId)
+          : await supabase.from("b2b_prevals").update(patch).eq("id", prevalId!);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null, { deal: dealId, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true });
+      }
+
+      // ================================================= deletion requests
+      // A trashcan on any deal, at any stage, raises a request rather than
+      // deleting outright. request_delete stamps the deal -- which surfaces it in
+      // CORP's Delete Requests modal, lights the red dots and drops a
+      // notification -- then CORP either approve_delete (the deal and everything
+      // under it is hard-deleted: items, listings, transfers and proofs cascade
+      // via their FKs; a linked pre-eval is SET NULL and survives) or deny_delete
+      // (the flag clears and the deal carries on). Same model as the
+      // recycle_requests / shopify-claims delete flow, on b2b_deals.
+      if (action === "request_delete") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "declined") return jsonResponse({ success: false, error: "Only a declined deal can be reopened." }, 409);
-        // Resume at the furthest stage its own data can satisfy. Checking
-        // listing_store as well as accepted_at matters: a CORP deal declined
-        // at listing_location has been accepted but has no listing store yet,
-        // and sending it straight to listing would trip the state-machine
-        // constraint.
-        const stage = (deal.accepted_at && deal.listing_store) ? "listing"
-          : deal.accepted_at ? "listing_location"
-          // Priced, so it is at least at review. Whether it got as far as the
-          // client is the one thing the row itself still records -- this is the
-          // last remaining read of quote_send_count as a state, and it is the
-          // right one: reopening must put the deal back where it died.
-          : deal.priced_by ? ((deal.quote_send_count || 0) > 0 ? "quote" : "review")
-          : deal.pricing_store ? "pricing"
-          : deal.signed_at ? "pricing_location"
-          : "pickup";
+        if (deal.delete_requested_at) {
+          return jsonResponse({ success: false, error: "A deletion request is already pending on this deal." }, 409);
+        }
+        const who = str(body.requested_by, 120, "Requested by");
         const { error } = await supabase.from("b2b_deals").update({
-          stage, declined_at: null, declined_by: null,
-          declined_reason: null, declined_category: null,
+          delete_requested_at: new Date().toISOString(),
+          delete_requested_by: who,
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", dealStore(deal));
-        return jsonResponse({ success: true, stage });
+        const ref = `${deal.client?.acronym || "B2B"}-${pad(deal.deal_no, 3)}`;
+        await queueNotification({
+          category: "requests",
+          kind: "b2b_delete_request",
+          title: `Delete request — B2B deal ${ref}`,
+          body: `${who || "Someone"} asked to delete deal ${ref}${deal.client?.company ? ` (${deal.client.company})` : ""}. Nothing is removed until you approve it.`,
+          link: "operations.html",
+          audienceRoles: ["district manager", "ceo", "mocd", "tom"],
+          audienceFeature: "cap-b2b-corp",
+          excludeUser: who,
+        });
+        await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.requested_by, 80, "User") });
+        return jsonResponse({ success: true });
+      }
+
+      // CORP-only, and gated on ACCEPT_ROLES like every other final call here
+      // (send, accept): a store can ask, only corp can pull the trigger.
+      if (action === "deny_delete" || action === "approve_delete") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can act on a delete request." }, 403);
+        }
+        if (!deal.delete_requested_at) {
+          return jsonResponse({ success: false, error: "There's no delete request on this deal." }, 409);
+        }
+        if (action === "deny_delete") {
+          const { error } = await supabase.from("b2b_deals")
+            .update({ delete_requested_at: null, delete_requested_by: null }).eq("id", deal.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
+          return jsonResponse({ success: true });
+        }
+        // approve_delete -- the point of no return. The deal row goes and every
+        // child cascades with it; the signature PNG in the private bucket is
+        // orphaned rather than deleted (storage carries no FK and a protective
+        // trigger blocks the delete -- an unreferenced file is harmless).
+        const { error } = await supabase.from("b2b_deals").delete().eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true });
       }
 
       return jsonResponse({ success: false, error: "Unknown action" }, 400);
@@ -1219,12 +1972,104 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ?clients=1 → the directory, with deal counts rolled up in the view
+    // ?clients=1              → the directory, with deal counts rolled up
+    // ?clients=1&scope=store  → the same list stripped to what a store needs to
+    //                           pick a business off, no contact details
+    //
+    // Exactly the same shape of decision the board makes with ?store= below: the
+    // request says which side it is asking from, and the columns follow. That is
+    // the PIN trust model this whole app runs on -- what it buys is that the
+    // browser of someone who never asks for corp's view never receives it.
     if (url.searchParams.get("clients")) {
+      const forStore = url.searchParams.get("scope") === "store";
       const { data, error } = await supabase.from("b2b_client_list")
-        .select("*").order("company", { ascending: true }).limit(2000);
+        .select(forStore ? CLIENT_PICK_COLS : "*")
+        .order("company", { ascending: true }).limit(2000);
       if (error) return jsonResponse({ success: false, error: error.message }, 500);
       return jsonResponse({ success: true, data: data || [] });
+    }
+
+    // ?proofs=<deal or evaluation id> → the approval evidence on it.
+    //
+    // One parameter for both owners: the ids are UUIDs, so matching either
+    // column is unambiguous and the caller does not have to say which kind of
+    // thing it is holding.
+    //
+    // body_text comes back in full here, unlike on the list views, because this
+    // is the screen where somebody is actually reading the email.
+    const proofsFor = url.searchParams.get("proofs");
+    if (proofsFor) {
+      const { data, error } = await supabase.from("b2b_approval_proofs")
+        .select(PROOF_COLS)
+        .or(`deal_id.eq.${proofsFor},preval_id.eq.${proofsFor}`)
+        .order("added_at", { ascending: true }).limit(500);
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({ success: true, data: data || [] });
+    }
+
+    // ?proof_file=<proof id> → the attachment itself.
+    //
+    // Streamed through here rather than handed out as a signed URL, for the same
+    // reason the signature is: a signed URL keeps working after it leaves the
+    // page, and this is evidence about a named client.
+    const proofFile = url.searchParams.get("proof_file");
+    if (proofFile) {
+      const { data: pr } = await supabase.from("b2b_approval_proofs")
+        .select("file_path, mime").eq("id", proofFile).maybeSingle();
+      if (!pr?.file_path) return jsonResponse({ success: false, error: "That entry has no attachment." }, 404);
+      const dl = await supabase.storage.from("b2b-proofs").download(pr.file_path);
+      if (dl.error || !dl.data) return jsonResponse({ success: false, error: "Couldn't read that attachment." }, 500);
+      return new Response(await dl.data.arrayBuffer(), {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": pr.mime || "application/octet-stream",
+          "Cache-Control": "private, max-age=60",
+        },
+      });
+    }
+
+    // ?prevals=1[&store=<CODE>] → the evaluation list.
+    //
+    // Unbounded in principle but tiny in practice, and unlike the board there is
+    // no open/finished split worth paging: an evaluation is a page of numbers,
+    // not a pipeline. A store-scoped request gets only its own -- an evaluation
+    // belongs to whoever is having the conversation.
+    if (url.searchParams.get("prevals")) {
+      const pStore = String(url.searchParams.get("store") || "ALL").toUpperCase();
+      const pOne = !!pStore && pStore !== "ALL";
+      let q = supabase.from("b2b_preval_list")
+        .select(pOne ? SCOPED_PREVAL_COLS : PREVAL_COLS)
+        .order("created_at", { ascending: false }).limit(2000);
+      if (pOne) q = q.eq("store", pStore);
+      const { data, error } = await q;
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({ success: true, data: data || [], meta: { wipe_fee: await wipeFeeNow(supabase) } });
+    }
+
+    // ?preval_id=<uuid> → that evaluation's lines, shaped exactly like deal line
+    // items so the one item editor can render either without knowing which.
+    const prevalId = url.searchParams.get("preval_id");
+    if (prevalId) {
+      const { data, error } = await supabase.from("b2b_preval_items")
+        .select(PREVAL_ITEM_COLS).eq("preval_id", prevalId)
+        .order("sort_order", { ascending: true })
+        .order("line_no", { ascending: true }).limit(5000);
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({
+        success: true,
+        data: (data || []).map((it: any) => ({
+          ...it,
+          // The fields a deal line has and an evaluation line cannot. Present
+          // and empty rather than absent: the shared renderer reads them, and
+          // undefined would paint as the string "undefined".
+          sku: null, serials: "", serial_list: [], listings: [],
+          listed_qty: 0, recycled_qty: 0, wiped_qty: 0,
+          qty_value_total: it.disposition === "recycle" ? 0 : it.value * it.quantity,
+          qty_offer_total: it.offer * it.quantity,
+          qty_wipe_total: it.wipe_required ? it.wipe_fee * it.quantity : 0,
+          qty_shipping_total: it.shipping_cost * it.quantity,
+        })),
+      });
     }
 
     // ?deal_id=<uuid> → that deal's line items, each with the Shopify listings
