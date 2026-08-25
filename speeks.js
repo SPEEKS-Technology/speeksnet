@@ -19002,32 +19002,32 @@ function _b2bItemTotals() {
 function _b2bPaintTotals() {
     const t = _b2bItemTotals();
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    set('b2bTotValue', _b2bMoney(t.value, 2));
-    set('b2bTotOffer', _b2bMoney(t.net, 2));
     set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
-    // Margin is against what the deal actually costs us: the wipe discount
-    // improves it, shipping and the marketplace fee erode it. Measuring against
-    // the offer alone was fine until shipping existed, and would now overstate
-    // every deal we pay freight on -- which is the number Paul asked to see.
-    const margin = t.value - t.outlay;
-    const pct = t.value > 0 ? Math.round((margin / t.value) * 100) : 0;
-    set('b2bTotMargin', `${_b2bMoney(margin, 2)} (${pct}%)`);
+    // "Our offer" is the gross offer we make the client; the data-wipe discount
+    // is shown as its own line and added back into the net below, rather than
+    // netted into this figure.
+    set('b2bTotOffer', _b2bMoney(t.offer, 2));
+    set('b2bTotValue', _b2bMoney(t.value, 2));
+    // Gross profit = resale value − our offer.
+    set('b2bTotGross', _b2bMoney(t.value - t.offer, 2));
+    // Net profit = resale value − our offer − shipping − selling fees + data
+    // wipe. Since outlay = (offer − wipe) + shipping + fee, this is value − outlay.
+    const net = t.value - t.outlay;
+    const pct = t.value > 0 ? Math.round((net / t.value) * 100) : 0;
+    set('b2bTotNet', `${_b2bMoney(net, 2)} (${pct}%)`);
     const wipeEl = document.getElementById('b2bTotWipe');
     if (wipeEl) {
-        wipeEl.textContent = t.wipe ? `−${_b2bMoney(t.wipe, 2)}` : '—';
+        wipeEl.textContent = t.wipe ? _b2bMoney(t.wipe, 2) : '—';
         wipeEl.closest('.b2b-tot')?.classList.toggle('muted', !t.wipe);
     }
     const shipEl = document.getElementById('b2bTotShip');
     if (shipEl) {
-        // "+" because it adds to what the deal costs us, where the wipe line
-        // above reads "−". The two sit next to each other and pull opposite ways.
-        shipEl.textContent = t.ship ? `+${_b2bMoney(t.ship, 2)}` : '—';
+        shipEl.textContent = t.ship ? _b2bMoney(t.ship, 2) : '—';
         shipEl.closest('.b2b-tot')?.classList.toggle('muted', !t.ship);
     }
     const feeEl = document.getElementById('b2bTotFee');
     if (feeEl) {
-        // "+" like shipping: another cost between us and the resale value.
-        feeEl.textContent = t.fee ? `+${_b2bMoney(t.fee, 2)}` : '—';
+        feeEl.textContent = t.fee ? _b2bMoney(t.fee, 2) : '—';
         feeEl.closest('.b2b-tot')?.classList.toggle('muted', !t.fee);
     }
     _b2bModalItems.forEach(it => {
@@ -20157,21 +20157,21 @@ function _b2bItemSheetBody(it) {
 }
 
 function _b2bTotalsBar(showMargin) {
+    // A straight P&L, left to right: what we pay, what it's worth, the profit
+    // between them, then each cost/discount, then the net. Gross and Net are the
+    // margin figures, gated on showMargin.
     return `
     <div class="b2b-totals">
         <div class="b2b-tot"><span class="b2b-tot-k">Items</span><span class="b2b-tot-v" id="b2bTotUnits">—</span></div>
+        <div class="b2b-tot"><span class="b2b-tot-k">Our offer</span><span class="b2b-tot-v" id="b2bTotOffer">—</span></div>
         <div class="b2b-tot"><span class="b2b-tot-k">Resale value</span><span class="b2b-tot-v" id="b2bTotValue">—</span></div>
-        <div class="b2b-tot muted"><span class="b2b-tot-k">Data wipes</span><span class="b2b-tot-v" id="b2bTotWipe">—</span></div>
-        <div class="b2b-tot"><span class="b2b-tot-k">We pay</span><span class="b2b-tot-v accent" id="b2bTotOffer">—</span></div>
-        <!-- Sits after "We pay" deliberately: it is a cost of ours that lands
-             on top of the offer, not a deduction from it like the wipes. -->
+        ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross profit</span><span class="b2b-tot-v" id="b2bTotGross">—</span></div>' : ''}
         <div class="b2b-tot muted"><span class="b2b-tot-k">Shipping</span><span class="b2b-tot-v" id="b2bTotShip">—</span></div>
-        <!-- Sits with shipping, not with the wipe: both are costs that stand
-             between the resale value and us, where the wipe is money the client
-             does not receive. -->
         <div class="b2b-tot muted" title="Assumed marketplace cut, ${Math.round(B2B_MARKETPLACE_FEE * 100)}% of resale value">
             <span class="b2b-tot-k">Selling fees</span><span class="b2b-tot-v" id="b2bTotFee">—</span></div>
-        ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross margin</span><span class="b2b-tot-v" id="b2bTotMargin">—</span></div>' : ''}
+        <div class="b2b-tot muted" title="Certified data-wipe fee — discounted off what we pay the client">
+            <span class="b2b-tot-k">Data wipes</span><span class="b2b-tot-v" id="b2bTotWipe">—</span></div>
+        ${showMargin ? '<div class="b2b-tot b2b-tot-net"><span class="b2b-tot-k">Net profit</span><span class="b2b-tot-v accent" id="b2bTotNet">—</span></div>' : ''}
     </div>`;
 }
 

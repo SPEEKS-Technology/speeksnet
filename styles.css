@@ -13014,7 +13014,10 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 }
 /* Never clip the acts column on a narrow laptop -- scroll the body instead. */
 .b2b-deal-modal.b2b-modal-full > .manage-content {
-    overflow-x: auto;
+    /* Clip, don't scroll: the wide sheet owns its OWN horizontal scroll (see
+       .b2b-items.b2b-ss below). If the body scrolled instead, the sheet's
+       overflow escaped the modal and spilled onto the page on a narrow screen. */
+    overflow-x: hidden;
     /* Narrower gutters than the standard 20px, side to side only. The grid was
        overflowing a 1440px screen by about 15px, and 20px of padding either side
        of a sixteen-column sheet buys nothing that a readable Model column
@@ -13055,7 +13058,20 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
        it scrolls sideways, which is what was asked for, and every column is cut
        to its real content rather than shaved to avoid the scrollbar. */
     --b2b-pcols: 56px 100px minmax(56px, 0.85fr) minmax(74px, 1fr) 90px 70px 90px 88px 58px 76px 76px 72px 58px 122px 36px minmax(150px, 1.15fr) 96px 184px;
+    /* The sheet owns its horizontal scroll so it never spills out of the modal
+       on a narrow screen (the body clips -- see .manage-content). flex + min-
+       height keep it from collapsing to a sliver as a column-flex item once
+       overflow is non-visible. */
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    flex: 0 0 auto;
+    min-height: fit-content;
 }
+/* Header and rows share one width so they stay aligned while scrolled. 1552px =
+   the sum of the --b2b-pcols tracks above (minmax mins); update it if the
+   template changes. Scoped away from the listing grid, which is narrower. */
+.b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-pline,
+.b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-prow { min-width: 1552px; }
 /* True grid: drop the inter-cell gap and draw a hairline down every column
    boundary. The row's own bottom border is the horizontal line, so together they
    read as a spreadsheet rather than a list of chips. */
