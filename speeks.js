@@ -15983,10 +15983,10 @@ async function _b2bSyncOpenDeal(ping) {
         // whether you are typing in them and repaints the input. They were left
         // here after the sheet rework and were being overwritten mid-edit.
         //
-        // The panel fields (serials, staff_notes, listing_info, gpu) stay here
+        // The panel fields (serials, staff_notes, gpu, battery_health) stay here
         // because they have no .b2b-pcell to patch, and they are safe now only
         // because the whole row is skipped while the cursor is inside it.
-        ['serials', 'staff_notes', 'listing_info', 'gpu',
+        ['serials', 'staff_notes', 'gpu', 'battery_health',
          'wipe_required', 'wipe_fee', 'label_printed_qty',
          'listed_qty', 'recycled_qty', 'wiped_qty'].forEach(f => {
             if (String(remote[f] ?? '') !== String(local[f] ?? '')) { local[f] = remote[f]; changed++; }
@@ -19645,44 +19645,83 @@ const _B2B_ICO_COPY = '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
 // Serials are absent on an evaluation -- nobody has held these units -- and so is
 // the label, which is minted at conversion.
 function _b2bRowPanel(it) {
-    const need    = Number(it.quantity) || 1;
-    const serials = _b2bSerials(it);
-    const left    = need - serials.length;
-    const gpu     = B2B_SPEC_FIELDS.find(f => f.key === 'gpu');
-    const carries = (B2B_SPECS_FOR[it.item_type || 'other'] || []).includes('gpu');
+    // The dropdown's "extra information", in order: first the optional specs this
+    // type carries (GPU + battery health for a computer; nothing for Other, which
+    // skips straight to notes), then the free-form internal note. Serials are
+    // deliberately NOT here -- they get their own button on the row, because they
+    // matter too much to bury under an "extra info" panel.
+    const optSpecs = _b2bSpecsFor(it).filter(f => !f.req);
     return `
         <div class="b2b-rowpanel">
-            ${_b2bIsPreval() ? '' : `
-            <div class="b2b-rp-f b2b-rp-serials">
-                <label>Serials
-                    <span class="b2b-serial-count ${serials.length === need ? '' : 'miss'}">${serials.length} of ${need}</span>
-                </label>
-                <div class="b2b-rp-serialrow">
-                    <input value="${escapeHtml(it.serials || '')}" placeholder="C02X1234, C02X5678 — one per unit, comma separated"
-                        oninput="b2bItemSerials('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
-                    ${left > 0 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',false)" title="This unit has no serial you can read">No Visible Serial</button>` : ''}
-                    ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true)" title="Fill every remaining slot">Fill All ${left}</button>` : ''}
-                </div>
-            </div>`}
-            ${carries ? `
+            ${optSpecs.map(f => `
             <div class="b2b-rp-f b2b-rp-gpu">
-                <label>${escapeHtml(gpu.label)}</label>
-                <input value="${escapeHtml(it.gpu || '')}" placeholder="${escapeHtml(gpu.hint)}" list="b2bdl-gpu"
-                    oninput="b2bItemSpec('${it.id}','gpu',this.value)" onchange="b2bItemSave('${it.id}')">
-            </div>` : ''}
+                <label>${escapeHtml(f.label)}</label>
+                <input value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}" ${f.pick ? `list="b2bdl-${f.key}"` : ''}
+                    oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
+            </div>`).join('')}
             <div class="b2b-rp-f">
-                <label>Listing info <span class="b2b-tag-int">for whoever lists it</span></label>
-                <textarea rows="2" placeholder="Anything the lister needs that no other field covers — a missing charger, a cracked bezel, which port is dead"
-                    oninput="b2bItemInput('${it.id}','listing_info',this.value)" onchange="b2bItemSave('${it.id}')">${escapeHtml(it.listing_info || '')}</textarea>
-            </div>
-            <div class="b2b-rp-f">
-                <label>Staff notes <span class="b2b-tag-int">internal</span></label>
+                <label>Internal notes <span class="b2b-tag-int">never leaves the building</span></label>
                 <textarea rows="2" placeholder="Anything the team should know — never leaves the building"
                     oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')">${escapeHtml(it.staff_notes || '')}</textarea>
             </div>
             ${_b2bIsPreval() ? '' : `<div class="b2b-rp-foot">${_b2bLabelBtn(it, 'b2b-mini')}</div>`}
         </div>`;
 }
+
+// The serials editor, opened from the row's Serials button -- deliberately its
+// own focused popup rather than a field in the ⋯ dropdown, so serial capture is
+// front-and-centre. Reuses the same helpers the old inline editor did.
+function b2bSerialsOpen(id) {
+    const it = (typeof _b2bLocalItem === 'function' && _b2bLocalItem(id)) || (_b2bModalItems || []).find(x => x.id === id);
+    if (!it) return;
+    _b2bSerialPopId = id;
+    let pop = document.getElementById('b2bSerialPop');
+    if (!pop) {
+        pop = document.createElement('div');
+        pop.id = 'b2bSerialPop';
+        pop.className = 'b2b-serialpop';
+        pop.addEventListener('mousedown', (e) => { if (e.target === pop) b2bSerialsClose(); });
+        document.body.appendChild(pop);
+    }
+    _b2bSerialPopPaint();
+    pop.classList.add('show');
+    setTimeout(() => { const i = document.getElementById('b2bSerialPopInput'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 0);
+}
+function _b2bSerialPopPaint() {
+    const pop = document.getElementById('b2bSerialPop');
+    const id = _b2bSerialPopId;
+    const it = (typeof _b2bLocalItem === 'function' && _b2bLocalItem(id)) || (_b2bModalItems || []).find(x => x.id === id);
+    if (!pop || !it) return;
+    const need = Number(it.quantity) || 1;
+    const serials = _b2bSerials(it);
+    const left = need - serials.length;
+    const name = [it.make, it.model].filter(Boolean).join(' ') || `Line ${_b2bLineNo(it)}`;
+    pop.innerHTML = `
+        <div class="b2b-serialpop-card" onmousedown="event.stopPropagation()">
+            <div class="b2b-serialpop-h">
+                <div><b>Serial numbers</b>
+                    <span class="b2b-serial-count ${serials.length === need ? '' : 'miss'}">${serials.length} of ${need}</span></div>
+                <button class="b2b-x" title="Done" onclick="b2bSerialsClose()">${_b2bIco(_B2B_ICO_X)}</button>
+            </div>
+            <div class="b2b-serialpop-sub">${escapeHtml(name)} · one serial per unit, comma separated</div>
+            <textarea id="b2bSerialPopInput" rows="5" placeholder="C02X1234, C02X5678, …"
+                oninput="b2bItemSerials('${it.id}',this.value)">${escapeHtml(it.serials || '')}</textarea>
+            <div class="b2b-serialpop-acts">
+                ${left > 0 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',false); _b2bSerialPopPaint()" title="This unit has no serial you can read">No Visible Serial</button>` : ''}
+                ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true); _b2bSerialPopPaint()" title="Fill every remaining slot">Fill All ${left}</button>` : ''}
+                <button class="b2b-btn b2b-btn-primary" onclick="b2bSerialsClose()">Done</button>
+            </div>
+        </div>`;
+}
+function b2bSerialsClose() {
+    const pop = document.getElementById('b2bSerialPop');
+    if (pop) pop.classList.remove('show');
+    const id = _b2bSerialPopId;
+    _b2bSerialPopId = null;
+    // Persist whatever was typed and refresh the row's count badge.
+    if (id) { try { b2bItemSave(id); } catch (_) {} }
+}
+let _b2bSerialPopId = null;
 
 // ===========================================================================
 // PRICING SHEET — EXCEL-STYLE CELL SELECTION
@@ -19821,14 +19860,10 @@ function _b2bItemSheet() {
         </div>`;
     }
 
-    // The three required specs (CPU / RAM / Storage) are columns, not a detail
-    // view -- a keyboard pricer tabs straight across them. GPU and battery stay
-    // optional, so they live behind the ⋯ with serials and notes.
-    // Battery health joins CPU/RAM/Storage on the row. It is not required -- a
-    // dead battery reports nothing -- but it changes what a machine is worth, and
-    // hiding it behind the ⋯ meant you could not tell at a glance whether a
-    // quantity line was worth having.
-    const sheetSpecs = B2B_SPEC_FIELDS.filter(f => f.req || f.key === 'battery_health');
+    // Only the three required specs (CPU / RAM / Storage) are inline columns, so
+    // a keyboard pricer tabs straight across them. The optional ones (GPU and
+    // battery health) live behind the ⋯ panel with serials and notes.
+    const sheetSpecs = B2B_SPEC_FIELDS.filter(f => f.req);
 
     const head = `
         <div class="b2b-prow b2b-phead">
@@ -19855,8 +19890,10 @@ function _b2bItemSheet() {
         // A line "has detail" if the ⋯ sheet holds anything worth reopening for --
         // serials, notes, or an optional spec (GPU/battery). The required specs
         // are inline now, so they don't count toward the dot.
-        const hasDetail = !!(String(it.staff_notes || '').trim() || String(it.listing_info || '').trim()
-            || _b2bSerials(it).length || String(it.gpu || '').trim());
+        // Dot on the ⋯ button = the dropdown holds something (an internal note or
+        // an optional spec). Serials drive their own button's badge, not this.
+        const hasDetail = !!(String(it.staff_notes || '').trim()
+            || String(it.gpu || '').trim() || String(it.battery_health || '').trim());
         // Anything blocking the line pops its panel open unasked -- the point of
         // the flag is that you can see what to fix, not hunt for it -- unless it
         // has been collapsed by hand, which outranks that.
@@ -19957,14 +19994,16 @@ function _b2bItemSheet() {
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Total">
                     ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
+                    ${_b2bIsPreval() ? '' : `<button class="b2b-ss-serial ${_b2bSerials(it).length === need ? '' : 'miss'}"
+                        title="Serial numbers — ${_b2bSerials(it).length} of ${need}. Click to edit."
+                        onclick="b2bSerialsOpen('${it.id}')"><span class="b2b-ss-serial-n">#${_b2bSerials(it).length}/${need}</span></button>`}
                     <button class="b2b-notes-btn b2b-ss-copy" title="Copy this line — everything but the serials"
                         onclick="b2bCopyItem('${it.id}',this)">${_b2bIco(_B2B_ICO_COPY)}</button>
-                    <!-- Expands in place. It used to open a modal over the sheet,
-                         which is the "separate button" nobody liked: it covered
-                         the row you were working on, trapped focus, and threw
-                         itself away if a drag-select strayed past its edge. -->
+                    <!-- Expands in place with the type's extra specs + the internal
+                         note. Serials have their own button; client notes, handling
+                         and wipe are inline columns. -->
                     <button class="b2b-notes-btn b2b-ss-more ${hasDetail ? 'has' : ''} ${blocked.length ? 'req' : ''} ${rowOpen ? 'on' : ''}"
-                        title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Serials, listing info & staff notes'}"
+                        title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Extra specs & internal notes'}"
                         aria-expanded="${rowOpen ? 'true' : 'false'}"
                         onclick="b2bToggleRow('${it.id}')">
                         <span class="b2b-rowtoggle">${rowOpen ? '−' : '+'}</span>
@@ -20089,21 +20128,8 @@ function _b2bItemSheetBody(it) {
                     </div>
                 </div>
             </div>`}
-            <!-- Present here as well as in the spreadsheet's row panel: the card
-                 grid is what the quote and view screens use, and a field you can
-                 only reach from one of the two grids is a field people will
-                 swear does not exist. -->
             <div class="b2b-isheet-sec">
-                <h5>Listing info <span class="b2b-tag-int">for whoever lists it</span></h5>
-                <div class="b2b-f">
-                    <textarea class="b2b-tag-free" rows="2"
-                        placeholder="Anything the lister needs that no other field covers"
-                        oninput="b2bItemInput('${it.id}','listing_info',this.value)"
-                        onchange="b2bItemSave('${it.id}')">${escapeHtml(it.listing_info || '')}</textarea>
-                </div>
-            </div>
-            <div class="b2b-isheet-sec">
-                <h5>Staff notes <span class="b2b-tag-int">internal</span></h5>
+                <h5>Internal notes <span class="b2b-tag-int">never leaves the building</span></h5>
                 <div class="b2b-f">
                     <input value="${escapeHtml(it.staff_notes || '')}" placeholder="Anything the team should know"
                         oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')"></div>
