@@ -21868,9 +21868,14 @@ function _b2bListUnit(it, code, units) {
         if (n > wipeRoom) n = wipeRoom;
     }
 
-    // A temp id so an undo landing before the server replies still targets the
-    // right row; the reconcile below swaps in the real one.
-    it.listings = [...before.listings, { id: `tmp-${code}`, shopify_barcode: code, units: n, listed_by: _b2bUser() }];
+    // Scanning a barcode already on this line adds to that listing (the server
+    // does the same), so bump the existing chip rather than showing a duplicate.
+    // Otherwise a temp id, so an undo landing before the server replies still
+    // targets the right row; the reconcile below swaps in the real one.
+    const existing = before.listings.find(l => String(l.shopify_barcode) === String(code));
+    it.listings = existing
+        ? before.listings.map(l => l === existing ? { ...l, units: (Number(l.units) || 1) + n } : l)
+        : [...before.listings, { id: `tmp-${code}`, shopify_barcode: code, units: n, listed_by: _b2bUser() }];
     it.listed_qty = before.listed + n;
     _b2bPendingUnit = null;
     _b2bDirty = true;

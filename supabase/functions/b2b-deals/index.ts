@@ -1374,23 +1374,47 @@ Deno.serve(async (req: Request) => {
             }
             if (units > wipeRoom) units = wipeRoom;
           }
-          const { error } = await supabase.from("b2b_item_listings").insert({
-            item_id: item.id, deal_id: item.deal_id, shopify_barcode: code, units,
-            listed_by: str(body.user, 80, "User"),
-          });
-          if (error) {
-            // 23505 is unique_violation. The barcode is unique system-wide, so
-            // this is a real signal worth spelling out: the same Shopify listing
-            // cannot be two of our units.
-            if (error.code === "23505") {
-              return jsonResponse({ success: false, error: `Barcode ${code} is already recorded against another unit.` }, 409);
+          // Scanning a barcode that is ALREADY on this line means the same Shopify
+          // listing is covering more of the line's units than first recorded --
+          // add the scanned quantity to that listing rather than refusing it. The
+          // room/wipe caps above already exclude the units it holds (listed_qty is
+          // SUM(units)), so this can't push the line past its quantity. The same
+          // barcode on a DIFFERENT line is still a real conflict: one Shopify
+          // listing cannot be two different units. The system-wide unique index is
+          // the backstop for both.
+          const { data: existing } = await supabase.from("b2b_item_listings")
+            .select("id, item_id, units").eq("shopify_barcode", code).maybeSingle();
+          if (existing) {
+            if (existing.item_id !== item.id) {
+              return jsonResponse({ success: false, error: `Barcode ${code} is already recorded against another line.` }, 409);
             }
-            // 23514 is check_violation -- the listed+recycled<=quantity backstop
-            // firing means the capacity check above raced with another lister.
-            if (error.code === "23514") {
-              return jsonResponse({ success: false, error: "Someone else just listed the last unit on that line." }, 409);
+            const { error } = await supabase.from("b2b_item_listings")
+              .update({ units: (Number(existing.units) || 1) + units }).eq("id", existing.id);
+            if (error) {
+              if (error.code === "23514") {
+                return jsonResponse({ success: false, error: "Someone else just listed the last unit on that line." }, 409);
+              }
+              return jsonResponse({ success: false, error: error.message }, 500);
             }
-            return jsonResponse({ success: false, error: error.message }, 500);
+          } else {
+            const { error } = await supabase.from("b2b_item_listings").insert({
+              item_id: item.id, deal_id: item.deal_id, shopify_barcode: code, units,
+              listed_by: str(body.user, 80, "User"),
+            });
+            if (error) {
+              // 23505 is unique_violation -- another request inserted this same
+              // barcode between our check and this insert. On another line it is a
+              // real conflict; the check above already merged it when it was ours.
+              if (error.code === "23505") {
+                return jsonResponse({ success: false, error: `Barcode ${code} is already recorded against another line.` }, 409);
+              }
+              // 23514 is check_violation -- the listed+recycled<=quantity backstop
+              // firing means the capacity check above raced with another lister.
+              if (error.code === "23514") {
+                return jsonResponse({ success: false, error: "Someone else just listed the last unit on that line." }, 409);
+              }
+              return jsonResponse({ success: false, error: error.message }, 500);
+            }
           }
 
         } else {
