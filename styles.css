@@ -13539,6 +13539,13 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    narrow columns (specs, disposition) usable. */
 .b2b-items.b2b-ss .b2b-pcell input,
 .b2b-items.b2b-ss .b2b-pcell select { padding-left: 5px; padding-right: 4px; }
+/* Every sheet cell must clip to its grid track. A grid item defaults to
+   min-width:auto, so it refuses to shrink below its content's min-content -- a
+   <select> whose widest option (e.g. "Computer") is wider than its fixed Type
+   track then spills over the Brand column beside it. min-width:0 lets each cell
+   hold its track and the field scroll its own overflow instead. */
+.b2b-items.b2b-ss .b2b-pcell,
+.b2b-items.b2b-ss .b2b-phead > span { min-width: 0; }
 /* The line's own edges close the grid -- no dangling border on the last column. */
 .b2b-items.b2b-ss .b2b-prow > *:last-child { border-right: 0; }
 .b2b-phead .c { text-align: center; }
