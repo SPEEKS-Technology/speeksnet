@@ -20636,7 +20636,11 @@ function _b2bStageQuote(deal) {
                 <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
             </div>
             ${_b2bProofPanel(deal)}
-            ${_b2bTotalsBar(true)}
+            ${_b2bTotalsBar(true, _b2bModalItems.length > 1
+                ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
+                    title="Group by brand then model, highest value first at both levels"
+                    onclick="b2bSortItems(this)">↕ Sort by brand</button>`
+                : '')}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
