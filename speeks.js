@@ -20279,10 +20279,12 @@ function _b2bItemSheetBody(it) {
         </div>`;
 }
 
-function _b2bTotalsBar(showMargin) {
+function _b2bTotalsBar(showMargin, actions) {
     // A straight P&L, left to right: what we pay, what it's worth, the profit
     // between them, then each cost/discount, then the net. Gross and Net are the
-    // margin figures, gated on showMargin.
+    // margin figures, gated on showMargin. `actions` is optional right-docked
+    // markup (e.g. the pricing sheet's Sort button) that rides the far end of the
+    // bar via margin-left:auto.
     return `
     <div class="b2b-totals">
         <div class="b2b-tot"><span class="b2b-tot-k">Items</span><span class="b2b-tot-v" id="b2bTotUnits">—</span></div>
@@ -20295,6 +20297,7 @@ function _b2bTotalsBar(showMargin) {
         <div class="b2b-tot muted" title="Certified data-wipe fee — discounted off what we pay the client">
             <span class="b2b-tot-k">Data wipes</span><span class="b2b-tot-v" id="b2bTotWipe">—</span></div>
         ${showMargin ? '<div class="b2b-tot b2b-tot-net"><span class="b2b-tot-k">Net profit</span><span class="b2b-tot-v accent" id="b2bTotNet">—</span></div>' : ''}
+        ${actions || ''}
     </div>`;
 }
 
@@ -20342,17 +20345,14 @@ function _b2bStagePricing(deal) {
             ${_b2bSendbackNote(deal)}
             ${_b2bPrevalOriginNote(deal)}
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
-            ${_b2bTotalsBar(true)}
+            ${_b2bTotalsBar(true, !_b2bIsPreval() && _b2bModalItems.length > 1
+                ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
+                    title="Group by brand then model, highest value first at both levels"
+                    onclick="b2bSortItems(this)">↕ Sort by brand</button>`
+                : '')}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
-            <div class="b2b-sheet-actions">
-                <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
-                ${!_b2bIsPreval() && _b2bModalItems.length > 1
-                    ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
-                        title="Group by brand then model, highest value first at both levels"
-                        onclick="b2bSortItems(this)">↕ Sort by brand</button>`
-                    : ''}
-            </div>
+            <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
             ${_b2bQuoteClientBlock(deal)}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
