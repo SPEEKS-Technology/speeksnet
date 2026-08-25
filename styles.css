@@ -9926,7 +9926,10 @@ body.sam-active .hotbar-btn:hover {
 /* Added 2026-08-21 with the Categories nag. A new bubble id is NOT covered by
    this rule until it is listed here — mine shipped visible, and a floating
    teal toast is exactly what the feed replaced. */
-#recatAlertBubble {
+#recatAlertBubble,
+/* Added 2026-08-25 with the no-pictures alarm, listed here in the same commit
+   that created it — see the note above for what happens otherwise. */
+#photoAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -17527,6 +17530,10 @@ body.tv-body { display: block; background: #eef1f5; }
 }
 .ec-ok { color: #178048; }
 .ec-warn { color: #b7791f; }
+/* Red, not amber, and only on the All Stores card's No Photos row. Everything
+   else on that card is work waiting in a queue; this one is a shopper looking
+   at an empty square on the live storefront right now. */
+.ec-bad { color: #d1443b; }
 .ec-off { color: var(--cb-faint); }
 .ec-hfoot { padding: 0 13px 13px; display: flex; gap: 8px; }
 .ec-hfoot .ec-btn { flex: 1; justify-content: center; }
@@ -17563,6 +17570,104 @@ body.tv-body { display: block; background: #eef1f5; }
 .ec-fbtn.active .ec-fcount { background: #fff; color: #178048; }
 
 .ec-empty { padding: 34px 10px; text-align: center; color: var(--cb-muted); font-size: 13px; font-weight: 600; }
+
+/* --- LISTING HEALTH: two sections on one page ----------------------------- *
+   Upload keeps its own pill. It was briefly folded into a drawer at the bottom
+   of All Stores; what actually needed collapsing was the three eBay ROWS on each
+   store card (see .ec-hebay). .lh-folded is kept only so a stale cached render
+   cannot leave the Upload tab hidden — _ecSyncChrome clears it on every pass. */
+.lh-folded { display: none !important; }
+
+.lh-sec + .lh-sec { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--cb-line); }
+.lh-sechead { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.lh-sectitles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.lh-eyebrow {
+    font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--cb-faint);
+}
+.lh-title { font-size: 15px; font-weight: 800; color: var(--cb-ink); line-height: 1.25; }
+/* The count sits at the far right of its own header, so the two sections'
+   numbers line up down the page and can be compared without reading. */
+.lh-count {
+    margin-left: auto; flex: 0 0 auto; min-width: 30px; text-align: center;
+    border-radius: 20px; padding: 3px 10px; font-size: 12px; font-weight: 800;
+}
+.lh-count-ok   { background: var(--cb-sage-tint); color: #178048; }
+.lh-count-warn { background: var(--cb-gold-tint); color: #b7791f; }
+.lh-count-bad  { background: var(--cb-red-tint);  color: #d1443b; }
+
+/* ALL CLEAR IS ONE LINE. This section is an alarm whose correct reading is
+   zero, and it is directly above a working queue — given a full-height empty
+   state it would push the actual work off the screen every single day for the
+   sake of saying nothing happened. */
+.lh-clear {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--cb-sage-tint); border: 1px solid #cfe6d4; border-radius: 10px;
+    padding: 11px 14px; font-size: 12.5px; font-weight: 700; color: #178048;
+}
+.lh-clear svg { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ...and NOT-KNOWN is its own state, never folded into either of the other
+   two. A check that failed must not borrow the green line. */
+.lh-unknown {
+    display: flex; flex-direction: column; gap: 3px;
+    background: var(--cb-line-2); border: 1px solid var(--cb-line); border-radius: 10px;
+    padding: 11px 14px;
+}
+.lh-unknown-t { font-size: 12.5px; font-weight: 800; color: var(--cb-ink); }
+.lh-why { font-size: 11.5px; font-weight: 600; color: var(--cb-muted); }
+
+.lh-alarm {
+    display: flex; align-items: flex-start; gap: 10px;
+    background: var(--cb-red-tint); border: 1px solid #f2c8c4; border-radius: 10px;
+    padding: 11px 14px; margin-bottom: 14px;
+    font-size: 12.5px; font-weight: 600; color: #a3352c; line-height: 1.55;
+}
+.lh-alarm svg { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.lh-alarm strong { font-weight: 800; }
+
+/* The SKU is the thing somebody reads out or carries onto the floor, so it is
+   monospaced and selectable-looking rather than styled as a faint subtitle. */
+.lh-sku {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px; font-weight: 700; color: var(--cb-ink);
+    background: var(--cb-line-2); border-radius: 5px; padding: 2px 6px;
+    white-space: nowrap;
+}
+.lh-instock { font-size: 12px; font-weight: 800; color: var(--cb-ink); }
+.lh-soldout { font-size: 11px; font-weight: 700; color: var(--cb-faint); white-space: nowrap; }
+.lh-since   { font-size: 11.5px; font-weight: 700; color: var(--cb-muted); white-space: nowrap; }
+/* Past a fortnight this is not a listing waiting on its photos, it is one
+   nobody is coming back to — and the table is sorted by stock, so the worst
+   offender is not necessarily the one at the top. */
+.lh-stale { color: #d1443b; font-weight: 800; }
+/* Nothing truncates the title — it is how somebody recognises the unit — so
+   the cell wraps rather than ellipsing, exactly as the filing queue's does. */
+.lh-table td { vertical-align: middle; }
+
+/* The eBay upload rows, folded away INSIDE each All Stores card. SPEEKS Connect
+   uploading is parked at all five stores, so three rows of zeroes were doubling
+   the height of every card above the part anybody still reads. Quieter than an
+   .ec-hrow on purpose — it is a drawer, not a stat. */
+.ec-hebay { border-top: 1px dashed var(--cb-line); margin-top: 2px; }
+.ec-hebay > summary {
+    display: flex; align-items: center; gap: 6px;
+    cursor: pointer; list-style: none; user-select: none;
+    padding: 8px 0 7px; font-size: 11px; font-weight: 700;
+    letter-spacing: .01em; color: var(--cb-faint);
+}
+.ec-hebay > summary::-webkit-details-marker { display: none; }
+.ec-hebay > summary:before { content: "▸"; font-size: 10px; }
+.ec-hebay[open] > summary:before { content: "▾"; }
+.ec-hebay > summary:hover { color: var(--cb-muted); }
+/* ⚠️ A CLOSED <details> DOES NOT HIDE THESE ON ITS OWN. The browser's own rule
+   is `details:not([open]) > *:not(summary) { display: none }` — a UA style, so
+   the author rule `.ec-hrow { display: flex }` beats it and every row renders
+   with the drawer shut. Without this line the collapse silently does nothing;
+   the UI harness asserts the rows are really unrendered, not merely unstyled. */
+.ec-hebay:not([open]) > .ec-hrow { display: none; }
+/* The last row inside the drawer keeps the card's own bottom rhythm. */
+.ec-hebay > .ec-hrow:last-child { border-bottom: 0; }
 
 /* --- Categories: the filing queue ---------------------------------------- *
    A queue of SUGGESTIONS, so it is deliberately quieter than the eBay feed

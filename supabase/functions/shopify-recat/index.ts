@@ -5,8 +5,11 @@
 //
 //   THE PANEL (SPEEKS Connect → Categories), x-user-pin:
 //     GET  ?view=review&store=OVL      the queue, one row per product
-//     GET  ?view=counts                per-store totals for both queues, and
+//     GET  ?view=counts                per-store totals for every queue, and
 //                                      nothing else — what the feed card polls
+//     GET  ?view=photos&store=OVL      live listings with NO PHOTOGRAPH. Read
+//                                      only: the fix is a camera, not an API
+//                                      call (see the 0065 migration).
 //     POST {action:"apply", store, productIds:[...]}
 //     POST {action:"skip",  store, productId, reason}
 //     POST {action:"unskip", store, productId}
@@ -84,17 +87,30 @@ const SHOP_BY_STORE: Record<string, string> = {
 // Filing stock is a merchandising decision that writes to a live catalogue, so
 // it starts with the people who answer for the storefront: corp everywhere, a
 // manager at their own store. Everyone else is refused BY DEFAULT — and only by
-// default. FEATURE_KEY below is the same switch the Categories button reads, so
-// the DM can hand the tool to an ASM in Feature Access and have it actually
+// default. CATS_KEY / PHOTOS_KEY below are the same switches the tab reads, so
+// the DM can hand either half to an ASM in Feature Access and have it actually
 // work, rather than granting a button that 403s (see [[kpi-role-gate]]).
 const CORP_ROLES = ["district manager", "ceo", "mocd"];
 const STORE_ROLES = ["manager", "owner (manager)", "owner manager", "multi-store manager"];
 const MSM_STORES = ["BAL", "MPL"];
 
 // The junk drawer we are emptying. A proposal always leaves this one.
-// The Feature Access key of the Categories tab. One string, read by the button
-// and by this function, so a grant cannot be half-made.
-const FEATURE_KEY = "ec-view-categories";
+//
+// TWO KEYS, because Listing Health is two tools sharing one page. Categories is
+// a merchandising queue you work down; the photo alarm is a read-only number
+// that should always be zero and is squarely an ASM's job. Since they were
+// merged onto one tab, one switch meant granting the alarm forced you to grant
+// the filing queue with it. Each half now answers for itself and the tab shows
+// whichever halves the reader holds.
+//
+// ⚠️ Both keys are read HERE as well as by the button. A grant that shows a
+// section the server then 401s is worse than no grant (see [[kpi-role-gate]]).
+const CATS_KEY = "ec-view-categories";
+const PHOTOS_KEY = "ec-view-photos";
+// The photo alarm's default audience is wider by one role: an ASM is usually the
+// person holding the camera. Filing stock into collections is not theirs by
+// default, so STORE_ROLES alone still gates Categories.
+const PHOTO_EXTRA_ROLES = ["assistant manager"];
 const FROM_HANDLE = "other";
 const BATCH_SIZE = 10;
 
@@ -124,13 +140,14 @@ async function sb(path: string, init: RequestInit = {}) {
 }
 const rows = async (path: string) => await (await sb(path)).json();
 
-type Scope = { name: string; role: string; stores: string[]; corp: boolean };
+type Scope = { name: string; role: string; stores: string[]; corp: boolean;
+               mayCats: boolean; mayPhotos: boolean };
 
 // An override row for this feature, resolved the way the site resolves it:
 // the person beats their role, and neither existing means "use the default".
 // Returns null for "nothing said".
-async function featureSays(role: string, name: string): Promise<boolean | null> {
-  const list = await rows(`feature_overrides?feature_key=eq.${FEATURE_KEY}`
+async function featureSays(key: string, role: string, name: string): Promise<boolean | null> {
+  const list = await rows(`feature_overrides?feature_key=eq.${encodeURIComponent(key)}`
     + `&select=subject_type,subject,enabled`);
   const lc = (v: unknown) => String(v || "").toLowerCase().trim();
   // "Owner (Manager)" -> "owner-manager", the slug the tool writes.
@@ -149,9 +166,23 @@ async function scopeFor(pin: string): Promise<Scope | null> {
   if (!user) return null;
   const role = String(user.role || "").toLowerCase().trim();
   const corp = CORP_ROLES.includes(role);
-  const byRole = corp || STORE_ROLES.includes(role);
-  const said = await featureSays(role, String(user.name || ""));
-  if (!(said === null ? byRole : said)) return null;
+  const byRoleCats = corp || STORE_ROLES.includes(role);
+  // ⚠️ MOCD IS OUT OF THE PHOTO DEFAULT, and this has to match FEATURE_CATALOG's
+  // `def` in speeks.js exactly. Their ec-view-categories was revoked by hand; a
+  // new key defaulting on for them would re-open the page under a new name, and
+  // a backend that says yes while the button says no is how you get a tool
+  // reachable by URL that nobody can see.
+  const byRolePhotos = (corp && role !== "mocd")
+    || STORE_ROLES.includes(role) || PHOTO_EXTRA_ROLES.includes(role);
+  const name = String(user.name || "");
+  const [saidCats, saidPhotos] = await Promise.all([
+    featureSays(CATS_KEY, role, name), featureSays(PHOTOS_KEY, role, name),
+  ]);
+  const mayCats = saidCats === null ? byRoleCats : saidCats;
+  const mayPhotos = saidPhotos === null ? byRolePhotos : saidPhotos;
+  // Only a reader holding NEITHER half is a stranger to this function. Holding
+  // one is the whole point of splitting the keys.
+  if (!mayCats && !mayPhotos) return null;
   // A granted role still only gets ITS OWN stock. Feature Access answers "may
   // this person file", never "whose catalogue" — that stays the store on their
   // user row, and corp is the only thing that means all five.
@@ -159,7 +190,7 @@ async function scopeFor(pin: string): Promise<Scope | null> {
     : role === "multi-store manager" ? MSM_STORES
     : [String(user.store || "").toUpperCase()].filter(s => STORES.includes(s));
   if (!stores.length) return null;
-  return { name: user.name || "", role, stores, corp };
+  return { name: user.name || "", role, stores, corp, mayCats, mayPhotos };
 }
 
 async function shopFor(store: string): Promise<{ shop: string; token: string }> {
@@ -472,24 +503,61 @@ Deno.serve(async (req) => {
     const view = url.searchParams.get("view") || "";
 
     // --- panel ---------------------------------------------------------------
-    if (req.method === "POST" || view === "review" || view === "counts") {
+    if (req.method === "POST" || view === "review" || view === "counts"
+        || view === "photos") {
       const scope = await scopeFor(pin);
       // A stale sessionStorage PIN outlives a PIN change and lands exactly here.
       if (!scope) {
         return json({ error: "unauthorized",
                       detail: "no matching user, or your role may not file stock" }, 401);
       }
-      if (req.method === "POST") return await handlePost(req, scope);
+      // Per-half gates. scopeFor only proved they hold ONE of the two.
+      const noCats = () => json({ error: "forbidden",
+        detail: "the Categories queue is not switched on for you" }, 403);
+      const noPhotos = () => json({ error: "forbidden",
+        detail: "the no-pictures alarm is not switched on for you" }, 403);
+
+      // Filing writes to a live catalogue and is Categories' half, always.
+      if (req.method === "POST") {
+        if (!scope.mayCats) return noCats();
+        return await handlePost(req, scope);
+      }
+      if (view === "photos" && !scope.mayPhotos) return noPhotos();
+      if (view === "review" && !scope.mayCats) return noCats();
 
       // JUST THE NUMBERS, for the notification check that every manager runs
       // on a timer. The review payload carries a whole store queue with it —
       // 90 rows to answer "is there anything to do", on every page, forever.
       if (view === "counts") {
-        const [other, misfiled, unmatched] = await Promise.all([
-          queueTotals(scope.stores, "other"), queueTotals(scope.stores, "misfiled"),
-          queueTotals(scope.stores, "unmatched")]);
-        return json({ scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
-                      other, misfiled, unmatched });
+        // Only the halves this reader holds — and the ones they do not are
+        // OMITTED rather than sent as zero. A zero means "nothing to do"; a
+        // missing key means "not your tool", and the nag that reads this must
+        // be able to tell those apart or it will report an all-clear on a
+        // queue it was never allowed to look at.
+        const [other, misfiled, unmatched, photos] = await Promise.all([
+          scope.mayCats ? queueTotals(scope.stores, "other") : null,
+          scope.mayCats ? queueTotals(scope.stores, "misfiled") : null,
+          scope.mayCats ? queueTotals(scope.stores, "unmatched") : null,
+          scope.mayPhotos ? photoTotals(scope.stores) : null]);
+        return json({ scope: { name: scope.name, role: scope.role, stores: scope.stores,
+                               corp: scope.corp, mayCats: scope.mayCats, mayPhotos: scope.mayPhotos },
+                      ...(scope.mayCats ? { other, misfiled, unmatched } : {}),
+                      ...(scope.mayPhotos ? { photos } : {}) });
+      }
+
+      // The photo alarm for one store. Its own view rather than a field on the
+      // review payload: Categories and Photos are two sections of one page now,
+      // and bolting this onto `review` would make every tab switch inside
+      // Categories re-fetch a list that cannot have changed.
+      if (view === "photos") {
+        const askedP = (url.searchParams.get("store") || "").toUpperCase();
+        const storeP = scope.stores.includes(askedP) ? askedP : scope.stores[0];
+        return json({
+          scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp,
+                   mayCats: scope.mayCats, mayPhotos: scope.mayPhotos },
+          store: storeP,
+          queue: await photosFor(storeP),
+        });
       }
 
       const asked = (url.searchParams.get("store") || "").toUpperCase();
@@ -506,7 +574,8 @@ Deno.serve(async (req) => {
         totals[m] = m === mode ? queue.length : (await queueTotals([store], m))[store] || 0;
       }
       return json({
-        scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
+        scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp,
+                   mayCats: scope.mayCats, mayPhotos: scope.mayPhotos },
         store, mode,
         queue: queue.map(p => ({
           productId: p.product_id, sku: p.sku, title: p.title, handle: p.product_handle,
@@ -599,6 +668,44 @@ async function queueTotals(stores: string[], mode: string): Promise<Record<strin
              : mode === "unmatched" ? "collection_unmatched"
              : "collection_proposals";
   const all = await rows(`${view}?select=store_code`);
+  const out: Record<string, number> = {};
+  for (const s of stores) out[s] = 0;
+  for (const r of all) if (r.store_code in out) out[r.store_code] += 1;
+  return out;
+}
+
+// --- PHOTOS: live on the online store with nothing to look at ---------------
+//
+// A different question from everything above it, sharing this function for one
+// reason: it is the same person, the same PIN and the same store scope, and a
+// second edge function would mean a second copy of scopeFor to drift out of
+// sync (see [[kpi-role-gate]] for what that costs).
+//
+// READ ONLY, and it stays that way. The fix is a photograph, taken in Shopify
+// with the item in your hands — so a row carries the SKU and a link and nothing
+// that pretends to act. See 0065 for why unpublished no-photo stock, which is
+// 500× larger, is deliberately not in here.
+async function photosFor(store: string) {
+  const list = await rows(`listing_no_photos?store_code=eq.${encodeURIComponent(store)}`
+    + `&select=sku,product_id,product_handle,title,price,quantity,product_created_at`
+    // In stock first: the alarm is meant to be short, and when it is not, the
+    // unit somebody can actually walk over and photograph is the one to do now.
+    + `&order=quantity.desc,product_created_at.asc`);
+  return list.map((r: any) => ({
+    productId: r.product_id,
+    sku: r.sku,
+    title: r.title,
+    handle: r.product_handle,
+    price: r.price,
+    quantity: r.quantity,
+    listedAt: r.product_created_at,
+    shop: SHOP_BY_STORE[store],
+  }));
+}
+
+// One query for all five, tallied here — same reasoning as queueTotals.
+async function photoTotals(stores: string[]): Promise<Record<string, number>> {
+  const all = await rows(`listing_no_photos?select=store_code`);
   const out: Record<string, number> = {};
   for (const s of stores) out[s] = 0;
   for (const r of all) if (r.store_code in out) out[r.store_code] += 1;

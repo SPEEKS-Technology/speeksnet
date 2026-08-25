@@ -33563,7 +33563,7 @@ const FEATURE_CATALOG = [
     // and nothing saying why. The tab is DERIVED (data-feature-any on the
     // button): grant either sub-tab and the tab appears carrying it, revoke both
     // and the tab goes. One fact, one switch.
-    { key: 'ec-upload',                label: 'SPEEKS Connect · Upload tab',   tab: 'widgets', group: 'Operations', def: 'all' },
+    { key: 'ec-upload',                label: 'SPEEKS Connect · Upload',   tab: 'widgets', group: 'Operations', def: 'all' },
     // The Categories queue inside SPEEKS Connect. Managers and the DM to start —
     // it writes to the live storefront, so it is not something to hand out by
     // accident. This switch is the WHOLE gate, not a cosmetic one: shopify-recat
@@ -33571,7 +33571,16 @@ const FEATURE_CATALOG = [
     // turning it on for somebody genuinely grants them the tool and turning it
     // off genuinely takes it away. See the KPI role gate for what happens when a
     // frontend switch and a backend allow-list disagree.
-    { key: 'ec-view-categories',       label: 'SPEEKS Connect · Categories tab', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager'] },
+    { key: 'ec-view-categories',       label: 'SPEEKS Connect · Categories', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager'] },
+    // The other half of Listing Health. Its own switch since 2026-08-25: the two
+    // share a tab but not a job, and one key meant granting the read-only alarm
+    // forced the filing queue on with it. The tab shows whichever halves are on.
+    //
+    // ⚠️ `mocd` is deliberately absent from this default even though Categories
+    // lists it — the MOCD's ec-view-categories was revoked by hand, and a new key
+    // defaulting ON would quietly re-open the page to them under a new name.
+    // ASM is present: photographing an item is their job (see the notify roles).
+    { key: 'ec-view-photos',           label: 'SPEEKS Connect · No Pictures', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -33763,7 +33772,7 @@ const _SECTION_TABS = {
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks',
-                        'widget-ops-b2b', 'ec-upload', 'ec-view-categories'],
+                        'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos'],
 };
 
 function _applySectionNavVisibility(userRoleClass, userName) {
@@ -34528,6 +34537,7 @@ const JUMP_KEYWORDS = {
     'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
     'ec-upload':                 'speeks connect ebay listings upload list publish online marketplace sku',
     'ec-view-categories':        'speeks connect categories other collection wrong category shelf file shopify',
+    'ec-view-photos':            'speeks connect listing health no pictures photos missing image online store',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
     'widget-variance-replies':   'variance replies gm notes dm notes markdown discount negative',
@@ -34586,7 +34596,7 @@ const JUMP_PLACES = [
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
-    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
+    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
     // card are separate Feature Access keys, and a single row would be invisible to
@@ -39489,7 +39499,22 @@ function _samReminderCfg() {
     const _rcOnly = (_rqT && _rqT.dataset && _rqT.dataset.only) || '';
     cfg.push({ key: 'recatQueue', id: 'recatAlertBubble', text: 'recatAlertBubbleText',
         title: _rcOnly === 'wrong' ? 'Listings In The Wrong Category' : 'Listings Need A Category',
-        urgency: 1, due: 'Action', cls: 'sam-due-amber',
+        // Red, matching the no-pictures card. Both are the storefront being
+        // wrong where a customer can see it, and the two sitting side by side in
+        // different colours read as two different grades of problem. Urgency
+        // still 1 against the alarm's 2, so photos sort above it — the ORDER
+        // carries which is worse now that the colour no longer does.
+        urgency: 1, due: 'Action', cls: 'sam-due-red',
+        action: "window.location.href='operations.html#categories'" });
+    // Live on the online store with no picture. RED where the category queue
+    // beside it is amber, and a higher urgency, because the two are not the same
+    // kind of finding: a category queue is a standing backlog that is never
+    // really empty, while this number should read zero every single day. Any
+    // other reading is an exception, and an unbuyable listing outranks an untidy
+    // one. Still "Action", not "Overdue" — nothing has a deadline to have missed.
+    cfg.push({ key: 'photoAlert', id: 'photoAlertBubble', text: 'photoAlertBubbleText',
+        title: 'Listings With No Pictures',
+        urgency: 2, due: 'Action', cls: 'sam-due-red',
         action: "window.location.href='operations.html#categories'" });
     return cfg;
 }
@@ -44034,9 +44059,31 @@ async function ecLoad() {
     // two buttons with a switch are resolved in the DOM by page load, so this is
     // knowable here; All Stores is not (it needs the server's scope) and is left
     // to _ecSyncChrome.
-    if (_ecView === 'listings') {
-        const v = _ecViewsOn();
-        if (!v.listings && v.cats) { _ecView = 'cats'; _ecMarkView('cats'); }
+    // ANYONE WITH LISTING HEALTH OPENS ON IT. Upload is a drawer on the All
+    // Stores page now, so it is nobody's landing page — and this cannot wait for
+    // _ecSyncChrome, which runs after the request is already in flight. Deciding
+    // it from the buttons means no wasted listings fetch and no flash of a view
+    // the panel is about to move away from. The fold itself needs the SERVER's
+    // scope, which is why the landing is keyed on the grant instead.
+    //
+    // ⚠️ THE DM AND THE CEO LAND ON ALL STORES, and they are the exception the
+    // comment above says is not knowable — because they are keyed on the ROLE,
+    // not on the scope. Whether the All Stores PILL may be shown needs the
+    // server's answer; whether this person is the DM does not, and it is sitting
+    // in sessionStorage before the first request. Their job is the estate, so
+    // opening them on one store's queue is the wrong first screen.
+    //
+    // Deliberately these two roles by name rather than "corp": MOCD is corp for
+    // some tools and is locked out of this one entirely, so landing them on a
+    // view they will be bounced off is worse than not trying.
+    const _ecRoleLc = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const _ecLandsAllStores = _ecRoleLc === 'district manager' || _ecRoleLc === 'ceo';
+    if (_ecView === 'listings' && _ecLandsAllStores) {
+        _ecView = 'health';
+        _ecMarkView('health');
+    } else if (_ecView === 'listings' && _ecGranted('ecViewCatsBtn')) {
+        _ecView = 'cats';
+        _ecMarkView('cats');
     }
     if (!_ecData) body.innerHTML = '<div class="status-message">Loading SPEEKS Connect…</div>';
     try {
@@ -44052,7 +44099,49 @@ async function ecLoad() {
             // file stock — a narrower list than who may list on eBay — so the
             // eBay scope is left exactly as it was rather than overwritten
             // with an answer from a different question.
-            await rcLoad();
+            // ONLY FETCH THE HALVES THIS READER HOLDS. ?view=review now 403s for
+            // somebody granted the alarm alone, and a 403 on load would take the
+            // whole page down over a section they were never going to see.
+            const wantCats = typeof _jumpFeatureVisible !== 'function'
+                || _jumpFeatureVisible('ec-view-categories');
+            if (wantCats) await rcLoad();
+            // ⚠️ THE ALL STORES PILL IS FED BY THE EBAY SCOPE, and only the
+            // listings fetch brings that back. Listing Health never makes that
+            // fetch — so the moment Upload stopped being the landing view, All
+            // Stores vanished for the DM, on a page that had never touched it.
+            // shopify-recat answers the same question about the same person, so
+            // it stands in until a real eBay payload replaces it.
+            if (!_ecScope && _rcData?.scope) {
+                _ecScope = { allStores: !!_rcData.scope.corp, stores: _rcData.scope.stores };
+            }
+            _lhScope = _rcData?.scope || null;
+            // Its own request, after rcLoad so it asks about the store rcLoad
+            // actually settled on — passing a null store would let the server
+            // pick a default, and the two halves of one page would then be
+            // describing two different stores.
+            //
+            // A failure must not take the filing queue down with it, and must
+            // not read as an all clear either: _lhPhotoErr is what the section
+            // draws instead of the green line.
+            const wantPhotos = _lhScope && typeof _lhScope.mayPhotos === 'boolean'
+                ? _lhScope.mayPhotos
+                : (typeof _jumpFeatureVisible !== 'function' || _jumpFeatureVisible('ec-view-photos'));
+            if (!wantPhotos) {
+                _lhPhotos = null; _lhPhotoErr = null;
+            } else try {
+                _lhPhotos = await _rcFetch(`?view=photos&store=${encodeURIComponent(_ecStore || '')}`);
+                _lhPhotoErr = null;
+                // The photos payload carries the same scope, so a reader granted
+                // ONLY the alarm still gets a store list and an All Stores pill —
+                // rcLoad never ran for them.
+                if (_lhPhotos?.scope) {
+                    _lhScope = _lhPhotos.scope;
+                    if (!_ecScope) _ecScope = { allStores: !!_lhPhotos.scope.corp, stores: _lhPhotos.scope.stores };
+                }
+            } catch (e) {
+                _lhPhotos = null;
+                _lhPhotoErr = e.message || String(e);
+            }
         } else {
             _ecData = await _ecFetch(`?view=listings${_ecStore ? `&store=${_ecStore}` : ''}`);
             _ecScope = _ecData.scope;
@@ -44065,6 +44154,11 @@ async function ecLoad() {
     } catch (e) {
         body.innerHTML = `<div class="ec-empty">Could not load SPEEKS Connect.<br>
             <span style="font-weight:600;color:var(--cb-faint);">${_ecEsc(e.message)}</span></div>`;
+        // The CHROME still has to be right when the BODY could not load. Without
+        // this the toggle keeps whatever it was showing before the failure — and
+        // since the Upload fold is applied here, a failed load left an Upload
+        // pill on screen beside the page that had already absorbed it.
+        _ecSyncChrome();
     }
 }
 
@@ -44081,15 +44175,26 @@ async function ecLoad() {
 // instead — the inline style is exactly what _applyFeatureOverridesToPlainEls
 // left behind, and reading the COMPUTED style would be useless while the toggle
 // around it is still hidden.
+// What Feature Access GRANTED, read off the buttons it owns. The inline display
+// is its answer and nothing else writes one — which is exactly why the fold
+// below hides the Upload pill with a CLASS. Hiding it inline would make a
+// folded tab indistinguishable from a revoked one, and the dropdown that
+// replaced it would disappear along with the pill.
+const _ecGranted = id => {
+    const b = document.getElementById(id);
+    return !!b && b.style.display !== 'none';
+};
+
+// UPLOAD STAYS A TAB. It was briefly folded into a drawer at the bottom of the
+// All Stores page; that was the wrong reading of "collapse the upload parts".
+// What was actually making the page long was the three eBay ROWS on every store
+// card, and those are now a per-card <details> in _ecHealthHtml. The panel
+// itself is break-glass and keeps its own pill, reachable in one click.
 function _ecViewsOn() {
-    const on = id => {
-        const b = document.getElementById(id);
-        return !!b && b.style.display !== 'none';
-    };
     return {
-        listings: on('ecViewListingsBtn'),
+        listings: _ecGranted('ecViewListingsBtn'),
         health: !!_ecScope?.allStores,
-        cats: on('ecViewCatsBtn'),
+        cats: _ecGranted('ecViewCatsBtn'),
     };
 }
 
@@ -44098,6 +44203,11 @@ function _ecSyncChrome() {
     const sel = document.getElementById('ecStoreFilter');
     const health = document.getElementById('ecViewHealthBtn');
     if (health) health.style.display = _ecScope?.allStores ? '' : 'none';
+    // The Upload pill is Feature Access's to show or hide and nothing else's.
+    // A previous round folded it away with .lh-folded; that class is cleared
+    // here so an old cached render cannot leave the tab hidden.
+    const up = document.getElementById('ecViewListingsBtn');
+    if (up) up.classList.remove('lh-folded');
     const views = _ecViewsOn();
     const n = ['listings', 'health', 'cats'].filter(v => views[v]).length;
     // A toggle offering a single option is a button that does nothing, so it
@@ -44141,8 +44251,17 @@ function _ecSyncChrome() {
         const cats = _rcData?.counts;
         const toFile = cats ? (cats.other || 0) + (cats.misfiled || 0) + (cats.unmatched || 0)
                             : (_rcData?.queue || []).length;
+        // BOTH SECTIONS, because the page is now both. The photo count leads:
+        // it is the one that is supposed to read zero, so it is the one worth
+        // seeing without scrolling. A photo check that FAILED says so rather
+        // than being left out — silence here would read as a clean store.
+        const pics = _lhPhotos ? (_lhPhotos.queue || []).length : null;
+        const bits = [];
+        if (_lhPhotoErr) bits.push('Photo Check Failed');
+        else if (pics) bits.push(`${pics} Missing A Photo`);
+        if (toFile) bits.push(`${toFile} Item${toFile === 1 ? '' : 's'} To Submit`);
         sub.textContent = _ecView === 'cats'
-            ? `${_ecStore || ''} · ${toFile ? `${toFile} Item${toFile === 1 ? '' : 's'} To Submit` : 'Everything Is Fixed'}`
+            ? `${_ecStore || ''} · ${bits.length ? bits.join(' · ') : 'All Clear'}`
             : _ecView === 'health' ? 'Every store, at a glance'
             : !_ecData?.summary?.connected ? `${_ecStore || ''} · Not connected to eBay yet`
             : !_ecFeed.length ? `${_ecStore} · Scan a SKU to list it on eBay`
@@ -44214,6 +44333,10 @@ function ecSetStore(store) {
     // The filing queue is per store too, and a stale one would draw the last
     // store's rows under the new store's name for as long as the fetch takes.
     _rcData = null;
+    // Same for the photo alarm, and worse: a stale ALL CLEAR under a new store's
+    // name is a reassuring statement about a store nobody has checked yet.
+    _lhPhotos = null;
+    _lhPhotoErr = null;
     ecLoad();
 }
 window.ecSetStore = ecSetStore;
@@ -44224,9 +44347,18 @@ function ecRender() {
     const body = document.getElementById('ecBody');
     if (!body) return;
     _ecSyncChrome();
+    // EVERY view, before any of the early returns below. See _ecStandbySync.
+    _ecStandbySync();
 
     if (_ecView === 'health') { body.innerHTML = _ecHealthHtml(); return; }
-    if (_ecView === 'cats') { body.innerHTML = _rcHtml(); return; }
+    if (_ecView === 'cats') {
+        body.innerHTML = _lhHtml();
+        // The shelf picker and the eBay category popover can both be open over
+        // this page now that Upload renders inside it, and the rows beneath
+        // either of them have just been rebuilt.
+        if (document.getElementById('ecCatPop')) _ecCatPlace();
+        return;
+    }
 
     const s = _ecData?.summary;
     if (!s) { body.innerHTML = '<div class="ec-empty">No store selected.</div>'; return; }
@@ -44235,7 +44367,7 @@ function ecRender() {
         return;
     }
 
-    body.innerHTML = _ecStandbyHtml() + _ecQuickHtml() + _ecFeedHtml();
+    body.innerHTML = _ecQuickHtml() + _ecFeedHtml();
 
     // The table was just rebuilt beneath any open category picker: its anchor
     // button is a new element and the rows may have shifted. Re-place so the
@@ -44257,6 +44389,53 @@ function ecRender() {
 // The banner exists because the alternative is worse: a store scans a SKU, gets
 // a 409 they have never seen, and reads it as the tool being broken. Say it
 // first, on load, where the scan box is about to be.
+// ⚠️ WHY THIS RENDERS OUTSIDE #ecBody (moved 2026-08-25).
+//
+// The banner and its Take The Channel Back button used to be concatenated into
+// the Upload view's HTML. Then ec-upload was revoked for every role — Upload is
+// paused, so that was correct — and the break-glass switch vanished with the
+// view that held it. The one control you need on the day MC hands a store back
+// was unreachable in the UI, and nothing said so.
+//
+// A banner about WHO OWNS THE CHANNEL is not a fact about the Upload tab. It
+// belongs to the panel, so it renders into #ecStandbyHost above the body on
+// every view, and that host carries no data-feature of its own.
+function _ecStandbySync() {
+    const host = document.getElementById('ecStandbyHost');
+    if (!host) return;
+    // All Stores knows about five stores at once; the single-store views know
+    // about one. Same banner either way — the DM is the only role offered the
+    // button, and All Stores is the view they actually live on.
+    host.innerHTML = _ecView === 'health' ? _ecStandbyAllHtml() : _ecStandbyHtml();
+}
+
+// The All Stores form: one banner naming every parked store, each with its own
+// button. Per store rather than one "take them all back" — the stores came off
+// SPEEKS Connect one at a time as MC adopted them, and they come back the same
+// way. A single button for five stores is the kind of convenience that causes
+// duplicate orders at the four you were not thinking about.
+function _ecStandbyAllHtml() {
+    const parked = (_ecHealth?.stores || [])
+        .filter(s => String(s.channelMode || 'active') === 'standby');
+    if (!parked.length) return '';
+    const canFlip = !!_ecScope?.allStores;
+    const names = parked.map(s => s.store).join(', ');
+    return `
+    <div class="ec-standby">
+      <div class="ec-standby-l">
+        <div class="ec-standby-t">On Standby &middot; Marketplace Connect Owns ${parked.length === 1
+            ? _ecEsc(names) + "'s eBay" : _ecEsc(names) + ' &mdash; ' + parked.length + ' Stores'}</div>
+        <div class="ec-standby-n">Nothing is uploaded, imported or price-synced from here for
+          ${parked.length === 1 ? 'that store' : 'those stores'} &mdash; two systems on one item
+          would put the same sale into Shopify twice. Everything still works; it is just parked.</div>
+      </div>
+      ${canFlip ? `<div class="ec-standby-r">${parked.map(s => `
+        <button class="ec-btn ec-btn-glass" onclick="ecTakeOver('${_ecEsc(s.store)}')"
+          title="Hands ${_ecEsc(s.store)}'s eBay channel back to SPEEKS Connect">Take ${_ecEsc(s.store)} Back</button>`
+      ).join('')}</div>` : ''}
+    </div>`;
+}
+
 function _ecStandbyHtml() {
     if ((_ecData?.summary?.channelMode || 'active') !== 'standby') return '';
     const s = _ecData.summary;
@@ -44291,8 +44470,11 @@ function _ecStandbyHtml() {
 // consequence rather than asking "are you sure": the danger is not the click,
 // it is doing it while MC still holds the listings, and only the person clicking
 // knows whether that is true.
-async function ecTakeOver() {
-    const store = _ecStore;
+// `which` is passed by the All Stores banner, where five stores are on screen
+// and _ecStore is not the one whose button was clicked. Defaults to the single
+// store the other views are about.
+async function ecTakeOver(which) {
+    const store = which || _ecStore;
     if (!confirm(
         `Hand ${store}'s eBay channel back to SPEEKS Connect?\n\n`
         + `Only do this if Marketplace Connect is NOT managing ${store}'s listings any more.\n\n`
@@ -44515,25 +44697,38 @@ function _ecHealthHtml() {
         <div class="ec-hcard">
           <div class="ec-hhead"><span class="ec-hstore">${_ecEsc(s.store)}</span>${chip}</div>
           <div class="ec-hbody">
-            ${row('Live On eBay', s.connected ? c.live : '—', s.connected ? 'ec-ok' : 'ec-off')}
-            ${row('Did Not Upload',
-                  !s.connected ? '—'
-                    : c.failed
-                      // A COUNT NOBODY CAN OPEN IS A DEAD END. "Did Not Upload: 1"
-                      // says a listing failed and gives no way to find out which,
-                      // and the store view is session-scoped so signing in again
-                      // shows nothing. Clicking pulls those rows into the feed,
-                      // where the error, both links and Try Again already live.
-                      ? `<button type="button" class="ec-hbtn"
-                           onclick="ecShowFailed('${_ecEsc(s.store)}')"
-                           title="Show what did not upload">${c.failed} To Fix</button>`
-                      : c.failed,
-                  !s.connected ? 'ec-off' : c.failed ? 'ec-warn' : 'ec-ok')}
-            ${row('Checked Against eBay', s.freshness.liveMinutes == null ? 'Never'
-                  : _ecAgo(new Date(Date.now() - s.freshness.liveMinutes * 60000).toISOString()),
-                  s.freshness.liveMinutes == null ? 'ec-off'
-                  : s.freshness.liveMinutes > 90 ? 'ec-warn' : 'ec-ok')}
+            <!-- LISTING HEALTH FIRST, BARE. These are the numbers that still
+                 mean something day to day, so they are what the card reads as. -->
             ${_ecHealthCats(s.store)}
+            <!-- ...and the eBay upload numbers folded away underneath. SPEEKS
+                 Connect uploading is parked at all five stores, so three rows of
+                 zeroes were making every card twice as tall as the part anybody
+                 reads. Collapsed, not deleted: the channel is break-glass and
+                 the moment it comes back these are the first numbers to check.
+                 "Checked Against eBay" is in here too — the live sweeps are off
+                 with the channel, so that timestamp only grows staler, and on
+                 the face of the card it reads as something being wrong. -->
+            <details class="ec-hebay">
+              <summary>eBay Upload${!s.connected ? ' · Not Connected' : c.failed ? ` · ${c.failed} To Fix` : ''}</summary>
+              ${row('Live On eBay', s.connected ? c.live : '—', s.connected ? 'ec-ok' : 'ec-off')}
+              ${row('Did Not Upload',
+                    !s.connected ? '—'
+                      : c.failed
+                        // A COUNT NOBODY CAN OPEN IS A DEAD END. "Did Not Upload: 1"
+                        // says a listing failed and gives no way to find out which,
+                        // and the store view is session-scoped so signing in again
+                        // shows nothing. Clicking pulls those rows into the feed,
+                        // where the error, both links and Try Again already live.
+                        ? `<button type="button" class="ec-hbtn"
+                             onclick="ecShowFailed('${_ecEsc(s.store)}')"
+                             title="Show what did not upload">${c.failed} To Fix</button>`
+                        : c.failed,
+                    !s.connected ? 'ec-off' : c.failed ? 'ec-warn' : 'ec-ok')}
+              ${row('Checked Against eBay', s.freshness.liveMinutes == null ? 'Never'
+                    : _ecAgo(new Date(Date.now() - s.freshness.liveMinutes * 60000).toISOString()),
+                    s.freshness.liveMinutes == null ? 'ec-off'
+                    : s.freshness.liveMinutes > 90 ? 'ec-warn' : 'ec-ok')}
+            </details>
           </div>
         </div>`;
     }).join('')}</div>`;
@@ -44560,11 +44755,227 @@ function _ecHealthCats(store) {
     // "somebody has to pick" — two different jobs, so two numbers rather than
     // one that hides the harder half.
     const none = _rcCounts.unmatched?.[store] ?? null;
-    if (other == null && wrong == null && none == null) return '';
-    const row = (k, n) => `<div class="ec-hrow"><span class="ec-hk">${k}</span>`
-        + `<span class="ec-hv ${n ? 'ec-warn' : 'ec-ok'}">${n == null ? '—' : n}</span></div>`;
-    return row('In &ldquo;Other&rdquo;', other) + row('No Suggestion', none)
-         + row('Wrong Category', wrong);
+    // The photo alarm, per store. RED rather than amber when it is not zero:
+    // everything else on this card is work queued up, and this one is a shopper
+    // looking at an empty square on the live storefront right now.
+    const pics = _rcCounts.photos?.[store] ?? null;
+    if (other == null && wrong == null && none == null && pics == null) return '';
+    const row = (k, n, bad) => `<div class="ec-hrow"><span class="ec-hk">${k}</span>`
+        + `<span class="ec-hv ${n ? (bad || 'ec-warn') : 'ec-ok'}">${n == null ? '—' : n}</span></div>`;
+    // ⚠️ A HALF YOU DO NOT HOLD IS ABSENT, NOT A DASH. The server OMITS the
+    // counts for a switched-off half, and `—` on this card means "we could not
+    // read it" — a real state, and the wrong one to show somebody who simply
+    // was not given the tool. Presence of the key, not the value, decides.
+    const hasPics = Object.prototype.hasOwnProperty.call(_rcCounts, 'photos');
+    const hasCats = Object.prototype.hasOwnProperty.call(_rcCounts, 'other');
+    return (hasPics ? row('No Photos', pics, 'ec-bad') : '')
+         + (hasCats ? row('In &ldquo;Other&rdquo;', other) + row('No Suggestion', none)
+                    + row('Wrong Category', wrong) : '');
+}
+
+// --- LISTING HEALTH: one page, because it is one question -------------------
+//
+// "Is this listing fit for a shopper to land on" gets asked two ways — does it
+// sit on a shelf anyone can find, and is there anything to look at — of the
+// same catalogue, by the same person, under the same permission. Two tabs made
+// that two things to remember to check. One page makes it one.
+//
+// Upload comes along as a collapsed dropdown rather than a tab. eBay listing is
+// in standby at all five stores, so it is break-glass; break-glass belongs
+// behind glass, not in the first row of controls on a page somebody opens daily.
+//
+// ⚠️ THE TWO SECTIONS ARE DIFFERENT KINDS OF THING AND MUST NOT LOOK ALIKE.
+// Categories is a WORKING QUEUE — a list you sit down and grind through, and a
+// long one is normal. Photos is an ALARM — the right reading is zero, the user
+// checks it by hand every week, and any row on it is a shopper looking at an
+// empty square right now. So Photos renders as one calm line when it is clear
+// and takes the top of the page when it is not, while Categories always looks
+// like the list it is.
+
+let _lhPhotos = null;     // { store, queue } from shopify-recat?view=photos
+let _lhPhotoErr = null;   // why the check could not run, when it could not
+// THE SERVER'S ANSWER about which halves of Listing Health this reader holds,
+// from whichever of the two payloads arrived (`?view=review` or `?view=photos` —
+// a reader granted one half only ever fetches that one). Preferred over the
+// local switch in _lhMay: the server decides whether the data comes, so drawing
+// a section from the local answer alone can put a heading over a 403.
+let _lhScope = null;      // { mayCats, mayPhotos, stores, corp } | null
+
+// HOW LONG THE EMPTY SQUARE HAS BEEN THERE, always as a duration.
+//
+// _ecAgo is the house formatter and is deliberately not used here: past 14 days
+// it gives up on "ago" and prints a date. That is right for the upload feed,
+// where a row is something you did and the question is when — and wrong here,
+// where the number IS the severity and only gets more important as it grows.
+// "Jul 2" makes a reader do the subtraction; "54 days" is the finding.
+function _lhFor(iso) {
+    if (!iso) return '—';
+    const ms = Date.now() - Date.parse(iso);
+    if (!isFinite(ms) || ms < 0) return '—';
+    const days = Math.floor(ms / 86400000);
+    if (days < 1) return 'Today';
+    if (days < 60) return `${days} Day${days === 1 ? '' : 's'}`;
+    const months = Math.round(days / 30.44);
+    return `${months} Month${months === 1 ? '' : 's'}`;
+}
+
+// Two weeks live with no photograph is not a listing waiting on its photos any
+// more; it is one nobody is coming back to. Worth marking, since the sort is by
+// stock and the oldest offender is not necessarily at the top.
+const _lhStale = iso => {
+    const ms = Date.now() - Date.parse(iso || '');
+    return isFinite(ms) && ms > 14 * 86400000;
+};
+
+// One header for both sections, so two things that share a page read as two
+// parts of it rather than two panels that happened to land together.
+function _lhSec(eyebrow, title, inner, badge) {
+    return `<section class="lh-sec">
+      <div class="lh-sechead">
+        <div class="lh-sectitles">
+          <span class="lh-eyebrow">${_ecEsc(eyebrow)}</span>
+          <span class="lh-title">${_ecEsc(title)}</span>
+        </div>
+        ${badge || ''}
+      </div>
+      ${inner}
+    </section>`;
+}
+
+// ONE TAB, TWO TOOLS, TWO SWITCHES. Listing Health shows whichever halves the
+// reader holds — grant only the alarm and that is the whole page; grant only
+// Categories and the page is what it was before the alarm existed. The pill
+// itself is data-feature-any over the same two keys, so it appears for either.
+//
+// ⚠️ Read the SERVER's answer where we have it (`_rcData.scope.mayPhotos`), and
+// fall back to the local switch only before the first payload lands. The two
+// agree by construction — same keys, same override table — but the server is the
+// one that decides whether the data arrives, so a section drawn from the local
+// answer alone can render a heading over a 403.
+function _lhMay(half) {
+    const scope = _lhScope || _rcData?.scope;
+    const key = half === 'photos' ? 'mayPhotos' : 'mayCats';
+    if (scope && typeof scope[key] === 'boolean') return scope[key];
+    return typeof _jumpFeatureVisible === 'function'
+        ? _jumpFeatureVisible(half === 'photos' ? 'ec-view-photos' : 'ec-view-categories')
+        : true;
+}
+
+function _lhHtml() {
+    // No Upload drawer here — it lives at the bottom of the All Stores page,
+    // with the other whole-estate things. This page is the daily one.
+    const photos = _lhMay('photos') ? _lhPhotosHtml() : '';
+    const cats = _lhMay('cats') ? _lhCatsHtml() : '';
+    // Reachable only by a race: the pill needs one of the two, so losing both
+    // between the click and the render means an override changed underneath.
+    // Say that, rather than drawing an empty page that looks broken.
+    if (!photos && !cats) {
+        return '<div class="ec-empty">Listing Health is not switched on for you.</div>';
+    }
+    return photos + cats;
+}
+
+// --- the photo alarm --------------------------------------------------------
+//
+// Live on the online store, zero photographs. Read-only on purpose: the fix is
+// a camera and a Shopify upload, so every row carries the SKU to find the unit
+// by and a link to the page to fix it on, and offers no button that could only
+// ever mean "I did it somewhere else".
+//
+// See the 0065 migration for what is deliberately NOT counted here — 515
+// in-stock products with no photos that were never published. That is a real
+// and much bigger problem, and folding it in would turn the one number in this
+// panel that should read zero into a 500-row backlog nobody could alarm on.
+function _lhPhotosHtml() {
+    const store = _ecEsc(_ecStore || '');
+    const head = (inner, badge) => _lhSec('Photos', 'Live With No Photos', inner, badge);
+
+    // ⚠️ A FAILED CHECK IS NOT AN ALL CLEAR. Same rule the All Stores card
+    // follows: drawing the calm green line for a request that never answered
+    // would be a lie about the storefront, and a zero nobody can trust is worth
+    // less than no zero at all.
+    if (_lhPhotoErr) {
+        return head(`<div class="lh-unknown">
+            <span class="lh-unknown-t">Could Not Check ${store}</span>
+            <span class="lh-why">${_ecEsc(_lhPhotoErr)}</span>
+            <span class="lh-why">This is not an all clear — nobody has looked yet.</span>
+          </div>`);
+    }
+    if (!_lhPhotos) return '';
+
+    const q = _lhPhotos.queue || [];
+    if (!q.length) {
+        return head(`<div class="lh-clear">
+            <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>All Clear — Every Listing Live At ${store} Has A Photo</span>
+          </div>`, '<span class="lh-count lh-count-ok">0</span>');
+    }
+
+    const n = q.length;
+    const rows = q.map(p => {
+        // ⚠️ THE ADMIN LINK NEEDS THE NUMERIC ID, not the handle — a
+        // handle-based admin URL 404s and looks perfectly right until clicked.
+        const numeric = _ecEsc(String(p.productId || '').split('/').pop());
+        const shop = _ecEsc(p.shop || '');
+        return `
+        <tr class="cb-row">
+          <td><div class="rc-title">${_ecEsc(p.title || 'Untitled Listing')}</div></td>
+          <td class="cb-col-status"><span class="lh-sku">${_ecEsc(p.sku || '—')}</span></td>
+          <td class="cb-col-status">${_ecMoney(p.price)}</td>
+          <td class="cb-col-status">${p.quantity > 0
+              ? `<span class="lh-instock">${p.quantity}</span>`
+              : '<span class="lh-soldout">Sold Out</span>'}</td>
+          <td class="cb-col-status"><span class="lh-since${_lhStale(p.listedAt) ? ' lh-stale' : ''}">${_lhFor(p.listedAt)}</span></td>
+          <td class="cb-col-status">
+            <div class="ec-pills rc-links">
+              ${p.handle ? `<a class="ec-pill ec-pill-store" href="https://${shop}/products/${_ecEsc(p.handle)}"
+                   target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}
+              ${numeric ? `<a class="ec-pill ec-pill-shopify" href="https://${shop}/admin/products/${numeric}"
+                   target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
+            </div>
+          </td>
+        </tr>`;
+    }).join('');
+
+    // Plain English, and it says who fixes it — the house rule for anything
+    // that reads as an alert. "image_count = 0" is not a sentence anybody can act on.
+    const said = `<div class="lh-alarm">
+        <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>${n === 1 ? 'One listing is' : n + ' listings are'} live on ${store}'s online store with no
+        photograph, so a shopper reaching ${n === 1 ? 'it' : 'them'} sees an empty square.
+        <strong>The store fixes ${n === 1 ? 'this' : 'these'}</strong> — open the SKU in Shopify and add photos.</span>
+      </div>`;
+
+    return head(said + `
+      <table class="cb-table rc-table lh-table">
+        <thead><tr>
+          <th style="width:34%;">Item</th>
+          <!-- The SKU gets its OWN column rather than the faint line under the
+               title it has in the Categories queue. This is the thing somebody
+               reads out to a manager, or walks the floor holding — it has to be
+               findable at a glance, not hunted for in a subtitle. -->
+          <th style="width:16%;" class="cb-col-status">SKU</th>
+          <th style="width:10%;" class="cb-col-status">Price</th>
+          <th style="width:8%;"  class="cb-col-status">Stock</th>
+          <!-- How long a shopper has been able to see the empty square. It is
+               the only urgency signal on the row, and the difference between
+               "listed an hour ago, the photos are coming" and a month. -->
+          <th style="width:14%;" class="cb-col-status">Live For</th>
+          <th style="width:18%;" class="cb-col-status">Open</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`, `<span class="lh-count lh-count-bad">${n}</span>`);
+}
+
+// --- the filing queue, unchanged, in a section ------------------------------
+// _rcHtml is untouched: its three tabs, its skipped list and every state it
+// carries work exactly as they did as a whole view.
+function _lhCatsHtml() {
+    const c = _rcData?.counts;
+    const total = c ? (c.other || 0) + (c.misfiled || 0) + (c.unmatched || 0) : null;
+    return _lhSec('Categories', 'Waiting On A Category', _rcHtml(),
+        total == null ? ''
+          : `<span class="lh-count${total ? ' lh-count-warn' : ' lh-count-ok'}">${total}</span>`);
 }
 
 // --- Categories: filing the `other` pile ------------------------------------
@@ -45086,6 +45497,68 @@ function _rcNagBubbleEl() {
     return b;
 }
 
+// --- Listings live on the online store with no picture ----------------------
+//
+// Rides the SAME ?view=counts fetch as the Categories nag rather than adding a
+// second request: this runs on a 30-minute timer on every dashboard load, both
+// numbers come back in one payload, and two pollers for one endpoint is just a
+// bigger bill for the same answer.
+//
+// ⚠️ The bubble id has to be in the RETIRED FLOATING ALERT TOASTS list in
+// styles.css or it ships as a visible floating toast. It is there.
+function _lhHideNag() {
+    const b = document.getElementById('photoAlertBubble');
+    if (b) b.style.display = 'none';
+}
+window._lhHideNag = _lhHideNag;
+
+function _lhNagBubbleEl() {
+    let b = document.getElementById('photoAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'photoAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #b91c1c, #7f1d1d); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(127, 29, 29, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span style="font-size:16px; flex-shrink:0; margin-top:2px;">📷</span>
+        <span id="photoAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="_lhHideNag()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+// Called from inside checkCategoryQueueReminders with that function's payload,
+// BEFORE its own early-returns — the two queues empty independently, and a store
+// with a clean category queue must still hear about a photo-less listing.
+function _lhUpdateNag(d, stores) {
+    const n = stores.reduce((t, s) => t + (d.photos?.[s] || 0), 0);
+    if (!n) { _lhHideNag(); return; }
+    const b = _lhNagBubbleEl();
+    if (!b) return;
+    const t = document.getElementById('photoAlertBubbleText');
+    if (t) {
+        const where = stores.length > 1 ? stores.join(' & ') : (stores[0] || 'Your store');
+        // Says what a shopper sees, not what the table contains. "1 listing with
+        // no image_count" is a database sentence; an empty picture box is the
+        // thing that costs the sale, and it tells the reader why to care.
+        // "BAL & MPL has" is wrong; the verb follows the SUBJECT (the stores),
+        // not the count. A two-store MSM reads this line every day.
+        t.dataset.summary = where + (stores.length > 1 ? ' have ' : ' has ')
+            + n + ' listing' + (n === 1 ? '' : 's')
+            + ' live on the online store with no pictures — a shopper sees an empty box, so '
+            + (n === 1 ? 'it will' : 'they will') + ' not sell. Add a photo in Shopify.';
+        // The count IS the identity, same as the Categories nag: photograph one
+        // of three and the remaining two are new information worth surfacing
+        // again; photograph them all and the card leaves on its own.
+        t.dataset.sig = 'photos:' + n;
+        t.dataset.stores = stores.join(',');
+        t.textContent = t.dataset.summary;
+    }
+    b.style.display = 'flex';
+}
+
 async function checkCategoryQueueReminders() {
     // THE DECK IS THE ONLY PLACE THIS IS EVER SEEN. The bubble is an invisible
     // state-carrier for _samGatherReminders, and the feed lives on the dashboard
@@ -45094,25 +45567,40 @@ async function checkCategoryQueueReminders() {
     // panel is closed to a 401 in their console on every page.
     if (!document.getElementById('samFeed')) return;
     // The same switch as the button: no tool, no nag about the tool.
-    if (typeof _jumpFeatureVisible === 'function' && !_jumpFeatureVisible('ec-view-categories')) {
-        _rcHideNag(); return;
+    // EITHER half is reason enough to poll — the two nags have separate switches
+    // now. Which cards then appear is decided by the payload: the server OMITS
+    // the counts for a half you do not hold, so the `|| 0` below reads as
+    // "nothing to do" and that nag hides itself. No second gate needed here.
+    if (typeof _jumpFeatureVisible === 'function'
+        && !_jumpFeatureVisible('ec-view-categories') && !_jumpFeatureVisible('ec-view-photos')) {
+        _rcHideNag(); _lhHideNag(); return;
     }
     const pin = sessionStorage.getItem('speeksUserPin') || '';
-    if (!pin) { _rcHideNag(); return; }
+    if (!pin) { _rcHideNag(); _lhHideNag(); return; }
     if (!_rcNagStarted) { _rcNagStarted = true; setInterval(checkCategoryQueueReminders, RECAT_NAG_MS); }
     // ?view=counts, not ?view=review: the review payload carries a whole store
     // queue with it, and this runs on a timer on every page.
     let d = null;
     try { d = await _rcFetch('?view=counts'); } catch (_) { return; }  // a 401 is a role answer, not an error to show
-    if (!d || d.scope?.corp) { _rcHideNag(); return; }
+    if (!d || d.scope?.corp) { _rcHideNag(); _lhHideNag(); return; }
     const stores = d.scope?.stores || [];
+    // Before the category early-return below, so an empty category queue cannot
+    // swallow a photo alarm on the same store.
+    _lhUpdateNag(d, stores);
     const other = stores.reduce((n, s) => n + (d.other?.[s] || 0), 0);
     const mis = stores.reduce((n, s) => n + (d.misfiled?.[s] || 0), 0);
     // The No Suggestion pile counts here too, and it is the half that had NO
     // screen at all until now. Leaving it out of the nag would be the same bug
     // one level up: work that exists and nothing that says so.
     const unm = stores.reduce((n, s) => n + (d.unmatched?.[s] || 0), 0);
-    if (!other && !mis && !unm) { _rcHideNag(); return; }
+    // Categories clean. The photo card may still have just appeared, and the
+    // feed only repaints when something asks it to — so this path has to render
+    // before it leaves, or the alarm sits in the DOM unseen until the next tick.
+    if (!other && !mis && !unm) {
+        _rcHideNag();
+        if (typeof renderActionFeed === 'function') renderActionFeed();
+        return;
+    }
     const b = _rcNagBubbleEl();
     if (!b) return;
     const t = document.getElementById('recatAlertBubbleText');
