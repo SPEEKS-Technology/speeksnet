@@ -17503,11 +17503,11 @@ function _b2bStagePreval(v) {
             ${frozen}${expiredNote}
             ${dates}
             ${_b2bTotalsBar(true)}
-            ${_b2bCustPanel(_b2bQuoteSubject_src())}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             ${open ? `<button class="b2b-btn b2b-btn-secondary b2b-add"
-                onclick="b2bAddItem('${v.id}',this)">＋ Add Line Item</button>` : ''}`,
+                onclick="b2bAddItem('${v.id}',this)">＋ Add Line Item</button>` : ''}
+            ${_b2bQuoteClientBlock(_b2bQuoteSubject_src())}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bPrevalActions(v, canMove)}
@@ -20268,10 +20268,10 @@ function _b2bStagePricing(deal) {
             ${_b2bPrevalOriginNote(deal)}
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${_b2bTotalsBar(true)}
-            ${_b2bCustPanel(deal)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
-            <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
+            <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
+            ${_b2bQuoteClientBlock(deal)}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
@@ -20752,11 +20752,11 @@ function _b2bQuoteFootNotes(items) {
 // document itself, no collapsible. Lives at the bottom of the review and quote
 // screens so the working sheet is what you land on and the quote is there to
 // scroll to when you want to check it.
-function _b2bQuoteClientBlock(deal) {
+function _b2bQuoteClientBlock(subject) {
     return `
         <div class="b2b-clientquote">
             <div class="b2b-clientquote-h">Quote for the client</div>
-            <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
+            <div id="b2bQuoteDoc">${_b2bQuoteDoc(subject, _b2bModalItems)}</div>
         </div>`;
 }
 
