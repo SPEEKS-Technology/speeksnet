@@ -19744,7 +19744,9 @@ function _b2bSelText() {
             }
             line.push(String(v).replace(/\s+/g, ' ').trim());
         }
-        out.push(line.join('\t'));
+        // Space-joined with empty cells dropped -- readable spacing, not TSV
+        // columns (the user prefers plain spacing over Excel tab formatting).
+        out.push(line.filter(v => v !== '').join(' '));
     }
     return out.join('\n');
 }
