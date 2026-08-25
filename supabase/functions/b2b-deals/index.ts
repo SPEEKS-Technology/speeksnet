@@ -123,7 +123,9 @@ const ACCEPT_ROLES = ["ceo", "mocd", "tom", "district manager"];
 // a reason, and it would stop silently. Must match B2B_REASON_CONDITIONS in
 // speeks.js -- if these two disagree, the gate passes on one side and fails on
 // the other.
-const REASON_CONDITIONS = ["Fair", "Broken", "For Parts"];
+// Fair no longer requires a reason -- only Broken (and its legacy 'For Parts'
+// spelling). Must match B2B_REASON_CONDITIONS in speeks.js.
+const REASON_CONDITIONS = ["Broken", "For Parts"];
 const DECLINE_CATEGORIES = ["client_declined", "client_unresponsive", "withdrawn", "not_viable", "other"];
 const TERMINAL = ["completed", "declined"];
 

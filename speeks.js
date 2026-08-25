@@ -18291,11 +18291,12 @@ function _b2bTagsOf(str)  { return String(str || '').split(';').map(s => s.trim(
 function _b2bPresetNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => B2B_NOTE_TAGS.includes(t)); }
 function _b2bCustomNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => !B2B_NOTE_TAGS.includes(t)).join('; '); }
 
-// Anything downgraded to Fair or Broken has to say why: that note prints on
-// the quote and is the only thing standing between a low offer and an argument
-// with the client later. Keeps the legacy 'For Parts' spelling so the gate can
-// never quietly stop firing on an older row -- see B2B_COND_LEGACY.
-const B2B_REASON_CONDITIONS = ['Fair', 'Broken', ...B2B_COND_LEGACY];
+// Anything downgraded to Broken has to say why: that note prints on the quote
+// and is the only thing standing between a low offer and an argument with the
+// client later. Fair no longer requires it (a Fair item is common enough that a
+// reason is not always warranted). Keeps the legacy 'For Parts' spelling so the
+// gate can never quietly stop firing on an older row -- see B2B_COND_LEGACY.
+const B2B_REASON_CONDITIONS = ['Broken', ...B2B_COND_LEGACY];
 function _b2bNeedsReason(it)   { return B2B_REASON_CONDITIONS.includes(it.condition); }
 function _b2bMissingReason(it) { return _b2bNeedsReason(it) && !String(it.client_notes || '').trim(); }
 // Deliberately no `unreasoned()` helper: a second, weaker gate alongside
