@@ -1374,20 +1374,17 @@ Deno.serve(async (req: Request) => {
             }
             if (units > wipeRoom) units = wipeRoom;
           }
-          // Scanning a barcode that is ALREADY on this line means the same Shopify
+          // Scanning a barcode that is ALREADY on THIS line means the same Shopify
           // listing is covering more of the line's units than first recorded --
           // add the scanned quantity to that listing rather than refusing it. The
           // room/wipe caps above already exclude the units it holds (listed_qty is
-          // SUM(units)), so this can't push the line past its quantity. The same
-          // barcode on a DIFFERENT line is still a real conflict: one Shopify
-          // listing cannot be two different units. The system-wide unique index is
-          // the backstop for both.
+          // SUM(units)), so this can't push the line past its quantity. A barcode
+          // may also be attached to OTHER lines (one listing can span units that
+          // were split across our line items), so the lookup is scoped to this
+          // item; uniqueness is (item_id, shopify_barcode), not global -- see 0054.
           const { data: existing } = await supabase.from("b2b_item_listings")
-            .select("id, item_id, units").eq("shopify_barcode", code).maybeSingle();
+            .select("id, units").eq("item_id", item.id).eq("shopify_barcode", code).maybeSingle();
           if (existing) {
-            if (existing.item_id !== item.id) {
-              return jsonResponse({ success: false, error: `Barcode ${code} is already recorded against another line.` }, 409);
-            }
             const { error } = await supabase.from("b2b_item_listings")
               .update({ units: (Number(existing.units) || 1) + units }).eq("id", existing.id);
             if (error) {
@@ -1402,11 +1399,12 @@ Deno.serve(async (req: Request) => {
               listed_by: str(body.user, 80, "User"),
             });
             if (error) {
-              // 23505 is unique_violation -- another request inserted this same
-              // barcode between our check and this insert. On another line it is a
-              // real conflict; the check above already merged it when it was ours.
+              // 23505 is unique_violation on (item_id, shopify_barcode) -- another
+              // request added this same barcode to this same line between our check
+              // and this insert. The check above already merged it when it landed
+              // first; this is only the race.
               if (error.code === "23505") {
-                return jsonResponse({ success: false, error: `Barcode ${code} is already recorded against another line.` }, 409);
+                return jsonResponse({ success: false, error: `Barcode ${code} was just added to this line — scan it again to add more.` }, 409);
               }
               // 23514 is check_violation -- the listed+recycled<=quantity backstop
               // firing means the capacity check above raced with another lister.
