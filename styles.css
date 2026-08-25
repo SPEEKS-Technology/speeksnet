@@ -13004,13 +13004,13 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    wants the width for its columns and the height to show as many rows as it can.
    The generic wide modal stays 1080; this one goes bigger and taller. */
 .b2b-deal-modal.b2b-modal-full {
-    /* 99vw, not 97: sixteen honest columns come to ~1354px and 97vw of a 1440px
-       screen leaves 1335 of usable width after .manage-content's padding, so the
-       sheet panned sideways on the commonest desktop size for the sake of 20px.
-       This is a full-bleed working surface -- it already takes 92vh -- so the
-       margin is better spent on the grid than on the backdrop. */
-    width: min(1650px, 99vw); max-width: 99vw;
-    height: 92vh; max-height: 92vh;
+    /* Full-size working surface: the pricing/quote/listing sheets are wide and
+       dense, so this modal takes essentially the whole screen -- 99vw wide and
+       96vh tall -- rather than capping at a fixed width. No px cap, so a big
+       monitor gets all of it; the 1vw/4vh left over just keeps a hair of the
+       backdrop visible so it still reads as a modal. */
+    width: 99vw; max-width: 99vw;
+    height: 96vh; max-height: 96vh;
 }
 /* Never clip the acts column on a narrow laptop -- scroll the body instead. */
 .b2b-deal-modal.b2b-modal-full > .manage-content {
