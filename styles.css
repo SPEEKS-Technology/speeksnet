@@ -11963,6 +11963,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-btn:disabled { opacity: .45; cursor: not-allowed; }
 .b2b-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(31,157,87,.16); }
 .b2b-add { margin-top: 12px; width: 100%; }
+/* Sheet toolbar: Add Line stretches, Sort hugs its label on the right. The row
+   owns the top margin so the buttons inside sit flush. */
+.b2b-sheet-actions { display: flex; gap: 10px; margin-top: 12px; }
+.b2b-sheet-actions .b2b-add { margin-top: 0; width: auto; flex: 1 1 auto; }
+.b2b-sortbtn { flex: 0 0 auto; white-space: nowrap; }
 .b2b-foot-note { font-size: 11.5px; color: var(--b2b-faint); align-self: center; }
 
 /* `.manage-footer button` (0,1,1) outranks `.b2b-btn` (0,1,0) and was giving

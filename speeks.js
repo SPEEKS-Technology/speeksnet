@@ -18919,6 +18919,63 @@ async function b2bDrop(ev, id) {
     }
 }
 
+// One-tap tidy of the sheet: group the lines by brand (A→Z), and within each
+// brand keep every line of a model together, ordering those model groups by
+// their most valuable line first. Same persistence as a drag -- it rewrites
+// sort_order through reorder_items, so the quote and the next person to open the
+// deal both see the arranged order. Brands stay alphabetical (it's "sort by
+// brand"); only the models within a brand are ranked by value.
+async function b2bSortItems(btn) {
+    const items = _b2bModalItems;
+    if (!items || items.length < 2) return;
+    const before = items.slice();
+
+    const val      = it => Number(it.value) || 0;
+    const brandKey = it => String(it.make  || '').trim().toLowerCase();
+    const modelKey = it => String(it.model || '').trim().toLowerCase();
+    const groupKey = it => `${brandKey(it)} ${modelKey(it)}`;
+
+    // A model group ranks by its best line, so all lines of one model stay
+    // adjacent even when their own values differ.
+    const groupVal = new Map();
+    for (const it of items) {
+        const k = groupKey(it);
+        groupVal.set(k, Math.max(groupVal.get(k) ?? -Infinity, val(it)));
+    }
+
+    const sorted = items.slice().sort((a, b) => {
+        const ba = brandKey(a), bb = brandKey(b);
+        if (ba !== bb) {                       // brand A→Z, blank brands last
+            if (!ba) return 1;
+            if (!bb) return -1;
+            return ba < bb ? -1 : 1;
+        }
+        const ga = groupVal.get(groupKey(a));  // highest-value model group first
+        const gb = groupVal.get(groupKey(b));
+        if (ga !== gb) return gb - ga;
+        const ma = modelKey(a), mb = modelKey(b);
+        if (ma !== mb) return ma < mb ? -1 : 1; // tie on value → keep model names together
+        return val(b) - val(a);                // same model → dearer line first
+    });
+
+    // Nothing moved -- don't churn the server or dirty the deal.
+    if (sorted.every((it, i) => it.id === before[i].id)) return;
+
+    _b2bModalItems = sorted;
+    _b2bRepaintItems();
+    _b2bPaintQuoteDoc();
+    try {
+        await _b2bSend({ action: 'reorder_items', deal_id: _b2bModalDeal.id,
+                         order: sorted.map(i => i.id) });
+        _b2bDirty = true;
+    } catch (e) {
+        _b2bModalItems = before;
+        _b2bRepaintItems();
+        _b2bPaintQuoteDoc();
+        _b2bSay(`Couldn't save the new order: ${e.message}`, true);
+    }
+}
+
 // The key to the coloured bars down the left of the sheet. Always rendered
 // rather than only when a non-purchase line exists: the grid repaints on its
 // own (_b2bRepaintItems touches #b2bItemGrid alone), so a legend that appeared
@@ -20283,7 +20340,14 @@ function _b2bStagePricing(deal) {
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
-            <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
+            <div class="b2b-sheet-actions">
+                <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
+                ${!_b2bIsPreval() && _b2bModalItems.length > 1
+                    ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
+                        title="Group lines by brand, then by model — highest-value models first"
+                        onclick="b2bSortItems(this)">↕ Sort by brand</button>`
+                    : ''}
+            </div>
             ${_b2bQuoteClientBlock(deal)}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
