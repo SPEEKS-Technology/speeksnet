@@ -18919,12 +18919,12 @@ async function b2bDrop(ev, id) {
     }
 }
 
-// One-tap tidy of the sheet: group the lines by brand (A→Z), and within each
-// brand keep every line of a model together, ordering those model groups by
-// their most valuable line first. Same persistence as a drag -- it rewrites
+// One-tap tidy of the sheet: group the lines by brand, then keep every line of
+// a model together within its brand. Both levels are ranked by value -- the
+// highest-value brand leads, and inside it the highest-value model group leads
+// -- so the dearest kit sits at the top. Same persistence as a drag: it rewrites
 // sort_order through reorder_items, so the quote and the next person to open the
-// deal both see the arranged order. Brands stay alphabetical (it's "sort by
-// brand"); only the models within a brand are ranked by value.
+// deal both see the arranged order.
 async function b2bSortItems(btn) {
     const items = _b2bModalItems;
     if (!items || items.length < 2) return;
@@ -18935,20 +18935,25 @@ async function b2bSortItems(btn) {
     const modelKey = it => String(it.model || '').trim().toLowerCase();
     const groupKey = it => `${brandKey(it)} ${modelKey(it)}`;
 
-    // A model group ranks by its best line, so all lines of one model stay
-    // adjacent even when their own values differ.
+    // Each brand and each model group ranks by its best line, so a whole brand
+    // (and a whole model within it) stays together while the dearest kit floats
+    // to the top.
+    const brandVal = new Map();
     const groupVal = new Map();
     for (const it of items) {
-        const k = groupKey(it);
-        groupVal.set(k, Math.max(groupVal.get(k) ?? -Infinity, val(it)));
+        const bk = brandKey(it), gk = groupKey(it);
+        brandVal.set(bk, Math.max(brandVal.get(bk) ?? -Infinity, val(it)));
+        groupVal.set(gk, Math.max(groupVal.get(gk) ?? -Infinity, val(it)));
     }
 
     const sorted = items.slice().sort((a, b) => {
         const ba = brandKey(a), bb = brandKey(b);
-        if (ba !== bb) {                       // brand A→Z, blank brands last
+        if (ba !== bb) {                       // highest-value brand first, blank brands last
             if (!ba) return 1;
             if (!bb) return -1;
-            return ba < bb ? -1 : 1;
+            const va = brandVal.get(ba), vb = brandVal.get(bb);
+            if (va !== vb) return vb - va;
+            return ba < bb ? -1 : 1;           // tie on value → brand name A→Z
         }
         const ga = groupVal.get(groupKey(a));  // highest-value model group first
         const gb = groupVal.get(groupKey(b));
@@ -20344,7 +20349,7 @@ function _b2bStagePricing(deal) {
                 <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
                 ${!_b2bIsPreval() && _b2bModalItems.length > 1
                     ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
-                        title="Group lines by brand, then by model — highest-value models first"
+                        title="Group by brand then model, highest value first at both levels"
                         onclick="b2bSortItems(this)">↕ Sort by brand</button>`
                     : ''}
             </div>
