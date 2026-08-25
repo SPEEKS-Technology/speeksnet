@@ -18438,6 +18438,30 @@ function _b2bLineMarginHtml(it) {
     return `<span class="${m.cls}" id="b2bMg-${it.id}" title="${escapeHtml(m.tip)}">${m.text}</span>`;
 }
 
+// Per-line figures for the sheet's Margin / Net margin columns. Gross = resale
+// value − our offer. Net also nets shipping + the marketplace fee and adds the
+// data-wipe fee back (it is discounted off what we pay). Same value/offer
+// handling as _b2bLineMargin: scrap has no value, a no-residual line pays 0.
+function _b2bLineFig(it) {
+    const q = Number(it.quantity) || 1;
+    const value = _b2bIsScrap(it) ? 0 : (Number(it.value) || 0) * q;
+    const offer = _b2bIsBuy(it) ? (Number(it.offer) || 0) * q : 0;
+    const ship = (Number(it.shipping_cost) || 0) * q;
+    const fee = _b2bFeeOn(value);
+    const wipe = _b2bWipeTotal(it);
+    return { value, offer, ship, fee, wipe, gross: value - offer, net: value - offer - ship - fee + wipe };
+}
+function _b2bLineGrossHtml(it) {
+    const f = _b2bLineFig(it);
+    if (f.value <= 0 && f.offer <= 0) return `<span class="b2b-f-off" id="b2bGr-${it.id}">—</span>`;
+    return `<span class="b2b-f-mgn${f.gross < 0 ? ' bad' : ''}" id="b2bGr-${it.id}" title="Resale value − our offer">${_b2bMoney(f.gross, 2)}</span>`;
+}
+function _b2bLineNetHtml(it) {
+    const f = _b2bLineFig(it);
+    if (f.value <= 0 && f.offer <= 0 && !f.ship) return `<span class="b2b-f-off" id="b2bNm-${it.id}">—</span>`;
+    return `<span class="b2b-f-mgn${f.net < 0 ? ' bad' : ''}" id="b2bNm-${it.id}" title="Value − offer − shipping − selling fees + data wipe">${_b2bMoney(f.net, 2)}</span>`;
+}
+
 // A one-line preview of whatever was written about this line.
 //
 // Client notes print on the client's quote; staff notes never leave the
@@ -19047,6 +19071,23 @@ function _b2bPaintTotals() {
             mel.className = m.cls;
             mel.title = m.tip;
             mel.textContent = m.text;
+        }
+        // The sheet's Margin (gross) + Net margin cells move with value/offer/
+        // shipping too, so they repaint on this same pass.
+        const gel = document.getElementById(`b2bGr-${it.id}`);
+        const nel = document.getElementById(`b2bNm-${it.id}`);
+        if (gel || nel) {
+            const f = _b2bLineFig(it);
+            if (gel) {
+                const off = f.value <= 0 && f.offer <= 0;
+                gel.className = off ? 'b2b-f-off' : ('b2b-f-mgn' + (f.gross < 0 ? ' bad' : ''));
+                gel.textContent = off ? '—' : _b2bMoney(f.gross, 2);
+            }
+            if (nel) {
+                const off = f.value <= 0 && f.offer <= 0 && !f.ship;
+                nel.className = off ? 'b2b-f-off' : ('b2b-f-mgn' + (f.net < 0 ? ' bad' : ''));
+                nel.textContent = off ? '—' : _b2bMoney(f.net, 2);
+            }
         }
     });
     const submit = document.getElementById('b2bPrSubmit');
@@ -19879,8 +19920,9 @@ function _b2bItemSheet() {
                 f.req ? '<i class="b2b-req-star" title="Required before this can be quoted">*</i>' : ''}</span>`).join('')}
             <span>Condition</span>
             <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span>
+            <span class="r" title="Resale value − our offer">Margin</span>
             <span class="r" title="What it costs us to move one of these, per unit. Never shown to the client.">Ship</span>
-            <span class="r">Margin</span>
+            <span class="r" title="Value − offer − shipping − selling fees + data wipe">Net margin</span>
             <span>Handling</span><span class="c">Wipe</span>
             <span title="Prints on the client's quote. Required on a Fair or Broken line.">Client Notes</span>
             <span class="r">Total</span><span></span>
@@ -19968,17 +20010,18 @@ function _b2bItemSheet() {
                     ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
+                <span class="b2b-pcell n b2b-pc-mgn" data-k="Margin">
+                    ${_b2bLineGrossHtml(it)}</span>
                 <!-- Blank on a recycle line, like Value and Offer: we do not pay
                      to ship scrap, so zero is the true figure rather than a
-                     rounding of one. All three money columns now agree that a
-                     recycle line costs nothing and earns nothing. -->
+                     rounding of one. -->
                 <span class="b2b-pcell n" data-k="Ship">
                     ${scrap ? '<span class="b2b-f-off">—</span>'
                           : `<input type="number" min="0" step="0.01" value="${Number(it.shipping_cost) || 0}"
                         title="Our freight cost per unit — never shown to the client"
                         oninput="b2bItemInput('${it.id}','shipping_cost',this.value)" onchange="b2bItemSave('${it.id}')">`}</span>
-                <span class="b2b-pcell n b2b-pc-mgn" data-k="Margin">
-                    ${_b2bLineMarginHtml(it)}</span>
+                <span class="b2b-pcell n b2b-pc-mgn" data-k="Net margin">
+                    ${_b2bLineNetHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-disp" data-k="Handling">
                     <select data-tip="${escapeHtml(B2B_DISP[disp].hint)}" onchange="b2bItemDisposition('${it.id}',this.value)">
                         ${B2B_DISPOSITIONS.map(d => `<option value="${d.key}" ${disp === d.key ? 'selected' : ''}>${_B2B_DISP_SEL[d.key]}</option>`).join('')}
