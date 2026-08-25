@@ -12364,9 +12364,13 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    receive on the right, so the two are read against each other rather than one
    being imagined from the other. */
 .b2b-rvw-wrap {
-    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr);
+    display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.9fr);
     gap: 18px; align-items: start; margin-top: 14px;
 }
+/* The left column carries the P&L stats bar plus the offer-editable line list;
+   min-width:0 lets the list scroll horizontally inside itself rather than
+   forcing the whole split wider. */
+.b2b-rvw-main { min-width: 0; }
 /* Below ~1150px the two columns each become too narrow to read, and a quote is
    a document -- it wants width more than it wants adjacency. */
 @media (max-width: 1150px) { .b2b-rvw-wrap { grid-template-columns: 1fr; } }
@@ -12380,17 +12384,21 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     max-height: 620px; overflow-y: auto;
     border: 1px solid var(--b2b-line); border-radius: 12px; background: #f7f9fa; padding: 12px;
 }
-.b2b-rvw { border: 1px solid var(--b2b-line); border-radius: 12px; background: #fff; overflow: hidden; }
+/* The line list scrolls sideways rather than crushing its columns when the left
+   column is narrow (small screens, or the split above ~1150px). */
+.b2b-rvw { border: 1px solid var(--b2b-line); border-radius: 12px; background: #fff; overflow-x: auto; }
 .b2b-rvw-head, .b2b-rvw-row {
-    display: grid; grid-template-columns: minmax(0, 1fr) 46px 62px 96px 92px;
-    gap: 10px; align-items: center; padding: 9px 13px;
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) 38px 68px 92px 54px 60px 54px 82px;
+    gap: 9px; align-items: center; padding: 9px 13px; min-width: 620px;
 }
 .b2b-rvw-head {
     font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
     color: var(--b2b-faint); background: #f7f9fa; border-bottom: 1px solid var(--b2b-line);
 }
 .b2b-rvw-head .c, .b2b-rvw-qty { text-align: center; }
-.b2b-rvw-head .r, .b2b-rvw-mgn, .b2b-rvw-tot { text-align: right; }
+.b2b-rvw-head .r,
+.b2b-rvw-val, .b2b-rvw-mgn, .b2b-rvw-ship, .b2b-rvw-net, .b2b-rvw-tot { text-align: right; }
 .b2b-rvw-row { border-bottom: 1px solid var(--b2b-line-2); }
 .b2b-rvw-row:last-child { border-bottom: 0; }
 /* Same two tints the sheet uses, so a scrap line looks like a scrap line
@@ -12403,6 +12411,8 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    assumed -- it is the half of the line the client actually reads. */
 .b2b-rvw-note { font-size: 11.5px; color: #475569; margin-top: 3px; font-style: italic; }
 .b2b-rvw-qty { font-size: 13px; font-weight: 700; color: var(--b2b-faint); }
+.b2b-rvw-val, .b2b-rvw-ship { font-size: 12.5px; color: #475569; }
+.b2b-rvw-mgn, .b2b-rvw-net { font-size: 12.5px; font-weight: 700; }
 .b2b-rvw-tot { font-size: 13.5px; font-weight: 800; color: #1a1c1e; }
 .b2b-rvw-offer input {
     font: inherit; font-size: 13px; font-weight: 700; text-align: right; width: 100%;
