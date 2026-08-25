@@ -422,12 +422,13 @@ async function summaryFor(store: string) {
   const [ebayRow, liveRun] = await Promise.all([
     rows(`ebay_stores?store_code=eq.${encodeURIComponent(store)}`
        + `&select=ebay_user_id,environment,merchant_location_key,payment_policy_id,`
-       + `return_policy_id,fulfillment_policy_id,installed_at`),
+       + `return_policy_id,fulfillment_policy_id,installed_at,`
+       + `channel_mode,channel_mode_at,channel_mode_by,channel_mode_note`),
     rows(`ebay_live_runs?store_code=eq.${encodeURIComponent(store)}&select=*`),
   ]);
   const st = ebayRow[0] || null;
   if (!st) {
-    return { store, connected: false,
+    return { store, connected: false, channelMode: "active",
              counts: { live: 0, ended: 0, disabled: 0, failed: 0, total: 0 },
              setup: null, freshness: { liveMinutes: null, liveError: null } };
   }
@@ -441,6 +442,13 @@ async function summaryFor(store: string) {
     connected: true,
     ebayUserId: st.ebay_user_id || null,
     environment: st.environment || null,
+    // Which system owns this store's eBay account. Sent on every load, not only
+    // when something is refused — a store that opens SPEEKS Connect while it is
+    // parked should be told so BEFORE they scan a SKU and read the 409 as a bug.
+    channelMode: String(st.channel_mode || "active"),
+    channelModeAt: st.channel_mode_at || null,
+    channelModeBy: st.channel_mode_by || null,
+    channelModeNote: st.channel_mode_note || null,
     setup: {
       merchantLocation: !!st.merchant_location_key,
       paymentPolicy: !!st.payment_policy_id,
@@ -567,7 +575,12 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
 
   if (!store) return json({ error: "forbidden", detail: "that store is not yours" }, 403);
   if (!scope.canList) return json({ error: "forbidden" }, 403);
-  if (!sku) return json({ error: "pass a sku" }, 400);
+  // Every action here is about one listing EXCEPT these two, which are about the
+  // channel itself — which system owns the store's eBay account, and a snapshot
+  // of what was ours before the other one took it. Demanding a sku for those
+  // would refuse them with a message about the wrong thing entirely.
+  const CHANNEL_ACTIONS = new Set(["mode", "handover"]);
+  if (!sku && !CHANNEL_ACTIONS.has(action)) return json({ error: "pass a sku" }, 400);
 
   // A STORE WITH NO eBay CONNECTION HAS TO BE REFUSED HERE, NOT LATER.
   // ebay_listings.store_code is a foreign key into ebay_stores, so the attempt
@@ -763,6 +776,133 @@ async function handleAction(req: Request, scope: Scope): Promise<Response> {
     });
     return json({ ok: true, store, sku, was: st, status: "dismissed" });
   }
+
+  // ------------------------------------------------------------------------
+  // BREAK GLASS — hand the channel back, or park it.
+  //
+  // POST { action: "mode", store, mode: "active" | "standby", note? }
+  //
+  // Standby is what makes it safe to leave SPEEKS Connect standing while
+  // Marketplace Connect owns the eBay account: everything is still here, nothing
+  // runs by itself. This is the switch, and it is a ROUTE rather than a SQL
+  // update on purpose — the day somebody needs to break the glass is a day MC is
+  // broken, which is not the day to be hunting for database access.
+  //
+  // DM/CEO only. Every other role can list, but which system owns a store's eBay
+  // account is a district decision, and taking the channel back at the wrong
+  // moment is how you get two of everything.
+  if (action === "mode") {
+    if (!scope.allStores) {
+      return json({
+        error: "only a District Manager or the CEO can change which system owns eBay",
+        detail: "Ask them to take the channel back in SPEEKS Connect.",
+      }, 403);
+    }
+    const want = String(body.mode || "").toLowerCase().trim();
+    if (want !== "active" && want !== "standby") {
+      return json({ error: `mode must be "active" or "standby", not "${want}"` }, 400);
+    }
+    const cur = await rows(
+      `ebay_stores?store_code=eq.${encodeURIComponent(store)}&select=channel_mode`);
+    if (!cur.length) return json({ error: `no ebay_stores row for ${store}` }, 404);
+    const was = String(cur[0].channel_mode || "active");
+
+    await sb(`ebay_stores?store_code=eq.${encodeURIComponent(store)}`, {
+      method: "PATCH",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({
+        channel_mode: want,
+        channel_mode_at: new Date().toISOString(),
+        channel_mode_by: scope.name || scope.role,
+        channel_mode_note: String(body.note || "").slice(0, 500) || null,
+      }),
+    });
+
+    return json({
+      ok: true, store, was, mode: want,
+      // Say what actually changed, because "active" reads like a no-op switch
+      // and it is not — it re-arms four automatic write paths at once.
+      effect: want === "active"
+        ? `SPEEKS Connect will publish, import ${store}'s eBay orders, withdraw stock and `
+          + `sync prices again. If Marketplace Connect is still managing these listings, `
+          + `both systems will now import every sale.`
+        : `SPEEKS Connect will no longer publish, import orders, withdraw stock or sync `
+          + `prices for ${store}. The panel and every manual route keep working. Sweeps `
+          + `and alerting stay on.`,
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // HANDOVER SNAPSHOT — record what was OURS before MC adopts it.
+  //
+  // POST { action: "handover", store, batch? }
+  //
+  // ⚠️ TIME-SENSITIVE, AND IT DOES NOT COME BACK. Today "is this listing ours"
+  // has a definite answer: ours carry an ebay_offer_id and the Inventory API
+  // returns them, while an MC listing answers 25710 NOT FOUND. After MC's scan
+  // adopts ours, that test no longer separates them and ebay_live never did.
+  //
+  // Three questions later depend on having taken this:
+  //   - a duplicate order turns up: was that listing ever ours to reverse?
+  //   - we break the glass: which listings are we taking back?
+  //   - MC's scan claimed to cover everything: did it? A listing of ours that MC
+  //     did NOT adopt is now live on eBay and managed by nobody, which is the
+  //     failure standby itself introduces.
+  //
+  // Reads only ebay_listings — no eBay calls, so it is safe to run repeatedly
+  // and fast enough to do all five stores while somebody waits.
+  if (action === "handover") {
+    if (!scope.allStores) {
+      return json({ error: "District Manager or CEO only" }, 403);
+    }
+    const batch = String(body.batch || "").slice(0, 120)
+      || `pre-MC-adoption ${new Date().toISOString().slice(0, 10)}`;
+
+    const mine = await allRows(
+      `ebay_listings?store_code=eq.${encodeURIComponent(store)}`
+      + `&select=sku,ebay_listing_id,ebay_offer_id,shopify_variant_id,title,price,quantity,status`);
+    const liveSkus = new Set((await allRows(
+      `ebay_live?store_code=eq.${encodeURIComponent(store)}&select=sku`)).map((r: any) => r.sku));
+
+    // Every status, not just published. A snapshot filtered down to the happy
+    // rows cannot be reconciled against the table it came from, and 'ended' rows
+    // are exactly the ones reconcile() would have republished.
+    const payload = mine.map((r: any) => ({
+      store_code: store, sku: r.sku,
+      ebay_listing_id: r.ebay_listing_id ?? null,
+      ebay_offer_id: r.ebay_offer_id ?? null,
+      shopify_variant_id: r.shopify_variant_id ?? null,
+      title: r.title ?? null, price: r.price ?? null, quantity: r.quantity ?? null,
+      listing_status: r.status ?? null,
+      live_on_ebay: liveSkus.has(r.sku),
+      batch,
+    }));
+
+    if (payload.length) {
+      // merge-duplicates so re-running the same batch corrects it rather than
+      // failing halfway on the unique index.
+      await sb("ebay_handover?on_conflict=store_code,sku,batch", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(payload),
+      });
+    }
+
+    const published = payload.filter(p => p.listing_status === "published");
+    return json({
+      ok: true, store, batch,
+      captured: payload.length,
+      published: published.length,
+      // The interesting disagreements, surfaced now rather than left in the table.
+      publishedButNotLive: published.filter(p => !p.live_on_ebay).map(p => p.sku).slice(0, 20),
+      liveButNotPublished: [...liveSkus].filter(
+        s => !mine.some((m: any) => m.sku === s && m.status === "published")).length,
+      note: `${published.length} listing(s) at ${store} were ours and published at capture. `
+        + `Keep this: after Marketplace Connect adopts them, nothing else can tell `
+        + `ours apart from MC's.`,
+    });
+  }
+
   return json({ error: `unknown action "${action}"` }, 400);
 }
 

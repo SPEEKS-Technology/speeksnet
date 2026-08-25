@@ -13,10 +13,10 @@
 // reasoning as shopify-live.
 //
 // WHY INCREMENTAL IS THE DEFAULT. A full sweep of a store is 40+ paginated
-// GraphQL calls. Each page of 50 products with their variants and images costs
-// ~550 of Shopify's 1000-point budget, and the bucket restores at 100/s — so a
-// full sweep spends minutes mostly asleep. Products we care about are the ones
-// that just changed, and `updated_at:>` finds those in one or two pages.
+// GraphQL calls, and the cost bucket restores at 100/s, so a full sweep spends
+// much of its time asleep regardless of how cheap a page is. Products we care
+// about are the ones that just changed, and `updated_at:>` finds those in one or
+// two pages. (See PAGE below for the measured per-page cost.)
 //
 // The full sweep still has to exist: incremental never sees a product whose
 // stock was decremented by an order placed before the window, and it can never
@@ -27,14 +27,29 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const SHOPIFY_API_VERSION = Deno.env.get("SHOPIFY_API_VERSION") || "2026-07";
 
-// 50 products a page, 5 images and 5 variants each: 50 * (1 + 5 + 5) = 550
-// points, comfortably inside Shopify's 1000-point per-query ceiling. Raising
-// any of the three trips it, and the error Shopify returns for that
-// ("Query cost is 1100, maximum is 1000") arrives as a 200 with an errors
-// array, so it fails as an empty sweep rather than as an obvious break.
+// 50 products a page with 5 images, 5 variants and 6 collections each. MEASURED
+// against a real store rather than derived: requestedQueryCost 114,
+// actualQueryCost 72, against a bucket of 2000 refilling at 100/s. The old note
+// here claimed 550 of a 1000 ceiling; Shopify's cost model and bucket have both
+// moved since, so re-measure rather than trusting arithmetic — the error for
+// overrunning ("Query cost is 1100, maximum is 1000") arrives as a 200 with an
+// errors array, and so fails as an empty sweep rather than an obvious break.
+// Measure with: dup-probe?store=OVL&gql=<query>, which prints the cost extension.
 const PAGE = 50;
 const IMAGES_PER_PRODUCT = 5;
 const VARIANTS_PER_PRODUCT = 5;
+// Collections are the category system — product_type is blank on 98% of the
+// catalogue — so they are the gate the Call Back matcher scores against.
+// Measured: products sit in ONE or TWO collections, never more, so six is
+// generous. A product on the ceiling is still COUNTED rather than quietly
+// clipped, because a silently truncated collection list would make a match look
+// impossible instead of merely unmatched.
+//
+// ⚠️ Not every collection is a category. `newly-listed-devices` holds all 35,049
+// products at every store — it is merchandising. shopify_collections.matchable
+// is what separates the two; the matcher must respect it or everything matches
+// everything.
+const COLLECTIONS_PER_PRODUCT = 6;
 // Page ceilings. A sweep that runs away is worse than a sweep that stops short
 // and says so — the edge runtime would kill it mid-write with no record of
 // where it got to.
@@ -105,13 +120,58 @@ const PAGE_QUERY = `
       pageInfo { hasNextPage endCursor }
       edges { node {
         id title createdAt status
+        handle
+        # Non-null only when the product is live on the online store, which is
+        # what "a customer could buy this right now" actually means. Cheaper and
+        # more direct than walking resource publications — and note that
+        # publishedOnCurrentPublication needs read_product_listings, which we do
+        # not hold. Measured: this tracks publishedAt exactly, and both track
+        # stock, so a sold-out product reads null. That is the wanted answer, not
+        # a gap.
+        onlineStoreUrl
+        # THE CONDITION LIVES IN HERE, in a two-cell <tr> of the spec table that
+        # every PayMore listing carries. descriptionHtml is a plain SCALAR, so it
+        # adds no cost points to a page — only bytes, and at PAGE=50 that is well
+        # under a megabyte a request. A metafields connection would have been the
+        # obvious alternative and is the expensive one: a connection per product,
+        # charged against the very cost bucket the header above warns about.
+        descriptionHtml
         images(first: ${IMAGES_PER_PRODUCT}) { edges { node { id } } }
+        collections(first: ${COLLECTIONS_PER_PRODUCT}) { edges { node { handle } } }
         variants(first: ${VARIANTS_PER_PRODUCT}) { edges { node {
           id sku price inventoryQuantity
         } } }
       } }
     }
   }`;
+
+// The Condition row of the description spec table. Same shape ebay-sync's
+// parseSpecs() reads for eBay item specifics — any <tr> with exactly two cells is
+// a label/value pair — narrowed to the one label we want, so a 15KB description
+// is not fully parsed 4,000 times a sweep.
+//
+// Returns null rather than a guess. "We could not read it" and "it is Good" are
+// different answers, and the panel says Unknown Condition for the first.
+const stripCellTags = (h: string) =>
+  h.replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ")
+   .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+   .replace(/\s+/g, " ").trim();
+
+function conditionFromDescription(html: string): string | null {
+  if (!html) return null;
+  for (const row of (html.match(/<tr[\s\S]*?<\/tr>/gi) || [])) {
+    const cells = row.match(/<td[\s\S]*?<\/td>/gi) || [];
+    if (cells.length !== 2) continue;
+    const key = stripCellTags(cells[0]).replace(/[?:]+$/, "").trim();
+    if (!/^condition$/i.test(key)) continue;
+    const value = stripCellTags(cells[1]);
+    // "N/A" is what the template writes when nobody graded it, so it means the
+    // same as an empty cell and must not be shown as if it were a grade.
+    if (!value || /^(n\/?a|none|unknown|-+)$/i.test(value)) return null;
+    return value.slice(0, 60);
+  }
+  return null;
+}
 
 type Row = {
   store_code: string;
@@ -123,6 +183,10 @@ type Row = {
   quantity: number;
   image_count: number;
   product_created_at: string | null;
+  collections: string[];
+  product_handle: string | null;
+  online_published: boolean;
+  condition: string | null;
   seen_at: string;
   updated_at: string;
 };
@@ -149,10 +213,18 @@ function dedupe(rows: Row[]): { rows: Row[]; duplicates: number } {
   return { rows: [...best.values()], duplicates };
 }
 
-function rowsFrom(store: string, products: any[], stamp: string): Row[] {
+function rowsFrom(store: string, products: any[], stamp: string): { rows: Row[]; atCollectionCap: number } {
   const out: Row[] = [];
+  let atCollectionCap = 0;
   for (const p of products) {
     const images = (p.images?.edges || []).length;
+    const collections = (p.collections?.edges || []).map((e: any) => String(e.node?.handle || "")).filter(Boolean);
+    // Sitting exactly on the ceiling means the list MIGHT be clipped. Counted,
+    // not assumed either way — see COLLECTIONS_PER_PRODUCT.
+    if (collections.length >= COLLECTIONS_PER_PRODUCT) atCollectionCap += 1;
+    // ONCE PER PRODUCT, not once per variant: the description belongs to the
+    // product, and a 15KB regex pass per variant would be paid for nothing.
+    const condition = conditionFromDescription(String(p.descriptionHtml || ""));
     for (const v of (p.variants?.edges || []).map((e: any) => e.node)) {
       // No SKU means nothing eBay can be keyed on, and nothing our own Shopify
       // orders can be matched to either. Skipping is the only honest option.
@@ -167,12 +239,16 @@ function rowsFrom(store: string, products: any[], stamp: string): Row[] {
         quantity: Number(v.inventoryQuantity ?? 0),
         image_count: images,
         product_created_at: p.createdAt || null,
+        collections,
+        product_handle: p.handle || null,
+        online_published: !!p.onlineStoreUrl,
+        condition,
         seen_at: stamp,
         updated_at: stamp,
       });
     }
   }
-  return out;
+  return { rows: out, atCollectionCap };
 }
 
 async function upsert(rows: Row[]) {
@@ -490,6 +566,7 @@ Deno.serve(async (req: Request) => {
   let variants = 0;
   let duplicates = 0;
   let truncated = false;
+  let atCollectionCap = 0;
   // Across pages as well as within one. The same SKU can appear on page 1 and
   // page 7, and only a set that outlives the page can tell that apart from two
   // legitimately different items.
@@ -500,7 +577,9 @@ Deno.serve(async (req: Request) => {
       const data = await shopifyGql(shop, token, PAGE_QUERY, { q, n: PAGE, after });
       const conn = data.products;
       const nodes = (conn?.edges || []).map((e: any) => e.node);
-      const deduped = dedupe(rowsFrom(store, nodes, new Date().toISOString()));
+      const built = rowsFrom(store, nodes, new Date().toISOString());
+      atCollectionCap += built.atCollectionCap;
+      const deduped = dedupe(built.rows);
       duplicates += deduped.duplicates;
       const rows = deduped.rows.filter(r => {
         if (seenSkus.has(r.sku)) { duplicates += 1; return false; }
@@ -550,6 +629,9 @@ Deno.serve(async (req: Request) => {
     mode: doFull ? "full" : "incremental",
     since: doFull ? null : since,
     pages, variants, duplicates, pruned, truncated,
+    // Products sitting on COLLECTIONS_PER_PRODUCT, whose collection list may be
+    // clipped. Non-zero means raise the constant (and re-check the point sum).
+    atCollectionCap,
     finishedAt,
   });
 });

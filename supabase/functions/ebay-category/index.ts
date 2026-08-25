@@ -115,7 +115,19 @@ Deno.serve(async (req: Request) => {
   // for the required set alone says the card needs nothing but Game, and then
   // publish fails with 25064 anyway.
   const wantAll = url.searchParams.get("all") === "1";
-  if (!store || !category) return json({ error: "pass ?store=LEE&category=183454" }, 400);
+  // &subtree=<id> — the LEAF names under one top-level category.
+  //
+  // Added for the Call Back matcher's Type list. Shopify's 63 collections are
+  // the category system but they are coarse where it hurts most: "Video Games"
+  // is 1,435 of 3,875 in-stock items, so matching on it alone discriminates
+  // nothing. eBay's leaves under the same subtree are shaped the way the want
+  // actually arrives — per-platform ("Nintendo Switch Video Games") rather than
+  // per-publisher — which is exactly the axis our own titles cannot be split on
+  // by their first token, because for a game that token is the game's name.
+  const subtree = (url.searchParams.get("subtree") || "").trim();
+  if (!store || (!category && !subtree)) {
+    return json({ error: "pass ?store=LEE&category=183454 or ?store=LEE&subtree=1249" }, 400);
+  }
 
   const row = (await (await sb(
     `ebay_stores?store_code=eq.${encodeURIComponent(store)}&select=*`)).json())[0];
@@ -135,6 +147,35 @@ Deno.serve(async (req: Request) => {
     try { return { status: r.status, body: t ? JSON.parse(t) : null }; }
     catch { return { status: r.status, body: t }; }
   };
+
+  if (subtree) {
+    const res = await get(
+      `/commerce/taxonomy/v1/category_tree/0/get_category_subtree`
+      + `?category_id=${encodeURIComponent(subtree)}`);
+    if (res.status !== 200) return json({ store, subtree, status: res.status, body: res.body }, 502);
+
+    // Walk to the leaves only. An interior node is a heading, not something a
+    // person would ever pick off a list, and eBay marks the real ones itself.
+    const leaves: { id: string; name: string; path: string }[] = [];
+    const walk = (node: any, trail: string[]) => {
+      const name = node?.category?.categoryName || "";
+      const id = node?.category?.categoryId || "";
+      const children = node?.childCategoryTreeNodes || [];
+      if (node?.leafCategoryTreeNode || !children.length) {
+        if (id) leaves.push({ id, name, path: trail.concat(name).join(" > ") });
+        return;
+      }
+      for (const c of children) walk(c, trail.concat(name));
+    };
+    walk(res.body?.categorySubtreeNode, []);
+
+    return json({
+      store, subtree,
+      root: res.body?.categorySubtreeNode?.category?.categoryName ?? null,
+      leafCount: leaves.length,
+      leaves: leaves.sort((a, b) => a.path.localeCompare(b.path)),
+    });
+  }
 
   const cat = encodeURIComponent(category);
   // Marketplace is fixed: this integration only ever lists to EBAY_US.

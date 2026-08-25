@@ -824,6 +824,37 @@ function toggleCalendar() {
     }
     toggleModal('calendarDropdown');
 }
+// Where an idea goes if the recipient list has not loaded (or is empty). Same
+// fallback pattern as every other emailing tool: the address that was hardcoded
+// into the form before the list existed, so a failed fetch sends the idea to the
+// person it has always gone to rather than nowhere.
+const IDEA_FALLBACK_TO = ['ethan.kushnir@speekstechnology.com'];
+
+// formsubmit.co takes ONE address in the URL and the rest through a _cc field,
+// so the list is split rather than joined. Called on open, not at inject time:
+// the recipient list is fetched lazily and a modal built at page load would keep
+// whatever address was current then for the rest of the session.
+async function _ideaSyncRecipients() {
+    const form = document.getElementById('ideaForm');
+    if (!form) return;
+    await _fetchEmailLists();
+    const to = _recipientsFor('idea_submissions', IDEA_FALLBACK_TO)
+        .map(a => String(a || '').trim()).filter(Boolean);
+    const list = to.length ? to : IDEA_FALLBACK_TO;
+    form.action = 'https://formsubmit.co/' + encodeURIComponent(list[0]);
+    // _cc is rewritten every open, including to empty — an address removed in the
+    // tool has to actually stop receiving ideas, and a stale hidden field would
+    // keep copying them in forever.
+    let cc = form.querySelector('input[name="_cc"]');
+    if (!cc) {
+        cc = document.createElement('input');
+        cc.type = 'hidden';
+        cc.name = '_cc';
+        form.appendChild(cc);
+    }
+    cc.value = list.slice(1).join(',');
+}
+
 function toggleIdeaModal() {
     // Pre-fill the submitter's name from their session so they don't retype it.
     const nameEl = document.getElementById('ideaName');
@@ -831,6 +862,10 @@ function toggleIdeaModal() {
         const u = sessionStorage.getItem('speeksUserName');
         if (u && u.trim()) nameEl.value = u.trim();
     }
+    // Not awaited: the address only has to be right by the time Submit is
+    // pressed, and blocking the modal open on a network call to show a form
+    // would be a worse trade. The form carries the fallback until it resolves.
+    _ideaSyncRecipients();
     toggleModal('ideaModal');
 }
 
@@ -1380,17 +1415,73 @@ window.toggleReaction = function(id, emoji) {
     }
 };
 
+// THE EMOJI PICKER IS CUT OFF BY THE CARD, not by the feed — the same thing that
+// sent the "Read by" receipt into the card header a few rows below this. A hub
+// card is `overflow: hidden` (it rounds its own corners), the picker is ~230px of
+// six emoji hanging off a button that sits at the right-hand end of the footer,
+// and an absolutely positioned popover inside that card is simply sheared off at
+// its edge. On a phone the card is the screen width, so it loses the last emoji
+// or two every time.
+//
+// Same answer as the dropdowns and the store picker: while it is open it lives on
+// <body> as position:fixed, placed by hand against the button. That escapes the
+// card's clipping AND any transformed ancestor, and it is the only fix that does
+// not depend on knowing which ancestor is doing the clipping.
+function _rxPlacePicker(p, btn) {
+    const r = btn.getBoundingClientRect();
+    const w = p.offsetWidth, h = p.offsetHeight;
+    // Left-aligned with the button, then pulled back inside the window. The
+    // button is near the right edge far more often than not, which is exactly
+    // the case that was losing emoji.
+    p.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - w - 8))) + 'px';
+    // Above by preference — it is a menu hanging off a button at the bottom of a
+    // card — but below when there is no room above.
+    const above = r.top - 8 - h;
+    p.style.top = Math.round(above >= 8 ? above : Math.min(r.bottom + 8, window.innerHeight - h - 8)) + 'px';
+    p.style.bottom = 'auto';
+}
+
+function _rxClosePicker(p) {
+    p.classList.remove('show', 'rx-float');
+    p.style.left = p.style.top = p.style.bottom = '';
+    // Home again. A feed re-render can destroy the wrapper while the picker is
+    // parked on <body>, which would leave it orphaned there forever — so if home
+    // is gone, so is the picker.
+    const home = p._rxHome;
+    if (!home) return;
+    if (home.isConnected) home.appendChild(p); else p.remove();
+    p._rxHome = null;
+}
+function _rxCloseAll() {
+    document.querySelectorAll('.reaction-picker-popover.show').forEach(_rxClosePicker);
+}
+
 window.toggleReactionPicker = function(id) {
     const picker = document.getElementById('picker_' + id);
-    if (picker) picker.classList.toggle('show');
+    if (!picker) return;
+    if (picker.classList.contains('show')) { _rxClosePicker(picker); return; }
+    _rxCloseAll();
+    const wrap = picker.closest('.reaction-picker-wrapper');
+    const btn = wrap && wrap.querySelector('.add-reaction-btn');
+    if (!btn) { picker.classList.add('show'); return; }
+    picker._rxHome = picker.parentNode;
+    document.body.appendChild(picker);
+    picker.classList.add('rx-float', 'show');
+    _rxPlacePicker(picker, btn);
 };
 
-// Close all open pickers if clicked outside
+// Close all open pickers if clicked outside. The picker itself is on <body> while
+// open, so it no longer answers .closest('.reaction-picker-wrapper') — its own
+// buttons are checked directly rather than relying on where it is parented.
 document.addEventListener('click', (e) => {
-    if (!e.target.closest('.reaction-picker-wrapper')) {
-        document.querySelectorAll('.reaction-picker-popover.show').forEach(p => p.classList.remove('show'));
-    }
+    if (e.target.closest('.reaction-picker-wrapper')) return;
+    if (e.target.closest('.reaction-picker-popover')) return;
+    _rxCloseAll();
 });
+// A fixed popover does not travel with the button it hangs off. Capturing,
+// because the scroll happens inside the feed, not on the window.
+window.addEventListener('scroll', _rxCloseAll, true);
+window.addEventListener('resize', _rxCloseAll);
 
 // THE CARD IS WHAT CLIPS THE "READ BY" LIST, NOT THE FEED.
 // #notifDropdown .hub-item is overflow:hidden (it rounds its own corners), and
@@ -2431,6 +2522,7 @@ function renderDocs(docs) {
                     ${isPin ? `<span class="cat-ico"><svg viewBox="0 0 24 24" aria-hidden="true">${DOC_ICONS.pin}</svg></span>` : ''}
                     <span class="cat-name">${cat}</span>
                     <span class="cat-count">${items.length}</span>
+                    <span class="cat-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
                 </div>`;
 
         const cards = items.map(item => {
@@ -2473,7 +2565,44 @@ function renderDocs(docs) {
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }));
 
+    // The category heads are accordion handles. Bound on EVERY width and the
+    // breakpoint is left to CSS: `dp-open` only means anything inside the phone
+    // block (which is what hides a closed section's grid), so on desktop this
+    // toggles a class nothing reads. That keeps 900px written down in one place
+    // instead of in a matchMedia here as well.
+    container.querySelectorAll('.category-title').forEach(t => t.addEventListener('click', () => {
+        toggleDocCategory(t.closest('.category-section'));
+    }));
+
     filterDocs();
+}
+
+// One open at a time — clicking the open one shuts it. On a phone the rail of
+// category chips is hidden (six chips across a 390px screen was most of a
+// screenful before a single document), and these bars replace it: the list of
+// categories IS the navigation (user's call, 20 Aug).
+function toggleDocCategory(sec) {
+    if (!sec) return;
+    const wasOpen = sec.classList.contains('dp-open');
+    document.querySelectorAll('.category-section.dp-open').forEach(s => s.classList.remove('dp-open'));
+    if (!wasOpen) sec.classList.add('dp-open');
+}
+
+// Which section is open after the visible set changes.
+//   searching  — every section that still has a match opens. A page of shut bars
+//                hiding the results you just asked for is not a search.
+//   otherwise  — back to one: whichever is already open if it survived the
+//                filter, else the first visible one (Pinned, on arrival).
+function _docSyncAccordion(search) {
+    const secs = [...document.querySelectorAll('.category-section')];
+    if (!secs.length) return;
+    if (search) {
+        secs.forEach(s => s.classList.toggle('dp-open', !s.classList.contains('hidden')));
+        return;
+    }
+    const vis = secs.filter(s => !s.classList.contains('hidden'));
+    const open = vis.find(s => s.classList.contains('dp-open')) || vis[0];
+    secs.forEach(s => s.classList.toggle('dp-open', s === open));
 }
 
 async function loadDocs() {
@@ -2536,6 +2665,7 @@ function filterDocs() {
     const noResults = document.getElementById('noResults');
     if (noResults) noResults.classList.toggle('hidden', hasVis || search === '');
     _docSyncRailActive();
+    _docSyncAccordion(search);
 }
 
 
@@ -3647,12 +3777,60 @@ function _kpiAddSelfRowHtml(p, isEditing) {
         '</td></tr>';
 }
 
+// ⚠️ TYPED NUMBERS LIVE ONLY IN THE DOM UNTIL SAVE. _kpiSavePeriod reads them
+// straight out of the inputs by id, so nothing puts them back into
+// _kpiPeriodsData — and every re-render rebuilds the grid FROM
+// _kpiPeriodsData. So any re-render mid-edit silently wiped a whole week of
+// entry: fill in the roster, click "+ Add Ethan (DM)", and the grid came back
+// blank from the server.
+//
+// This reads the inputs back into the data before a re-render can throw them
+// away. It is keyed on the same ids the save path uses, and those ids embed the
+// PERIOD, so a period whose inputs are not on screen is untouched — which is
+// what makes it safe to call before any render rather than only some.
+//
+// An empty box harvests as null, exactly as it SAVES as null: emptying a figure
+// is an instruction ("there is no number here"), not an absence of one.
+function _kpiHarvestInputs(periodDate) {
+    if (!periodDate) return 0;
+    const p = (_kpiPeriodsData || []).find(function(x) { return x.period_end_date === periodDate; });
+    if (!p) return 0;
+    const pk = periodDate.replace(/-/g, '');
+    let rows = 0;
+    (p.entries || []).forEach(function(entry, empIdx) {
+        let onScreen = false;
+        _KPI_INPUT_FIELDS.forEach(function(f) {
+            const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + f);
+            if (!el) return;
+            onScreen = true;
+            if (el.value !== '') {
+                entry[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
+            } else if (Object.prototype.hasOwnProperty.call(entry, f)) {
+                // An emptied box on a row that HAD a figure is a deletion, and
+                // the save path already reads it that way. But writing null onto
+                // a key that was never there is not the same thing: the Store
+                // Total row filters on `!= null`, and Number(null) is 0, so a
+                // roster of untouched rows would start totalling "$0" where it
+                // correctly showed "—".
+                entry[f] = null;
+            }
+        });
+        // The computed columns are only ever written to the DOM by
+        // _kpiUpdateRow, never to the entry, so without this the Est. GP and
+        // margin cells would come back stale next to fresh inputs.
+        if (onScreen) { rows++; Object.assign(entry, _kpiCalcDerived(entry)); }
+    });
+    return rows;
+}
+
 // who: 'self' (DM/CEO adds themselves) or 'dm' (a store editor adds the DM).
 function _kpiAddSelf(periodDate, who) {
     const name = who === 'dm' ? _kpiDmName() : sessionStorage.getItem('speeksUserName');
     if (!name) return;
     const p = (_kpiPeriodsData || []).find(function(x) { return x.period_end_date === periodDate; });
     if (!p || p.entries.some(function(e) { return e.employee_name === name; })) return;
+    // BEFORE the push, or adding a row costs everything typed above it.
+    _kpiHarvestInputs(periodDate);
     // _selfAdded marks the row as a local, not-yet-saved addition so cancelling
     // the edit can remove it again (saved rows have an id and are kept).
     p.entries.push({ employee_name: name, _selfAdded: true });
@@ -5838,6 +6016,7 @@ async function checkKpiDueReminders() {
 function kpiHeaderStartEdit() {
     const ep = (_kpiPeriodsData || []).find(function(p) { return p.is_editable; }) || (_kpiPeriodsData || [])[0];
     if (!ep) return;
+    _kpiHarvestInputs(_kpiEditingPeriod);
     _kpiEditingPeriod = ep.period_end_date;
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
@@ -7425,7 +7604,11 @@ function initOperations() {
     // cannot be looked up yet -- this runs before the first fetch.
     const sign = hash.match(/^b2b-sign-([A-Za-z0-9-]{6,})$/);
     if (sign) _b2bPendingSign = sign[1];
+    // #categories is the feed card's destination: the Categories view inside
+    // SPEEKS Connect, which is a view of a tab rather than a tab of its own.
+    if (hash === 'categories') { _ecView = 'cats'; }
     let initial = sign ? 'b2b'
+        : hash === 'categories' ? 'ebay'
         : ['marginguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
     if (!tabVisible('ops-tab-' + initial)) {
@@ -7434,10 +7617,14 @@ function initOperations() {
         if (firstVisible) initial = firstVisible.id.replace('ops-tab-', '');
     }
     switchOperationsTab(initial);
+    if (hash === 'categories') _ecMarkView('cats');
 }
 
 function _kpiStartEdit(periodDate) {
     if (_kpiEditingPeriod === periodDate) return;
+    // Opening a second week for edit re-renders the first one back to view mode,
+    // which used to take its unsaved numbers with it.
+    _kpiHarvestInputs(_kpiEditingPeriod);
     _kpiEditingPeriod = periodDate;
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
@@ -8642,12 +8829,12 @@ function renderQMTab(tab) {
     } else if (tab === 'reviews') {
         // --- NEW BANNER FOR NON-5-STAR REVIEWS ---
         html += `
-        <div style="margin-bottom: 15px; background: #fffbeb; border: 1px solid #fde68a; padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; flex-direction: column; gap: 4px;">
-                <span style="font-size: 13px; font-weight: 900; color: #92400e;">Handling a Sub-5-Star Review?</span>
-                <span style="font-size: 11px; font-weight: 700; color: #b45309;">Follow the SOP for mixed or negative feedback before replying.</span>
+        <div class="qm-sop-banner" style="margin-bottom: 15px; background: #fffbeb; border: 1px solid #fde68a; padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+            <div class="qm-sop-copy" style="display: flex; flex-direction: column; gap: 4px;">
+                <span class="qm-sop-t" style="font-size: 13px; font-weight: 900; color: #92400e;">Handling a Sub-5-Star Review?</span>
+                <span class="qm-sop-s" style="font-size: 11px; font-weight: 700; color: #b45309;">Follow the SOP for mixed or negative feedback before replying.</span>
             </div>
-            <a href="https://drive.google.com/file/d/1D4VBM5nSD0KpK-bzE3_O9OOncFCsk80w/view?usp=sharing" target="_blank" class="mini-action-btn" style="background: white; border-color: #fde68a; color: #92400e; box-shadow: 0 2px 4px rgba(251,191,36,0.15);">View Process ↗</a>
+            <a href="https://drive.google.com/file/d/1D4VBM5nSD0KpK-bzE3_O9OOncFCsk80w/view?usp=sharing" target="_blank" class="mini-action-btn qm-sop-cta" style="background: white; border-color: #fde68a; color: #92400e; box-shadow: 0 2px 4px rgba(251,191,36,0.15);">View Process ↗</a>
         </div>`;
 
         html += '<div class="qm-category-items open" style="margin-left: 0; padding-left: 0; border: none; background: transparent; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start;">';
@@ -9802,7 +9989,7 @@ function _lvStamp(d) {
         // so on the 17th this is 16 of 31 and the average-per-day figures beside it
         // divide by the same 16.
         return d.month
-            ? _lvDays(d) + ' Of ' + d.month.daysTotal + ' Days'
+            ? _lvDays(d) + ' of ' + d.month.daysTotal + ' Days'
             : 'Month So Far';
     }
     return 'Last Change ' + _lvClock(d.asOfCentral);
@@ -11144,7 +11331,7 @@ function _bdGoalChip(store, t, proj, isCurrent) {
     // "Tracking" is a word about the future, and a closed month has none. The
     // running month says what it is heading for; a finished one says what it
     // came to.
-    const verb = isCurrent ? ' Tracking To ' : ' Of ';
+    const verb = isCurrent ? ' Tracking To ' : ' of ';
     return '<span class="bd-h-goal' + tone + '">'
         + '<b>' + _lvPct(pct) + '</b>' + verb + _lvMoney(goal, false) + ' Goal</span>';
 }
@@ -11437,7 +11624,7 @@ function _bdRender() {
     //
     // The captions stay. They are not decoration: the sheet's "Sell" column is
     // the resale value of goods BOUGHT and its "Buy" column is the cash paid, so
-    // "Resale Value" and "Out Of The Till" are what stop the two being read the
+    // "Resale Value" and "Out of The Till" are what stop the two being read the
     // wrong way round.
     const dRes = pt && _bdDelta(at(t.resale), pt.resale, 'good');
     html += '<div class="bd-strip bd-strip2">'
@@ -11451,7 +11638,7 @@ function _bdRender() {
         // is already in the two tiles beside it — the resale value carries the
         // month-end picture and the buy margin carries the ratio between them —
         // so three periods of cash-out was the same story told a third time.
-        + tile('Cash Paid <span class="bd-k-sub">&middot; Out Of The Till</span>', _lvMoney(t.paid, false), {})
+        + tile('Cash Paid <span class="bd-k-sub">&middot; Out of The Till</span>', _lvMoney(t.paid, false), {})
         + tile('Buy Margin <span class="bd-k-sub">&middot; On Purchases</span>', _lvPct(t.buyMargin), {
             cmp: [lastMo((pt && pt.buyMargin !== null) ? _lvPct(pt.buyMargin) : '', ''), lastYr('buyMargin')],
         })
@@ -11987,7 +12174,7 @@ function _lvSumReviews(id, fc, codes) {
 // second thing to disagree.
 function _lvReviewSub(f) {
     const banked = _lvNum(f.reviews)
-        + (f.reviewsGoal > 0 ? ' Of ' + _lvNum(f.reviewsGoal) : '');
+        + (f.reviewsGoal > 0 ? ' of ' + _lvNum(f.reviewsGoal) : '');
     // Title Case, like every other sub-line on the strip ("$5,768 So Far") and
     // like the rest of the email and the boards.
     if (!(f.reviewsGoal > 0)) return banked + ' So Far';
@@ -12056,7 +12243,7 @@ function _lvBuyBlock(d, views) {
         const r = rows[0];
         html += '<div class="lv-strip lv-buy-strip">'
             + _lvTile('Bought', _lvMoney(r.b.bought, false), 'Resale Value', true)
-            + _lvTile('Cash Paid', _lvMoney(r.b.paid, false), 'Out Of The Till')
+            + _lvTile('Cash Paid', _lvMoney(r.b.paid, false), 'Out of The Till')
             + _lvTile('Buy Margin', _lvPct(r.b.margin), 'On Purchases')
             + _lvTile('Bought vs Sold', _lvRatio(r.b.bought, r.b.sold), 'Stock In Against Out')
             + '</div>';
@@ -12223,7 +12410,7 @@ function _lvCmpSum(views, key) {
 // figure and that month's actual.
 //
 // A row whose month is PARTIAL says so where the figure would otherwise imply five
-// stores: "3 Of 5" replaces nothing, it is appended to the name, because the
+// stores: "3 of 5" replaces nothing, it is appended to the name, because the
 // alternative is a district total that quietly means something narrower than the
 // tile above it.
 function _lvCmpRows(views, d, pick) {
@@ -12236,7 +12423,7 @@ function _lvCmpRows(views, d, pick) {
         return {
             k: _lvCmpName(sum.span, yr)
                 + (sum.partial && views.length > 1
-                    ? ' <span class="lv-cmp-part">' + sum.codes.length + ' Of ' + sum.total + '</span>' : ''),
+                    ? ' <span class="lv-cmp-part">' + sum.codes.length + ' of ' + sum.total + '</span>' : ''),
             v: _lvMoney(pair[1], false),
             d: _lvDelta(pair[0], pair[1], 'good'),
         };
@@ -12441,7 +12628,7 @@ function _lvRollupTiles(r, d, label, views) {
     // Complete days on both finished views; only Today counts itself.
     const elapsed = _lvIsToday() ? (d.month && d.month.daysElapsed) : (d.prev && d.prev.daysElapsed);
     const days = d.month && elapsed !== null && elapsed !== undefined
-        ? elapsed + ' Of ' + d.month.daysTotal + ' Days'
+        ? elapsed + ' of ' + d.month.daysTotal + ' Days'
         : '';
     // The fourth tile answers "and where does that leave the month?". On the Month
     // view the first tile IS the month, so repeating it there would waste the slot —
@@ -12586,25 +12773,71 @@ function _lvStoreRow(v, d, foot, rev) {
 const _LV_COMPANY_ROLES = new Set(["district manager", "ceo"]);
 
 function _lvCards(stores, d, rollup, rollupLabel) {
+    // Kept so setLiveCard can rebuild just this zone. Which branch of
+    // renderLiveDashboard called us decides what "the deck" is, and there is no
+    // way to work that out again from the DOM.
+    _lvCardArgs = { stores, d, rollup, rollupLabel };
     const role = (sessionStorage.getItem("speeksUserRole") || "").toLowerCase().trim();
     const company = _LV_COMPANY_ROLES.has(role);
-    // A Multi-Store Manager runs two stores and is handed exactly those two, so
-    // "their store" is both of them plus the combined line — not one of the pair.
+    // A Multi-Store Manager runs two stores, so "their store" is both of them plus
+    // the combined line — not one of the pair. They are no longer HANDED just those
+    // two (the payload is district-wide for everyone), so the pair is filtered out
+    // of it below.
     const msm = sessionStorage.getItem("speeksMultiStore") === "true";
 
-    let list, roll;
-    if (company || msm) {
+    let list, roll, rollLabel = rollupLabel;
+    if (msm) {
+        // The payload is the whole district for EVERYBODY now (see scopeFor in
+        // shopify-live), so "their stores" has to be applied here rather than
+        // trusted from the server: the picker offers BAL, MPL and the pair, not
+        // the five-store district deck a DM gets (user's call, 19 Aug). Only the
+        // deck is narrowed — the desktop table underneath still shows all five,
+        // which is the same district-for-context decision every store gets.
+        list = stores.filter(m => m && MULTISTORE_MANAGER_STORES.includes(String(m.code || '').toUpperCase()));
+        // A payload that somehow carries neither of their stores falls back to
+        // what it does carry rather than to the empty state.
+        if (!list.length) list = stores;
+        // Built here, not taken from `rollup`: the caller is the district branch,
+        // whose roll-up is the five-store total. The pair line has to be summed
+        // out of exactly the two rows the picker can reach or it means something
+        // wider than its label says.
+        const healthy = list.filter(m => !m.error);
+        roll = list.length > 1 ? _lvCombine((healthy.length ? healthy : list).map(m => _lvView(m))) : null;
+        rollLabel = 'Both';
+    } else if (company) {
         list = stores;
         roll = rollup;
     } else {
         list = stores.filter(m => m && m.code === _lvOwnCode);
+        // The edge function already scoped this payload to one store, so that row
+        // IS theirs whether or not _lvOwnStore managed to match a code. Without
+        // this the phone showed "no live figures yet" over a payload that had them.
+        if (!list.length && stores.length === 1) list = stores;
         roll = null;   // no district total for a single store — it would be the same number
     }
     if (!list.length) {
-        return '<p class="lv-cards-legend">No live figures for your store yet.</p>';
+        return '<div class="lv-cardzone"><p class="lv-cards-none">No live figures for your store yet.</p></div>';
     }
 
-    function card(v, isRoll) {
+    // Buying is keyed the FOLLOWING morning, so Today has none to show — the same
+    // reason _lvBuyBlock draws nothing on that tab. Asking for it anyway would
+    // print $0 against every store and read as a district that bought nothing.
+    // A CLOSED DAY buys nothing, and printing "Bought Value $0" against it is the
+    // exact bug _lvBuyBlock already refuses to ship: every Monday the Yesterday tab
+    // would report the district as having had a catastrophic day when the stores
+    // were simply shut. Suppressed on Yesterday only — a $0 MONTH is a real number
+    // worth seeing, a $0 Sunday is just Sunday.
+    const buyFor = code => {
+        if (_lvMode === 'today') return null;
+        const b = _lvBuyFor(code, d);
+        if (_lvIsPrev() && b && !b.bought) return null;
+        return b;
+    };
+
+    const fig = (k, v) => '<div class="lvc-f"><span class="lvc-k">' + k + '</span>'
+        + '<span class="lvc-v">' + v + '</span></div>';
+
+    function card(v, isRoll, buy) {
         const tint = (!isRoll && STORE_TINTS[v.code])
             ? '<i class="lv-tint" style="background:' + STORE_TINTS[v.code] + '"></i>' : '';
         const head = '<div class="lvc-h">' + tint + '<b>' + escapeHtml(String(v.code || '')) + '</b>';
@@ -12612,33 +12845,190 @@ function _lvCards(stores, d, rollup, rollupLabel) {
             return '<li class="lvc lvc-err">' + head + '</div>'
                 + '<p class="lvc-errmsg">not reporting &middot; ' + escapeHtml(v.error) + '</p></li>';
         }
-        const pct = v.pctOfGoal;
+        // THE SAME FIGURE THE DESKTOP TABLE'S "% to goal" COLUMN SHOWS, which is
+        // paceIndex — NOT pctOfGoal. The two are different numbers and the card
+        // had the wrong one: pctOfGoal is banked GP over the whole monthly goal,
+        // so halfway through August OVL read 53.8% on the phone against 104% on
+        // the table everybody actually works from. paceIndex divides that by how
+        // much of the SELLING month has gone (Sundays excluded upstream), so 100
+        // means exactly on track. _lvPaceCls, not a band of my own, so the colour
+        // agrees with the table too: at or above 100 green, under it red.
+        const pct = v.paceIndex;
         const has = !(pct === null || pct === undefined);
-        // Same three-band read as the pace column: at or past goal, within reach,
-        // or behind. Colour carries it so a card is scannable without reading.
-        const band = !has ? '' : (Number(pct) >= 100 ? ' good' : (Number(pct) >= 75 ? ' near' : ' low'));
+        const band = has ? ' ' + _lvPaceCls(pct) : '';
         return '<li class="lvc' + (isRoll ? ' lvc-roll' : '') + '">'
-            + head + '<span class="lvc-goal' + band + '">' + _lvPct(pct) + '</span></div>'
+            + head + '<span class="lvc-goal' + band + '">'
+            + '<span class="lvc-goal-k">% to Goal</span>'
+            // "No Goal" in place of the figure, not on a line of its own underneath:
+            // the extra row was 32px that only some cards had, so the card grew and
+            // shrank as the picker moved between stores.
+            + (has ? Math.round(Number(pct)) + '%' : 'No Goal') + '</span></div>'
             + '<div class="lvc-figs">'
-            + '<div class="lvc-f"><span class="lvc-k">Net Sales</span>'
-            + '<span class="lvc-v">' + _lvMoney(v.netToday, false) + '</span></div>'
-            + '<div class="lvc-f"><span class="lvc-k">Gross Profit</span>'
-            + '<span class="lvc-v">' + _lvMoney(v.gpToday, false) + '</span></div>'
+            // The five figures the phone build carries, in the order they are read:
+            // what came in, what was kept, the rate it was kept at, and what went
+            // back out to buy stock. The fifth — % to goal — is on the header line
+            // above, because it is the one figure a column of cards is scanned for.
+            + fig('Net Sales', _lvMoney(v.netToday, false))
+            + fig('Gross Profit', _lvMoney(v.gpToday, false))
+            + fig('Margin', _lvPct(v.marginToday))
+            + (buy ? fig('Bought Value', _lvMoney(buy.bought, false)) : '')
             + '</div>'
-            + (has ? '' : '<div class="lvc-goal-lab">no goal set</div>')
             + '</li>';
     }
 
+    // Per store first, so the roll-up line can be summed out of exactly the rows
+    // shown underneath it rather than read from a separate call that could cover a
+    // different set of stores.
+    const buys = list.map(m => buyFor(m && m.code));
+    // every(Boolean), not some(): a roll-up built from four stores out of five is a
+    // district total that quietly means something narrower than the label says.
+    const rollBuy = buys.length && buys.every(Boolean) ? _lvBuySum(buys) : null;
+
     // The company line leads for a DM: the district number is the headline and the
     // stores underneath are the breakdown, which is the order they are read in.
-    let html = '<p class="lv-cards-legend">' + escapeHtml(_lvModeName())
-        + ' &middot; percentage is month-to-date gross profit against goal.</p>'
-        + '<ul class="lv-cards">';
+    //
+    // ONE AT A TIME on a phone (user's call, 19 Aug). Six stacked cards is a
+    // scroll, and a scroll is not a glance — so the roll-up is what opens and the
+    // pills below the day toggle switch to a single store. The desktop table
+    // underneath still shows all five at once, which is why the pills carry the
+    // same `display:none` above 900px that .lv-cards does: this state has no
+    // meaning there and the row would just be chrome.
+    const deck = [];
     if (roll) {
-        html += card(Object.assign({}, _lvView(roll), { code: rollupLabel, name: '' }), true);
+        // paceIndex is computed server-side per store; a district or MSM roll-up
+        // has none, so it is derived here the same way _lvTable derives it for its
+        // own total row — otherwise the District card would be the one card on the
+        // phone with a blank percentage.
+        const rollView = _lvView(roll);
+        deck.push({ key: '_roll', label: rollLabel,
+            view: Object.assign({}, rollView, { code: rollLabel, name: '',
+                paceIndex: _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
+            buy: rollBuy, isRoll: true });
     }
-    list.forEach(m => { html += card(_lvView(m), false); });
-    return html + '</ul>';
+    list.forEach((m, i) => {
+        deck.push({ key: String((m && m.code) || ''), label: String((m && m.code) || ''),
+            view: _lvView(m), buy: buys[i], isRoll: false });
+    });
+
+    // A pick that is no longer in the deck — a role change, a store that dropped
+    // out of the payload — falls back to the first card rather than rendering an
+    // empty list under a lit pill.
+    // An MSM opens on Both, not on the store whose dashboard they are on (asked for
+    // on 19 Aug, reversed on 20 Aug): the pair total is the glance, and the two
+    // stores are one tap away in the list either way. Same as every other role —
+    // deck[0] is the roll-up wherever there is one.
+    let picked = deck.find(c => c.key === _lvCardPick);
+    if (!picked) { picked = deck[0]; _lvCardPick = picked.key; }
+
+    // A dropdown, not a pill row: six pills do not fit across a phone, and a
+    // horizontal scroller hides stores off an edge nobody thinks to swipe.
+    //
+    // Built rather than a native <select>, because the popup a <select> opens is
+    // drawn by the OS and cannot be styled — on desktop Chrome that is a squared
+    // white box with hairlines down two edges, which is what it looked like in
+    // review. This is a button and a list, so it matches the day toggle beside it
+    // on every platform instead of looking like whichever platform you are on.
+    let html = '<div class="lv-cardzone">';
+    if (deck.length > 1) {
+        const dot = c => (!c.isRoll && STORE_TINTS[c.key])
+            ? '<i class="lv-pdot" style="background:' + STORE_TINTS[c.key] + '"></i>' : '';
+        html += '<div class="lv-picks">'
+            + '<div class="lv-pickwrap">'
+            + '<button type="button" class="lv-pickbtn" aria-haspopup="listbox"'
+            + ' aria-expanded="false" onclick="lvTogglePickList(event)">'
+            + dot(picked) + '<span class="lv-pickcur">' + escapeHtml(picked.label) + '</span>'
+            + '<svg class="lv-pickchev" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+            + ' stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+            + '<path d="M6 9l6 6 6-6"/></svg></button>'
+            + '<ul class="lv-picklist" role="listbox">'
+            + deck.map(c => '<li><button type="button" role="option" class="lv-pickopt'
+                + (c.key === picked.key ? ' on' : '') + '"'
+                + ' aria-selected="' + (c.key === picked.key ? 'true' : 'false') + '"'
+                + ' onclick="setLiveCard(' + JSON.stringify(c.key).replace(/"/g, '&quot;') + ')">'
+                + dot(c) + escapeHtml(c.label) + '</button></li>').join('')
+            + '</ul></div></div>';
+    }
+
+    // No legend paragraph. It carried the day name (already on the toggle), what
+    // the percentage measures, and on Today a line explaining why Bought Value is
+    // absent — three sentences of italics above three numbers, cut 19 Aug. The
+    // Today tab now simply shows the figures it has.
+    html += '<ul class="lv-cards">' + card(picked.view, picked.isRoll, picked.buy) + '</ul>';
+    return html + '</div>';
+}
+
+// Which card the phone is showing. Module-level and NOT persisted: it is a
+// glance, and the next time somebody opens the dashboard the roll-up is the
+// right thing to be looking at again.
+function lvTogglePickList(ev) {
+    ev.stopPropagation();
+    const wrap = ev.currentTarget.closest('.lv-pickwrap');
+    if (!wrap) return;
+    const open = wrap.classList.toggle('open');
+    ev.currentTarget.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) _lvPlacePickList(wrap);
+}
+// The list is position:fixed, so it has to be placed by hand every time it opens.
+// It has to be: .cc-widget is overflow:hidden and an absolutely positioned list
+// was sheared off at the card's bottom edge — with six stores the last one was
+// half a row of text. Mirrors _ddPlace in the DROPDOWNS module, including the
+// flip-above when the button is nearer the bottom of the screen than the top.
+function _lvPlacePickList(wrap) {
+    const btn = wrap.querySelector('.lv-pickbtn');
+    const list = wrap.querySelector('.lv-picklist');
+    if (!btn || !list) return;
+    const r = btn.getBoundingClientRect();
+    list.style.minWidth = Math.max(Math.round(r.width), 132) + 'px';
+    list.style.left = Math.round(r.left) + 'px';
+    const below = window.innerHeight - r.bottom;
+    const want = Math.min(list.scrollHeight + 12, 300);
+    if (below < want && r.top > below) {
+        list.style.top = '';
+        list.style.bottom = Math.round(window.innerHeight - r.top + 5) + 'px';
+    } else {
+        list.style.bottom = '';
+        list.style.top = Math.round(r.bottom + 5) + 'px';
+    }
+}
+// A fixed list does not travel with the button it hangs off, so a scroll has to
+// close it rather than leave it floating over the page. Capturing, because the
+// scroll may happen inside the panel rather than on the window.
+window.addEventListener('scroll', function () {
+    document.querySelectorAll('.lv-pickwrap.open').forEach(function (w) {
+        w.classList.remove('open');
+        const b = w.querySelector('.lv-pickbtn');
+        if (b) b.setAttribute('aria-expanded', 'false');
+    });
+}, true);
+// One listener for every mount. Not an Escape handler as well: closeAllModals
+// already owns that key and peels its own layers in a set order, and a second
+// opinion about Escape is how that ordering breaks.
+function _lvClosePickLists() {
+    document.querySelectorAll('.lv-pickwrap.open').forEach(function (w) {
+        w.classList.remove('open');
+        const b = w.querySelector('.lv-pickbtn');
+        if (b) b.setAttribute('aria-expanded', 'false');
+    });
+}
+document.addEventListener('click', function (ev) {
+    if (ev.target.closest && ev.target.closest('.lv-pickwrap')) return;
+    _lvClosePickLists();
+});
+
+let _lvCardPick = null;
+let _lvCardArgs = null;
+function setLiveCard(key) {
+    if (key === _lvCardPick) return;
+    _lvCardPick = key;
+    // Only the picker and the card can have changed. renderLiveDashboard() rewrites
+    // the whole mount — freshness pill, date, day toggle, tables and all — and on a
+    // phone that reflow was visible as the header and the card jumping as you moved
+    // between stores. Falls back to the full render if no zone has been built yet.
+    const zones = document.querySelectorAll('.lv-cardzone');
+    if (!zones.length || !_lvCardArgs) { renderLiveDashboard(); return; }
+    const a = _lvCardArgs;
+    const html = _lvCards(a.stores, a.d, a.rollup, a.rollupLabel);
+    zones.forEach(z => { z.outerHTML = html; });
 }
 
 function _lvTable(stores, d, rollup, rollupLabel) {
@@ -12703,7 +13093,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
 // cron only writes when a number MOVES, so a quiet morning produced the same
 // pill as a broken feed and it fired often enough to stop meaning anything.
 //
-// Nothing is lost: the header beside this pill still reads "last change 1:42 pm",
+// Nothing is lost: the header beside this pill still reads "Last change 1:42 pm",
 // which is the same information stated as a fact rather than as an alarm — a
 // genuinely stalled feed shows up there as a timestamp that stops advancing.
 function _lvFreshness(d) {
@@ -12771,6 +13161,15 @@ function renderLiveDashboard() {
     // rather than set once: the payload can change scope on a re-login without a
     // reload, and a stale code would mark somebody else's store as yours.
     _lvOwnCode = (_lvOwnStore(d, stores) || {}).code || null;
+
+    // On a phone the summary strip is hidden and every tab either side of Live is
+    // too, so a COLLAPSED board is a lone tab pill above nothing at all. Both
+    // _ccOpenDefaultTab and _dcOpenDefaultTab were written for this and then never
+    // called from anywhere — this is their one caller. _openDefaultTab picks the
+    // first tab whose computed display is not none, which on a phone is Live, and
+    // the _..DefaultOpened flags mean somebody who taps the open tab shut keeps it
+    // shut rather than having it forced back open on the next payload.
+    if (_isMobileLayout()) { _ccOpenDefaultTab(); _dcOpenDefaultTab(); }
 
     // ---- DM / CEO: the five-store table ----
     if (dDetail) {
@@ -12863,7 +13262,12 @@ function renderLiveDashboard() {
     } else if (stores.length === 1) {
         const m = stores[0];
         tiles = _lvStoreTiles(_lvView(m), d);
-        detail = m.error ? _lvStoreError(m) : _lvStoreDetail(d, _lvView(m));
+        // The cards ride in front of the desktop detail the same way they do in
+        // _lvTable — one of the two is ever visible, cards below 900px. This branch
+        // draws no table, so without them the phone had nothing left once the
+        // headline tiles were hidden.
+        detail = m.error ? _lvStoreError(m)
+            : _lvCards(stores, d, null, null) + _lvStoreDetail(d, _lvView(m));
     } else {
         // Multi-Store Manager: both stores stacked, exactly as their checklist and
         // Listing Goals already do — no dashboard switch to see the other one.
@@ -12877,7 +13281,7 @@ function renderLiveDashboard() {
     }
 
     const stamp = _lvMode === 'today'
-        ? 'last change ' + _lvClock(d.asOfCentral) + ' Central'
+        ? 'Last change ' + _lvClock(d.asOfCentral) + ' Central'
         : escapeHtml(_lvHeadStamp(d));
     details.forEach(el => {
         // Two mounts don't offer the full-screen button: the one already inside
@@ -13229,6 +13633,12 @@ async function fetchMasterDistrictDashboard() {
 let goalsRoster = [];
 let liveGoalsData = [];
 let allDistrictGoalsData = [];
+// Whether the district goals fetch has come back AT ALL — which is not the same
+// question as whether it came back with anything. An empty week is a real,
+// common state (Monday morning, before any store has set a roster), so the
+// modal must not read "no rows" as "still loading" and sit on a spinner that
+// nothing will ever clear.
+let _dmxGoalsLoaded = false;
 let editingYesterday = false;
 let goalsTargetStore = 'OVL';
 let currentAppDate = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
@@ -14712,6 +15122,7 @@ async function fetchDmGoalsData() {
             fetchAllStoreTargets()
         ]);
         allDistrictGoalsData = goalsResults.flat();
+        _dmxGoalsLoaded = true;
         dmStoreHistory = {};
         stores.forEach(s => { dmStoreHistory[s] = weeksFor(s); });
         renderDmListingModal();
@@ -14899,7 +15310,7 @@ async function fetchAndRenderEmployeeGoals() {
             <div class="emp-week-section">
                 <div class="emp-week-head">
                     <span class="emp-goal-label">THIS WEEK'S GOALS
-                        <span class="goals-info-i" data-tip-title="Your weekly goal" data-tip-desc="The sum of your daily listing goals so far this week — across whatever roles you've had each day.">i</span>
+                        <span class="goals-info-i m-hide" data-tip-title="Your weekly goal" data-tip-desc="The sum of your daily listing goals so far this week — across whatever roles you've had each day.">i</span>
                     </span>
                     <span class="emp-week-total" title="Your goal so far this week">${weekGoalTotal || 0}</span>
                 </div>
@@ -22167,14 +22578,178 @@ const CB_ACTIVE_DAYS  = 30;   // days an entry stays on the sheet
 const CB_PURGE_DAYS   = 120;  // days from date_of_call until permanent deletion
 
 let _cbCache = [];
-let _cbView = null;           // 'mine' | 'all' | 'archived'
+let _cbView = null;           // 'matches' | 'mine' | 'all' | 'history'
+// Which of the History tab's two sections is open. 'auto' means nobody has
+// clicked yet: Completed opens itself when it has rows and stays shut when it has
+// none, because leading the tab with an empty list is worse than leading it with
+// two closed headers. After a click the choice is explicit, and 'none' is a real
+// answer -- either section can be shut, neither has to be open, never both are.
+let _cbHistOpen = 'auto';   // 'auto' | 'completed' | 'archived' | 'none'
+
+// ONE CUSTOMER, SEVERAL WANTS. "Nintendo 64 full console, PS4 complete." was one
+// row asking for two things, and the matcher can only answer a row with one
+// category on it -- so it found the N64 and the PS4 was never looked for. Each
+// want is now its OWN call back: its own category, its own matches, its own
+// 30-day timer, its own status. You can sell them the N64 today and keep looking
+// for the PS4, which one row with one status cannot express.
+//
+// The only thing that needed building for that is not having to type the name and
+// number again. _cbLastAdded is who was just logged; _cbAddFor is who the form is
+// currently pre-filled for, set only when somebody ASKS for it -- silently keeping
+// the last customer in the fields is how a want gets logged against the wrong
+// person.
+let _cbLastAdded = null;   // {name, phone, store} — offers the button
+let _cbAddFor = null;      // {name, phone, store} — pre-fills the form
 let _cbExpandedId = null;
 let _cbEditingId = null;
 let _cbLoading = false;
+// A view was clicked while a fetch was in the air, so the fetch that lands is
+// answering the wrong question and one more is needed.
+let _cbReloadWanted = false;
 
 function _cbDaysAgo(n) {
     const d = new Date(); d.setDate(d.getDate() - n);
     return d.toISOString().slice(0, 10);
+}
+
+// ============================================================================
+// SHOPIFY MATCHING — "somebody already has what that customer asked for"
+// ---------------------------------------------------------------------------
+// The direction is the opposite of the obvious one: each store's OWN stock is
+// matched against EVERY store's open call backs, so the green row and the feed
+// card go to the store that HAS the item. That store rings the customer and
+// sells it from its own online store; the store that logged the customer finds
+// out through the attribution line already on the row.
+//
+// Category (a Shopify collection) is the matcher's GATE, which is why it is a
+// required field rather than a nicety: a row without one can never be answered.
+// Type narrows inside the category and is optional. "Any Model" says the
+// customer is not fussy, and is what lets a bare "Playstation 5" match.
+// ============================================================================
+
+// The storefront a match is actually sold from. These are the .myshopify.com
+// domains rather than the public ones because they always resolve, and a link
+// that 404s on a customer call is worse than no link — see cbMatchListingUrl,
+// which only offers one for a unit that is genuinely published.
+const CB_SHOP_DOMAINS = {
+    OVL: 'paymore-overland-park.myshopify.com',
+    LEE: 'paymore-lees-summit.myshopify.com',
+    WSP: 'paymore-westport.myshopify.com',
+    MPL: 'paymore-maplewood.myshopify.com',
+    BAL: 'paymore-ballwin.myshopify.com'
+};
+
+// Roles that may answer a match. Mirrors DECIDER_ROLES in the customer-callbacks
+// edge function — an employee can see the green row and ring the customer, but
+// "That's It" / "Not It" permanently changes what the sweep offers, so it needs
+// a manager. Corp roles pass through cbCanDecide separately.
+const CB_DECIDER_ROLES = ['manager', 'assistant manager', 'multi-store manager', 'owner (manager)'];
+
+// 62 categories and ~193 types is one small payload that changes when somebody
+// seeds a new type, not while a manager is typing — so it is fetched once per
+// page load and shared by the quick-add and the edit row.
+let _cbVocab = null;
+let _cbVocabPromise = null;
+function cbVocab() {
+    if (_cbVocab) return Promise.resolve(_cbVocab);
+    if (!_cbVocabPromise) {
+        _cbVocabPromise = fetch(`${CALLBACKS_URL}?vocab=1`)
+            .then(r => r.ok ? r.json() : { categories: [] })
+            .then(d => { _cbVocab = (d && d.categories) || []; return _cbVocab; })
+            // Null the promise so a failed first load is retried rather than
+            // cached as "there are no categories" for the rest of the session.
+            .catch(() => { _cbVocabPromise = null; return []; });
+    }
+    return _cbVocabPromise;
+}
+
+function _cbCatByHandle(handle) {
+    return (_cbVocab || []).find(c => c.handle === handle) || null;
+}
+
+// Which stores' stock counts as "ours" for the green row. A corp role holds no
+// stock at all, so it gets null — every match is information rather than an
+// instruction, and nothing turns green.
+function _cbMatchScope() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    if (CB_CORP_ROLES.includes(role) || store === 'ALL') return null;
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return [...MULTISTORE_MANAGER_STORES];
+    return STORE_CODES.includes(store) ? [store] : [];
+}
+
+// A match still worth acting on. `sold` rows ship from the server so a row that
+// was green can say why it stopped, but they are not an answer to anything.
+function _cbLiveMatches(entry) {
+    return (entry.matches || []).filter(m => m.state === 'suggested' || m.state === 'confirmed');
+}
+
+function _cbSplitMatches(entry) {
+    const scope = _cbMatchScope();
+    const live = _cbLiveMatches(entry);
+    if (!scope) return { mine: [], theirs: live };
+    return {
+        mine:   live.filter(m => scope.includes(m.store_code)),
+        theirs: live.filter(m => !scope.includes(m.store_code))
+    };
+}
+
+// Only the holding store's management may answer. The server enforces the same
+// rule; this was here so a button that would 403 was never offered in the first
+// place. No button calls it since the answers came off the panel on 2026-08-24 --
+// it stays as the readable statement of who the server will accept a decision
+// from, for whoever puts that control back or drives cbMatchDecide by hand.
+// ⚠️ EITHER STORE'S MANAGEMENT, and the second half was added on 2026-08-24 when
+// "Not This" came back. The rule was the HOLDING store only, which is right for a
+// question about the stock — but the question this button usually answers is about
+// the CUSTOMER: "they would not want a broken one". That is known by the store
+// that took the call, and under the old rule an OVL manager could not dismiss
+// MPL's broken PS5 from their own customer's row, which is the exact case the
+// button was brought back for.
+//
+// So a veto may come from whoever knows either half: the store holding the item,
+// or the store that logged the want. canDecideMatch in customer-callbacks mirrors
+// this — see [[kpi-role-gate]] for what happens when those two drift.
+function cbCanDecide(match, entry) {
+    const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase().trim();
+    const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    if (CB_CORP_ROLES.includes(role) || store === 'ALL') return true;
+    if (!CB_DECIDER_ROLES.includes(role)) return false;
+    const mine = (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
+        ? MULTISTORE_MANAGER_STORES : [store];
+    return mine.includes(match.store_code) || (!!entry && mine.includes(entry.store));
+}
+
+// A link only when there is genuinely something to open. 114 of the in-stock
+// items the matcher can reach are not published to the online store, and a
+// storefront URL for one of those is a 404 handed to somebody mid-phone-call.
+function cbMatchListingUrl(m) {
+    if (!m.online_published || !m.product_handle) return null;
+    const shop = CB_SHOP_DOMAINS[m.store_code];
+    return shop ? `https://${shop}/products/${encodeURIComponent(m.product_handle)}` : null;
+}
+
+// The Shopify admin link, and ONLY for a store's own stock. The storefront URL
+// above is public and does not exist for the in-stock units that were never
+// published; this one always resolves, because it points at the product record
+// rather than at the listing. Own store only on purpose: whoever is reading this
+// is signed into their own Shopify and nobody else's, so another store's admin
+// link is a login screen handed to somebody mid-phone-call.
+function cbMatchAdminUrl(m) {
+    const scope = _cbMatchScope();
+    if (!scope || !scope.includes(m.store_code)) return null;
+    const shop = CB_SHOP_DOMAINS[m.store_code];
+    // product_id arrives as a gid, and the numeric id is the last segment of it.
+    // Anything that is not a bare number is not linkable, and a broken admin URL
+    // handed over mid-call is worse than no link at all.
+    const id = String(m.product_id || '').split('/').pop();
+    if (!shop || !/^[0-9]+$/.test(id)) return null;
+    return `https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/products/${id}`;
+}
+
+function _cbMoney(v) {
+    const n = Number(v);
+    return isFinite(n) ? '$' + n.toFixed(2) : '';
 }
 
 async function cbFetch(view, store) {
@@ -22204,6 +22779,21 @@ async function cbPost(payload) {
 // Edit/delete/restore: own store only (MSM covers both of theirs, corp covers all).
 // Status changes are deliberately NOT gated — any store marking an entry Contacted
 // is the cross-store "we've got this" signal, and the change is attributed below.
+// WHO MAY DELETE. Management and above; an ASM or below asks instead. A delete
+// takes the customer's request and the whole note thread with it and there is no
+// undo — that is a different weight of action from editing a phone number, which
+// is why it is a different list from cbCanModify.
+// Mirrored by DELETE_ROLES in the customer-callbacks function, which is what
+// actually enforces it.
+const CB_DELETE_ROLES = ['manager', 'owner (manager)', 'owner manager',
+    'multi-store manager', 'district manager', 'ceo', 'mocd'];
+
+function cbCanDelete(entry) {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (!CB_DELETE_ROLES.includes(role)) return false;
+    return cbCanModify(entry);
+}
+
 function cbCanModify(entry) {
     const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase().trim();
     const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
@@ -22254,7 +22844,9 @@ function _cbShortDate(iso) {
 
 function _cbDaysBadge(entry) {
     const { daysLeft, purgeLeft } = cbDaysInfo(entry);
-    if (_cbView === 'archived' || entry.archived_at || daysLeft <= 0) {
+    // archived_at is the fact; the view was only ever a proxy for it, and since
+    // Completed and Archived share a tab it is not even that any more.
+    if (entry.archived_at || daysLeft <= 0) {
         return `<span class="cb-days cb-days-archived">purges in ${Math.max(purgeLeft, 0)}d</span>`;
     }
     const cls = daysLeft <= 7 ? 'cb-days-urgent' : daysLeft <= 14 ? 'cb-days-warn' : 'cb-days-ok';
@@ -22285,17 +22877,60 @@ function _cbIsCorpRole() {
 
 // --- Load & render
 async function cbLoad() {
-    // Corp roles (DM/CEO/MOCD) watch the whole district — no "My Store" view;
-    // they land on All Stores and narrow with the store filter instead.
-    if (_cbView === null) _cbView = _cbIsCorpRole() ? 'all' : 'mine';
-    _cbSyncControls();   // highlight the right view button before the fetch resolves
-    if (_cbLoading) return;
+    // FIRST LOAD PICKS ITS OWN TAB, and it cannot be picked before the data is in:
+    // "is there anything to act on" is a question about the rows. So the view stays
+    // null across the fetch and is decided once the cache is filled -- which also
+    // means there is nothing for _cbSyncControls to highlight until then, and the
+    // HTML marks Matches active so the toggle is not blank while it loads.
+    if (_cbView) _cbSyncControls();   // highlight the right view button before the fetch resolves
+
+    // ⚠️ A CLICK ARRIVING MID-FETCH USED TO BE THROWN AWAY. cbSetView sets the view
+    // and calls this; a bare `if (_cbLoading) return` dropped it on the floor —
+    // nothing re-rendered, and clicking the SAME tab again hit cbSetView's equality
+    // guard and did nothing at all, so the panel looked frozen on whatever was last
+    // drawn. Arriving from another Operations tab made it easy to hit, because the
+    // first fetch is still in the air while somebody is clicking.
+    //
+    // Now the view change is drawn immediately from the cache in hand, and the load
+    // is asked to run again when the one in flight lands — which is what the History
+    // tab needs, since only that view fetches the archived rows.
+    if (_cbLoading) {
+        _cbReloadWanted = true;
+        if (_cbView) cbRender();
+        return;
+    }
     _cbLoading = true;
     const body = document.getElementById('cbBody');
     if (body && !_cbCache.length) body.innerHTML = '<div class="status-message">Loading Call Backs…</div>';
     try {
         // Fetch everything once; view filtering happens client-side in cbRender.
-        _cbCache = await cbFetch(_cbView === 'archived' ? 'archived' : 'active', 'ALL');
+        // The vocabulary rides along on the first load so the quick-add's Category
+        // select is never briefly empty — after that cbVocab() resolves instantly.
+        //
+        // ARCHIVED ROWS COME FROM A SECOND CALL, and they are MERGED into the same
+        // cache rather than held beside it. Fourteen actions in this module find
+        // their row with `_cbCache.find(x => x.id === id)`, so a second array would
+        // have broken every one of them for an archived row -- restore included,
+        // which is the only thing you can do to one. The archived call is skipped
+        // everywhere except the History tab, where it is the only way to see them.
+        const needArchived = _cbView === 'history';
+        const [rows, archived] = await Promise.all([
+            cbFetch('active', 'ALL'),
+            needArchived ? cbFetch('archived', 'ALL') : Promise.resolve([]),
+            cbVocab()
+        ]);
+        _cbCache = archived.length ? [...rows, ...archived] : rows;
+        // ⚠️ TESTED HERE, NOT AT ENTRY. The landing view is a default for somebody
+        // who has not chosen one — so the question is whether a view is set NOW,
+        // after the await. Reading a `firstLoad` flag captured before the fetch
+        // overwrote a tab the person had clicked while it was in the air.
+        if (_cbView === null) {
+            // Matches when this store has stock against a call back, All Stores when
+            // it does not. My Store is no longer where anyone lands: a manager who
+            // wants only their own rows is one click away, and the reason to open
+            // this tool at all is stock that can be sold today.
+            _cbView = _cbVisibleEntries('matches').length ? 'matches' : 'all';
+        }
         cbRender();
     } catch (e) {
         // Only surface the error when there's nothing on screen — a failed
@@ -22303,6 +22938,9 @@ async function cbLoad() {
         if (body && !_cbCache.length) body.innerHTML = '<div class="status-message">Could not load call backs. Try again in a minute.</div>';
     } finally {
         _cbLoading = false;
+        // Cleared before the call, so one change queues one extra round rather than
+        // a loop.
+        if (_cbReloadWanted) { _cbReloadWanted = false; cbLoad(); }
     }
 }
 
@@ -22314,96 +22952,389 @@ function cbSetView(view) {
     cbLoad();
 }
 
+// What 'auto' actually means, resolved against the data rather than guessed at
+// the moment the tab is built.
+function _cbHistResolved() {
+    if (_cbHistOpen !== 'auto') return _cbHistOpen;
+    return _cbVisibleEntries('completed').length ? 'completed' : 'none';
+}
+
+// Clicking the open section CLOSES it. Never two open at once, which is what the
+// single-value state gives for free.
+function cbSetHistory(which) {
+    _cbHistOpen = (_cbHistResolved() === which) ? 'none' : which;
+    _cbExpandedId = null;
+    _cbEditingId = null;
+    cbRender();
+}
+window.cbSetHistory = cbSetHistory;
+
 function _cbSyncControls() {
-    ['mine', 'all', 'archived'].forEach(v => {
+    ['matches', 'mine', 'all', 'history'].forEach(v => {
         const btn = document.getElementById('cbView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
         if (btn) btn.classList.toggle('active', _cbView === v);
     });
     // (The My Store button itself is role-gated in the HTML — applyRoleBasedUI
     // hides it for corp roles before first paint, so no JS display toggling here.)
-    const filter = document.getElementById('cbStoreFilter');
-    if (filter) filter.style.display = (_cbView === 'mine') ? 'none' : '';
+    //
+    // THE STORE FILTER IS A CORP CONTROL. A store already has the only two scopes
+    // that mean anything to it -- its own rows, and everybody's -- and the dropdown
+    // was a third way of asking the same question with one more thing to leave set
+    // wrong. Corp keeps it: a DM has no My Store, so narrowing to one is the only
+    // way they get a single store's list.
+    _cbShowFilter(_cbIsCorpRole());
 }
 
-function _cbVisibleEntries() {
+// MATCHES TO THE TOP. The list is ordered by date of call, which is the same
+// thing as time left, so a row somebody can answer today sat wherever its call
+// date put it -- eleven rows down, under ten nobody can act on. Rank first and
+// date second, so inside each band the old order is untouched.
+//
+// Your OWN stock outranks another store's, because those are different things:
+// one is a call to make, the other a fact to know. A corp role holds no stock of
+// its own so every match ranks 1 for them, which changes nothing -- matched still
+// beats unmatched, which is the whole point.
+// THE MATCHES TAB IS A WORKLIST, so it holds only what this store can act on. It
+// shipped holding every matched row with your own sorted first, and an OVL manager
+// opened it onto a WSP row they can do nothing about. The store that HAS the item
+// is the one that rings the customer — another store's match is information, and
+// it is already on the All Stores list where information belongs.
+//
+// CORP IS THE EXCEPTION, and has to be: a DM holds no stock, so `mine` is empty
+// for them and this tab would be empty too. For corp every match is theirs to
+// chase up, which is the whole point of the district view.
+function _cbMatchIsMyWork(e) {
+    return _cbMatchScope() ? _cbSplitMatches(e).mine.length > 0 : _cbLiveMatches(e).length > 0;
+}
+
+function _cbMatchRank(e) {
+    const { mine, theirs } = _cbSplitMatches(e);
+    return mine.length ? 0 : theirs.length ? 1 : 2;
+}
+
+// `view` is passed in rather than read off _cbView because the History tab asks
+// for two lists in one render.
+// ⚠️ HIDING A SELECT DOES NOT HIDE A SELECT ANY MORE. Every select on the site is
+// wrapped by the custom dropdown (see _ddInit): the native one stays in the DOM and
+// stays authoritative, but it is moved inside a `.dd-host` and covered by a
+// `.dd-btn` face. So `select.style.display = 'none'` hides the half nobody can see
+// and leaves the visible half on screen. This line read
+// `filter.style.display = (_cbView === 'mine') ? 'none' : ''` for weeks and the
+// dropdown sat there on My Store the whole time.
+//
+// Both halves are set: the host is what shows, and the select is covered anyway,
+// but the enhancer may not have wrapped it yet on the very first paint.
+function _cbShowFilter(show) {
+    const sel = document.getElementById('cbStoreFilter');
+    if (!sel) return;
+    const host = sel.closest('.dd-host');
+    sel.style.display = show ? '' : 'none';
+    if (host) host.style.display = show ? '' : 'none';
+}
+
+function _cbVisibleEntries(view) {
+    const v = view || _cbView;
     const filter = document.getElementById('cbStoreFilter');
-    const filterStore = (_cbView === 'mine') ? _cbHomeStore() : (filter ? filter.value : 'ALL');
-    const showCompleted = document.getElementById('cbShowCompleted')?.checked;
+    // Read the dropdown only for the roles that can SEE it, so a value left behind
+    // by a role change cannot quietly narrow somebody's list to one store.
+    const filterStore = (v === 'mine') ? _cbHomeStore()
+        : (_cbIsCorpRole() && filter) ? filter.value : 'ALL';
+    // Completed and Archived are sections of one tab now, not views of their own.
+    // Every branch tests archived_at explicitly: archived rows are in the cache at
+    // all on the History tab, and an expired row must never surface in an open list.
+    const keep = v === 'archived'  ? (e => !!e.archived_at)
+        : v === 'completed' ? (e => !e.archived_at && e.status === 'completed')
+        : v === 'matches'   ? (e => !e.archived_at && e.status !== 'completed' && _cbMatchIsMyWork(e))
+        : (e => !e.archived_at && e.status !== 'completed');
+    // Matches-first on the open lists only. On the two backward-looking ones the
+    // order that matters is when it happened.
+    const byMatch = v === 'matches' || v === 'mine' || v === 'all';
     return _cbCache
         .filter(e => filterStore === 'ALL' || e.store === filterStore)
-        .filter(e => _cbView === 'archived' || showCompleted || e.status !== 'completed')
-        .sort((a, b) => (b.date_of_call || '').localeCompare(a.date_of_call || ''));
+        .filter(keep)
+        .sort((a, b) => (byMatch ? _cbMatchRank(a) - _cbMatchRank(b) : 0)
+            || (b.date_of_call || '').localeCompare(a.date_of_call || ''));
+}
+
+// The table, lifted out of cbRender so the History tab's two sections can each
+// render one of their own.
+function _cbTableHtml(entries) {
+    const showStore = _cbView !== 'mine';
+    let html = `<table class="cb-table"><thead><tr>
+        ${showStore ? '<th class="cb-col-store">Store</th>' : ''}
+        <th class="cb-col-customer">Customer</th><th class="cb-col-phone">Phone</th><th class="cb-col-item">Item Wanted</th>
+        <th class="cb-col-status">Status</th><th class="cb-col-timer">Timer</th><th class="cb-col-notes">${CB_ICONS.note}</th><th class="cb-col-logged">Logged</th><th class="cb-col-actions"></th>
+    </tr></thead><tbody>`;
+    entries.forEach(e => { html += cbRowHtml(e, showStore); });
+    return html + '</tbody></table>';
+}
+
+// ONE TAB, TWO LISTS, exactly one open. Completed and Archived were two tabs and
+// they were the two nobody opened: one is the end of a call back and the other the
+// end of its clock, which is the same shelf. Only the open section renders a
+// table, so the closed one costs nothing.
+const _CB_HIST = {
+    completed: { label: 'Completed', empty: 'Nothing completed yet.',
+        icon: '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>' },
+    archived:  { label: 'Archived', empty: 'Nothing archived in the last 90 days.',
+        icon: '<svg viewBox="0 0 24 24"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>' }
+};
+
+function _cbHistoryHtml(lists) {
+    const openKey = _cbHistResolved();
+    const sect = (key) => {
+        const meta = _CB_HIST[key];
+        const list = lists[key];
+        const isOpen = openKey === key;
+        return `<button class="cb-hist-head ${isOpen ? 'is-open' : ''}" onclick="cbSetHistory('${key}')">
+                <svg class="cb-hist-chev" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+                ${meta.icon}<span class="cb-hist-label">${meta.label}</span>
+                <span class="cb-hist-n">${list.length}</span>
+            </button>` + (isOpen
+            ? `<div class="cb-hist-body">${list.length ? _cbTableHtml(list) : `<div class="cb-empty">${meta.empty}</div>`}</div>`
+            : '');
+    };
+    return `<div class="cb-hist">${sect('completed')}${sect('archived')}</div>`;
+}
+
+// The Matches tab counts what it is FOR, not how many rows are open. Every row on
+// it is now answerable by whoever is reading, so the count says so plainly; corp
+// gets the neutral wording because a DM answers none of them personally.
+function _cbMatchesSubtitle(entries) {
+    const mine = !!_cbMatchScope();
+    if (!entries.length) {
+        return mine ? 'Nothing you have is on a call back' : 'Nothing in stock for anybody';
+    }
+    return mine ? `${entries.length} you can answer` : `${entries.length} with stock`;
 }
 
 function cbRender() {
     const body = document.getElementById('cbBody');
     if (!body) return;
     _cbSyncControls();
-    const entries = _cbVisibleEntries();
 
     const filterEl = document.getElementById('cbStoreFilter');
-    const scopeStore = (_cbView === 'mine') ? _cbHomeStore() : (filterEl ? filterEl.value : 'ALL');
+    const scopeStore = (_cbView === 'mine') ? _cbHomeStore()
+        : (_cbIsCorpRole() && filterEl) ? filterEl.value : 'ALL';
     const scoped = _cbCache.filter(e => scopeStore === 'ALL' || e.store === scopeStore);
     const open = scoped.filter(e => e.status !== 'completed' && !e.archived_at).length;
     const expiring = scoped.filter(e => { const d = cbDaysInfo(e).daysLeft; return e.status !== 'completed' && !e.archived_at && d > 0 && d <= 7; }).length;
     const sub = document.getElementById('cbSubtitle');
-    if (sub) sub.textContent = _cbView === 'archived'
-        ? `${entries.length} archived`
+
+    // History renders two lists and no quick-add, so it leaves early rather than
+    // threading two special cases through everything below.
+    if (_cbView === 'history') {
+        const lists = { completed: _cbVisibleEntries('completed'), archived: _cbVisibleEntries('archived') };
+        if (sub) sub.textContent = `${lists.completed.length} completed · ${lists.archived.length} archived`;
+        body.innerHTML = _cbHistoryHtml(lists);
+        return;
+    }
+
+    const entries = _cbVisibleEntries();
+    if (sub) sub.textContent = _cbView === 'matches'
+        ? _cbMatchesSubtitle(entries)
         : `${open} open${expiring ? ` · ${expiring} expiring soon` : ''}`;
 
     let html = '';
-    if (_cbView !== 'archived') html += _cbQuickAddHtml();
+    // No quick-add on Matches: it is a worklist you scan and act on, and the add
+    // form would push the thing you came for down the screen. Logging a new call
+    // back happens on My Store, where the row you are creating belongs.
+    if (_cbView !== 'matches') html += _cbQuickAddHtml();
 
     if (!entries.length) {
         const msgs = {
-            mine:     'No call backs yet. When a customer wants something you don\'t have, log it above ↑',
-            all:      'No open call backs across stores.',
-            archived: 'Nothing archived in the last 90 days.'
+            matches: _cbMatchScope()
+                ? 'Nothing you have in stock is on a call back right now. Check All Stores for what other stores are looking for.'
+                : 'Nothing anybody has in stock is on a call back right now.',
+            mine:    'No call backs yet. When a customer wants something you don\'t have, log it above ↑',
+            all:     'No open call backs across stores.'
         };
         html += `<div class="cb-empty">${msgs[_cbView]}</div>`;
         body.innerHTML = html;
         return;
     }
 
-    const showStore = _cbView !== 'mine';
-    html += `<table class="cb-table"><thead><tr>
-        ${showStore ? '<th class="cb-col-store">Store</th>' : ''}
-        <th class="cb-col-customer">Customer</th><th class="cb-col-phone">Phone</th><th class="cb-col-item">Item Wanted</th>
-        <th class="cb-col-status">Status</th><th class="cb-col-timer">Timer</th><th class="cb-col-notes">${CB_ICONS.note}</th><th class="cb-col-logged">Logged</th><th class="cb-col-actions"></th>
-    </tr></thead><tbody>`;
-    entries.forEach(e => { html += cbRowHtml(e, showStore); });
-    html += '</tbody></table>';
-    body.innerHTML = html;
+    body.innerHTML = html + _cbTableHtml(entries);
 }
+
+// Offered after a successful add, and only then: the fastest moment to log a
+// second want is while the customer is still on the phone.
+function cbAddAnotherItem() {
+    if (!_cbLastAdded) return;
+    _cbAddFor = _cbLastAdded;
+    cbRender();
+    document.getElementById('cbAddItem')?.focus();
+}
+window.cbAddAnotherItem = cbAddAnotherItem;
+
+function cbAddForClear() {
+    _cbAddFor = null;
+    _cbLastAdded = null;
+    cbRender();
+    document.getElementById('cbAddName')?.focus();
+}
+window.cbAddForClear = cbAddForClear;
 
 function _cbQuickAddHtml() {
     const home = _cbHomeStore();
     const addStores = _cbAddStores();
-    const dflt = addStores && addStores.includes(home) ? home : (addStores ? addStores[0] : home);
+    const pinned = _cbAddFor;
+    const dfltStore = pinned && pinned.store ? pinned.store : null;
+    const dflt = dfltStore || (addStores && addStores.includes(home) ? home : (addStores ? addStores[0] : home));
     const storePicker = addStores
         ? `<select id="cbAddStore" class="kpi-select cb-add-store">${addStores.map(s => `<option value="${s}" ${s === dflt ? 'selected' : ''}>${s}</option>`).join('')}</select>`
         : '';
+    // Two states, one strip. Before: "that is logged, want to add another for
+    // them?". After: "you are still adding for Mark", with the way out on it --
+    // pre-filled fields somebody has forgotten about are worse than empty ones.
+    //
+    // AND THE WAY OUT IS A CANCEL, said in that word. It read "Done — Log Someone
+    // Else", which is the same action but sounds like a save: somebody who hit Add
+    // Another Item by accident had to work out that the button finishing the thing
+    // they did not mean to start was the one marked Done. Red, an X, and the word
+    // Cancel — and it is deliberately the only red thing on the strip.
+    const strip = pinned
+        ? `<div class="cb-qa-for">
+               <span class="cb-qa-for-txt">Adding Another Item For <b>${escapeHtml(pinned.name)}</b></span>
+               <button class="cb-qa-for-btn is-cancel" onclick="cbAddForClear()"
+                       data-cb-tip="Stops adding for ${escapeHtml(pinned.name)} and empties the fields. Nothing already logged is affected.">${CB_ICONS.cancel}Cancel</button>
+           </div>`
+        : (_cbLastAdded
+        ? `<div class="cb-qa-for is-done">
+               <span class="cb-qa-for-txt">Logged For <b>${escapeHtml(_cbLastAdded.name)}</b></span>
+               <button class="cb-qa-for-btn" onclick="cbAddAnotherItem()">${CB_ICONS.plus}Add Another Item For ${escapeHtml(_cbLastAdded.name)}</button>
+           </div>`
+        : '');
+    // Two lines rather than one: who called and what they want, then how we find
+    // it. Nine controls on a single row put the Category select somewhere nobody
+    // would look for it, and it is the field the whole match depends on.
     return `<div class="cb-quickadd">
-        ${storePicker}
-        <input type="text" id="cbAddName"  placeholder="Customer name" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-        <input type="tel"  id="cbAddPhone" placeholder="Phone" inputmode="numeric" oninput="cbPhoneInput(this)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-        <input type="text" id="cbAddItem"  placeholder="Item they're looking for" class="cb-add-item" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-        <input type="text" id="cbAddNoteTxt" placeholder="Notes (optional)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-        <button class="btn-primary cb-add-btn" onclick="cbQuickAdd()">${CB_ICONS.plus}Add</button>
+        ${strip}
+        <div class="cb-qa-line">
+            ${storePicker}
+            <input type="text" id="cbAddName"  placeholder="Customer name" value="${pinned ? escapeHtml(pinned.name) : ''}" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+            <input type="tel"  id="cbAddPhone" placeholder="Phone" inputmode="numeric" value="${pinned ? escapeHtml(cbFormatPhone(pinned.phone)) : ''}" oninput="cbPhoneInput(this)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+            <input type="text" id="cbAddItem"  placeholder="Item they're looking for" class="cb-add-item" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+        </div>
+        <div class="cb-qa-line cb-qa-match">
+            ${_cbCategorySelectHtml('cbAddCategory', '', 'cbAddType')}
+            ${_cbTypeSelectHtml('cbAddType', '', [])}
+            <label class="cb-anymodel" data-cb-tip="Tick when the customer isn't fussy — any model in this category counts. Without it, something they actually said has to match the listing.">
+                <input type="checkbox" id="cbAddAnyModel"><span>Any Model</span>
+            </label>
+            <input type="text" id="cbAddNoteTxt" placeholder="Notes (optional)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+            <button class="btn-primary cb-add-btn" onclick="cbQuickAdd()">${CB_ICONS.plus}Add</button>
+        </div>
     </div>`;
+}
+
+// The Category select. Sorted by how much stock the category actually holds, so
+// the six that cover most of a shift are at the top of the list rather than
+// alphabetised among 62.
+function _cbCategorySelectHtml(id, selected, typeSelectId) {
+    const opts = (_cbVocab || []).map(c =>
+        `<option value="${escapeHtml(c.handle)}" ${c.handle === selected ? 'selected' : ''}>${escapeHtml(c.title)}</option>`
+    ).join('');
+    return `<select id="${id}" class="kpi-select cb-cat-select" data-cb-tip="Which shelf it lives on. This is what the search is limited to, so it's required."
+            onchange="cbCategoryChanged('${id}','${typeSelectId}')">
+        <option value="">Category…</option>${opts}
+    </select>`;
+}
+
+// The Type select — optional, and disabled until a category with types is
+// chosen. A chosen type is a REQUIREMENT on the match, not a hint, which is why
+// the empty option says "Any type" rather than looking like a blank field.
+function _cbTypeSelectHtml(id, selected, types) {
+    const list = types || [];
+    const opts = list.map(t =>
+        `<option value="${t.id}" ${String(t.id) === String(selected) ? 'selected' : ''}>${escapeHtml(t.name)}</option>`
+    ).join('');
+    return `<select id="${id}" class="kpi-select cb-type-select" ${list.length ? '' : 'disabled'}
+            data-cb-tip="Optional. Narrows the search inside the category — a platform, a model or a shape.">
+        <option value="">${list.length ? 'Any type' : 'Type…'}</option>${opts}
+    </select>`;
+}
+
+// Repopulating the Type select in place rather than re-rendering the pane: a
+// re-render would wipe the name and phone somebody has already typed.
+function cbCategoryChanged(catId, typeId) {
+    const cat = _cbCatByHandle(document.getElementById(catId)?.value || '');
+    const sel = document.getElementById(typeId);
+    if (!sel) return;
+    const types = cat ? (cat.types || []) : [];
+    sel.innerHTML = `<option value="">${types.length ? 'Any type' : 'Type…'}</option>`
+        + types.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+    sel.disabled = !types.length;
+}
+
+// What the row was filed under, plus the two tags that explain its behaviour.
+// "Any Model" is why a bare "Playstation 5" matches; "Needs Detail" is why a row
+// with a category still never will — the customer named nothing specific and the
+// type is only a shelf, so there is nothing for the matcher to land on.
+function _cbItemMetaHtml(e) {
+    const bits = [];
+    if (e.category_title) {
+        const cat = _cbCatByHandle(e.category_handle);
+        const ty = (cat && e.type_id) ? (cat.types || []).find(t => String(t.id) === String(e.type_id)) : null;
+        bits.push(`<span class="cb-cat">${escapeHtml(e.category_title)}${ty ? ' · ' + escapeHtml(ty.name) : ''}</span>`);
+    }
+    if (e.any_model) bits.push('<span class="cb-tag cb-tag-any" data-cb-tip="Any model in this category counts.">Any Model</span>');
+    if (e.needs_detail) bits.push('<span class="cb-tag cb-tag-detail" data-cb-tip="Nothing here is specific enough to match against stock. Edit the row and say which model, or tick Any Model.">Needs Detail</span>');
+    return bits.join('');
+}
+
+// The chip that carries the whole point of the feature. Green and first-person
+// when the stock is OURS — that is an instruction, ring the customer. Neutral
+// when it is another store's, because that is information: they will be told.
+//
+// EXCEPT FOR CORP. A DM has no stock of their own, so _cbMatchScope returns null
+// and every match landed in `theirs` and came out grey — which made the district
+// view the one place you could not see, at a glance, that a store had something
+// to act on. Green there means "somebody has to ring a customer about this", and
+// the label names who: the point of the district view is checking they did.
+function _cbMatchChipHtml(mine, theirs) {
+    if (!_cbMatchScope() && theirs.length) {
+        const stores = [...new Set(theirs.map(m => m.store_code))];
+        const label = stores.length === 1 ? `${stores[0]} Has It` : `${stores.length} Stores Have It`;
+        return `<span class="cb-tag cb-tag-hasit" data-cb-tip="${escapeHtml(stores.join(', '))} ${stores.length === 1 ? 'has' : 'have'} one in stock and should be ringing the customer. Open the row to see what they have and whether they have answered.">${escapeHtml(label)}</span>`;
+    }
+    if (mine.length) {
+        const n = mine.length;
+        // The count is how many of OUR listings fit, not how many units we own —
+        // the matcher surfaces the best three per store, so LEE's five PS5s read
+        // as three. Claiming "you have 3 in stock" would be understating it.
+        return `<span class="cb-tag cb-tag-hasit" data-cb-tip="${n === 1 ? 'One of your listings fits' : n + ' of your listings fit'} — open the row to see ${n === 1 ? 'it' : 'them'}.">You Have It${n > 1 ? ' · ' + n : ''}</span>`;
+    }
+    if (!theirs.length) return '';
+    const stores = [...new Set(theirs.map(m => m.store_code))];
+    const label = stores.length === 1 ? `${stores[0]} Has It` : `${stores.length} Stores Have It`;
+    return `<span class="cb-tag cb-tag-elsewhere" data-cb-tip="${escapeHtml(stores.join(', '))} ${stores.length === 1 ? 'has' : 'have'} one in stock. Their store rings the customer.">${escapeHtml(label)}</span>`;
 }
 
 function cbRowHtml(e, showStore) {
     const canAct = cbCanModify(e);
     const meta = CB_STATUS_META[e.status] || CB_STATUS_META.open;
-    const isArchived = _cbView === 'archived';
+    // A FACT ABOUT THE ROW, not about the view. This read `_cbView === 'archived'`,
+    // which stopped being able to answer the question the moment Completed and
+    // Archived became two sections of one tab -- a completed row would have come
+    // out wearing the Expired chip and a Restore button.
+    const isArchived = !!e.archived_at;
     const editing = _cbEditingId === e.id;
     const expanded = _cbExpandedId === e.id || editing;
+    const { mine, theirs } = _cbSplitMatches(e);
+    const matchChip = isArchived ? '' : _cbMatchChipHtml(mine, theirs);
 
     // Status is clickable for EVERYONE — another store marking Contacted is the
     // cross-store "we have this item" signal. The change is attributed under the chip.
     // The attribution line always renders (blank when unset) so row heights never shift.
-    const statusBy = `<div class="cb-status-by">${(e.status !== 'open' && e.status_by) ? `${escapeHtml(e.status_by)} · ${escapeHtml(e.status_store || '')}` : '&nbsp;'}</div>`;
+    // Once somebody has acted this slot carries WHO, which is the more useful
+    // thing. Until then it says what to do with the pill above it — the pill has
+    // always been clickable and nothing on the row said so, so the status sat at
+    // Open on rows that had plainly been dealt with.
+    const statusBy = `<div class="cb-status-by">${
+        (e.status !== 'open' && e.status_by) ? `${escapeHtml(e.status_by)} · ${escapeHtml(e.status_store || '')}`
+        : (!isArchived && e.status === 'open') ? '<span class="cb-status-hint">Click to Change</span>'
+        : '&nbsp;'}</div>`;
     const chip = isArchived
         ? `<span class="cb-chip cb-chip-expired">Expired</span>`
         : `<span class="cb-chip cb-chip-${e.status} cb-chip-clickable" onclick="event.stopPropagation();cbCycleStatus('${e.id}')" data-cb-tip="Click to mark ${CB_STATUS_META[meta.next].label}">${meta.label}</span>${statusBy}`;
@@ -22416,7 +23347,13 @@ function cbRowHtml(e, showStore) {
         actions = isArchived
             ? `<button class="cb-icon-btn" data-cb-tip="Restore to active" onclick="event.stopPropagation();cbRestoreEntry('${e.id}')">${CB_ICONS.restore}</button>`
             : `<button class="cb-icon-btn" data-cb-tip="Edit" onclick="event.stopPropagation();cbEditEntry('${e.id}')">${CB_ICONS.edit}</button>`;
-        actions += `<button class="cb-icon-btn cb-btn-danger" data-cb-tip="Delete" onclick="event.stopPropagation();cbDeleteEntry('${e.id}')">${CB_ICONS.trash}</button>`;
+        // A delete is the one action here that destroys a customer's request
+        // outright, and there is no undo — the row and its whole note thread go.
+        // So management deletes, and everybody else ASKS: the request lands in the
+        // note thread, where it is attributed and a manager can act on it.
+        actions += cbCanDelete(e)
+            ? `<button class="cb-icon-btn cb-btn-danger" data-cb-tip="Delete" onclick="event.stopPropagation();cbDeleteEntry('${e.id}')">${CB_ICONS.trash}</button>`
+            : `<button class="cb-icon-btn" data-cb-tip="Ask a manager to delete this" onclick="event.stopPropagation();cbRequestDelete('${e.id}')">${CB_ICONS.trash}</button>`;
     }
 
     let row;
@@ -22425,7 +23362,14 @@ function cbRowHtml(e, showStore) {
             ${showStore ? `<td class="cb-col-store">${escapeHtml(e.store)}</td>` : ''}
             <td><input class="cb-edit-input" id="cbEditName" value="${escapeHtml(e.customer_name)}"></td>
             <td><input class="cb-edit-input" id="cbEditPhone" type="tel" inputmode="numeric" oninput="cbPhoneInput(this)" value="${escapeHtml(String(e.phone || '').replace(/\D/g, '').slice(0, 10))}"></td>
-            <td class="cb-col-item"><input class="cb-edit-input" id="cbEditItem" value="${escapeHtml(e.item)}"></td>
+            <td class="cb-col-item">
+                <input class="cb-edit-input" id="cbEditItem" value="${escapeHtml(e.item)}">
+                <div class="cb-edit-match">
+                    ${_cbCategorySelectHtml('cbEditCategory', e.category_handle || '', 'cbEditType')}
+                    ${_cbTypeSelectHtml('cbEditType', e.type_id || '', (_cbCatByHandle(e.category_handle) || {}).types || [])}
+                    <label class="cb-anymodel"><input type="checkbox" id="cbEditAnyModel" ${e.any_model ? 'checked' : ''}><span>Any Model</span></label>
+                </div>
+            </td>
             <td class="cb-cell-status">${chip}</td>
             <td class="cb-cell-timer"><input class="cb-edit-input cb-edit-date" id="cbEditDate" type="date" value="${e.date_of_call}" data-cb-tip="Date of call (resets the 30-day timer)"></td>
             <td class="cb-col-notes"></td>
@@ -22436,11 +23380,20 @@ function cbRowHtml(e, showStore) {
             </td>
         </tr>`;
     } else {
-        row = `<tr class="cb-row ${expanded ? 'cb-row-open' : ''} ${e.status === 'completed' ? 'cb-row-done' : ''}" data-id="${e.id}" onclick="cbToggleRow('${e.id}')">
+        // The green row, and it follows the green CHIP rather than `mine` — corp
+        // has no stock of its own, so `mine` is always empty for a DM and the
+        // district view was the one place the rows all looked the same. Green
+        // means "there is stock somebody has to ring about", which is exactly
+        // what a DM is scanning the list for.
+        const hasIt = mine.length || (!_cbMatchScope() && theirs.length);
+        row = `<tr class="cb-row ${expanded ? 'cb-row-open' : ''} ${e.status === 'completed' ? 'cb-row-done' : ''} ${hasIt ? 'cb-row-hasit' : ''}" data-id="${e.id}" onclick="cbToggleRow('${e.id}')">
             ${showStore ? `<td class="cb-col-store">${escapeHtml(e.store)}</td>` : ''}
             <td class="cb-customer">${escapeHtml(e.customer_name)}</td>
             <td>${phone}</td>
-            <td class="cb-col-item cb-item">${escapeHtml(e.item)}</td>
+            <td class="cb-col-item cb-item">
+                <div class="cb-item-text">${escapeHtml(e.item)}</div>
+                <div class="cb-item-meta">${_cbItemMetaHtml(e)}${matchChip}</div>
+            </td>
             <td class="cb-cell-status">${chip}</td>
             <td class="cb-cell-timer">${_cbDaysBadge(e)}</td>
             <td class="cb-col-notes">${e.notes.length ? `<span class="cb-note-count">${CB_ICONS.note}${e.notes.length}</span>` : ''}</td>
@@ -22450,9 +23403,17 @@ function cbRowHtml(e, showStore) {
     }
 
     if (expanded && !editing) {
+        // A deletion request is a note with a flag on it, so it is attributed and
+        // sits in the same thread as everything else said about the row.
         const noteItems = e.notes.map(n =>
-            `<div class="cb-note">${escapeHtml(n.text)} <span class="cb-note-meta">— ${escapeHtml(n.user)} (${escapeHtml(n.store)}) · ${_cbShortDate(n.at)}</span></div>`
+            `<div class="cb-note${n.kind === 'delete_request' ? ' cb-note-del' : ''}">${
+                n.kind === 'delete_request' ? '<span class="cb-note-tag">Delete requested</span> ' : ''
+            }${escapeHtml(n.text)} <span class="cb-note-meta">— ${escapeHtml(n.user)} (${escapeHtml(n.store)}) · ${_cbShortDate(n.at)}</span></div>`
         ).join('') || '<div class="cb-note cb-note-none">No notes yet.</div>';
+        // NOTES FIRST. "Needs it by the 12th" is the thing you have to know before
+        // you ring anybody, and under a list of nine matching consoles it was off
+        // the bottom of the screen — the longer the match list, the further the
+        // reason for the call sank.
         row += `<tr class="cb-row-detail"><td colspan="${showStore ? 9 : 8}">
             <div class="cb-notes-thread">${noteItems}</div>
             <div class="cb-note-add">
@@ -22460,9 +23421,154 @@ function cbRowHtml(e, showStore) {
                        onclick="event.stopPropagation()" onkeydown="if(event.key==='Enter')cbAddNote('${e.id}')">
                 <button class="btn-secondary cb-note-btn" onclick="event.stopPropagation();cbAddNote('${e.id}')">Add note</button>
             </div>
+            ${_cbMatchPanelHtml(e, mine, theirs)}
         </td></tr>`;
     }
     return row;
+}
+
+// --- The match panel --------------------------------------------------------
+// Ours first and under its own heading, because the two halves are different
+// kinds of fact: our stock is a call to make, another store's is context. A
+// `sold` row is kept visible on purpose — a match that was there yesterday and
+// has gone should say so rather than silently disappear.
+// OUT OF STOCK IS NOT SHOWN. There was a "No Longer In Stock" section carrying
+// the `sold` matches, on the reasoning that a match which was there yesterday
+// should say it has gone rather than vanish. In use it read as a suggestion:
+// three lines of stock on a call back panel, one of which cannot be sold. The
+// server no longer ships `sold` either, so this cannot come back by accident.
+// A GRADE THE SHELF DECLARED, on every line, in a pill the same size whatever it
+// says. Broken stock is offered now rather than hidden (see fact 4 in
+// callback-match), so this is the thing that makes the offer safe: nobody rings a
+// customer about a cracked laptop without having been told it is cracked.
+//
+// The vocabulary is PayMore's, not ours — measured across 3,822 in-stock units:
+// Good, Acceptable, Used, Very Good, New, Broken, Like New, Fair, Flawless, and a
+// tail of one-offs like "Brown/Dead Pixels". So the tone is decided by matching
+// the value rather than by a lookup table that a new grade would fall out of, and
+// anything unrecognised still renders — in the neutral tone, spelled as written.
+//
+// 5% of stock has no Condition row at all. That says "Unknown Condition" in the
+// same pill: a missing grade is a fact about the listing, and rendering nothing
+// would read as "fine".
+// Broken is NOT in this table: _CB_COND_BAD is tested before it, because these
+// are anchored at the start of the value and a fault is often written after a
+// kind word ("Good shell, bad LCD"). A row here would be unreachable.
+const _CB_COND_BAD = /(broken|dead|bad|damag|crack|for parts|not working|salvage|junk|scrap)/i;
+const _CB_COND_TONE = [
+    [/^(new|flawless|sealed|brand new)/i,          'is-new'],
+    [/^(like new|very good|excellent|mint)/i,      'is-good'],
+    [/^(good|lightly played)/i,                    'is-good'],
+    [/^(acceptable|fair|used|played|moderately)/i, 'is-fair'],
+];
+
+function _cbConditionPill(m) {
+    const raw = String(m.condition || '').trim();
+    if (!raw) {
+        return '<span class="cb-m-cond is-unknown" data-cb-tip="This listing has no Condition row filled in, so we cannot say. Open it in Shopify to check before you ring anybody.">Unknown Condition</span>';
+    }
+    // Broken is tested FIRST: the tone table is anchored at the start of the value,
+    // and a fault is often written after a kind word ("Good shell, bad LCD"), which
+    // would otherwise come out green.
+    const tone = _CB_COND_BAD.test(raw)
+        ? 'is-broken'
+        : (_CB_COND_TONE.find(([re]) => re.test(raw)) || [null, 'is-unknown'])[1];
+    return `<span class="cb-m-cond ${tone}">${escapeHtml(raw)}</span>`;
+}
+
+// Broken to the bottom of whichever list it is in. callback-match already keeps a
+// broken unit from taking a per-store slot off a sound one; this is the other half,
+// so the first thing read is the best thing available.
+function _cbMatchOrder(list) {
+    // Title as well as grade: the 5% with no Condition row still say "Bad LCD" in
+    // the name, and that is the one place left to read it.
+    const bad = (m) => _CB_COND_BAD.test(String(m.condition || '') + ' ' + String(m.title || ''));
+    return [...list].sort((a, b) => (bad(a) ? 1 : 0) - (bad(b) ? 1 : 0)
+        || (Number(b.score) || 0) - (Number(a.score) || 0));
+}
+
+function _cbMatchPanelHtml(e, mineIn, theirsIn) {
+    const mine = _cbMatchOrder(mineIn), theirs = _cbMatchOrder(theirsIn);
+    if (!mine.length && !theirs.length) return '';
+    const sect = (label, list, cls) => list.length
+        ? `<div class="cb-match-group ${cls || ''}">
+               <div class="cb-match-head">${label}</div>
+               ${list.map(m => _cbMatchHtml(e, m)).join('')}
+           </div>` : '';
+    return `<div class="cb-match-panel">
+        ${sect(mine.length === 1 ? 'You Have This — Call The Customer' : `You Have ${mine.length} That Fit — Call The Customer`, mine, 'is-mine')}
+        ${sect(theirs.length === 1 ? 'Another Store Has One' : 'Other Stores Have These', theirs)}
+    </div>`;
+}
+
+function _cbMatchHtml(e, m) {
+    const url = cbMatchListingUrl(m);
+    const adminUrl = cbMatchAdminUrl(m);
+    const bits = [];
+    if (m.price != null) bits.push(_cbMoney(m.price));
+    if (m.sku) bits.push('SKU ' + escapeHtml(m.sku));
+    // The "filed under Other" admission was dropped on 2026-08-24. It explained
+    // the matcher to itself rather than telling the floor anything they could act
+    // on, and it sat on the one line that has to read at a glance mid-phone-call.
+    // found_via is still recorded on the match, so nothing is lost but the noise.
+    if (!m.online_published) bits.push('<span class="cb-m-via">Not Listed Online</span>');
+    // The condition goes on the FRONT of the meta line, before price and SKU: it is
+    // the thing that decides whether the call happens at all.
+    bits.unshift(_cbConditionPill(m));
+
+    // "NOT THIS" IS BACK, and "That's It" is not. They came off together earlier
+    // on 2026-08-24 as bookkeeping, and half of that was right: confirming told
+    // nobody anything. Rejecting is the opposite — it is the control that makes it
+    // safe to OFFER a broken unit instead of hiding it, which is the whole reason
+    // fact 4 in callback-match was reversed the same day. One press and the pairing
+    // is never suggested for this customer again, so the panel gets more honest
+    // rather than noisier: everything in stock is shown, graded, and dismissable.
+    //
+    // Managers of the holding store only, mirroring the server (see cbCanDecide) —
+    // a permanent veto on somebody else's stock is not a decision to hand out.
+    const actions = cbCanDecide(m, e)
+        ? `<button class="cb-m-btn is-no" onclick="event.stopPropagation();cbMatchDecide('${e.id}',${m.id},'reject')" data-cb-tip="Not what this customer wants. Permanent: this item is never suggested for ${escapeHtml(e.customer_name || 'this call back')} again. Other customers are unaffected.">Not This</button>`
+        : '';
+    // Storefront first, admin second: the public page is the one you read to the
+    // customer, the admin one is where you go to change something.
+    const link = (url
+        ? `<a class="cb-m-btn is-link" href="${escapeHtml(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" data-cb-tip="The public listing — what the customer sees.">Listing</a>`
+        : '')
+        + (adminUrl
+        ? `<a class="cb-m-btn is-admin" href="${escapeHtml(adminUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" data-cb-tip="Open this product in your own Shopify admin.">Shopify</a>`
+        : '');
+
+    return `<div class="cb-match">
+        <span class="cb-m-store" style="background:${STORE_TINTS[m.store_code] || '#647082'}">${escapeHtml(m.store_code)}</span>
+        <div class="cb-m-body">
+            <div class="cb-m-title">${escapeHtml(m.title || '')}</div>
+            <div class="cb-m-meta">${bits.join(' · ')}</div>
+        </div>
+        <div class="cb-m-actions">${link}${actions}</div>
+    </div>`;
+}
+
+// Optimistic, like every other action here. A rejection is permanent by design,
+// so it leaves the panel immediately rather than sitting there greyed out.
+function cbMatchDecide(entryId, matchId, decision) {
+    const e = _cbCache.find(x => x.id === entryId);
+    if (!e) return;
+    const m = (e.matches || []).find(x => String(x.id) === String(matchId));
+    if (!m) return;
+    if (decision === 'reject') {
+        // Named, because the veto is per CUSTOMER and not global — somebody
+        // dismissing a broken laptop here has not taken it off anybody else's list,
+        // and the confirm is the only place that can say so.
+        if (!confirm(`Not this?\n\n"${m.title}"\n\nwill never be suggested for ${e.customer_name || 'this call back'} again. `
+                   + `Other customers are unaffected.`)) return;
+        e.matches = e.matches.filter(x => String(x.id) !== String(matchId));
+    } else {
+        m.state = 'confirmed';
+        m.decided_by = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    }
+    cbRender();
+    cbPost({ action: decision === 'reject' ? 'match_reject' : 'match_confirm', matchId })
+        .catch(err => { alert('Could not save that: ' + err.message); cbLoad(); });
 }
 
 // --- Actions (optimistic: mutate cache, render, POST in background)
@@ -22477,25 +23583,48 @@ async function cbQuickAdd() {
     const phone = (document.getElementById('cbAddPhone')?.value || '').replace(/\D/g, '');
     const item  = document.getElementById('cbAddItem')?.value.trim();
     const note  = document.getElementById('cbAddNoteTxt')?.value.trim();
+    const catHandle = document.getElementById('cbAddCategory')?.value || '';
+    const typeId    = document.getElementById('cbAddType')?.value || '';
+    const anyModel  = !!document.getElementById('cbAddAnyModel')?.checked;
     if (!name || !phone || !item) { alert('Customer name, phone, and item are required.'); return; }
     if (phone.length !== 10) { alert('Phone number must be exactly 10 digits.'); return; }
+    // Required because it is the matcher's gate, and said plainly for the same
+    // reason: without it the row is logged and then never answered by anything.
+    if (!catHandle) { alert('Pick a category — it is what we search, so a call back without one will never be matched to stock.'); return; }
 
     const store = document.getElementById('cbAddStore')?.value || _cbHomeStore();
     const user  = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const cat   = _cbCatByHandle(catHandle);
     const entry = {
         id: 'tmp-' + Date.now(), store, customer_name: name, phone, item,
         status: 'open', date_of_call: _cbDaysAgo(0), created_by: user,
         archived_at: null,
+        category_handle: catHandle, category_title: cat ? cat.title : catHandle,
+        type_id: typeId ? Number(typeId) : null, any_model: anyModel,
+        needs_detail: false, matches: [],
         notes: note ? [{ text: note, user, store, at: _cbDaysAgo(0) }] : []
     };
     _cbCache.unshift(entry);
+    // Read off the SUBMITTED values, not off _cbAddFor, so editing the name over a
+    // pre-filled one moves the streak to whoever was actually logged.
+    _cbLastAdded = { name, phone, store };
+    if (_cbAddFor) _cbAddFor = _cbLastAdded;
     cbRender();
-    document.getElementById('cbAddName')?.focus();
+    // Mid-streak the name and number are already right, so the cursor belongs in
+    // the only field that changes.
+    document.getElementById(_cbAddFor ? 'cbAddItem' : 'cbAddName')?.focus();
     try {
-        const out = await cbPost({ action: 'add', entry: { store, customer_name: name, phone, item, note: note || null, created_by: user } });
+        const out = await cbPost({ action: 'add', entry: {
+            store, customer_name: name, phone, item, note: note || null, created_by: user,
+            category_handle: catHandle, type_id: typeId || null, any_model: anyModel
+        } });
         // Reconcile the optimistic row with the server's (real uuid, server-side
         // defaults) — row onclick handlers embed the id, so re-render after.
         if (out.entry) { Object.assign(entry, out.entry); cbRender(); }
+        // The add kicks a match sweep server-side rather than waiting for the next
+        // scheduled one, so the answer to "does anybody have this" lands a few
+        // seconds later. Re-fetch once instead of making the person reload.
+        setTimeout(() => { if (!_cbEditingId) cbLoad(); }, 5000);
     } catch (e) {
         _cbCache = _cbCache.filter(x => x.id !== entry.id);
         cbRender();
@@ -22546,16 +23675,32 @@ function cbSaveEdit(id) {
     if (!e) return;
     const editedPhone = (document.getElementById('cbEditPhone')?.value || '').replace(/\D/g, '');
     if (editedPhone && editedPhone.length !== 10) { alert('Phone number must be exactly 10 digits.'); return; }
+    const catHandle = document.getElementById('cbEditCategory')?.value || '';
+    if (!catHandle) { alert('Pick a category — it is what we search, so a call back without one will never be matched to stock.'); return; }
+    const typeId = document.getElementById('cbEditType')?.value || '';
     const fields = {
         customer_name: document.getElementById('cbEditName')?.value.trim()  || e.customer_name,
         phone:         editedPhone || e.phone,
         item:          document.getElementById('cbEditItem')?.value.trim()  || e.item,
-        date_of_call:  document.getElementById('cbEditDate')?.value         || e.date_of_call
+        date_of_call:  document.getElementById('cbEditDate')?.value         || e.date_of_call,
+        category_handle: catHandle,
+        type_id:         typeId || null,
+        any_model:       !!document.getElementById('cbEditAnyModel')?.checked
     };
-    Object.assign(e, fields);
+    const cat = _cbCatByHandle(catHandle);
+    Object.assign(e, fields, {
+        type_id: typeId ? Number(typeId) : null,
+        category_title: cat ? cat.title : catHandle
+    });
+    // What the row asks for has changed, so the server bins the old suggestions
+    // and re-runs the match. Clear them here too rather than leaving answers to
+    // the previous question sitting under the row.
+    e.matches = (e.matches || []).filter(m => m.state === 'confirmed');
     _cbEditingId = null;
     cbRender();
-    cbPost({ action: 'edit', id, fields }).catch(() => cbLoad());
+    cbPost({ action: 'edit', id, fields })
+        .then(() => setTimeout(() => { if (!_cbEditingId) cbLoad(); }, 5000))
+        .catch(() => cbLoad());
 }
 
 function cbDeleteEntry(id) {
@@ -22567,6 +23712,33 @@ function cbDeleteEntry(id) {
     cbPost({ action: 'delete', id }).catch(() => cbLoad());
 }
 
+// The ASM-and-below path. A reason is asked for and not required: "duplicate" is
+// most of them, and a manager reading a bare request can see the row for
+// themselves. The row STAYS — the whole point is that nothing is destroyed until
+// somebody who may destroy it says so.
+function cbRequestDelete(id) {
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    const why = prompt(`Ask a manager to delete the call back for ${e.customer_name}?\n\n`
+        + 'Why should it go? (optional — duplicate, customer cancelled, logged in error)');
+    if (why === null) return;
+    const who = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const note = {
+        text: String(why).trim() || 'No reason given.',
+        kind: 'delete_request',
+        user: who,
+        store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase(),
+        at: new Date().toISOString().slice(0, 10),
+    };
+    // Optimistic, like every other action here, and the row is opened so the
+    // request is visible the moment it is made rather than hidden one click deep.
+    e.notes = [...(e.notes || []), note];
+    _cbExpandedId = id;
+    cbRender();
+    cbPost({ action: 'delete_request', id, note }).catch(() => cbLoad());
+}
+window.cbRequestDelete = cbRequestDelete;
+
 function cbRestoreEntry(id) {
     const e = _cbCache.find(x => x.id === id);
     if (!e) return;
@@ -22576,6 +23748,98 @@ function cbRestoreEntry(id) {
     _cbCache = _cbCache.filter(x => x.id !== id);   // leaves the archived view
     cbRender();
     cbPost({ action: 'restore', id }).catch(() => cbLoad());
+}
+
+// ============================================================================
+// FEED REMINDER — "you have what somebody's customer asked for"
+// ---------------------------------------------------------------------------
+// Same hidden-bubble idiom as B2B above: the QuickPortal feed decides a card is
+// live by reading this element's COMPUTED DISPLAY, so it stays in the DOM and
+// merely goes invisible. Removing it would silently kill the card.
+//
+// Scoped to the store that HOLDS the stock, which is the whole direction of the
+// feature — a card at WSP about a customer LEE logged. Corp roles are skipped on
+// purpose: a DM holds no stock, so twenty of these would be noise, and the
+// oversight they want is the tab itself.
+// ============================================================================
+
+function _cbMatchBubbleEl() {
+    let b = document.getElementById('cbMatchAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'cbMatchAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; '
+        + 'background:linear-gradient(135deg, #1f9d57, #178048); color:white; '
+        + 'padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; '
+        + 'font-size:13px; box-shadow:0 10px 28px rgba(23,128,72,.38); '
+        + 'max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span style="font-size:16px; flex-shrink:0; margin-top:2px;">📞</span>
+        <span id="cbMatchAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="closeCbMatchAlertBubble()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+function closeCbMatchAlertBubble() {
+    const b = document.getElementById('cbMatchAlertBubble');
+    if (b) b.style.display = 'none';
+}
+
+async function checkCallbackMatchReminders() {
+    const scope = _cbMatchScope();
+    if (!scope || !scope.length) return;    // corp, or no store to hold anything
+    const b = _cbMatchBubbleEl();
+    if (!b) return;
+    try {
+        const rows = await cbFetch('active', 'ALL');
+        // `suggested` only. A confirmed match is already being worked, and
+        // nagging about work in progress is how a feed stops being read.
+        const hits = [];
+        rows.forEach(e => {
+            if (e.status === 'completed' || e.archived_at) return;
+            const n = (e.matches || []).filter(m =>
+                m.state === 'suggested' && scope.includes(m.store_code)).length;
+            if (n) hits.push({ entry: e, count: n });
+        });
+        if (!hits.length) { b.style.display = 'none'; return; }
+
+        const t = document.getElementById('cbMatchAlertBubbleText');
+        if (t) {
+            const lead = hits[0];
+            const more = hits.length - 1;
+            const line = `${lead.entry.store}'s customer wants "${lead.entry.item}" — you have `
+                + `${lead.count === 1 ? 'one' : lead.count}`;
+            t.innerHTML = `<b>You have a call back item</b><br>${escapeHtml(line)}`
+                + (more ? ` · ${more} more ${more === 1 ? 'call back' : 'call backs'} you can answer.` : '.');
+            t.dataset.summary = `${hits.length} call back${hits.length === 1 ? '' : 's'} you can answer · ${line}`;
+            // Identity for the snooze: the actual set of matches. A new one
+            // breaking through a snooze is the point — the old ones staying quiet
+            // for the day is too.
+            t.dataset.sig = hits.map(h => h.entry.id + ':' + h.count).sort().join('|');
+            // MSM routing: if every hit is at one of their stores only, the card
+            // opens that store's tool without switching dashboards.
+            const stores = [...new Set(hits.flatMap(h =>
+                (h.entry.matches || []).filter(m => m.state === 'suggested' && scope.includes(m.store_code))
+                    .map(m => m.store_code)))];
+            t.dataset.stores = stores.join(',');
+        }
+        b.style.display = 'flex';
+    } catch (_) {
+        // a failed poll leaves the bubble exactly as it was
+    }
+}
+
+// Realtime: the matcher broadcasts when the SET of matches moves, so a sweep
+// that finds something new lights the card and repaints an open pane without a
+// reload. No-op when the pane isn't showing.
+function _cbRealtimeRefresh() {
+    const pane = document.getElementById('ops-pane-callbacks');
+    if (!pane || !pane.classList.contains('active') || _cbEditingId) return;
+    return cbLoad();
 }
 
 // ============================================================================
@@ -22602,7 +23866,12 @@ function _isMobileLayout() {
 // re-evaluate on its own. Re-run it on the crossing, not on every resize tick.
 try {
     window.matchMedia("(max-width: 900px)").addEventListener("change", function () {
-        if (document.body.classList.contains("is-authenticated")) applyRoleBasedUI();
+        if (!document.body.classList.contains("is-authenticated")) return;
+        applyRoleBasedUI();
+        // The feed cap is a measured pixel height, so it is wrong the moment the
+        // breakpoint moves in either direction: stale-tight going wide, unset
+        // going narrow. Re-measured here rather than left until the next payload.
+        if (typeof _samCapFeed === "function") _samCapFeed();
     });
 } catch (_) { /* older browsers: the initial pass still applies */ }
 
@@ -22958,7 +24227,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -22996,6 +24265,17 @@ function initDashboardData() {
 // --- INIT LISTENERS ---
 document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => document.body.classList.remove('preload'), 150);
+
+    // Every SPEEKS Tools modal is marked so the MOBILE LAYER can give it the same
+    // slide-in-from-the-right entrance the Tools panel and the Checklist already
+    // use — they are all "the thing behind that button", and two entrances from
+    // one strip of controls read as two different kinds of surface (user's call,
+    // 20 Aug). Derived from the header the tool modals already carry rather than
+    // from a list of 32 ids: a new tool gets the entrance by having a tool head,
+    // which is one less thing to remember. Modals opened from inside a page have
+    // no .tool-head and keep the bottom sheet, which is right for those.
+    document.querySelectorAll('.modal-menu > .modal-header.tool-head')
+        .forEach(h => h.parentElement.classList.add('tool-modal'));
 
     if (localStorage.getItem('speeksSidebar') === 'collapsed') { 
         document.querySelector('.sidebar')?.classList.add('collapsed'); 
@@ -23136,6 +24416,16 @@ function _tipPlaceAtCursor(e) {
 }
 
 document.addEventListener('mouseover', function(e) {
+    // TOUCH DEVICES GET NO TOOLTIP. A tap on a phone fires a synthetic mouseover,
+    // so every data-tip on the site — "SPEEKS Tools", "Snooze", the nav icons —
+    // popped a white card over the thing you had just tapped and then sat there,
+    // because there is no matching mouseout coming. Checked live rather than
+    // cached, so Chrome's device-toolbar toggle behaves like a real device.
+    if (window.matchMedia && window.matchMedia('(hover: none), (pointer: coarse)').matches) {
+        customTooltip.classList.remove('show', 'anchored');
+        _tipAnchored = false;
+        return;
+    }
     // Reset the anchored state each pass; the top-nav branch re-arms it below.
     customTooltip.classList.remove('anchored'); _tipAnchored = false;
     // Inside the redesigned tool modals (and the Tools side panel), upgrade any
@@ -23183,7 +24473,7 @@ document.addEventListener('mouseover', function(e) {
     const cbTip = e.target.closest('[data-cb-tip]');
     if (cbTip) {
         customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
-        customTooltip.innerHTML = `<strong style="display:block; color: var(--sage-professional); font-size: 13px; white-space: nowrap;">${cbTip.dataset.cbTip}</strong>`;
+        customTooltip.innerHTML = `<strong style="display:block; color: var(--sage-professional); font-size: 13px; white-space: normal;">${cbTip.dataset.cbTip}</strong>`;
         customTooltip.classList.add('show');
         return;
     }
@@ -28545,7 +29835,10 @@ async function loadChecklist() {
     const qTab = document.getElementById('cl-tab-quarterly');
     if (qTab) {
         if (!isASM && (store === 'CORP' || store === 'ALL')) {
-            qTab.style.display = 'inline-flex';
+            // Empty string, NOT 'inline-flex': the stylesheet sizes these four tabs as
+            // equal flex children, and an inline display opts this one out of that —
+            // which is why Quarterly sat at a different size to its three siblings.
+            qTab.style.display = '';
         } else {
             qTab.style.display = 'none';
             if (currentChecklistTab === 'quarterly') switchChecklistTab('daily');
@@ -29899,7 +31192,7 @@ function startEditPatchGroup(gi) {
         <input type="text" class="form-input-lg pne-edit-gtitle" value="${title.replace(/"/g, '&quot;')}" placeholder="Version title">
         <input type="date" class="form-input-lg pne-edit-gdate" value="${date}">
         <div class="pne-edit-actions">
-            <button class="btn-primary" onclick="saveEditPatchGroup(${gi})">Save</button>
+            <button class="pne-btn pne-btn-save" onclick="saveEditPatchGroup(${gi})">Save</button>
             <button class="pne-btn" onclick="cancelEditPatchGroup(${gi})">Cancel</button>
         </div>`;
     if (header) header.appendChild(editDiv);
@@ -29923,7 +31216,8 @@ async function saveEditPatchGroup(gi) {
     const dateRaw  = el.querySelector('.pne-edit-gdate').value; // YYYY-MM-DD
     if (!title || !dateRaw) return;
 
-    const saveBtn = el.querySelector('.btn-primary');
+    // .pne-btn-save, matching the markup above -- see saveEditPatchItem.
+    const saveBtn = el.querySelector('.pne-btn-save');
     if (saveBtn) { saveBtn.textContent = 'Saving...'; saveBtn.disabled = true; }
 
     try {
@@ -29953,7 +31247,7 @@ function startEditPatchItem(id) {
         </select>
         <textarea class="form-input-lg pn-textarea pne-edit-sum">${decodedSummary}</textarea>
         <div class="pne-edit-actions">
-            <button class="btn-primary" onclick="saveEditPatchItem('${id}')">Save Changes</button>
+            <button class="pne-btn pne-btn-save" onclick="saveEditPatchItem('${id}')">Save Changes</button>
             <button class="pne-btn" onclick="cancelEditPatchItem('${id}')">Cancel</button>
         </div>`;
     el.appendChild(editDiv);
@@ -29976,7 +31270,11 @@ async function saveEditPatchItem(id) {
     const { title, date } = el.dataset;
     if (!category || !summary) return;
 
-    const saveBtn = el.querySelector('.btn-primary');
+    // Hooked on .pne-btn-save, not .btn-primary: the button wears the row's own
+    // small button now, and a stale .btn-primary selector here would find nothing
+    // and silently drop the Saving.../disabled state -- leaving the row live for a
+    // second click, and the error path with no button to re-enable.
+    const saveBtn = el.querySelector('.pne-btn-save');
     if (saveBtn) saveBtn.textContent = 'Saving...';
     if (saveBtn) saveBtn.disabled = true;
 
@@ -30149,7 +31447,7 @@ function renderBoxAdminList() {
     cats.forEach(cat => {
         const group = items.filter(i => i.category === cat);
         if (!group.length) return;
-        html += `<div style="font-weight:800;font-size:12px;color:#64748b;margin:12px 0 6px;">${label[cat]}</div>`;
+        html += `<div class="bai-cat">${label[cat]}</div>`;
         group.forEach(it => {
             const meta = [
                 _boxStoresToMarket(it.stores),
@@ -30158,9 +31456,9 @@ function renderBoxAdminList() {
                 it.order_name ? `“${escapeHtml(it.order_name)}”` : ''
             ].filter(Boolean).join(' · ');
             html += `<div class="box-admin-item">
-                <div style="min-width:0;">
-                    <div style="font-weight:800;color:var(--slate-charcoal);font-size:13px;">${escapeHtml(it.name)}</div>
-                    <div style="font-size:11px;color:#94a3b8;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${meta}</div>
+                <div class="bai-text">
+                    <div class="bai-name">${escapeHtml(it.name)}</div>
+                    <div class="bai-meta">${meta}</div>
                 </div>
                 <button class="bai-del" title="Remove item" onclick="boxAdminDeleteItem('${it.id}', this)">🗑</button>
             </div>`;
@@ -30928,7 +32226,11 @@ function renderMyRecycleTable() {
     const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
 
     const th = (t, extra = '') => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap; ${extra}">${t}</th>`;
-    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+    // data-label is what lights up .tbl-stack below 640px: the table stops being a
+    // table and each row becomes a card with its column name beside each value. Ten
+    // columns squeezed into 360px is what the phone had before — a Description
+    // wrapping one word per line beside four starved columns.
+    const td = (c, extra = '', label = '') => `<td data-label="${label}" style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
     // Report preview "page" (DM/CEO) — mirrors the Box Order flow: Send Email
     // first shows the composed email, and the actual send happens from there.
     if (canReview && _recycleReportPreviewing) {
@@ -30967,7 +32269,7 @@ function renderMyRecycleTable() {
     // inside a ~908px modal, and Description collapsed to 97px — every column
     // from Description rightward was pushed off-screen and one long description
     // wrapped into a 739px-tall empty band. See siteSkuSpan().
-    html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+    html += `<div style="overflow-x:auto;"><table class="tbl-stack recycle-tbl" style="width:100%; border-collapse:collapse; font-size:12.5px;">
         <thead><tr>${canReview ? th('Review') : th('Status')}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description', 'width:100%;')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
     rows.forEach(r => {
         // A line with a pending delete request is LOCKED — no reviewing, no
@@ -31006,13 +32308,13 @@ function renderMyRecycleTable() {
         if (canReview) {
             const vColor = verdict === 'against' ? '#dc2626' : verdict === 'for' ? '#059669' : verdict === 'ignore' ? '#475569' : verdict === 'denied' ? '#b91c1c' : '#94a3b8';
             const vBorder = verdict === 'against' ? '#fecaca' : verdict === 'for' ? '#a7f3d0' : verdict === 'ignore' ? '#94a3b8' : verdict === 'denied' ? '#fca5a5' : '#cbd5e1';
-            firstCell = td(`${lineIsNew ? NEW_DOT : ''}<select ${delPending ? 'disabled' : ''} onchange="setRecycleReviewed('${r.id}', this.value)" title="${delPending ? 'Locked — a delete request is pending on this line' : r.reviewed_at ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Against = out of inventory · For = store-use tool · Ignore = cost moved to another SKU · Deny = do not recycle'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:${delPending ? 'not-allowed' : 'pointer'};${delPending ? ' opacity:0.55;' : ''}">
+            firstCell = td(`<span class="recycle-review-cell">${lineIsNew ? NEW_DOT : ''}<select ${delPending ? 'disabled' : ''} onchange="setRecycleReviewed('${r.id}', this.value)" title="${delPending ? 'Locked — a delete request is pending on this line' : r.reviewed_at ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Against = out of inventory · For = store-use tool · Ignore = cost moved to another SKU · Deny = do not recycle'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:${delPending ? 'not-allowed' : 'pointer'};${delPending ? ' opacity:0.55;' : ''}">
                 <option value=""${verdict ? '' : ' selected'}>— Review —</option>
                 <option value="against"${verdict === 'against' ? ' selected' : ''}>Against Store</option>
                 <option value="for"${verdict === 'for' ? ' selected' : ''}>For Store</option>
                 <option value="ignore"${verdict === 'ignore' ? ' selected' : ''}>Ignore</option>
                 <option value="denied"${verdict === 'denied' ? ' selected' : ''}>Deny</option>
-            </select>`, 'text-align:center; white-space:nowrap;');
+            </select></span>`, 'text-align:center; white-space:nowrap;', 'Review');
         } else {
             // Manager-facing status: any verdict except "denied" means the DM
             // approved the recycle; no verdict yet = pending.
@@ -31021,7 +32323,7 @@ function renderMyRecycleTable() {
                 : verdict
                 ? `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:3px 10px; white-space:nowrap;">✓ Approved</span>`
                 : `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; padding:3px 10px; white-space:nowrap;">⏳ Pending</span>`;
-            firstCell = td((lineIsNew ? NEW_DOT : '') + chip, 'white-space:nowrap;');
+            firstCell = td('<span class="recycle-review-cell">' + (lineIsNew ? NEW_DOT : '') + chip + '</span>', 'white-space:nowrap;', 'Status');
         }
         const struck = verdict === 'ignore' || verdict === 'denied';
         const struckTitle = verdict === 'ignore' ? 'Not counted — cost was moved into another SKU' : 'Not counted — the request was denied, item stays in inventory';
@@ -31062,16 +32364,16 @@ function renderMyRecycleTable() {
         }).join('');
         html += `<tr style="${rowBg}">
             ${firstCell}
-            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
-            ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
-            ${td(`${siteSkuSpan(r.sku || '', 'font-weight:700; color:var(--slate-charcoal);')}${siteCopyBtn(r.sku, 'SKU')}`, 'min-width:110px;')}
-            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`)}
-            ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
-            ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`, '', 'Date')}
+            ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`, '', 'Store') : ''}
+            ${td(`${siteSkuSpan(r.sku || '', 'font-weight:700; color:var(--slate-charcoal);')}${siteCopyBtn(r.sku, 'SKU')}`, 'min-width:110px;', 'SKU')}
+            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`, '', 'Description')}
+            ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;', 'Qty')}
+            ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;', 'Unit Cost')}
             ${td(struck
                 ? `<span style="text-decoration:line-through; color:#94a3b8;" title="${struckTitle}">${_fmtRecycleMoney(_recycleLineTotal(r))}</span>`
-                : _fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;')}
-            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
+                : _fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;', 'Total Cost')}
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`, '', 'By')}
             ${td(noteBtn + delBtn, 'text-align:right; white-space:nowrap;')}
         </tr>`;
         if (_recycleNoteOpen.has(r.id) && !delPending) {
@@ -31623,7 +32925,8 @@ const EMAIL_LIST_GROUPS = [
     },
     {
         title: 'Operations Reports',
-        desc: 'Scheduled reports on how the stores are running.',
+        desc: 'Scheduled reports on how the stores are running, plus the mail the '
+            + 'site sends on someone else\'s behalf.',
         lists: [
             { key: 'unlisted_report', label: 'Unlisted Inventory Weekly Update',
               desc: 'Monday 9am — the pile per store, and what it would take to clear it.' },
@@ -31635,6 +32938,9 @@ const EMAIL_LIST_GROUPS = [
               desc: 'Who the month-end recycle report email is addressed to.' },
             { key: 'expense_report', label: 'Expense Reports',
               desc: 'Where a monthly expense report goes when the DM or MSM sends one.' },
+            { key: 'idea_submissions', label: 'Submit an Idea',
+              desc: 'Who receives an idea from the lightbulb in the top bar. '
+                  + 'The first address is the To; any others are copied in.' },
         ],
     },
     {
@@ -31728,7 +33034,7 @@ function renderEmailRecipients() {
     // shut would mean typing an address and still having to click to see it.
     if (q && groups.length && !groups.some(g => g.title === _erOpen)) _erOpen = groups[0].title;
 
-    let html = `<div class="kb-search-bar doc-search-wrapper" style="margin-bottom: 12px;">
+    let html = `<div class="kb-search-bar doc-search-wrapper">
         <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
         <input type="text" id="emailRecipientSearch" class="kb-search-input doc-search-input"
             placeholder="Search reports & addresses..." value="${escapeHtml(_erQuery)}"
@@ -31757,21 +33063,25 @@ function renderEmailRecipients() {
             html += `<div class="er-body">`;
             group.lists.forEach(l => {
                 const emails = _recipientsFor(l.key, []);
+                // CLASSES, not inline styles. Every part of this list used to carry
+                // its own style="" attribute, which no stylesheet can reach past —
+                // so this tool sat out the phone pass that every other tool got, and
+                // its remove button inherited the blanket 44px tap floor against an
+                // 18px width and rendered as a tall oval (user's report, 20 Aug).
+                // The look is unchanged on desktop; see the .er-chip block in
+                // styles.css, which reproduces exactly what was inline here.
                 const chips = emails.length
-                    ? emails.map(e => `<span style="display: inline-flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 12px; font-weight: 700; color: var(--slate-charcoal); margin: 0 6px 6px 0;">
-                            ${escapeHtml(e)}
-                            <button data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove" style="border: none; background: #e2e8f0; color: #64748b; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 900; cursor: pointer; line-height: 1;">✕</button>
-                        </span>`).join('')
-                    : '<span style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px;">None — the built-in default applies.</span>';
+                    ? emails.map(e => `<span class="er-chip">${escapeHtml(e)}<button class="er-chip-x" data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove">✕</button></span>`).join('')
+                    : '<span class="er-chip-none">None — the built-in default applies.</span>';
                 const inputId = `email-add-${l.key}`;
-                html += `<div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;">
-                    <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: ${l.desc ? '3px' : '7px'};">${escapeHtml(l.label)}</div>
-                    ${l.desc ? `<div style="font-size: 11.5px; font-weight: 600; color: #94a3b8; margin-bottom: 8px;">${escapeHtml(l.desc)}</div>` : ''}
-                    <div>${chips}</div>
-                    <div style="display: flex; gap: 6px; margin-top: 6px;">
-                        <input type="email" id="${inputId}" placeholder="name@company.com" style="flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px;"
+                html += `<div class="er-card">
+                    <div class="er-card-t${l.desc ? '' : ' er-card-t-solo'}">${escapeHtml(l.label)}</div>
+                    ${l.desc ? `<div class="er-card-d">${escapeHtml(l.desc)}</div>` : ''}
+                    <div class="er-chips">${chips}</div>
+                    <div class="er-add">
+                        <input type="email" id="${inputId}" class="er-add-input" placeholder="name@company.com"
                             onkeydown="if(event.key==='Enter'){event.preventDefault(); emailRecipientAdd('${l.key}', '${inputId}', this.nextElementSibling);}">
-                        <button class="btn-secondary" style="padding: 6px 14px; font-size: 12px;" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
+                        <button class="btn-secondary er-add-btn" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
                     </div>
                 </div>`;
             });
@@ -32081,7 +33391,22 @@ const FEATURE_CATALOG = [
     { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
-    { key: 'widget-ops-ebay',          label: 'SPEEKS Connect (Tab)',          tab: 'widgets', group: 'Operations', def: 'all' },
+    // SPEEKS CONNECT HAS NO TAB SWITCH OF ITS OWN, on purpose. It had three
+    // toggles for two things — Upload, Categories, and the tab that contains
+    // them — and a parent switch that can contradict its children is a way to
+    // turn a tool half-off: Categories granted, tab revoked, nothing on screen
+    // and nothing saying why. The tab is DERIVED (data-feature-any on the
+    // button): grant either sub-tab and the tab appears carrying it, revoke both
+    // and the tab goes. One fact, one switch.
+    { key: 'ec-upload',                label: 'SPEEKS Connect · Upload tab',   tab: 'widgets', group: 'Operations', def: 'all' },
+    // The Categories queue inside SPEEKS Connect. Managers and the DM to start —
+    // it writes to the live storefront, so it is not something to hand out by
+    // accident. This switch is the WHOLE gate, not a cosmetic one: shopify-recat
+    // reads the same feature_overrides row before it will file anything, so
+    // turning it on for somebody genuinely grants them the tool and turning it
+    // off genuinely takes it away. See the KPI role gate for what happens when a
+    // frontend switch and a backend allow-list disagree.
+    { key: 'ec-view-categories',       label: 'SPEEKS Connect · Categories tab', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -32272,7 +33597,8 @@ const _SECTION_TABS = {
     // 'widget-margin-replies' is intentionally omitted — see the parked block in
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
-    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks', 'widget-ops-b2b', 'widget-ops-ebay'],
+    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks',
+                        'widget-ops-b2b', 'ec-upload', 'ec-view-categories'],
 };
 
 function _applySectionNavVisibility(userRoleClass, userName) {
@@ -32331,6 +33657,18 @@ function _applyFeatureOverridesToPlainEls(userRoleClass, userName) {
         if (el.classList.contains('dynamic-module') || el.classList.contains('dynamic-module-flex') || el.classList.contains('dynamic-module-block')) return;
         const ov = _featureOverrideFor(el.getAttribute('data-feature'), userRoleClass, userName);
         const allowed = ov === null ? _passesRoleClasses(el.classList, userRoleClass) : ov;
+        if (allowed) el.style.removeProperty('display');
+        else el.style.setProperty('display', 'none', 'important');
+    });
+    // A CONTAINER WITH NO SWITCH OF ITS OWN. Its visibility is the OR of the
+    // sub-tabs inside it, which is the only way a parent and its children cannot
+    // contradict each other — the failure being avoided is "Categories granted,
+    // the tab that holds it revoked", which shows nothing and explains nothing.
+    // Same resolution _SECTION_TABS already uses one level up for the page nav
+    // link, so a tab and the link that reaches it can never disagree either.
+    document.querySelectorAll('[data-feature-any]').forEach(el => {
+        const keys = el.getAttribute('data-feature-any').split(',').map(s => s.trim()).filter(Boolean);
+        const allowed = keys.some(k => _featureEffectiveVisible(k, userRoleClass, userName));
         if (allowed) el.style.removeProperty('display');
         else el.style.setProperty('display', 'none', 'important');
     });
@@ -32497,6 +33835,13 @@ function _kickFeatureOverridesRefresh() {
 // ---- Feature Access settings modal ------------------------------------------
 let _faTab = 'tools';
 let _faUser = '';    // selected user (lowercased name) on the Per-User tab
+// Which Per-User group cards are open. Changing one setting re-renders the whole
+// tab (the badges and the per-user counts in the picker have to move with it), and
+// every card renders collapsed by default -- so the card you were working in shut
+// itself the moment you touched a toggle, and the next change meant re-opening it.
+// Held out here so the render can put it back. Not per user on purpose: going down
+// a category across several people is the reason this tab exists.
+const _faOpenGroups = new Set();
 let _faUsers = [];   // [{name, role, store}] from the auth directory
 let _faFilter = '';
 
@@ -32551,6 +33896,16 @@ function switchFaTab(tab) {
     _faTab = tab;
     _faSyncTabButtons();
     renderFaBody();
+    // Land at the top of the new tab. Switching from halfway down the 40-row
+    // Widgets list used to drop you halfway down Per-User (user's call, 20 Aug).
+    // BOTH containers: the desktop modal scrolls its .manage-content, the phone
+    // sheet scrolls itself (see the Feature Access block in the mobile layer).
+    const modal = document.getElementById('featureAccessModal');
+    if (modal) {
+        modal.scrollTop = 0;
+        const body = modal.querySelector('.manage-content');
+        if (body) body.scrollTop = 0;
+    }
 }
 
 function _faSyncTabButtons() {
@@ -32901,12 +34256,14 @@ function _faUserRowsHtml() {
                 return `<button class="fa-seg${cls}" onclick="faSetUser('${f.key}', '${val}')">${txt}</button>`;
             };
             return `<div class="fa-urow">
-                <span class="fa-urow-label">${escapeHtml(f.label)}${inherited !== null ? `<span class="fa-role-def"> · role default: ${inherited ? 'visible' : 'hidden'}</span>` : ''}</span>
+                <span class="fa-urow-label">${escapeHtml(f.label)}${inherited !== null ? `<span class="fa-role-def"> · Role Default: ${inherited ? 'Visible' : 'Hidden'}</span>` : ''}</span>
                 <div class="fa-seg-group">${seg('default', 'Default')}${seg('on', 'On')}${seg('off', 'Off')}</div>
             </div>`;
         }).join('');
         const setCount = byGroup[g].filter(f => _faUserOverride(f.key, _faUser) !== null).length;
-        const collapsed = filter ? '' : ' collapsed';
+        // A filter expands everything it matched; otherwise a card is open only if
+        // it was open before the re-render.
+        const collapsed = (filter || _faOpenGroups.has(g)) ? '' : ' collapsed';
         html += `<div class="fa-ugroup${collapsed}">
             <div class="fa-ugroup-head" onclick="faToggleUserGroup(this)">
                 ${chev}<span class="fa-ugroup-name">${escapeHtml(g)}</span>
@@ -32921,7 +34278,12 @@ function _faUserRowsHtml() {
 
 function faToggleUserGroup(head) {
     const g = head.closest('.fa-ugroup');
-    if (g) g.classList.toggle('collapsed');
+    if (!g) return;
+    const open = g.classList.toggle('collapsed') === false;
+    const name = (g.querySelector('.fa-ugroup-name') || {}).textContent || '';
+    // The name is the key the render checks, so it is read back off the card
+    // rather than threaded through the onclick -- one source of truth for it.
+    if (open) _faOpenGroups.add(name); else _faOpenGroups.delete(name);
 }
 
 async function faSetUser(key, val) {
@@ -32999,7 +34361,8 @@ const JUMP_KEYWORDS = {
     'widget-ops-marginguide':    'margin guide buy ladder buying percentages offer ceiling rebuttals condition testing tips projection what should i offer',
     'widget-ops-callbacks':      'callback sheet call back call backs customer calls waiting hold looking for item phone',
     'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
-    'widget-ops-ebay':           'speeks connect ebay listings upload list publish online marketplace sku',
+    'ec-upload':                 'speeks connect ebay listings upload list publish online marketplace sku',
+    'ec-view-categories':        'speeks connect categories other collection wrong category shelf file shopify',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
     'widget-variance-replies':   'variance replies gm notes dm notes markdown discount negative',
@@ -33058,7 +34421,7 @@ const JUMP_PLACES = [
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
-    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: 'widget-ops-ebay',             page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
+    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
     // card are separate Feature Access keys, and a single row would be invisible to
@@ -33184,7 +34547,12 @@ function _jumpPlaceItems() {
             const link = document.querySelector('.nav-bar a.nav-link[href="' + p.page + '"]');
             return !link || link.style.display !== 'none';
         }
-        return _jumpFeatureVisible(p.feature);
+        // An array means the destination is a CONTAINER whose visibility is the
+        // OR of what it holds — SPEEKS Connect has no switch of its own, it has
+        // Upload and Categories. Same rule as data-feature-any in the DOM.
+        return Array.isArray(p.feature)
+            ? p.feature.some(k => _jumpFeatureVisible(k))
+            : _jumpFeatureVisible(p.feature);
     }).map(p => ({
         id: p.id,
         label: p.label,
@@ -37101,7 +38469,85 @@ function _samIsMSM() {
 // One "everything" feed. Announcements + store notes get a permanent read;
 // reminders get a per-day dismiss (they re-surface tomorrow if still due). The
 // header's Mark-all-read clears whatever is currently active.
+// Two rows and then a scroll, on a phone only (user's call, 19 Aug). The deck is
+// a glance; twenty notifications turn the home page into a page of notifications.
+//
+// MEASURED rather than a fixed max-height in the stylesheet, because a feed row
+// is one line or five depending on the card — a snoozeable reminder with a
+// three-line body is nearly triple the height of a patch-note line, so any
+// px value that shows two of one shows half of the other.
+function _samCapFeed() {
+    const feed = document.getElementById('samFeed');
+    if (!feed) return;
+    // Desktop puts the feed in a fixed-height card beside the rail and has its own
+    // scroll; releasing the cap here is what makes this safe to call unconditionally.
+    if (!_isMobileLayout()) { feed.style.maxHeight = ''; return; }
+    const rows = feed.querySelectorAll('.sam-ann');
+    if (rows.length <= 2) { feed.style.maxHeight = ''; return; }
+    const top = feed.getBoundingClientRect().top;
+    const cut = rows[1].getBoundingClientRect().bottom;
+    const pad = parseFloat(getComputedStyle(feed).paddingBottom) || 0;
+    // + scrollTop, and this is the whole bug: getBoundingClientRect is measured
+    // against the VIEWPORT, so once somebody has scrolled the feed to the bottom
+    // row two has travelled up and the same arithmetic returns a smaller number.
+    // The next re-render then locked that in and the feed shrank to one row.
+    // Adding the scroll offset back makes the measurement independent of where
+    // the feed happens to be scrolled to.
+    const h = Math.round(cut - top + pad + feed.scrollTop);
+    // A row mid-enter-animation measures short and would lock the cap in too tight.
+    if (h <= 0) return;
+    feed.style.maxHeight = h + 'px';
+}
+
+// TWENTY-FIVE PLACES CALL THIS, and on a fresh load most of them fire — every
+// async check paints the moment it resolves, staggered across the first couple
+// of seconds. Each paint that adds a card reflows everything under it, and on a
+// phone _samCapFeed() then re-measures the two-row cap from whichever cards
+// happen to be on top: a reminder row is ~50px and an announcement ~98px, so an
+// item arriving and sorting above the others resizes the whole deck. Five
+// notifications arriving meant the deck changing height four or five times, the
+// feed's own scrollbar resizing with it, and the page jumping under your thumb.
+//
+// So the calls are coalesced. Nothing here needs to be synchronous — every one
+// of those 25 sites is fire-and-forget — and one frame is imperceptible.
+//
+//   · normally: one paint per animation frame, which collapses the bursts;
+//   · for the first few seconds after the deck initialises: a trailing debounce,
+//     which collapses the whole staggered arrival into a single settle.
+//
+// The immediate first paint is kept in both cases, so the deck is never blank
+// while waiting — it fills once and then stops moving.
+const SAM_SETTLE_MS = 2500;   // how long a load counts as "still arriving"
+const SAM_SETTLE_WAIT = 320;  // trailing debounce during that window
+// On window rather than a module-level let: a top-level `let` is NOT a property
+// of the global object, so nothing outside this file — the harness, or the
+// console during a live debug — can see or extend the window.
+window._samSettleUntil = 0;
+let _samRaf = null, _samDebounce = null, _samPainted = false;
+
 function renderActionFeed() {
+    // First paint of a load goes straight through: something on screen beats a
+    // tidy one 300ms later.
+    if (!_samPainted) { _samPainted = true; return _samRenderFeedNow(); }
+    if (Date.now() < window._samSettleUntil) {
+        if (_samRaf) { cancelAnimationFrame(_samRaf); _samRaf = null; }
+        clearTimeout(_samDebounce);
+        _samDebounce = setTimeout(_samRenderFeedNow, SAM_SETTLE_WAIT);
+        return;
+    }
+    if (_samRaf) return;
+    _samRaf = requestAnimationFrame(() => { _samRaf = null; _samRenderFeedNow(); });
+}
+// For the rare caller that must see the DOM updated on the next line.
+function renderActionFeedNow() {
+    if (_samRaf) { cancelAnimationFrame(_samRaf); _samRaf = null; }
+    clearTimeout(_samDebounce);
+    _samRenderFeedNow();
+}
+
+function _samRenderFeedNow() {
+    if (_samRaf) { cancelAnimationFrame(_samRaf); _samRaf = null; }
+    clearTimeout(_samDebounce);
     const feed = document.getElementById('samFeed');
     if (!feed) return; // not a manager / menu not present
 
@@ -37253,7 +38699,7 @@ function renderActionFeed() {
             desired.push({ key: 'note:' + (it.id || ('d' + it.dateMs)), html: `<div class="sam-ann note" data-hub-target="note-${_samEsc(String(it.id || ''))}" onclick="openHubTo('note-${_samEsc(String(it.id || ''))}','unread')">
                 <span class="sam-adot"></span>
                 <div class="sam-a-body">
-                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${chip}<span class="sam-a-flag gold">Store note</span></div>
+                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${chip}</div>
                     <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
                     <div class="sam-a-meta">${it.dateObj ? _samFmtDate(it.dateObj) : 'Store note'}</div>
                 </div>
@@ -37344,6 +38790,10 @@ function _samReconcileFeed(feed, desired) {
         }
         prev = el;
     });
+
+    // After the reconcile, never before it: the cap is measured off the second row
+    // and the second row is whatever this pass just put there.
+    _samCapFeed();
 }
 
 // ONE RULE, everywhere: you may only mark something read if you can actually read
@@ -37371,7 +38821,22 @@ function _samAddReadFull() {
             ev.stopPropagation();   // don't double-fire the row's own handler
             openHubTo(row.dataset.hubTarget || '');
         };
-        el.insertAdjacentElement('afterend', btn);
+        // "Read full" belongs on the byline, not on a line of its own: the two
+        // together were three stacked rows under a one-line snippet. The meta line
+        // becomes a flex row and the link sits immediately to its right.
+        const meta = row.querySelector('.sam-a-meta');
+        if (meta) {
+            let foot = row.querySelector('.sam-a-foot');
+            if (!foot) {
+                foot = document.createElement('div');
+                foot.className = 'sam-a-foot';
+                meta.parentNode.insertBefore(foot, meta);
+                foot.appendChild(meta);
+            }
+            foot.appendChild(btn);
+        } else {
+            el.insertAdjacentElement('afterend', btn);
+        }
     });
 }
 
@@ -37844,7 +39309,51 @@ function _samReminderCfg() {
     cfg.push({ key: 'listingGoalsDaily', id: 'listingGoalsDailyAlertBubble', text: 'listingGoalsDailyAlertBubbleText',
         title: 'Set Today’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-red', noSnooze: true,
         action: "openListingGoals()" });
+    // Call Back matches — the store that HAS the item. An opportunity rather than
+    // a deadline, so it is amber and snoozeable: nothing is late, somebody just
+    // has a phone call worth making. It clears itself once the match is answered
+    // or the unit sells, and a NEW match breaks through the snooze (data-sig).
+    cfg.push({ key: 'cbMatch', id: 'cbMatchAlertBubble', text: 'cbMatchAlertBubbleText',
+        title: 'Call Back Item In Stock', urgency: 2, due: 'Action', cls: 'sam-due-amber',
+        action: "window.location.href='operations.html#callbacks'" });
+    // Listings with no category, or on a shelf their own title disagrees with.
+    // An opportunity, not a deadline — nothing is late, the storefront is just
+    // untidier than it should be — so it is amber and snoozeable, and the counts
+    // in data-sig break a snooze when new stock arrives.
+    const _rqT = document.getElementById('recatAlertBubbleText');
+    const _rcOnly = (_rqT && _rqT.dataset && _rqT.dataset.only) || '';
+    cfg.push({ key: 'recatQueue', id: 'recatAlertBubble', text: 'recatAlertBubbleText',
+        title: _rcOnly === 'wrong' ? 'Listings In The Wrong Category' : 'Listings Need A Category',
+        urgency: 1, due: 'Action', cls: 'sam-due-amber',
+        action: "window.location.href='operations.html#categories'" });
     return cfg;
+}
+
+// Does this card's action lead somewhere that does not exist on a phone?
+// If it does, the card still shows — the work is still outstanding and the person
+// still needs telling — but it stops pretending to be a button. Tapping "Aging
+// Inventory Replies Overdue" used to navigate to workspace.html, whose every tab
+// is cut on mobile, and the B2B card landed on Operations' only surviving tab,
+// SPEEKS Connect, which is not what it said it would open.
+//
+// Both halves are ASKED, not listed:
+//   · Workspace and Operations have no tab left on a phone (their nav links carry
+//     data-mobile="hide" too), so any navigation to either page is a dead end.
+//   · Tool modals are answered by the Tools side panel, which is in all five
+//     shells — so the same data-mobile markup that hides the tool from the panel
+//     is what tells us the card should not open it. Nothing to keep in sync.
+function _samDestDead(action) {
+    if (!action || !_isMobileLayout()) return false;
+    if (/\b(workspace|operations)\.html/.test(action)) return true;
+    const fn = (String(action).match(/([A-Za-z_$][\w$]*)\s*\(/) || [])[1];
+    if (!fn) return false;
+    const items = document.querySelectorAll('.tools-side-panel .tools-item[onclick]');
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].getAttribute('onclick').indexOf(fn + '(') >= 0) {
+            return items[i].getAttribute('data-mobile') === 'hide';
+        }
+    }
+    return false;
 }
 
 function _samDismKey() {
@@ -37935,7 +39444,7 @@ function _samGatherReminders() {
         // while he's on the other store's dashboard — without switching dashboards.
         // A both-store alert stamps two, so nothing is set and the tool opens on the
         // active dashboard store (the user's chosen rule).
-        let action = c.action || '';
+        let action = _samDestDead(c.action) ? '' : (c.action || '');
         if (action && t && t.dataset && t.dataset.stores) {
             const stores = t.dataset.stores.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
             const roleLc = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
@@ -38008,6 +39517,9 @@ const _RT_TOOL_CHECKS = {
     gpGoals:       ['checkGpGoalReminder'],
     preferred:     ['checkPreferredReminders'],
     b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders'],
+    // callback-match broadcasts when the SET of matches moves — a new one lights
+    // the card, a sold unit clears it, both without a reload.
+    callbackMatch: ['checkCallbackMatchReminders', '_cbRealtimeRefresh'],
     // Command Center + Listing Goals sources. Each re-fetches through its edge
     // fn and recomputes its update signature, so the pulsing dot / bar lights the
     // moment a write lands — no refresh or re-login. (scorecard fn, ebay-alerts
@@ -38133,6 +39645,9 @@ function samInit() {
             .some(b => window.getComputedStyle(b).display !== 'none');
         menu.classList.toggle('sam-norail', !anyItem);
     }
+    // Open the settle window BEFORE the first paint, so everything arriving
+    // during the load is collapsed into one.
+    if (!window._samInited) window._samSettleUntil = Date.now() + SAM_SETTLE_MS;
     renderActionFeed();
     samRefreshListing();
     samCleanHotbar();
@@ -38324,7 +39839,15 @@ function renderHubFeed() {
 
     const labels = { all: 'updates', unread: 'unread', ann: 'announcements', note: 'comments', due: 'deadlines', patch: 'patch notes', arch: 'archived' };
     const countEl = document.getElementById('hubCount');
-    if (countEl) countEl.textContent = `${shown.length} ${labels[filter] || 'updates'}`;
+    // The noun is in its own span so the phone can drop it. The filter row holds
+    // the control, this count and the Documents button, and the count is the only
+    // one of the three whose WIDTH changes with the filter — "34 updates" is 24px
+    // narrower than "24 announcements", which was enough to push Documents onto a
+    // second line the moment you filtered. Beside a control that already says
+    // "Announcements", the number alone says everything the phrase did.
+    // Labels come from a fixed map above, so no escaping is needed here.
+    if (countEl) countEl.innerHTML = shown.length
+        + ' <span class="hub-count-w">' + (labels[filter] || 'updates') + '</span>';
 
     feed.innerHTML = shown.length ? shown.map(it => it.html).join('') : '<div class="hub-empty">Nothing here right now.</div>';
     // A rebuild throws away the card a pending jump was scrolling to (and can add
@@ -39286,7 +40809,17 @@ function renderDmListingModal() {
             + (unset ? ' · ' + unset + (unset === 1 ? ' store still needs' : ' stores still need') + ' this week’s goal' : '');
     }
 
-    if (!all.some(s => s.names.length)) {
+    // ⚠️ THIS USED TO TEST FOR ROWS, NOT FOR A RESPONSE. "Nobody in the district
+    // has a role this week" is a normal state — it is the state of every Monday
+    // morning before the first manager sets a roster — and it made the panel sit
+    // on "Syncing the district roster…" forever, because the thing it was
+    // waiting for had already arrived and was empty.
+    //
+    // The one legitimate reason to hold the whole panel back is that the fetch
+    // has not returned yet. An empty week renders: the rail, the district strip,
+    // the stretch factor and last week's Results are all still worth reading —
+    // and "5 stores still need this week's goal" is the DM's actual Monday job.
+    if (!_dmxGoalsLoaded) {
         wrap.innerHTML = '<div class="dmx-empty" style="padding:60px 0;">Syncing the district roster…</div>';
         return;
     }
@@ -39330,7 +40863,12 @@ function renderDmListingModal() {
     pane += _dmxFactorSetter(all);
 
     if (!sel.names.length) {
-        pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week.</div>';
+        // Say WHY it is blank. The goal is derived from who gets rostered, so an
+        // empty pane early in the week is the roster not being set yet — not a
+        // failure to load one. The old bare sentence read as a dead end.
+        pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week yet.'
+            + '<div class="dmx-empty-n">The days fill in here as ' + escapeHtml(sel.store)
+            + ' sets its roster. Last week is under <b>Results</b>.</div></div>';
     } else {
         // Role gets its own column rather than trailing the name. As a sibling of
         // the name its left edge moved with the length of every name above it, so
@@ -39556,13 +41094,18 @@ function _dmxEfficiencyPane() {
     if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';
     if (!rows.length) return head + '<div class="dmx-empty">No capacity data for this week.</div>';
 
-    // Column order reads left to right as the story: who, what they had, what we
-    // asked for, what they did, then how that compares. Listed sits beside Goal
-    // because those two are the pair anyone checks first.
+    // Column order reads left to right as the story: who the store is and what it
+    // had, then the plan and the outcome, then the reading of it.
+    //
+    // Staffed For sits next to Hours because those two are the same fact in two
+    // units — contracted hours, and the listings those hours actually earned once
+    // seats were assigned. Read apart, the pair invites the units to be confused
+    // (user, 2026-08-24). Listed then closes the plan-and-outcome group, landing
+    // next to the Efficiency it feeds.
     let t = '<table class="dmx-tbl dmx-tbl-c"><thead><tr>'
-        + '<th>Store</th><th>Hours</th><th>Ceiling</th>'
-        + '<th>Goal</th><th>Listed</th>'
-        + '<th>Staffed For</th><th>Efficiency</th><th>Result</th>'
+        + '<th>Store</th><th>Hours</th><th>Staffed For</th>'
+        + '<th>Ceiling</th><th>Goal</th><th>Listed</th>'
+        + '<th>Efficiency</th><th>Result</th>'
         + '</tr></thead><tbody>';
 
     rows.forEach(r => {
@@ -39589,10 +41132,10 @@ function _dmxEfficiencyPane() {
                 + r.assignedDays + '/' + (r.people.length * 6) + ' roles</span>' : '')
             + '</td>'
             + '<td class="dmx-num">' + r.hours + '</td>'
+            + '<td class="dmx-num">' + r.adjusted + '</td>'
             + '<td class="dmx-num dmx-mute">' + r.capacity + '</td>'
             + '<td class="dmx-num">' + r.planned + '</td>'
             + '<td class="dmx-num' + (pending ? ' dmx-mute' : '') + '">' + (pending ? '–' : r.actual) + '</td>'
-            + '<td class="dmx-num">' + r.adjusted + '</td>'
             + '<td class="dmx-num">' + (pct == null ? '–' : pct + '%') + '</td>'
             + '<td>' + _dmxEffChip(pct, pending ? 'KPI not filed yet' : 'No roles set') + '</td></tr>';
     });
@@ -39604,10 +41147,10 @@ function _dmxEfficiencyPane() {
     const dPct = (dPending || !dAdj) ? null : _dmxPct(dAct, dAdj);
     t += '<tr class="dmx-tot"><td class="dmx-cl">District</td>'
         + '<td class="dmx-num">' + sum('hours') + '</td>'
+        + '<td class="dmx-num">' + dAdj + '</td>'
         + '<td class="dmx-num">' + sum('capacity') + '</td>'
         + '<td class="dmx-num">' + sum('planned') + '</td>'
         + '<td class="dmx-num' + (dPending ? ' dmx-mute' : '') + '">' + (dPending ? '–' : dAct) + '</td>'
-        + '<td class="dmx-num">' + dAdj + '</td>'
         + '<td class="dmx-num">' + (dPct == null ? '–' : dPct + '%') + '</td>'
         + '<td>' + _dmxEffChip(dPct, dPending ? 'KPI not filed yet' : 'No roles set') + '</td></tr></tbody></table>';
 
@@ -40154,7 +41697,7 @@ function _dccLine(r) {
     // through to the neutral summary instead.
     const cand = [
         [ebayOff >= 3 ? (ebayBad >= 3 ? 'b' : 'w') : null,
-         'eBay Health Failing On ' + ebayOff + ' Of 4'],
+         'eBay Health Failing On ' + ebayOff + ' of 4'],
         [_dccState(r, 'track'),   'eBay Tracking ' + _dccEbayPct(r.track)],
         [_dccState(r, 'conv'),    'Conversion ' + r.conv + '%'],
         [_dccState(r, 'time'),    'Transaction Time ' + r.time + ' Min'],
@@ -40278,7 +41821,7 @@ function _dccEbayBlock(r) {
         return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>All Four Within Threshold</em></div>'
             + '<div class="dcc-clear">' + _DCC_ICO.g + (bits || 'No data reported yet') + '</div></div>';
     }
-    return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>' + off + ' Of 4 Over Threshold</em></div>'
+    return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>' + off + ' of 4 Over Threshold</em></div>'
         + '<div class="dcc-g4">' + four.map(function (f) {
             const val = f[1] == null ? '—' : f[1].replace('%', '');
             return '<div class="dcc-cell' + (f[2] ? ' ' + f[2] : '') + '">'
@@ -41203,7 +42746,7 @@ function renderExpenses() {
     if (sub) {
         sub.textContent = _expMonthLabel(_expMonth) + ' · ' + _expMoney(mileage + expense) + ' total'
             + (_expIsReviewer()
-                ? (_expIsAll() ? ' · everyone' : ' · reviewing ' + _expPerson)
+                ? (_expIsAll() ? ' · Everyone' : ' · Reviewing ' + _expPerson)
                 : '');
     }
 
@@ -41263,8 +42806,8 @@ function _expControlsHtml() {
         : '<span class="exp-ctl exp-ctl-ro"><span>Mileage rate</span><b>$' + _expRate(rate) + '/mi</b></span>';
 
     const cats = _expCanManageCats()
-        ? '<button type="button" class="exp-btn-sm" onclick="expToggleCats()">'
-            + (_expCatsOpen ? 'Close categories' : 'Manage categories') + '</button>'
+        ? '<button type="button" class="exp-btn-sm exp-btn-cats" onclick="expToggleCats()">'
+            + (_expCatsOpen ? 'Close' : 'Manage') + '</button>'
         : '';
 
     return '<div class="exp-controls">'
@@ -41294,7 +42837,7 @@ function _expMileageHtml() {
     const rows = _expRows('mileage');
     const canEdit = _expCanEdit();
     const all = _expIsAll();
-    let html = '<div class="exp-table-wrap"><table class="exp-table"><thead><tr>'
+    let html = '<div class="exp-table-wrap' + (_expEditId ? ' editing' : '') + '"><table class="exp-table"><thead><tr>'
         + '<th>Date</th>' + (all ? '<th>Person</th>' : '') + '<th>Purpose</th><th>From</th><th>To</th>'
         + '<th class="num">Miles</th><th class="num">Rate</th><th class="num">Amount</th>'
         + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>';
@@ -41326,7 +42869,7 @@ function _expExpenseHtml() {
     const rows = _expRows('expense');
     const canEdit = _expCanEdit();
     const all = _expIsAll();
-    let html = '<div class="exp-table-wrap"><table class="exp-table"><thead><tr>'
+    let html = '<div class="exp-table-wrap' + (_expEditId ? ' editing' : '') + '"><table class="exp-table"><thead><tr>'
         + '<th>Date</th>' + (all ? '<th>Person</th>' : '') + '<th>Category</th><th>Description</th><th class="num">Amount</th>'
         + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>';
 
@@ -41398,13 +42941,13 @@ function _expMileageEditRow(e) {
     const i = (id, v, type, step) => '<input type="' + type + '" id="exp-ed-' + id + '" class="exp-input"'
         + (step ? ' step="' + step + '" min="0"' : '') + ' value="' + escapeHtml(v == null ? '' : String(v)) + '">';
     return '<tr class="exp-editing">'
-        + '<td>' + i('date', String(e.entry_date).slice(0, 10), 'date') + '</td>'
-        + '<td>' + i('desc', e.description, 'text') + '</td>'
-        + '<td>' + i('from', e.from_loc, 'text') + '</td>'
-        + '<td>' + i('to', e.to_loc, 'text') + '</td>'
-        + '<td class="num">' + i('miles', e.miles, 'number', '0.1') + '</td>'
-        + '<td class="num muted">$' + _expRate(e.rate) + '</td>'
-        + '<td class="num muted">recalculated</td>'
+        + '<td data-label="Date">' + i('date', String(e.entry_date).slice(0, 10), 'date') + '</td>'
+        + '<td data-label="Purpose">' + i('desc', e.description, 'text') + '</td>'
+        + '<td data-label="From">' + i('from', e.from_loc, 'text') + '</td>'
+        + '<td data-label="To">' + i('to', e.to_loc, 'text') + '</td>'
+        + '<td class="num" data-label="Miles">' + i('miles', e.miles, 'number', '0.1') + '</td>'
+        + '<td class="num muted" data-label="Rate">$' + _expRate(e.rate) + '</td>'
+        + '<td class="num muted" data-label="Amount">recalculated</td>'
         + '<td class="num exp-edit-actions">'
             + '<button type="button" class="exp-btn-sm" onclick="expSaveEdit(\'' + e.id + '\',\'mileage\')">Save</button>'
             + '<button type="button" class="exp-btn-sm ghost" onclick="expCancelEdit()">Cancel</button>'
@@ -41413,10 +42956,10 @@ function _expMileageEditRow(e) {
 
 function _expExpenseEditRow(e) {
     return '<tr class="exp-editing">'
-        + '<td><input type="date" id="exp-ed-date" class="exp-input" value="' + String(e.entry_date).slice(0, 10) + '"></td>'
-        + '<td><select id="exp-ed-cat" class="exp-input">' + _expCatOptions(e.category) + '</select></td>'
-        + '<td><input type="text" id="exp-ed-desc" class="exp-input" value="' + escapeHtml(e.description || '') + '"></td>'
-        + '<td class="num"><input type="number" id="exp-ed-amt" class="exp-input" step="0.01" min="0" value="' + (Number(e.amount) || 0) + '"></td>'
+        + '<td data-label="Date"><input type="date" id="exp-ed-date" class="exp-input" value="' + String(e.entry_date).slice(0, 10) + '"></td>'
+        + '<td data-label="Category"><select id="exp-ed-cat" class="exp-input">' + _expCatOptions(e.category) + '</select></td>'
+        + '<td data-label="Description"><input type="text" id="exp-ed-desc" class="exp-input" value="' + escapeHtml(e.description || '') + '"></td>'
+        + '<td class="num" data-label="Amount"><input type="number" id="exp-ed-amt" class="exp-input" step="0.01" min="0" value="' + (Number(e.amount) || 0) + '"></td>'
         + '<td class="num exp-edit-actions">'
             + '<button type="button" class="exp-btn-sm" onclick="expSaveEdit(\'' + e.id + '\',\'expense\')">Save</button>'
             + '<button type="button" class="exp-btn-sm ghost" onclick="expCancelEdit()">Cancel</button>'
@@ -41531,7 +43074,7 @@ function _expCatsHtml() {
         + '</div>').join('');
     // Own view, so it carries its own heading and Back, exactly like the preview.
     return '<div class="exp-view">'
-        + '<div class="exp-view-h">Expense categories</div>'
+        + '<div class="exp-view-h">Expense Categories</div>'
         + '<div class="exp-cats">'
         + '<div class="exp-cats-sub">Renaming a category also relabels every line already filed under it. '
         + 'Deleting one that is still in use retires it instead, so old reports keep their labels.</div>'
@@ -41644,7 +43187,7 @@ function _expCompose() {
 function _expPreviewHtml() {
     const { email, subject, body } = _expCompose();
     return '<div class="exp-view">'
-        + '<div class="exp-view-h">Email preview</div>'
+        + '<div class="exp-view-h">Email Preview</div>'
         + '<div class="box-order-email-preview">'
         + escapeHtml('To: ' + email + '\nSubject: ' + subject + '\n\n' + body)
         + '</div>'
@@ -42320,11 +43863,31 @@ function _ecFeedReconcile() {
 async function ecLoad() {
     const body = document.getElementById('ecBody');
     if (!body) return;
+    // BEFORE the fetch, not after. _ecSyncChrome corrects the view too, but it
+    // runs once the request is already in flight — so a person with Upload
+    // revoked would fetch a listings payload they may not see, then switch. The
+    // two buttons with a switch are resolved in the DOM by page load, so this is
+    // knowable here; All Stores is not (it needs the server's scope) and is left
+    // to _ecSyncChrome.
+    if (_ecView === 'listings') {
+        const v = _ecViewsOn();
+        if (!v.listings && v.cats) { _ecView = 'cats'; _ecMarkView('cats'); }
+    }
     if (!_ecData) body.innerHTML = '<div class="status-message">Loading SPEEKS Connect…</div>';
     try {
         if (_ecView === 'health') {
             _ecHealth = await _ecFetch('?view=health');
+            // Best-effort and never blocking: a 401 here (a role that may see
+            // eBay across stores but not file stock) must leave the eBay
+            // numbers on screen, not replace them with an error.
+            _rcCounts = await _rcFetch(`?view=counts`).catch(() => null);
             _ecScope = _ecHealth.scope;
+        } else if (_ecView === 'cats') {
+            // Its own function, its own scope. shopify-recat decides who may
+            // file stock — a narrower list than who may list on eBay — so the
+            // eBay scope is left exactly as it was rather than overwritten
+            // with an answer from a different question.
+            await rcLoad();
         } else {
             _ecData = await _ecFetch(`?view=listings${_ecStore ? `&store=${_ecStore}` : ''}`);
             _ecScope = _ecData.scope;
@@ -42343,16 +43906,48 @@ async function ecLoad() {
 // Store picker and the All Stores tab come from the scope the SERVER returned,
 // never from the browser's own idea of the role. This only avoids drawing a
 // control that would 403; the edge function is what actually decides.
+// Which sub-tabs this person actually has. Upload and Categories are Feature
+// Access's to decide and All Stores is the SERVER's (the scope it returned), so
+// this reads all three rather than deciding any of them.
+//
+// NOT SET HERE, for the two with a switch. Feature Access owns those buttons
+// (data-feature ec-upload / ec-view-categories), so writing a display on one
+// would undo whatever the DM chose the moment the panel refreshed. Read it
+// instead — the inline style is exactly what _applyFeatureOverridesToPlainEls
+// left behind, and reading the COMPUTED style would be useless while the toggle
+// around it is still hidden.
+function _ecViewsOn() {
+    const on = id => {
+        const b = document.getElementById(id);
+        return !!b && b.style.display !== 'none';
+    };
+    return {
+        listings: on('ecViewListingsBtn'),
+        health: !!_ecScope?.allStores,
+        cats: on('ecViewCatsBtn'),
+    };
+}
+
 function _ecSyncChrome() {
     const sub = document.getElementById('ecSubtitle');
     const sel = document.getElementById('ecStoreFilter');
     const health = document.getElementById('ecViewHealthBtn');
     if (health) health.style.display = _ecScope?.allStores ? '' : 'none';
-    // Everyone but the DM and the CEO has exactly one view. A toggle offering
-    // a single option is a button that does nothing, so it goes with the
-    // second view rather than sitting there inviting a click.
+    const views = _ecViewsOn();
+    const n = ['listings', 'health', 'cats'].filter(v => views[v]).length;
+    // A toggle offering a single option is a button that does nothing, so it
+    // goes with the second view rather than sitting there inviting a click.
     const toggle = document.getElementById('ecViewToggle');
-    if (toggle) toggle.style.display = _ecScope?.allStores ? '' : 'none';
+    if (toggle) toggle.style.display = n > 1 ? '' : 'none';
+
+    // LAND ON SOMETHING THAT EXISTS. With Upload revoked and Categories granted,
+    // the panel opened on Upload — a blank pane behind a hidden button, which
+    // reads as the tool being broken rather than as a permission. The tab is
+    // derived from these two, so by the time this runs at least one is on.
+    if (!views[_ecView]) {
+        const first = ['listings', 'cats', 'health'].find(v => views[v]);
+        if (first) { _ecView = first; _ecMarkView(first); }
+    }
 
     if (sel) {
         const many = (_ecScope?.stores || []).length > 1;
@@ -42364,7 +43959,15 @@ function _ecSyncChrome() {
     }
     if (sub) {
         const errs = _ecFeed.filter(e => e.state === 'failed').length;
-        sub.textContent = _ecView === 'health' ? 'Every store, at a glance'
+        // BOTH queues, not the open one. In the Wrong Category tab with nothing
+        // in it the old line called the store clear over 64 still
+        // sitting in Other — the header is about the STORE, not about the tab.
+        const cats = _rcData?.counts;
+        const toFile = cats ? (cats.other || 0) + (cats.misfiled || 0) + (cats.unmatched || 0)
+                            : (_rcData?.queue || []).length;
+        sub.textContent = _ecView === 'cats'
+            ? `${_ecStore || ''} · ${toFile ? `${toFile} Item${toFile === 1 ? '' : 's'} To Submit` : 'Everything Is Fixed'}`
+            : _ecView === 'health' ? 'Every store, at a glance'
             : !_ecData?.summary?.connected ? `${_ecStore || ''} · Not connected to eBay yet`
             : !_ecFeed.length ? `${_ecStore} · Scan a SKU to list it on eBay`
             : `${_ecStore} · ${_ecFeed.length} Uploaded this session`
@@ -42379,12 +43982,20 @@ function _ecSyncChrome() {
     }
 }
 
-function ecSetView(view) {
-    _ecView = view;
-    ['listings', 'health'].forEach(v => {
+// Which pill is lit. Its own function because the #categories deep link opens
+// the view WITHOUT going through ecSetView — that would load the panel before
+// the tab it lives on exists — and a panel showing Categories under a lit
+// Upload pill is just a bug with extra steps.
+function _ecMarkView(view) {
+    ['listings', 'health', 'cats'].forEach(v => {
         const b = document.getElementById('ecView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
         if (b) b.classList.toggle('active', v === view);
     });
+}
+
+function ecSetView(view) {
+    _ecView = view;
+    _ecMarkView(view);
     ecLoad();
 }
 
@@ -42424,8 +44035,12 @@ async function ecShowFailed(store) {
 function ecSetStore(store) {
     _ecStore = store;
     _ecData = null;
+    // The filing queue is per store too, and a stale one would draw the last
+    // store's rows under the new store's name for as long as the fetch takes.
+    _rcData = null;
     ecLoad();
 }
+window.ecSetStore = ecSetStore;
 
 // --- render -----------------------------------------------------------------
 
@@ -42435,6 +44050,7 @@ function ecRender() {
     _ecSyncChrome();
 
     if (_ecView === 'health') { body.innerHTML = _ecHealthHtml(); return; }
+    if (_ecView === 'cats') { body.innerHTML = _rcHtml(); return; }
 
     const s = _ecData?.summary;
     if (!s) { body.innerHTML = '<div class="ec-empty">No store selected.</div>'; return; }
@@ -42443,13 +44059,81 @@ function ecRender() {
         return;
     }
 
-    body.innerHTML = _ecQuickHtml() + _ecFeedHtml();
+    body.innerHTML = _ecStandbyHtml() + _ecQuickHtml() + _ecFeedHtml();
 
     // The table was just rebuilt beneath any open category picker: its anchor
     // button is a new element and the rows may have shifted. Re-place so the
     // popover follows rather than hanging over stale coordinates.
     if (document.getElementById('ecCatPop')) _ecCatPlace();
 }
+
+// --- STANDBY BANNER ---------------------------------------------------------
+// PayMore's new Marketplace Connect adopts every live eBay listing during setup,
+// ours included. Once it has, two systems manage one physical unit: both would
+// import the same sale (two Shopify orders, stock decremented twice, the variant
+// driven negative) and our republish path would put a second copy of an item on
+// eBay the moment Shopify restocked it.
+//
+// So SPEEKS Connect goes to STANDBY per store rather than being torn out. The
+// tab, the panel and every manual route stay exactly where they are — this is
+// break-glass, and glass you cannot see through is no use.
+//
+// The banner exists because the alternative is worse: a store scans a SKU, gets
+// a 409 they have never seen, and reads it as the tool being broken. Say it
+// first, on load, where the scan box is about to be.
+function _ecStandbyHtml() {
+    if ((_ecData?.summary?.channelMode || 'active') !== 'standby') return '';
+    const s = _ecData.summary;
+    const when = s.channelModeAt
+        ? new Date(s.channelModeAt).toLocaleDateString('en-US',
+            { month: 'short', day: 'numeric', year: 'numeric' })
+        : null;
+    // Only the DM and the CEO get the button. Every role here may list — but
+    // which system owns a store's eBay account is a district decision, and
+    // taking it back while MC still holds the listings is how you get two of
+    // everything. The backend enforces it too; this only avoids offering a
+    // button that would 403.
+    const canFlip = !!_ecScope?.allStores;
+    return `
+    <div class="ec-standby">
+      <div class="ec-standby-l">
+        <div class="ec-standby-t">On Standby &middot; Marketplace Connect Owns ${_ecEsc(_ecStore)}'s eBay</div>
+        <div class="ec-standby-n">Nothing is uploaded, imported or price-synced from here while MC
+          manages these listings &mdash; two systems on one item would put the same sale into
+          Shopify twice. Everything still works; it is just parked.${
+          when ? ` Parked ${_ecEsc(when)}${s.channelModeBy ? ' by ' + _ecEsc(s.channelModeBy) : ''}.` : ''}${
+          s.channelModeNote ? `<br><b>Note:</b> ${_ecEsc(s.channelModeNote)}` : ''}</div>
+      </div>
+      ${canFlip ? `<div class="ec-standby-r">
+        <button class="ec-btn ec-btn-glass" onclick="ecTakeOver()"
+          title="Hands ${_ecEsc(_ecStore)}'s eBay channel back to SPEEKS Connect">Take The Channel Back</button>
+      </div>` : ''}
+    </div>`;
+}
+
+// BREAK GLASS. Deliberately a confirm, and deliberately one that names the
+// consequence rather than asking "are you sure": the danger is not the click,
+// it is doing it while MC still holds the listings, and only the person clicking
+// knows whether that is true.
+async function ecTakeOver() {
+    const store = _ecStore;
+    if (!confirm(
+        `Hand ${store}'s eBay channel back to SPEEKS Connect?\n\n`
+        + `Only do this if Marketplace Connect is NOT managing ${store}'s listings any more.\n\n`
+        + `If it still is, both systems will import every eBay sale and each one will `
+        + `become two Shopify orders.`)) return;
+    const note = prompt(`Why is ${store} coming back on? (optional, saved with the change)`) || '';
+    try {
+        // _ecPost returns { ok, status, body } — the payload is on .body.
+        const { ok, body } = await _ecPost({ action: 'mode', store, mode: 'active', note });
+        if (!ok || body?.error) { alert(body?.detail || body?.error || 'That did not go through.'); return; }
+        alert(`${store} is active again.\n\n${body.effect || ''}`);
+        await ecLoad();
+    } catch (e) {
+        alert('Could not reach the server. Nothing changed.');
+    }
+}
+window.ecTakeOver = ecTakeOver;
 
 // The whole point of the tab: scan a SKU, send it. Several at once is allowed
 // because a store listing a shelf does not want to do this one row at a time.
@@ -42673,10 +44357,619 @@ function _ecHealthHtml() {
                   : _ecAgo(new Date(Date.now() - s.freshness.liveMinutes * 60000).toISOString()),
                   s.freshness.liveMinutes == null ? 'ec-off'
                   : s.freshness.liveMinutes > 90 ? 'ec-warn' : 'ec-ok')}
+            ${_ecHealthCats(s.store)}
           </div>
         </div>`;
     }).join('')}</div>`;
 }
+
+// The two Categories numbers, on the All Stores card. This is where the store
+// chips used to live inside the queue — "where is the work" is a whole-district
+// question, and it belongs next to the other whole-district numbers rather than
+// above a list of one store's rows.
+//
+// Amber TEXT, not a control (user's call, 21 Aug). The "Did Not Upload" count
+// next to it is a button because the rows behind it are session-scoped and
+// otherwise unreachable; these two are three clicks away in the panel's own
+// store dropdown, so a pill invited a click it did not need to own.
+//
+// Absent, not zeroed, when the counts have not arrived — shopify-recat answers
+// separately from the health view (different function, narrower role list), and
+// drawing "0" for a request that failed would be a lie about a tidy storefront.
+function _ecHealthCats(store) {
+    if (!_rcCounts) return '';
+    const other = _rcCounts.other?.[store] ?? null;
+    const wrong = _rcCounts.misfiled?.[store] ?? null;
+    // The pile is Other, and the split inside it is "we have a guess" versus
+    // "somebody has to pick" — two different jobs, so two numbers rather than
+    // one that hides the harder half.
+    const none = _rcCounts.unmatched?.[store] ?? null;
+    if (other == null && wrong == null && none == null) return '';
+    const row = (k, n) => `<div class="ec-hrow"><span class="ec-hk">${k}</span>`
+        + `<span class="ec-hv ${n ? 'ec-warn' : 'ec-ok'}">${n == null ? '—' : n}</span></div>`;
+    return row('In &ldquo;Other&rdquo;', other) + row('No Suggestion', none)
+         + row('Wrong Category', wrong);
+}
+
+// --- Categories: filing the `other` pile ------------------------------------
+//
+// Every category collection at all five stores is hand-filed by a lister, so
+// anything unobvious lands in `Other` — 457 in-stock units were sitting there
+// and in nothing else, while Networking and eleven other shelves held zero
+// products. The shopify-recat rules propose a shelf for each one; this is
+// where a person says yes.
+//
+// IT IS A QUEUE OF SUGGESTIONS, NOT A REPORT. Nothing here has happened yet.
+// Submit writes to Shopify (join the new collection, leave Other, one
+// mutation) and the row leaves the queue. Remove records a skip against
+// that product so the queue stops offering it — per PRODUCT, never per rule,
+// because the rule may be right about the other forty titles it caught.
+//
+// The queue is served by shopify-recat?view=review, which authenticates on the
+// person's PIN exactly as ebay-channel does. The sync secret in this file is
+// not a secret — it ships to every browser — so it is never what guards a
+// write to a live catalogue.
+const RECAT_URL = `${_BASE}/shopify-recat`;
+
+let _rcData = null;
+let _rcSel = new Set();
+// 'other'    — the junk drawer: stock with no real category at all
+// 'misfiled' — stock on a real shelf that its own title disagrees with. Scored
+//              by STRONG rules only: the full rule set flags 421 products and
+//              is wrong about most of them, because every laptop title recites
+//              an SSD and every gaming PC a GPU.
+// The Categories counts, per store, for the All Stores card. Its own request:
+// the health view comes from ebay-channel and these come from shopify-recat,
+// which answers a narrower role list. Null until one arrives, so the card can
+// leave the rows out rather than drawing a reassuring zero.
+let _rcCounts = null;
+let _rcMode = 'other';
+// BOTH QUEUES ONLY EVER SHOW LISTINGS THAT ARE LIVE ON THE ONLINE STORE.
+// PayMore's storefront is the whole point of a collection, so an unpublished
+// product's shelf is a shelf no shopper can arrive at — reviewing it spends
+// somebody's attention and changes nothing anyone sees. 967 of the in-stock
+// units are unpublished. The filter lives in the views (0056), not here: the
+// panel must not be the only thing that knows, or the scripted sweep would
+// happily file everything the panel no longer shows.
+
+async function _rcFetch(path) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(`${RECAT_URL}${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`,
+        { headers: { 'x-user-pin': pin } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || body.error || `Request failed (${r.status})`);
+    return body;
+}
+
+async function _rcPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(RECAT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok && body.ok !== false, status: r.status, body };
+}
+
+async function rcLoad() {
+    _rcData = await _rcFetch(`?view=review&mode=${_rcMode}${_ecStore ? `&store=${_ecStore}` : ''}`);
+    _ecStore = _rcData.store;
+    // A selection belongs to the store it was made in. Carrying it across a
+    // store switch would file another store's products on the next click.
+    _rcSel = new Set();
+    // Overrides for rows that are no longer in the queue are dead weight, and
+    // an id that came back around would silently inherit an old decision.
+    const live = new Set((_rcData.queue || []).map(q => q.productId));
+    for (const id of [..._rcOver.keys()]) if (!live.has(id)) _rcOver.delete(id);
+}
+
+function _rcHtml() {
+    const queue = _rcData?.queue || [];
+    const skipped = _rcData?.skipped || [];
+
+    // NO PER-STORE CHIPS. Everybody who could see more than one store here also
+    // has the store dropdown in the panel header, and two controls for one
+    // choice is one too many. Where the work is across all five is a question
+    // the All Stores tab answers now, next to the eBay numbers.
+
+    // Two different questions, so two queues rather than one mixed list: "this
+    // has no category" and "this has the wrong one" are agreed to differently,
+    // and the second one takes something OFF a shelf a person chose.
+    // Named for what a person sees in Shopify — the Other collection, and a
+    // category that is wrong — not for the mechanism.
+    //
+    // BOTH counts are THIS STORE'S. The misfiled badge used to carry the whole
+    // scope, so a DM looking at OVL read 17 above a list of one.
+    const cOther = _rcData?.counts?.other ?? null;
+    const cWrong = _rcData?.counts?.misfiled ?? null;
+    // THE THIRD TAB IS THE REST OF THE SAME PILE. The first two tabs are lists
+    // of SUGGESTIONS, and for months that is all this panel could ever show —
+    // so 48 listings across the five stores sat in Other on the live storefront
+    // and appeared on no screen anywhere, because no keyword reached them.
+    // "Xreal One Pro Smart Glasses", "Roland V-60HD HD Video Switcher". They
+    // are not edge cases, they are just the ones a rule was never going to get.
+    const cNone = _rcData?.counts?.unmatched ?? null;
+    const badge = n => (n == null ? '' : ` <span class="rc-chip-n">${n}</span>`);
+    const modes = `
+      <div class="rc-modes">
+        <button type="button" class="rc-mode${_rcMode === 'other' ? ' rc-mode-on' : ''}"
+                onclick="rcSetMode('other')">&ldquo;Other&rdquo; Collection${badge(cOther)}</button>
+        <button type="button" class="rc-mode${_rcMode === 'misfiled' ? ' rc-mode-on' : ''}"
+                onclick="rcSetMode('misfiled')">Wrong Category${badge(cWrong)}</button>
+        <button type="button" class="rc-mode${_rcMode === 'unmatched' ? ' rc-mode-on' : ''}"
+                title="Also in Other, but nothing matched — you pick the category"
+                onclick="rcSetMode('unmatched')">No Suggestion${badge(cNone)}</button>
+      </div>
+      <div class="rc-note">Live On The Online Store Only — Unpublished Stock Is Not Listed Here</div>`;
+
+    // Skips are shown, not hidden: a queue that silently swallows decisions is
+    // one nobody trusts, and a skip made in error has to be findable.
+    //
+    // With the title, the SKU and WHERE IT IS NOW, because that is the whole
+    // question. A skip is right when the item is already in the category it
+    // belongs in and wrong when it is still sitting in Other — and an id on its
+    // own cannot tell you which of those you did. So the category is the one bold
+    // thing on the line: it is what somebody is actually reading for.
+    //
+    // Edit rather than Put It Back, and it is the same action either way — the row
+    // goes back in the queue, which is the only place its category can be changed.
+    const catOf = s => {
+        const c = s.in || [];
+        if (!c.length) return '';
+        return `<strong class="rc-skipcat">${_ecEsc(c.join(' + '))}`
+             + ` ${c.length > 1 ? 'Categories' : 'Category'}</strong>`;
+    };
+    const skips = skipped.length ? `
+      <details class="rc-skips">
+        <summary>${skipped.length} Skipped At ${_ecEsc(_ecStore)}</summary>
+        ${skipped.map(s => `
+          <div class="rc-skiprow">
+            <div class="rc-skipmain">
+              <div class="rc-title">${_ecEsc(s.title || 'Untitled Listing')}</div>
+              <div class="rc-sub">${[
+                  s.sku ? _ecEsc(s.sku) : '',
+                  _ecEsc(String(s.product_id).split('/').pop()),
+                  catOf(s),
+                  _ecEsc(s.skipped_by || ''),
+                  s.reason ? _ecEsc(s.reason) : '',
+                ].filter(Boolean).join(' · ')}</div>
+            </div>
+            <button class="ec-btn ec-btn-sm" data-id="${_ecEsc(s.product_id)}"
+                    title="Puts it back in the queue, where its category can be changed"
+                    onclick="rcUnskip(this.dataset.id)">Edit</button>
+          </div>`).join('')}
+      </details>` : '';
+
+    if (!queue.length) {
+        // The skipped list belongs HERE TOO, and this is the reading of it that
+        // matters most: an empty queue with two skips in it is not the same thing
+        // as an empty queue, and hiding them exactly when there is nothing else
+        // on screen is how a decision gets forgotten.
+        return modes + `<div class="ec-empty">${
+          _rcMode === 'misfiled'
+            ? `Nothing looks miscategorised at ${_ecEsc(_ecStore)}.`
+            : _rcMode === 'unmatched'
+            ? `Nothing at ${_ecEsc(_ecStore)} is waiting on a hand-picked category.`
+            : `Nothing left to edit at ${_ecEsc(_ecStore)}.`}<br>
+          <span style="font-weight:600;color:var(--cb-faint);">${
+            _rcMode === 'misfiled'
+              ? 'Every listing on the online store sits in a category its own title agrees with.'
+              : _rcMode === 'unmatched'
+              ? 'Every listing still in Other has a suggested category — see the first tab.'
+              : 'Every listing on the online store here is in a real category.'}</span></div>` + skips;
+    }
+
+    const n = _rcSel.size;
+    const bar = `
+      <div class="ec-quick rc-bar">
+        <label class="rc-all">
+          <input type="checkbox" id="rcAll" onchange="rcSelectAll(this.checked)"
+                 ${n && n === _rcReady().length ? 'checked' : ''}>
+          Select All
+        </label>
+        <button class="ec-btn ec-btn-go" id="rcFileBtn" ${n ? '' : 'disabled'}
+                onclick="rcFileSelected()">Submit ${n ? n + ' ' : ''}Selected</button>
+        <span class="rc-count">${_rcMode === 'unmatched'
+            ? `${queue.length} Waiting On A Category At ${_ecEsc(_ecStore)}`
+            : `${queue.length} To Submit At ${_ecEsc(_ecStore)}`}</span>
+      </div>`;
+
+    const rows = queue.map(q => {
+        const id = _ecEsc(q.productId);
+        // A shelf somebody picked wins over the one the rule proposed, and says
+        // so — an overridden row that looked identical to a proposed one would
+        // make the reviewer wonder whether their click registered.
+        const chosen = _rcOver.has(q.productId);
+        const target = _rcTargetOf(q);
+        // A No Suggestion row arrives with no shelf, so there is nothing to
+        // agree with yet and nothing to submit. It still has to be READABLE —
+        // being on screen at all is the whole point — so it shows the item, the
+        // links and an ask. Ticking and Submit stay shut until somebody answers.
+        const ready = !!target;
+        const toTitle = !ready ? 'Choose A Category'
+            : chosen ? ((_rcData?.shelves || []).find(s => s.handle === target)?.title || target)
+            : q.toTitle;
+        // The rule that decided is shown on every row on purpose: it is the
+        // only way to tell a good match from a lucky one, and the wrong ones
+        // are always obvious once you can see which word won.
+        return `
+        <tr class="cb-row">
+          <td class="rc-pick">
+            <label class="rc-tick"${ready ? '' : ' title="Pick a category first"'}>
+              <input type="checkbox" data-id="${id}" ${_rcSel.has(q.productId) ? 'checked' : ''}
+                     ${ready ? '' : 'disabled'}
+                     onchange="rcToggle(this.dataset.id, this.checked)">
+            </label>
+          </td>
+          <td>
+            <div class="rc-title">${_ecEsc(q.title)}</div>
+            <div class="rc-sub">${_ecEsc(q.sku || '')}</div>
+          </td>
+          <td class="cb-col-status">
+            <div class="ec-pills rc-links">
+              ${q.handle ? `<a class="ec-pill ec-pill-store" href="https://${_ecEsc(q.shop)}/products/${_ecEsc(q.handle)}"
+                   target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}
+              ${q.productId ? `<a class="ec-pill ec-pill-shopify" href="https://${_ecEsc(q.shop)}/admin/products/${_ecEsc(String(q.productId).split('/').pop())}"
+                   target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
+            </div>
+          </td>
+          <td class="cb-col-status">${q.rule === 'no match'
+            ? '<span class="rc-nomatch">Nothing Matched</span>'
+            : `<span class="rc-rule">${_ecEsc(q.rule)}</span>`}</td>
+          <td class="cb-col-status">
+            <span class="rc-move"><span class="rc-from">${_ecEsc((q.from || ['Other']).join(' + '))}</span>
+              <svg class="rc-arr" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+              <button type="button" class="rc-shelf${chosen ? ' rc-shelf-picked' : ''}${ready ? '' : ' rc-shelf-empty'}" data-id="${id}"
+                      title="${!ready ? 'Nothing matched this title — pick the category it belongs in'
+                              : chosen ? 'You chose this shelf — click to change it' : 'Click to file it somewhere else'}"
+                      onclick="rcOpenShelf(this.dataset.id, this)">
+                <span class="rc-to">${_ecEsc(toTitle)}</span>
+                <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+              </button></span>
+          </td>
+          <td class="cb-col-status rc-acts">
+            <button class="ec-btn ec-btn-sm ec-btn-on" data-id="${id}" ${ready ? '' : 'disabled'}
+                    ${ready ? '' : 'title="Pick a category first"'}
+                    onclick="rcFileOne(this.dataset.id, this)">Submit</button>
+            <button class="ec-btn ec-btn-sm ec-btn-off" data-id="${id}"
+                    title="${_rcMode === 'misfiled' ? 'Leave it on the shelf it is on and stop offering it' : 'Leave it in Other and stop offering it'}"
+                    onclick="rcSkip(this.dataset.id, this)">Remove</button>
+          </td>
+        </tr>`;
+    }).join('');
+
+
+    return modes + bar + `
+      <table class="cb-table rc-table">
+        <thead><tr>
+          <th style="width:4%;"></th>
+          <!-- The links get their own column, exactly as they do on the Upload
+               table next door. Beside the title rather than under it, and — the
+               reason it is a column and not a flex row — always at the same x,
+               whatever the title's length. Sharing the title's line meant the
+               pills sat inline on short titles and dropped to a second line on
+               long ones, which reads as a rendering accident. Nothing truncates:
+               the title is how somebody judges the category. -->
+          <th style="width:33%;">Item</th>
+          <th style="width:15%;" class="cb-col-status">Open</th>
+          <th style="width:12%;" class="cb-col-status">Matched On</th>
+          <!-- Move To carries the DECISION, and in the Wrong Category queue both
+               halves are real category names ("Speakers & Audio -> DJ & Recording
+               Equipment"), which cannot share one line at any width this table can
+               spare. So it takes 3% back off Item to keep each NAME whole on its
+               own line rather than breaking one of them across three. A title that
+               no longer fits wraps into the second line it already has for its SKU. -->
+          <th style="width:23%;" class="cb-col-status">Move To</th>
+          <th style="width:13%;" class="cb-col-status"></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` + skips;
+}
+
+// --- choosing a different shelf ---------------------------------------------
+//
+// The rule's answer is a DEFAULT, not a verdict. It is right about four titles
+// in five and wrong about the fifth in a way only somebody who knows the item
+// can see — "Viture Luma XR Projector Smart Glasses" is not a projector, and no
+// keyword was ever going to work that out.
+//
+// This reuses the eBay category popover wholesale: same element id, same
+// placement, same outside-click and Escape handling. A second popover with its
+// own idea of where the viewport ends is how two of them end up on screen.
+const _rcOver = new Map();   // productId → chosen handle, until it is filed
+// Which of the two panels opened the shared popover. They want opposite things
+// when the page scrolls — see _ecCatReflow.
+let _rcPickerOn = false;
+
+function _rcTargetOf(q) { return _rcOver.get(q.productId) || q.to; }
+
+function rcOpenShelf(id, btn) {
+    if (_ecCatSku === id) { ecCloseCategory(); return; }
+    ecCloseCategory();
+    _ecCatSku = id;
+
+    const q = (_rcData?.queue || []).find(x => x.productId === id);
+    const shelves = _rcData?.shelves || [];
+    const current = q ? _rcTargetOf(q) : '';
+
+    const pop = document.createElement('div');
+    pop.id = 'ecCatPop';
+    pop.className = 'ec-catpop';
+    pop.innerHTML = `
+      <div class="ec-catpop-head">
+        <span class="ec-catpop-sku">${_ecEsc(q?.sku || 'Choose A Shelf')}</span>
+        <button class="ec-x" onclick="ecCloseCategory()" aria-label="Close">&times;</button>
+      </div>
+      <input class="ec-catpop-q" id="ecCatQ" placeholder="Search Categories"
+             oninput="rcShelfSearch(this.value)" autocomplete="off">
+      <div class="ec-catpop-list" id="ecCatList">${_rcShelfListHtml(shelves, current, '')}</div>`;
+    document.body.appendChild(pop);
+    _ecCatAnchor = btn;
+    _rcPickerOn = true;
+    _ecCatPlace();
+
+    document.addEventListener('mousedown', _ecCatOutside, true);
+    document.addEventListener('keydown', _ecCatEsc, true);
+    document.addEventListener('scroll', _ecCatReflow, true);
+    window.addEventListener('resize', _ecCatReflow);
+    document.getElementById('ecCatQ')?.focus();
+}
+window.rcOpenShelf = rcOpenShelf;
+
+function _rcShelfListHtml(shelves, current, q) {
+    const needle = String(q || '').toLowerCase().trim();
+    const hits = needle ? shelves.filter(s => s.title.toLowerCase().includes(needle)) : shelves;
+    if (!hits.length) return '<div class="ec-catpop-note">No category by that name.</div>';
+    return hits.map(s => `
+      <button type="button" class="ec-catopt${s.handle === current ? ' ec-catopt-on' : ''}"
+              data-h="${_ecEsc(s.handle)}" onclick="rcPickShelf(this.dataset.h)">
+        ${_ecEsc(s.title)}${s.handle === current ? '<span class="rc-optnow">Current</span>' : ''}
+      </button>`).join('');
+}
+
+function rcShelfSearch(q) {
+    const list = document.getElementById('ecCatList');
+    if (!list) return;
+    const row = (_rcData?.queue || []).find(x => x.productId === _ecCatSku);
+    list.innerHTML = _rcShelfListHtml(_rcData?.shelves || [], row ? _rcTargetOf(row) : '', q);
+    _ecCatPlace();
+}
+window.rcShelfSearch = rcShelfSearch;
+
+// Choosing does NOT file. It changes where this row would go, and Submit (or
+// the bulk button) carries the choice — so somebody can correct three rows and
+// then send all three, rather than being committed by the act of looking.
+function rcPickShelf(handle) {
+    const id = _ecCatSku;
+    if (!id) return;
+    const q = (_rcData?.queue || []).find(x => x.productId === id);
+    if (q && handle === q.to) _rcOver.delete(id); else _rcOver.set(id, handle);
+    ecCloseCategory();
+    ecRender();
+}
+window.rcPickShelf = rcPickShelf;
+
+// The bar is repainted in place rather than through ecRender, because a full
+// rebuild would replace the checkbox the person is still clicking through.
+// The rows that could actually be submitted right now. In the first two tabs
+// that is all of them; in No Suggestion it is only the ones somebody has picked
+// a category for, and Select All has to mean THAT — a Select All that ticks 13
+// rows and then fails on 11 of them is worse than no Select All.
+function _rcReady() {
+    return (_rcData?.queue || []).filter(q => _rcTargetOf(q));
+}
+
+function rcToggle(id, on) {
+    if (on) _rcSel.add(id); else _rcSel.delete(id);
+    const btn = document.getElementById('rcFileBtn');
+    if (btn) { btn.disabled = !_rcSel.size; btn.textContent = `Submit ${_rcSel.size ? _rcSel.size + ' ' : ''}Selected`; }
+    const all = document.getElementById('rcAll');
+    if (all) all.checked = _rcSel.size === _rcReady().length && _rcSel.size > 0;
+}
+window.rcToggle = rcToggle;
+
+function rcSelectAll(on) {
+    _rcSel = on ? new Set(_rcReady().map(q => q.productId)) : new Set();
+    ecRender();
+}
+window.rcSelectAll = rcSelectAll;
+
+async function rcSetMode(mode) {
+    if (_rcMode === mode) return;
+    _rcMode = mode;
+    _rcData = null;
+    const body = document.getElementById('ecBody');
+    if (body) body.innerHTML = '<div class="status-message">Loading…</div>';
+    try { await rcLoad(); } catch (e) {
+        if (body) body.innerHTML = `<div class="ec-empty">Could not load that list.<br>
+            <span style="font-weight:600;color:var(--cb-faint);">${_ecEsc(e.message)}</span></div>`;
+        return;
+    }
+    ecRender();
+}
+window.rcSetMode = rcSetMode;
+
+async function _rcRun(ids, btn) {
+    if (!ids.length) return;
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
+    // Each row carries its own destination, which is the rule's unless somebody
+    // changed it. The server checks both: the product must be in the queue and
+    // the shelf must be one anything may be filed on.
+    const items = ids.map(id => ({ productId: id, to: _rcOver.get(id) }));
+    const res = await _rcPost({ action: 'apply', store: _ecStore, mode: _rcMode, items });
+    if (!res.ok) {
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+        alert(res.body?.detail || res.body?.error || 'Could not file that.');
+        return;
+    }
+    // A partial failure is the interesting case: some products moved and some
+    // did not, and saying "done" would bury the ones that did not.
+    if (res.body.failed) {
+        alert(`${res.body.moved} filed. ${res.body.failed} could not be:\n`
+            + (res.body.errors || []).map(e => `· ${e.title}: ${e.why}`).join('\n'));
+    }
+    await rcLoad();
+    // No card to clear from here: the feed deck is on the dashboard, and this
+    // panel is on Operations. Going back to the dashboard re-runs the check.
+    ecRender();
+}
+
+async function rcFileOne(id, btn) { await _rcRun([id], btn); }
+window.rcFileOne = rcFileOne;
+
+async function rcFileSelected() {
+    const ids = [..._rcSel];
+    if (!ids.length) return;
+    // The two queues do different things to the storefront, so they get
+    // different sentences. "Leaves Other" is reassuring; "comes off the shelf
+    // somebody put it on" is the one worth reading twice.
+    if (!confirm(`Submit ${ids.length} item${ids.length === 1 ? '' : 's'} at ${_ecStore}?\n\n`
+        + (_rcMode === 'misfiled'
+            ? 'Each one joins its new collection and COMES OFF the collection it is on now, on the live store.'
+            : _rcMode === 'unmatched'
+            ? 'Each one joins the category YOU picked and leaves Other on the live store.'
+            : 'Each one joins its new collection and leaves Other on the live store.'))) return;
+    await _rcRun(ids, document.getElementById('rcFileBtn'));
+}
+window.rcFileSelected = rcFileSelected;
+
+async function rcSkip(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Removing…'; }
+    const res = await _rcPost({ action: 'skip', store: _ecStore, productId: id });
+    if (!res.ok) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Remove'; }
+        alert(res.body?.detail || res.body?.error || 'Could not skip that.');
+        return;
+    }
+    await rcLoad();
+    ecRender();
+}
+window.rcSkip = rcSkip;
+
+async function rcUnskip(id) {
+    const res = await _rcPost({ action: 'unskip', store: _ecStore, productId: id });
+    if (!res.ok) { alert(res.body?.detail || res.body?.error || 'Could not undo that.'); return; }
+    await rcLoad();
+    ecRender();
+}
+window.rcUnskip = rcUnskip;
+
+// The panel's own state is script-scoped, so neither the console nor a harness
+// can read it — which turns "the queue is empty" into a guess about whether the
+// fetch failed, the view flipped back, or there is genuinely nothing to file.
+window.rcLoad = rcLoad;
+window._dbgRecat = () => ({
+    view: _ecView, store: _ecStore, loaded: !!_rcData, mode: _rcMode,
+    queue: (_rcData?.queue || []).length, skipped: (_rcData?.skipped || []).length,
+    selected: _rcSel.size, counts: _rcData?.counts || null,
+});
+
+// --- The nag: listings waiting on a category --------------------------------
+//
+// Nothing "happens" when a listing needs filing — a product is created in
+// Shopify with no collection, and the queue notices at the next catalogue
+// sweep. There is no write handler to hook, so this is a data-derived reminder
+// like the KPI ones: ask for the counts, carry them on a hidden bubble, and let
+// _samGatherReminders turn that into the feed card.
+//
+// STORE ROLES ONLY, and the SERVER decides which those are (scope.corp). The DM
+// lives in this panel and their queue is a standing backlog of 289 across five
+// stores; a card saying so every morning is a card nobody reads. A manager has
+// a handful at their own store, which is a thing you can actually finish.
+//
+// Snoozeable, because nothing here is late — a shelf is untidy, not overdue.
+// data-sig carries the counts, so a snooze holds only until the numbers move
+// and new stock breaks through it (see [[feed-suppression-keys]]).
+const RECAT_NAG_MS = 30 * 60 * 1000;
+let _rcNagStarted = false;
+
+function _rcHideNag() {
+    const b = document.getElementById('recatAlertBubble');
+    if (b) b.style.display = 'none';
+}
+window._rcHideNag = _rcHideNag;
+
+function _rcNagBubbleEl() {
+    let b = document.getElementById('recatAlertBubble');
+    if (b) return b;
+    // Same anchor and stacking context as every other bubble, and absent on the
+    // pages with no deck — which is exactly where there is nothing to show.
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'recatAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #0f766e, #134e4a); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(19, 78, 74, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span style="font-size:16px; flex-shrink:0; margin-top:2px;">📁</span>
+        <span id="recatAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="_rcHideNag()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+async function checkCategoryQueueReminders() {
+    // THE DECK IS THE ONLY PLACE THIS IS EVER SEEN. The bubble is an invisible
+    // state-carrier for _samGatherReminders, and the feed lives on the dashboard
+    // alone — so checking on the other four shells spends a request per page
+    // load to update something nobody can look at, and hands every role the
+    // panel is closed to a 401 in their console on every page.
+    if (!document.getElementById('samFeed')) return;
+    // The same switch as the button: no tool, no nag about the tool.
+    if (typeof _jumpFeatureVisible === 'function' && !_jumpFeatureVisible('ec-view-categories')) {
+        _rcHideNag(); return;
+    }
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) { _rcHideNag(); return; }
+    if (!_rcNagStarted) { _rcNagStarted = true; setInterval(checkCategoryQueueReminders, RECAT_NAG_MS); }
+    // ?view=counts, not ?view=review: the review payload carries a whole store
+    // queue with it, and this runs on a timer on every page.
+    let d = null;
+    try { d = await _rcFetch('?view=counts'); } catch (_) { return; }  // a 401 is a role answer, not an error to show
+    if (!d || d.scope?.corp) { _rcHideNag(); return; }
+    const stores = d.scope?.stores || [];
+    const other = stores.reduce((n, s) => n + (d.other?.[s] || 0), 0);
+    const mis = stores.reduce((n, s) => n + (d.misfiled?.[s] || 0), 0);
+    // The No Suggestion pile counts here too, and it is the half that had NO
+    // screen at all until now. Leaving it out of the nag would be the same bug
+    // one level up: work that exists and nothing that says so.
+    const unm = stores.reduce((n, s) => n + (d.unmatched?.[s] || 0), 0);
+    if (!other && !mis && !unm) { _rcHideNag(); return; }
+    const b = _rcNagBubbleEl();
+    if (!b) return;
+    const t = document.getElementById('recatAlertBubbleText');
+    if (t) {
+        // Two problems, and only the halves that exist. The words are the panel's:
+        // in "Other" means no category at all, the wrong category means somebody
+        // filed it somewhere its own title disagrees with.
+        // Both halves of the Other pile are the same pile, so they are one
+        // number — with the hand-pick count in brackets, because "we suggested a
+        // shelf, confirm it" and "nothing matched, you decide" are the same
+        // errand but not the same amount of thinking.
+        const pile = other + unm;
+        const bits = [];
+        if (pile) bits.push(pile + ' listing' + (pile === 1 ? '' : 's') + " in “Other”"
+            + (unm ? ' (' + unm + ' with nothing matched)' : ''));
+        if (mis) bits.push(mis + ' in the wrong category');
+        const where = stores.length > 1 ? stores.join(' & ') : (stores[0] || 'Your store');
+        t.dataset.summary = where + ' has ' + bits.join(' and ')
+            + ' on the online store — open Categories to sort them.';
+        // Which halves exist, so the card title can name the one that is really
+        // there — "Listings Need A Category" over three miscategorised items is
+        // the wrong sentence.
+        t.dataset.only = pile ? (mis ? '' : 'other') : 'wrong';
+        // The counts ARE the identity. File some and the rest is new information
+        // worth surfacing again; file them all and the card leaves on its own.
+        t.dataset.sig = 'recat:' + other + ':' + mis + ':' + unm;
+        t.dataset.stores = stores.join(',');
+        t.textContent = t.dataset.summary;
+    }
+    b.style.display = 'flex';
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+window.checkCategoryQueueReminders = checkCategoryQueueReminders;
 
 // --- actions ----------------------------------------------------------------
 
@@ -42798,7 +45091,12 @@ function _ecCatAnchorEl() {
     const sel = (window.CSS && CSS.escape)
         ? CSS.escape(_ecCatSku)
         : String(_ecCatSku).replace(/["\\]/g, '\\$&');
-    const el = document.querySelector(`#ecBody .ec-catbtn[data-sku="${sel}"]`);
+    // Two kinds of anchor, because two panels share this popover: an eBay row
+    // keys on its SKU, a Categories row on its product id. Without the second
+    // selector the picker lost its anchor on every re-render and fell back to
+    // measuring itself, which is how it ended up floating mid-page.
+    const el = document.querySelector(`#ecBody .ec-catbtn[data-sku="${sel}"]`)
+        || document.querySelector(`#ecBody .rc-shelf[data-id="${sel}"]`);
     if (el) _ecCatAnchor = el;
     return el;
 }
@@ -42873,6 +45171,16 @@ function _ecCatReflow(ev) {
     const pop = document.getElementById('ecCatPop');
     if (!pop) return;
     if (ev?.target && pop.contains(ev.target.nodeType ? ev.target : pop)) return;
+    // THE SHELF PICKER BELONGS TO ONE ROW. _ecCatPlace ends in a clamp that
+    // keeps the popover on screen whatever the arithmetic said. That is right
+    // for the eBay panel and wrong here: scroll the queue and the list stays
+    // parked over the middle of the page with the row it applies to gone, over
+    // rows it would not file. So it closes with its row instead.
+    if (_rcPickerOn) {
+        const a = _ecCatAnchorEl();
+        const r = a ? a.getBoundingClientRect() : null;
+        if (!r || r.bottom < 8 || r.top > window.innerHeight - 8) { ecCloseCategory(); return; }
+    }
     _ecCatPlace();
 }
 
@@ -42892,6 +45200,7 @@ function ecCloseCategory() {
     _ecCatSku = null;
     _ecCatAnchor = null;
     _ecCatChrome = null;
+    _rcPickerOn = false;
 }
 window.ecCloseCategory = ecCloseCategory;
 
@@ -43383,7 +45692,7 @@ function ecFix(sku, note, replay) {
         </div>
         <div class="ec-fix-foot">
           ${at > 0 ? `<button class="ec-btn ec-btn-sm ec-fix-back"
-                  onclick="ecFixBack()">&larr; Back</button>` : ''}
+                  onclick="ecFixBack()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>Back</button>` : ''}
           <button class="ec-btn ec-btn-sm" onclick="ecFixClose()">Cancel</button>
           <button class="ec-btn ec-btn-sm ec-btn-on" id="ecFixGo"
                   onclick="ecFixSubmit()">Save &amp; Upload</button>
@@ -43567,4 +45876,575 @@ async function ecRefresh() {
         _ecBusy = false;
         if (btn) btn.disabled = false;
     }
+}
+
+// ============================================================================
+// MODULE: DROPDOWNS — one look for every <select> on the site
+// ============================================================================
+// A native <select> renders its popup in the OPERATING SYSTEM, not the page, so
+// CSS cannot touch it: on Windows Chrome that is a squared white list with black
+// hairlines down two edges, which is nothing like the rest of this site. The
+// store picker on the phone dashboard was rebuilt as a button-and-list for that
+// reason, and this generalises it to every select rather than leaving one
+// dropdown that matches the design and a hundred that do not.
+//
+// THE NATIVE SELECT STAYS IN THE DOM AND STAYS AUTHORITATIVE. It is only hidden
+// from view. Every `document.getElementById('x').value` read, every `.value = y`
+// write, every `onchange=` attribute and every form serialisation across the
+// site keeps working untouched — this draws a face over the control, it does not
+// replace it. That is the whole reason it is safe to apply site-wide.
+//
+// Opt out with data-dd="off" on the select.
+const _DD_SKIP = 'bs-hidden-select';
+let _ddSeq = 0;
+
+function _ddOptions(sel) {
+    return Array.from(sel.options).filter(o => !o.disabled || o.selected);
+}
+function _ddLabel(sel) {
+    const o = sel.options[sel.selectedIndex];
+    return o ? o.text : '';
+}
+
+// Redrawn from the native select every time, so a caller that repopulated the
+// options or set .value behind our back is picked up rather than remembered wrong.
+// A CONTROL SHOULD BE AT LEAST AS WIDE AS THE LONGEST THING IT CAN SAY.
+// Now that the open list matches the button to the pixel, a button narrower than
+// its own options truncates them — the workspace month picker was 107px wide and
+// ellipsised every single month in the list. Two controls on the whole site were
+// in that state, and both were already too narrow before this: the wider list
+// just hid it.
+//
+// Measured with canvas rather than a probe element: no layout, no reflow, and it
+// runs on every repopulation. Guarded three ways so a long option cannot blow up
+// a row — never past the space the parent actually has, never past 280px, and
+// never below a floor the page set on the select itself.
+function _ddFit(host) {
+    const btn = host._ddBtn, sel = host._ddSel;
+    if (!btn || !sel || !sel.options.length) return;
+    const cs = getComputedStyle(btn);
+    const cv = _ddFit._c || (_ddFit._c = document.createElement('canvas'));
+    const ctx = cv.getContext('2d');
+    // MEASURED TWICE, because the two halves of this control are not set in the
+    // same type. .dd-opt is a flat 13.5px/650 while the button wears whichever
+    // site class the select brought with it — .metric-dropdown is 12px — so
+    // sizing the control off the button alone left the OPTIONS clipped in a
+    // button that looked roomy. Both are measured and the wider wins.
+    const measure = (font, pad) => {
+        ctx.font = font;
+        let t = 0;
+        for (let i = 0; i < sel.options.length; i++) {
+            const w = ctx.measureText(sel.options[i].text).width;
+            if (w > t) t = w;
+        }
+        return Math.ceil(t + pad) + 1;
+    };
+    const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)
+               + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
+    // Button: padding, borders, the chevron and its gap.
+    const asBtn = measure(cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily,
+                          padX + 15 + 8);
+    // Option: the list's 5px either side, plus the option's own padding — which
+    // _ddPlace derives from the button's, so it tracks the same number.
+    const asOpt = measure('650 13.5px ' + cs.fontFamily,
+                          10 + Math.max(parseFloat(cs.paddingLeft) - 5, 4) + 11);
+    // A floor the page set on the select is a FLOOR, not an override: it was
+    // being applied last, so it beat the room clamp below. That is how the feed's
+    // filter kept a 200px width from a desktop rule on a 320px phone.
+    let want = Math.max(asBtn, asOpt, host._ddNativeMin || 0);
+    want = Math.min(want, 280);
+    // NO PARENT CLAMP. There was one — "never past the space the parent actually
+    // has" — and it was circular: a shrink-to-fit parent's width IS this
+    // control's width, so it pinned the control to whatever it already happened
+    // to be and it could never grow back to fit its own options. That is why the
+    // feed's filter measured 112px with "All updates" showing and then jumped to
+    // 141px on "Announcements", moving the whole row under your finger.
+    //
+    // Trying to detect a shrink-to-fit parent by its `display` does not work
+    // either: .hub-select-wrap computes to `flex`, not `inline-flex`, and a flex
+    // ITEM with `flex: 0 1 auto` is just as content-driven. Overflow is held back
+    // by `.dd-host { max-width: 100% }` in CSS, which resolves against the
+    // containing block rather than against this control, plus the two caps below.
+    want = Math.min(want, Math.max(120, window.innerWidth - 24));
+    host.style.minWidth = want + 'px';
+}
+
+function _ddSync(host) {
+    const sel = host._ddSel;
+    if (!sel) return;
+    host._ddBtnLabel.textContent = _ddLabel(sel) || '—';
+    host.classList.toggle('dd-empty', !sel.options.length);
+    // The face is a separate <button>, so a disabled <select> does not disable it
+    // on its own — `.dd-btn:disabled` never matched, and a locked control kept a
+    // chevron, a pointer cursor and full contrast while doing nothing. That is the
+    // single-store manager's Store field in the recycle tool: the page disables it,
+    // and on a phone it still read as something you could open (user's call,
+    // 20 Aug: "don't make it seem like there is a dropdown there").
+    //
+    // LOCKED is wider than disabled: one option is nothing to choose either, and a
+    // chevron is a promise that something opens. Re-evaluated on every sync, so a
+    // list that fills in later gets its chevron back.
+    host._ddBtn.disabled = !!sel.disabled;
+    host.classList.toggle('dd-locked', !!sel.disabled || sel.options.length <= 1);
+    _ddFit(host);
+    if (!host.classList.contains('open')) return;
+    _ddFillList(host);
+}
+
+// TYPE TO JUMP. No box, nothing on screen to aim at: the list opens and you
+// start typing, exactly as a native select behaves — except native type-ahead is
+// PREFIX-ONLY, and what somebody knows about an item is rarely the first word of
+// the shelf it lives on. Typing "video" on the 63-shelf category list moved the
+// cursor nowhere, because it matched on "V" and stopped.
+//
+// So the jump is a SUBSTRING match, first hit wins, and the letters keep
+// narrowing until you stop typing for DD_TYPE_RESET. Prefix matches are still
+// preferred, so a list where two options contain "con" but one starts with it
+// lands where a native select would have.
+const DD_TYPE_RESET = 1100;
+// Only worth having on a list too long to scan. Below this, the eye is faster.
+const DD_SEARCH_MIN = 10;
+
+const _ddSearchable = sel => _ddOptions(sel).length >= DD_SEARCH_MIN;
+
+// Matched against the option's own text AND its group's label, so a shelf found
+// by its group lands even when its own name does not say so.
+function _ddHay(o) {
+    const g = o.parentElement && o.parentElement.tagName === 'OPTGROUP'
+        ? o.parentElement.label + ' ' : '';
+    return (g + o.text).toLowerCase();
+}
+
+function _ddFillList(host) {
+    const sel = host._ddSel;
+    const list = host._ddList;
+    list.innerHTML = '';
+    _ddOptions(sel).forEach(o => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'dd-opt' + (o.selected ? ' on' : '') + (o.disabled ? ' dd-dis' : '');
+        b.setAttribute('role', 'option');
+        b.setAttribute('aria-selected', o.selected ? 'true' : 'false');
+        b.dataset.ddHay = _ddHay(o);
+        b.textContent = o.text;
+        if (o.disabled) b.disabled = true;
+        b.addEventListener('click', ev => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            _ddChoose(host, o.value);
+        });
+        list.appendChild(b);
+    });
+}
+
+function _ddClearType(host) {
+    host._ddType = '';
+    clearTimeout(host._ddTypeT);
+}
+
+function _ddJump(host, ch) {
+    host._ddType = (host._ddType || '') + ch.toLowerCase();
+    clearTimeout(host._ddTypeT);
+    host._ddTypeT = setTimeout(() => _ddClearType(host), DD_TYPE_RESET);
+
+    const q = host._ddType;
+    const opts = Array.from(host._ddList.querySelectorAll('.dd-opt:not([disabled])'));
+    // Prefix first, so short queries land where a native select would; then
+    // anywhere in the label, which is the part native could never do.
+    const hit = opts.find(o => (o.dataset.ddHay || '').startsWith(q))
+             || opts.find(o => (o.dataset.ddHay || '').includes(q));
+    // A miss leaves the cursor exactly where it was rather than jumping to
+    // something that does not match — the same as a native select ignoring a
+    // letter nothing starts with. There is no longer a badge showing the letters:
+    // the black on the option they found is the feedback, so a hit is obvious and
+    // a miss is the cursor not moving.
+    if (hit) hit.focus({ preventScroll: false });
+}
+
+// The one place a value is written. Writing through the native select and then
+// dispatching a real 'change' is what keeps every existing handler on the page
+// firing exactly as it did before this module existed.
+function _ddChoose(host, value) {
+    const sel = host._ddSel;
+    _ddClose(host);
+    if (sel.value === value) return;
+    sel.value = value;
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    _ddSync(host);
+}
+
+// position: fixed, placed on open. Half the selects on this site sit inside
+// modals and panels with overflow:hidden, and an absolutely positioned list gets
+// clipped by them — the menu would open and be invisible.
+function _ddPlace(host) {
+    const r = host._ddBtn.getBoundingClientRect();
+    const list = host._ddList;
+    // EXACTLY AS WIDE AS THE BUTTON (user's call, 20 Aug). It was min-width with a
+    // 130px floor, so a narrow control opened a list wider than itself on two
+    // counts at once: the floor, and its own longest option. The feed's "All
+    // updates" is 105px and opened at 130. The list reads as the control
+    // continuing, and a control that changes width when you touch it does not.
+    list.style.width = Math.round(r.width) + 'px';
+    list.style.minWidth = '0';
+    list.style.left = Math.round(r.left) + 'px';
+    // Line the option labels up with the label on the button, so the open list
+    // reads as the control continuing rather than as a panel beside it. The
+    // button's padding varies by whichever site class it inherited (12px bare,
+    // 13-14px on .form-input), so it is measured rather than assumed; the list's
+    // own 5px of padding is subtracted out.
+    const padL = parseFloat(getComputedStyle(host._ddBtn).paddingLeft);
+    list.style.setProperty('--dd-opt-pad',
+        Math.max((isFinite(padL) ? padL : 12) - 5, 4) + 'px');
+    // Keep it inside the window. A list that matches its button can only leave the
+    // viewport if the button already has, but the pickers and this share a
+    // placement idiom and only one of them was clamped.
+    const w = Math.round(r.width);
+    const maxL = window.innerWidth - w - 6;
+    list.style.left = Math.round(Math.max(6, Math.min(r.left, maxL))) + 'px';
+    // A label that no longer fits the button's width gets the full text on hover.
+    // Set here rather than at fill time because whether it fits is a measurement,
+    // and a title on every option would put a browser tooltip on all of them.
+    // .dd-opt only, so nothing else the list may hold picks up a browser tooltip.
+    Array.from(list.querySelectorAll('.dd-opt')).forEach(o => {
+        if (o.scrollWidth > o.clientWidth + 1) o.title = o.textContent;
+        else o.removeAttribute('title');
+    });
+    // Flip above the button when there is more room up than down.
+    const below = window.innerHeight - r.bottom;
+    const h = Math.min(list.scrollHeight + 12, 280);
+    if (below < h && r.top > below) {
+        list.style.top = '';
+        list.style.bottom = Math.round(window.innerHeight - r.top + 5) + 'px';
+    } else {
+        list.style.bottom = '';
+        list.style.top = Math.round(r.bottom + 5) + 'px';
+    }
+}
+
+function _ddClose(host) {
+    if (!host.classList.contains('open')) return;
+    host.classList.remove('open');
+    host._ddList.classList.remove('dd-open');
+    // Put it back where it belongs. Leaving every list parked in <body> would
+    // slowly fill the document with 127 detached menus, and anything walking the
+    // host's subtree (the harness does) would stop finding it.
+    if (host._ddList.parentNode !== host) host.appendChild(host._ddList);
+    host._ddBtn.setAttribute('aria-expanded', 'false');
+}
+function _ddCloseAll(except) {
+    document.querySelectorAll('.dd-host.open').forEach(h => { if (h !== except) _ddClose(h); });
+    // ORPHANS — the reason a menu could get stuck open (user's report, 20 Aug:
+    // "it doesn't go away if I click something else, I have to select a choice").
+    //
+    // _ddOpen moves the list into <body>. If the host's container is re-rendered
+    // while it is open — which every table on this site does, the recycle list on
+    // a poll and on every note toggle — the host is destroyed and the list is left
+    // behind in <body>, still .dd-open and still painted over the new table. The
+    // sweep above walks `.dd-host.open`, and that host is no longer in the
+    // document, so nothing closed it. Picking an option DID work, because
+    // _ddChoose holds a JS reference to the detached host — which is exactly the
+    // shape of the report.
+    //
+    // Removed rather than re-parented: there is nothing left to re-parent it to.
+    document.querySelectorAll('body > .dd-list.dd-open').forEach(l => {
+        if (except && l === except._ddList) return;
+        l.classList.remove('dd-open');
+        l.remove();
+    });
+}
+function _ddOpen(host) {
+    if (host._ddSel.disabled) return;
+    _ddCloseAll(host);
+    // Letters left over from last time would send the next open somewhere nobody
+    // asked for, so the buffer is cleared here rather than on close.
+    _ddClearType(host);
+    host._ddHasSearch = _ddSearchable(host._ddSel);
+    _ddFillList(host);
+    host.classList.add('open');
+    host._ddBtn.setAttribute('aria-expanded', 'true');
+    // MOVED TO <body> WHILE OPEN. position:fixed is resolved against the nearest
+    // ancestor with a transform, not against the viewport — and .modal-menu is
+    // `transform: translate(-50%,-50%) scale(.95)`, so every dropdown inside a
+    // modal opened 121px right and 91px below where it belonged. Half the selects
+    // on this site live in modals. Re-parenting to <body> removes the transformed
+    // ancestor entirely, which is the only fix that does not depend on knowing
+    // which ancestor is transformed.
+    document.body.appendChild(host._ddList);
+    host._ddList.classList.add('dd-open');
+    _ddPlace(host);
+    const on = host._ddList.querySelector('.dd-opt.on') || host._ddList.querySelector('.dd-opt');
+    if (on) on.focus({ preventScroll: true });
+}
+
+function _ddKey(host, ev) {
+    const opts = Array.from(host._ddList.querySelectorAll('.dd-opt:not([disabled])'));
+    const i = opts.indexOf(document.activeElement);
+    if (ev.key === 'Escape') {
+        // Only while OPEN, and stopped here so it never reaches closeAllModals —
+        // Escape should peel this list before the modal it is sitting in.
+        ev.stopPropagation();
+        ev.preventDefault();
+        _ddClose(host);
+        host._ddBtn.focus();
+    } else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        // Arrowing is a deliberate move away from what was typed, so the letters
+        // go with it — otherwise the next keystroke jumps back.
+        _ddClearType(host);
+        const next = ev.key === 'ArrowDown' ? Math.min(i + 1, opts.length - 1) : Math.max(i - 1, 0);
+        if (opts[next]) opts[next].focus({ preventScroll: true });
+    } else if (ev.key === 'Enter' || ev.key === ' ') {
+        // The focused option is the answer. Space included because the list is a
+        // row of buttons and a button takes Space — without this it scrolled the
+        // page behind the open list.
+        ev.preventDefault();
+        if (document.activeElement && document.activeElement.classList.contains('dd-opt')) {
+            document.activeElement.click();
+        }
+    } else if (ev.key === 'Backspace') {
+        ev.preventDefault();
+        const q = (host._ddType || '').slice(0, -1);
+        _ddClearType(host);
+        for (const c of q) _ddJump(host, c);
+    } else if (host._ddHasSearch && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+        // One printable character. Only on the long lists — on five stores the
+        // browser's own prefix jump is already the right behaviour and a second
+        // one fighting it is worse than neither.
+        ev.preventDefault();
+        _ddJump(host, ev.key);
+    }
+}
+
+// SOME SELECTS WERE ALREADY DRESSED BY HAND before this module existed: the
+// native arrow suppressed with appearance:none and a chevron drawn beside the
+// control as a sibling — #notifDropdown .hub-chev is `position:absolute;
+// right:12px`. The face brings its own chevron, so both showed, a couple of
+// pixels apart. That is the "up and down arrow" on the announcements filter.
+//
+// Matched on being a TEXT-FREE sibling that draws a chevron — either by class
+// name or by the path data itself — so a search icon or a real label beside a
+// select is left alone. Hidden rather than removed: it is the page's markup, not
+// ours, and a re-render would put it back anyway.
+const _DD_CHEV_SHAPE = /^(m6 9l6 6 6-6|6 9 12 15 18 9|m6 9 12 15 18 9|m19 9l-7 7-7-7)$/;
+
+function _ddHideOwnChevron(sel, wrap) {
+    if (!wrap || wrap.nodeType !== 1) return;
+    Array.from(wrap.children).forEach(el => {
+        if (el === sel || el.classList.contains('dd-host')) return;
+        if (el.textContent.trim()) return;
+        const svg = el.tagName.toLowerCase() === 'svg' ? el : el.querySelector('svg');
+        if (!svg) return;
+        const byName = /chev|caret|arrow/i.test(el.className + ' ' + (svg.getAttribute('class') || ''));
+        const geom = ((svg.querySelector('path') || {}).getAttribute
+                        ? svg.querySelector('path').getAttribute('d') : '')
+                  || ((svg.querySelector('polyline') || {}).getAttribute
+                        ? svg.querySelector('polyline').getAttribute('points') : '');
+        if (!byName && !_DD_CHEV_SHAPE.test(String(geom).trim().toLowerCase())) return;
+        el.classList.add('dd-dupe-chev');
+    });
+}
+
+function _ddEnhance(sel) {
+    if (!sel || sel._ddDone) return;
+    if (sel.multiple || (sel.size && sel.size > 1)) return;
+    if (sel.dataset.dd === 'off') return;
+    if (sel.classList.contains(_DD_SKIP)) return;
+    sel._ddDone = true;
+
+    const host = document.createElement('div');
+    host.className = 'dd-host';
+    // The select keeps every class it had: the site sizes these controls with
+    // .form-input / .idea-input / .kpi-select and the face has to inherit that
+    // width, so the HOST copies the layout classes and the native one keeps them
+    // too for any CSS that reads them.
+    host.dataset.ddFor = sel.id || ('dd' + (++_ddSeq));
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'dd-btn ' + sel.className;
+    btn.setAttribute('aria-haspopup', 'listbox');
+    btn.setAttribute('aria-expanded', 'false');
+    if (sel.id) btn.setAttribute('aria-labelledby', sel.id + '-ddlab');
+    const lab = document.createElement('span');
+    lab.className = 'dd-cur';
+    lab.id = (sel.id || host.dataset.ddFor) + '-ddlab';
+    btn.appendChild(lab);
+    const chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    chev.setAttribute('class', 'dd-chev');
+    chev.setAttribute('viewBox', '0 0 24 24');
+    chev.innerHTML = '<path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>';
+    btn.appendChild(chev);
+
+    const list = document.createElement('div');
+    list.className = 'dd-list';
+    list.setAttribute('role', 'listbox');
+
+    // Before the select is moved: once it lives in the host, its old siblings are
+    // no longer reachable from it.
+    const origParent = sel.parentNode;
+    _ddHideOwnChevron(sel, origParent);
+    origParent.insertBefore(host, sel);
+    host.appendChild(sel);
+    host.appendChild(btn);
+    host.appendChild(list);
+
+    // CARRY OVER A WIDTH THE PAGE SET ON THE SELECT ITSELF. The face inherits the
+    // select's CLASSES, which covers .form-input and friends — but a good deal of
+    // this site sizes its selects by ELEMENT (`#notifDropdown .hub-select-wrap
+    // select { min-width: 200px }`), and no class copying can reach a rule like
+    // that. Those controls silently shrank to their label when the face went on,
+    // which is how the feed's filter ended up a 105px button under a 130px list.
+    // Read now, while the native control is still laid out, and only when it is a
+    // real positive floor — a width or a flex basis is the page's business and is
+    // left alone.
+    const nativeMin = parseFloat(getComputedStyle(sel).minWidth);
+    if (isFinite(nativeMin) && nativeMin > 1) host._ddNativeMin = nativeMin;
+
+    sel.classList.add('dd-native');
+
+    host._ddSel = sel;
+    host._ddBtn = btn;
+    host._ddBtnLabel = lab;
+    host._ddList = list;
+
+    btn.addEventListener('click', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        // Re-read before opening: plenty of callers set .value without dispatching
+        // anything, and the label would otherwise show the previous choice.
+        _ddSync(host);
+        host.classList.contains('open') ? _ddClose(host) : _ddOpen(host);
+    });
+    list.addEventListener('keydown', ev => _ddKey(host, ev));
+    // A caller that dispatches change (or the user, via the hidden native control
+    // on a platform that still surfaces it) keeps the face in step.
+    sel.addEventListener('change', () => _ddSync(host));
+    // Repopulated options — store lists, user lists, month lists — are the common
+    // case on this site, so watch for them rather than reading once at startup.
+    new MutationObserver(() => _ddSync(host)).observe(sel, { childList: true, subtree: true });
+    // And the case nothing can observe: `sel.value = x` fires no event and mutates
+    // no attribute — .value moves the IDL selected property, not the markup — so a
+    // caller that sets a store and does not dispatch change leaves the face showing
+    // the old one. dmChartStoreSelector and mbStoreSelect both do exactly that.
+    // The real descriptor is called through, so behaviour is unchanged; this only
+    // adds the redraw. Instance-level, so no other <select> on the page is touched.
+    _ddWatchValue(sel, host, "value");
+    _ddWatchValue(sel, host, "selectedIndex");
+
+    _ddSync(host);
+}
+
+function _ddWatchValue(sel, host, prop) {
+    const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, prop);
+    if (!desc || !desc.get || !desc.set) return;
+    Object.defineProperty(sel, prop, {
+        configurable: true,
+        enumerable: false,
+        get() { return desc.get.call(this); },
+        set(v) { desc.set.call(this, v); _ddSync(host); },
+    });
+}
+
+function _ddScan(root) {
+    (root || document).querySelectorAll('select:not(.dd-native)').forEach(_ddEnhance);
+}
+
+document.addEventListener('click', () => _ddCloseAll());
+// A `click` never fires if the pointer MOVES between press and release — a small
+// drag with a mouse, or a tap that slides a pixel on a touchscreen, which is most
+// taps. The list then stayed open until you picked something out of it. pointerdown
+// always fires, and CAPTURE means no descendant that calls stopPropagation() on its
+// own click can swallow the close either — the other way this can happen, and the
+// one that cannot be proved absent by testing.
+//
+// Both custom dropdowns close from this one listener so they cannot drift apart.
+// The click handlers above stay: a keyboard-driven click (Enter on a focused
+// control) fires no pointer event at all.
+document.addEventListener('pointerdown', (ev) => {
+    const t = ev.target;
+    if (!t || !t.closest) return;
+    // .dd-list as well as .dd-host: the list is re-parented to <body> while it is
+    // open, so it is no longer inside its own host (see _ddOpen).
+    if (!t.closest('.dd-host') && !t.closest('.dd-list')) _ddCloseAll();
+    if (!t.closest('.lv-pickwrap')) _lvClosePickLists();
+}, true);
+let _ddFitTimer = null;
+window.addEventListener('resize', () => {
+    _ddCloseAll();
+    // Debounced: a rotation fires this a dozen times.
+    clearTimeout(_ddFitTimer);
+    _ddFitTimer = setTimeout(() => {
+        document.querySelectorAll('.dd-host').forEach(h => {
+            if (!h._ddSel || !h._ddBtn) return;
+            // Re-read the floor: it lives in CSS, so crossing a breakpoint
+            // changes it. The hidden select still reports its own min-width —
+            // .dd-native sets width, not min-width.
+            const nm = parseFloat(getComputedStyle(h._ddSel).minWidth);
+            h._ddNativeMin = (isFinite(nm) && nm > 1) ? nm : 0;
+            _ddFit(h);
+        });
+    }, 150);
+});
+// Any scroll, including inside a modal body: a fixed-position list does not move
+// with its button, so it has to close rather than float off on its own.
+//
+// EXCEPT the list scrolling ITSELF. .dd-list is capped at 280px and scrolls
+// inside, and this listener is in CAPTURE — so dragging a long list (the
+// Feature Access user picker is 40-odd people) fired scroll, closed the list
+// mid-drag, and it read as "I cannot scroll this dropdown" (user's report, 20
+// Aug). The list does not move relative to its button when it scrolls its own
+// contents, which is the whole reason this closer exists.
+window.addEventListener('scroll', (ev) => {
+    const t = ev.target;
+    if (t && t.nodeType === 1 && t.closest && t.closest('.dd-list')) return;
+    _ddCloseAll();
+}, true);
+
+// Selects arrive with rendered HTML all day on this site, so scanning once at
+// startup would cover a fraction of them. Debounced: several renderers rebuild
+// a panel's innerHTML a few times in a row.
+let _ddTimer = null;
+// BEFORE THE NEXT PAINT, not 60ms after it. The 60ms debounce meant every
+// re-render that contains a <select> painted the raw native control first and
+// swapped in the face a frame or four later — a visible flash of unstyled
+// dropdowns at a different width. On Call Backs, where toggling a filter rebuilt
+// the quick-add row underneath it, that was the "visual glitch in the top
+// section": three native selects appearing and then jumping.
+//
+// requestAnimationFrame runs after the mutation and before the paint, and
+// coalesces every mutation in the same frame, which is what the debounce was
+// for. The timeout stays as a backstop: rAF does not fire in a background tab,
+// and a panel rendered there must still be enhanced when nobody is looking.
+let _ddRaf = 0;
+function _ddQueueScan() {
+    if (_ddRaf) return;
+    const run = () => {
+        if (!_ddRaf) return;
+        _ddRaf = 0;
+        clearTimeout(_ddTimer);
+        _ddScan();
+    };
+    _ddRaf = 1;
+    requestAnimationFrame(run);
+    clearTimeout(_ddTimer);
+    _ddTimer = setTimeout(run, 120);
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { _ddScan(); _ddWatch(); });
+} else {
+    _ddScan(); _ddWatch();
+}
+function _ddWatch() {
+    new MutationObserver(muts => {
+        for (const m of muts) {
+            for (const n of m.addedNodes) {
+                if (n.nodeType !== 1) continue;
+                if (n.tagName === 'SELECT' || n.querySelector && n.querySelector('select')) {
+                    _ddQueueScan();
+                    return;
+                }
+            }
+        }
+    }).observe(document.body, { childList: true, subtree: true });
 }
