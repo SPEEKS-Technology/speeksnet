@@ -9042,7 +9042,7 @@ function injectIdeaModal() {
         <div class="modal-menu idea-menu" id="ideaModal">
             <div class="modal-header">
                 <h3>Submit an Idea</h3>
-                <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+                <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
             <div class="modal-content" style="padding: 25px;">
                 <form id="ideaForm" action="https://formsubmit.co/ethan.kushnir@speekstechnology.com" method="POST" enctype="multipart/form-data" target="hidden_iframe" onsubmit="prepareIdeaSubmit()">
@@ -44116,7 +44116,18 @@ function _ecSyncChrome() {
 
     if (sel) {
         const many = (_ecScope?.stores || []).length > 1;
-        sel.style.display = many && _ecView !== 'health' ? '' : 'none';
+        // ⚠️ HIDING A SELECT DOES NOT HIDE A SELECT. The custom dropdown (_ddInit)
+        // moves the native one into a `.dd-host` and covers it with a `.dd-btn`
+        // face, so setting display on the select alone hides the half nobody can
+        // see and leaves the visible half on screen. This line intended to drop the
+        // picker on All Stores -- which is every store at once, so a one-store
+        // picker beside it means nothing -- and never did. Both halves are set: the
+        // host is what shows, and the enhancer may not have wrapped it yet on the
+        // first paint. Same fix as _cbShowFilter.
+        const showSel = many && _ecView !== 'health';
+        const selHost = sel.closest('.dd-host');
+        sel.style.display = showSel ? '' : 'none';
+        if (selHost) selHost.style.display = showSel ? '' : 'none';
         if (many) {
             sel.innerHTML = _ecScope.stores
                 .map(s => `<option value="${s}"${s === _ecStore ? ' selected' : ''}>${s}</option>`).join('');

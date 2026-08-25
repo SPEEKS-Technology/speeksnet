@@ -9844,6 +9844,12 @@ body.sam-active .hotbar-btn:hover {
     font-size: 13px;
 }
 .tools-panel-close:hover { background: #fcecec; color: var(--red-alert); }
+/* The Tools X used to be a text glyph, so it never needed this. It is the same
+   inline SVG as every other close control now (25 Aug), which is what makes it the
+   same BUTTON and not merely the same box -- a text x and a 15px SVG read as two
+   different sizes inside identical squares. 14 against this 28px button matches the
+   15/32 the modal headers use. */
+.tools-panel-close svg { width: 14px; height: 14px; display: block; }
 
 .tools-panel-body { padding: 14px 10px 22px; }
 
@@ -18323,22 +18329,65 @@ select.dd-native {
     .gi-panel-header .modal-close-btn,
     .cl-panel-header .modal-close-btn,
     .cl-close {
-        /* !important on the geometry only. Four modals size their X by ID
-           (#ideaModal, #quickMsgDropdown, #hotkeysDropdown, #calendarDropdown at
-           32px) and .modal-menu.manage-menu does it at (0,3,0) — no class-level
-           rule can reach past either, and "standardize the x button" means all of
-           them. Colours and hovers are left to those rules. */
+        /* !important on the geometry AND on the design now. This block used to leave
+           "colours and hovers to those rules" -- and those rules are per-modal ID
+           selectors, which is exactly how three different X buttons ended up on one
+           phone (user report, 25 Aug). Measured at 390px before this change,
+           scripts/close-btn-audit.js found 10 distinct designs across 228 controls:
+           #settingsModal still wore the base transparent circle with #999 ink,
+           #crmModal sat at 9px radius against everyone elses 8px, and two greys were
+           in play (#647082 and #647b8b). !important beats an ID selector whatever its
+           specificity, so ONE class-level rule settles all of them without naming a
+           single #id -- name an id here and the next modal added is a new exception.
+
+           9px, not the 8px this block used to name: 145 of the 228 were already 9px,
+           so the majority keeps the look it had and only the outliers move.
+
+           THE SIZES WERE ALREADY EQUAL HERE -- THE GLYPH WAS NOT. Tools, Submit an
+           Idea and the CRM modal drew a TEXT x where the other 220 drew a 15px SVG,
+           so identical 30px boxes still read as three different buttons. No CSS can
+           fix that: those three sites now emit the same inline SVG, and the audit
+           script is the guard against a fourth creeping back in. */
         width: 30px !important; height: 30px !important;
         min-width: 30px !important; min-height: 30px !important;
         padding: 0;
         font-size: 13px;
-        border-radius: 8px;
+        border-radius: 9px !important;
+        background: #f1f5f9 !important;
+        color: #647082 !important;
+        border: none !important;
         flex: 0 0 auto;
         display: inline-flex;
         align-items: center;
         justify-content: center;
     }
-    .tools-panel-close svg, .modal-close-btn svg, .cl-close svg { width: 15px; height: 15px; }
+    .tools-panel-close svg, .modal-close-btn svg, .cl-close svg { width: 15px; height: 15px; display: block; }
+    .tools-panel-close:hover, .modal-close-btn:hover, .cl-close:hover {
+        background: #fcecec !important; color: var(--red-alert) !important;
+    }
+
+    /* The two X-es that sit on a coloured or dark surface. They keep their own ink --
+       a pale grey chip on a coloured alert bubble, or floating over arbitrary video,
+       would either clash or vanish -- but they take the same box as everything else.
+
+       BOTH WERE BEING STRETCHED INTO OVALS, AND NEITHER OWNS THE BUG. The blanket
+       `button { min-height: 44px }` in the tap-target block at the very end of this
+       file is only (0,0,1), but it is LATER, so against a bare class it wins: the
+       alert-bubble X measured 22 wide by 44 tall and the video X 34 by 44. Naming an
+       explicit height is the fix, not trimming the padding around it -- the same
+       lesson as .lv-mode in round 7 and .modal-close-btn in round 9. */
+    .daily-bubble-close,
+    .award-video-close-btn {
+        width: 30px !important; height: 30px !important;
+        min-width: 30px !important; min-height: 30px !important;
+        padding: 0;
+        border-radius: 9px !important;
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .daily-bubble-close svg, .award-video-close-btn svg { width: 15px; height: 15px; display: block; }
 
     /* The Tools search box. The input keeps 16px text — anything smaller and iOS
        Safari zooms the viewport on focus and never zooms back — so the box is
