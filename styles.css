@@ -12364,7 +12364,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    receive on the right, so the two are read against each other rather than one
    being imagined from the other. */
 .b2b-rvw-wrap {
-    display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.9fr);
+    display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.1fr);
     gap: 18px; align-items: start; margin-top: 14px;
 }
 /* The left column carries the P&L stats bar plus the offer-editable line list;
@@ -12380,8 +12380,9 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     text-transform: uppercase; color: var(--b2b-faint);
 }
 .b2b-rvw-cap .b2b-mini { margin-left: auto; }
+/* No scroll box: the offer list on the left is always the taller column, so the
+   quote just grows to its natural height beside it. */
 .b2b-rvw-doc > div:last-child {
-    max-height: 620px; overflow-y: auto;
     border: 1px solid var(--b2b-line); border-radius: 12px; background: #f7f9fa; padding: 12px;
 }
 /* The line list scrolls sideways rather than crushing its columns when the left
@@ -12389,8 +12390,8 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-rvw { border: 1px solid var(--b2b-line); border-radius: 12px; background: #fff; overflow-x: auto; }
 .b2b-rvw-head, .b2b-rvw-row {
     display: grid;
-    grid-template-columns: minmax(120px, 1fr) 38px 68px 92px 54px 60px 54px 82px;
-    gap: 9px; align-items: center; padding: 9px 13px; min-width: 620px;
+    grid-template-columns: minmax(92px, 1fr) 32px 58px 78px 46px 52px 46px 72px;
+    gap: 8px; align-items: center; padding: 9px 11px; min-width: 520px;
 }
 .b2b-rvw-head {
     font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
