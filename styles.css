@@ -5676,6 +5676,16 @@ button.dc-audit:hover { background: #fff; }
 .pne-btn-delete:hover { background: #fee2e2; color: var(--red-alert); border-color: #fca5a5; }
 .pne-btn-confirm-delete { background: var(--red-alert); color: white; border-color: var(--red-alert); }
 .pne-btn-confirm-delete:hover { opacity: 0.88; background: var(--red-alert); }
+/* Save on an item being edited: a green .pne-btn, the same shape as the Cancel
+   beside it. It used to be .btn-primary -- 13px uppercase in 12px/24px padding
+   with a shadow and a hover lift -- which next to an 11px/4px Cancel made the
+   pair look like two different tiers of control and towered over the row it
+   belonged to. This is one line of a release being edited, not the release
+   being published, so it takes the row's own button. Colour is the only
+   difference from Cancel, which is exactly what -confirm-delete above does. */
+.pne-btn-save { background: var(--sage-professional); color: #fff; border-color: var(--sage-professional); }
+.pne-btn-save:hover { background: var(--sage-hover, #4a7530); color: #fff; }
+.pne-btn-save:disabled { opacity: 0.65; cursor: default; }
 
 .pne-item-edit { display: flex; flex-direction: column; gap: 8px; }
 .pne-edit-actions { display: flex; align-items: center; gap: 8px; }

@@ -29351,7 +29351,7 @@ function startEditPatchGroup(gi) {
         <input type="text" class="form-input-lg pne-edit-gtitle" value="${title.replace(/"/g, '&quot;')}" placeholder="Version title">
         <input type="date" class="form-input-lg pne-edit-gdate" value="${date}">
         <div class="pne-edit-actions">
-            <button class="btn-primary" onclick="saveEditPatchGroup(${gi})">Save</button>
+            <button class="pne-btn pne-btn-save" onclick="saveEditPatchGroup(${gi})">Save</button>
             <button class="pne-btn" onclick="cancelEditPatchGroup(${gi})">Cancel</button>
         </div>`;
     if (header) header.appendChild(editDiv);
@@ -29375,7 +29375,8 @@ async function saveEditPatchGroup(gi) {
     const dateRaw  = el.querySelector('.pne-edit-gdate').value; // YYYY-MM-DD
     if (!title || !dateRaw) return;
 
-    const saveBtn = el.querySelector('.btn-primary');
+    // .pne-btn-save, matching the markup above -- see saveEditPatchItem.
+    const saveBtn = el.querySelector('.pne-btn-save');
     if (saveBtn) { saveBtn.textContent = 'Saving...'; saveBtn.disabled = true; }
 
     try {
@@ -29405,7 +29406,7 @@ function startEditPatchItem(id) {
         </select>
         <textarea class="form-input-lg pn-textarea pne-edit-sum">${decodedSummary}</textarea>
         <div class="pne-edit-actions">
-            <button class="btn-primary" onclick="saveEditPatchItem('${id}')">Save Changes</button>
+            <button class="pne-btn pne-btn-save" onclick="saveEditPatchItem('${id}')">Save Changes</button>
             <button class="pne-btn" onclick="cancelEditPatchItem('${id}')">Cancel</button>
         </div>`;
     el.appendChild(editDiv);
@@ -29428,7 +29429,11 @@ async function saveEditPatchItem(id) {
     const { title, date } = el.dataset;
     if (!category || !summary) return;
 
-    const saveBtn = el.querySelector('.btn-primary');
+    // Hooked on .pne-btn-save, not .btn-primary: the button wears the row's own
+    // small button now, and a stale .btn-primary selector here would find nothing
+    // and silently drop the Saving.../disabled state -- leaving the row live for a
+    // second click, and the error path with no button to re-enable.
+    const saveBtn = el.querySelector('.pne-btn-save');
     if (saveBtn) saveBtn.textContent = 'Saving...';
     if (saveBtn) saveBtn.disabled = true;
 
