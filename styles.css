@@ -12424,32 +12424,32 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    drag-select that strays past the edge cannot throw the whole thing away.
    Boxes are wide because these fields hold sentences -- the old drawer gave them
    a single-line input about 260px across. */
+/* Compact: one tight row of cell-like fields, not a roomy card. GPU/battery sit
+   narrow, the internal note takes the rest; tiny labels, thin borders, minimal
+   padding -- it reads as an extension of the sheet, not a panel over it. */
 .b2b-rowpanel {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 12px 18px; padding: 13px var(--b2b-prow-pad) 15px;
+    display: flex; flex-wrap: wrap; align-items: flex-end;
+    gap: 6px 12px; padding: 6px var(--b2b-prow-pad) 7px;
     border-top: 1px dashed var(--b2b-line-2); background: #fbfcfd;
 }
-/* Serials get the full width: a qty-20 line is a long comma-separated string and
-   wrapping it into a 280px box makes it unreadable. */
-.b2b-rowpanel .b2b-rp-serials { grid-column: 1 / -1; }
-.b2b-rp-f { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.b2b-rp-f { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 240px; }
+.b2b-rp-gpu { flex: 0 1 150px; }
 .b2b-rp-f > label {
-    font-size: 10px; font-weight: 800; letter-spacing: .07em;
+    font-size: 9px; font-weight: 800; letter-spacing: .05em;
     text-transform: uppercase; color: var(--b2b-faint);
-    display: flex; align-items: center; gap: 7px;
+    display: flex; align-items: center; gap: 6px; margin: 0;
 }
 .b2b-rp-f input, .b2b-rp-f textarea {
-    font: inherit; font-size: 12.5px; width: 100%;
-    padding: 7px 9px; border-radius: 8px; border: 1px solid var(--b2b-line);
-    background: #fff; color: #1a1c1e; resize: vertical;
+    font: inherit; font-size: 12px; width: 100%;
+    padding: 4px 7px; border-radius: 6px; border: 1px solid var(--b2b-line);
+    background: #fff; color: #1a1c1e; min-height: 28px;
 }
+.b2b-rp-f textarea { resize: vertical; height: 28px; line-height: 1.35; }
 .b2b-rp-f input:focus, .b2b-rp-f textarea:focus {
     outline: none; border-color: var(--sage-professional);
-    box-shadow: 0 0 0 3px rgba(31,157,87,.12);
+    box-shadow: 0 0 0 2px rgba(31,157,87,.12);
 }
-.b2b-rp-serialrow { display: flex; gap: 7px; align-items: center; }
-.b2b-rp-serialrow input { flex: 1; }
-.b2b-rp-foot { grid-column: 1 / -1; display: flex; justify-content: flex-end; }
+.b2b-rp-foot { flex: 0 0 auto; margin-left: auto; display: flex; align-items: flex-end; }
 /* + / − in the actions cell. Sized to the other two buttons in that cell so the
    row does not change height when a panel opens. */
 .b2b-rowtoggle { font-size: 15px; font-weight: 800; line-height: 1; }

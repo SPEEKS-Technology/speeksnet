@@ -19661,7 +19661,7 @@ function _b2bRowPanel(it) {
             </div>`).join('')}
             <div class="b2b-rp-f">
                 <label>Internal notes <span class="b2b-tag-int">never leaves the building</span></label>
-                <textarea rows="2" placeholder="Anything the team should know — never leaves the building"
+                <textarea rows="1" placeholder="Anything the team should know — never leaves the building"
                     oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')">${escapeHtml(it.staff_notes || '')}</textarea>
             </div>
             ${_b2bIsPreval() ? '' : `<div class="b2b-rp-foot">${_b2bLabelBtn(it, 'b2b-mini')}</div>`}
@@ -20217,8 +20217,7 @@ function _b2bStagePricing(deal) {
             ${_b2bCustPanel(deal)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
-            <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
-            ${_b2bDealStatsHtml(_b2bModalItems, deal)}`,
+            <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
