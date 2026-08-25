@@ -18453,13 +18453,15 @@ function _b2bLineFig(it) {
 }
 function _b2bLineGrossHtml(it) {
     const f = _b2bLineFig(it);
-    if (f.value <= 0 && f.offer <= 0) return `<span class="b2b-f-off" id="b2bGr-${it.id}">—</span>`;
-    return `<span class="b2b-f-mgn${f.gross < 0 ? ' bad' : ''}" id="b2bGr-${it.id}" title="Resale value − our offer">${_b2bMoney(f.gross, 2)}</span>`;
+    if (f.value <= 0) return `<span class="b2b-f-off" id="b2bGr-${it.id}">—</span>`;
+    const pct = Math.round((f.gross / f.value) * 100);
+    return `<span class="b2b-f-mgn${pct < 0 ? ' bad' : ''}" id="b2bGr-${it.id}" title="Gross margin — resale value − our offer (${_b2bMoney(f.gross, 2)})">${pct}%</span>`;
 }
 function _b2bLineNetHtml(it) {
     const f = _b2bLineFig(it);
-    if (f.value <= 0 && f.offer <= 0 && !f.ship) return `<span class="b2b-f-off" id="b2bNm-${it.id}">—</span>`;
-    return `<span class="b2b-f-mgn${f.net < 0 ? ' bad' : ''}" id="b2bNm-${it.id}" title="Value − offer − shipping − selling fees + data wipe">${_b2bMoney(f.net, 2)}</span>`;
+    if (f.value <= 0) return `<span class="b2b-f-off" id="b2bNm-${it.id}">—</span>`;
+    const pct = Math.round((f.net / f.value) * 100);
+    return `<span class="b2b-f-mgn${pct < 0 ? ' bad' : ''}" id="b2bNm-${it.id}" title="Net margin — value − offer − shipping − selling fees + data wipe (${_b2bMoney(f.net, 2)})">${pct}%</span>`;
 }
 
 // A one-line preview of whatever was written about this line.
@@ -19078,15 +19080,16 @@ function _b2bPaintTotals() {
         const nel = document.getElementById(`b2bNm-${it.id}`);
         if (gel || nel) {
             const f = _b2bLineFig(it);
+            const off = f.value <= 0;
             if (gel) {
-                const off = f.value <= 0 && f.offer <= 0;
-                gel.className = off ? 'b2b-f-off' : ('b2b-f-mgn' + (f.gross < 0 ? ' bad' : ''));
-                gel.textContent = off ? '—' : _b2bMoney(f.gross, 2);
+                const pct = off ? 0 : Math.round((f.gross / f.value) * 100);
+                gel.className = off ? 'b2b-f-off' : ('b2b-f-mgn' + (pct < 0 ? ' bad' : ''));
+                gel.textContent = off ? '—' : `${pct}%`;
             }
             if (nel) {
-                const off = f.value <= 0 && f.offer <= 0 && !f.ship;
-                nel.className = off ? 'b2b-f-off' : ('b2b-f-mgn' + (f.net < 0 ? ' bad' : ''));
-                nel.textContent = off ? '—' : _b2bMoney(f.net, 2);
+                const pct = off ? 0 : Math.round((f.net / f.value) * 100);
+                nel.className = off ? 'b2b-f-off' : ('b2b-f-mgn' + (pct < 0 ? ' bad' : ''));
+                nel.textContent = off ? '—' : `${pct}%`;
             }
         }
     });
