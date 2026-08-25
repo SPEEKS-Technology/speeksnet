@@ -16394,10 +16394,10 @@ async function _b2bSyncOpenDeal(ping) {
         // whether you are typing in them and repaints the input. They were left
         // here after the sheet rework and were being overwritten mid-edit.
         //
-        // The panel fields (serials, staff_notes, listing_info, gpu) stay here
+        // The panel fields (serials, staff_notes, gpu, battery_health) stay here
         // because they have no .b2b-pcell to patch, and they are safe now only
         // because the whole row is skipped while the cursor is inside it.
-        ['serials', 'staff_notes', 'listing_info', 'gpu',
+        ['serials', 'staff_notes', 'gpu', 'battery_health',
          'wipe_required', 'wipe_fee', 'label_printed_qty',
          'listed_qty', 'recycled_qty', 'wiped_qty'].forEach(f => {
             if (String(remote[f] ?? '') !== String(local[f] ?? '')) { local[f] = remote[f]; changed++; }
@@ -17914,11 +17914,11 @@ function _b2bStagePreval(v) {
             ${frozen}${expiredNote}
             ${dates}
             ${_b2bTotalsBar(true)}
-            ${_b2bCustPanel(_b2bQuoteSubject_src())}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             ${open ? `<button class="b2b-btn b2b-btn-secondary b2b-add"
-                onclick="b2bAddItem('${v.id}',this)">＋ Add Line Item</button>` : ''}`,
+                onclick="b2bAddItem('${v.id}',this)">＋ Add Line Item</button>` : ''}
+            ${_b2bQuoteClientBlock(_b2bQuoteSubject_src())}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bPrevalActions(v, canMove)}
@@ -18702,11 +18702,12 @@ function _b2bTagsOf(str)  { return String(str || '').split(';').map(s => s.trim(
 function _b2bPresetNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => B2B_NOTE_TAGS.includes(t)); }
 function _b2bCustomNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => !B2B_NOTE_TAGS.includes(t)).join('; '); }
 
-// Anything downgraded to Fair or Broken has to say why: that note prints on
-// the quote and is the only thing standing between a low offer and an argument
-// with the client later. Keeps the legacy 'For Parts' spelling so the gate can
-// never quietly stop firing on an older row -- see B2B_COND_LEGACY.
-const B2B_REASON_CONDITIONS = ['Fair', 'Broken', ...B2B_COND_LEGACY];
+// Anything downgraded to Broken has to say why: that note prints on the quote
+// and is the only thing standing between a low offer and an argument with the
+// client later. Fair no longer requires it (a Fair item is common enough that a
+// reason is not always warranted). Keeps the legacy 'For Parts' spelling so the
+// gate can never quietly stop firing on an older row -- see B2B_COND_LEGACY.
+const B2B_REASON_CONDITIONS = ['Broken', ...B2B_COND_LEGACY];
 function _b2bNeedsReason(it)   { return B2B_REASON_CONDITIONS.includes(it.condition); }
 function _b2bMissingReason(it) { return _b2bNeedsReason(it) && !String(it.client_notes || '').trim(); }
 // Deliberately no `unreasoned()` helper: a second, weaker gate alongside
@@ -18723,10 +18724,18 @@ const B2B_ICO_BARCODE = '<path d="M3 5v14"/><path d="M7 5v14"/><path d="M11 5v14
 function _b2bLabelBtn(it, cls) {
     if (!it.sku) return '';
     const n = Number(it.quantity) || 1;
-    return `<button class="b2b-linelabel ${cls || ''}" onclick="event.stopPropagation();b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
-        aria-label="Print labels for ${escapeHtml(it.sku)}"
-        data-tip="${n === 1 ? `Print the label for ${escapeHtml(it.sku)}`
-                            : `Print labels for ${escapeHtml(it.sku)} — it asks how many`}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
+    // The button carries its own state so nothing has to nag or auto-open: amber
+    // while any unit still needs a label, green once they are all printed. No
+    // print is ever forced -- the colour is the whole reminder.
+    const short = _b2bLabelsShort(it);
+    const state = short > 0 ? 'b2b-label-todo' : ((Number(it.label_printed_qty) || 0) > 0 ? 'b2b-label-done' : '');
+    const tip = short > 0
+        ? `${short} of ${n} label${n === 1 ? '' : 's'} not printed yet — click to print`
+        : ((Number(it.label_printed_qty) || 0) > 0
+            ? `Labels printed for ${escapeHtml(it.sku)} — click to reprint`
+            : (n === 1 ? `Print the label for ${escapeHtml(it.sku)}` : `Print labels for ${escapeHtml(it.sku)} — it asks how many`));
+    return `<button class="b2b-linelabel ${state} ${cls || ''}" onclick="event.stopPropagation();b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
+        aria-label="Print labels for ${escapeHtml(it.sku)}" data-tip="${tip}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
 }
 // WHAT THE ITEM EDITOR IS EDITING
 // -------------------------------
@@ -18841,32 +18850,30 @@ function _b2bLineMarginHtml(it) {
     return `<span class="${m.cls}" id="b2bMg-${it.id}" title="${escapeHtml(m.tip)}">${m.text}</span>`;
 }
 
-// A one-line preview of whatever was written about this line.
-//
-// Client notes print on the client's quote; staff notes never leave the
-// building. Both sit behind the ⋯ sheet, so scanning a thirty-line pallet for
-// "which lines did the client say something about" meant opening thirty
-// sheets -- which is what was reported. An earlier version of this always
-// rendered, including a "No details yet" placeholder, and that is what made it
-// cost height on every row; this one returns nothing when there is nothing to
-// say, so only the handful of annotated lines pay for it.
-//
-// Client leads, because that is the half that reaches the client.
-//
-// Named apart from _b2bNoteHint, which already exists and returns a plain-text
-// summary for the card grid's tooltip. Two `function` declarations of one name
-// do not collide loudly -- the later simply wins -- so this would have rendered
-// that tooltip string, unwrapped, into the row.
-function _b2bNoteLine(it) {
-    const client = String(it.client_notes || '').trim();
-    const staff  = String(it.staff_notes || '').trim();
-    if (!client && !staff) return '';
-    const part = (cls, label, text) =>
-        `<span class="${cls}" title="${escapeHtml(label + ': ' + text)}"><b>${label}</b>${escapeHtml(text)}</span>`;
-    return `<div class="b2b-pnote-hint">`
-        + (client ? part('b2b-nh-c', 'Client', client) : '')
-        + (staff  ? part('b2b-nh-s', 'Staff',  staff)  : '')
-        + `</div>`;
+// Per-line figures for the sheet's Margin / Net margin columns. Gross = resale
+// value − our offer. Net also nets shipping + the marketplace fee and adds the
+// data-wipe fee back (it is discounted off what we pay). Same value/offer
+// handling as _b2bLineMargin: scrap has no value, a no-residual line pays 0.
+function _b2bLineFig(it) {
+    const q = Number(it.quantity) || 1;
+    const value = _b2bIsScrap(it) ? 0 : (Number(it.value) || 0) * q;
+    const offer = _b2bIsBuy(it) ? (Number(it.offer) || 0) * q : 0;
+    const ship = (Number(it.shipping_cost) || 0) * q;
+    const fee = _b2bFeeOn(value);
+    const wipe = _b2bWipeTotal(it);
+    return { value, offer, ship, fee, wipe, gross: value - offer, net: value - offer - ship - fee + wipe };
+}
+function _b2bLineGrossHtml(it) {
+    const f = _b2bLineFig(it);
+    if (f.value <= 0) return `<span class="b2b-f-off" id="b2bGr-${it.id}">—</span>`;
+    const pct = Math.round((f.gross / f.value) * 100);
+    return `<span class="b2b-f-mgn${pct < 0 ? ' bad' : ''}" id="b2bGr-${it.id}" title="Gross margin — resale value − our offer (${_b2bMoney(f.gross, 2)})">${pct}%</span>`;
+}
+function _b2bLineNetHtml(it) {
+    const f = _b2bLineFig(it);
+    if (f.value <= 0) return `<span class="b2b-f-off" id="b2bNm-${it.id}">—</span>`;
+    const pct = Math.round((f.net / f.value) * 100);
+    return `<span class="b2b-f-mgn${pct < 0 ? ' bad' : ''}" id="b2bNm-${it.id}" title="Net margin — value − offer − shipping − selling fees + data wipe (${_b2bMoney(f.net, 2)})">${pct}%</span>`;
 }
 
 // What the pickup screen shows for the signature: the QR to collect one, the
@@ -19295,6 +19302,68 @@ async function b2bDrop(ev, id) {
     }
 }
 
+// One-tap tidy of the sheet: group the lines by brand, then keep every line of
+// a model together within its brand. Both levels are ranked by value -- the
+// highest-value brand leads, and inside it the highest-value model group leads
+// -- so the dearest kit sits at the top. Same persistence as a drag: it rewrites
+// sort_order through reorder_items, so the quote and the next person to open the
+// deal both see the arranged order.
+async function b2bSortItems(btn) {
+    const items = _b2bModalItems;
+    if (!items || items.length < 2) return;
+    const before = items.slice();
+
+    const val      = it => Number(it.value) || 0;
+    const brandKey = it => String(it.make  || '').trim().toLowerCase();
+    const modelKey = it => String(it.model || '').trim().toLowerCase();
+    const groupKey = it => `${brandKey(it)} ${modelKey(it)}`;
+
+    // Each brand and each model group ranks by its best line, so a whole brand
+    // (and a whole model within it) stays together while the dearest kit floats
+    // to the top.
+    const brandVal = new Map();
+    const groupVal = new Map();
+    for (const it of items) {
+        const bk = brandKey(it), gk = groupKey(it);
+        brandVal.set(bk, Math.max(brandVal.get(bk) ?? -Infinity, val(it)));
+        groupVal.set(gk, Math.max(groupVal.get(gk) ?? -Infinity, val(it)));
+    }
+
+    const sorted = items.slice().sort((a, b) => {
+        const ba = brandKey(a), bb = brandKey(b);
+        if (ba !== bb) {                       // highest-value brand first, blank brands last
+            if (!ba) return 1;
+            if (!bb) return -1;
+            const va = brandVal.get(ba), vb = brandVal.get(bb);
+            if (va !== vb) return vb - va;
+            return ba < bb ? -1 : 1;           // tie on value → brand name A→Z
+        }
+        const ga = groupVal.get(groupKey(a));  // highest-value model group first
+        const gb = groupVal.get(groupKey(b));
+        if (ga !== gb) return gb - ga;
+        const ma = modelKey(a), mb = modelKey(b);
+        if (ma !== mb) return ma < mb ? -1 : 1; // tie on value → keep model names together
+        return val(b) - val(a);                // same model → dearer line first
+    });
+
+    // Nothing moved -- don't churn the server or dirty the deal.
+    if (sorted.every((it, i) => it.id === before[i].id)) return;
+
+    _b2bModalItems = sorted;
+    _b2bRepaintItems();
+    _b2bPaintQuoteDoc();
+    try {
+        await _b2bSend({ action: 'reorder_items', deal_id: _b2bModalDeal.id,
+                         order: sorted.map(i => i.id) });
+        _b2bDirty = true;
+    } catch (e) {
+        _b2bModalItems = before;
+        _b2bRepaintItems();
+        _b2bPaintQuoteDoc();
+        _b2bSay(`Couldn't save the new order: ${e.message}`, true);
+    }
+}
+
 // The key to the coloured bars down the left of the sheet. Always rendered
 // rather than only when a non-purchase line exists: the grid repaints on its
 // own (_b2bRepaintItems touches #b2bItemGrid alone), so a legend that appeared
@@ -19405,32 +19474,34 @@ function _b2bItemTotals() {
 function _b2bPaintTotals() {
     const t = _b2bItemTotals();
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    set('b2bTotValue', _b2bMoney(t.value, 2));
-    set('b2bTotOffer', _b2bMoney(t.net, 2));
     set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
-    // Margin is against what the deal actually costs us: the wipe discount
-    // improves it, shipping and the marketplace fee erode it. Measuring against
-    // the offer alone was fine until shipping existed, and would now overstate
-    // every deal we pay freight on -- which is the number Paul asked to see.
-    const margin = t.value - t.outlay;
-    const pct = t.value > 0 ? Math.round((margin / t.value) * 100) : 0;
-    set('b2bTotMargin', `${_b2bMoney(margin, 2)} (${pct}%)`);
+    // "Our offer" is the gross offer we make the client; the data-wipe discount
+    // is shown as its own line and added back into the net below, rather than
+    // netted into this figure.
+    set('b2bTotOffer', _b2bMoney(t.offer, 2));
+    set('b2bTotValue', _b2bMoney(t.value, 2));
+    // Gross profit = resale value − our offer, with its margin % alongside.
+    const gross = t.value - t.offer;
+    const gpct = t.value > 0 ? Math.round((gross / t.value) * 100) : 0;
+    set('b2bTotGross', `${_b2bMoney(gross, 2)} (${gpct}%)`);
+    // Net profit = resale value − our offer − shipping − selling fees + data
+    // wipe. Since outlay = (offer − wipe) + shipping + fee, this is value − outlay.
+    const net = t.value - t.outlay;
+    const pct = t.value > 0 ? Math.round((net / t.value) * 100) : 0;
+    set('b2bTotNet', `${_b2bMoney(net, 2)} (${pct}%)`);
     const wipeEl = document.getElementById('b2bTotWipe');
     if (wipeEl) {
-        wipeEl.textContent = t.wipe ? `−${_b2bMoney(t.wipe, 2)}` : '—';
+        wipeEl.textContent = t.wipe ? _b2bMoney(t.wipe, 2) : '—';
         wipeEl.closest('.b2b-tot')?.classList.toggle('muted', !t.wipe);
     }
     const shipEl = document.getElementById('b2bTotShip');
     if (shipEl) {
-        // "+" because it adds to what the deal costs us, where the wipe line
-        // above reads "−". The two sit next to each other and pull opposite ways.
-        shipEl.textContent = t.ship ? `+${_b2bMoney(t.ship, 2)}` : '—';
+        shipEl.textContent = t.ship ? _b2bMoney(t.ship, 2) : '—';
         shipEl.closest('.b2b-tot')?.classList.toggle('muted', !t.ship);
     }
     const feeEl = document.getElementById('b2bTotFee');
     if (feeEl) {
-        // "+" like shipping: another cost between us and the resale value.
-        feeEl.textContent = t.fee ? `+${_b2bMoney(t.fee, 2)}` : '—';
+        feeEl.textContent = t.fee ? _b2bMoney(t.fee, 2) : '—';
         feeEl.closest('.b2b-tot')?.classList.toggle('muted', !t.fee);
     }
     _b2bModalItems.forEach(it => {
@@ -19450,6 +19521,24 @@ function _b2bPaintTotals() {
             mel.className = m.cls;
             mel.title = m.tip;
             mel.textContent = m.text;
+        }
+        // The sheet's Margin (gross) + Net margin cells move with value/offer/
+        // shipping too, so they repaint on this same pass.
+        const gel = document.getElementById(`b2bGr-${it.id}`);
+        const nel = document.getElementById(`b2bNm-${it.id}`);
+        if (gel || nel) {
+            const f = _b2bLineFig(it);
+            const off = f.value <= 0;
+            if (gel) {
+                const pct = off ? 0 : Math.round((f.gross / f.value) * 100);
+                gel.className = off ? 'b2b-f-off' : ('b2b-f-mgn' + (pct < 0 ? ' bad' : ''));
+                gel.textContent = off ? '—' : `${pct}%`;
+            }
+            if (nel) {
+                const pct = off ? 0 : Math.round((f.net / f.value) * 100);
+                nel.className = off ? 'b2b-f-off' : ('b2b-f-mgn' + (pct < 0 ? ' bad' : ''));
+                nel.textContent = off ? '—' : `${pct}%`;
+            }
         }
     });
     const submit = document.getElementById('b2bPrSubmit');
@@ -19510,7 +19599,11 @@ function b2bItemType(id, value) {
     // would refuse the save otherwise, and the row would lie until a refresh.
     const keep = B2B_SPECS_FOR[value] || [];
     B2B_SPEC_FIELDS.forEach(f => { if (!keep.includes(f.key)) it[f.key] = null; });
-    if (keep.length) _b2bNotesOpen.add(id);   // the specs live in the drawer
+    // The specs (CPU/RAM/Storage and the optional ones) live in the dropdown now.
+    // Changing to a type that carries them pops the sheet row open so the required
+    // fields are right in front of you; 'Other' carries none, so it closes again.
+    if (keep.length) { _b2bRowShut.delete(id); _b2bRowOpen.add(id); }
+    else { _b2bRowOpen.delete(id); }
     _b2bRepaintItems();
     b2bItemSave(id);
 }
@@ -19784,15 +19877,16 @@ function b2bDeleteItem(id) {
         });
 }
 
-// Pricing renders the dense spreadsheet; quote (and the read-only views) keep the
-// card/drawer grid. _b2bRepaintItems is shared, so one flag picks the renderer.
+// The dense spreadsheet is the only item grid now; the old card/drawer grid was
+// retired once every stage that shows lines moved onto the sheet. _b2bGridMode
+// stays as the "are we on a sheet stage" guard the detail-sheet repaint reads.
 let _b2bGridMode = 'cards';
 // The line whose detail sheet is open over the spreadsheet, if any.
 let _b2bSheetId = null;
 
 function _b2bRepaintItems() {
     const wrap = document.getElementById('b2bItemGrid');
-    if (wrap) wrap.innerHTML = _b2bGridMode === 'sheet' ? _b2bItemSheet() : _b2bItemCards();
+    if (wrap) wrap.innerHTML = _b2bItemSheet();
     _b2bPaintTotals();
     // Keep an open detail sheet in step with the grid it hangs off -- a tag or
     // disposition change repaints both. If the line it belongs to is gone, so is
@@ -19803,14 +19897,7 @@ function _b2bRepaintItems() {
     }
 }
 
-// Which lines have their notes open. Notes are the bulky part and most lines
-// never need them, so they fold away -- but a line still missing a required
-// reason is forced open, because hiding the thing blocking submission would be
-// the one case where collapsing costs more than it saves.
-const _b2bNotesOpen = new Set();
-// Which spreadsheet rows have their inline panel expanded. Separate from
-// _b2bNotesOpen, which belongs to the card grid: the two grids are different
-// shapes and sharing the set made a line opened in one appear open in the other.
+// Which spreadsheet rows have their inline ⋯ panel expanded.
 const _b2bRowOpen = new Set();
 // Explicitly collapsed, which has to outrank "blocked, so opened for you".
 // Without it the auto-open won every render and the + was inert on exactly the
@@ -19833,11 +19920,6 @@ function b2bToggleRow(id) {
     else      { _b2bRowShut.delete(id); _b2bRowOpen.add(id); }
     _b2bRepaintItems();
     if (!open) document.querySelector(`#b2bPline-${id} .b2b-rowpanel textarea`)?.focus();
-}
-
-function b2bToggleNotes(id) {
-    if (_b2bNotesOpen.has(id)) _b2bNotesOpen.delete(id); else _b2bNotesOpen.add(id);
-    _b2bRepaintItems();
 }
 
 // A one-line summary of what is folded away, so a closed row still says whether
@@ -19864,182 +19946,12 @@ function _b2bLineNo(it) {
     return parts.length > 1 ? parts[parts.length - 1] : String(it.line_no).padStart(4, '0');
 }
 
-// Rendered as a grid rather than a stack of cards: one row per line with the
-// columns aligned, the way anyone pricing a pallet expects to read it.
-function _b2bItemCards() {
-    if (!_b2bModalItems.length) {
-        return `<div class="b2b-empty sm">
-            <div class="b2b-empty-t">No lines yet</div>
-            <div class="b2b-empty-s">Add the first item to start pricing this pickup.</div>
-        </div>`;
-    }
-
-    const head = `
-        <div class="b2b-prow b2b-phead">
-            <span>Line</span><span>Type</span><span>Brand</span><span>Model</span><span>Condition</span>
-            <span class="r">Qty</span><span class="r">Unit value</span><span class="r">Unit offer</span>
-            <span class="r">Line total</span><span></span>
-        </div>`;
-
-    const rows = _b2bModalItems.map(it => {
-        const disp    = _b2bDispOf(it);
-        const buy     = _b2bIsBuy(it);
-        const scrap   = _b2bIsScrap(it);
-        const tags    = _b2bPresetNotes(it);
-        const needs   = _b2bNeedsReason(it);
-        const missing = _b2bMissingReason(it);
-        const blocked = _b2bItemBlocked(it);
-        // Forced open whenever something is blocking submission: hiding the thing
-        // you have to fix is the one case where folding costs more than it saves.
-        const open    = _b2bNotesOpen.has(it.id) || blocked.length > 0;
-        const free    = B2B_NOTE_TAGS.filter(t => !tags.includes(t));
-        const specs   = _b2bSpecsFor(it);
-        const serials = _b2bSerials(it);
-        const need    = Number(it.quantity) || 1;
-        const left    = need - serials.length;
-
-        const specBlock = specs.length ? `
-            <div class="b2b-specs">
-                ${specs.map(f => `
-                <div class="b2b-f b2b-spec">
-                    <label>${f.label}${f.req ? ' <span class="b2b-tag-req">required</span>' : ''}</label>
-                    <input value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}"
-                        oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
-                </div>`).join('')}
-            </div>` : '';
-
-        // Disposition and the wipe flag live here rather than in the row's action
-        // cluster: they are pricing decisions, not per-click controls, and five
-        // controls in one grid cell overflowed it. The row still reports their
-        // state through the chips beside the SKU.
-        const handling = `
-            <div class="b2b-handling">
-                <div class="b2b-f">
-                    <label>What happens to it</label>
-                    <select class="b2b-dispsel" onchange="b2bItemDisposition('${it.id}',this.value)">
-                        ${B2B_DISPOSITIONS.map(d => `<option value="${d.key}" ${disp === d.key ? 'selected' : ''}>${d.label}</option>`).join('')}
-                    </select>
-                    <span class="b2b-hint sm">${escapeHtml(B2B_DISP[disp].hint)}</span>
-                </div>
-                <div class="b2b-f">
-                    <label>Certified data wipe</label>
-                    <div class="b2b-wipewrap">
-                        <label class="b2b-rec-toggle b2b-wipetog">
-                            <input type="checkbox" ${it.wipe_required ? 'checked' : ''} onchange="b2bItemWipe('${it.id}',this.checked)">
-                            <span>${_b2bMoney(it.wipe_fee || _b2bWipeFee(), 2)} per unit${it.wipe_required && need > 1 ? ` · ${_b2bMoney(_b2bWipeTotal(it), 2)} total` : ''}</span>
-                        </label>
-                    </div>
-                    <span class="b2b-hint sm">Comes off what we pay them. They are never charged for it.</span>
-                </div>
-            </div>`;
-
-        const drawer = open ? `
-            <div class="b2b-pdrawer">
-                ${handling}
-                ${specBlock}
-                <div class="b2b-f b2b-serialf">
-                    <label>Serial numbers
-                        <span class="b2b-serial-count ${serials.length === need ? '' : 'miss'}">${serials.length} of ${need}</span>
-                        <span class="b2b-tag-int">one per unit, comma separated</span></label>
-                    <div class="b2b-serialrow">
-                        <input value="${escapeHtml(it.serials || '')}" placeholder="C02X1234, C02X5678"
-                            oninput="b2bItemSerials('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
-                        ${left > 0 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',false)"
-                            title="This unit has no serial you can read">No Visible Serial</button>` : ''}
-                        ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true)"
-                            title="Fill every remaining slot">Fill All ${left}</button>` : ''}
-                    </div>
-                </div>
-                <div class="b2b-pnote">
-                    <div class="b2b-f"><label>Staff notes <span class="b2b-tag-int">internal</span></label>
-                        <input value="${escapeHtml(it.staff_notes || '')}" placeholder="Anything the team should know"
-                            oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')"></div>
-                    <div class="b2b-f"><label>Client notes
-                        ${needs ? '<span class="b2b-tag-req">reason required</span>' : '<span class="b2b-tag-ext">prints on the quote</span>'}</label>
-                        <div class="b2b-chiprow">
-                            ${tags.map(t => `<span class="b2b-chip-tag">${escapeHtml(t)}<button title="Remove"
-                                onclick="b2bItemToggleTag('${it.id}','${escapeHtml(t)}')">×</button></span>`).join('')}
-                            ${free.length ? `
-                            <select class="b2b-tagsel" onchange="b2bItemToggleTag('${it.id}',this.value)">
-                                <option value="">${tags.length ? '＋ Another tag…' : '＋ Add a tag…'}</option>
-                                ${free.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
-                            </select>` : ''}
-                        </div>
-                        <input class="b2b-tag-free ${missing ? 'miss' : ''}" value="${escapeHtml(_b2bCustomNotes(it))}"
-                            placeholder="${needs ? 'Why is it ' + escapeHtml(it.condition) + '? Pick a tag or type it here' : "Anything the tags don't cover"}"
-                            oninput="b2bItemCustomNote('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
-                        <span class="b2b-req-note" style="${missing ? '' : 'display:none;'}">${escapeHtml(it.condition || '')} items need a reason before this can be quoted.</span></div>
-                </div>
-            </div>` : '';
-
-        return `
-        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
-            <div class="b2b-prow">
-                <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
-                    <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
-                    ${!buy ? `<span class="b2b-doc-rec ${scrap ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].short)}</span>` : ''}
-                    ${it.wipe_required ? '<span class="b2b-doc-rec wipe" title="Certified data wipe">Wipe</span>' : ''}
-                </span>
-                <span class="b2b-pcell" data-k="Type">
-                    <select onchange="b2bItemType('${it.id}',this.value)">
-                        ${B2B_ITEM_TYPES.map(t => `<option value="${t.key}" ${(it.item_type || 'other') === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
-                    </select></span>
-                <span class="b2b-pcell" data-k="Brand">
-                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple" list="b2bdl-make"
-                        oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
-                <span class="b2b-pcell" data-k="Model">
-                    <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
-                        oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></span>
-                <span class="b2b-pcell" data-k="Condition">
-                    <select onchange="b2bItemCondition('${it.id}',this.value)">
-                        <option value="">—</option>
-                        ${B2B_CONDITIONS.map(c => `<option ${it.condition === c ? 'selected' : ''}>${c}</option>`).join('')}
-                    </select></span>
-                <span class="b2b-pcell n" data-k="Qty">
-                    <input type="number" min="1" step="1" value="${need}"
-                        oninput="b2bItemInput('${it.id}','quantity',this.value)" onchange="b2bItemSave('${it.id}')"></span>
-                <span class="b2b-pcell n" data-k="Unit value">
-                    ${scrap ? '<span class="b2b-f-off">—</span>'
-                          : `<input type="number" min="0" step="0.01" value="${Number(it.value) || 0}"
-                        oninput="b2bItemInput('${it.id}','value',this.value)" onchange="b2bItemSave('${it.id}')">`}</span>
-                <span class="b2b-pcell n" data-k="Unit offer">
-                    ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
-                        oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
-                          : '<span class="b2b-f-off">—</span>'}</span>
-                <span class="b2b-pcell n b2b-pc-tot" data-k="Line total">
-                    ${_b2bLineTotalHtml(it)}</span>
-                <span class="b2b-pcell b2b-pc-acts">
-                    <!-- Print leads, delete trails, and the two are never
-                         neighbours: they were one misclick apart and only one of
-                         them can be undone. -->
-                    ${_b2bLabelBtn(it)}
-                    <button class="b2b-notes-btn ${open ? 'on' : ''} ${blocked.length ? 'req' : ''}"
-                        title="${blocked.length ? 'Not ready yet — ' + escapeHtml(blocked.join(', ')) : escapeHtml(_b2bNoteHint(it))}"
-                        onclick="b2bToggleNotes('${it.id}')">
-                        ${_b2bIco('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>')}
-                        ${(it.client_notes || it.staff_notes || it.serials) ? '<i class="b2b-notes-dot"></i>' : ''}
-                    </button>
-                    <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">
-                        ${_b2bIco('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
-                    </button>
-                </span>
-            </div>
-            ${open ? '' : _b2bNoteLine(it)}
-            <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
-            ${drawer}
-        </div>`;
-    }).join('');
-
-    // Mounted once for the whole grid, not per row -- thirty lines would
-    // otherwise repeat the same option lists thirty times.
-    return _b2bDatalists() + head + rows;
-}
 
 // --- pricing spreadsheet ---------------------------------------------------
-// Same data as _b2bItemCards, but every line stays a single dense row: the
-// disposition and the wipe flag are their own columns, and the bulky per-line
-// detail (specs, serials, notes) opens behind the ⋯ in a focused sheet rather
-// than an inline drawer that grows the row. Quote keeps _b2bItemCards untouched.
+// The item grid: every line is a single dense row -- the disposition and the
+// wipe flag are their own columns, and the bulky per-line detail (specs,
+// serials, notes) opens behind the ⋯ in a focused sheet rather than an inline
+// drawer that grows the row.
 const _B2B_ICO_DETAIL = '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>'
     + '<line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>'
     + '<line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>';
@@ -20056,46 +19968,220 @@ const _B2B_ICO_COPY = '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
 // Serials are absent on an evaluation -- nobody has held these units -- and so is
 // the label, which is minted at conversion.
 function _b2bRowPanel(it) {
-    const need    = Number(it.quantity) || 1;
-    const serials = _b2bSerials(it);
-    const left    = need - serials.length;
-    const gpu     = B2B_SPEC_FIELDS.find(f => f.key === 'gpu');
-    const carries = (B2B_SPECS_FOR[it.item_type || 'other'] || []).includes('gpu');
+    // The dropdown's "extra information", in order: every spec the type carries,
+    // required first (CPU/RAM/Storage) then optional (GPU, battery) --
+    // B2B_SPEC_FIELDS is already in that order -- then the free-form internal
+    // note. Required specs moved off the row into here to keep it narrow; they
+    // keep their required marker, the miss highlight and the one-tap ∅. Serials
+    // are NOT here -- they get their own button on the row.
+    const specs = _b2bSpecsFor(it);
     return `
         <div class="b2b-rowpanel">
-            ${_b2bIsPreval() ? '' : `
-            <div class="b2b-rp-f b2b-rp-serials">
-                <label>Serials
-                    <span class="b2b-serial-count ${serials.length === need ? '' : 'miss'}">${serials.length} of ${need}</span>
-                </label>
-                <div class="b2b-rp-serialrow">
-                    <input value="${escapeHtml(it.serials || '')}" placeholder="C02X1234, C02X5678 — one per unit, comma separated"
-                        oninput="b2bItemSerials('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
-                    ${left > 0 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',false)" title="This unit has no serial you can read">No Visible Serial</button>` : ''}
-                    ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true)" title="Fill every remaining slot">Fill All ${left}</button>` : ''}
-                </div>
-            </div>`}
-            ${carries ? `
+            ${specs.map(f => {
+                const miss = f.req && !String(it[f.key] ?? '').trim();
+                return `
             <div class="b2b-rp-f b2b-rp-gpu">
-                <label>${escapeHtml(gpu.label)}</label>
-                <input value="${escapeHtml(it.gpu || '')}" placeholder="${escapeHtml(gpu.hint)}" list="b2bdl-gpu"
-                    oninput="b2bItemSpec('${it.id}','gpu',this.value)" onchange="b2bItemSave('${it.id}')">
-            </div>` : ''}
+                <label>${escapeHtml(f.label)}${f.req ? ' <span class="b2b-tag-req">required</span>' : ''}</label>
+                <div class="b2b-rp-specrow">
+                    <input ${f.req ? `data-req-spec="${f.key}"` : ''} class="${miss ? 'b2b-spec-miss' : ''}" value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}" ${f.pick ? `list="b2bdl-${f.key}"` : ''}
+                        oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
+                    ${f.req ? `<button class="b2b-mini" tabindex="-1" title="No ${escapeHtml(f.label)} — fills NO ${escapeHtml(f.label.toUpperCase())}" onclick="b2bItemSpecNone('${it.id}','${f.key}','${escapeHtml(f.label)}')">∅</button>` : ''}
+                </div>
+            </div>`;
+            }).join('')}
             <div class="b2b-rp-f">
-                <label>Listing info <span class="b2b-tag-int">for whoever lists it</span></label>
-                <textarea rows="2" placeholder="Anything the lister needs that no other field covers — a missing charger, a cracked bezel, which port is dead"
-                    oninput="b2bItemInput('${it.id}','listing_info',this.value)" onchange="b2bItemSave('${it.id}')">${escapeHtml(it.listing_info || '')}</textarea>
-            </div>
-            <div class="b2b-rp-f">
-                <label>Staff notes <span class="b2b-tag-int">internal</span></label>
-                <textarea rows="2" placeholder="Anything the team should know — never leaves the building"
+                <label>Internal notes <span class="b2b-tag-int">never leaves the building</span></label>
+                <textarea rows="1" placeholder="Anything the team should know — never leaves the building"
                     oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')">${escapeHtml(it.staff_notes || '')}</textarea>
             </div>
-            ${_b2bIsPreval() ? '' : `<div class="b2b-rp-foot">${_b2bLabelBtn(it, 'b2b-mini')}</div>`}
         </div>`;
 }
 
+// The serials editor, opened from the row's Serials button -- deliberately its
+// own focused popup rather than a field in the ⋯ dropdown, so serial capture is
+// front-and-centre. Reuses the same helpers the old inline editor did.
+function b2bSerialsOpen(id) {
+    const it = (typeof _b2bLocalItem === 'function' && _b2bLocalItem(id)) || (_b2bModalItems || []).find(x => x.id === id);
+    if (!it) return;
+    _b2bSerialPopId = id;
+    let pop = document.getElementById('b2bSerialPop');
+    if (!pop) {
+        pop = document.createElement('div');
+        pop.id = 'b2bSerialPop';
+        pop.className = 'b2b-serialpop';
+        pop.addEventListener('mousedown', (e) => { if (e.target === pop) b2bSerialsClose(); });
+        document.body.appendChild(pop);
+    }
+    _b2bSerialPopPaint();
+    pop.classList.add('show');
+    setTimeout(() => { const i = document.getElementById('b2bSerialPopInput'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 0);
+}
+function _b2bSerialPopPaint() {
+    const pop = document.getElementById('b2bSerialPop');
+    const id = _b2bSerialPopId;
+    const it = (typeof _b2bLocalItem === 'function' && _b2bLocalItem(id)) || (_b2bModalItems || []).find(x => x.id === id);
+    if (!pop || !it) return;
+    const need = Number(it.quantity) || 1;
+    const serials = _b2bSerials(it);
+    const left = need - serials.length;
+    const name = [it.make, it.model].filter(Boolean).join(' ') || `Line ${_b2bLineNo(it)}`;
+    pop.innerHTML = `
+        <div class="b2b-serialpop-card" onmousedown="event.stopPropagation()">
+            <div class="b2b-serialpop-h">
+                <div><b>Serial numbers</b>
+                    <span class="b2b-serial-count ${serials.length === need ? '' : 'miss'}">${serials.length} of ${need}</span></div>
+                <button class="b2b-x" title="Done" onclick="b2bSerialsClose()">${_b2bIco(_B2B_ICO_X)}</button>
+            </div>
+            <div class="b2b-serialpop-sub">${escapeHtml(name)} · one serial per unit, comma separated</div>
+            <textarea id="b2bSerialPopInput" rows="5" placeholder="C02X1234, C02X5678, …"
+                oninput="b2bItemSerials('${it.id}',this.value)">${escapeHtml(it.serials || '')}</textarea>
+            <div class="b2b-serialpop-acts">
+                ${left > 0 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',false); _b2bSerialPopPaint()" title="This unit has no serial you can read">No Visible Serial</button>` : ''}
+                ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true); _b2bSerialPopPaint()" title="Fill every remaining slot">Fill All ${left}</button>` : ''}
+                <button class="b2b-btn b2b-btn-primary" onclick="b2bSerialsClose()">Done</button>
+            </div>
+        </div>`;
+}
+function b2bSerialsClose() {
+    const pop = document.getElementById('b2bSerialPop');
+    if (pop) pop.classList.remove('show');
+    const id = _b2bSerialPopId;
+    _b2bSerialPopId = null;
+    // Persist whatever was typed and refresh the row's count badge.
+    if (id) { try { b2bItemSave(id); } catch (_) {} }
+}
+let _b2bSerialPopId = null;
+
+// ===========================================================================
+// PRICING SHEET — EXCEL-STYLE CELL SELECTION
+// ===========================================================================
+// The sheet's cells are <input>/<select>, so a browser can't drag-select across
+// them the way it can plain text -- which is why the sheet "won't let you copy".
+// This layers a spreadsheet selection on top: click a cell to edit as normal;
+// click-drag, or Shift+click, to select a block of cells; Ctrl/Cmd+C copies the
+// block as TSV so it pastes straight into Excel, Sheets or an email. Bound once
+// via document-level delegation, so it survives every re-render of the sheet.
+const _b2bSel = { bound: false, grid: null, anchor: null, focus: null, dragging: false, moved: false };
+
+function _b2bCellsIn(rowEl) {
+    const prow = rowEl && rowEl.querySelector('.b2b-prow');
+    return prow ? [...prow.children].filter(c => c.classList && c.classList.contains('b2b-pcell')) : [];
+}
+function _b2bSheetCellRC(cell) {
+    const grid = cell.closest('.b2b-items.b2b-ss');
+    const rowEl = cell.closest('.b2b-pline');
+    if (!grid || !rowEl) return null;
+    const r = [...grid.querySelectorAll('.b2b-pline')].indexOf(rowEl);
+    const c = _b2bCellsIn(rowEl).indexOf(cell);
+    return (r < 0 || c < 0) ? null : { r, c, grid };
+}
+function _b2bSelClear() {
+    if (_b2bSel.grid) _b2bSel.grid.querySelectorAll('.b2b-cell-sel').forEach(e => e.classList.remove('b2b-cell-sel'));
+    _b2bSel.anchor = _b2bSel.focus = null;
+}
+function _b2bSelBox() {
+    const a = _b2bSel.anchor, f = _b2bSel.focus;
+    return { r0: Math.min(a.r, f.r), r1: Math.max(a.r, f.r), c0: Math.min(a.c, f.c), c1: Math.max(a.c, f.c) };
+}
+function _b2bSelPaint() {
+    const g = _b2bSel.grid;
+    if (!g || !_b2bSel.anchor || !_b2bSel.focus) return;
+    g.querySelectorAll('.b2b-cell-sel').forEach(e => e.classList.remove('b2b-cell-sel'));
+    const { r0, r1, c0, c1 } = _b2bSelBox();
+    const rows = [...g.querySelectorAll('.b2b-pline')];
+    for (let r = r0; r <= r1; r++) {
+        const cells = _b2bCellsIn(rows[r]);
+        for (let c = c0; c <= c1; c++) cells[c] && cells[c].classList.add('b2b-cell-sel');
+    }
+}
+function _b2bSelText() {
+    const g = _b2bSel.grid;
+    if (!g || !_b2bSel.anchor || !_b2bSel.focus) return '';
+    const { r0, r1, c0, c1 } = _b2bSelBox();
+    const rows = [...g.querySelectorAll('.b2b-pline')];
+    const out = [];
+    for (let r = r0; r <= r1; r++) {
+        const cells = _b2bCellsIn(rows[r]);
+        const line = [];
+        for (let c = c0; c <= c1; c++) {
+            const cell = cells[c];
+            let v = '';
+            if (cell) {
+                const f = cell.querySelector('input, select, textarea');
+                v = f ? (f.value || '') : (cell.innerText || '');
+            }
+            line.push(String(v).replace(/\s+/g, ' ').trim());
+        }
+        // Space-joined with empty cells dropped -- readable spacing, not TSV
+        // columns (the user prefers plain spacing over Excel tab formatting).
+        out.push(line.filter(v => v !== '').join(' '));
+    }
+    return out.join('\n');
+}
+function _b2bSelInit() {
+    if (_b2bSel.bound) return;
+    _b2bSel.bound = true;
+    document.addEventListener('mousedown', (e) => {
+        const cell = e.target.closest && e.target.closest('.b2b-items.b2b-ss .b2b-pcell');
+        if (!cell) { if (!(e.target.closest && e.target.closest('.b2b-items.b2b-ss'))) _b2bSelClear(); return; }
+        const rc = _b2bSheetCellRC(cell);
+        if (!rc) return;
+        _b2bSel.grid = rc.grid;
+        _b2bSel.dragging = true;
+        _b2bSel.moved = false;
+        if (e.shiftKey && _b2bSel.anchor) {   // extend from the existing anchor
+            _b2bSel.focus = { r: rc.r, c: rc.c };
+            _b2bSel.moved = true;
+            _b2bSelPaint();
+            e.preventDefault();
+            return;
+        }
+        // Plain mousedown: set the anchor but DON'T paint or preventDefault yet,
+        // so a click that doesn't drag still focuses the input for editing.
+        _b2bSel.anchor = { r: rc.r, c: rc.c };
+        _b2bSel.focus = { r: rc.r, c: rc.c };
+    });
+    document.addEventListener('mouseover', (e) => {
+        if (!_b2bSel.dragging) return;
+        const cell = e.target.closest && e.target.closest('.b2b-items.b2b-ss .b2b-pcell');
+        if (!cell) return;
+        const rc = _b2bSheetCellRC(cell);
+        if (!rc || rc.grid !== _b2bSel.grid) return;
+        if (_b2bSel.focus && rc.r === _b2bSel.focus.r && rc.c === _b2bSel.focus.c) return;
+        _b2bSel.moved = true;
+        _b2bSel.focus = { r: rc.r, c: rc.c };
+        // A genuine drag: drop input focus and any native text range so only the
+        // cell block shows as selected.
+        if (document.activeElement && _b2bSel.grid.contains(document.activeElement)) document.activeElement.blur();
+        const s = window.getSelection && window.getSelection();
+        if (s) s.removeAllRanges();
+        _b2bSel.grid.classList.add('b2b-selecting');
+        _b2bSelPaint();
+    });
+    document.addEventListener('mouseup', () => {
+        if (!_b2bSel.dragging) return;
+        _b2bSel.dragging = false;
+        if (_b2bSel.grid) _b2bSel.grid.classList.remove('b2b-selecting');
+        // A click that never dragged is an edit, not a selection: clear the block
+        // so the input the browser just focused behaves normally.
+        if (!_b2bSel.moved) _b2bSelClear();
+    });
+    document.addEventListener('copy', (e) => {
+        const g = _b2bSel.grid;
+        if (!g || !g.isConnected || !_b2bSel.anchor || !_b2bSel.focus) return;
+        // Only hijack copy for a real multi-cell block that is still on screen.
+        // A single cell is left to the browser, so copying inside one input works.
+        const single = _b2bSel.anchor.r === _b2bSel.focus.r && _b2bSel.anchor.c === _b2bSel.focus.c;
+        if (single || !g.querySelector('.b2b-cell-sel')) return;
+        const txt = _b2bSelText();
+        if (!txt || !e.clipboardData) return;
+        e.clipboardData.setData('text/plain', txt);
+        e.preventDefault();
+    });
+}
+
 function _b2bItemSheet() {
+    _b2bSelInit();
     if (!_b2bModalItems.length) {
         return `<div class="b2b-empty sm">
             <div class="b2b-empty-t">No lines yet</div>
@@ -20103,14 +20189,10 @@ function _b2bItemSheet() {
         </div>`;
     }
 
-    // The three required specs (CPU / RAM / Storage) are columns, not a detail
-    // view -- a keyboard pricer tabs straight across them. GPU and battery stay
-    // optional, so they live behind the ⋯ with serials and notes.
-    // Battery health joins CPU/RAM/Storage on the row. It is not required -- a
-    // dead battery reports nothing -- but it changes what a machine is worth, and
-    // hiding it behind the ⋯ meant you could not tell at a glance whether a
-    // quantity line was worth having.
-    const sheetSpecs = B2B_SPEC_FIELDS.filter(f => f.req || f.key === 'battery_health');
+    // No specs are inline any more -- CPU/RAM/Storage (required) and GPU/battery
+    // (optional) all live in the ⋯ dropdown, to keep the row narrow. Empty here so
+    // the header and rows render no spec columns; the grid template dropped them.
+    const sheetSpecs = [];
 
     const head = `
         <div class="b2b-prow b2b-phead">
@@ -20119,8 +20201,9 @@ function _b2bItemSheet() {
                 f.req ? '<i class="b2b-req-star" title="Required before this can be quoted">*</i>' : ''}</span>`).join('')}
             <span>Condition</span>
             <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span>
+            <span class="r" title="Resale value − our offer">Margin</span>
             <span class="r" title="What it costs us to move one of these, per unit. Never shown to the client.">Ship</span>
-            <span class="r">Margin</span>
+            <span class="r" title="Value − offer − shipping − selling fees + data wipe">Net margin</span>
             <span>Handling</span><span class="c">Wipe</span>
             <span title="Prints on the client's quote. Required on a Fair or Broken line.">Client Notes</span>
             <span class="r">Total</span><span></span>
@@ -20137,8 +20220,10 @@ function _b2bItemSheet() {
         // A line "has detail" if the ⋯ sheet holds anything worth reopening for --
         // serials, notes, or an optional spec (GPU/battery). The required specs
         // are inline now, so they don't count toward the dot.
-        const hasDetail = !!(String(it.staff_notes || '').trim() || String(it.listing_info || '').trim()
-            || _b2bSerials(it).length || String(it.gpu || '').trim());
+        // Dot on the ⋯ button = the dropdown holds something (an internal note or
+        // an optional spec). Serials drive their own button's badge, not this.
+        const hasDetail = !!(String(it.staff_notes || '').trim()
+            || String(it.gpu || '').trim() || String(it.battery_health || '').trim());
         // Anything blocking the line pops its panel open unasked -- the point of
         // the flag is that you can see what to fix, not hunt for it -- unless it
         // has been collapsed by hand, which outranks that.
@@ -20173,8 +20258,6 @@ function _b2bItemSheet() {
                     ondragover="b2bDragOver(event,'${it.id}')" ondrop="b2bDrop(event,'${it.id}')"`}>
                     <span class="b2b-mono">${escapeHtml(_b2bIsPreval() ? String(it.line_no) : _b2bLineNo(it))}</span>
                     ${blocked.length ? `<i class="b2b-ss-flag" title="${escapeHtml(blocked.join(', '))}"></i>` : ''}
-                    ${_b2bLabelsShort(it) ? `<i class="b2b-ss-untagged" title="${
-                        _b2bLabelsShort(it)} unit${_b2bLabelsShort(it) === 1 ? '' : 's'} on this line still have no label printed"></i>` : ''}
                 </span>
                 <span class="b2b-pcell" data-k="Type">
                     <select onchange="b2bItemType('${it.id}',this.value)">
@@ -20208,17 +20291,18 @@ function _b2bItemSheet() {
                     ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
+                <span class="b2b-pcell n b2b-pc-mgn" data-k="Margin">
+                    ${_b2bLineGrossHtml(it)}</span>
                 <!-- Blank on a recycle line, like Value and Offer: we do not pay
                      to ship scrap, so zero is the true figure rather than a
-                     rounding of one. All three money columns now agree that a
-                     recycle line costs nothing and earns nothing. -->
+                     rounding of one. -->
                 <span class="b2b-pcell n" data-k="Ship">
                     ${scrap ? '<span class="b2b-f-off">—</span>'
                           : `<input type="number" min="0" step="0.01" value="${Number(it.shipping_cost) || 0}"
                         title="Our freight cost per unit — never shown to the client"
                         oninput="b2bItemInput('${it.id}','shipping_cost',this.value)" onchange="b2bItemSave('${it.id}')">`}</span>
-                <span class="b2b-pcell n b2b-pc-mgn" data-k="Margin">
-                    ${_b2bLineMarginHtml(it)}</span>
+                <span class="b2b-pcell n b2b-pc-mgn" data-k="Net margin">
+                    ${_b2bLineNetHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-disp" data-k="Handling">
                     <select data-tip="${escapeHtml(B2B_DISP[disp].hint)}" onchange="b2bItemDisposition('${it.id}',this.value)">
                         ${B2B_DISPOSITIONS.map(d => `<option value="${d.key}" ${disp === d.key ? 'selected' : ''}>${_B2B_DISP_SEL[d.key]}</option>`).join('')}
@@ -20239,14 +20323,17 @@ function _b2bItemSheet() {
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Total">
                     ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
+                    ${_b2bIsPreval() ? '' : `<button class="b2b-ss-serial ${_b2bSerials(it).length === need ? '' : 'miss'}"
+                        title="Serial numbers — ${_b2bSerials(it).length} of ${need}. Click to edit."
+                        onclick="b2bSerialsOpen('${it.id}')"><span class="b2b-ss-serial-n">#${_b2bSerials(it).length}/${need}</span></button>`}
+                    ${_b2bLabelBtn(it)}
                     <button class="b2b-notes-btn b2b-ss-copy" title="Copy this line — everything but the serials"
                         onclick="b2bCopyItem('${it.id}',this)">${_b2bIco(_B2B_ICO_COPY)}</button>
-                    <!-- Expands in place. It used to open a modal over the sheet,
-                         which is the "separate button" nobody liked: it covered
-                         the row you were working on, trapped focus, and threw
-                         itself away if a drag-select strayed past its edge. -->
+                    <!-- Expands in place with the type's extra specs + the internal
+                         note. Serials have their own button; client notes, handling
+                         and wipe are inline columns. -->
                     <button class="b2b-notes-btn b2b-ss-more ${hasDetail ? 'has' : ''} ${blocked.length ? 'req' : ''} ${rowOpen ? 'on' : ''}"
-                        title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Serials, listing info & staff notes'}"
+                        title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Extra specs & internal notes'}"
                         aria-expanded="${rowOpen ? 'true' : 'false'}"
                         onclick="b2bToggleRow('${it.id}')">
                         <span class="b2b-rowtoggle">${rowOpen ? '−' : '+'}</span>
@@ -20371,21 +20458,8 @@ function _b2bItemSheetBody(it) {
                     </div>
                 </div>
             </div>`}
-            <!-- Present here as well as in the spreadsheet's row panel: the card
-                 grid is what the quote and view screens use, and a field you can
-                 only reach from one of the two grids is a field people will
-                 swear does not exist. -->
             <div class="b2b-isheet-sec">
-                <h5>Listing info <span class="b2b-tag-int">for whoever lists it</span></h5>
-                <div class="b2b-f">
-                    <textarea class="b2b-tag-free" rows="2"
-                        placeholder="Anything the lister needs that no other field covers"
-                        oninput="b2bItemInput('${it.id}','listing_info',this.value)"
-                        onchange="b2bItemSave('${it.id}')">${escapeHtml(it.listing_info || '')}</textarea>
-                </div>
-            </div>
-            <div class="b2b-isheet-sec">
-                <h5>Staff notes <span class="b2b-tag-int">internal</span></h5>
+                <h5>Internal notes <span class="b2b-tag-int">never leaves the building</span></h5>
                 <div class="b2b-f">
                     <input value="${escapeHtml(it.staff_notes || '')}" placeholder="Anything the team should know"
                         oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')"></div>
@@ -20406,22 +20480,25 @@ function _b2bItemSheetBody(it) {
         </div>`;
 }
 
-function _b2bTotalsBar(showMargin) {
+function _b2bTotalsBar(showMargin, actions) {
+    // A straight P&L, left to right: what we pay, what it's worth, the profit
+    // between them, then each cost/discount, then the net. Gross and Net are the
+    // margin figures, gated on showMargin. `actions` is optional right-docked
+    // markup (e.g. the pricing sheet's Sort button) that rides the far end of the
+    // bar via margin-left:auto.
     return `
     <div class="b2b-totals">
         <div class="b2b-tot"><span class="b2b-tot-k">Items</span><span class="b2b-tot-v" id="b2bTotUnits">—</span></div>
+        <div class="b2b-tot"><span class="b2b-tot-k">Our offer</span><span class="b2b-tot-v" id="b2bTotOffer">—</span></div>
         <div class="b2b-tot"><span class="b2b-tot-k">Resale value</span><span class="b2b-tot-v" id="b2bTotValue">—</span></div>
-        <div class="b2b-tot muted"><span class="b2b-tot-k">Data wipes</span><span class="b2b-tot-v" id="b2bTotWipe">—</span></div>
-        <div class="b2b-tot"><span class="b2b-tot-k">We pay</span><span class="b2b-tot-v accent" id="b2bTotOffer">—</span></div>
-        <!-- Sits after "We pay" deliberately: it is a cost of ours that lands
-             on top of the offer, not a deduction from it like the wipes. -->
+        ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross profit</span><span class="b2b-tot-v" id="b2bTotGross">—</span></div>' : ''}
         <div class="b2b-tot muted"><span class="b2b-tot-k">Shipping</span><span class="b2b-tot-v" id="b2bTotShip">—</span></div>
-        <!-- Sits with shipping, not with the wipe: both are costs that stand
-             between the resale value and us, where the wipe is money the client
-             does not receive. -->
         <div class="b2b-tot muted" title="Assumed marketplace cut, ${Math.round(B2B_MARKETPLACE_FEE * 100)}% of resale value">
             <span class="b2b-tot-k">Selling fees</span><span class="b2b-tot-v" id="b2bTotFee">—</span></div>
-        ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross margin</span><span class="b2b-tot-v" id="b2bTotMargin">—</span></div>' : ''}
+        <div class="b2b-tot muted" title="Certified data-wipe fee — discounted off what we pay the client">
+            <span class="b2b-tot-k">Data wipes</span><span class="b2b-tot-v" id="b2bTotWipe">—</span></div>
+        ${showMargin ? '<div class="b2b-tot b2b-tot-net"><span class="b2b-tot-k">Net profit</span><span class="b2b-tot-v accent" id="b2bTotNet">—</span></div>' : ''}
+        ${actions || ''}
     </div>`;
 }
 
@@ -20469,12 +20546,15 @@ function _b2bStagePricing(deal) {
             ${_b2bSendbackNote(deal)}
             ${_b2bPrevalOriginNote(deal)}
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">${_b2bIntake(deal).was}</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
-            ${_b2bTotalsBar(true)}
-            ${_b2bCustPanel(deal)}
+            ${_b2bTotalsBar(true, !_b2bIsPreval() && _b2bModalItems.length > 1
+                ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
+                    title="Group by brand then model, highest value first at both levels"
+                    onclick="b2bSortItems(this)">↕ Sort by brand</button>`
+                : '')}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
-            ${_b2bDealStatsHtml(_b2bModalItems, deal)}`,
+            ${_b2bQuoteClientBlock(deal)}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
@@ -20494,10 +20574,10 @@ async function b2bSubmitPricing(id, btn) {
     // hunt for them, and the server would refuse anyway.
     const gaps = _b2bNotReady();
     if (gaps.length) {
-        if (_b2bGridMode === 'sheet') {
-            _b2bRepaintItems();
-            // Put the cursor on the first gap: a missing spec is an inline cell, a
-            // missing serial or condition reason lives in the ⋯ detail sheet.
+        _b2bRepaintItems();
+        // Put the cursor on the first gap: a missing spec is an inline cell, a
+        // missing serial or condition reason lives in the ⋯ detail sheet.
+        {
             const g = gaps[0];
             const line = document.getElementById(`b2bPline-${g.id}`);
             line?.scrollIntoView({ block: 'center' });
@@ -20514,10 +20594,6 @@ async function b2bSubmitPricing(id, btn) {
                 _b2bRepaintItems();
                 document.querySelector(`#b2bPline-${g.id} .b2b-rp-serialrow input`)?.focus();
             }
-        } else {
-            // Cards mode fixes lines in the inline drawer.
-            gaps.forEach(it => _b2bNotesOpen.add(it.id));
-            _b2bRepaintItems();
         }
         return _b2bSay(gaps.map(it => `${_b2bItemName(it)} (${_b2bItemBlocked(it).join(', ')})`).join(' · '), true);
     }
@@ -20603,12 +20679,13 @@ function _b2bReviewLines() {
         return '<div class="b2b-empty sm"><div class="b2b-empty-t">No lines on this quote</div></div>';
     }
     const rows = _b2bModalItems.map(it => {
-        const qty  = Number(it.quantity) || 1;
-        const buy  = _b2bIsBuy(it);
-        const disp = _b2bDispOf(it);
-        const spec = _b2bQuoteDesc(it);
+        const qty   = Number(it.quantity) || 1;
+        const buy   = _b2bIsBuy(it);
+        const scrap = _b2bIsScrap(it);
+        const disp  = _b2bDispOf(it);
+        const spec  = _b2bQuoteDesc(it);
         return `
-        <div class="b2b-rvw-row ${_b2bIsScrap(it) ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''}" data-rvw="${it.id}">
+        <div class="b2b-rvw-row ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''}" data-rvw="${it.id}">
             <div class="b2b-rvw-what">
                 <div class="b2b-rvw-name">${escapeHtml(_b2bItemName(it))}
                     ${it.condition ? `<span class="b2b-chip b2b-chip-${_b2bCondChip(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
@@ -20619,7 +20696,7 @@ function _b2bReviewLines() {
                 ${it.client_notes ? `<div class="b2b-rvw-note">${escapeHtml(it.client_notes)}</div>` : ''}
             </div>
             <div class="b2b-rvw-qty">×${qty}</div>
-            <div class="b2b-rvw-mgn">${_b2bLineMarginHtml(it)}</div>
+            <div class="b2b-rvw-val">${scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(Number(it.value) || 0, 2)}</div>
             <div class="b2b-rvw-offer">
                 ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         aria-label="Offer per unit"
@@ -20627,16 +20704,46 @@ function _b2bReviewLines() {
                         onchange="b2bReviewOffer('${it.id}')">`
                       : '<span class="b2b-f-off">—</span>'}
             </div>
+            <div class="b2b-rvw-mgn">${_b2bLineGrossHtml(it)}</div>
+            <div class="b2b-rvw-ship">${scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(Number(it.shipping_cost) || 0, 2)}</div>
+            <div class="b2b-rvw-net">${_b2bLineNetHtml(it)}</div>
             <div class="b2b-rvw-tot">${buy ? _b2bMoney((Number(it.offer) || 0) * qty, 2) : '—'}</div>
         </div>`;
     }).join('');
     return `
         <div class="b2b-rvw">
             <div class="b2b-rvw-head">
-                <span>Item</span><span class="c">Qty</span><span class="r">Margin</span>
-                <span class="r">Offer ea.</span><span class="r">Line total</span>
+                <span>Item</span><span class="c">Qty</span><span class="r">Value ea.</span>
+                <span class="r">Offer ea.</span><span class="r" title="Gross margin — resale value − our offer">Margin</span>
+                <span class="r" title="Our freight cost per unit — never shown to the client">Ship</span>
+                <span class="r" title="Net margin — value − offer − shipping − selling fees + data wipe">Net</span>
+                <span class="r">Line total</span>
             </div>
             ${rows}
+        </div>`;
+}
+
+// The split the approval and out-for-quote screens share: on the left the P&L
+// stats and a line list whose ONLY editable cell is the offer -- value, fees and
+// margins are there to be read, not filled in; on the right the exact document
+// the client sees, which is where the specs and notes live. Editing an offer
+// (b2bReviewOffer) repaints both halves. The full pricing sheet is one click
+// away for the rare correction that is worth more than a send-back.
+function _b2bReviewSplit(deal, capLabel) {
+    return `
+        <div class="b2b-rvw-wrap">
+            <div class="b2b-rvw-main">
+                ${_b2bTotalsBar(true)}
+                <div class="b2b-rvw-cap">
+                    <span>${escapeHtml(capLabel)}</span>
+                    <button class="b2b-mini" onclick="b2bReviewFull(true)">Open the full pricing sheet</button>
+                </div>
+                <div id="b2bReviewLines">${_b2bReviewLines()}</div>
+            </div>
+            <div class="b2b-rvw-doc">
+                <div class="b2b-rvw-cap"><span>Quote for the client</span></div>
+                <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
+            </div>
         </div>`;
 }
 
@@ -20686,20 +20793,7 @@ function _b2bStageReview(deal) {
                     : 'A CEO, MOCD or District Manager sends it out.'}
             </div>
             ${_b2bProofPanel(deal)}
-            ${_b2bTotalsBar(true)}
-            <div class="b2b-rvw-wrap">
-                <div class="b2b-rvw-lines">
-                    <div class="b2b-rvw-cap">
-                        <span>What you're approving</span>
-                        <button class="b2b-mini" onclick="b2bReviewFull(true)">Open the full pricing sheet</button>
-                    </div>
-                    <div id="b2bReviewLines">${_b2bReviewLines()}</div>
-                </div>
-                <div class="b2b-rvw-doc">
-                    <div class="b2b-rvw-cap"><span>What the client sees</span></div>
-                    <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
-                </div>
-            </div>`,
+            ${_b2bReviewSplit(deal, "What you're approving")}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
@@ -20712,7 +20806,7 @@ function _b2bStageReview(deal) {
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
                 <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>`
                 : `<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">${escapeHtml(sent)}</span>`}`,
-        after: _b2bPaintTotals,
+        after: () => { _b2bPaintTotals(); _b2bPaintQuoteDoc(); },
     });
 }
 
@@ -20721,14 +20815,53 @@ function _b2bStageQuote(deal) {
     // full spreadsheet -- see _b2bStageReview. Opening the sheet explicitly is
     // the way past it, and re-entering resets that so the next deal starts calm.
     if (_b2bAwaitingApproval(deal) && !_b2bReviewFull) return _b2bStageReview(deal);
-    // Same dense spreadsheet as pricing for editing the lines; the client-facing
-    // quote preview below it is what they review before emailing.
-    _b2bGridMode = 'sheet';
     const canAccept = _b2bCanAccept();
     const unsent = _b2bAwaitingApproval(deal);
     const sent = deal.quote_send_count
         ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}`
         : 'Not sent yet';
+
+    // Default view for a SENT quote: the same calm split as approval -- offers
+    // editable on the left over the P&L, the client's document on the right.
+    // The full spreadsheet is the one-click escape hatch below (_b2bReviewFull).
+    if (!_b2bReviewFull) {
+        return _b2bShowDeal({
+            delDeal: deal,
+            stage: deal.stage,
+            eyebrow: deal.ref,
+            title: 'Quote',
+            sub: 'Adjust an offer if you need to while the client decides. Accepting locks the offers in as our cost.',
+            full: true,
+            body: `
+            ${_b2bSummary(deal)}
+            ${_b2bWhereLine(deal)}
+            <div class="b2b-sendbar">
+                <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
+                <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
+                    value="${escapeHtml(deal.client?.contact_email || '')}">
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
+                <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
+                <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
+            </div>
+            ${_b2bProofPanel(deal)}
+            ${_b2bReviewSplit(deal, 'Quote lines')}`,
+            footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            ${_b2bMoveBtn(deal)}
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
+            ${_b2bIsCorp() ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
+            ${canAccept ? `<button class="b2b-btn b2b-btn-secondary" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>` : ''}
+            ${canAccept
+                ? `<button class="b2b-btn b2b-btn-primary" onclick="b2bAcceptQuote('${deal.id}',this)">Mark Accepted</button>`
+                : '<span class="b2b-foot-note">Only a CEO, MOCD or District Manager can accept a quote.</span>'}`,
+            after: () => { _b2bPaintTotals(); _b2bPaintQuoteDoc(); },
+        });
+    }
+
+    // ----- escape hatch: the full editable spreadsheet (_b2bReviewFull) -----
+    // Same dense sheet as pricing for editing the lines; the client-facing quote
+    // preview below it is what they review before emailing.
+    _b2bGridMode = 'sheet';
 
     const banner = unsent ? `
         <div class="b2b-note warn b2b-approve">
@@ -20762,15 +20895,16 @@ function _b2bStageQuote(deal) {
                 <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
             </div>
             ${_b2bProofPanel(deal)}
-            ${_b2bTotalsBar(true)}
+            ${_b2bTotalsBar(true, _b2bModalItems.length > 1
+                ? `<button class="b2b-btn b2b-btn-secondary b2b-sortbtn"
+                    title="Group by brand then model, highest value first at both levels"
+                    onclick="b2bSortItems(this)">↕ Sort by brand</button>`
+                : '')}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
             ${_b2bDealStatsHtml(_b2bModalItems, deal)}
-            <details class="b2b-preview" open>
-                <summary>Quote preview — this is what the client sees</summary>
-                <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
-            </details>`,
+            ${_b2bQuoteClientBlock(deal)}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
@@ -20959,6 +21093,18 @@ function _b2bQuoteFootNotes(items) {
 // The client-facing quote. Deliberately carries no SKUs and no deal reference
 // -- those are ours, for labels and the floor. A client identifies their quote
 // by the date we collected their equipment.
+// The client-facing quote as a static, always-visible section -- header then the
+// document itself, no collapsible. Lives at the bottom of the review and quote
+// screens so the working sheet is what you land on and the quote is there to
+// scroll to when you want to check it.
+function _b2bQuoteClientBlock(subject) {
+    return `
+        <div class="b2b-clientquote">
+            <div class="b2b-clientquote-h">Quote for the client</div>
+            <div id="b2bQuoteDoc">${_b2bQuoteDoc(subject, _b2bModalItems)}</div>
+        </div>`;
+}
+
 function _b2bQuoteDoc(deal, items) {
     const c = deal.client || {};
     const t = _b2bQuoteTotals(items);
@@ -20976,8 +21122,8 @@ function _b2bQuoteDoc(deal, items) {
                 ${it.condition ? `<span class="b2b-doc-cond ${_b2bCondClass(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
                 ${!buy ? `<span class="b2b-doc-rec ${disp === 'recycle' ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
                 ${it.wipe_required ? '<span class="b2b-doc-rec wipe">Certified wipe</span>' : ''}
-                ${spec ? `<div class="b2b-doc-sub">${escapeHtml(spec)}</div>` : ''}
-                ${it.client_notes ? `<div class="b2b-doc-sub">${escapeHtml(it.client_notes)}</div>` : ''}
+                ${spec ? `<span class="b2b-doc-inline">${escapeHtml(spec)}</span>` : ''}
+                ${it.client_notes ? `<span class="b2b-doc-inline b2b-doc-note">${escapeHtml(it.client_notes)}</span>` : ''}
             </td>
             <td class="c">${qty}</td>
             <td class="r">${buy ? _b2bMoney(it.offer, 2) : '—'}</td>
@@ -21299,8 +21445,12 @@ async function b2bAcceptQuote(id, btn) {
     // serials get all the way to a 400 from the accept call.
     const gaps = _b2bNotReady();
     if (gaps.length) {
-        gaps.forEach(it => _b2bNotesOpen.add(it.id));
-        _b2bRepaintItems();
+        // The blocking fields (specs, serials) aren't on the offer-only review, so
+        // open the full sheet where they can be fixed, then name what's missing on
+        // that screen (reopening rebuilds the modal, so the message goes after it).
+        const did = (_b2bModalDeal || {}).id;
+        _b2bReviewFull = true;
+        if (did) b2bOpenDeal('quote', did);
         return _b2bSay(gaps.map(it => `${_b2bItemName(it)} (${_b2bItemBlocked(it).join(', ')})`).join(' · '), true);
     }
     const t = _b2bItemTotals();
@@ -21424,14 +21574,20 @@ function _b2bStageListing(deal) {
 function _b2bScanBar(deal) {
     const it = _b2bPendingUnit ? _b2bLocalItem(_b2bPendingUnit) : null;
     if (it) {
-        const unit = _b2bDone(it) + 1;
+        const q = Number(it.quantity) || 1;
+        // A wipe line can only list as many as are certified wiped.
+        const remaining = it.wipe_required
+            ? Math.max(0, Math.min(q - _b2bDone(it), (Number(it.wiped_qty) || 0) - (Number(it.listed_qty) || 0)))
+            : q - _b2bDone(it);
         return `
         <div class="b2b-scanbar pending">
             <span class="b2b-scan-ico">${_b2bIco(B2B_SCAN_SVG)}</span>
             <div class="b2b-scan-ask">
                 <span class="b2b-scan-ask-t">Now scan the Shopify barcode</span>
-                <span class="b2b-scan-ask-s">${escapeHtml(_b2bItemName(it))} · unit ${unit} of ${Number(it.quantity) || 1}</span>
+                <span class="b2b-scan-ask-s">${escapeHtml(_b2bItemName(it))} · ${remaining} of ${q} left to list</span>
             </div>
+            ${remaining > 1 ? `<label class="b2b-scan-units" title="How many units this one barcode covers. Lower it to split the line across barcodes.">×
+                <input id="b2bScanUnits" type="number" min="1" max="${remaining}" value="${remaining}"></label>` : ''}
             <input id="b2bScanIn" class="form-input-lg b2b-scan-num" autocomplete="off" inputmode="numeric" maxlength="8"
                 placeholder="8-digit barcode"
                 oninput="_b2bScanTyped(this,'${deal.id}')"
@@ -21542,8 +21698,8 @@ function _b2bListRows() {
         const codes = (it.listings || []).length ? `
             <div class="b2b-lcodes">
                 ${it.listings.map(l => `
-                <span class="b2b-lcode" title="Listed by ${escapeHtml(l.listed_by || 'unknown')}">
-                    <span class="b2b-mono">${escapeHtml(l.shopify_barcode)}</span>
+                <span class="b2b-lcode" title="${(Number(l.units) || 1)} unit${(Number(l.units) || 1) === 1 ? '' : 's'} · listed by ${escapeHtml(l.listed_by || 'unknown')}">
+                    <span class="b2b-mono">${escapeHtml(l.shopify_barcode)}</span>${(Number(l.units) || 1) > 1 ? `<span class="b2b-lcode-n">×${Number(l.units)}</span>` : ''}
                     <button class="b2b-lcode-x" title="Remove this barcode"
                         onclick="b2bUnlistUnit('${it.id}','${l.id}')">×</button>
                 </span>`).join('')}
@@ -21669,7 +21825,7 @@ function b2bScan(dealId) {
         if (it.listings?.some(l => l.shopify_barcode === raw)) {
             return _b2bScanFlash(`${raw} is already recorded on this line.`, true, it.id);
         }
-        return _b2bListUnit(it, raw);
+        return _b2bListUnit(it, raw, Number(document.getElementById('b2bScanUnits')?.value) || undefined);
     }
 
     // First scan: which line is this?
@@ -21698,15 +21854,24 @@ function b2bAskShopify(itemId) {
 
 // Apply locally, repaint now, then reconcile with the server. On failure the
 // line snaps back and says why, rather than the click having felt ignored.
-function _b2bListUnit(it, code) {
+function _b2bListUnit(it, code, units) {
     const qty = Number(it.quantity) || 1;
     const before = { listed: Number(it.listed_qty) || 0, listings: (it.listings || []).slice() };
-    if (before.listed + (Number(it.recycled_qty) || 0) >= qty) return;
+    const room = qty - before.listed - (Number(it.recycled_qty) || 0);
+    if (room <= 0) return;
+    // One barcode lists every remaining unit by default; a smaller count splits
+    // the line across barcodes. A wipe line lists no more than are certified.
+    let n = Math.min(Math.max(1, Math.trunc(Number(units) || room)), room);
+    if (it.wipe_required) {
+        const wipeRoom = (Number(it.wiped_qty) || 0) - before.listed;
+        if (wipeRoom <= 0) return;
+        if (n > wipeRoom) n = wipeRoom;
+    }
 
     // A temp id so an undo landing before the server replies still targets the
     // right row; the reconcile below swaps in the real one.
-    it.listings = [...before.listings, { id: `tmp-${code}`, shopify_barcode: code, listed_by: _b2bUser() }];
-    it.listed_qty = before.listed + 1;
+    it.listings = [...before.listings, { id: `tmp-${code}`, shopify_barcode: code, units: n, listed_by: _b2bUser() }];
+    it.listed_qty = before.listed + n;
     _b2bPendingUnit = null;
     _b2bDirty = true;
     _b2bRepaintScanBar();
@@ -21714,7 +21879,7 @@ function _b2bListUnit(it, code) {
     _b2bScanFlash(`${code} → ${it.sku || 'line'} · ${it.listed_qty} of ${qty} listed`, false, it.id);
     const done = _b2bAllSatisfied();
 
-    _b2bEnqueue(it.id, () => _b2bSend({ action: 'list_unit', id: it.id, shopify_barcode: code }))
+    _b2bEnqueue(it.id, () => _b2bSend({ action: 'list_unit', id: it.id, shopify_barcode: code, units: n }))
         .then(out => {
             if (!out) return;
             it.listed_qty = out.listed_qty;
@@ -21741,11 +21906,11 @@ function b2bUnlistUnit(itemId, listingId) {
     const target = listingId ? list.find(l => l.id === listingId) : list[list.length - 1];
     if (!target) return;
     if (listingId && !confirm(`Remove Shopify barcode ${target.shopify_barcode} from this line?\n\n`
-        + 'The unit goes back on the checklist to be listed again.')) return;
+        + `Its ${Number(target.units) || 1} unit${(Number(target.units) || 1) === 1 ? '' : 's'} go back on the checklist to be listed again.`)) return;
 
     const before = { listed: Number(it.listed_qty) || 0, listings: list.slice() };
     it.listings = list.filter(l => l !== target);
-    it.listed_qty = Math.max(0, before.listed - 1);
+    it.listed_qty = Math.max(0, before.listed - (Number(target.units) || 1));
     _b2bDirty = true;
     _b2bRepaintListing();
 
@@ -21868,7 +22033,7 @@ function _b2bStageView(deal) {
         eyebrow: deal.ref,
         title: deal.client?.company || 'Deal',
         sub: `${B2B_STAGE[deal.stage]?.label || deal.stage}${deal.accepted_at ? ` · accepted ${_b2bDate(deal.accepted_at)}` : ''}`,
-        wide: true,
+        full: true,
         body: `
             ${_b2bSummary(deal)}
             ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
