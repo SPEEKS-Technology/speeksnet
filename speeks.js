@@ -19684,7 +19684,134 @@ function _b2bRowPanel(it) {
         </div>`;
 }
 
+// ===========================================================================
+// PRICING SHEET — EXCEL-STYLE CELL SELECTION
+// ===========================================================================
+// The sheet's cells are <input>/<select>, so a browser can't drag-select across
+// them the way it can plain text -- which is why the sheet "won't let you copy".
+// This layers a spreadsheet selection on top: click a cell to edit as normal;
+// click-drag, or Shift+click, to select a block of cells; Ctrl/Cmd+C copies the
+// block as TSV so it pastes straight into Excel, Sheets or an email. Bound once
+// via document-level delegation, so it survives every re-render of the sheet.
+const _b2bSel = { bound: false, grid: null, anchor: null, focus: null, dragging: false, moved: false };
+
+function _b2bCellsIn(rowEl) {
+    const prow = rowEl && rowEl.querySelector('.b2b-prow');
+    return prow ? [...prow.children].filter(c => c.classList && c.classList.contains('b2b-pcell')) : [];
+}
+function _b2bSheetCellRC(cell) {
+    const grid = cell.closest('.b2b-items.b2b-ss');
+    const rowEl = cell.closest('.b2b-pline');
+    if (!grid || !rowEl) return null;
+    const r = [...grid.querySelectorAll('.b2b-pline')].indexOf(rowEl);
+    const c = _b2bCellsIn(rowEl).indexOf(cell);
+    return (r < 0 || c < 0) ? null : { r, c, grid };
+}
+function _b2bSelClear() {
+    if (_b2bSel.grid) _b2bSel.grid.querySelectorAll('.b2b-cell-sel').forEach(e => e.classList.remove('b2b-cell-sel'));
+    _b2bSel.anchor = _b2bSel.focus = null;
+}
+function _b2bSelBox() {
+    const a = _b2bSel.anchor, f = _b2bSel.focus;
+    return { r0: Math.min(a.r, f.r), r1: Math.max(a.r, f.r), c0: Math.min(a.c, f.c), c1: Math.max(a.c, f.c) };
+}
+function _b2bSelPaint() {
+    const g = _b2bSel.grid;
+    if (!g || !_b2bSel.anchor || !_b2bSel.focus) return;
+    g.querySelectorAll('.b2b-cell-sel').forEach(e => e.classList.remove('b2b-cell-sel'));
+    const { r0, r1, c0, c1 } = _b2bSelBox();
+    const rows = [...g.querySelectorAll('.b2b-pline')];
+    for (let r = r0; r <= r1; r++) {
+        const cells = _b2bCellsIn(rows[r]);
+        for (let c = c0; c <= c1; c++) cells[c] && cells[c].classList.add('b2b-cell-sel');
+    }
+}
+function _b2bSelText() {
+    const g = _b2bSel.grid;
+    if (!g || !_b2bSel.anchor || !_b2bSel.focus) return '';
+    const { r0, r1, c0, c1 } = _b2bSelBox();
+    const rows = [...g.querySelectorAll('.b2b-pline')];
+    const out = [];
+    for (let r = r0; r <= r1; r++) {
+        const cells = _b2bCellsIn(rows[r]);
+        const line = [];
+        for (let c = c0; c <= c1; c++) {
+            const cell = cells[c];
+            let v = '';
+            if (cell) {
+                const f = cell.querySelector('input, select, textarea');
+                v = f ? (f.value || '') : (cell.innerText || '');
+            }
+            line.push(String(v).replace(/\s+/g, ' ').trim());
+        }
+        out.push(line.join('\t'));
+    }
+    return out.join('\n');
+}
+function _b2bSelInit() {
+    if (_b2bSel.bound) return;
+    _b2bSel.bound = true;
+    document.addEventListener('mousedown', (e) => {
+        const cell = e.target.closest && e.target.closest('.b2b-items.b2b-ss .b2b-pcell');
+        if (!cell) { if (!(e.target.closest && e.target.closest('.b2b-items.b2b-ss'))) _b2bSelClear(); return; }
+        const rc = _b2bSheetCellRC(cell);
+        if (!rc) return;
+        _b2bSel.grid = rc.grid;
+        _b2bSel.dragging = true;
+        _b2bSel.moved = false;
+        if (e.shiftKey && _b2bSel.anchor) {   // extend from the existing anchor
+            _b2bSel.focus = { r: rc.r, c: rc.c };
+            _b2bSel.moved = true;
+            _b2bSelPaint();
+            e.preventDefault();
+            return;
+        }
+        // Plain mousedown: set the anchor but DON'T paint or preventDefault yet,
+        // so a click that doesn't drag still focuses the input for editing.
+        _b2bSel.anchor = { r: rc.r, c: rc.c };
+        _b2bSel.focus = { r: rc.r, c: rc.c };
+    });
+    document.addEventListener('mouseover', (e) => {
+        if (!_b2bSel.dragging) return;
+        const cell = e.target.closest && e.target.closest('.b2b-items.b2b-ss .b2b-pcell');
+        if (!cell) return;
+        const rc = _b2bSheetCellRC(cell);
+        if (!rc || rc.grid !== _b2bSel.grid) return;
+        if (_b2bSel.focus && rc.r === _b2bSel.focus.r && rc.c === _b2bSel.focus.c) return;
+        _b2bSel.moved = true;
+        _b2bSel.focus = { r: rc.r, c: rc.c };
+        // A genuine drag: drop input focus and any native text range so only the
+        // cell block shows as selected.
+        if (document.activeElement && _b2bSel.grid.contains(document.activeElement)) document.activeElement.blur();
+        const s = window.getSelection && window.getSelection();
+        if (s) s.removeAllRanges();
+        _b2bSel.grid.classList.add('b2b-selecting');
+        _b2bSelPaint();
+    });
+    document.addEventListener('mouseup', () => {
+        if (!_b2bSel.dragging) return;
+        _b2bSel.dragging = false;
+        if (_b2bSel.grid) _b2bSel.grid.classList.remove('b2b-selecting');
+        // A click that never dragged is an edit, not a selection: clear the block
+        // so the input the browser just focused behaves normally.
+        if (!_b2bSel.moved) _b2bSelClear();
+    });
+    document.addEventListener('copy', (e) => {
+        const g = _b2bSel.grid;
+        if (!g || !g.isConnected || !_b2bSel.anchor || !_b2bSel.focus) return;
+        // Only hijack copy for a real multi-cell block that is still on screen.
+        // A single cell is left to the browser, so copying inside one input works.
+        const single = _b2bSel.anchor.r === _b2bSel.focus.r && _b2bSel.anchor.c === _b2bSel.focus.c;
+        if (single || !g.querySelector('.b2b-cell-sel')) return;
+        const txt = _b2bSelText();
+        if (!txt || !e.clipboardData) return;
+        e.clipboardData.setData('text/plain', txt);
+        e.preventDefault();
+    });
+}
+
 function _b2bItemSheet() {
+    _b2bSelInit();
     if (!_b2bModalItems.length) {
         return `<div class="b2b-empty sm">
             <div class="b2b-empty-t">No lines yet</div>

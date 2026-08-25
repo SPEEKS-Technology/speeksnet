@@ -14570,6 +14570,36 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-deal-del.pending { color: #b45309; border-color: #fde68a; background: #fffbeb; }
 .b2b-deal-del.pending:hover { background: #fef3c7; }
 
+/* --- B2B copy / selection ------------------------------------------------- */
+/* Read-only text in a deal modal (quote preview, summary, view tables, totals)
+   stays selectable so it can be copied. The pricing sheet's own cells are
+   <input>s and get the spreadsheet selection below instead. */
+.b2b-deal-modal .manage-content,
+.b2b-deal-modal .manage-content span:not(.b2b-pcell),
+.b2b-deal-modal .manage-content td,
+.b2b-deal-modal .manage-content p,
+.b2b-deal-modal .manage-content b,
+.b2b-deal-modal .manage-content div {
+    -webkit-user-select: text;
+    user-select: text;
+}
+/* Read-only sheet cells (line no, totals) are selectable too; the editable ones
+   are covered by the input rule elsewhere. */
+.b2b-items.b2b-ss .b2b-pc-sku,
+.b2b-items.b2b-ss .b2b-pc-tot { -webkit-user-select: text; user-select: text; }
+
+/* Excel-style block selection on the pricing sheet. While dragging, native text
+   selection is suppressed so only the cell block highlights. */
+.b2b-items.b2b-ss.b2b-selecting,
+.b2b-items.b2b-ss.b2b-selecting * { -webkit-user-select: none !important; user-select: none !important; }
+.b2b-items.b2b-ss .b2b-pcell.b2b-cell-sel {
+    background: rgba(59, 130, 246, 0.16) !important;
+    box-shadow: inset 0 0 0 1px #3b82f6;
+    position: relative; z-index: 1;
+}
+.b2b-items.b2b-ss .b2b-pcell.b2b-cell-sel input,
+.b2b-items.b2b-ss .b2b-pcell.b2b-cell-sel select { background: transparent !important; }
+
 .crm-help { font-size: 13px; color: #64707c; font-weight: 500; line-height: 1.5; margin: 2px 0 14px; }
 .crm-search { margin-bottom: 14px; }
 .crm-clist { display: flex; flex-direction: column; gap: 10px; }
