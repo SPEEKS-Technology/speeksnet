@@ -20436,19 +20436,14 @@ function _b2bStageReview(deal) {
             </div>
             ${_b2bProofPanel(deal)}
             ${_b2bTotalsBar(true)}
-            <div class="b2b-rvw-wrap">
-                <div class="b2b-rvw-lines">
-                    <div class="b2b-rvw-cap">
-                        <span>What you're approving</span>
-                        <button class="b2b-mini" onclick="b2bReviewFull(true)">Open the full pricing sheet</button>
-                    </div>
-                    <div id="b2bReviewLines">${_b2bReviewLines()}</div>
+            <div class="b2b-rvw-lines">
+                <div class="b2b-rvw-cap">
+                    <span>What you're approving</span>
+                    <button class="b2b-mini" onclick="b2bReviewFull(true)">Open the full pricing sheet</button>
                 </div>
-                <div class="b2b-rvw-doc">
-                    <div class="b2b-rvw-cap"><span>What the client sees</span></div>
-                    <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
-                </div>
-            </div>`,
+                <div id="b2bReviewLines">${_b2bReviewLines()}</div>
+            </div>
+            ${_b2bQuoteClientBlock(deal)}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
@@ -20516,10 +20511,7 @@ function _b2bStageQuote(deal) {
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
             ${_b2bDealStatsHtml(_b2bModalItems, deal)}
-            <details class="b2b-preview" open>
-                <summary>Quote preview — this is what the client sees</summary>
-                <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
-            </details>`,
+            ${_b2bQuoteClientBlock(deal)}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
@@ -20708,6 +20700,18 @@ function _b2bQuoteFootNotes(items) {
 // The client-facing quote. Deliberately carries no SKUs and no deal reference
 // -- those are ours, for labels and the floor. A client identifies their quote
 // by the date we collected their equipment.
+// The client-facing quote as a static, always-visible section -- header then the
+// document itself, no collapsible. Lives at the bottom of the review and quote
+// screens so the working sheet is what you land on and the quote is there to
+// scroll to when you want to check it.
+function _b2bQuoteClientBlock(deal) {
+    return `
+        <div class="b2b-clientquote">
+            <div class="b2b-clientquote-h">Quote for the client</div>
+            <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
+        </div>`;
+}
+
 function _b2bQuoteDoc(deal, items) {
     const c = deal.client || {};
     const t = _b2bQuoteTotals(items);
@@ -20725,8 +20729,8 @@ function _b2bQuoteDoc(deal, items) {
                 ${it.condition ? `<span class="b2b-doc-cond ${_b2bCondClass(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
                 ${!buy ? `<span class="b2b-doc-rec ${disp === 'recycle' ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
                 ${it.wipe_required ? '<span class="b2b-doc-rec wipe">Certified wipe</span>' : ''}
-                ${spec ? `<div class="b2b-doc-sub">${escapeHtml(spec)}</div>` : ''}
-                ${it.client_notes ? `<div class="b2b-doc-sub">${escapeHtml(it.client_notes)}</div>` : ''}
+                ${spec ? `<span class="b2b-doc-inline">${escapeHtml(spec)}</span>` : ''}
+                ${it.client_notes ? `<span class="b2b-doc-inline b2b-doc-note">${escapeHtml(it.client_notes)}</span>` : ''}
             </td>
             <td class="c">${qty}</td>
             <td class="r">${buy ? _b2bMoney(it.offer, 2) : '—'}</td>
