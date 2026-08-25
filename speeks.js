@@ -19153,7 +19153,12 @@ function b2bItemType(id, value) {
     // would refuse the save otherwise, and the row would lie until a refresh.
     const keep = B2B_SPECS_FOR[value] || [];
     B2B_SPEC_FIELDS.forEach(f => { if (!keep.includes(f.key)) it[f.key] = null; });
-    if (keep.length) _b2bNotesOpen.add(id);   // the specs live in the drawer
+    // The specs (CPU/RAM/Storage and the optional ones) live in the dropdown now.
+    // Changing to a type that carries them pops the dropdown open so the required
+    // fields are right in front of you; 'Other' carries none, so it closes again.
+    // Handles both the card drawer (_b2bNotesOpen) and the sheet row (_b2bRowOpen).
+    if (keep.length) { _b2bNotesOpen.add(id); _b2bRowShut.delete(id); _b2bRowOpen.add(id); }
+    else { _b2bNotesOpen.delete(id); _b2bRowOpen.delete(id); }
     _b2bRepaintItems();
     b2bItemSave(id);
 }
@@ -19699,20 +19704,27 @@ const _B2B_ICO_COPY = '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
 // Serials are absent on an evaluation -- nobody has held these units -- and so is
 // the label, which is minted at conversion.
 function _b2bRowPanel(it) {
-    // The dropdown's "extra information", in order: first the optional specs this
-    // type carries (GPU + battery health for a computer; nothing for Other, which
-    // skips straight to notes), then the free-form internal note. Serials are
-    // deliberately NOT here -- they get their own button on the row, because they
-    // matter too much to bury under an "extra info" panel.
-    const optSpecs = _b2bSpecsFor(it).filter(f => !f.req);
+    // The dropdown's "extra information", in order: every spec the type carries,
+    // required first (CPU/RAM/Storage) then optional (GPU, battery) --
+    // B2B_SPEC_FIELDS is already in that order -- then the free-form internal
+    // note. Required specs moved off the row into here to keep it narrow; they
+    // keep their required marker, the miss highlight and the one-tap ∅. Serials
+    // are NOT here -- they get their own button on the row.
+    const specs = _b2bSpecsFor(it);
     return `
         <div class="b2b-rowpanel">
-            ${optSpecs.map(f => `
+            ${specs.map(f => {
+                const miss = f.req && !String(it[f.key] ?? '').trim();
+                return `
             <div class="b2b-rp-f b2b-rp-gpu">
-                <label>${escapeHtml(f.label)}</label>
-                <input value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}" ${f.pick ? `list="b2bdl-${f.key}"` : ''}
-                    oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
-            </div>`).join('')}
+                <label>${escapeHtml(f.label)}${f.req ? ' <span class="b2b-tag-req">required</span>' : ''}</label>
+                <div class="b2b-rp-specrow">
+                    <input ${f.req ? `data-req-spec="${f.key}"` : ''} class="${miss ? 'b2b-spec-miss' : ''}" value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}" ${f.pick ? `list="b2bdl-${f.key}"` : ''}
+                        oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
+                    ${f.req ? `<button class="b2b-mini" tabindex="-1" title="No ${escapeHtml(f.label)} — fills NO ${escapeHtml(f.label.toUpperCase())}" onclick="b2bItemSpecNone('${it.id}','${f.key}','${escapeHtml(f.label)}')">∅</button>` : ''}
+                </div>
+            </div>`;
+            }).join('')}
             <div class="b2b-rp-f">
                 <label>Internal notes <span class="b2b-tag-int">never leaves the building</span></label>
                 <textarea rows="1" placeholder="Anything the team should know — never leaves the building"
@@ -19913,10 +19925,10 @@ function _b2bItemSheet() {
         </div>`;
     }
 
-    // Only the three required specs (CPU / RAM / Storage) are inline columns, so
-    // a keyboard pricer tabs straight across them. The optional ones (GPU and
-    // battery health) live behind the ⋯ panel with serials and notes.
-    const sheetSpecs = B2B_SPEC_FIELDS.filter(f => f.req);
+    // No specs are inline any more -- CPU/RAM/Storage (required) and GPU/battery
+    // (optional) all live in the ⋯ dropdown, to keep the row narrow. Empty here so
+    // the header and rows render no spec columns; the grid template dropped them.
+    const sheetSpecs = [];
 
     const head = `
         <div class="b2b-prow b2b-phead">

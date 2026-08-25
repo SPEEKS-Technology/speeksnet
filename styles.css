@@ -12434,6 +12434,9 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 }
 .b2b-rp-f { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 240px; }
 .b2b-rp-gpu { flex: 0 1 150px; }
+.b2b-rp-specrow { display: flex; gap: 5px; align-items: center; }
+.b2b-rp-specrow input { flex: 1; min-width: 0; }
+.b2b-rp-specrow .b2b-mini { flex: 0 0 auto; padding: 0 8px; }
 .b2b-rp-f > label {
     font-size: 9px; font-weight: 800; letter-spacing: .05em;
     text-transform: uppercase; color: var(--b2b-faint);
@@ -13057,7 +13060,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
        The sheet no longer pretends it fits a laptop screen. It is a spreadsheet;
        it scrolls sideways, which is what was asked for, and every column is cut
        to its real content rather than shaved to avoid the scrollbar. */
-    --b2b-pcols: 56px 100px minmax(56px, 0.85fr) minmax(74px, 1fr) 90px 70px 90px 88px 58px 76px 76px 58px 72px 64px 122px 36px minmax(150px, 1.15fr) 96px 184px;
+    --b2b-pcols: 56px 100px minmax(56px, 0.85fr) minmax(74px, 1fr) 88px 58px 76px 76px 58px 72px 64px 122px 36px minmax(150px, 1.15fr) 96px 184px;
     /* The sheet owns its horizontal scroll so it never spills out of the modal
        on a narrow screen (the body clips -- see .manage-content). flex + min-
        height keep it from collapsing to a sliver as a column-flex item once
@@ -13071,7 +13074,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    the sum of the --b2b-pcols tracks above (minmax mins); update it if the
    template changes. Scoped away from the listing grid, which is narrower. */
 .b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-pline,
-.b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-prow { min-width: 1616px; }
+.b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-prow { min-width: 1366px; }
 /* True grid: drop the inter-cell gap and draw a hairline down every column
    boundary. The row's own bottom border is the horizontal line, so together they
    read as a spreadsheet rather than a list of chips. */
