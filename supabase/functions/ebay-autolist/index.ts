@@ -98,8 +98,32 @@ Deno.serve(async (req: Request) => {
 
   const st = (await (await sb(
     `ebay_stores?store_code=eq.${encodeURIComponent(store)}`
-    + `&select=auto_list_enabled,auto_list_per_run`)).json())[0];
+    + `&select=auto_list_enabled,auto_list_per_run,channel_mode`)).json())[0];
   if (!st) return json({ store, error: "no ebay_stores row" }, 404);
+
+  // STANDBY, and this gate is NOT merely an optimisation. ebay-sync would refuse
+  // every item anyway, but the loop below calls stampAttempt on a refusal, which
+  // writes `status: 'failed'` and burns a backoff slot. Two things follow:
+  //
+  //  - Eligibility is filtered against ebay_live, not against our own status, so
+  //    a listing of ours that is genuinely published but missing from the last
+  //    sweep can reach the batch — and stamping it 'failed' DEMOTES it. That
+  //    matters beyond cosmetics: ebay-orders only claims sales for SKUs at
+  //    published/ended, so demoting a live listing is how we would stop
+  //    importing its real eBay sale.
+  //  - Every run would refill last_error with standby text on up to 8 items per
+  //    store, burying the real refusals a store needs to act on.
+  //
+  // Dry runs still report, so "what would this store list if we took the channel
+  // back" stays answerable while parked.
+  if (String(st.channel_mode || "active") === "standby" && !dry) {
+    return json({
+      store, enabled: !!st.auto_list_enabled, standby: true, listed: 0,
+      note: `${store} is in standby: Marketplace Connect owns this store's eBay listings, `
+        + `so nothing is auto-listed. &dry=1 still shows what would be listed.`,
+    });
+  }
+
   if (!st.auto_list_enabled && !dry) {
     // Not an error. The cron runs for every store and most of them are off.
     return json({ store, enabled: false, listed: 0, note: "auto-listing is off for this store" });

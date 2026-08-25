@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260818w">
+  <link rel="stylesheet" href="styles.css?v=20260824r">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260818w" defer></script>
+  <script src="speeks.js?v=20260824r" defer></script>
 </head>
 
 <body class="preload">
@@ -39,10 +39,10 @@
   </div>
   
   <nav class="nav-bar">
-    <a href="index.html" data-m="Home" class="nav-link active"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></i><span>QuickPortal</span></a>
+    <a href="index.html" data-m="Quick Portal" class="nav-link active"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></i><span>QuickPortal</span></a>
     <a data-mobile="hide" href="operations.html" data-m="Ops" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></i><span>Operations</span></a>
     <a data-mobile="hide" href="workspace.html" data-m="Work" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></i><span>Workspace</span></a>
-    <a href="docs.html" data-m="Docs" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></i><span>Processes & Policies</span></a>
+    <a href="docs.html" data-m="Processes" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></i><span>Processes & Policies</span></a>
     <a href="stats.html" data-m="Stats" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg></i><span>Stats & Awards</span></a>
   </nav>
 
@@ -79,12 +79,12 @@
       <div class="action-btn" onclick="toggleCalendar()" data-mobile="hide" data-tip="Strategic Calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
       <div class="action-btn" id="notifBellBtn" onclick="toggleNotifs()" data-tip="Announcements"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><div class="notif-dot" id="notifBadge"></div>
       </div>
-      <div class="action-btn" id="notifySettingsBtn" data-feature="nav-settings" onclick="openSettings()" data-tip="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+      <div class="action-btn" id="notifySettingsBtn" data-feature="nav-settings" data-mobile="hide" onclick="openSettings()" data-tip="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
     </div>
     <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v3.4.0</span>
+            <span class="version-tag">v3.5.0</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -175,7 +175,11 @@
             <div id="annBodyInput" class="editor-body" contenteditable="true" placeholder="Start typing your announcement here..."></div>
         </div>
 
-        <div>
+        <!-- Desktop only. Picking a file, naming it and watching a 10 MB upload is a
+             desk job, and the dropzone plus its browse button was a third of the
+             composer on a phone (user's call, 20 Aug). The input stays in the DOM, so
+             publishAnnouncement() reads it and simply finds nothing attached. -->
+        <div data-mobile="hide">
             <label class="form-label-caps">Attach Document <span style="font-weight:400;text-transform:none;color:#888;">(optional — Word, PDF, Excel · max 10 MB)</span></label>
             <div class="ann-doc-dropzone" id="annDocDropzone">
                 <input type="file" id="annDocInput" accept=".doc,.docx,.pdf,.xls,.xlsx" style="display:none;" onchange="onAnnDocSelected(this)">
@@ -493,7 +497,7 @@
         <div class="align-center gap-15">
             <div class="notif-tabs">
                 <button id="qm-tab-common" class="tab-btn active" onclick="switchQMTab('common')">Common</button>
-                <button id="qm-tab-nodeals" class="tab-btn" onclick="switchQMTab('nodeals')">No Deals</button>
+                <button id="qm-tab-nodeals" class="tab-btn" data-mobile="hide" onclick="switchQMTab('nodeals')">No Deals</button>
                 <button id="qm-tab-reviews" class="tab-btn" onclick="switchQMTab('reviews')">Reviews</button>
                 <button id="qm-tab-networking" class="tab-btn dynamic-module-block role-district-manager role-manager role-owner-manager" onclick="switchQMTab('networking')">Networking</button>
             </div>
@@ -518,7 +522,8 @@
             <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="hub-filter">
-            <label>Show</label>
+            <!-- The "Show" label is gone: the control says "All updates" / "Unread"
+                 / "Comments", which is self-evidently what it is showing. -->
             <div class="hub-select-wrap">
                 <select id="hubFilter" onchange="setHubFilter(this.value)">
                     <option value="all">All updates</option>
@@ -532,7 +537,7 @@
             </div>
             <span class="hub-count" id="hubCount"></span>
             <!-- Entry point for the Documents view. openDocsModal() and #annDocsModal
-                 have existed since the feed was built — including a "← Back" that
+                 have existed since the feed was built — including a Back control that
                  returns here — but nothing ever called it, so every file ever attached
                  to an announcement was unreachable once the post scrolled away. -->
             <button type="button" class="hub-docs-btn" onclick="openDocsModal()">
@@ -547,7 +552,7 @@
 <div class="modal-menu notif-menu" id="annDocsModal">
     <div class="modal-header">
         <div class="align-center gap-15">
-            <button class="ann-docs-back-btn" onclick="closeAllModals(); toggleNotifs();">← Back</button>
+            <button class="ann-docs-back-btn" onclick="closeAllModals(); toggleNotifs();" title="Back to the feed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>Back</button>
             <h3>Documents</h3>
         </div>
         <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
@@ -756,11 +761,11 @@
           <span class="hotbar-label">CEO</span>
           <div class="hotbar-links">
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-sales-summary">📊 Sales Summary</a> 
-            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-store-passwords">🔑 Store Passwords</a>
+            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-store-passwords">🔑 Store Passwords</a>
             <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-tom-folder">📁 MOCD Folder</a>
-            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-paymore-google-drive">☁️ PayMore Google Drive</a> 
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-tom-folder">📁 MOCD Folder</a>
+            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-paymore-google-drive">☁️ PayMore Google Drive</a> 
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ceo-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
         </div>
         </div>
       </div>
@@ -769,10 +774,10 @@
         <div class="hotbar-container">
           <span class="hotbar-label">DM</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-store-passwords">🔑 Store Passwords</a>
+            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-store-passwords">🔑 Store Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-sales-summary">📊 Sales Summary</a>
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>
-            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-paymore-google-drive">☁️ PayMore Google Drive</a> 
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>
+            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-dm-paymore-google-drive">☁️ PayMore Google Drive</a> 
           </div>
         </div>
       </div>
@@ -781,9 +786,9 @@
         <div class="hotbar-container">
           <span class="hotbar-label">MOCD</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-tom-folder">📁 MOCD Folder</a>
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-tom-tom-folder">📁 MOCD Folder</a>
             <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-tom-b2b-records">🏢 B2B Records</a>   
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-tom-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
         </div>
         </div>
       </div>
@@ -820,7 +825,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">LEE</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1BWWMPddxjoTTZL9ZRfgiH6-EiE5vaOczi-x_41Skaxk/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1BWWMPddxjoTTZL9ZRfgiH6-EiE5vaOczi-x_41Skaxk/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-passwords">🔑 Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/130-aH4s8pNeggrqVSXSJ0R0JDnWkskXUfhNPxSAlPRg/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-marketplace">🛒 Marketplace</a>
             <a href="https://docs.google.com/spreadsheets/d/1qExWuMZKBD3DCm_i9m5kNnN4WhouHeJuA3gYWXLihrA/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-employee-purchases">🛍️ Employee Purchases</a>
             <a href="https://docs.google.com/spreadsheets/d/1D9epYOeJ1OZADUniM4MovvUqaiPfoyKAnedCcbEeFbM/edit?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-lee-pc-inventory">💻 PC Inventory</a>
@@ -834,7 +839,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">OVL</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1Ze3z9iyDZZaXsOEjOekEEsrO7OqDpVeH6Bhk4t67K2I/edit" target="_blank" class="hotbar-btn" data-feature="hb-ovl-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1Ze3z9iyDZZaXsOEjOekEEsrO7OqDpVeH6Bhk4t67K2I/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-passwords">🔑 Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1r2UfB926QvaSDuO7_mqOE8z4u6IWjgbIqg_N6rfFV9c/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-marketplace">🛒 Marketplace</a>
             <a href="https://docs.google.com/spreadsheets/d/1DhNRld28CSUKG-4B-dHU4o8gyREKtqLo2J2rI2IdT8M/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-employee-purchases">🛍️ Employee Purchases</a>
             <a href="https://docs.google.com/spreadsheets/d/1RKMryoJ7BZgB5DjSUaTjCSvJQW8_OAkmnwXfBznlSX0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-ovl-pc-inventory">💻 PC Inventory</a>
@@ -848,7 +853,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">WSP</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/14AYsHQ0R1IEXqgKqrGEuyURHGi3fFKrAglgu0dVFJPE/edit" target="_blank" class="hotbar-btn" data-feature="hb-wsp-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/14AYsHQ0R1IEXqgKqrGEuyURHGi3fFKrAglgu0dVFJPE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-passwords">🔑 Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1V0TQ1cJXqUzt0mRnrjvPt_TLzlE8vE7MpxxIMQ9X2yE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-marketplace">🛒 Marketplace</a>
             <a href="https://docs.google.com/spreadsheets/d/1tp5E1yQhx0j776N-1WMhTzXA_ltvPOPiltsYo65fyc0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-employee-purchases">🛍️ Employee Purchases</a>
             <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-wsp-b2b-records">🏢 B2B Records</a>  
@@ -861,7 +866,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">MPL</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/18VeWgGjoIfKRlJUtj0PTU1-uJJavKaPu3W2o_A4vyFs/edit" target="_blank" class="hotbar-btn" data-feature="hb-mpl-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/18VeWgGjoIfKRlJUtj0PTU1-uJJavKaPu3W2o_A4vyFs/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-passwords">🔑 Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1xVJ_JJD-wZUbzFfer4fF50CH6RkZ-sqzxe4bYRGqDtE/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-marketplace">🛒 Marketplace</a>
             <a href="https://docs.google.com/spreadsheets/d/10DiGbDO0tyHitLpltOiTix2TowoeMNzsp0a3MjOtTSY/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-employee-purchases">🛍️ Employee Purchases</a>
             <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-mpl-b2b-records">🏢 B2B Records</a>  
@@ -874,7 +879,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">BAL</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1SuXAQc66OzKOfXkPcp7pCCsccWFB4RbHG2N6YGt3wf0/edit" target="_blank" class="hotbar-btn" data-feature="hb-bal-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1SuXAQc66OzKOfXkPcp7pCCsccWFB4RbHG2N6YGt3wf0/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-passwords">🔑 Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/192c0M5Mxe9oy5PR6JQelD_DPh4ebvJpCnK26kYGpnbk/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-marketplace">🛒 Marketplace</a>
             <a href="https://docs.google.com/spreadsheets/d/1RHnw3rK9kvNvmQznMFr6qkg82j0GpWEwUhDOIPDGfts/edit" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-employee-purchases">🛍️ Employee Purchases</a>
             <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-mobile="hide" data-feature="hb-bal-b2b-records">🏢 B2B Records</a>  
@@ -904,7 +909,7 @@
          pays for. -->
     <!-- id, not just the class: the district board below is a .cc-widget too now,
          so every lookup in the tab machinery goes through these two ids. -->
-    <div class="card employee-widget-card ew-airy cc-widget dynamic-module-block role-manager role-owner-manager role-employee" id="ccWidget" data-mobile="hide" data-feature="widget-scorecard-alerts">
+    <div class="card employee-widget-card ew-airy cc-widget dynamic-module-block role-manager role-owner-manager role-employee" id="ccWidget" data-feature="widget-scorecard-alerts">
         <div class="ew-head">
             <div class="ew-titles">
                 <span class="ew-eyebrow"><span id="cc-store-eyebrow">—</span> · This Month</span>
@@ -1083,9 +1088,9 @@
       <div class="cc-tabbar">
           <div class="ew-seg cc-seg">
               <button id="dc-tab-live" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('live')" data-feature="widget-district-live">Live Dashboard</button>
-              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('stores')">Store Breakdown</button>
-              <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
-              <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('scorecard')">Scorecard</button>
+              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" type="button" onclick="switchDistrictTab('stores')">Store Breakdown</button>
+              <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
+              <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" type="button" onclick="switchDistrictTab('scorecard')">Scorecard</button>
           </div>
           <div class="cc-tabbar-right">
               <button id="dc-collapse" class="cc-collapse" type="button" onclick="collapseDistrict()" style="display:none;">&#9650; Summary</button>
@@ -1104,9 +1109,9 @@
           <div class="cc-sum" id="dc-sum-refunds"><div class="cc-sum-k">Refunds &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-goal"><div class="cc-sum-k">Company Tracking to Goal <span class="cc-sum-thru">Through Yesterday</span></div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-reviews" hidden><div class="cc-sum-k">Google Reviews &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-score"><div class="cc-sum-k">Scorecard &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-audit"><div class="cc-sum-k">PayMore Audit &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-ebay" data-mobile="hide"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-score" data-mobile="hide"><div class="cc-sum-k">Scorecard &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-audit" data-mobile="hide"><div class="cc-sum-k">PayMore Audit &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
       </div>
 
       <div class="cc-body">
@@ -1132,11 +1137,11 @@
               </div>
           </div>
 
-          <div class="cc-panel" id="dc-panel-ebay">
+          <div class="cc-panel" id="dc-panel-ebay" data-mobile="hide">
               <div id="dc-ebay-body"><div class="status-message">Syncing the district&hellip;</div></div>
           </div>
 
-          <div class="cc-panel" id="dc-panel-scorecard">
+          <div class="cc-panel" id="dc-panel-scorecard" data-mobile="hide">
               <div id="dc-score-body"><div class="status-message">Syncing the district&hellip;</div></div>
           </div>
 
@@ -1145,7 +1150,7 @@
                now (#dmGoalsModal, #dmListingModal, #dmCleaningModal).
                Sits second, right after Live: it is the tab a DM opens most, and the
                one the eBay and Scorecard rows drill into. -->
-          <div class="cc-panel" id="dc-panel-stores">
+          <div class="cc-panel" id="dc-panel-stores" data-mobile="hide">
               <div id="district-master-body">
                   <div class="dcc-empty">Syncing the district&hellip;</div>
               </div>
@@ -1478,7 +1483,7 @@
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
             <h3 style="margin: 0;">Manager Checklist</h3>
-            <button class="modal-close-btn" onclick="toggleChecklistPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            <button onclick="toggleChecklistPanel(event)" class="modal-close-btn cl-close" style="background: #f1f5f9; color: #64748b;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         
         <div class="notif-tabs">
@@ -2039,7 +2044,7 @@
       </div>
       <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
-    <div style="padding: 14px 18px 14px;">
+    <div class="fa-tabs-wrap">
         <div class="notif-tabs fa-tabs">
             <button id="fa-tab-tools" class="tab-btn active" onclick="switchFaTab('tools')">SPEEKS Tools</button>
             <button id="fa-tab-hotbar" class="tab-btn" onclick="switchFaTab('hotbar')">Hotbar Links</button>
@@ -2075,7 +2080,7 @@
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-mocd role-owner-manager">
       <div class="tools-group-label">Content</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-mocd role-owner-manager" data-mobile="hide" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></span>Announcements</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-mocd role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></span>Announcements</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-patch-notes" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></span>Patch Notes</a>
     </div>
 
@@ -2085,13 +2090,13 @@
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manager-checklist" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></span>Manager Checklist</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-variance-report" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></span>Submit Variance Report</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-mobile="hide" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></span>Send Store Comment</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-store-comment-drafts" onclick="_closeToolsPanel(); openDailyBriefReview();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>Daily Store Messages</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-store-comment-drafts" onclick="_closeToolsPanel(); openDailyBriefReview();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>Daily Store Messages</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
       <div class="tools-group-label">Orders</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-box-order" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></span>Box Order</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-mobile="hide" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></span>Recycle Inventory</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></span>Recycle Inventory</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-manager role-assistant-manager" data-mobile="hide" data-feature="tool-preferred-request" onclick="_closeToolsPanel(); togglePreferredPurchases();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
       <a class="tools-item dynamic-module-flex role-owner-manager" data-mobile="hide" data-feature="tool-preferred-approve" onclick="_closeToolsPanel(); openPreferredOwner();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/><polyline points="9 15 11 17 15 13"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
     </div>

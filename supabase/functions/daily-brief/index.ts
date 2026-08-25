@@ -505,29 +505,23 @@ function evaluate(f: Facts, hist: Facts[], ctx: {
       detail: "This is the store as a WHOLE having a big day, not one person. Praise the store." });
   }
 
-  // --- Google reviews. ONLY from MTD movement (his rule): a jump day to day is
-  // the signal, and a flat MTD across consecutive days is the nudge. The daily
-  // count is deliberately unused — it lags and double-counts.
-  if (f.fiveStarMtd != null) {
-    const prev = hist.find((h) => h.fiveStarMtd != null);
-    if (prev?.fiveStarMtd != null) {
-      const jump = f.fiveStarMtd - prev.fiveStarMtd;
-      if (jump >= 3) {
-        push({ key: "reviews_jump", dir: "praise", points: 2,
-          fact: `${jump} new 5-star reviews, ${f.fiveStarMtd} month to date` });
-      } else if (jump > 0) {
-        push({ key: "reviews_up", dir: "praise", points: 1,
-          fact: `${jump} new 5-star review${jump === 1 ? "" : "s"}, ${f.fiveStarMtd} month to date` });
-      } else {
-        const flat = [f, ...hist].filter((h) => h.fiveStarMtd != null).slice(0, 3);
-        const stuck = flat.length >= 3 && flat.every((h) => h.fiveStarMtd === f.fiveStarMtd);
-        if (stuck) {
-          push({ key: "reviews_flat", dir: "correct", points: 0,
-            fact: `5-star reviews stuck on ${f.fiveStarMtd} for ${flat.length} days` });
-        }
-      }
-    }
-  }
+  // --- Google reviews: DELIBERATELY NOT A SIGNAL (his call, 2026-08-21).
+  //
+  // The only MTD review figure we have comes from the nightly Day End Report, and
+  // the POS behind that report LAGS the truth. Measured: LEE stood at 29 reviews
+  // on the month while the report still said 26. Three days of that lag looks
+  // exactly like a store that has stopped earning reviews, which is how a nudge
+  // gets sent to a store that is actually doing fine — and praise for "3 new
+  // reviews" can be last week's, arriving late.
+  //
+  // A wrong number in a message to a store costs more than a missing one, so
+  // reviews are out of the messaging entirely. `fiveStarMtd` is still carried in
+  // the facts and still shown on the verification strip — the DM can see it and
+  // add review talk by hand when he knows the real figure. This is a data-quality
+  // decision, not a design one: if we ever read review counts from Google itself
+  // rather than through the POS, the signal can come straight back.
+  //
+  // Nothing else here reads fiveStarMtd, so removing the block is the whole change.
 
   const score = sig.filter((s) => s.dir === "praise").reduce((a, s) => a + s.points, 0);
   return { signals: sig, score };
@@ -562,7 +556,9 @@ function systemPrompt(): string {
     "- Use ONLY the facts given. Never invent a number, a name, a rank, a record or a trend.",
     "- Never state a fraction, ratio or count that is not written in the facts. If the facts say \"14 of 15 customers\" you may write \"14 for 15\"; you may NOT write \"15 for 15\". Do not round a fraction up to a perfect score.",
     "- Naming a person is RARE. None of the 15 real messages in the blind test named anyone; 40% of the drafts did. Most mornings, name nobody.",
+    "- FIRST NAMES ONLY. Never a surname, never a full name, not even the first time somebody is mentioned. Write \"great listing day Caleb\", never \"Caleb Starr\". A surname in a message to your own shop floor is the clearest tell in this whole list that a machine wrote it, because nobody standing in a store talks that way. The facts you are given contain first names only; if you find yourself with a surname you have invented it.",
     "- If you do name someone, say what they led IN WORDS, never with a figure: \"Caleb led the listings\" or \"Olivia had the biggest value day\", never \"Caleb led with 37 of them\". Never call someone the leader without saying which of the two things they led.",
+    "- NEVER mention Google reviews, review counts, star ratings, or a customer naming somebody in a review. The review figures we hold are days behind reality, so anything you write about them may be wrong. He adds review praise by hand when he knows the real number. If a review somehow appears in the facts, ignore it.",
     "- Do not quote dollar amounts unless the fact is a small count or a percentage target.",
     "- Output the message text ONLY. No greeting, no signature, no quote marks, no preamble.",
     "- At most one correction, and only if one is listed. If none is listed, the message is pure praise.",
@@ -574,23 +570,20 @@ function systemPrompt(): string {
   ].join("\n");
 }
 
-// Which of a store's real staff a review actually named. Exact word match on the
-// first name or the full name: a fuzzy match risks naming the WRONG colleague, and
-// naming nobody is strictly better than that.
-function reviewNames(shoutouts: unknown, roster: string[]): string[] {
-  const text = (Array.isArray(shoutouts) ? shoutouts : []).join(" ");
-  if (!text.trim() || !roster.length) return [];
-  const hit: string[] = [];
-  for (const full of roster) {
-    const first = String(full).trim().split(/\s+/)[0];
-    if (!first || first.length < 3) continue;
-    const re = new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-    if (re.test(text)) hit.push(full);
-  }
-  return [...new Set(hit)];
-}
+// FIRST NAME ONLY, everywhere a person reaches a draft.
+//
+// His rule, 2026-08-21: a surname in one of these messages reads as machine-
+// written. It is true — nobody walking a shop floor says "great listing, Caleb
+// Starr". The Day End Report gives full names, so the trim happens HERE, on the
+// way into the prompt, rather than being asked of the model: a rule the data
+// obeys cannot be broken by a draft that ignores it.
+//
+// Two people sharing a first name is fine and needs no special case — a human
+// would say the first name too, and the alternative (naming nobody, or reaching
+// for a surname to disambiguate) is worse than the ambiguity.
+const firstName = (full: unknown) => String(full ?? "").trim().split(/\s+/)[0] || "";
 
-function userPrompt(store: string, refDate: string, signals: Signal[], recent: string[], f: Facts, siblings: string[], names: string[] = []): string {
+function userPrompt(store: string, refDate: string, signals: Signal[], recent: string[], f: Facts, siblings: string[]): string {
   const praise = signals.filter((s) => s.dir === "praise");
   const correct = signals.filter((s) => s.dir === "correct");
   const lines: string[] = [];
@@ -625,32 +618,33 @@ function userPrompt(store: string, refDate: string, signals: Signal[], recent: s
     const byCount = [...team].sort((a: any, b: any) => num(b.processed) - num(a.processed))[0];
     const byValue = [...team].sort((a: any, b: any) => num(b.value) - num(a.value))[0];
     lines.push("");
+    // First names only, trimmed here — see firstName above.
+    const led = firstName(byCount?.name), ledVal = firstName(byValue?.name);
     if (byCount && byValue && byCount.name === byValue.name) {
-      lines.push(`Led the board on BOTH counts: ${byCount.name}, ${byCount.processed} items and ${fmtMoney(num(byCount.value))} of value.`);
+      lines.push(`Led the board on BOTH counts: ${led}, ${byCount.processed} items and ${fmtMoney(num(byCount.value))} of value.`);
       lines.push("Unambiguous, so you may name them for the listing day.");
     } else {
-      lines.push(`Most items listed: ${byCount.name} (${byCount.processed} items).`);
-      lines.push(`Highest value processed: ${byValue.name} (${fmtMoney(num(byValue.value))}).`);
+      lines.push(`Most items listed: ${led} (${byCount.processed} items).`);
+      lines.push(`Highest value processed: ${ledVal} (${fmtMoney(num(byValue.value))}).`);
       lines.push("These are two DIFFERENT people. Either name one and say which of the two things they led, or name nobody and praise the store. Do not call someone the leader without saying what they led.");
     }
     lines.push("He does not name anyone every time. Only if it fits.");
+    lines.push("These are first names and that is the ONLY form to use. Never a surname, never a full name.");
   }
-  // Reviews: NAMES ONLY, and only names that match a real person on the roster.
+
+  // REVIEW SHOUTOUTS ARE GONE (his call, 2026-08-21). A store no longer gets told
+  // that a customer named one of its people in a review.
   //
-  // The prose is never passed. It is PaytonAI's summary of the review, not the
-  // review, and it is not reliable enough to repeat to a store: LEE's 2026-08-12
-  // report calls the same person "Jurrel" in one line and "Jerrell" in the next
-  // (he is Jurell Guild), wrapped in invented interpretation like "signaling a
-  // highly satisfying overall experience". Ethan's rule, 2026-08-14: never comment
-  // on what a review said. Saying somebody got named in one is fine.
+  // Two reasons, and the second is the real one. The names came from PaytonAI's
+  // summary of the review rather than the review, and it mangles them — LEE's
+  // 2026-08-12 report calls the same man "Jurrel" and "Jerrell" in consecutive
+  // lines (he is Jurell Guild), which is why they used to be matched against the
+  // roster before use. But the review COUNT this all hangs off lags the POS by
+  // days, so a shoutout could be for a review that landed last week, or arrive
+  // days after the person was thanked in person. Praise that is late and
+  // second-hand is worse than none.
   //
-  // Matching against the roster is what makes that safe. A mangled name simply
-  // fails to match and nobody is named, which is the right way to fail.
-  if (names.length) {
-    lines.push("");
-    lines.push(`Named by a customer in a 5-star review yesterday: ${names.join(", ")}.`);
-    lines.push("You may say they got named in a review. You may NOT say anything about what the review said, or what the customer liked: that text is an unreliable summary and is deliberately not shown to you.");
-  }
+  // The roster query that existed only to verify these names went with it.
 
   if (recent.length) {
     lines.push("");
@@ -986,7 +980,7 @@ Deno.serve(async (req) => {
   // window and hangs storeGoal / staffed / listers on every day, because the
   // low-listing pattern check needs each historical day's own goal, not just the
   // ref day's.
-  const [recs, comments, weekDrafts, decided, opened, roster] = await Promise.all([
+  const [recs, comments, weekDrafts, decided, opened] = await Promise.all([
     sb.from("records").select("store,label,value").eq("label", "Daily Buy Record"),
     sb.from("store_comments").select("store,author,message,created_at")
       .order("created_at", { ascending: false }).limit(120),
@@ -1011,21 +1005,10 @@ Deno.serve(async (req) => {
     // instead of a constant nobody remembers to switch on.
     sb.from("daily_buysell").select("store,date").gt("buy", 0)
       .order("date", { ascending: true }).limit(2000),
-    // Who actually works at each store. Used ONLY to check a name a review
-    // mentioned against a real person — see reviewNames. PaytonAI mangles them
-    // ("Jurrel" and "Jerrell" for the same man in one report), and a name we
-    // cannot verify is a name we do not use.
-    sb.from("users").select("name, store"),
+    // (The `users` roster read that used to sit here existed ONLY to verify names
+    // a review mentioned. Review shoutouts are gone — see userPrompt — so the
+    // query went with them rather than being left to look load-bearing.)
   ]);
-
-  const rosterFor = new Map<string, string[]>();
-  for (const u of (roster.data ?? []) as any[]) {
-    const s = String(u.store ?? "").toUpperCase();
-    if (!s || !u.name) continue;
-    const arr = rosterFor.get(s) ?? [];
-    arr.push(String(u.name));
-    rosterFor.set(s, arr);
-  }
 
   const firstDay = new Map<string, string>();
   for (const r of opened.data ?? []) {
@@ -1161,8 +1144,7 @@ Deno.serve(async (req) => {
     ];
 
     try {
-      const names = reviewNames(c.facts.shoutouts, rosterFor.get(c.store) ?? []);
-      const ask = userPrompt(c.store, ref, c.signals, recent, c.facts, written_so_far, names);
+      const ask = userPrompt(c.store, ref, c.signals, recent, c.facts, written_so_far);
       const turns: any[] = [{ role: "user", content: ask }];
 
       // Draft, check mechanically, and give it ONE chance to fix what it broke.

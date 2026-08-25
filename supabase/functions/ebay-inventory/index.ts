@@ -875,6 +875,35 @@ Deno.serve(async (req: Request) => {
   const store = STORE_BY_SHOP[shop];
   if (!store) return json({ error: `unmapped shop ${shop}` }, 202);
 
+  // ------------------------------------------------------------------------
+  // STANDBY — the AUTOMATIC paths only. Placed here, after the store resolves
+  // and before the topic dispatch, so it covers both webhooks in one gate:
+  // products/update (reprice + content re-push) and inventory_levels/update
+  // (reconcile: withdraw at 0, REPUBLISH when stock returns).
+  //
+  // Republish is the dangerous one. Once Marketplace Connect has adopted a
+  // listing, MC manages its stock; if our reconcile republishes the same unit
+  // the moment Shopify restocks it, there are two live listings against one
+  // physical item and whichever sells second is an oversell.
+  //
+  // Deliberately NOT inside reconcile()/reprice(), which is where a gate would
+  // normally go: ?resync=1 and ?end=1 call those too, and they are hand-repair
+  // routes — exactly the break-glass tools that must keep working while the
+  // machinery is parked. Automatic off, manual on, is the whole distinction.
+  //
+  // ⚠️ MUST BE 2xx. A non-2xx tells Shopify the webhook failed and it retries
+  // the SAME body for 48 hours; a store in standby for a week would accumulate
+  // a retry storm behind it.
+  const modeRow = await ebayStore(store);
+  if (String(modeRow?.channel_mode || "active") === "standby") {
+    return json({
+      skipped: "standby", store,
+      note: `${store} is in standby: Marketplace Connect owns this store's eBay `
+        + `listings, so stock, price and content are pushed by MC, not by us. `
+        + `?resync=1 and ?end=1 still work by hand.`,
+    }, 202);
+  }
+
   const payload = JSON.parse(raw);
 
   // --- product edits (products/update) --------------------------------------

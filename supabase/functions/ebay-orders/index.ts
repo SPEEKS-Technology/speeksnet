@@ -603,6 +603,41 @@ Deno.serve(async (req: Request) => {
   const row = await ebayStore(store);
   if (!row) return json({ error: `no ebay_stores row for ${store}` }, 404);
 
+  // ------------------------------------------------------------------------
+  // STANDBY. Marketplace Connect's new version adopts our live eBay listings,
+  // and once it holds one it imports that listing's sales itself. Our ownership
+  // guard below would ALSO claim them — it keys on ebay_listings.status, which
+  // still says published — so every sale would become two Shopify orders: double
+  // revenue, stock decremented twice, the variant driven negative. That is the
+  // 2026-08-20 incident ($13,820.44 phantom, 77 orders) as a steady state rather
+  // than a one-off, and at all five stores instead of two.
+  //
+  // 200, not an error: the cron is behaving exactly as intended and a 4xx would
+  // read as a broken job in the cron watchdog.
+  //
+  // ⚠️ WRITES NO ebay_orders ROWS ON PURPOSE, the same way the ownership guard
+  // stays silent about MC's orders. A row here would be a non-DONE status, which
+  // ebay-alert counts as a failed import — hundreds of them — and would make the
+  // real failures unfindable. Silence also keeps every sale importable if the
+  // glass gets broken and the store goes back to active.
+  //
+  // ⚠️ THE RISK STANDBY INTRODUCES, stated plainly: if MC did NOT actually adopt
+  // one of our listings, that item's sale now reaches Shopify through nobody.
+  // Standby is only safe once adoption is confirmed for the store — which is
+  // what ebay_handover exists to let you check.
+  if (String(row.channel_mode || "active") === "standby" && url.searchParams.get("all") !== "1") {
+    return json({
+      ok: true, store, standby: true, imported: 0,
+      note: `${store} is in standby: Marketplace Connect owns this store's eBay listings `
+        + `and imports their sales itself. Importing here as well would create a second `
+        + `Shopify order for every eBay sale.`,
+      breakGlass: `POST ebay-channel {action:"mode", store:"${store}", mode:"active"} `
+        + `to take the channel back, or &all=1 for a one-off import.`,
+      since: row.channel_mode_at || null,
+      by: row.channel_mode_by || null,
+    });
+  }
+
   const days = Math.min(Number(url.searchParams.get("days") || 7), 30);
   const since = new Date(Date.now() - days * 86400000).toISOString();
   const api = ebayClient(HOSTS[row.environment as "production" | "sandbox"],
