@@ -19034,8 +19034,10 @@ function _b2bPaintTotals() {
     // netted into this figure.
     set('b2bTotOffer', _b2bMoney(t.offer, 2));
     set('b2bTotValue', _b2bMoney(t.value, 2));
-    // Gross profit = resale value − our offer.
-    set('b2bTotGross', _b2bMoney(t.value - t.offer, 2));
+    // Gross profit = resale value − our offer, with its margin % alongside.
+    const gross = t.value - t.offer;
+    const gpct = t.value > 0 ? Math.round((gross / t.value) * 100) : 0;
+    set('b2bTotGross', `${_b2bMoney(gross, 2)} (${gpct}%)`);
     // Net profit = resale value − our offer − shipping − selling fees + data
     // wipe. Since outlay = (offer − wipe) + shipping + fee, this is value − outlay.
     const net = t.value - t.outlay;
