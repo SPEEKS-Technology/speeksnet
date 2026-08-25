@@ -123,7 +123,9 @@ const ACCEPT_ROLES = ["ceo", "mocd", "tom", "district manager"];
 // a reason, and it would stop silently. Must match B2B_REASON_CONDITIONS in
 // speeks.js -- if these two disagree, the gate passes on one side and fails on
 // the other.
-const REASON_CONDITIONS = ["Fair", "Broken", "For Parts"];
+// Fair no longer requires a reason -- only Broken (and its legacy 'For Parts'
+// spelling). Must match B2B_REASON_CONDITIONS in speeks.js.
+const REASON_CONDITIONS = ["Broken", "For Parts"];
 const DECLINE_CATEGORIES = ["client_declined", "client_unresponsive", "withdrawn", "not_viable", "other"];
 const TERMINAL = ["completed", "declined"];
 
@@ -344,7 +346,7 @@ function barcode8(v: unknown): string {
 
 async function itemListings(supabase: any, itemId: string) {
   const { data } = await supabase.from("b2b_item_listings")
-    .select("id,item_id,shopify_barcode,listed_by,listed_at").eq("item_id", itemId)
+    .select("id,item_id,shopify_barcode,listed_by,listed_at,units").eq("item_id", itemId)
     .order("listed_at", { ascending: true }).limit(10000);
   return data || [];
 }
@@ -1351,20 +1353,29 @@ Deno.serve(async (req: Request) => {
             return jsonResponse({ success: false, error: "A recycle line has nothing to list — recycle it out instead." }, 409);
           }
           const code = barcode8(body.shopify_barcode);
-          if (item.listed_qty + item.recycled_qty >= qty) {
+          const room = qty - item.listed_qty - item.recycled_qty;
+          if (room <= 0) {
             return jsonResponse({ success: false, error: `${item.sku || "This line"} is already fully accounted for (${item.listed_qty}/${qty}).` }, 409);
           }
+          // One barcode usually covers the whole line, so `units` defaults to
+          // every remaining unit; a smaller number splits the line across
+          // barcodes. Never more than remain.
+          let units = Math.min(count(body.units, 1, 100000, "Units", room), room);
           // We charged the client for a certified wipe on this line, so a unit
-          // cannot go up for sale until one has actually been done. You may list
-          // exactly as many as have been certified, no more.
-          if (item.wipe_required && item.listed_qty >= item.wiped_qty) {
-            return jsonResponse({
-              success: false,
-              error: `${item.sku || "This line"} needs a certified data wipe first — ${item.wiped_qty} of ${qty} wiped so far.`,
-            }, 409);
+          // cannot go up for sale until one has actually been done -- list no
+          // more than have been certified.
+          if (item.wipe_required) {
+            const wipeRoom = item.wiped_qty - item.listed_qty;
+            if (wipeRoom <= 0) {
+              return jsonResponse({
+                success: false,
+                error: `${item.sku || "This line"} needs a certified data wipe first — ${item.wiped_qty} of ${qty} wiped so far.`,
+              }, 409);
+            }
+            if (units > wipeRoom) units = wipeRoom;
           }
           const { error } = await supabase.from("b2b_item_listings").insert({
-            item_id: item.id, deal_id: item.deal_id, shopify_barcode: code,
+            item_id: item.id, deal_id: item.deal_id, shopify_barcode: code, units,
             listed_by: str(body.user, 80, "User"),
           });
           if (error) {
@@ -2083,7 +2094,7 @@ Deno.serve(async (req: Request) => {
           .order("sort_order", { ascending: true })
           .order("line_no", { ascending: true }).limit(5000),
         supabase.from("b2b_item_listings")
-          .select("id,item_id,shopify_barcode,listed_by,listed_at").eq("deal_id", dealId)
+          .select("id,item_id,shopify_barcode,listed_by,listed_at,units").eq("deal_id", dealId)
           .order("listed_at", { ascending: true }).limit(20000),
       ]);
       if (error) return jsonResponse({ success: false, error: error.message }, 500);
