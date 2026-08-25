@@ -18312,10 +18312,18 @@ const B2B_ICO_BARCODE = '<path d="M3 5v14"/><path d="M7 5v14"/><path d="M11 5v14
 function _b2bLabelBtn(it, cls) {
     if (!it.sku) return '';
     const n = Number(it.quantity) || 1;
-    return `<button class="b2b-linelabel ${cls || ''}" onclick="event.stopPropagation();b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
-        aria-label="Print labels for ${escapeHtml(it.sku)}"
-        data-tip="${n === 1 ? `Print the label for ${escapeHtml(it.sku)}`
-                            : `Print labels for ${escapeHtml(it.sku)} — it asks how many`}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
+    // The button carries its own state so nothing has to nag or auto-open: amber
+    // while any unit still needs a label, green once they are all printed. No
+    // print is ever forced -- the colour is the whole reminder.
+    const short = _b2bLabelsShort(it);
+    const state = short > 0 ? 'b2b-label-todo' : ((Number(it.label_printed_qty) || 0) > 0 ? 'b2b-label-done' : '');
+    const tip = short > 0
+        ? `${short} of ${n} label${n === 1 ? '' : 's'} not printed yet — click to print`
+        : ((Number(it.label_printed_qty) || 0) > 0
+            ? `Labels printed for ${escapeHtml(it.sku)} — click to reprint`
+            : (n === 1 ? `Print the label for ${escapeHtml(it.sku)}` : `Print labels for ${escapeHtml(it.sku)} — it asks how many`));
+    return `<button class="b2b-linelabel ${state} ${cls || ''}" onclick="event.stopPropagation();b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
+        aria-label="Print labels for ${escapeHtml(it.sku)}" data-tip="${tip}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
 }
 // WHAT THE ITEM EDITOR IS EDITING
 // -------------------------------
@@ -19664,7 +19672,6 @@ function _b2bRowPanel(it) {
                 <textarea rows="1" placeholder="Anything the team should know — never leaves the building"
                     oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')">${escapeHtml(it.staff_notes || '')}</textarea>
             </div>
-            ${_b2bIsPreval() ? '' : `<div class="b2b-rp-foot">${_b2bLabelBtn(it, 'b2b-mini')}</div>`}
         </div>`;
 }
 
@@ -19928,8 +19935,6 @@ function _b2bItemSheet() {
                     ondragover="b2bDragOver(event,'${it.id}')" ondrop="b2bDrop(event,'${it.id}')"`}>
                     <span class="b2b-mono">${escapeHtml(_b2bIsPreval() ? String(it.line_no) : _b2bLineNo(it))}</span>
                     ${blocked.length ? `<i class="b2b-ss-flag" title="${escapeHtml(blocked.join(', '))}"></i>` : ''}
-                    ${_b2bLabelsShort(it) ? `<i class="b2b-ss-untagged" title="${
-                        _b2bLabelsShort(it)} unit${_b2bLabelsShort(it) === 1 ? '' : 's'} on this line still have no label printed"></i>` : ''}
                 </span>
                 <span class="b2b-pcell" data-k="Type">
                     <select onchange="b2bItemType('${it.id}',this.value)">
@@ -19997,6 +20002,7 @@ function _b2bItemSheet() {
                     ${_b2bIsPreval() ? '' : `<button class="b2b-ss-serial ${_b2bSerials(it).length === need ? '' : 'miss'}"
                         title="Serial numbers — ${_b2bSerials(it).length} of ${need}. Click to edit."
                         onclick="b2bSerialsOpen('${it.id}')"><span class="b2b-ss-serial-n">#${_b2bSerials(it).length}/${need}</span></button>`}
+                    ${_b2bLabelBtn(it)}
                     <button class="b2b-notes-btn b2b-ss-copy" title="Copy this line — everything but the serials"
                         onclick="b2bCopyItem('${it.id}',this)">${_b2bIco(_B2B_ICO_COPY)}</button>
                     <!-- Expands in place with the type's extra specs + the internal
