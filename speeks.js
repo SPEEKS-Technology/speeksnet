@@ -21238,14 +21238,20 @@ function _b2bStageListing(deal) {
 function _b2bScanBar(deal) {
     const it = _b2bPendingUnit ? _b2bLocalItem(_b2bPendingUnit) : null;
     if (it) {
-        const unit = _b2bDone(it) + 1;
+        const q = Number(it.quantity) || 1;
+        // A wipe line can only list as many as are certified wiped.
+        const remaining = it.wipe_required
+            ? Math.max(0, Math.min(q - _b2bDone(it), (Number(it.wiped_qty) || 0) - (Number(it.listed_qty) || 0)))
+            : q - _b2bDone(it);
         return `
         <div class="b2b-scanbar pending">
             <span class="b2b-scan-ico">${_b2bIco(B2B_SCAN_SVG)}</span>
             <div class="b2b-scan-ask">
                 <span class="b2b-scan-ask-t">Now scan the Shopify barcode</span>
-                <span class="b2b-scan-ask-s">${escapeHtml(_b2bItemName(it))} · unit ${unit} of ${Number(it.quantity) || 1}</span>
+                <span class="b2b-scan-ask-s">${escapeHtml(_b2bItemName(it))} · ${remaining} of ${q} left to list</span>
             </div>
+            ${remaining > 1 ? `<label class="b2b-scan-units" title="How many units this one barcode covers. Lower it to split the line across barcodes.">×
+                <input id="b2bScanUnits" type="number" min="1" max="${remaining}" value="${remaining}"></label>` : ''}
             <input id="b2bScanIn" class="form-input-lg b2b-scan-num" autocomplete="off" inputmode="numeric" maxlength="8"
                 placeholder="8-digit barcode"
                 oninput="_b2bScanTyped(this,'${deal.id}')"
@@ -21356,8 +21362,8 @@ function _b2bListRows() {
         const codes = (it.listings || []).length ? `
             <div class="b2b-lcodes">
                 ${it.listings.map(l => `
-                <span class="b2b-lcode" title="Listed by ${escapeHtml(l.listed_by || 'unknown')}">
-                    <span class="b2b-mono">${escapeHtml(l.shopify_barcode)}</span>
+                <span class="b2b-lcode" title="${(Number(l.units) || 1)} unit${(Number(l.units) || 1) === 1 ? '' : 's'} · listed by ${escapeHtml(l.listed_by || 'unknown')}">
+                    <span class="b2b-mono">${escapeHtml(l.shopify_barcode)}</span>${(Number(l.units) || 1) > 1 ? `<span class="b2b-lcode-n">×${Number(l.units)}</span>` : ''}
                     <button class="b2b-lcode-x" title="Remove this barcode"
                         onclick="b2bUnlistUnit('${it.id}','${l.id}')">×</button>
                 </span>`).join('')}
@@ -21483,7 +21489,7 @@ function b2bScan(dealId) {
         if (it.listings?.some(l => l.shopify_barcode === raw)) {
             return _b2bScanFlash(`${raw} is already recorded on this line.`, true, it.id);
         }
-        return _b2bListUnit(it, raw);
+        return _b2bListUnit(it, raw, Number(document.getElementById('b2bScanUnits')?.value) || undefined);
     }
 
     // First scan: which line is this?
@@ -21512,15 +21518,24 @@ function b2bAskShopify(itemId) {
 
 // Apply locally, repaint now, then reconcile with the server. On failure the
 // line snaps back and says why, rather than the click having felt ignored.
-function _b2bListUnit(it, code) {
+function _b2bListUnit(it, code, units) {
     const qty = Number(it.quantity) || 1;
     const before = { listed: Number(it.listed_qty) || 0, listings: (it.listings || []).slice() };
-    if (before.listed + (Number(it.recycled_qty) || 0) >= qty) return;
+    const room = qty - before.listed - (Number(it.recycled_qty) || 0);
+    if (room <= 0) return;
+    // One barcode lists every remaining unit by default; a smaller count splits
+    // the line across barcodes. A wipe line lists no more than are certified.
+    let n = Math.min(Math.max(1, Math.trunc(Number(units) || room)), room);
+    if (it.wipe_required) {
+        const wipeRoom = (Number(it.wiped_qty) || 0) - before.listed;
+        if (wipeRoom <= 0) return;
+        if (n > wipeRoom) n = wipeRoom;
+    }
 
     // A temp id so an undo landing before the server replies still targets the
     // right row; the reconcile below swaps in the real one.
-    it.listings = [...before.listings, { id: `tmp-${code}`, shopify_barcode: code, listed_by: _b2bUser() }];
-    it.listed_qty = before.listed + 1;
+    it.listings = [...before.listings, { id: `tmp-${code}`, shopify_barcode: code, units: n, listed_by: _b2bUser() }];
+    it.listed_qty = before.listed + n;
     _b2bPendingUnit = null;
     _b2bDirty = true;
     _b2bRepaintScanBar();
@@ -21528,7 +21543,7 @@ function _b2bListUnit(it, code) {
     _b2bScanFlash(`${code} → ${it.sku || 'line'} · ${it.listed_qty} of ${qty} listed`, false, it.id);
     const done = _b2bAllSatisfied();
 
-    _b2bEnqueue(it.id, () => _b2bSend({ action: 'list_unit', id: it.id, shopify_barcode: code }))
+    _b2bEnqueue(it.id, () => _b2bSend({ action: 'list_unit', id: it.id, shopify_barcode: code, units: n }))
         .then(out => {
             if (!out) return;
             it.listed_qty = out.listed_qty;
@@ -21555,11 +21570,11 @@ function b2bUnlistUnit(itemId, listingId) {
     const target = listingId ? list.find(l => l.id === listingId) : list[list.length - 1];
     if (!target) return;
     if (listingId && !confirm(`Remove Shopify barcode ${target.shopify_barcode} from this line?\n\n`
-        + 'The unit goes back on the checklist to be listed again.')) return;
+        + `Its ${Number(target.units) || 1} unit${(Number(target.units) || 1) === 1 ? '' : 's'} go back on the checklist to be listed again.`)) return;
 
     const before = { listed: Number(it.listed_qty) || 0, listings: list.slice() };
     it.listings = list.filter(l => l !== target);
-    it.listed_qty = Math.max(0, before.listed - 1);
+    it.listed_qty = Math.max(0, before.listed - (Number(target.units) || 1));
     _b2bDirty = true;
     _b2bRepaintListing();
 
