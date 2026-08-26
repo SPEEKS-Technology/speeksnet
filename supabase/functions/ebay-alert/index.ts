@@ -266,6 +266,16 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     return data || [];
   };
 
+  // WHICH STORES ARE PARKED. Read before anything else because more than one
+  // check below has to know: at a standby store Marketplace Connect owns the
+  // channel and our own jobs are deliberately off, so an absence of activity is
+  // the intended state rather than a fault. Check 4 re-reads this table for its
+  // other columns; five rows twice is cheaper than threading state through.
+  const parked = new Set((await read("ebay_stores.modes", sb.from("ebay_stores")
+    .select("store_code, channel_mode")))
+    .filter((r: any) => String(r.channel_mode || "active") === "standby")
+    .map((r: any) => String(r.store_code)));
+
   // --- 1. listings that failed, errored, or never left pending ---------------
   // Only rows that could BE a problem. Pulling the whole table works today at a
   // few hundred rows and quietly stops working at a thousand.
@@ -332,7 +342,18 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     .or("last_error.not.is.null,status.eq.imported,and(tracking_number.not.is.null,tracking_pushed_at.is.null)"));
   for (const o of orders) {
     const label = o.shopify_order_name || o.ebay_order_id;
-    if (o.last_error) {
+    // A PARKED STORE'S IMPORT FAILURES ARE NOT FAILURES, AND THEY CANNOT CLEAR.
+    // At a standby store Marketplace Connect imports the eBay sale, not us, so our
+    // attempt failing on "Unable to reserve inventory" means only that MC got there
+    // first and took the stock -- the order IS in Shopify, and there is nothing on the
+    // shelf to count. Worse, the poll is off, so nothing will ever retry the row: the
+    // error is frozen at the moment of cutover and re-nags every RENAG_HOURS forever.
+    // Two such rows survived the handover (LEE 07-15079-74562, WSP 24-15063-49743) and
+    // both mailed "go and look for it" about orders that were already fine.
+    // Only the last_error branch is skipped. Tracking captured and never pushed stays
+    // live for parked stores: that one is about an order WE own and a buyer who can see
+    // no tracking, which standby does not make untrue.
+    if (o.last_error && !parked.has(String(o.store_code))) {
       // THE COMMON ONE, AND IT IS NOT A TOOL FAULT. Shopify says
       // "Unable to reserve inventory" when it holds zero of the thing eBay just
       // sold, so the sale cannot be written down. That is the shelf and Shopify
@@ -750,7 +771,7 @@ function build(issues: Issue[], firstSeen: Record<string, string>) {
   <tr><td style="padding:12px 20px;border-top:1px solid ${C.line};background:#f7faf8;color:${C.muted};font-size:11px;line-height:1.7;">
     <b style="color:${C.charcoal};">The tag on each one says who can fix it.</b><br>
     <b>Store Can Fix</b> — the shop floor sorts it out: count something, cancel something,
-    correct a listing. No code needed.<br>
+    correct a listing, press Try Again. No code needed.<br>
     <b>You Can Fix</b> — a setting or a reconnect only you can do, and the mail says where.<br>
     <b>Needs Claude</b> — the tool itself is broken. Nobody on the floor can help; forward it.
   </td></tr>
@@ -798,9 +819,9 @@ Deno.serve(async (req: Request) => {
         title: "This error check is partly blind",
         detail: "We cannot read ebay_orders, so any problem in it goes unreported — meaning a quiet inbox no longer proves everything is fine. Our end, and it is the most important one on this list. The error: permission denied for relation ebay_orders",
         fix: "claude" },
-      { key: "s4", store: "WSP", severity: "critical",
-        title: "One item is for sale twice on eBay — MO02-4518A-E10",
-        detail: "MO02-4518A-E10 has 2 listings at the same time and there is only one of it. Whoever buys second gets cancelled, and eBay counts that against the store. End all but one of those listings on eBay.",
+      { key: "s6", store: "WSP", severity: "critical",
+        title: "eBay hiccuped putting a listing up — MO02-4649A-R2R2",
+        detail: "eBay's own systems errored while MO02-4649A-R2R2 — 2020 Apple MacBook Air 13.3\" M1 was going up, so it is not live. Nothing is wrong with the item, and nothing is wrong with SPEEKS Connect. Open SPEEKS Connect, find this SKU under Listings and press Try Again — it normally goes straight up. If it fails twice more, forward this. eBay's words: inventory_item: 25001: A system error has occurred. Core Inventory Service internal error",
         fix: "store" },
       { key: "s5", store: "OVL", severity: "warning",
         title: "OVL's eBay listings are not being checked",
@@ -851,7 +872,7 @@ Deno.serve(async (req: Request) => {
             // busy system means the checks are blind, which looks identical to
             // "nothing is wrong" in the issue list alone. -1 means that read failed.
             rowsRead: counts,
-            issues: issues.map((i) => ({ severity: i.severity, store: i.store, title: i.title, key: i.key })),
+            issues: issues.map((i) => ({ severity: i.severity, store: i.store, title: i.title, key: i.key, fix: i.fix })),
           });
     }
 

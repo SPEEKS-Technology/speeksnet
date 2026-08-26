@@ -36,12 +36,23 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
 // Full-replacement scope set: inventory (listings), account (business policies
 // and merchant locations), fulfillment (orders and shipping). The bare
-// api_scope is required alongside them for the taxonomy calls.
+// api_scope is required alongside them for the taxonomy calls. sell.finances is
+// the Net Profit fee poller (see [[net-profit-tracking]]).
+//
+// ⚠️ sell.finances CANNOT BE MADE READ-ONLY. eBay ships no .readonly variant of
+// it, and its own description is "...and allow you to initiate refunds".
+// issueRefund is POST /sell/fulfillment/v1/order/{order_id}/issue_refund, which
+// is gated on sell.finances and NOT on sell.fulfillment — so it survives
+// dropping every write scope in this list. Reducing the others to .readonly was
+// considered and rejected 2026-08-25 for exactly that reason: it would have cost
+// SPEEKS Connect upload without removing the refund capability. Refunds are held
+// off by the GET-only guard in the fee poller, never by this list.
 const SCOPES = Deno.env.get("EBAY_SCOPES") || [
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
+  "https://api.ebay.com/oauth/api_scope/sell.finances",
 ].join(" ");
 
 const STATE_TTL_MS = 10 * 60 * 1000;
