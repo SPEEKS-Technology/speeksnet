@@ -63,6 +63,65 @@ const chicagoDay = (iso: string) => DAY_FMT.format(new Date(iso));
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+// --- WHEN A MONTH CLOSES, and what that does to a shipping charge ----------
+// The rule, from the CFO (2026-08-27):
+//   · the month closes at 7pm Central on the 1st, so the stores have that day
+//     to ship what sold on the last day of the month;
+//   · never on a day the stores are shut — they buy ZERO labels on a Sunday
+//     (measured: 0 of 2,403 in July) and they close for Thanksgiving,
+//     Christmas and New Year's Day — so it slips to the first eligible
+//     business day;
+//   · anything applied after that stays in the new month. No back-dating.
+//
+// Of the three holidays only New Year's Day can ever land on a close. The 1st
+// and 2nd of a month are the only candidates and neither Thanksgiving (4th
+// Thursday of November) nor Christmas can fall there, so December always
+// closes on Jan 2 at the earliest and the other two never bite.
+function isStoreHoliday(y: number, m0: number, day: number): boolean {
+  if (m0 === 0 && day === 1) return true;    // New Year's Day
+  if (m0 === 11 && day === 25) return true;  // Christmas
+  if (m0 === 10) {                           // Thanksgiving, 4th Thursday
+    const first = new Date(Date.UTC(y, 10, 1)).getUTCDay();
+    return day === 1 + ((4 - first + 7) % 7) + 21;
+  }
+  return false;
+}
+
+// The last day whose charges still belong to the month that just ended.
+// ym is the month being closed, e.g. "2026-07". Returns YYYY-MM-DD.
+function monthCloseDay(ym: string): string {
+  const y = Number(ym.slice(0, 4));
+  const m0 = Number(ym.slice(5, 7)) - 1;
+  const ny = m0 === 11 ? y + 1 : y;
+  const nm0 = (m0 + 1) % 12;
+  for (let day = 1; day < 15; day++) {
+    if (new Date(Date.UTC(ny, nm0, day)).getUTCDay() === 0) continue;
+    if (isStoreHoliday(ny, nm0, day)) continue;
+    const mm = String(nm0 + 1).padStart(2, "0");
+    const dd = String(day).padStart(2, "0");
+    return ny + "-" + mm + "-" + dd;
+  }
+  throw new Error("no eligible close day found for " + ym);
+}
+
+// Which day does this shipping charge belong to?
+//
+// ⚠️ TWO DIFFERENT RULES, AND THE DIFFERENCE IS WHO CONTROLS THE TIMING.
+// A LABEL is the direct cost of one sale and the store decides when to buy it,
+// so it books to the SALE — otherwise holding shipping until the 1st would
+// push cost into next month and inflate the month the bonus is paid on. A
+// carrier PRICE ADJUSTMENT is a billing correction whose timing the carrier
+// decides, never arrives inside three days, and cannot be gamed, so it books
+// when it was charged.
+//
+// The exception is the close. Once a month is shut nothing may re-open it, so
+// a label that turns up afterwards books to the day it was charged.
+function shippingBookingDay(saleDay: string, chargedOn: string, shape: string): string {
+  if (!chargedOn) return saleDay;
+  if (shape === "charge-adjustment" || shape === "credit-adjustment") return chargedOn;
+  return chargedOn <= monthCloseDay(saleDay.slice(0, 7)) ? saleDay : chargedOn;
+}
+
 // --- eBay Finances API -------------------------------------------------------
 // ⚠️ The Finances API is served from apiz.ebay.com, NOT api.ebay.com. The wrong
 // host returns a 404 that reads exactly like "this store had no transactions".
@@ -352,6 +411,22 @@ Deno.serve(async (req: Request) => {
   const labelLag: Record<string, { n: number; maxLag: number; over7: number; amountOver7: number }> = {};
   let ordersWithTruncatedEvents = 0;
   let labelEvents = 0;
+  // Charges that belong to a day outside this window. Not losses — "before" is
+  // the prior month's own cost and was reported there, "after" is picked up by
+  // the next month's run. Counted so the two months can be tied together.
+  const outOfWindow = { before: 0, before_n: 0, after: 0, after_n: 0 };
+  const rebooked = { n: 0, amount: 0 };
+  // ⚠️ THE SCAN HAS TO REACH BACK PAST THE WINDOW, or "no back-dating" quietly
+  // loses money. A label bought Sep 2 for a Jul 31 sale books to Sep 2 — but
+  // the ORDER is a July order, and a September run querying only September's
+  // orders would never see it. It would fall out of both months and nobody
+  // would be charged for the postage. 40 days covers the longest lag measured
+  // (12 days, MPL #MO03-2363) with room for a slow close.
+  const scanFrom = (() => {
+    const d = new Date(from + "T12:00:00Z");
+    d.setUTCDate(d.getUTCDate() - 40);
+    return d.toISOString().slice(0, 10);
+  })();
   // eBay Order Id -> the Chicago day the order SOLD. This is what makes eBay
   // fees land on the sale date instead of the settlement date: a refund posted
   // on Aug 10 against a Jul 5 order credits its fee back to JUL 5.
@@ -386,7 +461,7 @@ Deno.serve(async (req: Request) => {
            } }
          }
        }`,
-      { q: `created_at:>=${from} AND created_at:<=${to}`, after: cursor });
+      { q: `created_at:>=${scanFrom} AND created_at:<=${to}`, after: cursor });
     if (body.errors?.length) {
       return json({ error: "shopify orders query failed", detail: body.errors, store }, 502);
     }
@@ -453,10 +528,20 @@ Deno.serve(async (req: Request) => {
           if (lag > 7) { lb.over7++; lb.amountOver7 = round2(lb.amountOver7 + v); }
           labelLag[shape] = lb;
         }
+        const bookTo = shippingBookingDay(d, chargedOn, shape);
         if (wantLabels) {
-          labelDetail.push({ order: o.name, day: d, chargedOn, shape, amount: v, msg });
+          labelDetail.push({ order: o.name, day: d, chargedOn, book_to: bookTo,
+                             shape, amount: v, msg });
         }
-        days[d].shipping_cost = round2((days[d].shipping_cost || 0) + v);
+        // A charge can now land outside the window. That is the rule working,
+        // not a leak — but it is counted, because a silent one would be.
+        if (!days[bookTo]) {
+          if (bookTo > to) { outOfWindow.after = round2(outOfWindow.after + v); outOfWindow.after_n++; }
+          else { outOfWindow.before = round2(outOfWindow.before + v); outOfWindow.before_n++; }
+          continue;
+        }
+        if (bookTo !== d) { rebooked.n++; rebooked.amount = round2(rebooked.amount + v); }
+        days[bookTo].shipping_cost = round2((days[bookTo].shipping_cost || 0) + v);
         ordersWithShopifyLabel.add(o.name);
       }
 
@@ -964,6 +1049,14 @@ Deno.serve(async (req: Request) => {
     feeByTransactionKind: feeByKind,
     paymentsLedger: ledger,
     shippingLabelShapes: labelShapes,
+    shippingAttribution: {
+      rule: "a label books to the SALE day unless it was charged after that month "
+          + "closed; a carrier price adjustment always books to the day charged",
+      month_closes: monthCloseDay(from.slice(0, 7)) + " 19:00 America/Chicago",
+      scanned_orders_from: scanFrom,
+      rebooked_to_a_different_day: rebooked,
+      outside_this_window: outOfWindow,
+    },
     shippingLabelLag: labelLag,
     shippingLabelDetail: wantLabels ? labelDetail : undefined,
     blocked,
