@@ -128,6 +128,14 @@ Deno.serve(async (req) => {
   const stores = only ? [only] : Object.keys(SHOP_BY_STORE);
   for (const s of stores) if (!SHOP_BY_STORE[s]) return json({ error: `unknown store ${s}` }, 400);
 
+  // Orders the store CAUGHT before the parcel shipped. eBay refunded the buyer
+  // and we kept the goods — so the sale genuinely reversed and the refund on the
+  // real Shopify order is CORRECT accounting, not glitch noise. Adding it back
+  // would credit the store for an item still on its own shelf, and then credit
+  // it a second time when that item is resold. These stay in the day.
+  const recoveredRows = await sbAll("refund_recovered?select=ebay_order_id,reason");
+  const recovered = new Set(recoveredRows.map((r: any) => String(r.ebay_order_id)));
+
   // The duplicate ledger: eBay order id -> the Shopify copy WE refunded.
   const ledgerRows = await sbAll("refund_damage?select=ebay_order_id,order_name,store_code");
   const ledger: Record<string, string> = {};
@@ -260,7 +268,11 @@ Deno.serve(async (req) => {
             const b = bump(rd);
 
             let kind: string;
-            if (ledgerName && ledgerName !== o.name) {
+            if (eid && recovered.has(eid)) {
+              // A real cancelled sale. Left in the store's figure on purpose.
+              kind = "recovered — sale genuinely reversed";
+              b.genuine_refund = r2(b.genuine_refund + amt); b.genuine_orders++;
+            } else if (ledgerName && ledgerName !== o.name) {
               // The ledger names a DIFFERENT Shopify order for this same eBay
               // sale, so two copies of one sale provably exist. This is the
               // mirror-back landing on the copy we did NOT refund.

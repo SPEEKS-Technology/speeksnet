@@ -200,6 +200,70 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   if (!authed(url)) return json({ error: "unauthorised" }, 401);
 
+  // ---- SKU history --------------------------------------------------------
+  // "Did the item we saved off the shelf actually get resold?" A recovered item
+  // goes back into stock and is relisted, and PayMore SKUs carry a LOCATION
+  // suffix that changes when the item moves — so match on the STEM, not the
+  // whole SKU, or a resale from a new bin reads as "never resold".
+  const skuLike = (url.searchParams.get("skuLike") || "").trim().toUpperCase();
+  if (skuLike) {
+    const since = (url.searchParams.get("since") || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) {
+      return json({ error: "skuLike needs since=YYYY-MM-DD" }, 400);
+    }
+    const wantStore = (url.searchParams.get("store") || "").trim().toUpperCase();
+    let shops = (await sbGet(`shopify_stores?select=shop,store_code,access_token`))
+      .map((x: any) => ({ ...x, code: x.store_code || STORE_BY_SHOP[x.shop] || x.shop }));
+    if (wantStore) shops = shops.filter((x: any) => x.code === wantStore);
+    if (!shops.length) return json({ error: `no store matched ${wantStore}` }, 400);
+
+    const SKU_Q = `query($q: String!, $after: String) {
+      orders(first: 100, query: $q, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        edges { node {
+          name createdAt displayFinancialStatus
+          lineItems(first: 50) { edges { node {
+            name quantity sku originalTotalSet { shopMoney { amount } }
+          } } }
+        } }
+      }
+    }`;
+
+    const hits: any[] = [];
+    for (const st of shops) {
+      let after: string | null = null, pages = 0;
+      for (;;) {
+        const r = await fetch(`https://${st.shop}/admin/api/${API_VERSION}/graphql.json`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": st.access_token },
+          body: JSON.stringify({ query: SKU_Q, variables: { q: `created_at:>=${since}`, after } }),
+        });
+        const b = await r.json();
+        if (b.errors?.length) {
+          return json({ error: `${st.code}: ${JSON.stringify(b.errors).slice(0, 200)}` }, 502);
+        }
+        for (const e of (b.data?.orders?.edges || [])) {
+          for (const li of (e.node.lineItems?.edges || [])) {
+            const sku = String(li.node.sku || "").toUpperCase();
+            if (!sku.startsWith(skuLike)) continue;
+            hits.push({
+              store: st.code, order: e.node.name, created: e.node.createdAt,
+              status: e.node.displayFinancialStatus, sku: li.node.sku,
+              item: li.node.name, qty: li.node.quantity,
+              amount: Number(li.node.originalTotalSet?.shopMoney?.amount || 0),
+            });
+          }
+        }
+        if (!b.data?.orders?.pageInfo?.hasNextPage) break;
+        after = b.data.orders.pageInfo.endCursor;
+        if (++pages > 40) break;
+      }
+    }
+    hits.sort((a, b) => String(a.created).localeCompare(String(b.created)));
+    return json({ readOnly: "Shopify GETs only; nothing written", skuLike, since,
+                  matches: hits.length, hits });
+  }
+
   const ids = (url.searchParams.get("ebay") || "")
     .split(",").map((s) => s.trim()).filter(Boolean);
   if (!ids.length) return json({ error: "pass ebay=<eBay order id>[,<id>...]" }, 400);
