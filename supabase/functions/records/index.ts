@@ -66,8 +66,11 @@ Deno.serve(async (req: Request) => {
 
     const { data, error } = await supabase
       .from("records")
-      .select("id, store, label, value, period, person")
-      .order("label");
+      .select("id, store, label, value, period, person, ordinal")
+      // ordinal is the DM's hand-picked place on a person board. NULLs sort last
+      // so a label that has never been ordered still comes back in a stable
+      // order and the frontend's value-descending fallback takes over.
+      .order("label").order("ordinal", { ascending: true, nullsFirst: false });
     if (error) return reply({ error: error.message }, 500);
 
     // store → section and period → subtext for the frontend. `person` is passed
@@ -80,6 +83,7 @@ Deno.serve(async (req: Request) => {
       value: r.value,
       subtext: r.period,
       person: r.person,
+      ordinal: r.ordinal,
     })));
   }
 
@@ -110,6 +114,9 @@ Deno.serve(async (req: Request) => {
 
       // A person with no name or no number is not a record — drop those rather
       // than writing blank rows the board would then have to filter out.
+      // ⚠️ Filter BEFORE numbering, not after. Numbering first and then dropping
+      // the blank rows leaves gaps (0,2,3), which still sort correctly today but
+      // stop being a usable "place" the moment anything reads them as one.
       const rows = (Array.isArray(body.rows) ? body.rows : [])
         .map((r: any) => ({
           label,
@@ -118,7 +125,9 @@ Deno.serve(async (req: Request) => {
           value: String(r.value ?? "").trim(),
           period: String(r.date ?? "").trim() || null,
         }))
-        .filter((r: any) => r.person && r.value);
+        .filter((r: any) => r.person && r.value)
+        // The payload arrives in the DM's chosen order, so the index IS the place.
+        .map((r: any, i: number) => ({ ...r, ordinal: i }));
 
       // Delete first, then insert. Scoped to this one label, so no other metric
       // can be caught by it. If the insert fails the label is left empty rather

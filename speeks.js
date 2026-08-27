@@ -8206,6 +8206,24 @@ const RECORD_LEADER_ONLY = {
 const RECORD_PERSON_LABELS = Object.keys(RECORD_LEADER_ONLY)
     .filter(l => RECORD_LEADER_ONLY[l].by === 'person');
 
+/* The order the cards sit in, which is a layout decision and not something the
+ * API should be deciding. It arrived in whatever order the rows came back,
+ * so adding a metric could silently reshuffle the whole page.
+ *
+ * Reads as three rows of three: the daily records together on the top row, the
+ * monthly ones underneath, and Customer Conversion alone on the third. Anything
+ * not named here is appended, so a new metric shows up at the end rather than
+ * disappearing. */
+const RECORD_CARD_ORDER = [
+    'Daily Buy Record',
+    'Daily Sell Record',
+    'Single Day Google Reviews',
+    'Monthly Revenue Record',
+    'Monthly Gross Profit Record',
+    'Monthly Sell Margin Record',
+    'Monthly Customer Conversion Record',
+];
+
 function renderRecords() {
     const cont = document.getElementById('recordsContainer');
     if (!cont) return;
@@ -8228,7 +8246,11 @@ function renderRecords() {
     let bC = 0;
     let html = '<div class="records-grid">';
 
-    Object.keys(map).forEach(l => {
+    const rank = l => {
+        const i = RECORD_CARD_ORDER.indexOf(l);
+        return i === -1 ? RECORD_CARD_ORDER.length : i;
+    };
+    Object.keys(map).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).forEach(l => {
         let d = map[l];
         const only = RECORD_LEADER_ONLY[l];
         const byPerson = only?.by === 'person';
@@ -8241,7 +8263,9 @@ function renderRecords() {
 
         bC++;
         let oId = 'overflow-board-' + bC;
-        d.s.sort((a, b) => parseNum(b.value) - parseNum(a.value));
+        // A store board ranks by the number. A person board ranks by the place
+        // the DM set with the arrows in the tool, falling back to the number.
+        d.s.sort(byPerson ? _recPersonOrder : (a, b) => parseNum(b.value) - parseNum(a.value));
         let cR = d.c || d.s[0];
 
         html += `
@@ -8441,9 +8465,11 @@ function populateRecordsModal() {
         `<div class="cr-grid-scroll">` +
             `<div class="cr-grid" style="grid-template-columns:${cols};">${head}${body}</div>` +
             RECORD_PERSON_LABELS.map(_recPersonSection).join('') +
-        `</div>` +
-        `<datalist id="crStaffList">${_recStaffOptions()}</datalist>`;
+        `</div>`;
     _recomputeCompanyRecords();
+    // Numbers the places and greys the arrow that has nowhere to go. Runs after
+    // the markup lands because it is derived from position, not from the data.
+    document.querySelectorAll('#manageRecordsList .cr-people').forEach(_recRenumber);
 }
 
 /* ── Person-held records ──────────────────────────────────────────────────
@@ -8467,16 +8493,34 @@ function _recStaff() {
     } catch (e) { return []; }
 }
 
-function _recStaffOptions() {
-    return _recStaff()
-        .map(u => `<option value="${escapeHtml(u.name)}" data-store="${escapeHtml(u.store || '')}">`)
+// Options for the name picker. A <datalist> was the obvious fit and was wrong:
+// the browser draws that suggestion popup itself, so it ignored every dropdown
+// style on the site and came up as a full-height black native list beside a
+// properly dressed Store control. A real <select> gets picked up by _ddScan's
+// MutationObserver and wears the same .dd-btn face as everything else.
+//
+// The CURRENT holder is kept as an option even when they are no longer in the
+// staff cache. A record set by somebody who has since left must not vanish from
+// the editor — without this the select would fall back to the placeholder and
+// the next save would drop the row, because a row with no name is discarded.
+function _recStaffOptions(current) {
+    const cur = String(current || '').trim();
+    const names = _recStaff().map(u => String(u.name).trim()).filter(Boolean);
+    if (cur && !names.some(n => n.toLowerCase() === cur.toLowerCase())) names.unshift(cur);
+    return names
+        .map(n => `<option value="${escapeHtml(n)}"${
+            n.toLowerCase() === cur.toLowerCase() ? ' selected' : ''}>${escapeHtml(n)}</option>`)
         .join('');
 }
 
 function _recPersonSection(label) {
+    // _recPersonOrder is the same comparator the board uses, so what the editor
+    // shows top to bottom is exactly what the page will show. Sorting here by
+    // value alone (as this did) meant the arrows appeared to do nothing after a
+    // reload, because the saved order was thrown away on the way back in.
     const rows = (recordsCache || [])
         .filter(r => String(r.label || '').trim() === label)
-        .sort((a, b) => parseNum(b.value) - parseNum(a.value));
+        .sort(_recPersonOrder);
     // Always offer an empty row, so an unpopulated metric is one you can type
     // into rather than one you first have to work out how to start.
     const shown = rows.length ? rows : [{}];
@@ -8485,7 +8529,12 @@ function _recPersonSection(label) {
     <div class="cr-people" data-label="${escapeHtml(label)}">
         <div class="cr-people-h">
             <span class="cr-people-t">${escapeHtml(label)}</span>
-            <span class="cr-people-s">Held by a person, not a store. Top of the list is the company record; the rest show as places 2-5.</span>
+            <span class="cr-people-s">Held by a person, not a store. The board shows them in this order &mdash; use the arrows to move somebody up or down.</span>
+        </div>
+        <div class="cr-pwarn" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+            <span>A higher number is sitting below a lower one. Fine for a tie you have ranked by hand &mdash; otherwise
+                  <button type="button" class="cr-psort" onclick="_recSortByValue(this)">sort by number</button>.</span>
         </div>
         <div class="cr-prow cr-phead">
             <span>Name</span><span>Store</span><span>Reviews</span><span>Date</span><span></span>
@@ -8495,24 +8544,115 @@ function _recPersonSection(label) {
     </div>`;
 }
 
+/* Where a person sits on the board. The DM's saved place wins; anything never
+   ordered falls back to the number, so a label that predates the ordinal column
+   still ranks sensibly instead of collapsing into insertion order. */
+function _recPersonOrder(a, b) {
+    const ao = a.ordinal, bo = b.ordinal;
+    const aHas = ao !== null && ao !== undefined && ao !== '';
+    const bHas = bo !== null && bo !== undefined && bo !== '';
+    if (aHas && bHas) return Number(ao) - Number(bo);
+    if (aHas !== bHas) return aHas ? -1 : 1;
+    return parseNum(b.value) - parseNum(a.value);
+}
+
 function _recPersonRow(r) {
     r = r || {};
     const store = String(r.section || '').toUpperCase();
     return `
-    <div class="cr-prow cr-person-row">
-        <input type="text" class="p-name" list="crStaffList" placeholder="Name"
-               value="${escapeHtml(r.person || '')}" oninput="_recFillStore(this)">
-        <select class="p-store">
-            <option value="">Store</option>
-            ${RECORD_STORE_CODES.map(c =>
-                `<option value="${c}"${c === store ? ' selected' : ''}>${c}</option>`).join('')}
-        </select>
-        <input type="text" class="p-val" placeholder="0" value="${escapeHtml(r.value || '')}">
-        <input type="text" class="p-date" placeholder="August 21, 2026" value="${escapeHtml(r.subtext || '')}">
-        <button type="button" class="cr-prm" title="Remove" onclick="this.closest('.cr-person-row').remove()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+    <div class="cr-person-row">
+        <div class="cr-pmove">
+            <button type="button" class="cr-pmv up" title="Move up" aria-label="Move up" onclick="_recMovePerson(this,-1)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>
+            </button>
+            <span class="cr-prank"></span>
+            <button type="button" class="cr-pmv down" title="Move down" aria-label="Move down" onclick="_recMovePerson(this,1)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+        </div>
+        <div class="cr-prow cr-pfields">
+            <select class="p-name" onchange="_recFillStore(this)">
+                <option value="">Name</option>
+                ${_recStaffOptions(r.person)}
+            </select>
+            <select class="p-store">
+                <option value="">Store</option>
+                ${RECORD_STORE_CODES.map(c =>
+                    `<option value="${c}"${c === store ? ' selected' : ''}>${c}</option>`).join('')}
+            </select>
+            <input type="text" class="p-val" placeholder="0" value="${escapeHtml(r.value || '')}"
+                   oninput="_recOrderWarn(this.closest('.cr-people'))">
+            <input type="text" class="p-date" placeholder="August 21, 2026" value="${escapeHtml(r.subtext || '')}">
+            <button type="button" class="cr-prm" title="Remove" onclick="_recRemovePerson(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
     </div>`;
+}
+
+// Swap a row with its neighbour. This is the whole reason the board stores an
+// ordinal: moving somebody between 1st and 2nd is one click, instead of retyping
+// four fields on two rows and hoping you did not transpose anything.
+function _recMovePerson(btn, dir) {
+    const row = btn.closest('.cr-person-row');
+    const other = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+    if (!other) return;
+    // insertBefore MOVES the node, so every control inside keeps its live value
+    // and the .dd-host face the enhancer already built around it. Re-rendering
+    // the row from markup would throw away anything typed but not yet saved.
+    row.parentNode.insertBefore(dir < 0 ? row : other, dir < 0 ? other : row);
+    _recRenumber(row.closest('.cr-people'));
+    // Keep the keyboard on the button that just moved, not on wherever the row
+    // used to be — otherwise a second press acts on the neighbour.
+    const again = row.querySelector('.cr-pmv.' + (dir < 0 ? 'up' : 'down'));
+    if (again && !again.disabled) again.focus();
+}
+
+function _recRemovePerson(btn) {
+    const box = btn.closest('.cr-people');
+    btn.closest('.cr-person-row').remove();
+    _recRenumber(box);
+}
+
+// Places are positional, so they are read off the DOM rather than stored on each
+// row. One function to call after any move, add or remove.
+function _recRenumber(box) {
+    if (!box) return;
+    const rows = Array.from(box.querySelectorAll('.cr-person-row'));
+    rows.forEach((row, i) => {
+        const rank = row.querySelector('.cr-prank');
+        if (rank) rank.textContent = i + 1;
+        const up = row.querySelector('.cr-pmv.up');
+        const down = row.querySelector('.cr-pmv.down');
+        if (up) up.disabled = i === 0;
+        if (down) down.disabled = i === rows.length - 1;
+    });
+    _recOrderWarn(box);
+}
+
+// The board shows the DM's order, not the numbers, so it is possible to leave a
+// smaller number above a bigger one. That is legitimate for a tie broken by hand
+// and wrong the rest of the time — so say so here rather than silently re-sorting
+// and undoing a deliberate move.
+function _recOrderWarn(box) {
+    const warn = box && box.querySelector('.cr-pwarn');
+    if (!warn) return;
+    const vals = Array.from(box.querySelectorAll('.cr-person-row'))
+        .map(r => r.querySelector('.p-val').value.trim())
+        .filter(v => v !== '')
+        .map(parseNum);
+    warn.hidden = !vals.some((v, i) => i > 0 && v > vals[i - 1]);
+}
+
+// Put the rows back in number order, for when the board has drifted and the
+// obvious answer is the right one.
+function _recSortByValue(btn) {
+    const box = btn.closest('.cr-people');
+    const wrap = box.querySelector('.cr-people-rows');
+    Array.from(wrap.children)
+        .sort((a, b) => parseNum(b.querySelector('.p-val').value) - parseNum(a.querySelector('.p-val').value))
+        .forEach(row => wrap.appendChild(row));
+    _recRenumber(box);
 }
 
 // Picking a known name fills in where they work. Only ever fills a BLANK store:
@@ -8532,10 +8672,21 @@ function _recFillStore(input) {
 }
 
 function _recAddPerson(btn) {
-    const box = btn.closest('.cr-people').querySelector('.cr-people-rows');
+    const people = btn.closest('.cr-people');
+    const box = people.querySelector('.cr-people-rows');
     box.insertAdjacentHTML('beforeend', _recPersonRow({}));
-    const added = box.lastElementChild.querySelector('.p-name');
-    if (added) added.focus();
+    _recRenumber(people);
+    // ⚠️ The name control is a <select>, and the enhancer HIDES it behind a
+    // .dd-btn face — focusing the select itself puts the caret nowhere visible.
+    // The face is built by a MutationObserver, so wait a frame for it to exist
+    // and fall back to the native control if the enhancer is not running.
+    const added = box.lastElementChild;
+    requestAnimationFrame(() => {
+        const sel = added.querySelector('.p-name');
+        const host = sel && sel.closest('.dd-host');
+        const face = host && host.querySelector('.dd-btn');
+        (face || sel || added).focus();
+    });
 }
 
 // The Company column mirrors whichever store has the highest value for each

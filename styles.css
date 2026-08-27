@@ -2034,7 +2034,13 @@ select.bs-hidden-select:focus {
 .aw-cap { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #94a3b8; margin-top: 3px; }
 
 /* --- all-time records: quiet header, mint hero, clean list --- */
-.records-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: start; }
+/* Three even rows of three. `align-items: start` let every card shrink to its own
+   content, so a sparse card left a ragged step and the row read as broken rather
+   than as a card with room to grow. Stretching keeps each row a single height —
+   which matters most for Single Day Google Reviews, whose card is short today
+   and will fill as more people land on the board. Grid never reflows a card
+   upward into a gap the way a masonry layout would, so nothing below can climb. */
+.records-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: stretch; }
 .rec {
     background: #fff; border: 1px solid #e6ebf1; border-radius: 14px;
     box-shadow: 0 1px 2px rgba(16,24,40,.05); overflow: hidden; display: flex;
@@ -10438,8 +10444,56 @@ body.sam-active .hotbar-btn:hover {
 #manageRecordsList .cr-phead {
     padding: 0 2px 6px; font-size: 9.5px; font-weight: 800; letter-spacing: .07em;
     text-transform: uppercase; color: #94a3b8;
+    /* The move column sits outside the field grid, so the headings have to be
+       pushed by exactly its width plus the row gap or every label is off by one
+       control. Kept as one custom property so the two can never drift. */
+    margin-left: calc(var(--cr-move-w) + 8px);
 }
+#manageRecordsList .cr-people { --cr-move-w: 26px; }
+
+/* A person row is now [ move handles ][ the field grid ]. The grid keeps its own
+   .cr-prow columns; only the handles are new, so the fields still line up with
+   the headings above. */
+#manageRecordsList .cr-person-row { display: flex; align-items: center; gap: 8px; }
+#manageRecordsList .cr-pfields { flex: 1 1 auto; min-width: 0; }
 #manageRecordsList .cr-person-row + .cr-person-row { margin-top: 7px; }
+
+#manageRecordsList .cr-pmove {
+    flex: none; width: var(--cr-move-w);
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+}
+#manageRecordsList .cr-prank {
+    font-size: 10px; font-weight: 850; color: #94a3b8;
+    font-variant-numeric: tabular-nums; line-height: 1;
+}
+#manageRecordsList .cr-pmv {
+    display: flex; align-items: center; justify-content: center;
+    width: 24px; height: 16px; padding: 0; flex: none;
+    /* ⚠️ The global button{min-height:44px} rule ovals anything it is not told
+       about — these would become 44px tall lozenges without this. */
+    min-height: 0;
+    border: 0; background: none; border-radius: 5px;
+    color: #8f9dad; cursor: pointer; transition: color .14s, background .14s;
+}
+#manageRecordsList .cr-pmv svg { width: 14px; height: 14px; }
+#manageRecordsList .cr-pmv:hover:not(:disabled) { color: #178048; background: #eef7f1; }
+#manageRecordsList .cr-pmv:disabled { opacity: .28; cursor: default; }
+#manageRecordsList .cr-pmv:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
+
+/* Shown only when a bigger number is sitting below a smaller one. */
+#manageRecordsList .cr-pwarn {
+    display: flex; align-items: flex-start; gap: 7px; margin: 0 0 10px;
+    padding: 7px 9px; border-radius: 8px;
+    background: #fffbeb; border: 1px solid #fde9a9; color: #8a6100;
+    font-size: 11px; font-weight: 650; line-height: 1.4;
+}
+#manageRecordsList .cr-pwarn[hidden] { display: none; }
+#manageRecordsList .cr-pwarn svg { width: 14px; height: 14px; flex: none; margin-top: 1px; }
+#manageRecordsList .cr-psort {
+    min-height: 0; padding: 0; border: 0; background: none;
+    font: inherit; color: #8a6100; font-weight: 850;
+    text-decoration: underline; cursor: pointer;
+}
 #manageRecordsList .cr-person-row input {
     width: 100%; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 7px;
     font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal); outline: none; background: #fff;
