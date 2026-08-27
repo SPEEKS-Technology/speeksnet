@@ -221,19 +221,65 @@ Deno.serve(async (req: Request) => {
   // --- net sales + cost -----------------------------------------------------
   // Same dataset and columns the Sales tab already runs on, so the NET PROFIT
   // tab's Sales/Cost cannot drift from the Sales tab's by construction.
-  const days: Record<string, any> = {};
+  //
+  // ⚠️ GROUPED BY day AND order_name, NOT BY day ALONE, because a refund has to
+  // be re-dated and a day total cannot be taken apart again.
+  //
+  // WHY RE-DATE AT ALL. Measured against PayMore's own consolidated export for
+  // OVL July 2026: grouped by day alone the month total is exact to the cent
+  // and 29 of the 31 DAYS are wrong, by as much as $1,516. Every dollar of that
+  // is a refund filed on a different day — the gross side already agreed on all
+  // 31 days. ShopifyQL books a refund on the day the money moved; the export
+  // books it against the day the item SOLD, which is the number a manager can
+  // act on, because a $1,500 return of a July 15th sale is a July 15th problem.
+  //
+  // The rule, and each clause is load-bearing (see the aggregation below):
+  //   * only refunds that returned LINE ITEMS move. A refund with no line items
+  //     behind it is a price adjustment and stays where it was recorded.
+  //   * the destination is the order's processedAt, NOT its createdAt.
+  //     Marketplace Connect imports an eBay sale a day or two after it happens,
+  //     so createdAt is the import date; four of July's refunds land on the
+  //     wrong day if you use it.
+  //   * a row's SALE half never travels, only its RETURN half. An exchange
+  //     books the returned item and its replacement under one order name, and
+  //     dragging the replacement back would invent revenue on the wrong day.
   const qlBody = await gql(
-    `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, returns GROUP BY day SINCE ${from} UNTIL ${to} ORDER BY day") {
+    `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, returns GROUP BY day, order_name SINCE ${from} UNTIL ${to}") {
          parseErrors tableData { rows } } }`);
   const ql = qlBody?.data?.shopifyqlQuery;
   if (ql?.parseErrors?.length) warnings.push(`shopifyql: ${ql.parseErrors.join("; ")}`);
-  for (const row of ql?.tableData?.rows || []) {
-    const d = String(row.day).slice(0, 10);
+  const qlRows = (ql?.tableData?.rows || []).map((row: any) => ({
+    day: String(row.day).slice(0, 10),
+    order: String(row.order_name || ""),
+    net: round2(Number(row.net_sales) || 0),
+    cost: round2(Number(row.cost_of_goods_sold) || 0),
+    ret: round2(Number(row.returns) || 0),
+  }));
+
+  // ⚠️ REFUSE AN EMPTY ANSWER RATHER THAN PUBLISHING ZEROS. The day skeleton
+  // below is built from the date range, not from the rows, so a ShopifyQL query
+  // that fails or comes back empty would otherwise produce a complete-looking
+  // month of $0.00 — which the sheet would happily write over real figures. A
+  // store with genuinely no sales in a range is not a case worth supporting at
+  // the cost of that.
+  if (!qlRows.length) {
+    return json({
+      error: "shopifyql returned no sales rows for this range — refusing to "
+        + "report a month of zeros. Check the date range and the query.",
+      store, from, to, parseErrors: ql?.parseErrors ?? null,
+    }, 502);
+  }
+
+  // Every day in the range gets a row, whether or not it traded. A daily grid
+  // with a hole in it reads as a quiet Tuesday, not as a day nobody collected.
+  const days: Record<string, any> = {};
+  for (let t = Date.parse(`${from}T12:00:00Z`); t <= Date.parse(`${to}T12:00:00Z`); t += 86400000) {
+    const d = new Date(t).toISOString().slice(0, 10);
     days[d] = {
       day: d,
-      net_sales: round2(Number(row.net_sales) || 0),
-      cost: round2(Number(row.cost_of_goods_sold) || 0),
-      returns: round2(Number(row.returns) || 0),
+      net_sales: 0,
+      cost: 0,
+      returns: 0,
       cc_fee: 0,
       ebay_fee: null,
       // 0, not null: shipping is now readable, so an empty day genuinely means
@@ -264,6 +310,9 @@ Deno.serve(async (req: Request) => {
   // fees land on the sale date instead of the settlement date: a refund posted
   // on Aug 10 against a Jul 5 order credits its fee back to JUL 5.
   const ebayOrderDay: Record<string, { day: string; name: string }> = {};
+  // Shopify order name -> the day that order SOLD. Only orders that returned
+  // line items appear here; nothing else re-dates. See the ShopifyQL block.
+  const saleDay: Record<string, string> = {};
   // Orders that already carry a Shopify Shipping label, so an eBay-bought label
   // on the same order can be spotted as a possible double count.
   const ordersWithShopifyLabel = new Set<string>();
@@ -277,10 +326,13 @@ Deno.serve(async (req: Request) => {
          orders(first: 25, after: $after, sortKey: CREATED_AT, query: $q) {
            pageInfo { hasNextPage endCursor }
            edges { node {
-             name createdAt sourceName
+             name createdAt processedAt sourceName
              customAttributes { key value }
              transactions { kind status gateway
                fees { type amount { amount } } }
+             refunds(first: 10) {
+               refundLineItems(first: 1) { edges { node { quantity } } }
+             }
              events(first: 50) {
                pageInfo { hasNextPage }
                edges { node { message } }
@@ -295,6 +347,15 @@ Deno.serve(async (req: Request) => {
     const conn = body.data.orders;
     for (const e of conn.edges) {
       const o = e.node;
+
+      // Collected BEFORE the window guard, because an order's sale day and its
+      // creation day are not always the same one and the sale day is the one
+      // the re-dating below needs.
+      const soldOn = chicagoDay(o.processedAt || o.createdAt);
+      const returnedLineItems = (o.refunds || []).some((rf: any) =>
+        (rf.refundLineItems?.edges || []).length > 0);
+      if (returnedLineItems && soldOn >= from && soldOn <= to) saleDay[o.name] = soldOn;
+
       const d = chicagoDay(o.createdAt);
       if (!days[d]) continue; // outside the ShopifyQL window; never invent a row
       days[d].orders++;
@@ -354,6 +415,39 @@ Deno.serve(async (req: Request) => {
     warnings.push(`${unknownLabelMessages.length} unrecognised shipping-label message shape(s) — `
       + "these were NOT counted, so shipping is understated until parseLabelCost learns them: "
       + unknownLabelMessages.slice(0, 3).map((m) => JSON.stringify(m)).join(" | "));
+  }
+
+  // --- fold the ShopifyQL rows into days, re-dating the refunds --------------
+  // Runs HERE, after the order sweep, because it needs `saleDay`, and that is
+  // only known once every order has been read.
+  //
+  // Each row is split in two. `gross` is what the day actually sold and never
+  // moves. `ret` is the refunded part and travels to the day the item sold —
+  // but only when this order returned line items AND its sale day is inside the
+  // window; otherwise it stays put, which is the correct answer for a refund of
+  // something sold last month.
+  //
+  // Cost follows the same journey, with one gap that is left alone on purpose:
+  // a row holding BOTH a sale and a return (an exchange) carries a single netted
+  // cost figure that cannot be taken apart, so its cost stays on its own day.
+  // One exchange in OVL's July put $20 of cost on the wrong day; the month total
+  // is unaffected, and inventing a split would be worse than leaving it.
+  let refundsRedated = 0;
+  let refundsRedatedAmount = 0;
+  for (const r of qlRows) {
+    const gross = round2(r.net - r.ret);
+    const dest = saleDay[r.order] && saleDay[r.order] !== r.day ? saleDay[r.order] : r.day;
+    if (days[r.day]) {
+      days[r.day].net_sales = round2(days[r.day].net_sales + gross);
+    }
+    if (days[dest]) {
+      days[dest].net_sales = round2(days[dest].net_sales + r.ret);
+      days[dest].returns = round2(days[dest].returns + r.ret);
+    }
+    // Cost: a pure refund row travels whole, everything else stays.
+    const costHome = (r.ret !== 0 && gross === 0) ? dest : r.day;
+    if (days[costHome]) days[costHome].cost = round2(days[costHome].cost + r.cost);
+    if (dest !== r.day) { refundsRedated++; refundsRedatedAmount = round2(refundsRedatedAmount - r.ret); }
   }
 
   // --- eBay share -----------------------------------------------------------
@@ -539,6 +633,11 @@ Deno.serve(async (req: Request) => {
 
   return json({
     store, shop: t.shop, from, to, scopes,
+    // How much work the re-dating did. Zero here on a month that had refunds
+    // means the rule stopped firing — the daily grid would look plausible and
+    // be wrong, so it is reported rather than left to be inferred.
+    refunds_redated: refundsRedated,
+    refunds_redated_amount: refundsRedatedAmount,
     totals: {
       net_sales: sum("net_sales"),
       cost: sum("cost"),
