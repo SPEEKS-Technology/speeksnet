@@ -32,8 +32,16 @@
 //     credit OVL for an item on its own shelf and then credit it again when it
 //     resold — the MacBook resold as #KS01-14308 and the turntable as
 //     #KS01-14305, both on Aug 25.
-//   * Draft orders that are NOT repayments. LEE #MO01-9161 ($1,549.99, Aug 26)
-//     matches no refund at that store and is an ordinary invoiced sale.
+//   * Draft orders dated BEFORE Aug 26. The stores confirm no repayment
+//     invoices went out before then, so LEE #MO01-8920 ($499.99, Aug 20),
+//     WSP #MO02-6682 ($599.99, Aug 20) and BAL #MO04-2847 ($124.99, Aug 24)
+//     are ordinary invoiced sales. From Aug 26 EVERY draft is a repayment and
+//     is voided, including LEE #MO01-9161 ($1,549.99) which matches no refund
+//     amount — the stores know what they invoiced and that outranks the
+//     amount test, which is now reported only.
+//     ⚠️ That rule has a shelf life: when repayment invoicing finishes,
+//     ordinary draft sales resume and this would strip them. Every voided
+//     draft is listed individually so the day that starts happening is visible.
 //   Each of those was a live bug at some point in the derivation. Removing any
 //   of them understates a store for a day it traded normally.
 //
@@ -91,7 +99,7 @@ var MRF_OTHER_NOTES = [
 // Aug 26 only. Sales / cost, from sales-true-daily 2026-08-27.
 var MRF_FIX = [
   { store: 'OVL', day: 26, sales: 2950.26, cost: 1143.54 },  // sheet reads -10211.82 / -4578.25
-  { store: 'LEE', day: 26, sales: 5713.21, cost: 2656.68 },  // sheet reads -10352.96 / -4149.99
+  { store: 'LEE', day: 26, sales: 4163.22, cost: 1956.68 },  // sheet reads -10352.96 / -4149.99
   { store: 'WSP', day: 26, sales: 3373.80, cost: 1525.00 },  // sheet reads   1508.86 /   605.00
   { store: 'MPL', day: 26, sales: 1516.92, cost:  734.00 },  // sheet reads  -3722.89 / -1501.30
   { store: 'BAL', day: 26, sales: 1301.25, cost:  570.32 }   // sheet reads  -2158.59 /  -974.68

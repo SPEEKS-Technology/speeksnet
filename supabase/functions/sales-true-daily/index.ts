@@ -163,8 +163,20 @@ Deno.serve(async (req) => {
     const d = chicagoDay(r.ebay_refund_date);
     if (d < firstRefundDay) firstRefundDay = d;
   }
-  const looksLikeRepayment = (st: string, day: string, amt: number) =>
-    day >= firstRefundDay && !!refundedAmounts[st]?.has(r2(amt));
+  // ⚠️ THE BOUNDARY IS A FACT FROM THE BUSINESS, NOT A HEURISTIC (user,
+  // 2026-08-27): "all draft orders starting yesterday should be voided — those
+  // are the repayments. No draft orders were going out before yesterday for
+  // this issue." So the date alone decides, and the amount match is kept only
+  // as a REPORTED signal — an amount that matches nothing is worth seeing, but
+  // it is not grounds for overriding what the stores know they did.
+  //
+  // ⚠️ THIS RULE HAS A SHELF LIFE. Once repayment invoicing finishes, ordinary
+  // draft-order sales will resume and this would strip them as recovery. Every
+  // stripped draft is listed individually in the detail for exactly that
+  // reason — when real ones start appearing, move the boundary.
+  const REPAYMENT_DRAFTS_FROM = "2026-08-26";
+  const looksLikeRepayment = (_st: string, day: string, _amt: number) =>
+    day >= REPAYMENT_DRAFTS_FROM;
 
   // The duplicate ledger: eBay order id -> the Shopify copy WE refunded.
   const ledgerRows = await sbAll("refund_damage?select=ebay_order_id,order_name,store_code");
@@ -285,7 +297,8 @@ Deno.serve(async (req) => {
               b.draft_orders++;
               buckets(sold).draft.add(o.name);
               detail.push({ day: sold, store, kind: "draft-order invoice (repayment)",
-                            order: o.name, amount: amt });
+                            order: o.name, amount: amt,
+                            matches_a_refund_amount: !!refundedAmounts[store]?.has(amt) });
             } else {
               // A real invoiced sale. Counted as selling, and listed so the
               // judgement is visible rather than buried in a total.
