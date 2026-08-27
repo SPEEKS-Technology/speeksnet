@@ -93,6 +93,21 @@ Deno.serve(async (req: Request) => {
 
   const targets: Record<string, Target> = {};
 
+  // ⚠️ A RE-CREATED LISTING GETS A NEW SKU. When a store rebuilds the product
+  // instead of correcting its stock, the SKU in refund_damage is dead and every
+  // check keyed on it goes blind — the item can sell and nothing notices.
+  // refund_recovered.current_sku overrides it. OVL's Ray-Bans came back as
+  // KS01-7521A-R1R3 having been KS01-7521A-E10.
+  const skuOverride: Record<string, string> = {};
+  if (ebayIds.length) {
+    const rec = await sbAll(
+      "refund_recovered?select=ebay_order_id,current_sku"
+      + `&ebay_order_id=in.(${ebayIds.map((x) => `"${x}"`).join(",")})`);
+    for (const r of rec as any[]) {
+      if (r.current_sku) skuOverride[String(r.ebay_order_id)] = String(r.current_sku);
+    }
+  }
+
   // Resolve eBay order ids to a SKU, the Shopify copies to exclude, and the date
   // after which a sale of that SKU counts as a re-sale.
   if (ebayIds.length) {
@@ -101,7 +116,7 @@ Deno.serve(async (req: Request) => {
       + "ebay_refund_total,shopify_refunded_at"
       + `&ebay_order_id=in.(${ebayIds.map((x) => `"${x}"`).join(",")})`);
     for (const r of rows as any[]) {
-      const sku = String(r.sku || "").trim();
+      const sku = (skuOverride[String(r.ebay_order_id)] || String(r.sku || "")).trim();
       if (!sku) continue;
       const t: Target = targets[sku] || {
         sku,

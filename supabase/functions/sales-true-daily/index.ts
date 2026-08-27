@@ -354,6 +354,48 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ---- ONE RECOVERED ITEM IS ONE RETURN, NOT TWO -------------------------
+    // ⚠️ A recovered order has TWO Shopify copies and BOTH were refunded, but
+    // only one item came back and eBay paid the buyer once. The `recovered`
+    // test above fires on the eBay id, which both copies carry, so both refunds
+    // were being kept as genuine returns and the store was charged twice.
+    // Measured on OVL 2026-08-25: six "genuine" refunds for three items,
+    // $4,839.94 against $2,419.97 of actual returns — exactly double, to the
+    // penny. The store took a $2,419.97 hit it never earned.
+    //
+    // Keep the EARLIEST refund per eBay id, which is the copy closest to the
+    // sale, and demote the rest to mirror-back so they are added back like any
+    // other duplicate. Sorted by day then order name so the choice is
+    // deterministic and a re-run cannot pick a different keeper.
+    const recoveredRefunds: Record<string, any[]> = {};
+    for (const d of detail) {
+      if (!/^recovered/.test(String(d.kind)) || !d.ebay_order_id) continue;
+      (recoveredRefunds[d.ebay_order_id] ||= []).push(d);
+    }
+    for (const [eid, list] of Object.entries(recoveredRefunds)) {
+      if (list.length < 2) continue;
+      list.sort((a, b) => (a.day === b.day
+        ? String(a.order).localeCompare(String(b.order))
+        : (a.day < b.day ? -1 : 1)));
+      for (const dup of list.slice(1)) {
+        const b = bump(dup.day);
+        b.genuine_refund = r2(b.genuine_refund - dup.amount);
+        b.genuine_orders--;
+        b.mirror_refund = r2(b.mirror_refund + dup.amount);
+        b.mirror_orders++;
+        buckets(dup.day).mirror.add(dup.order);
+        dup.kind = "duplicate copy of a recovered return — added back, "
+          + `the return itself is counted on ${list[0].day} (${list[0].order})`;
+        dup.demoted_from = "recovered — sale genuinely reversed";
+      }
+      detail.push({
+        day: list[0].day, store, kind: "recovered return counted ONCE",
+        ebay_order_id: eid, order: list[0].order, amount: list[0].amount,
+        copies_seen: list.length,
+        copies_added_back: list.slice(1).map((x) => x.order),
+      });
+    }
+
     // ---- COGS for the same three buckets -----------------------------------
     // A refund reverses cost of goods as well as revenue, so a day carrying
     // mirror-back refunds understates cost too and its margin is nonsense.
