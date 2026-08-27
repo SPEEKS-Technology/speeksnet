@@ -8200,8 +8200,13 @@ function _recHolders(champ, stores) {
  * auto-fill — the leader is simply whoever is top. It also changes how the
  * Company Records tool edits it, which is why the tool reads this same map.
  */
+// `show`/`hide` override the button's wording. Single Day Google Reviews used to
+// say "See Places 2-5" because its hero spends the first place, but the rest of
+// the page says "See Full Leaderboard" and one card wording itself differently
+// read as a different kind of control. Omit them and the default applies —
+// they stay supported for any metric that genuinely needs its own words.
 const RECORD_LEADER_ONLY = {
-    'Single Day Google Reviews': { by: 'person', show: 'See Places 2-5', hide: 'Hide Places 2-5' },
+    'Single Day Google Reviews': { by: 'person' },
 };
 const RECORD_PERSON_LABELS = Object.keys(RECORD_LEADER_ONLY)
     .filter(l => RECORD_LEADER_ONLY[l].by === 'person');
@@ -8325,8 +8330,8 @@ function renderRecords() {
             }
             html += `</div>`;
             if (hidden.length) {
-                const show = only ? only.show : 'See Full Leaderboard';
-                const hide = only ? only.hide : 'Hide Leaderboard';
+                const show = (only && only.show) || 'See Full Leaderboard';
+                const hide = (only && only.hide) || 'Hide Leaderboard';
                 html += `<button class="rec-more" data-show="${escapeHtml(show)}" data-hide="${escapeHtml(hide)}" onclick="toggleBoard('${oId}', this)">${escapeHtml(show)} ▾</button>`;
             }
         }
@@ -8340,9 +8345,9 @@ function renderRecords() {
 function toggleBoard(id, btn) {
     const el = document.getElementById(id);
     el.classList.toggle('open');
-    // The wording is the card's, not this function's — a leader-only board says
-    // "Places 2-5". The fallbacks keep any button rendered before this change
-    // (a cached page mid-deploy) reading the way it always did.
+    // The wording is the card's, not this function's, so a metric can override it.
+    // The fallbacks matter mid-deploy: a cached page can hold a button rendered
+    // by the old code, and it has to keep reading the way it was drawn.
     const open = el.classList.contains('open');
     const show = btn.dataset.show || 'See Full Leaderboard';
     const hide = btn.dataset.hide || 'Hide Leaderboard';
