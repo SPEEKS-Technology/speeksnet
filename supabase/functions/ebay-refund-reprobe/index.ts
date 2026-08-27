@@ -142,9 +142,39 @@ Deno.serve(async (req: Request) => {
   const report: any[] = [];
 
   for (const st of targets) {
-    const baseline = await (await sb(
+    // ⚠️ refund_damage IS NOT EVERY DUPLICATE. It is staged from
+    // `dup_order_cleanup where result ilike 'refunded%'`, so it holds only the
+    // duplicates we successfully REFUNDED — 396 of 415. The other 19 came back
+    // 'blocked: Shopify refuses cancel while a fulfillment stands' or already
+    // cancelled. Those orders still exist, still carry refunds, and their eBay
+    // state had NEVER BEEN MEASURED — they were invisible to the one tool whose
+    // job is to say whether money left the account. Absence from this probe was
+    // reading as "no damage", which is the same silent-undercount failure as a
+    // 429 or a stale 200.
+    const damage = await (await sb(
       `refund_damage?select=store_code,order_name,ebay_order_id,shopify_refund,ebay_refund_total,ebay_payment_status`
       + `&store_code=eq.${encodeURIComponent(st.store_code)}`)).json();
+    const cleanup = await (await sb(
+      `dup_order_cleanup?select=store_code,order_name,ebay_order_id`
+      + `&store_code=eq.${encodeURIComponent(st.store_code)}&ebay_order_id=not.is.null`)).json();
+    const seenEid = new Set(
+      (damage as any[]).map((r) => String(r.ebay_order_id)));
+    const baseline = [
+      ...(damage as any[]),
+      ...(cleanup as any[])
+        .filter((r) => !seenEid.has(String(r.ebay_order_id)))
+        .map((r) => ({
+          store_code: r.store_code,
+          order_name: r.order_name,
+          ebay_order_id: r.ebay_order_id,
+          // No prior reading exists for these, which is the point of adding
+          // them. Null, not zero — zero would claim we had measured $0.
+          shopify_refund: null,
+          ebay_refund_total: null,
+          ebay_payment_status: null,
+          never_probed_before: true,
+        })),
+    ];
 
     let token: string;
     try {
