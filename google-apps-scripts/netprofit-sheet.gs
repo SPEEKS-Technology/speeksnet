@@ -399,34 +399,88 @@ function _npAuditFormulas(formulas, values) {
   Logger.log(problems ? '  %s column(s) are not internally consistent.'
                       : '  every column is internally consistent.', problems);
 
-  // ⚠️ CONSISTENCY IS NOT CORRECTNESS, and this is the case that proves it.
-  // A "Tracking" column projects the month: (MTD / elapsed days) * days in month.
-  // `DA` divides by the LITERAL 1 instead of by the day column, and because that
-  // literal survives a fill-down unchanged, every row agrees with every other row
-  // and the check above reports the column as clean. It is not clean — on day 20
-  // of a 31-day month it reports 20x the real figure, and NP Tracking is the
-  // projected Net Profit the bonus conversation reads.
+  // ⚠️ THE SHAPE AUDIT ABOVE IS INFORMATIONAL, NOT A VERDICT — and it cost a
+  // false alarm to learn that. Every Tracking column in this tab hard-types its
+  // divisor per row (`/1` on day 1, `/2` on day 2 ...), so no two rows share a
+  // shape and all 18 of them report as "inconsistent". Reading row 5's `/1` as a
+  // literal-1 bug, I called NP Tracking 20x wrong. It is not: rows 6+ carry `/2`,
+  // `/3`, `/4`, and the VALUES are right on every row checked.
   //
-  // So the Tracking columns are asserted directly: each must divide by a CELL,
-  // never by a number. Printed side by side, because the odd one out is obvious
-  // to a human the moment the three sit together and is invisible otherwise.
-  Logger.log('\n=== TRACKING COLUMNS — must divide by the day column, not a literal ===');
-  var bad = 0;
-  for (var tc = 0; tc < lastCol; tc++) {
-    var head = String(values[NP_HEADER_ROWS - 1][tc] || '').trim();
-    if (!/tracking/i.test(head)) continue;
-    var tf = String((formulas[first - 1] || [])[tc] || '').trim();
-    if (!tf) continue;
-    // The divisor of the projection: what sits between "/" and the next ")".
-    var m = tf.match(/\/\s*([^)*\s]+)/);
-    var divisor = m ? m[1] : '(none found)';
-    var ok = /^\$?[A-Z]{1,3}\$?\d+$/.test(divisor);
-    if (!ok) bad++;
-    Logger.log('  %s %s[%s] divides by %s   %s',
-      ok ? '   ' : '!! ', _npColLetter(tc), head, divisor, tf);
-  }
-  Logger.log(bad ? '  !! %s Tracking column(s) divide by a literal — the projection is wrong.'
-                 : '  all Tracking columns divide by a cell.', bad);
+  // A formula states intent. Only the value states the result. So the checks that
+  // follow compare what the tab COMPUTES against what the column MEANS, and those
+  // are the verdict.
+  //
+  // (The hard-typed divisors are still a real fragility — nothing makes them
+  // follow if a row is inserted or the month is rolled over — but that is a
+  // maintenance note, not an error, and it is not what this should shout about.)
+  _npAuditValues(values, formulas, first, last);
+}
+
+// ============================================================================
+// _npAuditValues — check the tab's arithmetic against its own column headings.
+// Read-only. This is what actually found the Net Margin inversion.
+// ============================================================================
+function _npAuditValues(values, formulas, first, last) {
+  var daysInMonth = last - first + 1;
+  var num = function (v) { var n = Number(v); return isFinite(n) ? n : null; };
+  var near = function (a, b, tol) { return a !== null && b !== null && Math.abs(a - b) < (tol || 0.02); };
+
+  Logger.log('\n=== VALUE CHECKS (what the tab computes vs what the heading means) ===');
+  var fails = 0;
+
+  NP_ORDER.concat(['TTL']).forEach(function (code) {
+    var base = (code === 'TTL') ? NP_TTL_BASE : NP_BASES[code];
+    if (base === undefined) return;
+    var bad = [];
+    for (var r = first; r <= last; r++) {
+      var row = values[r - 1], day = r - first + 1;
+      var sales = num(row[base + NP_OFF_SALES]);
+      if (!sales) continue;                      // a day with no sales proves nothing
+      var np    = num(row[base + 12]);
+      var npTot = num(row[base + 13]);
+      var npTrk = num(row[base + 14]);
+      var netMg = num(row[base + 15]);
+      var cost  = num(row[base + NP_OFF_COST]);
+      var gp    = num(row[base + 5]);
+
+      // 1. NP = sales - cost - eBay - shipping - cc - 7% of sales
+      var wantNp = sales - cost - num(row[base + NP_OFF_EBAYFEE])
+                 - num(row[base + NP_OFF_SHIP]) - num(row[base + NP_OFF_CCFEE]) - sales * 0.07;
+      if (!near(wantNp, np)) bad.push('day ' + day + ' NP is ' + np + ', arithmetic says ' + wantNp.toFixed(2));
+
+      // 2. Tracking projects the month from the RUNNING TOTAL and the day number.
+      if (npTot !== null && npTrk !== null && !near((npTot / day) * daysInMonth, npTrk, 0.05)) {
+        bad.push('day ' + day + ' NP Tracking is ' + npTrk + ', (MTD/day)*' + daysInMonth
+                 + ' says ' + ((npTot / day) * daysInMonth).toFixed(2));
+      }
+
+      // 3. ⚠️ THE ONE THAT WAS WRONG IN THE SHIPPED TAB. Net Margin is NP/Sales.
+      //    Gross Margin is written 1-(Cost/Sales), which is correct because Cost
+      //    IS a cost — 1 minus it leaves the margin. Net Margin copied that shape
+      //    as 1-(NP/Sales), but NP is the RESULT, not a cost, so the same formula
+      //    reports the inverse: 67.52% where the real net margin is 32.48%.
+      if (netMg !== null && !near(np / sales, netMg, 0.0005)) {
+        bad.push('day ' + day + ' Net Margin reads ' + (netMg * 100).toFixed(2)
+                 + '% but NP/Sales is ' + ((np / sales) * 100).toFixed(2) + '%'
+                 + (Math.abs((1 - np / sales) - netMg) < 0.0005 ? '  <- INVERTED, it is showing 1 - margin' : ''));
+      }
+      // 4. Gross Margin, as the control: if this also fails, the block is misaligned.
+      var grossMg = num(row[base + 8]);
+      if (grossMg !== null && gp !== null && !near(gp / sales, grossMg, 0.0005)) {
+        bad.push('day ' + day + ' Gross Margin reads ' + (grossMg * 100).toFixed(2)
+                 + '% but GP/Sales is ' + ((gp / sales) * 100).toFixed(2) + '%');
+      }
+    }
+    if (bad.length) {
+      fails++;
+      Logger.log('  !! %s — %s problem(s); first few:', code, bad.length);
+      for (var i = 0; i < Math.min(3, bad.length); i++) Logger.log('       %s', bad[i]);
+    } else {
+      Logger.log('   ok %s — NP, Tracking, Gross Margin and Net Margin all agree with the data.', code);
+    }
+  });
+  Logger.log(fails ? '  %s block(s) have a column that does not compute what its heading says.'
+                   : '  every block computes what its headings say.', fails);
 }
 
 // ============================================================================
@@ -455,6 +509,68 @@ function _npAuditFormulas(formulas, values) {
 
 function npFixTotalsPreview() { _npFixTotals(true); }
 function npFixTotalsApply()   { _npFixTotals(false); }
+
+// ============================================================================
+// npFixNetMargin — Net Margin is showing 1 minus itself, in all six blocks.
+//
+//   Gross Margin  =1-(E5/B5)     RIGHT. Cost IS a cost, so 1 minus cost-over-
+//                                sales leaves the margin.
+//   Net Margin    =1-(M5/B5)     WRONG. NP is the RESULT, not a cost. The same
+//                                shape reports the inverse: OVL day 1 reads
+//                                67.52% where the real net margin is 32.48%.
+//
+// Verified on rows 5-8 at OVL and row 5 at all five stores plus TTL: in every
+// case the printed figure equals 1 - (NP/Sales) exactly. Gross Margin is correct
+// everywhere, which is what rules out a misaligned block and leaves the formula
+// itself as the fault.
+//
+// Rewrites the Net Margin cell on every day row of every block, including TTL —
+// this is a display column, not one of the five TTL data columns npFixTotals
+// guards, and leaving TTL inverted while the stores read true would be worse
+// than either. Preview first.
+// ============================================================================
+function npFixNetMarginPreview() { _npFixNetMargin(true); }
+function npFixNetMarginApply()   { _npFixNetMargin(false); }
+
+function _npFixNetMargin(dryRun) {
+  var ss = SpreadsheetApp.openById(NP_SHEET_ID);
+  var sh = ss.getSheetByName(NP_TAB);
+  if (!sh) { Logger.log('!! no tab named "%s"', NP_TAB); return; }
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  var values = sh.getRange(1, 1, lastRow, lastCol).getValues();
+
+  // Day rows from the sheet itself, never from a constant.
+  var first = NP_HEADER_ROWS + 1, last = first - 1;
+  for (var rr = first; rr <= lastRow; rr++) {
+    if (Number(String(values[rr - 1][0]).trim()) !== (rr - first + 1)) break;
+    last = rr;
+  }
+  if (last < first) { Logger.log('!! no day rows found'); return; }
+
+  Logger.log(dryRun ? '=== PREVIEW — nothing will be written ===' : '=== APPLYING ===');
+  var wrote = 0, already = 0;
+  NP_ORDER.concat(['TTL']).forEach(function (code) {
+    var base = (code === 'TTL') ? NP_TTL_BASE : NP_BASES[code];
+    if (base === undefined) return;
+    var salesCol = base + NP_OFF_SALES, npCol = base + 12, mgCol = base + 15;
+    var sL = _npColLetter(salesCol), nL = _npColLetter(npCol), mL = _npColLetter(mgCol);
+    var changed = 0;
+    for (var r = first; r <= last; r++) {
+      // IFERROR so a day with no sales reads blank rather than #DIV/0!, which is
+      // what the Gross Margin column does today on empty days.
+      var want = '=IFERROR(' + nL + r + '/' + sL + r + ',"")';
+      var cur = String(sh.getRange(r, mgCol + 1).getFormula()).trim();
+      if (cur === want) { already++; continue; }
+      if (!dryRun) sh.getRange(r, mgCol + 1).setFormula(want);
+      wrote++; changed++;
+    }
+    Logger.log('  %s  Net Margin %s  rows %s-%s  %s cell(s) %s',
+      code, mL, first, last, changed, dryRun ? 'would change' : 'written');
+  });
+  Logger.log('%s %s cell(s), %s already correct.',
+    dryRun ? 'PREVIEW:' : 'DONE:', wrote, already);
+  if (dryRun) Logger.log('Run npFixNetMarginApply() to write.');
+}
 
 // Structure copied from the cells above so the fix reads like the template,
 // not like a replacement of it. Sales and Cost keep the ISBLANK(B{r}) guard
