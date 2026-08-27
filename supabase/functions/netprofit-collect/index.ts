@@ -512,6 +512,9 @@ Deno.serve(async (req: Request) => {
     fee_new: 0, fee_other: 0,
     fee_by_type: {} as Record<string, number>,
     fee_type_unbucketed: 0, fee_type_unbucketed_rows: 0,
+    // Paging integrity. `transactions` short of `transactions_expected` is the
+    // dropped-row failure; it throws rather than reporting a short fee.
+    transactions: 0, transactions_expected: 0, duplicate_page_rows: 0,
   };
   try {
     const er = await fetch(
@@ -529,18 +532,70 @@ Deno.serve(async (req: Request) => {
     upper.setUTCDate(upper.getUTCDate() + 1);
     const filter = `transactionDate:[${from}T00:00:00.000Z..${upper.toISOString().slice(0, 23)}Z]`;
 
+    // ⚠️ OFFSET PAGING OVER A LIVE SET. The window deliberately runs to TODAY,
+    // so eBay is still writing into the range while we page through it. Offset
+    // paging is position-based: a row inserted ahead of the cursor shifts every
+    // later row down one, and the record sitting on a page boundary is then
+    // never returned. The reverse shift returns one TWICE.
+    //
+    // Measured, WSP July 2026: three reads gave 9,849.08 / 9,753.28 / 9,849.08.
+    // The low read was one dropped transaction, $95.80. Nothing detected it —
+    // the total simply came back smaller, and a smaller fee reads as a BIGGER
+    // Net Profit. That is the one direction this file must never fail in.
+    //
+    // So: dedupe by transactionId (catches the double), and require the row
+    // count to reach eBay's own `total` (catches the drop). A short read throws,
+    // which the catch below turns into ebay_fee = null and a warning — the same
+    // honest #N/A an HTTP failure produces, instead of a plausible wrong number.
+    const seen = new Set<string>();
     const txs: any[] = [];
+    let expected = 0;
+    let dupePageRows = 0;
     for (let off = 0; off < 20000; off += 200) {
       const r2 = await ebayGet(
         `${host}/sell/finances/v1/transaction?limit=200&offset=${off}`
         + `&filter=${encodeURIComponent(filter)}`, token);
+      // 204 = No Content, which is how the Finances API says "that offset is past
+      // the end". It is a normal terminator, not a failure: WSP July holds exactly
+      // 1000 transactions, so offset 1000 answers 204. Treating it as an error
+      // threw away the whole store's fee (and, worse, its eBay shipping — see the
+      // catch below).
+      if (r2.status === 204) break;
       if (r2.status !== 200) {
         throw new Error(`finances HTTP ${r2.status}: ${(await r2.text()).slice(0, 200)}`);
       }
       const b2 = await r2.json();
       const page = b2?.transactions || [];
-      for (const x of page) txs.push(x);
-      if (off + 200 >= (Number(b2?.total) || 0)) break;
+      // `total` is re-read every page on purpose: it is the live count, and the
+      // largest one seen is the bar the final tally has to clear.
+      expected = Math.max(expected, Number(b2?.total) || 0);
+      for (const x of page) {
+        // No id means it cannot be de-duplicated; keep it rather than drop it,
+        // and let the count check be the safety net.
+        const id = String(x?.transactionId || "");
+        if (id && seen.has(id)) { dupePageRows++; continue; }
+        if (id) seen.add(id);
+        txs.push(x);
+      }
+      // ⚠️ STOP ON A SHORT PAGE, NOT ON `total`. WSP July came back with total
+      // exactly 1000 — a round number that is far more likely to be a reporting
+      // cap than a true count, and trusting it would have stopped paging with
+      // real transactions still unread. A full page always means "ask again";
+      // only a page that comes back short proves the end. `total` is kept as the
+      // floor the final count must clear, never as the thing that ends the loop.
+      if (page.length < 200) break;
+    }
+    ebay.transactions = txs.length;
+    ebay.transactions_expected = expected;
+    ebay.duplicate_page_rows = dupePageRows;
+    // Equal is the normal case. MORE than expected is fine and is why the dedupe
+    // runs first — eBay wrote new rows while we paged, and they are real. FEWER
+    // is the failure: rows the paging lost.
+    if (txs.length < expected) {
+      throw new Error(
+        `finances paging incomplete: read ${txs.length} of ${expected} transactions `
+        + `(${expected - txs.length} lost to offset drift). Refusing to report a `
+        + "fee total that is short — a low fee overstates Net Profit.");
     }
 
     // Only now that the WHOLE range came back 200 do the nulls become zeros: a
@@ -690,7 +745,20 @@ Deno.serve(async (req: Request) => {
   } catch (e) {
     // A failure here must leave ebay_fee NULL, never 0 — the sheet writes =NA()
     // for null, and a 0 would silently overstate Net Profit.
-    for (const d of Object.keys(days)) days[d].ebay_fee = null;
+    //
+    // ⚠️ SHIPPING GOES NULL TOO. shipping_cost is the SUM of two sources: Shopify
+    // labels from the order timeline, and eBay's own labels (mostly the buyer's
+    // return leg) from this pass. When this pass fails, the Shopify half survives
+    // and looks like a complete figure — measured on WSP July, $8,780.39 instead
+    // of $9,233.53, understating postage by $453.14 with nothing to show for it.
+    // A partial cost is more dangerous than no cost, because only one of them
+    // announces itself.
+    for (const d of Object.keys(days)) {
+      days[d].ebay_fee = null;
+      days[d].ebay_fee_new = null;
+      days[d].ebay_fee_other = null;
+      days[d].shipping_cost = null;
+    }
     warnings.push(`eBay fee unavailable: ${String(e)}`);
   }
 
@@ -702,7 +770,28 @@ Deno.serve(async (req: Request) => {
   const scopes = String(t.scopes || "");
 
   const list = Object.values(days).sort((a: any, b: any) => (a.day < b.day ? -1 : 1));
-  const sum = (k: string) => round2(list.reduce((a: number, r: any) => a + (Number(r[k]) || 0), 0));
+
+  // ⚠️ A NULL DAY POISONS THE TOTAL, and must. The per-day nulls were already
+  // honest — the sheet writes =NA() for them — but `Number(null) || 0` quietly
+  // turned a whole failed eBay pass into a totals.ebay_fee of 0.00, which reads
+  // as "eBay charged us nothing" and inflates net_before_royalty by the entire
+  // fee. Caught live: MPL came back 0.00 the first time the paging guard fired.
+  // If any day is unknown, the month is unknown. Say so.
+  const sum = (k: string) => {
+    let a = 0;
+    for (const r of list as any[]) {
+      const v = r[k];
+      if (v === null || v === undefined) return null;
+      a += Number(v) || 0;
+    }
+    return round2(a);
+  };
+  // For the arithmetic below: any null input makes the result null too.
+  const minus = (...xs: (number | null)[]): number | null => {
+    if (xs.some((x) => x === null)) return null;
+    const [head, ...rest] = xs as number[];
+    return round2(rest.reduce((a, b) => a - b, head));
+  };
 
   return json({
     store, shop: t.shop, from, to, scopes,
@@ -728,9 +817,9 @@ Deno.serve(async (req: Request) => {
       // ⚠️ NOT the sheet's Net Profit. The tab also subtracts a flat 7% of sales
       // (the `(B5*0.07)` line in its NP formula), which is the workbook's own
       // definition and is applied there, not here. This is the cost side only.
-      net_before_royalty: round2(
-        sum("net_sales") - sum("cost") - sum("cc_fee")
-        - sum("shipping_cost") - sum("ebay_fee")),
+      net_before_royalty: minus(
+        sum("net_sales"), sum("cost"), sum("cc_fee"),
+        sum("shipping_cost"), sum("ebay_fee")),
     },
     ebayFinances: ebay,
     feeByTransactionKind: feeByKind,
