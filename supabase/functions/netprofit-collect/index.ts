@@ -502,6 +502,8 @@ Deno.serve(async (req: Request) => {
   const ebay = {
     sale_fees: 0, refund_fee_credits: 0, labels: 0, label_count: 0,
     return_labels: 0, return_label_count: 0,
+    // Voided / refunded eBay labels. Non-zero here means postage came back.
+    label_credits: 0, label_credit_count: 0,
     rows: 0, matched: 0, unmatched: 0,
     account_fees_unattributed: 0, skipped_disputes: 0, skipped_transfers: 0,
     unhandled_types: {} as Record<string, number>,
@@ -710,17 +712,31 @@ Deno.serve(async (req: Request) => {
         //
         // A NON-return eBay label on an order that already has a Shopify label
         // is a different matter and still worth flagging.
+        // ⚠️ THE SIGN COMES FROM bookingEntry, NOT FROM THE TYPE NAME — the same
+        // rule the NON_SALE_CHARGE branch above already follows. A voided or
+        // refunded label comes back as SHIPPING_LABEL with bookingEntry CREDIT
+        // and a POSITIVE amount: it is money handed back. Adding it unsigned
+        // charged us for postage twice — once when we bought the label, again
+        // when eBay refunded it. Confirmed against the CFO's consolidated
+        // report, which carries these as negative "Ebay Shipping" (OVL
+        // #KS01-12833, 7/23: ($65.90)).
+        const credit = String(x.bookingEntry) === "CREDIT";
+        const signed = credit ? -amt : amt;
+        if (credit) {
+          ebay.label_credits = round2(ebay.label_credits + amt);
+          ebay.label_credit_count++;
+        }
         const isReturn = /return/i.test(String(x.transactionMemo || ""))
           || (x.references || []).some((r: any) => String(r?.referenceType) === "RETURN_ID");
         if (isReturn) {
-          ebay.return_labels = round2(ebay.return_labels + amt);
+          ebay.return_labels = round2(ebay.return_labels + signed);
           ebay.return_label_count++;
-        } else if (ordersWithShopifyLabel.has(hit.name)) {
+        } else if (!credit && ordersWithShopifyLabel.has(hit.name)) {
           ebay.overlap_orders.push(hit.name);
         }
-        ebay.labels = round2(ebay.labels + amt);
+        ebay.labels = round2(ebay.labels + signed);
         ebay.label_count++;
-        days[d].shipping_cost = round2((days[d].shipping_cost || 0) + amt);
+        days[d].shipping_cost = round2((days[d].shipping_cost || 0) + signed);
       }
     }
 
