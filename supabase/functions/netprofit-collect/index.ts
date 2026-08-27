@@ -214,6 +214,12 @@ Deno.serve(async (req: Request) => {
   // ?labels=1 dumps every shipping-label event per order, for reconciling
   // against a Shopify "shipping labels by order" export. Read-only, no cost.
   const wantLabels = url.searchParams.get("labels") === "1";
+  // ?ledger=1 reads the Shopify Payments balance ledger and buckets the
+  // shipping-label lines. This is ACTUAL MONEY off the payout, so it is the
+  // only thing that can settle whether a timeline message like "a shipping
+  // label for $17.88 with a $3.56 shipping insurance premium" cost us $17.88
+  // or $21.44 — the prose alone cannot. READ-ONLY.
+  const wantLedger = url.searchParams.get("ledger") === "1";
   if (!SHOP_BY_STORE[store]) return json({ error: `unknown store "${store}"` }, 400);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
     return json({ error: "pass from=YYYY-MM-DD&to=YYYY-MM-DD" }, 400);
@@ -834,6 +840,81 @@ Deno.serve(async (req: Request) => {
     return round2(rest.reduce((a, b) => a - b, head));
   };
 
+  // --- Shopify Payments ledger, shipping-label lines only -------------------
+  // ⚠️ /balance/transactions.json WITHOUT a payout_id returns only the CURRENT
+  // UNPAID balance — 499 rows, none of them July. History lives behind the
+  // payouts: list the payouts that settled in the window, then read each one's
+  // transactions. Labels bought late in July settle in early August, so the
+  // payout window is deliberately wider than the reporting window.
+  //
+  // ⚠️ AND IT DOES NOT ANSWER THE POSTAGE QUESTION AT THESE FIVE STORES.
+  // Measured on OVL July: 68 payouts, source types payout / charge /
+  // Payments::Refund / adjustment, and ZERO shipping_label rows. PayMore's
+  // labels are billed on the Shopify invoice, not deducted from the payout,
+  // so the order timeline stays the only programmatic source for label cost
+  // (ShopifyQL's shipping_labels dataset has no cost column either — every
+  // cost-shaped name is rejected; shipping_price is what the CUSTOMER paid).
+  // Kept because it is read-only, cheap, and answers other questions.
+  let ledger: any = undefined;
+  if (wantLedger) {
+    ledger = {
+      byType: {} as Record<string, { n: number; amount: number }>,
+      shippingLabelByOrder: {} as Record<string, number>,
+      payouts: 0, rows: 0, inWindow: 0,
+      shipping_label_total: 0,
+      first_seen: "", last_seen: "",
+      error: null as string | null,
+    };
+    const shopGet = async (path: string) => {
+      const r = await fetch(`https://${t.shop}/admin/api/${API_VERSION}/${path}`,
+        { headers: { "X-Shopify-Access-Token": t.access_token } });
+      if (!r.ok) throw new Error(`HTTP ${r.status} on ${path}: ${(await r.text()).slice(0, 200)}`);
+      return await r.json();
+    };
+    try {
+      const padDate = (d: string, days: number) => {
+        const x = new Date(d + "T12:00:00Z");
+        x.setUTCDate(x.getUTCDate() + days);
+        return x.toISOString().slice(0, 10);
+      };
+      const po = await shopGet(
+        `shopify_payments/payouts.json?limit=250&date_min=${padDate(from, -10)}`
+        + `&date_max=${padDate(to, 21)}`);
+      const payouts = po?.payouts || [];
+      ledger.payouts = payouts.length;
+      for (const p of payouts) {
+        // Shopify allows 2 calls/sec here and a busy store has ~70 payouts;
+        // without this the walk 429s a third of the way in and the totals lie.
+        await new Promise((r) => setTimeout(r, 600));
+        const b = await shopGet(
+          `shopify_payments/balance/transactions.json?limit=250&payout_id=${p.id}`);
+        for (const x of (b?.transactions || [])) {
+          ledger.rows++;
+          const day = chicagoDay(String(x.processed_at || p.date || ""));
+          if (!ledger.first_seen || day < ledger.first_seen) ledger.first_seen = day;
+          if (day > ledger.last_seen) ledger.last_seen = day;
+          const st = String(x.source_type || x.type || "unknown");
+          const amt = Number(x.amount) || 0;
+          const bk = ledger.byType[st] || { n: 0, amount: 0 };
+          bk.n++; bk.amount = round2(bk.amount + amt);
+          ledger.byType[st] = bk;
+          if (day < from || day > to) continue;
+          ledger.inWindow++;
+          if (/shipping_label/i.test(st)) {
+            ledger.shipping_label_total = round2(ledger.shipping_label_total + amt);
+            const oid = String(x.source_order_id || x.source_id || "");
+            if (oid) {
+              ledger.shippingLabelByOrder[oid] =
+                round2((ledger.shippingLabelByOrder[oid] || 0) + amt);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      ledger.error = String(e);
+    }
+  }
+
   return json({
     store, shop: t.shop, from, to, scopes,
     // How much work the re-dating did. Zero here on a month that had refunds
@@ -864,6 +945,7 @@ Deno.serve(async (req: Request) => {
     },
     ebayFinances: ebay,
     feeByTransactionKind: feeByKind,
+    paymentsLedger: ledger,
     shippingLabelShapes: labelShapes,
     shippingLabelDetail: wantLabels ? labelDetail : undefined,
     blocked,
