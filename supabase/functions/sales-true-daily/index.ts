@@ -92,6 +92,7 @@ const ORDER_Q = `query($q: String!, $after: String) {
       currentSubtotalPriceSet { shopMoney { amount } }
       refunds(first: 20) {
         createdAt
+        totalRefundedSet { shopMoney { amount } }
         refundLineItems(first: 100) { edges { node { subtotalSet { shopMoney { amount } } } } }
       }
     } }
@@ -280,6 +281,7 @@ Deno.serve(async (req) => {
     const sourceNames: Record<string, number> = {};
     const dayRows: Record<string, any> = {};
     const detail: any[] = [];
+    const noLineItems: any[] = [];
     // Order names per day per bucket, so the COGS half can be priced from
     // Shopify's own per-order cost rather than from unitCost — which is the
     // CURRENT cost of the SKU, not what it cost when it sold.
@@ -336,7 +338,22 @@ Deno.serve(async (req) => {
             if (!inRange(rd)) continue;
             const amt = r2((rf.refundLineItems?.edges || [])
               .reduce((a: number, x: any) => a + num(x.node.subtotalSet?.shopMoney?.amount), 0));
-            if (!amt) continue;
+            // ⚠️ A REFUND WITH NO LINE ITEMS STILL MOVES MONEY. Shopify's own
+            // day `returns` figure counts it; this pass, which prices refunds
+            // from refundLineItems, scores it zero and drops it. That silent
+            // drop is the whole of refunds_unreconciled, and until now the
+            // residual was a number with nothing attached to it. Record them so
+            // the gap can be read rather than guessed at.
+            const rTotal = r2(num(rf.totalRefundedSet?.shopMoney?.amount));
+            if (!amt) {
+              if (rTotal) {
+                noLineItems.push({ day: rd, store, order: o.name,
+                                   ebay_order_id: eid, total_refunded: rTotal,
+                                   why: "refund carries no line items — a shipping, tax or "
+                                      + "goodwill adjustment, not a returned item" });
+              }
+              continue;
+            }
             const b = bump(rd);
 
             let kind: string;
@@ -453,6 +470,12 @@ Deno.serve(async (req) => {
         reported_returns: r2(Math.abs(rep.returns)),
         refunds_classified: classified,
         refunds_unreconciled: residual,
+        // What the residual is made of, named. Anything left over after these
+        // is genuinely unexplained and should be treated as such.
+        adjustment_only_refunds: r2(noLineItems
+          .filter((x) => x.day === day)
+          .reduce((a, x) => a + x.total_refunded, 0)),
+        adjustment_only_detail: noLineItems.filter((x) => x.day === day),
         draft_orders_kept_as_real_sales: r2(b.draft_kept || 0),
         all_draft_orders_channel: r2(b.draft_all_channel || 0),
         left_in_genuine_refunds: b.genuine_refund,
