@@ -66,6 +66,22 @@ const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 // --- eBay Finances API -------------------------------------------------------
 // ⚠️ The Finances API is served from apiz.ebay.com, NOT api.ebay.com. The wrong
 // host returns a 404 that reads exactly like "this store had no transactions".
+// What Finance calls "eBay New" on the Selling → Payments report: the Final Value
+// Fee, both halves. EVERYTHING ELSE eBay charges falls in "eBay Other" — the CFO
+// listed six kinds (regulatory operating, very high "item not as described",
+// below standard performance, international, charity donation, deposit
+// processing) but the bucket is defined as the complement, not as that list, so a
+// fee kind eBay adds later is counted from the day it appears instead of being
+// silently dropped for not being on a hard-coded list.
+//
+// July 2026, all five stores, showed only four types in total:
+//   FINAL_VALUE_FEE 42,317.31 · FINAL_VALUE_FEE_FIXED_PER_ORDER 938.30  (New)
+//   HIGH_ITEM_NOT_AS_DESCRIBED_FEE 3,062.07 · INTERNATIONAL_FEE 1,089.54 (Other)
+const EBAY_FEE_NEW = new Set([
+  "FINAL_VALUE_FEE",
+  "FINAL_VALUE_FEE_FIXED_PER_ORDER",
+]);
+
 const EBAY_FIN_HOST: Record<string, string> = {
   production: "https://apiz.ebay.com",
   sandbox: "https://apiz.sandbox.ebay.com",
@@ -282,6 +298,10 @@ Deno.serve(async (req: Request) => {
       returns: 0,
       cc_fee: 0,
       ebay_fee: null,
+      // The CFO's split of the line above. null for the same reason ebay_fee is:
+      // a day we could not read owes an unknown fee, not a zero one.
+      ebay_fee_new: null,
+      ebay_fee_other: null,
       // 0, not null: shipping is now readable, so an empty day genuinely means
       // no labels were bought against it.
       shipping_cost: 0,
@@ -486,6 +506,12 @@ Deno.serve(async (req: Request) => {
     account_fees_unattributed: 0, skipped_disputes: 0, skipped_transfers: 0,
     unhandled_types: {} as Record<string, number>,
     overlap_orders: [] as string[],
+    // The CFO's two columns off the Selling → Payments report, plus the raw
+    // per-type tally behind them so a disagreement can be argued from the line
+    // rather than from the total.
+    fee_new: 0, fee_other: 0,
+    fee_by_type: {} as Record<string, number>,
+    fee_type_unbucketed: 0, fee_type_unbucketed_rows: 0,
   };
   try {
     const er = await fetch(
@@ -520,7 +546,11 @@ Deno.serve(async (req: Request) => {
     // Only now that the WHOLE range came back 200 do the nulls become zeros: a
     // day with no eBay activity genuinely owes no fee, but a day we failed to
     // read owes an unknown one, and those two must never look alike.
-    for (const d of Object.keys(days)) days[d].ebay_fee = 0;
+    for (const d of Object.keys(days)) {
+      days[d].ebay_fee = 0;
+      days[d].ebay_fee_new = 0;
+      days[d].ebay_fee_other = 0;
+    }
 
     for (const x of txs) {
       ebay.rows++;
@@ -564,13 +594,56 @@ Deno.serve(async (req: Request) => {
       const d = hit.day;
       ebay.matched++;
 
-      if (type === "SALE") {
-        ebay.sale_fees = round2(ebay.sale_fees + fee);
-        days[d].ebay_fee = round2((days[d].ebay_fee || 0) + fee);
-      } else if (type === "REFUND") {
-        // DEBIT row, but totalFeeAmount is the fee eBay hands BACK to us.
-        ebay.refund_fee_credits = round2(ebay.refund_fee_credits + fee);
-        days[d].ebay_fee = round2((days[d].ebay_fee || 0) - fee);
+      if (type === "SALE" || type === "REFUND") {
+        // ── The CFO's split ────────────────────────────────────────────────
+        // Finance does not read "eBay fee" as one number. Off the Selling →
+        // Payments report he keeps two columns:
+        //   eBay New   = Final Value Fee - fixed + Final Value Fee - variable
+        //   eBay Other = regulatory operating, very high "item not as described",
+        //                below standard performance, international, charity
+        //                donation, deposit processing
+        // Those report labels have API equivalents at
+        // orderLineItems[].marketplaceFees[].feeType, so the same split can be
+        // produced here and the two sources compared line for line rather than
+        // "the totals are close".
+        //
+        // ✅ NOTHING IS LOST BY BUCKETING. Verified over all five stores in July
+        // 2026: the line-item fees sum EXACTLY to totalFeeAmount, $0.00
+        // unexplained across 2,700+ transactions. So New + Other is the whole
+        // fee, and this is a split of the existing column, not a new total.
+        // ebay_fee is still written from totalFeeAmount — the authoritative
+        // figure — so a fee kind eBay invents tomorrow lands in the total even
+        // if it lands in neither bucket. `fee_type_unbucketed` is what says so.
+        const sign = type === "SALE" ? 1 : -1;
+        let bucketed = 0;
+        for (const li of x?.orderLineItems || []) {
+          for (const f of li?.marketplaceFees || []) {
+            const ft = String(f?.feeType || "?").toUpperCase();
+            const fa = Number(f?.amount?.value) || 0;
+            bucketed += fa;
+            ebay.fee_by_type[ft] = round2((ebay.fee_by_type[ft] || 0) + sign * fa);
+            if (EBAY_FEE_NEW.has(ft)) {
+              ebay.fee_new = round2(ebay.fee_new + sign * fa);
+              days[d].ebay_fee_new = round2((days[d].ebay_fee_new || 0) + sign * fa);
+            } else {
+              ebay.fee_other = round2(ebay.fee_other + sign * fa);
+              days[d].ebay_fee_other = round2((days[d].ebay_fee_other || 0) + sign * fa);
+            }
+          }
+        }
+        if (Math.abs(bucketed - fee) > 0.005) {
+          ebay.fee_type_unbucketed = round2(ebay.fee_type_unbucketed + (fee - bucketed));
+          ebay.fee_type_unbucketed_rows++;
+        }
+
+        if (type === "SALE") {
+          ebay.sale_fees = round2(ebay.sale_fees + fee);
+          days[d].ebay_fee = round2((days[d].ebay_fee || 0) + fee);
+        } else {
+          // DEBIT row, but totalFeeAmount is the fee eBay hands BACK to us.
+          ebay.refund_fee_credits = round2(ebay.refund_fee_credits + fee);
+          days[d].ebay_fee = round2((days[d].ebay_fee || 0) - fee);
+        }
       } else {
         // An eBay label never appears in the Shopify timeline, so it is real
         // ADDITIONAL postage. Most are RETURN labels — verified by
@@ -644,6 +717,10 @@ Deno.serve(async (req: Request) => {
       cc_fee: sum("cc_fee"),
       shipping_cost: sum("shipping_cost"),
       ebay_fee: sum("ebay_fee"),
+      // Finance's two columns. They add to ebay_fee, and ebayFinances
+      // .fee_type_unbucketed is non-zero if they ever stop doing so.
+      ebay_fee_new: sum("ebay_fee_new"),
+      ebay_fee_other: sum("ebay_fee_other"),
       ebay_net_sales: sum("ebay_net_sales"),
       orders: sum("orders"),
       ebay_orders: sum("ebay_orders"),

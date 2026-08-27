@@ -196,6 +196,48 @@ Deno.serve(async (req: Request) => {
     byType[k].fees = Math.round(byType[k].fees * 100) / 100;
   }
 
+  // ---------------------------------------------------------------------------
+  // Fee types, because "eBay Fee" is not one number to Finance.
+  // ---------------------------------------------------------------------------
+  // The CFO builds his column off the Selling → Payments report, split two ways:
+  //   "eBay New"   = Final Value Fee - fixed + Final Value Fee - variable
+  //   "eBay Other" = regulatory operating, "item not as described", below-standard
+  //                  performance, international, charity donation, deposit processing
+  // Those are the report's LABELS. The API's equivalents live at
+  // orderLineItems[].marketplaceFees[].feeType, which the collector never looked
+  // at — it only ever summed totalFeeAmount. Tallying them here is what makes the
+  // two sources comparable line for line instead of "the totals are close".
+  //
+  // ⚠️ Also tally the DIFFERENCE between totalFeeAmount and the sum of the line
+  // fees. If a fee kind is charged at order level rather than per line item it
+  // shows up here and nowhere else, and it would be invisible to a feeType tally
+  // that trusted the parts to add up to the whole.
+  const byFeeType: Record<string, { n: number; amount: number; onTxTypes: Record<string, number> }> = {};
+  let lineFeeSum = 0, totalFeeSum = 0, txsWithFeeGap = 0, feeGap = 0;
+  for (const t of txs) {
+    const txType = String(t.transactionType || "?");
+    const tot = Number(t?.totalFeeAmount?.value) || 0;
+    let mine = 0;
+    for (const li of t?.orderLineItems || []) {
+      for (const f of li?.marketplaceFees || []) {
+        const ft = String(f?.feeType || "?");
+        const amt = Number(f?.amount?.value) || 0;
+        byFeeType[ft] = byFeeType[ft] || { n: 0, amount: 0, onTxTypes: {} };
+        byFeeType[ft].n++;
+        byFeeType[ft].amount += amt;
+        byFeeType[ft].onTxTypes[txType] = (byFeeType[ft].onTxTypes[txType] || 0) + 1;
+        mine += amt;
+      }
+    }
+    lineFeeSum += mine;
+    totalFeeSum += tot;
+    if (Math.abs(mine - tot) > 0.005) { txsWithFeeGap++; feeGap += tot - mine; }
+  }
+  for (const k of Object.keys(byFeeType)) {
+    byFeeType[k].amount = Math.round(byFeeType[k].amount * 100) / 100;
+  }
+  const money = (n: number) => Math.round(n * 100) / 100;
+
   const sale = txs.find((t) => t.transactionType === "SALE");
 
   return json({
@@ -209,6 +251,18 @@ Deno.serve(async (req: Request) => {
     // the whole month.
     needsPaging: (Number(body?.total) || 0) > txs.length,
     byType,
+    // Every fee kind eBay actually charged, so the CFO's two buckets can be
+    // rebuilt from the API instead of taken on trust.
+    byFeeType,
+    feeReconciliation: {
+      sum_of_line_item_fees: money(lineFeeSum),
+      sum_of_totalFeeAmount: money(totalFeeSum),
+      // Non-zero means some fee is charged outside orderLineItems[].marketplaceFees
+      // and a feeType tally alone would under-report it.
+      unexplained: money(totalFeeSum - lineFeeSum),
+      transactions_where_they_disagree: txsWithFeeGap,
+      gap: money(feeGap),
+    },
     fieldsOnFirstSale: sale ? Object.keys(sale) : null,
     sampleSale: sale ?? null,
     // One of each non-SALE type, so the sign and shape of every row that could
