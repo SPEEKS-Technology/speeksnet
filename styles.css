@@ -2053,6 +2053,11 @@ select.bs-hidden-select:focus {
 .rec-champ .cs .ch { color: #178048; font-weight: 850; letter-spacing: .015em; }
 .rec-champ .cs .cd { color: #cbd5e1; margin: 0 5px; }
 .rec-list { padding: 6px 8px 4px; display: flex; flex-direction: column; }
+/* A leader-only card holds nothing but its collapsed board, so the list's top
+   padding would sit as a blank strip under the hero. Dropping it also lands the
+   first revealed row flush against the hero's divider, which is where the
+   fourth row lands on every other card. */
+.rec-list.lead { padding-top: 0; }
 .rec-li { display: flex; align-items: center; gap: 11px; padding: 9px 8px; }
 .rec-li + .rec-li { border-top: 1px solid #f1f5f9; }
 .hidden-board .rec-li:first-child { border-top: 1px solid #f1f5f9; }

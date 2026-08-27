@@ -8185,6 +8185,25 @@ function _recHolders(champ, stores) {
     return (exact.length ? exact : hits).map(s => String(s.section).trim());
 }
 
+/* Records whose hero IS first place, rather than a company-wide total.
+ *
+ * Every other metric on this page has a real Company figure — the best day the
+ * company as a whole bought, the month it as a whole billed — so the hero is a
+ * number in its own right and the board underneath starts again at 1. Reviews
+ * don't work that way: five stores cannot add their best days together and call
+ * the sum a record, so the company's best single day IS whichever store's best
+ * single day is highest. Printing that store at rank 1 directly beneath its own
+ * headline would just say it twice, so the hero takes first place and the
+ * dropdown carries 2-5.
+ *
+ * The value is the label's own copy: adding a metric here changes only which
+ * rows are visible, never the data, and the Company Records tool edits it like
+ * any other.
+ */
+const RECORD_LEADER_ONLY = {
+    'Single Day Google Reviews': { show: 'See Places 2-5', hide: 'Hide Places 2-5' },
+};
+
 function renderRecords() {
     const cont = document.getElementById('recordsContainer');
     if (!cont) return;
@@ -8230,8 +8249,16 @@ function renderRecords() {
         }
 
         if (d.s.length) {
-            html += `<div class="rec-list">`;
-            html += d.s.slice(0, 3).map((s, i) => `
+            // How many places the card shows before the dropdown. A leader-only
+            // card spends its first place on the hero above, so it opens the
+            // dropdown at 2 while everyone else opens it at 4.
+            const only = RECORD_LEADER_ONLY[l];
+            const cut = only ? 1 : 3;
+            const inline = only ? [] : d.s.slice(0, cut);
+            const hidden = d.s.slice(cut);
+
+            html += `<div class="rec-list${only ? ' lead' : ''}">`;
+            html += inline.map((s, i) => `
                 <div class="rec-li">
                     <span class="lr${i===0 ? ' g' : ''}">${i+1}</span>
                     <span class="ls">${s.section}</span>
@@ -8241,12 +8268,12 @@ function renderRecords() {
                     </span>
                 </div>`).join('');
 
-            if (d.s.length > 3) {
+            if (hidden.length) {
                 html += `
                 <div id="${oId}" class="hidden-board">
-                    ${d.s.slice(3).map((s, i) => `
+                    ${hidden.map((s, i) => `
                     <div class="rec-li">
-                        <span class="lr">${i+4}</span>
+                        <span class="lr">${i+cut+1}</span>
                         <span class="ls">${s.section}</span>
                         <span class="lv">
                             <b>${s.value || '-'}</b>
@@ -8256,8 +8283,10 @@ function renderRecords() {
                 </div>`;
             }
             html += `</div>`;
-            if (d.s.length > 3) {
-                html += `<button class="rec-more" onclick="toggleBoard('${oId}', this)">See Full Leaderboard ▾</button>`;
+            if (hidden.length) {
+                const show = only ? only.show : 'See Full Leaderboard';
+                const hide = only ? only.hide : 'Hide Leaderboard';
+                html += `<button class="rec-more" data-show="${escapeHtml(show)}" data-hide="${escapeHtml(hide)}" onclick="toggleBoard('${oId}', this)">${escapeHtml(show)} ▾</button>`;
             }
         }
         html += `</div>`;
@@ -8267,10 +8296,16 @@ function renderRecords() {
     cont.innerHTML = html;
 }
 
-function toggleBoard(id, btn) { 
-    const el = document.getElementById(id); 
-    el.classList.toggle('open'); 
-    btn.innerText = el.classList.contains('open') ? 'Hide Leaderboard ▴' : 'See Full Leaderboard ▾'; 
+function toggleBoard(id, btn) {
+    const el = document.getElementById(id);
+    el.classList.toggle('open');
+    // The wording is the card's, not this function's — a leader-only board says
+    // "Places 2-5". The fallbacks keep any button rendered before this change
+    // (a cached page mid-deploy) reading the way it always did.
+    const open = el.classList.contains('open');
+    const show = btn.dataset.show || 'See Full Leaderboard';
+    const hide = btn.dataset.hide || 'Hide Leaderboard';
+    btn.innerText = open ? `${hide} ▴` : `${show} ▾`;
 }
 
 async function toggleManageRecords() {

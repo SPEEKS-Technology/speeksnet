@@ -1,8 +1,15 @@
 // ============================================================================
 // dupe-risk-list — the duplicate orders that have NOT been refunded on eBay.
 //
-//   ?secret=<ops>             JSON (default)
-//   ?secret=<ops>&format=csv  CSV, one row per eBay order
+//   ?secret=<ops>                JSON (default)
+//   ?secret=<ops>&format=csv     CSV, one row per eBay order — every column
+//   ?secret=<ops>&format=master  CSV in the master workbook's own 10 columns,
+//                                the same shape dupe-newly-surfaced emits, so
+//                                the two files stack in one sheet
+//
+// The master shape deliberately carries an EMPTY "eBay Refunded (Central)".
+// That blank is the entire point of this list: these are the rows where eBay
+// has not moved. Do not fill it in to make the columns look tidy.
 //
 // READ-ONLY. Reads the newest row per eBay order out of `refund_reprobe` and
 // keeps only those still showing no refund on eBay. Touches neither Shopify nor
@@ -70,6 +77,20 @@ async function sbAll(path: string) {
     out.push(...page);
     if (page.length < 1000) return out;
   }
+}
+
+// The store's clock, not the server's — the edge runtime is UTC, so a 7pm
+// Central refund would otherwise print as the following day. Same format as
+// dupe-newly-surfaced so the two exports sort together in one column.
+const CENTRAL = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", hour12: false,
+});
+function central(iso: string | null) {
+  if (!iso) return "";
+  const p: any = {};
+  for (const x of CENTRAL.formatToParts(new Date(iso))) p[x.type] = x.value;
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
 }
 
 const csvCell = (v: unknown) => {
@@ -162,7 +183,48 @@ Deno.serve(async (req: Request) => {
     else s.not_shipped++;
   }
 
-  if ((url.searchParams.get("format") || "").toLowerCase() === "csv") {
+  const format = (url.searchParams.get("format") || "").toLowerCase();
+
+  // The master workbook's columns, C onward. SKU and the Shopify refund
+  // timestamp are not on refund_reprobe — they belong to refund_damage, which
+  // is the row that records what WE did, so it is joined rather than read off
+  // the eBay body. An id missing from refund_damage keeps its row and shows a
+  // blank cell: dropping it would quietly shrink an exposure list.
+  if (format === "master") {
+    const dmg = await sbAll("refund_damage?select=ebay_order_id,sku,shopify_refunded_at");
+    const byId: Record<string, any> = {};
+    for (const d of dmg) byId[String(d.ebay_order_id)] = d;
+
+    const HEAD = [
+      "Store", "Shopify Order", "SKU", "eBay Order ID", "eBay Order Total",
+      "Shopify Refund Amount", "Shipped To Buyer", "Buyer Requested Refund",
+      "Shopify Refunded (Central)", "eBay Refunded (Central)",
+    ];
+    const body = [HEAD.join(",")].concat(out.map((o) => {
+      const d = byId[o.ebay_order_id] || {};
+      return [
+        o.store,
+        o.shopify_dupe_refunded,
+        d.sku ?? "",
+        o.ebay_order_id,
+        o.ebay_order_total,
+        o.shopify_refund,
+        o.ebay_fulfillment_status === "FULFILLED" ? "Yes" : "No",
+        o.cancel_state === "NONE_REQUESTED" ? "No" : (o.cancel_state ?? ""),
+        central(d.shopify_refunded_at ?? null),
+        "", // eBay has not refunded these — see the header.
+      ].map(csvCell).join(",");
+    })).join("\n");
+
+    return new Response(body, {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="dupe-still-at-risk-master.csv"',
+      },
+    });
+  }
+
+  if (format === "csv") {
     const cols = [
       "store", "store_label", "manager", "ebay_order_id", "sale_date", "days_open",
       "shopify_dupe_refunded", "shopify_refund", "ebay_order_total", "due_seller",
