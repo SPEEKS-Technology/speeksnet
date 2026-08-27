@@ -93,26 +93,60 @@ var MRF_NOTE = 'MC mirror-back fix (Aug 26) — real figure. Locked from the dai
 // script and must never be rewritten here.
 var MRF_OTHER_NOTES = [
   'MPC dupe error fix — real figure. Locked from the daily sync.',
-  'New-MC dupe fix (Aug 24-25) — real figure. Locked from the daily sync.'
+  'New-MC dupe fix (Aug 24-25) — real figure. Locked from the daily sync.',
+  // ⚠️ newmc-store-fix.gs's note was MISSING from this list until 2026-08-27.
+  // It owns Aug 15-24 at every store — the largest block of pins in the month —
+  // so its absence meant those cells were protected only by luck (nothing in
+  // MRF_FIX happened to point at one). BAL Aug 24 now does. See MRF_FORCE.
+  'New-MC adoption dupe fix — real figure. Locked from the daily sync.'
 ];
 
-// Aug 26 only. Sales / cost, from sales-true-daily 2026-08-27.
+// Aug 26, and one Aug 24 cell. Sales / cost, from sales-true-daily 2026-08-27.
 var MRF_FIX = [
   { store: 'OVL', day: 26, sales: 2950.26, cost: 1143.54 },  // sheet reads -10211.82 / -4578.25
   { store: 'LEE', day: 26, sales: 4163.22, cost: 1956.68 },  // sheet reads -10352.96 / -4149.99
   { store: 'WSP', day: 26, sales: 3373.80, cost: 1525.00 },  // sheet reads   1508.86 /   605.00
   { store: 'MPL', day: 26, sales: 1516.92, cost:  734.00 },  // sheet reads  -3722.89 / -1501.30
-  { store: 'BAL', day: 26, sales: 1301.25, cost:  570.32 }   // sheet reads  -2158.59 /  -974.68
+  { store: 'BAL', day: 26, sales: 1301.25, cost:  570.32 },  // sheet reads  -2158.59 /  -974.68
+
+  // -------------------------------------------------------------------------
+  // BAL AUG 24 — +124.99 / +52.00, and the ONLY pre-Aug-26 cell this file moves.
+  // -------------------------------------------------------------------------
+  // eBay 13-15066-46687 has TWO Shopify orders and BOTH were refunded: our own
+  // #MO04-2821 (SPEEKS Connect, cancelled 17:08) and the new-MC phantom
+  // #MO04-2836 (cancelled 17:17, nine minutes later, in the same cleanup pass).
+  // The phantom is already out of the pin. The pin ALSO leaves our copy's refund
+  // in, as one of the "three genuine returns" newmc-store-fix.gs recorded on
+  // this day. It is not a return.
+  //
+  // PROOF: dupe-order-trace reports CONTRADICTION on this eBay order. Both
+  // Shopify copies read UNFULFILLED with no tracking, but eBay holds a real USPS
+  // number, 92346902673388000088429465, shipped 2026-08-24T14:43Z — two and a
+  // half hours BEFORE either cancellation. The parcel went out. The buyer has
+  // the goods and the money.
+  //
+  // So the sale is real and stays in the day; the $124.99 is loss, and belongs
+  // on the loss sheet, not netted out of what BAL sold. A cancelled Shopify
+  // order is not evidence a parcel never shipped — only an eBay tracking NUMBER
+  // settles that.
+  { store: 'BAL', day: 24, sales: 3502.71, cost: 1136.00 }   // pin says 3377.72 / 1084.00
 ];
+
+// Cells in MRF_FIX that an earlier fix's note owns, and that we overwrite
+// anyway. Nothing may be added here without the evidence written out above it —
+// the note guard exists precisely to stop casual restatement of a locked day.
+var MRF_FORCE = { 'BAL:24': true };
 
 // Reported by the preview but NEVER written — the existing pin is correct.
 // See the header: un-cleaned duplicates that carry both a positive and a
 // negative leg, so a ledger-based recomputation cannot strip them.
 var MRF_KNOWN_DIFFERENT = [
-  { store: 'LEE', day: 19, why: '#MO01-9103 +88.99  — pin is right' },
-  { store: 'LEE', day: 24, why: '#MO01-9103 -88.99  — pin is right' },
-  { store: 'BAL', day: 22, why: '#MO04-2844 +699.99 — pin is right' },
-  { store: 'BAL', day: 24, why: '#MO04-2844 -699.99 — pin is right' }
+  { store: 'LEE', day: 19, why: '#MO01-9103 +88.99  — pin is right (cost agrees to the cent)' },
+  { store: 'LEE', day: 24, why: '#MO01-9103 -88.99  — pin is right (cost agrees to the cent)' },
+  { store: 'BAL', day: 22, why: '#MO04-2844 +699.99 / +300.00 — pin is right' },
+  { store: 'BAL', day: 24, why: '#MO04-2844 -699.99 / -300.00 — pin is right. The OTHER half of this day, +124.99 / +52.00, IS written — see MRF_FIX' },
+  { store: 'WSP', day: 15, why: 'cost +900.00 is hand-entered for a directly-listed eBay item Shopify carries no COGS for — pin is right, and WSP Aug 15 must never be recomputed' },
+  { store: 'LEE', day: 25, why: 'sales -0.47 — too small to justify moving a locked cell; pin stands' }
 ];
 
 function mrfFixPreview() { _mrfRun(true); }
@@ -175,6 +209,11 @@ function _mrfRun(dryRun) {
       var owned = false;
       for (var n = 0; n < MRF_OTHER_NOTES.length; n++) {
         if (note.indexOf(MRF_OTHER_NOTES[n]) === 0) owned = true;
+      }
+      if (owned && MRF_FORCE[f.store + ':' + f.day]) {
+        Logger.log('  ' + f.store + ' ' + f.day + ' ' + pairs[p].what
+                   + ': owned by an earlier fix, OVERRIDDEN ON PURPOSE (MRF_FORCE)');
+        owned = false;
       }
       if (owned) {
         Logger.log('  ' + f.store + ' ' + f.day + ' ' + pairs[p].what + ': OWNED BY AN EARLIER FIX, skipped');
