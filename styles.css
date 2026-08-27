@@ -2064,6 +2064,13 @@ select.bs-hidden-select:focus {
 .rec-li .lr { width: 18px; text-align: center; font-size: 12px; font-weight: 850; color: #94a3b8; flex: none; font-variant-numeric: tabular-nums; }
 .rec-li .lr.g { color: #c99a17; }
 .rec-li .ls { font-size: 13px; font-weight: 800; color: var(--slate-charcoal); }
+/* Person-held metrics: the name is the holder, the store is where they work.
+   Stacked so the name keeps the weight the store code has on every other card. */
+.rec-li .ls .lsub {
+    display: block; margin-top: 1px;
+    font-size: 10px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: #94a3b8;
+}
 .rec-li .lv { margin-left: auto; text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
 .rec-li .lv b { font-size: 14px; font-weight: 850; line-height: 1.15; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
 .rec-li .lv span { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
@@ -10327,7 +10334,16 @@ body.sam-active .hotbar-btn:hover {
    value + date. Redesign only — every cell keeps .record-manage-row so
    saveManageRecords() reads exactly the same fields. */
 #manageRecordsList .cr-hint { font-size: 12px; color: #647082; margin: 0 0 12px; }
-#manageRecordsList .cr-grid-scroll { overflow-x: auto; padding-bottom: 4px; }
+/* This is the vertical scroller, not .manage-content — overflow-x:auto makes
+   overflow-y compute to auto too, which is also what lets the header freeze.
+   Everything the tool edits sits inside it so there is exactly ONE scrollbar:
+   nesting a second one hid the person editor below the fold on a short screen
+   with nothing to say it was there. flex:1 1 auto so it takes the modal's
+   height rather than its content's. */
+#manageRecordsList .cr-grid-scroll {
+    overflow-x: auto; padding-bottom: 4px;
+    flex: 1 1 auto;
+}
 #manageRecordsList .cr-grid { display: grid; gap: 6px; min-width: min-content; align-items: stretch; }
 #manageRecordsList .cr-cell { display: flex; box-sizing: border-box; }
 #manageRecordsList .cr-colhead {
@@ -10336,6 +10352,35 @@ body.sam-active .hotbar-btn:hover {
     color: #475569; background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 8px; padding: 9px 6px;
     position: sticky; top: 0; z-index: 3;
 }
+/* The frozen header is not one bar — it is six separate cells with the grid's
+   6px gutters between and below them, and a gutter is transparent. So a row
+   scrolling underneath stayed visible through the gaps and around the pills'
+   rounded corners, which is what read as content clipping through the header.
+   These fill the gutters with the panel's own colour: opaque, but the same
+   shade the gaps already appeared to be, so the header looks unchanged and
+   simply stops leaking. The shadow is what says "this floats above the rows"
+   rather than "this is the first row" — the same fix as .b2b-phead.
+   A pseudo-element cannot do this: these cells are sticky WITH a z-index, so
+   they open a stacking context and even a z-index:-1 child paints over their
+   own background. A box-shadow paints outside the border box and behind it. */
+#manageRecordsList .cr-colhead,
+#manageRecordsList .cr-corner {
+    /* Square along the bottom. A box-shadow follows the border-radius, so a
+       rounded corner leaves a notch the shadow cannot fill, and a row shows
+       through it — that was the last of the leak after the gutters were
+       closed. Squaring the pills is what makes the cover total rather than
+       nearly total, and it reads as a spreadsheet header, which this is. */
+    border-radius: 0;
+    box-shadow:
+        0 0 0 5px #f6f8fa,                    /* close the gutters either side */
+        0 5px 0 5px #f6f8fa,                  /* and the one underneath */
+        0 12px 12px -9px rgba(16, 24, 34, .5);
+}
+/* The left column freezes against the HORIZONTAL scroll, so only the gutter it
+   is scrolled across needs closing. Top and bottom stay open on purpose: those
+   gaps separate one metric from the next, and this cell travels with its row,
+   so nothing ever passes behind it vertically. */
+#manageRecordsList .cr-rowhead { box-shadow: 7px 0 0 0 #f6f8fa; }
 #manageRecordsList .cr-corner {
     align-items: center; padding: 9px 12px;
     font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8;
@@ -10368,6 +10413,64 @@ body.sam-active .hotbar-btn:hover {
 }
 #manageRecordsList .cr-company input:focus { box-shadow: none; border-color: #d6e9dd; }
 #manageRecordsList .cr-company input.r-date { color: #5f8f74; font-weight: 600; }
+
+/* ── Person-held records ───────────────────────────────────────────────────
+   A list, not a grid: the holder is a person, so there is no column to put
+   them in and the number of holders is not fixed at five. Sits below the
+   grid, inside the same scroll container. */
+#manageRecordsList .cr-people {
+    margin-top: 18px; padding: 14px; background: #fff;
+    border: 1px solid #e3e8ee; border-radius: 12px;
+    /* Above the frozen header (z-index 3/4). Scrolling down to this section
+       slides it over the store columns, which is right: those column names
+       describe the grid, and nothing here belongs to them. */
+    position: relative; z-index: 5;
+}
+#manageRecordsList .cr-people-h { display: flex; flex-direction: column; gap: 3px; margin-bottom: 11px; }
+#manageRecordsList .cr-people-t {
+    font-size: 12.5px; font-weight: 800; color: var(--slate-charcoal);
+}
+#manageRecordsList .cr-people-s { font-size: 11.5px; color: #647082; line-height: 1.35; }
+#manageRecordsList .cr-prow {
+    display: grid; grid-template-columns: minmax(120px, 1.6fr) minmax(96px, .9fr) 80px minmax(130px, 1.2fr) 32px;
+    gap: 8px; align-items: center;
+}
+#manageRecordsList .cr-phead {
+    padding: 0 2px 6px; font-size: 9.5px; font-weight: 800; letter-spacing: .07em;
+    text-transform: uppercase; color: #94a3b8;
+}
+#manageRecordsList .cr-person-row + .cr-person-row { margin-top: 7px; }
+#manageRecordsList .cr-person-row input {
+    width: 100%; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 7px;
+    font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal); outline: none; background: #fff;
+}
+#manageRecordsList .cr-person-row input:focus {
+    border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(31, 157, 87, .12);
+}
+#manageRecordsList .cr-person-row .p-val { font-variant-numeric: tabular-nums; }
+#manageRecordsList .cr-person-row .p-date { font-size: 11.5px; color: #64748b; }
+/* The native <select> is moved into a .dd-host and covered by a .dd-btn face,
+   so the face is what has to be sized here — styling the select alone would
+   leave a control that reads at the wrong height. */
+#manageRecordsList .cr-person-row .dd-host { width: 100%; min-width: 0; }
+#manageRecordsList .cr-person-row .dd-btn {
+    width: 100%; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 7px;
+    font-size: 12.5px; font-weight: 600; background: #fff; min-height: 0;
+}
+#manageRecordsList .cr-prm {
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; min-height: 0; padding: 0; flex: none;
+    border: 1px solid #e3e8ee; border-radius: 8px; background: #f8fafc;
+    color: #94a3b8; cursor: pointer; transition: background .15s, color .15s;
+}
+#manageRecordsList .cr-prm svg { width: 15px; height: 15px; }
+#manageRecordsList .cr-prm:hover { background: #fef2f2; color: var(--red-alert); border-color: #fbd5d5; }
+#manageRecordsList .cr-padd {
+    margin-top: 10px; width: 100%; padding: 8px; border-radius: 8px;
+    background: #f4faf6; border: 1px solid #e3ede7; color: #178048;
+    font-size: 11.5px; font-weight: 800; cursor: pointer; transition: background .15s;
+}
+#manageRecordsList .cr-padd:hover { background: #e8f7ee; }
 #boxOrderModal .box-order-footer button svg { width: 15px; height: 15px; }
 /* Recycle report footer (JS-rendered) mirrors Box Order's arrow/info buttons. */
 #recycleInvModal .btn-primary svg, #recycleInvModal .btn-secondary svg { width: 15px; height: 15px; flex: 0 0 auto; }

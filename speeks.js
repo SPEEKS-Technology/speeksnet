@@ -8189,20 +8189,22 @@ function _recHolders(champ, stores) {
  *
  * Every other metric on this page has a real Company figure — the best day the
  * company as a whole bought, the month it as a whole billed — so the hero is a
- * number in its own right and the board underneath starts again at 1. Reviews
- * don't work that way: five stores cannot add their best days together and call
- * the sum a record, so the company's best single day IS whichever store's best
- * single day is highest. Printing that store at rank 1 directly beneath its own
- * headline would just say it twice, so the hero takes first place and the
- * dropdown carries 2-5.
+ * number in its own right and the board underneath starts again at 1. A metric
+ * listed here has no such total: the hero IS first place, so printing that
+ * holder again at rank 1 directly beneath their own headline would just say it
+ * twice. The hero takes first place and the dropdown carries 2-5.
  *
- * The value is the label's own copy: adding a metric here changes only which
- * rows are visible, never the data, and the Company Records tool edits it like
- * any other.
+ * `by: 'person'` means the holder is a PERSON and the store is only where they
+ * work. That changes the whole row: the name is the headline, the store is
+ * supporting detail, two rows can share a store, and there is no Company row to
+ * auto-fill — the leader is simply whoever is top. It also changes how the
+ * Company Records tool edits it, which is why the tool reads this same map.
  */
 const RECORD_LEADER_ONLY = {
-    'Single Day Google Reviews': { show: 'See Places 2-5', hide: 'Hide Places 2-5' },
+    'Single Day Google Reviews': { by: 'person', show: 'See Places 2-5', hide: 'Hide Places 2-5' },
 };
+const RECORD_PERSON_LABELS = Object.keys(RECORD_LEADER_ONLY)
+    .filter(l => RECORD_LEADER_ONLY[l].by === 'person');
 
 function renderRecords() {
     const cont = document.getElementById('recordsContainer');
@@ -8228,6 +8230,15 @@ function renderRecords() {
 
     Object.keys(map).forEach(l => {
         let d = map[l];
+        const only = RECORD_LEADER_ONLY[l];
+        const byPerson = only?.by === 'person';
+
+        // A person-held metric with nobody on it yet renders NOTHING. An empty
+        // card would sit on the page for the whole rollout announcing that the
+        // company has no record — the same reason the reviews tiles hide until
+        // the hub carries reviews.
+        if (byPerson && !d.s.some(s => String(s.value || '').trim())) return;
+
         bC++;
         let oId = 'overflow-board-' + bC;
         d.s.sort((a, b) => parseNum(b.value) - parseNum(a.value));
@@ -8238,8 +8249,17 @@ function renderRecords() {
             <div class="rec-h">${l}</div>`;
 
         if (cR) {
-            const who = _recHolders(cR, d.s).map(escapeHtml).join(' &middot; ');
-            const when = cR.subtext || '';
+            // Who holds it. For a person metric that is the name on the row —
+            // no lookup, because the row already says. _recHolders exists only
+            // because a store metric's Company row carries no store.
+            const who = byPerson
+                ? [String(cR.person || '').trim()].filter(Boolean).map(escapeHtml).join('')
+                : _recHolders(cR, d.s).map(escapeHtml).join(' &middot; ');
+            // The store is where they work, so it rides with the date as
+            // supporting detail rather than standing in for the holder.
+            const when = byPerson
+                ? [cR.section, cR.subtext].filter(Boolean).map(escapeHtml).join(' &middot; ')
+                : (cR.subtext || '');
             html += `
             <div class="rec-champ">
                 <div class="cc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></svg> Company Record</div>
@@ -8252,34 +8272,31 @@ function renderRecords() {
             // How many places the card shows before the dropdown. A leader-only
             // card spends its first place on the hero above, so it opens the
             // dropdown at 2 while everyone else opens it at 4.
-            const only = RECORD_LEADER_ONLY[l];
             const cut = only ? 1 : 3;
             const inline = only ? [] : d.s.slice(0, cut);
             const hidden = d.s.slice(cut);
 
-            html += `<div class="rec-list${only ? ' lead' : ''}">`;
-            html += inline.map((s, i) => `
+            // One row of the board. A person row names the person and puts the
+            // store underneath in small type; a store row is the store, and has
+            // nothing to put on a second line.
+            const li = (s, rank, gold) => `
                 <div class="rec-li">
-                    <span class="lr${i===0 ? ' g' : ''}">${i+1}</span>
-                    <span class="ls">${s.section}</span>
+                    <span class="lr${gold ? ' g' : ''}">${rank}</span>
+                    <span class="ls">${escapeHtml(byPerson ? (s.person || '—') : s.section)}${
+                        byPerson ? `<span class="lsub">${escapeHtml(s.section || '')}</span>` : ''}</span>
                     <span class="lv">
-                        <b>${s.value || '-'}</b>
-                        <span>${s.subtext || ''}</span>
+                        <b>${escapeHtml(s.value || '-')}</b>
+                        <span>${escapeHtml(s.subtext || '')}</span>
                     </span>
-                </div>`).join('');
+                </div>`;
+
+            html += `<div class="rec-list${only ? ' lead' : ''}">`;
+            html += inline.map((s, i) => li(s, i + 1, i === 0)).join('');
 
             if (hidden.length) {
                 html += `
                 <div id="${oId}" class="hidden-board">
-                    ${hidden.map((s, i) => `
-                    <div class="rec-li">
-                        <span class="lr">${i+cut+1}</span>
-                        <span class="ls">${s.section}</span>
-                        <span class="lv">
-                            <b>${s.value || '-'}</b>
-                            <span>${s.subtext || ''}</span>
-                        </span>
-                    </div>`).join('')}
+                    ${hidden.map((s, i) => li(s, i + cut + 1, false)).join('')}
                 </div>`;
             }
             html += `</div>`;
@@ -8328,6 +8345,17 @@ async function toggleManageRecords() {
                 recordsCache = await res.json();
                 localStorage.setItem('speeksRecordsCache', JSON.stringify(recordsCache));
             }
+            // Person-held metrics offer a name picker. Warm the same cache the
+            // Permissions tool uses; failing is not fatal — the field is still
+            // free text, it just stops suggesting.
+            if (!globalUsersData.length) {
+                try {
+                    const cached = JSON.parse(localStorage.getItem('speeksAuthCache') || 'null');
+                    const data = cached || await fetch(`${AUTH_URL}?v=${Date.now()}`).then(r => r.json());
+                    globalUsersData = data.users || [];
+                    if (!cached) localStorage.setItem('speeksAuthCache', JSON.stringify(data));
+                } catch (e) {}
+            }
             populateRecordsModal();
         } catch (e) {
             list.innerHTML = '<div style="color:var(--red-alert); padding:20px; text-align:center;">Failed to sync data.</div>';
@@ -8354,6 +8382,9 @@ function populateRecordsModal() {
     recordsCache.forEach(r => {
         const label = String(r.label || '').trim();
         if (!label) return;
+        // Person-held metrics have no place in a store grid — two people at one
+        // store would collide in a single cell. They get their own editor below.
+        if (RECORD_PERSON_LABELS.includes(label)) return;
         const section = String(r.section || 'COMPANY').trim();
         if (!byLabel[label]) { byLabel[label] = {}; labels.push(label); }
         byLabel[label][section] = r;
@@ -8403,8 +8434,108 @@ function populateRecordsModal() {
     const cols = `minmax(150px, 1.3fr) repeat(${sections.length}, minmax(118px, 1fr))`;
     list.innerHTML =
         `<p class="cr-hint">Each column is a store. Fill a metric across the stores — the <strong>Company</strong> column auto-fills with the highest value.</p>` +
-        `<div class="cr-grid-scroll"><div class="cr-grid" style="grid-template-columns:${cols};">${head}${body}</div></div>`;
+        // The person editors live INSIDE the scroller, not after it. Two nested
+        // scrollers would otherwise hide them below the fold on a short screen
+        // with no scrollbar to say they were there — the tool would look like
+        // it had simply lost the metric.
+        `<div class="cr-grid-scroll">` +
+            `<div class="cr-grid" style="grid-template-columns:${cols};">${head}${body}</div>` +
+            RECORD_PERSON_LABELS.map(_recPersonSection).join('') +
+        `</div>` +
+        `<datalist id="crStaffList">${_recStaffOptions()}</datalist>`;
     _recomputeCompanyRecords();
+}
+
+/* ── Person-held records ──────────────────────────────────────────────────
+ * The grid above is stores across the top, which cannot hold these: the
+ * holder is a person, the store is only where they work, and two people at
+ * one store can both be on the board. So each person metric gets a list you
+ * add rows to, and the whole label is replaced on save rather than updated
+ * cell by cell — see the records function for why.
+ */
+const RECORD_STORE_CODES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+
+// Names for the picker, so the DM types "Ja" rather than the whole name and
+// cannot invent a speling of somebody who already exists. Read from the same
+// cache the Permissions tool fills; an empty cache just means free text.
+function _recStaff() {
+    try {
+        const d = globalUsersData.length
+            ? { users: globalUsersData }
+            : JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        return (d.users || []).filter(u => u && u.name);
+    } catch (e) { return []; }
+}
+
+function _recStaffOptions() {
+    return _recStaff()
+        .map(u => `<option value="${escapeHtml(u.name)}" data-store="${escapeHtml(u.store || '')}">`)
+        .join('');
+}
+
+function _recPersonSection(label) {
+    const rows = (recordsCache || [])
+        .filter(r => String(r.label || '').trim() === label)
+        .sort((a, b) => parseNum(b.value) - parseNum(a.value));
+    // Always offer an empty row, so an unpopulated metric is one you can type
+    // into rather than one you first have to work out how to start.
+    const shown = rows.length ? rows : [{}];
+
+    return `
+    <div class="cr-people" data-label="${escapeHtml(label)}">
+        <div class="cr-people-h">
+            <span class="cr-people-t">${escapeHtml(label)}</span>
+            <span class="cr-people-s">Held by a person, not a store. Top of the list is the company record; the rest show as places 2-5.</span>
+        </div>
+        <div class="cr-prow cr-phead">
+            <span>Name</span><span>Store</span><span>Reviews</span><span>Date</span><span></span>
+        </div>
+        <div class="cr-people-rows">${shown.map(_recPersonRow).join('')}</div>
+        <button type="button" class="cr-padd" onclick="_recAddPerson(this)">+ Add Person</button>
+    </div>`;
+}
+
+function _recPersonRow(r) {
+    r = r || {};
+    const store = String(r.section || '').toUpperCase();
+    return `
+    <div class="cr-prow cr-person-row">
+        <input type="text" class="p-name" list="crStaffList" placeholder="Name"
+               value="${escapeHtml(r.person || '')}" oninput="_recFillStore(this)">
+        <select class="p-store">
+            <option value="">Store</option>
+            ${RECORD_STORE_CODES.map(c =>
+                `<option value="${c}"${c === store ? ' selected' : ''}>${c}</option>`).join('')}
+        </select>
+        <input type="text" class="p-val" placeholder="0" value="${escapeHtml(r.value || '')}">
+        <input type="text" class="p-date" placeholder="August 21, 2026" value="${escapeHtml(r.subtext || '')}">
+        <button type="button" class="cr-prm" title="Remove" onclick="this.closest('.cr-person-row').remove()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>`;
+}
+
+// Picking a known name fills in where they work. Only ever fills a BLANK store:
+// somebody who has since transferred still set their record at the old store,
+// and overwriting that would quietly rewrite history.
+function _recFillStore(input) {
+    const row = input.closest('.cr-person-row');
+    const sel = row && row.querySelector('.p-store');
+    if (!sel || sel.value) return;
+    const name = input.value.trim().toLowerCase();
+    const hit = _recStaff().find(u => String(u.name).trim().toLowerCase() === name);
+    if (!hit || !hit.store) return;
+    sel.value = String(hit.store).toUpperCase();
+    // The native select is authoritative but it is covered by a .dd-btn face,
+    // so the visible label only follows if the change event is dispatched.
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function _recAddPerson(btn) {
+    const box = btn.closest('.cr-people').querySelector('.cr-people-rows');
+    box.insertAdjacentHTML('beforeend', _recPersonRow({}));
+    const added = box.lastElementChild.querySelector('.p-name');
+    if (added) added.focus();
 }
 
 // The Company column mirrors whichever store has the highest value for each
@@ -8456,12 +8587,42 @@ async function saveManageRecords() {
         });
     });
 
+    // Person-held metrics are a separate POST per label: they are replaced
+    // wholesale, so a row the DM deleted has to be absent from the payload
+    // rather than simply not updated.
+    const personPayloads = Array.from(document.querySelectorAll('.cr-people')).map(box => ({
+        type: 'person-records',
+        label: box.getAttribute('data-label'),
+        rows: Array.from(box.querySelectorAll('.cr-person-row')).map(row => ({
+            person: row.querySelector('.p-name').value.trim(),
+            store: row.querySelector('.p-store').value.trim(),
+            value: row.querySelector('.p-val').value.trim(),
+            date: row.querySelector('.p-date').value.trim()
+        }))
+    }));
+
+    // A named person with no number (or the reverse) is a half-filled row, and
+    // the save would silently drop it. Say so before writing anything, because
+    // after the replace there is nothing left to compare against.
+    const halfFilled = personPayloads.flatMap(p =>
+        p.rows.filter(r => (r.person || r.value) && !(r.person && r.value)));
+    if (halfFilled.length) {
+        alert(`${halfFilled.length} row${halfFilled.length > 1 ? 's need' : ' needs'} both a name and a number.\n\n`
+            + `Fill them in or clear them, then save again.`);
+        btn.textContent = "Save Changes";
+        btn.style.opacity = "1";
+        return;
+    }
+
     try {
-        const res = await fetch(RECORDS_URL, {
+        const post = (payload) => fetch(RECORDS_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(updatedRecords)
+            body: JSON.stringify(payload)
         });
+
+        const results = await Promise.all([post(updatedRecords), ...personPayloads.map(post)]);
+        const res = { ok: results.every(r => r.ok) };
 
         if (res.ok) {
             alert("Company Records successfully updated!");
