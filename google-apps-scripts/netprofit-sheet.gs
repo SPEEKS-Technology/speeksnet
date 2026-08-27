@@ -637,3 +637,74 @@ function _npFixTotals(preview) {
   Logger.log('\nTTL now sums: %s', NP_ORDER.join(' + '));
   if (preview) Logger.log('PREVIEW ONLY — nothing was written. Run npFixTotalsApply to commit.');
 }
+
+// ============================================================================
+// npProbeSummary — dump the SUMMARY BLOCK under the day grid.
+//
+// READ-ONLY. Writes nothing.
+//
+// The day grid (rows 5-36) was measured on 2026-08-26 and is documented at the
+// top of this file. Everything BELOW it — "Days this month", "Days Thru month",
+// "Net GP MTD", the tracking and MoM cells, the "Last month" strip and the YoY
+// block — never has been. The screenshot shows those cells carrying #DIV/0!
+// because "Days Thru month" reads 0, and the fix has to write into them.
+//
+// ⚠️ MEASURE, DO NOT ASSUME. This file's own rule. A formula written against a
+// guessed address lands in whatever is actually there, and on this tab that is
+// a Net Profit figure a bonus is paid from. Run this, paste me the log, and the
+// additions get built against real addresses.
+// ============================================================================
+function npProbeSummary() {
+  var ss = SpreadsheetApp.openById(NP_SHEET_ID);
+  var sh = ss.getSheetByName(NP_TAB);
+  if (!sh) { Logger.log('!! no tab named "%s"', NP_TAB); return; }
+
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  var formulas = sh.getRange(1, 1, lastRow, lastCol).getFormulas();
+
+  // Find the TTL row so the dump starts just below the grid rather than at a
+  // hard-coded 36 — the same "locate it, never count to it" rule the writer uses.
+  var ttlRow = -1;
+  for (var r = NP_HEADER_ROWS; r < lastRow; r++) {
+    if (String(values[r][0]).trim().toUpperCase() === 'TTL') { ttlRow = r; break; }
+  }
+  Logger.log('TAB "%s": %s rows x %s cols. TTL row = %s (1-based). Dumping %s..%s.',
+    NP_TAB, lastRow, lastCol, ttlRow + 1, ttlRow + 2, lastRow);
+
+  var blocks = [];
+  for (var s in NP_BASES) blocks.push([s, NP_BASES[s]]);
+  blocks.push(['TTL', NP_TTL_BASE]);
+  blocks.sort(function (a, b) { return a[1] - b[1]; });
+
+  for (var b = 0; b < blocks.length; b++) {
+    var name = blocks[b][0], base = blocks[b][1];
+    var end = (b + 1 < blocks.length) ? blocks[b + 1][1] : lastCol;
+    Logger.log('\n===== %s  (columns %s..%s) =====',
+      name, _npColLetter(base), _npColLetter(end - 1));
+    for (var rr = ttlRow + 1; rr < lastRow; rr++) {
+      var parts = [];
+      for (var c = base; c < end; c++) {
+        var f = String(formulas[rr][c]).trim();
+        var v = String(values[rr][c]).trim();
+        if (f === '' && v === '') continue;
+        parts.push(_npColLetter(c) + (rr + 1) + '=' + (f !== '' ? f : JSON.stringify(v)));
+      }
+      if (parts.length) Logger.log('  row %s: %s', rr + 1, parts.join('  |  '));
+    }
+  }
+
+  // Anything living to the RIGHT of the last block would be missed above.
+  Logger.log('\n===== beyond the last block (columns %s..%s) =====',
+    _npColLetter(NP_TTL_BASE + 18), _npColLetter(lastCol - 1));
+  for (var r2 = ttlRow + 1; r2 < lastRow; r2++) {
+    var extra = [];
+    for (var c2 = NP_TTL_BASE + 18; c2 < lastCol; c2++) {
+      var f2 = String(formulas[r2][c2]).trim(), v2 = String(values[r2][c2]).trim();
+      if (f2 === '' && v2 === '') continue;
+      extra.push(_npColLetter(c2) + (r2 + 1) + '=' + (f2 !== '' ? f2 : JSON.stringify(v2)));
+    }
+    if (extra.length) Logger.log('  row %s: %s', r2 + 1, extra.join('  |  '));
+  }
+  Logger.log('\nRead-only: nothing was written.');
+}
