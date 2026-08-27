@@ -211,6 +211,11 @@ Deno.serve(async (req) => {
     const sourceNames: Record<string, number> = {};
     const dayRows: Record<string, any> = {};
     const detail: any[] = [];
+    // Order names per day per bucket, so the COGS half can be priced from
+    // Shopify's own per-order cost rather than from unitCost — which is the
+    // CURRENT cost of the SKU, not what it cost when it sold.
+    const dayOrders: Record<string, { mirror: Set<string>; ourDupe: Set<string>; draft: Set<string> }> = {};
+    const buckets = (d: string) => (dayOrders[d] ||= { mirror: new Set(), ourDupe: new Set(), draft: new Set() });
     const bump = (d: string) => (dayRows[d] ||= {
       day: d, store,
       mirror_refund: 0, mirror_orders: 0,
@@ -239,6 +244,7 @@ Deno.serve(async (req) => {
             const b = bump(sold);
             b.draft_sales = r2(b.draft_sales + amt);
             b.draft_orders++;
+            buckets(sold).draft.add(o.name);
             detail.push({ day: sold, store, kind: "draft-order invoice", order: o.name, amount: amt });
           }
 
@@ -258,11 +264,11 @@ Deno.serve(async (req) => {
               // The ledger names a DIFFERENT Shopify order for this same eBay
               // sale, so two copies of one sale provably exist. This is the
               // mirror-back landing on the copy we did NOT refund.
-              kind = "mirror-back";
+              kind = "mirror-back"; buckets(rd).mirror.add(o.name);
               b.mirror_refund = r2(b.mirror_refund + amt); b.mirror_orders++;
             } else if (ledgerName) {
               // The ledger names THIS order: our own duplicate refund.
-              kind = "our duplicate refund";
+              kind = "our duplicate refund"; buckets(rd).ourDupe.add(o.name);
               b.our_dupe_refund = r2(b.our_dupe_refund + amt); b.our_dupe_orders++;
             } else if (eid) {
               // Has an eBay id but no twin on record. Not provably a duplicate,
@@ -280,6 +286,30 @@ Deno.serve(async (req) => {
         if (!d.orders.pageInfo.hasNextPage) break;
         after = d.orders.pageInfo.endCursor;
         if (pages > 80) break; // a runaway page loop must not bill forever
+      }
+    }
+
+    // ---- COGS for the same three buckets -----------------------------------
+    // A refund reverses cost of goods as well as revenue, so a day carrying
+    // mirror-back refunds understates cost too and its margin is nonsense.
+    // Priced from ShopifyQL per order, ONE QUERY PER DAY: `GROUP BY order_name`
+    // across a whole month silently truncates on a busy store, and the rows it
+    // drops are the big negative ones — which reads as a plausible correction
+    // rather than as a failure.
+    const costBucket: Record<string, { mirror: number; ourDupe: number; draft: number }> = {};
+    for (const day of Object.keys(dayOrders)) {
+      const bk = dayOrders[day];
+      if (!bk.mirror.size && !bk.ourDupe.size && !bk.draft.size) continue;
+      const perOrder = await gql(
+        `{ shopifyqlQuery(query: "FROM sales SHOW cost_of_goods_sold GROUP BY order_name SINCE ${day} UNTIL ${day}") {
+             parseErrors tableData { rows } } }`, {});
+      const c = (costBucket[day] ||= { mirror: 0, ourDupe: 0, draft: 0 });
+      for (const row of perOrder?.shopifyqlQuery?.tableData?.rows || []) {
+        const nm = String(row.order_name || "");
+        const cost = num(row.cost_of_goods_sold);
+        if (bk.mirror.has(nm)) c.mirror = r2(c.mirror + cost);
+        if (bk.ourDupe.has(nm)) c.ourDupe = r2(c.ourDupe + cost);
+        if (bk.draft.has(nm)) c.draft = r2(c.draft + cost);
       }
     }
 
@@ -314,6 +344,13 @@ Deno.serve(async (req) => {
         less_draft_order_invoices: b.draft_sales,
         true_sales: trueSales,
         adjustment: r2(trueSales - rep.net_sales),
+        reported_cost: rep.cost,
+        // Mirror/our-duplicate costs come back NEGATIVE (a reversal), so
+        // subtracting them adds the cost back. Draft cost is a real cost of a
+        // real item leaving, but the sale is not selling — both legs come out.
+        true_cost: r2(rep.cost - (costBucket[day]?.mirror || 0) - (costBucket[day]?.ourDupe || 0)
+                      - (costBucket[day]?.draft || 0)),
+        cost_parts: costBucket[day] || { mirror: 0, ourDupe: 0, draft: 0 },
         reported_returns: r2(Math.abs(rep.returns)),
         refunds_classified: classified,
         refunds_unreconciled: residual,
