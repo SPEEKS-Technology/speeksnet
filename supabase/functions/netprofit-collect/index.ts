@@ -173,6 +173,20 @@ async function mintEbayToken(row: any): Promise<string> {
 // returns null rather than 0 so the caller can WARN — silently scoring an
 // unknown message as zero would understate shipping and overstate Net Profit,
 // which is the one direction this whole collector must never fail in.
+// Which of the five shapes a message is. The CFO's report and this collector
+// disagree on shipping by a flat per-order amount at every store, and the shape
+// tally is what tells them apart: an overage that lands entirely on ONE shape is
+// a parsing bug, one spread across all of them is a scope difference.
+function labelShape(msg: string): string {
+  if (!/shipping label/i.test(msg)) return "not-a-label";
+  if (/voided/i.test(msg)) return "voided";
+  if (/credited to your account/i.test(msg)) return "credit-adjustment";
+  if (/price adjustment/i.test(msg)) return "charge-adjustment";
+  if (/purchased .*label for /i.test(msg)) return "purchased-for-with-premium";
+  if (/purchased/i.test(msg)) return "purchased-included-premium";
+  return "unknown";
+}
+
 function parseLabelCost(msg: string): number | null {
   if (!/shipping label/i.test(msg)) return null;
   const amounts = [...msg.matchAll(/\$([\d,]+\.\d{2})/g)]
@@ -197,6 +211,9 @@ Deno.serve(async (req: Request) => {
   const store = (url.searchParams.get("store") || "").toUpperCase().trim();
   const from = (url.searchParams.get("from") || "").trim();
   const to = (url.searchParams.get("to") || "").trim();
+  // ?labels=1 dumps every shipping-label event per order, for reconciling
+  // against a Shopify "shipping labels by order" export. Read-only, no cost.
+  const wantLabels = url.searchParams.get("labels") === "1";
   if (!SHOP_BY_STORE[store]) return json({ error: `unknown store "${store}"` }, 400);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
     return json({ error: "pass from=YYYY-MM-DD&to=YYYY-MM-DD" }, 400);
@@ -324,6 +341,8 @@ Deno.serve(async (req: Request) => {
   let pages = 0;
   const feeByKind: Record<string, number> = {};
   const unknownLabelMessages: string[] = [];
+  const labelShapes: Record<string, { n: number; amount: number }> = {};
+  const labelDetail: any[] = [];
   let ordersWithTruncatedEvents = 0;
   let labelEvents = 0;
   // eBay Order Id -> the Chicago day the order SOLD. This is what makes eBay
@@ -408,6 +427,12 @@ Deno.serve(async (req: Request) => {
           if (unknownLabelMessages.length < 20) unknownLabelMessages.push(msg);
           continue;
         }
+        const shape = labelShape(msg);
+        const bucket = labelShapes[shape] || { n: 0, amount: 0 };
+        bucket.n++;
+        bucket.amount = round2(bucket.amount + v);
+        labelShapes[shape] = bucket;
+        if (wantLabels) labelDetail.push({ order: o.name, day: d, shape, amount: v, msg });
         days[d].shipping_cost = round2((days[d].shipping_cost || 0) + v);
         ordersWithShopifyLabel.add(o.name);
       }
@@ -839,6 +864,8 @@ Deno.serve(async (req: Request) => {
     },
     ebayFinances: ebay,
     feeByTransactionKind: feeByKind,
+    shippingLabelShapes: labelShapes,
+    shippingLabelDetail: wantLabels ? labelDetail : undefined,
     blocked,
     warnings,
     days: list,
