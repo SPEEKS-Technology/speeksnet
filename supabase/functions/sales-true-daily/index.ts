@@ -178,9 +178,28 @@ Deno.serve(async (req) => {
   const looksLikeRepayment = (_st: string, day: string, _amt: number) =>
     day >= REPAYMENT_DRAFTS_FROM;
 
-  // The duplicate ledger: eBay order id -> the Shopify copy WE refunded.
+  // The duplicate ledger: eBay order id -> the Shopify copy we identified as
+  // the duplicate.
+  //
+  // ⚠️ refund_damage IS NOT THE WHOLE LEDGER. It is staged from
+  // `dup_order_cleanup where result ilike 'refunded%'`, so it only knows the
+  // duplicates we successfully REFUNDED — 396 of 415. The other 19 were
+  // 'blocked: Shopify refuses cancel while a fulfillment stands' or already
+  // cancelled, which says the cleanup ACTION failed, not that the order is any
+  // less a duplicate. Those 19 later took refunds anyway, and with a ledger
+  // that could not see them the refunds landed in the store's figure as
+  // unclassified: $3,267.77 across 20 refunds, $2,889.81 of it BAL, which is
+  // the whole reason BAL looked like an outlier on unexplained returns.
+  //
+  // dup_order_cleanup carries exactly one order_name per eBay id (415 rows,
+  // 415 distinct ids, zero with two names), so widening the ledger adds no
+  // ambiguity. refund_damage still wins where both know an id — it is the
+  // probed set and its name is the one the damage export was built from.
+  const cleanupRows = await sbAll(
+    "dup_order_cleanup?select=ebay_order_id,order_name,store_code&ebay_order_id=not.is.null");
   const ledgerRows = await sbAll("refund_damage?select=ebay_order_id,order_name,store_code");
   const ledger: Record<string, string> = {};
+  for (const d of cleanupRows) ledger[String(d.ebay_order_id)] = String(d.order_name || "");
   for (const d of ledgerRows) ledger[String(d.ebay_order_id)] = String(d.order_name || "");
 
   const tokRows = await sbAll("shopify_stores?select=shop,access_token");
