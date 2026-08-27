@@ -12,12 +12,19 @@
 //
 //   * ShopifyQL's `parseErrors` is a list of STRINGS, not objects. Selecting
 //     subfields on it fails the whole query with `selectionMismatch`.
-//   * Naming an unknown column reports THAT column and stays silent about the
-//     valid ones, so `SHOW a,b,c` + diffing the error list enumerates a dataset
-//     — but Shopify throttles a rapid sweep, and a throttled reply carries no
-//     parseErrors at all, which reads as "every name was valid". Always send a
-//     known-bad sentinel column in the batch and discard the batch if the
-//     sentinel does not come back as missing.
+//   * ⚠️ CORRECTED 2026-08-27 — THE BATCH-DIFF TRICK DOES NOT WORK, and this
+//     file used to say it did. `parseErrors` carries exactly ONE entry, the
+//     FIRST column that could not be resolved:
+//         ["Column Not Found: Column 'zzz_bogus_col' not found"]
+//     Every name after that failure is simply never reached, so reading
+//     "not named in the error" as "valid" mislabels real columns in both
+//     directions. Caught by a positive control: `shipping_price` came back
+//     "invalid" from a batch sweep, having been queried successfully minutes
+//     earlier.
+//     ENUMERATE ONE COLUMN PER REQUEST. A column is valid iff parseErrors is
+//     EMPTY **and** tableData came back — that pair is also what separates a
+//     real answer from a throttled one, which returns neither. Run known-good
+//     and known-bad controls in the same pass and void the run if either fails.
 // ============================================================================
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
