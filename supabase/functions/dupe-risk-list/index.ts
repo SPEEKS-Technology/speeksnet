@@ -6,6 +6,13 @@
 //   ?secret=<ops>&format=master  CSV in the master workbook's own 10 columns,
 //                                the same shape dupe-newly-surfaced emits, so
 //                                the two files stack in one sheet
+//   ?secret=<ops>&format=master&scope=all
+//                                RECONCILIATION: every duplicate order we know
+//                                of, lost and at-risk alike, with a State and
+//                                an Our Loss column. This is the whole universe
+//                                and its total is the answer — a hand-kept
+//                                workbook that disagrees is diffed against
+//                                this, not the other way round.
 //
 // The master shape deliberately carries an EMPTY "eBay Refunded (Central)".
 // That blank is the entire point of this list: these are the rows where eBay
@@ -105,7 +112,7 @@ Deno.serve(async (req: Request) => {
   // Ordered so the FIRST row seen for an order id is its newest probe.
   const rows = await sbAll(
     "refund_reprobe?select=run_at,store_code,order_name,ebay_order_id,shopify_refund,"
-      + "ebay_order_total,ebay_refund_total,ebay_payment_status,ebay_fulfillment_status,body"
+      + "ebay_order_total,ebay_refund_total,ebay_refund_date,ebay_payment_status,ebay_fulfillment_status,body"
       + "&order=ebay_order_id.asc,run_at.desc",
   );
 
@@ -117,10 +124,15 @@ Deno.serve(async (req: Request) => {
   const out: any[] = [];
   let probedAt = "";
 
+  // scope=all keeps the orders eBay HAS refunded as well, so the file is the
+  // whole universe rather than the open half of it. Only the reconciliation
+  // export asks for this; every other caller wants the at-risk list.
+  const keepAll = (url.searchParams.get("scope") || "").toLowerCase() === "all";
+
   for (const r of all) {
     if (r.run_at > probedAt) probedAt = r.run_at;
     // The whole filter. A refund of any size means eBay has already moved.
-    if (num(r.ebay_refund_total) > 0) continue;
+    if (!keepAll && num(r.ebay_refund_total) > 0) continue;
 
     const b = r.body || {};
     const lines = Array.isArray(b.lineItems) ? b.lineItems : [];
@@ -139,6 +151,11 @@ Deno.serve(async (req: Request) => {
       shopify_dupe_refunded: r.order_name,
       shopify_refund: r2(num(r.shopify_refund)),
       ebay_order_total: r2(num(r.ebay_order_total)),
+      // What eBay actually took back. Zero means still exposure, not loss —
+      // the one column that must never be conflated with the order total.
+      ebay_refund_total: r2(num(r.ebay_refund_total)),
+      state: num(r.ebay_refund_total) > 0 ? "Lost" : "At Risk",
+      ebay_refund_date: r.ebay_refund_date ?? null,
       // What we would actually lose: buyer price less eBay fees and tax.
       due_seller: r2(num(b?.paymentSummary?.totalDueSeller?.value)),
       ebay_payment_status: b.orderPaymentStatus ?? r.ebay_payment_status ?? null,
@@ -195,11 +212,16 @@ Deno.serve(async (req: Request) => {
     const byId: Record<string, any> = {};
     for (const d of dmg) byId[String(d.ebay_order_id)] = d;
 
+    // scope=all is a reconciliation, so it carries the two columns that make
+    // the arithmetic checkable: which side of the line a row is on, and the
+    // single number that should be summed. Without them a reader has to guess
+    // whether "eBay Order Total" means money lost, and that guess is exactly
+    // how a hand-kept total drifts.
     const HEAD = [
       "Store", "Shopify Order", "SKU", "eBay Order ID", "eBay Order Total",
       "Shopify Refund Amount", "Shipped To Buyer", "Buyer Requested Refund",
       "Shopify Refunded (Central)", "eBay Refunded (Central)",
-    ];
+    ].concat(keepAll ? ["State", "Our Loss"] : []);
     const body = [HEAD.join(",")].concat(out.map((o) => {
       const d = byId[o.ebay_order_id] || {};
       return [
@@ -212,8 +234,11 @@ Deno.serve(async (req: Request) => {
         o.ebay_fulfillment_status === "FULFILLED" ? "Yes" : "No",
         o.cancel_state === "NONE_REQUESTED" ? "No" : (o.cancel_state ?? ""),
         central(d.shopify_refunded_at ?? null),
-        "", // eBay has not refunded these — see the header.
-      ].map(csvCell).join(",");
+        // Blank while eBay has not moved — that blank is what puts a row on the
+        // at-risk side, so it is never filled in to tidy the column.
+        o.state === "Lost" ? central(o.ebay_refund_date ?? null) : "",
+      ].concat(keepAll ? [o.state, o.state === "Lost" ? o.ebay_refund_total : 0] : [])
+       .map(csvCell).join(",");
     })).join("\n");
 
     return new Response(body, {
