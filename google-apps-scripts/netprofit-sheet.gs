@@ -322,6 +322,111 @@ function _npProbe() {
     var a = String(values[r4][0]).trim();
     if (a !== '') Logger.log('row %s: "%s"', r4 + 1, a);
   }
+
+  _npAuditFormulas(formulas, values);
+}
+
+// ============================================================================
+// _npAuditFormulas — find the day rows whose formula does not match the rest of
+// its own column.
+//
+// WHY: reading row 5 tells you almost nothing. Day 1 is where a broken formula
+// is RIGHT BY ACCIDENT — `(CY5/1)*CO$40` and `(CY5/CM5)*CO$40` are the same
+// number when CM5 is 1, and a relative `CO40` still points at row 40 when it is
+// written on row 5. Both only diverge once the formula is filled down, and by
+// then nobody is reading row 5.
+//
+// The two that prompted this, both in the TTL block:
+//   CT (GP Tracking)  = ...(CR5/CM5)*CO40    -- CO40 is RELATIVE where every
+//                       sibling uses CO$40, so a fill-down walks it to CO41,
+//                       CO42 ... into blank cells.
+//   DA (NP Tracking)  = ...(CY5/1)*CO$40     -- divides by the LITERAL 1 where
+//                       siblings divide by CM5, the day number. On day 20 of a
+//                       31-day month that reports 31x MTD instead of 1.55x —
+//                       and NP Tracking is the projected-month figure the bonus
+//                       conversation will actually look at.
+// Neither is written by this file; the TTL block is never touched except by
+// npFixTotals, and then only its five data columns.
+//
+// Normalises each formula by replacing its own row number with '#', so every
+// day row in a column should reduce to an IDENTICAL string. Anything that does
+// not is reported with its row. Read-only.
+// ============================================================================
+function _npAuditFormulas(formulas, values) {
+  // Derive the day rows from the sheet, never from a constant: the whole point
+  // of this audit is to catch a tab that has drifted from what the code assumes.
+  // Column A (OVL's day column) holds 1..31; stop at the first row that is not
+  // the next day number, which is TTL.
+  var first = NP_HEADER_ROWS + 1, last = first - 1;
+  for (var rr = first; rr <= values.length; rr++) {
+    if (Number(String(values[rr - 1][0]).trim()) !== (rr - first + 1)) break;
+    last = rr;
+  }
+  if (last < first) { Logger.log('\n=== FORMULA CONSISTENCY: no day rows found, skipped ==='); return; }
+  Logger.log('\n=== FORMULA CONSISTENCY, day rows %s-%s ===', first, last);
+
+  var problems = 0;
+  var lastCol = formulas[0].length;
+  for (var c = 0; c < lastCol; c++) {
+    var shapes = {};   // normalised formula -> [rows]
+    for (var r = first; r <= last; r++) {
+      var f = String((formulas[r - 1] || [])[c] || '').trim();
+      if (!f) continue;
+      // Replace this row's own number wherever it appears as a row reference.
+      // A2, $A$2 and 2 in `CO$40` are all handled: only digits that follow a
+      // column letter are touched, and only when they equal this row.
+      var norm = f.replace(/(\$?[A-Z]{1,3}\$?)(\d+)/g, function (m, col, num) {
+        return col + (Number(num) === r ? '#' : num);
+      });
+      (shapes[norm] = shapes[norm] || []).push(r);
+    }
+    var keys = Object.keys(shapes);
+    if (keys.length <= 1) continue;
+    // The majority shape is the column's intent; anything else is the odd one out.
+    keys.sort(function (a, b) { return shapes[b].length - shapes[a].length; });
+    problems++;
+    Logger.log('  !! %s (%s): %s different shapes',
+      _npColLetter(c), String(values[NP_HEADER_ROWS - 1][c] || '').trim() || '(no header)', keys.length);
+    for (var k = 0; k < keys.length; k++) {
+      var rows = shapes[keys[k]];
+      Logger.log('       %s row%s %s%s',
+        (k === 0 ? 'MAJORITY' : 'ODD     '),
+        rows.length === 1 ? '' : 's',
+        rows.length > 6 ? rows.slice(0, 6).join(',') + ',... (' + rows.length + ')' : rows.join(','),
+        '  ' + keys[k]);
+    }
+  }
+  Logger.log(problems ? '  %s column(s) are not internally consistent.'
+                      : '  every column is internally consistent.', problems);
+
+  // ⚠️ CONSISTENCY IS NOT CORRECTNESS, and this is the case that proves it.
+  // A "Tracking" column projects the month: (MTD / elapsed days) * days in month.
+  // `DA` divides by the LITERAL 1 instead of by the day column, and because that
+  // literal survives a fill-down unchanged, every row agrees with every other row
+  // and the check above reports the column as clean. It is not clean — on day 20
+  // of a 31-day month it reports 20x the real figure, and NP Tracking is the
+  // projected Net Profit the bonus conversation reads.
+  //
+  // So the Tracking columns are asserted directly: each must divide by a CELL,
+  // never by a number. Printed side by side, because the odd one out is obvious
+  // to a human the moment the three sit together and is invisible otherwise.
+  Logger.log('\n=== TRACKING COLUMNS — must divide by the day column, not a literal ===');
+  var bad = 0;
+  for (var tc = 0; tc < lastCol; tc++) {
+    var head = String(values[NP_HEADER_ROWS - 1][tc] || '').trim();
+    if (!/tracking/i.test(head)) continue;
+    var tf = String((formulas[first - 1] || [])[tc] || '').trim();
+    if (!tf) continue;
+    // The divisor of the projection: what sits between "/" and the next ")".
+    var m = tf.match(/\/\s*([^)*\s]+)/);
+    var divisor = m ? m[1] : '(none found)';
+    var ok = /^\$?[A-Z]{1,3}\$?\d+$/.test(divisor);
+    if (!ok) bad++;
+    Logger.log('  %s %s[%s] divides by %s   %s',
+      ok ? '   ' : '!! ', _npColLetter(tc), head, divisor, tf);
+  }
+  Logger.log(bad ? '  !! %s Tracking column(s) divide by a literal — the projection is wrong.'
+                 : '  all Tracking columns divide by a cell.', bad);
 }
 
 // ============================================================================
