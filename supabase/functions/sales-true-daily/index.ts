@@ -136,6 +136,36 @@ Deno.serve(async (req) => {
   const recoveredRows = await sbAll("refund_recovered?select=ebay_order_id,reason");
   const recovered = new Set(recoveredRows.map((r: any) => String(r.ebay_order_id)));
 
+  // ⚠️ NOT EVERY DRAFT ORDER IS A REPAYMENT. Stores use draft orders for
+  // ordinary invoiced sales too, and stripping all of them understates real
+  // selling: Aug 20 and Aug 24 carry drafts that PREDATE the first eBay refund
+  // and so cannot possibly be repayment for one, and LEE #MO01-9161 ($1,549.99
+  // on Aug 26) matches no refund at that store at all.
+  //
+  // A draft only comes out when BOTH hold: it is dated on or after the first
+  // eBay refund, and its amount equals an eBay order total we actually refunded
+  // at that store. Everything else stays in and is reported, because the cost of
+  // wrongly stripping a real sale is a store blamed for a day it did not have.
+  const reprobe = await sbAll(
+    "refund_reprobe?select=run_at,store_code,ebay_order_id,ebay_order_total,ebay_refund_total,ebay_refund_date"
+    + "&order=ebay_order_id.asc,run_at.desc");
+  const newestProbe: Record<string, any> = {};
+  for (const r of reprobe) if (!newestProbe[r.ebay_order_id]) newestProbe[r.ebay_order_id] = r;
+  const refundedAmounts: Record<string, Set<number>> = {};
+  let firstRefundDay = "9999-12-31";
+  for (const r of Object.values(newestProbe) as any[]) {
+    if (num(r.ebay_refund_total) <= 0) continue;
+    (refundedAmounts[r.store_code] ||= new Set()).add(r2(num(r.ebay_order_total)));
+    // ⚠️ The eBay REFUND date, not the probe run date. Using run_at put the
+    // boundary at today, so every repayment invoice failed the test and was
+    // counted as a real sale — the exact opposite of the intent.
+    if (!r.ebay_refund_date) continue;
+    const d = chicagoDay(r.ebay_refund_date);
+    if (d < firstRefundDay) firstRefundDay = d;
+  }
+  const looksLikeRepayment = (st: string, day: string, amt: number) =>
+    day >= firstRefundDay && !!refundedAmounts[st]?.has(r2(amt));
+
   // The duplicate ledger: eBay order id -> the Shopify copy WE refunded.
   const ledgerRows = await sbAll("refund_damage?select=ebay_order_id,order_name,store_code");
   const ledger: Record<string, string> = {};
@@ -250,10 +280,20 @@ Deno.serve(async (req) => {
           if (isDraft(o.sourceName) && inRange(sold)) {
             const amt = r2(num(o.currentSubtotalPriceSet?.shopMoney?.amount));
             const b = bump(sold);
-            b.draft_sales = r2(b.draft_sales + amt);
-            b.draft_orders++;
-            buckets(sold).draft.add(o.name);
-            detail.push({ day: sold, store, kind: "draft-order invoice", order: o.name, amount: amt });
+            if (looksLikeRepayment(store, sold, amt)) {
+              b.draft_sales = r2(b.draft_sales + amt);
+              b.draft_orders++;
+              buckets(sold).draft.add(o.name);
+              detail.push({ day: sold, store, kind: "draft-order invoice (repayment)",
+                            order: o.name, amount: amt });
+            } else {
+              // A real invoiced sale. Counted as selling, and listed so the
+              // judgement is visible rather than buried in a total.
+              b.draft_kept = r2((b.draft_kept || 0) + amt);
+              b.draft_kept_orders = (b.draft_kept_orders || 0) + 1;
+              detail.push({ day: sold, store, kind: "draft order KEPT as a real sale",
+                            order: o.name, amount: amt });
+            }
           }
 
           // ---- refunds booked into this range ----
@@ -329,13 +369,12 @@ Deno.serve(async (req) => {
       const day = new Date(t).toISOString().slice(0, 10);
       const b = bump(day);
       const rep = reported[day] || { net_sales: 0, gross_sales: 0, returns: 0, cost: 0 };
-      // Prefer Shopify's own channel split for the draft figure and fall back to
-      // the per-order pass. If the two disagree, say so rather than picking one.
+      // The channel split counts EVERY draft order, including the ordinary
+      // invoiced sales this function deliberately keeps, so it is a
+      // cross-check and must never overwrite the filtered figure — doing so
+      // silently reinstated the very drafts the repayment test had spared.
       const draftCh = r2(draftByDay[day] || 0);
-      if (draftCh && b.draft_sales && Math.abs(draftCh - b.draft_sales) > 0.01) {
-        b.draft_disagreement = { channel: draftCh, per_order: b.draft_sales };
-      }
-      b.draft_sales = draftCh || b.draft_sales;
+      b.draft_all_channel = draftCh;
       // Add the incident refunds back (they are negative in net_sales) and take
       // the invoice recovery out. Genuine and unknown refunds are left alone.
       const trueSales = r2(rep.net_sales + b.mirror_refund + b.our_dupe_refund - b.draft_sales);
@@ -366,6 +405,8 @@ Deno.serve(async (req) => {
         reported_returns: r2(Math.abs(rep.returns)),
         refunds_classified: classified,
         refunds_unreconciled: residual,
+        draft_orders_kept_as_real_sales: r2(b.draft_kept || 0),
+        all_draft_orders_channel: r2(b.draft_all_channel || 0),
         left_in_genuine_refunds: b.genuine_refund,
         left_in_unclassified_refunds: b.unknown_refund,
         counts: {
@@ -375,6 +416,8 @@ Deno.serve(async (req) => {
       });
     }
     perStore[store] = { orders_scanned: seenOrder.size, source_names: sourceNames,
+      repayment_test: { first_refund_day: firstRefundDay,
+                        refunded_amounts_known: (refundedAmounts[store] || new Set()).size },
       sales_channels: channels };
     if (url.searchParams.get("detail") === "1") perStore[store].detail = detail;
   }
@@ -407,6 +450,7 @@ Deno.serve(async (req) => {
       add_back_mirror_refunds: tot("add_back_mirror_refunds"),
       add_back_our_duplicate_refunds: tot("add_back_our_duplicate_refunds"),
       less_draft_order_invoices: tot("less_draft_order_invoices"),
+      draft_orders_kept_as_real_sales: tot("draft_orders_kept_as_real_sales"),
       true_sales: tot("true_sales"),
       left_in_genuine_refunds: tot("left_in_genuine_refunds"),
       left_in_unclassified_refunds: tot("left_in_unclassified_refunds"),
