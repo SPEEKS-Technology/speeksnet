@@ -88,6 +88,12 @@ const STORES: Record<string, { label: string; manager: string; email: string; ph
 
 // Orders NOT to contact anyone about, with the reason recorded so this is a
 // decision on the record rather than a silent gap.
+// ⚠️ THIS MAP IS NO LONGER THE SOURCE OF TRUTH — the `refund_recovered` table is,
+// because the loss exports need the same answer and a constant living in one
+// function cannot give it to them. Three OVL orders sat here while every
+// accounting export still counted them, overstating the damage by $2,227.59.
+// Kept as the historical record and merged with the table at runtime, so an
+// order in either place is honoured. Add new ones to the TABLE.
 const EXCLUDE_EBAY_ORDERS: Record<string, string> = {
   // Caught before they shipped and already dealt with by the store (2026-08-26).
   // Shopify shows these FULFILLED with tracking because labels were bought, but
@@ -530,10 +536,17 @@ Deno.serve(async (req: Request) => {
   // separately because each one is a buyer this list used to skip.
   const recoveredByEbay: any[] = [];
 
+  // Merge the table over the constant above. A read failure must not silently
+  // start chasing buyers whose parcels never left the shelf, so it throws
+  // rather than falling back to the constant alone.
+  const recoveredRows = await sbAll("refund_recovered?select=ebay_order_id,reason");
+  const excludeNow: Record<string, string> = { ...EXCLUDE_EBAY_ORDERS };
+  for (const r of recoveredRows) excludeNow[String(r.ebay_order_id)] = r.reason;
+
   const excludedByHand: any[] = [];
   const byStore: Record<string, any[]> = {};
   for (const r of refunded as any[]) {
-    const why = EXCLUDE_EBAY_ORDERS[String(r.ebay_order_id)];
+    const why = excludeNow[String(r.ebay_order_id)];
     if (why) { excludedByHand.push({ ...pick(r), why }); continue; }
     (byStore[r.store_code] ||= []).push(r);
   }

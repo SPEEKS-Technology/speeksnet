@@ -116,6 +116,13 @@ Deno.serve(async (req: Request) => {
       + "&order=ebay_order_id.asc,run_at.desc",
   );
 
+  // Orders the store caught before they shipped. eBay refunded the buyer, but
+  // we still hold the goods — a cancelled sale, not a loss. Read from the DB so
+  // outreach and the accounting exports cannot disagree about it.
+  const recoveredRows = await sbAll("refund_recovered?select=ebay_order_id,reason");
+  const recovered: Record<string, string> = {};
+  for (const r of recoveredRows) recovered[String(r.ebay_order_id)] = r.reason;
+
   const newest: Record<string, any> = {};
   for (const r of rows) if (!newest[r.ebay_order_id]) newest[r.ebay_order_id] = r;
   const all = Object.values(newest) as any[];
@@ -133,6 +140,9 @@ Deno.serve(async (req: Request) => {
     if (r.run_at > probedAt) probedAt = r.run_at;
     // The whole filter. A refund of any size means eBay has already moved.
     if (!keepAll && num(r.ebay_refund_total) > 0) continue;
+    // Recovered orders belong to neither list: eBay HAS refunded, so they are
+    // not exposure, and we kept the goods, so they are not loss either.
+    if (!keepAll && recovered[r.ebay_order_id]) continue;
 
     const b = r.body || {};
     const lines = Array.isArray(b.lineItems) ? b.lineItems : [];
@@ -154,7 +164,10 @@ Deno.serve(async (req: Request) => {
       // What eBay actually took back. Zero means still exposure, not loss —
       // the one column that must never be conflated with the order total.
       ebay_refund_total: r2(num(r.ebay_refund_total)),
-      state: num(r.ebay_refund_total) > 0 ? "Lost" : "At Risk",
+      state: recovered[r.ebay_order_id]
+        ? "Recovered"
+        : (num(r.ebay_refund_total) > 0 ? "Lost" : "At Risk"),
+      recovered_reason: recovered[r.ebay_order_id] ?? null,
       ebay_refund_date: r.ebay_refund_date ?? null,
       // What we would actually lose: buyer price less eBay fees and tax.
       due_seller: r2(num(b?.paymentSummary?.totalDueSeller?.value)),
@@ -221,7 +234,7 @@ Deno.serve(async (req: Request) => {
       "Store", "Shopify Order", "SKU", "eBay Order ID", "eBay Order Total",
       "Shopify Refund Amount", "Shipped To Buyer", "Buyer Requested Refund",
       "Shopify Refunded (Central)", "eBay Refunded (Central)",
-    ].concat(keepAll ? ["State", "Our Loss"] : []);
+    ].concat(keepAll ? ["State", "Our Loss", "Recovered — Why"] : []);
     const body = [HEAD.join(",")].concat(out.map((o) => {
       const d = byId[o.ebay_order_id] || {};
       return [
@@ -237,7 +250,8 @@ Deno.serve(async (req: Request) => {
         // Blank while eBay has not moved — that blank is what puts a row on the
         // at-risk side, so it is never filled in to tidy the column.
         o.state === "Lost" ? central(o.ebay_refund_date ?? null) : "",
-      ].concat(keepAll ? [o.state, o.state === "Lost" ? o.ebay_refund_total : 0] : [])
+      ].concat(keepAll ? [o.state, o.state === "Lost" ? o.ebay_refund_total : 0,
+                          o.recovered_reason ?? ""] : [])
        .map(csvCell).join(",");
     })).join("\n");
 
@@ -276,7 +290,10 @@ Deno.serve(async (req: Request) => {
     totals: {
       duplicate_orders_probed: all.length,
       already_refunded_on_ebay: all.length - out.length,
-      still_at_risk: out.length,
+      still_at_risk: out.filter((o) => o.state === "At Risk").length,
+      recovered_by_store: out.filter((o) => o.state === "Recovered").length,
+      recovered_value_not_lost: r2(out.filter((o) => o.state === "Recovered")
+        .reduce((a, o) => a + o.ebay_refund_total, 0)),
       at_risk_ebay_total: r2(out.reduce((a, o) => a + o.ebay_order_total, 0)),
       at_risk_due_seller: r2(out.reduce((a, o) => a + o.due_seller, 0)),
     },
