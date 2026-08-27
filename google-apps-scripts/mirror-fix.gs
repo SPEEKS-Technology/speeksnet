@@ -137,6 +137,24 @@ var MRF_FIX = [
   { store: 'BAL', day: 24, sales: 3502.71, cost: 1136.00 }   // pin says 3377.72 / 1084.00
 ];
 
+// ---------------------------------------------------------------------------
+// 🔁 AUG 27 WILL NEED THE SAME TREATMENT. Not added here because it is still a
+// live trading day as this is written.
+// ---------------------------------------------------------------------------
+// 83 more SPEEKS Connect orders were reversed on 2026-08-27 16:57-16:59 UTC
+// (OVL 76 / $14,639.19, WSP 7 / $1,159.93) to match eBay refunds that had
+// already happened. A refund books to the REFUND day, so Aug 27 now reads
+// OVL -14,046.28 and WSP -160.05 in Shopify against true sales of 300.95 and
+// 999.88. Same shape as Aug 26, same fix.
+//
+// ✅ Verified NOT to have paid anybody twice: eBay was probed before and after
+// and 83 of 83 refund totals were unchanged, growth $0.00 -- as with the 216 on
+// Aug 26. MC propagates refunds for orders MC OWNS; a SPEEKS Connect order is
+// not one. Refunding the PHANTOM is still the thing that pays the buyer.
+//
+// Derive Aug 27 after midnight -- a part-day figure is a different number, not
+// a small error -- and only once refunds_unreconciled reads 0.
+
 // Cells in MRF_FIX that an earlier fix's note owns, and that we overwrite
 // anyway. Nothing may be added here without the evidence written out above it —
 // the note guard exists precisely to stop casual restatement of a locked day.
