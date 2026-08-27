@@ -107,7 +107,12 @@ var MRF_FIX = [
   { store: 'LEE', day: 26, sales: 4163.22, cost: 1956.68 },  // sheet reads -10352.96 / -4149.99
   { store: 'WSP', day: 26, sales: 3373.80, cost: 1525.00 },  // sheet reads   1508.86 /   605.00
   { store: 'MPL', day: 26, sales: 1516.92, cost:  734.00 },  // sheet reads  -3722.89 / -1501.30
-  { store: 'BAL', day: 26, sales: 1301.25, cost:  570.32 },  // sheet reads  -2158.59 /  -974.68
+  // BAL moved from 1301.25 to 1208.84 between two runs four hours apart on
+  // 2026-08-27, with NO new refund appearing. Shopify's day total was simply
+  // behind its own refund detail: refunds_unreconciled read -92.41 and is now 0.
+  // Always re-derive Aug 26 immediately before applying, and treat a non-zero
+  // refunds_unreconciled as "the day has not settled yet", not as a rounding.
+  { store: 'BAL', day: 26, sales: 1208.84, cost:  570.32 },  // sheet reads  -2251.00 /  -974.68
 
   // -------------------------------------------------------------------------
   // BAL AUG 24 — +124.99 / +52.00, and the ONLY pre-Aug-26 cell this file moves.
@@ -140,6 +145,29 @@ var MRF_FORCE = { 'BAL:24': true };
 // Reported by the preview but NEVER written — the existing pin is correct.
 // See the header: un-cleaned duplicates that carry both a positive and a
 // negative leg, so a ledger-based recomputation cannot strip them.
+// ---------------------------------------------------------------------------
+// THE LEDGER-MISSED DUPLICATES ARE NOW A CLOSED SET, 2026-08-27.
+// ---------------------------------------------------------------------------
+// Swept every eBay order our books touched between Aug 8 and Aug 26 -- 521 ids
+// -- through dupe-order-trace. 417 have two Shopify copies. dup_order_cleanup
+// names at least one copy of 414 of them. It names NEITHER copy of exactly
+// three, and dupe-restate ?probe= says where each leg landed:
+//
+//   LEE #MO01-9103   +88.99  Aug 19,  -88.99  Aug 24   (cost 0 both legs)
+//   BAL #MO04-2844  +699.99  Aug 22, -699.99  Aug 24   (+/-300.00 cost)
+//   WSP #MO02-6754     0.00  Aug 24 only -- sale and refund fell on the SAME
+//                      day and cancel there, so no figure is wrong. Nothing
+//                      to correct at WSP, and nothing to add to this file.
+//
+// The two that move money are the two already pinned. So the sheet's Aug 15-25
+// figures need no further correction from this class, and the only pre-Aug-26
+// cell this file writes is BAL Aug 24 below.
+//
+// ⚠️ #MO02-6754 is still worth someone's attention for a different reason: it
+// carries a $899.99 Shopify refund, our copy #MO02-6752 SHIPPED, and the order
+// is in neither refund_damage nor refund_reprobe -- so if that refund reached
+// eBay it is loss nobody has counted. That is a question for the loss sheet,
+// not for what WSP sold.
 var MRF_KNOWN_DIFFERENT = [
   { store: 'LEE', day: 19, why: '#MO01-9103 +88.99  — pin is right (cost agrees to the cent)' },
   { store: 'LEE', day: 24, why: '#MO01-9103 -88.99  — pin is right (cost agrees to the cent)' },

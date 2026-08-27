@@ -2,9 +2,18 @@
 // dupe-restate — what each store ACTUALLY sold per day, with the duplicate
 // Marketplace Connect orders (and their reversals) taken back out.
 //
-//   ?secret=<ops>&store=OVL[&from=2026-08-01&to=2026-08-26]
+//   ?secret=<ops>&store=OVL[&from=2026-08-01&to=2026-08-26][&batches=a,b]
+//                            [&probe=#MO03-2951,#MO03-2935]
 //
 // READ-ONLY. Computes and reports; writes nothing, to Shopify or to the sheet.
+//
+// ?probe= REPORTS named orders day by day and changes no figure. It exists for
+// the phantoms the ledger never staged: dup_order_cleanup only holds a pair the
+// pairing run actually saw, and a copy whose twin was already refunded looked
+// unique at the time (#MO01-9103, #MO04-2844, #MO03-2935, #MO03-2951). Those
+// carry BOTH a sale leg and a refund leg, so a ledger-based restatement strips
+// neither. Probing shows which day each leg landed on -- the only way to know
+// whether the two cancel inside one day or move money between days.
 //
 // METHOD (identical to the Aug-16-20 restatement in mpc-dupe-fix.gs, which
 // reproduced BAL's pre-contamination figures 8/8 to the cent):
@@ -71,6 +80,11 @@ Deno.serve(async (req: Request) => {
   const batches = (url.searchParams.get("batches") || DEFAULT_BATCHES.join(","))
     .split(",").map((s) => s.trim()).filter(Boolean);
 
+  // Reported only. Deliberately NOT added to dupKeys: a probe must never move a
+  // figure, or the next person cannot tell a measurement from a correction.
+  const probeKeys = new Set(
+    (url.searchParams.get("probe") || "").split(",").map((x) => key(x)).filter(Boolean));
+
   const sbGet = async (path: string) => {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
       headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
@@ -109,6 +123,17 @@ Deno.serve(async (req: Request) => {
   // --- current vs per-order ---------------------------------------------------
   const byDay = await ql(
     `FROM sales SHOW net_sales, cost_of_goods_sold GROUP BY day SINCE ${from} UNTIL ${to} ORDER BY day`);
+  const days: Record<string, any> = {};
+  for (const row of byDay) {
+    const d = String(row.day).slice(0, 10);
+    days[d] = {
+      day: d,
+      sheet_now_sales: r2(Number(row.net_sales) || 0),
+      sheet_now_cost: r2(Number(row.cost_of_goods_sold) || 0),
+      dup_sales: 0, dup_cost: 0, dup_orders: 0,
+    };
+  }
+
   // ⚠️ ONE QUERY PER DAY, never `GROUP BY day, order_name` across the range.
   // ShopifyQL silently truncates a large result: OVL (the busiest store, ~1200
   // order-days in August) came back short, and because the dropped rows included
@@ -123,22 +148,12 @@ Deno.serve(async (req: Request) => {
     for (const r of rows) byOrder.push({ ...r, day: d });
   }
 
-  const days: Record<string, any> = {};
-  for (const row of byDay) {
-    const d = String(row.day).slice(0, 10);
-    days[d] = {
-      day: d,
-      sheet_now_sales: r2(Number(row.net_sales) || 0),
-      sheet_now_cost: r2(Number(row.cost_of_goods_sold) || 0),
-      dup_sales: 0, dup_cost: 0, dup_orders: 0,
-    };
-  }
-
   // Reconciliation guard: the per-order query is the one that could silently
   // truncate, and a short read would UNDER-subtract, leaving phantom money in a
   // "corrected" figure. Summing it back to the per-day totals proves it whole.
   const recon: Record<string, { s: number; c: number }> = {};
   const matched = new Set<string>();
+  const probed: any[] = [];
   for (const row of byOrder) {
     const d = String(row.day).slice(0, 10);
     const s = Number(row.net_sales) || 0;
@@ -146,6 +161,7 @@ Deno.serve(async (req: Request) => {
     recon[d] = recon[d] || { s: 0, c: 0 };
     recon[d].s += s; recon[d].c += c;
     const k = key(row.order_name);
+    if (probeKeys.has(k)) probed.push({ order: String(row.order_name), day: d, net_sales: r2(s), cost: r2(c) });
     if (!dupKeys.has(k) || !days[d]) continue;
     matched.add(k);
     days[d].dup_sales = r2(days[d].dup_sales + s);
@@ -182,6 +198,13 @@ Deno.serve(async (req: Request) => {
     // Expected to be non-empty and harmless: an order fully cancelled or falling
     // outside the window contributes nothing to any day, so it cannot be matched.
     duplicates_unmatched: unmatched,
+    // Each probed order, every day it touches. ONE row means its sale and its
+    // reversal fell on the same day and cancel there, so no day figure is wrong.
+    // TWO rows mean it is moving money between days, by that amount.
+    ...(probeKeys.size ? {
+      probe: probed.sort((a, b) => a.order.localeCompare(b.order) || a.day.localeCompare(b.day)),
+      probe_not_found: [...probeKeys].filter((k) => !probed.some((x) => key(x.order) === k)),
+    } : {}),
     reconciliation: reconIssues.length ? reconIssues : "per-order sums match per-day totals on every day",
     month_totals: {
       sales_now: sum(list, "sheet_now_sales"), sales_correct: sum(list, "correct_sales"),
