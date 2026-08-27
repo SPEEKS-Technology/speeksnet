@@ -349,6 +349,7 @@ Deno.serve(async (req: Request) => {
   const unknownLabelMessages: string[] = [];
   const labelShapes: Record<string, { n: number; amount: number }> = {};
   const labelDetail: any[] = [];
+  const labelLag: Record<string, { n: number; maxLag: number; over7: number; amountOver7: number }> = {};
   let ordersWithTruncatedEvents = 0;
   let labelEvents = 0;
   // eBay Order Id -> the Chicago day the order SOLD. This is what makes eBay
@@ -380,7 +381,7 @@ Deno.serve(async (req: Request) => {
              }
              events(first: 50) {
                pageInfo { hasNextPage }
-               edges { node { message } }
+               edges { node { message createdAt } }
              }
            } }
          }
@@ -438,7 +439,23 @@ Deno.serve(async (req: Request) => {
         bucket.n++;
         bucket.amount = round2(bucket.amount + v);
         labelShapes[shape] = bucket;
-        if (wantLabels) labelDetail.push({ order: o.name, day: d, shape, amount: v, msg });
+        // chargedOn is when the money moved; day is the order it is booked to.
+        // A carrier reweigh can land weeks after the sale, which is the whole
+        // reason the sheet needs an MTD restatement pass and not just a 1-day
+        // lag — see the lagDays tally below.
+        const chargedOn = ee.node?.createdAt ? chicagoDay(String(ee.node.createdAt)) : "";
+        if (chargedOn && chargedOn !== d) {
+          const lag = Math.round(
+            (Date.parse(chargedOn + "T12:00:00Z") - Date.parse(d + "T12:00:00Z")) / 86400000);
+          const lb = labelLag[shape] || { n: 0, maxLag: 0, over7: 0, amountOver7: 0 };
+          lb.n++;
+          lb.maxLag = Math.max(lb.maxLag, lag);
+          if (lag > 7) { lb.over7++; lb.amountOver7 = round2(lb.amountOver7 + v); }
+          labelLag[shape] = lb;
+        }
+        if (wantLabels) {
+          labelDetail.push({ order: o.name, day: d, chargedOn, shape, amount: v, msg });
+        }
         days[d].shipping_cost = round2((days[d].shipping_cost || 0) + v);
         ordersWithShopifyLabel.add(o.name);
       }
@@ -947,6 +964,7 @@ Deno.serve(async (req: Request) => {
     feeByTransactionKind: feeByKind,
     paymentsLedger: ledger,
     shippingLabelShapes: labelShapes,
+    shippingLabelLag: labelLag,
     shippingLabelDetail: wantLabels ? labelDetail : undefined,
     blocked,
     warnings,
