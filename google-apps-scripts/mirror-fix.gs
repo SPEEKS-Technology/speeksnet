@@ -106,7 +106,22 @@ var MRF_FIX = [
   { store: 'OVL', day: 26, sales: 2950.26, cost: 1143.54 },  // sheet reads -10211.82 / -4578.25
   { store: 'LEE', day: 26, sales: 4163.22, cost: 1956.68 },  // sheet reads -10352.96 / -4149.99
   { store: 'WSP', day: 26, sales: 3373.80, cost: 1525.00 },  // sheet reads   1508.86 /   605.00
-  { store: 'MPL', day: 26, sales: 1516.92, cost:  734.00 },  // sheet reads  -3722.89 / -1501.30
+  // ⚠️ MPL AUG 26 IS NEGATIVE, AND THAT IS THE CORRECT FIGURE. Restated
+  // 2026-08-27 from 1,516.92 / 734.00 after MPL confirmed it had SAVED seven
+  // items off the shelf. When this file was first written those seven were not
+  // in refund_recovered, so both Shopify copies of each looked like duplicates
+  // and both were added back. They are not duplicates: eBay refunded the buyer,
+  // MPL kept the goods, and that is a real return.
+  //
+  // Each item shows exactly one return, verified order by order:
+  //   the phantom copy refunded Aug 24  -> added back  (#MO03-3027, 3040, 3043,
+  //                                        3044, 3047, 3036, 3029)
+  //   our SPEEKS Connect copy Aug 26    -> KEPT        (#MO03-2991, 3010, 3006,
+  //                                        3004, 2998, 3018, 3024)
+  // Seven returns, $3,589.93, all on the 26th, against $2,755.84 of gross
+  // sales — so the day really is negative. The items are on MPL's shelf and
+  // earn their margin again when they sell; none of the seven has yet.
+  { store: 'MPL', day: 26, sales: -2073.01, cost: -872.00 }, // sheet reads  -3722.89 / -1501.30
   // BAL moved from 1301.25 to 1208.84 between two runs four hours apart on
   // 2026-08-27, with NO new refund appearing. Shopify's day total was simply
   // behind its own refund detail: refunds_unreconciled read -92.41 and is now 0.
