@@ -224,6 +224,19 @@ function _npxSync(preview) {
       skips.push(a1 + ' (' + what + ') — formula already there: ' + existingF);
       return;
     }
+    // ⚠️ NEVER SILENTLY REPLACE SOMEBODY'S TEXT. Numbers and dates in these
+    // cells are ours to maintain; a WORD in one is a label, and a label sitting
+    // where this script expected a blank means the block is not shaped the way
+    // the probe suggested. CP2 is the case that proved it: it holds "TTL", the
+    // block's own name, exactly where the five store blocks hold "NP Goal".
+    // Writing there would have erased the company block's title.
+    // Deliberate relabels pass replaceFormula and are unaffected.
+    if (typeof existingV === 'string' && existingV.trim() !== '' && !replaceFormula) {
+      if (existingV.trim().toLowerCase() !== String(value).trim().toLowerCase()) {
+        skips.push(a1 + ' (' + what + ') — text already there: "' + existingV + '"');
+      }
+      return;
+    }
     // Rewriting a cell with what it already holds is noise in the log and churn
     // on the sheet, and it buries the handful of writes that DO change
     // something. Only report a real change. This matters most for the YoY
@@ -294,8 +307,18 @@ function _npxSync(preview) {
     // The tab's own record of which month it holds. Nothing computes from it,
     // but a row-2 header reading July over September's numbers is exactly how
     // a wrong month gets believed.
-    plan(bBase + NPX_OFF_LABEL, 1, bName + ' month header',
-         new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1, 1), 'ddd mmm dd yyyy');
+    //
+    // It is a CHAIN like the two above it — T2 =B2, AL2 =T2, BD2 =AL2, BV2
+    // =BD2 — so only OVL carries a real date. TTL was the one link never
+    // joined up. Continue the chain rather than writing a sixth literal that
+    // would sit unchanged if anyone edited B2 by hand.
+    if (bi === 0) {
+      plan(bBase + NPX_OFF_LABEL, 1, bName + ' month header',
+           new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1, 1), 'ddd mmm dd yyyy');
+    } else {
+      plan(bBase + NPX_OFF_LABEL, 1, bName + ' month header',
+           '=' + _npxA1(blocks[bi - 1][1] + NPX_OFF_LABEL, 1), 'ddd mmm dd yyyy');
+    }
   }
 
   // === 3. last month's Revenue, GP and Net Profit ============================
