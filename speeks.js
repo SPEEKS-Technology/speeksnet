@@ -45111,10 +45111,15 @@ function _ecHealthHtml() {
     }).join('')}</div>`;
 }
 
-// The two Categories numbers, on the All Stores card. This is where the store
+// The Listing Health numbers, on the All Stores card. This is where the store
 // chips used to live inside the queue — "where is the work" is a whole-district
 // question, and it belongs next to the other whole-district numbers rather than
 // above a list of one store's rows.
+//
+// ⚠️ IN THE SAME ORDER AS THE PANEL: photos, then titles, then categories. A DM
+// reads a card here, picks a store, and lands on a page whose sections have to
+// be in the order they just scanned — reshuffling them makes the card and the
+// page feel like two different tools.
 //
 // Amber TEXT, not a control (user's call, 21 Aug). The "Did Not Upload" count
 // next to it is a button because the rows behind it are session-scoped and
@@ -45136,7 +45141,15 @@ function _ecHealthCats(store) {
     // everything else on this card is work queued up, and this one is a shopper
     // looking at an empty square on the live storefront right now.
     const pics = _rcCounts.photos?.[store] ?? null;
-    if (other == null && wrong == null && none == null && pics == null) return '';
+    // TITLES ARE TWO NUMBERS FOR THE SAME REASON THE PILE IS. `titles` is every
+    // open review; `titlesWrong` is the severity-3 subset — a listing describing
+    // the WRONG THING to a buyer, which is a misdescribed sale rather than a
+    // missed one. One combined number would bury five urgent rows under thirty
+    // optional ones, which is the whole reason the panel has tiers.
+    const titles = _rcCounts.titles?.[store] ?? null;
+    const titlesBad = _rcCounts.titlesWrong?.[store] ?? null;
+    if (other == null && wrong == null && none == null && pics == null
+        && titles == null && titlesBad == null) return '';
     const row = (k, n, bad) => `<div class="ec-hrow"><span class="ec-hk">${k}</span>`
         + `<span class="ec-hv ${n ? (bad || 'ec-warn') : 'ec-ok'}">${n == null ? '—' : n}</span></div>`;
     // ⚠️ A HALF YOU DO NOT HOLD IS ABSENT, NOT A DASH. The server OMITS the
@@ -45145,7 +45158,13 @@ function _ecHealthCats(store) {
     // was not given the tool. Presence of the key, not the value, decides.
     const hasPics = Object.prototype.hasOwnProperty.call(_rcCounts, 'photos');
     const hasCats = Object.prototype.hasOwnProperty.call(_rcCounts, 'other');
+    const hasTitles = Object.prototype.hasOwnProperty.call(_rcCounts, 'titles');
     return (hasPics ? row('No Photos', pics, 'ec-bad') : '')
+         // RED, alongside No Photos, and for the same reason: everything else on
+         // this card is work queued up, while these two are a shopper being shown
+         // something wrong on the live storefront right now.
+         + (hasTitles ? row('Wrong Titles', titlesBad, 'ec-bad')
+                      + row('Titles To Review', titles) : '')
          + (hasCats ? row('In &ldquo;Other&rdquo;', other) + row('No Suggestion', none)
                     + row('Wrong Category', wrong) : '');
 }

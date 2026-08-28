@@ -352,7 +352,7 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     ok(errs.length === 0, 'no console errors', errs.length ? errs.slice(0, 3).join(' | ') : 'clean');
 
     console.log('');
-    console.log('== The All Stores tab carries the same two numbers ==');
+    console.log('== The All Stores tab carries every Listing Health number ==');
     await page.click('#ecViewHealthBtn');
     await page.waitForFunction(() => document.querySelectorAll('.ec-hcard').length > 0, { timeout: 20000 }).catch(() => {});
     // The counts come from shopify-recat, not from the health view, so they land
@@ -368,7 +368,14 @@ const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g ==
     ok(cards.length === 5, 'a card per store', cards.map(c => c.store).join(' '));
     ok(cards.every(c => c.keys.some(k => /Other/.test(k)) && c.keys.some(k => /Wrong Category/.test(k))),
         'each one now names both category queues', JSON.stringify(cards[0]?.keys));
-    ok(cards.every(c => c.vals.length === 5), 'five rows on every card', String(cards[0]?.vals.length));
+    // Seven since the Titles tool landed: No Photos, Wrong Titles, Titles To
+    // Review, In "Other", No Suggestion, Wrong Category — and the eBay chip row.
+    // Pinned deliberately: a half that silently stops answering drops its rows
+    // rather than showing a dash, so the COUNT is what catches that.
+    ok(cards.every(c => c.vals.length === 7), 'seven rows on every card', String(cards[0]?.vals.length));
+    ok(cards.every(c => c.keys.some(k => /Wrong Titles/.test(k))
+                     && c.keys.some(k => /Titles To Review/.test(k))),
+        'each one carries both title numbers', JSON.stringify(cards[0]?.keys));
     // Text, not controls: the pills invited a click they did not need to own.
     // Asserted, because "make it text" is easy to undo by accident the next time
     // somebody copies the To Fix row above it.

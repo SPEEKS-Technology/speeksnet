@@ -358,6 +358,76 @@ const seed = async (page, titles, err, tier) => await page.evaluate((t, e, c, tr
     ok(clearScope.clear && clearScope.scope,
        'an all clear still says what it was an all clear OF');
 
+    // ---------------------------------------------------------- all stores
+    // The DM's landing view. A district manager does not open a store to find
+    // out whether a store needs opening — the card has to carry the number.
+    console.log('');
+    console.log('== The All Stores card carries the title numbers ==');
+    await page.evaluate(() => {
+        _ecView = 'health';
+        _ecScope = { allStores: true, stores: ['OVL', 'LEE'] };
+        _ecHealth = { stores: ['OVL', 'LEE'].map(s => ({
+            store: s, connected: true,
+            counts: { live: 0, failed: 0 },
+            freshness: { liveMinutes: 12 },
+        })) };
+        _rcCounts = {
+            photos:   { OVL: 0, LEE: 0 },
+            other:    { OVL: 3, LEE: 0 },
+            unmatched:{ OVL: 1, LEE: 0 },
+            misfiled: { OVL: 0, LEE: 0 },
+            titles:      { OVL: 14, LEE: 3 },
+            titlesWrong: { OVL: 2,  LEE: 0 },
+        };
+        ecRender();
+    });
+    const cards = await page.$$eval('.ec-hcard', cs => cs.map(c => ({
+        store: c.querySelector('.ec-hstore')?.textContent?.trim(),
+        rows: [...c.querySelectorAll('.ec-hrow')].map(r => ({
+            k: r.querySelector('.ec-hk')?.textContent?.trim(),
+            v: r.querySelector('.ec-hv')?.textContent?.trim(),
+            colour: getComputedStyle(r.querySelector('.ec-hv')).color,
+        })),
+    })));
+    const ovl = cards.find(c => c.store === 'OVL') || { rows: [] };
+    const at = k => ovl.rows.find(r => new RegExp(k).test(r.k || ''));
+    ok(cards.length === 2, 'a card per store', cards.map(c => c.store).join(' '));
+    ok(!!at('Titles To Review'), 'the card names the title queue');
+    ok(at('Titles To Review')?.v === '14', 'and carries the store\'s own number',
+       at('Titles To Review')?.v);
+    ok(at('Wrong Titles')?.v === '2', 'the severity-3 count is split out, not buried',
+       at('Wrong Titles')?.v);
+    // Red, like No Photos: both are a shopper being shown something wrong right
+    // now, while everything else on the card is work queued up.
+    ok(at('Wrong Titles')?.colour === at('No Photos')?.colour
+       || at('Wrong Titles')?.colour !== at('Titles To Review')?.colour,
+       'Wrong Titles is graded harder than the queue below it',
+       at('Wrong Titles')?.colour);
+    // ⚠️ THE CARD MUST READ IN THE SAME ORDER AS THE PAGE IT LEADS TO.
+    const order = ovl.rows.map(r => r.k).filter(k =>
+        /No Photos|Titles|In .Other|No Suggestion|Wrong Category/.test(k || ''));
+    ok(/No Photos/.test(order[0]) && /Titles/.test(order[1] || '')
+       && /Titles/.test(order[2] || '') && /Other/.test(order[3] || ''),
+       'photos, then titles, then categories — the panel\'s own order',
+       order.join(' > '));
+    // A store with nothing wrong still shows the row: absent means "we could not
+    // read it", and zero means "we looked".
+    const lee = cards.find(c => c.store === 'LEE') || { rows: [] };
+    ok(lee.rows.some(r => /Wrong Titles/.test(r.k || '') && r.v === '0'),
+       'a clean store shows a zero, not a blank');
+
+    // And a reader without the Titles half sees NO title rows at all, rather
+    // than two dashes claiming we could not read something they were never given.
+    await page.evaluate(() => {
+        _rcCounts = { photos: { OVL: 0, LEE: 0 }, other: { OVL: 3, LEE: 0 },
+                      unmatched: { OVL: 1, LEE: 0 }, misfiled: { OVL: 0, LEE: 0 } };
+        ecRender();
+    });
+    const ungranted = await page.$$eval('.ec-hcard .ec-hk',
+        ks => ks.map(k => k.textContent.trim()).filter(t => /Title/.test(t)));
+    ok(ungranted.length === 0, 'no title rows when the reader does not hold Titles',
+       ungranted.join(' | ') || 'none');
+
     // ------------------------------------------------------------- caution
     // CIB is the one suggestion that asserts something about the ITEM rather
     // than about the words, so the reviewer has to check it against the game in
