@@ -37,7 +37,9 @@
 // ============================================================================
 
 var NP_SHEET_ID = '1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8';  // Sales Summary 2026
-var NP_TAB      = 'NET PROFIT TEMPLATE';
+var NP_TAB_PREFIX = 'Net Profit';              // tabs are "Net Profit Sep 26"
+var NP_TAB_LEGACY = 'NET PROFIT TEMPLATE';     // the single tab everything used before
+var NP_TAB        = NP_TAB_LEGACY;            // overwritten per run by _npTab()
 
 var NP_ENDPOINT = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/netprofit-collect';
 var NP_SECRET   = 'sp33ks-sync-k3y-2026-x9mq';
@@ -62,6 +64,45 @@ var NP_BLOCKED_AS_NA = true;          // see the header warning before changing
 function npProbe()        { _npProbe(); }
 function npWritePreview() { _npWrite(true); }
 function npWriteApply()   { _npWrite(false); }
+
+// ---------------------------------------------------------------------------
+// WHICH TAB. From 2026-09 the workbook keeps ONE TAB PER MONTH — "Net Profit
+// Sep 26", "Net Profit Oct 26" — the same convention the Sales Summary uses.
+//
+// ⚠️ THE TAB IS CHOSEN BY THE MONTH BEING WRITTEN, NOT BY TODAY. npsMonthClose
+// sets NP_FROM back to the month it is closing, and on the evening of Oct 1
+// that means it must write into "Net Profit Sep 26" while the calendar says
+// October. Resolving from the clock instead of from NP_FROM would put a closed
+// month's final figures into the new month's empty grid.
+var NP_MON_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function _npTabName(ym) {
+  return NP_TAB_PREFIX + ' ' + NP_MON_ABBR[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(2, 4);
+}
+
+function _npTab(ss, ym) {
+  ym = ym || String(NP_FROM).slice(0, 7);
+  var want = _npTabName(ym);
+  var sh = ss.getSheetByName(want);
+  if (sh) { NP_TAB = want; return sh; }
+
+  // The single pre-rollover tab. Falling back to it is right while there is
+  // only one month in the workbook, but it must be LOUD: silently writing
+  // September's figures into a tab called something else is how a month ends
+  // up in the wrong place with nothing to show it happened.
+  var legacy = ss.getSheetByName(NP_TAB_LEGACY);
+  if (legacy) {
+    Logger.log('!! no tab "%s" — falling back to "%s". Rename it or run npRollApply.',
+      want, NP_TAB_LEGACY);
+    NP_TAB = NP_TAB_LEGACY;
+    return legacy;
+  }
+  Logger.log('!! no tab "%s" and no "%s". Nothing written. Tabs present: %s',
+    want, NP_TAB_LEGACY,
+    ss.getSheets().map(function (s) { return s.getName(); }).join(' | '));
+  return null;
+}
 
 function _npColLetter(i0) {
   var n = i0 + 1, s = '';
@@ -109,8 +150,8 @@ function _npIsOurPlaceholder(f) {
 
 function _npWrite(preview) {
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
-  var sh = ss.getSheetByName(NP_TAB);
-  if (!sh) { Logger.log('!! no tab named "%s"', NP_TAB); return; }
+  var sh = _npTab(ss);
+  if (!sh) return;
 
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
   var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();
@@ -280,8 +321,8 @@ function _npProbe() {
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
   var names = ss.getSheets().map(function (s) { return '"' + s.getName() + '"'; });
   Logger.log('TABS (%s): %s', names.length, names.join(', '));
-  var sh = ss.getSheetByName(NP_TAB);
-  if (!sh) { Logger.log('!! no tab named "%s"', NP_TAB); return; }
+  var sh = _npTab(ss);
+  if (!sh) return;
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
   Logger.log('TAB "%s": %s rows x %s cols (last col = %s)', NP_TAB, lastRow, lastCol, _npColLetter(lastCol - 1));
   var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();
@@ -534,8 +575,8 @@ function npFixNetMarginApply()   { _npFixNetMargin(false); }
 
 function _npFixNetMargin(dryRun) {
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
-  var sh = ss.getSheetByName(NP_TAB);
-  if (!sh) { Logger.log('!! no tab named "%s"', NP_TAB); return; }
+  var sh = _npTab(ss);
+  if (!sh) return;
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
   var values = sh.getRange(1, 1, lastRow, lastCol).getValues();
 
@@ -586,8 +627,8 @@ var NP_TTL_COLS = [
 
 function _npFixTotals(preview) {
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
-  var sh = ss.getSheetByName(NP_TAB);
-  if (!sh) { Logger.log('!! no tab named "%s"', NP_TAB); return; }
+  var sh = _npTab(ss);
+  if (!sh) return;
 
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
   var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();
@@ -656,8 +697,8 @@ function _npFixTotals(preview) {
 // ============================================================================
 function npProbeSummary() {
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
-  var sh = ss.getSheetByName(NP_TAB);
-  if (!sh) { Logger.log('!! no tab named "%s"', NP_TAB); return; }
+  var sh = _npTab(ss);
+  if (!sh) return;
 
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
   var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();
@@ -731,8 +772,8 @@ function npProbeSummary() {
 // ============================================================================
 function npProbeGrid() {
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
-  var sh = ss.getSheetByName(NP_TAB);
-  if (!sh) { Logger.log('!! no tab named "%s"', NP_TAB); return; }
+  var sh = _npTab(ss);
+  if (!sh) return;
 
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
   var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();

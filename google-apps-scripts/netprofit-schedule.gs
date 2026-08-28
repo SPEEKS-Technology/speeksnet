@@ -140,6 +140,20 @@ function npsMonthClose() {
   // ⚠️ The collector has its own copy of this calendar. If the two ever
   // disagree, a late charge lands in a month whose close was decided on a
   // different date, and no total ties. Refuse rather than guess.
+  // ⚠️ NO TAB, NO CLOSE. From 2026-09 each month has its own tab, and a month
+  // with none was never on the record — August is exactly that: the tab held
+  // July all along and August is deliberately being skipped (user, 2026-08-28).
+  // Without this the close would fall back to whatever tab it could find and
+  // write a full month of August figures over the live month.
+  var closeTab = SpreadsheetApp.openById(NP_SHEET_ID)
+    .getSheetByName(_npTabName(target));
+  if (!closeTab) {
+    Logger.log('No tab "%s" — %s was never kept, so there is nothing to close. '
+      + 'Marking it closed so this stops asking.', _npTabName(target), target);
+    props.setProperty(NPS_LAST_CLOSED_KEY, target);
+    return;
+  }
+
   var theirs = _npsAskCollectorCloseDay(target);
   if (theirs && theirs !== close.date) {
     throw new Error('CLOSE CALENDAR DRIFT: this script says ' + target + ' closes '

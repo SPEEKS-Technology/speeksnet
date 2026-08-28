@@ -50,6 +50,7 @@ var NPX_OFF_VAL_R    = 5;   // F — last-month GP + Net Profit, and the YoY val
 var NPX_OFF_GOAL_LBL = 3;   // D — "% of GP Goal" (row 1), "NP Goal" (row 2)
 var NPX_OFF_GOAL_VAL = 4;   // E — the percentage (row 1), the goal (row 2)
 var NPX_OFF_REVTRACK = 3;   // D — Rev Tracking, the source of YoY "Current"
+var NPX_OFF_NP       = 12;  // M — NP, the tab's own net profit (TTL row = the month)
 var NPX_OFF_NPTOTAL  = 13;  // N — NP Total, cumulative net profit banked
 var NPX_OFF_NPTRACK  = 14;  // O — NP Tracking, the projected full month
 
@@ -167,6 +168,64 @@ function _npxFetchMonth(store, ym) {
   finally { NP_FROM = saveF; NP_TO = saveT; }
 }
 
+// ---------------------------------------------------------------------------
+// LAST MONTH, READ OFF ITS OWN TAB.
+//
+// From 2026-09 every closed month keeps its tab, and that tab's TTL row already
+// holds the three figures in the tab's own arithmetic — the same formulas the
+// bonus is read from. Reading them beats refetching from Shopify twice over:
+//
+//   1. IT IS WALL-PROOF. A closed month drifts past the 60-day Shopify order
+//      wall within weeks, after which a refetch silently loses the fees and
+//      reports a Net Profit that is too high. The tab does not decay.
+//   2. IT CANNOT DISAGREE WITH ITSELF. A refetch re-derives from live Shopify
+//      data that has moved on — a late refund, a reweigh — so last month's
+//      figure on the new tab would stop matching the closed tab it came from.
+//      The month was closed on purpose; this reads the closed answer.
+//
+// Falls back to the collector when the prior tab does not exist, which is
+// exactly September's position: August is deliberately never getting a tab, so
+// September's MoM denominator has to come from Shopify. August is inside the
+// wall for all of September, so that fetch is sound — it just has to happen
+// before Oct 1, and the once-per-month marker makes sure it happens on the 1st.
+function _npxLastMonthFromTab(ss, prevYm) {
+  var sh = ss.getSheetByName(_npTabName(prevYm));
+  if (!sh) return null;
+
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  var vals = sh.getRange(1, 1, lastRow, lastCol).getValues();
+
+  var ttl = -1;
+  for (var r = NP_HEADER_ROWS; r < lastRow; r++) {
+    if (String(vals[r][NP_BASES.OVL]).trim().toUpperCase() === 'TTL') { ttl = r; break; }
+  }
+  if (ttl < 0) {
+    Logger.log('  !! tab "%s" exists but has no TTL row — falling back to the collector',
+      _npTabName(prevYm));
+    return null;
+  }
+
+  var out = {}, missing = [];
+  for (var i = 0; i < NP_ORDER.length; i++) {
+    var st = NP_ORDER[i], b = NP_BASES[st];
+    var rev = Number(vals[ttl][b + NP_OFF_SALES]);
+    var gp  = Number(vals[ttl][b + NPX_OFF_VAL_R]);
+    var np  = Number(vals[ttl][b + NPX_OFF_NP]);
+    // An empty or #N/A TTL means that month was never finished. Refusing beats
+    // reading a zero as a real month with no sales.
+    if (!isFinite(rev) || !isFinite(gp) || !isFinite(np) || rev === 0) { missing.push(st); continue; }
+    out[st] = { revenue: r2c(rev), gp: r2c(gp), np: r2c(np), source: 'tab' };
+  }
+  if (missing.length) {
+    Logger.log('  !! tab "%s" has no usable TTL for %s — falling back to the collector for all five',
+      _npTabName(prevYm), missing.join(', '));
+    return null;
+  }
+  return out;
+}
+
+function r2c(n) { return Math.round(n * 100) / 100; }
+
 // Revenue / GP / Net Profit for a whole month in the tab's OWN terms:
 //   NP = Sales - Cost - eBay Fee - Shipping - CC Fee - 7% of Sales
 // which is M36 =B36-E36-J36-K36-L36-(B36*0.07), read off the sheet itself.
@@ -216,13 +275,17 @@ function _npxMonthTotals(data) {
 
 function _npxSync(preview) {
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
-  var sh = ss.getSheetByName(NP_TAB);
-  if (!sh) { Logger.log('!! no tab named "%s"', NP_TAB); return; }
 
+  // The month decides the tab, so it has to be known first. `var` hoists but
+  // the VALUE does not: resolving the tab above this line passed `undefined`
+  // as the month and silently fell back to the legacy tab.
   var ym = _npxGridMonth();
   var prevYm = _npxPrevYm(ym);
   var daysIn = _npxDaysIn(ym);
   var mm = ym.slice(5, 7);
+
+  var sh = _npTab(ss, ym);
+  if (!sh) return;
 
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
   var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();
@@ -379,17 +442,27 @@ function _npxSync(preview) {
       prevYm, NPX_SHOPIFY_WALL_DAYS, wallYmd);
   }
   Logger.log(lmSkip ? '' : '\n--- last month (%s) ---', prevYm);
+  // The closed month's own tab first; Shopify only when there isn't one.
+  var fromTab = lmSkip ? null : _npxLastMonthFromTab(ss, prevYm);
+  if (fromTab) {
+    Logger.log('  reading last month off tab "%s" — the closed figures, so the '
+      + '60-day wall does not apply and this cannot drift away from what that '
+      + 'month was closed at.', _npTabName(prevYm));
+  }
+
   var lmOk = [];
   for (var li = 0; li < NP_ORDER.length && !lmSkip; li++) {
     var store = NP_ORDER[li], sb = NP_BASES[store], tot;
     try {
-      tot = _npxMonthTotals(_npxFetchMonth(store, prevYm));
+      tot = fromTab ? fromTab[store] : _npxMonthTotals(_npxFetchMonth(store, prevYm));
+      if (fromTab) tot.npTrustworthy = true;
     } catch (e) {
       Logger.log('  %s: SKIPPED — %s', store, e.message);
       skips.push(store + ' last month: ' + e.message);
       continue;
     }
-    Logger.log('  %s: %s days | Revenue %s | GP %s | NP %s%s', store, tot.days,
+    Logger.log('  %s: %s | Revenue %s | GP %s | NP %s%s', store,
+      fromTab ? 'from tab' : tot.days + ' days',
       tot.revenue, tot.gp, tot.np,
       tot.npTrustworthy ? '' : '\n    !! NET PROFIT NOT WRITTEN. ' + tot.blind + ' of '
         + tot.sellingDays + ' selling days report ZERO eBay fee, shipping AND card fee'
@@ -400,7 +473,9 @@ function _npxSync(preview) {
         + ' Missing fees make Net Profit TOO HIGH, so Revenue and GP are written and NP is not.');
     plan(sb + NPX_OFF_VAL_L, rowLastMonth, store + ' last-month Revenue', tot.revenue, NPX_MONEY);
     plan(sb + NPX_OFF_VAL_R, rowLastMonth, store + ' last-month GP', tot.gp, NPX_MONEY);
-    if (tot.npTrustworthy && !behindWall) {
+    // The wall only governs a Shopify REFETCH. A figure read off the closed
+    // month's own tab is already final and cannot decay.
+    if (tot.npTrustworthy && (fromTab || !behindWall)) {
       plan(sb + NPX_OFF_VAL_R, rowLastMonth + 1, store + ' last-month Net Profit', tot.np, NPX_MONEY);
       lmOk.push(store);
     } else {
