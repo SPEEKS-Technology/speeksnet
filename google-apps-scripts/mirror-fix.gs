@@ -89,6 +89,14 @@ var MRF_HEADER_ROWS = 4;   // day rows start here; the row is still LOCATED by d
 
 var MRF_NOTE = 'MC mirror-back fix (Aug 26) — real figure. Locked from the daily sync.';
 
+// Aug 27 is a different correction from Aug 26 and says so on the cell. On the
+// 26th the eBay refunds flooded back in; on the 27th the day is mostly about
+// draft orders, and at LEE it is ONLY about draft orders. A note reading
+// "MC mirror-back fix" on a cell that no mirror-back touched would send the
+// next reader looking for an incident that did not happen there.
+var MRF_NOTE_0827 = 'Aug 27 restated — duplicate refunds added back, ALL draft orders removed. '
+  + 'Real figure. Locked from the daily sync.';
+
 // Every earlier fix's note. A cell carrying one of these belongs to that
 // script and must never be rewritten here.
 var MRF_OTHER_NOTES = [
@@ -101,7 +109,9 @@ var MRF_OTHER_NOTES = [
   'New-MC adoption dupe fix — real figure. Locked from the daily sync.'
 ];
 
-// Aug 26, and one Aug 24 cell. Sales / cost, from sales-true-daily 2026-08-27.
+// Aug 26 + one Aug 24 cell + all five Aug 27 cells. Sales / cost, from
+// sales-true-daily: the Aug 26 block derived 2026-08-27, the Aug 27 block
+// derived 2026-08-28 once the day had closed.
 var MRF_FIX = [
   { store: 'OVL', day: 26, sales: 2950.26, cost: 1143.54 },  // sheet reads -10211.82 / -4578.25
   { store: 'LEE', day: 26, sales: 4163.22, cost: 1956.68 },  // sheet reads -10352.96 / -4149.99
@@ -149,7 +159,52 @@ var MRF_FIX = [
   // on the loss sheet, not netted out of what BAL sold. A cancelled Shopify
   // order is not evidence a parcel never shipped — only an eBay tracking NUMBER
   // settles that.
-  { store: 'BAL', day: 24, sales: 3502.71, cost: 1136.00 }   // pin says 3377.72 / 1084.00
+  { store: 'BAL', day: 24, sales: 3502.71, cost: 1136.00 },  // pin says 3377.72 / 1084.00
+
+  // ==========================================================================
+  // AUG 27 — all five stores. Derived 2026-08-28 from sales-true-daily, after
+  // the day closed. Two corrections, both asked for explicitly (user, 8/28):
+  // strip the eBay return problem, and strip EVERY draft order.
+  // ==========================================================================
+  //
+  // WHAT MOVES EACH STORE, and it is not the same thing at each:
+  //
+  //   OVL  -7,848.75 -> 4,731.60   76 mirror refunds added back (+14,639.19),
+  //                                14 draft invoices removed (-2,058.84).
+  //                                A NEGATIVE DAY BECOMES A NORMAL ONE. Every
+  //                                one of OVL's 76 refunds was a duplicate;
+  //                                nothing genuine was left behind.
+  //   LEE   7,581.94 -> 5,709.04   no duplicates at all — this is 10 draft
+  //                                invoices coming out (-1,872.90) and nothing
+  //                                else. The day gets SMALLER, and that is the
+  //                                honest direction.
+  //   WSP   6,257.61 -> 7,417.54   7 mirror refunds added back. No drafts.
+  //   MPL   2,830.26 -> 2,810.27   one $19.99 draft.
+  //   BAL   5,144.79 -> 4,874.81   two drafts (-269.98).
+  //
+  // Cost moves with it, and the mirror legs make it look strange: OVL's
+  // reported cost is NEGATIVE (-2,755.58) because the duplicate refunds carried
+  // -6,065.06 of cost back out. Removing them restores 2,300.16, which is what
+  // OVL's real sales actually cost.
+  //
+  // ⚠️ EVERY DRAFT ORDER ON THE 27th CAME OUT — draft_orders_kept_as_real_sales
+  // reads 0 at all five stores. That is what was asked for, but it is NOT the
+  // standing rule: sales-true-daily normally keeps a draft that cannot be a
+  // repayment. Once repayment invoicing finishes, real draft sales resume and
+  // this blanket strip would start eating them.
+  //
+  // ⚠️ LEE'S refunds_unreconciled READS 185.00, NOT 0. The file's own rule says
+  // treat that as "the day has not settled". It is not, in this one case: all
+  // $185 is three refunds carrying NO line items (#MO01-8451 $150,
+  // #MO01-8755 $20, #MO01-8767 $15) — shipping, tax or goodwill adjustments on
+  // older orders, named individually by the collector. Nothing came back to the
+  // shelf. They stay subtracted because the money did leave, but somebody at
+  // LEE should say what they were for.
+  { store: 'OVL', day: 27, sales: 4731.60, cost: 2300.16, note: MRF_NOTE_0827 },
+  { store: 'LEE', day: 27, sales: 5709.04, cost: 2408.40, note: MRF_NOTE_0827 },
+  { store: 'WSP', day: 27, sales: 7417.54, cost: 3047.62, note: MRF_NOTE_0827 },
+  { store: 'MPL', day: 27, sales: 2810.27, cost:  914.81, note: MRF_NOTE_0827 },
+  { store: 'BAL', day: 27, sales: 4874.81, cost: 1759.01, note: MRF_NOTE_0827 }
 ];
 
 // ---------------------------------------------------------------------------
@@ -294,7 +349,10 @@ function _mrfRun(dryRun) {
       if (!dryRun) {
         var cell = sh.getRange(r + 1, c + 1);
         cell.setFormula('=' + want);   // bare-number formula: the workbook's own lock
-        cell.setNote(MRF_NOTE);
+        // Per-entry note where one is given. A cell restated for a different
+        // reason on a different day must say so on the cell — the note is the
+        // only place the reason survives once the number looks ordinary.
+        cell.setNote(f.note || MRF_NOTE);
       }
       wrote++;
     }
