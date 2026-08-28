@@ -110,18 +110,43 @@ function npsDailyRefresh() {
   NP_FROM = ym + '-01';
   NP_TO = today;
   Logger.log('=== DAILY REFRESH %s — month to date %s .. %s ===', today, NP_FROM, NP_TO);
-  // A new month has no tab until something makes one. Left manual, the first
-  // 2pm run of every month would find nothing, log "no tab" and write nothing —
-  // and it would keep doing that, quietly, until somebody noticed the month was
-  // empty. Rolling here happens exactly when it is needed and cannot fire early.
-  _npsEnsureTab(ym);
-  _npWrite(false);
-  // The summary strip second, always: Days Thru is DERIVED from the last day
-  // carrying Sales, so running it before the grid is written would measure
-  // yesterday's sheet and leave every Tracking figure a day behind.
-  _npxSync(false);
-  Logger.log('Daily refresh done. The current month stays open; it closes at 7pm on %s.',
-    _npsMonthCloseDay(ym).date);
+
+  // ⚠️ EVERY FAILURE PATH IN THIS FILE LOGS A LINE AND RETURNS, AND NOBODY
+  // READS APPS SCRIPT LOGS. Wrapped so a throw reaches a person instead of a
+  // log nobody opens — an unattended job that fails politely is
+  // indistinguishable from one that never ran.
+  try {
+    // A new month has no tab until something makes one. Left manual, the first
+    // 2pm run of every month would find nothing, log "no tab" and write
+    // nothing — and keep doing that, quietly, until somebody noticed the month
+    // was empty. Rolling here happens when it is needed and cannot fire early.
+    if (!_npsEnsureTab(ym)) {
+      _npaSendFailure('The 2pm daily refresh',
+        'No tab "' + _npTabName(ym) + '", and no previous month to roll forward from.',
+        'You — run npRollStatus to see what tabs exist, then npRollApply, or create '
+          + 'the month by hand. Nothing is being recorded for ' + ym + ' until it exists.');
+      return;
+    }
+
+    // Snapshot BEFORE the write, so the alert can tell a figure that MOVED from
+    // one being filled for the first time. Filling a day is not a change.
+    var before = _npaSnapshot(ym);
+
+    _npWrite(false);
+    // The summary strip second, always: Days Thru is DERIVED from the last day
+    // carrying Sales, so running it before the grid is written would measure
+    // yesterday's sheet and leave every Tracking figure a day behind.
+    _npxSync(false);
+    _npaReport(before, ym, '2pm daily refresh');
+
+    Logger.log('Daily refresh done. The current month stays open; it closes at 7pm on %s.',
+      _npsMonthCloseDay(ym).date);
+  } catch (e) {
+    _npaSendFailure('The 2pm daily refresh', String(e && e.stack ? e.stack : e),
+      'Claude — send this email on. The next 2pm run rewrites the whole month to '
+        + 'date, so one missed run usually repairs itself; two in a row does not.');
+    throw e;   // still fail loudly in the execution log
+  }
 }
 
 function npsMonthClose() {
@@ -161,26 +186,47 @@ function npsMonthClose() {
 
   var theirs = _npsAskCollectorCloseDay(target);
   if (theirs && theirs !== close.date) {
-    throw new Error('CLOSE CALENDAR DRIFT: this script says ' + target + ' closes '
-      + close.date + ', the collector says ' + theirs
-      + '. Fix monthCloseDay() in netprofit-collect before closing anything.');
+    var drift = 'CLOSE CALENDAR DRIFT: this script says ' + target + ' closes '
+      + close.date + ', the collector says ' + theirs + '.';
+    // The one failure here that must never pass quietly. A disagreement about
+    // the close date puts a late charge in one month and the close in another,
+    // and no total ties afterwards.
+    _npaSendFailure('The 7pm month close', drift,
+      'Claude — nothing was written and ' + target + ' is still OPEN. '
+        + 'monthCloseDay() in netprofit-collect and _npsMonthCloseDay() here have '
+        + 'drifted apart and must be reconciled before the month can close.');
+    throw new Error(drift + ' Fix monthCloseDay() in netprofit-collect before '
+      + 'closing anything.');
   }
 
-  NP_FROM = target + '-01';
-  NP_TO = _npsLastDayOf(target);
-  Logger.log('=== MONTH CLOSE %s — writing %s in full (%s .. %s) ===',
-    today, target, NP_FROM, NP_TO);
-  if (close.why.length) Logger.log('  close slipped: %s', close.why.join('; '));
-  _npWrite(false);
-  // On a close the grid holds the month being closed, so Days Thru lands on its
-  // final day and Tracking stops projecting — the closed month reads as fact,
-  // not as a forecast. That is the figure the bonus is paid on.
-  _npxSync(false);
+  try {
+    NP_FROM = target + '-01';
+    NP_TO = _npsLastDayOf(target);
+    Logger.log('=== MONTH CLOSE %s — writing %s in full (%s .. %s) ===',
+      today, target, NP_FROM, NP_TO);
+    if (close.why.length) Logger.log('  close slipped: %s', close.why.join('; '));
+    _npWrite(false);
+    // On a close the grid holds the month being closed, so Days Thru lands on
+    // its final day and Tracking stops projecting — the closed month reads as
+    // fact, not as a forecast. That is the figure the bonus is paid on.
+    _npxSync(false);
 
-  props.setProperty(NPS_LAST_CLOSED_KEY, target);
-  Logger.log('%s is CLOSED. Nothing will rewrite it — the daily refresh only '
-    + 'touches the current month, and late charges book to the day they are '
-    + 'charged, in the new month.', target);
+    props.setProperty(NPS_LAST_CLOSED_KEY, target);
+    Logger.log('%s is CLOSED. Nothing will rewrite it — the daily refresh only '
+      + 'touches the current month, and late charges book to the day they are '
+      + 'charged, in the new month.', target);
+
+    // Read AFTER the property is set, so the email only ever goes out for a
+    // month that really did close. Silence on close night is the wrong default:
+    // this is the moment the figure stops moving.
+    _npaSendClose(target, _npaSnapshot(target));
+  } catch (e) {
+    _npaSendFailure('The 7pm month close', String(e && e.stack ? e.stack : e),
+      'Claude — send this email on. ' + target + ' may be PARTLY written and is '
+        + 'not marked closed, so the next eligible run will try again. Do not pay '
+        + 'a bonus on this month until it has closed cleanly.');
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------------------

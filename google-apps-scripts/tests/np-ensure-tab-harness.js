@@ -22,7 +22,11 @@ global.PropertiesService = { getScriptProperties: () => ({ getProperty: () => nu
 global.UrlFetchApp = { fetch: () => ({ getResponseCode: () => 200, getContentText: () => '{"days":[]}' }) };
 global.ScriptApp = { getProjectTriggers: () => [] };
 
-let src = ['netprofit-sheet.gs', 'netprofit-summary.gs', 'netprofit-rollover.gs', 'netprofit-schedule.gs']
+const sent = [];
+global.GmailApp = { sendEmail: (to, subj, plain, opts) => sent.push({ to, subj, plain, html: opts && opts.htmlBody }) };
+
+let src = ['netprofit-sheet.gs', 'netprofit-summary.gs', 'netprofit-rollover.gs',
+           'netprofit-alerts.gs', 'netprofit-schedule.gs']
   .map(f => fs.readFileSync(path + f, 'utf8')).join('\n');
 src = src.replace(/^var /gm, 'globalThis.').replace(/^function /gm, 'globalThis.$&');
 eval(src.replace(/globalThis\.function (\w+)/g, 'globalThis.$1 = function $1'));
@@ -79,6 +83,36 @@ check(rolls.length === 0, 'refused to roll from a month that is not there');
 check(r === false, 'reported failure rather than pretending');
 check(out.some(l => l.indexOf('no tab "Net Profit Dec 26"') >= 0),
   'said which tab was missing');
+
+console.log('\n=== _npaDiff: what counts as a change ===');
+const before = { days: { 'OVL:3': 2410.55, 'OVL:4': 900.00, 'LEE:3': 1200.00, 'WSP:9': 500.00 }, month: {} };
+const after  = { days: {
+  'OVL:3': 1902.18,   // -508.37  material, big
+  'OVL:4': 1000.00,   // +100.00  under the reporting threshold
+  'LEE:3': 1420.00,   // +220.00  material, but "minor" (under NPA_BIG_CHANGE)
+  'WSP:9': 500.00,    //  0       unchanged
+  'BAL:7': 4000.00,   // FIRST FILL — must never count as a change
+}, month: {} };
+const d = _npaDiff(before, after);
+const by = {};
+d.forEach(x => { by[x.store + ':' + x.day] = x; });
+check(d.length === 2, `two material changes (got ${d.length}: ${d.map(x => x.store + ':' + x.day).join(', ')})`);
+check(!!by['OVL:3'] && Math.abs(by['OVL:3'].delta + 508.37) < 0.005, 'OVL day 3 reported at -508.37');
+check(!!by['LEE:3'] && Math.abs(by['LEE:3'].delta - 220) < 0.005, 'LEE day 3 reported at +220.00');
+check(!by['OVL:4'], 'a $100 move is under the threshold and not reported');
+check(!by['WSP:9'], 'an unchanged figure is not reported');
+check(!by['BAL:7'], 'a day filled for the FIRST time is not a change');
+check(d[0].store === 'OVL', 'sorted biggest move first');
+check(_npaDiff(null, after).length === 0, 'no snapshot (first run of a month) reports nothing');
+
+console.log('\n=== failure alert names who fixes it ===');
+sent.length = 0;
+_npaSendFailure('The 2pm daily refresh', 'OVL: collector returned HTTP 500',
+  'Claude — the collector is failing, not the sheet.');
+check(sent.length === 1, 'one email sent');
+check(/did not complete/.test(sent[0].subj), `subject says what happened: "${sent[0].subj}"`);
+check(/Who fixes it/.test(sent[0].html), 'body carries a "Who fixes it" block');
+check(/HTTP 500/.test(sent[0].plain), 'plain-text alternative carries the detail');
 
 console.log(fail ? `\n${fail} FAILED` : '\nall assertions passed');
 process.exit(fail ? 1 : 0);
