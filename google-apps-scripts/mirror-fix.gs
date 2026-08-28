@@ -97,6 +97,16 @@ var MRF_NOTE = 'MC mirror-back fix (Aug 26) — real figure. Locked from the dai
 var MRF_NOTE_0827 = 'Aug 27 restated — duplicate refunds added back, ALL draft orders removed. '
   + 'Real figure. Locked from the daily sync.';
 
+// WSP's Aug 27 needed one thing more, and the cell has to say so. Every other
+// store collected the glitch repayments through draft orders, which the
+// restatement strips as a class. WSP instead re-listed the item itself and let
+// the customer buy it again, so the repayment arrived as an ordinary eBay sale
+// that no rule could distinguish from selling.
+var MRF_NOTE_0827_WSP = 'Aug 27 restated — duplicate refunds added back, draft orders removed, '
+  + 'AND #MO02-6860 (99.99 / 30.00 cost) removed: a re-listing of an item that had '
+  + 'already shipped, sold back to the same customer to repay the eBay glitch refund. '
+  + 'Real figure. Locked from the daily sync.';
+
 // Every earlier fix's note. A cell carrying one of these belongs to that
 // script and must never be rewritten here.
 var MRF_OTHER_NOTES = [
@@ -202,7 +212,25 @@ var MRF_FIX = [
   // LEE should say what they were for.
   { store: 'OVL', day: 27, sales: 4731.60, cost: 2300.16, note: MRF_NOTE_0827 },
   { store: 'LEE', day: 27, sales: 5709.04, cost: 2408.40, note: MRF_NOTE_0827 },
-  { store: 'WSP', day: 27, sales: 7417.54, cost: 3047.62, note: MRF_NOTE_0827 },
+  //
+  // ⚠️ WSP IS 99.99 BELOW WHAT sales-true-daily REPORTS, ON PURPOSE (user,
+  // 2026-08-28). #MO02-6860, eBay 21-15069-09088, 21:16 — a $99.99 "sale" of
+  // SKU MO02-4601A-E5, the Apple Magic Keyboard already sold on Aug 19 as
+  // #MO02-6657 and SHIPPED under tracking 92346902673388000085521568. There is
+  // only one unit, and it left the building nine days earlier: this is the
+  // customer paying back a glitch refund through a listing WSP made for the
+  // purpose, not a sale.
+  //
+  // No rule in sales-true-daily could catch it. The repayment test keys on
+  // draft orders because that is how the other four stores invoiced; this came
+  // through the eBay channel looking exactly like trading. Confirmed by SKU
+  // against the shipped original, and by WSP telling us they did it.
+  //
+  // BOTH LEGS COME OUT — 99.99 of sales and 30.00 of cost — which is how the
+  // draft repayments are already handled ("the sale is not selling"). Leaving
+  // the cost in would charge WSP a second time for a keyboard bought once.
+  //   7417.54 - 99.99 = 7317.55      3047.62 - 30.00 = 3017.62
+  { store: 'WSP', day: 27, sales: 7317.55, cost: 3017.62, note: MRF_NOTE_0827_WSP },
   { store: 'MPL', day: 27, sales: 2810.27, cost:  914.81, note: MRF_NOTE_0827 },
   { store: 'BAL', day: 27, sales: 4874.81, cost: 1759.01, note: MRF_NOTE_0827 }
 ];
@@ -376,7 +404,16 @@ function _mrfRun(dryRun) {
 // ---------------------------------------------------------------------------
 function mrfClearCarriedNotes() {
   var ss = SpreadsheetApp.openById(MRF_SHEET_ID);
+  // ⚠️ DERIVED FROM MRF_FIX, NOT LISTED BY HAND. This list was hand-maintained
+  // and MRF_NOTE_0827 never made it in, so every Aug 27 note would have ridden
+  // copyTo() into September with nothing to strip it — an annotation about a
+  // duplicate incident sitting on a day that has not happened yet. Reading the
+  // notes back off the pins means a new note constant cannot be forgotten.
   var all = [MRF_NOTE].concat(MRF_OTHER_NOTES);
+  for (var f = 0; f < MRF_FIX.length; f++) {
+    var pinNote = MRF_FIX[f].note || MRF_NOTE;
+    if (all.indexOf(pinNote) < 0) all.push(pinNote);
+  }
   var sheets = ss.getSheets(), cleared = 0;
   for (var s = 0; s < sheets.length; s++) {
     var sh = sheets[s];
