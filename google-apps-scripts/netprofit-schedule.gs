@@ -111,6 +111,10 @@ function npsDailyRefresh() {
   NP_TO = today;
   Logger.log('=== DAILY REFRESH %s — month to date %s .. %s ===', today, NP_FROM, NP_TO);
   _npWrite(false);
+  // The summary strip second, always: Days Thru is DERIVED from the last day
+  // carrying Sales, so running it before the grid is written would measure
+  // yesterday's sheet and leave every Tracking figure a day behind.
+  _npxSync(false);
   Logger.log('Daily refresh done. The current month stays open; it closes at 7pm on %s.',
     _npsMonthCloseDay(ym).date);
 }
@@ -149,6 +153,10 @@ function npsMonthClose() {
     today, target, NP_FROM, NP_TO);
   if (close.why.length) Logger.log('  close slipped: %s', close.why.join('; '));
   _npWrite(false);
+  // On a close the grid holds the month being closed, so Days Thru lands on its
+  // final day and Tracking stops projecting — the closed month reads as fact,
+  // not as a forecast. That is the figure the bonus is paid on.
+  _npxSync(false);
 
   props.setProperty(NPS_LAST_CLOSED_KEY, target);
   Logger.log('%s is CLOSED. Nothing will rewrite it — the daily refresh only '
