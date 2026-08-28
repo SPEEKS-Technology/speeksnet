@@ -144,6 +144,10 @@ function _nprBlank(ym, preview) {
 function _nprPlanClear(sh, ym, preview) {
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
   var values = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  // ⚠️ READ THE FORMULAS ONCE. Asking each cell for its own formula is a
+  // separate round trip to the Sheets service, and the summary sweep asks 30
+  // times. See the batching note below — this run has a six-minute ceiling.
+  var formulas = sh.getRange(1, 1, lastRow, lastCol).getFormulas();
 
   // Located, never counted — an inserted row must not shift what gets wiped.
   var rowTtl0      = _npxFindRow(values, NP_BASES.OVL, 'TTL');
@@ -173,21 +177,31 @@ function _nprPlanClear(sh, ym, preview) {
 
   // --- 1. the five written columns, five store blocks. TTL is derived and is
   // deliberately absent from NP_ORDER, so it is never reached here.
+  //
+  // ⚠️ ONE BATCHED CALL, NOT FIFTY. Every getRange().clearContent() is its own
+  // round trip, and the first apply of this file spent four minutes on 25 day
+  // ranges plus 30 single cells. Apps Script kills a run at six, and the ROLL
+  // does all of this AFTER a full-tab copyTo() — so the version that matters,
+  // on the 1st of the month, had less headroom than the version already tested.
+  // getRangeList collects the lot and clears them in one request.
   var cells = 0;
+  var dayA1 = [];
   for (var i = 0; i < NP_ORDER.length; i++) {
     var store = NP_ORDER[i], base = NP_BASES[store];
     var cols = [];
     for (var d = 0; d < DATA_OFFSETS.length; d++) {
       var c0 = base + DATA_OFFSETS[d][0];
-      cols.push(_npColLetter(c0) + firstDayRow1 + ':' + _npColLetter(c0) + lastDayRow1);
-      if (!preview) {
-        var rng = sh.getRange(firstDayRow1, c0 + 1, nDays, 1);
-        rng.clearContent();
-        rng.clearNote();
-      }
+      var a1r = _npColLetter(c0) + firstDayRow1 + ':' + _npColLetter(c0) + lastDayRow1;
+      cols.push(a1r);
+      dayA1.push(a1r);
       cells += nDays;
     }
     Logger.log('    %s: %s', store, cols.join('  '));
+  }
+  if (!preview && dayA1.length) {
+    var dayList = sh.getRangeList(dayA1);
+    dayList.clearContent();
+    dayList.clearNote();
   }
 
   // --- 2. the summary cells the two writers fill. Everything else in the strip
@@ -218,11 +232,15 @@ function _nprPlanClear(sh, ym, preview) {
     var col0 = summary[s][0], row0 = summary[s][1];
     var a1 = _npColLetter(col0) + (row0 + 1);
     // Only clear a VALUE. Several of these are formulas on the TTL block
-    // (=C38+U38+... and the YoY sums) and those are the roll-up, not data.
-    var cell = sh.getRange(row0 + 1, col0 + 1);
-    if (String(cell.getFormula()).trim() !== '') { kept.push(a1); continue; }
+    // (=C38+U38+... , the YoY sums, and CQ2 = the sum of the five store goals)
+    // and those are the roll-up, not data. Read off the grid pulled above.
+    if (String(formulas[row0][col0]).trim() !== '') { kept.push(a1); continue; }
     cleared.push(a1);
-    if (!preview) { cell.clearContent(); cell.clearNote(); }
+  }
+  if (!preview && cleared.length) {
+    var sumList = sh.getRangeList(cleared);
+    sumList.clearContent();
+    sumList.clearNote();
   }
   Logger.log('    summary values cleared: %s', cleared.join(' ') || '(none)');
   if (kept.length) Logger.log('    summary formulas KEPT (roll-ups, not data): %s', kept.join(' '));
@@ -231,11 +249,10 @@ function _nprPlanClear(sh, ym, preview) {
   // and the summary writer re-derives it from the first day that carries Sales.
   // Left at last month's 30 or 31, a one-day-old September would divide by a
   // full month and report a tracking figure a thirtieth of the truth.
-  var thruCell = sh.getRange(rowDaysThru + 1, NP_BASES.OVL + NPX_OFF_VAL_L + 1);
-  if (String(thruCell.getFormula()).trim() === '') {
+  if (String(formulas[rowDaysThru][NP_BASES.OVL + NPX_OFF_VAL_L]).trim() === '') {
     Logger.log('    Days Thru %s%s -> 0',
       _npColLetter(NP_BASES.OVL + NPX_OFF_VAL_L), rowDaysThru + 1);
-    if (!preview) thruCell.setValue(0);
+    if (!preview) sh.getRange(rowDaysThru + 1, NP_BASES.OVL + NPX_OFF_VAL_L + 1).setValue(0);
   }
 
   Logger.log('  %s day cells + %s summary cells%s',

@@ -64,6 +64,22 @@ global.Logger = { log: (...a) => {
 } };
 const touched = { content: [], note: [], set: [] };
 function a1(r1, c1) { return L(c1 - 1) + r1; }
+function col(letters) { let n = 0; for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; }
+// getRangeList takes A1 strings, including ranges like "B5:B35"
+function expand(a) {
+  const m = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(a);
+  if (!m) return [a];
+  const out = [];
+  for (let r = +m[2]; r <= +m[4]; r++) out.push(m[1] + r);
+  return out;
+}
+function hit(bucket, grid, a) {
+  for (const c of expand(a)) {
+    bucket.push(c);
+    const m = /^([A-Z]+)(\d+)$/.exec(c);
+    grid[+m[2] - 1][col(m[1])] = '';
+  }
+}
 function mkRange(r1, c1, nR = 1, nC = 1) {
   return {
     getA1Notation: () => a1(r1, c1),
@@ -81,6 +97,10 @@ const sheet = {
   getRange: (...a) => a.length === 1
     ? mkRange(Number(/\d+/.exec(a[0])[0]), 1)
     : mkRange(a[0], a[1], a[2] || 1, a[3] || 1),
+  getRangeList: (list) => ({
+    clearContent: () => list.forEach(a => hit(touched.content, values, a)),
+    clearNote: () => list.forEach(a => hit(touched.note, notes, a)),
+  }),
   getConditionalFormatRules: () => [], setConditionalFormatRules: () => {},
 };
 global.SpreadsheetApp = {
