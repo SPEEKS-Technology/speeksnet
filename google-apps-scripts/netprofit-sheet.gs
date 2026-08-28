@@ -708,3 +708,75 @@ function npProbeSummary() {
   }
   Logger.log('\nRead-only: nothing was written.');
 }
+
+// ============================================================================
+// npProbeGrid — the half of the tab npProbeSummary could not see.
+//
+// READ-ONLY. Writes nothing.
+//
+// npProbeSummary dumped everything BELOW the TTL row and answered where the
+// last-month and YoY values live. Three things are still unmeasured and all
+// three are needed before anything is written:
+//
+//   1. THE COLUMN MEANINGS. The summary block reads M36, D5:D35 and B5:B35 but
+//      never says what those columns ARE. The last-month writer has to produce
+//      Revenue, GP and Net Profit in the same terms the grid uses, and "the
+//      same terms" is a formula, not a guess.
+//   2. THE "% OF GOAL" CELL. It is not below the TTL row — the summary probe
+//      would have found it. It is somewhere in rows 1-4 or off to the side,
+//      and colouring a cell requires knowing which cell.
+//   3. EXISTING CONDITIONAL FORMAT RULES. Adding a rule to a range that already
+//      has one does not replace it; both apply, and the older one usually wins.
+//      A green cell that refuses to turn red is this, every time.
+// ============================================================================
+function npProbeGrid() {
+  var ss = SpreadsheetApp.openById(NP_SHEET_ID);
+  var sh = ss.getSheetByName(NP_TAB);
+  if (!sh) { Logger.log('!! no tab named "%s"', NP_TAB); return; }
+
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  var formulas = sh.getRange(1, 1, lastRow, lastCol).getFormulas();
+
+  // --- 1. the OVL block in full: headers, the first day rows, the TTL row ---
+  // One block is enough: the other five are the same shape 18 columns along,
+  // which npProbeSummary already confirmed.
+  Logger.log('===== OVL block (columns A..R) — headers, first days, TTL =====');
+  var rows = [1, 2, 3, 4, 5, 6, 7, 36];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i] - 1;
+    if (r < 0 || r >= lastRow) continue;
+    var parts = [];
+    for (var c = 0; c < 18; c++) {
+      var f = String(formulas[r][c]).trim(), v = String(values[r][c]).trim();
+      if (f === '' && v === '') continue;
+      parts.push(_npColLetter(c) + (r + 1) + '=' + (f !== '' ? f : JSON.stringify(v)));
+    }
+    Logger.log('  row %s: %s', r + 1, parts.length ? parts.join('  |  ') : '(empty)');
+  }
+
+  // --- 2. anything anywhere that names a goal ---
+  Logger.log('\n===== every cell whose text mentions goal / target / %% of =====');
+  var hits = 0;
+  for (var rr = 0; rr < lastRow; rr++) {
+    for (var cc = 0; cc < lastCol; cc++) {
+      var t = String(values[rr][cc]);
+      if (!/goal|target|% ?of/i.test(t)) continue;
+      var ff = String(formulas[rr][cc]).trim();
+      Logger.log('  %s%s = %s', _npColLetter(cc), rr + 1,
+        ff !== '' ? ff : JSON.stringify(t.trim()));
+      hits++;
+    }
+  }
+  if (!hits) Logger.log('  (none — the goal cell is not labelled on this tab)');
+
+  // --- 3. conditional formatting already on the sheet ---
+  var rules = sh.getConditionalFormatRules();
+  Logger.log('\n===== %s existing conditional format rule(s) =====', rules.length);
+  for (var k = 0; k < rules.length; k++) {
+    var rs = rules[k].getRanges().map(function (x) { return x.getA1Notation(); });
+    Logger.log('  [%s] ranges: %s', k, rs.join(', '));
+  }
+
+  Logger.log('\nRead-only: nothing was written.');
+}
