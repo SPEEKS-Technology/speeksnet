@@ -44,9 +44,16 @@ var NP_TAB        = NP_TAB_LEGACY;            // overwritten per run by _npTab()
 var NP_ENDPOINT = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/netprofit-collect';
 var NP_SECRET   = 'sp33ks-sync-k3y-2026-x9mq';
 
-// The month being written. The template's row-2 headers already read Jul 01 2026.
-var NP_FROM = '2026-07-01';
-var NP_TO   = '2026-07-31';
+// The month being written, and therefore WHICH TAB — _npTab() resolves the tab
+// name from this, not from the clock.
+//
+// ⚠️ ONLY MANUAL RUNS READ THESE. npsDailyRefresh and npsMonthClose both set
+// NP_FROM/NP_TO themselves at runtime, so whatever is committed here has no
+// effect on the 2pm and 7pm jobs. It matters when someone runs npWriteApply or
+// npSummaryApply by hand — and a stale month here points those at a tab that
+// may not exist, or worse, at one that does.
+var NP_FROM = '2026-09-01';
+var NP_TO   = '2026-09-30';
 
 var NP_BASES    = { OVL: 0, LEE: 18, WSP: 36, MPL: 54, BAL: 72 };
 var NP_TTL_BASE = 90;                 // read-only: dumped, never written
