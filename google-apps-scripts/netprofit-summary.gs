@@ -403,6 +403,18 @@ function _npxSync(preview) {
     if (tot.npTrustworthy && !behindWall) {
       plan(sb + NPX_OFF_VAL_R, rowLastMonth + 1, store + ' last-month Net Profit', tot.np, NPX_MONEY);
       lmOk.push(store);
+    } else {
+      // ⚠️ CLEAR IT, DO NOT LEAVE IT. Refusing to write is not the same as
+      // leaving whatever was there, because the cell beside it HAS just been
+      // rewritten for a different month. Sept 1 is the case: the 2pm refresh
+      // has the grid on September and writes August's Revenue, GP and NP; the
+      // 7pm close puts the grid on August, which makes last month JULY, and
+      // July is behind the wall. Revenue and GP become July's and the Net
+      // Profit cell would still be holding August's. One row, two months, and
+      // the MoM percentage underneath it reads as if that were a real
+      // comparison. Blank says "not known"; a stale number says nothing at all.
+      plan(sb + NPX_OFF_VAL_R, rowLastMonth + 1, store + ' last-month Net Profit (cleared)',
+           '', NPX_MONEY, null, true);
     }
   }
   // TTL as SUM formulas rather than a written total: if one store is ever
@@ -422,6 +434,11 @@ function _npxSync(preview) {
       plan(tb + NPX_OFF_VAL_R, rowLastMonth + 1, 'TTL last-month Net Profit',
            sumOf(NPX_OFF_VAL_R, rowLastMonth + 1), NPX_MONEY);
     } else {
+      // Cleared for the same reason as the stores above: a company total left
+      // over from another month is worse than an empty cell, because it is the
+      // one figure nobody re-derives by hand.
+      plan(tb + NPX_OFF_VAL_R, rowLastMonth + 1, 'TTL last-month Net Profit (cleared)',
+           '', NPX_MONEY, null, true);
       Logger.log('  TTL Net Profit NOT written: only %s of %s stores have a trustworthy NP. '
         + 'A company total built from a partial set still reads as a real figure.',
         lmOk.length, NP_ORDER.length);
