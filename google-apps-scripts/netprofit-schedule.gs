@@ -110,6 +110,11 @@ function npsDailyRefresh() {
   NP_FROM = ym + '-01';
   NP_TO = today;
   Logger.log('=== DAILY REFRESH %s — month to date %s .. %s ===', today, NP_FROM, NP_TO);
+  // A new month has no tab until something makes one. Left manual, the first
+  // 2pm run of every month would find nothing, log "no tab" and write nothing —
+  // and it would keep doing that, quietly, until somebody noticed the month was
+  // empty. Rolling here happens exactly when it is needed and cannot fire early.
+  _npsEnsureTab(ym);
   _npWrite(false);
   // The summary strip second, always: Days Thru is DERIVED from the last day
   // carrying Sales, so running it before the grid is written would measure
@@ -176,6 +181,45 @@ function npsMonthClose() {
   Logger.log('%s is CLOSED. Nothing will rewrite it — the daily refresh only '
     + 'touches the current month, and late charges book to the day they are '
     + 'charged, in the new month.', target);
+}
+
+// ---------------------------------------------------------------------------
+// Make sure the month being written has a tab, rolling the previous one
+// forward if it does not.
+//
+// ⚠️ THE ROLL COPIES THE PREVIOUS MONTH AND CLEARS THE COPY. The source is
+// never modified, which is what makes it safe to run at 2pm on the 1st — five
+// hours BEFORE that same month closes at 7pm. September's tab is copied to
+// make October's, September's own figures are untouched, and the 7pm close
+// then writes September's final month into the tab it always had.
+//
+// ⚠️ IT CANNOT RUN TWICE. _nprRoll refuses outright when the target tab already
+// exists, so a second 2pm run — or a manual npRollApply on the same day — finds
+// the tab present and does nothing.
+//
+// If a tab is ever deleted mid-month this recreates it empty and the daily
+// refresh refills it, because the refresh always rewrites the WHOLE month to
+// date rather than just today.
+// ---------------------------------------------------------------------------
+function _npsEnsureTab(ym) {
+  var ss = SpreadsheetApp.openById(NP_SHEET_ID);
+  if (ss.getSheetByName(_npTabName(ym))) return true;
+
+  var prev = _npsPrevMonth(ym + '-01');
+  if (!ss.getSheetByName(_npTabName(prev))) {
+    Logger.log('!! no tab "%s", and no "%s" to roll forward from either. '
+      + 'Nothing will be written this run — create the month by hand '
+      + '(npRollStatus lists what is there).', _npTabName(ym), _npTabName(prev));
+    return false;
+  }
+
+  Logger.log('No tab for %s yet — rolling %s forward.', ym, prev);
+  var saveSrc = NPR_SOURCE_YM, saveDst = NPR_TARGET_YM;
+  NPR_SOURCE_YM = prev;
+  NPR_TARGET_YM = ym;
+  try { _nprRoll(false); }
+  finally { NPR_SOURCE_YM = saveSrc; NPR_TARGET_YM = saveDst; }
+  return !!ss.getSheetByName(_npTabName(ym));
 }
 
 // Ask the collector what date IT thinks the month closes on. One cheap call,
