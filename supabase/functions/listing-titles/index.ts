@@ -721,6 +721,194 @@ const TITLE_SPECS = ["Brand", "Model", "Storage", "Capacity", "Storage 1",
 
 const squash = (v: string) => norm(v).replace(/ /g, "");
 
+// ⚠️ THE TWO RULES BELOW WERE BURIED INSIDE strengthOf AND ARE NOW SHARED.
+// They are what took the lazy-title check from 224 findings to 6, so anything
+// that proposes a spec value has to obey them or it re-introduces every one of
+// those mistakes under a new name.
+
+// Is this value the kind of thing that belongs in a title at all?
+function titleWorthy(k: string, v: string, specs: Record<string, string>): boolean {
+  if (!v || PLACEHOLDER.test(v) || squash(v).length < 2) return false;
+  // ⚠️ A DEPARTMENT NAME IS NOT A DETAIL. Shopify's Collection leaks into Model
+  // and Type for some products — a Roku's read "Audio & Video" — and appending
+  // those gives a title a shelf label rather than a fact. The ampersand is the
+  // tell: PayMore's shelves are named that way, products are not.
+  const coll = String(specs["Collection"] || "").trim().toLowerCase();
+  const sub = String(specs["Sub-Collection"] || "").trim().toLowerCase();
+  const lv = v.toLowerCase();
+  if (lv === coll || lv === sub || / & /.test(v)) return false;
+  // ⚠️ AN OPAQUE PART CODE IS NOT A SEARCH TERM. A single unbroken run of 8+
+  // mixed letters and digits ("FWANJA1102", "VDCDJZX96KGM") is a factory code,
+  // not something a buyer types.
+  //
+  // ⚠️⚠️ THIS TEST WAS DEAD UNTIL 2026-08-28. It read /d/ and /s/ — the
+  // LETTERS d and s — because a patch script ate the backslashes off \d and
+  // \s. So it demanded the value contain a lower-case "d" and contain no
+  // lower-case "s", which almost no upper-case part number does either way, and
+  // the guard never fired. It looked correct in review for three days. Any regex
+  // written through a script gets read back out of the file afterwards.
+  // ⚠️ UNDERSCORES AND SHORT RUNS COUNT TOO. "3994_JP-SGS8P-BLK" walked through
+  // the first version because `_` was not in the character class, and "G3AL9"
+  // because it is only five characters. A single unbroken run with no vowel is
+  // a part number whatever its length.
+  const solid = /^[A-Za-z0-9][A-Za-z0-9_\-/.]*$/.test(v) && !/\s/.test(v);
+  if (solid && /\d/.test(v) && /[A-Za-z]/.test(v)
+      && (squash(v).length >= 8 || !/[aeiou]/i.test(v.replace(/[^A-Za-z]/g, "")))) return false;
+  return true;
+}
+
+// Is it ALREADY in the title? Exactly, or near enough that repeating it would
+// restate the title inside itself:
+//   "HP Prodesk 600 G5 Mini i5-9500T 8GB 500GB"
+//        + "HP Prodesk 600 G5 Desktop Mini 8GB RAM"
+// ⚠️ STEM THE PLURAL. "…Wireless Earbuds" against the spec "…in-Ear Earbud"
+// overlapped at 50% for one trailing "s", and the tool proposed appending the
+// title to itself.
+function valuePresent(title: string, v: string): boolean {
+  if (squash(title).includes(squash(v))) return true;
+  const stem = (w: string) => w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w;
+  const vw = tokens(v).filter(w => w.length > 1).map(stem);
+  const tw = new Set(tokens(title).map(stem));
+  return vw.length > 0 && vw.filter(w => tw.has(w)).length / vw.length >= 0.6;
+}
+
+// ============== WHAT THIS KIND OF THING IS NORMALLY CALLED ==================
+// Ethan, 2026-08-28: "it should just be comparable by type … as long as our
+// title has the same type of information as comparable sold and active items."
+//
+// ⚠️ LEARNED FROM OUR OWN CATALOGUE, NOT FROM EBAY, AND THAT IS THE POINT.
+// He also asked whether active listings are safe to learn from: "I just don't
+// want to copy titles of items that may not ever sell." Exactly right — an
+// active sample contains everything that has NOT sold, and wording copied from
+// it is as likely to come from a dud as from a winner.
+//
+// Our own storefront dodges that entirely. PayMore's listing software writes
+// these titles from what sells, so the house convention is already the
+// sales-informed one — and it needs no eBay call, no scope we do not hold, and
+// carries no other seller's phrasing into our listing.
+//
+// It learns the SHAPE, never the words: "9 in 10 Custom Gaming PC titles name
+// the GPU" is a fact about which KIND of detail belongs, and the value filled in
+// comes from this listing's own spec table. That is also why shape survives dead
+// listings where wording does not — a gaming PC that never sold still names its
+// GPU.
+type Bucket = { n: number; keys: Map<string, { has: number; inTitle: number }> };
+type Convention = Map<string, Bucket>;
+
+// Thresholds: a collection needs 8 products before its habits mean anything, a
+// field needs to exist on 8 of them, and 70% of those must put it in the title.
+// Below that it is one person's preference, not a convention.
+// ⚠️⚠️ OFF BY DEFAULT. MEASURED AT ~60% PRECISION OVER ALL FIVE STORES, AND
+// TWO OF THE 55 WOULD HAVE MADE A CORRECT TITLE WRONG:
+//
+//   "Nikon Z 6 24.5MP Mirrorless Camera"  + "Digital SLR DSLR Camera"
+//   "Milwaukee 3485-20 M12 Right Angle Die Grinder"
+//                                        + "3/8\" Stubby Impact Wrench"
+//
+// The first is the exact severity-3 error CONFLICTS exists to catch, proposed
+// by us. A check that can turn a correct listing into a misdescribed one is
+// worse than no check, whatever its hit rate elsewhere.
+//
+// WHAT IT GOT RIGHT, and why it is kept rather than deleted: it is very good on
+// titles that say almost nothing — "JVC XL-R86BK" -> + Compact Disc Player,
+// "Nikon SB-600" -> + Camera Flash, "Mophie JP-SGS8P" -> + Battery Case,
+// "649532018505" (a bare barcode) -> + Bosch Laser Level, and every bare-part-
+// number RAM listing at MPL gaining its capacity. It is also the only check that
+// found the motherboard chipsets (AMD B550, Intel B560, AMD X870), which are
+// real search terms nothing else proposes.
+//
+// WHERE IT FAILS is the mirror image: titles that are ALREADY rich, where the
+// category habit adds something redundant ("Soundbar" + "Bluetooth Sound Bar"),
+// contradictory (the Nikon), or simply wrong for the item (the Milwaukee). The
+// mechanism has no idea what the product IS — it knows only that listings on
+// this shelf usually name their Type, and a Type field can be wrong.
+//
+// The next version needs the value checked against the item, not just against
+// the shelf: run the proposed title back through CONFLICTS and refuse anything
+// that would raise one, and never propose a product noun into a title that
+// already names its own. Both are real work, not tuning, so it ships off.
+const CONV_ENABLED = false;
+
+const CONV_MIN_PRODUCTS = 8;
+const CONV_MIN_SHARE = 0.7;
+
+// ⚠️ MEASURED, THEN TIGHTENED. The first version of this check produced 25
+// findings at OVL of which about four were real — the same shape of failure the
+// TITLE_SPECS header warns about, re-created under a new name. Every rule below
+// comes from one of those bad rows, and the check is worth nothing without them.
+//
+// 1. NEVER APPEND A BARE NUMBER. "New Diablo III (PC, 2012) 1989" and
+//    "SpongeBob … Rehydrated - Disc Only 2020". Games conventionally carry the
+//    year INSIDE the parenthetical, so co-occurrence made Release Year look like
+//    a house convention — and then appended it bare, in the wrong place, and on
+//    Diablo with the wrong year. A convention about PLACEMENT cannot be honoured
+//    by sticking the value on the end.
+// 2. NEVER APPEND A VALUE THAT FIGHTS THE TITLE'S OWN NUMBERS.
+//    "Micron … 16GB (1x16GB) RAM DDR4 2666MHz" + "32GB (2x16GB) RAM" put two
+//    different capacities in one title. Same unit, different number, from the
+//    spec-conflict check — that row needs a person, not an append.
+// 3. NEVER APPEND WHEN EVERYTHING NEW IS SHORT OR GENERIC.
+//    "Polaroid OneStep 600 …" + "Polaroid PDC", "Canon mini dv …" + "Canon ZR
+//    Series", "Kaypro …" + "MODEL C", "… Solid State Drive" + "SSD". In each the
+//    only genuinely new token is an abbreviation or a filler word, so the title
+//    gets longer and says nothing more.
+//
+// Fields that are never title material whatever the corpus says. These are the
+// same ones that took the lazy-title check from 224 findings to 6: they belong
+// in eBay's own item specifics, or nowhere ("Acceptable" in a title repels a
+// buyer).
+const CONV_NEVER = /^(release\s*year|year|publisher|developer|genre|condition|rating|esrb|region|country|serial|sku|upc|ean|isbn|weight|dimensions|notes?)$/i;
+const CONV_FILLER = new Set(["series", "model", "type", "edition", "version",
+  "system", "device", "unit", "item", "gen", "generation", "the", "and", "with"]);
+
+// At least one genuinely new word that is long enough to be a search term.
+function convWorthAdding(title: string, v: string): boolean {
+  const have = new Set(tokens(title));
+  const fresh = tokens(v).filter(t => !have.has(t) && !CONV_FILLER.has(t));
+  return fresh.some(t => t.length >= 4 && /[a-z]/.test(t));
+}
+
+// Same unit, different number, in the title and in the value.
+function convContradicts(title: string, v: string): boolean {
+  const units = (text: string) => {
+    const out = new Map<string, Set<string>>();
+    for (const m of String(text).matchAll(/\b(\d+(?:\.\d+)?)\s?(w|watt|watts|gb|tb|mb|mhz|ghz|mp|in|inch|hz)\b/gi)) {
+      const u = m[2].toLowerCase().replace(/^watts?$/, "w").replace(/^inch$/, "in");
+      if (!out.has(u)) out.set(u, new Set());
+      out.get(u)!.add(m[1]);
+    }
+    return out;
+  };
+  const a = units(title), b = units(v);
+  for (const [u, vals] of b) {
+    const mine = a.get(u);
+    if (mine && mine.size && ![...vals].some(x => mine.has(x))) return true;
+  }
+  return false;
+}
+
+function learnConvention(cands: Row[], extras: Record<string, Extra>): Convention {
+  const out: Convention = new Map();
+  for (const row of cands) {
+    const specs = extras[row.product_id]?.specs;
+    if (!specs) continue;
+    const coll = String(specs["Collection"] || "").trim().toLowerCase();
+    if (!coll) continue;
+    let b = out.get(coll);
+    if (!b) { b = { n: 0, keys: new Map() }; out.set(coll, b); }
+    b.n += 1;
+    for (const [k, raw] of Object.entries(specs)) {
+      const v = String(raw || "").trim();
+      if (!titleWorthy(k, v, specs)) continue;
+      const c = b.keys.get(k) || { has: 0, inTitle: 0 };
+      c.has += 1;
+      if (valuePresent(row.title || "", v)) c.inTitle += 1;
+      b.keys.set(k, c);
+    }
+  }
+  return out;
+}
+
 type Strength = { pct: number; present: number; total: number;
                   missing: { k: string; v: string }[] };
 
@@ -730,7 +918,7 @@ function strengthOf(title: string, specs: Record<string, string> | undefined): S
   const present: string[] = [], missing: { k: string; v: string }[] = [];
   for (const k of TITLE_SPECS) {
     const v = String(specs[k] || "").trim();
-    if (!v || PLACEHOLDER.test(v) || squash(v).length < 2) continue;
+    if (!titleWorthy(k, v, specs)) continue;
     if (t.includes(squash(v))) { present.push(k); continue; }
     // ⚠️ MOSTLY-PRESENT IS PRESENT. The exact-substring test treats a value as
     // wholly missing when nearly all of it is already in the title, and the
@@ -746,32 +934,73 @@ function strengthOf(title: string, specs: Record<string, string> | undefined): S
     // "Push True Wireless in-Ear Earbud" overlapped at only 50% because earbuds
     // and earbud are different strings — so the tool proposed appending the title
     // to itself. One trailing "s" was the entire difference.
-    const stem = (w: string) => w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w;
-    const vw = tokens(v).filter(w => w.length > 1).map(stem);
-    const tw = new Set(tokens(title).map(stem));
-    if (vw.length && vw.filter(w => tw.has(w)).length / vw.length >= 0.6) {
-      present.push(k); continue;
-    }
+    if (valuePresent(title, v)) { present.push(k); continue; }
     // ⚠️ A DEPARTMENT NAME IS NOT A DETAIL. Shopify's Collection leaks into Model
     // and Type for some products — a Roku's read "Audio & Video", a custom build's
     // "Custom PC" — and appending those gives a title a shelf label rather than a
     // fact ("New Roku Streaming Stick 4K Audio & Video Black 2160p (4K)"). The
     // ampersand is the tell: PayMore's shelves are named that way, products are not.
-    const coll = String(specs["Collection"] || "").trim().toLowerCase();
-    const sub = String(specs["Sub-Collection"] || "").trim().toLowerCase();
-    const lv = v.toLowerCase();
-    if (lv === coll || lv === sub || / & /.test(v)) continue;
-    // ⚠️ AN OPAQUE PART CODE IS NOT A SEARCH TERM. A single run of 8+ mixed
-    // letters and digits ("FWANJA1102", "VDCDJZX96KGM") is a factory code, not
-    // something a buyer types — it counts as neither present nor missing, so it
-    // can neither be proposed nor drag the strength score down.
-    if (/^[A-Za-z0-9][A-Za-z0-9-/]{7,}$/.test(v) && /d/.test(v) && /[A-Za-z]/.test(v)
-        && !/s/.test(v)) continue;
     missing.push({ k, v });
   }
   const total = present.length + missing.length;
   if (!total) return null;
   return { pct: Math.round(100 * present.length / total), present: present.length, total, missing };
+}
+
+// ⚠️ THE LISTING CAN SETTLE ITS OWN ARGUMENT. Ethan, 2026-08-28: "remember to
+// read the HTML, meta fields, etc. to determine if our title is correct to our
+// listing then we compare to eBay."
+//
+// He is right, and the row that prompted it proves it. BAL MO04-1726A-E10:
+//     Shopify   "…1TB SSD GeForce RTX 3050"
+//     eBay      "…1TB SSD GeForce GTX 1060"
+//     spec table `GPU/Graphics Card Model: GeForce RTX 3050`   <- settles it
+// The GPU was upgraded, the title and the spec table were both updated, and TWO
+// stale copies were left behind — the eBay listing, and the `whats_include`
+// metafield, which still reads "…Nvidia GeForce GTX 1060". eBay is not
+// disagreeing at random; it is showing the same stale string the metafield has.
+//
+// Asking a manager "one of these is wrong, you pick" when the listing already
+// answers is work we are creating, not work we are finding.
+//
+// ⚠️ ONLY ADJUDICATES A REAL CONFLICT, never a truncation. Both sides must carry
+// words the other does not: "…16GB RAM 1TB SSD" versus a shortened "…16GB RAM"
+// is one title being cut off, and declaring the longer one "backed by the spec
+// table" would be true and useless. A spec value counts only when it is made of
+// the words actually in dispute.
+type Verdict = { side: "ours" | "theirs"; field: string; value: string } | null;
+
+function adjudicate(ours: string, theirs: string,
+                    specs: Record<string, string> | undefined): Verdict {
+  if (!specs) return null;
+  const a = new Set(tokens(ours)), b = new Set(tokens(theirs));
+  const ourOnly = [...a].filter(t => !b.has(t));
+  const theirOnly = [...b].filter(t => !a.has(t));
+  if (!ourOnly.length || !theirOnly.length) return null;
+  const so = squash(ours), st = squash(theirs);
+  let backsUs: Verdict = null, backsThem: Verdict = null;
+  // EVERY spec key, not just the title-worthy ones. This is not proposing an
+  // edit — it is asking which side the listing's own record agrees with — and
+  // the deciding field is often one nobody would put in a title
+  // ("GPU/Graphics Card Model", "Storage Type 1").
+  for (const [k, raw] of Object.entries(specs)) {
+    const v = String(raw || "").trim();
+    if (!v || PLACEHOLDER.test(v) || squash(v).length < 3) continue;
+    const vt = tokens(v);
+    if (!vt.length) continue;
+    const inOurs = so.includes(squash(v)), inTheirs = st.includes(squash(v));
+    if (inOurs === inTheirs) continue;
+    if (inOurs && vt.some(t => ourOnly.includes(t)) && !backsUs) {
+      backsUs = { side: "ours", field: k, value: v };
+    }
+    if (inTheirs && vt.some(t => theirOnly.includes(t)) && !backsThem) {
+      backsThem = { side: "theirs", field: k, value: v };
+    }
+  }
+  // Both supported means the spec table is inconsistent with itself and is no
+  // longer a referee — fall back to asking the person.
+  if (backsUs && backsThem) return null;
+  return backsUs || backsThem;
 }
 
 const MODEL_MIN_CORPUS = 8;
@@ -940,7 +1169,7 @@ const titleWord = (w: string) =>
 // asked. Null and false must never be conflated — silence is not evidence.
 function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
                  modelReal: boolean | null, modelExample?: string | null,
-                 brandReal?: boolean | null): Analysis {
+                 brandReal?: boolean | null, convention?: Convention): Analysis {
   const findings: Finding[] = [];
   const original = (row.title || "").trim();
   let title = original;
@@ -1022,14 +1251,24 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     const when = age === null ? "when we last looked"
       : age < 1 ? "as of today"
       : `as of our last eBay snapshot, ${age} day${age === 1 ? "" : "s"} ago`;
+    // The listing's own record decides it wherever it can, and the sentence
+    // changes completely with the answer — because so does WHO FIXES IT and
+    // WHERE. "Correct the eBay listing" and "correct Shopify" are opposite
+    // errands, and the old copy sent somebody to work it out for themselves.
+    const verdict = adjudicate(original, row.ebay_title, extra?.specs);
+    const stale = age !== null && age >= 2
+      ? ` ⚠️ Our eBay snapshot is ${age} days old, so confirm on eBay itself rather than trusting this line.`
+      : "";
     findings.push({
       code: "title-drift",
-      says: `eBay showed "${row.ebay_title}" ${when}, while Shopify says "${original}". One of the two is wrong in front of a buyer. Check which is the real item before changing anything — a wrong title here is a misdescribed sale, not a missed one.`
-        + (age !== null && age >= 2
-            ? ` ⚠️ Our eBay snapshot is ${age} days old because the eBay sweeps are paused, so confirm on eBay itself rather than trusting this line.`
-            : ""),
+      says: verdict?.side === "ours"
+        ? `eBay is showing "${row.ebay_title}" ${when}, but this listing's own ${verdict.field} field says "${verdict.value}" — which is what the Shopify title says. OUR TITLE IS RIGHT AND THE EBAY ONE IS STALE, so do not change anything here: the eBay listing is the copy that needs correcting.`
+        : verdict?.side === "theirs"
+          ? `eBay is showing "${row.ebay_title}" ${when}, and this listing's own ${verdict.field} field says "${verdict.value}" — which agrees with eBay, not with the Shopify title. THE SHOPIFY TITLE LOOKS LIKE THE WRONG ONE. Check the unit, then correct the title here.`
+          : `eBay showed "${row.ebay_title}" ${when}, while Shopify says "${original}". One of the two is wrong in front of a buyer, and this listing's spec table does not settle which. Check which is the real item before changing anything — a wrong title here is a misdescribed sale, not a missed one.`,
       severity: 3, fixable: false,
     });
+    if (stale) findings[findings.length - 1].says += stale;
   }
 
   // THE TITLE CONTRADICTS THE LISTING'S OWN SPEC TABLE. Severity 3: this is not
@@ -1084,12 +1323,26 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     const opens = (original.match(/[([]/g) || []).length;
     const closes = (original.match(/[)\]]/g) || []).length;
     const dangling = /[,\-–/(]\s*$/.test(original.trim());
-    if (opens !== closes || dangling) {
+    // ⚠️ A TITLE CAN BE CUT OFF WITH ITS BRACKETS BALANCED. "Nintendo Switch
+    // OLED The Legend of Zelda Tears of the" ends on a joining word — there is
+    // no punctuation to notice, and it was reaching the queue as a title worth
+    // ADDING WORDS TO rather than one that had lost them.
+    // WARN: REQUIRE A SPACE, AND NEVER SINGLE LETTERS. The first version used a
+    // word boundary and matched the "A" in every Apple part number - a slash is
+    // a word boundary, so "MFXH4LL/A", "MYL92LL/A" and even "N/A" read as titles
+    // cut off mid-phrase. 48 of the 49 it caught were false; the one real one was
+    // "...Zelda Tears of the". Dropped "a", "an" and "plus" as well: "Atari 2600
+    // Console System CX-2600 A" is a model number and "Wii Fit Plus" is a name.
+    const hanging = /\s(of|the|and|for|with|in|on|to|by|from)\s*$/i
+      .test(original.trim());
+    if (opens !== closes || dangling || hanging) {
       findings.push({
         code: "truncated-title",
         says: opens !== closes
           ? "The title has an unclosed bracket, so it was cut off before it finished. A shopper sees a title that stops mid-phrase."
-          : "The title ends on a comma or dash, so something was meant to follow it and did not.",
+          : hanging
+            ? "The title ends on a joining word, so it was cut off mid-phrase — the rest of the name is missing."
+            : "The title ends on a comma or dash, so something was meant to follow it and did not.",
         severity: 2, fixable: false,
       });
     }
@@ -1310,8 +1563,15 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   // Switch, 2019)" into "Disney Tsum Festival" — the repetition IS the product's
   // name. Anchoring it targets the artifact this was written for, a brand
   // prepended twice by the listing tool, and leaves real names alone.
-  const dup = original.match(/\b(\S+\s+\S+(?:\s+\S+)?)\s+\1\b/i)
+  // WARN: A REPEAT FOLLOWED BY AN APOSTROPHE IS PART OF THE NAME, NOT A MISTAKE.
+  // "Pokemon TCG The Glory of Team Rocket Team Rocket's Mewtwo EX" is a SET
+  // called The Glory of Team Rocket holding a CARD called Team Rocket's Mewtwo.
+  // Collapsing it produced "The Glory of Team Rocket's Mewtwo EX" - a different,
+  // non-existent set, on a PSA 10 graded card. Caught in a dry run, never shipped.
+  const dupRaw = original.match(/\b(\S+\s+\S+(?:\s+\S+)?)\s+\1\b/i)
     || original.match(/^(\S{2,})\s+\1\b/i);
+  const dup = dupRaw && !/^['’]/.test(
+    original.slice((dupRaw.index || 0) + dupRaw[0].length)) ? dupRaw : null;
   if (dup) {
     findings.push({
       code: "repeated-phrase",
@@ -1547,6 +1807,9 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   // wattages, worse than the one it replaced. Where a spec-conflict has fired the
   // row already says the listing disagrees with itself, and the fix is to correct
   // one side by hand, not to bolt the other side on the end.
+  // Which fields lazy-title has already spent, so the category check below
+  // cannot propose the same value twice under a different sentence.
+  const lazyUsed = new Set<string>();
   const conflicted = brokenTitle;
   const strength = strengthOf(original, extra?.specs);
   if (!conflicted && strength && strength.pct < 60) {
@@ -1554,7 +1817,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     const fits = strength.missing.filter(m => m.v.length + 1 <= room);
     if (fits.length >= 2 && room >= 12) {
       const added: string[] = [];
-      for (const m of fits) if (tryAppend(m.v)) added.push(`${m.k} ${m.v}`);
+      for (const m of fits) if (tryAppend(m.v)) { added.push(`${m.k} ${m.v}`); lazyUsed.add(m.k); }
       if (added.length) {
         findings.push({
           code: "lazy-title",
@@ -1562,6 +1825,60 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
           severity: 1, fixable: true,
         });
       }
+    }
+  }
+
+  // ============ THE DETAIL THIS KIND OF THING NORMALLY CARRIES =============
+  // See learnConvention for why the corpus is our own storefront and not eBay.
+  // This is the "comparable by type" check: not "copy these words" but "titles
+  // for this kind of item name the GPU, and this one does not."
+  //
+  // ⚠️ AT MOST TWO, MOST-CONVENTIONAL FIRST. A title carrying five appended
+  // fields is not a better title, and the reviewer stops reading a diff that
+  // long. Whatever the category names most consistently gets the room.
+  // ⚠️ NEVER STACK A CONVENTION ON TOP OF A REPAIR. WSP's "Canon EOS R100
+  // 24.1MP Digital SLR DSLR Camera" had already been corrected to "Mirrorless
+  // Camera" by the hardware-conflict rule; the convention check then appended
+  // its Type field on the end and produced "…24.1MP Mirrorless Camera Digital
+  // SLR DSLR Camera" — a suggestion worse than either fix alone. A row that
+  // already has something WRONG with it gets that fixed and nothing else; the
+  // polish can wait for the next sweep, when the title is sound.
+  const beingRepaired = findings.some(f => f.severity >= 2);
+  const convBucket = convention?.get(collection.trim().toLowerCase());
+  if (CONV_ENABLED && !brokenTitle && !beingRepaired && convBucket
+      && convBucket.n >= CONV_MIN_PRODUCTS && extra?.specs) {
+    const gaps: { k: string; v: string; share: number }[] = [];
+    for (const [k, c] of convBucket.keys) {
+      if (c.has < CONV_MIN_PRODUCTS) continue;
+      const share = c.inTitle / c.has;
+      if (share < CONV_MIN_SHARE) continue;
+      if (lazyUsed.has(k)) continue;
+      if (CONV_NEVER.test(k.trim())) continue;
+      const v = String(extra.specs[k] || "").trim();
+      if (!titleWorthy(k, v, extra.specs)) continue;
+      // Against the WORKING title, not the original — an earlier fix may have
+      // added it already.
+      if (valuePresent(title, v)) continue;
+      // A value with no letters in it is a year or a bare measurement, and the
+      // convention that produced it was about placement, not presence.
+      if (!/[A-Za-z]/.test(v)) continue;
+      if (convContradicts(title, v)) continue;
+      if (!convWorthAdding(title, v)) continue;
+      gaps.push({ k, v, share });
+    }
+    gaps.sort((a, b) => b.share - a.share);
+    const added: string[] = [];
+    for (const g of gaps.slice(0, 2)) {
+      if (tryAppend(g.v)) {
+        added.push(`${g.k} ${g.v} — ${Math.round(g.share * 100)}% of our ${collection} titles say it`);
+      }
+    }
+    if (added.length) {
+      findings.push({
+        code: "missing-for-category",
+        says: `Nearly every ${collection} listing we write names ${added.length === 1 ? "this detail" : "these details"} in the title, and this one does not: ${added.join("; ")}. The values come from this listing's own spec table — nothing is invented and no wording is copied from another seller.`,
+        severity: 1, fixable: true,
+      });
     }
   }
 
@@ -1715,6 +2032,13 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     }
   }
 
+  // ⚠️ LEARNED FROM THE WHOLE RUN, BEFORE ANY ROW IS JUDGED. The convention is
+  // a fact about a COLLECTION, so it needs every product in it — which is why
+  // the default sweep limit covers a whole store. A small `limit` gives a
+  // convention learned from a slice, and the thresholds (8 products, 8 with the
+  // field) are what stop that slice inventing a house style from three items.
+  const convention = learnConvention(cands, extras);
+
   const out: any[] = [];
   // Pairs where the eBay listing mapped to this SKU is a DIFFERENT PRODUCT. Not
   // queued (they are not titles to rewrite) but counted, because silently
@@ -1776,7 +2100,8 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
         ? Math.round(100 * shared / Math.max(wa.length, wb.size)) : 100;
       if (pct < 65) mismatched.push({ sku: row.sku, shopify: row.title, ebay: row.ebay_title });
     }
-    const a = analyse(row, extras[row.product_id], comps, modelReal, modelExample, brandReal);
+    const a = analyse(row, extras[row.product_id], comps, modelReal, modelExample,
+                      brandReal, convention);
 
     // Carry the market's findings forward on a rules-only pass. Not merged when
     // the market DID run — then the fresh answer is the whole answer, including
@@ -2015,13 +2340,35 @@ async function handlePost(req: Request, scope: Scope) {
   // surgery: we know precisely which characters to look for, so there is no
   // parsing to get wrong and no way to touch markup that does not contain it.
   // If the old title does not appear, nothing is written.
+  // ⚠️ AND A THIRD COPY LIVES IN A METAFIELD. `whats_include` on BAL
+  // MO04-1726A-E10 reads "Fractal Custom PC … Nvidia GeForce GTX 1060" — the
+  // whole title, one GPU out of date, in a field the description swap below
+  // cannot reach because it is not in descriptionHtml at all. Left alone, a
+  // manager fixes the title and the tool's own `included` list still quotes the
+  // old one back at them.
   let descriptionHtml: string | null = null;
+  let staleMetafields: { id: string; value: string }[] = [];
   try {
     const cur = await shopifyGql(shop, token,
-      `query($id: ID!) { product(id: $id) { descriptionHtml } }`, { id: productId });
+      `query($id: ID!) { product(id: $id) {
+         descriptionHtml
+         metafields(first: 60) { edges { node { id value } } }
+       } }`, { id: productId });
     const html = String(cur?.product?.descriptionHtml || "");
     if (html && item.current_title && html.includes(item.current_title)) {
       descriptionHtml = html.split(item.current_title).join(next);
+    }
+    if (item.current_title) {
+      for (const e of (cur?.product?.metafields?.edges || [])) {
+        const id = String(e?.node?.id || "");
+        const v = String(e?.node?.value ?? "");
+        // A literal swap, exactly as the description one is. A list metafield
+        // stores JSON text and the title still appears verbatim inside it, so
+        // there is nothing to parse and no way to damage the structure.
+        if (id && v.includes(item.current_title)) {
+          staleMetafields.push({ id, value: v.split(item.current_title).join(next) });
+        }
+      }
     }
   } catch {
     // A title fix that lands is worth more than one that fails over its own
@@ -2043,6 +2390,26 @@ async function handlePost(req: Request, scope: Scope) {
                   detail: errs.map((e: any) => `${(e.field || []).join(".")}: ${e.message}`).join("; ") }, 422);
   }
   const saved = data?.productUpdate?.product?.title || next;
+
+  // ⚠️ A SEPARATE MUTATION, AFTER the title has landed, and its failure is
+  // swallowed. Same rule the descriptionHtml read follows: a title fix that
+  // lands is worth more than one that fails over its own footnote. Folding these
+  // into the productUpdate input would let a metafield the API refuses take the
+  // title change down with it.
+  let metafieldsFixed = 0;
+  if (staleMetafields.length) {
+    try {
+      const res = await shopifyGql(shop, token, `
+        mutation($mf: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $mf) { userErrors { field message } }
+        }`, {
+        mf: staleMetafields.map(m => ({ ownerId: productId, id: m.id, value: m.value })),
+      });
+      if (!(res?.metafieldsSet?.userErrors || []).length) {
+        metafieldsFixed = staleMetafields.length;
+      }
+    } catch { /* the title is already correct; this is the footnote */ }
+  }
 
   // The ledger first, then the queue row. `current_title` is overwritten by the
   // next sweep, so without the move row there would be no record anywhere of
@@ -2071,7 +2438,8 @@ async function handlePost(req: Request, scope: Scope) {
     body: JSON.stringify({ title: saved, updated_at: new Date().toISOString() }),
   }).catch(() => { /* cosmetic only; the next sweep fixes it */ });
 
-  return json({ ok: true, applied: productId, title: saved });
+  return json({ ok: true, applied: productId, title: saved,
+                ...(metafieldsFixed ? { metafieldsFixed } : {}) });
 }
 
 // --- routing ----------------------------------------------------------------
