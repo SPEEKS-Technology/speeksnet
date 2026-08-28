@@ -168,25 +168,42 @@ function _npxFetchMonth(store, ym) {
 //   NP = Sales - Cost - eBay Fee - Shipping - CC Fee - 7% of Sales
 // which is M36 =B36-E36-J36-K36-L36-(B36*0.07), read off the sheet itself.
 function _npxMonthTotals(data) {
-  var s = 0, c = 0, e = 0, sh = 0, cc = 0, naE = 0, naS = 0;
+  var s = 0, c = 0, e = 0, sh = 0, cc = 0, naE = 0, naS = 0, blind = 0, sellingDays = 0;
   for (var i = 0; i < data.days.length; i++) {
     var x = data.days[i];
-    s += Number(x.net_sales) || 0;
+    var sales = Number(x.net_sales) || 0;
+    s += sales;
     c += Number(x.cost) || 0;
     cc += Number(x.cc_fee) || 0;
     if (x.ebay_fee === null || x.ebay_fee === undefined) naE++; else e += Number(x.ebay_fee);
     if (x.shipping_cost === null || x.shipping_cost === undefined) naS++; else sh += Number(x.shipping_cost);
+    // ⚠️ THE 60-DAY SHOPIFY WALL. Sales and Cost come from ShopifyQL, which has
+    // no age limit. Every fee comes from the ORDERS api, and without the
+    // read_all_orders scope Shopify simply does not return orders older than 60
+    // days — no error, no empty result, just orders that are not there. The fees
+    // then arrive as 0 rather than null, so the =NA() guard never fires and Net
+    // Profit comes out CONFIDENTLY TOO HIGH.
+    // Measured 2026-08-27: OVL June had 27 of 30 days like this and reported
+    // $62,700 of Net Profit on $1,198 of total fees. The first day with data was
+    // June 28 — exactly 60 days back, to the day.
+    // A real selling day with cost of goods and no card fee, no shipping and no
+    // eBay fee has not happened; that shape means the data is missing.
+    if (sales > 0) {
+      sellingDays++;
+      if (!Number(x.ebay_fee) && !Number(x.shipping_cost) && !Number(x.cc_fee)) blind++;
+    }
   }
   var r2 = function (n) { return Math.round(n * 100) / 100; };
   return {
     revenue: r2(s),
     gp: r2(s - c),
     np: r2(s - c - e - sh - cc - (s * 0.07)),
-    // ⚠️ A missing fee column does not make Net Profit unknown, it makes it too
+    // A missing fee column does not make Net Profit unknown, it makes it too
     // HIGH — the formula subtracts those cells and a blank is arithmetic zero.
-    // Same trap the day-grid writer answers with =NA().
-    npTrustworthy: naE === 0 && naS === 0,
-    naEbay: naE, naShip: naS, days: data.days.length
+    // Revenue and GP are still sound, so they are written either way.
+    npTrustworthy: naE === 0 && naS === 0 && blind <= Math.floor(sellingDays * 0.2),
+    naEbay: naE, naShip: naS, blind: blind, sellingDays: sellingDays,
+    days: data.days.length
   };
 }
 
@@ -349,8 +366,13 @@ function _npxSync(preview) {
     }
     Logger.log('  %s: %s days | Revenue %s | GP %s | NP %s%s', store, tot.days,
       tot.revenue, tot.gp, tot.np,
-      tot.npTrustworthy ? '' : '  !! ' + tot.naEbay + ' days missing eBay fee, '
-        + tot.naShip + ' missing shipping — NP would be TOO HIGH, not written');
+      tot.npTrustworthy ? '' : '\n    !! NET PROFIT NOT WRITTEN. ' + tot.blind + ' of '
+        + tot.sellingDays + ' selling days report ZERO eBay fee, shipping AND card fee'
+        + (tot.naEbay || tot.naShip ? ' (plus ' + tot.naEbay + ' null eBay, ' + tot.naShip + ' null shipping)' : '')
+        + '. That is the 60-day Shopify order wall, not a quiet month: Sales and Cost'
+        + ' come from ShopifyQL and are fine, the fees come from the Orders API which'
+        + ' returns nothing older than 60 days without the read_all_orders scope.'
+        + ' Missing fees make Net Profit TOO HIGH, so Revenue and GP are written and NP is not.');
     plan(sb + NPX_OFF_VAL_L, rowLastMonth, store + ' last-month Revenue', tot.revenue, NPX_MONEY);
     plan(sb + NPX_OFF_VAL_R, rowLastMonth, store + ' last-month GP', tot.gp, NPX_MONEY);
     if (tot.npTrustworthy) {
