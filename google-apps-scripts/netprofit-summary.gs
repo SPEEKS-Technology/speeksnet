@@ -104,6 +104,9 @@ var NPX_GOAL_BASIS = 'tracking';
 var NPX_GREEN_BG = '#d9ead3', NPX_GREEN_FG = '#274e13';
 var NPX_RED_BG   = '#f4cccc', NPX_RED_FG   = '#990000';
 
+var NPX_TZ = 'America/Chicago';
+var NPX_SHOPIFY_WALL_DAYS = 60;   // Shopify hides orders older than this without read_all_orders
+
 var NPX_LASTMONTH_KEY = 'NPX_LAST_MONTH_FOR';
 var NPX_FORCE_LAST_MONTH = false;   // set true for one run to redo last month
 
@@ -345,6 +348,20 @@ function _npxSync(preview) {
   // BOTH the marker and the cell: a marker alone would skip forever if
   // somebody cleared the cells, which is the failure that looks like the
   // feature was never built.
+  // ⚠️ THE WALL IS A DATE, SO CHECK THE DATE — do not wait to notice it in the
+  // data. The blind-day test below catches a month that is wholly behind the
+  // 60-day line, but every MONTH CLOSE lands on a month whose first day or two
+  // has just crossed it: closing August on Oct 1 puts Aug 1 one day past. One
+  // or two hidden days out of 31 is under any sensible blind-day threshold, so
+  // the heuristic would pass it and write a Net Profit missing two days of fees.
+  // Refusing is safe and self-heals: the very next 2pm refresh has the new month
+  // in the grid, which makes the just-closed month "last month" at ~31 days old,
+  // comfortably inside the wall, and writes it properly.
+  var wallBack = new Date();
+  wallBack.setDate(wallBack.getDate() - NPX_SHOPIFY_WALL_DAYS);
+  var wallYmd = Utilities.formatDate(wallBack, NPX_TZ, 'yyyy-MM-dd');
+  var behindWall = (prevYm + '-01') < wallYmd;
+
   var lmProps = PropertiesService.getScriptProperties();
   var lmDone = lmProps.getProperty(NPX_LASTMONTH_KEY) === ym;
   var lmCell = values[rowLastMonth][NP_BASES.OVL + NPX_OFF_VAL_L];
@@ -352,6 +369,14 @@ function _npxSync(preview) {
   if (lmSkip) {
     Logger.log('\n--- last month (%s): already written for %s (OVL reads %s) — not refetching. '
       + 'Set NPX_FORCE_LAST_MONTH = true to redo it. ---', prevYm, ym, lmCell);
+  }
+  if (behindWall && !lmSkip) {
+    Logger.log('\n!! %s begins behind the %s-day Shopify order wall (oldest visible day is %s). '
+      + 'Revenue and GP come from ShopifyQL and are still written; NET PROFIT IS NOT, because '
+      + 'the hidden days contribute no fees and a short fee makes NP too HIGH. This is normal '
+      + 'on a month-close night — the next daily refresh writes it properly, once the grid '
+      + 'holds the new month and last month is only ~31 days old.',
+      prevYm, NPX_SHOPIFY_WALL_DAYS, wallYmd);
   }
   Logger.log(lmSkip ? '' : '\n--- last month (%s) ---', prevYm);
   var lmOk = [];
@@ -375,7 +400,7 @@ function _npxSync(preview) {
         + ' Missing fees make Net Profit TOO HIGH, so Revenue and GP are written and NP is not.');
     plan(sb + NPX_OFF_VAL_L, rowLastMonth, store + ' last-month Revenue', tot.revenue, NPX_MONEY);
     plan(sb + NPX_OFF_VAL_R, rowLastMonth, store + ' last-month GP', tot.gp, NPX_MONEY);
-    if (tot.npTrustworthy) {
+    if (tot.npTrustworthy && !behindWall) {
       plan(sb + NPX_OFF_VAL_R, rowLastMonth + 1, store + ' last-month Net Profit', tot.np, NPX_MONEY);
       lmOk.push(store);
     }
