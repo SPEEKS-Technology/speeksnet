@@ -33,16 +33,22 @@ let fails = 0;
 const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g === undefined ? '' : '   ' + g)); if (!c) fails++; };
 const IGNORE = /calendar\.google\.com|toDataURL|[Tt]ainted canvas|Failed to fetch|net::ERR|401/;
 
-async function withGrants(browser, upload, cats, photos) {
+async function withGrants(browser, upload, cats, photos, titles) {
     // `photos` defaults to `cats` so the four original cases keep meaning what
     // they meant: "Listing Health off" is both halves off. Pass it explicitly
     // to drive one half on its own.
     if (photos === undefined) photos = cats;
+    // `titles` (2026-08-28) follows the same rule, and it HAS to: it is a third
+    // half of the same pill, and it defaults ON for a manager. Leaving it out of
+    // the seed left it resolving to its role default, so every "Listing Health
+    // off" case in this file started reporting the pill as visible. A new
+    // data-feature-any key must be added here the day it is added to the pill.
+    if (titles === undefined) titles = cats;
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => { const m = String(e.message || e); if (!IGNORE.test(m)) errs.push(m); });
     await page.setViewport({ width: 1500, height: 1000 });
-    await page.evaluateOnNewDocument(([u, c, ph]) => {
+    await page.evaluateOnNewDocument(([u, c, ph, t]) => {
         sessionStorage.setItem('speeksUnlocked', 'true');
         sessionStorage.setItem('speeksUserName', 'Test Manager');
         sessionStorage.setItem('speeksUserRole', 'manager');
@@ -51,10 +57,10 @@ async function withGrants(browser, upload, cats, photos) {
         // _featureOverrideFor reads them: role slug, not role class.
         window.__FA_SEED = {
             role: { 'ec-upload': { manager: u }, 'ec-view-categories': { manager: c },
-                    'ec-view-photos': { manager: ph } },
+                    'ec-view-photos': { manager: ph }, 'ec-view-titles': { manager: t } },
             user: {},
         };
-    }, [upload, cats, photos]);
+    }, [upload, cats, photos, titles]);
     await page.goto('file:///' + REPO + '/operations.html', { waitUntil: 'domcontentloaded' }).catch(() => {});
     await new Promise(r => setTimeout(r, 2300));
     // Seed and re-run the pass the page runs at login.
@@ -152,6 +158,17 @@ const read = page => page.evaluate(() => {
     ok(s.jump === true, 'Jump To reaches it on the alarm key alone', String(s.jump));
     await page.close();
 
+    // Upload off, Categories off, Photos off, TITLES ON. Same assertion one key
+    // over: a grant is not proven by the control existing, only by the control
+    // being reachable — which is why the TAB is checked and not just the pill.
+    ({ page } = await withGrants(browser, false, false, false, true));
+    s = await read(page);
+    ok(s.tab, 'the tab shows for title review alone', String(s.tab));
+    ok(!s.upload && s.cats, 'and the Listing Health pill is the half that is on',
+        `upload=${s.upload} listingHealth=${s.cats}`);
+    ok(s.jump === true, 'Jump To reaches it on the titles key alone', String(s.jump));
+    await page.close();
+
     console.log('');
     console.log('== The retired switch is really gone ==');
     const gone = await p4.evaluate(() => ({
@@ -169,12 +186,14 @@ const read = page => page.evaluate(() => {
     // "Upload tab" / "No Pictures alarm" described the WIDGET. In a list of
     // switches every row is a tab or a panel or an alarm, so the suffix is noise
     // that pushes the part you are scanning for further right.
-    const labels = await p4.evaluate(() => ['ec-upload', 'ec-view-categories', 'ec-view-photos']
+    const labels = await p4.evaluate(() =>
+        ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles']
         .map(k => (FEATURE_CATALOG.find(f => f.key === k) || {}).label));
+    ok(labels.every(Boolean), 'every SPEEKS Connect switch is in the catalog', labels.join(' | '));
     ok(labels.every(l => l && !/\b(tab|alarm|panel|widget)$/i.test(l)),
-        'no trailing tab / alarm on the three SPEEKS Connect switches', labels.join(' | '));
+        'no trailing tab / alarm on the SPEEKS Connect switches', labels.join(' | '));
     ok(labels.every(l => /^SPEEKS Connect · /.test(l)),
-        'and all three still group under one name', labels.join(' | '));
+        'and they all group under one name', labels.join(' | '));
 
     console.log('');
     console.log('== Where each role opens ==');

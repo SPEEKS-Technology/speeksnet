@@ -111,6 +111,20 @@ const PHOTOS_KEY = "ec-view-photos";
 // person holding the camera. Filing stock into collections is not theirs by
 // default, so STORE_ROLES alone still gates Categories.
 const PHOTO_EXTRA_ROLES = ["assistant manager"];
+// A THIRD KEY THIS FUNCTION DOES NOT OWN.
+//
+// Listing Titles is served by its own function (listing-titles), which holds all
+// the reasoning and every write. What lives here is ONLY its count — because the
+// action feed already polls this endpoint every 30 minutes on every dashboard
+// load, and one payload carrying three numbers is strictly better than a second
+// poller for the third. Same argument the photo alarm's counts are here for.
+//
+// The count is a plain read of listing_title_queue, so it costs one HEAD request
+// and needs nothing from eBay or Shopify.
+const TITLES_KEY = "ec-view-titles";
+// Matches FEATURE_CATALOG's def and listing-titles' own byRole. MOCD excluded,
+// as with the photo alarm.
+const TITLE_EXTRA_ROLES = ["assistant manager"];
 const FROM_HANDLE = "other";
 const BATCH_SIZE = 10;
 
@@ -141,7 +155,7 @@ async function sb(path: string, init: RequestInit = {}) {
 const rows = async (path: string) => await (await sb(path)).json();
 
 type Scope = { name: string; role: string; stores: string[]; corp: boolean;
-               mayCats: boolean; mayPhotos: boolean };
+               mayCats: boolean; mayPhotos: boolean; mayTitles: boolean };
 
 // An override row for this feature, resolved the way the site resolves it:
 // the person beats their role, and neither existing means "use the default".
@@ -174,15 +188,19 @@ async function scopeFor(pin: string): Promise<Scope | null> {
   // reachable by URL that nobody can see.
   const byRolePhotos = (corp && role !== "mocd")
     || STORE_ROLES.includes(role) || PHOTO_EXTRA_ROLES.includes(role);
+  const byRoleTitles = (corp && role !== "mocd")
+    || STORE_ROLES.includes(role) || TITLE_EXTRA_ROLES.includes(role);
   const name = String(user.name || "");
-  const [saidCats, saidPhotos] = await Promise.all([
+  const [saidCats, saidPhotos, saidTitles] = await Promise.all([
     featureSays(CATS_KEY, role, name), featureSays(PHOTOS_KEY, role, name),
+    featureSays(TITLES_KEY, role, name),
   ]);
   const mayCats = saidCats === null ? byRoleCats : saidCats;
   const mayPhotos = saidPhotos === null ? byRolePhotos : saidPhotos;
+  const mayTitles = saidTitles === null ? byRoleTitles : saidTitles;
   // Only a reader holding NEITHER half is a stranger to this function. Holding
   // one is the whole point of splitting the keys.
-  if (!mayCats && !mayPhotos) return null;
+  if (!mayCats && !mayPhotos && !mayTitles) return null;
   // A granted role still only gets ITS OWN stock. Feature Access answers "may
   // this person file", never "whose catalogue" — that stays the store on their
   // user row, and corp is the only thing that means all five.
@@ -190,7 +208,7 @@ async function scopeFor(pin: string): Promise<Scope | null> {
     : role === "multi-store manager" ? MSM_STORES
     : [String(user.store || "").toUpperCase()].filter(s => STORES.includes(s));
   if (!stores.length) return null;
-  return { name: user.name || "", role, stores, corp, mayCats, mayPhotos };
+  return { name: user.name || "", role, stores, corp, mayCats, mayPhotos, mayTitles };
 }
 
 async function shopFor(store: string): Promise<{ shop: string; token: string }> {
@@ -534,15 +552,23 @@ Deno.serve(async (req) => {
         // missing key means "not your tool", and the nag that reads this must
         // be able to tell those apart or it will report an all-clear on a
         // queue it was never allowed to look at.
-        const [other, misfiled, unmatched, photos] = await Promise.all([
+        const [other, misfiled, unmatched, photos, titles, titlesWrong] = await Promise.all([
           scope.mayCats ? queueTotals(scope.stores, "other") : null,
           scope.mayCats ? queueTotals(scope.stores, "misfiled") : null,
           scope.mayCats ? queueTotals(scope.stores, "unmatched") : null,
-          scope.mayPhotos ? photoTotals(scope.stores) : null]);
+          scope.mayPhotos ? photoTotals(scope.stores) : null,
+          scope.mayTitles ? titleTotals(scope.stores, null) : null,
+          // SEPARATELY, because only this number is worth a notification. The
+          // whole queue is mostly severity 1 — several hundred games that would
+          // like the letters CIB — and nagging a manager daily about those would
+          // spend the credibility the eight genuinely WRONG listings need.
+          scope.mayTitles ? titleTotals(scope.stores, 3) : null]);
         return json({ scope: { name: scope.name, role: scope.role, stores: scope.stores,
-                               corp: scope.corp, mayCats: scope.mayCats, mayPhotos: scope.mayPhotos },
+                               corp: scope.corp, mayCats: scope.mayCats, mayPhotos: scope.mayPhotos,
+                               mayTitles: scope.mayTitles },
                       ...(scope.mayCats ? { other, misfiled, unmatched } : {}),
-                      ...(scope.mayPhotos ? { photos } : {}) });
+                      ...(scope.mayPhotos ? { photos } : {}),
+                      ...(scope.mayTitles ? { titles, titlesWrong } : {}) });
       }
 
       // The photo alarm for one store. Its own view rather than a field on the
@@ -554,7 +580,7 @@ Deno.serve(async (req) => {
         const storeP = scope.stores.includes(askedP) ? askedP : scope.stores[0];
         return json({
           scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp,
-                   mayCats: scope.mayCats, mayPhotos: scope.mayPhotos },
+                   mayCats: scope.mayCats, mayPhotos: scope.mayPhotos, mayTitles: scope.mayTitles },
           store: storeP,
           queue: await photosFor(storeP),
         });
@@ -685,6 +711,21 @@ async function queueTotals(stores: string[], mode: string): Promise<Record<strin
 // with the item in your hands — so a row carries the SKU and a link and nothing
 // that pretends to act. See 0065 for why unpublished no-photo stock, which is
 // 500× larger, is deliberately not in here.
+// Open title reviews per store, optionally only at one severity. HEAD-only
+// with count=exact: this rides the notification poll, so it must never pull a
+// row it is not going to show.
+async function titleTotals(stores: string[], severity: number | null): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const s of stores) {
+    const sev = severity == null ? "" : `&severity=eq.${severity}`;
+    const res = await sb(`listing_title_queue?store_code=eq.${s}${sev}&select=product_id`, {
+      headers: { Prefer: "count=exact", Range: "0-0" },
+    });
+    out[s] = Number((res.headers.get("content-range") || "").split("/")[1] || 0) || 0;
+  }
+  return out;
+}
+
 async function photosFor(store: string) {
   const list = await rows(`listing_no_photos?store_code=eq.${encodeURIComponent(store)}`
     + `&select=sku,product_id,product_handle,title,price,quantity,product_created_at`

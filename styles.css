@@ -17994,6 +17994,186 @@ body.tv-body { display: block; background: #eef1f5; }
     color: var(--cb-faint); margin: -6px 0 12px;
 }
 
+/* --- Listing Titles (Listing Health, section three) ------------------------
+   A ROW HERE IS A DECISION, NOT A TABLE CELL. The other two queues on this page
+   are tables, because their rows are one fact each. A title review is three
+   pieces of prose stacked — what it says now, what it would say, and why — plus
+   an editable field, and none of that survives being squeezed into a column. So
+   the row is a card and the reading order is top to bottom. */
+.lt-modes { flex-wrap: wrap; }
+/* The count on each tab is coloured by SEVERITY, not by the tab being active —
+   a red 3 on an inactive tab is the whole point of the number. */
+.lt-t-bad  { background: var(--cb-red-tint)  !important; color: #d1443b !important; }
+.lt-t-warn { background: var(--cb-gold-tint) !important; color: #b7791f !important; }
+.lt-t-ok   { background: var(--cb-sage-tint) !important; color: #178048 !important; }
+
+/* The blurb above the rows for the two calmer tiers. Not .lh-alarm: those are
+   red-bordered panels for something wrong in front of a customer, and reusing
+   one to say "these could work harder" would make the page cry wolf. */
+.lt-said {
+    font-size: 12px; font-weight: 600; color: var(--cb-muted); line-height: 1.55;
+    background: var(--cb-line-2); border-radius: 10px; padding: 10px 13px; margin-bottom: 14px;
+}
+.lt-said strong { font-weight: 800; color: var(--cb-ink); }
+
+.lt-rows { display: flex; flex-direction: column; gap: 10px; }
+.lt-row {
+    display: flex; gap: 16px; align-items: flex-start;
+    border: 1px solid var(--cb-line); border-radius: 12px;
+    background: var(--cb-card); padding: 13px 15px;
+}
+/* Severity as a left edge rather than a whole tinted card: the reviewer is
+   reading TEXT in here, and a red background behind a title makes the title
+   harder to judge, which is the one thing this panel must not do. */
+.lt-sev-3 { border-left: 3px solid #d1443b; }
+.lt-sev-2 { border-left: 3px solid #d69e2e; }
+.lt-sev-1 { border-left: 3px solid var(--cb-sage); }
+
+.lt-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.lt-side { flex: 0 0 210px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+
+.lt-now, .lt-new { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+/* Fixed-width labels so the three stacked titles start at the same column and
+   can be read as a comparison instead of three separate sentences. */
+.lt-lab {
+    flex: 0 0 76px; font-size: 10px; font-weight: 800; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--cb-faint); padding-top: 2px;
+}
+/* ⚠️ A TITLE MUST WRAP, NEVER TRUNCATE. These run to 80 characters and the
+   reviewer is deciding on the exact words — an ellipsis in the middle of the
+   part that changed would hide the only thing worth looking at. This is the
+   table-layout trap from the other tools, avoided by not using a table. */
+.lt-cur, .lt-sug {
+    font-size: 13px; font-weight: 700; color: var(--cb-ink); line-height: 1.4;
+    overflow-wrap: anywhere; min-width: 0;
+}
+.lt-sug { color: #178048; }
+.lt-len { font-size: 10.5px; font-weight: 700; color: var(--cb-faint); flex: 0 0 auto; }
+/* What eBay is showing right now, when it disagrees with Shopify. Red because
+   one of the two is wrong in front of a buyer and we do not know which. */
+.lt-drift .lt-cur { color: #a3352c; }
+.lt-drift .lt-lab { color: #d1443b; }
+.lt-nosug { font-size: 12px; font-weight: 700; color: #b7791f; }
+/* The words the suggestion ADDS or CHANGES. A word-level mark, so the reviewer
+   can see at a glance whether the new words are true of the item in their hand. */
+.lt-add {
+    background: var(--cb-sage-tint); color: #146c3d; border-radius: 4px;
+    padding: 0 3px; font-weight: 800;
+}
+
+.lt-edit { display: flex; align-items: center; gap: 9px; margin-top: 2px; }
+.lt-input {
+    flex: 1 1 auto; min-width: 0; font-family: inherit;
+    font-size: 12.5px; font-weight: 700; color: var(--cb-ink);
+    border: 1px solid var(--cb-line); border-radius: 8px; padding: 7px 10px;
+    background: var(--cb-bg);
+}
+.lt-input:focus { outline: none; border-color: var(--cb-sage); background: var(--cb-card); }
+.lt-input:disabled { color: var(--cb-faint); }
+/* Typed-over-the-suggestion looks different from the suggestion, because the
+   button changes meaning with it ("Approve" becomes "Save My Title"). */
+.lt-dirty { border-color: #b7791f; background: var(--cb-card); }
+.lt-count { font-size: 10.5px; font-weight: 800; color: var(--cb-faint); flex: 0 0 auto; }
+.lt-over  { color: #d1443b; }
+
+/* WHY, in the server's own sentences. Small but not hidden behind a fold: the
+   reason is what somebody is actually deciding on, and a reviewer who has to
+   click to find out why will just press Approve. */
+.lt-why { margin: 3px 0 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+/* The confirm-before-you-approve line. Amber rather than red: nothing is
+   wrong yet, the reviewer just has to check something we cannot. Block-level so
+   it cannot be read as a trailing clause of the reason above it. */
+.lt-caution {
+    display: block;
+    margin: 6px 0 0;
+    padding: 7px 10px;
+    border-left: 3px solid #d97706;
+    border-radius: 0 6px 6px 0;
+    background: #fffbeb;
+    color: #92400e;
+    font-weight: 600;
+    line-height: 1.45;
+}
+
+/* The scope line. Quiet by default — it is context, not an alarm — and amber
+   when it has to admit half the scope is not being applied. */
+.lt-scope {
+    margin: 0 0 10px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: .01em;
+    color: var(--cb-muted);
+    line-height: 1.5;
+}
+
+.lt-scope-part {
+    padding: 7px 10px;
+    border-left: 3px solid #d97706;
+    border-radius: 0 6px 6px 0;
+    background: #fffbeb;
+    color: #92400e;
+    font-weight: 600;
+}
+
+.lt-why li { font-size: 11.5px; font-weight: 600; color: var(--cb-muted); line-height: 1.5; }
+
+.lt-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lt-price { font-size: 12.5px; font-weight: 800; color: var(--cb-ink); }
+/* How much the suggestion is worth trusting. Deliberately quiet — it qualifies
+   the suggestion, it is not a status. */
+.lt-basis {
+    font-size: 10px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase;
+    border-radius: 5px; padding: 2px 6px; white-space: nowrap;
+    background: var(--cb-line-2); color: var(--cb-muted); cursor: help;
+}
+.lt-basis-category { background: var(--cb-gold-tint); color: #b7791f; }
+.lt-basis-gtin, .lt-basis-model { background: var(--cb-sage-tint); color: #178048; }
+
+.lt-acts { display: flex; gap: 6px; width: 100%; }
+.lt-ok, .lt-no {
+    flex: 1 1 0; font-family: inherit; font-size: 12px; font-weight: 800;
+    border-radius: 8px; padding: 7px 10px; cursor: pointer; border: 1px solid transparent;
+    transition: filter .12s, border-color .12s;
+}
+.lt-ok { background: var(--cb-sage); color: #fff; }
+.lt-ok:hover:not(:disabled) { filter: brightness(1.06); }
+/* ⚠️ Disabled must LOOK disabled. Approve is refused for a row with no
+   suggestion until somebody types one, and a button that looks pressable but
+   does nothing reads as the tool being broken. */
+.lt-ok:disabled { background: var(--cb-line-2); color: var(--cb-faint); cursor: not-allowed; }
+.lt-no { background: var(--cb-card); border-color: var(--cb-line); color: var(--cb-muted); }
+.lt-no:hover:not(:disabled) { border-color: #d1443b; color: #d1443b; }
+.lt-no:disabled { color: var(--cb-faint); cursor: not-allowed; }
+
+/* The comps, folded. Unlike the reason, these are evidence you go looking for
+   rather than something you need to decide — and they are other sellers' words,
+   which should never outweigh our own title on the page.
+   ⚠️ A closed <details> does not hide a flex child on its own: the UA rule
+   loses to any author display rule, which is what made the eBay rows on the All
+   Stores cards render with the drawer shut. Nothing in here is display:flex, so
+   it collapses correctly — keep it that way. */
+.lt-comps { width: 100%; }
+/* ⚠️ COLLAPSE STATED EXPLICITLY, not inherited from whatever the browser does
+   this year. Chrome 151 no longer puts display:none on a closed details'
+   children — it wraps them in ::details-content with content-visibility:hidden,
+   so the children keep a computed display, a layout box and a non-null
+   offsetParent while being genuinely invisible. That is fine here, but it means
+   the collapse depends on a UA mechanism that has already changed once and that
+   any author display rule on a child could still defeat (the way .ec-hrow beat
+   the old rule and shipped the eBay rows visible with the drawer shut). This
+   rule makes it ours. */
+.lt-comps:not([open]) > *:not(summary) { display: none; }
+.lt-comps summary {
+    font-size: 11px; font-weight: 800; color: var(--cb-muted); cursor: pointer;
+    letter-spacing: .01em;
+}
+.lt-comps ul { margin: 6px 0 0; padding-left: 15px; }
+.lt-comps li {
+    font-size: 11px; font-weight: 600; color: var(--cb-faint); line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+
 /* --- The session feed ---------------------------------------------------- *
    One row per SKU somebody scanned, and it changes state under them: amber
    while eBay is being asked, green when it is up, red when it is refused. The

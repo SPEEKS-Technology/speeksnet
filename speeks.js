@@ -33933,6 +33933,11 @@ const FEATURE_CATALOG = [
     // defaulting ON would quietly re-open the page to them under a new name.
     // ASM is present: photographing an item is their job (see the notify roles).
     { key: 'ec-view-photos',           label: 'SPEEKS Connect · No Pictures', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
+    // Same audience as the alarm, and for the same reason: an ASM is usually
+    // the person who wrote the title. ⚠️ This list must match `byRole` in the
+    // listing-titles function — a backend that says yes while the button says no
+    // is a tool reachable by URL that nobody can see.
+    { key: 'ec-view-titles',           label: 'SPEEKS Connect · Titles', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -34124,7 +34129,8 @@ const _SECTION_TABS = {
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks',
-                        'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos'],
+                        'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos',
+                        'ec-view-titles'],
 };
 
 function _applySectionNavVisibility(userRoleClass, userName) {
@@ -34890,6 +34896,7 @@ const JUMP_KEYWORDS = {
     'ec-upload':                 'speeks connect ebay listings upload list publish online marketplace sku',
     'ec-view-categories':        'speeks connect categories other collection wrong category shelf file shopify',
     'ec-view-photos':            'speeks connect listing health no pictures photos missing image online store',
+    'ec-view-titles':            'speeks connect listing health titles title fix keywords seo rename wrong title bundle cib ebay',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
     'widget-variance-replies':   'variance replies gm notes dm notes markdown discount negative',
@@ -34948,7 +34955,7 @@ const JUMP_PLACES = [
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
-    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
+    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
     // card are separate Feature Access keys, and a single row would be invisible to
@@ -44494,6 +44501,24 @@ async function ecLoad() {
                 _lhPhotos = null;
                 _lhPhotoErr = e.message || String(e);
             }
+            // Titles, same posture as the photo alarm: its own function, its own
+            // gate, and a failure that must not take the rest of the page down.
+            // Asked AFTER rcLoad for the same reason — so both halves of one page
+            // are describing the same store rather than two server defaults.
+            const wantTitles = typeof _jumpFeatureVisible !== 'function'
+                || _jumpFeatureVisible('ec-view-titles');
+            if (!wantTitles) {
+                _ltData = null; _ltErr = null;
+            } else try {
+                _ltData = await _ltFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`);
+                _ltErr = null;
+                if (!_ecScope && _ltData?.scope) {
+                    _ecScope = { allStores: !!_ltData.scope.corp, stores: _ltData.scope.stores };
+                }
+            } catch (e) {
+                _ltData = null;
+                _ltErr = e.message || String(e);
+            }
         } else {
             _ecData = await _ecFetch(`?view=listings${_ecStore ? `&store=${_ecStore}` : ''}`);
             _ecScope = _ecData.scope;
@@ -45205,6 +45230,15 @@ function _lhSec(eyebrow, title, inner, badge) {
 // one that decides whether the data arrives, so a section drawn from the local
 // answer alone can render a heading over a 403.
 function _lhMay(half) {
+    // Titles is served by its OWN edge function, so shopify-recat's scope says
+    // nothing about it — its answer arrives on _ltData.scope instead. Falling
+    // through to the local switch before the first payload is the same posture
+    // the other two halves take.
+    if (half === 'titles') {
+        if (_ltData?.scope) return true;
+        return typeof _jumpFeatureVisible === 'function'
+            ? _jumpFeatureVisible('ec-view-titles') : true;
+    }
     const scope = _lhScope || _rcData?.scope;
     const key = half === 'photos' ? 'mayPhotos' : 'mayCats';
     if (scope && typeof scope[key] === 'boolean') return scope[key];
@@ -45217,14 +45251,18 @@ function _lhHtml() {
     // No Upload drawer here — it lives at the bottom of the All Stores page,
     // with the other whole-estate things. This page is the daily one.
     const photos = _lhMay('photos') ? _lhPhotosHtml() : '';
+    // Between the alarm and the filing queue, because that is what it is: the
+    // top tier of it (a listing whose title is WRONG) belongs with the photo
+    // alarm, and the bottom tier is a queue you grind like Categories.
+    const titles = _lhMay('titles') ? _ltHtml() : '';
     const cats = _lhMay('cats') ? _lhCatsHtml() : '';
     // Reachable only by a race: the pill needs one of the two, so losing both
     // between the click and the render means an override changed underneath.
     // Say that, rather than drawing an empty page that looks broken.
-    if (!photos && !cats) {
+    if (!photos && !cats && !titles) {
         return '<div class="ec-empty">Listing Health is not switched on for you.</div>';
     }
-    return photos + cats;
+    return photos + titles + cats;
 }
 
 // --- the photo alarm --------------------------------------------------------
@@ -45329,6 +45367,385 @@ function _lhCatsHtml() {
         total == null ? ''
           : `<span class="lh-count${total ? ' lh-count-warn' : ' lh-count-ok'}">${total}</span>`);
 }
+
+
+// --- Listing Titles ---------------------------------------------------------
+//
+// THE THIRD TOOL ON THIS PAGE, and the one that reads a title rather than a
+// picture or a shelf. Built 2026-08-28.
+//
+// It exists because a title can be WRONG, not merely unoptimised. The estate
+// carries listings whose eBay title names a different product than Shopify's
+// (a Nintendo NES "Super C" listed as "Tecmo Super Bowl"; a 16GB DDR4 module
+// listed as a different part at a different speed), mirrorless cameras sold as
+// DSLRs, and RAM that never says the word RAM. Those cost sales or produce
+// misdescribed ones; the unused characters are the smaller half.
+//
+// THREE TABS, BY WHAT IS WRONG WITH THE LISTING — not by store and not by age:
+//   Wrong          the listing misdescribes the item (severity 3)
+//   Hard To Find   the listing cannot be searched for (severity 2)
+//   Opportunity    the listing works and could work harder (severity 1)
+// Without the split the tabs would be one list of 575 rows in which the eight
+// genuinely wrong listings sat below four hundred games wanting the letters
+// CIB. The counts on the tabs are what makes "nothing is actually wrong here"
+// readable at a glance.
+//
+// NOTHING HERE HAPPENS UNTIL SOMEBODY PRESSES APPROVE. Approve writes the
+// SHOPIFY product title, which Marketplace Connect mirrors onto eBay verbatim
+// (1,254 of 1,283 live titles are byte-identical to Shopify's, and 25 of the 29
+// differences are only &amp; encoding). So this changes the storefront title
+// too — accepted deliberately, and the reason there is no bulk apply.
+const LT_URL = `${_BASE}/listing-titles`;
+
+let _ltData = null;   // { store, queue, counts } from listing-titles?view=review
+let _ltErr = null;    // why the queue could not be read, when it could not
+let _ltTier = 3;      // which tab: 3 Wrong, 2 Hard To Find, 1 Opportunity
+// Titles the reviewer has typed over the suggestion, by productId. Held here
+// rather than read off the DOM at submit time because the reconciler replaces
+// the subtree on every state change and an in-progress edit would be lost.
+let _ltEdits = new Map();
+let _ltBusy = new Set();
+
+async function _ltFetch(path) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(`${LT_URL}${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`,
+        { headers: { 'x-user-pin': pin } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || body.error || `Request failed (${r.status})`);
+    return body;
+}
+
+async function _ltPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(LT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok && body.ok !== false, status: r.status, body };
+}
+
+const _LT_TIERS = [
+    { n: 3, label: 'Wrong', cls: 'lt-t-bad' },
+    { n: 2, label: 'Hard To Find', cls: 'lt-t-warn' },
+    { n: 1, label: 'Opportunity', cls: 'lt-t-ok' },
+];
+
+// WHY A ROW IS WHAT IT IS, in the words the server sent. The findings are
+// already written as sentences a manager can read (the house rule for anything
+// alert-shaped), so this renders them rather than mapping codes to strings here
+// — one place writes the English, and it is the place that knows what it found.
+function _ltWhy(f) {
+    // A finding's `warn` is a caution the reviewer has to act on BEFORE
+    // approving, so it renders as its own line outside the reason list rather
+    // than as a clause on the end of a sentence somebody skims. Today only CIB
+    // carries one: it is the single edit here that asserts something about the
+    // physical item, and only the person holding the game can settle it.
+    return (f || []).map(x => `<li>${_ecEsc(x.says || '')}`
+        + (x.warn ? `<span class="lt-caution">${_ecEsc(x.warn)}</span>` : '')
+        + `</li>`).join('');
+}
+
+// The suggestion, with the changed run marked. A word-level diff rather than a
+// character one: the reviewer is deciding whether the NEW WORDS are right, and
+// a character diff of "Digital SLR DSLR" -> "DSLR" is unreadable.
+function _ltDiff(from, to) {
+    const a = String(from || '').split(/\s+/);
+    const b = String(to || '').split(/\s+/);
+    let head = 0;
+    while (head < a.length && head < b.length && a[head] === b[head]) head++;
+    let tail = 0;
+    while (tail < a.length - head && tail < b.length - head
+           && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+    const mid = b.slice(head, b.length - tail);
+    const pre = b.slice(0, head).join(' ');
+    const post = b.slice(b.length - tail).join(' ');
+    return `${_ecEsc(pre)}${pre && mid.length ? ' ' : ''}`
+        + (mid.length ? `<mark class="lt-add">${_ecEsc(mid.join(' '))}</mark>` : '')
+        + `${post && mid.length ? ' ' : ''}${_ecEsc(post)}`;
+}
+
+function _ltHtml() {
+    const head = (inner, badge) => _lhSec('Titles', 'Listing Titles', inner, badge);
+    const store = _ecEsc(_ecStore || '');
+
+    // ⚠️ A FAILED READ IS NOT AN ALL CLEAR — the same rule the photo alarm
+    // follows. Drawing the calm line for a request that never answered would be
+    // a claim about the catalogue that nobody has checked.
+    if (_ltErr) {
+        return head(`<div class="lh-unknown">
+            <span class="lh-unknown-t">Could Not Check ${store}</span>
+            <span class="lh-why">${_ecEsc(_ltErr)}</span>
+            <span class="lh-why">This is not an all clear — nobody has looked yet.</span>
+          </div>`);
+    }
+    if (!_ltData) return '';
+
+    const all = _ltData.queue || [];
+    const byTier = n => all.filter(r => r.severity === n);
+    const total = all.length;
+    if (!total) {
+        // The scope line matters MOST here. "All clear" over a list narrowed to
+        // eBay is a much smaller claim than "all clear" over the whole storefront,
+        // and the reader cannot tell which they are looking at without it.
+        return head(`<div class="lh-clear">
+            <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>All Clear — No Title Problems Found At ${store}</span>
+          </div>` + _ltScopeNote(_ltData.ebayScope),
+          '<span class="lh-count lh-count-ok">0</span>');
+    }
+
+    // Land on the worst tier that has anything in it. Opening on an empty
+    // "Wrong" tab hides the work and reads as a broken panel.
+    if (!byTier(_ltTier).length) {
+        const first = _LT_TIERS.find(t => byTier(t.n).length);
+        if (first) _ltTier = first.n;
+    }
+
+    const tabs = _LT_TIERS.map(t => {
+        const n = byTier(t.n).length;
+        // .rc-mode, not a tab class of its own: the Categories queue lower down
+        // this same page already has three tabs, and two tab dialects on one page
+        // read as two panels that happened to land together.
+        return `<button type="button" class="rc-mode${t.n === _ltTier ? ' rc-mode-on' : ''}"
+                onclick="ltSetTier(${t.n})">${t.label}
+                <span class="rc-chip-n ${n ? t.cls : ''}">${n}</span></button>`;
+    }).join('');
+
+    const rows = byTier(_ltTier).map(_ltRow).join('');
+    const worst = Math.max(...all.map(r => r.severity));
+    return head(`
+      ${_ltScopeNote(_ltData.ebayScope)}
+      <div class="rc-modes lt-modes">${tabs}</div>
+      ${_ltTierSaid(_ltTier, byTier(_ltTier).length, store)}
+      <div class="lt-rows">${rows}</div>`,
+      `<span class="lh-count ${worst === 3 ? 'lh-count-bad' : worst === 2 ? 'lh-count-warn' : 'lh-count-ok'}">${total}</span>`);
+}
+
+// WHAT IS AND IS NOT IN THIS LIST, in one line. The queue is customer-facing
+// stock only — in stock, on the online store, and live on eBay (Ethan,
+// 2026-08-28: "this will help make sure everything customer facing is being
+// fixed") — and a reviewer who does not know that reads a short list as a clean
+// catalogue. The Categories queue below it already carries the same kind of line.
+//
+// ⚠️ THE EBAY HALF IS CONDITIONAL AND THE HONEST STATE IS THE UNCOMFORTABLE ONE.
+// It only applies while our eBay snapshot is fresh; the five sweeps that fill it
+// are paused, so today it does not apply at all. Saying "and live on eBay" then
+// would describe a filter that is not running. Saying nothing would be worse —
+// somebody would assume it is.
+function _ltScopeNote(sc) {
+    const base = 'In Stock And Live On The Online Store';
+    if (sc && sc.active) {
+        return `<div class="lt-scope">${base} And On eBay — Nothing Else Is Listed Here</div>`;
+    }
+    const age = sc && sc.hours != null
+        ? (sc.hours < 48 ? `${sc.hours} hours old`
+                         : `${Math.floor(sc.hours / 24)} days old`)
+        : 'missing';
+    return `<div class="lt-scope lt-scope-part">${base}. The eBay check is
+        <strong>not being applied</strong> — our eBay snapshot is ${age} because the live
+        sweeps are paused, so this list is not narrowed to eBay and nothing is being
+        hidden from it.</div>`;
+}
+
+// Plain English, and it says who fixes it. Each tier is a different KIND of
+// problem, so one blurb for all three would have to be vague enough to fit a
+// misdescribed listing and a missing keyword at once.
+function _ltTierSaid(tier, n, store) {
+    if (!n) return '';
+    const isAre = n === 1 ? 'listing is' : 'listings are';
+    if (tier === 3) {
+        return `<div class="lh-alarm">
+            <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>${n} ${isAre} describing the wrong thing to a buyer at ${store} — a mismatched
+            title is a misdescribed sale, not just a missed one.
+            <strong>Read both titles before deciding</strong>, then fix the one that is wrong.</span>
+          </div>`;
+    }
+    if (tier === 2) {
+        return `<div class="lt-said">${n} ${isAre} missing the words a buyer would search for, so they
+            are close to invisible however good the price is. <strong>The store fixes these</strong> —
+            approve the suggestion or type a better title.</div>`;
+    }
+    return `<div class="lt-said">${n} ${isAre} findable and could be more so. Nothing here is broken,
+        so this is the pile to work when the other two are empty.</div>`;
+}
+
+function ltSetTier(n) { _ltTier = n; ecRender(); }
+window.ltSetTier = ltSetTier;
+
+function _ltRow(r) {
+    const id = String(r.productId || '');
+    const numeric = _ecEsc(id.split('/').pop());
+    const shop = _ecEsc(r.shop || '');
+    const busy = _ltBusy.has(id);
+    const edited = _ltEdits.get(id);
+    // The box holds, in order of preference: what the reviewer typed, the
+    // suggestion, or the current title. A row with NO suggestion arrives with
+    // the current title in the box on purpose — it is the starting point for
+    // somebody who has to write one, and Approve stays refused until they do.
+    const boxVal = edited != null ? edited : (r.suggested || r.current || '');
+    const dirty = edited != null && edited !== (r.suggested || '');
+    const canApprove = !busy && !!boxVal.trim() && boxVal.trim() !== (r.current || '');
+    const len = boxVal.length;
+
+    return `<div class="lt-row lt-sev-${r.severity}">
+      <div class="lt-main">
+        <div class="lt-now">
+          <span class="lt-lab">Now</span>
+          <span class="lt-cur">${_ecEsc(r.current || '')}</span>
+          <span class="lt-len">${(r.current || '').length}</span>
+        </div>
+        ${r.ebayTitle ? `<div class="lt-now lt-drift">
+          <span class="lt-lab">On eBay</span>
+          <span class="lt-cur">${_ecEsc(r.ebayTitle)}</span>
+        </div>` : ''}
+        <div class="lt-new">
+          <!-- Always "Suggested", even when there is nothing to suggest. The
+               three labels are a fixed column that the eye reads down (Now /
+               On eBay / Suggested); "Needs A Title" wrapped to two lines and
+               broke that alignment on exactly the rows a reviewer has to read
+               most carefully. What is different about those rows is said in
+               the VALUE, where there is room for a sentence. -->
+          <span class="lt-lab">Suggested</span>
+          ${r.suggested
+            ? `<span class="lt-sug">${_ltDiff(r.current, r.suggested)}</span>`
+            : `<span class="lt-nosug">No safe automatic fix — type one below.</span>`}
+        </div>
+        <div class="lt-edit">
+          <input type="text" maxlength="80" class="lt-input${dirty ? ' lt-dirty' : ''}"
+                 value="${_ecEsc(boxVal)}" data-pid="${_ecEsc(id)}"
+                 oninput="ltEdit(this)" ${busy ? 'disabled' : ''}
+                 aria-label="Title to save">
+          <span class="lt-count${len > 80 ? ' lt-over' : ''}">${len}/80</span>
+        </div>
+        <ul class="lt-why">${_ltWhy(r.findings)}</ul>
+      </div>
+      <div class="lt-side">
+        <div class="lt-meta">
+          <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+          <span class="lt-price">${_ecMoney(r.price)}</span>
+          ${_ltBasis(r)}
+        </div>
+        <div class="ec-pills rc-links">
+          ${numeric ? `<a class="ec-pill ec-pill-shopify" href="https://${shop}/admin/products/${numeric}"
+               target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
+        </div>
+        <div class="lt-acts">
+          <button class="lt-ok" onclick="ltApprove('${_ecEsc(id)}')"
+                  ${canApprove ? '' : 'disabled'}>${busy ? 'Saving…' : (dirty ? 'Save My Title' : 'Approve')}</button>
+          <button class="lt-no" onclick="ltDeny('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Deny</button>
+        </div>
+        ${r.comps && r.comps.length ? `<details class="lt-comps">
+          <summary>${r.comps.length} Live eBay Listings</summary>
+          <ul>${r.comps.map(c => `<li>${_ecEsc(c.title)}</li>`).join('')}</ul>
+        </details>` : ''}
+      </div>
+    </div>`;
+}
+
+// HOW MUCH THE SUGGESTION IS WORTH TRUSTING, on the row. A suggestion built
+// from our own rules (a doubled phrase, a spec table that names the product) is
+// more trustworthy than one built from what other sellers happen to write, and a
+// reviewer deciding in two seconds needs to see which they are looking at.
+//
+// ⚠️ It says Active, never Sold. eBay's sold-data API (Marketplace Insights) is
+// a Limited Release we do not hold, so the market sample is live listings.
+// Labelling it "sold" would be the single most misleading word on the page.
+function _ltBasis(r) {
+    const map = {
+        rules: ['Our Rules', 'Found by reading the title and the Shopify spec table — no outside data.'],
+        gtin: ['Barcode Match', 'Live listings sharing this item\u2019s barcode, so the same product.'],
+        model: ['Model Match', 'Live listings naming the same model number.'],
+        category: ['Active Listings', 'Words most live listings in this eBay category use. Active listings, not sold — eBay does not give us sold data.'],
+    };
+    const m = map[r.basis] || map.rules;
+    return `<span class="lt-basis lt-basis-${_ecEsc(r.basis || 'rules')}" title="${_ecEsc(m[1])}">${m[0]}</span>`;
+}
+
+function ltEdit(el) {
+    // Kept in the Map, not the DOM: ecRender replaces this subtree whenever any
+    // row changes state, and an edit read off the input at submit time would be
+    // gone. No re-render here — retyping every keystroke would move the caret.
+    _ltEdits.set(el.dataset.pid, el.value);
+    const box = el.parentElement && el.parentElement.querySelector('.lt-count');
+    if (box) {
+        box.textContent = `${el.value.length}/80`;
+        box.classList.toggle('lt-over', el.value.length > 80);
+    }
+    // The buttons' enabled state depends on the text, so it has to keep up
+    // without a full re-render.
+    const row = el.closest('.lt-row');
+    const ok = row && row.querySelector('.lt-ok');
+    if (ok) {
+        const cur = row.querySelector('.lt-cur');
+        const v = el.value.trim();
+        ok.disabled = !v || v === (cur ? cur.textContent : '');
+        ok.textContent = 'Save My Title';
+    }
+    el.classList.add('lt-dirty');
+}
+window.ltEdit = ltEdit;
+
+async function ltApprove(pid) {
+    const row = (_ltData?.queue || []).find(r => r.productId === pid);
+    if (!row) return;
+    const typed = _ltEdits.get(pid);
+    const title = (typed != null ? typed : (row.suggested || '')).trim();
+    if (!title) return;
+    // ⚠️ THIS WRITES A LIVE STOREFRONT TITLE, so it asks first and it names both
+    // titles in the question. A confirm that only says "are you sure" makes
+    // somebody click through it; one that shows what changes is read.
+    const okToGo = confirm(`Change this listing's title?\n\nFrom: ${row.current}\n`
+        + `To:   ${title}\n\nThis updates the Shopify product, so it changes the online store`
+        + ` and eBay.`);
+    if (!okToGo) return;
+    _ltBusy.add(pid); ecRender();
+    const res = await _ltPost({ action: 'approve', store: _ecStore, productId: pid, title });
+    _ltBusy.delete(pid);
+    if (!res.ok) {
+        // The server's detail is written for a person (it explains a 409 as "the
+        // title changed in Shopify since the list was drawn"), so show it rather
+        // than a status code.
+        alert(res.body?.detail || res.body?.error || 'Could not save that title.');
+        ecRender();
+        return;
+    }
+    _ltEdits.delete(pid);
+    // Reload rather than splicing the row out: approving can change the counts
+    // on all three tabs, and a store's queue is small enough that one read is
+    // cheaper than keeping three numbers in step by hand.
+    try { _ltData = await _ltFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`); }
+    catch (e) { _ltErr = e.message || String(e); }
+    ecRender();
+}
+window.ltApprove = ltApprove;
+
+async function ltDeny(pid) {
+    const row = (_ltData?.queue || []).find(r => r.productId === pid);
+    if (!row) return;
+    // A reason, because a denial is information: it is the only signal that a
+    // rule is wrong, and "denied" with no note teaches nobody anything. Blank is
+    // allowed — refusing to record the denial without one would just mean fewer
+    // denials and a queue nobody trusts.
+    const reason = prompt(`Why is this title fine as it is?\n\n${row.current}\n\n`
+        + `(Optional — it is how we find out a rule is wrong.)`, '');
+    if (reason === null) return;
+    _ltBusy.add(pid); ecRender();
+    const res = await _ltPost({ action: 'deny', store: _ecStore, productId: pid, reason });
+    _ltBusy.delete(pid);
+    if (!res.ok) {
+        alert(res.body?.detail || res.body?.error || 'Could not record that.');
+        ecRender();
+        return;
+    }
+    _ltEdits.delete(pid);
+    try { _ltData = await _ltFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`); }
+    catch (e) { _ltErr = e.message || String(e); }
+    ecRender();
+}
+window.ltDeny = ltDeny;
 
 // --- Categories: filing the `other` pile ------------------------------------
 //
@@ -45924,7 +46341,8 @@ async function checkCategoryQueueReminders() {
     // the counts for a half you do not hold, so the `|| 0` below reads as
     // "nothing to do" and that nag hides itself. No second gate needed here.
     if (typeof _jumpFeatureVisible === 'function'
-        && !_jumpFeatureVisible('ec-view-categories') && !_jumpFeatureVisible('ec-view-photos')) {
+        && !_jumpFeatureVisible('ec-view-categories') && !_jumpFeatureVisible('ec-view-photos')
+        && !_jumpFeatureVisible('ec-view-titles')) {
         _rcHideNag(); _lhHideNag(); return;
     }
     const pin = sessionStorage.getItem('speeksUserPin') || '';
