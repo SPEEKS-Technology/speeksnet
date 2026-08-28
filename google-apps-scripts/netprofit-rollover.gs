@@ -39,6 +39,10 @@ var NPR_TARGET_YM = '2026-10';   // the month it becomes
 
 var NPR_BLANK_YM  = '2026-09';   // for npRollBlank*: the tab to empty in place
 
+// Place a newly rolled tab BEFORE the month it came from, matching the
+// workbook's own newest-first order. Set false to append it after instead.
+var NPR_NEW_TAB_FIRST = true;
+
 function npRollPreview()      { _nprRoll(true); }
 function npRollApply()        { _nprRoll(false); }
 function npRollBlankPreview() { _nprBlank(NPR_BLANK_YM, true); }
@@ -101,8 +105,16 @@ function _nprRoll(preview) {
 
   var dst = src.copyTo(ss).setName(dstName);
   ss.setActiveSheet(dst);
-  ss.moveActiveSheet(src.getIndex() + 1);
-  Logger.log('  copied to "%s" at position %s', dstName, dst.getIndex());
+  // ⚠️ THE WORKBOOK RUNS NEWEST-FIRST. Its own tab order is
+  //   Buy Aug 26 | Sales Aug 26 | Summary | Net Profit Sep 26 | Conversions |
+  //   Buy Jul 26 | Sales Jul 26 | Buy Jun 26 | ...
+  // — descending, so the current month is always the one you land on. copyTo()
+  // appends to the very end, which would bury each new month behind January.
+  // Moving it to the source's own index puts the new month immediately BEFORE
+  // the one it came from, which is where everyone already looks for it.
+  ss.moveActiveSheet(NPR_NEW_TAB_FIRST ? src.getIndex() : src.getIndex() + 1);
+  Logger.log('  copied to "%s" at position %s (%s "%s")', dstName, dst.getIndex(),
+    NPR_NEW_TAB_FIRST ? 'before' : 'after', srcName);
   _nprPlanClear(dst, NPR_TARGET_YM, false);
   Logger.log('\nRolled. The new tab is EMPTY — the 2pm refresh fills it, and '
     + 'npSummaryApply sets Days this month, the month header and the YoY base.');
