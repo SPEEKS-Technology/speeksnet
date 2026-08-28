@@ -425,6 +425,16 @@ function _npxSync(preview) {
   var wallYmd = Utilities.formatDate(wallBack, NPX_TZ, 'yyyy-MM-dd');
   var behindWall = (prevYm + '-01') < wallYmd;
 
+  // ⚠️ AND LAST MONTH MUST ACTUALLY BE OVER. Setting NP_FROM to September on
+  // Aug 28 to prepare the new tab makes "last month" August — a month with
+  // three days still to run. Writing it would put a PARTIAL August in as the
+  // MoM denominator, and the once-per-month marker would then treat it as done
+  // and never refetch, locking a part-month figure in for all of September.
+  // Compared as months in the stores' own timezone: the script's clock is not
+  // necessarily Central, and on the 1st that is a whole month of difference.
+  var todayYm = Utilities.formatDate(new Date(), NPX_TZ, 'yyyy-MM');
+  var monthUnfinished = prevYm >= todayYm;
+
   var lmProps = PropertiesService.getScriptProperties();
   var lmDone = lmProps.getProperty(NPX_LASTMONTH_KEY) === ym;
   var lmCell = values[rowLastMonth][NP_BASES.OVL + NPX_OFF_VAL_L];
@@ -443,7 +453,13 @@ function _npxSync(preview) {
   }
   Logger.log(lmSkip ? '' : '\n--- last month (%s) ---', prevYm);
   // The closed month's own tab first; Shopify only when there isn't one.
-  var fromTab = lmSkip ? null : _npxLastMonthFromTab(ss, prevYm);
+  if (monthUnfinished) {
+    Logger.log('\n--- last month (%s) is NOT OVER YET (today is %s) — skipping it entirely. '
+      + 'A part-month figure written here would become the MoM denominator AND be '
+      + 'marked done, so it would never be refetched. It fills in on the 1st. ---',
+      prevYm, todayYm);
+  }
+  var fromTab = (lmSkip || monthUnfinished) ? null : _npxLastMonthFromTab(ss, prevYm);
   if (fromTab) {
     Logger.log('  reading last month off tab "%s" — the closed figures, so the '
       + '60-day wall does not apply and this cannot drift away from what that '
@@ -451,7 +467,7 @@ function _npxSync(preview) {
   }
 
   var lmOk = [];
-  for (var li = 0; li < NP_ORDER.length && !lmSkip; li++) {
+  for (var li = 0; li < NP_ORDER.length && !lmSkip && !monthUnfinished; li++) {
     var store = NP_ORDER[li], sb = NP_BASES[store], tot;
     try {
       tot = fromTab ? fromTab[store] : _npxMonthTotals(_npxFetchMonth(store, prevYm));
@@ -500,7 +516,7 @@ function _npxSync(preview) {
     for (var q = 0; q < NP_ORDER.length; q++) parts.push(_npxA1(NP_BASES[NP_ORDER[q]] + off, row0));
     return '=' + parts.join('+');
   };
-  if (!lmSkip) {
+  if (!lmSkip && !monthUnfinished) {
     plan(tb + NPX_OFF_VAL_L, rowLastMonth, 'TTL last-month Revenue',
          sumOf(NPX_OFF_VAL_L, rowLastMonth), NPX_MONEY);
     plan(tb + NPX_OFF_VAL_R, rowLastMonth, 'TTL last-month GP',
@@ -675,7 +691,7 @@ function _npxSync(preview) {
   Logger.log('\nWrote %s cell(s).', writes.length);
   // Marked only after the write succeeded. Marking before would leave the
   // marker claiming a month that a mid-run failure never finished writing.
-  if (!lmSkip && lmOk.length === NP_ORDER.length) {
+  if (!lmSkip && !monthUnfinished && lmOk.length === NP_ORDER.length) {
     lmProps.setProperty(NPX_LASTMONTH_KEY, ym);
     Logger.log('Last month (%s) recorded for grid month %s; it will not be refetched.',
       prevYm, ym);
