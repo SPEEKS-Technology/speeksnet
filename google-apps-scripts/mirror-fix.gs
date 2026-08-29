@@ -107,6 +107,30 @@ var MRF_NOTE_0827_WSP = 'Aug 27 restated — duplicate refunds added back, draft
   + 'already shipped, sold back to the same customer to repay the eBay glitch refund. '
   + 'Real figure. Locked from the daily sync.';
 
+// AUG 28. The repayments stopped arriving as draft orders at OVL and LEE and
+// started arriving as ordinary eBay sales — the WSP pattern from the 27th, now
+// at two more stores. The note has to name the orders, because nothing in the
+// figure itself shows why a normal-looking eBay sale was removed.
+var MRF_NOTE_0828 = 'Aug 28 restated — duplicate refunds added back, ALL draft orders removed. '
+  + 'Real figure. Locked from the daily sync.';
+
+var MRF_NOTE_0828_OVL = 'Aug 28 restated — duplicate refunds added back, draft orders removed, '
+  + 'AND three repayment re-listings removed: #KS01-14401 (39.99/6.00), #KS01-14406 '
+  + '(39.99/15.00), #KS01-14426 (239.99/120.00). Each is the THIRD sale of a SKU that '
+  + 'sold and was refunded twice in the glitch — the customer buying it again to pay us '
+  + 'back, not a sale. Real figure. Locked from the daily sync.';
+
+var MRF_NOTE_0828_LEE = 'Aug 28 restated — duplicate refunds added back, draft orders removed, '
+  + 'AND #MO01-9234 (1274.99/466.79) removed: a repayment re-listing of MO01-5329A2-F1R1, '
+  + 'which sold on Aug 22 and again on Aug 24 and was refunded both times. '
+  + 'Real figure. Locked from the daily sync.';
+
+// LEE's Aug 27 pin is AMENDED, not created, by this pass — see the entry.
+var MRF_NOTE_0827_LEE = 'Aug 27 restated — duplicate refunds added back, ALL draft orders removed, '
+  + 'AND #MO01-9207 (64.99/20.00) removed: a repayment re-listing of MO01-5368I-E4, which sold '
+  + 'on Aug 22 and again on Aug 24 and was refunded both times. Real figure. '
+  + 'Locked from the daily sync.';
+
 // Every earlier fix's note. A cell carrying one of these belongs to that
 // script and must never be rewritten here.
 var MRF_OTHER_NOTES = [
@@ -211,7 +235,16 @@ var MRF_FIX = [
   // shelf. They stay subtracted because the money did leave, but somebody at
   // LEE should say what they were for.
   { store: 'OVL', day: 27, sales: 4731.60, cost: 2300.16, note: MRF_NOTE_0827 },
-  { store: 'LEE', day: 27, sales: 5709.04, cost: 2408.40, note: MRF_NOTE_0827 },
+  // ⚠️ AMENDED 2026-08-29, and this cell was already pinned by THIS file.
+  // #MO01-9207 (Aug 27, 64.99 / 20.00 cost) is a repayment re-listing, the same
+  // shape as WSP's #MO02-6860 the same day: SKU MO01-5368I-E4 sold on Aug 22
+  // (#MO01-8982) and again on Aug 24 (#MO01-9045), and BOTH were refunded in the
+  // glitch. The Aug 27 order is the customer paying us back by buying the item a
+  // third time. It arrived as an ordinary eBay sale, so no rule strips it.
+  //   5709.04 - 64.99 = 5644.05      2408.40 - 20.00 = 2388.40
+  // Safe to rewrite: the cell carries MRF_NOTE_0827, this file's own note, so
+  // the note guard permits it and no MRF_FORCE entry is needed.
+  { store: 'LEE', day: 27, sales: 5644.05, cost: 2388.40, note: MRF_NOTE_0827_LEE },
   //
   // ⚠️ WSP IS 99.99 BELOW WHAT sales-true-daily REPORTS, ON PURPOSE (user,
   // 2026-08-28). #MO02-6860, eBay 21-15069-09088, 21:16 — a $99.99 "sale" of
@@ -232,7 +265,43 @@ var MRF_FIX = [
   //   7417.54 - 99.99 = 7317.55      3047.62 - 30.00 = 3017.62
   { store: 'WSP', day: 27, sales: 7317.55, cost: 3017.62, note: MRF_NOTE_0827_WSP },
   { store: 'MPL', day: 27, sales: 2810.27, cost:  914.81, note: MRF_NOTE_0827 },
-  { store: 'BAL', day: 27, sales: 4874.81, cost: 1759.01, note: MRF_NOTE_0827 }
+  { store: 'BAL', day: 27, sales: 4874.81, cost: 1759.01, note: MRF_NOTE_0827 },
+
+  // -------------------------------------------------------------------------
+  // AUG 28 — derived 2026-08-29 from sales-true-daily, once the day had closed.
+  // -------------------------------------------------------------------------
+  // Base figures are sales-true-daily's true_sales / true_cost, which already
+  // add back proven duplicate refunds and strip every draft order:
+  //     OVL 11200.83 -> 8501.52   (2699.31 of drafts, 20 of them)
+  //     LEE  2869.81 -> 2869.81   (no drafts)
+  //     WSP 10458.58 -> 10458.58  (no drafts)
+  //     MPL  3527.84 -> 3438.85   (88.99 of drafts)
+  //     BAL  8032.91 -> 7827.91   (249.99 of drafts, plus 44.99 mirror added back)
+  //
+  // ⚠️ THE REPAYMENTS HAVE MOVED OFF DRAFT ORDERS AT OVL AND LEE. Until the 27th
+  // only WSP collected them as ordinary sales; now three OVL orders and one LEE
+  // order do the same, so the draft-order class no longer catches them all. Each
+  // was verified the same way, and the signature is unmistakable — the SAME SKU
+  // sold three times in August, the first two refunded, the third still paid:
+  //     KS01-7374A7-CB1R1  #KS01-13957 Aug 19 R · #KS01-14219 Aug 25 R · #KS01-14401 Aug 28 PAID
+  //     KS01-7309A-E5      #KS01-14072 Aug 22 R · #KS01-14131 Aug 25 R · #KS01-14406 Aug 28 PAID
+  //     KS01-7481I-R8R2    #KS01-14045 Aug 21 R · #KS01-14172 Aug 25 R · #KS01-14426 Aug 28 PAID
+  //     MO01-5329A2-F1R1   #MO01-8979  Aug 22 R · #MO01-9049  Aug 24 R · #MO01-9234 Aug 28 PAID
+  // Both legs come out, as the draft repayments do: the sale is not selling, and
+  // leaving the cost in charges the store again for stock it sold once.
+  //     OVL  8501.52 - 319.97 = 8181.55      3990.58 - 141.00 = 3849.58
+  //     LEE  2869.81 - 1274.99 = 1594.82     1088.55 - 466.79 =  621.76
+  //
+  // ⚠️ OVL's refunds_unreconciled reads 85 and that is NOT an unsettled day.
+  // It is two refunds carrying no line items — #KS01-13775 (50.00) and
+  // #KS01-14014 (35.00), shipping/goodwill adjustments rather than returned
+  // items. Real money that left, correctly left in the figure. Compare BAL Aug 26,
+  // where a non-zero reading really did mean Shopify was behind its own detail.
+  { store: 'OVL', day: 28, sales: 8181.55, cost: 3849.58, note: MRF_NOTE_0828_OVL },
+  { store: 'LEE', day: 28, sales: 1594.82, cost:  621.76, note: MRF_NOTE_0828_LEE },
+  { store: 'WSP', day: 28, sales: 10458.58, cost: 3466.01, note: MRF_NOTE_0828 },
+  { store: 'MPL', day: 28, sales: 3438.85, cost: 1522.72, note: MRF_NOTE_0828 },
+  { store: 'BAL', day: 28, sales: 7827.91, cost: 2949.27, note: MRF_NOTE_0828 }
 ];
 
 // ---------------------------------------------------------------------------
