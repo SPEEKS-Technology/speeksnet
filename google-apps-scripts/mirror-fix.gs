@@ -131,6 +131,17 @@ var MRF_NOTE_0827_LEE = 'Aug 27 restated — duplicate refunds added back, ALL d
   + 'on Aug 22 and again on Aug 24 and was refunded both times. Real figure. '
   + 'Locked from the daily sync.';
 
+// AUG 29. Only OVL needed anything beyond the ordinary restatement.
+var MRF_NOTE_0829 = 'Aug 29 restated — duplicate refunds added back, ALL draft orders removed. '
+  + 'Real figure. Locked from the daily sync.';
+
+var MRF_NOTE_0829_OVL = 'Aug 29 restated — duplicate refunds added back, draft orders removed, '
+  + 'AND three repayment re-listings removed: #KS01-14468 (119.99/55.00), #KS01-14474 '
+  + '(32.99/5.00), #KS01-14476 (319.99/160.00). Each is the third sale of a SKU whose '
+  + 'first sale AND whose phantom duplicate were both refunded in the glitch — the '
+  + 'customer buying it again to pay us back, not a sale. Real figure. '
+  + 'Locked from the daily sync.';
+
 // Every earlier fix's note. A cell carrying one of these belongs to that
 // script and must never be rewritten here.
 var MRF_OTHER_NOTES = [
@@ -301,7 +312,65 @@ var MRF_FIX = [
   { store: 'LEE', day: 28, sales: 1594.82, cost:  621.76, note: MRF_NOTE_0828_LEE },
   { store: 'WSP', day: 28, sales: 10458.58, cost: 3466.01, note: MRF_NOTE_0828 },
   { store: 'MPL', day: 28, sales: 3438.85, cost: 1522.72, note: MRF_NOTE_0828 },
-  { store: 'BAL', day: 28, sales: 7827.91, cost: 2949.27, note: MRF_NOTE_0828 }
+  { store: 'BAL', day: 28, sales: 7827.91, cost: 2949.27, note: MRF_NOTE_0828 },
+
+  // -------------------------------------------------------------------------
+  // AUG 29 — derived 2026-08-30 from sales-true-daily, once the day had closed.
+  // -------------------------------------------------------------------------
+  //     OVL 7422.35 -> 7264.37   (157.98 of drafts)
+  //     LEE 5262.68 -> 5229.69   ( 32.99 of drafts)
+  //     WSP 8559.65 -> 8559.65   (no drafts)
+  //     MPL 1473.18 -> 1473.18   (no drafts)
+  //     BAL 1397.79 -> 1397.79   (no drafts)
+  //
+  // ⚠️ THE REPAYMENT RE-LISTINGS ARE NOW FOUND BY RULE, NOT BY HAND. Ethan
+  // listed them for Aug 27/28; for Aug 29 they were derived and then checked
+  // against that list as a control. The test that works:
+  //
+  //     an order paid on the day, whose SKU also sits on an EARLIER order that
+  //     appears in dup_order_cleanup — i.e. a phantom duplicate WE refunded.
+  //
+  // The ledger membership is the whole test. A SKU that merely sold and was
+  // refunded before is an ordinary return, and the store really does earn the
+  // money when it resells it. Only a SKU whose PHANTOM COPY was refunded in the
+  // glitch is being bought again to repay us.
+  //
+  // Control: all five orders Ethan named on Aug 27/28 have a ledger prior
+  // (#KS01-14219, #KS01-14131, #KS01-14172, #MO01-9045, #MO01-9049) and every
+  // original sale behind them does NOT — which is right, because the ledger
+  // holds the duplicates we refunded, never the real sale.
+  //
+  // Aug 29 threw 8 candidates and the ledger test kept 3, all at OVL. Each is
+  // the third sale of the SKU, and each matches its ledger refund to the cent:
+  //     KS01-6989A-R10R4  #KS01-13942 Aug 19 R · #KS01-14211 Aug 25 R (ledger, refunded 119.99) · #KS01-14468 PAID 119.99
+  //     KS01-7327C1-E4    #KS01-14043 Aug 21 R · #KS01-14143 Aug 25 R (ledger, refunded  32.99) · #KS01-14474 PAID  32.99
+  //     KS01-7481H-R8R2   #KS01-14073 Aug 22 R · #KS01-14157 Aug 25 R (ledger, refunded 319.99) · #KS01-14476 PAID 319.99
+  //     OVL 7264.37 - 472.97 = 6791.40      2955.56 - 220.00 = 2735.56
+  //
+  // ⚠️ FIVE CANDIDATES WERE REJECTED, and each would have understated a store
+  // for a day it traded normally:
+  //   LEE #MO01-9252 (17.41) and #MO01-9253 (86.77) — both point at ONE prior,
+  //     #MO01-8596 of Aug 4. That is before the glitch refunds began on Aug 20,
+  //     it is not in the ledger, and neither amount matches it. An ordinary
+  //     return, resold.
+  //   MPL #MO03-3150 (99.99) and #MO03-3152 (644.99) — their priors #MO03-3125
+  //     and #MO03-2834 are UNFULFILLED. The item never shipped, so it is on the
+  //     shelf and reselling it is real revenue. This is the refund_recovered
+  //     case, not a repayment.
+  //   BAL #MO04-2973 (284.99) — prior #MO04-2679 shipped and was refunded, but
+  //     it is not in the ledger and has no phantom duplicate, so the SKU was
+  //     never part of the duplicate incident. The price also moved (315.32 ->
+  //     284.99), which a repayment does not do: a repayment is for the exact
+  //     amount we wrongly refunded.
+  //
+  // ⚠️ LEE 19.99 and OVL 60.00 read as refunds_unreconciled and are NOT an
+  // unsettled day — #MO01-8960 and #KS01-14305, refunds carrying no line items,
+  // so shipping or goodwill rather than a returned item. Correctly left in.
+  { store: 'OVL', day: 29, sales: 6791.40, cost: 2735.56, note: MRF_NOTE_0829_OVL },
+  { store: 'LEE', day: 29, sales: 5229.69, cost: 2577.17, note: MRF_NOTE_0829 },
+  { store: 'WSP', day: 29, sales: 8559.65, cost: 3209.00, note: MRF_NOTE_0829 },
+  { store: 'MPL', day: 29, sales: 1473.18, cost:  552.00, note: MRF_NOTE_0829 },
+  { store: 'BAL', day: 29, sales: 1397.79, cost:  559.60, note: MRF_NOTE_0829 }
 ];
 
 // ---------------------------------------------------------------------------
