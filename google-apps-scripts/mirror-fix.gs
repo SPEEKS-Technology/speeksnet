@@ -136,11 +136,17 @@ var MRF_NOTE_0829 = 'Aug 29 restated — duplicate refunds added back, ALL draft
   + 'Real figure. Locked from the daily sync.';
 
 var MRF_NOTE_0829_OVL = 'Aug 29 restated — duplicate refunds added back, draft orders removed, '
-  + 'AND three repayment re-listings removed: #KS01-14468 (119.99/55.00), #KS01-14474 '
-  + '(32.99/5.00), #KS01-14476 (319.99/160.00). Each is the third sale of a SKU whose '
-  + 'first sale AND whose phantom duplicate were both refunded in the glitch — the '
-  + 'customer buying it again to pay us back, not a sale. Real figure. '
-  + 'Locked from the daily sync.';
+  + 'AND two repayment re-listings removed: #KS01-14474 (32.99/5.00) and #KS01-14476 '
+  + '(319.99/160.00). Each is the third sale of a SKU whose first sale AND whose phantom '
+  + 'duplicate were both refunded in the glitch — the customer buying it again to pay us '
+  + 'back, not a sale. A third repayment, #KS01-14468 (119.99/55.00), came out already as '
+  + 'a draft order. Real figure. Locked from the daily sync.';
+
+// MPL is not the plain restatement after all — see the entry.
+var MRF_NOTE_0829_MPL = 'Aug 29 restated — the VOID of draft order #MO03-3133 (-88.99/-29.00) '
+  + 'added back. That draft was an Aug 28 repayment invoice and was already removed from '
+  + 'Aug 28, so leaving its reversal in would dock MPL twice for one invoice it was never '
+  + 'credited for. Real figure. Locked from the daily sync.';
 
 // Every earlier fix's note. A cell carrying one of these belongs to that
 // script and must never be rewritten here.
@@ -311,6 +317,20 @@ var MRF_FIX = [
   { store: 'OVL', day: 28, sales: 8181.55, cost: 3849.58, note: MRF_NOTE_0828_OVL },
   { store: 'LEE', day: 28, sales: 1594.82, cost:  621.76, note: MRF_NOTE_0828_LEE },
   { store: 'WSP', day: 28, sales: 10458.58, cost: 3466.01, note: MRF_NOTE_0828 },
+  // ⚠️⚠️ DO NOT RE-DERIVE THIS CELL. It will come back WRONG, and higher.
+  // Draft #MO03-3133 (88.99 / 29.00) was an Aug 28 repayment invoice, stripped
+  // when this cell was derived on 2026-08-29. It has since been VOIDED, and a
+  // voided draft is no longer returned by the order query sales-true-daily
+  // strips from — while ShopifyQL still books its +88.99 on Aug 28. So today the
+  // same function reports Aug 28 as 3527.84 with less_draft_order_invoices = 0,
+  // and "correcting" the pin to match would put the phantom invoice back.
+  //
+  // The function is internally inconsistent about it too: the COST leg still
+  // strips (1551.72 -> 1522.72) while the SALES leg no longer does. If a
+  // re-derivation ever disagrees with a pin by exactly a draft amount, the pin
+  // is right and the draft has been voided since.
+  //
+  // The matching negative lands on Aug 29 and is removed there — see day 29.
   { store: 'MPL', day: 28, sales: 3438.85, cost: 1522.72, note: MRF_NOTE_0828 },
   { store: 'BAL', day: 28, sales: 7827.91, cost: 2949.27, note: MRF_NOTE_0828 },
 
@@ -366,10 +386,32 @@ var MRF_FIX = [
   // ⚠️ LEE 19.99 and OVL 60.00 read as refunds_unreconciled and are NOT an
   // unsettled day — #MO01-8960 and #KS01-14305, refunds carrying no line items,
   // so shipping or goodwill rather than a returned item. Correctly left in.
-  { store: 'OVL', day: 29, sales: 6791.40, cost: 2735.56, note: MRF_NOTE_0829_OVL },
+  // ⚠️ A REPAYMENT CAN ALSO BE A DRAFT ORDER, AND THEN IT IS ALREADY OUT.
+  // #KS01-14468 (119.99/55.00) is BOTH — a repayment re-listing invoiced as a
+  // draft. It satisfies the ledger test AND sits in the 157.98 of drafts the
+  // restatement strips as a class, so subtracting it again took 119.99 out of
+  // OVL twice. Caught by listing the day's draft orders rather than trusting the
+  // repayment list to be disjoint from them.
+  //   OVL 7264.37 - (32.99 + 319.99) = 6911.39     2955.56 - (5 + 160) = 2790.56
+  { store: 'OVL', day: 29, sales: 6911.39, cost: 2790.56, note: MRF_NOTE_0829_OVL },
   { store: 'LEE', day: 29, sales: 5229.69, cost: 2577.17, note: MRF_NOTE_0829 },
   { store: 'WSP', day: 29, sales: 8559.65, cost: 3209.00, note: MRF_NOTE_0829 },
-  { store: 'MPL', day: 29, sales: 1473.18, cost:  552.00, note: MRF_NOTE_0829 },
+  // ⚠️ THE VOID OF A REMOVED DRAFT MUST COME OUT TOO. sales-true-daily reports
+  // MPL with no draft orders on Aug 29 and that is true of orders CREATED that
+  // day — but the day still carries -88.99 / -29.00 against the Draft Orders
+  // channel, which is Aug 28's repayment invoice #MO03-3133 being VOIDED. Its
+  // positive leg was already removed from Aug 28, so leaving the negative in
+  // charges MPL for reversing a sale it was never credited with.
+  //
+  // Confirmed per order, not inferred from the channel total:
+  //   FROM sales SHOW net_sales, cost_of_goods_sold GROUP BY order_name
+  //   -> #MO03-3133  net -88.99  cogs -29     (day totals 1473.18 / 552.00)
+  //
+  // `less_draft_order_invoices` only strips POSITIVE draft revenue, so a void
+  // lands on the following day and no rule catches it. Check the Draft Orders
+  // channel figure for a NEGATIVE on every day a draft was voided.
+  //   MPL 1473.18 + 88.99 = 1562.17            552.00 + 29.00 = 581.00
+  { store: 'MPL', day: 29, sales: 1562.17, cost:  581.00, note: MRF_NOTE_0829_MPL },
   { store: 'BAL', day: 29, sales: 1397.79, cost:  559.60, note: MRF_NOTE_0829 }
 ];
 
