@@ -677,17 +677,25 @@ function _npxSync(preview) {
     // label attached to the wrong one — the kind of wrong that gets read off a
     // screen and believed. Owning both halves is what makes the block align by
     // construction rather than by luck.
-    plan(tb + NPX_OFF_YOY_LBL, rowYoY,     'TTL YoY label',     'YoY');
-    plan(tb + NPX_OFF_VAL_R,   rowYoY,     'TTL YoY header',    'Revenue');
-    plan(tb + NPX_OFF_YOY_LBL, rowYoY + 1, 'TTL YoY "Last"',    'Last');
-    plan(tb + NPX_OFF_YOY_LBL, rowYoY + 2, 'TTL YoY "Current"', 'Current');
-    plan(tb + NPX_OFF_YOY_LBL, rowYoY + 3, 'TTL YoY "Inc/Dec"', 'Inc/Dec');
+    // ⚠️ THESE PASS replaceFormula BECAUSE THEY ARE A DELIBERATE RELABEL, which
+    // is exactly the case plan()'s text guard carves out. Without it the first
+    // attempt wrote only the two cells that happened to be EMPTY and skipped the
+    // four that needed correcting — "text already there: YoY " — which would
+    // have left the tab with two YoY headers and the labels still off by one.
+    // Worse than before, from a fix. The guard is right; it just has to be told
+    // that moving a block is intentional.
+    plan(tb + NPX_OFF_YOY_LBL, rowYoY,     'TTL YoY label',     'YoY',     null, null, true);
+    plan(tb + NPX_OFF_VAL_R,   rowYoY,     'TTL YoY header',    'Revenue', null, null, true);
+    plan(tb + NPX_OFF_YOY_LBL, rowYoY + 1, 'TTL YoY "Last"',    'Last',    null, null, true);
+    plan(tb + NPX_OFF_YOY_LBL, rowYoY + 2, 'TTL YoY "Current"', 'Current', null, null, true);
+    plan(tb + NPX_OFF_YOY_LBL, rowYoY + 3, 'TTL YoY "Inc/Dec"', 'Inc/Dec', null, null, true);
     // ⚠️ AND CLEAR THE ONE LEFT BEHIND. Moving a four-row block up by one row
     // leaves its last label orphaned a row below, with nothing beside it — an
     // "Inc/Dec" against an empty cell reads as a figure that failed to compute
     // rather than one that moved. Only cleared when it is actually the orphan.
     if (String(values[rowYoY + 4][tb + NPX_OFF_YOY_LBL]).trim() === 'Inc/Dec') {
-      plan(tb + NPX_OFF_YOY_LBL, rowYoY + 4, 'TTL YoY stale label (cleared)', '');
+      plan(tb + NPX_OFF_YOY_LBL, rowYoY + 4, 'TTL YoY stale label (cleared)',
+           '', null, null, true);
     }
 
     plan(tb + NPX_OFF_VAL_R, rowYoY + 1, 'TTL YoY last year', refs(rowYoY + 1), NPX_MONEY, note, true);
