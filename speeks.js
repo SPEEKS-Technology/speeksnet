@@ -45472,23 +45472,56 @@ function _ltWhy(f) {
         + `</li>`).join('');
 }
 
-// The suggestion, with the changed run marked. A word-level diff rather than a
-// character one: the reviewer is deciding whether the NEW WORDS are right, and
-// a character diff of "Digital SLR DSLR" -> "DSLR" is unreadable.
-function _ltDiff(from, to) {
-    const a = String(from || '').split(/\s+/);
-    const b = String(to || '').split(/\s+/);
+// The changed run, located as word indexes into BOTH titles. A word-level diff
+// rather than a character one: the reviewer is deciding whether the NEW WORDS
+// are right, and a character diff of "Digital SLR DSLR" -> "DSLR" is unreadable.
+function _ltRun(from, to) {
+    const a = String(from || '').trim().split(/\s+/);
+    const b = String(to || '').trim().split(/\s+/);
     let head = 0;
     while (head < a.length && head < b.length && a[head] === b[head]) head++;
     let tail = 0;
     while (tail < a.length - head && tail < b.length - head
            && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
-    const mid = b.slice(head, b.length - tail);
-    const pre = b.slice(0, head).join(' ');
-    const post = b.slice(b.length - tail).join(' ');
-    return `${_ecEsc(pre)}${pre && mid.length ? ' ' : ''}`
-        + (mid.length ? `<mark class="lt-add">${_ecEsc(mid.join(' '))}</mark>` : '')
-        + `${post && mid.length ? ' ' : ''}${_ecEsc(post)}`;
+    return { a, b, head, tail };
+}
+
+// One side of that diff, drawn with its changed run marked.
+function _ltMark(words, head, tail, cls) {
+    // ⚠️ JOIN THE PARTS — NEVER CONCATENATE WITH CONDITIONAL SPACES. The build
+    // this replaces put a space between the head and the tail only when the
+    // middle had something in it, so a PURE DELETION welded the two halves
+    // together: the suggestion "GoPro Hero11 Black 27MP Action Camera" was
+    // shown to the reviewer as "27MPAction Camera". The suggested string was
+    // always right — Approve would have saved the correct title — but this is
+    // the line somebody reads BEFORE approving, so it is the line that matters.
+    // Deletions are the commonest fix this tool makes, which is exactly the
+    // case the old spacing rule got wrong.
+    const pre = words.slice(0, head).join(' ');
+    const midTxt = words.slice(head, words.length - tail).join(' ');
+    const post = words.slice(words.length - tail).join(' ');
+    const parts = [];
+    if (pre) parts.push(_ecEsc(pre));
+    if (midTxt) parts.push('<mark class="' + cls + '">' + _ecEsc(midTxt) + '</mark>');
+    if (post) parts.push(_ecEsc(post));
+    return parts.join(' ');
+}
+
+// The suggestion, with the words it ADDS marked. This line stays character for
+// character equal to the string in the edit box below it — the reviewer reads
+// it as the title they are approving, so nothing may be inserted into it.
+function _ltDiff(from, to) {
+    const r = _ltRun(from, to);
+    return _ltMark(r.b, r.head, r.tail, 'lt-add');
+}
+
+// The current title, with the words it LOSES marked. A deletion leaves nothing
+// green on the Suggested line, so without this the row showed two long titles
+// and no sign of what differed — on exactly the edits that are hardest to spot
+// by eye ("360", "Digital SLR", a doubled word).
+function _ltGone(from, to) {
+    const r = _ltRun(from, to);
+    return _ltMark(r.a, r.head, r.tail, 'lt-cut');
 }
 
 function _ltHtml() {
@@ -45619,7 +45652,8 @@ function _ltRow(r) {
       <div class="lt-main">
         <div class="lt-now">
           <span class="lt-lab">Now</span>
-          <span class="lt-cur">${_ecEsc(r.current || '')}</span>
+          <span class="lt-cur">${r.suggested
+            ? _ltGone(r.current, r.suggested) : _ecEsc(r.current || '')}</span>
           <span class="lt-len">${(r.current || '').length}</span>
         </div>
         ${r.ebayTitle ? `<div class="lt-now lt-drift">

@@ -18060,6 +18060,14 @@ body.tv-body { display: block; background: #eef1f5; }
     background: var(--cb-sage-tint); color: #146c3d; border-radius: 4px;
     padding: 0 3px; font-weight: 800;
 }
+/* The words the suggestion REMOVES, marked on the Now line rather than the
+   Suggested one: the Suggested line has to stay equal to the title being
+   approved, and a removal has nowhere to live on it anyway. */
+.lt-cut {
+    background: rgba(209, 68, 59, 0.10); color: #a3352c;
+    text-decoration: line-through; border-radius: 4px;
+    padding: 0 3px; font-weight: 800;
+}
 
 .lt-edit { display: flex; align-items: center; gap: 9px; margin-top: 2px; }
 .lt-input {
