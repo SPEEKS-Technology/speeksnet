@@ -51,8 +51,27 @@
 // [[alert-message-plain-english]] and [[title-case-headers]].
 // ============================================================================
 
+// The same SDK and the same key daily-brief already uses — nothing new to
+// provision. Only the name check touches it; every other finding in this file
+// is rules and costs nothing to run.
+import Anthropic from "npm:@anthropic-ai/sdk";
+import { z } from "npm:zod";
+import { zodOutputFormat } from "npm:@anthropic-ai/sdk/helpers/zod";
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+
+// One verdict per listing we asked about. `id` is the Shopify product id, echoed
+// back so a reordered or short answer can still be matched to the right row.
+const NameReportSchema = z.object({
+  results: z.array(z.object({
+    id: z.string(),
+    verdict: z.enum(["ok", "garbled", "wrong"]),
+    wrong_text: z.string().optional(),
+    correct_text: z.string().optional(),
+    why: z.string().optional(),
+  })),
+});
 const SHOPIFY_API_VERSION = Deno.env.get("SHOPIFY_API_VERSION") || "2026-07";
 const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 
@@ -1208,6 +1227,147 @@ const COMP_STOPWORDS = new Set([
     + "same day usa us ca uk eu bin buy now sale deal cheap best price").split(" "),
 ]);
 
+// ======================= THE NAME CHECK (Claude) ============================
+// The ONE question in this file that code cannot answer, and the reason is
+// written down in five failed designs above: eBay Browse is a fuzzy SEARCH, not
+// a product catalogue, and half our estate is items we own the only copy of. So
+// "no results" proves nothing and "some results" proves nothing.
+//
+// ⚠️ AND THE SPEC TABLE CANNOT SETTLE IT EITHER. OVL's $1,499.99
+// "Sony OX 7 IV 33MP Mirrorless Digital Camera" is an α7 IV whose α was mangled
+// into "OX" — and the spec table says "OX 7 IV" too, because PayMore's listing
+// software made the same mistake in both fields. The listing agrees with itself
+// perfectly. Every offline rule passes it. Nobody will ever search for it.
+//
+// Ethan, 2026-08-31: "If doing the same sweep can be systematic/coded, let's not
+// use usage." Agreed, and that is why this is the ONLY model-backed check —
+// everything else in this file stays rules, which are free, repeatable and
+// auditable. This is scoped to names and nothing else.
+//
+// Known real ones this exists to catch, all found by hand: "Sony OX 7 IV"
+// (α7 IV), "Vivant" (Vivint), "Steeleseries" (SteelSeries), "Bose Waves Music
+// System" (Wave), and an AsRock B650M titled Intel when B650M is AMD.
+
+const NAME_MODEL = "claude-opus-5";
+// Per store per run. Mirrors MARKET_MAX and exists for the same reason: the
+// 150s edge wall cuts the RESPONSE while the function keeps executing, so an
+// over-long run reports IDLE_TIMEOUT and nobody can tell how much was saved.
+const NAME_MAX = 100;
+const NAME_BATCH = 25;          // products per request
+const NAME_CONCURRENCY = 4;     // batches in flight — 100 items in one round trip
+
+// ⚠️ BUMP THIS WHEN WHAT WE SEND CHANGES. It is stored next to every answer, so
+// changing it re-asks about every listing automatically instead of leaving old
+// answers that were given less to look at. This is the whole reason the column
+// exists: adding metafields later costs one backfill, not a wiped table.
+const ASK_RECIPE = "v1:title+brand+model";
+
+// Carried forward on a rules-only pass, exactly as MARKET_CODES is — otherwise
+// the twice-daily cron shares a primary key with these rows and stamps them
+// `clean`, which is precisely how the market's findings were erased twice a day
+// until 2026-08-28.
+const NAME_CODES = new Set<string>(["name-garbled", "name-wrong"]);
+
+type NameVerdict = {
+  verdict: "ok" | "garbled" | "wrong";
+  wrong_text?: string;
+  correct_text?: string;
+  why?: string;
+};
+
+// ⚠️ EVERY FAILED DESIGN FAILED THE SAME WAY: it flagged real products that are
+// merely rare. "Xbox Elite Controller Series 2", "HoverAir X1 Travel Combo" and
+// "Minolta 100-300 f/4.5-5.6" are all real, and a check that cannot tell rare
+// from wrong produces 25 findings per 798 of which almost none are true. The
+// abstention rules below are that lesson written as instructions.
+const NAME_SYSTEM = `You are checking product titles for a used-electronics and
+video-game reseller. Each title was written by store staff and may contain a
+mangled product name.
+
+Report a title ONLY when one of these is true:
+
+  "garbled" — the product name as written is not a real product name. It is a
+  typo, a misspelling, or a mangled rendering of a real product. Example: a
+  camera titled "Sony OX 7 IV" where the real product is the Sony a7 IV.
+
+  "wrong"   — the title states something factually untrue about the product it
+  names. Example: a motherboard titled "AsRock B650M ... LGA1700 Intel" when the
+  B650M is an AMD board.
+
+Otherwise return "ok".
+
+ABSTAIN unless you are confident. Returning "ok" is always the safe answer and
+is never penalised. In particular:
+
+- This inventory is USED and often obscure, rare, regional, discontinued, or
+  low-volume. A product being unfamiliar or rarely sold is NOT an error. If you
+  are not sure a product exists, return "ok".
+- Do NOT report a title for being short, vague, incomplete, badly punctuated,
+  oddly capitalised, or for missing details. Other checks handle all of that.
+- Do NOT report condition or handling words: Broken, For Parts, Read, No Power,
+  Cracked, Scratched, New, Refurbished, Factory Unlocked, WiFi Only, GSM.
+- Do NOT report manufacturer part numbers, SKUs, or model codes that look like
+  gibberish (MK8F3LL/A, SM-A156U, GA10052-US). Those are real and correct.
+- Do NOT report carrier names, storage sizes, colours, or screen sizes.
+- A brand written in the wrong case ("google Pixel", "AsRock") is NOT an error.
+
+When you do report one, you must quote the wrong text EXACTLY as it appears in
+the title, character for character, in "wrong_text" — and give the correction in
+"correct_text" as it should replace that exact text. Quote the smallest span
+that contains the error. If you cannot quote the error verbatim from the title,
+return "ok" instead.
+
+Keep "why" to one short sentence a shop manager can act on.`;
+
+// A stable, human-readable stamp of the exact title we asked about. Compared
+// against the live title to decide whether a listing still has an answer.
+// ⚠️ Deliberately NOT a hash — the value is readable in the table, and when a
+// verdict looks wrong you can see what it was given.
+const askedStamp = (title: string) => `${ASK_RECIPE}|${(title || "").trim()}`;
+
+async function checkNamesBatch(
+  client: any,
+  items: { id: string; title: string; brand: string; model: string; shelf: string }[],
+): Promise<{ verdicts: Record<string, NameVerdict>; input: number; output: number }> {
+  const out: Record<string, NameVerdict> = {};
+  if (!items.length) return { verdicts: out, input: 0, output: 0 };
+
+  const res = await client.messages.parse({
+    model: NAME_MODEL,
+    max_tokens: 8000,
+    system: NAME_SYSTEM,
+    messages: [{
+      role: "user",
+      content: "Check these listings:\n\n" + JSON.stringify(
+        items.map(i => ({
+          id: i.id, title: i.title,
+          spec_brand: i.brand || undefined,
+          spec_model: i.model || undefined,
+          shelf: i.shelf || undefined,
+        })), null, 1),
+    }],
+    output_config: { format: zodOutputFormat(NameReportSchema) },
+  });
+
+  const parsed = res?.parsed_output;
+  // ⚠️ NULL MEANS THE ANSWER DID NOT VALIDATE. Treat it as "did not ask", never
+  // as "everything is fine" — a silent all-clear is the one answer this check
+  // must never invent, and the caller declines to stamp the clock on a throw.
+  if (!parsed || !Array.isArray(parsed.results)) {
+    throw new Error("the name check returned nothing that matched its schema");
+  }
+  for (const r of parsed.results) {
+    if (r && typeof r.id === "string") out[r.id] = r as NameVerdict;
+  }
+  // Reported all the way out to the sweep response so the bill is a number
+  // somebody can read after a run, not an estimate in a commit message.
+  return {
+    verdicts: out,
+    input: Number(res?.usage?.input_tokens || 0),
+    output: Number(res?.usage?.output_tokens || 0),
+  };
+}
+
 type Row = {
   store_code: string; product_id: string; sku: string; title: string;
   product_handle: string | null; price: number | null; quantity: number;
@@ -1250,7 +1410,8 @@ const titleWord = (w: string) =>
 // asked. Null and false must never be conflated — silence is not evidence.
 function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
                  modelReal: boolean | null, modelExample?: string | null,
-                 brandReal?: boolean | null, convention?: Convention): Analysis {
+                 brandReal?: boolean | null, convention?: Convention,
+                 nameVerdict?: NameVerdict | null): Analysis {
   const findings: Finding[] = [];
   const original = (row.title || "").trim();
   let title = original;
@@ -1434,6 +1595,52 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   // repaired by a person before anything is added to it: appending to it produces
   // a suggestion strictly worse than the title it replaces, and this file's whole
   // premise is that a suggestion can be trusted.
+  // ================== THE NAME THE LISTING GOT WRONG ========================
+  // The only model-backed finding in the file. See NAME_SYSTEM for why code
+  // cannot reach it and what the model is told to abstain on.
+  //
+  // ⚠️⚠️ THE QUOTE IS VERIFIED, NEVER TRUSTED. The model must hand back the
+  // wrong text exactly as it appears in the title; we find that span ourselves
+  // and swap it. If the span is not in the title character for character the
+  // finding is DROPPED ENTIRELY — not downgraded, not reported without a fix.
+  // That is what keeps the house rule intact: every suggestion is the current
+  // title plus NAMED edits, and a model cannot write a title here even if it
+  // tries. It is also the only defence against a confident wrong answer.
+  //
+  // ⚠️ A REPLACEMENT, NEVER AN APPEND. capTitle is not involved and tryAppend is
+  // not used: a name fix substitutes one span for another, so it cannot push a
+  // title past 80 characters unless the correction is longer than the error —
+  // and in that one case it goes report-only rather than truncating, for the
+  // same reason "…GeForce RTX" was never acceptable.
+  if (nameVerdict && nameVerdict.verdict !== "ok") {
+    const wrong = String(nameVerdict.wrong_text || "");
+    const right = String(nameVerdict.correct_text || "").trim();
+    const at = wrong ? title.indexOf(wrong) : -1;
+    if (at >= 0 && right && right !== wrong) {
+      const swapped = (title.slice(0, at) + right + title.slice(at + wrong.length))
+        .replace(/\s+/g, " ").trim();
+      const wrongIsWrong = nameVerdict.verdict === "wrong";
+      const why = String(nameVerdict.why || "").trim();
+      const fits = swapped.length <= EBAY_TITLE_MAX;
+      if (fits) { title = swapped; fixable = true; }
+      findings.push({
+        code: wrongIsWrong ? "name-wrong" : "name-garbled",
+        severity: wrongIsWrong ? 3 : 2,
+        fixable: fits,
+        says: (wrongIsWrong
+          ? `The title says "${wrong}", which is not true of this product — it should be "${right}".`
+          : `"${wrong}" is not a real product name; it looks like "${right}" typed wrong. Nobody searching for this item will use the words in the title, so it is effectively invisible on every channel.`)
+          + (why ? ` ${why.replace(/\s+$/, "").replace(/([^.])$/, "$1.")}` : "")
+          + ` This one is checked against outside product knowledge rather than against your own listing`
+          + (fits ? `, so read the corrected name before approving it.`
+                  : ` — and the correction does not fit in 80 characters, so it is reported without an automatic fix and needs editing by hand.`),
+      });
+    }
+    // Quote not found in the title: the model described an error it could not
+    // point at. Silently dropped, and counted by the sweep as `unverified` so
+    // the rate is visible rather than invisible.
+  }
+
   const brokenTitle = findings.some(f =>
     f.code === "truncated-title" || f.code === "spec-conflict");
 
@@ -1891,7 +2098,18 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   // Which fields lazy-title has already spent, so the category check below
   // cannot propose the same value twice under a different sentence.
   const lazyUsed = new Set<string>();
-  const conflicted = brokenTitle;
+  // ⚠️ NEVER APPEND A SPEC VALUE ONTO A NAME WE ARE MID-WAY THROUGH CORRECTING.
+  // OVL's "Philips Shockbox … Speaker" got both rules at once and came out as
+  // "Philips ShoqBox Wireless Portable Bluetooth Speaker Shockbox 7200 Black" —
+  // the name fix corrected the spelling at the front while lazy-title appended
+  // the Model field, which still carries the OLD spelling. One title, both
+  // spellings, and it reads like nonsense.
+  //
+  // This is the same rule the convention check already obeys ("never stack a
+  // convention on top of a repair"); lazy-title was the one append site without
+  // it. The spec table is not a second opinion on a name the listing itself got
+  // wrong — fix the name, let the next sweep add the detail.
+  const conflicted = brokenTitle || findings.some(f => NAME_CODES.has(f.code));
   const strength = strengthOf(original, extra?.specs);
   if (!conflicted && strength && strength.pct < 60) {
     const room = EBAY_TITLE_MAX - title.length;
@@ -2034,7 +2252,15 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
 // made it re-examine the SAME 120 rows every run while ~680 products per store
 // were never asked about at all. `market_at` (migration 0068b) is the market's
 // own clock, nulls first, so "run it again to walk further" is actually true.
-async function candidatesFor(store: string, limit: number, byMarket = false): Promise<Row[]> {
+// ⚠️ THE NAME PASS HAS A THIRD CLOCK, AND IT IS NOT A TIMESTAMP. `asked_title`
+// stores the exact title the model was shown, prefixed by ASK_RECIPE. A listing
+// needs asking when that stamp does not match the title it has now — which
+// makes the ordering self-managing: a new listing has no stamp and sorts first,
+// an edited title stops matching and comes back round, and an untouched listing
+// is never asked about twice however often the sweep runs. It is also why
+// bumping ASK_RECIPE re-asks the whole estate on its own.
+async function candidatesFor(store: string, limit: number, byMarket = false,
+                             byNames = false): Promise<Row[]> {
   // Paged, and ORDERED — an unordered paged read can repeat or skip rows
   // between pages, because Postgres makes no promise about row order without it.
   const cat: any[] = await allRows(
@@ -2042,18 +2268,29 @@ async function candidatesFor(store: string, limit: number, byMarket = false): Pr
     + `&select=store_code,sku,product_id,title,price,quantity&order=sku`);
   const seen: any[] = await allRows(
     `listing_title_reviews?store_code=eq.${store}`
-    + `&select=product_id,swept_at,market_at,status,current_title&order=product_id`);
+    + `&select=product_id,swept_at,market_at,asked_at,asked_title,status,current_title`
+    + `&order=product_id`);
   const bySeen = new Map(seen.map(r => [r.product_id, r]));
   const scored = cat.map(c => {
     const s = bySeen.get(c.product_id);
     // A row whose title has CHANGED since we looked is new work again, whatever
     // it was decided last time — which is how a denial stops being permanent.
     const stale = s && s.current_title !== c.title;
-    const clock = byMarket ? s?.market_at : s?.swept_at;
+    // The name pass asks a different question: not "how long since we looked"
+    // but "has this exact title ever been shown to the model". Anything whose
+    // stamp does not match is unasked, whenever it was last swept.
+    const unasked = byNames && s?.asked_title !== askedStamp(c.title || "");
+    const clock = byNames ? s?.asked_at : byMarket ? s?.market_at : s?.swept_at;
     // Never looked at, or looked at under a title that no longer exists: first.
-    return { c, at: !s || stale || !clock ? 0 : Date.parse(clock) || 0 };
+    return { c, at: !s || stale || unasked || !clock ? 0 : Date.parse(clock) || 0,
+             unasked: byNames ? !!unasked : true };
   });
   scored.sort((a, b) => a.at - b.at);
+  // ⚠️ THE NAME PASS TAKES ONLY WHAT IT HAS NOT ASKED. Every other pass re-walks
+  // the whole estate oldest-first, which is right for a free rules check and
+  // wrong for a paid one: without this it would re-ask about the same 100
+  // listings every morning and bill for an answer it already has.
+  const pool = byNames ? scored.filter(s => s.unasked) : scored;
   // ⚠️ ONE PRODUCT CAN HOLD SEVERAL SKUs. ebay_catalog is keyed (store_code, sku)
   // and a multi-variant product contributes one row per variant, so without this
   // the upsert sends two rows with the same product_id and Postgres refuses the
@@ -2067,7 +2304,7 @@ async function candidatesFor(store: string, limit: number, byMarket = false): Pr
   // somebody so they can find the unit, and any variant leads to the same
   // product page.
   const byProduct = new Map<string, typeof scored[number]>();
-  for (const s of scored) if (!byProduct.has(s.c.product_id)) byProduct.set(s.c.product_id, s);
+  for (const s of pool) if (!byProduct.has(s.c.product_id)) byProduct.set(s.c.product_id, s);
   return [...byProduct.values()].slice(0, limit).map(s => ({
     store_code: s.c.store_code, product_id: s.c.product_id, sku: s.c.sku,
     title: s.c.title || "", product_handle: null,
@@ -2077,8 +2314,8 @@ async function candidatesFor(store: string, limit: number, byMarket = false): Pr
 }
 
 async function sweep(store: string, limit: number, wantMarket: boolean, save: boolean,
-                     wantNames = false) {
-  const cands = await candidatesFor(store, limit, wantMarket);
+                     wantNames = false, wantLlm = false) {
+  const cands = await candidatesFor(store, limit, wantMarket, wantLlm);
   if (!cands.length) return { store, examined: 0, queued: 0, rows: [] as any[] };
   // ONE stamp for the whole run. Stamping per row made the findings batch land a
   // few milliseconds before the clean batch, so the next run's "least recently
@@ -2096,8 +2333,23 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
   const priorRows: any[] = await allRows(
     `listing_title_reviews?store_code=eq.${store}`
     + `&select=product_id,current_title,suggested_title,findings,basis,confidence,comps`
+    + `,asked_title,asked_at`
     + `&order=product_id`);
   const prior = new Map(priorRows.map(r => [r.product_id, r]));
+
+  // ⚠️ EVERY OBJECT IN A POSTGREST BULK UPSERT MUST CARRY THE SAME KEYS — a
+  // mixed batch is refused outright with "All object keys must match", which
+  // would kill the whole save, not the one row. So on a name pass every row gets
+  // both columns: the new stamp if the model answered for it, and otherwise the
+  // stamp it already had, so a failed batch neither wipes an old answer nor
+  // claims a new one. On any other pass the keys are absent entirely, which
+  // leaves the stored values alone.
+  const askedCols = (productId: string, title: string) => {
+    if (!wantLlm) return {};
+    if (nameBy[productId]) return { asked_title: askedStamp(title), asked_at: stampedAt };
+    const p = prior.get(productId);
+    return { asked_title: p?.asked_title ?? null, asked_at: p?.asked_at ?? null };
+  };
 
   // Our OWN live eBay item ids, for the model check's corpus exclusion. Every
   // active listing on the shared account is in here whoever put it there, which
@@ -2121,6 +2373,63 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     // Bundle detection is a nice-to-have; a Shopify hiccup must not stop the
     // correctness findings, which need nothing but the title.
     extrasNote = `Shopify extras unavailable: ${String(e).slice(0, 160)}`;
+  }
+
+  // ===================== THE NAME PASS ====================================
+  // Runs BEFORE the per-row loop so the whole page goes out in a few parallel
+  // requests instead of one round trip per listing — 100 listings in roughly one
+  // round trip's latency, which is what keeps this inside the 150s wall.
+  const nameBy: Record<string, NameVerdict> = {};
+  const nameUnverified: { sku: string; title: string; claimed: string; correction: string }[] = [];
+  let nameNote: string | null = null;
+  let nameUsage = { input: 0, output: 0, asked: 0, batches: 0 };
+  if (wantLlm) {
+    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    if (!apiKey) {
+      // Plain English, and it names who fixes it — the house rule for anything
+      // alert-shaped. A missing key must never read as "no bad names found".
+      nameNote = "ANTHROPIC_API_KEY is not set on this project, so no titles were "
+        + "checked for mangled product names. Nothing is wrong with the listings; "
+        + "the check did not run. Claude fixes this by setting the key.";
+    } else {
+      const client = new Anthropic({ apiKey });
+      const items = cands.map(c => ({
+        id: c.product_id,
+        title: c.title,
+        brand: String(extras[c.product_id]?.specs?.["Brand"] || "").trim(),
+        model: String(extras[c.product_id]?.specs?.["Model"] || "").trim(),
+        shelf: [extras[c.product_id]?.specs?.["Collection"],
+                extras[c.product_id]?.specs?.["Sub-Collection"]]
+          .filter(Boolean).join(" / "),
+      }));
+      const batches: typeof items[] = [];
+      for (let i = 0; i < items.length; i += NAME_BATCH) batches.push(items.slice(i, i + NAME_BATCH));
+      const failed: string[] = [];
+      for (let i = 0; i < batches.length; i += NAME_CONCURRENCY) {
+        const wave = batches.slice(i, i + NAME_CONCURRENCY);
+        const settled = await Promise.allSettled(
+          wave.map(b => checkNamesBatch(client, b).then(r => ({ r, n: b.length }))));
+        for (const s of settled) {
+          if (s.status === "fulfilled") {
+            Object.assign(nameBy, s.value.r.verdicts);
+            nameUsage.asked += s.value.n;
+            nameUsage.batches += 1;
+            nameUsage.input += s.value.r.input;
+            nameUsage.output += s.value.r.output;
+          } else {
+            // ⚠️ A FAILED BATCH IS NOT A CLEAN BATCH. Its listings keep no stamp,
+            // so the next run picks them up again rather than recording silence
+            // as an all-clear.
+            failed.push(String(s.reason).slice(0, 120));
+          }
+        }
+      }
+      if (failed.length) {
+        nameNote = `${failed.length} of ${batches.length} name-check batches failed and `
+          + `those listings were left unasked, so the next run will pick them up. `
+          + `First error: ${failed[0]}`;
+      }
+    }
   }
 
   // Which model tokens the market has heard of. Cached across the whole sweep —
@@ -2206,19 +2515,49 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
         ? Math.round(100 * shared / Math.max(wa.length, wb.size)) : 100;
       if (pct < 65) mismatched.push({ sku: row.sku, shopify: row.title, ebay: row.ebay_title });
     }
+    const nv = nameBy[row.product_id] || null;
     const a = analyse(row, extras[row.product_id], comps, modelReal, modelExample,
-                      brandReal, convention);
+                      brandReal, convention, nv);
+    // The model claimed an error it could not quote out of the title, so analyse
+    // dropped it. Counted rather than hidden: this rate is how we find out the
+    // check has started inventing, and it is the number to watch after any
+    // change to NAME_SYSTEM.
+    if (nv && nv.verdict !== "ok" && !a.findings.some(f => NAME_CODES.has(f.code))) {
+      nameUnverified.push({ sku: row.sku, title: row.title,
+                            claimed: String(nv.wrong_text || ""),
+                            correction: String(nv.correct_text || "") });
+    }
 
     // Carry the market's findings forward on a rules-only pass. Not merged when
     // the market DID run — then the fresh answer is the whole answer, including
     // a market finding that has stopped applying.
-    if (!wantMarket) {
+    if (!wantMarket || !wantLlm) {
       const p = prior.get(row.product_id);
       if (p && p.current_title === row.title) {
-        const keep = (p.findings || []).filter((f: any) => MARKET_CODES.has(f?.code));
+        const codes = new Set<string>([
+          ...(wantMarket ? [] : [...MARKET_CODES]),
+          // ⚠️ SAME TRAP, DIFFERENT CHECK. The twice-daily rules cron shares a
+          // primary key with these rows, so without carrying them it would stamp
+          // a paid-for verdict `clean` every morning — exactly what happened to
+          // the market's findings until 2026-08-28. A rules pass is not evidence
+          // a name is fine, only that nobody asked.
+          ...(wantLlm ? [] : [...NAME_CODES]),
+        ]);
+        const keep = (p.findings || []).filter((f: any) => codes.has(f?.code));
         if (keep.length) {
           const have = new Set(a.findings.map(f => f.code));
           for (const f of keep) if (!have.has(f.code)) a.findings.push(f);
+          // ⚠️ A NAME FIX LIVES INSIDE THE SUGGESTION, NOT BESIDE IT. Carrying
+          // the finding forward without the suggestion that contains it leaves a
+          // row saying "this name is wrong" next to a suggested title that does
+          // not fix the name — and worse, a rules-only suggestion computed from
+          // the WRONG name. The earlier pass had both halves, so its suggestion
+          // is strictly better than anything the rules can produce alone.
+          if (keep.some((f: any) => NAME_CODES.has(f?.code)) && p.suggested_title) {
+            a.suggested = p.suggested_title;
+            a.basis = p.basis || a.basis;
+            a.confidence = p.confidence || a.confidence;
+          }
           // The market's suggestion outranks a rules-only one only where the
           // rules had nothing to offer — a rules fix is a named edit to this
           // exact title and is never worth discarding for a keyword list.
@@ -2252,6 +2591,7 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
       // Only the market pass may move the market's clock. A rules-only run that
       // stamped it would make eBay look freshly asked when it was not.
       ...(wantMarket ? { market_at: stampedAt } : {}),
+      ...askedCols(row.product_id, row.title),
     });
   }
 
@@ -2267,6 +2607,7 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
       price: c.price, quantity: c.quantity,
       severity: 1, status: "clean", swept_at: stampedAt,
       ...(wantMarket ? { market_at: stampedAt } : {}),
+      ...askedCols(c.product_id, c.title || ""),
     }));
     for (const batch of [out, clean]) {
       if (!batch.length) continue;
@@ -2283,6 +2624,21 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     ...(mismatched.length ? { differentItemOnEbay: mismatched } : {}),
     ...(extrasNote ? { extrasNote } : {}),
     ...(marketNote ? { marketNote } : {}),
+    ...(nameNote ? { nameNote } : {}),
+    ...(wantLlm ? { nameCheck: {
+      asked: nameUsage.asked, batches: nameUsage.batches,
+      inputTokens: nameUsage.input, outputTokens: nameUsage.output,
+      // Claude Opus 5 list price, $5/M in and $25/M out. Rounded to cents so a
+      // run that "felt expensive" can be checked instead of argued about.
+      estCostUsd: Math.round(
+        (nameUsage.input / 1e6 * 5 + nameUsage.output / 1e6 * 25) * 100) / 100,
+      flagged: Object.values(nameBy).filter(v => v?.verdict !== "ok").length,
+      // The rate to watch. A model that starts quoting text which is not in the
+      // title is a model that has started inventing, and these are the rows that
+      // were dropped for it.
+      unverified: nameUnverified.length,
+      ...(nameUnverified.length ? { unverifiedRows: nameUnverified.slice(0, 10) } : {}),
+    } } : {}),
     saved: save,
     rows: out.map(o => ({
       sku: o.sku, current: o.current_title, suggested: o.suggested_title,
@@ -2698,22 +3054,30 @@ Deno.serve(async (req: Request) => {
       // — that is the intended way to use it.
       const MARKET_MAX = 120;
       const market = url.searchParams.get("market") === "1";
-      const used = market ? Math.min(limit, MARKET_MAX) : limit;
+      // ⚠️ THE ONLY PASS THAT SPENDS MONEY. Capped for the same reason market=1
+      // is — the 150s wall truncates the RESPONSE while the function keeps
+      // running, so an over-long run reports a timeout and nobody can tell how
+      // much was saved or how much was billed.
+      const llm = url.searchParams.get("llm") === "1";
+      const used = llm ? Math.min(limit, NAME_MAX)
+                 : market ? Math.min(limit, MARKET_MAX) : limit;
       const clamped = used !== limit;
       // Opt-in, and only meaningful with market=1 since both verdicts come from
       // eBay. See the block in analyse() for the five measured designs and why
       // this is not on.
       const names = url.searchParams.get("names") === "1";
       const out = [];
-      for (const s of list) out.push(await sweep(s, used, market, save, names && market));
+      for (const s of list) out.push(await sweep(s, used, market, save, names && market, llm));
       return json({
-        ok: true, market, saved: save, limit: used,
+        ok: true, market, llm, saved: save, limit: used,
         nameChecks: (url.searchParams.get("names") === "1" && market)
           ? "ON — brand/model name checks are opt-in and LOW PRECISION; see analyse() in the source"
           : "off (default)",
         // Said out loud. A silently reduced limit reads as full coverage, which
         // is the same class of lie as a queue that stops refreshing.
-        ...(clamped ? { limitClamped: `market=1 is capped at ${MARKET_MAX} items per store per run so the request finishes inside the 150s function limit; asked for ${limit}. Run it again to walk further — the sweep takes the least-recently-checked items first.` } : {}),
+        ...(clamped ? { limitClamped: llm
+          ? `llm=1 is capped at ${NAME_MAX} listings per store per run so the request finishes inside the 150s function limit; asked for ${limit}. Run it again to walk further — the name pass takes only listings whose exact title it has never been shown, so repeated runs move forward and a finished store returns 0 examined.`
+          : `market=1 is capped at ${MARKET_MAX} items per store per run so the request finishes inside the 150s function limit; asked for ${limit}. Run it again to walk further — the sweep takes the least-recently-checked items first.` } : {}),
         stores: out,
       });
     }
