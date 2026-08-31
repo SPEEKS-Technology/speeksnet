@@ -2765,6 +2765,101 @@ async function worstFor(stores: string[]): Promise<Record<string, number>> {
   return out;
 }
 
+// --- the description's own copy of the title -------------------------------
+
+// HTML SPELLS THE TITLE DIFFERENTLY THAN SHOPIFY DOES, and that quietly broke
+// the description swap for a fifth of the queue. The title field holds the
+// characters a person typed; descriptionHtml holds them ENTITY-ENCODED, so
+// "Zoom Lens,Auto & Manual Lens" is stored as "Zoom Lens,Auto &amp; Manual
+// Lens". A literal includes() of the title therefore found nothing, wrote
+// nothing, and reported nothing — the title changed and the heading two
+// paragraphs below it did not. Caught on OVL KS01-7548N-E6, where the title
+// was fixed to f/4-5.6 and the <h1> and the included-items list both kept
+// saying f/1.4-5.6.
+//
+// Rather than guess which entities a title might contain (&amp; today, &quot;
+// the moment a screen size like 10.5" is added, &#39; on any possessive), we
+// decode the document ONCE, keeping a map from each decoded character back to
+// the span of source it came from. A match in the decoded text can then be
+// spliced out of the ORIGINAL html by offset. One mechanism, every entity
+// form, and the markup around the match is never touched.
+const HTML_ENTITY = /&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]{1,31});/g;
+const NAMED_ENTITY: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: "\u00a0",
+};
+
+function decodeWithMap(html: string): { text: string; from: number[]; to: number[] } {
+  const text: string[] = []; const from: number[] = []; const to: number[] = [];
+  let i = 0;
+  while (i < html.length) {
+    if (html[i] === '&') {
+      HTML_ENTITY.lastIndex = i;
+      const m = HTML_ENTITY.exec(html);
+      if (m && m.index === i) {
+        const body = m[1];
+        let ch: string | null = null;
+        if (body[0] === '#') {
+          const code = body[1] === 'x' || body[1] === 'X'
+            ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+          // Only the Basic Multilingual Plane, and never a lone surrogate: a
+          // half character in the decoded stream would misalign every offset
+          // after it, and offsets are the whole point of this map.
+          if (Number.isFinite(code) && code > 0 && code <= 0xffff
+              && !(code >= 0xd800 && code <= 0xdfff)) ch = String.fromCharCode(code);
+        } else {
+          ch = NAMED_ENTITY[body] ?? NAMED_ENTITY[body.toLowerCase()] ?? null;
+        }
+        if (ch !== null) {
+          text.push(ch); from.push(i); to.push(i + m[0].length);
+          i += m[0].length;
+          continue;
+        }
+      }
+    }
+    text.push(html[i]); from.push(i); to.push(i + 1);
+    i++;
+  }
+  return { text: text.join(''), from, to };
+}
+
+// What goes BACK in is escaped, because it is being written into markup. The
+// new title arrives as plain text off a form field; dropping a bare & into a
+// document is how the next reader of this html inherits the same bug.
+//
+// ⚠️ THE QUOTES ARE ESCAPED TOO, and that is not fussiness. A match can land
+// inside an ATTRIBUTE — an alt= or title= on the listing image — and a raw "
+// written there ends the attribute early and spills the rest of the title into
+// the markup as junk attributes. Thirteen of the titles waiting in the queue
+// right now carry an inch mark, so this is the common case, not the exotic one.
+// Inside a text node &quot; renders exactly as a quote does, so escaping costs
+// nothing and closes the only way this function could damage a page.
+function escapeHtml(t: string): string {
+  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Every occurrence, not the first: the listing template writes the title twice
+// (the <h1> and the first line of "Items included in this sale"), and a fix
+// that repaired one of them would be harder to notice than one that repaired
+// neither. Spliced back to front so the earlier offsets stay valid.
+function swapTitleInHtml(html: string, oldTitle: string, newTitle: string):
+    { html: string; hits: number } {
+  if (!html || !oldTitle || oldTitle === newTitle) return { html, hits: 0 };
+  const d = decodeWithMap(html);
+  const at: number[] = [];
+  for (let i = d.text.indexOf(oldTitle); i >= 0; i = d.text.indexOf(oldTitle, i + oldTitle.length)) {
+    at.push(i);
+  }
+  if (!at.length) return { html, hits: 0 };
+  const rep = escapeHtml(newTitle);
+  let out = html;
+  for (let k = at.length - 1; k >= 0; k--) {
+    const i = at[k];
+    out = out.slice(0, d.from[i]) + rep + out.slice(d.to[i + oldTitle.length - 1]);
+  }
+  return { html: out, hits: at.length };
+}
+
 async function handlePost(req: Request, scope: Scope) {
   const body = await req.json().catch(() => ({}));
   const action = String(body.action || "");
@@ -2839,34 +2934,47 @@ async function handlePost(req: Request, scope: Scope) {
   // manager fixes the title and the tool's own `included` list still quotes the
   // old one back at them.
   let descriptionHtml: string | null = null;
+  let descHits = 0;
   let staleMetafields: { id: string; value: string }[] = [];
+  // ⚠️ TWO READS, NOT ONE. These used to share a query, and shopifyGql throws on
+  // ANY error in the response — so a metafields half that failed for its own
+  // reasons (a throttle, a permission, a product with an awkward field) took the
+  // descriptionHtml half down with it, into a catch that says nothing. The
+  // description is the copy a customer reads; it does not get to depend on the
+  // metafields call succeeding. Same lesson the Live Dashboard learned when one
+  // store's ShopifyQL fault silently killed its orders query too.
   try {
     const cur = await shopifyGql(shop, token,
-      `query($id: ID!) { product(id: $id) {
-         descriptionHtml
-         metafields(first: 60) { edges { node { id value } } }
-       } }`, { id: productId });
+      `query($id: ID!) { product(id: $id) { descriptionHtml } }`, { id: productId });
     const html = String(cur?.product?.descriptionHtml || "");
-    if (html && item.current_title && html.includes(item.current_title)) {
-      descriptionHtml = html.split(item.current_title).join(next);
-    }
-    if (item.current_title) {
-      for (const e of (cur?.product?.metafields?.edges || [])) {
-        const id = String(e?.node?.id || "");
-        const v = String(e?.node?.value ?? "");
-        // A literal swap, exactly as the description one is. A list metafield
-        // stores JSON text and the title still appears verbatim inside it, so
-        // there is nothing to parse and no way to damage the structure.
-        if (id && v.includes(item.current_title)) {
-          staleMetafields.push({ id, value: v.split(item.current_title).join(next) });
-        }
-      }
+    if (html && item.current_title) {
+      const swap = swapTitleInHtml(html, item.current_title, next);
+      if (swap.hits) { descriptionHtml = swap.html; descHits = swap.hits; }
     }
   } catch {
     // A title fix that lands is worth more than one that fails over its own
     // footnote. The description staying stale is visible and recoverable; a
     // refused title change is the thing somebody came here to do.
   }
+  try {
+    const cur = await shopifyGql(shop, token,
+      `query($id: ID!) { product(id: $id) {
+         metafields(first: 60) { edges { node { id value } } }
+       } }`, { id: productId });
+    if (item.current_title) {
+      for (const e of (cur?.product?.metafields?.edges || [])) {
+        const id = String(e?.node?.id || "");
+        const v = String(e?.node?.value ?? "");
+        // A LITERAL swap here, deliberately unlike the description's. A
+        // metafield holds plain text or JSON, not markup: there are no entities
+        // to decode, and escaping what goes back in would write a literal
+        // "&amp;" into a field that should hold an ampersand.
+        if (id && v.includes(item.current_title)) {
+          staleMetafields.push({ id, value: v.split(item.current_title).join(next) });
+        }
+      }
+    }
+  } catch { /* the footnote's footnote */ }
 
   const data = await shopifyGql(shop, token, `
     mutation($input: ProductInput!) {
@@ -2930,7 +3038,11 @@ async function handlePost(req: Request, scope: Scope) {
     body: JSON.stringify({ title: saved, updated_at: new Date().toISOString() }),
   }).catch(() => { /* cosmetic only; the next sweep fixes it */ });
 
+  // descHits is reported because a SILENT no-op is what hid this for weeks: the
+  // approve said ok, the title changed, and nobody could tell from the answer
+  // whether the description had been carried along or quietly skipped.
   return json({ ok: true, applied: productId, title: saved,
+                descriptionCopies: descHits,
                 ...(metafieldsFixed ? { metafieldsFixed } : {}) });
 }
 
