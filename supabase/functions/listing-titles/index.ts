@@ -1302,6 +1302,24 @@ is never penalised. In particular:
 - This inventory is USED and often obscure, rare, regional, discontinued, or
   low-volume. A product being unfamiliar or rarely sold is NOT an error. If you
   are not sure a product exists, return "ok".
+- YOUR KNOWLEDGE HAS A CUTOFF AND THIS SHOP SELLS THINGS RELEASED AFTER IT.
+  THE TEST IS WHETHER A WORD IS MISSPELLED, NOT WHETHER YOU RECOGNISE IT.
+
+    * An unfamiliar but WELL-FORMED variant in a line you know — "MacBook Neo",
+      a Galaxy model you have not seen, a GeForce number you do not recognise —
+      is almost certainly a product released after your cutoff. Return "ok", and
+      NEVER correct it to the nearest variant you do know. "Neo" is a real word
+      spelled correctly; it is not a mangling of "Air".
+
+    * A word that is MISSPELLED — letters wrong, transposed, doubled or missing
+      — is still an error however new the product is, and you should still
+      report it: "Harmon Kardon" for Harman Kardon, "Assasins Creed" for
+      Assassin's Creed, "Steeleseries" for SteelSeries, "Vivant" for Vivint,
+      "Amaxon" for Amazon, "DGI" for DJI.
+
+  And a stated specification that contradicts a part number in the same title is
+  always reportable — "PC3-14900" is 1866MHz whatever the title says. That is
+  arithmetic, not recognition.
 - Do NOT report a title for being short, vague, incomplete, badly punctuated,
   oddly capitalised, or for missing details. Other checks handle all of that.
 - Do NOT report condition or handling words: Broken, For Parts, Read, No Power,
@@ -1616,7 +1634,19 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     const wrong = String(nameVerdict.wrong_text || "");
     const right = String(nameVerdict.correct_text || "").trim();
     const at = wrong ? title.indexOf(wrong) : -1;
-    if (at >= 0 && right && right !== wrong) {
+    // ⚠️ A CORRECTION CAN BE A PLACEHOLDER, AND THE QUOTE CHECK CANNOT SEE IT.
+    // WSP's truncated `"v (Neo Geo MVS,"` came back with the replacement
+    // "[actual game title]" — the quoted wrong text really was in the title, so
+    // every existing guard passed, and approving it would have written the
+    // literal words "[actual game title]" onto a live storefront. The quote
+    // check proves the model read the title; it proves nothing about whether the
+    // model KNOWS the answer. This is the other half.
+    const placeholder = /[\[\]<>{}]|\b(actual|correct|real|proper|insert|unknown|tbd|xxx+)\b/i
+      .test(right);
+    // No finding is pushed, so the sweep's own check — a non-ok verdict that
+    // produced no name finding — counts it as `unverified`, exactly like a quote
+    // that could not be located. Same failure, same counter, one rate to watch.
+    if (!placeholder && at >= 0 && right && right !== wrong) {
       const swapped = (title.slice(0, at) + right + title.slice(at + wrong.length))
         .replace(/\s+/g, " ").trim();
       const wrongIsWrong = nameVerdict.verdict === "wrong";
