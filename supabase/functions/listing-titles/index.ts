@@ -909,6 +909,85 @@ function learnConvention(cands: Row[], extras: Record<string, Extra>): Conventio
   return out;
 }
 
+// ⚠️ A CARRIER NAME IS A LOCK STATUS. Ethan, 2026-08-31: "Verizon and T-Mobile
+// are in fact stating it is a T-Mobile device." He is right, and we were scoring
+// those titles as though they had left the fact out — "Verizon Apple iPhone 13
+// 128GB Midnight" was being counted as MISSING `Lock Status: Network Locked`,
+// which drags its strength down and makes a complete title look lazy.
+//
+// Only satisfies a LOCKED status. A title that says "Verizon" over a spec
+// reading `Unlocked` is a contradiction, not a statement, and stays missing.
+//
+// ⚠️ MVNOs COUNT AND THE OBVIOUS LIST MISSES THEM. The first version had the
+// four big networks and would have failed on BAL's real row, "Consumer Cellular
+// Apple iPad 1st Gen". Written against the raw title rather than norm() because
+// norm turns "AT&T" into "at t".
+const CARRIERS = /\b(verizon|t\s*-?\s*mobile|at\s*&\s*t|at\s*and\s*t|\bat&t\b|sprint|metro\s*by\s*t|metro\s*pcs|metropcs|boost\s*(mobile|infinite)?|cricket|us\s*cellular|consumer\s*cellular|straight\s*talk|tracfone|net\s*10|simple\s*mobile|total\s*(wireless|by\s*verizon)|page\s*plus|xfinity|spectrum|visible|mint\s*mobile|google\s*fi|h2o|lycamobile|ultra\s*mobile|red\s*pocket|safelink|assurance)\b/i;
+
+function lockStatedByCarrier(title: string, v: string): boolean {
+  return /lock/i.test(v) && !/unlock/i.test(v) && CARRIERS.test(title);
+}
+
+// ================== THE SCREEN A PHONE OR TABLET IS SOLD BY ==================
+// Ethan, 2026-08-31, on the measured gap: "If you feel it is important to add the
+// screen size for things like tablets and mobile devices, then we should."
+//
+// This is the one field that earns a rule of its own, because the lazy-title
+// RATIO can never reach it: a phone title carrying brand, model, capacity and
+// colour and omitting only the screen scores 80%, and 80% is a title we leave
+// alone by policy. Measured over all five storefronts, Screen Size is recorded
+// on 181 in-scope products and the omission is not spread evenly:
+//
+//   Monitor                     53 recorded,  0 omitted   <- already perfect
+//   Laptops / MacBooks / AIO    66 recorded,  4 omitted
+//   Apple iPhone                12 recorded, 11 omitted   <- the gap
+//   Android Phones               8 recorded,  7 omitted
+//   iPad / Android Tablet       22 recorded,  6 omitted
+//
+// So this fires on roughly 30 rows estate-wide, ~6 a store, and almost all of
+// them are phones and tablets. Monitors and laptops are gated IN deliberately
+// even though they are near-perfect: including a shelf that is already complete
+// costs nothing and means a regression there is caught.
+const SCREEN_SHELVES = /\b(iphones?|phones?|smartphones?|ipads?|tablets?|laptops?|notebooks?|chromebooks?|macbook|imac|monitors?|aio|all[\s-]?in[\s-]?one|televisions?|tvs?|handheld\s+gaming)\b/i;
+// ⚠️ A SHELF OF PARTS IS NOT A SHELF OF SCREENS. "Phone Cases" and "Laptop
+// Chargers" both satisfy the list above, and a replacement screen assembly can
+// legitimately carry a Screen Size spec — but nobody wants 6.1" welded onto the
+// title of a case. Checked second so it always wins.
+const SCREEN_NOT = /\b(case|cover|charger|cable|adapter|protector|stand|mount|dock|bag|sleeve|part|parts|repair|replacement|accessor)/i;
+
+// ⚠️ "6.1" IS TWO CHARACTERS AFTER squash(), AND TWO CHARACTERS FIND THEMSELVES
+// ANYWHERE. valuePresent() squashes both sides and asks for a substring, so it
+// reported 6.1" as ALREADY PRESENT in "Factory Unlocked Apple iPhone 16 128GB
+// Black MYAP3LL/A" — the "61" it found is the tail of "16" and the head of
+// "128". Two live rows at two stores. A measurement is only worth as much as
+// its presence test, so this one is written for numbers.
+//
+// ⚠️ AND IT DELIBERATELY ACCEPTS A BARE NUMBER. `13` matching "iPhone 13" is a
+// false PRESENT, which costs us one quiet row; demanding the inch mark would
+// give a false MISSING, which puts a wrong suggestion in front of a manager.
+// Between a rule that stays quiet and a rule that is wrong out loud, take quiet.
+function screenSizePresent(title: string, v: string): boolean {
+  const m = String(v).match(/(\d+(?:\.\d+)?)/);
+  if (!m) return true;                       // no number to look for: say nothing
+  const n = m[1].replace(".", "\\.");
+  return new RegExp(`(^|[^\\d.])${n}\\s*(?:"|”|''|-?\\s*in(ch(es)?)?\\b)`, "i").test(title)
+      || new RegExp(`(^|[^\\d.])${n}(?![\\d.])`).test(title);
+}
+
+// ⚠️ THE NUMBER IS THE LISTING'S, THE UNIT MARK IS OURS. BAL's HP Chromebook
+// records `14in`, and "HP Chromebook … 14in" reads like a typo next to every
+// other title on the shelf. Normalising the unit to an inch mark is the only
+// liberty taken with a spec value anywhere in this file, and it is confined to
+// the unit — the digits are never touched, so the tool still cannot invent a
+// measurement it was not given.
+function screenSizeText(v: string): string | null {
+  const m = String(v).match(/(\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!isFinite(n) || n < 3 || n > 120) return null;   // not a screen measurement
+  return `${m[1]}"`;
+}
+
 type Strength = { pct: number; present: number; total: number;
                   missing: { k: string; v: string }[] };
 
@@ -920,6 +999,8 @@ function strengthOf(title: string, specs: Record<string, string> | undefined): S
     const v = String(specs[k] || "").trim();
     if (!titleWorthy(k, v, specs)) continue;
     if (t.includes(squash(v))) { present.push(k); continue; }
+    // A carrier name in the title already says the device is locked. See CARRIERS.
+    if (k === "Lock Status" && lockStatedByCarrier(title, v)) { present.push(k); continue; }
     // ⚠️ MOSTLY-PRESENT IS PRESENT. The exact-substring test treats a value as
     // wholly missing when nearly all of it is already in the title, and the
     // suggestions it produced were embarrassing:
@@ -1825,6 +1906,31 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
           severity: 1, fixable: true,
         });
       }
+    }
+  }
+
+  // ==================== THE SCREEN SIZE, ON ITS OWN =========================
+  // The one field allowed to fire without the ratio. See SCREEN_SHELVES for the
+  // measurement that earned it and for why monitors and laptops are in the gate
+  // even though they are already clean.
+  //
+  // ⚠️ NOT ON A TITLE THAT IS ALREADY WRONG. Same house rule the convention
+  // check obeys: a row with something WRONG with it gets that fixed and nothing
+  // else, or the reviewer is reading a diff that repairs and polishes at once.
+  // Polish can wait for the next sweep, when the title is sound.
+  const shelf = `${collection} ${extra?.specs?.["Sub-Collection"] || ""}`.trim();
+  const screenSpec = String(extra?.specs?.["Screen Size"] || "").trim();
+  if (!brokenTitle && !findings.some(f => f.severity >= 2) && !lazyUsed.has("Screen Size")
+      && screenSpec && !PLACEHOLDER.test(screenSpec)
+      && SCREEN_SHELVES.test(shelf) && !SCREEN_NOT.test(shelf)
+      && !screenSizePresent(title, screenSpec)) {
+    const text = screenSizeText(screenSpec);
+    if (text && tryAppend(text)) {
+      findings.push({
+        code: "missing-screen-size",
+        says: `This listing records a ${text} screen and the title does not say so. Screen size is one of the first things a buyer filters a phone or tablet by, so a title without it is missing from those results entirely. The measurement is the listing's own — only the inch mark is ours.`,
+        severity: 1, fixable: true,
+      });
     }
   }
 
