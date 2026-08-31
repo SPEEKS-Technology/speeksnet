@@ -696,6 +696,15 @@ function _npxSync(preview) {
     if (String(values[rowYoY + 4][tb + NPX_OFF_YOY_LBL]).trim() === 'Inc/Dec') {
       plan(tb + NPX_OFF_YOY_LBL, rowYoY + 4, 'TTL YoY stale label (cleared)',
            '', null, null, true);
+      // ⚠️ AND THE FORMULA BESIDE IT, WHICH IS THE HALF THAT SHOWS A NUMBER.
+      // Clearing only the label leaves =IFERROR((CR45/CR44)-1,"") in place with
+      // its inputs now meaning different things — Inc/Dec divided by Current.
+      // It reads blank while the month is empty, so it would have looked fine
+      // today and become an unlabelled percentage on a financial sheet the
+      // moment the first day landed. An orphaned label is untidy; an orphaned
+      // FORMULA is a number somebody can read.
+      plan(tb + NPX_OFF_VAL_R, rowYoY + 4, 'TTL YoY stale formula (cleared)',
+           '', null, null, true);
     }
 
     plan(tb + NPX_OFF_VAL_R, rowYoY + 1, 'TTL YoY last year', refs(rowYoY + 1), NPX_MONEY, note, true);
