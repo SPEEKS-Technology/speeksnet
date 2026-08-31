@@ -45270,18 +45270,24 @@ function _lhHtml() {
     // No Upload drawer here — it lives at the bottom of the All Stores page,
     // with the other whole-estate things. This page is the daily one.
     const photos = _lhMay('photos') ? _lhPhotosHtml() : '';
-    // Between the alarm and the filing queue, because that is what it is: the
-    // top tier of it (a listing whose title is WRONG) belongs with the photo
-    // alarm, and the bottom tier is a queue you grind like Categories.
-    const titles = _lhMay('titles') ? _ltHtml() : '';
+    // ⚠️ TITLES GOES LAST, AND IT IS ABOUT LENGTH, NOT IMPORTANCE. It sat
+    // between the alarm and the filing queue on the argument that its top tier
+    // (a title that is WRONG) belongs beside the photo alarm. True, but it is
+    // now the longest section on the page by a wide margin — 138 rows against
+    // the alarm's handful — so placing it second pushed Categories off the
+    // bottom of the screen and out of the day. Ethan, 2026-08-31: "move
+    // categories under no pictures since there will be a lot more titles."
+    // The two SHORT sections stay where a manager can see both without
+    // scrolling; the long grind goes underneath them.
     const cats = _lhMay('cats') ? _lhCatsHtml() : '';
+    const titles = _lhMay('titles') ? _ltHtml() : '';
     // Reachable only by a race: the pill needs one of the two, so losing both
     // between the click and the render means an override changed underneath.
     // Say that, rather than drawing an empty page that looks broken.
     if (!photos && !cats && !titles) {
         return '<div class="ec-empty">Listing Health is not switched on for you.</div>';
     }
-    return photos + titles + cats;
+    return photos + cats + titles;
 }
 
 // --- the photo alarm --------------------------------------------------------
