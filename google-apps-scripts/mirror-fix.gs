@@ -600,10 +600,17 @@ function _mrfRun(dryRun) {
         skipped++; continue;
       }
       // ⚠️ A CORRECT VALUE IS NOT A LOCKED ONE, AND THIS BRANCH USED TO ASSUME
-      // IT WAS. Aug 30 was the first day that needed no adjustment at all, so
-      // every one of its ten cells already held the right number — put there by
-      // the daily importer, as a PLAIN VALUE. The old code logged "already" and
-      // moved on without writing, which skipped setFormula and setNote both.
+      // IT WAS. Whenever a store-day came out clean, the pin equalled what the
+      // daily importer had already written — as a PLAIN VALUE — so the old code
+      // logged "already" and moved on without writing, skipping setFormula and
+      // setNote both.
+      //
+      // Found on Aug 30 (all five stores clean at once), but it reached back
+      // further and the preview named them: WSP Aug 28, WSP Aug 29, BAL Aug 29
+      // — the three earlier store-days that needed no adjustment. Each had sat
+      // unprotected since the day it was pinned. None had actually drifted,
+      // which is only knowable because a drifted cell would no longer match its
+      // pin and would report as a CHANGE rather than a lock.
       //
       // The lock IS the formula: the importer skips a cell only when
       // getFormula() is non-empty (sales-email-import.gs, and documented at
