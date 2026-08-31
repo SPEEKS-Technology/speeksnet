@@ -148,6 +148,11 @@ var MRF_NOTE_0829_MPL = 'Aug 29 restated — the VOID of draft order #MO03-3133 
   + 'Aug 28, so leaving its reversal in would dock MPL twice for one invoice it was never '
   + 'credited for. Real figure. Locked from the daily sync.';
 
+// AUG 30. The first day since this began that needed nothing taken out.
+var MRF_NOTE_0830 = 'Aug 30 verified — no draft orders, no repayment re-listings, '
+  + 'no duplicate refunds landed on the day. Reported figure confirmed correct and '
+  + 'pinned as-is. Locked from the daily sync.';
+
 // Every earlier fix's note. A cell carrying one of these belongs to that
 // script and must never be rewritten here.
 var MRF_OTHER_NOTES = [
@@ -412,7 +417,53 @@ var MRF_FIX = [
   // channel figure for a NEGATIVE on every day a draft was voided.
   //   MPL 1473.18 + 88.99 = 1562.17            552.00 + 29.00 = 581.00
   { store: 'MPL', day: 29, sales: 1562.17, cost:  581.00, note: MRF_NOTE_0829_MPL },
-  { store: 'BAL', day: 29, sales: 1397.79, cost:  559.60, note: MRF_NOTE_0829 }
+  { store: 'BAL', day: 29, sales: 1397.79, cost:  559.60, note: MRF_NOTE_0829 },
+
+  // -------------------------------------------------------------------------
+  // AUG 30 (Sunday) — derived 2026-08-31. NOTHING NEEDED REMOVING.
+  // -------------------------------------------------------------------------
+  // Every adjustment this restatement exists to make came back zero, and each
+  // was checked rather than assumed:
+  //
+  //   DRAFT ORDERS — none. Checked BOTH ways, because the two of them disagree
+  //     and Aug 29 proved it: `all_draft_orders_channel` counts orders CREATED
+  //     that day and missed MPL's -88.99 void entirely. So the Draft Orders
+  //     SALES CHANNEL was read as well, and no store has that channel on Aug 30
+  //     at all — no positive leg, and no void of an earlier one.
+  //   REPAYMENT RE-LISTINGS — none. All 45 SKUs sold across the five stores were
+  //     put to the ledger test (a SKU on an EARLIER order inside
+  //     dup_order_cleanup) and not one matched. Zero candidates, not zero
+  //     survivors: there was nothing to reject.
+  //   DUPLICATE / MIRROR-BACK REFUNDS — none. add_back_mirror_refunds and
+  //     add_back_our_duplicate_refunds are 0 at all five stores.
+  //
+  // ⚠️ PINNED ANYWAY, AND THAT IS THE POINT. A correct figure still needs
+  // locking: 109 of the at-risk orders are still PAID on eBay, and when one
+  // propagates, new Marketplace Connect writes the refund back against the REAL
+  // order — which lands on whatever day that order sold. An unpinned Aug 30 can
+  // quietly lose money weeks from now with nothing to show it happened.
+  //
+  // The reported and true figures are therefore identical, deliberately:
+  //     OVL 2381.44 / 1250.00      LEE 1237.35 /  420.61
+  //     WSP  734.95 /  210.01      MPL 1306.92 /  519.00
+  //     BAL  467.91 /  158.46
+  //
+  // ⚠️ LEE's 74.99 refund is NOT an adjustment — it is the recovered-item case.
+  // #MO01-9251 sold Aug 29, never shipped, and was cancelled Aug 30 20:29. The
+  // same phone (MO01-5346A-F1R1) then sold again the same day as #MO01-9285 for
+  // the same 74.99. The item was on the shelf, so the resale is real revenue and
+  // BOTH legs correctly stay in: Aug 29 keeps the sale, Aug 30 carries the
+  // cancel and the resale, and across the two days the phone is counted once.
+  //
+  // ⚠️ OVL's day is a third one order. #KS01-14483 is 807.50 of the 2381.44 and
+  // is still AUTHORIZED / UNFULFILLED — payment taken but not captured. If it
+  // never captures, this cell is 807.50 too high and needs restating with
+  // MRF_FORCE. Worth a look before the month closes.
+  { store: 'OVL', day: 30, sales: 2381.44, cost: 1250.00, note: MRF_NOTE_0830 },
+  { store: 'LEE', day: 30, sales: 1237.35, cost:  420.61, note: MRF_NOTE_0830 },
+  { store: 'WSP', day: 30, sales:  734.95, cost:  210.01, note: MRF_NOTE_0830 },
+  { store: 'MPL', day: 30, sales: 1306.92, cost:  519.00, note: MRF_NOTE_0830 },
+  { store: 'BAL', day: 30, sales:  467.91, cost:  158.46, note: MRF_NOTE_0830 }
 ];
 
 // ---------------------------------------------------------------------------
