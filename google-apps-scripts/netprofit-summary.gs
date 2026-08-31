@@ -47,9 +47,40 @@ var NPX_OFF_LABEL    = 1;   // B — "Last month", "Days this month", ...
 var NPX_OFF_VAL_L    = 2;   // C — those values, and last-month REVENUE
 var NPX_OFF_YOY_LBL  = 4;   // E — "YoY" / "Last" / "Current" / "Inc/Dec"
 var NPX_OFF_VAL_R    = 5;   // F — last-month GP + Net Profit, and the YoY values
+// ⚠️ THE LAST-MONTH STRIP WAS RELAID BY HAND ON 2026-08-31 AND THESE ARE THE
+// MEASURED ADDRESSES, not the old ones. Ethan replaced the single "Last month"
+// label with three named ones and moved Net Profit up onto the same row:
+//
+//   BEFORE            B38 "Last month"   C38 revenue   F38 GP   F39 Net Profit
+//   NOW               B38 "Last Month Revenue"  C38 revenue
+//                     E38 "Last Month GP"       F38 GP
+//                     I38 "Last Month NP"       J38 net profit
+//
+// ⚠️ THE RENAME ALONE BROKE THE WHOLE SYNC, SILENTLY. _npxFindRow matches the
+// label EXACTLY, so "Last Month Revenue" did not equal "Last month", the row
+// came back -1, and _npxSync logged one line and RETURNED — no last-month
+// figures, no Days Thru, no YoY, no goal percentage, and no failure email
+// either, because returning is not throwing. The grid above kept filling, so
+// nothing looked wrong. That is why the anchor label is a named constant now.
+//
+// Verified identical in all six blocks by npProbeSummary (2026-08-31): the
+// labels sit at +1 / +4 / +8 and the values one column right of each, at
+// +2 / +5 / +9, in OVL, LEE, WSP, MPL, BAL and TTL alike.
+var NPX_LM_LABEL     = 'Last Month Revenue';   // the anchor _npxFindRow looks for
+var NPX_OFF_LM_GPLBL = 4;   // E — "Last Month GP"
+var NPX_OFF_LM_NPLBL = 8;   // I — "Last Month NP"
+var NPX_OFF_LM_NP    = 9;   // J — the net profit VALUE, now on the same row as
+                            //     revenue and GP rather than the row below
+// Row 39: the month-over-month percentages, written by _npxSync so all six
+// blocks stay identical and survive the October roll. See _npxMomFormula.
+var NPX_MOM_ROW_OFF  = 1;   // one row under the last-month strip
+
 var NPX_OFF_GOAL_LBL = 3;   // D — "% of GP Goal" (row 1), "NP Goal" (row 2)
 var NPX_OFF_GOAL_VAL = 4;   // E — the percentage (row 1), the goal (row 2)
 var NPX_OFF_REVTRACK = 3;   // D — Rev Tracking, the source of YoY "Current"
+// H — GP Tracking. Same shape as the other two: (cumulative / days so far) *
+// days in month, so each cell is a projection of the whole month.
+var NPX_OFF_GPTRACK  = 7;
 var NPX_OFF_NP       = 12;  // M — NP, the tab's own net profit (TTL row = the month)
 var NPX_OFF_NPTOTAL  = 13;  // N — NP Total, cumulative net profit banked
 var NPX_OFF_NPTRACK  = 14;  // O — NP Tracking, the projected full month
@@ -338,7 +369,7 @@ function _npxSync(preview) {
 
   // --- locate every row we touch, by label ---------------------------------
   var rowTtl0      = _npxFindRow(values, NP_BASES.OVL, 'TTL');
-  var rowLastMonth = _npxFindRow(values, NP_BASES.OVL + NPX_OFF_LABEL, 'Last month');
+  var rowLastMonth = _npxFindRow(values, NP_BASES.OVL + NPX_OFF_LABEL, NPX_LM_LABEL);
   var rowDaysIn    = _npxFindRow(values, NP_BASES.OVL + NPX_OFF_LABEL, 'Days this month');
   var rowDaysThru  = _npxFindRow(values, NP_BASES.OVL + NPX_OFF_LABEL, 'Days Thru month');
   var rowYoY       = _npxFindRow(values, NP_BASES.OVL + NPX_OFF_YOY_LBL, 'YoY');
@@ -492,7 +523,7 @@ function _npxSync(preview) {
     // The wall only governs a Shopify REFETCH. A figure read off the closed
     // month's own tab is already final and cannot decay.
     if (tot.npTrustworthy && (fromTab || !behindWall)) {
-      plan(sb + NPX_OFF_VAL_R, rowLastMonth + 1, store + ' last-month Net Profit', tot.np, NPX_MONEY);
+      plan(sb + NPX_OFF_LM_NP, rowLastMonth, store + ' last-month Net Profit', tot.np, NPX_MONEY);
       lmOk.push(store);
     } else {
       // ⚠️ CLEAR IT, DO NOT LEAVE IT. Refusing to write is not the same as
@@ -504,7 +535,7 @@ function _npxSync(preview) {
       // Profit cell would still be holding August's. One row, two months, and
       // the MoM percentage underneath it reads as if that were a real
       // comparison. Blank says "not known"; a stale number says nothing at all.
-      plan(sb + NPX_OFF_VAL_R, rowLastMonth + 1, store + ' last-month Net Profit (cleared)',
+      plan(sb + NPX_OFF_LM_NP, rowLastMonth, store + ' last-month Net Profit (cleared)',
            '', NPX_MONEY, null, true);
     }
   }
@@ -522,17 +553,60 @@ function _npxSync(preview) {
     plan(tb + NPX_OFF_VAL_R, rowLastMonth, 'TTL last-month GP',
          sumOf(NPX_OFF_VAL_R, rowLastMonth), NPX_MONEY);
     if (lmOk.length === NP_ORDER.length) {
-      plan(tb + NPX_OFF_VAL_R, rowLastMonth + 1, 'TTL last-month Net Profit',
-           sumOf(NPX_OFF_VAL_R, rowLastMonth + 1), NPX_MONEY);
+      plan(tb + NPX_OFF_LM_NP, rowLastMonth, 'TTL last-month Net Profit',
+           sumOf(NPX_OFF_LM_NP, rowLastMonth), NPX_MONEY);
     } else {
       // Cleared for the same reason as the stores above: a company total left
       // over from another month is worse than an empty cell, because it is the
       // one figure nobody re-derives by hand.
-      plan(tb + NPX_OFF_VAL_R, rowLastMonth + 1, 'TTL last-month Net Profit (cleared)',
+      plan(tb + NPX_OFF_LM_NP, rowLastMonth, 'TTL last-month Net Profit (cleared)',
            '', NPX_MONEY, null, true);
       Logger.log('  TTL Net Profit NOT written: only %s of %s stores have a trustworthy NP. '
         + 'A company total built from a partial set still reads as a real figure.',
         lmOk.length, NP_ORDER.length);
+    }
+  }
+
+  // === 3b. Month-over-month, under each last-month figure ===================
+  // Ethan, 2026-08-31: "a MoM percentage in the cell beneath the blue cell for
+  // Last Month Revenue, Last Month GP, and Last Month NP relative to where we
+  // are tracking for in those respective categories."
+  //
+  // ⚠️ "WHERE WE ARE TRACKING" IS THE LAST NON-EMPTY TRACKING CELL, NOT THE TTL
+  // ROW. Rev/GP/NP Tracking are (cumulative / days so far) * days in month, so
+  // each day's cell is already a projection of the WHOLE month — which is the
+  // right thing to compare a whole last month against, with no prorating. The
+  // TTL row is a sum of the days and would be month-to-date, so on the 3rd it
+  // would read as a 90% collapse every month. Same reasoning, and deliberately
+  // the same formula shape, as the YoY "Current" cell below.
+  //
+  // ⚠️ WRITTEN BY THE SCRIPT, NOT LEFT AS HAND FORMULAS. Six blocks by three
+  // figures is eighteen cells to keep in step, and the October roll copies
+  // whatever is there — a hand-typed one that drifted in one block would be
+  // copied forward every month after. This also keeps them out of the cells the
+  // last-month writer owns: NP used to live at F39, exactly where the GP
+  // percentage now goes, so a hand-typed formula there would have been
+  // overwritten with a dollar figure at 2pm.
+  var momPairs = [
+    ['Revenue', NPX_OFF_REVTRACK, NPX_OFF_VAL_L],
+    ['GP',      NPX_OFF_GPTRACK,  NPX_OFF_VAL_R],
+    ['NP',      NPX_OFF_NPTRACK,  NPX_OFF_LM_NP],
+  ];
+  var momRow = rowLastMonth + NPX_MOM_ROW_OFF;
+  for (var mi = 0; mi < blocks.length; mi++) {
+    var mName = blocks[mi][0], mBase = blocks[mi][1];
+    for (var mj = 0; mj < momPairs.length; mj++) {
+      var label = momPairs[mj][0], trackOff = momPairs[mj][1], lastOff = momPairs[mj][2];
+      var tc = _npColLetter(mBase + trackOff);
+      var rng = tc + firstDay1 + ':' + tc + lastDay1;
+      var lastA1 = _npxA1(mBase + lastOff, rowLastMonth);
+      // IFERROR, not a bare divide: last month is EMPTY for a store whose
+      // previous month was never kept — August is exactly that — and a bare
+      // formula would print #DIV/0! in eighteen cells on day one.
+      plan(mBase + lastOff, momRow, mName + ' ' + label + ' MoM',
+        '=IFERROR((INDEX(FILTER(' + rng + ', ' + rng + '<>""), COUNTA(FILTER('
+        + rng + ', ' + rng + '<>"")))/' + lastA1 + ')-1,"")',
+        NPX_PCT, null, true);
     }
   }
 

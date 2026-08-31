@@ -151,7 +151,7 @@ function _nprPlanClear(sh, ym, preview) {
 
   // Located, never counted — an inserted row must not shift what gets wiped.
   var rowTtl0      = _npxFindRow(values, NP_BASES.OVL, 'TTL');
-  var rowLastMonth = _npxFindRow(values, NP_BASES.OVL + NPX_OFF_LABEL, 'Last month');
+  var rowLastMonth = _npxFindRow(values, NP_BASES.OVL + NPX_OFF_LABEL, NPX_LM_LABEL);
   var rowDaysThru  = _npxFindRow(values, NP_BASES.OVL + NPX_OFF_LABEL, 'Days Thru month');
   var rowYoY       = _npxFindRow(values, NP_BASES.OVL + NPX_OFF_YOY_LBL, 'YoY');
   if (rowTtl0 < 0 || rowLastMonth < 0 || rowDaysThru < 0) {
@@ -218,7 +218,16 @@ function _nprPlanClear(sh, ym, preview) {
     // which is the kind of wrong that reads as right.
     summary.push([bb + NPX_OFF_VAL_L, rowLastMonth]);
     summary.push([bb + NPX_OFF_VAL_R, rowLastMonth]);
-    summary.push([bb + NPX_OFF_VAL_R, rowLastMonth + 1]);
+    // ⚠️ NET PROFIT MOVED ON 2026-08-31 — it is J38, beside Revenue and GP, not
+    // F39 under them. Clearing the old address would have left the new cell
+    // holding the PREVIOUS month's Net Profit on a brand-new tab, sitting
+    // between two figures that had been correctly cleared. Wrong by one month,
+    // in the one column a bonus is paid from, and nothing on the sheet would
+    // have said so.
+    summary.push([bb + NPX_OFF_LM_NP, rowLastMonth]);
+    // The three MoM percentages under them are FORMULAS, so the guard below
+    // keeps them by itself and _npxSync rewrites them anyway. Listed for the
+    // reader, not for the clear.
     // the YoY base, where a YoY block exists at all
     if (rowYoY >= 0) summary.push([bb + NPX_OFF_VAL_R, rowYoY + 1]);
     // ⚠️ THE GOAL GOES TOO. A goal is set for one month. Carrying August's
