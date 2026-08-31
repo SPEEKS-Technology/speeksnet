@@ -561,7 +561,7 @@ function _mrfRun(dryRun) {
   var formulas = sh.getRange(1, 1, lastRow, lastCol).getFormulas();
   var notes    = sh.getRange(1, 1, lastRow, lastCol).getNotes();
 
-  var wrote = 0, skipped = 0, already = 0;
+  var wrote = 0, skipped = 0, already = 0, locked = 0;
   Logger.log(dryRun ? '=== PREVIEW — nothing will be written ===' : '=== APPLYING ===');
 
   for (var i = 0; i < MRF_FIX.length; i++) {
@@ -599,9 +599,34 @@ function _mrfRun(dryRun) {
         Logger.log('  ' + f.store + ' ' + f.day + ' ' + pairs[p].what + ': REAL FORMULA ' + curF + ', skipped');
         skipped++; continue;
       }
+      // ⚠️ A CORRECT VALUE IS NOT A LOCKED ONE, AND THIS BRANCH USED TO ASSUME
+      // IT WAS. Aug 30 was the first day that needed no adjustment at all, so
+      // every one of its ten cells already held the right number — put there by
+      // the daily importer, as a PLAIN VALUE. The old code logged "already" and
+      // moved on without writing, which skipped setFormula and setNote both.
+      //
+      // The lock IS the formula: the importer skips a cell only when
+      // getFormula() is non-empty (sales-email-import.gs, and documented at
+      // month-rollover.gs:704). A plain value is not protected by anything. So
+      // the day the restatement had least to do was the one day it left
+      // unguarded — and a mirror-back refund landing on it later would have
+      // rewritten it silently, which is the entire failure this file exists to
+      // prevent.
+      //
+      // Matching value, no formula => stamp the lock, do not change the number.
       if (Math.abs(Number(cur) - want) < 0.005) {
-        Logger.log('  ' + f.store + ' ' + f.day + ' ' + pairs[p].what + ': already ' + want);
-        already++; continue;
+        if (curF) {                       // bare-number formula: ours, already locked
+          Logger.log('  ' + f.store + ' ' + f.day + ' ' + pairs[p].what + ': already ' + want);
+          already++; continue;
+        }
+        Logger.log('  ' + f.store + ' ' + f.day + ' ' + pairs[p].what
+                   + ': already ' + want + ' but UNLOCKED (plain value) -> locking');
+        if (!dryRun) {
+          var lockCell = sh.getRange(r + 1, c + 1);
+          lockCell.setFormula('=' + want);
+          lockCell.setNote(f.note || MRF_NOTE);
+        }
+        locked++; continue;
       }
       Logger.log('  ' + f.store + ' ' + f.day + ' ' + pairs[p].what + ': ' + cur + '  ->  ' + want
                  + (curF ? '   (was locked ' + curF + ')' : ''));
@@ -623,7 +648,8 @@ function _mrfRun(dryRun) {
     Logger.log('  ' + d.store + ' Aug ' + d.day + ': ' + d.why);
   }
   Logger.log((dryRun ? 'PREVIEW: ' : 'DONE: ') + wrote + ' cell(s) ' + (dryRun ? 'would change' : 'written')
-             + ', ' + already + ' already correct, ' + skipped + ' skipped.');
+             + ', ' + locked + ' correct but ' + (dryRun ? 'would be locked' : 'newly locked')
+             + ', ' + already + ' already correct and locked, ' + skipped + ' skipped.');
   if (dryRun) Logger.log('Run mrfFixApply() to write.');
 }
 
