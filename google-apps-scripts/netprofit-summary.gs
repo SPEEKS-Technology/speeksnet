@@ -668,6 +668,28 @@ function _npxSync(preview) {
     var note = 'Same-store: ' + NPX_SAME_STORE.join(' + ') + ' only.\n'
       + 'MPL and BAL have no 2025 history. Including them would print their '
       + 'entire revenue as year-over-year growth.';
+    // ⚠️ WRITE THE TTL LABELS TOO, FOR THE SAME REASON THE STORES' ARE WRITTEN.
+    // This block wrote its VALUES at rowYoY+1..+3 and left the labels alone, so
+    // it silently depended on somebody having typed them in the right four rows.
+    // On 2026-08-31 they were a row lower than the stores', and the preview
+    // showed the result: "YoY" beside a dollar figure, "Last" beside the CURRENT
+    // total, and "Current" beside a percentage. Every number correct, every
+    // label attached to the wrong one — the kind of wrong that gets read off a
+    // screen and believed. Owning both halves is what makes the block align by
+    // construction rather than by luck.
+    plan(tb + NPX_OFF_YOY_LBL, rowYoY,     'TTL YoY label',     'YoY');
+    plan(tb + NPX_OFF_VAL_R,   rowYoY,     'TTL YoY header',    'Revenue');
+    plan(tb + NPX_OFF_YOY_LBL, rowYoY + 1, 'TTL YoY "Last"',    'Last');
+    plan(tb + NPX_OFF_YOY_LBL, rowYoY + 2, 'TTL YoY "Current"', 'Current');
+    plan(tb + NPX_OFF_YOY_LBL, rowYoY + 3, 'TTL YoY "Inc/Dec"', 'Inc/Dec');
+    // ⚠️ AND CLEAR THE ONE LEFT BEHIND. Moving a four-row block up by one row
+    // leaves its last label orphaned a row below, with nothing beside it — an
+    // "Inc/Dec" against an empty cell reads as a figure that failed to compute
+    // rather than one that moved. Only cleared when it is actually the orphan.
+    if (String(values[rowYoY + 4][tb + NPX_OFF_YOY_LBL]).trim() === 'Inc/Dec') {
+      plan(tb + NPX_OFF_YOY_LBL, rowYoY + 4, 'TTL YoY stale label (cleared)', '');
+    }
+
     plan(tb + NPX_OFF_VAL_R, rowYoY + 1, 'TTL YoY last year', refs(rowYoY + 1), NPX_MONEY, note, true);
     plan(tb + NPX_OFF_VAL_R, rowYoY + 2, 'TTL YoY current',   refs(rowYoY + 2), NPX_MONEY, note, true);
     plan(tb + NPX_OFF_VAL_R, rowYoY + 3, 'TTL YoY Inc/Dec',
