@@ -18088,20 +18088,22 @@ body.tv-body { display: block; background: #eef1f5; }
    reason is what somebody is actually deciding on, and a reviewer who has to
    click to find out why will just press Approve. */
 .lt-why { margin: 3px 0 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
-/* The confirm-before-you-approve line. Amber rather than red: nothing is
-   wrong yet, the reviewer just has to check something we cannot. Block-level so
-   it cannot be read as a trailing clause of the reason above it. */
+/* The check-this-yourself line, as its own bullet under the reason. Red, and
+   asked for in red: it is the one line on the row that is an instruction to the
+   reviewer rather than a description of the listing, and it only appears where
+   we genuinely cannot settle the question from the data — is the game really
+   complete, is this really what the product is called. */
 .lt-caution {
-    display: block;
-    margin: 6px 0 0;
-    padding: 7px 10px;
-    border-left: 3px solid #d97706;
+    margin: 5px 0 1px;
+    padding: 6px 10px;
+    border-left: 3px solid #d1443b;
     border-radius: 0 6px 6px 0;
-    background: #fffbeb;
-    color: #92400e;
-    font-weight: 600;
+    background: #fef2f2;
     line-height: 1.45;
+    list-style: none;
+    margin-left: -16px;   /* out of the ul's bullet indent, back to the edge */
 }
+.lt-why li.lt-caution { color: #a3352c; font-weight: 700; }
 
 /* The scope line. Quiet by default — it is context, not an alarm — and amber
    when it has to admit half the scope is not being applied. */

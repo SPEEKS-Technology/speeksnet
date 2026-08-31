@@ -45463,13 +45463,15 @@ const _LT_TIERS = [
 // — one place writes the English, and it is the place that knows what it found.
 function _ltWhy(f) {
     // A finding's `warn` is a caution the reviewer has to act on BEFORE
-    // approving, so it renders as its own line outside the reason list rather
-    // than as a clause on the end of a sentence somebody skims. Today only CIB
-    // carries one: it is the single edit here that asserts something about the
-    // physical item, and only the person holding the game can settle it.
-    return (f || []).map(x => `<li>${_ecEsc(x.says || '')}`
-        + (x.warn ? `<span class="lt-caution">${_ecEsc(x.warn)}</span>` : '')
-        + `</li>`).join('');
+    // approving, and it gets its OWN BULLET rather than a clause on the end of
+    // the reason. It used to be appended to the sentence, which made the one
+    // line a reviewer most needed to act on the tail of the line they were
+    // already skimming — and made every checked-name row read as a paragraph.
+    // Two findings carry one: CIB (only the person holding the game can settle
+    // whether it is complete) and the checked-name results (judged against
+    // outside product knowledge, not against anything in the listing).
+    return (f || []).map(x => `<li>${_ecEsc(x.says || '')}</li>`
+        + (x.warn ? `<li class="lt-caution">${_ecEsc(x.warn)}</li>` : '')).join('');
 }
 
 // The changed run, located as word indexes into BOTH titles. A word-level diff
@@ -45719,8 +45721,16 @@ function _ltBasis(r) {
         model: ['Model Match', 'Live listings naming the same model number.'],
         category: ['Active Listings', 'Words most live listings in this eBay category use. Active listings, not sold — eBay does not give us sold data.'],
     };
-    const m = map[r.basis] || map.rules;
-    return `<span class="lt-basis lt-basis-${_ecEsc(r.basis || 'rules')}" title="${_ecEsc(m[1])}">${m[0]}</span>`;
+    // ⚠️ NO BADGE FOR THE ORDINARY CASE. Almost every row is found by our own
+    // rules, so an "Our Rules" chip on almost every row said nothing — it was
+    // the default wearing a label. The badge exists to mark the rows that came
+    // from somewhere ELSE (a barcode match, a model match, what live listings
+    // say), and a badge that only appears when there is something to say is
+    // read; one that is always there is furniture.
+    if (!r.basis || r.basis === 'rules') return '';
+    const m = map[r.basis];
+    if (!m) return '';
+    return `<span class="lt-basis lt-basis-${_ecEsc(r.basis)}" title="${_ecEsc(m[1])}">${m[0]}</span>`;
 }
 
 function ltEdit(el) {

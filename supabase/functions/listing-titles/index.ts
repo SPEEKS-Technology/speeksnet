@@ -1653,17 +1653,30 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       const why = String(nameVerdict.why || "").trim();
       const fits = swapped.length <= EBAY_TITLE_MAX;
       if (fits) { title = swapped; fixable = true; }
+      // ⚠️ THE REASON LEADS WITH THE FACT, and the instruction is a SEPARATE
+      // line. This used to be one four-sentence paragraph — what the title
+      // says, what it should say, why, where the judgement came from, and what
+      // to do about it — and a reviewer working through a hundred rows read
+      // the first clause and skipped the rest. The `why` is the part that
+      // settles it ("Hero11 Black is not a 360 camera"), so it goes first and
+      // the correction follows; everything about HOW we know moves to `warn`,
+      // which the page renders as its own red bullet underneath.
+      const tidyWhy = why ? why.replace(/\s+$/, "").replace(/[.;,]$/, "") : "";
       findings.push({
         code: wrongIsWrong ? "name-wrong" : "name-garbled",
         severity: wrongIsWrong ? 3 : 2,
         fixable: fits,
         says: (wrongIsWrong
-          ? `The title says "${wrong}", which is not true of this product — it should be "${right}".`
-          : `"${wrong}" is not a real product name; it looks like "${right}" typed wrong. Nobody searching for this item will use the words in the title, so it is effectively invisible on every channel.`)
-          + (why ? ` ${why.replace(/\s+$/, "").replace(/([^.])$/, "$1.")}` : "")
-          + ` This one is checked against outside product knowledge rather than against your own listing`
-          + (fits ? `, so read the corrected name before approving it.`
-                  : ` — and the correction does not fit in 80 characters, so it is reported without an automatic fix and needs editing by hand.`),
+          ? (tidyWhy
+              ? `${tidyWhy} — "${wrong}" should be "${right}".`
+              : `The title says "${wrong}"; it should be "${right}".`)
+          : `"${wrong}" is not a real product name — it looks like "${right}" typed wrong`
+            + (tidyWhy ? `. ${tidyWhy}.` : `, so nobody searching for it will find this listing.`))
+          + (fits ? "" : ` The correction does not fit in 80 characters, so it needs editing by hand.`),
+        // Only where we genuinely cannot settle it from the listing. Every other
+        // finding on this page is read off the title and the spec table, and
+        // saying so on those rows too would train people to ignore the line.
+        warn: "Checked against outside product knowledge, not against your own listing — verify this one against the product before approving.",
       });
     }
     // Quote not found in the title: the model described an error it could not
