@@ -153,6 +153,23 @@ var MRF_NOTE_0830 = 'Aug 30 verified — no draft orders, no repayment re-listin
   + 'no duplicate refunds landed on the day. Reported figure confirmed correct and '
   + 'pinned as-is. Locked from the daily sync.';
 
+// AUG 31. The Shopify daily sales emails never arrived, so these five cells were
+// BLANK rather than wrong — the figures below are the only ones the sheet will
+// ever get for that day unless the emails turn up late.
+var MRF_NOTE_0831 = 'Aug 31 entered from Shopify directly — the daily sales '
+  + 'emails never arrived, so this cell was blank. Derived from ShopifyQL, draft '
+  + 'orders removed. Real figure. Locked from the daily sync.';
+
+var MRF_NOTE_0831_OVL = 'Aug 31 entered from Shopify directly — the daily sales '
+  + 'emails never arrived. Four draft orders removed (304.96/115.02) and one '
+  + 'repayment re-listing removed: #KS01-14503 (559.99/260.00), the third sale of '
+  + 'KS01-7366A-E9 after both its original AND its phantom duplicate were '
+  + 'refunded. COST ALSO CORRECTED: Shopify reports 415.49 for the day because '
+  + '#KS01-13901 dumps -2400.00 of COGS onto Aug 31 for an order sold Aug 18 that '
+  + 'was never refunded. Aug 18 still carries the +2400, so the day is pinned on '
+  + 'its own trading cost instead. See MRF_FIX for the full working. '
+  + 'Locked from the daily sync.';
+
 // Every earlier fix's note. A cell carrying one of these belongs to that
 // script and must never be rewritten here.
 var MRF_OTHER_NOTES = [
@@ -463,7 +480,91 @@ var MRF_FIX = [
   { store: 'LEE', day: 30, sales: 1237.35, cost:  420.61, note: MRF_NOTE_0830 },
   { store: 'WSP', day: 30, sales:  734.95, cost:  210.01, note: MRF_NOTE_0830 },
   { store: 'MPL', day: 30, sales: 1306.92, cost:  519.00, note: MRF_NOTE_0830 },
-  { store: 'BAL', day: 30, sales:  467.91, cost:  158.46, note: MRF_NOTE_0830 }
+  { store: 'BAL', day: 30, sales:  467.91, cost:  158.46, note: MRF_NOTE_0830 },
+
+  // -------------------------------------------------------------------------
+  // AUG 31 — derived 2026-09-01. ⚠️ THE EMAILS NEVER CAME.
+  // -------------------------------------------------------------------------
+  // Every other day in this file CORRECTS a figure the daily import had already
+  // written. This one SUPPLIES it. Shopify sent no daily sales email for any of
+  // the five stores, so sales_ingest_runs recorded missing_n=5 on both the 12:01
+  // and 13:01 UTC passes and alerted on the second. errors=[] and
+  // unchanged_n=149: the pipeline worked perfectly and had nothing to read.
+  //
+  // The five cells were therefore BLANK, not wrong, and these figures are the
+  // only ones the sheet will get unless the emails arrive late. If they do, the
+  // import re-verifies a 32-day window and would overwrite — which is precisely
+  // what the bare-number-formula lock prevents.
+  //
+  // The buying email DID arrive (cash paid, drawer and safe for Aug 29 and 31,
+  // and the 5-star review counts that ride the same "Day End Report"), so only
+  // Sales and Cost were missing. Nothing else needs entering by hand.
+  //
+  // WSP / MPL / BAL: clean. No drafts, no repayments, no duplicate refunds, and
+  // the ledger test returned nothing. ShopifyQL taken as-is.
+  { store: 'WSP', day: 31, sales: 7198.73, cost: 3142.00, note: MRF_NOTE_0831 },
+  { store: 'MPL', day: 31, sales: 7086.42, cost: 3013.71, note: MRF_NOTE_0831 },
+  //
+  // LEE: no drafts and no repayments. Its 669.98 of refunds STAY IN — #MO01-8576
+  // (-519.99) and #MO01-9229 (-149.99) are in neither the duplicate ledger nor
+  // the at-risk pool, so they are ordinary customer returns and the store really
+  // did lose those sales. The "Marketplace Connect" channel label on them names
+  // the app the ORIGINAL order came through; it is not evidence of a mirror-back.
+  { store: 'LEE', day: 31, sales: 8037.11, cost: 3892.26, note: MRF_NOTE_0831 },
+  //
+  // BAL: one draft order, #MO04-2997, but it is worth 0.00 and its Draft Orders
+  // channel figure is 0. Nothing to remove.
+  { store: 'BAL', day: 31, sales: 8181.65, cost: 3381.04, note: MRF_NOTE_0831 },
+  //
+  // ===================== OVL, which needed all three ======================
+  //
+  // 1. DRAFT ORDERS — four, 304.96 / 115.02:
+  //      #KS01-14495 224.99/115.00   #KS01-14504 32.99/0.01
+  //      #KS01-14514  32.99/  0.01   #KS01-14523 13.99/0.00
+  //
+  // 2. ⚠️ THREE OF THOSE DRAFTS ARE ALSO REPAYMENTS, AND ARE ALREADY OUT.
+  // The ledger test threw six candidates and every one is OVL. #KS01-14495,
+  // #KS01-14504 and #KS01-14514 each satisfy it AND sit in the 304.96 of drafts,
+  // so subtracting them again would take 290.97 out of OVL twice — the same trap
+  // #KS01-14468 set on Aug 29, which is why the draft list is now always read
+  // before the repayment list is applied.
+  //   Two more candidates net to zero on the day and need nothing:
+  //      #KS01-14490  VOIDED and cancelled (sales 0, cost 0)
+  //      #KS01-14494  sold AND refunded on Aug 31 (sales 0, cost 0)
+  //   One is real and is NOT a draft:
+  //      #KS01-14503  559.99 / 260.00 — KS01-7366A-E9, whose history is the
+  //      textbook shape: sold Aug 16 (#KS01-13798, refunded 559.99), phantom
+  //      duplicate Aug 25 (#KS01-14279, refunded 559.99, in the ledger), then
+  //      bought again Aug 31 for 559.99 to the cent. The item shipped, so this
+  //      cannot be a resale off the shelf.
+  //
+  // 3. ⚠️ THE COST IS NOT WHAT SHOPIFY REPORTS, AND THIS IS THE ONE JUDGEMENT
+  //    CALL IN THE DAY. ShopifyQL gives OVL a cost of 415.49 on 6274.63 of
+  //    sales — a 93.4% margin, against 51.6 / 56.4 / 57.5 / 58.7 at the other
+  //    four stores. The cause is four rows carrying COGS with NO sales:
+  //      #KS01-13901  -2400.00      #KS01-13686  -205.00
+  //      #KS01-13071    -15.00      #KS01-13439    -5.00
+  //    #KS01-13901 is an Aorus PC sold on Aug 18, still PAID, still FULFILLED,
+  //    NEVER REFUNDED — and Aug 18 STILL CARRIES ITS +2400. The variant's unit
+  //    cost is still 2400.00 in Shopify today, so nobody re-costed the product;
+  //    the line item was removed from the order on Aug 31, which reverses COGS
+  //    on the day of the edit and leaves the sale where it was.
+  //
+  //    So the 2625.00 belongs to Aug 18 and earlier, all of which already hold
+  //    their positive legs. Pinning 415.49 would hand OVL a 93% margin day and
+  //    carry it into the bonus; pinning the day's own trading cost keeps every
+  //    day honest and leaves the discrepancy at MONTH level, where it is
+  //    documented here and findable.
+  //
+  //    ⚠️ THE MONTH NOW OVER-COUNTS OVL COST BY 2625.00 and understates August
+  //    GP by the same. The clean fix is to restate AUG 18's cost, which is
+  //    inside the locked Aug 15-25 range and needs MRF_FORCE — and needs somebody
+  //    to decide first whether that PC's cost really was 2400.00 against a
+  //    2349.99 sale, because as booked Aug 18 sold it at a 50.01 loss.
+  //
+  //   OVL sales 6274.63 - 304.96 (drafts) - 559.99 (repayment) = 5409.68
+  //   OVL cost  3040.49 - 115.02 (drafts) - 260.00 (repayment) = 2665.47   (50.7%)
+  { store: 'OVL', day: 31, sales: 5409.68, cost: 2665.47, note: MRF_NOTE_0831_OVL }
 ];
 
 // ---------------------------------------------------------------------------
