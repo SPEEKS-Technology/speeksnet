@@ -1315,8 +1315,16 @@ function mrPostRollRepair(ym, apply) {
     Logger.log('   month name : %s', r.monthNames.length ? r.monthNames.join('  ') : 'nothing to change');
     Logger.log('   B2B cleared: %s', r.b2bCleared.length ? r.b2bCleared.length + ' cells  ' + r.b2bCleared.join(' ') : 'nothing typed');
   });
-  if (!apply) Logger.log("Run mrPostRollRepair('" + ym + "', true) to write.");
+  if (!apply) Logger.log('Nothing was written. Run mrRepairApply to write it.');
 }
+
+// ⚠️ THE RUN DROPDOWN CANNOT PASS AN ARGUMENT. It lists bare function names, so
+// mrPostRollRepair picked from the menu always arrives with apply undefined and
+// always dry-runs — which is safe, and completely undiscoverable as the reason
+// nothing happened. These two are the pair you actually run, named the way
+// mirror-fix.gs names its own (mrfFixPreview / mrfFixApply).
+function mrRepairPreview() { mrPostRollRepair(_mrCentralMonth(), false); }
+function mrRepairApply()   { mrPostRollRepair(_mrCentralMonth(), true); }
 
 // Next month's tabs with a (PREVIEW) suffix, to be checked beside the real ones.
 // Nothing reads a PREVIEW tab — the name does not match what the site's parsers
