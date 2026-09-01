@@ -43,7 +43,31 @@
 
 var CPS_TZ     = 'America/Chicago';
 var CPS_BASE   = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1';
-var CPS_SECRET = 'sp33ks-sync-k3y-2026-x9mq';
+
+// ⚠️ ONE-TIME SETUP, AND WHY IT IS NOT JUST TYPED IN HERE LIKE THE OTHER SCRIPTS.
+// Project Settings -> Script Properties -> Add script property
+//     name: SYNC_SECRET    value: (the shared sync key)
+//
+// Every other .gs in this project carries that key as a plain string, and this
+// repository is PUBLIC on github.com/SPEEKS-Technology/speeksnet. The key is the
+// only gate in front of refund-export, outreach-list and sales-true-daily, so
+// anyone who reads the repo can pull all 415 refunded orders with buyer names
+// and the company's whole revenue with one curl. That is already true and this
+// file cannot undo it — but it is a brand-new file that nothing depends on yet,
+// which makes it the cheapest place to stop making it worse.
+//
+// Fixing it properly means rotating the key and moving all 67 files to secrets;
+// that breaks every deployed function and cron until they are redeployed, so it
+// is a decision to take deliberately, not a side effect of this report.
+function _cpsSecret() {
+  var v = PropertiesService.getScriptProperties().getProperty('SYNC_SECRET');
+  if (!v) {
+    throw new Error('SYNC_SECRET is not set. Project Settings -> Script Properties '
+      + '-> Add script property, name SYNC_SECRET, value the shared sync key. '
+      + 'See the note at the top of company-performance-sheet.gs.');
+  }
+  return v;
+}
 
 // The month this workbook reports on, and the month it reads from the sheet.
 var CPS_MONTH      = '2026-08';
@@ -144,7 +168,7 @@ function _cpsDollars(v) {
 
 function _cpsFetch(path) {
   var url = CPS_BASE + '/' + path + (path.indexOf('?') >= 0 ? '&' : '?')
-          + 'secret=' + encodeURIComponent(CPS_SECRET);
+          + 'secret=' + encodeURIComponent(_cpsSecret());
   var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
   if (res.getResponseCode() !== 200) {
     throw new Error(path + ' returned HTTP ' + res.getResponseCode() + ': '
