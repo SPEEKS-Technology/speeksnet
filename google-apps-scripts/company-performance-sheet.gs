@@ -399,7 +399,6 @@ function buildCompanyPerformance() {
 
   // ---- layer 2: what actually left ---------------------------------------
   var affected = ref.rows.filter(function (r) { return _cpsMoney(r.ebay_refund_total) > 0; });
-  var stillPaid = ref.rows.filter(function (r) { return _cpsMoney(r.ebay_refund_total) === 0; });
   var refByStore = {}, shipByStore = {}, shipN = {};
   CPS_STORES.forEach(function (s) { refByStore[s.code] = 0; shipByStore[s.code] = 0; shipN[s.code] = 0; });
   affected.forEach(function (r) {
@@ -466,7 +465,7 @@ function buildCompanyPerformance() {
   var dbl = _cpsDoubleCount(daily);
 
   var ctx = { ss: ss, t0: t0, daily: daily, ref: ref, reach: reach, st: st, sheet: sheet,
-              byStore: byStore, byDay: byDay, affected: affected, stillPaid: stillPaid,
+              byStore: byStore, byDay: byDay, affected: affected,
               refByStore: refByStore, shipByStore: shipByStore, shipN: shipN,
               rec: rec, recTtl: recTtl, dbl: dbl };
 
@@ -477,7 +476,6 @@ function buildCompanyPerformance() {
   _cpsDaily(ctx);
   _cpsRecovery(ctx);
   _cpsRefundedOrders(ctx);
-  _cpsStillExposed(ctx);
   _cpsReconcile(ctx);
 
   var first = ss.getSheets()[0];
@@ -663,11 +661,6 @@ function _cpsSummary(c) {
   push('The fault cost us', hit);
   push('  which is this share of the month', gpHad ? hit / gpHad : 0);
   push('');
-  push('STILL AT RISK');
-  push('Orders refunded in Shopify that eBay has NOT refunded yet', c.stillPaid.length);
-  push('  if they follow, this much more leaves',
-    _cpsSum(c.stillPaid.map(function (r) { return _cpsMoney(r.shopify_refund); })));
-  push('');
 
   // ---- where the top two lines come from ----
   push('WHERE THESE NUMBERS COME FROM');
@@ -791,10 +784,6 @@ function _cpsReadMe(c) {
     ['WHAT IS NOT IN THIS NUMBER'],
     ['Operating costs.', 'This is revenue and gross profit. Rent, payroll, marketing and eBay/card fees are not here. '
       + 'This is not a P&L; it is the top of one.'],
-    ['The still-exposed orders.', c.stillPaid.length + ' orders (' + $(_cpsSum(c.stillPaid.map(function (r) {
-        return _cpsMoney(r.shopify_refund); }))) + ') are refunded in Shopify and still show PAID on eBay. They have '
-      + 'NOT been subtracted, because the money has not left. If the hourly job fires again they will, so treat that '
-      + 'figure as exposure, not loss. See the Still Exposed tab.'],
     ['Goods that came back.', c.rec.returnedN + ' buyers are marked as returning the item. Their cost is still counted '
       + 'as lost per choice 3. The Recovery tab shows what that decision is worth so it can be revisited.'],
     [''],
@@ -810,11 +799,20 @@ function _cpsReadMe(c) {
     return [r[0] || '', r.length > 1 ? r[1] : ''];
   }));
   sh.getRange(1, 1).setFontSize(16).setFontWeight('bold').setFontColor(CPS_HEAD);
-  [3, 9, 18, 24, 29].forEach(function (r) {
-    sh.getRange(r, 1, 1, 2).setFontWeight('bold').setFontColor(CPS_HEAD).setBackground(CPS_SOFT);
-  });
-  sh.getRange(19, 1, 4, 1).setFontWeight('bold');
-  sh.getRange(25, 1, 3, 1).setFontWeight('bold');
+  for (var fr = 2; fr <= L.length; fr++) {
+    var lbl = String(L[fr - 1][0] || '');
+    var second = L[fr - 1].length > 1 ? String(L[fr - 1][1] || '') : '';
+    var letters = lbl.replace(/[^A-Za-z]/g, '');
+    if (!letters) continue;
+    if (!second && letters.length > 4 && lbl === lbl.toUpperCase()) {
+      sh.getRange(fr, 1, 1, 2).setFontWeight('bold').setFontColor(CPS_HEAD).setBackground(CPS_SOFT);
+    } else if (second && lbl === lbl.toUpperCase() && letters.length > 4) {
+      // a titled paragraph: "3. THE COST OF THOSE GOODS STAYS IN." + its prose
+      sh.getRange(fr, 1).setFontWeight('bold');
+    } else if (second && /\.$/.test(lbl) && lbl.length < 40) {
+      sh.getRange(fr, 1).setFontWeight('bold');
+    }
+  }
   sh.setColumnWidth(1, 330);
   sh.setColumnWidth(2, 760);
   sh.getRange(1, 1, L.length, 2).setVerticalAlignment('top').setWrap(true).setFontColor(CPS_INK);
@@ -860,17 +858,15 @@ function _cpsBridge(c) {
       -(gpHad - gp), -(gpHad - gp) / gpHad],
     ['Orders refunded without anyone asking', c.affected.length, ''],
     ['of those, already delivered (buyer kept goods AND cash)',
-      c.shipN.OVL + c.shipN.LEE + c.shipN.WSP + c.shipN.MPL + c.shipN.BAL, ''],
-    ['Still exposed: refunded in Shopify, still PAID on eBay',
-      _cpsSum(c.stillPaid.map(function (r) { return _cpsMoney(r.shopify_refund); })), '']
+      c.shipN.OVL + c.shipN.LEE + c.shipN.WSP + c.shipN.MPL + c.shipN.BAL, '']
   ];
   sh.getRange(1, 1, rows.length, 3).setValues(rows);
   sh.getRange(1, 1).setFontSize(15).setFontWeight('bold').setFontColor(CPS_HEAD);
   sh.getRange(2, 1).setFontColor('#6b7280').setFontStyle('italic');
   sh.getRange(4, 1, 1, 3).setFontWeight('bold').setBackground(CPS_HEAD).setFontColor('#ffffff');
-  sh.getRange(5, 2, 16, 1).setNumberFormat(CPS_MONEY);
+  sh.getRange(5, 2, 15, 1).setNumberFormat(CPS_MONEY);
   sh.getRange(18, 2, 2, 1).setNumberFormat('#,##0');
-  sh.getRange(5, 3, 16, 1).setNumberFormat(CPS_PCT);
+  sh.getRange(5, 3, 15, 1).setNumberFormat(CPS_PCT);
   [8, 11].forEach(function (r) {
     sh.getRange(r, 1, 1, 3).setFontWeight('bold').setBackground(CPS_SOFT).setBorder(
       true, null, true, null, null, null, CPS_HEAD, SpreadsheetApp.BorderStyle.SOLID);
@@ -878,7 +874,6 @@ function _cpsBridge(c) {
   sh.getRange(6, 1, 1, 3).setBackground(CPS_LOSS);
   sh.getRange(16, 1, 1, 3).setFontWeight('bold').setFontColor(CPS_HEAD).setBackground(CPS_SOFT);
   sh.getRange(17, 1, 1, 3).setBackground(CPS_LOSS);
-  sh.getRange(20, 1, 1, 3).setBackground(CPS_WARN);
   sh.setColumnWidth(1, 420); sh.setColumnWidth(2, 150); sh.setColumnWidth(3, 120);
   sh.getRange(1, 1, rows.length, 3).setFontColor(CPS_INK);
   sh.getRange(1, 1).setFontColor(CPS_HEAD);
@@ -1016,8 +1011,6 @@ function _cpsRecovery(c) {
   if (c.st.ok) {
     var live = {}, n = 0;
     c.affected.forEach(function (r) { live[r.ebay_order_id] = _cpsMoney(r.ebay_refund_total); });
-    var zero = {};
-    c.stillPaid.forEach(function (r) { zero[r.ebay_order_id] = true; });
     var missingRows = [], phantomRows = [], phantom$ = 0, missing$ = 0;
     Object.keys(live).forEach(function (id) {
       if (!c.st.byOrder[id]) { missingRows.push(id); missing$ = _cpsMoney(missing$ + live[id]); }
@@ -1154,34 +1147,6 @@ function _cpsRefundedOrders(c) {
     ];
     sh.setConditionalFormatRules(rules);
   }
-}
-
-// ------------------------------------------------------------ Still Exposed --
-function _cpsStillExposed(c) {
-  var sh = c.ss.insertSheet('Still Exposed');
-  var head = ['Store', 'Shopify order', 'eBay order', 'SKU', 'Refunded in Shopify',
-              'eBay payment status', 'Delivered?', 'Shopify refunded at (Central)', 'Batch'];
-  var body = c.stillPaid.map(function (r) {
-    return [r.store_code, r.order_name, r.ebay_order_id, r.sku, _cpsMoney(r.shopify_refund),
-            r.ebay_payment_status, r.ebay_fulfillment_status === 'FULFILLED' ? 'yes' : 'no',
-            r.shopify_refunded_at ? Utilities.formatDate(new Date(r.shopify_refunded_at), CPS_TZ, 'yyyy-MM-dd HH:mm') : '',
-            r.batch];
-  }).sort(function (a, b) { return b[4] - a[4]; });
-
-  sh.getRange(1, 1, 1, 1).setValue('STILL EXPOSED — refunded in Shopify, eBay has not (yet) followed. '
-    + 'NOT subtracted anywhere in this workbook: the money has not left. Measured '
-    + _cpsStamp(c.ref.measured_to) + '.');
-  sh.getRange(1, 1, 1, head.length).merge().setWrap(true).setBackground(CPS_WARN).setFontColor(CPS_INK);
-  sh.getRange(2, 1, 1, head.length).setValues([head])
-    .setFontWeight('bold').setBackground(CPS_HEAD).setFontColor('#ffffff').setWrap(true);
-  if (body.length) {
-    sh.getRange(3, 1, body.length, head.length).setValues(body);
-    sh.getRange(3, 5, body.length, 1).setNumberFormat(CPS_MONEY);
-    sh.getRange(3, 1, body.length, head.length).setFontColor(CPS_INK);
-  }
-  var w = [64, 130, 130, 190, 140, 165, 100, 175, 230];
-  for (var i = 0; i < head.length; i++) sh.setColumnWidth(i + 1, w[i]);
-  sh.setFrozenRows(2);
 }
 
 // ----------------------------------------------------------- Reconciliation --
