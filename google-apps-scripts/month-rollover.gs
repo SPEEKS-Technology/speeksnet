@@ -910,6 +910,8 @@ function _mrReport(r) {
         ? rep.carried.monthNames.join('  ') : 'no typed month cell on this tab'));
       Logger.log('  b2b    : ' + (rep.carried.b2bCleared.length
         ? rep.carried.b2bCleared.length + ' typed cells cleared' : 'nothing typed'));
+      Logger.log('  fills  : ' + (rep.carried.fillsCleared.length
+        ? rep.carried.fillsCleared.length + ' goal fills cleared' : 'already clear'));
     }
     Logger.log('  rows   : +' + rep.rowsInserted + ' / -' + rep.rowsDeleted);
     Logger.log('  cleared: ' + rep.cleared + ' typed cells');
@@ -1075,6 +1077,16 @@ function mrPostRollAudit(ym) {
       for (var c = 0; c < lastCol; c++) {
         var v = (values[r] || [])[c];
         if (v === '' || v === null || v === undefined) continue;
+        // A date-valued month header stringifies to 56 characters and used to be
+        // dropped by the length guard below — so this audit reported "nothing to
+        // change" for the Sales tab while B2 plainly read August on screen.
+        if (v instanceof Date) {
+          Logger.log('   %s  %s  (DATE) %s %s', _mrA1(r, c),
+            (v.getMonth() === mi && v.getFullYear() === Number(ym.slice(0, 4))) ? 'OK' : 'STALE',
+            MR_MON_ABBR[v.getMonth()], v.getFullYear());
+          monthCells++;
+          continue;
+        }
         var txt = String(v);
         if (txt.length > 40) continue;
         var hit = null;
@@ -1218,6 +1230,35 @@ function _mrMonthNamePlan(values, formulas, targetYm, lastRow, lastCol) {
       if ((formulas[r] || [])[c]) continue;            // follows another cell
       var raw = (values[r] || [])[c];
       if (raw === '' || raw === null || raw === undefined) continue;
+
+      // ⚠️ THE SALES TAB'S MONTH IS A DATE, NOT TEXT, AND THAT IS WHY BOTH THIS
+      // PASS AND THE AUDIT WALKED PAST IT. B2 is a real Date formatted mmmm yyyy,
+      // so it READS "August 2026" and stringifies to
+      //   "Sat Aug 01 2026 00:00:00 GMT-0500 (Central Daylight Time)"
+      // — 56 characters, past the length guard below, and matching no month
+      // regex either. The audit reported "nothing to change" on a tab that was
+      // plainly wrong on screen, which is the worst kind of clean result.
+      //
+      // The tell was in the screenshot before it was in the data: the cell is
+      // RIGHT-aligned, and Sheets right-aligns dates and numbers while text goes
+      // left. A month header that is a date must be written back as a date, or
+      // the mmmm yyyy format has nothing to format.
+      if (raw instanceof Date) {
+        if (raw.getFullYear() === Number(yr) && raw.getMonth() === mi) continue;
+        // Keep the day where it was, clamped: new Date(2026, 8, 31) silently
+        // becomes October 1st, which would move the header a whole month.
+        var dim = new Date(Number(yr), mi + 1, 0).getDate();
+        var d = Math.min(raw.getDate() || 1, dim);
+        plan.push({
+          row: r, col: c, isDate: true,
+          from: MR_MON_ABBR[raw.getMonth()] + ' ' + raw.getFullYear(),
+          to: MR_MON_ABBR[mi] + ' ' + yr,
+          dateValue: new Date(Number(yr), mi, d,
+                              raw.getHours(), raw.getMinutes(), raw.getSeconds()),
+        });
+        continue;
+      }
+
       var txt = String(raw).trim();
       if (txt.length > 20) continue;
       for (var m = 0; m < 12; m++) {
@@ -1275,6 +1316,33 @@ function _mrB2bPlan(values, formulas, lastRow, lastCol) {
   return plan;
 }
 
+// ---- 3. the goal fills ------------------------------------------------------
+// ⚠️ THE ROLL IS THE RIGHT PLACE FOR THIS, NOT THE IMPORTER. The importer paints
+// green at 100% and red below, and it now leaves a block alone until that block
+// has a day with sales on it — but on the 1st the roll has ALREADY copied last
+// month's fill, and the importer's next run is the following morning, by which
+// time the month HAS sales and the honest paint is red. So the white would never
+// actually be seen.
+//
+// The roll knows something the importer cannot: this tab is brand new and has
+// never had a figure in it. That is the one moment "no colour" is certainly
+// right, so that is where it is done.
+//
+// Bounded to labels containing "gp goal" on purpose: the Buy tab has a bare
+// "goal" at AE2 whose neighbours are the 40/35/40 buying-day targets, and those
+// are nobody's business here.
+function _mrGoalFillPlan(values, lastRow, lastCol) {
+  var plan = [];
+  for (var r = 0; r < lastRow; r++) {
+    for (var c = 0; c + 1 < lastCol; c++) {
+      var t = String((values[r] || [])[c] || '').trim().toLowerCase();
+      if (t.indexOf('gp goal') < 0) continue;
+      plan.push({ row: r, col: c + 1 });     // the figure sits one to the right
+    }
+  }
+  return plan;
+}
+
 // Both passes against one tab. Returns what it did, or would do.
 function _mrCarryOverPass(tab, targetYm, dryRun) {
   var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
@@ -1283,15 +1351,28 @@ function _mrCarryOverPass(tab, targetYm, dryRun) {
 
   var names = _mrMonthNamePlan(values, formulas, targetYm, lastRow, lastCol);
   var b2b = _mrB2bPlan(values, formulas, lastRow, lastCol);
-  var out = { monthNames: [], b2bCleared: [] };
+  var fills = _mrGoalFillPlan(values, lastRow, lastCol);
+  var out = { monthNames: [], b2bCleared: [], fillsCleared: [] };
 
   names.forEach(function (p) {
-    out.monthNames.push(_mrA1(p.row, p.col) + ' "' + p.from + '" -> "' + p.to + '"');
-    if (!dryRun) tab.getRange(p.row + 1, p.col + 1).setValue(p.to);
+    out.monthNames.push(_mrA1(p.row, p.col) + ' ' + (p.isDate ? '(date) ' : '')
+      + '"' + p.from + '" -> "' + p.to + '"');
+    // A date cell gets a Date. Writing the string "September 2026" over it would
+    // read correctly and quietly break every formula that does date arithmetic
+    // on it, plus the mmmm yyyy format it is displayed through.
+    if (!dryRun) tab.getRange(p.row + 1, p.col + 1)
+      .setValue(p.isDate ? p.dateValue : p.to);
   });
   b2b.forEach(function (p) {
     out.b2bCleared.push(_mrA1(p.row, p.col) + '[' + p.was + ']');
     if (!dryRun) tab.getRange(p.row + 1, p.col + 1).clearContent();
+  });
+  fills.forEach(function (p) {
+    var cell = tab.getRange(p.row + 1, p.col + 1);
+    var had = String(cell.getBackground()).toLowerCase();
+    if (had === '#ffffff' || had === 'white') return;      // already clear
+    out.fillsCleared.push(_mrA1(p.row, p.col) + '[' + had + ']');
+    if (!dryRun) cell.setBackground(null);
   });
   return out;
 }
@@ -1314,6 +1395,7 @@ function mrPostRollRepair(ym, apply) {
     Logger.log('-- %s', tab.getName());
     Logger.log('   month name : %s', r.monthNames.length ? r.monthNames.join('  ') : 'nothing to change');
     Logger.log('   B2B cleared: %s', r.b2bCleared.length ? r.b2bCleared.length + ' cells  ' + r.b2bCleared.join(' ') : 'nothing typed');
+    Logger.log('   goal fills : %s', r.fillsCleared.length ? r.fillsCleared.length + ' cleared  ' + r.fillsCleared.join(' ') : 'already clear');
   });
   if (!apply) Logger.log('Nothing was written. Run mrRepairApply to write it.');
 }
