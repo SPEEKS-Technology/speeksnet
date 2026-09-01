@@ -164,11 +164,12 @@ var MRF_NOTE_0831_OVL = 'Aug 31 entered from Shopify directly — the daily sale
   + 'emails never arrived. Four draft orders removed (304.96/115.02) and one '
   + 'repayment re-listing removed: #KS01-14503 (559.99/260.00), the third sale of '
   + 'KS01-7366A-E9 after both its original AND its phantom duplicate were '
-  + 'refunded. COST ALSO CORRECTED: Shopify reports 415.49 for the day because '
-  + '#KS01-13901 dumps -2400.00 of COGS onto Aug 31 for an order sold Aug 18 that '
-  + 'was never refunded. Aug 18 still carries the +2400, so the day is pinned on '
-  + 'its own trading cost instead. See MRF_FIX for the full working. '
-  + 'Locked from the daily sync.';
+  + 'refunded. ⚠️ THE LOW COST IS REAL, NOT AN ERROR: #KS01-13901, an Aorus PC '
+  + 'sold Aug 18, was genuinely returned on Aug 31 and restocked, reversing '
+  + '2400.00 of COGS. Shopify records the refund as ZERO DOLLARS, so the sale '
+  + 'stays booked on Aug 18 and only the cost comes back — which is why this day '
+  + 'reads a 99% margin. If the customer was in fact paid back outside Shopify, '
+  + 'this cell needs 2349.99 taken off sales as well. Locked from the daily sync.';
 
 // Every earlier fix's note. A cell carrying one of these belongs to that
 // script and must never be rewritten here.
@@ -538,33 +539,39 @@ var MRF_FIX = [
   //      bought again Aug 31 for 559.99 to the cent. The item shipped, so this
   //      cannot be a resale off the shelf.
   //
-  // 3. ⚠️ THE COST IS NOT WHAT SHOPIFY REPORTS, AND THIS IS THE ONE JUDGEMENT
-  //    CALL IN THE DAY. ShopifyQL gives OVL a cost of 415.49 on 6274.63 of
-  //    sales — a 93.4% margin, against 51.6 / 56.4 / 57.5 / 58.7 at the other
-  //    four stores. The cause is four rows carrying COGS with NO sales:
+  // 3. ⚠️ A 99% MARGIN DAY THAT IS NOT A MISTAKE. ShopifyQL gives OVL a cost of
+  //    415.49 on 6274.63 of sales, against 51.6 / 56.4 / 57.5 / 58.7 at the other
+  //    four stores. Four rows carry COGS with NO sales against them:
   //      #KS01-13901  -2400.00      #KS01-13686  -205.00
   //      #KS01-13071    -15.00      #KS01-13439    -5.00
-  //    #KS01-13901 is an Aorus PC sold on Aug 18, still PAID, still FULFILLED,
-  //    NEVER REFUNDED — and Aug 18 STILL CARRIES ITS +2400. The variant's unit
-  //    cost is still 2400.00 in Shopify today, so nobody re-costed the product;
-  //    the line item was removed from the order on Aug 31, which reverses COGS
-  //    on the day of the edit and leaves the sale where it was.
   //
-  //    So the 2625.00 belongs to Aug 18 and earlier, all of which already hold
-  //    their positive legs. Pinning 415.49 would hand OVL a 93% margin day and
-  //    carry it into the bonus; pinning the day's own trading cost keeps every
-  //    day honest and leaves the discrepancy at MONTH level, where it is
-  //    documented here and findable.
+  //    ⚠️ CORRECTED 2026-09-01, AND THE FIRST READING WAS WRONG. This entry
+  //    originally excluded the 2625.00 and pinned OVL on its trading cost of
+  //    2665.47, on the reasoning that #KS01-13901 was "never refunded" and the
+  //    reversal therefore belonged to Aug 18. Ethan: the PC was a GENUINE RETURN.
+  //    The order record settles it — there IS a refund, Refund/1155646816358,
+  //    created 2026-08-31T18:42:28Z, with currentQuantity and refundableQuantity
+  //    both 0, so the item came back and was restocked.
   //
-  //    ⚠️ THE MONTH NOW OVER-COUNTS OVL COST BY 2625.00 and understates August
-  //    GP by the same. The clean fix is to restate AUG 18's cost, which is
-  //    inside the locked Aug 15-25 range and needs MRF_FORCE — and needs somebody
-  //    to decide first whether that PC's cost really was 2400.00 against a
-  //    2349.99 sale, because as booked Aug 18 sold it at a 50.01 loss.
+  //    What made it look like no refund at all is that the refund is for ZERO
+  //    DOLLARS. displayFinancialStatus is still PAID and totalRefunded is 0.00.
+  //    A zero-dollar refund is not the same thing as no refund, and reading
+  //    "refunded: 0" as "never returned" is what produced the wrong pin.
+  //
+  //    So the goods came back and, as Shopify has it, the cash did not. The sale
+  //    stays booked on Aug 18, only the 2400.00 of cost comes back, and OVL
+  //    really did clear an abnormal margin on Aug 31. Taking the reversal out
+  //    would have understated August GP by 2625.00 to make one day look normal.
+  //
+  //    ⚠️ ONE THING COULD STILL CHANGE THIS. If the customer was paid back
+  //    OUTSIDE Shopify — card terminal, cash drawer, store credit — then the
+  //    2349.99 of sales never reversed anywhere and this cell is that much too
+  //    high. Shopify cannot see such a refund, so no query settles it; only the
+  //    store can say. If it happened, restate to sales 3059.69 / cost 40.47.
   //
   //   OVL sales 6274.63 - 304.96 (drafts) - 559.99 (repayment) = 5409.68
-  //   OVL cost  3040.49 - 115.02 (drafts) - 260.00 (repayment) = 2665.47   (50.7%)
-  { store: 'OVL', day: 31, sales: 5409.68, cost: 2665.47, note: MRF_NOTE_0831_OVL }
+  //   OVL cost   415.49 - 115.02 (drafts) - 260.00 (repayment) =   40.47   (99.3%)
+  { store: 'OVL', day: 31, sales: 5409.68, cost:   40.47, note: MRF_NOTE_0831_OVL }
 ];
 
 // ---------------------------------------------------------------------------
