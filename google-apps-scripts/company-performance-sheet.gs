@@ -101,11 +101,29 @@ var CPS_HEADER_ROWS = 3;
 // ⚠️ FILL THIS IN — the outreach workbook, converted to a Google Sheet.
 var CPS_REFUND_BOOK_ID = '';
 
-// Statuses that mean "the money came back". Matched case-insensitively after
-// trimming. Set from what cpsStatusCensus actually reports; every value found
-// and NOT counted is printed on the Recovery tab with its dollar amount, so a
-// missing word here is visible on the face of the document rather than silent.
-var CPS_PAID_STATUSES = ['paid', 'repaid', 'paid back', 'replied - paying', 'paying'];
+// Statuses that mean "the money came back", from Ethan 2026-09-01: the managers
+// type PAID when a customer settles a draft order, and PAID LISTING <n> when the
+// customer buys a replacement eBay listing put up for them to pay through.
+//
+// ⚠️ PREFIX MATCH, NOT EXACT. "PAID LISTING 3" is a different string from "PAID
+// LISTING 7", and an exact-match list would silently skip every one of them and
+// under-report the recovery. Anything beginning with the word "paid" counts;
+// every distinct value found is printed on the Recovery tab with its amount, so
+// what was counted is visible rather than buried in a mapping.
+var CPS_PAID_PREFIXES = ['paid', 'repaid'];
+// Exact values that also mean paid but do not start with the word.
+var CPS_PAID_STATUSES = ['replied - paying', 'paying'];
+
+function _cpsIsPaid(status) {
+  var n = _cpsNorm(status);
+  if (!n) return false;
+  if (CPS_PAID_STATUSES.indexOf(n) >= 0) return true;
+  for (var i = 0; i < CPS_PAID_PREFIXES.length; i++) {
+    var p = CPS_PAID_PREFIXES[i];
+    if (n === p || n.indexOf(p + ' ') === 0) return true;
+  }
+  return false;
+}
 
 // Statuses that mean the goods came back to us instead of the money. Reported
 // as a SEPARATE, clearly-marked line and deliberately NOT in the headline: the
@@ -114,22 +132,25 @@ var CPS_PAID_STATUSES = ['paid', 'repaid', 'paid back', 'replied - paying', 'pay
 // size of that choice without it being made for them.
 var CPS_RETURNED_STATUSES = ['returned', 'replied - returning', 'returning', 'item returned'];
 
-// ⚠️ THE DOUBLE COUNT, AND WHY IT IS SETTLED BY EVIDENCE RATHER THAN BY A NOTE.
-// A buyer can "pay us back" two ways. If they sent money outside Shopify, that
-// cash is nowhere in the sales figure and adding it back is right. But if they
-// paid a draft-order invoice or simply bought the item again, that is a NEW
-// Shopify order which is ALREADY inside true_sales — adding it to recovery as
-// well counts the same money twice, in a document going to the CFO.
+// ⚠️ FALSE, AND THE REASON MATTERS — IT FLIPPED WHEN THE BASELINE CHANGED.
+// While this workbook rebuilt sales from Shopify, a customer who repaid by
+// paying a draft-order invoice or buying a replacement listing was ALREADY
+// inside that figure, so adding them to recovery too would have counted the
+// money twice. Excluding them was right.
 //
-// resale-check settles it per order: it looks for a later sale of the same SKU
-// at the same store after the refund timestamp and returns RESOLD with the
-// order number, date and amount. A sampled 25 orders per store came back about
-// a quarter RESOLD, so this is not a hypothetical.
+// The baseline is the Sales Summary now, and the Sales Summary has draft orders
+// and repayment re-listings taken OUT of it by hand, every day — that is the
+// daily routine, and mirror-fix.gs records each removal by order number
+// ("draft orders removed", "repayment re-listing removed: #KS01-14503"). So the
+// repayment money is NOT in the base, and excluding it here would lose it
+// entirely: the workbook would show a recovery of zero while customers were
+// actually paying us back.
 //
-// Default is to EXCLUDE a resold order from the add-back and say so on the face
-// of the document. Set false to include it anyway; the exclusion list is
-// printed either way, so the choice is never invisible.
-var CPS_EXCLUDE_RESOLD_FROM_RECOVERY = true;
+// Same evidence, opposite conclusion, because the question changed. Left as a
+// switch, and the resale finding is still measured and still shown on the
+// Refunded Orders tab, because "this buyer paid by re-buying" is worth seeing
+// even when it does not change the arithmetic.
+var CPS_EXCLUDE_RESOLD_FROM_RECOVERY = false;
 
 // Which orders to spend resale-check calls on. 'paid' is the decision-relevant
 // set and keeps the run inside Apps Script's execution limit; 'all' sweeps every
@@ -329,7 +350,7 @@ function cpsStatusCensus() {
              _cpsPad('$ REFUNDED', 14), 'COUNTED AS');
   for (var k = 0; k < keys.length; k++) {
     var t = tally[keys[k]], n = _cpsNorm(keys[k]);
-    var role = CPS_PAID_STATUSES.indexOf(n) >= 0 ? 'PAID -> added back'
+    var role = _cpsIsPaid(keys[k]) ? 'PAID -> added back'
              : (CPS_RETURNED_STATUSES.indexOf(n) >= 0 ? 'returned (disclosed only)' : 'not recovered');
     Logger.log('%s  %s  %s  %s', _cpsPad(keys[k], 26), _cpsPad(String(t.n), 6),
                _cpsPad('$' + t.$.toFixed(2), 14), role);
@@ -399,8 +420,7 @@ function buildCompanyPerformance() {
   var claimed = [];
   affected.forEach(function (r) {
     var hit = st.byOrder[r.ebay_order_id];
-    var n = _cpsNorm(hit ? hit.status : '');
-    if (CPS_PAID_STATUSES.indexOf(n) >= 0) claimed.push(r);
+    if (_cpsIsPaid(hit ? hit.status : '')) claimed.push(r);
   });
   var resale = _cpsResaleMap(CPS_RESALE_CHECK === 'all' ? affected : claimed);
 
@@ -408,8 +428,8 @@ function buildCompanyPerformance() {
     var hit = st.byOrder[r.ebay_order_id];
     var status = hit ? hit.status : '';
     var n = _cpsNorm(status);
-    var isPaid = CPS_PAID_STATUSES.indexOf(n) >= 0;
-    var isRet  = CPS_RETURNED_STATUSES.indexOf(n) >= 0;
+    var isPaid = _cpsIsPaid(status);
+    var isRet  = !isPaid && CPS_RETURNED_STATUSES.indexOf(n) >= 0;
     var rs = resale.byOrder[r.ebay_order_id] || null;
     var resold = !!(rs && rs.verdict === 'RESOLD');
     var addBack = isPaid && !(resold && CPS_EXCLUDE_RESOLD_FROM_RECOVERY);
@@ -969,17 +989,66 @@ function _cpsRecovery(c) {
                     : 'STATUSES NOT READ — ' + c.st.why, ''],
            ['', ''],
            ['Counted as PAID (added back to sales)', ''],
-           ['Statuses treated as paid', CPS_PAID_STATUSES.join(', ')],
+           ['Rule for "paid"', 'anything starting with "' + CPS_PAID_PREFIXES.join('" or "')
+             + '", plus ' + CPS_PAID_STATUSES.join(', ')],
            ['Orders counted', c.rec.counted],
            ['Money added back', c.recTtl],
            ['', '']];
   CPS_STORES.forEach(function (s) { L.push(['  ' + s.code, _cpsMoney(c.rec.byStore[s.code])]); });
+  L.push(['', '']);
+  var paidSeen = {};
+  c.rec.rows.forEach(function (x) {
+    if (!x.isPaid || !x.status) return;
+    paidSeen[x.status] = _cpsMoney((paidSeen[x.status] || 0) + _cpsMoney(x.r.ebay_refund_total));
+  });
+  var pk = Object.keys(paidSeen).sort();
+  L.push(['THE STATUS VALUES THAT ACTUALLY MATCHED — check none of these is a mistake', '']);
+  if (!pk.length) L.push(['  (none yet)', '']);
+  pk.forEach(function (k) { L.push(['  "' + k + '"', paidSeen[k]]); });
   L.push(['', '']);
   L.push(['FOUND BUT NOT COUNTED — check nothing belongs above', '']);
   var nk = Object.keys(c.rec.notCounted).sort(function (a, b) {
     return c.rec.notCounted[b] - c.rec.notCounted[a]; });
   if (!nk.length) L.push(['(every status found is either paid or returned)', '']);
   nk.forEach(function (k) { L.push(['  "' + k + '"', _cpsMoney(c.rec.notCounted[k])]); });
+  L.push(['', '']);
+  L.push(['YOUR WORKBOOK vs THE LIVE eBAY MEASUREMENT', '']);
+  if (c.st.ok) {
+    var live = {}, n = 0;
+    c.affected.forEach(function (r) { live[r.ebay_order_id] = _cpsMoney(r.ebay_refund_total); });
+    var zero = {};
+    c.stillPaid.forEach(function (r) { zero[r.ebay_order_id] = true; });
+    var missingRows = [], phantomRows = [], phantom$ = 0, missing$ = 0;
+    Object.keys(live).forEach(function (id) {
+      if (!c.st.byOrder[id]) { missingRows.push(id); missing$ = _cpsMoney(missing$ + live[id]); }
+    });
+    Object.keys(c.st.byOrder).forEach(function (id) {
+      if (live[id] != null) { n++; return; }
+      // In the workbook, but eBay is not showing a refund against it.
+      phantomRows.push(id);
+      if (_cpsIsPaid(c.st.byOrder[id].status)) phantom$ = _cpsMoney(phantom$ + 1);
+    });
+    L.push(['Orders eBay confirms it refunded', c.affected.length]);
+    L.push(['Rows in your workbook that match one of them', n]);
+    L.push(['Refunded on eBay but NOT in your workbook', missingRows.length]);
+    L.push(['  their value — cannot be marked paid, there is no row for them', missing$]);
+    L.push(['In your workbook but eBay shows no refund', phantomRows.length]);
+    L.push(['  of those, marked as paid — CHECK THESE, they add back money that may never have left',
+      phantom$]);
+    if (missingRows.length) {
+      L.push(['  first few with no row: ' + missingRows.slice(0, 6).join(', '), '']);
+    }
+    if (phantomRows.length) {
+      L.push(['  first few with no eBay refund: ' + phantomRows.slice(0, 6).join(', '), '']);
+    }
+    L.push(['', '']);
+    L.push(['The money in step 2 comes from the LIVE measurement above, not from the workbook, '
+      + 'because eBay settles refunds days after the fact and the workbook was built on one '
+      + 'particular morning. The statuses come from the workbook, because only a person knows '
+      + 'who has paid. Where the two disagree it is listed here rather than reconciled silently.', '']);
+  } else {
+    L.push(['Not available — the statuses were not read.', '']);
+  }
   L.push(['', '']);
   L.push(['GOODS RETURNED INSTEAD OF MONEY — disclosed, NOT in the headline', '']);
   L.push(['Orders marked as returning the item', c.rec.returnedN]);
