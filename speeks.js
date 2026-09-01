@@ -32730,6 +32730,44 @@ function _recycleCanReview() {
     return role === 'ceo' || role === 'district manager';
 }
 
+// The search box over My Requests. Held here rather than read off the input at
+// render time for the same reason the Listing Titles edit box is: the table is
+// rebuilt by innerHTML on every change, and anything living inside it is gone.
+// The input itself sits in the panel ABOVE #recycle-table-wrap, so it survives
+// the rebuild and keeps focus and caret while somebody types.
+let _recycleQuery = '';
+
+// Matched against the columns a person can actually see, and nothing else. A
+// search that quietly matched a hidden field would return a row whose reason
+// for matching is invisible — the reader is left doubting the search instead
+// of reading the row.
+function _recycleMatches(r, q) {
+    if (!q) return true;
+    const hay = [r.sku, r.description, r.created_by, r.store]
+        .map(v => String(v == null ? '' : v).toLowerCase()).join(' \u0001 ');
+    // Every word must appear somewhere, in any order: "iphone lee" finds the
+    // LEE iPhone line without anybody having to guess the column order.
+    return q.split(/\s+/).filter(Boolean).every(w => hay.includes(w));
+}
+
+// The month names in the empty state are buttons, not advice. Being told the
+// line is in July and then having to go and find July in a dropdown is the
+// same dead end one step further along.
+function _recycleJumpMonth(m) {
+    const sel = document.getElementById('recycle-month-filter');
+    if (!sel) return;
+    if (![...sel.options].some(o => o.value === m)) return;
+    sel.value = m;
+    renderMyRecycleTable();
+}
+window._recycleJumpMonth = _recycleJumpMonth;
+
+function filterRecycleRequests(v) {
+    _recycleQuery = String(v == null ? '' : v).toLowerCase().trim();
+    renderMyRecycleTable();
+}
+window.filterRecycleRequests = filterRecycleRequests;
+
 function renderMyRecycleTable() {
     const wrap = document.getElementById('recycle-table-wrap');
     if (!wrap) return;
@@ -32740,6 +32778,22 @@ function renderMyRecycleTable() {
     const filterStore = (document.getElementById('recycle-view-filter') || {}).value || '';
     let rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
     if (filterStore) rows = rows.filter(r => (r.store || '').toUpperCase() === filterStore);
+    const q = _recycleQuery;
+    // Counted BEFORE the search narrows anything, because "3 of 47" is the
+    // number that tells somebody whether their search worked.
+    const monthCount = rows.length;
+    if (q) rows = rows.filter(r => _recycleMatches(r, q));
+    // ⚠️ A SEARCH THAT FINDS NOTHING HERE IS NOT THE SAME AS NOTHING TO FIND.
+    // The month filter defaults to the current month, so looking up a SKU
+    // recycled in July while August is selected returns an empty table and no
+    // hint that the line exists at all — the exact dead end this box was added
+    // to remove. _recycleMine holds every month already fetched, so we can say
+    // where it actually is.
+    const elsewhere = q && !rows.length
+        ? _recycleMine.filter(r => _recycleMonthKey(r.created_at) !== month
+                                   && (!filterStore || (r.store || '').toUpperCase() === filterStore)
+                                   && _recycleMatches(r, q))
+        : [];
     // Keep the Store column whenever the user spans multiple stores — even with
     // a single store filtered — so columns don't jump around as filters change.
     const showStore = multi;
@@ -32754,7 +32808,24 @@ function renderMyRecycleTable() {
                 <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
             </div>`
             : '';
-        wrap.innerHTML = `${emptyBtns}${_recycleDeleteReqPanel(canReview)}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
+        // Three different empty states, because they need three different
+        // answers: nothing was recycled, nothing matched, or it matched in
+        // another month and here is the button that takes you there.
+        let emptyMsg;
+        if (!q) {
+            emptyMsg = `No recycle requests for ${_recycleMonthLabel(month)}.`;
+        } else if (elsewhere.length) {
+            const months = [...new Set(elsewhere.map(r => _recycleMonthKey(r.created_at)))]
+                .sort().reverse();
+            emptyMsg = `Nothing matching “${escapeHtml(q)}” in ${_recycleMonthLabel(month)}`
+                + ` — but ${elsewhere.length} line${elsewhere.length === 1 ? '' : 's'} match`
+                + `${elsewhere.length === 1 ? 'es' : ''} in `
+                + months.map(m => `<button onclick="_recycleJumpMonth('${m}')" style="background:none; border:none; padding:0 2px; font:inherit; font-weight:800; color:var(--sage-professional, #5a8d3b); text-decoration:underline; cursor:pointer;">${_recycleMonthLabel(m)}</button>`).join(' · ')
+                + '.';
+        } else {
+            emptyMsg = `Nothing matches “${escapeHtml(q)}”.`;
+        }
+        wrap.innerHTML = `${emptyBtns}${_recycleDeleteReqPanel(canReview)}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600; line-height:1.6;">${emptyMsg}</div>`;
         return;
     }
     rows = [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -32943,7 +33014,9 @@ function renderMyRecycleTable() {
     const labelSpan = 1 + (showStore ? 1 : 0) + 5;
     const footLabel = (t, c) => `<td colspan="${labelSpan}" style="padding:${c ? '4px' : '11px'} 10px; font-weight:800; font-size:${c ? '10.5px' : '12px'}; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">${t}</td>`;
     html += `</tbody><tfoot><tr>
-        ${footLabel(`Total recycled cost · ${_recycleMonthLabel(month)}`)}
+        ${footLabel(q
+            ? `${rows.length} of ${monthCount} lines · “${escapeHtml(q)}”`
+            : `Total recycled cost · ${_recycleMonthLabel(month)}`)}
         <td style="padding:11px 10px; font-weight:900; font-size:14px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(total)}</td>
         <td colspan="2"></td>
     </tr>`;

@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260831c">
+  <link rel="stylesheet" href="styles.css?v=20260901a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <script src="speeks.js?v=20260901a" defer></script>
 </head>
@@ -1270,6 +1270,10 @@
                     <label class="form-label-caps">Store</label>
                     <select id="recycle-view-filter" class="form-input-lg" onchange="renderMyRecycleTable()"></select>
                 </div>
+            </div>
+            <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
+                <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+                <input type="text" id="recycleSearch" class="kb-search-input doc-search-input" placeholder="Search SKU, item, or who filed it…" autocomplete="off" oninput="filterRecycleRequests(this.value)" onkeydown="if(event.key===&quot;Escape&quot;){this.value=&quot;&quot;;filterRecycleRequests(&quot;&quot;);}">
             </div>
             <div id="recycle-table-wrap"></div>
         </div>
