@@ -13,8 +13,24 @@
 // will actually ask: "what did we KEEP?" It starts from the same real sales and
 // then takes out the cash that genuinely left the building.
 //
+// ⚠️ THE BASELINE IS THE SALES SUMMARY SHEET, NOT A RECOMPUTATION, AND THAT WAS
+// A CORRECTION. The first version of this workbook rebuilt "what we sold" from
+// Shopify via sales-true-daily and got $747,894.97. That figure is too high by
+// $54,204.89: when the Marketplace Connect fault duplicated an order, BOTH
+// Shopify copies ended up with a refund on them — ours on the phantom copy and
+// the mirror-back on the real one — and sales-true-daily adds back both, so 294
+// eBay sales were counted twice. Subtracting the refunded cash from an inflated
+// base then produced a gross profit that landed almost exactly on the sheet's,
+// because the two errors were nearly the same size and cancelled.
+//
+// Ethan spotted it from the answer alone: "my sheet took all of our daily sales
+// assuming we did not refund any of those sales, so my 364 should be what we
+// would've done." Correct. The sheet already IS the what-we-would-have-done
+// figure, it is the number the business runs on, and it does not need rebuilding
+// — it needs the money that actually left subtracted from it.
+//
 // THE FOUR ACCOUNTING CHOICES, ALL DELIBERATE, ALL ETHAN'S CALL (2026-09-01):
-//   1. Sales are the REAL sales — refunds caused by the fault added back.
+//   1. Sales are the SHEET's sales — the agreed record of what we sold.
 //   2. The cash we refunded to eBay buyers comes OFF, in full. It is gone.
 //   3. The COST of those goods STAYS IN. The buyer kept the item, so we lost the
 //      product as well as the money; reversing the COGS would flatter the month
@@ -336,7 +352,9 @@ function buildCompanyPerformance() {
   var t0 = new Date();
 
   // ---- live measurements, both timestamped by the endpoint itself ----------
-  var daily = _cpsFetch('sales-true-daily?from=' + CPS_MONTH + '-01&to=' + _cpsLastDay());
+  // detail=1 gives the per-refund classification, which is the only way to see
+  // the double count described at the top of this file.
+  var daily = _cpsFetch('sales-true-daily?detail=1&from=' + CPS_MONTH + '-01&to=' + _cpsLastDay());
   var ref   = _cpsFetch('refund-export');
   var reach = _cpsFetch('outreach-list');
   if (ref.non_200) {
@@ -425,11 +443,12 @@ function buildCompanyPerformance() {
   var ss = SpreadsheetApp.create(title);
 
   var sheet = _cpsSheetMonth();
+  var dbl = _cpsDoubleCount(daily);
 
   var ctx = { ss: ss, t0: t0, daily: daily, ref: ref, reach: reach, st: st, sheet: sheet,
               byStore: byStore, byDay: byDay, affected: affected, stillPaid: stillPaid,
               refByStore: refByStore, shipByStore: shipByStore, shipN: shipN,
-              rec: rec, recTtl: recTtl };
+              rec: rec, recTtl: recTtl, dbl: dbl };
 
   _cpsSummary(ctx);
   _cpsReadMe(ctx);
@@ -466,7 +485,8 @@ function buildCompanyPerformance() {
 // already had the fault's refunds netted out on the day they landed — so the
 // sheet has quietly absorbed most of the damage already. See _cpsSummary.
 function _cpsSheetMonth() {
-  var out = { ok: false, why: '', values: null, sales: 0, cost: 0, cells: 0 };
+  var out = { ok: false, why: '', values: null, sales: 0, cost: 0, cells: 0, byStore: {} };
+  CPS_STORES.forEach(function (s) { out.byStore[s.code] = { sales: 0, cost: 0 }; });
   try {
     var tab = SpreadsheetApp.openById(CPS_SALES_BOOK).getSheetByName(CPS_SALES_TAB);
     if (!tab) throw new Error('no tab named "' + CPS_SALES_TAB + '"');
@@ -481,8 +501,12 @@ function _cpsSheetMonth() {
       var base = CPS_COL_BASES[CPS_STORES[i].code];
       var row = _cpsSheetDayRow(out.values, base, d);
       if (row < 0) continue;
-      out.sales = _cpsMoney(out.sales + _cpsMoney(out.values[row][base + CPS_COL_SALES]));
-      out.cost  = _cpsMoney(out.cost  + _cpsMoney(out.values[row][base + CPS_COL_COST]));
+      var vS = _cpsMoney(out.values[row][base + CPS_COL_SALES]);
+      var vC = _cpsMoney(out.values[row][base + CPS_COL_COST]);
+      var b = out.byStore[CPS_STORES[i].code];
+      b.sales = _cpsMoney(b.sales + vS); b.cost = _cpsMoney(b.cost + vC);
+      out.sales = _cpsMoney(out.sales + vS);
+      out.cost  = _cpsMoney(out.cost  + vC);
       out.cells++;
     }
   }
@@ -500,52 +524,71 @@ function _cpsSheetDayRow(values, base, day) {
   return -1;
 }
 
+// ⚠️ HOW MUCH sales-true-daily COUNTS TWICE. For one eBay sale the fault left two
+// Shopify orders, and a refund landed on each: ours on the phantom copy ("our
+// duplicate refund") and the mirror-back on the real one ("mirror-back"). Both
+// are added back, so the sale is counted twice. Exactly one add-back per eBay id
+// is right, so the smaller of the two legs is the error.
+//
+// This is measured, never assumed, because it is the thing that made the first
+// version of this workbook wrong and it will change as orders settle.
+function _cpsDoubleCount(daily) {
+  var out = { orders: 0, sales: 0 };
+  var byEid = {};
+  Object.keys(daily.per_store || {}).forEach(function (st) {
+    (daily.per_store[st].detail || []).forEach(function (d) {
+      if (!d.ebay_order_id) return;
+      if (d.kind !== 'mirror-back' && d.kind !== 'our duplicate refund') return;
+      var e = byEid[d.ebay_order_id] || (byEid[d.ebay_order_id] = { mirror: 0, dupe: 0 });
+      if (d.kind === 'mirror-back') e.mirror = _cpsMoney(e.mirror + d.amount);
+      else e.dupe = _cpsMoney(e.dupe + d.amount);
+    });
+  });
+  Object.keys(byEid).forEach(function (e) {
+    var x = byEid[e];
+    if (x.mirror > 0 && x.dupe > 0) {
+      out.orders++;
+      out.sales = _cpsMoney(out.sales + Math.min(x.mirror, x.dupe));
+    }
+  });
+  return out;
+}
+
 function _cpsLastDay() {
   var y = Number(CPS_MONTH.slice(0, 4)), m = Number(CPS_MONTH.slice(5, 7));
   return CPS_MONTH + '-' + new Date(y, m, 0).getDate();
 }
 
-// The days the SHEET is short on, derived rather than typed in — CPS_MONTH is a
-// variable and a hardcoded "Aug 20, 24 and 25" would be stated as fact in a
-// September workbook.
+// The month we are measuring FROM. The Sales Summary is the business's agreed
+// record of what it sold and is what everyone upstairs already has in front of
+// them, so it is the baseline whenever it can be read.
 //
-// ⚠️ THE SHEET'S SHORT DAYS, NOT eBAY'S PAYOUT DAYS. They are different lists.
-// eBay's cash left on Aug 24 and 25, but the sheet is also short about seventeen
-// thousand on Aug 20 — the Marketplace Connect back-fill, refunded inside Shopify
-// and never propagated, so no money ever left. It still sits in the sheet as a
-// negative, so it belongs in a sentence about why the sheet is low. Naming eBay's
-// dates above numbers derived from the sheet gap is the sort of mismatch that
-// gets a document sent back.
-//
-// Days carrying under 2% of the gap are left out: a sentence about where the
-// damage sits should not list four days worth a few hundred dollars.
-function _cpsShortDays(c) {
-  if (!c.sheet || !c.sheet.ok) return '';
-  var gap = {}, total = 0;
-  Object.keys(c.byDay).forEach(function (day) {
-    var d = Number(day.slice(8, 10)), g = 0;
-    for (var i = 0; i < CPS_STORES.length; i++) {
-      var code = CPS_STORES[i].code, base = CPS_COL_BASES[code];
-      var row = _cpsSheetDayRow(c.sheet.values, base, d);
-      if (row < 0) continue;
-      var mine = (c.byDay[day] || {})[code] || { sales: 0 };
-      g += _cpsMoney(mine.sales) - _cpsMoney(c.sheet.values[row][base + CPS_COL_SALES]);
-    }
-    g = _cpsMoney(g);
-    if (g > 0.005) { gap[d] = g; total += g; }
-  });
-  var days = Object.keys(gap).map(Number)
-    .filter(function (d) { return total > 0 && gap[d] / total >= 0.02; })
-    .sort(function (a, b) { return a - b; });
-  if (!days.length) return '';
-  var mon = MR_CPS_MON[Number(CPS_MONTH.slice(5, 7)) - 1];
-  var names = days.map(function (d) { return mon + ' ' + d; });
-  if (names.length === 1) return names[0];
-  return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+// The Shopify recomputation is kept as a cross-check only, and only with its
+// double count removed — see _cpsDoubleCount. If the sheet cannot be read the
+// corrected recomputation stands in, loudly, because a workbook that silently
+// swaps its own foundation is worse than one that fails.
+function _cpsBase(c) {
+  if (c.sheet && c.sheet.ok) {
+    return { sales: c.sheet.sales, cost: c.sheet.cost,
+             gp: _cpsMoney(c.sheet.sales - c.sheet.cost),
+             source: 'the Sales Summary sheet (' + CPS_SALES_TAB + ')', fromSheet: true };
+  }
+  var sales = _cpsMoney(_cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].sales; })) - c.dbl.sales);
+  var cost = _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].cost; }));
+  return { sales: sales, cost: cost, gp: _cpsMoney(sales - cost),
+           source: 'a Shopify recomputation — THE SHEET COULD NOT BE READ: ' + (c.sheet ? c.sheet.why : ''),
+           fromSheet: false };
 }
 
-var MR_CPS_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// Per store, same rule.
+function _cpsBaseStore(c, code) {
+  if (c.sheet && c.sheet.ok) {
+    var b = c.sheet.byStore[code];
+    return { sales: b.sales, cost: b.cost, gp: _cpsMoney(b.sales - b.cost) };
+  }
+  var t = c.byStore[code];
+  return { sales: t.sales, cost: t.cost, gp: _cpsMoney(t.sales - t.cost) };
+}
 
 // ------------------------------------------------------------------ Summary --
 // One screen, no jargon, nothing to page through. Everything here is repeated in
@@ -561,8 +604,8 @@ var MR_CPS_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
 // close together is the two methods agreeing, not an error — and burying that
 // would leave the most obvious challenge unanswered.
 function _cpsSummary(c) {
-  var sold = _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].sales; }));
-  var cost = _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].cost; }));
+  var base = _cpsBase(c);
+  var sold = base.sales, cost = base.cost;
   var out  = _cpsSum(CPS_STORES.map(function (s) { return c.refByStore[s.code]; }));
   var kept = _cpsMoney(sold - out + c.recTtl);
   var gp   = _cpsMoney(kept - cost);
@@ -581,13 +624,13 @@ function _cpsSummary(c) {
     + Utilities.formatDate(c.t0, CPS_TZ, 'h:mm a') + ' US Central');
   push('');
   push('IN ONE SENTENCE');
-  push(CPS_MONTH_NAME + ' was a ' + $(sold) + ' month. A software fault refunded '
+  push('We sold ' + $(sold) + ' in ' + CPS_MONTH_NAME + '. A software fault refunded '
     + $(out) + ' to ' + c.affected.length + ' buyers who never asked for it, and '
     + shipN + ' of them had already received their goods — so we lost the money AND the '
     + 'product. That turned ' + $(gpHad) + ' of gross profit into ' + $(gp) + '.');
   push('');
   push('THE NUMBERS');
-  push('What we sold', sold);
+  push('What we sold — ' + (base.fromSheet ? 'straight off the Sales Summary' : 'RECOMPUTED, see below'), sold);
   push('Refunded to buyers by the fault', -out);
   push('Got back from buyers who paid us', c.recTtl);
   push('WHAT WE KEPT', kept);
@@ -595,7 +638,7 @@ function _cpsSummary(c) {
   push('GROSS PROFIT', gp);
   push('');
   push('WHAT IT COST US');
-  push('Gross profit if the fault had never happened', gpHad);
+  push('Gross profit we would have made — what the Sales Summary shows', gpHad);
   push('Gross profit as it actually landed', gp);
   push('The fault cost us', hit);
   push('  which is this share of the month', gpHad ? hit / gpHad : 0);
@@ -606,45 +649,36 @@ function _cpsSummary(c) {
     _cpsSum(c.stillPaid.map(function (r) { return _cpsMoney(r.shopify_refund); })));
   push('');
 
-  // ---- the sheet question ----
-  push('WHY THIS IS NOT THE SAME AS THE SALES SUMMARY SHEET');
-  if (c.sheet.ok) {
-    var shGp = _cpsMoney(c.sheet.sales - c.sheet.cost);
-    push('The sheet shows this much gross profit for ' + CPS_MONTH_NAME, shGp);
-    push('This workbook says our gross profit was', gp);
-    push('Difference (this workbook minus the sheet)', _cpsMoney(gp - shGp));
+  // ---- where the top two lines come from ----
+  push('WHERE THESE NUMBERS COME FROM');
+  if (base.fromSheet) {
+    push('"What we sold" and "Cost of the goods" are taken STRAIGHT OFF the Sales Summary ('
+      + CPS_SALES_TAB + '). They are not recomputed and not adjusted. That sheet is the '
+      + 'business\'s record of what it sold assuming nothing was refunded, which is exactly '
+      + 'the right place to start from.');
     push('');
-    push('That looks wrong, and it is not. The sheet is NOT a "before the damage" figure. '
-      + (_cpsShortDays(c)
-          ? 'Almost all of the gap sits on ' + _cpsShortDays(c) + '. Those days were never '
-            + 'restated, so the sheet still carries their refunds as negatives — it has already '
-            + 'absorbed most of the loss without anyone deciding that it should.'
-          : 'Its unrestated days still carry the fault\'s refunds as negatives, so it has '
-            + 'already absorbed most of the loss without anyone deciding that it should.'));
-    push('');
-    push('Sales the sheet never added back', _cpsMoney(sold - c.sheet.sales));
-    push('Cost the sheet reversed along with them', _cpsMoney(cost - c.sheet.cost));
-    push('  so the sheet is short this much gross profit',
-      _cpsMoney((sold - c.sheet.sales) - (cost - c.sheet.cost)));
-    push('Cash that actually left the building', out);
-    push('  this workbook is more conservative by',
-      _cpsMoney(out - ((sold - c.sheet.sales) - (cost - c.sheet.cost))));
-    push('');
-    push('The difference is one decision: when a buyer keeps the goods AND the money, the sheet '
-      + 'credits the cost of those goods back as though they returned to the shelf. This workbook '
-      + 'does not, because they did not. Two methods, from opposite directions, landing within '
-      + $(Math.abs(_cpsMoney(gp - shGp))) + ' of each other.');
-    push('');
-    push('⚠️ SO THE SHEET UNDERSTATES WHAT WE SOLD. Our real ' + CPS_MONTH_NAME
-      + ' gross profit, before the fault, was ' + $(gpHad) + ' — not ' + $(shGp)
-      + (_cpsShortDays(c)
-          ? '. If ' + _cpsShortDays(c) + ' are ever restated the way the later days were, the '
-            + 'sheet will move to meet this.'
-          : '.'));
+    push('This workbook adds one thing the sheet cannot know: how much of that money eBay '
+      + 'handed back to buyers. That is measured order by order against eBay itself, not '
+      + 'estimated, and it is the only subtraction made.');
   } else {
-    push('The Sales Summary could not be read, so the comparison is not shown here.',
-      c.sheet.why);
+    push('⚠️ THE SALES SUMMARY COULD NOT BE READ, so the top lines are a Shopify '
+      + 'recomputation instead. Check it before circulating.', c.sheet.why);
   }
+  push('');
+  push('A CROSS-CHECK, AND ONE TRAP IN IT');
+  push('Shopify, recomputed independently, puts the same month at', _cpsMoney(
+    _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].sales; })) - c.dbl.sales));
+  push('  and before correction it said',
+    _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].sales; })));
+  push('  the difference is a genuine double count', c.dbl.sales);
+  push('');
+  push('⚠️ WHY THAT CORRECTION EXISTS. When the fault duplicated an order, BOTH Shopify copies '
+    + 'ended up with a refund on them — ours on the phantom copy, and the mirror-back on the '
+    + 'real one. The recomputation adds back both, so ' + c.dbl.orders + ' eBay sales get counted '
+    + 'twice. An earlier version of this workbook used that inflated figure as its starting '
+    + 'point; subtracting the refunded cash from it produced a gross profit that landed almost '
+    + 'exactly on the sheet\'s, because the two errors were nearly the same size and cancelled. '
+    + 'The sheet is the baseline now precisely so that cannot happen.');
   push('');
   push('Every figure above is order-level and re-derivable. See the other tabs.');
 
@@ -683,8 +717,8 @@ function _cpsSummary(c) {
 
 // ------------------------------------------------------------------ Read Me --
 function _cpsReadMe(c) {
-  var sold  = _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].sales; }));
-  var cost  = _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].cost; }));
+  var base  = _cpsBase(c);
+  var sold  = base.sales, cost = base.cost;
   var out   = _cpsSum(CPS_STORES.map(function (s) { return c.refByStore[s.code]; }));
   var ship  = _cpsSum(CPS_STORES.map(function (s) { return c.shipByStore[s.code]; }));
   var kept  = _cpsMoney(sold - out + c.recTtl);
@@ -720,9 +754,11 @@ function _cpsReadMe(c) {
     ['Had the fault never happened, the same month would have produced ' + $(gpHad) + ' of gross profit.'],
     [''],
     ['HOW EACH LINE IS BUILT — the four choices, all deliberate'],
-    ['1. SALES ARE THE REAL SALES.', 'Orders refunded by the fault are added back. They were genuine sales to genuine '
-      + 'customers who kept genuine goods; a bookkeeping accident does not un-sell them. This is the same basis as the '
-      + 'Sales Summary sheet, and the Reconciliation tab proves the two agree.'],
+    ['1. SALES ARE THE SHEET\'S SALES.', 'Taken straight off the Sales Summary, which records what we sold as though '
+      + 'nothing had been refunded. That is already the right starting point and it is the number the business runs on, '
+      + 'so this workbook does not rebuild it. An earlier version did rebuild it from Shopify and was too high by '
+      + $(c.dbl.sales) + ' — the fault left two Shopify copies of ' + c.dbl.orders + ' sales and the recomputation '
+      + 'added back a refund on each. See the Summary tab.'],
     ['2. THE REFUNDED CASH COMES OFF IN FULL.', 'Every dollar eBay returned to a buyer is subtracted, measured order by '
       + 'order against the eBay Sell Fulfillment API rather than estimated.'],
     ['3. THE COST OF THOSE GOODS STAYS IN.', 'The buyer kept the item, so we lost the product as well as the money. '
@@ -768,8 +804,8 @@ function _cpsReadMe(c) {
 
 // ------------------------------------------------------------------- Bridge --
 function _cpsBridge(c) {
-  var sold = _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].sales; }));
-  var cost = _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].cost; }));
+  var base = _cpsBase(c);
+  var sold = base.sales, cost = base.cost;
   var out  = _cpsSum(CPS_STORES.map(function (s) { return c.refByStore[s.code]; }));
   var kept = _cpsMoney(sold - out + c.recTtl);
   var gp   = _cpsMoney(kept - cost);
@@ -781,7 +817,7 @@ function _cpsBridge(c) {
     ['as measured ' + Utilities.formatDate(c.t0, CPS_TZ, 'yyyy-MM-dd HH:mm') + ' US Central', '', ''],
     ['', '', ''],
     ['', 'Amount', '% of sales'],
-    ['What we sold in ' + CPS_MONTH_NAME + ' (real sales)', sold, 1],
+    ['What we sold in ' + CPS_MONTH_NAME + ' — from ' + (base.fromSheet ? CPS_SALES_TAB : 'a recomputation'), sold, 1],
     ['Less: cash refunded to eBay buyers by the fault', -out, -out / sold],
     ['Add: recovered from buyers who paid us back', c.recTtl, c.recTtl / sold],
     ['= REVENUE THE COMPANY ACTUALLY KEPT', kept, kept / sold],
@@ -790,7 +826,7 @@ function _cpsBridge(c) {
     ['= GROSS PROFIT AS IT ACTUALLY LANDED', gp, gp / sold],
     ['', '', ''],
     ['Gross margin as it landed', '', gp / kept],
-    ['Gross margin had the fault never happened', '', gpHad / sold],
+    ['Gross margin we would have made', '', gpHad / sold],
     ['', '', ''],
     ['WHAT THE INCIDENT COST US', '', ''],
     // ⚠️ THIS EQUALS THE CASH REFUNDED, AND THAT IS NOT AN ERROR — it is the
@@ -832,12 +868,12 @@ function _cpsBridge(c) {
 // ----------------------------------------------------------------- By Store --
 function _cpsByStore(c) {
   var sh = c.ss.insertSheet('By Store');
-  var head = ['', 'Sold (real sales)', 'Refunded to buyers', 'Recovered',
-              'Revenue kept', 'Cost of goods', 'Gross profit', 'GP% kept', 'GP% had it not happened'];
+  var head = ['', 'Sold (per the sheet)', 'Refunded to buyers', 'Recovered',
+              'Revenue kept', 'Cost of goods', 'Gross profit', 'GP% kept', 'GP% we would have made'];
   var body = [];
   var T = [0, 0, 0, 0, 0, 0];
   CPS_STORES.forEach(function (s) {
-    var b = c.byStore[s.code];
+    var b = _cpsBaseStore(c, s.code);
     var out = _cpsMoney(c.refByStore[s.code]), rc = _cpsMoney(c.rec.byStore[s.code]);
     var kept = _cpsMoney(b.sales - out + rc), gp = _cpsMoney(kept - b.cost);
     T[0] += b.sales; T[1] += out; T[2] += rc; T[3] += kept; T[4] += b.cost; T[5] += gp;
