@@ -695,7 +695,12 @@ function _cpsDaily(c) {
     + 'published record and is built the same way, except that only the restated days carry the hand corrections '
     + 'documented in mirror-fix.gs — so the two agree on most days and differ on a few. The Reconciliation tab '
     + 'shows every difference so it can be checked rather than taken on trust.');
-  sh.getRange(body.length + 3, 1, 1, 6).merge().setWrap(true).setFontColor('#6b7280').setFontStyle('italic');
+  // ⚠️ DO NOT MERGE THIS. The tab freezes column 1 so the day stays visible while
+  // you scroll across five stores, and Sheets refuses to merge a range that
+  // straddles the frozen boundary: "You can't merge frozen and non-frozen
+  // columns." Left unmerged and unwrapped, the text simply overflows across the
+  // empty cells to its right and reads the same, with no merge to refuse.
+  sh.getRange(body.length + 3, 1).setWrap(false).setFontColor('#6b7280').setFontStyle('italic');
 }
 
 // ------------------------------------------------------------------ Recovery --
