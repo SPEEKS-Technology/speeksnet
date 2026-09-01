@@ -24392,6 +24392,30 @@ try {
     });
 } catch (_) { /* older browsers: the initial pass still applies */ }
 
+// ⚠️ HIDING A SELECT DOES NOT HIDE A SELECT. The custom dropdown (_ddEnhance)
+// moves the native control into a `.dd-host` and covers it with a `.dd-btn`
+// face, so a role gate written onto the <select> alone hides the half nobody can
+// see and leaves the visible half on screen. That is how a store manager could
+// still be looking at a district store picker on Variance Replies (Ethan,
+// 2026-09-01) even though the data underneath was correctly scoped to their own
+// store the whole time.
+//
+// This is the third time the same trap has been paid for — see _cbShowFilter and
+// the Command Center store picker, both of which fix it one control at a time.
+// Doing it in the sweep instead covers every role-gated select there is
+// (vr-store-select, ag-store-select, bm-store-select, kpiModalStoreSelect) and
+// every one added later, without anyone having to remember.
+//
+// The host carries no inline display when visible: `.dd-host { display: block }`
+// is its natural state, and writing block over it would fight any future layout.
+function _ddMirrorGate(el, visible) {
+    if (!el || el.tagName !== 'SELECT') return;
+    const host = el.closest('.dd-host');
+    if (!host) return;                       // not wrapped (yet) — see _ddEnhance
+    if (visible) host.style.removeProperty('display');
+    else host.style.setProperty('display', 'none', 'important');
+}
+
 function applyRoleBasedUI() {
     const userRole = sessionStorage.getItem('speeksUserRole') || 'employee';
     const userStore = sessionStorage.getItem('speeksUserStore') || 'ALL';
@@ -24440,6 +24464,7 @@ function applyRoleBasedUI() {
         } else {
             module.style.setProperty('display', 'none', 'important');
         }
+        _ddMirrorGate(module, visible);
     });
 
     // Feature overrides on plain (non role-gated) elements — e.g. individual
@@ -47765,7 +47790,15 @@ function _ddEnhance(sel) {
 
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'dd-btn ' + sel.className;
+    // LAYOUT CLASSES ONLY. The face needs .kpi-select / .form-input and friends
+    // to inherit its width (see the note above), but it must NOT inherit the
+    // ROLE-GATING ones: applyRoleBasedUI matches anything carrying
+    // .dynamic-module-*, so the face was being found by the sweep and given
+    // `display: block !important` — over a control that is `display: flex` and
+    // relies on space-between to put its chevron on the right. Gating now lives
+    // on the host (_ddMirrorGate), which is the element that should carry it.
+    btn.className = 'dd-btn ' + sel.className.split(/\s+/)
+        .filter(c => c && !/^(dynamic-module|role-|store-)/.test(c)).join(' ');
     btn.setAttribute('aria-haspopup', 'listbox');
     btn.setAttribute('aria-expanded', 'false');
     if (sel.id) btn.setAttribute('aria-labelledby', sel.id + '-ddlab');
@@ -47791,6 +47824,16 @@ function _ddEnhance(sel) {
     host.appendChild(sel);
     host.appendChild(btn);
     host.appendChild(list);
+
+    // ⚠️ THE OTHER HALF OF THE ORDERING PROBLEM. _ddScan runs off a
+    // MutationObserver, so a select can be wrapped LONG AFTER applyRoleBasedUI
+    // decided it should not be on screen — and the sweep cannot mirror onto a
+    // host that did not exist when it ran. A face born into a hidden select is
+    // born hidden; between this and _ddMirrorGate, neither order can leak a
+    // control the user is not allowed to see.
+    if (sel.style.getPropertyValue('display') === 'none') {
+        host.style.setProperty('display', 'none', 'important');
+    }
 
     // CARRY OVER A WIDTH THE PAGE SET ON THE SELECT ITSELF. The face inherits the
     // select's CLASSES, which covers .form-input and friends — but a good deal of
