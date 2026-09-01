@@ -1004,6 +1004,180 @@ function mrFooterAudit() {
   });
 }
 
+
+// ============================================================================
+// WHAT THE ROLL LEAVES BEHIND
+//
+// Five things the roll copies from last month and does not correct, all found
+// on the September tabs on 2026-09-01 (Ethan):
+//
+//   1. the month NAME in the header, still reading the source month
+//   2. the GP goals, still last month's, because the roll runs at 4am and the
+//      new goals are entered later that morning
+//   3. the B2B rows on the Buy tab, still carrying last month's named deals
+//   4. the goal-percentage cells, still green or red from a month that ended
+//      at 100%+, when every store is now at 0%
+//   5. "Last month" revenue / GP / Net GP, read before the previous month's
+//      final day had been entered
+//
+// ⚠️ THIS AUDIT IS READ-ONLY AND EXISTS BECAUSE THE FIX MUST NOT GUESS. Every
+// one of the five is a cell position nobody has written down, and mrFooterAudit
+// covers only the first store block and prints no colours. Run this, read the
+// log, and the repair can then be aimed rather than swept. Touches nothing.
+function mrPostRollAudit(ym) {
+  var ss = _mrSs();
+  ym = ym || _mrCentralMonth();
+  var idx = _mrIndex(ss);
+  var entry = idx[ym];
+  if (!entry) { Logger.log('no tabs for %s', ym); return; }
+
+  var mi = Number(ym.slice(5, 7)) - 1;
+  var thisFull = MR_MON_FULL[mi], thisAbbr = MR_MON_ABBR[mi];
+  var prevYm = _mrPrevMonth(ym);
+  var pi = Number(prevYm.slice(5, 7)) - 1;
+  var prevFull = MR_MON_FULL[pi], prevAbbr = MR_MON_ABBR[pi];
+  Logger.log('=== POST-ROLL AUDIT %s (previous month %s) ===', ym, prevYm);
+  Logger.log('looking for stale "%s"/"%s", expecting "%s"/"%s"',
+    prevFull, prevAbbr, thisFull, thisAbbr);
+
+  ['sales', 'buy'].forEach(function (family) {
+    var tab = entry[family];
+    if (!tab) { Logger.log('-- no %s tab', family); return; }
+    var width = family === 'buy' ? MR_BUY_WIDTH : MR_SALES_WIDTH;
+    var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+    var rng = tab.getRange(1, 1, lastRow, lastCol);
+    var values = rng.getValues(), formulas = rng.getFormulas();
+    var colours = rng.getBackgrounds();
+    var bases = _mrBases(values, width);
+
+    Logger.log('');
+    Logger.log('======== %s (%s) %sx%s ========', tab.getName(), family, lastRow, lastCol);
+
+    // ---- 1. any cell naming a month -------------------------------------
+    // Reported whether it is stale or already right, because a header that is
+    // ALREADY correct means the roll handles it and the fix must leave it be.
+    Logger.log('  -- cells naming a month --');
+    var monthCells = 0;
+    for (var r = 0; r < lastRow; r++) {
+      for (var c = 0; c < lastCol; c++) {
+        var v = (values[r] || [])[c];
+        if (v === '' || v === null || v === undefined) continue;
+        var txt = String(v);
+        if (txt.length > 40) continue;
+        var hit = null;
+        for (var m = 0; m < 12; m++) {
+          var re = new RegExp('\\b(' + MR_MON_FULL[m] + '|' + MR_MON_ABBR[m] + ')\\b', 'i');
+          if (re.test(txt)) { hit = MR_MON_ABBR[m]; break; }
+        }
+        if (!hit) continue;
+        var f = (formulas[r] || [])[c];
+        var state = hit === thisAbbr ? 'OK' : (hit === prevAbbr ? 'STALE' : 'other(' + hit + ')');
+        Logger.log('   %s  %s  "%s"%s', _mrA1(r, c), state, txt,
+          f ? '  [FORMULA ' + String(f).slice(0, 50) + ']' : '');
+        monthCells++;
+      }
+    }
+    if (!monthCells) Logger.log('   (none)');
+
+    // ---- 2 + 4. goal cells, their values AND their fill ------------------
+    // The fill is the point: a green left over from a finished month tells every
+    // manager they are ahead on the 1st.
+    Logger.log('  -- goal labels, the cell written, and the fill on that row --');
+    for (var r2 = 0; r2 < lastRow; r2++) {
+      for (var c2 = 0; c2 < lastCol; c2++) {
+        var t2 = String((values[r2] || [])[c2] || '').trim().toLowerCase();
+        if (MR_FOOTER.goal.indexOf(t2) < 0 && t2.indexOf('% of gp') < 0
+            && t2.indexOf('% of goal') < 0) continue;
+        var owner = _mrBlockOf(bases, c2, width) || 'no block';
+        var right = [];
+        for (var k = c2 + 1; k < Math.min(c2 + 4, lastCol); k++) {
+          var fk = (formulas[r2] || [])[k];
+          var vk = (values[r2] || [])[k];
+          right.push(_mrA1(r2, k) + '=' + (fk ? 'F' + String(fk).slice(0, 40)
+            : (vk === '' || vk === null ? '(blank)' : String(vk).slice(0, 24)))
+            + ' fill=' + colours[r2][k]);
+        }
+        Logger.log('   %s [%s] "%s"  ->  %s', _mrA1(r2, c2), owner, t2, right.join('   '));
+      }
+    }
+
+    // ---- 3. the B2B block, which the roll deliberately never touched -----
+    // Ethan 2026-08-12 said leave B2B manual, and it was. The named deals now
+    // carry into the new month, so the decision needs revisiting - but only the
+    // TYPED cells may ever be cleared; the GM column is a formula and the
+    // #DIV/0! on the empty rows is what a cleared row is SUPPOSED to look like.
+    Logger.log('  -- B2B region (typed vs formula) --');
+    var found2b = false;
+    for (var r3 = 0; r3 < lastRow; r3++) {
+      for (var c3 = 0; c3 < lastCol; c3++) {
+        var t3 = String((values[r3] || [])[c3] || '').trim().toLowerCase();
+        if (t3 !== 'b2b') continue;
+        found2b = true;
+        Logger.log('   anchor %s', _mrA1(r3, c3));
+        for (var rr = r3; rr < Math.min(r3 + 14, lastRow); rr++) {
+          var line = [];
+          for (var cc = c3; cc < Math.min(c3 + 6, lastCol); cc++) {
+            var ff = (formulas[rr] || [])[cc];
+            var vv = (values[rr] || [])[cc];
+            if (ff) line.push(_mrA1(rr, cc) + '=F' + String(ff).slice(0, 26));
+            else if (vv !== '' && vv !== null && vv !== undefined)
+              line.push(_mrA1(rr, cc) + '=TYPED[' + String(vv).slice(0, 20) + ']');
+          }
+          if (line.length) Logger.log('     %s', line.join('  '));
+        }
+      }
+    }
+    if (!found2b) Logger.log('   (no cell reads exactly "b2b")');
+
+    // ---- 5. "Last month" — formula or frozen number? --------------------
+    // This decides the whole safeguard. A live formula reading the previous tab
+    // self-heals the moment that tab is completed; a pasted number never does.
+    Logger.log('  -- "last month" cells --');
+    var foundLm = false;
+    for (var r4 = 0; r4 < lastRow; r4++) {
+      for (var c4 = 0; c4 < lastCol; c4++) {
+        var t4 = String((values[r4] || [])[c4] || '').trim().toLowerCase();
+        if (MR_FOOTER.lastMonth.indexOf(t4) < 0) continue;
+        foundLm = true;
+        var out = [];
+        for (var k4 = c4 + 1; k4 < Math.min(c4 + 8, lastCol); k4++) {
+          var f4 = (formulas[r4] || [])[k4];
+          var v4 = (values[r4] || [])[k4];
+          out.push(_mrA1(r4, k4) + '=' + (f4 ? 'FORMULA ' + String(f4).slice(0, 55)
+            : (v4 === '' || v4 === null ? '(blank)' : 'VALUE ' + String(v4).slice(0, 22))));
+        }
+        Logger.log('   %s [%s]  %s', _mrA1(r4, c4),
+          _mrBlockOf(bases, c4, width) || 'no block', out.join('   '));
+      }
+    }
+    if (!foundLm) Logger.log('   (none)');
+  });
+  Logger.log('');
+  Logger.log('=== end of audit — nothing was written ===');
+}
+
+// The GP goals for a month, re-read from SPEEKS and written to that month's
+// Sales tab. Exists because the roll and the goals race each other: the roll
+// fires at 4am on the 1st and the goals are keyed later that morning, so the
+// roll finds none, skips the cells, and last month's numbers stay. gp-goals
+// pushes on save for exactly this reason, and when that push does not land
+// there is currently no way to ask for it again without re-keying all five.
+//
+// Safe to run repeatedly: it writes the same five numbers, and a goal cell that
+// holds a formula is skipped by _mrWriteGoals rather than overwritten.
+function mrFixGoals(ym) {
+  var ss = _mrSs();
+  ym = ym || _mrCentralMonth();
+  var goals = _mrFetchGoals(ym);
+  if (!Object.keys(goals).length) {
+    Logger.log('SPEEKS has no goals for %s — nothing written. Enter them on the '
+      + 'site first; an empty answer means "not decided yet", never zero.', ym);
+    return;
+  }
+  Logger.log('SPEEKS goals for %s: %s', ym, JSON.stringify(goals));
+  Logger.log(JSON.stringify(_mrWriteGoals(ss, ym, goals)));
+}
+
 // Next month's tabs with a (PREVIEW) suffix, to be checked beside the real ones.
 // Nothing reads a PREVIEW tab — the name does not match what the site's parsers
 // look for, which is exactly why the suffix is safe.
