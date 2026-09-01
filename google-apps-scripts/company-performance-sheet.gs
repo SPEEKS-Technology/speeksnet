@@ -424,11 +424,14 @@ function buildCompanyPerformance() {
             + Utilities.formatDate(t0, CPS_TZ, 'yyyy-MM-dd HH:mm') + ')';
   var ss = SpreadsheetApp.create(title);
 
-  var ctx = { ss: ss, t0: t0, daily: daily, ref: ref, reach: reach, st: st,
+  var sheet = _cpsSheetMonth();
+
+  var ctx = { ss: ss, t0: t0, daily: daily, ref: ref, reach: reach, st: st, sheet: sheet,
               byStore: byStore, byDay: byDay, affected: affected, stillPaid: stillPaid,
               refByStore: refByStore, shipByStore: shipByStore, shipN: shipN,
               rec: rec, recTtl: recTtl };
 
+  _cpsSummary(ctx);
   _cpsReadMe(ctx);
   _cpsBridge(ctx);
   _cpsByStore(ctx);
@@ -454,9 +457,228 @@ function buildCompanyPerformance() {
   Logger.log('The file is UNSHARED. Share it deliberately.');
 }
 
+// The Sales Summary month, read once. Both the Summary tab (which has to explain
+// why its gross profit is not the sheet's) and the Reconciliation tab (which
+// shows it day by day) need this grid, and it is a whole-tab getValues.
+//
+// ⚠️ THE SHEET IS NOT A CLEAN "WHAT WE SOLD" FIGURE, AND THAT IS THE WHOLE POINT
+// OF SHOWING IT. Its unrestated days carry Shopify's reported net sales, which
+// already had the fault's refunds netted out on the day they landed — so the
+// sheet has quietly absorbed most of the damage already. See _cpsSummary.
+function _cpsSheetMonth() {
+  var out = { ok: false, why: '', values: null, sales: 0, cost: 0, cells: 0 };
+  try {
+    var tab = SpreadsheetApp.openById(CPS_SALES_BOOK).getSheetByName(CPS_SALES_TAB);
+    if (!tab) throw new Error('no tab named "' + CPS_SALES_TAB + '"');
+    out.values = tab.getRange(1, 1, tab.getLastRow(), tab.getLastColumn()).getValues();
+  } catch (e) {
+    out.why = String(e).slice(0, 200);
+    return out;
+  }
+  var dim = new Date(Number(CPS_MONTH.slice(0, 4)), Number(CPS_MONTH.slice(5, 7)), 0).getDate();
+  for (var d = 1; d <= dim; d++) {
+    for (var i = 0; i < CPS_STORES.length; i++) {
+      var base = CPS_COL_BASES[CPS_STORES[i].code];
+      var row = _cpsSheetDayRow(out.values, base, d);
+      if (row < 0) continue;
+      out.sales = _cpsMoney(out.sales + _cpsMoney(out.values[row][base + CPS_COL_SALES]));
+      out.cost  = _cpsMoney(out.cost  + _cpsMoney(out.values[row][base + CPS_COL_COST]));
+      out.cells++;
+    }
+  }
+  out.ok = out.cells > 0;
+  if (!out.ok) out.why = 'opened the tab but found no day rows';
+  return out;
+}
+
+function _cpsSheetDayRow(values, base, day) {
+  for (var r = CPS_HEADER_ROWS; r < values.length; r++) {
+    var first = String(values[r][0]).trim().toUpperCase();
+    if (first === 'TTL' || first.indexOf('TRACKING') === 0) break;
+    if (parseInt(values[r][base], 10) === day) return r;
+  }
+  return -1;
+}
+
 function _cpsLastDay() {
   var y = Number(CPS_MONTH.slice(0, 4)), m = Number(CPS_MONTH.slice(5, 7));
   return CPS_MONTH + '-' + new Date(y, m, 0).getDate();
+}
+
+// The days the SHEET is short on, derived rather than typed in — CPS_MONTH is a
+// variable and a hardcoded "Aug 20, 24 and 25" would be stated as fact in a
+// September workbook.
+//
+// ⚠️ THE SHEET'S SHORT DAYS, NOT eBAY'S PAYOUT DAYS. They are different lists.
+// eBay's cash left on Aug 24 and 25, but the sheet is also short about seventeen
+// thousand on Aug 20 — the Marketplace Connect back-fill, refunded inside Shopify
+// and never propagated, so no money ever left. It still sits in the sheet as a
+// negative, so it belongs in a sentence about why the sheet is low. Naming eBay's
+// dates above numbers derived from the sheet gap is the sort of mismatch that
+// gets a document sent back.
+//
+// Days carrying under 2% of the gap are left out: a sentence about where the
+// damage sits should not list four days worth a few hundred dollars.
+function _cpsShortDays(c) {
+  if (!c.sheet || !c.sheet.ok) return '';
+  var gap = {}, total = 0;
+  Object.keys(c.byDay).forEach(function (day) {
+    var d = Number(day.slice(8, 10)), g = 0;
+    for (var i = 0; i < CPS_STORES.length; i++) {
+      var code = CPS_STORES[i].code, base = CPS_COL_BASES[code];
+      var row = _cpsSheetDayRow(c.sheet.values, base, d);
+      if (row < 0) continue;
+      var mine = (c.byDay[day] || {})[code] || { sales: 0 };
+      g += _cpsMoney(mine.sales) - _cpsMoney(c.sheet.values[row][base + CPS_COL_SALES]);
+    }
+    g = _cpsMoney(g);
+    if (g > 0.005) { gap[d] = g; total += g; }
+  });
+  var days = Object.keys(gap).map(Number)
+    .filter(function (d) { return total > 0 && gap[d] / total >= 0.02; })
+    .sort(function (a, b) { return a - b; });
+  if (!days.length) return '';
+  var mon = MR_CPS_MON[Number(CPS_MONTH.slice(5, 7)) - 1];
+  var names = days.map(function (d) { return mon + ' ' + d; });
+  if (names.length === 1) return names[0];
+  return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+}
+
+var MR_CPS_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// ------------------------------------------------------------------ Summary --
+// One screen, no jargon, nothing to page through. Everything here is repeated in
+// detail somewhere else in the workbook; this tab exists so that nobody has to go
+// and find it.
+//
+// ⚠️ IT ANSWERS THE SHEET QUESTION HEAD-ON, because it is the first thing anyone
+// who knows the business will ask: "why is your gross profit almost the same as
+// the sheet's, if the sheet is supposed to be before the damage?" The answer is
+// that the sheet is NOT before the damage. The refunds fired on Aug 20, 24 and
+// 25; those days were never restated, so the sheet still carries them as
+// negatives and has already absorbed most of the loss. The two figures landing
+// close together is the two methods agreeing, not an error — and burying that
+// would leave the most obvious challenge unanswered.
+function _cpsSummary(c) {
+  var sold = _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].sales; }));
+  var cost = _cpsSum(CPS_STORES.map(function (s) { return c.byStore[s.code].cost; }));
+  var out  = _cpsSum(CPS_STORES.map(function (s) { return c.refByStore[s.code]; }));
+  var kept = _cpsMoney(sold - out + c.recTtl);
+  var gp   = _cpsMoney(kept - cost);
+  var gpHad = _cpsMoney(sold - cost);
+  var hit  = _cpsMoney(gpHad - gp);
+  var ship = _cpsSum(CPS_STORES.map(function (s) { return c.shipByStore[s.code]; }));
+  var shipN = c.shipN.OVL + c.shipN.LEE + c.shipN.WSP + c.shipN.MPL + c.shipN.BAL;
+  var $ = _cpsDollars;
+
+  var L = [];
+  var push = function (a, b) { L.push([a, b === undefined ? '' : b]); };
+
+  push('PayMore — ' + CPS_MONTH_NAME);
+  push('What the company actually did, measured '
+    + Utilities.formatDate(c.t0, CPS_TZ, 'MMMM d, yyyy') + ' at '
+    + Utilities.formatDate(c.t0, CPS_TZ, 'h:mm a') + ' US Central');
+  push('');
+  push('IN ONE SENTENCE');
+  push(CPS_MONTH_NAME + ' was a ' + $(sold) + ' month. A software fault refunded '
+    + $(out) + ' to ' + c.affected.length + ' buyers who never asked for it, and '
+    + shipN + ' of them had already received their goods — so we lost the money AND the '
+    + 'product. That turned ' + $(gpHad) + ' of gross profit into ' + $(gp) + '.');
+  push('');
+  push('THE NUMBERS');
+  push('What we sold', sold);
+  push('Refunded to buyers by the fault', -out);
+  push('Got back from buyers who paid us', c.recTtl);
+  push('WHAT WE KEPT', kept);
+  push('Cost of the goods we sold', -cost);
+  push('GROSS PROFIT', gp);
+  push('');
+  push('WHAT IT COST US');
+  push('Gross profit if the fault had never happened', gpHad);
+  push('Gross profit as it actually landed', gp);
+  push('The fault cost us', hit);
+  push('  which is this share of the month', gpHad ? hit / gpHad : 0);
+  push('');
+  push('STILL AT RISK');
+  push('Orders refunded in Shopify that eBay has NOT refunded yet', c.stillPaid.length);
+  push('  if they follow, this much more leaves',
+    _cpsSum(c.stillPaid.map(function (r) { return _cpsMoney(r.shopify_refund); })));
+  push('');
+
+  // ---- the sheet question ----
+  push('WHY THIS IS NOT THE SAME AS THE SALES SUMMARY SHEET');
+  if (c.sheet.ok) {
+    var shGp = _cpsMoney(c.sheet.sales - c.sheet.cost);
+    push('The sheet shows this much gross profit for ' + CPS_MONTH_NAME, shGp);
+    push('This workbook says our gross profit was', gp);
+    push('Difference (this workbook minus the sheet)', _cpsMoney(gp - shGp));
+    push('');
+    push('That looks wrong, and it is not. The sheet is NOT a "before the damage" figure. '
+      + (_cpsShortDays(c)
+          ? 'Almost all of the gap sits on ' + _cpsShortDays(c) + '. Those days were never '
+            + 'restated, so the sheet still carries their refunds as negatives — it has already '
+            + 'absorbed most of the loss without anyone deciding that it should.'
+          : 'Its unrestated days still carry the fault\'s refunds as negatives, so it has '
+            + 'already absorbed most of the loss without anyone deciding that it should.'));
+    push('');
+    push('Sales the sheet never added back', _cpsMoney(sold - c.sheet.sales));
+    push('Cost the sheet reversed along with them', _cpsMoney(cost - c.sheet.cost));
+    push('  so the sheet is short this much gross profit',
+      _cpsMoney((sold - c.sheet.sales) - (cost - c.sheet.cost)));
+    push('Cash that actually left the building', out);
+    push('  this workbook is more conservative by',
+      _cpsMoney(out - ((sold - c.sheet.sales) - (cost - c.sheet.cost))));
+    push('');
+    push('The difference is one decision: when a buyer keeps the goods AND the money, the sheet '
+      + 'credits the cost of those goods back as though they returned to the shelf. This workbook '
+      + 'does not, because they did not. Two methods, from opposite directions, landing within '
+      + $(Math.abs(_cpsMoney(gp - shGp))) + ' of each other.');
+    push('');
+    push('⚠️ SO THE SHEET UNDERSTATES WHAT WE SOLD. Our real ' + CPS_MONTH_NAME
+      + ' gross profit, before the fault, was ' + $(gpHad) + ' — not ' + $(shGp)
+      + (_cpsShortDays(c)
+          ? '. If ' + _cpsShortDays(c) + ' are ever restated the way the later days were, the '
+            + 'sheet will move to meet this.'
+          : '.'));
+  } else {
+    push('The Sales Summary could not be read, so the comparison is not shown here.',
+      c.sheet.why);
+  }
+  push('');
+  push('Every figure above is order-level and re-derivable. See the other tabs.');
+
+  var sh = c.ss.insertSheet('Summary');
+  sh.getRange(1, 1, L.length, 2).setValues(L);
+
+  // ---- looks ----
+  sh.getRange(1, 1).setFontSize(18).setFontWeight('bold').setFontColor(CPS_HEAD);
+  sh.getRange(2, 1).setFontColor('#6b7280').setFontStyle('italic');
+  sh.setColumnWidth(1, 520);
+  sh.setColumnWidth(2, 170);
+  sh.getRange(1, 1, L.length, 2).setVerticalAlignment('top').setWrap(true).setFontColor(CPS_INK);
+  sh.getRange(1, 1).setFontColor(CPS_HEAD);
+  sh.getRange(1, 2, L.length, 1).setHorizontalAlignment('right');
+
+  for (var r = 1; r <= L.length; r++) {
+    var label = String(L[r - 1][0]);
+    var val = L[r - 1][1];
+    var bare = label.replace(/[^A-Za-z]/g, '');
+    // A heading is a line with no figure that is entirely capitals.
+    if (val === '' && bare.length > 4 && label === label.toUpperCase()) {
+      sh.getRange(r, 1, 1, 2).setFontWeight('bold').setFontColor(CPS_HEAD)
+        .setBackground(CPS_SOFT).setWrap(false);
+    }
+    if (typeof val === 'number') {
+      var isCount = label.indexOf('Orders refunded') === 0;
+      var isPct = label.indexOf('which is this share') >= 0;
+      sh.getRange(r, 2).setNumberFormat(isPct ? CPS_PCT : (isCount ? '#,##0' : CPS_MONEY));
+      if (label === label.toUpperCase() && bare.length > 4) {
+        sh.getRange(r, 1, 1, 2).setFontWeight('bold').setFontSize(12);
+      }
+    }
+  }
+  sh.setFrozenRows(2);
 }
 
 // ------------------------------------------------------------------ Read Me --
@@ -868,9 +1090,8 @@ function _cpsReconcile(c) {
               'Sheet cost', 'This workbook', 'Diff'];
   var body = [], why = '';
   try {
-    var tab = SpreadsheetApp.openById(CPS_SALES_BOOK).getSheetByName(CPS_SALES_TAB);
-    if (!tab) throw new Error('no tab named "' + CPS_SALES_TAB + '"');
-    var values = tab.getRange(1, 1, tab.getLastRow(), tab.getLastColumn()).getValues();
+    if (!c.sheet.ok) throw new Error(c.sheet.why || 'the Sales Summary could not be read');
+    var values = c.sheet.values;
     Object.keys(c.byDay).sort().forEach(function (d) {
       var dayNo = Number(d.slice(8, 10));
       CPS_STORES.forEach(function (s) {
