@@ -218,6 +218,12 @@ function _cpsFetch(path) {
 // built by outreach-sheet.gs with Status first and eBay Order seventh, but five
 // managers have been working in it for a week — a column may have been inserted,
 // so nothing here indexes off a hard-coded number.
+function _cpsColLetter(i) {
+  var n = i + 1, out = '';
+  while (n > 0) { var r = (n - 1) % 26; out = String.fromCharCode(65 + r) + out; n = (n - r - 1) / 26; }
+  return out;
+}
+
 function _cpsHeaderMap(values) {
   for (var r = 0; r < Math.min(values.length, 12); r++) {
     var row = values[r], map = {}, hits = 0;
@@ -230,6 +236,13 @@ function _cpsHeaderMap(values) {
       else if (h === 'ebay username' || h === 'username') { map.user = c; }
       else if (h === 'buyer name' || h === 'full name') { map.name = c; }
       else if (h === 'item' || h === 'short item') { map.item = c; }
+      // ⚠️ MONEY ACTUALLY RECEIVED BEATS MONEY WE ASKED FOR. The managers keep a
+      // running "returned $ entered so far" column, and that is the real recovery:
+      // a customer can settle a draft order for a different figure than the refund,
+      // or pay part of it. Assuming they repaid exactly what was refunded is a
+      // guess where a measured number already exists.
+      else if (h.indexOf('return') >= 0 || h.indexOf('recovered') >= 0
+               || h.indexOf('received') >= 0 || h.indexOf('paid back') >= 0) { map.returned = c; }
       else if (h.indexOf('note') === 0 || h === 'how repaid') { map.note = c; }
     }
     if (map.status != null && map.order != null) { map.row = r; map.hits = hits; return map; }
@@ -240,7 +253,8 @@ function _cpsHeaderMap(values) {
 // Every Status typed against every eBay order, across all tabs of the outreach
 // workbook. Returns { byOrder: {id: {...}}, tabs: [...], missing: [...] }.
 function _cpsReadStatuses() {
-  var out = { byOrder: {}, tabs: [], rows: 0, blank: 0, ok: false, why: '' };
+  var out = { byOrder: {}, tabs: [], rows: 0, blank: 0, ok: false, why: '',
+              map: null, sheetTotal: 0, returnedTotal: 0 };
   if (!CPS_REFUND_BOOK_ID) {
     out.why = 'CPS_REFUND_BOOK_ID is blank — recovery not applied. See the header of this script.';
     return out;
@@ -261,6 +275,12 @@ function _cpsReadStatuses() {
     var map = _cpsHeaderMap(values);
     if (!map) continue;
     out.tabs.push(sh.getName());
+    if (!out.map) {
+      out.map = {};
+      ['status', 'order', 'amount', 'returned', 'note'].forEach(function (k) {
+        out.map[k] = map[k] == null ? null : _cpsColLetter(map[k]);
+      });
+    }
     for (var r = map.row + 1; r < values.length; r++) {
       var id = String(values[r][map.order] || '').trim();
       if (!id) continue;
@@ -271,8 +291,13 @@ function _cpsReadStatuses() {
         status: st,
         tab: sh.getName(),
         sheetAmount: map.amount != null ? _cpsMoney(values[r][map.amount]) : null,
+        returned: map.returned != null ? _cpsMoney(values[r][map.returned]) : null,
         note: map.note != null ? String(values[r][map.note] || '').trim() : ''
       };
+      out.sheetTotal = _cpsMoney((out.sheetTotal || 0)
+        + (map.amount != null ? _cpsMoney(values[r][map.amount]) : 0));
+      out.returnedTotal = _cpsMoney((out.returnedTotal || 0)
+        + (map.returned != null ? _cpsMoney(values[r][map.returned]) : 0));
     }
   }
   out.ok = out.rows > 0;
@@ -329,6 +354,18 @@ function cpsStatusCensus() {
   if (!st.ok) { Logger.log('!! %s', st.why); return; }
   Logger.log('workbook tabs read: %s', st.tabs.join(', '));
   Logger.log('rows with an eBay order: %s   (blank status: %s)', st.rows, st.blank);
+  if (st.map) {
+    Logger.log('columns found -> status %s | eBay order %s | amount %s | returned %s | note %s',
+      st.map.status || '(none)', st.map.order || '(none)', st.map.amount || '(none)',
+      st.map.returned || '(none)', st.map.note || '(none)');
+    if (!st.map.returned) {
+      Logger.log('!! NO "returned" COLUMN FOUND. Recovery will assume every paid buyer repaid');
+      Logger.log('   exactly what was refunded. If you keep a running total of money actually');
+      Logger.log('   received, tell me its header text and I will match it.');
+    }
+  }
+  Logger.log('your workbook totals: amount column %s | returned column %s',
+    _cpsDollars(st.sheetTotal), _cpsDollars(st.returnedTotal));
 
   var ref = _cpsFetch('refund-export');
   var amt = {};
@@ -355,9 +392,31 @@ function cpsStatusCensus() {
     Logger.log('%s  %s  %s  %s', _cpsPad(keys[k], 26), _cpsPad(String(t.n), 6),
                _cpsPad('$' + t.$.toFixed(2), 14), role);
   }
+  // ⚠️ THE TWO SIDES MUST BE COMPARED, NOT ASSUMED EQUAL. The workbook is a
+  // snapshot; the probe is live. Ethan's sheet totalled $57,639.86 where the live
+  // measurement said $54,736.63 refunded and $60,402.77 of order value — matching
+  // neither, because eBay credits the final-value fee back on a refund and the
+  // snapshot predates several settlements.
+  var live = 0, liveOrder = 0, n = 0;
+  for (var j = 0; j < ref.rows.length; j++) {
+    var rr = ref.rows[j];
+    if (_cpsMoney(rr.ebay_refund_total) <= 0) continue;
+    live = _cpsMoney(live + _cpsMoney(rr.ebay_refund_total));
+    liveOrder = _cpsMoney(liveOrder + _cpsMoney(rr.ebay_order_total));
+    if (st.byOrder[rr.ebay_order_id]) n++;
+  }
   Logger.log('');
-  Logger.log('Set CPS_PAID_STATUSES to the values above that mean the money actually came');
-  Logger.log('back, then Run -> buildCompanyPerformance. Nothing was written.');
+  Logger.log('=== YOUR WORKBOOK vs THE LIVE eBAY MEASUREMENT ===');
+  Logger.log('  cash eBay actually took back from us   %s   <- what the statement subtracts',
+    _cpsDollars(live));
+  Logger.log('  what the buyers were charged           %s   (order totals; eBay credits the',
+    _cpsDollars(liveOrder));
+  Logger.log('                                                    final-value fee back to us)');
+  Logger.log('  your amount column                     %s', _cpsDollars(st.sheetTotal));
+  Logger.log('  your returned-so-far column            %s', _cpsDollars(st.returnedTotal));
+  Logger.log('  rows of yours matched to a live refund %s of %s', n, Object.keys(st.byOrder).length);
+  Logger.log('');
+  Logger.log('Send me this log. Nothing was written.');
 }
 
 function _cpsPad(s, n) {
@@ -412,7 +471,7 @@ function buildCompanyPerformance() {
 
   // ---- layer 3: recovery, from the hand-typed statuses --------------------
   var rec = { byStore: {}, rows: [], counted: 0, returnedCost: 0, returnedN: 0,
-              notCounted: {}, excluded: [], excludedAmt: 0 };
+              notCounted: {}, excluded: [], excludedAmt: 0, fromSheet: 0, fromRefund: 0 };
   CPS_STORES.forEach(function (s) { rec.byStore[s.code] = 0; });
 
   // Classify first, so resale-check is asked about the claimed add-backs only.
@@ -434,7 +493,14 @@ function buildCompanyPerformance() {
     var addBack = isPaid && !(resold && CPS_EXCLUDE_RESOLD_FROM_RECOVERY);
 
     if (addBack) {
-      rec.byStore[r.store_code] = _cpsMoney(rec.byStore[r.store_code] + _cpsMoney(r.ebay_refund_total));
+      // The managers' own "returned so far" figure when they have entered one,
+      // because that is money we can see; the refund amount only when they have
+      // not, and then it is an assumption that they repaid it in full.
+      var got = (hit && hit.returned != null && hit.returned > 0)
+        ? hit.returned : _cpsMoney(r.ebay_refund_total);
+      if (hit && hit.returned != null && hit.returned > 0) rec.fromSheet++;
+      else rec.fromRefund++;
+      rec.byStore[r.store_code] = _cpsMoney(rec.byStore[r.store_code] + got);
       rec.counted++;
     } else if (isPaid) {
       // Marked paid, but the item sold again after the refund — so the money is
@@ -987,6 +1053,8 @@ function _cpsRecovery(c) {
            ['Rule for "paid"', 'anything starting with "' + CPS_PAID_PREFIXES.join('" or "')
              + '", plus ' + CPS_PAID_STATUSES.join(', ')],
            ['Orders counted', c.rec.counted],
+           ['  from your "returned so far" column — money we can see', c.rec.fromSheet],
+           ['  no figure entered, so assumed they repaid the refund in full', c.rec.fromRefund],
            ['Money added back', c.recTtl],
            ['', '']];
   CPS_STORES.forEach(function (s) { L.push(['  ' + s.code, _cpsMoney(c.rec.byStore[s.code])]); });
