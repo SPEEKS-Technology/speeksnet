@@ -1397,7 +1397,21 @@ type Row = {
   // because the sweeps that fill ebay_live are paused and a stale comparison
   // presented as current is worse than no comparison.
   ebay_seen_at?: string | null;
+  // The last title WE applied to this listing, if any. Present so the drift
+  // finding can tell "these two systems disagree" apart from "we corrected this
+  // and eBay has not caught up yet" — opposite errands with the same symptom.
+  ourMove?: { after_title: string; applied_at: string } | null;
 };
+
+// ⚠️ HOW LONG EBAY GETS TO CATCH UP BEFORE WE CALL IT A PROBLEM.
+// Approving a title makes eBay stale by definition — that is a CONSEQUENCE of
+// the fix, not a discovery, and reporting it the next morning made the tool
+// manufacture its own backlog: three of the seven drift rows in the queue on
+// 2026-09-01 were titles we had corrected ourselves. So the first few days are
+// silent. After that the silence would be the lie — Marketplace Connect owns
+// these listings now, and one that never syncs is a real problem wearing a
+// title-drift costume, which is why the message changes rather than staying off.
+const DRIFT_GRACE_DAYS = 5;
 
 type Analysis = {
   findings: Finding[];
@@ -1515,6 +1529,26 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // changes completely with the answer — because so does WHO FIXES IT and
     // WHERE. "Correct the eBay listing" and "correct Shopify" are opposite
     // errands, and the old copy sent somebody to work it out for themselves.
+    // Did WE put this title here, and is eBay still showing what it replaced?
+    // Then this is not two systems disagreeing about the truth — we know the
+    // truth, we wrote it — it is one system that has not been told yet.
+    const mine = row.ourMove && norm(row.ourMove.after_title) === norm(original)
+      ? row.ourMove : null;
+    const mineAge = mine ? _daysAgo(mine.applied_at) : null;
+    if (mine && mineAge !== null && mineAge < DRIFT_GRACE_DAYS) {
+      // Silent, and deliberately not even a low-severity note: there is nothing
+      // for a reviewer to decide while the sync still has time to happen.
+    } else if (mine) {
+      findings.push({
+        code: "ebay-not-synced",
+        says: `We corrected this title on ${new Date(mine.applied_at).toLocaleDateString("en-US",
+                { month: "short", day: "numeric" })} and eBay is still showing the old one ${when} `
+          + `— "${row.ebay_title}". ${mineAge} days is past any normal sync, so this is not a title `
+          + `to rewrite: the Shopify title here is already right. The eBay listing is the copy that `
+          + `needs correcting, and it is owned by Marketplace Connect.`,
+        severity: 3, fixable: false,
+      });
+    } else {
     const verdict = adjudicate(original, row.ebay_title, extra?.specs);
     const stale = age !== null && age >= 2
       ? ` ⚠️ Our eBay snapshot is ${age} days old, so confirm on eBay itself rather than trusting this line.`
@@ -1529,6 +1563,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       severity: 3, fixable: false,
     });
     if (stale) findings[findings.length - 1].says += stale;
+    }
   }
 
   // THE TITLE CONTRADICTS THE LISTING'S OWN SPEC TABLE. Severity 3: this is not
@@ -2370,13 +2405,21 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
   const live: any[] = await rows(
     `ebay_live?store_code=eq.${store}&select=sku,title,item_id,seen_at`);
   const liveBy = new Map(live.map(r => [r.sku, r]));
+  // Every title this tool has applied in this store, newest first, so the drift
+  // finding can recognise its own handiwork. One read for the store, not one
+  // per row.
+  const moveRows: any[] = await allRows(
+    `listing_title_moves?store_code=eq.${store}`
+    + `&select=product_id,after_title,applied_at&order=applied_at.desc`);
+  const moveBy = new Map<string, any>();
+  for (const m of moveRows) if (!moveBy.has(m.product_id)) moveBy.set(m.product_id, m);
   // What the LAST sweep concluded, so a rules-only run can carry the market's
   // half forward instead of stamping over it. Keyed by product_id, and only
   // trusted while current_title still matches.
   const priorRows: any[] = await allRows(
     `listing_title_reviews?store_code=eq.${store}`
     + `&select=product_id,current_title,suggested_title,findings,basis,confidence,comps`
-    + `,asked_title,asked_at`
+    + `,asked_title,asked_at,status,ebay_title,decided_at`
     + `&order=product_id`);
   const prior = new Map(priorRows.map(r => [r.product_id, r]));
 
@@ -2392,6 +2435,37 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     if (nameBy[productId]) return { asked_title: askedStamp(title), asked_at: stampedAt };
     const p = prior.get(productId);
     return { asked_title: p?.asked_title ?? null, asked_at: p?.asked_at ?? null };
+  };
+
+  // ⚠️ A DENIAL HAS TO SURVIVE THE NEXT SWEEP, OR IT IS NOT A DECISION.
+  // The rules cron re-walks the whole estate twice a day and the upsert wrote
+  // status:"open" unconditionally, so every Deny came back within hours — a
+  // reviewer's afternoon undone by a cron. candidatesFor already documents the
+  // rule this restores: "a row whose title has CHANGED since we looked is new
+  // work again, whatever it was decided last time".
+  //
+  // What makes it new work again, precisely:
+  //   * the Shopify title changed — it is a different title, never decided
+  //   * for a drift finding, the EBAY title changed — the disagreement the
+  //     reviewer looked at is not the disagreement we have now
+  //   * a finding code appeared that was not on the row when it was denied —
+  //     they dismissed what they were shown, not everything we might ever find
+  // Anything else keeps the decision, and decided_by/at/note are untouched
+  // because the upsert does not carry those columns.
+  const deniedStill = (productId: string, title: string, ebayTitle: string | null,
+                       codes: string[]): boolean => {
+    const p = prior.get(productId);
+    if (!p || p.status !== "denied") return false;
+    if (p.current_title !== title) return false;
+    const priorCodes = new Set((p.findings || []).map((f: any) => String(f?.code || "")));
+    // Note the test is on the drift we have NOW, not the drift it had then: a
+    // listing whose eBay copy has since CAUGHT UP has lost its drift finding,
+    // and nothing new has happened for a reviewer to look at.
+    if ((codes.includes("title-drift") || codes.includes("ebay-not-synced"))
+        && String(p.ebay_title ?? "") !== String(ebayTitle ?? "")) {
+      return false;
+    }
+    return codes.every(c => priorCodes.has(c));
   };
 
   // Our OWN live eBay item ids, for the model check's corpus exclusion. Every
@@ -2507,6 +2581,7 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     const lv = liveBy.get(row.sku);
     row.ebay_title = lv?.title || null;
     row.ebay_seen_at = lv?.seen_at || null;
+    row.ourMove = moveBy.get(row.product_id) || null;
     const c = catBy.get(row.sku);
     row.category_id = c?.category_id || null;
     row.category_name = c?.category_name || null;
@@ -2628,9 +2703,14 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
       category_id: row.category_id, category_name: row.category_name,
       price: row.price, quantity: row.quantity,
       // Only stored when it actually disagrees — the column IS the finding.
-      ebay_title: a.findings.some(f => f.code === "title-drift") ? row.ebay_title : null,
+      ebay_title: a.findings.some(f => f.code === "title-drift" || f.code === "ebay-not-synced")
+        ? row.ebay_title : null,
       severity: Math.max(...a.findings.map(f => f.severity)),
-      status: "open", swept_at: stampedAt,
+      status: deniedStill(row.product_id, row.title,
+                          a.findings.some(f => f.code === "title-drift" || f.code === "ebay-not-synced")
+                            ? row.ebay_title ?? null : null,
+                          a.findings.map(f => f.code)) ? "denied" : "open",
+      swept_at: stampedAt,
       // Only the market pass may move the market's clock. A rules-only run that
       // stamped it would make eBay look freshly asked when it was not.
       ...(wantMarket ? { market_at: stampedAt } : {}),
@@ -2725,6 +2805,50 @@ async function queueFor(store: string) {
     severity: r.severity, price: r.price, quantity: r.quantity,
     sweptAt: r.swept_at, shop: SHOP_BY_STORE[store],
   }));
+}
+
+// WHAT WAS DISMISSED, AND WHY — the half of Deny that never existed.
+//
+// The dialog told reviewers their reason "is how we find out a rule is wrong",
+// and then wrote it to a column nothing read. A note nobody reads is worse than
+// no note: it asks somebody to do work and quietly discards it.
+//
+// Two things come back. The rows, so a dismissal can be seen and taken back —
+// a decision you cannot undo is one people hesitate over, and hesitation is how
+// a review queue stops being worked. And a tally BY FINDING CODE, which is the
+// actual feedback loop: one dismissal is a listing, four dismissals of the same
+// code is a rule that needs looking at.
+//
+// ⚠️ ONLY 'not-a-problem' COUNTS TOWARDS THE TALLY. An 'ebay-stale' dismissal
+// says the rule was RIGHT and the fix lives in Marketplace Connect, so folding
+// those in would make title-drift look like our worst rule precisely when it
+// was doing its job.
+async function deniedFor(store: string) {
+  const d: any[] = await rows(
+    `listing_title_reviews?store_code=eq.${store}&status=eq.denied`
+    + `&select=product_id,sku,current_title,ebay_title,findings,severity,`
+    + `decided_by,decided_at,decided_as,decided_note`
+    + `&order=decided_at.desc&limit=100`);
+  const tally: Record<string, number> = {};
+  for (const r of d) {
+    if (r.decided_as === "ebay-stale") continue;
+    for (const f of (r.findings || [])) {
+      const c = String(f?.code || "");
+      if (c) tally[c] = (tally[c] || 0) + 1;
+    }
+  }
+  return {
+    rows: d.map(r => ({
+      productId: r.product_id, sku: r.sku,
+      current: r.current_title, ebayTitle: r.ebay_title,
+      findings: r.findings || [], severity: r.severity,
+      by: r.decided_by, at: r.decided_at,
+      as: r.decided_as, note: r.decided_note,
+    })),
+    // Sorted so the rule most often dismissed is the first thing read.
+    tally: Object.entries(tally).sort((a, b) => b[1] - a[1])
+      .map(([code, n]) => ({ code, n })),
+  };
 }
 
 // ⚠️ THE QUEUE'S THIRD SCOPE RULE IS CONDITIONAL, AND THE PANEL HAS TO SAY SO.
@@ -2886,9 +3010,16 @@ async function handlePost(req: Request, scope: Scope) {
   // ⚠️ ONLY EVER ACT ON WHAT THE QUEUE SAYS. A product id posted by a browser is
   // a request to act on a queued row, not a licence to retitle anything in the
   // catalogue. The view already refuses a row whose title moved under us.
-  const q: any[] = await rows(
-    `listing_title_queue?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
-    + `&select=product_id,sku,current_title,suggested_title,findings,basis&limit=1`);
+  // ⚠️ REOPEN READS THE TABLE, NOT THE QUEUE VIEW. The view is status='open' by
+  // definition, so looking a denied row up in it always fails — the one row
+  // reopen exists to act on is the one row the queue cannot see.
+  const q: any[] = action === "reopen"
+    ? await rows(
+        `listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
+        + `&status=eq.denied&select=product_id,sku,current_title,suggested_title,findings,basis&limit=1`)
+    : await rows(
+        `listing_title_queue?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
+        + `&select=product_id,sku,current_title,suggested_title,findings,basis&limit=1`);
   const item = q[0];
   if (!item) {
     return json({ error: "not in the queue",
@@ -2896,14 +3027,39 @@ async function handlePost(req: Request, scope: Scope) {
   }
 
   if (action === "deny") {
+    // ⚠️ WHICH ANSWER, NOT JUST THAT ONE WAS GIVEN. "The rule is wrong" and
+    // "our title is right, eBay's copy is stale" both empty the row out of the
+    // queue and mean opposite things about this tool. Counted together, every
+    // rule would look broken in proportion to how often Marketplace Connect
+    // failed to sync. The client says which; anything it does not recognise
+    // falls back to the ordinary reading rather than being refused, because a
+    // decision a reviewer has already made should never be lost to a typo.
+    const asRaw = String(body.as || "").trim();
+    const decidedAs = asRaw === "ebay-stale" ? "ebay-stale" : "not-a-problem";
     await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
       method: "PATCH", headers: { Prefer: "return=minimal" },
       body: JSON.stringify({
         status: "denied", decided_by: scope.name, decided_at: new Date().toISOString(),
+        decided_as: decidedAs,
         decided_note: String(body.reason || "").slice(0, 300) || null,
       }),
     });
-    return json({ ok: true, denied: productId });
+    return json({ ok: true, denied: productId, decidedAs });
+  }
+
+  // Undo. A denial that cannot be taken back is a decision people hesitate over,
+  // and hesitation is how a review queue stops being worked. Clearing the whole
+  // decision rather than only the status: a row put back in the queue carrying
+  // somebody's old note and timestamp would read as still decided.
+  if (action === "reopen") {
+    await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({
+        status: "open", decided_by: null, decided_at: null,
+        decided_as: null, decided_note: null,
+      }),
+    });
+    return json({ ok: true, reopened: productId });
   }
 
   if (action !== "approve") return json({ error: `unknown action: ${action}` }, 400);
@@ -3087,11 +3243,11 @@ Deno.serve(async (req: Request) => {
 
       const asked = (url.searchParams.get("store") || "").toUpperCase();
       const store = scope.stores.includes(asked) ? asked : scope.stores[0];
-      const [queue, counts, ebay] = await Promise.all([
-        queueFor(store), totals(scope.stores), ebayScope(store)]);
+      const [queue, counts, ebay, denied] = await Promise.all([
+        queueFor(store), totals(scope.stores), ebayScope(store), deniedFor(store)]);
       return json({
         scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
-        store, queue, counts, ebayScope: ebay,
+        store, queue, counts, ebayScope: ebay, denied,
       });
     }
 

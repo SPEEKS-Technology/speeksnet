@@ -45624,6 +45624,76 @@ function _ltGone(from, to) {
     return _ltMark(r.a, r.head, r.tail, 'lt-cut');
 }
 
+// WHAT WAS DISMISSED, FOLDED AWAY UNDER THE QUEUE.
+//
+// Shut by default and never a number in the header: this is not work waiting,
+// it is work already done, and a count beside the queue's own count would read
+// as a second pile to get through.
+//
+// It earns its place twice. A dismissal can be taken back — a decision you
+// cannot undo is one people hesitate over, and hesitation is how a review queue
+// stops being worked. And the tally turns fifty individual judgements into the
+// one sentence worth acting on: which RULE keeps being wrong.
+const _LT_CODE_SAYS = {
+    'name-wrong': 'Name checked against outside knowledge',
+    'name-garbled': 'Name looks misspelled',
+    'missing-screen-size': 'Screen size missing from the title',
+    'repeated-phrase': 'A phrase repeated in the title',
+    'title-drift': 'Shopify and eBay disagree',
+    'ebay-not-synced': 'eBay has not picked up our fix',
+    'missing-noun': 'No noun saying what the thing is',
+    'truncated-title': 'Title cut off mid-word',
+    'lazy-title': 'Specs in the listing but not the title',
+    'spec-conflict': 'Title contradicts the spec table',
+    'hardware-conflict': 'Two impossible specs together',
+    'brand-not-found': 'Brand not found on eBay',
+    'model-not-found': 'Model not confirmed on eBay',
+};
+
+function _ltDeniedHtml() {
+    const d = _ltData && _ltData.denied;
+    if (!d || !(d.rows || []).length) return '';
+    const when = t => {
+        const x = new Date(t);
+        return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+    // ⚠️ THE TALLY EXCLUDES eBay-STALE DISMISSALS, and the server already did
+    // that — repeated here only in the wording. Those say the rule was RIGHT and
+    // the fix lives in Marketplace Connect; counting them would make title-drift
+    // look like our worst rule exactly when it was doing its job.
+    const tally = (d.tally || []).filter(t => t.n >= 2);
+    const tallyHtml = tally.length
+        ? `<div class="lt-tally">
+             <div class="lt-tally-h">Dismissed More Than Once — Worth A Look At The Rule</div>
+             ${tally.map(t => `<div class="lt-tally-row">
+                 <span class="lt-tally-n">${t.n}</span>
+                 <span>${_ecEsc(_LT_CODE_SAYS[t.code] || t.code)}</span></div>`).join('')}
+           </div>`
+        : '';
+    const rows = d.rows.map(r => {
+        const busy = _ltBusy.has(r.productId);
+        const stale = r.as === 'ebay-stale';
+        return `<div class="lt-dn-row">
+          <div class="lt-dn-main">
+            <div class="lt-dn-title">${_ecEsc(r.current || '')}</div>
+            <div class="lt-dn-meta">
+              <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+              <span class="lt-dn-as ${stale ? 'lt-dn-ebay' : ''}">${stale ? 'eBay Is Stale' : 'Not A Problem'}</span>
+              <span>${_ecEsc(r.by || '')}${r.at ? ' · ' + when(r.at) : ''}</span>
+            </div>
+            ${r.note ? `<div class="lt-dn-note">${_ecEsc(r.note)}</div>` : ''}
+          </div>
+          <button class="lt-dn-undo" onclick="ltReopen('${_ecEsc(r.productId)}')" ${busy ? 'disabled' : ''}
+                  title="Put this back in the queue">${busy ? '…' : 'Undo'}</button>
+        </div>`;
+    }).join('');
+    return `<details class="lt-denied">
+      <summary>${d.rows.length} Dismissed</summary>
+      ${tallyHtml}
+      <div class="lt-dn-rows">${rows}</div>
+    </details>`;
+}
+
 function _ltHtml() {
     const head = (inner, badge) => _lhSec('Titles', 'Listing Titles', inner, badge);
     const store = _ecEsc(_ecStore || '');
@@ -45677,7 +45747,8 @@ function _ltHtml() {
       ${_ltScopeNote(_ltData.ebayScope)}
       <div class="rc-modes lt-modes">${tabs}</div>
       ${_ltTierSaid(_ltTier, byTier(_ltTier).length, store)}
-      <div class="lt-rows">${rows}</div>`,
+      <div class="lt-rows">${rows}</div>
+      ${_ltDeniedHtml()}`,
       `<span class="lh-count ${worst === 3 ? 'lh-count-bad' : worst === 2 ? 'lh-count-warn' : 'lh-count-ok'}">${total}</span>`);
 }
 
@@ -45794,7 +45865,8 @@ function _ltRow(r) {
         <div class="lt-acts">
           <button class="lt-ok" onclick="ltApprove('${_ecEsc(id)}')"
                   ${canApprove ? '' : 'disabled'}>${busy ? 'Saving…' : (dirty ? 'Save My Title' : 'Approve')}</button>
-          <button class="lt-no" onclick="ltDeny('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Deny</button>
+          <button class="lt-no" onclick="ltDeny('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
+                  title="${_ecEsc(_ltDenyKind(r).hint)}">${_ltDenyKind(r).label}</button>
         </div>
         ${r.comps && r.comps.length ? `<details class="lt-comps">
           <summary>${r.comps.length} Live eBay Listings</summary>
@@ -45855,6 +45927,31 @@ function ltEdit(el) {
 }
 window.ltEdit = ltEdit;
 
+// ⚠️ ONE BUTTON, TWO MEANINGS, AND THE ROW DECIDES WHICH.
+// On a name or spec finding, denying says "the rule is wrong, this title is
+// fine" — feedback about us. On a DRIFT row it says nothing of the kind: that
+// row is not a claim the title is wrong, it is a claim Shopify and eBay
+// disagree, and the usual answer is "our title is right, the eBay copy is
+// stale" — the rule being RIGHT, with the fix living in Marketplace Connect
+// where this tool cannot reach.
+//
+// The old button asked "Why is this title fine as it is?" on both. On a drift
+// row that is the wrong question about the wrong system, and the only one-click
+// action available, so a reviewer had to answer it to clear a row they had read
+// correctly. Ethan hit exactly that on the 3DR drone, 2026-09-01.
+const _LT_EBAY_CODES = new Set(['title-drift', 'ebay-not-synced']);
+
+function _ltDenyKind(r) {
+    const ebay = (r.findings || []).some(f => _LT_EBAY_CODES.has(f.code));
+    return ebay
+        ? { as: 'ebay-stale', label: 'eBay Is Stale',
+            hint: 'The Shopify title here is right — it is the eBay copy that needs correcting. Clears the row without recording this as a bad rule.',
+            ask: 'Confirm the Shopify title here is the right one?\n\nThis records that the EBAY listing is the copy that needs correcting, and clears the row. Nothing is changed on either listing.' }
+        : { as: 'not-a-problem', label: 'Deny',
+            hint: 'This title is fine as it is — the finding was wrong.',
+            ask: 'Why is this title fine as it is?' };
+}
+
 async function ltApprove(pid) {
     const row = (_ltData?.queue || []).find(r => r.productId === pid);
     if (!row) return;
@@ -45896,11 +45993,13 @@ async function ltDeny(pid) {
     // rule is wrong, and "denied" with no note teaches nobody anything. Blank is
     // allowed — refusing to record the denial without one would just mean fewer
     // denials and a queue nobody trusts.
-    const reason = prompt(`Why is this title fine as it is?\n\n${row.current}\n\n`
+    const kind = _ltDenyKind(row);
+    const reason = prompt(`${kind.ask}\n\n${row.current}\n\n`
         + `(Optional — it is how we find out a rule is wrong.)`, '');
     if (reason === null) return;
     _ltBusy.add(pid); ecRender();
-    const res = await _ltPost({ action: 'deny', store: _ecStore, productId: pid, reason });
+    const res = await _ltPost({ action: 'deny', store: _ecStore, productId: pid,
+                                reason, as: kind.as });
     _ltBusy.delete(pid);
     if (!res.ok) {
         alert(res.body?.detail || res.body?.error || 'Could not record that.');
@@ -45912,6 +46011,23 @@ async function ltDeny(pid) {
     catch (e) { _ltErr = e.message || String(e); }
     ecRender();
 }
+// Taking a dismissal back. Same refetch as every other action, because the row
+// has to reappear in the queue above for the undo to have visibly worked.
+async function ltReopen(pid) {
+    _ltBusy.add(pid); ecRender();
+    const res = await _ltPost({ action: 'reopen', store: _ecStore, productId: pid });
+    _ltBusy.delete(pid);
+    if (!res.ok) {
+        alert(res.body?.detail || res.body?.error || 'Could not put that back.');
+        ecRender();
+        return;
+    }
+    try { _ltData = await _ltFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`); }
+    catch (e) { _ltErr = e.message || String(e); }
+    ecRender();
+}
+window.ltReopen = ltReopen;
+
 window.ltDeny = ltDeny;
 
 // --- Categories: filing the `other` pile ------------------------------------

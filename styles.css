@@ -18070,6 +18070,74 @@ body.tv-body { display: block; background: #eef1f5; }
 }
 
 .lt-edit { display: flex; align-items: center; gap: 9px; margin-top: 2px; }
+
+/* THE DISMISSED DRAWER — work already done, folded under the work that is not.
+   Quieter than every row above it on purpose: nothing in here is waiting on
+   anybody, and it must never compete with the queue for attention. */
+.lt-denied { width: 100%; margin-top: 14px; border-top: 1px solid var(--cb-line); padding-top: 10px; }
+/* ⚠️ COLLAPSE STATED EXPLICITLY — the same Chrome 151 reason .lt-comps carries.
+   A closed <details> no longer puts display:none on its children, and .lt-dn-row
+   IS display:flex, which is exactly the author rule that beat the UA rule once
+   before and shipped the eBay rows visible with the drawer shut. */
+.lt-denied:not([open]) > *:not(summary) { display: none; }
+.lt-denied summary {
+    font-size: 11px; font-weight: 800; color: var(--cb-faint); cursor: pointer;
+    letter-spacing: .01em; text-transform: uppercase;
+}
+.lt-denied summary:hover { color: var(--cb-muted); }
+
+/* The one sentence in the drawer worth acting on: which RULE keeps being wrong. */
+.lt-tally {
+    margin: 10px 0 4px; padding: 10px 12px; border-radius: 9px;
+    background: #fffbeb; border: 1px solid #fde68a;
+}
+.lt-tally-h {
+    font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+    color: #92400e; margin-bottom: 6px;
+}
+.lt-tally-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px; font-weight: 700; color: #92400e; line-height: 1.7;
+}
+.lt-tally-n {
+    flex: 0 0 auto; min-width: 18px; text-align: center; font-weight: 900;
+    background: #fef3c7; border-radius: 5px; padding: 0 4px;
+}
+
+.lt-dn-rows { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.lt-dn-row {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 2px; border-bottom: 1px solid var(--cb-line);
+}
+.lt-dn-row:last-child { border-bottom: none; }
+.lt-dn-main { flex: 1 1 auto; min-width: 0; }
+.lt-dn-title {
+    font-size: 12px; font-weight: 700; color: var(--cb-muted);
+    line-height: 1.4; overflow-wrap: anywhere;
+}
+.lt-dn-meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 3px;
+    font-size: 10.5px; font-weight: 700; color: var(--cb-faint);
+}
+/* Which of the two answers it was. These mean opposite things about the tool,
+   so they must not look alike at a glance. */
+.lt-dn-as {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase;
+    color: var(--cb-muted); background: var(--cb-bg); border: 1px solid var(--cb-line);
+    border-radius: 20px; padding: 2px 8px;
+}
+.lt-dn-ebay { color: #b45309; background: #fffbeb; border-color: #fde68a; }
+.lt-dn-note {
+    font-size: 11px; font-weight: 600; color: var(--cb-faint);
+    line-height: 1.45; margin-top: 4px; font-style: italic;
+}
+.lt-dn-undo {
+    flex: 0 0 auto; font-size: 10.5px; font-weight: 800; cursor: pointer;
+    color: var(--cb-muted); background: var(--cb-card);
+    border: 1px solid var(--cb-line); border-radius: 7px; padding: 5px 11px;
+}
+.lt-dn-undo:hover:not(:disabled) { border-color: var(--cb-sage); color: #146c3d; }
+.lt-dn-undo:disabled { color: var(--cb-faint); cursor: not-allowed; }
 .lt-input {
     flex: 1 1 auto; min-width: 0; font-family: inherit;
     font-size: 12.5px; font-weight: 700; color: var(--cb-ink);
