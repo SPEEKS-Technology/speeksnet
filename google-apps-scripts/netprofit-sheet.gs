@@ -107,7 +107,11 @@ function npTtlRowProbe()  { _npTtlRowProbe(); }
 function npFixTrackingPreview() { _npFixTracking(true); }
 function npFixTrackingApply()   { _npFixTracking(false); }
 function npWritePreview() { _npWrite(true); }
-function npWriteApply()   { _npWrite(false); }
+// ⚠️ A HAND RUN ALWAYS WRITES SHIPPING. NP_SKIP_SHIP is a global and one Apps
+// Script project is one global scope that survives between executions, so an
+// 8am pass leaves it TRUE — and a manual npWriteApply later in the day would
+// then silently skip the one column somebody is most likely running it to fill.
+function npWriteApply()   { NP_SKIP_SHIP = false; _npWrite(false); }
 
 // ---------------------------------------------------------------------------
 // WHICH TAB. From 2026-09 the workbook keeps ONE TAB PER MONTH — "Net Profit
@@ -509,17 +513,47 @@ var NP_TRACKING = [
 // without a spreadsheet: this is the part that decides a projection, and a
 // wrong-but-adjacent column letter still returns a number that looks fine.
 //
+// ⚠️ THE GUARD IS  x=""  AND NOT  ISBLANK(x).  THEY ARE NOT THE SAME TEST, and
+// the difference is a whole company's percentage.
+//
+// ISBLANK is false for a cell holding a FORMULA that returns "" — the cell is
+// not empty, it contains a formula. Every store's Sales column is a written
+// value, so ISBLANK worked there; the TTL block's Sales is
+// =IF(ISBLANK(B5),"",T5+B5+AL5), a formula, so the guard never fired and the
+// company's tracking column computed on all 31 rows instead of just the days
+// that have happened.
+//
+// It failed the way these always do — plausibly. Every consumer reads the LAST
+// NON-EMPTY cell of the day range, so "never blank" means it read row 35, day
+// 31's fully decayed projection: 6,135.15 x 30 / 31 = 5,937.24, over a
+// 284,400 goal, printed as 2.1% where the truth was 64.7%. Measured 2026-09-02.
+//
+//   x=""      true for an empty cell AND for a formula returning ""
+//   ISBLANK   true only for a genuinely empty cell
+//
+// A real zero is unaffected: 0="" is FALSE in Sheets, so a day that genuinely
+// sold nothing still projects.
+//
 // daysThruRow1 = 0 means a DAY row, which divides by its own day number. Any
 // other value means the TTL row, which has no day number — its day cell reads
 // "TTL" — and so divides by Days Thru instead, on the row's own month figure.
+//
+// ⚠️ THE TTL ROW TAKES IFERROR, NOT A GUARD. Its Sales cell is a SUM, which
+// returns 0 rather than "" for an empty month, so no ="" test can blank it —
+// and on the 1st, before anything is written, Days Thru is 0 and the division
+// is what fails. IFERROR blanks exactly that case and nothing else. The day
+// rows cannot use IFERROR instead: dividing by a day number never errors, so a
+// future day would show 0 rather than blank, and 0 is a value the consumers
+// would happily read as the month's projection.
 function _npTrackFormula(base, spec, row1, daysThisRow1, daysThruRow1) {
   var salesL = _npColLetter(base + NP_OFF_SALES);
   var totalL = _npColLetter(base + 2);
-  var numer = daysThruRow1
-    ? _npColLetter(base + spec.month) + row1 + '/' + totalL + '$' + daysThruRow1
-    : _npColLetter(base + spec.cum) + row1 + '/' + _npColLetter(base) + row1;
-  return '=IF(ISBLANK(' + salesL + row1 + '),"",(' + numer + ')*'
-       + totalL + '$' + daysThisRow1 + ')';
+  if (daysThruRow1) {
+    return '=IFERROR((' + _npColLetter(base + spec.month) + row1 + '/'
+         + totalL + '$' + daysThruRow1 + ')*' + totalL + '$' + daysThisRow1 + ',"")';
+  }
+  return '=IF(' + salesL + row1 + '="","",(' + _npColLetter(base + spec.cum) + row1
+       + '/' + _npColLetter(base) + row1 + ')*' + totalL + '$' + daysThisRow1 + ')';
 }
 
 function _npFixTracking(preview) {
