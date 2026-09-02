@@ -37,6 +37,12 @@
 //   AF35  =IFERROR(MAX(AF4:AF34),0)                 fill across to AK35
 //   AF36  =IFERROR(AF35/$E$40*$E$39,0)              fill across to AK36
 //
+// ⚠️ THOSE ROW NUMBERS ARE FOR A 31-DAY MONTH ONLY, and the reader below no
+// longer trusts them. month-rollover.gs deletes a day row when the new month is
+// shorter, so in September 2026 the grid ended at row 33, the total moved to 34
+// and the projection to 35 — and a reader pinned to 35/36 served the projection
+// as the month-to-date count. The rows are FOUND from the day-number column.
+//
 // BUYING DAYS, NOT CALENDAR DAYS (user's call 2026-08-08, and the righter one):
 // a review comes from someone at the counter asking for one, and the stores are
 // shut on Sundays.
@@ -106,12 +112,43 @@ function addGoogleReviews(data) {
     // browser as text; the client treats 0 as "nothing yet".
     var num = function (v) { var x = Number(v); return isFinite(x) ? x : 0; };
 
+    // ⚠️⚠️ NEVER PIN THESE TO ROW 35 AGAIN — THE GRID IS AS LONG AS THE MONTH.
+    // This read row 35 for the total and 36 for the projection, which is where
+    // they sit in a 31-DAY month. month-rollover.gs deletes a day row when the
+    // new month is shorter, so on 2026-09-01 everything below the grid moved up
+    // one row: this then served the PROJECTION as the month-to-date figure —
+    // every store reported exactly 26x its real count (36 became 936, and the
+    // company tile read 5,148 five-star reviews against a goal of 185) — while
+    // the projection read the blank row below it and reported 0.
+    //
+    // Nothing announced it. The figures were the right SHAPE from the wrong
+    // cells, which is the one failure this file's try/catch cannot help with.
+    //
+    // So the grid's end is FOUND, not assumed: column AE carries the day
+    // numbers, and the last one is the last day of the month. The total is the
+    // row under it and the projection the row under that — right in a 28, 29,
+    // 30 or 31-day month, and right again if a row is ever added above the grid.
+    var lastDay = 4;                                   // 1-based; AE4 is day 1
+    var dayCol = tab.getRange('AE4:AE40').getValues(); // 40 is past any month end
+    for (var i = 0; i < dayCol.length; i++) {
+      var dn = Number(dayCol[i][0]);
+      // Consecutive from 1, so a stray number in a footer cannot extend the grid.
+      if (!isFinite(dn) || dn !== i + 1) break;
+      lastDay = 4 + i;
+    }
+    // A month has 28-31 days, so the grid can only end on rows 31-34. Anything
+    // else means the layout moved in a way this code has not been told about,
+    // and saying nothing beats confidently serving the wrong cell.
+    if (lastDay < 31 || lastDay > 34) return data;
+    var totalRow = lastDay + 1;
+    var projRow  = lastDay + 2;
+
     var cols = { ovl: 'AF', lee: 'AG', wsp: 'AH', mpl: 'AI', bal: 'AJ' };
     Object.keys(cols).forEach(function (s) {
       var c = cols[s];
-      data[s + 'Reviews']     = num(tab.getRange(c + '35').getValue());  // month to date
-      data[s + 'ReviewsProj'] = num(tab.getRange(c + '36').getValue());  // projected month-end
-      data[s + 'ReviewsGoal'] = num(tab.getRange(c + '2').getValue());   // monthly target
+      data[s + 'Reviews']     = num(tab.getRange(c + totalRow).getValue()); // month to date
+      data[s + 'ReviewsProj'] = num(tab.getRange(c + projRow).getValue());  // projected month-end
+      data[s + 'ReviewsGoal'] = num(tab.getRange(c + '2').getValue());      // monthly target
     });
 
     // ---- the DAY COLUMN, so the dashboard can see movement ------------------
@@ -132,7 +169,11 @@ function addGoogleReviews(data) {
     // so a real 0 (a store that genuinely has none yet) and a day the importer has
     // not reached are different facts, and collapsing them would make every store
     // read as "no movement" for the whole back half of the month.
-    var grid = tab.getRange('AF4:AJ34').getValues();
+    // Read to the grid's real end for the same reason. A fixed AF4:AJ34 in a
+    // 30-day month swept the TOTAL row in as "day 31", so every store's last day
+    // carried the whole month's count — and that is the exact shape
+    // _lvReviewStale reads to decide whether a store has stopped asking.
+    var grid = tab.getRange('AF4:AJ' + lastDay).getValues();
     var codes = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
     var daily = {};
     codes.forEach(function (code, ci) {
@@ -142,6 +183,13 @@ function addGoogleReviews(data) {
         var x = Number(v);
         return isFinite(x) ? x : null;
       });
+    });
+    // ⚠️ PADDED BACK TO 31. The client indexes these by day-1 and every other
+    // day array on the payload is 31 long; a 30-long array would read correctly
+    // by accident today and wrongly from anything assuming a fixed width.
+    // Trailing nulls say "this month has no such day", which is the truth.
+    codes.forEach(function (code) {
+      while (daily[code].length < 31) daily[code].push(null);
     });
     data.wkReviews = daily;
   } catch (err) {
