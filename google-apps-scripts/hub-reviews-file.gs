@@ -41,7 +41,13 @@
 // longer trusts them. month-rollover.gs deletes a day row when the new month is
 // shorter, so in September 2026 the grid ended at row 33, the total moved to 34
 // and the projection to 35 — and a reader pinned to 35/36 served the projection
-// as the month-to-date count. The rows are FOUND from the day-number column.
+// as the month-to-date count. The rows come from _hubRows() in Code.gs, which
+// derives them from the length of the month.
+//
+// ⚠️ AND THE DAY NUMBERS IN AE ARE NOT RELIABLE. The rollover renumbers the day
+// column of each STORE block, found from the header row; this mini-table is not
+// one of them, so after a 31-to-30 month it reads 1..29 then 31 — day 30's row
+// having been the one deleted. The rows here are counted, never read off it.
 //
 // BUYING DAYS, NOT CALENDAR DAYS (user's call 2026-08-08, and the righter one):
 // a review comes from someone at the counter asking for one, and the stores are
@@ -124,24 +130,26 @@ function addGoogleReviews(data) {
     // Nothing announced it. The figures were the right SHAPE from the wrong
     // cells, which is the one failure this file's try/catch cannot help with.
     //
-    // So the grid's end is FOUND, not assumed: column AE carries the day
-    // numbers, and the last one is the last day of the month. The total is the
-    // row under it and the projection the row under that — right in a 28, 29,
-    // 30 or 31-day month, and right again if a row is ever added above the grid.
-    var lastDay = 4;                                   // 1-based; AE4 is day 1
-    var dayCol = tab.getRange('AE4:AE40').getValues(); // 40 is past any month end
-    for (var i = 0; i < dayCol.length; i++) {
-      var dn = Number(dayCol[i][0]);
-      // Consecutive from 1, so a stray number in a footer cannot extend the grid.
-      if (!isFinite(dn) || dn !== i + 1) break;
-      lastDay = 4 + i;
-    }
-    // A month has 28-31 days, so the grid can only end on rows 31-34. Anything
-    // else means the layout moved in a way this code has not been told about,
-    // and saying nothing beats confidently serving the wrong cell.
-    if (lastDay < 31 || lastDay > 34) return data;
-    var totalRow = lastDay + 1;
-    var projRow  = lastDay + 2;
+    // ⚠️ THE ROWS COME FROM THE CALENDAR, NOT FROM READING THE DAY COLUMN.
+    // The first attempt at this scanned AE downwards for consecutive day
+    // numbers and stopped where they stopped. It was wrong on the very first
+    // run, because THE REVIEWS BLOCK'S DAY COLUMN IS NOT RENUMBERED BY THE
+    // ROLLOVER. month-rollover.gs renumbers the day column of each STORE block
+    // — found from the header row — and this mini-table at AE:AK is not one of
+    // them. Going 31 days to 30 it simply deleted day 30's row, leaving AE
+    // reading 1..29 then 31. The scan stopped at 29, put the total two rows too
+    // high, and served 0 for every store while the projection cell answered
+    // with the total. Reading the sheet is not automatically safer than
+    // computing: it is only safer when the thing you read is maintained.
+    //
+    // The length of the month is not in doubt and needs no lookup, and it is
+    // the same number month-rollover.gs sized the grid to. _hubRows lives in
+    // Code.gs, in this same project, so both files derive every row from one
+    // place — this block cannot drift away from the hub's own arithmetic.
+    var R = _hubRows(new Date());
+    var lastDay  = R.buyLast;    // 34 in a 31-day month
+    var totalRow = R.buyTotal;   // 35
+    var projRow  = R.buyProj;    // 36
 
     var cols = { ovl: 'AF', lee: 'AG', wsp: 'AH', mpl: 'AI', bal: 'AJ' };
     Object.keys(cols).forEach(function (s) {
