@@ -83,6 +83,24 @@ var NP_BLOCKED_AS_NA = true;          // see the header warning before changing
 // Only the newest day — the one nobody has shipped yet — sits empty until 2pm.
 var NP_SKIP_SHIP = false;
 
+// ⚠️ A DAY THAT HAS NOT HAPPENED YET HOLDS NOTHING, AND ZERO IS NOT NOTHING.
+//
+// npWriteApply reads NP_FROM/NP_TO from this file, and those are the whole
+// month — so a manual run on the 2nd asked the collector for all 30 days, got
+// legitimate zeros for the 29 that have not happened, and wrote them. Zeros are
+// not blanks to a spreadsheet: Gross Margin became 0/0, the Rev Tracking column
+// projected a month off a divisor that now counted 30 days instead of 1, and the
+// tab filled with #DIV/0! and a descending ladder of numbers that all looked
+// like real figures. (The 2pm job never showed this because it sets NP_TO to
+// today; only a hand-run did.)
+//
+// So the writer clamps to today in the stores' timezone, whatever it was asked
+// for, and clears any future day it finds already filled — which is what repairs
+// the damage from the run that caused this note. A locked cell is still never
+// touched.
+var NP_TZ = 'America/Chicago';
+var NP_CLEAR_FUTURE = true;
+
 function npProbe()        { _npProbe(); }
 function npWritePreview() { _npWrite(true); }
 function npWriteApply()   { _npWrite(false); }
@@ -196,6 +214,11 @@ function _npWrite(preview) {
 
   var totals = { sales: 0, cost: 0, cc: 0, ship: 0, ebay: 0, naEbay: 0, naShip: 0 };
   var refusals = [];
+  // Compared as YYYY-MM-DD strings, which sort the same way the dates do, and in
+  // the STORES' timezone — the script's clock is not necessarily Central and on
+  // a late-evening run that is a whole day of difference.
+  var todayYmd = Utilities.formatDate(new Date(), NP_TZ, 'yyyy-MM-dd');
+  var gridYm = String(NP_FROM).slice(0, 7);
 
   for (var si = 0; si < NP_ORDER.length; si++) {
     var store = NP_ORDER[si];
@@ -210,10 +233,11 @@ function _npWrite(preview) {
 
     Logger.log('\n=== %s (day col %s) — %s days ===', store, _npColLetter(base), data.days.length);
 
-    var rows = [], missing = [], placeholders = 0;
+    var rows = [], missing = [], future = [], placeholders = 0;
     for (var d = 0; d < data.days.length; d++) {
       var rec = data.days[d];
       var dayNum = parseInt(String(rec.day).slice(8, 10), 10);
+      if (String(rec.day) > todayYmd) { future.push(dayNum); continue; }
       var r = _npFindDayRow(values, base, dayNum);
       if (r < 0) { missing.push(dayNum); continue; }
 
@@ -255,6 +279,19 @@ function _npWrite(preview) {
       rows.push({ r: r, day: dayNum, rec: rec, locked: locked });
     }
     if (missing.length) Logger.log('  !! no row found for day(s): %s', missing.join(', '));
+    if (future.length) {
+      Logger.log('  %s day(s) not written because they have not happened yet (%s onward; today is %s)',
+        future.length, future[0], todayYmd);
+    }
+    // Runs whether or not there is anything to write, because the damage it
+    // repairs is exactly a run that wrote days it should not have.
+    var wiped = NP_CLEAR_FUTURE
+      ? _npClearFuture(sh, values, formulas, base, gridYm, todayYmd, preview) : 0;
+    if (wiped) {
+      Logger.log('  %s future-day cell(s) %s — a day that has not happened must be BLANK, '
+        + 'not zero: zero makes every tracking and margin formula compute off it.',
+        wiped, preview ? 'WOULD BE cleared' : 'cleared');
+    }
     if (placeholders) {
       Logger.log('  %s =NA() placeholder cell(s) from an earlier run will be replaced with real values',
         placeholders);
@@ -346,6 +383,35 @@ function _npWrite(preview) {
     Logger.log('refused: none');
   }
   if (preview) Logger.log('\nPREVIEW ONLY — nothing was written. Run npWriteApply to commit.');
+}
+
+// Clear the five written columns on any day row dated after today.
+//
+// ⚠️ ONLY PLAIN VALUES, NEVER A FORMULA. A formula is the workbook's lock idiom
+// or somebody's work, and neither becomes ours to delete just because the date
+// is in the future. Our own =NA() placeholder is cleared, because it means
+// "blocked, not known" and a day that has not happened is neither.
+function _npClearFuture(sh, values, formulas, base, gridYm, todayYmd, preview) {
+  var offs = [NP_OFF_SALES, NP_OFF_COST, NP_OFF_EBAYFEE, NP_OFF_SHIP, NP_OFF_CCFEE];
+  var n = 0;
+  for (var r = NP_HEADER_ROWS; r < values.length; r++) {
+    if (String(values[r][0]).trim().toUpperCase() === 'TTL') break;
+    var dn = parseInt(values[r][base], 10);
+    if (!dn) continue;
+    // The row's real date, built from the month the GRID holds — not from today,
+    // which in the small hours of the 1st is a different month entirely.
+    if (gridYm + '-' + ('0' + dn).slice(-2) <= todayYmd) continue;
+    for (var i = 0; i < offs.length; i++) {
+      var c = base + offs[i];
+      var f = String(formulas[r][c]).trim();
+      if (f !== '' && !_npIsOurPlaceholder(f)) continue;
+      var v = values[r][c];
+      if (f === '' && (v === '' || v === null || v === undefined)) continue;
+      if (!preview) sh.getRange(r + 1, c + 1).clearContent();
+      n++;
+    }
+  }
+  return n;
 }
 
 // Write one column down a set of located rows, skipping any cell that is locked

@@ -150,5 +150,123 @@ console.log('== Skipping leaves yesterday empty, NOT the whole month ==');
     ok(sh.cells['14,' + (SHIP + 1)] === undefined, 'day 10 — yesterday — is the only empty one');
 }
 
+// ---------------------------------------------------------------------------
+// A DAY THAT HAS NOT HAPPENED YET.
+//
+// npWriteApply reads NP_FROM/NP_TO out of the file, and those are the whole
+// month — so a hand-run on the 2nd asked for all 30 days, got legitimate zeros
+// for the 29 that had not happened, and wrote them. Zero is not blank to a
+// spreadsheet: Gross Margin became 0/0, Rev Tracking projected off a divisor
+// counting 30 days instead of 1, and the tab filled with #DIV/0! and a
+// descending ladder of numbers that all looked like real figures.
+const constOf = name => {
+    const m = src.match(new RegExp('var ' + name + '\\s*=\\s*([^;]*);'));
+    if (!m) throw new Error('constant not found: ' + name);
+    return m[1];
+};
+global.NP_HEADER_ROWS = eval(constOf('NP_HEADER_ROWS'));
+['NP_OFF_SALES', 'NP_OFF_COST', 'NP_OFF_EBAYFEE', 'NP_OFF_SHIP', 'NP_OFF_CCFEE']
+    .forEach(n => { global[n] = eval(constOf(n)); });
+eval(grab('_npIsOurPlaceholder'));
+eval(grab('_npClearFuture'));
+
+// A tab: 4 header rows, then 30 day rows, then TTL. Values and formulas are
+// separate grids, as getValues()/getFormulas() return them.
+function futureTab(fill) {
+    const W = 20, vals = [], fmls = [];
+    for (let r = 0; r < 4 + 30 + 1; r++) {
+        vals.push(new Array(W).fill(''));
+        fmls.push(new Array(W).fill(''));
+    }
+    for (let d = 1; d <= 30; d++) vals[4 + (d - 1)][0] = d;
+    vals[4 + 30][0] = 'TTL';
+    if (fill) fill(vals, fmls);
+    return { vals, fmls };
+}
+function clearSheet() {
+    const cleared = [];
+    return {
+        cleared,
+        getRange(r1, c1) { return { clearContent() { cleared.push(r1 + ',' + c1); } }; }
+    };
+}
+const OFFS = [NP_OFF_SALES, NP_OFF_COST, NP_OFF_EBAYFEE, NP_OFF_SHIP, NP_OFF_CCFEE];
+
+console.log('== The zeros a whole-month run wrote are cleared ==');
+{
+    // Exactly the damage: day 1 real, days 2-30 written as 0.
+    const { vals, fmls } = futureTab(v => {
+        OFFS.forEach(o => { v[4][o] = o === NP_OFF_SALES ? 949.33 : 168; });
+        for (let d = 2; d <= 30; d++) OFFS.forEach(o => { v[4 + (d - 1)][o] = 0; });
+    });
+    const sh = clearSheet();
+    const n = _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-09-02', false);
+    ok(n === 28 * 5, 'days 3-30 x 5 columns cleared — day 2 is today and stays', String(n));
+    ok(!sh.cleared.some(k => k.startsWith('5,')), 'day 1 — which happened — is untouched');
+    ok(!sh.cleared.some(k => k.startsWith('6,')), 'and so is day 2, which is today');
+    ok(sh.cleared.includes('7,' + (NP_OFF_SALES + 1)), 'day 3 onward is cleared', sh.cleared[0]);
+    ok(!sh.cleared.some(k => k.startsWith('35,')), 'the TTL row is never touched');
+}
+
+console.log('== Today itself is not a future day ==');
+{
+    const { vals, fmls } = futureTab(v => {
+        for (let d = 1; d <= 30; d++) OFFS.forEach(o => { v[4 + (d - 1)][o] = 5; });
+    });
+    const sh = clearSheet();
+    _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-09-15', false);
+    ok(!sh.cleared.some(k => Number(k.split(',')[0]) <= 4 + 15), 'days 1-15 all survive');
+    ok(sh.cleared.some(k => k.startsWith('20,')), 'day 16 is cleared', String(sh.cleared.length));
+    ok(sh.cleared.length === 15 * 5, '15 days x 5 columns', String(sh.cleared.length));
+}
+
+console.log('== The month comes from the GRID, not from the clock ==');
+{
+    // The close runs on Oct 1 against September's grid. Every day of September
+    // is in the past then, so nothing may be cleared — deriving the row's date
+    // from today's month instead would wipe the closed month.
+    const { vals, fmls } = futureTab(v => {
+        for (let d = 1; d <= 30; d++) OFFS.forEach(o => { v[4 + (d - 1)][o] = 99; });
+    });
+    const sh = clearSheet();
+    const n = _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-10-01', false);
+    ok(n === 0, 'closing September on Oct 1 clears nothing', String(n));
+}
+
+console.log('== A formula is never deleted, whatever the date ==');
+{
+    const { vals, fmls } = futureTab((v, f) => {
+        for (let d = 2; d <= 30; d++) OFFS.forEach(o => { v[4 + (d - 1)][o] = 0; });
+        f[4 + 9][NP_OFF_SALES] = '=949.33';          // day 10: the workbook's lock
+        f[4 + 10][NP_OFF_COST] = '=SUM(A1:A2)';      // day 11: somebody's work
+        f[4 + 11][NP_OFF_SHIP] = '=NA()';            // day 12: ours, and clearable
+    });
+    const sh = clearSheet();
+    _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-09-02', false);
+    ok(!sh.cleared.includes('14,' + (NP_OFF_SALES + 1)), 'a bare-number lock survives');
+    ok(!sh.cleared.includes('15,' + (NP_OFF_COST + 1)), 'a live formula survives');
+    ok(sh.cleared.includes('16,' + (NP_OFF_SHIP + 1)),
+       'our own =NA() goes — "blocked" and "has not happened" are different things');
+}
+
+console.log('== Nothing to do is nothing done ==');
+{
+    const { vals, fmls } = futureTab();            // every future day already blank
+    const sh = clearSheet();
+    const n = _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-09-02', false);
+    ok(n === 0 && sh.cleared.length === 0, 'a clean tab is not written to at all');
+}
+
+console.log('== Preview counts without clearing ==');
+{
+    const { vals, fmls } = futureTab(v => {
+        for (let d = 2; d <= 30; d++) OFFS.forEach(o => { v[4 + (d - 1)][o] = 0; });
+    });
+    const sh = clearSheet();
+    const n = _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-09-02', true);
+    ok(n === 28 * 5, 'it reports what it would clear', String(n));
+    ok(sh.cleared.length === 0, 'and clears nothing');
+}
+
 console.log(fails ? '\n' + fails + ' FAILED' : '\nall pass');
 process.exit(fails ? 1 : 0);

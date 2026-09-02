@@ -293,8 +293,11 @@ function _npxLastMonthTabFor(ss, prevYm) {
   return null;
 }
 
-function _npxLastMonthFromTab(ss, prevYm) {
-  var found = _npxLastMonthTabFor(ss, prevYm);
+function _npxLastMonthFromTab(ss, prevYm, found) {
+  // The caller has usually located it already — the skip decision needs to know
+  // whether a tab exists before it can be made — so scanning again would print
+  // the candidate list twice and read like two different searches.
+  found = found || _npxLastMonthTabFor(ss, prevYm);
   if (!found) return null;
   var sh = found.sh;
   Logger.log('  last month is on tab "%s" (found %s)', found.name, found.how);
@@ -566,13 +569,25 @@ function _npxSync(preview) {
   var todayYm = Utilities.formatDate(new Date(), NPX_TZ, 'yyyy-MM');
   var monthUnfinished = prevYm >= todayYm;
 
+  // ⚠️ THE MARKER RECORDS WHERE THE FIGURE CAME FROM, NOT JUST THAT IT EXISTS.
+  // It used to hold the month alone, which meant "written" and "written from the
+  // right place" were the same claim. They are not: on 2026-09-02 last month was
+  // written from Shopify because the tab lookup could not find August, the run
+  // marked it done, and the very next run — with the lookup FIXED — skipped it
+  // and left the wrong number sitting there. From the outside the fix simply did
+  // not work, and nothing said why.
+  //
+  // "2026-09|tab" or "2026-09|shopify". A bare month is a marker from before
+  // this change and is read as shopify, which is what it was.
   var lmProps = PropertiesService.getScriptProperties();
-  var lmDone = lmProps.getProperty(NPX_LASTMONTH_KEY) === ym;
+  var lmMark = String(lmProps.getProperty(NPX_LASTMONTH_KEY) || '');
+  var lmDone = lmMark === ym || lmMark.indexOf(ym + '|') === 0;
+  var lmSrc  = lmMark.indexOf('|') >= 0 ? lmMark.split('|')[1] : 'shopify';
   var lmCell = values[rowLastMonth][NP_BASES.OVL + NPX_OFF_VAL_L];
   var lmSkip = lmDone && typeof lmCell === 'number' && !NPX_FORCE_LAST_MONTH;
   if (lmSkip) {
-    Logger.log('\n--- last month (%s): already written for %s (OVL reads %s) — not refetching. '
-      + 'Set NPX_FORCE_LAST_MONTH = true to redo it. ---', prevYm, ym, lmCell);
+    Logger.log('\n--- last month (%s): already written for %s from %s (OVL reads %s) — not '
+      + 'refetching. Set NPX_FORCE_LAST_MONTH = true to redo it. ---', prevYm, ym, lmSrc, lmCell);
   }
   if (behindWall && !lmSkip) {
     Logger.log('\n!! %s begins behind the %s-day Shopify order wall (oldest visible day is %s). '
@@ -590,7 +605,18 @@ function _npxSync(preview) {
       + 'marked done, so it would never be refetched. It fills in on the 1st. ---',
       prevYm, todayYm);
   }
-  var fromTab = (lmSkip || monthUnfinished) ? null : _npxLastMonthFromTab(ss, prevYm);
+  // Located before the skip is final, because FINDING A TAB OVERRIDES THE SKIP.
+  // The tab is the better source by a distance — it carries our restatements and
+  // Shopify does not — so a month written from Shopify is redone the moment a
+  // tab for it turns up. That is self-healing, and it is the only thing that
+  // gets September's figures right without somebody remembering a flag.
+  var lmTab = monthUnfinished ? null : _npxLastMonthTabFor(ss, prevYm);
+  if (lmSkip && lmTab && lmSrc !== 'tab') {
+    Logger.log('  ...but tab "%s" holds %s and what is written came from Shopify. '
+      + 'Redoing it: the tab has the restatements, the refetch does not.', lmTab.name, prevYm);
+    lmSkip = false;
+  }
+  var fromTab = (lmSkip || monthUnfinished) ? null : _npxLastMonthFromTab(ss, prevYm, lmTab);
   if (fromTab) {
     Logger.log('  reading last month off that tab — the closed figures, so the '
       + '60-day wall does not apply and this cannot drift away from what the '
@@ -944,9 +970,11 @@ function _npxSync(preview) {
   // Marked only after the write succeeded. Marking before would leave the
   // marker claiming a month that a mid-run failure never finished writing.
   if (!lmSkip && !monthUnfinished && lmOk.length === NP_ORDER.length) {
-    lmProps.setProperty(NPX_LASTMONTH_KEY, ym);
-    Logger.log('Last month (%s) recorded for grid month %s; it will not be refetched.',
-      prevYm, ym);
+    lmProps.setProperty(NPX_LASTMONTH_KEY, ym + '|' + (fromTab ? 'tab' : 'shopify'));
+    Logger.log('Last month (%s) recorded for grid month %s, from %s. %s',
+      prevYm, ym, fromTab ? 'its own tab' : 'Shopify',
+      fromTab ? 'It will not be refetched.'
+              : 'It will be REDONE automatically if a tab for it ever appears.');
   }
   _npxApplyColour(sh, goalCells);
 }
