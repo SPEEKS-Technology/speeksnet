@@ -698,13 +698,22 @@ function _npTtlRowProbe() {
   if (ttl < 0) { Logger.log('!! no TTL row found in column %s', _npColLetter(NP_BASES.OVL)); return; }
   Logger.log('tab "%s" — TTL row is %s; day rows end at %s', NP_TAB, ttl + 1, ttl);
 
+  var firstDay = -1;
+  for (var fd = NP_HEADER_ROWS; fd < ttl; fd++) {
+    if (parseInt(values[fd][NP_BASES.OVL], 10) === 1) { firstDay = fd; break; }
+  }
+  if (firstDay < 0) { Logger.log('!! no day-1 row found — nothing done.'); return; }
+
   var names = ['day', 'Sales', 'Total', 'Rev Tracking', 'Cost', 'GP', 'GP Total',
                'GP Tracking', 'Gross Margin', 'eBay Fee', 'Shipping', 'CC Fee',
                'NP', 'NP Total', 'NP Tracking', 'Net Margin', 'MOM'];
   var blocks = NP_ORDER.map(function (c) { return [c, NP_BASES[c]]; });
   blocks.push(['TTL block', NP_TTL_BASE]);
 
-  var rowsToShow = [ttl - 2, ttl - 1, ttl];
+  // ⚠️ THE FIRST DAY ROW IS IN HERE ON PURPOSE. The TTL row's Sales is a SUM
+  // over the stores, and the only way to tell WHICH stores it sums is to see the
+  // formula next to the store cells it claims to add up.
+  var rowsToShow = [firstDay, ttl - 2, ttl - 1, ttl];
   for (var b = 0; b < blocks.length; b++) {
     var code = blocks[b][0], base = blocks[b][1];
     Logger.log('\n=== %s (day col %s) ===', code, _npColLetter(base));
@@ -719,7 +728,15 @@ function _npTtlRowProbe() {
         var v = (values[rr] || [])[c];
         parts.push((rr + 1) + ': ' + (f ? f : (v === '' || v === null || v === undefined ? '(EMPTY)' : v)));
       }
-      Logger.log('  +%s %-13s %s | %s', i, names[i], _npColLetter(c), parts.join('   '));
+      // ⚠️ NO WIDTH SPECIFIERS. Logger.log takes %s, %d and %f — it does NOT
+      // understand printf padding, so '%-13s' printed literally, shifted every
+      // argument one place along and silently swallowed the cell dump. The whole
+      // first run of this probe returned column headings and nothing else, and I
+      // read three screens of it without noticing there were no formulas in it.
+      // Pad in JavaScript instead.
+      var pad = names[i];
+      while (pad.length < 13) pad += ' ';
+      Logger.log('  +' + i + ' ' + pad + ' ' + _npColLetter(c) + ' | ' + parts.join('   '));
     }
   }
 
@@ -734,10 +751,6 @@ function _npTtlRowProbe() {
   // that does not collapse is a cell that disagrees with its neighbours — which
   // is exactly how the two TTL-block faults in _npAuditFormulas were found.
   var trackOffs = [[3, 'Rev Tracking'], [7, 'GP Tracking'], [14, 'NP Tracking']];
-  var firstDay = -1;
-  for (var fr = NP_HEADER_ROWS; fr < ttl; fr++) {
-    if (parseInt(values[fr][NP_BASES.OVL], 10) === 1) { firstDay = fr; break; }
-  }
   Logger.log('\n=== TRACKING COLUMNS, day rows %s-%s, formulas normalised ===',
     firstDay + 1, ttl);
   for (var tb = 0; tb < blocks.length; tb++) {
