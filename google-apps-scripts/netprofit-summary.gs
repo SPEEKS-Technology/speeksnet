@@ -161,6 +161,15 @@ var NPX_FORCE_LAST_MONTH = false;   // set true for one run to redo last month
 // This is the same shape as the 60-day-wall guard above: refuse the part that
 // cannot be done, do the rest, and say plainly what is missing.
 var NPX_LM_CACHE_KEY = 'NPX_LAST_MONTH_CACHE';
+
+// The Sales Summary's own month tab — "Sales Aug 26". Store blocks stride 11,
+// with the day number in the block's first column, sales at +1 and cost at +4.
+// The same map mirror-fix.gs and sep-fix.gs write through, which is the point:
+// this reads the cells those scripts restate.
+var NPX_SALES_PREFIX = 'Sales ';
+var NPX_SALES_BASES  = { OVL: 0, LEE: 11, WSP: 22, MPL: 33, BAL: 44 };
+var NPX_SALES_SALES  = 1;
+var NPX_SALES_COST   = 4;
 // Overwritten by npsDailyRefresh with what is ACTUALLY left of its six minutes,
 // because _npWrite has already spent some of them and its share grows through
 // the month. The default suits a manual run of npSummaryPreview/Apply.
@@ -291,6 +300,76 @@ function _npxLastMonthTabFor(ss, prevYm) {
       byHeader.map(function (x) { return x.getName(); }).join(', '));
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// LAST MONTH'S REVENUE AND COST, OFF THE SALES SUMMARY'S OWN MONTH TAB.
+//
+// ⚠️ SHOPIFY IS NOT THE BUSINESS'S ANSWER FOR A CLOSED MONTH, AND FOR OVL IT IS
+// $57,221 OUT. Measured 2026-09-02, August:
+//
+//              sheet        ShopifyQL     diff
+//     OVL   169,257.97     226,479.25   +57,221.28
+//     LEE   117,131.40     110,535.59    -6,595.81
+//     WSP   146,737.30     143,812.42    -2,924.88
+//     MPL   123,108.61     121,478.72    -1,629.89
+//
+// OVL is the outlier because OVL is the SPEEKS Connect store and carries the
+// Marketplace Connect duplicates from the Aug 20 back-fill. They were deleted;
+// ShopifyQL still reports them, exactly as it still reports the Sep 1 duplicate
+// after deletion. The sheet is right because the sheet was restated by hand.
+//
+// So revenue and cost come from the sheet, and only the FEES come from Shopify —
+// there is nowhere else to get them. Net Profit is then rebuilt with the tab's
+// own formula, Sales - Cost - fees - 7% of Sales, on the restated Sales.
+//
+// ⚠️ WHY NOT JUST READ LAST MONTH'S NET PROFIT TAB. Because there isn't one:
+// the workbook holds exactly one Net Profit tab, "Net Profit Sep 26". August's
+// Net Profit was never closed to a tab of its own. _npxLastMonthTabFor still
+// runs first and still wins when a real closed month exists — from now on every
+// month keeps its tab — and this is the answer for the months that do not.
+function _npxSalesTabTotals(ss, prevYm) {
+  var abbr = NP_MON_ABBR[Number(prevYm.slice(5, 7)) - 1];
+  var yy = prevYm.slice(2, 4);
+  var want = NPX_SALES_PREFIX + abbr + ' ' + yy;
+  var sheets = ss.getSheets(), sh = null, seen = [];
+  for (var i = 0; i < sheets.length; i++) {
+    var nm = sheets[i].getName();
+    if (nm.indexOf(NPX_SALES_PREFIX) !== 0) continue;
+    seen.push(nm);
+    // The exact name first; then anything that names the same month and year,
+    // because the workbook has used "Jul" and "July" for the same month before.
+    if (nm === want) { sh = sheets[i]; break; }
+    if (!sh && nm.toUpperCase().indexOf(abbr.toUpperCase()) > 0 && nm.indexOf(yy) > 0) sh = sheets[i];
+  }
+  if (!sh) {
+    Logger.log('  no Sales tab for %s (looked for "%s"; Sales tabs present: %s)',
+      prevYm, want, seen.length ? seen.join(', ') : 'none');
+    return null;
+  }
+
+  var vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  var ttl = -1;
+  for (var r = NP_HEADER_ROWS; r < vals.length; r++) {
+    if (String(vals[r][0]).trim().toUpperCase() === 'TTL') { ttl = r; break; }
+  }
+  if (ttl < 0) { Logger.log('  !! Sales tab "%s" has no TTL row — ignoring it', sh.getName()); return null; }
+
+  var out = {}, got = [];
+  for (var k = 0; k < NP_ORDER.length; k++) {
+    var st = NP_ORDER[k], b = NPX_SALES_BASES[st];
+    var rev = Number(vals[ttl][b + NPX_SALES_SALES]);
+    var cost = Number(vals[ttl][b + NPX_SALES_COST]);
+    // A zero month is not a month. Refusing one store beats writing a zero that
+    // reads like a real figure and becomes a MoM denominator.
+    if (!isFinite(rev) || !isFinite(cost) || rev === 0) continue;
+    out[st] = { revenue: r2c(rev), cost: r2c(cost) };
+    got.push(st);
+  }
+  if (!got.length) { Logger.log('  !! Sales tab "%s" TTL row is empty — ignoring it', sh.getName()); return null; }
+  out._tab = sh.getName();
+  out._stores = got;
+  return out;
 }
 
 function _npxLastMonthFromTab(ss, prevYm, found) {
@@ -611,9 +690,21 @@ function _npxSync(preview) {
   // tab for it turns up. That is self-healing, and it is the only thing that
   // gets September's figures right without somebody remembering a flag.
   var lmTab = monthUnfinished ? null : _npxLastMonthTabFor(ss, prevYm);
-  if (lmSkip && lmTab && lmSrc !== 'tab') {
-    Logger.log('  ...but tab "%s" holds %s and what is written came from Shopify. '
-      + 'Redoing it: the tab has the restatements, the refetch does not.', lmTab.name, prevYm);
+  // The Sales Summary's month tab, for revenue and cost. Read even when the skip
+  // is on, because WHICH SOURCE IS AVAILABLE is what decides whether the skip
+  // still holds.
+  var lmSales = (monthUnfinished || lmTab) ? null : _npxSalesTabTotals(ss, prevYm);
+  var lmBest = lmTab ? 'tab' : (lmSales ? 'sales-tab' : 'shopify');
+  if (lmSkip && lmSrc !== lmBest) {
+    // ⚠️ A BETTER SOURCE BEATS A DONE MARKER. What is written came from
+    // somewhere we now know to be worse, and leaving it means the fix that made
+    // the better source available appears to do nothing at all — which is
+    // exactly what happened on 2026-09-02, twice.
+    Logger.log('  ...but %s is now available for %s and what is written came from %s. '
+      + 'Redoing it.',
+      lmBest === 'tab' ? 'tab "' + lmTab.name + '"'
+        : lmBest === 'sales-tab' ? 'Sales tab "' + lmSales._tab + '"' : 'Shopify',
+      prevYm, lmSrc);
     lmSkip = false;
   }
   var fromTab = (lmSkip || monthUnfinished) ? null : _npxLastMonthFromTab(ss, prevYm, lmTab);
@@ -639,6 +730,7 @@ function _npxSync(preview) {
     Logger.log('  %s already banked from an earlier run: %s', lmCached.length, lmCached.join(', '));
   }
   var lmDeferred = [];
+  var usedSales = false;
 
   var lmOk = [];
   for (var li = 0; li < NP_ORDER.length && !lmSkip && !monthUnfinished; li++) {
@@ -662,6 +754,31 @@ function _npxSync(preview) {
       Logger.log('  %s: SKIPPED — %s', store, e.message);
       skips.push(store + ' last month: ' + e.message);
       continue;
+    }
+    // ⚠️ REVENUE AND COST FROM THE SHEET, FEES FROM SHOPIFY. The fees exist
+    // nowhere else, and the sheet's revenue is the restated one. Net Profit is
+    // rebuilt with the tab's own formula rather than adjusted, so the two can
+    // never drift into meaning different things:
+    //     NP = Sales - Cost - eBay fee - shipping - card fee - 7% of Sales
+    // The fee total is RECOVERED from what the collector already returned —
+    // gp - np - 7% of revenue is exactly those three fees — so a month already
+    // banked in the cache does not have to be fetched again to be corrected.
+    if (!fromTab && lmSales && lmSales[store]) {
+      var fees = r2c(tot.gp - tot.np - tot.revenue * 0.07);
+      var sRev = lmSales[store].revenue, sCost = lmSales[store].cost;
+      var sGp = r2c(sRev - sCost);
+      Logger.log('  %s: sheet says %s where Shopify said %s (%s%s) — using the sheet, '
+        + 'keeping Shopify\'s %s of fees', store, sRev, tot.revenue,
+        tot.revenue > sRev ? '+' : '', r2c(tot.revenue - sRev), fees);
+      tot = {
+        revenue: sRev, gp: sGp,
+        np: r2c(sGp - fees - sRev * 0.07),
+        npTrustworthy: tot.npTrustworthy,
+        naEbay: tot.naEbay, naShip: tot.naShip, blind: tot.blind,
+        sellingDays: tot.sellingDays, days: tot.days
+      };
+      howGot = 'sheet + Shopify fees';
+      usedSales = true;
     }
     Logger.log('  %s: %s | Revenue %s | GP %s | NP %s%s', store, howGot,
       tot.revenue, tot.gp, tot.np,
@@ -970,11 +1087,15 @@ function _npxSync(preview) {
   // Marked only after the write succeeded. Marking before would leave the
   // marker claiming a month that a mid-run failure never finished writing.
   if (!lmSkip && !monthUnfinished && lmOk.length === NP_ORDER.length) {
-    lmProps.setProperty(NPX_LASTMONTH_KEY, ym + '|' + (fromTab ? 'tab' : 'shopify'));
+    var src = fromTab ? 'tab' : usedSales ? 'sales-tab' : 'shopify';
+    lmProps.setProperty(NPX_LASTMONTH_KEY, ym + '|' + src);
     Logger.log('Last month (%s) recorded for grid month %s, from %s. %s',
-      prevYm, ym, fromTab ? 'its own tab' : 'Shopify',
-      fromTab ? 'It will not be refetched.'
-              : 'It will be REDONE automatically if a tab for it ever appears.');
+      prevYm, ym,
+      src === 'tab' ? 'its own Net Profit tab'
+        : src === 'sales-tab' ? 'the Sales Summary month tab, with Shopify fees'
+        : 'Shopify',
+      src === 'tab' ? 'It will not be refetched.'
+        : 'It will be REDONE automatically if a better source ever appears.');
   }
   _npxApplyColour(sh, goalCells);
 }
