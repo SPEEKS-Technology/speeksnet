@@ -238,14 +238,66 @@ function _npxFetchMonth(store, ym) {
 //      figure on the new tab would stop matching the closed tab it came from.
 //      The month was closed on purpose; this reads the closed answer.
 //
-// Falls back to the collector when the prior tab does not exist, which is
-// exactly September's position: August is deliberately never getting a tab, so
-// September's MoM denominator has to come from Shopify. August is inside the
-// wall for all of September, so that fetch is sound — it just has to happen
-// before Oct 1, and the once-per-month marker makes sure it happens on the 1st.
+// Falls back to the collector only when NO tab holds that month.
+//
+// ⚠️ FOUND BY ITS MONTH HEADER, NOT BY ITS NAME. This looked for one name —
+// "Net Profit Aug 26" — and August does not have that name: it is the single
+// pre-rollover tab, NP_TAB_LEGACY, because the rollover COPIED it to make
+// September rather than renaming it. So the lookup missed, the code fell
+// through to Shopify, and September's MoM denominator was re-derived live.
+//
+// That is not a slower route to the same number, it is a DIFFERENT number.
+// August's tab carries our restatements — the Marketplace Connect duplicates,
+// the mirror-back refunds, every pinned cell — and Shopify knows about none of
+// them. Ethan spotted it on OVL: the sheet and the refetch disagree, and the
+// sheet is the one the bonus was paid from.
+//
+// So: narrow by NAME (only a Net Profit tab is a candidate at all), then decide
+// by the tab's OWN row-2 month header, which is a real Date this script writes.
+// Every candidate is logged with the month it claims, so a miss says why.
+function _npxLastMonthTabFor(ss, prevYm) {
+  var want = _npTabName(prevYm);
+  var sheets = ss.getSheets();
+  var candidates = [], byHeader = [];
+
+  for (var i = 0; i < sheets.length; i++) {
+    var nm = sheets[i].getName();
+    // Only a Net Profit tab can be one. A Sales tab has a different stride, and
+    // reading a TTL row off it at Net Profit's offsets would land inside
+    // another store's block and return numbers that look perfectly real.
+    if (nm.indexOf(NP_TAB_PREFIX) !== 0 && nm !== NP_TAB_LEGACY) continue;
+    var hdr = '';
+    try {
+      var v = sheets[i].getRange(2, NP_BASES.OVL + NPX_OFF_LABEL + 1).getValue();
+      if (v instanceof Date) hdr = Utilities.formatDate(v, NPX_TZ, 'yyyy-MM');
+    } catch (e) { hdr = ''; }
+    candidates.push(nm + ' [' + (hdr || 'no month header') + ']');
+    if (nm === want) return { sh: sheets[i], name: nm, how: 'by name' };
+    if (hdr === prevYm) byHeader.push(sheets[i]);
+  }
+
+  Logger.log('  Net Profit tabs on the workbook: %s',
+    candidates.length ? candidates.join(' | ') : 'none');
+
+  if (byHeader.length === 1) {
+    return { sh: byHeader[0], name: byHeader[0].getName(), how: 'by its row-2 month header' };
+  }
+  if (byHeader.length > 1) {
+    // ⚠️ REFUSE. Two tabs claiming the same month is a real possibility after a
+    // rollover that was run twice, and picking one of them silently would put
+    // an arbitrary month's figures in as the bonus denominator.
+    Logger.log('  !! %s tabs claim %s (%s) — refusing to guess which is last month.',
+      byHeader.length, prevYm,
+      byHeader.map(function (x) { return x.getName(); }).join(', '));
+  }
+  return null;
+}
+
 function _npxLastMonthFromTab(ss, prevYm) {
-  var sh = ss.getSheetByName(_npTabName(prevYm));
-  if (!sh) return null;
+  var found = _npxLastMonthTabFor(ss, prevYm);
+  if (!found) return null;
+  var sh = found.sh;
+  Logger.log('  last month is on tab "%s" (found %s)', found.name, found.how);
 
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
   var vals = sh.getRange(1, 1, lastRow, lastCol).getValues();
@@ -255,8 +307,7 @@ function _npxLastMonthFromTab(ss, prevYm) {
     if (String(vals[r][NP_BASES.OVL]).trim().toUpperCase() === 'TTL') { ttl = r; break; }
   }
   if (ttl < 0) {
-    Logger.log('  !! tab "%s" exists but has no TTL row — falling back to the collector',
-      _npTabName(prevYm));
+    Logger.log('  !! tab "%s" has no TTL row — falling back to the collector', found.name);
     return null;
   }
 
@@ -273,7 +324,7 @@ function _npxLastMonthFromTab(ss, prevYm) {
   }
   if (missing.length) {
     Logger.log('  !! tab "%s" has no usable TTL for %s — falling back to the collector for all five',
-      _npTabName(prevYm), missing.join(', '));
+      found.name, missing.join(', '));
     return null;
   }
   return out;
@@ -541,9 +592,19 @@ function _npxSync(preview) {
   }
   var fromTab = (lmSkip || monthUnfinished) ? null : _npxLastMonthFromTab(ss, prevYm);
   if (fromTab) {
-    Logger.log('  reading last month off tab "%s" — the closed figures, so the '
-      + '60-day wall does not apply and this cannot drift away from what that '
-      + 'month was closed at.', _npTabName(prevYm));
+    Logger.log('  reading last month off that tab — the closed figures, so the '
+      + '60-day wall does not apply and this cannot drift away from what the '
+      + 'month was closed at, restatements and all.');
+    // ⚠️ AND THROW AWAY ANYTHING BANKED FROM SHOPIFY. A cache written on a run
+    // that could not find the tab holds figures the tab disagrees with — that
+    // is the whole point of preferring the tab — and leaving it would let a
+    // later run quietly serve them again.
+    PropertiesService.getScriptProperties().deleteProperty(NPX_LM_CACHE_KEY);
+  } else if (!lmSkip && !monthUnfinished) {
+    Logger.log('  !! NO TAB HOLDS %s, so last month is being re-derived from Shopify. '
+      + 'That is correct for a month that never had a tab, and WRONG for one that '
+      + 'was restated by hand — Shopify does not know about a pinned cell. If %s '
+      + 'has a tab, check its row-2 month header.', prevYm, prevYm);
   }
 
   var lmCache = fromTab ? {} : _npxLmCacheLoad(prevYm);
