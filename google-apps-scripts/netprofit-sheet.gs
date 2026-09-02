@@ -102,6 +102,7 @@ var NP_TZ = 'America/Chicago';
 var NP_CLEAR_FUTURE = true;
 
 function npProbe()        { _npProbe(); }
+function npTtlRowProbe()  { _npTtlRowProbe(); }
 function npWritePreview() { _npWrite(true); }
 function npWriteApply()   { _npWrite(false); }
 
@@ -441,6 +442,83 @@ function _npWriteRuns(sh, rows, col1, vals, off) {
     i = j + 1;
   }
   return wrote;
+}
+
+// ============================================================================
+// npTtlRowProbe — dump the TTL ROW, and the two day rows above it, formula by
+// formula, for all six blocks. READ-ONLY.
+//
+// ⚠️ THE TTL ROW IS NOT THE TTL BLOCK, and confusing the two is easy: the BLOCK
+// is the company column group at CM, the ROW is the month total at the bottom of
+// every block's day grid. npProbe describes the block. Nothing described the row
+// until Rev Tracking and GP Tracking went missing from it (Ethan, 2026-09-02)
+// and there was no way to see what had been there.
+//
+// It prints the last two DAY rows beside it on purpose. A tracking formula is
+// only meaningful next to the ones it was filled down from, and the difference
+// between "(Total/day number) * days in month" and "(Total/days thru) * days in
+// month" is invisible on a single row and worth thousands on a projection.
+// ============================================================================
+function _npTtlRowProbe() {
+  var ss = SpreadsheetApp.openById(NP_SHEET_ID);
+  var sh = _npTab(ss);
+  if (!sh) return;
+
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  var formulas = sh.getRange(1, 1, lastRow, lastCol).getFormulas();
+
+  // Located, not counted: the TTL row is wherever 'TTL' sits in OVL's day column.
+  var ttl = -1;
+  for (var r = NP_HEADER_ROWS; r < lastRow; r++) {
+    if (String(values[r][NP_BASES.OVL]).trim().toUpperCase() === 'TTL') { ttl = r; break; }
+  }
+  if (ttl < 0) { Logger.log('!! no TTL row found in column %s', _npColLetter(NP_BASES.OVL)); return; }
+  Logger.log('tab "%s" — TTL row is %s; day rows end at %s', NP_TAB, ttl + 1, ttl);
+
+  var names = ['day', 'Sales', 'Total', 'Rev Tracking', 'Cost', 'GP', 'GP Total',
+               'GP Tracking', 'Gross Margin', 'eBay Fee', 'Shipping', 'CC Fee',
+               'NP', 'NP Total', 'NP Tracking', 'Net Margin', 'MOM'];
+  var blocks = NP_ORDER.map(function (c) { return [c, NP_BASES[c]]; });
+  blocks.push(['TTL block', NP_TTL_BASE]);
+
+  var rowsToShow = [ttl - 2, ttl - 1, ttl];
+  for (var b = 0; b < blocks.length; b++) {
+    var code = blocks[b][0], base = blocks[b][1];
+    Logger.log('\n=== %s (day col %s) ===', code, _npColLetter(base));
+    for (var i = 0; i < names.length; i++) {
+      var c = base + i;
+      if (c >= lastCol) break;
+      var parts = [];
+      for (var k = 0; k < rowsToShow.length; k++) {
+        var rr = rowsToShow[k];
+        if (rr < 0) continue;
+        var f = String((formulas[rr] || [])[c] || '').trim();
+        var v = (values[rr] || [])[c];
+        parts.push((rr + 1) + ': ' + (f ? f : (v === '' || v === null || v === undefined ? '(EMPTY)' : v)));
+      }
+      Logger.log('  +%s %-13s %s | %s', i, names[i], _npColLetter(c), parts.join('   '));
+    }
+  }
+
+  // The one line worth reading first: what is actually missing on the TTL row.
+  Logger.log('\n=== EMPTY ON THE TTL ROW (row %s) ===', ttl + 1);
+  var anyGap = false;
+  for (var b2 = 0; b2 < blocks.length; b2++) {
+    var gaps = [];
+    for (var i2 = 1; i2 < names.length; i2++) {
+      var c2 = blocks[b2][1] + i2;
+      if (c2 >= lastCol) break;
+      var f2 = String((formulas[ttl] || [])[c2] || '').trim();
+      var v2 = (values[ttl] || [])[c2];
+      if (!f2 && (v2 === '' || v2 === null || v2 === undefined)) {
+        gaps.push(names[i2] + ' (' + _npColLetter(c2) + ')');
+      }
+    }
+    if (gaps.length) { anyGap = true; Logger.log('  %s: %s', blocks[b2][0], gaps.join(', ')); }
+  }
+  if (!anyGap) Logger.log('  none — every TTL-row cell carries a formula or a value.');
+  Logger.log('\nRead-only. Nothing was written.');
 }
 
 function _npProbe() {
