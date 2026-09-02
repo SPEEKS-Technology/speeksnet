@@ -1,14 +1,18 @@
 // ============================================================================
 // netprofit-schedule.gs — run the NET PROFIT tab on a schedule.
 //
-// TWO TRIGGERS, from the CFO's rules (2026-08-27):
+// THREE TRIGGERS on two functions, from the CFO's rules (2026-08-27, split into
+// a morning and an afternoon pass 2026-09-02):
 //
-//   npsDailyRefresh   2:00pm Central, every day
+//   npsDailyRefresh   8:00am AND 2:00pm Central, every day
 //                     Rewrites the WHOLE current month to date, not just
 //                     yesterday. A day is not final the next morning: 81% of
 //                     shipping labels post +1 day and 13% post +2-3 days, so
 //                     the month keeps moving behind you. This is the same
 //                     month-to-date sweep the Sales Summary already does.
+//                     The 8am pass writes every column EXCEPT shipping, so
+//                     there is a rough Net Profit to read first thing; the 2pm
+//                     pass adds shipping once the day's labels are bought.
 //
 //   npsMonthClose     7:00pm Central, every day — but it ACTS on one day a
 //                     month and logs "not today" on the rest.
@@ -53,18 +57,28 @@ var NPS_TZ = 'America/Chicago';
 // and Credit Card Fee for the whole month to date and takes whatever shipping
 // exists so far; the 2pm pass rewrites the lot once the labels are done.
 //
-// ⚠️ WHY THE MORNING PASS STILL WRITES SHIPPING, rather than leaving it for 2pm.
-// The tab's NP formula SUBTRACTS the shipping cell, and a blank cell is
-// arithmetic zero — so "leave shipping alone until 2pm" would overstate Net
-// Profit by the entire day's shipping, which is a bigger error than writing the
-// partial figure. Partial shipping is strictly closer to the truth than none,
-// and 2pm corrects it. Read NP_BLOCKED_AS_NA in netprofit-sheet.gs before
-// changing this.
+// ⚠️ THE MORNING PASS DOES NOT WRITE SHIPPING AT ALL. It sets NP_SKIP_SHIP and
+// the writer leaves that one column exactly as it found it.
+//
+// The first version of this wrote whatever shipping existed at 8am, on the
+// argument that the tab's NP formula SUBTRACTS the shipping cell and a blank
+// cell is arithmetic zero — so skipping it would overstate Net Profit by the
+// whole day's shipping. That argument is sound in general and wrong here, and
+// the stores are why: PayMore buys essentially no labels before 9am. At 8am
+// yesterday's shipping is genuinely near zero, so the blank cell is not a hole
+// where a cost should be — it is the correct figure for that hour. Writing a
+// partial number instead would not be more accurate, only more confident, and
+// it would put a figure in front of somebody that looks final and is not.
+//
+// ⚠️ SKIPPED, NOT CLEARED — and this is what makes it safe. Every earlier day in
+// the month already holds final shipping from a previous 2pm pass, and skipping
+// the column leaves all of it alone. Only the newest day sits empty, and only
+// until 2pm. Read NP_SKIP_SHIP in netprofit-sheet.gs before changing this.
 //
 // ⚠️ THE MORNING NUMBER IS ROUGH BY DESIGN AND ONLY FOR THE MOST RECENT DAY.
-// Every earlier day in the month already has final shipping, so only yesterday's
-// row moves at 2pm — and it moves DOWN, because shipping only ever gets added.
-var NPS_MORNING_HOUR = 8;  // 8am — everything, with shipping as far as it is known
+// Every earlier day already has final shipping, so only yesterday's row moves
+// at 2pm — and it moves DOWN, because shipping only ever gets added.
+var NPS_MORNING_HOUR = 8;  // 8am — everything except shipping
 var NPS_DAILY_HOUR = 14;   // 2pm — Apps Script fires within the hour, never before
 var NPS_CLOSE_HOUR = 19;   // 7pm
 var NPS_LAST_CLOSED_KEY = 'NPS_LAST_CLOSED_MONTH';
@@ -138,7 +152,15 @@ function npsDailyRefresh() {
   // in it was final. The hour is read from the clock rather than passed in,
   // because a time-based trigger cannot pass an argument.
   var hour = Number(Utilities.formatDate(new Date(), NPS_TZ, 'H'));
-  var pass = hour < NPS_DAILY_HOUR ? 'MORNING (shipping still arriving)' : '2PM (shipping final)';
+  var morning = hour < NPS_DAILY_HOUR;
+  var pass = morning ? 'MORNING (shipping not written yet)' : '2PM (shipping final)';
+  // ⚠️ A GLOBAL, AND IT MUST BE SET ON EVERY RUN — not just the morning one.
+  // One Apps Script project is one global scope and it survives between
+  // executions of the same script instance. Setting it only in the morning
+  // branch would leave it true, and the 2pm pass would then skip shipping too:
+  // the column would never be written again, by anything, and Net Profit would
+  // read high for the rest of the month with nothing to show why.
+  NP_SKIP_SHIP = morning;
   Logger.log('=== DAILY REFRESH %s [%s] — month to date %s .. %s ===',
     today, pass, NP_FROM, NP_TO);
 

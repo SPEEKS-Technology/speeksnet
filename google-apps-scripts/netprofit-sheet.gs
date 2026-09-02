@@ -68,6 +68,21 @@ var NP_OFF_CCFEE   = 11;
 var NP_HEADER_ROWS = 4;               // day rows start below this; still LOCATED by day number
 var NP_BLOCKED_AS_NA = true;          // see the header warning before changing
 
+// ⚠️ SET BY npsDailyRefresh, NOT BY HAND. True on the 8am pass only: the
+// shipping column is left exactly as it is, and every other column is written.
+//
+// The reasoning is the stores' own, and it is why this is safe rather than a
+// deliberate understatement of cost: PayMore buys almost no labels before 9am,
+// so at 8am yesterday's shipping is genuinely near zero. A blank cell reads as
+// zero to the tab's NP formula, and near-zero is what the truth is at that hour.
+// Writing a partial figure instead would not be more accurate, only more
+// confident. The 2pm pass fills the real number once the labels are bought.
+//
+// ⚠️ IT SKIPS, IT DOES NOT CLEAR. Every earlier day in the month already holds
+// final shipping from a previous 2pm pass, and skipping leaves all of it alone.
+// Only the newest day — the one nobody has shipped yet — sits empty until 2pm.
+var NP_SKIP_SHIP = false;
+
 function npProbe()        { _npProbe(); }
 function npWritePreview() { _npWrite(true); }
 function npWriteApply()   { _npWrite(false); }
@@ -212,22 +227,32 @@ function _npWrite(preview) {
       // the very write that unblocking made possible. That is exactly what
       // happened to eBay Fee once sell.finances was granted: 155 of 155 day
       // cells refused. A placeholder we wrote is ours to replace.
-      var locked = [];
+      // ⚠️ A LOCK IS PER COLUMN, NOT PER DAY. It used to skip the whole row:
+      // one pinned cell and that day's eBay Fee, Shipping and CC Fee froze at
+      // whatever they happened to hold, silently, for the rest of the month.
+      // Sep 1 at OVL is exactly that case — Sales and Cost are restated by hand
+      // because Shopify will not stop reporting a deleted duplicate, and the
+      // other three columns still have to keep updating underneath the pin.
+      var locked = {}, lockedNames = [];
       [[NP_OFF_SALES, 'Sales'], [NP_OFF_COST, 'Cost'], [NP_OFF_EBAYFEE, 'eBay Fee'],
        [NP_OFF_SHIP, 'Shipping'], [NP_OFF_CCFEE, 'CC Fee']].forEach(function (p) {
         var f = String(formulas[r][base + p[0]]).trim();
         if (f === '') return;
         if (_npIsOurPlaceholder(f)) { placeholders++; return; }
+        locked[p[0]] = true;
+        // A column we are not writing this pass cannot be "refused" by anything
+        // sitting in it, and saying so every morning would train people to skim
+        // past the refusals list.
+        if (p[0] === NP_OFF_SHIP && NP_SKIP_SHIP) return;
         // Naming the formula matters: "formula already in eBay Fee" repeated
         // 155 times said nothing about WHICH formula, and that is the whole
         // question when deciding whether it is safe to overwrite.
-        locked.push(p[1] + ' (' + f + ')');
+        lockedNames.push(p[1] + ' (' + f + ')');
       });
-      if (locked.length) {
-        refusals.push(store + ' day ' + dayNum + ': formula already in ' + locked.join(', '));
-        continue;
+      if (lockedNames.length) {
+        refusals.push(store + ' day ' + dayNum + ': left alone — ' + lockedNames.join(', '));
       }
-      rows.push({ r: r, day: dayNum, rec: rec });
+      rows.push({ r: r, day: dayNum, rec: rec, locked: locked });
     }
     if (missing.length) Logger.log('  !! no row found for day(s): %s', missing.join(', '));
     if (placeholders) {
@@ -235,13 +260,6 @@ function _npWrite(preview) {
         placeholders);
     }
     if (!rows.length) { Logger.log('  nothing writable'); continue; }
-
-    // Contiguity is checked, not assumed: the fast block write is only correct
-    // if the located rows really are consecutive and in day order.
-    var contiguous = true;
-    for (var k = 1; k < rows.length; k++) {
-      if (rows[k].r !== rows[k - 1].r + 1) { contiguous = false; break; }
-    }
 
     var salesCol = [], costCol = [], feeCols = [];
     var sSum = 0, cSum = 0, ccSum = 0, shSum = 0, eSum = 0, naEbay = 0, naShip = 0;
@@ -251,8 +269,8 @@ function _npWrite(preview) {
         ? (NP_BLOCKED_AS_NA ? '=NA()' : '') : x.ebay_fee;
       var ship = (x.shipping_cost === null || x.shipping_cost === undefined)
         ? (NP_BLOCKED_AS_NA ? '=NA()' : '') : x.shipping_cost;
-      salesCol.push([x.net_sales]);
-      costCol.push([x.cost]);
+      salesCol.push(x.net_sales);
+      costCol.push(x.cost);
       feeCols.push([ebayFee, ship, x.cc_fee]);
       sSum += x.net_sales; cSum += x.cost; ccSum += x.cc_fee;
       // Counted, not assumed: which columns are real changes as grants land, and
@@ -266,33 +284,39 @@ function _npWrite(preview) {
         Logger.log('  ... (%s more days)', rows.length - 4);
       }
     }
-    Logger.log('  month: Sales %s | Cost %s | eBay Fee %s | Ship %s | CC %s | rows %s-%s%s',
+    Logger.log('  month: Sales %s | Cost %s | eBay Fee %s | Ship %s | CC %s | rows %s-%s',
       Math.round(sSum * 100) / 100, Math.round(cSum * 100) / 100,
       naEbay ? naEbay + ' days #N/A' : Math.round(eSum * 100) / 100,
-      naShip ? naShip + ' days #N/A' : Math.round(shSum * 100) / 100,
+      NP_SKIP_SHIP ? 'not written this pass'
+        : (naShip ? naShip + ' days #N/A' : Math.round(shSum * 100) / 100),
       Math.round(ccSum * 100) / 100,
-      rows[0].r + 1, rows[rows.length - 1].r + 1, contiguous ? '' : '  (NON-CONTIGUOUS — per-cell write)');
+      rows[0].r + 1, rows[rows.length - 1].r + 1);
     totals.sales += sSum; totals.cost += cSum; totals.cc += ccSum; totals.ship += shSum;
     totals.ebay += eSum;
     totals.naEbay += naEbay; totals.naShip += naShip;
 
     if (preview) continue;
 
-    if (contiguous) {
-      var top = rows[0].r + 1;                                  // getRange is 1-indexed
-      sh.getRange(top, base + NP_OFF_SALES + 1, rows.length, 1).setValues(salesCol);
-      sh.getRange(top, base + NP_OFF_COST  + 1, rows.length, 1).setValues(costCol);
-      // +9, +10, +11 are adjacent, so the three fee columns go in one call.
-      sh.getRange(top, base + NP_OFF_EBAYFEE + 1, rows.length, 3).setValues(feeCols);
-    } else {
-      for (var w = 0; w < rows.length; w++) {
-        var rr = rows[w].r + 1;
-        sh.getRange(rr, base + NP_OFF_SALES + 1).setValue(salesCol[w][0]);
-        sh.getRange(rr, base + NP_OFF_COST  + 1).setValue(costCol[w][0]);
-        sh.getRange(rr, base + NP_OFF_EBAYFEE + 1, 1, 3).setValues([feeCols[w]]);
-      }
+    // One call per column instead of one per store for the three fee columns.
+    // They are adjacent and used to go in a single 3-wide write, which was
+    // faster and could not express "all of these except that one cell" — and
+    // both of the things this file now has to do, a pinned cell and a skipped
+    // column, are exactly that. _npWriteRuns is still block writes; it just
+    // breaks the block wherever a cell must not be touched.
+    var kept = 0;
+    kept += rows.length - _npWriteRuns(sh, rows, base + NP_OFF_SALES + 1, salesCol, NP_OFF_SALES);
+    kept += rows.length - _npWriteRuns(sh, rows, base + NP_OFF_COST + 1, costCol, NP_OFF_COST);
+    kept += rows.length - _npWriteRuns(sh, rows, base + NP_OFF_EBAYFEE + 1,
+      feeCols.map(function (f) { return f[0]; }), NP_OFF_EBAYFEE);
+    if (!NP_SKIP_SHIP) {
+      kept += rows.length - _npWriteRuns(sh, rows, base + NP_OFF_SHIP + 1,
+        feeCols.map(function (f) { return f[1]; }), NP_OFF_SHIP);
     }
-    Logger.log('  written.');
+    kept += rows.length - _npWriteRuns(sh, rows, base + NP_OFF_CCFEE + 1,
+      feeCols.map(function (f) { return f[2]; }), NP_OFF_CCFEE);
+    Logger.log('  written.%s%s',
+      kept ? '  ' + kept + ' locked cell(s) left as they were.' : '',
+      NP_SKIP_SHIP ? '  Shipping not written — morning pass.' : '');
   }
 
   Logger.log('\n=== ALL FIVE STORES ===');
@@ -322,6 +346,35 @@ function _npWrite(preview) {
     Logger.log('refused: none');
   }
   if (preview) Logger.log('\nPREVIEW ONLY — nothing was written. Run npWriteApply to commit.');
+}
+
+// Write one column down a set of located rows, skipping any cell that is locked
+// and any gap in the rows themselves.
+//
+// ⚠️ IT NEVER WRITES A LOCKED CELL, NOT EVEN BACK TO ITSELF. Putting a cell's
+// own formula back would look like a no-op and read as one, and it is not: it
+// re-enters the formula, and surviving being re-entered by this script is the
+// entire reason a lock exists. So the block is CUT at a locked row and resumed
+// after it. A month with one pin costs one extra setValues call.
+//
+// Returns how many cells it actually wrote, so the caller can say what it left.
+function _npWriteRuns(sh, rows, col1, vals, off) {
+  var i = 0, wrote = 0;
+  while (i < rows.length) {
+    if (rows[i].locked[off]) { i++; continue; }
+    var j = i;
+    // A run ends at a locked cell OR at a break in the row numbers — the rows
+    // are located by day number, so a missing day leaves a genuine gap and
+    // writing through it would put every later day one row too high.
+    while (j + 1 < rows.length && !rows[j + 1].locked[off]
+           && rows[j + 1].r === rows[j].r + 1) j++;
+    var chunk = [];
+    for (var k = i; k <= j; k++) chunk.push([vals[k]]);
+    sh.getRange(rows[i].r + 1, col1, chunk.length, 1).setValues(chunk);
+    wrote += chunk.length;
+    i = j + 1;
+  }
+  return wrote;
 }
 
 function _npProbe() {
