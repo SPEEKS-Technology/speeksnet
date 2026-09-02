@@ -116,6 +116,35 @@ function monthCloseDay(ym: string): string {
 //
 // The exception is the close. Once a month is shut nothing may re-open it, so
 // a label that turns up afterwards books to the day it was charged.
+// ⚠️ WHICH DAY A REFUND BOOKS TO. Ethan's call, 2026-09-02, and the reasoning
+// matters more than the setting because either answer is defensible.
+//
+// FALSE — a refund books to the day it was PROCESSED. This is what the Sales
+// Summary does, so the two sheets agree to the cent on every day, and a day that
+// has been closed stops moving.
+//
+// TRUE — a refund travels back to the day the item SOLD, so each day's Net
+// Profit is the true profit of what that day sold. This is how it was built.
+//
+// ⚠️ IT IS A RESHUFFLE, NOT A DIFFERENCE IN THE MONTH. A refund only ever moves
+// between days INSIDE one month — a cross-month refund already stays put,
+// because saleDay is only populated for orders whose sale day is in the window.
+// So the monthly figure the bonus is paid on is IDENTICAL either way. Measured
+// on WSP, Sep 1-2:
+//
+//              re-dated      not re-dated
+//     Sep 1     4,095.76        4,885.73
+//     Sep 2     2,546.87        1,756.90
+//     total     6,642.63        6,642.63
+//
+// Which is why this went the way it did: the day view costing hours to reconcile
+// against the sheet everyone else reads was a real cost, and it bought nothing
+// the bonus could see.
+//
+// The response still reports refunds_that_would_move, so it stays visible from
+// the outside what this setting is doing.
+const REDATE_REFUNDS_TO_SALE_DAY = false;
+
 function shippingBookingDay(saleDay: string, chargedOn: string, shape: string): string {
   if (!chargedOn) return saleDay;
   if (shape === "charge-adjustment" || shape === "credit-adjustment") return chargedOn;
@@ -587,9 +616,16 @@ Deno.serve(async (req: Request) => {
   // is unaffected, and inventing a split would be worse than leaving it.
   let refundsRedated = 0;
   let refundsRedatedAmount = 0;
+  // Counted even when the feature is off, because "how much WOULD have moved" is
+  // the only way to see, from a response, why this tab and the Sales Summary
+  // agree — or would not have.
+  let refundsWouldMove = 0;
+  let refundsWouldMoveAmount = 0;
   for (const r of qlRows) {
     const gross = round2(r.net - r.ret);
-    const dest = saleDay[r.order] && saleDay[r.order] !== r.day ? saleDay[r.order] : r.day;
+    const dest = REDATE_REFUNDS_TO_SALE_DAY
+      ? (saleDay[r.order] && saleDay[r.order] !== r.day ? saleDay[r.order] : r.day)
+      : r.day;
     if (days[r.day]) {
       days[r.day].net_sales = round2(days[r.day].net_sales + gross);
     }
@@ -601,6 +637,10 @@ Deno.serve(async (req: Request) => {
     const costHome = (r.ret !== 0 && gross === 0) ? dest : r.day;
     if (days[costHome]) days[costHome].cost = round2(days[costHome].cost + r.cost);
     if (dest !== r.day) { refundsRedated++; refundsRedatedAmount = round2(refundsRedatedAmount - r.ret); }
+    if (saleDay[r.order] && saleDay[r.order] !== r.day) {
+      refundsWouldMove++;
+      refundsWouldMoveAmount = round2(refundsWouldMoveAmount - r.ret);
+    }
   }
 
   // --- eBay share -----------------------------------------------------------
@@ -1024,6 +1064,9 @@ Deno.serve(async (req: Request) => {
     // be wrong, so it is reported rather than left to be inferred.
     refunds_redated: refundsRedated,
     refunds_redated_amount: refundsRedatedAmount,
+    redate_refunds_to_sale_day: REDATE_REFUNDS_TO_SALE_DAY,
+    refunds_that_would_move: refundsWouldMove,
+    refunds_that_would_move_amount: refundsWouldMoveAmount,
     totals: {
       net_sales: sum("net_sales"),
       cost: sum("cost"),
