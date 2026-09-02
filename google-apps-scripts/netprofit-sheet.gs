@@ -501,6 +501,89 @@ function _npTtlRowProbe() {
     }
   }
 
+  // ---- the three TRACKING columns, every day row, as shapes ----------------
+  // ⚠️ THIS IS THE PART THAT DECIDES WHETHER A REPAIR IS POSSIBLE. If the day
+  // rows still carry their formula, the TTL row can be rebuilt from the shape
+  // that is demonstrably in use rather than from a guess. If they are gone too,
+  // there is nothing on the tab to copy and the answer has to come from Ethan.
+  //
+  // Each formula is normalised by replacing its own row number with '#', so a
+  // whole column of correctly filled-down cells collapses to ONE line. Anything
+  // that does not collapse is a cell that disagrees with its neighbours — which
+  // is exactly how the two TTL-block faults in _npAuditFormulas were found.
+  var trackOffs = [[3, 'Rev Tracking'], [7, 'GP Tracking'], [14, 'NP Tracking']];
+  var firstDay = -1;
+  for (var fr = NP_HEADER_ROWS; fr < ttl; fr++) {
+    if (parseInt(values[fr][NP_BASES.OVL], 10) === 1) { firstDay = fr; break; }
+  }
+  Logger.log('\n=== TRACKING COLUMNS, day rows %s-%s, formulas normalised ===',
+    firstDay + 1, ttl);
+  for (var tb = 0; tb < blocks.length; tb++) {
+    var tcode = blocks[tb][0], tbase = blocks[tb][1];
+    for (var to = 0; to < trackOffs.length; to++) {
+      var tc = tbase + trackOffs[to][0];
+      if (tc >= lastCol) continue;
+      var shapes = {}, empties = [];
+      for (var dr = firstDay; dr < ttl; dr++) {
+        var df = String((formulas[dr] || [])[tc] || '').trim();
+        if (!df) { empties.push(dr + 1); continue; }
+        // Row numbers become '#', so a filled-down column reduces to one shape.
+        var norm = df.split(String(dr + 1)).join('#');
+        (shapes[norm] = shapes[norm] || []).push(dr + 1);
+      }
+      var keys = Object.keys(shapes);
+      Logger.log('  %s %s (%s): %s shape(s)%s', tcode, trackOffs[to][1], _npColLetter(tc),
+        keys.length, empties.length ? ', ' + empties.length + ' row(s) EMPTY' : '');
+      for (var ki = 0; ki < keys.length; ki++) {
+        var rws = shapes[keys[ki]];
+        Logger.log('      %s   [rows %s%s]', keys[ki], rws.slice(0, 3).join(','),
+          rws.length > 3 ? '..' + rws[rws.length - 1] + ', ' + rws.length + ' rows' : '');
+      }
+      if (empties.length) {
+        Logger.log('      EMPTY: rows %s%s', empties.slice(0, 6).join(','),
+          empties.length > 6 ? ' ... (' + empties.length + ' rows)' : '');
+      }
+    }
+  }
+
+  // ---- the goal strip, because "% of NP Goal shows 0%" lives here -----------
+  // The percentage is  last non-empty NP Tracking on the day rows / NP Goal.
+  // Both halves are printed, so the 0% can be attributed rather than guessed at:
+  // an empty goal and an empty numerator produce a BLANK, and a zero numerator
+  // over a real goal produces 0%. They are different faults.
+  Logger.log('\n=== GOAL STRIP (rows 1-2) ===');
+  for (var gb2 = 0; gb2 < blocks.length; gb2++) {
+    var gbase = blocks[gb2][1];
+    var line = [];
+    [[3, 'label'], [4, 'value']].forEach(function (p) {
+      for (var gr = 0; gr < 2; gr++) {
+        var gc = gbase + p[0];
+        if (gc >= lastCol) return;
+        var gf = String((formulas[gr] || [])[gc] || '').trim();
+        var gv = (values[gr] || [])[gc];
+        line.push(_npColLetter(gc) + (gr + 1) + '=' + (gf ? gf
+          : (gv === '' || gv === null || gv === undefined ? '(EMPTY)' : gv)));
+      }
+    });
+    Logger.log('  %s: %s', blocks[gb2][0], line.join('  |  '));
+  }
+
+  // ---- the two divisors every projection depends on -------------------------
+  Logger.log('\n=== DAYS ROWS ===');
+  for (var lr = 0; lr < values.length; lr++) {
+    var lbl = String(values[lr][NP_BASES.OVL + 1] || '').trim().toLowerCase();
+    if (lbl.indexOf('days') !== 0) continue;
+    var dline = [];
+    for (var db = 0; db < blocks.length; db++) {
+      var dc = blocks[db][1] + 2;
+      if (dc >= lastCol) continue;
+      var dfm = String((formulas[lr] || [])[dc] || '').trim();
+      dline.push(blocks[db][0] + ' ' + _npColLetter(dc) + (lr + 1) + '='
+        + (dfm ? dfm : (values[lr][dc] === '' ? '(EMPTY)' : values[lr][dc])));
+    }
+    Logger.log('  row %s "%s": %s', lr + 1, values[lr][NP_BASES.OVL + 1], dline.join('  |  '));
+  }
+
   // The one line worth reading first: what is actually missing on the TTL row.
   Logger.log('\n=== EMPTY ON THE TTL ROW (row %s) ===', ttl + 1);
   var anyGap = false;
