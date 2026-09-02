@@ -99,10 +99,13 @@ var NP_SKIP_SHIP = false;
 // the damage from the run that caused this note. A locked cell is still never
 // touched.
 var NP_TZ = 'America/Chicago';
+var NP_OFF_NPTRACK_MAX = 14;   // NP Tracking, the rightmost column this file writes
 var NP_CLEAR_FUTURE = true;
 
 function npProbe()        { _npProbe(); }
 function npTtlRowProbe()  { _npTtlRowProbe(); }
+function npFixTrackingPreview() { _npFixTracking(true); }
+function npFixTrackingApply()   { _npFixTracking(false); }
 function npWritePreview() { _npWrite(true); }
 function npWriteApply()   { _npWrite(false); }
 
@@ -442,6 +445,168 @@ function _npWriteRuns(sh, rows, col1, vals, off) {
     i = j + 1;
   }
   return wrote;
+}
+
+// ============================================================================
+// npFixTracking — the three projection columns, in all six blocks, plus the TTL
+// row they never had.
+//
+// Measured by npTtlRowProbe on 2026-09-02, not assumed. What it found:
+//
+// 1. ⚠️ NOTHING DELETED THE TTL ROW'S TRACKING CELLS. They were never there.
+//    The empty cells on row 36 are EXACTLY the cumulative columns (Total, GP
+//    Total, NP Total), the three tracking columns and MOM — the same seven, in
+//    all six blocks. Damage does not pick seven columns out of seventeen and
+//    then repeat the choice six times. The tab was built with the projection
+//    living on the DAY rows, and every consumer reads the last non-empty cell
+//    of the day range: the YoY "Current" figure and the % of NP Goal both do.
+//    Row 36 is added here because a month-total row that cannot show the month's
+//    projection is a gap for a reader, not because something took it away.
+//
+// 2. ⚠️ THE COMPANY'S NP TRACKING IS WRONG ON EVERY DAY BUT THE FIRST, and this
+//    is the real fault. DA carries, on all 31 rows:
+//        =IF(ISBLANK(CN#),"",(CY#/1)*CO$42)
+//    Two errors in one cell. It divides by the LITERAL 1 where every other block
+//    divides by the day number, and it reads CY — THAT DAY's net profit — where
+//    every other block reads the CUMULATIVE column. On day 2 it reports one
+//    day's NP times 30 instead of two days' average times 30. The company
+//    % of NP Goal is that cell over the goal, which is why it reads nothing
+//    like the five stores above it. _npAuditFormulas has described this fault
+//    in a comment since August; nothing fixed it.
+//
+// 3. Row 5 is right by accident everywhere. "(C5/1)*C42" and "(C5/A5)*C$42"
+//    agree when A5 is 1, and "(F5/...)" agrees with "(G5/...)" when day 1's GP
+//    and cumulative GP are the same number. Both diverge the moment the formula
+//    is filled down, which is how the tab drifts. The relative "C42" is the same
+//    trap: it walks to C43 — Days Thru — on the row below.
+//
+// 4. The TTL block guards on ISBLANK(B#) — OVL's sales — in Rev and GP Tracking,
+//    and on ISBLANK(CN#), its own, in NP Tracking. It cannot be both. A day
+//    where OVL sold nothing and another store did would blank the whole
+//    company's projection. Every block now guards on ITS OWN sales column.
+//
+// The shape is taken from what 29-30 rows of every column already agree on:
+//     day row:  =IF(ISBLANK({sales}r),"",({cumulative}r/{day}r)*{total}$D)
+//     TTL row:  =IF(ISBLANK({sales}T),"",({month}T/{total}$U)*{total}$D)
+// where D is "Days this month" and U is "Days Thru month", both LOCATED by
+// label. The TTL row divides by Days Thru because its own day cell reads "TTL".
+//
+// Every reference is GENERATED from NP_BASES and the offsets. Typing "BJ" for
+// MPL's GP Tracking is the error this file is arranged to prevent, and a
+// wrong-but-adjacent column still returns a plausible number.
+// ============================================================================
+
+// The three projections. "cum" is the numerator on a DAY row — always the
+// cumulative column — and "month" the numerator on the TTL row, where there is
+// no cumulative and the row itself is the month.
+var NP_TRACKING = [
+  { off: 3,  name: 'Rev Tracking', cum: 2,  month: 1  },
+  { off: 7,  name: 'GP Tracking',  cum: 6,  month: 5  },
+  { off: 14, name: 'NP Tracking',  cum: 13, month: 12 }
+];
+
+// The formula for ONE tracking cell. Pulled out of the loop so it can be tested
+// without a spreadsheet: this is the part that decides a projection, and a
+// wrong-but-adjacent column letter still returns a number that looks fine.
+//
+// daysThruRow1 = 0 means a DAY row, which divides by its own day number. Any
+// other value means the TTL row, which has no day number — its day cell reads
+// "TTL" — and so divides by Days Thru instead, on the row's own month figure.
+function _npTrackFormula(base, spec, row1, daysThisRow1, daysThruRow1) {
+  var salesL = _npColLetter(base + NP_OFF_SALES);
+  var totalL = _npColLetter(base + 2);
+  var numer = daysThruRow1
+    ? _npColLetter(base + spec.month) + row1 + '/' + totalL + '$' + daysThruRow1
+    : _npColLetter(base + spec.cum) + row1 + '/' + _npColLetter(base) + row1;
+  return '=IF(ISBLANK(' + salesL + row1 + '),"",(' + numer + ')*'
+       + totalL + '$' + daysThisRow1 + ')';
+}
+
+function _npFixTracking(preview) {
+  var ss = SpreadsheetApp.openById(NP_SHEET_ID);
+  var sh = _npTab(ss);
+  if (!sh) return;
+
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  var formulas = sh.getRange(1, 1, lastRow, lastCol).getFormulas();
+
+  // Everything located by content. A constant row number here is how a script
+  // survives one layout change and silently corrupts the next.
+  var firstDay = -1, ttl = -1;
+  for (var r = NP_HEADER_ROWS; r < lastRow; r++) {
+    var cell = String(values[r][NP_BASES.OVL]).trim();
+    if (firstDay < 0 && parseInt(cell, 10) === 1) firstDay = r;
+    if (cell.toUpperCase() === 'TTL') { ttl = r; break; }
+  }
+  var daysThis = -1, daysThru = -1;
+  for (var lr = 0; lr < lastRow; lr++) {
+    var lbl = String(values[lr][NP_BASES.OVL + 1] || '').trim().toLowerCase();
+    if (lbl === 'days this month') daysThis = lr;
+    if (lbl === 'days thru month') daysThru = lr;
+  }
+  // ⚠️ REFUSE RATHER THAN GUESS. Every one of these is a divisor or a
+  // multiplier in a projection; a wrong row here is not a broken formula, it is
+  // a plausible wrong number in the column the bonus is read from.
+  var missing = [];
+  if (firstDay < 0) missing.push('day 1 row');
+  if (ttl < 0) missing.push('TTL row');
+  if (daysThis < 0) missing.push('"Days this month" row');
+  if (daysThru < 0) missing.push('"Days Thru month" row');
+  if (missing.length) { Logger.log('!! could not locate: %s — nothing done.', missing.join(', ')); return; }
+
+  Logger.log('%s — tab "%s": day rows %s-%s, TTL row %s, Days this month row %s, Days Thru row %s',
+    preview ? 'PREVIEW (nothing will be written)' : 'APPLYING',
+    NP_TAB, firstDay + 1, ttl, ttl + 1, daysThis + 1, daysThru + 1);
+
+  var blocks = NP_ORDER.map(function (c) { return [c, NP_BASES[c]]; });
+  blocks.push(['TTL block', NP_TTL_BASE]);
+
+  var wrote = 0, same = 0, ttlAdded = 0;
+  for (var b = 0; b < blocks.length; b++) {
+    var code = blocks[b][0], base = blocks[b][1];
+    if (base + NP_OFF_NPTRACK_MAX >= lastCol) {
+      Logger.log('  %s: block runs past the last column — skipped', code);
+      continue;
+    }
+    for (var t = 0; t < NP_TRACKING.length; t++) {
+      var spec = NP_TRACKING[t];
+      var col = base + spec.off;
+      var changed = [], added = false;
+
+      for (var rr = firstDay; rr < ttl; rr++) {
+        var n = rr + 1;
+        var want = _npTrackFormula(base, spec, n, daysThis + 1, 0);
+        var cur = String(formulas[rr][col] || '').trim();
+        if (cur === want) { same++; continue; }
+        if (!preview) sh.getRange(n, col + 1).setFormula(want);
+        changed.push(n);
+        wrote++;
+      }
+
+      // The TTL row: no day number to divide by, so Days Thru, and the row's own
+      // month figure instead of a cumulative that does not exist there.
+      var tn = ttl + 1;
+      var ttlWant = _npTrackFormula(base, spec, tn, daysThis + 1, daysThru + 1);
+      var ttlCur = String(formulas[ttl][col] || '').trim();
+      if (ttlCur === ttlWant) { same++; }
+      else {
+        if (!preview) sh.getRange(tn, col + 1).setFormula(ttlWant);
+        added = true; ttlAdded++; wrote++;
+      }
+
+      Logger.log('  %s %s (%s): %s day row(s) %s%s', code, spec.name, _npColLetter(col),
+        changed.length,
+        changed.length ? (preview ? 'would change' : 'rewritten') + ' — ' + changed.slice(0, 6).join(',')
+          + (changed.length > 6 ? '...' : '') : 'already correct',
+        added ? ';  TTL row ' + _npColLetter(col) + tn + ' '
+              + (preview ? 'WOULD GET' : 'set to') + '  ' + ttlWant : '');
+    }
+  }
+
+  Logger.log('\n%s %s cell(s) (%s of them the TTL row), %s already correct.',
+    preview ? 'WOULD WRITE' : 'WROTE', wrote, ttlAdded, same);
+  if (preview) Logger.log('Nothing was written. Run npFixTrackingApply() to write it.');
 }
 
 // ============================================================================
