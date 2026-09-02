@@ -142,6 +142,30 @@ var NPX_SHOPIFY_WALL_DAYS = 60;   // Shopify hides orders older than this withou
 var NPX_LASTMONTH_KEY = 'NPX_LAST_MONTH_FOR';
 var NPX_FORCE_LAST_MONTH = false;   // set true for one run to redo last month
 
+// ⚠️ LAST MONTH COSTS 85 SECONDS A STORE AND APPS SCRIPT ALLOWS SIX MINUTES.
+// Five stores is roughly seven, so on 2026-09-02 the run died inside BAL with
+// "Exceeded maximum execution time" — and because every cell is written in one
+// batch at the END, dying there wrote NOTHING. Not last month, not Days Thru,
+// not the goal formulas. From the outside that reads as "it ran everything
+// except the days thru the month", which is exactly how it was reported, and
+// nothing in the log said the run had been killed rather than finished.
+//
+// Two changes, and they only matter together:
+//   * a BUDGET. Stop starting new fetches once the time is nearly up, name the
+//     stores that were left, and carry on to write everything else. A short
+//     last month is a gap; a killed run is a blank sheet.
+//   * a CACHE. Each store's month is banked the moment it lands, so a run that
+//     gets three stores is three stores of progress and not a retry from cold.
+//     Successive passes finish it — and there are two a day now.
+//
+// This is the same shape as the 60-day-wall guard above: refuse the part that
+// cannot be done, do the rest, and say plainly what is missing.
+var NPX_LM_CACHE_KEY = 'NPX_LAST_MONTH_CACHE';
+// Overwritten by npsDailyRefresh with what is ACTUALLY left of its six minutes,
+// because _npWrite has already spent some of them and its share grows through
+// the month. The default suits a manual run of npSummaryPreview/Apply.
+var NPX_BUDGET_MS = 210000;   // 3.5 minutes
+
 var NPX_MONEY = '$#,##0.00';
 var NPX_PCT   = '0.0%';
 
@@ -255,6 +279,30 @@ function _npxLastMonthFromTab(ss, prevYm) {
   return out;
 }
 
+// Last month's totals, banked per store as each one lands.
+//
+// ⚠️ KEYED BY THE MONTH, AND A DIFFERENT MONTH THROWS THE WHOLE THING AWAY.
+// A cache that outlived its month would serve August's revenue as September's
+// MoM denominator on the 1st of October, silently and forever — the marker
+// would then mark it done. Cheaper to refetch than to be wrong.
+function _npxLmCacheLoad(prevYm) {
+  if (NPX_FORCE_LAST_MONTH) return {};
+  var raw = PropertiesService.getScriptProperties().getProperty(NPX_LM_CACHE_KEY);
+  if (!raw) return {};
+  var c = null;
+  try { c = JSON.parse(raw); } catch (e) { return {}; }
+  return (c && c.ym === prevYm && c.stores) ? c.stores : {};
+}
+
+function _npxLmCacheSave(prevYm, store, tot) {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(NPX_LM_CACHE_KEY), c = null;
+  try { c = raw ? JSON.parse(raw) : null; } catch (e) { c = null; }
+  if (!c || c.ym !== prevYm) c = { ym: prevYm, stores: {} };
+  c.stores[store] = tot;
+  props.setProperty(NPX_LM_CACHE_KEY, JSON.stringify(c));
+}
+
 function r2c(n) { return Math.round(n * 100) / 100; }
 
 // Revenue / GP / Net Profit for a whole month in the tab's OWN terms:
@@ -305,6 +353,7 @@ function _npxMonthTotals(data) {
 // ---------------------------------------------------------------------------
 
 function _npxSync(preview) {
+  var npxT0 = new Date().getTime();
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
 
   // The month decides the tab, so it has to be known first. `var` hoists but
@@ -497,19 +546,37 @@ function _npxSync(preview) {
       + 'month was closed at.', _npTabName(prevYm));
   }
 
+  var lmCache = fromTab ? {} : _npxLmCacheLoad(prevYm);
+  var lmCached = Object.keys(lmCache);
+  if (lmCached.length) {
+    Logger.log('  %s already banked from an earlier run: %s', lmCached.length, lmCached.join(', '));
+  }
+  var lmDeferred = [];
+
   var lmOk = [];
   for (var li = 0; li < NP_ORDER.length && !lmSkip && !monthUnfinished; li++) {
-    var store = NP_ORDER[li], sb = NP_BASES[store], tot;
+    var store = NP_ORDER[li], sb = NP_BASES[store], tot, howGot;
     try {
-      tot = fromTab ? fromTab[store] : _npxMonthTotals(_npxFetchMonth(store, prevYm));
-      if (fromTab) tot.npTrustworthy = true;
+      if (fromTab) { tot = fromTab[store]; tot.npTrustworthy = true; howGot = 'from tab'; }
+      else if (lmCache[store]) { tot = lmCache[store]; howGot = 'from cache'; }
+      else {
+        // ⚠️ CHECKED BEFORE THE FETCH, NEVER AFTER. A fetch started with twenty
+        // seconds left does not fail politely — it takes the whole execution
+        // down with it, including the batch write at the bottom that is the
+        // only reason any of this ran.
+        if (new Date().getTime() - npxT0 > NPX_BUDGET_MS) { lmDeferred.push(store); continue; }
+        tot = _npxMonthTotals(_npxFetchMonth(store, prevYm));
+        // Banked BEFORE anything else can go wrong with the run. 85 seconds of
+        // Shopify paging is too expensive to spend twice for want of a write.
+        _npxLmCacheSave(prevYm, store, tot);
+        howGot = tot.days + ' days';
+      }
     } catch (e) {
       Logger.log('  %s: SKIPPED — %s', store, e.message);
       skips.push(store + ' last month: ' + e.message);
       continue;
     }
-    Logger.log('  %s: %s | Revenue %s | GP %s | NP %s%s', store,
-      fromTab ? 'from tab' : tot.days + ' days',
+    Logger.log('  %s: %s | Revenue %s | GP %s | NP %s%s', store, howGot,
       tot.revenue, tot.gp, tot.np,
       tot.npTrustworthy ? '' : '\n    !! NET PROFIT NOT WRITTEN. ' + tot.blind + ' of '
         + tot.sellingDays + ' selling days report ZERO eBay fee, shipping AND card fee'
@@ -539,6 +606,17 @@ function _npxSync(preview) {
            '', NPX_MONEY, null, true);
     }
   }
+  if (lmDeferred.length) {
+    Logger.log('\n  !! OUT OF TIME before %s (%s). Their last-month cells are left '
+      + 'BLANK and the month is NOT marked done, so the next refresh picks up where '
+      + 'this one stopped — the stores already fetched are banked and will not be '
+      + 'refetched. Two refreshes a day means it completes on its own; run '
+      + 'npSummaryApply by hand if you want it sooner.',
+      lmDeferred.length === 1 ? 'one store' : lmDeferred.length + ' stores',
+      lmDeferred.join(', '));
+    skips.push('last month deferred for ' + lmDeferred.join(', ') + ' — ran out of time');
+  }
+
   // TTL as SUM formulas rather than a written total: if one store is ever
   // restated the company figure follows instead of quietly disagreeing.
   var tb = NP_TTL_BASE;

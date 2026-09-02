@@ -4470,6 +4470,35 @@ function _mbDefaultView() {
     return (role === 'ceo' || role === 'district manager') ? 'overview' : 'store';
 }
 
+// WHICH STORE Store View is looking at. One function, used by the fetch, the
+// save and the subtitle, because they were each working it out for themselves
+// and getting three different answers.
+//
+// ⚠️ DECIDED BY ROLE, NEVER BY WHETHER A CONTROL IS ON SCREEN. The fetch used to
+// ask `sel.offsetParent === null` — "is the picker laid out?" — as a stand-in for
+// "may this person choose a store?". Those are not the same question, and on
+// 2026-09-02 they gave opposite answers: the picker's .dd-host was stuck hidden
+// (see _mbSyncControls below), so a District Manager on Store View was read as
+// somebody with no picker, fell back to their own store — which for a DM is
+// "ALL" — and fetched a store that does not exist. The subtitle said "OVL ·
+// Store View" the whole time, because IT read the select's value directly. Store
+// managers were unaffected, so it looked like a permissions problem and was not.
+//
+// It also fixes a quieter one the same way: mbSaveBriefStore read sel.value with
+// no role check at all, and sel.value is "OVL" until somebody touches it — so an
+// owner-manager at LEE saving Store View would have written into OVL.
+function _mbStore() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const own  = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase().trim();
+    const canPick = (role === 'ceo' || role === 'district manager');
+    const sel = document.getElementById('mbStoreSelect');
+    if (canPick && sel && MB_STORES.indexOf(sel.value) >= 0) return sel.value;
+    // Anyone else gets their own store, and a store that is not one of the five
+    // (a DM's "ALL", a blank session) falls to the first rather than being sent
+    // to the API to come back empty.
+    return MB_STORES.indexOf(own) >= 0 ? own : MB_STORES[0];
+}
+
 // Reflect the active view in the controls: highlight the toggle, and only show
 // the store picker in Store View (and only for CEO/DM — Overview spans all stores).
 function _mbSyncControls() {
@@ -4478,7 +4507,18 @@ function _mbSyncControls() {
     document.getElementById('mbViewOverviewBtn')?.classList.toggle('active', _mbView === 'overview');
     document.getElementById('mbViewStoreBtn')?.classList.toggle('active', _mbView === 'store');
     const sel = document.getElementById('mbStoreSelect');
-    if (sel) sel.style.display = (_mbView === 'store' && canPickStore) ? '' : 'none';
+    // ⚠️ SHOWING A SELECT DOES NOT SHOW A SELECT — the mirror image of the trap
+    // _ddMirrorGate was written for. This one is born `style="display:none"` in
+    // workspace.html, so _ddEnhance wraps it into a host that is born hidden
+    // ("a face born into a hidden select is born hidden"), and clearing the
+    // inline display on the native control afterwards leaves the host still
+    // carrying `display: none !important`. The DM's store picker was therefore
+    // never on screen, on any view, since the day the toggle was added.
+    if (sel) {
+        const show = (_mbView === 'store' && canPickStore);
+        sel.style.display = show ? '' : 'none';
+        _ddMirrorGate(sel, show);
+    }
     // Manage Rows edits the catalog, which is the same on both views — but hide
     // it mid-edit so the shape of the report can't change under an open form.
     const rowsBtn = document.getElementById('mbRowsBtn');
@@ -4486,8 +4526,7 @@ function _mbSyncControls() {
     _mbSyncOverviewMonths();
     const sub = document.getElementById('mbSubtitle');
     if (sub) {
-        const store = (sel && canPickStore ? sel.value : null) || sessionStorage.getItem('speeksUserStore') || '';
-        sub.textContent = _mbView === 'overview' ? 'All Stores' : (store + ' · Store View');
+        sub.textContent = _mbView === 'overview' ? 'All Stores' : (_mbStore() + ' · Store View');
     }
 }
 
@@ -4500,7 +4539,9 @@ function _mbSyncControls() {
 function _mbSyncOverviewMonths() {
     const sel = document.getElementById('mbOverviewMonth');
     if (!sel) return;
-    if (_mbView !== 'overview') { sel.style.display = 'none'; return; }
+    // Same host-mirroring as the store picker above, and for the same reason:
+    // this one is born display:none in the markup too.
+    if (_mbView !== 'overview') { sel.style.display = 'none'; _ddMirrorGate(sel, false); return; }
 
     // Only months that actually carry values for some store. The API lists the
     // open edit window in `months` before anything is entered for it, and an
@@ -4517,7 +4558,7 @@ function _mbSyncOverviewMonths() {
     // PICKER — nothing else is windowed, so the YoY rows still reach back into
     // the full history for their prior-year figure.
     const list = [...months].sort().reverse().slice(0, MB_OVERVIEW_MONTHS);
-    if (!list.length) { sel.style.display = 'none'; return; }
+    if (!list.length) { sel.style.display = 'none'; _ddMirrorGate(sel, false); return; }
 
     // A pick that no longer exists (store switch, fresh load) falls back to the
     // newest month rather than leaving the select pointing at nothing.
@@ -4529,6 +4570,7 @@ function _mbSyncOverviewMonths() {
     ).join('');
     sel.value = current;
     sel.style.display = '';
+    _ddMirrorGate(sel, true);
     // While editing, the view is pinned to the open month — offering a picker
     // that can't move would be a lie, and moving it mid-edit would silently
     // retarget the inputs at a locked month.
@@ -4605,10 +4647,7 @@ async function fetchMonthlyBriefOverview() {
 async function fetchMonthlyBriefStore() {
     const body = document.getElementById('mbBody');
     if (!body) return;
-    const sel = document.getElementById('mbStoreSelect');
-    let store = sel ? sel.value : (sessionStorage.getItem('speeksUserStore') || 'OVL');
-    // Managers without the picker default to their own store
-    if (sel && sel.offsetParent === null) { store = sessionStorage.getItem('speeksUserStore') || store; }
+    const store = _mbStore();
     _mbEditing = false;
     body.innerHTML = '<div class="status-message">Syncing Performance Brief…</div>';
     try {
@@ -5600,7 +5639,7 @@ function mbSaveBrief() {
 }
 
 async function mbSaveBriefStore() {
-    const store = document.getElementById('mbStoreSelect')?.value || sessionStorage.getItem('speeksUserStore');
+    const store = _mbStore();
     const pin   = sessionStorage.getItem('speeksUserPin');
     if (!pin) { alert('Session expired — please sign in again.'); return; }
 

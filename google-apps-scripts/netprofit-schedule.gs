@@ -144,6 +144,7 @@ function _npsLastDayOf(ym) {
 // ---------------------------------------------------------------------------
 
 function npsDailyRefresh() {
+  var npsT0 = new Date().getTime();
   var today = _npsToday();
   var ym = today.slice(0, 7);
   NP_FROM = ym + '-01';
@@ -189,6 +190,13 @@ function npsDailyRefresh() {
     // The summary strip second, always: Days Thru is DERIVED from the last day
     // carrying Sales, so running it before the grid is written would measure
     // yesterday's sheet and leave every Tracking figure a day behind.
+    //
+    // ⚠️ HAND IT WHAT IS ACTUALLY LEFT OF THE SIX MINUTES. _npWrite has already
+    // spent some, and its share grows with every day added to the month, so a
+    // fixed budget that is generous on the 2nd is fatal on the 30th. Whatever
+    // remains after this is for the summary's batch write and its colour rules,
+    // which are fast but not free — hence 5 minutes rather than 6.
+    NPX_BUDGET_MS = Math.max(30000, 300000 - (new Date().getTime() - npsT0));
     _npxSync(false);
     _npaReport(before, ym, pass.split(' ')[0].toLowerCase() + ' daily refresh');
 
