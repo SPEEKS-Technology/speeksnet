@@ -72,6 +72,11 @@ var MR_MON_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July
 var MR_SALES_WIDTH = 11;
 var MR_SALES_FIRST_ROW = 4;   // 0-based
 var MR_BUY_WIDTH = 5;
+// The Google-reviews mini-table on a Buy tab: its own day column, then the five
+// stores and a TTL — AE:AK in the layout as built. Seven columns, and NOT a
+// store block, which is exactly why it was invisible to this script until
+// 2026-09-02. See _mrReviewBase.
+var MR_REVIEW_WIDTH = 7;
 var MR_BUY_FIRST_ROW = 1;     // 0-based
 var MR_HEADER_ROWS = 4;
 
@@ -365,6 +370,34 @@ function _mrRetarget(f, prevName, srcName, cutRow, delta) {
   return out;
 }
 
+// ⚠️ THE REVIEWS MINI-TABLE IS NOT A STORE BLOCK, AND THAT COST A DAY.
+// _mrBases finds a block by looking for a store code in the header rows and
+// snapping to a MR_BUY_WIDTH boundary. The reviews table at AE:AK carries the
+// same five store codes in its own header, but the main blocks are to its LEFT
+// and win the left-to-right scan — so it is found by nothing, renumbered by
+// nothing and cleared by nothing.
+//
+// Two consequences, both hit on the first short month after it was built:
+//   * going 31 days to 30 the resize deleted DAY 30's row, and with no renumber
+//     the day column was left reading 1..29 then 31
+//   * August's final counts were still sitting in the September block, so the
+//     dashboard reported last month's figures until somebody noticed and
+//     cleared them by hand
+//
+// Located by SHAPE rather than by header text: the reviews day column is the
+// first column to the right of every store block that holds a 1 and a 2 in
+// consecutive day rows. Nothing else on the tab looks like that, and it cannot
+// be broken by relabelling a header.
+function _mrReviewBase(values, bases, firstRow, lastCol, width) {
+  var after = 0;
+  Object.keys(bases).forEach(function (c) { after = Math.max(after, bases[c] + width); });
+  for (var c = after; c < lastCol; c++) {
+    var rows = _mrDayRows(values, c, firstRow);
+    if (rows[1] !== undefined && rows[2] !== undefined) return c;
+  }
+  return -1;
+}
+
 // The 1-based row of the last day in a tab's grid — the anchor everything below
 // it is measured from.
 function _mrLastDayRow(sheet, width, firstRow) {
@@ -446,6 +479,13 @@ function _mrBuildTab(ss, src, targetYm, opts) {
                          + (p.note ? ' (' + p.note + ')' : ''));
       });
     rep.plan = { dayRows: srcCount + ' -> ' + wantCount, sundays: tgtSun.join(',') };
+    if (opts.family === 'buy') {
+      var dryRev = _mrReviewBase(srcValues, bases, firstRow, srcLastCol, width);
+      rep.reviews = dryRev < 0
+        ? { col: null, note: 'no day column found to the right of the store blocks' }
+        : { col: _mrColLetter(dryRev), days: wantCount,
+            width: Math.min(dryRev + MR_REVIEW_WIDTH, srcLastCol) - dryRev };
+    }
     return rep;
   }
   if (ss.getSheetByName(name)) { rep.warn.push('"' + name + '" already exists — SKIPPED'); return rep; }
@@ -518,6 +558,40 @@ function _mrBuildTab(ss, src, targetYm, opts) {
     }
     tab.getRange(start + 1, base + 1, wantCount, w).setValues(grid);
   });
+
+  // ---- the reviews mini-table, same treatment ----
+  // Its day column gets renumbered and last month's counts get cleared, for the
+  // same reasons the store blocks do. Kept separate rather than folded into
+  // tgtBases because it is a different WIDTH and holds no weekly column, and
+  // because a wrong guess here would write over five stores' buying data.
+  if (opts.family === 'buy') {
+    var revBase = _mrReviewBase(values, tgtBases, firstRow, lastCol, width);
+    if (revBase < 0) {
+      rep.warn.push('reviews: no day column found to the right of the store blocks — block left alone');
+    } else {
+      var revRows = _mrDayRows(values, revBase, firstRow);
+      var revStart = revRows[1];
+      var revEnd = Math.min(revBase + MR_REVIEW_WIDTH, lastCol);
+      var revGrid = [];
+      for (var rd = 1; rd <= wantCount; rd++) {
+        var rr = revStart + (rd - 1);
+        var rrow = [rd];                                  // the day number, renumbered
+        for (var rc = revBase + 1; rc < revEnd; rc++) {
+          var rf = (formulas[rr] || [])[rc];
+          // Same rule as a store block: a formula goes back verbatim to the cell
+          // it already occupies, a typed value is last month's count and goes.
+          rrow.push(rf && !_mrIsBareNumberFormula(rf) ? rf : '');
+          if (!rf || _mrIsBareNumberFormula(rf)) {
+            var rv = (values[rr] || [])[rc];
+            if (rv !== '' && rv !== null && rv !== undefined) rep.cleared++;
+          }
+        }
+        revGrid.push(rrow);
+      }
+      tab.getRange(revStart + 1, revBase + 1, wantCount, revEnd - revBase).setValues(revGrid);
+      rep.reviews = { col: _mrColLetter(revBase), days: wantCount, width: revEnd - revBase };
+    }
+  }
 
   // ---- the week-ending column, onto the new month's weeks ----
   // Authored, not copied: where a week ends is a fact about the calendar, and
@@ -915,6 +989,12 @@ function _mrReport(r) {
     }
     Logger.log('  rows   : +' + rep.rowsInserted + ' / -' + rep.rowsDeleted);
     Logger.log('  cleared: ' + rep.cleared + ' typed cells');
+    if (rep.reviews) {
+      Logger.log('  reviews: ' + (rep.reviews.col
+        ? rep.reviews.col + ' renumbered 1-' + rep.reviews.days
+          + ', ' + rep.reviews.width + ' cols cleared'
+        : 'NOT FOUND — ' + rep.reviews.note));
+    }
     if (rep.retarget) Logger.log('  lastmo : ' + rep.retarget.cells + ' refs  '
       + rep.retarget.from + ' -> ' + rep.retarget.to
       + '   rows below r' + rep.retarget.anchor + ' shift ' + (rep.retarget.shift > 0 ? '+' : '') + rep.retarget.shift);
