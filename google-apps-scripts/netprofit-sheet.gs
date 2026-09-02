@@ -83,6 +83,21 @@ var NP_BLOCKED_AS_NA = true;          // see the header warning before changing
 // Only the newest day — the one nobody has shipped yet — sits empty until 2pm.
 var NP_SKIP_SHIP = false;
 
+// ⚠️ THE TAB HOLDS COMPLETED DAYS ONLY. TODAY IS NOT A COMPLETED DAY.
+//
+// npsDailyRefresh sets NP_TO to TODAY, so both passes used to write a partial
+// current day — whatever had rung up by 8am, then again by 2pm. Ethan asked for
+// the opposite and he is right, for a reason bigger than tidiness: Days Thru is
+// DERIVED from the last day carrying Sales, so a part-day in the grid counts as
+// a whole one in every divisor on the tab. Two full days plus an hour of the
+// third projected the month over THREE days. Every tracking column, the % of NP
+// Goal and the YoY "Current" figure all read low, all day, every day, and
+// nothing about the number said so.
+//
+// The clamp is here rather than in the schedule so it holds for a hand run too,
+// and so the first of the month needs no special case: on Oct 1 every row is
+// >= today, nothing is written, and the close has already dealt with September.
+//
 // ⚠️ A DAY THAT HAS NOT HAPPENED YET HOLDS NOTHING, AND ZERO IS NOT NOTHING.
 //
 // npWriteApply reads NP_FROM/NP_TO from this file, and those are the whole
@@ -100,7 +115,7 @@ var NP_SKIP_SHIP = false;
 // touched.
 var NP_TZ = 'America/Chicago';
 var NP_OFF_NPTRACK_MAX = 14;   // NP Tracking, the rightmost column this file writes
-var NP_CLEAR_FUTURE = true;
+var NP_CLEAR_FUTURE = true;   // clear any row dated today or later that holds data
 
 function npProbe()        { _npProbe(); }
 function npTtlRowProbe()  { _npTtlRowProbe(); }
@@ -245,7 +260,9 @@ function _npWrite(preview) {
     for (var d = 0; d < data.days.length; d++) {
       var rec = data.days[d];
       var dayNum = parseInt(String(rec.day).slice(8, 10), 10);
-      if (String(rec.day) > todayYmd) { future.push(dayNum); continue; }
+      // >= not > : today is in progress, and half a day in the grid is counted
+      // as a whole one by Days Thru.
+      if (String(rec.day) >= todayYmd) { future.push(dayNum); continue; }
       var r = _npFindDayRow(values, base, dayNum);
       if (r < 0) { missing.push(dayNum); continue; }
 
@@ -288,16 +305,17 @@ function _npWrite(preview) {
     }
     if (missing.length) Logger.log('  !! no row found for day(s): %s', missing.join(', '));
     if (future.length) {
-      Logger.log('  %s day(s) not written because they have not happened yet (%s onward; today is %s)',
-        future.length, future[0], todayYmd);
+      Logger.log('  %s day(s) not written — not complete yet (%s onward; today is %s, '
+        + 'and today is never written)', future.length, future[0], todayYmd);
     }
     // Runs whether or not there is anything to write, because the damage it
     // repairs is exactly a run that wrote days it should not have.
     var wiped = NP_CLEAR_FUTURE
-      ? _npClearFuture(sh, values, formulas, base, gridYm, todayYmd, preview) : 0;
+      ? _npClearIncomplete(sh, values, formulas, base, gridYm, todayYmd, preview) : 0;
     if (wiped) {
-      Logger.log('  %s future-day cell(s) %s — a day that has not happened must be BLANK, '
-        + 'not zero: zero makes every tracking and margin formula compute off it.',
+      Logger.log('  %s incomplete-day cell(s) %s — a day that is not finished must be '
+        + 'BLANK, not part-written: a partial day counts as a whole one in Days Thru '
+        + 'and pulls every projection on the tab down with it.',
         wiped, preview ? 'WOULD BE cleared' : 'cleared');
     }
     if (placeholders) {
@@ -393,13 +411,17 @@ function _npWrite(preview) {
   if (preview) Logger.log('\nPREVIEW ONLY — nothing was written. Run npWriteApply to commit.');
 }
 
-// Clear the five written columns on any day row dated after today.
+// Clear the five written columns on any day row dated TODAY OR LATER.
+//
+// Today is included on purpose: it is not a completed day, and this is what
+// removes the part-day an earlier version of this file wrote before the clamp
+// existed. It also handles the ordinary case of a month rolling over.
 //
 // ⚠️ ONLY PLAIN VALUES, NEVER A FORMULA. A formula is the workbook's lock idiom
 // or somebody's work, and neither becomes ours to delete just because the date
-// is in the future. Our own =NA() placeholder is cleared, because it means
-// "blocked, not known" and a day that has not happened is neither.
-function _npClearFuture(sh, values, formulas, base, gridYm, todayYmd, preview) {
+// has not passed. Our own =NA() placeholder IS cleared, because it means
+// "blocked, not known" and an unfinished day is neither.
+function _npClearIncomplete(sh, values, formulas, base, gridYm, todayYmd, preview) {
   var offs = [NP_OFF_SALES, NP_OFF_COST, NP_OFF_EBAYFEE, NP_OFF_SHIP, NP_OFF_CCFEE];
   var n = 0;
   for (var r = NP_HEADER_ROWS; r < values.length; r++) {
@@ -408,7 +430,8 @@ function _npClearFuture(sh, values, formulas, base, gridYm, todayYmd, preview) {
     if (!dn) continue;
     // The row's real date, built from the month the GRID holds — not from today,
     // which in the small hours of the 1st is a different month entirely.
-    if (gridYm + '-' + ('0' + dn).slice(-2) <= todayYmd) continue;
+    // < not <= : today's own row is cleared, because today is not finished.
+    if (gridYm + '-' + ('0' + dn).slice(-2) < todayYmd) continue;
     for (var i = 0; i < offs.length; i++) {
       var c = base + offs[i];
       var f = String(formulas[r][c]).trim();

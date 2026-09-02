@@ -151,7 +151,9 @@ console.log('== Skipping leaves yesterday empty, NOT the whole month ==');
 }
 
 // ---------------------------------------------------------------------------
-// A DAY THAT HAS NOT HAPPENED YET.
+// THE TAB HOLDS COMPLETED DAYS ONLY, AND TODAY IS NOT ONE.
+//
+// Two faults, one rule.
 //
 // npWriteApply reads NP_FROM/NP_TO out of the file, and those are the whole
 // month — so a hand-run on the 2nd asked for all 30 days, got legitimate zeros
@@ -159,6 +161,17 @@ console.log('== Skipping leaves yesterday empty, NOT the whole month ==');
 // spreadsheet: Gross Margin became 0/0, Rev Tracking projected off a divisor
 // counting 30 days instead of 1, and the tab filled with #DIV/0! and a
 // descending ladder of numbers that all looked like real figures.
+//
+// And npsDailyRefresh sets NP_TO to TODAY, so both passes wrote a PART day —
+// whatever had rung up by 8am, then again by 2pm. That is subtler and was there
+// from the start: Days Thru is DERIVED from the last day carrying Sales, so an
+// hour of trading counts as a whole day in every divisor on the tab. Two full
+// days plus one hour projected the month over THREE days, and every tracking
+// column, the % of NP Goal and the YoY "Current" figure read low all day, with
+// nothing about the number saying so.
+//
+// So the boundary is TODAY, not tomorrow: today's row is never written, and is
+// cleared if something already wrote it.
 const constOf = name => {
     const m = src.match(new RegExp('var ' + name + '\\s*=\\s*([^;]*);'));
     if (!m) throw new Error('constant not found: ' + name);
@@ -168,7 +181,7 @@ global.NP_HEADER_ROWS = eval(constOf('NP_HEADER_ROWS'));
 ['NP_OFF_SALES', 'NP_OFF_COST', 'NP_OFF_EBAYFEE', 'NP_OFF_SHIP', 'NP_OFF_CCFEE']
     .forEach(n => { global[n] = eval(constOf(n)); });
 eval(grab('_npIsOurPlaceholder'));
-eval(grab('_npClearFuture'));
+eval(grab('_npClearIncomplete'));
 
 // A tab: 4 header rows, then 30 day rows, then TTL. Values and formulas are
 // separate grids, as getValues()/getFormulas() return them.
@@ -200,24 +213,25 @@ console.log('== The zeros a whole-month run wrote are cleared ==');
         for (let d = 2; d <= 30; d++) OFFS.forEach(o => { v[4 + (d - 1)][o] = 0; });
     });
     const sh = clearSheet();
-    const n = _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-09-02', false);
-    ok(n === 28 * 5, 'days 3-30 x 5 columns cleared — day 2 is today and stays', String(n));
-    ok(!sh.cleared.some(k => k.startsWith('5,')), 'day 1 — which happened — is untouched');
-    ok(!sh.cleared.some(k => k.startsWith('6,')), 'and so is day 2, which is today');
-    ok(sh.cleared.includes('7,' + (NP_OFF_SALES + 1)), 'day 3 onward is cleared', sh.cleared[0]);
+    const n = _npClearIncomplete(sh, vals, fmls, 0, '2026-09', '2026-09-02', false);
+    ok(n === 29 * 5, 'days 2-30 x 5 columns cleared', String(n));
+    ok(!sh.cleared.some(k => k.startsWith('5,')), 'day 1 — complete — is untouched');
+    ok(sh.cleared.includes('6,' + (NP_OFF_SALES + 1)),
+       'day 2 IS cleared, because it is today and today is still running', sh.cleared[0]);
+    ok(sh.cleared.includes('7,' + (NP_OFF_SALES + 1)), 'and every day after it');
     ok(!sh.cleared.some(k => k.startsWith('35,')), 'the TTL row is never touched');
 }
 
-console.log('== Today itself is not a future day ==');
+console.log('== Today is the boundary, and it falls on the cleared side ==');
 {
     const { vals, fmls } = futureTab(v => {
         for (let d = 1; d <= 30; d++) OFFS.forEach(o => { v[4 + (d - 1)][o] = 5; });
     });
     const sh = clearSheet();
-    _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-09-15', false);
-    ok(!sh.cleared.some(k => Number(k.split(',')[0]) <= 4 + 15), 'days 1-15 all survive');
-    ok(sh.cleared.some(k => k.startsWith('20,')), 'day 16 is cleared', String(sh.cleared.length));
-    ok(sh.cleared.length === 15 * 5, '15 days x 5 columns', String(sh.cleared.length));
+    _npClearIncomplete(sh, vals, fmls, 0, '2026-09', '2026-09-15', false);
+    ok(!sh.cleared.some(k => Number(k.split(',')[0]) <= 4 + 14), 'days 1-14 — complete — all survive');
+    ok(sh.cleared.some(k => k.startsWith('19,')), 'day 15, today, is cleared', String(sh.cleared.length));
+    ok(sh.cleared.length === 16 * 5, 'days 15-30, x 5 columns', String(sh.cleared.length));
 }
 
 console.log('== The month comes from the GRID, not from the clock ==');
@@ -229,7 +243,7 @@ console.log('== The month comes from the GRID, not from the clock ==');
         for (let d = 1; d <= 30; d++) OFFS.forEach(o => { v[4 + (d - 1)][o] = 99; });
     });
     const sh = clearSheet();
-    const n = _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-10-01', false);
+    const n = _npClearIncomplete(sh, vals, fmls, 0, '2026-09', '2026-10-01', false);
     ok(n === 0, 'closing September on Oct 1 clears nothing', String(n));
 }
 
@@ -242,7 +256,7 @@ console.log('== A formula is never deleted, whatever the date ==');
         f[4 + 11][NP_OFF_SHIP] = '=NA()';            // day 12: ours, and clearable
     });
     const sh = clearSheet();
-    _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-09-02', false);
+    _npClearIncomplete(sh, vals, fmls, 0, '2026-09', '2026-09-02', false);
     ok(!sh.cleared.includes('14,' + (NP_OFF_SALES + 1)), 'a bare-number lock survives');
     ok(!sh.cleared.includes('15,' + (NP_OFF_COST + 1)), 'a live formula survives');
     ok(sh.cleared.includes('16,' + (NP_OFF_SHIP + 1)),
@@ -253,7 +267,7 @@ console.log('== Nothing to do is nothing done ==');
 {
     const { vals, fmls } = futureTab();            // every future day already blank
     const sh = clearSheet();
-    const n = _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-09-02', false);
+    const n = _npClearIncomplete(sh, vals, fmls, 0, '2026-09', '2026-09-02', false);
     ok(n === 0 && sh.cleared.length === 0, 'a clean tab is not written to at all');
 }
 
@@ -263,9 +277,25 @@ console.log('== Preview counts without clearing ==');
         for (let d = 2; d <= 30; d++) OFFS.forEach(o => { v[4 + (d - 1)][o] = 0; });
     });
     const sh = clearSheet();
-    const n = _npClearFuture(sh, vals, fmls, 0, '2026-09', '2026-09-02', true);
-    ok(n === 28 * 5, 'it reports what it would clear', String(n));
+    const n = _npClearIncomplete(sh, vals, fmls, 0, '2026-09', '2026-09-02', true);
+    ok(n === 29 * 5, 'it reports what it would clear', String(n));
     ok(sh.cleared.length === 0, 'and clears nothing');
+}
+
+console.log('== And the WRITE side agrees with the clear side ==');
+{
+    // The two have to move together or they fight: the writer would put today's
+    // part-day in and the cleaner would take it straight back out, and whichever
+    // ran last would win. Asserted in the source because the clamp lives inside
+    // _npWrite, which needs a whole spreadsheet to call.
+    //
+    // ⚠️ ">" HERE INSTEAD OF ">=" IS THE WHOLE BUG. It reads as "skip the
+    // future", which sounds right and leaves today being written on every run.
+    const m = src.match(/if \(String\(rec\.day\) (>=?) todayYmd\)/);
+    ok(!!m, 'the writer clamps against today at all', m && m[0]);
+    ok(m && m[1] === '>=', 'and with >=, so TODAY is skipped, not just tomorrow', m && m[0]);
+    const c = src.match(/slice\(-2\) (<=?) todayYmd\) continue;/);
+    ok(!!c && c[1] === '<', 'and the cleaner keeps only days STRICTLY before today', c && c[0]);
 }
 
 console.log(fails ? '\n' + fails + ' FAILED' : '\nall pass');
