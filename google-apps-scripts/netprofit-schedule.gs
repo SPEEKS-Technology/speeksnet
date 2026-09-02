@@ -40,6 +40,31 @@
 // ============================================================================
 
 var NPS_TZ = 'America/Chicago';
+// ⚠️ TWO REFRESHES A DAY, AND THE DIFFERENCE IS SHIPPING.
+//
+// Everything on this sheet except shipping cost is known as soon as the day's
+// orders settle. Shipping is not: PayMore buys the previous day's labels through
+// the morning, so a figure read at 8am is partial and only settles by early
+// afternoon. Running once at 2pm made every other column wait for the one that
+// could not be hurried, and the whole month read a day stale until mid-afternoon
+// — which is no use to somebody looking at it over coffee.
+//
+// So the same refresh runs twice. The morning pass fills Sales, Cost, eBay Fee
+// and Credit Card Fee for the whole month to date and takes whatever shipping
+// exists so far; the 2pm pass rewrites the lot once the labels are done.
+//
+// ⚠️ WHY THE MORNING PASS STILL WRITES SHIPPING, rather than leaving it for 2pm.
+// The tab's NP formula SUBTRACTS the shipping cell, and a blank cell is
+// arithmetic zero — so "leave shipping alone until 2pm" would overstate Net
+// Profit by the entire day's shipping, which is a bigger error than writing the
+// partial figure. Partial shipping is strictly closer to the truth than none,
+// and 2pm corrects it. Read NP_BLOCKED_AS_NA in netprofit-sheet.gs before
+// changing this.
+//
+// ⚠️ THE MORNING NUMBER IS ROUGH BY DESIGN AND ONLY FOR THE MOST RECENT DAY.
+// Every earlier day in the month already has final shipping, so only yesterday's
+// row moves at 2pm — and it moves DOWN, because shipping only ever gets added.
+var NPS_MORNING_HOUR = 8;  // 8am — everything, with shipping as far as it is known
 var NPS_DAILY_HOUR = 14;   // 2pm — Apps Script fires within the hour, never before
 var NPS_CLOSE_HOUR = 19;   // 7pm
 var NPS_LAST_CLOSED_KEY = 'NPS_LAST_CLOSED_MONTH';
@@ -109,7 +134,13 @@ function npsDailyRefresh() {
   var ym = today.slice(0, 7);
   NP_FROM = ym + '-01';
   NP_TO = today;
-  Logger.log('=== DAILY REFRESH %s — month to date %s .. %s ===', today, NP_FROM, NP_TO);
+  // Which pass this is, so a log or a failure email says whether the shipping
+  // in it was final. The hour is read from the clock rather than passed in,
+  // because a time-based trigger cannot pass an argument.
+  var hour = Number(Utilities.formatDate(new Date(), NPS_TZ, 'H'));
+  var pass = hour < NPS_DAILY_HOUR ? 'MORNING (shipping still arriving)' : '2PM (shipping final)';
+  Logger.log('=== DAILY REFRESH %s [%s] — month to date %s .. %s ===',
+    today, pass, NP_FROM, NP_TO);
 
   // ⚠️ EVERY FAILURE PATH IN THIS FILE LOGS A LINE AND RETURNS, AND NOBODY
   // READS APPS SCRIPT LOGS. Wrapped so a throw reaches a person instead of a
@@ -117,11 +148,11 @@ function npsDailyRefresh() {
   // indistinguishable from one that never ran.
   try {
     // A new month has no tab until something makes one. Left manual, the first
-    // 2pm run of every month would find nothing, log "no tab" and write
+    // run of every month would find nothing, log "no tab" and write
     // nothing — and keep doing that, quietly, until somebody noticed the month
     // was empty. Rolling here happens when it is needed and cannot fire early.
     if (!_npsEnsureTab(ym)) {
-      _npaSendFailure('The 2pm daily refresh',
+      _npaSendFailure('The ' + pass.split(' ')[0].toLowerCase() + ' Net Profit refresh',
         'No tab "' + _npTabName(ym) + '", and no previous month to roll forward from.',
         'You — run npRollStatus to see what tabs exist, then npRollApply, or create '
           + 'the month by hand. Nothing is being recorded for ' + ym + ' until it exists.');
@@ -137,13 +168,13 @@ function npsDailyRefresh() {
     // carrying Sales, so running it before the grid is written would measure
     // yesterday's sheet and leave every Tracking figure a day behind.
     _npxSync(false);
-    _npaReport(before, ym, '2pm daily refresh');
+    _npaReport(before, ym, pass.split(' ')[0].toLowerCase() + ' daily refresh');
 
     Logger.log('Daily refresh done. The current month stays open; it closes at 7pm on %s.',
       _npsMonthCloseDay(ym).date);
   } catch (e) {
-    _npaSendFailure('The 2pm daily refresh', String(e && e.stack ? e.stack : e),
-      'Claude — send this email on. The next 2pm run rewrites the whole month to '
+    _npaSendFailure('The ' + pass.split(' ')[0].toLowerCase() + ' Net Profit refresh', String(e && e.stack ? e.stack : e),
+      'Claude — send this email on. The next run rewrites the whole month to '
         + 'date, so one missed run usually repairs itself; two in a row does not.');
     throw e;   // still fail loudly in the execution log
   }
@@ -292,12 +323,18 @@ function _npsAskCollectorCloseDay(ym) {
 
 function npsInstallTriggers() {
   npsRemoveTriggers();
+  // Two triggers on ONE function. The morning and afternoon passes do exactly
+  // the same work — the only thing that differs is how much of yesterday's
+  // shipping exists by then — so making them two functions would be two things
+  // to keep in step for no gain.
+  ScriptApp.newTrigger('npsDailyRefresh').timeBased()
+    .atHour(NPS_MORNING_HOUR).everyDays(1).inTimezone(NPS_TZ).create();
   ScriptApp.newTrigger('npsDailyRefresh').timeBased()
     .atHour(NPS_DAILY_HOUR).everyDays(1).inTimezone(NPS_TZ).create();
   ScriptApp.newTrigger('npsMonthClose').timeBased()
     .atHour(NPS_CLOSE_HOUR).everyDays(1).inTimezone(NPS_TZ).create();
-  Logger.log('Installed: npsDailyRefresh at %s:00 %s, npsMonthClose at %s:00 %s.',
-    NPS_DAILY_HOUR, NPS_TZ, NPS_CLOSE_HOUR, NPS_TZ);
+  Logger.log('Installed: npsDailyRefresh at %s:00 AND %s:00 %s, npsMonthClose at %s:00 %s.',
+    NPS_MORNING_HOUR, NPS_DAILY_HOUR, NPS_TZ, NPS_CLOSE_HOUR, NPS_TZ);
   Logger.log('⚠️ Apps Script fires within the hour, never before it — so the close '
     + 'runs between 7pm and 8pm Central, which is the safe direction.');
   npsStatus();
@@ -322,6 +359,17 @@ function npsStatus() {
   }
   Logger.log('Today (Central): %s', today);
   Logger.log('Triggers armed: %s', armed.length ? armed.join(', ') : 'NONE — run npsInstallTriggers');
+  // ⚠️ TWO npsDailyRefresh ENTRIES IS CORRECT, and a status line that did not
+  // say so would read as a duplicate somebody should go and delete. Apps Script
+  // does not report a trigger's hour, so the count is the only evidence the
+  // morning pass is armed at all.
+  var refreshes = 0;
+  for (var j = 0; j < armed.length; j++) if (armed[j] === 'npsDailyRefresh') refreshes++;
+  Logger.log('Daily refreshes armed: %s — expected 2 (%s:00 and %s:00 %s). %s',
+    refreshes, NPS_MORNING_HOUR, NPS_DAILY_HOUR, NPS_TZ,
+    refreshes === 2 ? 'OK'
+      : refreshes < 2 ? '!! re-run npsInstallTriggers — the morning pass is missing'
+                      : '!! more than two — run npsInstallTriggers to reset them');
   Logger.log('Last closed month: %s',
     PropertiesService.getScriptProperties().getProperty(NPS_LAST_CLOSED_KEY) || '(none yet)');
   Logger.log('--- next twelve closes ---');
