@@ -89,6 +89,9 @@ const js = stripReturnTypes(block)
     // parameter and variable annotations
     .replace(/(\w+)\s*:\s*\{[^{}]*\}\[\]/g, '$1')
     .replace(/(\w+)\s*:\s*Record<[^>]*>/g, '$1')
+    // A Record parameter may be optional: `specs: Record<string,string> | undefined`.
+    // The rule above leaves the union behind, and only type positions use it here.
+    .replace(/\s*\|\s*undefined\b/g, '')
     .replace(/(\w+)\s*:\s*(string|number|boolean|unknown|any)(\[\])?(\s*\|\s*null)?/g, '$1')
     .replace(/(\w+)\s*:\s*(RegExpExecArray|EchoPlan|Echo|SpecField)(\[\])?(\s*\|\s*null)?/g, '$1')
     .replace(/new (Map|Set)<[^>]*>\(/g, 'new $1(')

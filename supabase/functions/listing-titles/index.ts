@@ -1980,6 +1980,9 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // title with neither a product word nor a model is genuinely unreachable.
     // Grading these the same put 156 rows in Hard To Find, most of which were
     // findable, and that is what makes a tier stop being read.
+    // Only ever read when we HAVE a word and it will not fit; computing it
+    // there and then would bury the message in a nested conditional.
+    const cuttable = noun ? alsoInSpecs(original, extra?.specs) : [];
     const findableAnyway = !!(extra?.specs?.["Model"] || extra?.specs?.["MPN"])
       && tokens(original).some(t => /\d/.test(t) && t.length >= 3);
     // ⚠️ THE 90% RULE APPLIES HERE TOO. Ethan, 2026-08-28: "if we believe the
@@ -2017,7 +2020,15 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
         // TRUNCATE TO MAKE ROOM (see tryAppend) — hand the reviewer the word and
         // let them choose what comes out.
         : noun
-          ? `The title never says what the item IS. This listing is filed under "${shelfSaid}", so "${noun}" is the missing word — but the title is already ${original.length} of ${EBAY_TITLE_MAX} characters, so something has to come out before it will fit. Shorten it and add those words.`
+          ? `The title never says what the item IS. This listing is filed under "${shelfSaid}", so "${noun}" is the missing word — but the title is already ${original.length} of ${EBAY_TITLE_MAX} characters, so something has to come out before it will fit.`
+            // ⚠️ NAME WHAT IS SAFE TO LOSE, DECIDE NOTHING. Ethan chose this over
+            // the tool computing the swap itself: every value here is stated in
+            // the spec table, so the title is the only place it would disappear
+            // from — which is the fact a reviewer would otherwise go and check by
+            // hand before cutting anything. See alsoInSpecs.
+            + (cuttable.length
+                ? ` The spec table already states ${cuttable.join(", ")}, so cutting ${cuttable.length === 1 ? "that" : "any of those"} from the title takes nothing out of the listing.`
+                : "")
           : "The title never says what the item IS. Most buyers type the kind of thing they want, so the words they use never match this listing.")
         + (findableAnyway ? " It can still be found by its model number, so this is an improvement rather than a rescue." : ""),
       severity: findableAnyway ? 1 : 2, fixable: applied,
@@ -3173,6 +3184,51 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // digit, so "SATA" never matches inside "eSATA" and "8GB" never inside "128GB".
 const runRe = (was: string) =>
   new RegExp(`(?<![A-Za-z0-9])${escapeRe(was)}(?![A-Za-z0-9])`, "gi");
+
+// ============ WHICH WORDS THE TITLE IS *NOT* THE ONLY PLACE FOR ==============
+// Ethan, on a CPU/motherboard combo with no room for the words that name it:
+// *"can you not safely give a recommendation on what can be subbed out — clock
+// speed might not be as important as CPU Motherboard combo right?"*
+//
+// Right about the ranking, and the tool already holds it: `TITLE_SPECS` is the
+// measured list of what earns title space, and Processor Speed is not on it.
+// ⚠️ BUT ABSENCE FROM `TITLE_SPECS` MEANS "NOBODY MEASURED THAT FIELD", NOT
+// "WORTHLESS". That list was built against phones, laptops and cameras; "LGA
+// 1700 motherboard" is a real search. Deleting everything not on it would cut
+// the socket to buy room — a worse title wearing a fix's clothes. And on the row
+// that raised the question the trade does not even work: the gap is 22
+// characters and the clock speed is 8.
+//
+// So this NAMES CANDIDATES AND EDITS NOTHING. The reviewer has to decide what
+// comes out; the one thing they would otherwise go and check by hand is which of
+// these words the LISTING still says on its own, and that is exactly what this
+// answers. Cutting one of these loses it from the title only.
+//
+// ⚠️ AN ALLOW-LIST, NOT A DENY-LIST — the same one-directional safety as the
+// noun gate. A field missing from here means we name one fewer candidate; a
+// deny-list with a gap would name the BRAND. ("Motherboard Brand" and "CPU
+// Model" do not appear in TITLE_SPECS verbatim, so "not in TITLE_SPECS" would
+// have offered up "Gigabyte" and "Core I5-13600KF" as things to cut.)
+const SECONDARY_SPEC =
+  /^((processor|clock|memory|bus|write|read)\s+)?speed$|^socket$|^chipset$|^form\s+factor$|^cores?$|^thread\s+count$|^cache$|^interface$|^voltage$|^rpm$|^memory\s+(type|slots?)$|^expansion|^bus$/i;
+
+// Values the spec table states AND the title repeats, limited to the fields
+// above. Uses `runRe` so the boundary rule is the one the rest of the tool uses
+// — "ATX" must not match inside "microATX", and "8GB" not inside "128GB".
+function alsoInSpecs(title: string, specs: Record<string, string> | undefined): string[] {
+  if (!specs) return [];
+  const out: string[] = [];
+  for (const [k, raw] of Object.entries(specs)) {
+    if (!SECONDARY_SPEC.test(String(k).trim())) continue;
+    const v = String(raw || "").trim();
+    // Long values are I/O port lists and the like — never a word somebody would
+    // trim by hand, and they are not in the title anyway.
+    if (!v || PLACEHOLDER.test(v) || v.length < 3 || v.length > 24) continue;
+    if (!runRe(v).test(title)) continue;
+    if (!out.includes(v)) out.push(v);
+  }
+  return out.slice(0, 4);
+}
 
 // Matched case-insensitively, but what goes IN is written exactly as the
 // reviewer approved it. The title is the sentence somebody just checked, and a

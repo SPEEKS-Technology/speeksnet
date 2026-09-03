@@ -48,9 +48,20 @@ const block = [
     between('const tokens = ', '\n\n'),
     between('const PLACEHOLDER = /', '\n\n'),
     between('const PRODUCT_NOUNS = [', '// Measurements and capacities are not'),
+    between('const escapeRe = ', '// ============ WHICH WORDS'),
+    between('const SECONDARY_SPEC =', '\n// Matched case-insensitively'),
 ].join('\n\n');
 
 const js = block
+    // ⚠️ Record<> CONTAINS A COMMA, so it has to go before any rule that splits a
+    // parameter list on one. alsoInSpecs takes Record<string, string> | undefined.
+    .replace(/:\s*Record<[^>]*>(\s*\|\s*undefined)?/g, '')
+    .replace(/\)\s*:\s*string\[\]\s*\{/g, ') {')
+    .replace(/:\s*string\[\]\s*=/g, ' =')
+    // Any single string parameter: (s: string), (t: string), (was: string).
+    .replace(/\(\s*(\w+)\s*:\s*string\s*\)/g, '($1)')
+    .replace(/\(\s*(\w+)\s*:\s*string\s*,/g, '($1,')
+    .replace(/,\s*(\w+)\s*:\s*string\s*\)/g, ', $1)')
     .replace(/\(\s*s\s*:\s*string\s*\)/g, '(s)')
     .replace(/\(\s*t\s*:\s*string\s*\)\s*:\s*\w+\s*=>/g, '(t) =>')
     .replace(/\(\s*t\s*:\s*string\s*\)/g, '(t)')
@@ -61,12 +72,14 @@ const js = block
     .replace(/const (\w+) = \(([^)]*)\)\s*:\s*(string|boolean)(\s*\|\s*null)?\s*=>/g,
              (_m, n, p) => `const ${n} = (${p.replace(/\s*:\s*string/g, '')}) =>`);
 
-let shelfNoun, isProductNoun, depluralise, singularToken, GENERIC_SHELF, PRODUCT_NOUNS;
+let shelfNoun, isProductNoun, depluralise, singularToken, GENERIC_SHELF, PRODUCT_NOUNS,
+    alsoInSpecs, SECONDARY_SPEC;
 try {
-    ({ shelfNoun, isProductNoun, depluralise, singularToken, GENERIC_SHELF, PRODUCT_NOUNS } =
+    ({ shelfNoun, isProductNoun, depluralise, singularToken, GENERIC_SHELF, PRODUCT_NOUNS,
+       alsoInSpecs, SECONDARY_SPEC } =
         new Function(js + `
         return { shelfNoun, isProductNoun, depluralise, singularToken,
-                 GENERIC_SHELF, PRODUCT_NOUNS };`)());
+                 GENERIC_SHELF, PRODUCT_NOUNS, alsoInSpecs, SECONDARY_SPEC };`)());
 } catch (e) {
     console.log('  FAIL  could not lift the code out of index.ts   ' + e.message);
     process.exit(1);
@@ -236,6 +249,66 @@ ok(!/const generic = \/\^\(computer/.test(src),
 // title once dropped the "4050" to buy the space, and shipped as a suggestion.
 ok(/if \(title\.length \+ 1 \+ word\.length > EBAY_TITLE_MAX\) return false;/.test(src),
    'an addition that does not fit is simply not made');
+
+// =============================================================================
+console.log('\n8. WHICH WORDS THE TITLE IS NOT THE ONLY PLACE FOR');
+// The real OVL row, verbatim from ?peek=.
+const COMBO = {
+    'Collection': 'Computer Part', 'Sub-Collection': 'CPU & Motherboard Combos',
+    'Motherboard Brand': 'Gigabyte', 'Motherboard Model': 'B760M Aorus Elite',
+    'CPU Brand': 'Intel', 'CPU Model': 'Core I5-13600KF',
+    'Processor Speed': '3.50GHz', 'CPU MPN': 'SRMBE', 'Cores': '14 Core',
+    'Thread Count': '20 Thread', 'Socket': 'LGA 1700', 'Chipset': 'Intel B760',
+    'Form Factor': 'microATX', 'Memory': '4x DDR5 Slots',
+    'Storage': '2x M.2 NVMe Gen 4.0 x 4 Slot 4x Sata III 6Gbit/s Port',
+    'I/O Ports': '2x 3.5mm Headphone/Microphone Combo Ethernet Port 3x USB-A 3.2 Gen 1 Port',
+    'Condition': 'Good', 'UPC': '889523035023', 'Serial#': 'X310M613 231350052107',
+};
+const COMBO_TITLE = 'Gigabyte B760M Aorus Elite LGA 1700 Intel Core I5-13600KF 3.50GHz microATX';
+const cut = alsoInSpecs(COMBO_TITLE, COMBO);
+ok(cut.join(' | ') === '3.50GHz | LGA 1700 | microATX',
+   'names the clock speed, the socket and the form factor', cut.join(' | '));
+// ⚠️⚠️ THE FAILURE THAT WOULD MATTER. "Motherboard Brand" and "CPU Model" do not
+// appear in TITLE_SPECS verbatim, so a DENY-LIST built on "not in TITLE_SPECS"
+// would have told a reviewer it is safe to cut the brand and the model.
+ok(!cut.includes('Gigabyte'), 'NEVER the brand');
+ok(!cut.includes('B760M Aorus Elite'), 'NEVER the model');
+ok(!cut.includes('Core I5-13600KF'), 'NEVER the processor');
+ok(!cut.includes('Intel'), 'NEVER the CPU brand');
+// Present in the specs, absent from the title — nothing to offer cutting.
+ok(!cut.includes('14 Core') && !cut.includes('Intel B760'),
+   'only words the title actually says');
+// Identifiers and prose are not trim candidates.
+ok(!cut.some(v => /889523035023|X310M613|Good/.test(v)), 'never a serial, UPC or condition');
+// ⚠️ THE BOUNDARY RULE IS THE SHARED ONE. "ATX" must not match inside "microATX",
+// or a reviewer is told to cut a substring of another word.
+ok(alsoInSpecs('Asus X99-A LGA 2011-v3 Intel Core i7-6800K 6 Core 3.40GHz ATX',
+               { 'Processor Speed': '3.40GHz', 'Cores': '6 Core',
+                 'Socket': 'LGA 2011-v3', 'Form Factor': 'ATX' })
+     .join(' | ') === '3.40GHz | 6 Core | LGA 2011-v3 | ATX',
+   'BAL\'s combo, with ATX standing alone');
+ok(alsoInSpecs('Gigabyte B760M microATX', { 'Form Factor': 'ATX' }).length === 0,
+   'ATX inside microATX is not a match');
+ok(alsoInSpecs('Some Title', undefined).length === 0, 'no spec table, nothing to say');
+ok(alsoInSpecs('Some Title 3.50GHz', { 'Processor Speed': 'N/A' }).length === 0,
+   'a placeholder is not a candidate');
+ok(alsoInSpecs(COMBO_TITLE, COMBO).length <= 4, 'the list is capped so the message stays readable');
+// ⚠️ AN ALLOW-LIST, NOT A DENY-LIST — a field we have not thought about costs a
+// candidate, never a wrong one. This is the same one-directional safety as the
+// product-word gate, and it is the whole reason SECONDARY_SPEC is written out.
+ok(SECONDARY_SPEC.test('Processor Speed') && SECONDARY_SPEC.test('Socket')
+   && SECONDARY_SPEC.test('Form Factor') && SECONDARY_SPEC.test('Cores'),
+   'the secondary fields are named explicitly');
+ok(!SECONDARY_SPEC.test('Brand') && !SECONDARY_SPEC.test('Motherboard Model')
+   && !SECONDARY_SPEC.test('Storage') && !SECONDARY_SPEC.test('Screen Size'),
+   'and the fields buyers type are not');
+
+// The message only appears where we know the word AND it will not fit.
+ok(/const cuttable = noun \? alsoInSpecs\(original, extra\?\.specs\) : \[\];/.test(src),
+   'computed only when we have a word');
+ok(analyseBlock.includes('from the title takes nothing out of the listing.')
+   && analyseBlock.includes('The spec table already states'),
+   'and the finding says what it means in English');
 
 console.log('\n' + (fails ? `${fails} FAILED` : 'all passed'));
 process.exit(fails ? 1 : 0);
