@@ -20878,7 +20878,7 @@ function _b2bStagePricing(deal) {
                     title="Group by brand then model, highest value first at both levels"
                     onclick="b2bSortItems(this)">↕ Sort by brand</button>`
                 : '')}
-            ${_b2bIntakeTray(deal)}
+            ${_b2bBenchTray(deal)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
@@ -20892,7 +20892,7 @@ function _b2bStagePricing(deal) {
                 : `<button class="b2b-btn b2b-btn-primary" id="b2bPrSubmit" ${_b2bModalItems.length ? '' : 'disabled'}
                 onclick="b2bSubmitPricing('${deal.id}',this)">Submit For Quoting</button>`}`,
         // Totals as always, plus the first read of the intake tray. It runs here
-        // rather than from _b2bIntakeTray because the markup has to be in the DOM
+        // rather than from _b2bBenchTray because the markup has to be in the DOM
         // before there is anything to repaint into, and a render function has no
         // business firing a fetch. A no-op when the feature is off.
         after: (...a) => { _b2bPaintTotals(...a); _b2bIntakeLoad(deal.id); },
@@ -33914,7 +33914,7 @@ const FEATURE_CATALOG = [
     // own specs into the open deal. `def: []` is the whole point -- it ships off
     // for everyone, including CEO and DM, and is turned on per role or per person
     // in Feature Access once a bench has been through it. The existing manual and
-    // USB routes are unaffected either way; see _b2bIntakeTray in this file.
+    // USB routes are unaffected either way; see _b2bBenchTray in this file.
     { key: 'b2b-live-intake',          label: 'B2B Live Bench Intake',         tab: 'widgets', group: 'Operations', def: [] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,

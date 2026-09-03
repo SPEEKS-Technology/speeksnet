@@ -20125,7 +20125,7 @@ select.dd-native {
    code, and a row per machine that has reported in and is waiting on a person.
    Present only when the 'b2b-live-intake' feature is on for the viewer, so for
    everybody else the pricing sheet is unchanged -- there is no reserved space
-   and no empty container. See _b2bIntakeTray in speeks.js. */
+   and no empty container. See _b2bBenchTray in speeks.js. */
 .b2b-bench {
     margin-bottom: 14px; border-radius: var(--b2b-r-md);
     background: var(--b2b-surface); border: 1px solid var(--b2b-line-2);
