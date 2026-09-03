@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260825u">
+  <link rel="stylesheet" href="styles.css?v=20260903j">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260825u" defer></script>
+  <script src="speeks.js?v=20260903j" defer></script>
 </head>
 <body class="preload">
 
@@ -72,7 +72,9 @@
       <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v3.5.4</span>
+            <!-- Stamped by _stampVersion() from APP_VERSION in speeks.js, which is the
+                 one place the version number lives. Do not hardcode it here. -->
+            <span class="version-tag"></span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -740,6 +742,25 @@
                        own store from the moment it is created, and only corp can
                        move it elsewhere. _b2bCanCreate() is the real gate — this
                        class list only decides what is drawn. -->
+                  <!-- The bench capture tool, as a download. Pairs with the live
+                       intake tray on the pricing sheet: this is what you put on
+                       the USB stick.
+
+                       `role-none` is deliberate and is the whole access model
+                       here. _passesRoleClasses() treats an element with NO role
+                       classes as visible to everyone, so a bare data-feature
+                       would have shipped this to the entire company. No user
+                       holds a role of "none", so nobody passes the role gate and
+                       an explicit per-user override in Feature Access is the only
+                       way in. Currently: Nick Hettinger and Haydn Davis, while
+                       the feature is being tested. -->
+                  <a id="b2bCaptureDlBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-none"
+                     data-feature="b2b-capture-download"
+                     href="downloads/SPEEKS-Capture.zip" download
+                     title="Download the bench capture tool — unzip onto a USB stick, then run RUN-CAPTURE-LIVE.bat on the machine being tested">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                      SPEEKS Capture
+                  </a>
                   <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" onclick="b2bOpenCreate()">＋ New Deal</button>
               </div>
           </div>
