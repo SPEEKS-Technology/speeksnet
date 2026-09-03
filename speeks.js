@@ -46201,7 +46201,7 @@ function _ltAskEchoes(pre) {
           <ul class="lt-ask-fields">${left.map(l => `<li>
             <span class="lt-ask-f">${_ecEsc(l.field)}</span>
             <span>still says &ldquo;${_ecEsc(l.value)}&rdquo;</span>
-            <span class="lt-ask-where">${_ecEsc(l.where || '')}</span>
+            <span class="lt-ask-where">${_ecEsc((Array.isArray(l.where) ? l.where : [l.where || '']).join(' · '))}</span>
           </li>`).join('')}</ul>
         </div>`;
     }

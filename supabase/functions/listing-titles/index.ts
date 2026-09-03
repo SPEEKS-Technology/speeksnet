@@ -3161,7 +3161,7 @@ type EchoPlan = {
   cellHits: number;
   mfUpdates: { id: string; value: string }[];
   echoes: Echo[];
-  stillSays: { field: string; value: string; where: string }[];
+  stillSays: { field: string; value: string; where: string[] }[];
 };
 
 // What the rest of the listing should say once this title lands — and what it
@@ -3193,11 +3193,17 @@ function planEchoes(html: string, mfs: { id: string; key: string; value: string 
   // line, which is the same as not printing it. So a field is only "still
   // saying" it when the new title HAS STOPPED saying it.
   const lost = !!was && !runRe(was).test(nextTitle || "");
+  // ⚠️ EVERY PLACE, NOT THE FIRST ONE. A leftover is grouped by value exactly as
+  // a rewrite is, because it is the same fact in the same several places — the
+  // Canon T2i states its Type in the spec table AND `custom.type` AND
+  // `filter_attributes` AND `title_attributes`, and a line naming only the spec
+  // table understates the work by three fields.
   const left = (field: string, value: string, at: string) => {
     if (!lost) return;
     const v = value.trim();
-    if (plan.stillSays.some(s => s.value.toLowerCase() === v.toLowerCase())) return;
-    plan.stillSays.push({ field, value: v, where: at });
+    const had = plan.stillSays.find(s => s.value.toLowerCase() === v.toLowerCase());
+    if (had) { if (!had.where.includes(at)) had.where.push(at); return; }
+    plan.stillSays.push({ field, value: v, where: [at] });
   };
 
   // The description, back to front so the earlier offsets stay valid — the same
