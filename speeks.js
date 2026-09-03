@@ -45721,7 +45721,10 @@ function _ltDeniedHtml() {
             <div class="lt-dn-title">${_ecEsc(r.current || '')}</div>
             <div class="lt-dn-meta">
               <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
-              <span class="lt-dn-as ${stale ? 'lt-dn-ebay' : ''}">${stale ? 'eBay Is Stale' : 'Not A Problem'}</span>
+              <!-- The same word the button carried when it was clicked. A row
+                   dismissed with "Ours Is Fine" that reappears here as "eBay Is
+                   Stale" reads as a different decision than the one made. -->
+              <span class="lt-dn-as ${stale ? 'lt-dn-ebay' : ''}">${stale ? 'Ours Is Fine' : 'Not A Problem'}</span>
               <span>${_ecEsc(r.by || '')}${r.at ? ' · ' + when(r.at) : ''}</span>
             </div>
             ${r.note ? `<div class="lt-dn-note">${_ecEsc(r.note)}</div>` : ''}
@@ -45907,8 +45910,14 @@ function _ltRow(r) {
                target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
         </div>
         <div class="lt-acts">
+          <!-- ⚠️ A ROW WITH NO SUGGESTION SAYS "Save My Title" BEFORE IT IS
+               TYPED IN, NOT "Approve". There is nothing on that row to approve —
+               the button sat greyed out beside a line reading "No safe automatic
+               fix", carrying the name of an action that could never happen
+               there. Naming the action that CAN happen turns the greyed button
+               into an instruction: type one, and this saves it. -->
           <button class="lt-ok" onclick="ltApprove('${_ecEsc(id)}')"
-                  ${canApprove ? '' : 'disabled'}>${checking ? 'Checking…' : busy ? 'Saving…' : (dirty ? 'Save My Title' : 'Approve')}</button>
+                  ${canApprove ? '' : 'disabled'}>${checking ? 'Checking…' : busy ? 'Saving…' : ((dirty || !r.suggested) ? 'Save My Title' : 'Approve')}</button>
           <button class="lt-no" onclick="ltDeny('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
                   title="${_ecEsc(_ltDenyKind(r).hint)}">${_ltDenyKind(r).label}</button>
         </div>
@@ -45988,9 +45997,18 @@ const _LT_EBAY_CODES = new Set(['title-drift', 'ebay-not-synced']);
 function _ltDenyKind(r) {
     const ebay = (r.findings || []).some(f => _LT_EBAY_CODES.has(f.code));
     return ebay
-        ? { as: 'ebay-stale', label: 'eBay Is Stale',
-            hint: 'The Shopify title here is right — it is the eBay copy that needs correcting. Clears the row without recording this as a bad rule.',
-            ask: 'Confirm the Shopify title here is the right one?\n\nThis records that the EBAY listing is the copy that needs correcting, and clears the row. Nothing is changed on either listing.' }
+        // ⚠️ THE LABEL SAYS WHAT THE REVIEWER IS ANSWERING, NOT WHAT eBAY IS
+        // DOING. "eBay Is Stale" read as a statement about a system this button
+        // cannot touch, next to a greyed-out Approve and a row that says there
+        // is no safe automatic fix — three things at once and no obvious move.
+        // Ethan, 2026-09-03: "change it to something more clear like ours is
+        // fine". The answer being recorded is unchanged (`ebay-stale`, kept out
+        // of the bad-rule tally); only the word on the button is now the
+        // reviewer's own verdict about OUR listing, which is the one thing they
+        // are actually in a position to give.
+        ? { as: 'ebay-stale', label: 'Ours Is Fine',
+            hint: 'Our Shopify title is right as it is — it is the eBay copy that needs correcting, and Marketplace Connect owns that. Clears the row without recording this as a bad rule.',
+            ask: 'Confirm our Shopify title here is the right one?\n\nThis clears the row and records that the EBAY listing is the copy that needs correcting. Nothing is changed on either listing.' }
         : { as: 'not-a-problem', label: 'Deny',
             hint: 'This title is fine as it is — the finding was wrong.',
             ask: 'Why is this title fine as it is?' };

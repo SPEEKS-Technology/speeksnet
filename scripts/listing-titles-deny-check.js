@@ -2,7 +2,7 @@
 // nothing read, and a decision the next cron undid.
 //
 // What this asserts, in the real page:
-//   1. a drift row offers "eBay Is Stale", not "Deny" — that row is not a claim
+//   1. a drift row offers "Ours Is Fine", not "Deny" — that row is not a claim
 //      the title is wrong, and asking "why is this title fine?" on it is the
 //      wrong question about the wrong system
 //   2. an ordinary finding still offers "Deny"
@@ -104,13 +104,22 @@ const DATA = {
         title: (row.querySelector('.lt-cur') || {}).textContent || '',
         deny: (row.querySelector('.lt-no') || {}).textContent || '',
         hint: (row.querySelector('.lt-no') || {}).title || '',
+        okLabel: (row.querySelector('.lt-ok') || {}).textContent || '',
+        okOff: !!(row.querySelector('.lt-ok') || {}).disabled,
     })));
     ok(btns.length === 3, 'three rows rendered', 'got ' + btns.length);
     if (btns.length === 3) {
         ok(btns[0].deny.trim() === 'Deny', 'ordinary finding still says Deny', btns[0].deny.trim());
-        ok(btns[1].deny.trim() === 'eBay Is Stale', 'drift row says eBay Is Stale', btns[1].deny.trim());
-        ok(btns[2].deny.trim() === 'eBay Is Stale', 'not-synced row says eBay Is Stale', btns[2].deny.trim());
+        ok(btns[1].deny.trim() === 'Ours Is Fine', 'drift row says Ours Is Fine', btns[1].deny.trim());
+        ok(btns[2].deny.trim() === 'Ours Is Fine', 'not-synced row says Ours Is Fine', btns[2].deny.trim());
         ok(/eBay copy that needs correcting/i.test(btns[1].hint), 'drift hint names the right system');
+        // A row with a suggestion offers to approve it; a row without one offers
+        // the only thing it can, and says so while it is still greyed out.
+        ok(btns[0].okLabel.trim() === 'Approve' && !btns[0].okOff,
+           'a row with a suggestion offers Approve', btns[0].okLabel.trim());
+        ok(btns[1].okLabel.trim() === 'Save My Title' && btns[1].okOff,
+           'a row with no safe fix says Save My Title, greyed until one is typed',
+           btns[1].okLabel.trim());
     }
 
     console.log('== And sends the right answer ==');
@@ -155,7 +164,7 @@ const DATA = {
         ok(/2 Dismissed/.test(drawer.summary), 'summary counts them', drawer.summary);
         ok(drawer.rows.length === 2, 'both dismissals listed');
         ok(drawer.rows[0].as.trim() === 'Not A Problem', 'first is labelled Not A Problem', drawer.rows[0].as.trim());
-        ok(drawer.rows[1].as.trim() === 'eBay Is Stale', 'second is labelled eBay Is Stale', drawer.rows[1].as.trim());
+        ok(drawer.rows[1].as.trim() === 'Ours Is Fine', 'second is labelled Ours Is Fine', drawer.rows[1].as.trim());
         ok(/really does repeat/.test(drawer.rows[0].note), 'the note is finally shown', drawer.rows[0].note.slice(0, 40));
         ok(/Ethan Kushnir/.test(drawer.rows[0].meta), 'who dismissed it', drawer.rows[0].meta);
         ok(drawer.rows.every(r => r.undo), 'every row can be undone');
