@@ -148,9 +148,9 @@ const MF = [
     { id: 'gid://x/7', key: 'lens_type', value: 'Auto & Manual Lens' },
 ];
 
-const plan = (from, to, html = DESC, mfs = MF) => {
+const plan = (from, to, html = DESC, mfs = MF, correcting = false) => {
     const run = titleRun(from, to);
-    return { run, ...planEchoes(html, mfs.map(m => ({ ...m })), run.was, run.now, to) };
+    return { run, ...planEchoes(html, mfs.map(m => ({ ...m })), run.was, run.now, to, correcting) };
 };
 
 console.log('\nA whole value, in every place it is written down');
@@ -243,8 +243,12 @@ console.log('\nA de-duplication leaves nothing behind');
        JSON.stringify(p.stillSays));
 }
 
-console.log('\nA real deletion writes nothing and says what still states it');
+console.log('\nA deletion that is only a TRIM writes nothing and says what still states it');
 {
+    // Not a correction: the words were surplus in a title, and the field that
+    // holds them is right. Cutting them there deletes real information to make a
+    // title fit — "Factory Unlocked" off an 80-character title must not vanish
+    // out of the Network field.
     const html = `<table><tr><td>Display Type</td><td>IPS with LED</td></tr></table>`;
     const p = plan('Dell 24" E2414HT IPS with LED TN Business Monitor',
                    'Dell 24" E2414HT LED TN Business Monitor', html, []);
@@ -252,6 +256,51 @@ console.log('\nA real deletion writes nothing and says what still states it');
     ok(p.stillSays.length === 1 && p.stillSays[0].field === 'Display Type',
        'the field that still says it is named', JSON.stringify(p.stillSays));
     ok(p.html === html, 'the description is byte-identical');
+}
+
+console.log('\nA deletion that CORRECTS a mistake is taken out of the fields too');
+{
+    // Same edit, now raised by a finding that says the words were untrue: the
+    // panel is TN, so a Display Type still reading "IPS with LED" is stating
+    // something false about the item.
+    const html = `<table><tr><td>Display Type</td><td>IPS with LED</td></tr></table>`;
+    const p = plan('Dell 24" E2414HT IPS with LED TN Business Monitor',
+                   'Dell 24" E2414HT LED TN Business Monitor', html, [], true);
+    ok(p.cellHits === 1, 'the cell is rewritten', String(p.cellHits));
+    ok(p.html.includes('<td>LED</td>'), 'with the wrong words taken out and no gap left',
+       (p.html.match(/<td>[^<]*<\/td><\/tr>/) || [''])[0]);
+    ok(p.echoes.length === 1 && p.echoes[0].now === 'LED',
+       'and it is reported as a change, not as a leftover', JSON.stringify(p.echoes[0] || {}));
+    ok(p.stillSays.length === 0, 'nothing is left over');
+}
+{
+    // The case Ethan asked about: "Digital SLR DSLR Camera" in four places.
+    const html = `<table><tr><td>Type</td><td>Digital SLR DSLR Camera</td></tr></table>`;
+    const mfs = [
+        { id: 'gid://x/1', key: 'type', value: 'Digital SLR DSLR Camera' },
+        { id: 'gid://x/2', key: 'title_attributes',
+          value: JSON.stringify([{ key: 'Type', value: 'Digital SLR DSLR Camera' }]) },
+    ];
+    const p = plan('Canon EOS Rebel T2i 18.0MP Digital SLR DSLR Camera',
+                   'Canon EOS Rebel T2i 18.0MP DSLR Camera', html, mfs, true);
+    ok(p.echoes.length === 1 && p.echoes[0].now === 'DSLR Camera',
+       'the whole field follows the title', JSON.stringify(p.echoes[0] || {}));
+    ok(p.echoes[0] && p.echoes[0].where.length === 3,
+       'in all three places it is written down', p.echoes[0] && p.echoes[0].where.join(' · '));
+    ok(p.html.includes('<td>DSLR Camera</td>'),
+       'the cell has no double space and no leading one',
+       JSON.stringify((p.html.match(/<td>[^<]*<\/td><\/tr>/) || [''])[0]));
+    const j = JSON.parse((p.mfUpdates.find(u => u.id === 'gid://x/2') || {}).value || '[]');
+    ok(j[0] && j[0].value === 'DSLR Camera', 'and the JSON entry follows too',
+       JSON.stringify(j[0] || {}));
+}
+{
+    // ⚠️ A FIELD IS NEVER EMPTIED. Removing the whole of what a field says is a
+    // deletion of the field, not a correction of it.
+    const html = `<table><tr><td>Brand</td><td>Canon</td></tr></table>`;
+    const p = plan('Canon EOS Rebel T2i Camera', 'EOS Rebel T2i Camera', html, [], true);
+    ok(p.cellHits === 0 && p.html === html, 'the field keeps its only value');
+    ok(p.stillSays.length === 1, 'and it is reported instead', JSON.stringify(p.stillSays));
 }
 
 console.log('\nMarkup inside the cell is stepped around, not stripped');

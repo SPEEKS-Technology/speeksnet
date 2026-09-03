@@ -8,8 +8,8 @@
 //   2. an ordinary finding still offers "Deny"
 //   3. each sends the right `as` to the server, because that is the whole
 //      difference between "our rule is wrong" and "Marketplace Connect is behind"
-//   4. the Dismissed drawer renders, is SHUT by default, and its rows carry the
-//      who / when / why that used to be written and never read
+//   4. the Confirmed Correct drawer renders, is SHUT by default, and its rows
+//      carry the who / when / why that used to be written and never read
 //   5. the rule tally only counts not-a-problem dismissals — counting the
 //      eBay-stale ones would make title-drift look like our worst rule exactly
 //      when it was doing its job
@@ -205,7 +205,9 @@ const DATA = {
     if (drawer) {
         ok(drawer.open === false, 'shut by default — this is work already done');
         ok(drawer.bodyHidden === true, 'and its rows are genuinely hidden while shut');
-        ok(/2 Dismissed/.test(drawer.summary), 'summary counts them', drawer.summary);
+        ok(/2 Confirmed Correct/.test(drawer.summary),
+           'the drawer is named for what is IN it — titles a person read and kept',
+           drawer.summary);
         ok(drawer.rows.length === 2, 'both dismissals listed');
         ok(drawer.rows[0].as.trim() === 'Not A Problem', 'first is labelled Not A Problem', drawer.rows[0].as.trim());
         ok(drawer.rows[1].as.trim() === 'Ours Is Fine', 'second is labelled Ours Is Fine', drawer.rows[1].as.trim());

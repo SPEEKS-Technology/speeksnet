@@ -45707,7 +45707,7 @@ function _ltDeniedHtml() {
     const tally = (d.tally || []).filter(t => t.n >= 2);
     const tallyHtml = tally.length
         ? `<div class="lt-tally">
-             <div class="lt-tally-h">Dismissed More Than Once — Worth A Look At The Rule</div>
+             <div class="lt-tally-h">Confirmed Correct More Than Once — Worth A Look At The Rule</div>
              ${tally.map(t => `<div class="lt-tally-row">
                  <span class="lt-tally-n">${t.n}</span>
                  <span>${_ecEsc(_LT_CODE_SAYS[t.code] || t.code)}</span></div>`).join('')}
@@ -45734,7 +45734,14 @@ function _ltDeniedHtml() {
         </div>`;
     }).join('');
     return `<details class="lt-denied">
-      <summary>${d.rows.length} Dismissed</summary>
+      <!-- ⚠️ "CONFIRMED CORRECT", NOT "DISMISSED". Ethan, 2026-09-03: "change
+           the Dismissed name to something more direct". Dismissed named what
+           happened to the ROW; every row in here is a person having read a title
+           and decided it is right — which is what both answers assert (the rule
+           was wrong, or the rule was right and eBay holds the stale copy). It is
+           also the more inviting word: this drawer is a record of work done, not
+           a bin of things brushed aside. -->
+      <summary>${d.rows.length} Confirmed Correct</summary>
       ${tallyHtml}
       <div class="lt-dn-rows">${rows}</div>
     </details>`;
@@ -46292,7 +46299,7 @@ async function ltDeny(pid) {
     const kind = _ltDenyKind(row);
     // ⚠️ ONLY ONE OF THE TWO ANSWERS HAS ANYTHING TO LEARN FROM.
     // A Deny says our rule was wrong, and the note is the only place that can
-    // ever say HOW — it is read in the Dismissed drawer and it is what turns
+    // ever say HOW — it is read in the Confirmed Correct drawer, and it is what turns
     // four dismissals of one code into a rule somebody goes and fixes. "Ours Is
     // Fine" says the opposite: the rule was RIGHT and the stale copy is on eBay,
     // which is not feedback about anything here. Asking for a note there put an
@@ -46324,7 +46331,7 @@ async function ltDeny(pid) {
                      <span class="lt-cur">${_ecEsc(row.current || '')}</span></div></div>`,
             note: { label: 'Why Is It Fine? (Optional)',
                     placeholder: 'e.g. the model name really does repeat on the box',
-                    hint: 'Shown in Dismissed below, and it is how we find out a rule'
+                    hint: 'Shown in Confirmed Correct below, and it is how we find out a rule'
                         + ' is wrong. Four dismissals of one rule is a rule to go and fix.' },
             go: 'Dismiss It', cancel: 'Cancel' });
     if (!said) return;

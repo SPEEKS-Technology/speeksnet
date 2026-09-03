@@ -3069,6 +3069,43 @@ function replaceRun(v: string, was: string, now: string): string | null {
   return out;
 }
 
+// ⚠️ TAKING WORDS OUT IS ONLY SAFE WHEN THEY WERE WRONG.
+// Ethan, 2026-09-03: "subtraction only needs to occur if it's truly changing
+// something to be correct. If we are just shortening the title, but not
+// correcting a mistake, we shouldn't subtract from within the listing."
+//
+// That is the whole rule, and it is decidable from the finding that raised the
+// row rather than guessed at. A name-wrong deletion means the words were untrue
+// of the item — the Dell that says IPS when the panel is TN, the Micron whose
+// (4x1GB) contradicts its own part number — and a field still stating them is
+// stating something false. A repeated-phrase or truncated-title deletion means
+// the words were merely redundant IN A TITLE; the spec field that holds them
+// once is correct, and cutting them there would delete real information to make
+// a title fit. "Factory Unlocked" trimmed off an 80-character title must never
+// disappear out of the Network field where it belongs.
+const CORRECTING_CODES = new Set<string>([
+  "name-wrong", "name-garbled", "spec-conflict", "hardware-conflict",
+]);
+
+// The field with the run taken out, or null when what is left is not a value.
+// ⚠️ A FIELD MUST NEVER BE EMPTIED. "Canon" removed from a Brand of "Canon" is
+// not a correction, it is a deletion of the field, and the reviewer would have
+// no way of knowing it happened from a line that says "Brand: Canon -> ".
+function subtractRun(v: string, was: string): string | null {
+  if (!v || !was || !runRe(was).test(v)) return null;
+  const out = v.replace(runRe(was), " ")
+    .replace(/\s+/g, " ").trim()
+    // The spacing the removal left behind, not a rewrite: a run cut from inside
+    // "For Canon MFT Mount" must not leave "For  MFT Mount" or " ,".
+    .replace(/\s+([,;:)\]])/g, "$1").replace(/([(\[])\s+/g, "$1")
+    .replace(/^[,;:\-\s]+|[,;:\-\s]+$/g, "").trim();
+  if (!out || out === v.trim() || out.length < 2) return null;
+  if (PLACEHOLDER.test(out)) return null;
+  // Two adjacent alphanumerics somewhere: "(" or "-" alone is not a value.
+  if (!/[A-Za-z0-9]{2}/.test(out)) return null;
+  return out;
+}
+
 // The lister's JSON attribute arrays: [{key,value}, ...]. ⚠️ ANY OTHER SHAPE IS
 // LEFT ALONE. `custom.condition` is a list of bare strings, and other fields may
 // hold objects nobody here has seen; a shape we do not understand is one we do
@@ -3173,8 +3210,16 @@ type EchoPlan = {
 // red"><br></div>` keeps its marker div, its attributes and its bytes, and only
 // the run changes. A cell whose value is broken across a tag ("Alpha
 // <span>A7C</span>") simply does not match, and is reported as still saying it.
+// Whether the words being cut were WRONG, rather than merely surplus in a
+// title. Read off the findings that raised the row — see CORRECTING_CODES.
+function isCorrecting(findings: unknown): boolean {
+  return Array.isArray(findings)
+    && findings.some((f: any) => CORRECTING_CODES.has(String(f?.code || "")));
+}
+
 function planEchoes(html: string, mfs: { id: string; key: string; value: string }[],
-                    was: string, now: string, nextTitle = ""): EchoPlan {
+                    was: string, now: string, nextTitle = "",
+                    correcting = false): EchoPlan {
   const plan: EchoPlan = { html, cellHits: 0, mfUpdates: [], echoes: [], stillSays: [] };
   if (!was) return plan;
   const found = new Map<string, Echo>();
@@ -3193,6 +3238,13 @@ function planEchoes(html: string, mfs: { id: string; key: string; value: string 
   // line, which is the same as not printing it. So a field is only "still
   // saying" it when the new title HAS STOPPED saying it.
   const lost = !!was && !runRe(was).test(nextTitle || "");
+  // now === "" is a deletion. It is applied to the fields ONLY when the row was
+  // raised by a finding that says the words were wrong (see CORRECTING_CODES);
+  // otherwise the field keeps them and the reviewer is told, which is the
+  // difference between fixing a listing and trimming one to fit.
+  const nextFor = (v: string) =>
+    now ? replaceRun(v, was, now)
+        : (correcting && lost ? subtractRun(v, was) : null);
   // ⚠️ EVERY PLACE, NOT THE FIRST ONE. A leftover is grouped by value exactly as
   // a rewrite is, because it is the same fact in the same several places — the
   // Canon T2i states its Type in the spec table AND `custom.type` AND
@@ -3213,7 +3265,7 @@ function planEchoes(html: string, mfs: { id: string; key: string; value: string 
     const cell = cells[i];
     if (ECHO_SKIP_KEY.test(cell.key) || !specish(cell.value)) continue;
     if (!runRe(was).test(cell.value)) continue;
-    const next = now ? replaceRun(cell.value, was, now) : null;
+    const next = nextFor(cell.value);
     if (!next) { left(cell.key, cell.value, "spec table"); continue; }
     // Locate the run INSIDE the cell, entity-aware, and splice by offset.
     const inner = plan.html.slice(cell.start, cell.end);
@@ -3226,9 +3278,21 @@ function planEchoes(html: string, mfs: { id: string; key: string; value: string 
     let outInner = inner;
     for (let k = at.length - 1; k >= 0; k--) {
       const s = at[k];
+      // ⚠️ A SUBTRACTION TAKES ONE SPACE WITH IT. Splicing "" out of
+      // "Digital SLR DSLR Camera" otherwise leaves " DSLR Camera" in the cell —
+      // invisible in a browser, but it is what the next sweep reads back and
+      // compares, and a value that gains a leading space every time it is edited
+      // is a value that stops matching itself.
+      let end = s + was.length - 1;
+      if (!now && d.text[end + 1] === " ") end += 1;
+      else if (!now && s > 0 && d.text[s - 1] === " ") {
+        outInner = outInner.slice(0, d.from[s - 1]) + escapeHtml(now)
+                 + outInner.slice(d.to[end]);
+        continue;
+      }
       outInner = outInner.slice(0, d.from[s])
                + escapeHtml(now)
-               + outInner.slice(d.to[s + was.length - 1]);
+               + outInner.slice(d.to[end]);
     }
     plan.html = plan.html.slice(0, cell.start) + outInner + plan.html.slice(cell.end);
     plan.cellHits += at.length;
@@ -3243,7 +3307,7 @@ function planEchoes(html: string, mfs: { id: string; key: string; value: string 
       const outPairs = pairs.map(p => {
         if (ECHO_SKIP_KEY.test(p.key) || !specish(p.value)) return p;
         if (!runRe(was).test(p.value)) return p;
-        const next = now ? replaceRun(p.value, was, now) : null;
+        const next = nextFor(p.value);
         if (!next) { left(p.key || f.key, p.value, f.key); return p; }
         touched = true;
         note(p.key || f.key, p.value, next, f.key);
@@ -3253,7 +3317,7 @@ function planEchoes(html: string, mfs: { id: string; key: string; value: string 
       continue;
     }
     if (!specish(f.value) || !runRe(was).test(f.value)) continue;
-    const next = now ? replaceRun(f.value, was, now) : null;
+    const next = nextFor(f.value);
     if (!next) { left(f.key, f.value, f.key); continue; }
     plan.mfUpdates.push({ id: f.id, value: next });
     note(f.key, f.value, next, f.key);
@@ -3290,7 +3354,7 @@ function htmlDelta(a: string, b: string): { before: string; after: string } | nu
 async function echoSweep(store: string, limit: number) {
   const q: any[] = await allRows(
     `listing_title_queue?store_code=eq.${store}&suggested_title=not.is.null`
-    + `&select=sku,product_id,current_title,suggested_title&limit=${limit}`);
+    + `&select=sku,product_id,current_title,suggested_title,findings&limit=${limit}`);
   if (!q.length) return { store, examined: 0, rows: [] as any[] };
   const { shop, token } = await shopFor(store);
   const ids = [...new Set(q.map(r => String(r.product_id)))];
@@ -3317,7 +3381,8 @@ async function echoSweep(store: string, limit: number) {
     const x = raw[String(r.product_id)];
     if (!x) return { sku: r.sku, error: "product not readable in Shopify" };
     const run = titleRun(r.current_title || "", r.suggested_title || "");
-    const plan = planEchoes(x.html, x.mfs, run.was, run.now, r.suggested_title || "");
+    const plan = planEchoes(x.html, x.mfs, run.was, run.now, r.suggested_title || "",
+                            isCorrecting(r.findings));
     return {
       sku: r.sku, from: r.current_title, to: r.suggested_title, run,
       specRows: plan.cellHits, metafields: plan.mfUpdates.length,
@@ -3523,7 +3588,8 @@ async function handlePost(req: Request, scope: Scope) {
   // place and has left saying the old thing.
   {
     const run = titleRun(item.current_title || "", next);
-    const plan = planEchoes(html, mfList, run.was, run.now, next);
+    const plan = planEchoes(html, mfList, run.was, run.now, next,
+                            isCorrecting(item.findings));
     if (plan.cellHits) { html = plan.html; specRows = plan.cellHits; }
     for (const u of plan.mfUpdates) mfChanged.set(u.id, u.value);
     alsoUpdated = plan.echoes;
@@ -3731,7 +3797,8 @@ Deno.serve(async (req: Request) => {
         value: String(e?.node?.value ?? ""),
       }));
       const byId = new Map(mfs.map((f: any) => [f.id, f]));
-      const plan = planEchoes(html, mfs, was, now, String(d?.product?.title || ""));
+      const plan = planEchoes(html, mfs, was, now, String(d?.product?.title || ""),
+                              url.searchParams.get("correcting") === "1");
       const writes = plan.mfUpdates.map(u => {
         const f: any = byId.get(u.id);
         return f ? { namespace: f.namespace, key: f.key, type: f.type, value: u.value } : null;
@@ -3845,7 +3912,14 @@ Deno.serve(async (req: Request) => {
         if (wantEcho) {
           const cur = String(cat[0].title || "");
           const run = titleRun(cur, wantEcho);
-          const plan = planEchoes(html, mfs, run.was, run.now, wantEcho);
+          const plan = planEchoes(html, mfs, run.was, run.now, wantEcho,
+            url.searchParams.get("correcting") === "1"
+              || isCorrecting(analyse({
+                   store_code: store, product_id: cat[0].product_id, sku: cat[0].sku,
+                   title: cur, product_handle: null,
+                   price: cat[0].price == null ? null : Number(cat[0].price),
+                   quantity: cat[0].quantity || 0, wantNames: true,
+                 }, e, null, null, null, null).findings));
           echoPlan = {
             from: cur, to: wantEcho, run,
             alsoUpdated: plan.echoes,
