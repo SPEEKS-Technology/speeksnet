@@ -117,8 +117,17 @@ The eBay research link goes in `listing_info`, not `staff_notes` —
 
 ## Live intake over wifi (optional)
 
+On the bench, **double-click `RUN-CAPTURE-LIVE.bat`** instead of
+`RUN-CAPTURE.bat`. It asks for the session code and everything else is the same.
+
+Two launchers rather than a flag on the existing one, so nobody who
+double-clicks `RUN-CAPTURE.bat` is asked a new question — the normal way to work
+is exactly as it was, and live intake is a choice you make by picking the other
+file. Pressing Enter at the code prompt falls through to an ordinary offline
+capture, so picking the wrong one costs nothing.
+
 A pricer with the sheet open clicks **Start a session** and gets a six-character
-code. Run capture with `-Session <code>` (or `-Live` to be asked for it) and the
+code. (From a script: `-Session <code>` passes it directly, `-Live` asks.) The
 machine posts its own reading straight into that deal as well as writing the USB
 copy. It appears in a tray above the pricing sheet within a second or two, and a
 person clicks **Accept** to turn it into a line item.
