@@ -2997,6 +2997,335 @@ function swapTitleInHtml(html: string, oldTitle: string, newTitle: string):
   return { html: out, hits: at.length };
 }
 
+// --- THE REST OF THE LISTING SAYS IT TOO -------------------------------------
+//
+// Ethan, 2026-09-03: "if we change something in the title and that change is
+// something in the HTML spec table or the listing metafields, that needs to be
+// changed there too so the listing remains consistent from the title to the
+// rest. Example would be if we change the model number in the title, we need to
+// change it everywhere in the listing."
+//
+// A title is not the only place a listing states a fact about itself. MPL's
+// Sony ZV-E10 says "L-Mount" in FOUR places: the title, the Mount Type row of
+// the description's spec table, the `custom.mount_type` metafield, and again
+// inside `custom.title_attributes` — the JSON array PayMore's lister BUILDS the
+// title from. Correcting the title alone leaves three copies of the error
+// standing, and the spec table is exactly where a buyer looks to check what the
+// title just told them.
+//
+// ⚠️ IT ONLY EVER CHANGES THE WORDS THE REVIEWER SAW MARKED. The changed run is
+// computed with the SAME word-level head/tail diff the row draws on screen
+// (`_ltRun` in speeks.js), so what this rewrites can never be wider than the
+// green words somebody just read and approved. Nothing is inferred from the
+// product and nothing is guessed: a title edit whose words cannot be found in a
+// spec field changes the title and nothing else, and says so.
+//
+// ⚠️ ONE RUN, NOT A WORD-BY-WORD ALIGNMENT. "8 Core SR3QR 8 Thread" becomes
+// "6 Core SR3QR 12 Thread" as ONE run with an unchanged middle, and it will not
+// match the short value "8" that a Core Count field holds. That miss is
+// deliberate: pairing "8"->"6" and "8"->"12" onto separate fields means deciding
+// which bare number belongs to which key, and a bare number matches everything.
+// A missed propagation is reported as "still says"; a wrong one is silent damage
+// to the only description a buyer reads.
+
+type SpecField = { k: string; v: string; at: string[] };
+type Echo = { field: string; was: string; now: string; where: string[] };
+
+// Prose, checklists and identifiers — none of them a statement of spec, and all
+// three are ways to damage a listing quietly. A serial number that happens to
+// contain the changed run is not a claim about the model, it is the identity of
+// the unit in the box; `whats_include` is the accessory checklist (already
+// carried, where it quotes the title, by the whole-title swap above); the
+// condition fields are two paragraphs of English about scratches.
+const ECHO_SKIP_KEY =
+  /serial|barcode|\bupc\b|\bean\b|\bsku\b|\bqty\b|quantit|condition|descript|cosmetic|functional|includ|\bnote|categor|handle|\btag|image|photo|price|weight/i;
+
+// A spec value is short, flat, and not a stand-in. The length cap keeps a
+// paragraph out; the tag test keeps markup out of a string we are about to
+// compare and rewrite; PLACEHOLDER is the same list the suggestion builder uses
+// to refuse "VARIOUS" as a model.
+function specish(v: string): boolean {
+  const t = (v || "").trim();
+  return !!t && t.length <= 120 && !/[<>\r\n]/.test(t) && !PLACEHOLDER.test(t);
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// ⚠️ NOT \b. The runs this matches start and end on punctuation as often as not
+// — "f/3.5-5.6", "(2x8GB)", "24.2MP" — and \b in front of "(" is a boundary in
+// the wrong place. The rule actually wanted is: not glued to a letter or a
+// digit, so "SATA" never matches inside "eSATA" and "8GB" never inside "128GB".
+const runRe = (was: string) =>
+  new RegExp(`(?<![A-Za-z0-9])${escapeRe(was)}(?![A-Za-z0-9])`, "gi");
+
+// Matched case-insensitively, but what goes IN is written exactly as the
+// reviewer approved it. The title is the sentence somebody just checked, and a
+// spec table quietly Title-Casing it differently is a third version of the truth.
+function replaceRun(v: string, was: string, now: string): string | null {
+  if (!v || !was || !now) return null;
+  if (!runRe(was).test(v)) return null;
+  const out = v.replace(runRe(was), now).replace(/\s+/g, " ").trim();
+  if (!out || out === v.trim() || PLACEHOLDER.test(out)) return null;
+  return out;
+}
+
+// The lister's JSON attribute arrays: [{key,value}, ...]. ⚠️ ANY OTHER SHAPE IS
+// LEFT ALONE. `custom.condition` is a list of bare strings, and other fields may
+// hold objects nobody here has seen; a shape we do not understand is one we do
+// not edit.
+function jsonPairs(raw: string): { key: string; value: string }[] | null {
+  const t = (raw || "").trim();
+  if (!t.startsWith("[")) return null;
+  let j: unknown;
+  try { j = JSON.parse(t); } catch { return null; }
+  if (!Array.isArray(j) || !j.length) return null;
+  const out: { key: string; value: string }[] = [];
+  for (const e of j) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) return null;
+    const o = e as Record<string, unknown>;
+    if (typeof o.value !== "string" || typeof o.key !== "string") return null;
+    out.push({ key: o.key, value: o.value });
+  }
+  return out;
+}
+
+// Every <td> pair in the description, with the VALUE cell's span in the original
+// html. parseSpecs answers "what does it say"; this answers "where does it say
+// it", which is what a rewrite needs. Same two-cell rule, so the two can never
+// disagree about which rows are spec rows.
+function specCells(html: string):
+    { key: string; value: string; start: number; end: number }[] {
+  const out: { key: string; value: string; start: number; end: number }[] = [];
+  const tr = /<tr\b[\s\S]*?<\/tr>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = tr.exec(html))) {
+    const rowHtml = m[0], base = m.index;
+    const td = /<td\b[^>]*>([\s\S]*?)<\/td>/gi;
+    const cells: { inner: string; start: number; end: number }[] = [];
+    let c: RegExpExecArray | null;
+    while ((c = td.exec(rowHtml))) {
+      const openLen = c[0].length - c[1].length - "</td>".length;
+      cells.push({ inner: c[1],
+                   start: base + c.index + openLen,
+                   end: base + c.index + openLen + c[1].length });
+    }
+    if (cells.length !== 2) continue;
+    const key = stripTags(cells[0].inner).replace(/[?:]+$/, "").trim();
+    const value = stripTags(cells[1].inner);
+    if (key && value) out.push({ key, value, start: cells[1].start, end: cells[1].end });
+  }
+  return out;
+}
+
+// Everywhere this listing writes a fact down, grouped by the VALUE rather than
+// by the field name — the spec table calls it "Mount Type" and the metafield
+// calls it `mount_type`, and they are one fact in two places. The name shown is
+// the spec table's when it has one, because that is the name on the page the
+// reviewer is looking at.
+function collectSpecFields(html: string, mf: Record<string, string>): SpecField[] {
+  const by = new Map<string, SpecField>();
+  const add = (k: string, v: string, at: string, tabled: boolean) => {
+    if (!k || ECHO_SKIP_KEY.test(k) || !specish(v)) return;
+    const id = v.trim().toLowerCase();
+    const f = by.get(id) || { k, v: v.trim(), at: [] };
+    if (tabled) f.k = k;
+    if (!f.at.includes(at)) f.at.push(at);
+    by.set(id, f);
+  };
+  for (const cell of specCells(html)) add(cell.key, cell.value, "spec table", true);
+  for (const [key, raw] of Object.entries(mf || {})) {
+    if (ECHO_SKIP_KEY.test(key)) continue;
+    const pairs = jsonPairs(raw);
+    if (pairs) { for (const p of pairs) add(p.key || key, p.value, key, false); continue; }
+    add(key, raw, key, false);
+  }
+  return [...by.values()];
+}
+
+// Mirror of `_ltRun` in speeks.js — deliberately the same diff, so the words
+// this goes looking for are the words the reviewer saw marked.
+function titleRun(from: string, to: string): { was: string; now: string } {
+  const a = String(from || "").trim().split(/\s+/);
+  const b = String(to || "").trim().split(/\s+/);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head
+         && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  return { was: a.slice(head, a.length - tail).join(" "),
+           now: b.slice(head, b.length - tail).join(" ") };
+}
+
+type EchoPlan = {
+  html: string;
+  cellHits: number;
+  mfUpdates: { id: string; value: string }[];
+  echoes: Echo[];
+  stillSays: { field: string; value: string; where: string }[];
+};
+
+// What the rest of the listing should say once this title lands — and what it
+// will go on saying that the title no longer does.
+//
+// ⚠️ THE DESCRIPTION IS SPLICED, NEVER REBUILT. Each write is bounded to the
+// inside of one value <td>, and inside that cell the entity-aware map from
+// swapTitleInHtml does the work — so a cell reading `Sony<div style="color:
+// red"><br></div>` keeps its marker div, its attributes and its bytes, and only
+// the run changes. A cell whose value is broken across a tag ("Alpha
+// <span>A7C</span>") simply does not match, and is reported as still saying it.
+function planEchoes(html: string, mfs: { id: string; key: string; value: string }[],
+                    was: string, now: string, nextTitle = ""): EchoPlan {
+  const plan: EchoPlan = { html, cellHits: 0, mfUpdates: [], echoes: [], stillSays: [] };
+  if (!was) return plan;
+  const found = new Map<string, Echo>();
+  const note = (field: string, oldV: string, newV: string, at: string) => {
+    const id = oldV.trim().toLowerCase();
+    const e = found.get(id) || { field, was: oldV.trim(), now: newV.trim(), where: [] };
+    if (!e.where.includes(at)) e.where.push(at);
+    found.set(id, e);
+  };
+  // ⚠️ A DELETION IS USUALLY A DE-DUPLICATION, AND THE SPEC FIELD IS RIGHT.
+  // The commonest fix this tool makes is cutting a phrase the title said twice
+  // — "PENTAX 50-200mm f/4-5.6 50-200mm f/4-5.6 DAL" — and the Model field says
+  // it exactly ONCE, which is correct and must not be touched. Measured over the
+  // live queue, reporting every deletion put 22 rows on the leftover list of
+  // which 19 were de-duplications; the reviewer would have learned to ignore the
+  // line, which is the same as not printing it. So a field is only "still
+  // saying" it when the new title HAS STOPPED saying it.
+  const lost = !!was && !runRe(was).test(nextTitle || "");
+  const left = (field: string, value: string, at: string) => {
+    if (!lost) return;
+    const v = value.trim();
+    if (plan.stillSays.some(s => s.value.toLowerCase() === v.toLowerCase())) return;
+    plan.stillSays.push({ field, value: v, where: at });
+  };
+
+  // The description, back to front so the earlier offsets stay valid — the same
+  // reason swapTitleInHtml splices in reverse.
+  const cells = specCells(plan.html);
+  for (let i = cells.length - 1; i >= 0; i--) {
+    const cell = cells[i];
+    if (ECHO_SKIP_KEY.test(cell.key) || !specish(cell.value)) continue;
+    if (!runRe(was).test(cell.value)) continue;
+    const next = now ? replaceRun(cell.value, was, now) : null;
+    if (!next) { left(cell.key, cell.value, "spec table"); continue; }
+    // Locate the run INSIDE the cell, entity-aware, and splice by offset.
+    const inner = plan.html.slice(cell.start, cell.end);
+    const d = decodeWithMap(inner);
+    const at: number[] = [];
+    const re = runRe(was);
+    let mm: RegExpExecArray | null;
+    while ((mm = re.exec(d.text))) at.push(mm.index);
+    if (!at.length) { left(cell.key, cell.value, "spec table"); continue; }
+    let outInner = inner;
+    for (let k = at.length - 1; k >= 0; k--) {
+      const s = at[k];
+      outInner = outInner.slice(0, d.from[s])
+               + escapeHtml(now)
+               + outInner.slice(d.to[s + was.length - 1]);
+    }
+    plan.html = plan.html.slice(0, cell.start) + outInner + plan.html.slice(cell.end);
+    plan.cellHits += at.length;
+    note(cell.key, cell.value, next, "spec table");
+  }
+
+  for (const f of mfs) {
+    if (!f.id || ECHO_SKIP_KEY.test(f.key)) continue;
+    const pairs = jsonPairs(f.value);
+    if (pairs) {
+      let touched = false;
+      const outPairs = pairs.map(p => {
+        if (ECHO_SKIP_KEY.test(p.key) || !specish(p.value)) return p;
+        if (!runRe(was).test(p.value)) return p;
+        const next = now ? replaceRun(p.value, was, now) : null;
+        if (!next) { left(p.key || f.key, p.value, f.key); return p; }
+        touched = true;
+        note(p.key || f.key, p.value, next, f.key);
+        return { ...p, value: next };
+      });
+      if (touched) plan.mfUpdates.push({ id: f.id, value: JSON.stringify(outPairs) });
+      continue;
+    }
+    if (!specish(f.value) || !runRe(was).test(f.value)) continue;
+    const next = now ? replaceRun(f.value, was, now) : null;
+    if (!next) { left(f.key, f.value, f.key); continue; }
+    plan.mfUpdates.push({ id: f.id, value: next });
+    note(f.key, f.value, next, f.key);
+  }
+
+  plan.echoes = [...found.values()];
+  return plan;
+}
+
+// The changed bytes and nothing else, for reading a splice back. A whole
+// description is 6KB of markup nobody will check by eye, which is the same as
+// not checking it.
+function htmlDelta(a: string, b: string): { before: string; after: string } | null {
+  if (a === b) return null;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  let j = 0;
+  while (j < a.length - i && j < b.length - i
+         && a[a.length - 1 - j] === b[b.length - 1 - j]) j++;
+  const pad = 60;
+  return { before: a.slice(Math.max(0, i - pad), a.length - j + pad),
+           after: b.slice(Math.max(0, i - pad), b.length - j + pad) };
+}
+
+// WHAT THE ECHOES WOULD DO TO THE WHOLE QUEUE, WITHOUT TOUCHING ANYTHING.
+// ?echoes=1&store=ALL&secret= — every open row that has a suggestion, with the
+// spec fields that suggestion would carry the change into and the ones it would
+// leave saying the old thing.
+//
+// The sweep has been dry by default since the day it was written, and the spec
+// echoes are the half that writes into the description a customer reads. This is
+// how a rule change gets measured over 100 real listings before a reviewer meets
+// it, which is exactly how the eight false-positive classes were found.
+async function echoSweep(store: string, limit: number) {
+  const q: any[] = await allRows(
+    `listing_title_queue?store_code=eq.${store}&suggested_title=not.is.null`
+    + `&select=sku,product_id,current_title,suggested_title&limit=${limit}`);
+  if (!q.length) return { store, examined: 0, rows: [] as any[] };
+  const { shop, token } = await shopFor(store);
+  const ids = [...new Set(q.map(r => String(r.product_id)))];
+  const raw: Record<string, { html: string; mfs: { id: string; key: string; value: string }[] }> = {};
+  const CHUNK = 25;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const data = await shopifyGql(shop, token, `
+      query($ids: [ID!]!) { nodes(ids: $ids) { ... on Product {
+        id descriptionHtml
+        metafields(first: 60) { edges { node { id key value } } }
+      } } }`, { ids: ids.slice(i, i + CHUNK) });
+    for (const n of (data?.nodes || [])) {
+      if (!n?.id) continue;
+      raw[String(n.id)] = {
+        html: String(n.descriptionHtml || ""),
+        mfs: (n.metafields?.edges || []).map((e: any) => ({
+          id: String(e?.node?.id || ""), key: String(e?.node?.key || ""),
+          value: String(e?.node?.value ?? ""),
+        })),
+      };
+    }
+  }
+  const rows = q.map(r => {
+    const x = raw[String(r.product_id)];
+    if (!x) return { sku: r.sku, error: "product not readable in Shopify" };
+    const run = titleRun(r.current_title || "", r.suggested_title || "");
+    const plan = planEchoes(x.html, x.mfs, run.was, run.now, r.suggested_title || "");
+    return {
+      sku: r.sku, from: r.current_title, to: r.suggested_title, run,
+      specRows: plan.cellHits, metafields: plan.mfUpdates.length,
+      alsoUpdated: plan.echoes, stillSays: plan.stillSays,
+    };
+  });
+  return {
+    store, examined: rows.length,
+    withEcho: rows.filter((r: any) => (r.alsoUpdated || []).length).length,
+    withLeftover: rows.filter((r: any) => (r.stillSays || []).length).length,
+    rows,
+  };
+}
+
 async function handlePost(req: Request, scope: Scope) {
   const body = await req.json().catch(() => ({}));
   const action = String(body.action || "");
@@ -3062,7 +3391,15 @@ async function handlePost(req: Request, scope: Scope) {
     return json({ ok: true, reopened: productId });
   }
 
-  if (action !== "approve") return json({ error: `unknown action: ${action}` }, 400);
+  // "preview" is approve's own reading half, stopped one line before it writes.
+  // It exists so the confirm box can name the OTHER fields this will rewrite —
+  // and it runs the same code the write runs, against the same live listing, a
+  // second before it. A preview computed from a stored snapshot, or by a second
+  // implementation on the client, would eventually describe a change that is not
+  // the change being made, which is worse than showing nothing.
+  if (action !== "approve" && action !== "preview") {
+    return json({ error: `unknown action: ${action}` }, 400);
+  }
 
   // An edited title beats the suggestion always — the person is holding the
   // item. A row that arrived with no suggestion can ONLY be approved with one
@@ -3104,7 +3441,14 @@ async function handlePost(req: Request, scope: Scope) {
   // old one back at them.
   let descriptionHtml: string | null = null;
   let descHits = 0;
-  let staleMetafields: { id: string; value: string }[] = [];
+  let specRows = 0;
+  let html = "";
+  const mfList: { id: string; key: string; value: string }[] = [];
+  // id -> the value to write. One map, so the title swap and the spec echoes
+  // below cannot each send their own half of the same metafield.
+  const mfChanged = new Map<string, string>();
+  let alsoUpdated: Echo[] = [];
+  let stillSays: EchoPlan["stillSays"] = [];
   // ⚠️ TWO READS, NOT ONE. These used to share a query, and shopifyGql throws on
   // ANY error in the response — so a metafields half that failed for its own
   // reasons (a throttle, a permission, a product with an awkward field) took the
@@ -3115,10 +3459,10 @@ async function handlePost(req: Request, scope: Scope) {
   try {
     const cur = await shopifyGql(shop, token,
       `query($id: ID!) { product(id: $id) { descriptionHtml } }`, { id: productId });
-    const html = String(cur?.product?.descriptionHtml || "");
+    html = String(cur?.product?.descriptionHtml || "");
     if (html && item.current_title) {
       const swap = swapTitleInHtml(html, item.current_title, next);
-      if (swap.hits) { descriptionHtml = swap.html; descHits = swap.hits; }
+      if (swap.hits) { html = swap.html; descHits = swap.hits; }
     }
   } catch {
     // A title fix that lands is worth more than one that fails over its own
@@ -3128,22 +3472,55 @@ async function handlePost(req: Request, scope: Scope) {
   try {
     const cur = await shopifyGql(shop, token,
       `query($id: ID!) { product(id: $id) {
-         metafields(first: 60) { edges { node { id value } } }
+         metafields(first: 60) { edges { node { id key value } } }
        } }`, { id: productId });
+    for (const e of (cur?.product?.metafields?.edges || [])) {
+      const id = String(e?.node?.id || "");
+      if (!id) continue;
+      mfList.push({ id, key: String(e?.node?.key || ""),
+                    value: String(e?.node?.value ?? "") });
+    }
     if (item.current_title) {
-      for (const e of (cur?.product?.metafields?.edges || [])) {
-        const id = String(e?.node?.id || "");
-        const v = String(e?.node?.value ?? "");
+      for (const f of mfList) {
         // A LITERAL swap here, deliberately unlike the description's. A
         // metafield holds plain text or JSON, not markup: there are no entities
         // to decode, and escaping what goes back in would write a literal
         // "&amp;" into a field that should hold an ampersand.
-        if (id && v.includes(item.current_title)) {
-          staleMetafields.push({ id, value: v.split(item.current_title).join(next) });
+        if (f.value.includes(item.current_title)) {
+          f.value = f.value.split(item.current_title).join(next);
+          mfChanged.set(f.id, f.value);
         }
       }
     }
   } catch { /* the footnote's footnote */ }
+
+  // ⚠️ AND THE SAME FACT IS WRITTEN DOWN AGAIN IN FIELDS THAT NEVER QUOTE THE
+  // TITLE. The two swaps above only find a WHOLE copy of the old title. When a
+  // title says "L-Mount" and so do the Mount Type row of the spec table, the
+  // `mount_type` metafield and the `title_attributes` array the lister builds
+  // titles from, fixing the title leaves the listing arguing with itself — and
+  // the spec table is where a buyer goes to check what the title told them.
+  // planEchoes carries the reviewer's own changed words into every field that
+  // states them. Computed AFTER the swaps above so the two never write the same
+  // field twice, and reported either way: what it changed, and what it could not
+  // place and has left saying the old thing.
+  {
+    const run = titleRun(item.current_title || "", next);
+    const plan = planEchoes(html, mfList, run.was, run.now, next);
+    if (plan.cellHits) { html = plan.html; specRows = plan.cellHits; }
+    for (const u of plan.mfUpdates) mfChanged.set(u.id, u.value);
+    alsoUpdated = plan.echoes;
+    stillSays = plan.stillSays;
+  }
+  if (descHits || specRows) descriptionHtml = html;
+  const staleMetafields = [...mfChanged].map(([id, value]) => ({ id, value }));
+
+  if (action === "preview") {
+    return json({ ok: true, preview: true, title: next,
+                  descriptionCopies: descHits, specRows,
+                  metafields: staleMetafields.length,
+                  alsoUpdated, stillSays });
+  }
 
   const data = await shopifyGql(shop, token, `
     mutation($input: ProductInput!) {
@@ -3166,6 +3543,11 @@ async function handlePost(req: Request, scope: Scope) {
   // into the productUpdate input would let a metafield the API refuses take the
   // title change down with it.
   let metafieldsFixed = 0;
+  // ⚠️ AND WHEN IT DOES NOT LAND, SAY SO. The reviewer was shown these fields in
+  // the confirm box and clicked yes to all of them; a swallowed failure would
+  // leave the listing half-corrected while the screen said it was done, which is
+  // the silent no-op that hid the &amp; bug for a week.
+  let metafieldsLeft = 0;
   if (staleMetafields.length) {
     try {
       const res = await shopifyGql(shop, token, `
@@ -3176,8 +3558,10 @@ async function handlePost(req: Request, scope: Scope) {
       });
       if (!(res?.metafieldsSet?.userErrors || []).length) {
         metafieldsFixed = staleMetafields.length;
+      } else {
+        metafieldsLeft = staleMetafields.length;
       }
-    } catch { /* the title is already correct; this is the footnote */ }
+    } catch { metafieldsLeft = staleMetafields.length; }
   }
 
   // The ledger first, then the queue row. `current_title` is overwritten by the
@@ -3190,6 +3574,10 @@ async function handlePost(req: Request, scope: Scope) {
       before_title: item.current_title, after_title: saved,
       edited: !!typed && typed !== String(item.suggested_title || ""),
       basis: item.basis, findings: item.findings || [], applied_by: scope.name,
+      // Which spec fields moved with the title. Without this the ledger says
+      // a title changed on Sep 3 and nothing about the four other places on
+      // the same listing that changed with it.
+      spec_changes: alsoUpdated,
     }),
   });
   await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
@@ -3212,7 +3600,16 @@ async function handlePost(req: Request, scope: Scope) {
   // whether the description had been carried along or quietly skipped.
   return json({ ok: true, applied: productId, title: saved,
                 descriptionCopies: descHits,
-                ...(metafieldsFixed ? { metafieldsFixed } : {}) });
+                ...(specRows ? { specRows } : {}),
+                ...(metafieldsFixed ? { metafieldsFixed } : {}),
+                ...(metafieldsLeft ? { metafieldsLeft } : {}),
+                ...(alsoUpdated.length ? { alsoUpdated } : {}),
+                // ⚠️ REPORTED EVEN THOUGH NOTHING WAS DONE ABOUT IT. A field
+                // still stating what the title just stopped stating is the one
+                // outcome a reviewer has to hear about — it is the case this
+                // whole feature exists to end, and the case it cannot settle
+                // on its own (a deletion has no replacement value to write).
+                ...(stillSays.length ? { stillSays } : {}) });
 }
 
 // --- routing ----------------------------------------------------------------
@@ -3260,6 +3657,20 @@ Deno.serve(async (req: Request) => {
     // real metafield is the only way to tell a bundle from a box that mentions
     // its own charging cable, and guessing at it from the outside is what
     // produced the bad rule.
+    // --- what the spec echoes would do, over the whole queue ----------------
+    if (url.searchParams.get("echoes")) {
+      if (url.searchParams.get("secret") !== SECRET) {
+        return json({ error: "forbidden" }, 403);
+      }
+      const asked = (url.searchParams.get("store") || "").toUpperCase();
+      const list = asked === "ALL" ? STORES : STORES.includes(asked) ? [asked] : [];
+      if (!list.length) return json({ error: "store required" }, 400);
+      const limit = Math.min(Number(url.searchParams.get("limit") || 300), 1000);
+      const out = [];
+      for (const st of list) out.push(await echoSweep(st, limit));
+      return json({ stores: out });
+    }
+
     if (url.searchParams.get("peek")) {
       if (url.searchParams.get("secret") !== SECRET) {
         return json({ error: "forbidden" }, 403);
@@ -3273,6 +3684,53 @@ Deno.serve(async (req: Request) => {
       const { shop, token } = await shopFor(store);
       const extras = await extrasFor(shop, token, [cat[0].product_id]);
       const e = extras[cat[0].product_id];
+      // ?peek=…&raw=1 — the metafields and the description verbatim, which
+      // extrasFor deliberately throws away (it keeps only what the analyser
+      // needs). This is the view for "where else does this value live", which
+      // is a different question from "what does the analyser think".
+      //
+      // ?peek=…&echo=<a title> — WHAT APPROVING THAT TITLE WOULD REWRITE in the
+      // rest of the listing, and what it would leave saying the old thing.
+      // Reads only: it runs the same planEchoes the approve runs and prints the
+      // plan. Dry running is how every other half of this tool was measured
+      // before it was allowed near a live catalogue, and the spec echoes are the
+      // half that writes to the description a customer reads.
+      let rawMf: Record<string, string> | null = null;
+      let rawDesc = "";
+      let echoPlan: Record<string, unknown> | null = null;
+      const wantEcho = (url.searchParams.get("echo") || "").trim();
+      if (url.searchParams.get("raw") || wantEcho) {
+        const d = await shopifyGql(shop, token,
+          `query($id: ID!) { product(id: $id) { descriptionHtml
+             metafields(first: 60) { edges { node { id namespace key type value } } } } }`,
+          { id: cat[0].product_id });
+        const html = String(d?.product?.descriptionHtml || "");
+        const mfs: { id: string; key: string; value: string }[] = [];
+        rawMf = {};
+        for (const eg of (d?.product?.metafields?.edges || [])) {
+          const n = eg?.node; if (!n) continue;
+          rawMf[`${n.namespace}.${n.key} (${n.type})`] = String(n.value ?? "").slice(0, 600);
+          if (n.id) mfs.push({ id: String(n.id), key: String(n.key || ""),
+                               value: String(n.value ?? "") });
+        }
+        if (url.searchParams.get("raw")) rawDesc = html;
+        if (wantEcho) {
+          const cur = String(cat[0].title || "");
+          const run = titleRun(cur, wantEcho);
+          const plan = planEchoes(html, mfs, run.was, run.now, wantEcho);
+          echoPlan = {
+            from: cur, to: wantEcho, run,
+            alsoUpdated: plan.echoes,
+            stillSays: plan.stillSays,
+            specRows: plan.cellHits,
+            metafields: plan.mfUpdates.length,
+            // The bytes that would change in the description, so a splice can be
+            // read rather than trusted.
+            descriptionDiff: plan.cellHits
+              ? htmlDelta(html, plan.html) : null,
+          };
+        }
+      }
       // &market=1 exercises the eBay half for ONE item, which the sweep cannot
       // be aimed at (it walks oldest-swept-first by design). This is how the
       // model-not-found check gets tested against a known-bad title rather than
@@ -3316,6 +3774,8 @@ Deno.serve(async (req: Request) => {
       }
       return json({
         store, sku, title: cat[0].title,
+        ...(rawMf && rawDesc ? { metafields: rawMf, descriptionHtml: rawDesc } : rawMf && !wantEcho ? { metafields: rawMf } : {}),
+        ...(echoPlan ? { echo: echoPlan } : {}),
         specKeys: Object.keys(e?.specs || {}),
         specs: e?.specs || {},
         included: e?.included || [],

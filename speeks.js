@@ -45567,6 +45567,10 @@ let _ltTier = 3;      // which tab: 3 Wrong, 2 Hard To Find, 1 Opportunity
 // the subtree on every state change and an in-progress edit would be lost.
 let _ltEdits = new Map();
 let _ltBusy = new Set();
+// Reading what else the change would touch, before anybody is asked to confirm
+// it. Its own state and its own word on the button: "Saving…" over a request
+// that has not saved anything yet is the button lying about a live catalogue.
+let _ltChecking = new Set();
 
 async function _ltFetch(path) {
     const pin = sessionStorage.getItem('speeksUserPin') || '';
@@ -45847,7 +45851,8 @@ function _ltRow(r) {
     const id = String(r.productId || '');
     const numeric = _ecEsc(id.split('/').pop());
     const shop = _ecEsc(r.shop || '');
-    const busy = _ltBusy.has(id);
+    const checking = _ltChecking.has(id);
+    const busy = _ltBusy.has(id) || checking;
     const edited = _ltEdits.get(id);
     // The box holds, in order of preference: what the reviewer typed, the
     // suggestion, or the current title. A row with NO suggestion arrives with
@@ -45903,7 +45908,7 @@ function _ltRow(r) {
         </div>
         <div class="lt-acts">
           <button class="lt-ok" onclick="ltApprove('${_ecEsc(id)}')"
-                  ${canApprove ? '' : 'disabled'}>${busy ? 'Saving…' : (dirty ? 'Save My Title' : 'Approve')}</button>
+                  ${canApprove ? '' : 'disabled'}>${checking ? 'Checking…' : busy ? 'Saving…' : (dirty ? 'Save My Title' : 'Approve')}</button>
           <button class="lt-no" onclick="ltDeny('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
                   title="${_ecEsc(_ltDenyKind(r).hint)}">${_ltDenyKind(r).label}</button>
         </div>
@@ -45997,11 +46002,39 @@ async function ltApprove(pid) {
     const typed = _ltEdits.get(pid);
     const title = (typed != null ? typed : (row.suggested || '')).trim();
     if (!title) return;
+    // ⚠️ ASK THE SERVER WHAT ELSE THIS CHANGES BEFORE ASKING THE PERSON.
+    // The title is no longer the only field this writes: the same words are
+    // carried into the description's spec table and into every metafield that
+    // states them, so the confirm has to name those too. The preview runs the
+    // approve's own reading half against the live listing a second before the
+    // write, which is the only way the box can promise what the write will do.
+    // ⚠️ ITS FAILURE IS NOT THE FIX'S FAILURE. If the preview cannot be had, the
+    // question falls back to the title-only wording rather than blocking a
+    // correction somebody came here to make.
+    _ltChecking.add(pid); ecRender();
+    const pre = await _ltPost({ action: 'preview', store: _ecStore, productId: pid, title });
+    _ltChecking.delete(pid); ecRender();
+    let also = '';
+    if (pre.ok && pre.body) {
+        const up = pre.body.alsoUpdated || [];
+        const left = pre.body.stillSays || [];
+        if (up.length) {
+            also += `\n\nIt also updates these, so the rest of the listing agrees with the title:\n`
+                + up.map(u => `  • ${u.field}: ${u.was} → ${u.now}`).join('\n');
+        }
+        if (left.length) {
+            // Named in the SAME box, not in a message afterwards: the reviewer
+            // is about to open Shopify anyway, and this is the one thing here
+            // that still needs a person.
+            also += `\n\nLeft as it is — there is no replacement to write:\n`
+                + left.map(l => `  • ${l.field} still says "${l.value}"`).join('\n');
+        }
+    }
     // ⚠️ THIS WRITES A LIVE STOREFRONT TITLE, so it asks first and it names both
     // titles in the question. A confirm that only says "are you sure" makes
     // somebody click through it; one that shows what changes is read.
     const okToGo = confirm(`Change this listing's title?\n\nFrom: ${row.current}\n`
-        + `To:   ${title}\n\nThis updates the Shopify product, so it changes the online store`
+        + `To:   ${title}${also}\n\nThis updates the Shopify product, so it changes the online store`
         + ` and eBay.`);
     if (!okToGo) return;
     _ltBusy.add(pid); ecRender();
@@ -46016,6 +46049,15 @@ async function ltApprove(pid) {
         return;
     }
     _ltEdits.delete(pid);
+    // The title landed but the fields that quote it did not. Said out loud, and
+    // only in this case: the reviewer approved a set of changes and got some of
+    // them, so the listing is now half-corrected and a person has to finish it.
+    if (res.body?.metafieldsLeft) {
+        alert(`The title was changed, but ${res.body.metafieldsLeft} field`
+            + `${res.body.metafieldsLeft === 1 ? '' : 's'} that quote it could not be`
+            + ` saved — Shopify refused them. Open the product and fix them by hand,`
+            + ` or approve this row again once it is back in the queue.`);
+    }
     // Reload rather than splicing the row out: approving can change the counts
     // on all three tabs, and a store's queue is small enough that one read is
     // cheaper than keeping three numbers in step by hand.
