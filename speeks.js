@@ -45650,6 +45650,33 @@ function _ltMark(words, head, tail, cls) {
     return parts.join(' ');
 }
 
+// WHAT THE SUGGESTION TOOK OUT TO FIT THE REST IN, and why that was safe.
+//
+// ⚠️ THIS IS THE ONE SUGGESTION THAT DELETES SOMETHING TRUE. Every other fix on
+// this screen corrects a mistake or removes a repeat. This one spends a real
+// fact — a clock speed, a form factor — to buy room for the words that name the
+// item, so it has to be the most legible thing on the row rather than the least:
+// named in full, struck through, in red, with where the fact still lives. The
+// server chooses them (trimToFit, which may only spend a value the SPEC TABLE
+// also states) and sends them on the finding; nothing here decides anything.
+function _ltTrimLine(findings) {
+    const f = (findings || []).find(x => Array.isArray(x && x.trimmed) && x.trimmed.length);
+    if (!f) return '';
+    const cut = f.trimmed;
+    // Its own line rather than a clause in the reasons underneath: a reviewer
+    // skims Now / Suggested and stops. A deletion nobody asked for has to be
+    // caught in that skim, or the row is not safe to approve quickly — and being
+    // safe to approve quickly is the whole point of this screen.
+    return '<div class="lt-trim">'
+        + '<span class="lt-lab">Removed</span>'
+        + '<span class="lt-trim-v">'
+        + cut.map(v => '<s>' + _ecEsc(v) + '</s>').join(' ')
+        + '</span>'
+        + '<span class="lt-trim-why">to make room — the spec table still says '
+        + (cut.length === 1 ? 'it' : 'them') + ', so only the title is shorter</span>'
+        + '</div>';
+}
+
 // The suggestion, with the words it ADDS marked. This line stays character for
 // character equal to the string in the edit box below it — the reviewer reads
 // it as the title they are approving, so nothing may be inserted into it.
@@ -45897,6 +45924,7 @@ function _ltRow(r) {
             ? `<span class="lt-sug">${_ltDiff(r.current, r.suggested)}</span>`
             : `<span class="lt-nosug">No safe automatic fix — type one below.</span>`}
         </div>
+        ${_ltTrimLine(r.findings)}
         <div class="lt-edit">
           <input type="text" maxlength="80" class="lt-input${dirty ? ' lt-dirty' : ''}"
                  value="${_ecEsc(boxVal)}" data-pid="${_ecEsc(id)}"

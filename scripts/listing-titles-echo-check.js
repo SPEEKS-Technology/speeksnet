@@ -96,7 +96,11 @@ const js = stripReturnTypes(block)
     .replace(/(\w+)\s*:\s*(RegExpExecArray|EchoPlan|Echo|SpecField)(\[\])?(\s*\|\s*null)?/g, '$1')
     .replace(/new (Map|Set)<[^>]*>\(/g, 'new $1(')
     .replace(/\bas\s+Record<[^>]*>/g, '')
-    .replace(/\bas\s+any\b/g, '');
+    .replace(/\bas\s+any\b/g, '')
+    // TRIM_RANK is a tuple array, and `(… || [null, 99])[1] as number` reads it.
+    // Both arrived with trimToFit, which shares this block because it needs runRe.
+    .replace(/:\s*\[RegExp,\s*number\]\[\]/g, '')
+    .replace(/\s+as\s+(number|string|boolean)\b/g, '');
 
 let planEchoes, specCells, collectSpecFields, titleRun, replaceRun;
 try {

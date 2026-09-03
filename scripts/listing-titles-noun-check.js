@@ -49,10 +49,20 @@ const block = [
     between('const PLACEHOLDER = /', '\n\n'),
     between('const PRODUCT_NOUNS = [', '// Measurements and capacities are not'),
     between('const escapeRe = ', '// ============ WHICH WORDS'),
+    between('const EBAY_TITLE_MAX', '\n\n'),
     between('const SECONDARY_SPEC =', '\n// Matched case-insensitively'),
 ].join('\n\n');
 
 const js = block
+    // A tuple-array annotation (TRIM_RANK) and an inline object-array one
+    // (`hits: { v: string; rank: number }[]`). Both are whole-declaration
+    // annotations, so the value they precede is untouched.
+    .replace(/:\s*\[RegExp,\s*number\]\[\]/g, '')
+    .replace(/:\s*\{[^{}]*\}\[\]/g, '')
+    .replace(/\s+as\s+(number|string|boolean)\b/g, '')
+    // Any parameter annotated `: string`, wherever it sits in the list. The
+    // rules further down only ever caught the first or the last.
+    .replace(/([(,]\s*)(\w+)\s*:\s*string\b/g, '$1$2')
     // ⚠️ Record<> CONTAINS A COMMA, so it has to go before any rule that splits a
     // parameter list on one. alsoInSpecs takes Record<string, string> | undefined.
     .replace(/:\s*Record<[^>]*>(\s*\|\s*undefined)?/g, '')
@@ -73,13 +83,14 @@ const js = block
              (_m, n, p) => `const ${n} = (${p.replace(/\s*:\s*string/g, '')}) =>`);
 
 let shelfNoun, isProductNoun, depluralise, singularToken, GENERIC_SHELF, PRODUCT_NOUNS,
-    alsoInSpecs, SECONDARY_SPEC;
+    alsoInSpecs, SECONDARY_SPEC, trimToFit;
 try {
     ({ shelfNoun, isProductNoun, depluralise, singularToken, GENERIC_SHELF, PRODUCT_NOUNS,
-       alsoInSpecs, SECONDARY_SPEC } =
+       alsoInSpecs, SECONDARY_SPEC, trimToFit } =
         new Function(js + `
         return { shelfNoun, isProductNoun, depluralise, singularToken,
-                 GENERIC_SHELF, PRODUCT_NOUNS, alsoInSpecs, SECONDARY_SPEC };`)());
+                 GENERIC_SHELF, PRODUCT_NOUNS, alsoInSpecs, SECONDARY_SPEC,
+                 trimToFit };`)());
 } catch (e) {
     console.log('  FAIL  could not lift the code out of index.ts   ' + e.message);
     process.exit(1);
@@ -266,8 +277,10 @@ const COMBO = {
 };
 const COMBO_TITLE = 'Gigabyte B760M Aorus Elite LGA 1700 Intel Core I5-13600KF 3.50GHz microATX';
 const cut = alsoInSpecs(COMBO_TITLE, COMBO);
-ok(cut.join(' | ') === '3.50GHz | LGA 1700 | microATX',
-   'names the clock speed, the socket and the form factor', cut.join(' | '));
+// ⚠️ CHEAPEST FIRST, SOCKET LAST. The order is the only opinion in this path,
+// and it is what decides which fact gets spent when room has to be made.
+ok(cut.join(' | ') === '3.50GHz | microATX | LGA 1700',
+   'clock speed, then form factor, then the socket LAST', cut.join(' | '));
 // ⚠️⚠️ THE FAILURE THAT WOULD MATTER. "Motherboard Brand" and "CPU Model" do not
 // appear in TITLE_SPECS verbatim, so a DENY-LIST built on "not in TITLE_SPECS"
 // would have told a reviewer it is safe to cut the brand and the model.
@@ -285,7 +298,7 @@ ok(!cut.some(v => /889523035023|X310M613|Good/.test(v)), 'never a serial, UPC or
 ok(alsoInSpecs('Asus X99-A LGA 2011-v3 Intel Core i7-6800K 6 Core 3.40GHz ATX',
                { 'Processor Speed': '3.40GHz', 'Cores': '6 Core',
                  'Socket': 'LGA 2011-v3', 'Form Factor': 'ATX' })
-     .join(' | ') === '3.40GHz | 6 Core | LGA 2011-v3 | ATX',
+     .join(' | ') === '3.40GHz | 6 Core | ATX | LGA 2011-v3',
    'BAL\'s combo, with ATX standing alone');
 ok(alsoInSpecs('Gigabyte B760M microATX', { 'Form Factor': 'ATX' }).length === 0,
    'ATX inside microATX is not a match');
@@ -309,6 +322,71 @@ ok(/const cuttable = noun \? alsoInSpecs\(original, extra\?\.specs\) : \[\];/.te
 ok(analyseBlock.includes('from the title takes nothing out of the listing.')
    && analyseBlock.includes('The spec table already states'),
    'and the finding says what it means in English');
+
+// =============================================================================
+console.log('\n9. MAKING ROOM BY SPENDING A FACT THE LISTING KEEPS');
+// ⚠️ THE MOST DANGEROUS THING IN THIS FILE. Every other suggestion adds words or
+// removes a mistake; this one DELETES A TRUE FACT from a live title to buy space.
+// It is allowed only because the value is one the SPEC TABLE also states, chosen
+// by name from a published order, the fewest that will do.
+const ADD = 'CPU Motherboard Combo';
+
+// ⚠️ THE ANSWER ETHAN TYPED BY HAND. He was shown "no safe automatic fix", wrote
+// the title himself, and asked why the tool could not: "clock speed might not be
+// as important as CPU Motherboard combo right?" This asserts the tool now
+// produces HIS title, character for character.
+const ovl = trimToFit(COMBO_TITLE, ADD, COMBO);
+ok(ovl && ovl.title + ' ' + ADD
+     === 'Gigabyte B760M Aorus Elite LGA 1700 Intel Core I5-13600KF CPU Motherboard Combo',
+   "reaches the title Ethan wrote by hand", ovl && (ovl.title + ' ' + ADD));
+ok(ovl && (ovl.title + ' ' + ADD).length === 79, 'and it is 79 of 80',
+   ovl && (ovl.title + ' ' + ADD).length);
+ok(ovl && ovl.gone.join(' + ') === '3.50GHz + microATX',
+   'spending the clock speed and the form factor', ovl && ovl.gone.join(' + '));
+// ⚠️ AND KEEPING THE SOCKET. "LGA 1700 motherboard" is a real search; a clock
+// speed is implied by the CPU model number standing next to it. If this ever
+// flips, the tool is deleting the most searched thing on the row.
+ok(ovl && !ovl.gone.includes('LGA 1700') && ovl.title.includes('LGA 1700'),
+   'the socket survives — it is the thing people search');
+
+// BAL needs only three characters, so only one fact is spent.
+const BAL_T = 'Asus X99-A LGA 2011-v3 Intel Core i7-6800K 6 Core 3.40GHz ATX';
+const BAL_S = { 'Processor Speed': '3.40GHz', 'Cores': '6 Core',
+                'Socket': 'LGA 2011-v3', 'Form Factor': 'ATX' };
+const bal = trimToFit(BAL_T, ADD, BAL_S);
+ok(bal && bal.gone.length === 1 && bal.gone[0] === '3.40GHz',
+   'the FEWEST that will do, never a tidy-up', bal && bal.gone.join(' + '));
+ok(bal && (bal.title + ' ' + ADD).length <= 80, 'and the result fits', bal && (bal.title + ' ' + ADD).length);
+
+// A title that already fits is not this function's business.
+ok(trimToFit('Short Title', ADD, COMBO) === null, 'a title with room is left alone');
+// Nothing spendable -> null, and the finding falls back to naming the word.
+ok(trimToFit(COMBO_TITLE, ADD, { 'Brand': 'Gigabyte', 'Model': 'B760M Aorus Elite' }) === null,
+   'no spendable fact means NO suggestion, not a guess');
+// ⚠️ NEVER MORE THAN THREE. A title needing four facts removed to name itself is
+// a listing for a person to look at, and a suggestion that guts a title is one
+// nobody trusts enough to read the next one.
+const many = trimToFit(COMBO_TITLE, 'A Very Long Product Name That Cannot Possibly Fit Here', COMBO);
+ok(many === null || many.gone.length <= 3, 'at most three facts are ever spent',
+   many && many.gone.length);
+// ⚠️ NEVER A STUB. Brand plus model is the floor.
+ok((trimToFit('Corsair 3.50GHz', ADD, { 'Processor Speed': '3.50GHz' }) || {}).title === undefined,
+   'never trims a title down to a stub');
+// ⚠️ ONLY VALUES THE SPEC TABLE STATES. This is the entire safety argument: the
+// words leave the TITLE, never the LISTING.
+ok(ovl && ovl.gone.every(v => Object.values(COMBO).includes(v)),
+   'every word spent is one the spec table still holds');
+
+// ⚠️ THE BANNED BEHAVIOUR IS STILL BANNED. capTitle cut on a word boundary from
+// the END and once dropped the "4050" out of an Asus title to buy room for
+// " Bundle" — it did not know what it was deleting. Nothing here may do that.
+ok(/if \(title\.length \+ 1 \+ word\.length > EBAY_TITLE_MAX\) return false;/.test(src),
+   'tryAppend still refuses an addition that does not fit');
+ok(analyseBlock.includes('const room = trimToFit(title, noun, extra?.specs);')
+   && analyseBlock.includes('if (!applied) { title = original; trimmed = []; }'),
+   'and a trim that fails to land puts the title back');
+ok(analyseBlock.includes('...(trimmed.length ? { trimmed } : {}),'),
+   'what was spent is carried to the row so it can be shown in red');
 
 console.log('\n' + (fails ? `${fails} FAILED` : 'all passed'));
 process.exit(fails ? 1 : 0);

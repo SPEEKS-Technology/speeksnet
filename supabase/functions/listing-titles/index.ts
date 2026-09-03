@@ -2010,22 +2010,44 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // ⚠️ APPEND ONLY IF WE ARE GOING TO REPORT. tryAppend mutates the title and
     // sets `fixable`, so calling it before this gate produced a suggested title
     // with no finding beside it — a diff on the row that nothing explained.
-    const applied = !alreadyStrong && !!noun && tryAppend(noun);
+    let applied = !alreadyStrong && !!noun && tryAppend(noun);
+    // ⚠️ ONLY WHEN APPENDING OUTRIGHT HAS ALREADY FAILED. The straight append is
+    // always preferred — a title that loses nothing is better than one that
+    // trades, however good the trade.
+    let trimmed: string[] = [];
+    if (!alreadyStrong && !applied && noun) {
+      const room = trimToFit(title, noun, extra?.specs);
+      if (room) {
+        title = room.title; trimmed = room.gone;
+        applied = tryAppend(noun);
+        // Belt and braces: if the append still refuses, put the title back. A
+        // suggestion that only DELETED words would be a title made worse.
+        if (!applied) { title = original; trimmed = []; }
+      }
+    }
     if (!alreadyStrong) findings.push({
       code: "missing-noun",
-      says: (applied
+      // ⚠️ THE TRADE IS NAMED IN FULL OR IT IS NOT OFFERED. The reviewer is
+      // approving a DELETION as well as an addition, so the sentence has to say
+      // what went, why it was safe, and where it still lives.
+      ...(trimmed.length ? { trimmed } : {}),
+      says: (applied && trimmed.length
+        ? `The title never says what the item IS. This listing is filed under "${shelfSaid}", so "${noun}" is the word a buyer would type. There was no room for it, so ${trimmed.join(" and ")} ${trimmed.length === 1 ? "comes" : "come"} out to make space — the spec table still states ${trimmed.length === 1 ? "it" : "them"}, so the listing keeps ${trimmed.length === 1 ? "it" : "them"} and only the title is shorter.`
+        : applied
         ? `The title never says what the item IS. This listing is filed under "${shelfSaid}", so "${noun}" is the word a buyer would type — most people search for the kind of thing they want, and those words never match this listing.`
-        // ⚠️ WE KNOW THE WORD AND IT WILL NOT FIT. Saying "no safe automatic fix"
-        // here throws away the answer the listing was holding all along. NEVER
-        // TRUNCATE TO MAKE ROOM (see tryAppend) — hand the reviewer the word and
-        // let them choose what comes out.
+        // ⚠️ WE KNOW THE WORD, AND EVEN TRADING WOULD NOT FIT IT. The last
+        // resort, reached only when trimToFit refused: nothing in the title is a
+        // fact the spec table also holds, or three removals still were not
+        // enough. Saying "no safe automatic fix" here would throw away the
+        // answer the listing was holding all along, so name the word instead and
+        // let the reviewer decide what a machine may not.
         : noun
           ? `The title never says what the item IS. This listing is filed under "${shelfSaid}", so "${noun}" is the missing word — but the title is already ${original.length} of ${EBAY_TITLE_MAX} characters, so something has to come out before it will fit.`
-            // ⚠️ NAME WHAT IS SAFE TO LOSE, DECIDE NOTHING. Ethan chose this over
-            // the tool computing the swap itself: every value here is stated in
-            // the spec table, so the title is the only place it would disappear
-            // from — which is the fact a reviewer would otherwise go and check by
-            // hand before cutting anything. See alsoInSpecs.
+            // Name what is safe to lose. Every value here is stated in the
+            // spec table, so the title is the only place it would disappear
+            // from — the fact a reviewer would otherwise go and check by hand.
+            // On this branch trimToFit has already declined to spend them, so
+            // this is a shortlist for a person, not a plan we could not execute.
             + (cuttable.length
                 ? ` The spec table already states ${cuttable.join(", ")}, so cutting ${cuttable.length === 1 ? "that" : "any of those"} from the title takes nothing out of the listing.`
                 : "")
@@ -3212,12 +3234,28 @@ const runRe = (was: string) =>
 const SECONDARY_SPEC =
   /^((processor|clock|memory|bus|write|read)\s+)?speed$|^socket$|^chipset$|^form\s+factor$|^cores?$|^thread\s+count$|^cache$|^interface$|^voltage$|^rpm$|^memory\s+(type|slots?)$|^expansion|^bus$/i;
 
+// ⚠️ THE ORDER IS THE ONLY OPINION IN HERE, SO IT IS WRITTEN DOWN.
+// Dropped cheapest-first and THE SOCKET IS LAST: "LGA 1700 motherboard" is a
+// real search, while a clock speed is implied by the CPU model number standing
+// next to it and a core count by the same. Ethan's own hand-typed fix for the
+// OVL combo dropped the speed and the form factor and kept the socket, which is
+// what this order produces.
+const TRIM_RANK: [RegExp, number][] = [
+  [/speed$/i, 1], [/^cores?$/i, 2], [/^thread\s+count$/i, 3], [/^cache$/i, 4],
+  [/^voltage$/i, 5], [/^rpm$/i, 6], [/^memory\s+(type|slots?)$/i, 7],
+  [/^interface$/i, 8], [/^expansion/i, 9], [/^bus$/i, 10],
+  [/^form\s+factor$/i, 11], [/^chipset$/i, 12], [/^socket$/i, 13],
+];
+const trimRank = (k: string) =>
+  (TRIM_RANK.find(([re]) => re.test(k.trim())) || [null, 99])[1] as number;
+
 // Values the spec table states AND the title repeats, limited to the fields
-// above. Uses `runRe` so the boundary rule is the one the rest of the tool uses
-// — "ATX" must not match inside "microATX", and "8GB" not inside "128GB".
+// above, CHEAPEST FIRST. Uses `runRe` so the boundary rule is the one the rest
+// of the tool uses — "ATX" must not match inside "microATX", "8GB" not inside
+// "128GB".
 function alsoInSpecs(title: string, specs: Record<string, string> | undefined): string[] {
   if (!specs) return [];
-  const out: string[] = [];
+  const hits: { v: string; rank: number }[] = [];
   for (const [k, raw] of Object.entries(specs)) {
     if (!SECONDARY_SPEC.test(String(k).trim())) continue;
     const v = String(raw || "").trim();
@@ -3225,9 +3263,51 @@ function alsoInSpecs(title: string, specs: Record<string, string> | undefined): 
     // trim by hand, and they are not in the title anyway.
     if (!v || PLACEHOLDER.test(v) || v.length < 3 || v.length > 24) continue;
     if (!runRe(v).test(title)) continue;
-    if (!out.includes(v)) out.push(v);
+    if (!hits.some(h => h.v === v)) hits.push({ v, rank: trimRank(k) });
   }
-  return out.slice(0, 4);
+  return hits.sort((a, b) => a.rank - b.rank).map(h => h.v).slice(0, 4);
+}
+
+// ⚠️ MAKING ROOM IS ALLOWED ONLY BY DELETING A NAMED FACT THE LISTING STILL
+// STATES — NEVER BY TRUNCATING.
+// Ethan, having typed the fix by hand rather than being handed it: *"Can you
+// give the actual recommended title to approve. I still feel for something I
+// want simple and easy, stuff like this is too complicated and manual."* He is
+// right — a finding that describes the edit and leaves you to make it is a
+// worksheet, not a tool.
+//
+// The distinction from the old banned behaviour is the whole safety argument.
+// `capTitle` cut on a word boundary from the END and once dropped the "4050"
+// out of an Asus title to buy room for " Bundle" — it did not know what it was
+// deleting. This deletes a value the SPEC TABLE STATES, chosen by name, in a
+// fixed published order, the fewest that will do, and reports every one of them
+// back so the row can print them in red. Nothing leaves the LISTING; the words
+// leave the TITLE only, and the spec-echo subtraction rule already refuses to
+// follow a trim into the fields (shortening is not correcting).
+//
+// Returns the shortened title and what came out, or null when it cannot be done
+// inside the rules — in which case the finding goes back to naming the word and
+// letting the reviewer choose.
+function trimToFit(title: string, add: string,
+                   specs: Record<string, string> | undefined) {
+  const want = EBAY_TITLE_MAX - (add.length + 1);
+  if (title.length <= want) return null;          // it already fits; not our job
+  let t = title;
+  const gone: string[] = [];
+  for (const v of alsoInSpecs(title, specs)) {
+    // ⚠️ THREE IS THE CAP. A title needing four facts removed to name itself is
+    // not a title with a spacing problem, it is a listing somebody should look
+    // at — and a suggestion that deletes half a title is one nobody will trust
+    // enough to read the next one.
+    if (gone.length >= 3) break;
+    const next = t.replace(runRe(v), " ").replace(/\s+/g, " ").trim();
+    if (!next || next.length >= t.length) continue;
+    // Never leave a stub. Brand plus model is the floor.
+    if (next.split(" ").length < 3) continue;
+    t = next; gone.push(v);
+    if (t.length <= want) return { title: t, gone };
+  }
+  return null;
 }
 
 // Matched case-insensitively, but what goes IN is written exactly as the

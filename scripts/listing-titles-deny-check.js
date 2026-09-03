@@ -28,7 +28,7 @@ const DATA = {
     scope: { name: 'Ethan Kushnir', role: 'district manager', stores: ['OVL'], corp: true },
     store: 'OVL',
     ebayScope: { active: true, lastSeen: new Date().toISOString(), hours: 1, maxAgeHours: 36 },
-    counts: { OVL: 3 },
+    counts: { OVL: 4 },
     queue: [
         { productId: 'gid://shopify/Product/1', sku: 'KS01-A', severity: 3,
           current: 'GoPro Hero11 Black 27MP 360 Action Camera CHDHX-111',
@@ -51,6 +51,18 @@ const DATA = {
           findings: [{ code: 'ebay-not-synced', severity: 3,
                        says: 'We corrected this on Aug 28 and eBay has not picked it up.' }],
           basis: 'rules', confidence: 'high', comps: [], price: 249, quantity: 1,
+          shop: 'paymore-overland-park.myshopify.com' },
+        // ⚠️ THE ONE SUGGESTION THAT DELETES A TRUE FACT. Real OVL data: the
+        // CPU/motherboard combo whose title named neither part and had six
+        // characters spare. The reviewer is approving a removal as well as an
+        // addition, so the row has to SAY SO before they click.
+        { productId: 'gid://shopify/Product/4', sku: 'KS01-D', severity: 2,
+          current: 'Gigabyte B760M Aorus Elite LGA 1700 Intel Core I5-13600KF 3.50GHz microATX',
+          suggested: 'Gigabyte B760M Aorus Elite LGA 1700 Intel Core I5-13600KF CPU Motherboard Combo',
+          findings: [{ code: 'missing-noun', severity: 2,
+                       trimmed: ['3.50GHz', 'microATX'],
+                       says: 'The title never says what the item IS.' }],
+          basis: 'rules', confidence: 'high', comps: [], price: 249.99, quantity: 1,
           shop: 'paymore-overland-park.myshopify.com' },
     ],
     denied: {
@@ -107,7 +119,7 @@ const DATA = {
         okLabel: (row.querySelector('.lt-ok') || {}).textContent || '',
         okOff: !!(row.querySelector('.lt-ok') || {}).disabled,
     })));
-    ok(btns.length === 3, 'three rows rendered', 'got ' + btns.length);
+    ok(btns.length === 3, 'three rows on the Wrong tab', 'got ' + btns.length);
     if (btns.length === 3) {
         ok(btns[0].deny.trim() === 'Deny', 'ordinary finding still says Deny', btns[0].deny.trim());
         ok(btns[1].deny.trim() === 'Ours Is Fine', 'drift row says Ours Is Fine', btns[1].deny.trim());
@@ -121,6 +133,60 @@ const DATA = {
            'a row with no safe fix says Save My Title, greyed until one is typed',
            btns[1].okLabel.trim());
     }
+
+    console.log('== A suggestion that DELETES says so, in red ==');
+    // ⚠️ THE ROW IS APPROVED IN A SKIM. Every other fix on this screen only adds
+    // words or removes a mistake; this one spends a true fact (a clock speed, a
+    // form factor) to buy room for the words that name the item. If a reviewer
+    // can click Approve without meeting that, the screen is lying by omission.
+    // ⚠️ IT LIVES ON THE HARD TO FIND TAB. missing-noun is severity 2, so the
+    // row is not on the tab the rest of this harness reads — and a check that
+    // silently found nothing would have passed while the line never rendered.
+    await page.evaluate(() => ltSetTier(2));
+    await new Promise(r => setTimeout(r, 120));
+    const trim = await page.evaluate(() => {
+        const rows = [...document.querySelectorAll('.lt-row')];
+        const el = rows.map(r => r.querySelector('.lt-trim')).find(Boolean);
+        if (!el) return null;
+        const v = el.querySelector('.lt-trim-v');
+        const cs = getComputedStyle(v);
+        return {
+            text: el.textContent.replace(/\s+/g, ' ').trim(),
+            struck: [...v.querySelectorAll('s')].map(x => x.textContent),
+            colour: cs.color,
+            shown: !!el.getClientRects().length,
+            onlyOne: rows.filter(r => r.querySelector('.lt-trim')).length,
+        };
+    });
+    ok(!!trim, 'the trimmed row draws a Removed line');
+    if (trim) {
+        ok(trim.shown, 'and it is actually visible');
+        ok(trim.onlyOne === 1, 'only the row that trims something draws one', trim.onlyOne);
+        ok(trim.struck.join(' + ') === '3.50GHz + microATX',
+           'it names every word that came out, struck through', trim.struck.join(' + '));
+        // Red, not the sage of an ordinary edit. What is being approved is a LOSS.
+        ok(/rgb\(163,\s*53,\s*44\)/.test(trim.colour), 'in the red this site uses for a loss', trim.colour);
+        ok(/spec table still says them/.test(trim.text),
+           'and says where the facts still live', trim.text);
+    }
+    // ⚠️ THE SUGGESTED LINE MUST STILL EQUAL THE EDIT BOX. The reviewer reads one
+    // and approves the other, so a trim must not desynchronise them.
+    const pair = await page.evaluate(() => {
+        const row = [...document.querySelectorAll('.lt-row')].find(r => r.querySelector('.lt-trim'));
+        return row ? { sug: row.querySelector('.lt-sug').textContent.replace(/\s+/g, ' ').trim(),
+                       box: row.querySelector('.lt-input').value } : null;
+    });
+    ok(pair && pair.sug === pair.box,
+       'the suggestion drawn equals the title in the box', pair && pair.box);
+    ok(pair && pair.box.length <= 80, 'and it is inside eBay\'s 80', pair && pair.box.length);
+    // A picture of the one row that deletes something, because "is it legible"
+    // is not a thing an assertion can answer.
+    const trimRow = await page.$('.lt-row');
+    if (trimRow) await trimRow.screenshot({ path: REPO + "/scripts/lt-trim-row.png" });
+    // Back to the tab the rest of this harness was written against.
+    await page.evaluate(() => ltSetTier(3));
+    await new Promise(r => setTimeout(r, 120));
+
 
     console.log('== And sends the right answer ==');
     // ⚠️ NO BROWSER DIALOGS. These questions are asked in the product now — a

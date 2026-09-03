@@ -18053,6 +18053,16 @@ body.tv-body { display: block; background: #eef1f5; }
    one of the two is wrong in front of a buyer and we do not know which. */
 .lt-drift .lt-cur { color: #a3352c; }
 .lt-drift .lt-lab { color: #d1443b; }
+/* WHAT THE SUGGESTION TOOK OUT. Red because it is a LOSS the reviewer is
+   approving, and it sits in the Now/Suggested column so the eye meets it in
+   the same downward skim. The value is struck through: somebody who reads
+   nothing else still sees a word with a line through it. */
+.lt-trim { display: flex; gap: 8px; align-items: baseline; margin: 2px 0 0; flex-wrap: wrap; }
+.lt-trim .lt-lab { color: #a3352c; }
+.lt-trim-v { color: #a3352c; font-weight: 600; }
+.lt-trim-v s { text-decoration-thickness: 2px; margin-right: 6px; }
+.lt-trim-why { color: #64748b; font-size: 12px; }
+@media (max-width: 900px) { .lt-trim-why { font-size: 11px; } }
 .lt-nosug { font-size: 12px; font-weight: 700; color: #b7791f; }
 /* The words the suggestion ADDS or CHANGES. A word-level mark, so the reviewer
    can see at a glance whether the new words are true of the item in their hand. */
