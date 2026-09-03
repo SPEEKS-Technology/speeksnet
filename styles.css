@@ -20230,3 +20230,55 @@ select.dd-native {
     .b2b-bench-what { flex: 1 1 100%; }
     .b2b-bench-verdict { width: auto; flex: 1 1 auto; }
 }
+
+/* =========================================================
+   SPEEKS CAPTURE TOOL PANEL
+   =========================================================
+   Download the live bench tool, publish a new one, roll one back. Behind the
+   'b2b-capture-download' feature key, so for everybody else none of this
+   renders at all. See b2bCaptureRender in speeks.js. */
+.b2b-cap-get { width: 100%; margin: 0 0 16px; }
+
+.b2b-cap-up, .b2b-cap-hist { margin-top: 18px; }
+.b2b-cap-up .b2b-hint { margin: 6px 0 11px; font-size: 12px; color: var(--b2b-muted); line-height: 1.55; }
+.b2b-cap-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.b2b-cap-form input[type="text"] {
+    flex: 1 1 190px; min-width: 0; height: var(--b2b-h-md);
+    padding: 0 10px; font: inherit; font-size: 12.5px;
+    border: 1px solid var(--b2b-line); border-radius: var(--b2b-r-sm); background: #fff;
+}
+.b2b-cap-form input[type="file"] { flex: 1 1 100%; font-size: 12px; }
+.b2b-cap-stage {
+    display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+    font-size: 12px; color: var(--b2b-muted); cursor: pointer;
+}
+
+.b2b-cap-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; margin-top: 8px;
+    border: 1px solid var(--b2b-line-2); border-radius: var(--b2b-r-md); background: #fff;
+}
+/* The live one is the answer to the only question this list is usually asked,
+   so it is tinted rather than merely labelled. */
+.b2b-cap-row.is-current { background: var(--b2b-accent-tint); border-color: #cfeada; }
+.b2b-cap-what { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
+.b2b-cap-ver { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 800; color: var(--b2b-ink, #0f172a); }
+.b2b-cap-live {
+    font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: #fff; background: var(--b2b-accent); border-radius: 4px; padding: 2px 6px;
+}
+.b2b-cap-notes { font-size: 12px; color: #334155; line-height: 1.5; }
+.b2b-cap-meta { font-size: 10.5px; color: var(--b2b-faint); }
+/* Monospaced because it only exists to be compared, character by character,
+   against what a stick is carrying. */
+.b2b-cap-sha {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    margin-left: 6px; user-select: all;
+}
+.b2b-cap-acts { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.b2b-cap-acts .b2b-btn { padding: 5px 11px; font-size: 11.5px; height: auto; }
+
+@media (max-width: 720px) {
+    .b2b-cap-row { flex-wrap: wrap; }
+    .b2b-cap-what { flex: 1 1 100%; }
+}

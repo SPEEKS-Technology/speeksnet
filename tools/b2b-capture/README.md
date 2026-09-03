@@ -172,3 +172,31 @@ Worth one elevated run to confirm the WMI read works at all.
 
 Windows PowerShell 5.1, which ships with Windows. No runtime, no modules, no
 internet, nothing to install on a machine that was imaged twenty minutes ago.
+
+## How it reaches the bench
+
+The tool is **not** distributed from this repo. It is published from SPEEKSnet:
+**Operations → B2B Deals → SPEEKS Capture**.
+
+That panel is the whole release process:
+
+- **Download** hands you the version that is currently live.
+- **Upload** publishes a new one. Zip the `SPEEKS-Capture` folder, give it a
+  version label ("1.2.0", or "Sep 4 panel fix"), and it becomes live.
+- **Upload without making it live** stages one so you can test it before the
+  bench sees it.
+- **Make live** on any older version rolls back to it.
+
+Nothing is ever overwritten. Every upload is kept, and which one is live is a
+pointer that moves — so a broken upload cannot destroy the version that worked,
+and the live version can be neither deleted nor left unpublished. Each row shows
+its size, who uploaded it, when, and the first twelve characters of its SHA-256,
+which is how you tell what a stick in a drawer is actually carrying.
+
+Whoever can download the tool can also publish one: it is a single permission
+(`b2b-capture-download`), so MOCD does not need a developer to ship a fix.
+
+**This folder stays the source.** Edit here, run `Test-Normalizers.ps1`, zip the
+folder, then upload it in the panel. There is deliberately no zip committed to
+the repo any more — one that nothing serves only goes stale and gets downloaded
+by mistake.
