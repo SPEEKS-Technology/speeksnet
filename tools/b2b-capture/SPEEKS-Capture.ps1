@@ -55,7 +55,26 @@ param(
     # Ask for the session code instead of passing it in. For the bench, where
     # RUN-CAPTURE.bat is double-clicked and nobody is typing arguments. Blank
     # answer means "not this time" and the run continues offline.
+    #
+    # Asked ONCE PER STICK, not once per machine. The answer is written to
+    # config\speeks-device.json beside the script -- i.e. onto the USB -- and
+    # every later run, on every later machine, reuses it. A pallet of forty
+    # laptops is one code entry, not forty.
     [switch]$Live,
+
+    # Forget this stick's saved session and ask for a new one. How you move a
+    # stick from one pickup to the next. Without it a remembered code would keep
+    # posting into the deal it was last used for, which is the one genuinely
+    # dangerous thing a remembered credential can do.
+    [switch]$NewSession,
+
+    # A name for this stick, shown beside every machine it reports: "Bench 1",
+    # "Haydn's stick". Saved on first use, so it only has to be given once.
+    [string]$DeviceLabel,
+
+    # Print what this stick is enrolled against and exit. Does not read the
+    # machine and does not post.
+    [switch]$WhoAmI,
 
     # Override the endpoint. Only wanted for testing against a branch.
     [string]$PostTo = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/b2b-intake'
@@ -68,6 +87,97 @@ $ToolVersion = '0.1.0'
 # Every probe below runs inside this. A machine with a dead battery, no
 # discrete GPU, or a panel that reports no EDID must still produce a usable
 # record for every OTHER field -- one missing value is a blank, not a failure.
+# ---------------------------------------------------------------- the stick
+#
+# Identity and session live WITH THE DRIVE, in config\speeks-device.json beside
+# this script. That location is the point: the file travels on the USB, so the
+# stick -- not the machine, and not the person -- is what remembers which pickup
+# it is working. Plug it into the fortieth laptop of the day and it already
+# knows; the tech types nothing.
+#
+# Two things are kept:
+#   device_id     minted once, never again. Identifies THIS stick in the tray,
+#                 so "which one did that come off" has an answer when three
+#                 people are working one pallet.
+#   session_code  the pricer's code for the pickup in hand. Cleared by
+#                 -NewSession, which is how a stick is moved to the next job.
+#
+# Deliberately NOT a secret store. The code is a short-lived, single-deal,
+# human-gated credential and nothing it reaches can move money on its own (see
+# supabase/functions/b2b-intake). A stick that walks off can post junk into one
+# review tray until somebody closes the session. If that ever stops being an
+# acceptable blast radius, the answer is a per-device token hashed server-side
+# with its own revoke -- Haydn's handoff spells that design out and it is the
+# right next step, not a rewrite of this.
+$DeviceConfigDir  = Join-Path $PSScriptRoot 'config'
+$DeviceConfigPath = Join-Path $DeviceConfigDir 'speeks-device.json'
+
+function Get-DeviceConfig {
+    $cfg = [ordered]@{ device_id = $null; device_label = $null; session_code = $null; session_saved_at = $null }
+    if (Test-Path $DeviceConfigPath) {
+        try {
+            $raw = Get-Content -Raw -Path $DeviceConfigPath -Encoding UTF8 | ConvertFrom-Json
+            foreach ($k in @('device_id','device_label','session_code','session_saved_at')) {
+                if ($null -ne $raw.$k) { $cfg[$k] = [string]$raw.$k }
+            }
+        } catch {
+            # A corrupt config must not stop a capture. Mint a fresh identity and
+            # carry on -- the USB write is what matters and it has not run yet.
+            Write-Host '    Device config unreadable; starting a fresh one.' -ForegroundColor DarkYellow
+        }
+    }
+    if (-not $cfg.device_id) {
+        # usb-<12 hex>. Random rather than derived from the volume serial: a
+        # stick can be reformatted or cloned, and two sticks answering to one id
+        # would silently merge their captures in the tray.
+        $b = New-Object byte[] 6
+        ([System.Security.Cryptography.RandomNumberGenerator]::Create()).GetBytes($b)
+        $cfg.device_id = 'usb-' + (($b | ForEach-Object { $_.ToString('x2') }) -join '')
+        # Persisted the instant it is minted, not left to whatever runs later.
+        # An id that is only saved on the paths that post would be re-minted on
+        # every offline run, and the stick would answer to a different name each
+        # time -- which is the one thing an identity may not do.
+        [void](Save-DeviceConfig $cfg)
+    }
+    return $cfg
+}
+
+# Best-effort, exactly like -AlsoCopyTo. A write-protected or full stick must
+# cost a warning and nothing else; the capture itself is already safe on disk.
+function Save-DeviceConfig {
+    param($Config)
+    try {
+        if (-not (Test-Path $DeviceConfigDir)) { New-Item -ItemType Directory -Path $DeviceConfigDir -Force -ErrorAction Stop | Out-Null }
+        ($Config | ConvertTo-Json -Depth 4) | Set-Content -Path $DeviceConfigPath -Encoding UTF8 -ErrorAction Stop
+        return $true
+    } catch {
+        Write-Host "    Couldn't save this stick's settings: $($_.Exception.Message)" -ForegroundColor DarkYellow
+        Write-Host '      The capture is fine. You will be asked for the code again next run.' -ForegroundColor DarkGray
+        return $false
+    }
+}
+
+# Answered before anything touches the hardware, because the question is about
+# the stick and not about the machine it happens to be in.
+if ($WhoAmI) {
+    $c = Get-DeviceConfig
+    Write-Host ''
+    Write-Host '  SPEEKS Capture -- this drive' -ForegroundColor Cyan
+    Write-Host '  ---------------------------' -ForegroundColor DarkCyan
+    Write-Host "    Device id   $($c.device_id)"
+    Write-Host "    Label       $(if ($c.device_label) { $c.device_label } else { '(none -- set with -DeviceLabel)' })"
+    if ($c.session_code) {
+        Write-Host "    Session     $($c.session_code)" -ForegroundColor Green
+        Write-Host "    Saved       $($c.session_saved_at)" -ForegroundColor DarkGray
+        Write-Host '    Run -NewSession to move this stick to a different pickup.' -ForegroundColor DarkGray
+    } else {
+        Write-Host '    Session     (none -- runs offline; use -Live to enrol)' -ForegroundColor DarkYellow
+    }
+    Write-Host "    Config      $DeviceConfigPath" -ForegroundColor DarkGray
+    Write-Host ''
+    return
+}
+
 function Get-Safe {
     param([scriptblock]$Block, $Default = $null)
     try { $v = & $Block; if ($null -eq $v) { return $Default }; return $v }
@@ -124,15 +234,22 @@ function Normalize-Cpu {
 function Test-DiscreteGpu {
     param([string]$Name)
     if ([string]::IsNullOrWhiteSpace($Name)) { return $false }
-    if ($Name -match '(?i)\b(UHD|Iris|HD Graphics|Vega|Radeon Graphics|Microsoft Basic|Remote Display|Meta Virtual|Parsec|DisplayLink)\b') { return $false }
+    # Strip (R)/(TM) BEFORE matching anything. Vendors put them mid-name --
+    # "Intel(R) Arc(TM) A770 Graphics", "AMD Radeon(TM) Graphics" -- which breaks
+    # every \b...\b test below that expects the words to be adjacent. "Arc A770"
+    # was being read as integrated because of the (TM) between the two halves,
+    # and the integrated denylist was missing "Radeon(TM) Graphics" for the same
+    # reason (it only returned false by falling off the end, not by matching).
+    $n = (($Name -replace '\((R|TM|C|r|tm)\)', ' ') -replace '\s+', ' ').Trim()
+    if ($n -match '(?i)\b(UHD|Iris|HD Graphics|Vega|Radeon Graphics|Microsoft Basic|Remote Display|Meta Virtual|Parsec|DisplayLink)\b') { return $false }
     # Intel Arc is two different things wearing one name, so it cannot sit in the
     # list below. The A- and B-series are real cards; "Arc 130V" / "Arc 140V"
     # (Lunar Lake) and bare "Arc Graphics" (Meteor Lake) are the integrated GPU on
     # the CPU package. Only a letter-and-number model is discrete. This machine
     # reports "Intel(R) Arc(TM) 130V GPU (8GB)" and was being sold as having a
     # dedicated GPU it does not have.
-    if ($Name -match '(?i)\bArc\b') { return [bool]($Name -match '(?i)\bArc\s+[AB]\d{3}\b') }
-    if ($Name -match '(?i)\b(GeForce|RTX|GTX|Quadro|NVIDIA|Radeon (RX|Pro|R[579])|FirePro)\b') { return $true }
+    if ($n -match '(?i)\bArc\b') { return [bool]($n -match '(?i)\bArc\s+[AB]\d{3}\b') }
+    if ($n -match '(?i)\b(GeForce|RTX|GTX|Quadro|NVIDIA|Radeon (RX|Pro|R[579])|FirePro)\b') { return $true }
     return $false
 }
 
@@ -143,8 +260,27 @@ function Normalize-Gpu {
     $s = $s -replace '(?i)\s+Laptop GPU$', ''
     $s = $s -replace '(?i)\s+with Max-Q.*$', ''
     $s = ($s -replace '\s+', ' ').Trim()
-    if ($s -match '(?i)\b((?:RTX|GTX)\s*[A-Z]?[0-9]{3,4}\s*(?:Ti|SUPER|Ti SUPER)?)\b') {
-        return (($Matches[1] -replace '\s+', ' ').Trim() -replace '(?i)^(RTX|GTX)\s*', { $args[0].Value.ToUpper().Trim() + ' ' })
+    # Built up from the captured groups, NOT by chaining -replace. The previous
+    # version passed a scriptblock to -replace, which is a [Regex]::Replace
+    # feature and not a PowerShell operator feature -- the operator stringifies
+    # it, so every discrete NVIDIA card came out as the literal text of the
+    # scriptblock followed by its number:
+    #     " $args[0].Value.ToUpper().Trim() + ' ' 3060"
+    # That went into the gpu field, onto the quote and into the eBay query, and
+    # nothing failed loudly enough to notice. Found by Haydn's
+    # lib\Test-Normalizers.ps1, which pins this as a named case; the shape below
+    # is his.
+    if ($s -match '(?i)\b(RTX|GTX)\s*([A-Z]?[0-9]{3,4})\s*(Ti\s*SUPER|SUPER|Ti)?\b') {
+        $pre = $Matches[1].ToUpper()
+        $num = $Matches[2].ToUpper()
+        $suf = ''
+        if ($Matches[3]) {
+            $t = ($Matches[3] -replace '\s+', ' ').Trim()
+            if     ($t -match '(?i)^ti\s*super$') { $suf = ' Ti SUPER' }
+            elseif ($t -match '(?i)^super$')      { $suf = ' SUPER' }
+            elseif ($t -match '(?i)^ti$')         { $suf = ' Ti' }
+        }
+        return "$pre $num$suf"
     }
     if ($s -match '(?i)\b(Radeon\s+(?:RX|Pro)\s+[\w\s]+?[0-9]{3,4}\w*)\b') { return $Matches[1].Trim() }
     if ($s -match '(?i)\b(Quadro\s+[\w]+)\b') { return $Matches[1] }
@@ -158,7 +294,21 @@ function Format-Capacity {
     param([double]$Bytes)
     if ($Bytes -le 0) { return $null }
     $gb = $Bytes / 1e9
-    $tiers = @(128, 240, 250, 256, 320, 480, 500, 512, 640, 750, 1000, 1024, 2000, 2048, 4000, 4096, 8000)
+    # Tier list and the 6% tolerance are Haydn's, from lib\SpecRead.ps1 in his
+    # b2b-pickup build. Mine was too sparse and quietly rounded real sizes to the
+    # wrong neighbour: a 120GB SSD read 128GB, a 600GB SAS read 640GB, and an
+    # 800GB read 750GB. A denser list with a tighter tolerance fixes those and
+    # leaves an odd enterprise size (a genuine 400GB SSD) alone rather than
+    # rounding it into a marketing number it never had.
+    #
+    # 960 is deliberately ABSENT, and that is a LISTING decision, not a technical
+    # one. We sell that class as 1TB and never as 960GB, so a 960GB drive must
+    # snap up rather than find a tier of its own: 960.2 is 4% off 1000, inside
+    # the tolerance below. Adding 960 here would be more accurate about the
+    # hardware and wrong about the product.
+    $tiers = @(16, 32, 64, 120, 128, 160, 180, 200, 240, 250, 256, 320, 400, 480, 500, 512,
+               600, 640, 750, 800, 1000, 1024, 1200, 1500, 1600, 2000, 2048, 3000,
+               4000, 4096, 6000, 8000, 12000, 16000)
     # The NEAREST marketing size, not the first one within 8%. Several tiers sit
     # closer together than the tolerance -- 480/500/512, 240/250/256, 1000/1024 --
     # so scanning ascending and returning the first match under the threshold
@@ -174,8 +324,10 @@ function Format-Capacity {
         $rel = [math]::Abs($gb - $t) / $t
         if ($rel -lt $bestRel) { $bestRel = $rel; $best = $t }
     }
-    # Within 8% of a marketing size means it IS that size.
-    if ($null -ne $best -and $bestRel -lt 0.08) {
+    # Within 6% of a marketing size means it IS that size. Tighter than the 8%
+    # this used, because the list above is now dense enough that 8% could reach
+    # past a true neighbour.
+    if ($null -ne $best -and $bestRel -le 0.06) {
         if ($best -ge 1000) { return ('{0:0.#}TB' -f ($best / 1000.0)) }
         return "${best}GB"
     }
@@ -212,6 +364,47 @@ function Get-InternalPanelInstance {
         }
     }
     return $null
+}
+
+# The internal panel's EDID, straight out of the registry.
+#
+# Needed because WmiMonitorBasicDisplayParams only answers for panels that are
+# CURRENTLY ON. Dock a laptop and shut the lid -- which is how a bench actually
+# runs -- and the internal panel drops out of that class entirely while the two
+# external monitors remain, so there is nothing to match the internal instance
+# against and the panel reads as unknown. Windows caches each display's EDID
+# under Enum\DISPLAY regardless, so the physical size survives the lid being
+# closed. Verified on this machine docked to two 27" Dells: WMI offered only the
+# Dells, the registry still said 30x19cm / 1920x1200.
+#
+# InstanceName from WmiMonitorConnectionParams looks like
+#   DISPLAY\BOE0D59\4&23d45159&0&UID8388688_0
+# and the registry key drops that trailing _<n>.
+function Get-PanelFromEdid {
+    param([string]$InstanceName)
+    if ([string]::IsNullOrWhiteSpace($InstanceName)) { return $null }
+    $parts = $InstanceName -split '\\'
+    if ($parts.Count -lt 3) { return $null }
+    $monitorId = $parts[1]
+    $instKey   = $parts[2] -replace '_\d+$', ''
+    $path = "HKLM:\SYSTEM\CurrentControlSet\Enum\DISPLAY\$monitorId\$instKey\Device Parameters"
+    $edid = Get-Safe { (Get-ItemProperty -Path $path -Name EDID -ErrorAction Stop).EDID }
+    if (-not $edid -or $edid.Length -lt 62) { return $null }
+    # Header must be 00 FF FF FF FF FF FF 00, or it is not an EDID block.
+    if ($edid[0] -ne 0 -or $edid[1] -ne 255 -or $edid[7] -ne 0) { return $null }
+
+    $hCm = [int]$edid[21]; $vCm = [int]$edid[22]
+    $sizeIn = $null
+    if ($hCm -gt 0 -and $vCm -gt 0) { $sizeIn = Get-PanelSize ([double]$hCm) ([double]$vCm) }
+
+    # First detailed timing descriptor starts at 0x36; the active-pixel counts are
+    # split across a low byte and the high nibble of a shared byte.
+    $w = [int]$edid[56] + ((([int]$edid[58]) -band 0xF0) -shl 4)
+    $h = [int]$edid[59] + ((([int]$edid[61]) -band 0xF0) -shl 4)
+    if ($w -le 0 -or $h -le 0) { $w = $null; $h = $null }
+
+    if (-not $sizeIn -and -not $w) { return $null }
+    return [ordered]@{ size_in = $sizeIn; width = $w; height = $h; source = 'edid-registry' }
 }
 
 function Get-PanelSize {
@@ -377,7 +570,16 @@ if ($ramBytes -le 0) { $ramBytes = Get-Safe { [double]$sys.TotalPhysicalMemory }
 $ramGb = [math]::Round($ramBytes / 1GB)
 # Now a safety net for an odd reserve carve-out rather than the thing holding the
 # number up: a correct division lands on the tier exactly.
-foreach ($t in @(4,8,12,16,24,32,48,64,96,128)) { if ([math]::Abs($ramGb - $t) -le 1) { $ramGb = $t; break } }
+# Nearest tier by RELATIVE gap, over the sizes memory actually ships in. The
+# old +/-1 absolute snap was too tight at the top (a 512GB server is 3 off its
+# tier after an iGPU carve-out and would not snap) and the list was missing
+# 2/6/20/36/40/192/256/384/512 entirely. List and 6% are Haydn's.
+$ramBest = $null; $ramGap = [double]::MaxValue
+foreach ($t in @(2,4,6,8,12,16,20,24,32,36,40,48,64,96,128,192,256,384,512)) {
+    $g = [math]::Abs($ramGb - $t) / $t
+    if ($g -lt $ramGap) { $ramGap = $g; $ramBest = $t }
+}
+if ($null -ne $ramBest -and $ramGap -le 0.06) { $ramGb = [int]$ramBest }
 $ramText = if ($ramGb -gt 0) { "${ramGb}GB" } else { $null }
 
 # --- storage --------------------------------------------------------------
@@ -445,6 +647,15 @@ if ($itemType -eq 'laptop') {
     $sizeIn = $null
     if ($panel) { $sizeIn = Get-PanelSize ([double]$panel.MaxHorizontalImageSize) ([double]$panel.MaxVerticalImageSize) }
 
+    # Docked with the lid shut: the internal panel is known by name but absent
+    # from the WMI class above, so read its cached EDID instead. This is the
+    # normal bench case, not an edge case.
+    $edidPanel = $null
+    if (-not $sizeIn -and $panelName) {
+        $edidPanel = Get-PanelFromEdid $panelName
+        if ($edidPanel) { $sizeIn = $edidPanel.size_in }
+    }
+
     # NATIVE resolution off the panel's own EDID, not the adapter's current mode.
     # The current mode is whatever the machine happens to be driving right now,
     # which on a dock is the external monitor -- the same lie as the panel size,
@@ -462,6 +673,12 @@ if ($itemType -eq 'laptop') {
                 $resH = Get-Safe { [int]$pref.VerticalActivePixels }
             }
         }
+    }
+    # The same cached EDID carries the native mode, and it is the internal
+    # panel's own -- so it beats the adapter's current mode, which on a dock
+    # belongs to whichever monitor is driving.
+    if ((-not $resW -or -not $resH) -and $edidPanel -and $edidPanel.width) {
+        $resW = $edidPanel.width; $resH = $edidPanel.height
     }
     # Last resort: the adapter's current mode, and only when a single display is
     # attached, where it cannot be the wrong one.
@@ -668,11 +885,44 @@ if ($AlsoCopyTo) {
 # best-effort by design: this is a second destination, not the destination. A
 # failure prints and the run still succeeds, because the capture is already
 # safe and SPEEKS-Collate can still read it off the stick.
+$deviceCfg = Get-DeviceConfig
+$cfgDirty  = -not (Test-Path $DeviceConfigPath)   # a brand-new stick always saves
+
+if ($DeviceLabel) { $deviceCfg.device_label = $DeviceLabel.Trim(); $cfgDirty = $true }
+if ($NewSession)  { $deviceCfg.session_code = $null; $deviceCfg.session_saved_at = $null; $cfgDirty = $true }
+
+# Precedence: what was passed in, then what the stick remembers, then ask.
+# -NewSession forces the ask even though the stick had one.
 $sessionCode = $Session
-if (-not $sessionCode -and $Live) {
+$fromStick   = $false
+if (-not $sessionCode -and -not $NewSession -and $deviceCfg.session_code) {
+    $sessionCode = $deviceCfg.session_code
+    $fromStick   = $true
+}
+if (-not $sessionCode -and ($Live -or $NewSession)) {
     Write-Host ''
+    Write-Host "  Stick $($deviceCfg.device_id)" -ForegroundColor DarkGray
     Write-Host '  Session code from the pricing sheet (Enter to skip): ' -NoNewline -ForegroundColor Cyan
     $sessionCode = (Read-Host).Trim()
+}
+
+# Remember it for the rest of the pallet. Only once it is known -- a blank
+# answer must not wipe a code the stick was already carrying.
+if ($sessionCode) {
+    $sessionCode = $sessionCode.Trim().ToUpper()
+    if ($deviceCfg.session_code -ne $sessionCode) {
+        $deviceCfg.session_code     = $sessionCode
+        $deviceCfg.session_saved_at = (Get-Date).ToString('o')
+        $cfgDirty = $true
+    }
+}
+if ($cfgDirty) { [void](Save-DeviceConfig $deviceCfg) }
+
+if ($fromStick) {
+    Write-Host ''
+    Write-Host "    Stick   $($deviceCfg.device_id)$(if ($deviceCfg.device_label) { " ($($deviceCfg.device_label))" })" -ForegroundColor DarkGray
+    Write-Host "    Session $sessionCode " -NoNewline -ForegroundColor DarkGray
+    Write-Host 'remembered from this drive' -ForegroundColor DarkGreen
 }
 
 if ($sessionCode) {
@@ -689,7 +939,17 @@ if ($sessionCode) {
             [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     } catch { }
 
-    $payload = @{ action = 'submit'; code = $sessionCode; capture = $record }
+    # device_id rides on the record as well as the envelope, so the stored
+    # payload can still answer "which stick" long after the row was promoted.
+    $record.device_id    = $deviceCfg.device_id
+    $record.device_label = $deviceCfg.device_label
+    $payload = @{
+        action       = 'submit'
+        code         = $sessionCode
+        device_id    = $deviceCfg.device_id
+        device_label = $deviceCfg.device_label
+        capture      = $record
+    }
     # -Compress because the body travels over bench wifi, and UTF-8 bytes rather
     # than a string because Invoke-RestMethod on PS 5.1 will otherwise encode the
     # body as ISO-8859-1 and mangle any non-ASCII in a model name or a note.

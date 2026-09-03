@@ -16370,7 +16370,7 @@ function _b2bIntakeRow(p) {
         <div class="b2b-bench-what">
             <span class="b2b-bench-name">${escapeHtml(name)}</span>
             <span class="b2b-bench-spec">${escapeHtml(spec)}</span>
-            <span class="b2b-bench-meta">${escapeHtml(p.serial)}${f.condition ? ' · ' + escapeHtml(f.condition) : ''}${p.device ? ' · ' + escapeHtml(p.device) : ''}</span>
+            <span class="b2b-bench-meta">${escapeHtml(p.serial)}${f.condition ? ' · ' + escapeHtml(f.condition) : ''}${_b2bBenchFrom(p)}</span>
         </div>
         <div class="b2b-bench-verdict">${verdict}</div>
         <div class="b2b-bench-acts">
@@ -16381,6 +16381,17 @@ function _b2bIntakeRow(p) {
             <button class="b2b-btn b2b-btn-secondary" onclick="b2bIntakeReject('${p.id}',this)">Discard</button>
         </div>
     </div>`;
+}
+
+// Where a reading came from, in the order a pricer actually cares about it: the
+// stick's label if it has been named, else its id, and the machine's hostname
+// only as a last resort. The hostname is the least useful of the three -- a
+// freshly imaged laptop is DESKTOP-<random> and is a different machine every
+// time, whereas the stick is the thing somebody is holding.
+function _b2bBenchFrom(p) {
+    const stick = String(p.device_label || '').trim() || String(p.device_id || '').trim();
+    if (stick) return ' · ' + escapeHtml(stick);
+    return p.device ? ' · ' + escapeHtml(p.device) : '';
 }
 
 function _b2bIntakeRepaint() {

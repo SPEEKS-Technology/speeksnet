@@ -331,6 +331,10 @@ Deno.serve(async (req: Request) => {
           id: p.id,
           serial: p.serial,
           device: p.device,
+          // The stick. Shown in the tray so "which drive did that come off" has
+          // an answer while three people are working one pallet.
+          device_id: p.device_id,
+          device_label: p.device_label,
           received_at: p.received_at,
           fields,
           // null => a new line; otherwise the line this would join.
@@ -374,6 +378,12 @@ Deno.serve(async (req: Request) => {
       // machine and can do something about it.
       itemFieldsFrom(capture);
 
+      // Which STICK, not which machine. The envelope first, then the record, so
+      // a stick running an older build -- which sends neither -- still works and
+      // simply reports no device.
+      const deviceId = str(body.device_id ?? capture.device_id, 64, "Device id");
+      const deviceLabel = str(body.device_label ?? capture.device_label, 80, "Device label");
+
       // Upsert on (session_id, serial) -- a re-test replaces its earlier reading
       // rather than queueing a second one. Deliberately resets an already-decided
       // row back to pending: if a machine is tested again after its line was
@@ -383,6 +393,8 @@ Deno.serve(async (req: Request) => {
         serial,
         payload: capture,
         device: str(capture.captured_on, 120, "Device"),
+        device_id: deviceId,
+        device_label: deviceLabel,
         status: "pending",
         item_id: null,
         decided_by: null,
