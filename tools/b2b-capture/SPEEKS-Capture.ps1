@@ -292,6 +292,45 @@ if ($make -and $model) {
     if ($stripped) { $model = $stripped }
 }
 
+# Makers pad the model with words that carry no information here.
+# "HP OmniBook X Flip Laptop 14-fm0xxx" is 35 characters, of which "HP" repeats
+# the Brand column and "Laptop" repeats item_type -- and the Model column on the
+# pricing sheet can squeeze to 74px, so the padding is what pushes the part you
+# actually need off the end of the cell. "15.6 inch" goes too: the panel is its
+# own field, measured off the EDID rather than trusted from a marketing string.
+#
+# Only ever removed from the ENDS or as whole redundant words, never from the
+# middle of a name, and never if it would empty the field.
+$modelNoise = @(
+    '(?i)\s+(Laptop|Notebook|Notebook\s+PC|Desktop\s+PC|Tablet\s+PC|All-in-One)\s+PC\b',
+    '(?i)\s+(Laptop|Notebook\s+PC|Notebook|Desktop\s+PC|Tablet\s+PC)\b',
+    '(?i)\s+\d{1,2}(\.\d)?\s*(inch|in\.?|")\b',
+    '(?i)\s+\(?(PC|Computer)\)?$'
+)
+# Names where the "noise" word is the product, not padding. Microsoft's line IS
+# "Surface Laptop", and trimming it yields "Surface 4", which is not a machine
+# anybody sells. Framework's "Laptop 13" survives on its own because the rules
+# above all require whitespace before the word, so a leading one is never
+# matched -- but Surface is mid-string and needs saying out loud. Parked behind
+# a placeholder for the duration of the trim and put back after.
+$modelKeep = @('Surface Laptop Studio', 'Surface Laptop Go', 'Surface Laptop',
+               'Surface Book', 'Notebook 9')
+if ($model) {
+    $trimmed = $model
+    $parked = @{}
+    for ($k = 0; $k -lt $modelKeep.Count; $k++) {
+        $token = "@@K$k@@"
+        if ($trimmed -match ('(?i)' + [regex]::Escape($modelKeep[$k]))) {
+            $parked[$token] = [regex]::Match($trimmed, '(?i)' + [regex]::Escape($modelKeep[$k])).Value
+            $trimmed = [regex]::Replace($trimmed, '(?i)' + [regex]::Escape($modelKeep[$k]), $token)
+        }
+    }
+    foreach ($rx in $modelNoise) { $trimmed = ($trimmed -replace $rx, ' ') }
+    foreach ($token in $parked.Keys) { $trimmed = $trimmed.Replace($token, $parked[$token]) }
+    $trimmed = ($trimmed -replace '\s+', ' ').Trim()
+    if ($trimmed) { $model = $trimmed }
+}
+
 # --- laptop or desktop ----------------------------------------------------
 # Drives which spec fields are even allowed on the line: the table CHECK
 # refuses battery_health on a desktop and refuses every spec on `other`.

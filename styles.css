@@ -13546,6 +13546,14 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    hold its track and the field scroll its own overflow instead. */
 .b2b-items.b2b-ss .b2b-pcell,
 .b2b-items.b2b-ss .b2b-phead > span { min-width: 0; }
+/* ...and the same again for the FIELD inside the cell. The rule above frees the
+   cell (a grid item) to hold its track; it does nothing for the input or select
+   inside it, which is a flex item of that cell and carries its own
+   min-width:auto. A <select> still refuses to shrink below its widest option
+   from there, so "Computer" leans into Brand even though the cell itself is the
+   right width. Both levels have to be released, not just the outer one. */
+.b2b-items.b2b-ss .b2b-pcell > input,
+.b2b-items.b2b-ss .b2b-pcell > select { min-width: 0; }
 /* The line's own edges close the grid -- no dangling border on the last column. */
 .b2b-items.b2b-ss .b2b-prow > *:last-child { border-right: 0; }
 .b2b-phead .c { text-align: center; }

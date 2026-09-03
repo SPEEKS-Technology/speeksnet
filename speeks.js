@@ -33916,6 +33916,12 @@ const FEATURE_CATALOG = [
     // in Feature Access once a bench has been through it. The existing manual and
     // USB routes are unaffected either way; see _b2bBenchTray in this file.
     { key: 'b2b-live-intake',          label: 'B2B Live Bench Intake',         tab: 'widgets', group: 'Operations', def: [] },
+    // The download button in the B2B header for the bench capture tool. Same
+    // empty default as the tray above, and for the same reason -- the two are
+    // halves of one feature and should be switched on for the same people. The
+    // button also carries `role-none` in operations.html, so the role gate
+    // denies everyone and a per-user override is the only way to see it.
+    { key: 'b2b-capture-download',     label: 'B2B Capture Tool (Download)',   tab: 'widgets', group: 'Operations', def: [] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
     //      the link just inherits it. ----
