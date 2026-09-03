@@ -20151,6 +20151,9 @@ select.dd-native {
     padding: 3px 10px 3px 13px; user-select: all;
 }
 .b2b-intake-hint { font-size: 12px; color: var(--b2b-muted); flex: 1 1 auto; }
+/* A failed tray read. Stated in the strip rather than left to the console:
+   the pricer is the one who needs to know it did not load. */
+.b2b-intake-hint.bad { color: var(--red-alert); font-weight: 600; }
 .b2b-intake-head .b2b-btn { flex: 0 0 auto; }
 
 .b2b-intake-rows { border-top: 1px solid var(--b2b-line-2); }

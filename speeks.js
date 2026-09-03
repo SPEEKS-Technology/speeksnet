@@ -16235,7 +16235,7 @@ function _b2bDealById(id) { return _b2bDeals.find(d => d.id === id) || null; }
 //   - It does not trust the bench. Nothing a device sends appears on the sheet
 //     until a person clicks Accept.
 
-let _b2bIntakeState = { dealId: null, session: null, pending: [], expired: false, loaded: false, busy: false };
+let _b2bIntakeState = { dealId: null, session: null, pending: [], expired: false, loaded: false, busy: false, error: null };
 
 // Same derivation applyRoleBasedUI uses at the DOM level (see userRoleClass
 // there). Written out rather than borrowed because that one is a local.
@@ -16293,6 +16293,18 @@ function _b2bIntakeInner(deal) {
         return `<div class="b2b-intake-head">
             <span class="b2b-intake-title">Live bench intake</span>
             <span class="b2b-intake-hint">Checking…</span>
+        </div>`;
+    }
+
+    // A failed read says so and offers the retry, rather than looking like a
+    // feature that does nothing. Distinct from the no-session state below: there
+    // is nothing to start until we know what is already open.
+    if (st.error) {
+        return `<div class="b2b-intake-head">
+            <span class="b2b-intake-title">Live bench intake</span>
+            <span class="b2b-intake-hint bad">Couldn't read the tray — ${escapeHtml(st.error)}</span>
+            <button class="b2b-btn b2b-btn-secondary"
+                onclick="_b2bIntakeLoad('${deal.id}')">Try again</button>
         </div>`;
     }
 
@@ -16392,8 +16404,16 @@ async function _b2bIntakeLoad(dealId) {
             loaded: true,
             busy: false
         };
-    } catch (_) {
-        _b2bIntakeState.loaded = true;
+    } catch (e) {
+        // Set dealId, not just loaded. Leaving it null meant the render guard
+        // (st.dealId !== deal.id) stayed true forever, so a failed read left the
+        // tray showing its "Checking..." placeholder for good -- a strip with no
+        // button, no message and no way to retry, which reads as a broken
+        // feature rather than a failed request.
+        _b2bIntakeState = {
+            dealId, session: null, pending: [], expired: false,
+            loaded: true, busy: false, error: e.message || 'Could not reach the intake service.'
+        };
     }
     _b2bIntakeRepaint();
 }
