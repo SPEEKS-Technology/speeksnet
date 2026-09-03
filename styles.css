@@ -18252,6 +18252,219 @@ body.tv-body { display: block; background: #eef1f5; }
 }
 
 
+
+/* =========================================================
+   THE QUESTIONS THE TITLES TOOL ASKS  (lt-ask-*)  [2026-09-03]
+
+   Every decision in this tool used to be a browser confirm()
+   or prompt(): a grey OS box headed "127.0.0.1:5501 says",
+   with the two titles as plain text and an empty field under
+   a line of small print. Ethan: "make those popups small
+   actual designed HTML popups that match the site. It will
+   help people feel like they can and want to answer those
+   questions."
+
+   That is the whole point of the redesign. These are not
+   warnings to click past — they are the questions the queue
+   exists to collect answers to, and a box that looks like the
+   product is one people answer.
+
+   Airy V4 chrome, deliberately the same as the CSV export
+   picker (.ex-*): 18px card, icon tile + eyebrow header,
+   sage primary. What is NOT borrowed from it is the body —
+   this one reuses the ROW's own classes (.lt-lab, .lt-cur,
+   .lt-sug, .lt-add, .lt-cut), so the titles and the changed
+   words look identical to the row the question came from.
+   Reading the same diff twice in two different visual
+   languages is how a reviewer loses their place.
+   ========================================================= */
+.lt-ask-ov {
+    display: none;
+    position: fixed; inset: 0; z-index: 3300;
+    background: rgba(15, 23, 42, .42);
+    align-items: center; justify-content: center;
+    padding: 24px;
+}
+.lt-ask-ov.open { display: flex; }
+
+.lt-ask-card {
+    --lta-line: #eef1f5;
+    --lta-line-2: #e3e8ee;
+    --lta-muted: #647082;
+    --lta-faint: #8a94a3;
+    --lta-ink: #2f3a45;
+    width: 100%; max-width: 570px;
+    background: #fff;
+    border: 1px solid var(--lta-line-2);
+    border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(16, 24, 40, .20), 0 2px 8px rgba(16, 24, 40, .06);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    max-height: calc(100vh - 48px);
+}
+
+/* --- header --- */
+.lt-ask-head {
+    display: flex; align-items: flex-start; gap: 13px;
+    padding: 16px 18px; border-bottom: 1px solid var(--lta-line);
+}
+.lt-ask-ico {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px;
+    display: grid; place-items: center;
+    background: #e8f7ee; color: #1f9d57;
+}
+.lt-ask-ico svg {
+    width: 20px; height: 20px;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.lt-ask-ico.lta-warn { background: #fdf3e1; color: #b7791f; }
+.lt-ask-ico.lta-bad  { background: #fcecec; color: #d1443b; }
+
+.lt-ask-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+.lt-ask-eyebrow {
+    font-size: 10px; font-weight: 800; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--lta-faint);
+}
+.lt-ask-title {
+    font-size: 17px; font-weight: 800; letter-spacing: -.01em;
+    color: var(--slate-charcoal); line-height: 1.25;
+}
+.lt-ask-close {
+    flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid var(--lta-line-2);
+    background: #fff; border-radius: 9px; color: var(--lta-muted);
+    font-size: 18px; font-weight: 700; line-height: 1; cursor: pointer;
+    transition: background .15s, color .15s;
+}
+.lt-ask-close:hover { background: #f6f8fa; color: var(--slate-charcoal); }
+
+/* --- body --- */
+.lt-ask-body { padding: 15px 18px 4px; overflow: auto; }
+.lt-ask-say {
+    font-size: 12.5px; font-weight: 600; color: var(--lta-muted);
+    line-height: 1.55; margin: 0 0 12px;
+}
+.lt-ask-say:last-child { margin-bottom: 12px; }
+.lt-ask-say b { font-weight: 800; color: var(--lta-ink); }
+
+/* The two titles, in the row's own shape. */
+.lt-ask-pair {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 11px 13px; margin-bottom: 13px;
+    background: #f7faf8; border: 1px solid var(--lta-line); border-radius: 12px;
+}
+
+/* A section of fields this decision also moves. Quiet heading, because the
+   heading is not the information — the rows under it are. */
+.lt-ask-sec { margin-bottom: 13px; }
+.lt-ask-sec-h {
+    font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--lta-faint); margin-bottom: 6px;
+}
+.lt-ask-fields { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.lt-ask-fields li {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 7px;
+    font-size: 12.5px; line-height: 1.45;
+}
+.lt-ask-f { font-weight: 800; color: var(--lta-ink); }
+.lt-ask-f::after { content: ':'; color: var(--lta-faint); font-weight: 700; }
+.lt-ask-arrow { color: var(--lta-faint); font-weight: 800; }
+/* Where else the same value is written down. Faint and full-width: it is the
+   receipt for the line above, not part of the sentence. */
+.lt-ask-where {
+    flex: 1 1 100%;
+    font-size: 10.5px; font-weight: 700; color: var(--lta-faint);
+    overflow-wrap: anywhere;
+}
+.lt-ask-sec.lta-left .lt-ask-f { color: #b7791f; }
+
+/* Still reading the listing. The button is refused while this shows — a
+   confirm offered before we know what it changes is a question asked too
+   early. */
+.lt-ask-wait {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 700; color: var(--lta-faint);
+    padding: 4px 0 12px;
+}
+.lt-ask-spin {
+    width: 11px; height: 11px; flex: 0 0 auto; border-radius: 50%;
+    border: 2px solid rgba(31, 157, 87, .25); border-top-color: #1f9d57;
+    animation: lt-ask-spin .7s linear infinite;
+}
+@keyframes lt-ask-spin { to { transform: rotate(360deg); } }
+
+/* --- the note --- */
+.lt-ask-note { display: flex; flex-direction: column; gap: 6px; margin-bottom: 13px; }
+.lt-ask-note > label {
+    font-size: 10px; font-weight: 800; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--lta-faint);
+}
+.lt-ask-input {
+    font-family: inherit; font-size: 13px; font-weight: 600; color: var(--lta-ink);
+    padding: 10px 12px; border: 1.5px solid var(--lta-line-2); border-radius: 10px;
+    background: #fff; width: 100%; box-sizing: border-box;
+    transition: border-color .15s, box-shadow .15s;
+}
+.lt-ask-input::placeholder { color: #b3bcc6; font-weight: 600; }
+.lt-ask-input:focus {
+    outline: none; border-color: #1f9d57;
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .12);
+}
+.lt-ask-hint { font-size: 11px; font-weight: 650; color: var(--lta-faint); line-height: 1.45; }
+
+/* --- actions --- */
+.lt-ask-acts {
+    display: flex; justify-content: flex-end; gap: 9px;
+    padding: 4px 18px 18px;
+}
+.lt-ask-go, .lt-ask-cancel {
+    font-family: inherit; font-size: 12.5px; font-weight: 800;
+    padding: 10px 18px; border-radius: 10px; cursor: pointer;
+    border: 1.5px solid transparent; transition: filter .15s, background .15s, color .15s, border-color .15s;
+}
+.lt-ask-go { background: #1f9d57; color: #fff; }
+/* Sage is the button that writes to a live listing. A decision that only
+   clears a row is amber, and an acknowledgement is neutral — the colour is
+   the difference between the two, and the words alone are not enough at the
+   speed a queue gets worked. */
+.lt-ask-go.lta-warn { background: #b7791f; }
+.lt-ask-go.lta-bad  { background: #3d4852; }
+.lt-ask-go:hover:not(:disabled) { filter: brightness(1.06); }
+.lt-ask-go:disabled { background: var(--lta-line); color: var(--lta-faint); cursor: not-allowed; }
+.lt-ask-cancel { background: #fff; border-color: var(--lta-line-2); color: var(--lta-muted); }
+.lt-ask-cancel:hover { background: #f6f8fa; color: var(--slate-charcoal); }
+/* ⚠️ NOT A GREEN RING ON A GREEN BUTTON. An outline offset outside a filled
+   primary reads as a second border, and it has to work on three different
+   fills — so the ring goes INSIDE in white with a neutral halo behind it. */
+.lt-ask-go:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, .95); outline-offset: -4px;
+    box-shadow: 0 0 0 3px rgba(15, 23, 42, .17);
+}
+.lt-ask-cancel:focus-visible { outline: 2px solid #1f9d57; outline-offset: 2px; }
+
+@media (max-width: 560px) {
+    .lt-ask-ov { padding: 14px; align-items: flex-start; }
+    .lt-ask-card { margin-top: 22px; }
+    .lt-ask-acts { flex-direction: column-reverse; }
+    .lt-ask-go, .lt-ask-cancel { width: 100%; }
+    /* The label column costs a third of a phone screen and says nothing the
+       colour does not. */
+    .lt-ask-pair .lt-lab { flex-basis: 52px; }
+}
+
+/* ⚠️ THE BLANKET button{min-height:44px} IN THE TAP-TARGET BLOCK OVALS ANY
+   BUTTON IT IS NOT TOLD ABOUT, and this X is 30x30 by design — the same trap
+   the close-button standard was written for. Higher specificity than a bare
+   `button`, so source order does not matter. The two ACTION buttons are left
+   alone: 44px is exactly what they want on a phone. */
+@media (max-width: 900px) {
+    .lt-ask-close { min-height: 30px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lt-ask-spin { animation: none; border-top-color: rgba(31, 157, 87, .25); }
+}
+
 /* --- The session feed ---------------------------------------------------- *
    One row per SKU somebody scanned, and it changes state under them: amber
    while eBay is being asked, green when it is up, red when it is refused. The

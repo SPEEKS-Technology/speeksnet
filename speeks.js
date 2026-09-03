@@ -46014,47 +46014,238 @@ function _ltDenyKind(r) {
             ask: 'Why is this title fine as it is?' };
 }
 
+// THE QUESTIONS THIS TOOL ASKS, ASKED IN THE PRODUCT.
+//
+// Every decision here used to be a browser confirm() or prompt(): a grey OS box
+// headed "127.0.0.1:5501 says", the two titles as plain text, an empty field
+// under a line of small print. Ethan, 2026-09-03: "make those popups small
+// actual designed HTML popups that match the site. It will help people feel like
+// they can and want to answer those questions."
+//
+// That is the reason, and it is not decoration. This queue is worth exactly what
+// people are willing to answer, and a native dialog reads as an obstacle in
+// front of the page rather than a part of it — it looks like the browser
+// interrupting, its buttons say OK and Cancel whatever is being asked, and it
+// cannot show a word-level diff of the two titles at all.
+//
+// One dialog, three shapes (approve / dismiss / something went wrong), told
+// apart by the icon tile and the words. It returns a PROMISE so the callers keep
+// reading top to bottom exactly as they did around confirm():
+//
+//     const said = await _ltAsk({ ... });
+//     if (!said) return;              // cancelled, closed, or Escape
+//     ... said.note ...
+//
+// ⚠️ ONE AT A TIME. A second open would orphan the first promise, so opening
+// while one is up resolves the old one as a cancel first — nothing can be
+// answered by a box the person cannot see.
+let _ltAskEl = null;
+let _ltAskDone = null;
+
+const _LT_ASK_ICONS = {
+    // A pen: this writes.
+    ok: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+    // A crossed circle: this clears a row without changing anything.
+    warn: '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/>',
+    // The house alert shape, same as everywhere else something is half-done.
+    bad: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+};
+
+function _ltAskEnsure() {
+    if (_ltAskEl) return _ltAskEl;
+    const el = document.createElement('div');
+    el.id = 'ltAskOverlay';
+    el.className = 'lt-ask-ov';
+    // The overlay is a cancel, like every other modal on the site. The card
+    // swallows its own clicks so a stray click inside never closes the question.
+    el.addEventListener('click', (e) => { if (e.target === el) _ltAskClose(null); });
+    document.body.appendChild(el);
+    _ltAskEl = el;
+    return el;
+}
+
+function _ltAskClose(answer) {
+    const done = _ltAskDone;
+    _ltAskDone = null;
+    document.removeEventListener('keydown', _ltAskKey, true);
+    if (_ltAskEl) { _ltAskEl.classList.remove('open'); _ltAskEl.innerHTML = ''; }
+    if (done) done(answer);
+}
+
+// Answering with the keyboard, because the fastest way through a queue is not
+// the mouse: Enter is the primary button, Escape is cancel. Enter inside the
+// note field submits too — it is one line, and a newline in a 300-character
+// note buys nothing.
+// ⚠️ REGISTERED IN THE CAPTURE PHASE, and it stops the event. The page's own
+// Escape handler peels one layer at a time and ends at closeAllModals() — which
+// would take the whole Listing Health panel down behind a question that is still
+// waiting to be answered. Capture puts this box first in the queue, which is
+// where a modal awaiting an answer belongs.
+function _ltAskKey(e) {
+    if (!_ltAskDone) return;
+    if (e.key === 'Escape') {
+        e.preventDefault(); e.stopPropagation();
+        _ltAskClose(null);
+        return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+        const go = _ltAskEl && _ltAskEl.querySelector('.lt-ask-go');
+        if (go && !go.disabled) { e.preventDefault(); e.stopPropagation(); go.click(); }
+    }
+}
+
+function _ltAsk(o) {
+    if (_ltAskDone) _ltAskClose(null);
+    const el = _ltAskEnsure();
+    const kind = o.kind || 'ok';
+    const noteBox = o.note
+        ? `<div class="lt-ask-note">
+             <label for="ltAskNote">${_ecEsc(o.note.label || 'Note')}</label>
+             <input id="ltAskNote" class="lt-ask-input" type="text" maxlength="300"
+                    autocomplete="off" placeholder="${_ecEsc(o.note.placeholder || '')}">
+             ${o.note.hint ? `<span class="lt-ask-hint">${_ecEsc(o.note.hint)}</span>` : ''}
+           </div>`
+        : '';
+    el.innerHTML = `
+      <div class="lt-ask-card" role="dialog" aria-modal="true" aria-labelledby="ltAskTitle">
+        <div class="lt-ask-head">
+          <span class="lt-ask-ico ${kind === 'ok' ? '' : 'lta-' + kind}">
+            <svg viewBox="0 0 24 24">${_LT_ASK_ICONS[kind] || _LT_ASK_ICONS.ok}</svg>
+          </span>
+          <div class="lt-ask-titles">
+            <span class="lt-ask-eyebrow">${_ecEsc(o.eyebrow || '')}</span>
+            <span class="lt-ask-title" id="ltAskTitle">${_ecEsc(o.title || '')}</span>
+          </div>
+          <button type="button" class="lt-ask-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="lt-ask-body" id="ltAskBody">${o.body || ''}${noteBox}</div>
+        <div class="lt-ask-acts">
+          ${o.cancel === null ? '' : `<button type="button" class="lt-ask-cancel">${_ecEsc(o.cancel || 'Cancel')}</button>`}
+          <!-- ⚠️ THE PRIMARY IS COLOURED BY WHAT IT DOES, not by being primary.
+               Sage is reserved for the button that writes to a live listing;
+               a decision that only clears a row is amber, and an acknowledgement
+               is neutral. "Dismiss It" in the same green as "Change The Title"
+               tells a reviewer the two are the same kind of act, and they are
+               not. -->
+          <button type="button" class="lt-ask-go ${kind === 'ok' ? '' : 'lta-' + kind}"${o.busy ? ' disabled' : ''}>${_ecEsc(o.go || 'Confirm')}</button>
+        </div>
+      </div>`;
+    el.classList.add('open');
+    el.querySelector('.lt-ask-close').onclick = () => _ltAskClose(null);
+    const cancel = el.querySelector('.lt-ask-cancel');
+    if (cancel) cancel.onclick = () => _ltAskClose(null);
+    el.querySelector('.lt-ask-go').onclick = () => {
+        const box = el.querySelector('#ltAskNote');
+        _ltAskClose({ note: box ? box.value.trim() : '' });
+    };
+    // The field first when there is one — the question has already been read by
+    // then, and the answer is what we are waiting for.
+    const first = el.querySelector('#ltAskNote') || el.querySelector('.lt-ask-go');
+    if (first) setTimeout(() => first.focus(), 30);
+    document.addEventListener('keydown', _ltAskKey, true);
+    return new Promise(resolve => { _ltAskDone = resolve; });
+}
+
+// Filling in a question that was opened before its answer was known. The
+// approve asks Shopify what else the change touches while the box is already up,
+// so the reviewer is not left looking at a frozen button for a second.
+function _ltAskFill(bodyHtml, goLabel) {
+    if (!_ltAskDone || !_ltAskEl) return;
+    const body = _ltAskEl.querySelector('#ltAskBody');
+    if (body) body.innerHTML = bodyHtml;
+    const go = _ltAskEl.querySelector('.lt-ask-go');
+    if (go) { go.disabled = false; if (goLabel) go.textContent = goLabel; go.focus(); }
+}
+
+// Something went wrong, or something landed half-done. One button, and it is
+// never called for anything the person can act on inside the dialog.
+function _ltTell(title, say, kind) {
+    return _ltAsk({ kind: kind || 'bad', eyebrow: 'Listing Titles', title,
+                    body: `<p class="lt-ask-say">${_ecEsc(say)}</p>`,
+                    cancel: null, go: 'Got It' });
+}
+
+// The two titles in the row's own shape, so the box reads as the row it came
+// from rather than as a second opinion about it.
+function _ltAskPair(from, to) {
+    return `<div class="lt-ask-pair">
+      <div class="lt-now"><span class="lt-lab">Now</span>
+        <span class="lt-cur">${_ltGone(from, to)}</span></div>
+      <div class="lt-new"><span class="lt-lab">Saving</span>
+        <span class="lt-sug">${_ltDiff(from, to)}</span></div>
+    </div>`;
+}
+
+// The other fields this approve rewrites, and the ones it has to leave. Same
+// green/red marks as the title diff above them: it is the same kind of change,
+// so it should not need a second reading.
+function _ltAskEchoes(pre) {
+    const up = (pre && pre.alsoUpdated) || [];
+    const left = (pre && pre.stillSays) || [];
+    let html = '';
+    if (up.length) {
+        html += `<div class="lt-ask-sec">
+          <div class="lt-ask-sec-h">Also Updated, So The Listing Agrees With Itself</div>
+          <ul class="lt-ask-fields">${up.map(u => `<li>
+            <span class="lt-ask-f">${_ecEsc(u.field)}</span>
+            <span class="lt-cut">${_ecEsc(u.was)}</span>
+            <span class="lt-ask-arrow">&rarr;</span>
+            <span class="lt-add">${_ecEsc(u.now)}</span>
+            <span class="lt-ask-where">${_ecEsc((u.where || []).join(' · '))}</span>
+          </li>`).join('')}</ul>
+        </div>`;
+    }
+    if (left.length) {
+        html += `<div class="lt-ask-sec lta-left">
+          <div class="lt-ask-sec-h">Left As It Is — There Is No Replacement To Write</div>
+          <ul class="lt-ask-fields">${left.map(l => `<li>
+            <span class="lt-ask-f">${_ecEsc(l.field)}</span>
+            <span>still says &ldquo;${_ecEsc(l.value)}&rdquo;</span>
+            <span class="lt-ask-where">${_ecEsc(l.where || '')}</span>
+          </li>`).join('')}</ul>
+        </div>`;
+    }
+    return html;
+}
+
 async function ltApprove(pid) {
     const row = (_ltData?.queue || []).find(r => r.productId === pid);
     if (!row) return;
     const typed = _ltEdits.get(pid);
     const title = (typed != null ? typed : (row.suggested || '')).trim();
     if (!title) return;
-    // ⚠️ ASK THE SERVER WHAT ELSE THIS CHANGES BEFORE ASKING THE PERSON.
-    // The title is no longer the only field this writes: the same words are
+    // ⚠️ THIS WRITES A LIVE STOREFRONT TITLE, so it asks first and it shows what
+    // changes. A box that only says "are you sure" gets clicked through; one
+    // that draws the diff gets read.
+    //
+    // ⚠️ AND THE TITLE IS NOT THE ONLY FIELD IT WRITES. The same words are
     // carried into the description's spec table and into every metafield that
-    // states them, so the confirm has to name those too. The preview runs the
-    // approve's own reading half against the live listing a second before the
-    // write, which is the only way the box can promise what the write will do.
-    // ⚠️ ITS FAILURE IS NOT THE FIX'S FAILURE. If the preview cannot be had, the
-    // question falls back to the title-only wording rather than blocking a
-    // correction somebody came here to make.
+    // states them, so the question has to name those too. The preview runs the
+    // approve's own reading half against the LIVE listing a second before the
+    // write — the only way this box can promise what the write will do.
+    //
+    // The box opens FIRST and fills in when the answer lands: a second of dead
+    // button after a click reads as a broken screen, and the two titles — the
+    // part they came to check — are ready immediately either way.
+    const asking = _ltAsk({
+        kind: 'ok', eyebrow: 'Approve Title', title: 'Change this listing’s title?',
+        body: _ltAskPair(row.current, title)
+            + '<div class="lt-ask-wait"><span class="lt-ask-spin"></span>'
+            + 'Checking what else on this listing says the same thing…</div>',
+        busy: true, go: 'Checking…', cancel: 'Cancel',
+    });
     _ltChecking.add(pid); ecRender();
     const pre = await _ltPost({ action: 'preview', store: _ecStore, productId: pid, title });
     _ltChecking.delete(pid); ecRender();
-    let also = '';
-    if (pre.ok && pre.body) {
-        const up = pre.body.alsoUpdated || [];
-        const left = pre.body.stillSays || [];
-        if (up.length) {
-            also += `\n\nIt also updates these, so the rest of the listing agrees with the title:\n`
-                + up.map(u => `  • ${u.field}: ${u.was} → ${u.now}`).join('\n');
-        }
-        if (left.length) {
-            // Named in the SAME box, not in a message afterwards: the reviewer
-            // is about to open Shopify anyway, and this is the one thing here
-            // that still needs a person.
-            also += `\n\nLeft as it is — there is no replacement to write:\n`
-                + left.map(l => `  • ${l.field} still says "${l.value}"`).join('\n');
-        }
-    }
-    // ⚠️ THIS WRITES A LIVE STOREFRONT TITLE, so it asks first and it names both
-    // titles in the question. A confirm that only says "are you sure" makes
-    // somebody click through it; one that shows what changes is read.
-    const okToGo = confirm(`Change this listing's title?\n\nFrom: ${row.current}\n`
-        + `To:   ${title}${also}\n\nThis updates the Shopify product, so it changes the online store`
-        + ` and eBay.`);
-    if (!okToGo) return;
+    // ⚠️ A FAILED PREVIEW IS NOT A FAILED FIX. If it cannot be had, the question
+    // falls back to the titles alone rather than blocking a correction somebody
+    // came here to make.
+    _ltAskFill(_ltAskPair(row.current, title)
+        + (pre.ok && pre.body ? _ltAskEchoes(pre.body) : '')
+        + '<p class="lt-ask-say">This updates the Shopify product, so it changes'
+        + ' <b>the online store</b> and <b>eBay</b>.</p>', 'Change The Title');
+    const said = await asking;
+    if (!said) return;
     _ltBusy.add(pid); ecRender();
     const res = await _ltPost({ action: 'approve', store: _ecStore, productId: pid, title });
     _ltBusy.delete(pid);
@@ -46062,7 +46253,8 @@ async function ltApprove(pid) {
         // The server's detail is written for a person (it explains a 409 as "the
         // title changed in Shopify since the list was drawn"), so show it rather
         // than a status code.
-        alert(res.body?.detail || res.body?.error || 'Could not save that title.');
+        await _ltTell('That title was not saved',
+            res.body?.detail || res.body?.error || 'Could not save that title.');
         ecRender();
         return;
     }
@@ -46075,11 +46267,11 @@ async function ltApprove(pid) {
         // changed, so the queue no longer has anything to offer on it and the
         // approve refuses a title the product already has. The only routes back
         // are Shopify by hand or the respec repair — say the true one.
-        alert(`The title was changed, but ${res.body.metafieldsLeft} field`
-            + `${res.body.metafieldsLeft === 1 ? '' : 's'} that quote it could not be`
-            + ` saved — Shopify refused them. The listing is half-corrected: open the`
-            + ` product in Shopify and fix those fields by hand, or send this SKU to`
-            + ` Claude to repair.`);
+        await _ltTell('The title changed, the rest of the listing did not',
+            `Shopify refused ${res.body.metafieldsLeft} field`
+            + `${res.body.metafieldsLeft === 1 ? '' : 's'} that quote this title, so the`
+            + ` listing is half-corrected. Open the product in Shopify and fix those`
+            + ` fields by hand, or send this SKU to Claude to repair.`);
     }
     // Reload rather than splicing the row out: approving can change the counts
     // on all three tabs, and a store's queue is small enough that one read is
@@ -46108,22 +46300,42 @@ async function ltDeny(pid) {
     // out a rule is wrong") that was not even true of the answer being given.
     // Ethan, 2026-09-03: "if it does nothing, then we should get rid of that
     // popup." So that branch is now one confirm, and nothing else.
-    let reason = '';
-    if (kind.as === 'ebay-stale') {
-        if (!confirm(`${kind.ask}\n\n${row.current}`)) return;
-    } else {
-        const typed = prompt(`${kind.ask}\n\n${row.current}\n\n`
-            + `(Optional — it is how we find out a rule is wrong. It is shown in`
-            + ` Dismissed below.)`, '');
-        if (typed === null) return;
-        reason = typed;
-    }
+    const said = kind.as === 'ebay-stale'
+        ? await _ltAsk({
+            kind: 'warn', eyebrow: 'Our Title Is Right',
+            title: 'Confirm our Shopify title is the right one?',
+            body: `<div class="lt-ask-pair"><div class="lt-now">
+                     <span class="lt-lab">Ours</span>
+                     <span class="lt-cur">${_ecEsc(row.current || '')}</span></div>
+                   ${row.ebayTitle ? `<div class="lt-now lt-drift">
+                     <span class="lt-lab">On eBay</span>
+                     <span class="lt-cur">${_ecEsc(row.ebayTitle)}</span></div>` : ''}
+                   </div>
+                   <p class="lt-ask-say">This clears the row and records that the
+                    <b>eBay listing</b> is the copy that needs correcting.
+                    Nothing is changed on either listing, and it is not counted
+                    against the rule that raised it.</p>`,
+            go: 'Ours Is Fine', cancel: 'Cancel' })
+        : await _ltAsk({
+            kind: 'warn', eyebrow: 'Dismiss This Finding',
+            title: 'Is this title fine as it is?',
+            body: `<div class="lt-ask-pair"><div class="lt-now">
+                     <span class="lt-lab">Title</span>
+                     <span class="lt-cur">${_ecEsc(row.current || '')}</span></div></div>`,
+            note: { label: 'Why is it fine? (optional)',
+                    placeholder: 'e.g. the model name really does repeat on the box',
+                    hint: 'Shown in Dismissed below, and it is how we find out a rule'
+                        + ' is wrong. Four dismissals of one rule is a rule to go and fix.' },
+            go: 'Dismiss It', cancel: 'Cancel' });
+    if (!said) return;
+    const reason = said.note || '';
     _ltBusy.add(pid); ecRender();
     const res = await _ltPost({ action: 'deny', store: _ecStore, productId: pid,
                                 reason, as: kind.as });
     _ltBusy.delete(pid);
     if (!res.ok) {
-        alert(res.body?.detail || res.body?.error || 'Could not record that.');
+        await _ltTell('That dismissal was not recorded',
+            res.body?.detail || res.body?.error || 'Could not record that.');
         ecRender();
         return;
     }
@@ -46139,7 +46351,8 @@ async function ltReopen(pid) {
     const res = await _ltPost({ action: 'reopen', store: _ecStore, productId: pid });
     _ltBusy.delete(pid);
     if (!res.ok) {
-        alert(res.body?.detail || res.body?.error || 'Could not put that back.');
+        await _ltTell('That row was not put back',
+            res.body?.detail || res.body?.error || 'Could not put that back.');
         ecRender();
         return;
     }

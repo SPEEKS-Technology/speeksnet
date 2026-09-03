@@ -123,31 +123,62 @@ const DATA = {
     }
 
     console.log('== And sends the right answer ==');
-    // Both boxes are counted: only the answer that can teach us something asks
-    // for a note, and the other must not put an empty field in the way.
+    // ⚠️ NO BROWSER DIALOGS. These questions are asked in the product now — a
+    // designed box that can draw the titles it is asking about. The native
+    // confirm/prompt are stubbed only so the harness FAILS LOUDLY if anything
+    // here quietly falls back to one.
     await page.evaluate(() => {
-        window.__prompts = []; window.__confirms = [];
-        window.prompt = (t) => { window.__prompts.push(t); return 'because I checked it'; };
-        window.confirm = (t) => { window.__confirms.push(t); return true; };
+        window.__native = [];
+        window.prompt = (t) => { window.__native.push('prompt'); return ''; };
+        window.confirm = (t) => { window.__native.push('confirm'); return true; };
+        window.alert = (t) => { window.__native.push('alert'); };
     });
-    await page.evaluate(() => ltDeny('gid://shopify/Product/1'));
-    await new Promise(r => setTimeout(r, 200));
-    await page.evaluate(() => ltDeny('gid://shopify/Product/2'));
-    await new Promise(r => setTimeout(r, 200));
+    const askBox = () => page.evaluate(() => {
+        const ov = document.getElementById('ltAskOverlay');
+        if (!ov || !ov.classList.contains('open')) return null;
+        return {
+            eyebrow: (ov.querySelector('.lt-ask-eyebrow') || {}).textContent || '',
+            title: (ov.querySelector('.lt-ask-title') || {}).textContent || '',
+            body: (ov.querySelector('.lt-ask-body') || {}).textContent.replace(/\s+/g, ' ').trim(),
+            note: !!ov.querySelector('#ltAskNote'),
+            hint: (ov.querySelector('.lt-ask-hint') || {}).textContent || '',
+            go: (ov.querySelector('.lt-ask-go') || {}).textContent.trim(),
+        };
+    });
+
+    page.evaluate(() => ltDeny('gid://shopify/Product/1'));
+    await new Promise(r => setTimeout(r, 250));
+    let ask = await askBox();
+    ok(!!ask && ask.note, 'Deny asks in a box with a note field');
+    ok(ask && /rule is wrong/.test(ask.hint),
+       'and says what the note is for — it is the only signal a rule is misfiring');
+    ok(ask && ask.go === 'Dismiss It', 'the button names the action', ask && ask.go);
+    await page.evaluate(() => {
+        document.getElementById('ltAskNote').value = 'because I checked it';
+        document.querySelector('.lt-ask-go').click();
+    });
+    await new Promise(r => setTimeout(r, 250));
+
+    page.evaluate(() => ltDeny('gid://shopify/Product/2'));
+    await new Promise(r => setTimeout(r, 250));
+    ask = await askBox();
+    ok(!!ask && !ask.note,
+       'Ours Is Fine has NO note field — there is no rule to report on that answer');
+    ok(ask && /eBay listing/.test(ask.body) && /not counted against the rule/.test(ask.body),
+       'it says what it records and what it does not');
+    await page.evaluate(() => document.querySelector('.lt-ask-go').click());
+    await new Promise(r => setTimeout(r, 250));
+
     const posts = await page.evaluate(() => window.__posts);
-    const asked = await page.evaluate(() => ({ p: window.__prompts, c: window.__confirms }));
     ok(posts.length === 2, 'two denials posted', 'got ' + posts.length);
     if (posts.length === 2) {
         ok(posts[0].as === 'not-a-problem', 'name row posts not-a-problem', posts[0].as);
         ok(posts[1].as === 'ebay-stale', 'drift row posts ebay-stale', posts[1].as);
         ok(posts[0].reason === 'because I checked it', 'the note is still sent', posts[0].reason);
+        ok(posts[1].reason === '', 'and the answer with no note sends none', JSON.stringify(posts[1].reason));
     }
-    ok(asked.p.length === 1 && /rule is wrong/.test(asked.p[0]),
-       'Deny asks for a note — it is the only signal a rule is misfiring',
-       String(asked.p.length));
-    ok(asked.c.length === 1 && !/Optional/.test(asked.c[0]),
-       'Ours Is Fine just confirms — there is no rule to report on that answer',
-       String(asked.c.length));
+    const native = await page.evaluate(() => window.__native);
+    ok(native.length === 0, 'no browser dialog was used', native.join(',') || 'none');
 
     console.log('== The dismissed drawer ==');
     const drawer = await page.evaluate(() => {
