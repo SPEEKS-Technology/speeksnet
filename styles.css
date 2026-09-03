@@ -13508,7 +13508,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
        The sheet no longer pretends it fits a laptop screen. It is a spreadsheet;
        it scrolls sideways, which is what was asked for, and every column is cut
        to its real content rather than shaved to avoid the scrollbar. */
-    --b2b-pcols: 56px 100px minmax(56px, 0.85fr) minmax(74px, 1fr) 88px 58px 76px 76px 58px 72px 64px 122px 36px minmax(150px, 1.15fr) 96px 184px;
+    --b2b-pcols: 56px 128px minmax(56px, 0.85fr) minmax(74px, 1fr) 88px 58px 76px 76px 58px 72px 64px 122px 36px minmax(150px, 1.15fr) 96px 184px;
     /* The sheet owns its horizontal scroll so it never spills out of the modal
        on a narrow screen (the body clips -- see .manage-content). flex + min-
        height keep it from collapsing to a sliver as a column-flex item once
@@ -13518,11 +13518,15 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     flex: 0 0 auto;
     min-height: fit-content;
 }
-/* Header and rows share one width so they stay aligned while scrolled. 1552px =
-   the sum of the --b2b-pcols tracks above (minmax mins); update it if the
-   template changes. Scoped away from the listing grid, which is narrower. */
+/* Header and rows share one width so they stay aligned while scrolled.
+   1394px = the sum of the --b2b-pcols tracks above, counting each minmax at its
+   MINIMUM: 56+128+56+74+88+58+76+76+58+72+64+122+36+150+96+184.
+   THIS NUMBER IS AN INVARIANT -- change a track and change it here in the same
+   edit, or the header stops lining up with the body once the sheet is scrolled.
+   (It had already drifted: the comment said 1552 while the rule said 1366.)
+   Scoped away from the listing grid, which is narrower. */
 .b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-pline,
-.b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-prow { min-width: 1366px; }
+.b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-prow { min-width: 1394px; }
 /* True grid: drop the inter-cell gap and draw a hairline down every column
    boundary. The row's own bottom border is the horizontal line, so together they
    read as a spreadsheet rather than a list of chips. */
@@ -13546,6 +13550,28 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    hold its track and the field scroll its own overflow instead. */
 .b2b-items.b2b-ss .b2b-pcell,
 .b2b-items.b2b-ss .b2b-phead > span { min-width: 0; }
+/* ...and the same again for the FIELD inside the cell. The rule above frees the
+   cell (a grid item) to hold its track; it does nothing for the input or select
+   inside it, which is a flex item of that cell and carries its own
+   min-width:auto. A <select> still refuses to shrink below its widest option
+   from there, so "Computer" leans into Brand even though the cell itself is the
+   right width. Both levels have to be released, not just the outer one. */
+   .dd-host is in this list because the Type column has no <select> to match:
+   _ddEnhance() hides the native one (9x1px, clip-path) and builds a custom
+   dropdown in a <div class="dd-host">, so the previous version of this rule
+   matched nothing at all in the cell it was written for. That is a big part of
+   why the overlap survived three attempts at fixing it in CSS. */
+.b2b-items.b2b-ss .b2b-pcell > input,
+.b2b-items.b2b-ss .b2b-pcell > select,
+.b2b-items.b2b-ss .b2b-pcell > .dd-host { min-width: 0; max-width: 100%; }
+/* NO overflow:hidden on the cell. There was one, as a backstop while the cause
+   was unknown, and it is deliberately gone: it cost the outer 3px of the focus
+   ring on every sheet cell, and it was never what held the dropdown in -- the
+   open .dd-list is position:fixed and escapes the cell regardless.
+   What actually holds the control now is the min() clamp in _ddFit(), which is
+   the only thing that CAN: the floor it was overflowing with is an INLINE
+   min-width, and min-width outranks max-width (CSS 2.1 10.4), so no
+   non-!important rule here could ever have won. */
 /* The line's own edges close the grid -- no dangling border on the last column. */
 .b2b-items.b2b-ss .b2b-prow > *:last-child { border-right: 0; }
 .b2b-phead .c { text-align: center; }
@@ -20117,3 +20143,90 @@ select.dd-native {
    its own 430px block near .auth-page) and measures clean at 390px — verified,
    not assumed. Do not add rules here without a measurement showing a real
    problem; a second set of login breakpoints is how the sprawl started. */
+
+/* =========================================================
+   B2B LIVE BENCH INTAKE
+   =========================================================
+   The tray that sits above the pricing sheet while a session is open: the join
+   code, and a row per machine that has reported in and is waiting on a person.
+   Present only when the 'b2b-live-intake' feature is on for the viewer, so for
+   everybody else the pricing sheet is unchanged -- there is no reserved space
+   and no empty container. See _b2bBenchTray in speeks.js. */
+.b2b-bench {
+    margin-bottom: 14px; border-radius: var(--b2b-r-md);
+    background: var(--b2b-surface); border: 1px solid var(--b2b-line-2);
+    /* Clips the child rows to the rounded corners. */
+    overflow: hidden;
+    /* THESE TWO LINES ARE LOAD-BEARING, for the same reason they are on
+       .b2b-items.b2b-ss above. .manage-content is a column flex container, and
+       the moment overflow is not `visible` a flex item's min-height:auto
+       resolves to 0 -- so this collapsed to an empty bordered sliver with the
+       title, the hint and the button all clipped out of sight. It rendered
+       perfectly in the DOM and showed nothing on screen. Do not drop them. */
+    flex: 0 0 auto;
+    min-height: fit-content;
+}
+.b2b-bench-head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 13px;
+}
+.b2b-bench-title {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--b2b-faint); flex: 0 0 auto;
+}
+/* The one thing somebody is reading off this screen and typing into a laptop
+   across the bench, so it is monospaced, spaced out and the largest thing in the
+   row. Selectable on purpose -- copying it into a chat message is a normal way
+   to get it onto the machine. */
+.b2b-bench-code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 17px; font-weight: 700; letter-spacing: .18em;
+    color: var(--b2b-accent-deep); background: var(--b2b-accent-tint);
+    border: 1px solid #cfeada; border-radius: var(--b2b-r-sm);
+    padding: 3px 10px 3px 13px; user-select: all;
+}
+.b2b-bench-hint { font-size: 12px; color: var(--b2b-muted); flex: 1 1 auto; }
+/* A failed tray read. Stated in the strip rather than left to the console:
+   the pricer is the one who needs to know it did not load. */
+.b2b-bench-hint.bad { color: var(--red-alert); font-weight: 600; }
+.b2b-bench-head .b2b-btn { flex: 0 0 auto; }
+
+.b2b-bench-rows { border-top: 1px solid var(--b2b-line-2); }
+.b2b-bench-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 13px; border-bottom: 1px solid var(--b2b-line-2);
+    background: #fff;
+}
+.b2b-bench-row:last-child { border-bottom: 0; }
+/* A serial already on the sheet cannot be accepted at all -- the row exists only
+   to be discarded, so it is greyed rather than dressed up as a choice. */
+.b2b-bench-row.is-dup { background: #fcfcfd; }
+
+.b2b-bench-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.b2b-bench-name {
+    font-size: 12.5px; font-weight: 700; color: var(--b2b-ink, #0f172a);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.b2b-bench-spec { font-size: 11.5px; color: var(--b2b-muted); }
+.b2b-bench-meta { font-size: 10.5px; color: var(--b2b-faint); }
+
+/* What accepting WOULD do, stated before it is done. Fixed width so the column
+   of verdicts reads down the tray rather than jittering with the model names. */
+.b2b-bench-verdict {
+    flex: 0 0 auto; width: 210px; font-size: 12px; font-weight: 600;
+    color: var(--b2b-accent-deep);
+}
+.b2b-bench-verdict.bad { color: var(--red-alert); font-weight: 600; }
+.b2b-bench-q { font-weight: 500; color: var(--b2b-muted); }
+
+.b2b-bench-acts { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.b2b-bench-acts .b2b-btn { padding: 5px 11px; font-size: 11.5px; }
+
+/* Narrow: the verdict stops being a column and becomes a line under the name,
+   because at this width a 210px reservation squeezes the model down to nothing
+   -- and the model is what tells you which machine on the bench this is. */
+@media (max-width: 900px) {
+    .b2b-bench-row { flex-wrap: wrap; }
+    .b2b-bench-what { flex: 1 1 100%; }
+    .b2b-bench-verdict { width: auto; flex: 1 1 auto; }
+}

@@ -1,0 +1,13 @@
+# core.autocrlf is true for this repo, which is right for the source but must
+# never be allowed near a binary: a zip whose CRLFs got "fixed" on checkout is a
+# corrupt zip, and it fails at the person who downloaded it rather than here.
+# Git's own heuristic already treats these as binary; this states it so a future
+# .gitattributes cannot accidentally reclassify them.
+*.zip binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

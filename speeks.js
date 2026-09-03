@@ -26,6 +26,40 @@
   };
 })();
 
+// --- 0. APP VERSION ---
+// THE single source of truth for the version string. Bump this one line for a
+// release and every page follows: _stampVersion() below writes it into every
+// .version-tag in the document.
+//
+// It lived in the HTML before this, which meant six copies of the same literal
+// across index/workspace/operations/docs/stats/tv, and they drifted -- a bump
+// that missed a page left that page claiming an older version than the code it
+// was running. Do not put a version number back into the markup.
+//
+// Stored without the leading "v" so it is usable as data (comparisons, a header
+// on an API call, a patch-notes lookup); the "v" is presentation and is added
+// at the point of display.
+const APP_VERSION = '3.6.0';
+
+// Every .version-tag on the page, not the first: tv.html has one in the top nav
+// and the app pages have one in the sidebar greeting stack, and a page is free
+// to grow a second without needing to touch this.
+function _stampVersion() {
+    document.querySelectorAll('.version-tag').forEach(function (el) {
+        el.textContent = `v${APP_VERSION}`;
+    });
+}
+
+// speeks.js is deferred on all six pages, so the document is already parsed by
+// the time this runs and the direct call is the one that fires. The readyState
+// guard is for the other case -- a page that loads this without defer, or from
+// <head> -- so the tag still gets stamped instead of silently staying empty.
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _stampVersion);
+} else {
+    _stampVersion();
+}
+
 // --- 1. API URLS ---
 const _BASE = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1';
 const _SUPABASE_URL = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co';
@@ -56,6 +90,7 @@ const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
 const B2B_OUTREACH_URL  = `${_BASE}/b2b-outreach`;
+const B2B_INTAKE_URL    = `${_BASE}/b2b-intake`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const BUYING_MARGIN_URL = `${_BASE}/buying-margin`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
@@ -16185,6 +16220,301 @@ function _b2bDealById(id) { return _b2bDeals.find(d => d.id === id) || null; }
 // Realtime ping handler. Only refreshes when the pane is actually on screen and
 // nobody has a deal modal open -- re-rendering underneath someone mid-edit
 // would throw away what they were typing.
+// ===========================================================================
+// LIVE BENCH INTAKE  --  an OPTION, off unless 'b2b-live-intake' is switched on
+// ===========================================================================
+// A capture tool on the machine being tested posts its own specs to an open
+// session on this deal; they queue here and reach the sheet only when somebody
+// accepts them. See supabase/functions/b2b-intake.
+//
+// Three things this deliberately is not:
+//   - It is not the intake path. A deal with no session behaves exactly as it
+//     always has, and the manual sheet and the USB/collate route are untouched.
+//   - It does not write line items. Accepting asks b2b-intake, which asks
+//     b2b-deals, which is still the only writer of b2b_deal_items.
+//   - It does not trust the bench. Nothing a device sends appears on the sheet
+//     until a person clicks Accept.
+
+let _b2bIntakeState = { dealId: null, session: null, pending: [], expired: false, loaded: false, busy: false, error: null };
+
+// Same derivation applyRoleBasedUI uses at the DOM level (see userRoleClass
+// there). Written out rather than borrowed because that one is a local.
+function _b2bRoleClass() {
+    return 'role-' + _b2bRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+}
+
+// The gate. Uses the resolver rather than a [data-feature] attribute because the
+// tray is rendered into a modal long after applyRoleBasedUI has swept the page,
+// so the DOM-scan enforcement would never see it.
+function _b2bIntakeAllowed() {
+    try {
+        return typeof _featureEffectiveVisible === 'function'
+            && _featureEffectiveVisible('b2b-live-intake', _b2bRoleClass(), _b2bUser()) === true;
+    } catch (_) { return false; }
+}
+
+// Same no-preflight trick as _b2bSend: a text/plain content type keeps this a
+// simple request, so the bench and the sheet both skip the OPTIONS round trip.
+async function _b2bIntakeSend(payload) {
+    const res = await fetch(B2B_INTAKE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ ...payload, user: _b2bUser() })
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+    return out;
+}
+
+// Only while the lines are still editable, which is the same window b2b-intake
+// enforces server-side (OPEN_STAGES) -- the button must not offer something the
+// function will refuse.
+function _b2bIntakeStageOk(deal) {
+    return !!deal && ['pricing', 'quote'].includes(deal.stage) && !_b2bIsPreval();
+}
+
+// The whole block, container included, so a repaint can replace it wholesale.
+// Returns '' when the feature is off, which is what makes this additive: the
+// pricing sheet renders byte-identically to before for everyone else.
+function _b2bBenchTray(deal) {
+    if (!_b2bIntakeAllowed() || !_b2bIntakeStageOk(deal)) return '';
+    return `<div class="b2b-bench" id="b2bBenchTray">${_b2bIntakeInner(deal)}</div>`;
+}
+
+function _b2bIntakeInner(deal) {
+    const st = _b2bIntakeState;
+    const live = st.session && !st.expired;
+
+    // State belongs to whichever deal it was read for. Opening a second deal
+    // renders before the new read lands, and without this check that render
+    // would briefly show the PREVIOUS pallet's waiting machines against this
+    // one -- offering to accept a laptop into the wrong deal.
+    if (st.dealId !== deal.id || !st.loaded) {
+        return `<div class="b2b-bench-head">
+            <span class="b2b-bench-title">Live bench intake</span>
+            <span class="b2b-bench-hint">Checking…</span>
+        </div>`;
+    }
+
+    // A failed read says so and offers the retry, rather than looking like a
+    // feature that does nothing. Distinct from the no-session state below: there
+    // is nothing to start until we know what is already open.
+    if (st.error) {
+        return `<div class="b2b-bench-head">
+            <span class="b2b-bench-title">Live bench intake</span>
+            <span class="b2b-bench-hint bad">Couldn't read the tray — ${escapeHtml(st.error)}</span>
+            <button class="b2b-btn b2b-btn-secondary"
+                onclick="_b2bIntakeLoad('${deal.id}')">Try again</button>
+        </div>`;
+    }
+
+    if (!live) {
+        return `<div class="b2b-bench-head">
+            <span class="b2b-bench-title">Live bench intake</span>
+            <span class="b2b-bench-hint">Let the bench machines report their own specs into this deal.</span>
+            <button class="b2b-btn b2b-btn-secondary" ${st.busy ? 'disabled' : ''}
+                onclick="b2bIntakeStart('${deal.id}',this)">Start a session</button>
+        </div>`;
+    }
+
+    const rows = st.pending.map(_b2bIntakeRow).join('');
+    // Only offer "Accept all" when there is more than one and none of them is a
+    // duplicate. A bulk button that silently skips rows is worse than no bulk
+    // button -- the pricer would have to check afterwards which ones took.
+    const bulkable = st.pending.filter(p => !p.duplicate);
+    return `<div class="b2b-bench-head">
+            <span class="b2b-bench-title">Live bench intake</span>
+            <span class="b2b-bench-code" title="Type this into the capture tool on each machine">${escapeHtml(st.session.code)}</span>
+            <span class="b2b-bench-hint">${st.pending.length
+                ? `${st.pending.length} waiting`
+                : 'Open — waiting for machines'}${_b2bIntakeExpiryText(st.session)}</span>
+            ${bulkable.length > 1 ? `<button class="b2b-btn b2b-btn-primary" ${st.busy ? 'disabled' : ''}
+                onclick="b2bIntakeAcceptAll(this)">Accept all ${bulkable.length}</button>` : ''}
+            <button class="b2b-btn b2b-btn-secondary" ${st.busy ? 'disabled' : ''}
+                onclick="b2bIntakeStop('${deal.id}',this)">Close session</button>
+        </div>
+        ${rows ? `<div class="b2b-bench-rows">${rows}</div>` : ''}`;
+}
+
+function _b2bIntakeExpiryText(session) {
+    const mins = Math.round((new Date(session.expires_at) - Date.now()) / 60000);
+    if (!Number.isFinite(mins) || mins <= 0) return '';
+    if (mins < 60) return ` · closes in ${mins} min`;
+    return ` · closes in ${Math.round(mins / 60)}h`;
+}
+
+// One waiting machine. The point of this row is that it says what accepting
+// WOULD do before it is done -- a new line, or one more unit on an existing one.
+function _b2bIntakeRow(p) {
+    const f = p.fields || {};
+    const spec = [f.cpu, f.ram, f.storage, f.gpu].filter(Boolean).join(' · ');
+    const name = [f.make, f.model].filter(Boolean).join(' ') || 'Unknown machine';
+    const verdict = p.match
+        ? `+1 to line ${p.match.line_no} <span class="b2b-bench-q">(qty ${p.match.quantity} → ${p.match.quantity + 1})</span>`
+        : 'New line';
+
+    if (p.duplicate) {
+        return `<div class="b2b-bench-row is-dup">
+            <div class="b2b-bench-what">
+                <span class="b2b-bench-name">${escapeHtml(name)}</span>
+                <span class="b2b-bench-spec">${escapeHtml(spec)}</span>
+            </div>
+            <div class="b2b-bench-verdict bad">Serial ${escapeHtml(p.serial)} is already on the sheet</div>
+            <div class="b2b-bench-acts">
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bIntakeReject('${p.id}',this)">Discard</button>
+            </div>
+        </div>`;
+    }
+
+    return `<div class="b2b-bench-row">
+        <div class="b2b-bench-what">
+            <span class="b2b-bench-name">${escapeHtml(name)}</span>
+            <span class="b2b-bench-spec">${escapeHtml(spec)}</span>
+            <span class="b2b-bench-meta">${escapeHtml(p.serial)}${f.condition ? ' · ' + escapeHtml(f.condition) : ''}${_b2bBenchFrom(p)}</span>
+        </div>
+        <div class="b2b-bench-verdict">${verdict}</div>
+        <div class="b2b-bench-acts">
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bIntakeAccept('${p.id}',this)">Accept</button>
+            ${p.match ? `<button class="b2b-btn b2b-btn-secondary"
+                title="Put it on its own line instead of adding to line ${p.match.line_no}"
+                onclick="b2bIntakeAccept('${p.id}',this,true)">Own line</button>` : ''}
+            <button class="b2b-btn b2b-btn-secondary" onclick="b2bIntakeReject('${p.id}',this)">Discard</button>
+        </div>
+    </div>`;
+}
+
+// Where a reading came from, in the order a pricer actually cares about it: the
+// stick's label if it has been named, else its id, and the machine's hostname
+// only as a last resort. The hostname is the least useful of the three -- a
+// freshly imaged laptop is DESKTOP-<random> and is a different machine every
+// time, whereas the stick is the thing somebody is holding.
+function _b2bBenchFrom(p) {
+    const stick = String(p.device_label || '').trim() || String(p.device_id || '').trim();
+    if (stick) return ' · ' + escapeHtml(stick);
+    return p.device ? ' · ' + escapeHtml(p.device) : '';
+}
+
+function _b2bIntakeRepaint() {
+    const host = document.getElementById('b2bBenchTray');
+    if (!host || !_b2bModalDeal) return;
+    host.innerHTML = _b2bIntakeInner(_b2bModalDeal);
+}
+
+// Reads the tray. Quiet on failure: this is a side panel, and a blocking alert
+// because a poll missed would be worse than the panel being a few seconds stale.
+async function _b2bIntakeLoad(dealId) {
+    if (!_b2bIntakeAllowed()) return;
+    if (!document.getElementById('b2bBenchTray')) return;
+    try {
+        const out = await _b2bIntakeSend({ action: 'tray', deal_id: dealId });
+        _b2bIntakeState = {
+            dealId,
+            session: out.session || null,
+            pending: out.pending || [],
+            expired: !!out.expired,
+            loaded: true,
+            busy: false
+        };
+    } catch (e) {
+        // Set dealId, not just loaded. Leaving it null meant the render guard
+        // (st.dealId !== deal.id) stayed true forever, so a failed read left the
+        // tray showing its "Checking..." placeholder for good -- a strip with no
+        // button, no message and no way to retry, which reads as a broken
+        // feature rather than a failed request.
+        _b2bIntakeState = {
+            dealId, session: null, pending: [], expired: false,
+            loaded: true, busy: false, error: e.message || 'Could not reach the intake service.'
+        };
+    }
+    _b2bIntakeRepaint();
+}
+
+async function b2bIntakeStart(dealId, btn) {
+    if (btn) btn.disabled = true;
+    try {
+        const out = await _b2bIntakeSend({ action: 'open_session', deal_id: dealId });
+        _b2bIntakeState.session = out.session;
+        _b2bIntakeState.expired = false;
+        _b2bIntakeState.loaded = true;
+        _b2bIntakeRepaint();
+        _b2bSay(out.reused ? `Session already open — code ${out.session.code}.` : `Session open — code ${out.session.code}.`);
+    } catch (e) {
+        if (btn) btn.disabled = false;
+        _b2bSay(`Couldn't start a session: ${e.message}`, true);
+    }
+}
+
+async function b2bIntakeStop(dealId, btn) {
+    // Anything still waiting is about to become unreachable, so say so. Closing
+    // is not destructive to the sheet, but those readings are gone from the tray.
+    const waiting = _b2bIntakeState.pending.length;
+    if (waiting && !confirm(`${waiting} machine${waiting === 1 ? '' : 's'} still waiting to be accepted. Close the session anyway?`)) return;
+    if (btn) btn.disabled = true;
+    try {
+        await _b2bIntakeSend({ action: 'close_session', deal_id: dealId });
+        _b2bIntakeState = { dealId, session: null, pending: [], expired: false, loaded: true, busy: false };
+        _b2bIntakeRepaint();
+        _b2bSay('Session closed.');
+    } catch (e) {
+        if (btn) btn.disabled = false;
+        _b2bSay(`Couldn't close the session: ${e.message}`, true);
+    }
+}
+
+async function b2bIntakeAccept(id, btn, forceNew) {
+    if (btn) btn.disabled = true;
+    try {
+        const out = await _b2bIntakeSend({ action: 'accept', id, force_new: forceNew === true });
+        // The line the accept created or grew has to come from the deals fetch --
+        // the tray does not own line items and must not invent one locally.
+        await _b2bIntakeLoad(_b2bModalDeal ? _b2bModalDeal.id : _b2bIntakeState.dealId);
+        if (typeof _b2bSyncOpenDeal === 'function') await _b2bSyncOpenDeal({});
+        _b2bSay(out.rolled_up ? 'Added a unit to the matching line.' : 'New line added.');
+    } catch (e) {
+        if (btn) btn.disabled = false;
+        _b2bSay(`Couldn't accept that one: ${e.message}`, true);
+        // A stale tray is how most of these fail (someone else took it, or the
+        // serial landed on the sheet meanwhile), so re-read rather than leaving
+        // the row sitting there offering the same broken action.
+        await _b2bIntakeLoad(_b2bModalDeal ? _b2bModalDeal.id : _b2bIntakeState.dealId);
+    }
+}
+
+async function b2bIntakeReject(id, btn) {
+    if (btn) btn.disabled = true;
+    try {
+        await _b2bIntakeSend({ action: 'reject', id });
+        await _b2bIntakeLoad(_b2bModalDeal ? _b2bModalDeal.id : _b2bIntakeState.dealId);
+    } catch (e) {
+        if (btn) btn.disabled = false;
+        _b2bSay(`Couldn't discard that one: ${e.message}`, true);
+    }
+}
+
+// Sequential, not Promise.all. Each accept re-resolves its match against the
+// lines as they stand, so two identical machines accepted together must be seen
+// one after the other -- in parallel they would both find "no match" and become
+// two lines of one instead of one line of two.
+async function b2bIntakeAcceptAll(btn) {
+    const queue = _b2bIntakeState.pending.filter(p => !p.duplicate).map(p => p.id);
+    if (!queue.length) return;
+    if (btn) btn.disabled = true;
+    _b2bIntakeState.busy = true;
+    _b2bIntakeRepaint();
+
+    let ok = 0; let failed = 0;
+    for (const id of queue) {
+        try { await _b2bIntakeSend({ action: 'accept', id }); ok++; }
+        catch (_) { failed++; }
+    }
+    _b2bIntakeState.busy = false;
+    await _b2bIntakeLoad(_b2bModalDeal ? _b2bModalDeal.id : _b2bIntakeState.dealId);
+    if (typeof _b2bSyncOpenDeal === 'function') await _b2bSyncOpenDeal({});
+    _b2bSay(failed
+        ? `Accepted ${ok}, and ${failed} wouldn't go through — see the tray.`
+        : `Accepted ${ok} machine${ok === 1 ? '' : 's'}.`, !!failed);
+}
+
 function _b2bRealtimeRefresh() {
     const pane = document.getElementById('ops-pane-b2b');
     if (!pane || !pane.classList.contains('active') || document.hidden) return;
@@ -16313,6 +16643,14 @@ async function _b2bSyncOpenDeal(ping) {
     // A write to some other deal costs nothing, and our own echo is ignored
     // outright -- the edge fn broadcasts to every subscriber, sender included.
     if (ping.deal && ping.deal !== deal.id) return;
+
+    // The tray is its own surface and its own fetch, so it has to be refreshed
+    // here or a machine reporting in would sit invisible until somebody reopened
+    // the deal. Ahead of the own-echo check below on purpose: our own accept
+    // broadcasts too, and re-reading after it is how the tray drops the row it
+    // just consumed. A no-op when the feature is off or the tray isn't rendered.
+    _b2bIntakeLoad(deal.id);
+
     if (ping.by && ping.by === _b2bUser()) return;
 
     let fresh;
@@ -19316,7 +19654,7 @@ async function b2bSortItems(btn) {
     const val      = it => Number(it.value) || 0;
     const brandKey = it => String(it.make  || '').trim().toLowerCase();
     const modelKey = it => String(it.model || '').trim().toLowerCase();
-    const groupKey = it => `${brandKey(it)} ${modelKey(it)}`;
+    const groupKey = it => `${brandKey(it)}\u0000${modelKey(it)}`;
 
     // Each brand and each model group ranks by its best line, so a whole brand
     // (and a whole model within it) stays together while the dearest kit floats
@@ -20551,6 +20889,7 @@ function _b2bStagePricing(deal) {
                     title="Group by brand then model, highest value first at both levels"
                     onclick="b2bSortItems(this)">↕ Sort by brand</button>`
                 : '')}
+            ${_b2bBenchTray(deal)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
@@ -20563,7 +20902,11 @@ function _b2bStagePricing(deal) {
                 ? '<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">Prices save automatically — a manager or DM submits this for quoting.</span>'
                 : `<button class="b2b-btn b2b-btn-primary" id="b2bPrSubmit" ${_b2bModalItems.length ? '' : 'disabled'}
                 onclick="b2bSubmitPricing('${deal.id}',this)">Submit For Quoting</button>`}`,
-        after: _b2bPaintTotals,
+        // Totals as always, plus the first read of the intake tray. It runs here
+        // rather than from _b2bBenchTray because the markup has to be in the DOM
+        // before there is anything to repaint into, and a render function has no
+        // business firing a fetch. A no-op when the feature is off.
+        after: (...a) => { _b2bPaintTotals(...a); _b2bIntakeLoad(deal.id); },
     });
 }
 
@@ -33578,6 +33921,18 @@ const FEATURE_CATALOG = [
     // frontend switch and a backend allow-list disagree.
     { key: 'ec-view-categories',       label: 'SPEEKS Connect · Categories tab', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
+    // Live bench intake: the capture tool on a machine being tested posts its
+    // own specs into the open deal. `def: []` is the whole point -- it ships off
+    // for everyone, including CEO and DM, and is turned on per role or per person
+    // in Feature Access once a bench has been through it. The existing manual and
+    // USB routes are unaffected either way; see _b2bBenchTray in this file.
+    { key: 'b2b-live-intake',          label: 'B2B Live Bench Intake',         tab: 'widgets', group: 'Operations', def: [] },
+    // The download button in the B2B header for the bench capture tool. Same
+    // empty default as the tray above, and for the same reason -- the two are
+    // halves of one feature and should be switched on for the same people. The
+    // button also carries `role-none` in operations.html, so the role gate
+    // denies everyone and a per-user override is the only way to see it.
+    { key: 'b2b-capture-download',     label: 'B2B Capture Tool (Download)',   tab: 'widgets', group: 'Operations', def: [] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
     //      the link just inherits it. ----
@@ -46132,11 +46487,39 @@ function _ddFit(host) {
     //
     // Trying to detect a shrink-to-fit parent by its `display` does not work
     // either: .hub-select-wrap computes to `flex`, not `inline-flex`, and a flex
-    // ITEM with `flex: 0 1 auto` is just as content-driven. Overflow is held back
-    // by `.dd-host { max-width: 100% }` in CSS, which resolves against the
-    // containing block rather than against this control, plus the two caps below.
+    // ITEM with `flex: 0 1 auto` is just as content-driven.
+    //
+    // What this comment used to claim -- that overflow is "held back by
+    // .dd-host { max-width: 100% } in CSS" -- is FALSE, and it hid a real bug
+    // for a release. `min-width` is resolved AFTER `max-width` and wins over it
+    // (CSS 2.1 section 10.4), so the inline floor written below beats any
+    // max-width, in the stylesheet or otherwise. On the B2B pricing sheet the
+    // Type control measured 112px for its widest option ("Computer") inside an
+    // 87px content box and painted 12px over the Brand input, eating the first
+    // character of every brand: "Apple" read "pple", "HP" read "IP",
+    // "Framework" read "ramework". Three separate CSS fixes bounced off it,
+    // because no non-!important CSS can outrank an inline min-width.
     want = Math.min(want, Math.max(120, window.innerWidth - 24));
-    host.style.minWidth = want + 'px';
+
+    // Inside a sheet cell, clamp with min(): `100%` resolves against the cell's
+    // content box, so the control can never exceed its column, but still grows
+    // to `want` wherever the room exists. This is NOT the circular parent clamp
+    // the note above describes -- it never reads the parent's CURRENT width, so
+    // it cannot pin the control to whatever it already happens to be, and it
+    // can always grow back to fit its options. `_ddNativeMin` keeps its "floor,
+    // not override" meaning too: a 200px CSS floor still applies wherever
+    // 200px fits.
+    //
+    // Scoped to .b2b-pcell deliberately. A sheet cell is a grid item with a
+    // definite track width, so the percentage resolves against a real number.
+    // .hub-select-wrap is content-sized, where a percentage min-width is the
+    // cyclic case browsers resolve as indefinite -- which can collapse the
+    // control instead of clamping it. The feed filter is the reason the parent
+    // clamp was removed in the first place; it does not get to be the reason it
+    // breaks again.
+    host.style.minWidth = host.closest('.b2b-pcell')
+        ? 'min(' + want + 'px, 100%)'
+        : want + 'px';
 }
 
 function _ddSync(host) {
