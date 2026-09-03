@@ -123,7 +123,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     let b = await box();
     ok(!!b, 'the box is up before the server has answered');
     if (b) {
-        ok(b.eyebrow === 'Approve Title' && /Change this listing/.test(b.title),
+        ok(b.eyebrow === 'Approve Title' && /Change This Listing/.test(b.title),
            'it says what it is', b.eyebrow + ' / ' + b.title);
         ok(/lt-cut/.test(b.now) && /L-Mount/.test(b.now),
            'the words being lost are marked on the Now line');

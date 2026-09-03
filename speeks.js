@@ -46228,7 +46228,7 @@ async function ltApprove(pid) {
     // button after a click reads as a broken screen, and the two titles — the
     // part they came to check — are ready immediately either way.
     const asking = _ltAsk({
-        kind: 'ok', eyebrow: 'Approve Title', title: 'Change this listing’s title?',
+        kind: 'ok', eyebrow: 'Approve Title', title: 'Change This Listing’s Title?',
         body: _ltAskPair(row.current, title)
             + '<div class="lt-ask-wait"><span class="lt-ask-spin"></span>'
             + 'Checking what else on this listing says the same thing…</div>',
@@ -46253,7 +46253,7 @@ async function ltApprove(pid) {
         // The server's detail is written for a person (it explains a 409 as "the
         // title changed in Shopify since the list was drawn"), so show it rather
         // than a status code.
-        await _ltTell('That title was not saved',
+        await _ltTell('That Title Was Not Saved',
             res.body?.detail || res.body?.error || 'Could not save that title.');
         ecRender();
         return;
@@ -46267,7 +46267,7 @@ async function ltApprove(pid) {
         // changed, so the queue no longer has anything to offer on it and the
         // approve refuses a title the product already has. The only routes back
         // are Shopify by hand or the respec repair — say the true one.
-        await _ltTell('The title changed, the rest of the listing did not',
+        await _ltTell('The Title Changed, The Rest Of The Listing Did Not',
             `Shopify refused ${res.body.metafieldsLeft} field`
             + `${res.body.metafieldsLeft === 1 ? '' : 's'} that quote this title, so the`
             + ` listing is half-corrected. Open the product in Shopify and fix those`
@@ -46303,7 +46303,7 @@ async function ltDeny(pid) {
     const said = kind.as === 'ebay-stale'
         ? await _ltAsk({
             kind: 'warn', eyebrow: 'Our Title Is Right',
-            title: 'Confirm our Shopify title is the right one?',
+            title: 'Confirm Our Shopify Title Is The Right One?',
             body: `<div class="lt-ask-pair"><div class="lt-now">
                      <span class="lt-lab">Ours</span>
                      <span class="lt-cur">${_ecEsc(row.current || '')}</span></div>
@@ -46318,11 +46318,11 @@ async function ltDeny(pid) {
             go: 'Ours Is Fine', cancel: 'Cancel' })
         : await _ltAsk({
             kind: 'warn', eyebrow: 'Dismiss This Finding',
-            title: 'Is this title fine as it is?',
+            title: 'Is This Title Fine As It Is?',
             body: `<div class="lt-ask-pair"><div class="lt-now">
                      <span class="lt-lab">Title</span>
                      <span class="lt-cur">${_ecEsc(row.current || '')}</span></div></div>`,
-            note: { label: 'Why is it fine? (optional)',
+            note: { label: 'Why Is It Fine? (Optional)',
                     placeholder: 'e.g. the model name really does repeat on the box',
                     hint: 'Shown in Dismissed below, and it is how we find out a rule'
                         + ' is wrong. Four dismissals of one rule is a rule to go and fix.' },
@@ -46334,7 +46334,7 @@ async function ltDeny(pid) {
                                 reason, as: kind.as });
     _ltBusy.delete(pid);
     if (!res.ok) {
-        await _ltTell('That dismissal was not recorded',
+        await _ltTell('That Dismissal Was Not Recorded',
             res.body?.detail || res.body?.error || 'Could not record that.');
         ecRender();
         return;
@@ -46351,7 +46351,7 @@ async function ltReopen(pid) {
     const res = await _ltPost({ action: 'reopen', store: _ecStore, productId: pid });
     _ltBusy.delete(pid);
     if (!res.ok) {
-        await _ltTell('That row was not put back',
+        await _ltTell('That Row Was Not Put Back',
             res.body?.detail || res.body?.error || 'Could not put that back.');
         ecRender();
         return;
