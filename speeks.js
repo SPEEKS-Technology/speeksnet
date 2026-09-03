@@ -19623,7 +19623,7 @@ async function b2bSortItems(btn) {
     const val      = it => Number(it.value) || 0;
     const brandKey = it => String(it.make  || '').trim().toLowerCase();
     const modelKey = it => String(it.model || '').trim().toLowerCase();
-    const groupKey = it => `${brandKey(it)} ${modelKey(it)}`;
+    const groupKey = it => `${brandKey(it)}\u0000${modelKey(it)}`;
 
     // Each brand and each model group ranks by its best line, so a whole brand
     // (and a whole model within it) stays together while the dearest kit floats
