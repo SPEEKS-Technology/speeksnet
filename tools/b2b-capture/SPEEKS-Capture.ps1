@@ -178,6 +178,60 @@ if ($WhoAmI) {
     return
 }
 
+# One POST of one capture, with the retry policy, classifying the outcome.
+#
+# The three outcomes are treated very differently and must not be conflated:
+#
+#   sent     it is queued in SPEEKSnet, waiting on a person.
+#   dead     the SESSION is gone -- closed, expired, or never existed. Retrying
+#            cannot help and the caller should forget the code and ask for a new
+#            one. Distinguishing this from a network fault is the whole point of
+#            this function: they used to print the same sort of warning, and a
+#            closed session then looked like bad wifi for the rest of the pallet.
+#   offline  the network failed after three tries. The code is probably fine;
+#            keep it, keep the USB copy, and let the next machine try again.
+#
+# A 400 is neither: the payload itself was rejected, which is a bug in the tool
+# rather than anything the bench can fix, so it is reported verbatim and the
+# code is left alone.
+function Send-Capture {
+    param([byte[]]$Body, [string]$Url)
+    for ($try = 1; $try -le 3; $try++) {
+        try {
+            $resp = Invoke-RestMethod -Uri $Url -Method Post -Body $Body `
+                        -ContentType 'application/json; charset=utf-8' -TimeoutSec 20 -ErrorAction Stop
+            if ($resp.success) { return @{ sent = $true } }
+            # A refusal in the body rather than the status line. Same meaning if
+            # it names the session, so match on that rather than trusting only
+            # the HTTP code.
+            $dead = ([string]$resp.error -match "(?i)session\s+is(n't|\s+not)\s+open")
+            return @{ sent = $false; dead = $dead; error = [string]$resp.error }
+        } catch {
+            $status = $null
+            try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+            # 403 is the closed/unknown-session answer from b2b-intake.
+            if ($status -eq 403) { return @{ sent = $false; dead = $true; error = 'that session is not open' } }
+            # 400 is a validation refusal. Read the body so the bench sees why.
+            if ($status -eq 400) {
+                $msg = $_.Exception.Message
+                try {
+                    $sr = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
+                    $parsed = $sr.ReadToEnd() | ConvertFrom-Json
+                    if ($parsed.error) { $msg = [string]$parsed.error }
+                } catch { }
+                return @{ sent = $false; dead = $false; error = $msg }
+            }
+            if ($try -lt 3) {
+                Write-Host "    Attempt $try failed, retrying..." -ForegroundColor DarkYellow
+                Start-Sleep -Seconds ($try * 2)
+            } else {
+                return @{ sent = $false; dead = $false; offline = $true; error = $_.Exception.Message }
+            }
+        }
+    }
+    return @{ sent = $false; dead = $false; offline = $true; error = 'unknown failure' }
+}
+
 function Get-Safe {
     param([scriptblock]$Block, $Default = $null)
     try { $v = & $Block; if ($null -eq $v) { return $Default }; return $v }
@@ -956,39 +1010,71 @@ if ($sessionCode) {
     $bodyJson  = $payload | ConvertTo-Json -Depth 9 -Compress
     $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyJson)
 
-    # Three tries. Bench wifi drops, and a lost packet must not mean retyping a
-    # machine -- but a REFUSED code is final, so that one stops immediately
-    # instead of hammering the endpoint twice more for the same answer.
-    $sent = $false
-    for ($try = 1; $try -le 3 -and -not $sent; $try++) {
-        try {
-            $resp = Invoke-RestMethod -Uri $PostTo -Method Post -Body $bodyBytes `
-                        -ContentType 'application/json; charset=utf-8' -TimeoutSec 20 -ErrorAction Stop
-            if ($resp.success) {
-                Write-Host '    Queued ' -NoNewline -ForegroundColor DarkGray
-                Write-Host 'waiting for someone to accept it on the pricing sheet' -ForegroundColor Green
-                $sent = $true
+    $result = Send-Capture -Body $bodyBytes -Url $PostTo
+
+    # The session this drive was carrying has been closed, has expired, or was
+    # reopened as a different one. The remembered code is now worthless and must
+    # NOT be kept: left in place it would fail identically on every remaining
+    # machine of the pallet, each failure looking like a network problem, and the
+    # whole batch would quietly end up USB-only with nobody told why.
+    #
+    # So forget it, say plainly what happened, and ask for the new one. The
+    # machine has already been read and its JSON is already on the stick, so the
+    # retry costs nothing but the typing.
+    if ($result.dead) {
+        Write-Host ''
+        Write-Host '    That session is closed.' -ForegroundColor Yellow
+        Write-Host "    Code $sessionCode is no longer accepted, so this drive has forgotten it." -ForegroundColor DarkGray
+
+        $deviceCfg.session_code     = $null
+        $deviceCfg.session_saved_at = $null
+        [void](Save-DeviceConfig $deviceCfg)
+
+        # Never prompt under -NoPrompt: that switch exists for unattended sweeps,
+        # and a blocked Read-Host there would hang the run -- the one failure
+        # worse than not posting.
+        if ($NoPrompt) {
+            Write-Host '    Run again with -Session <code>, or -Live to be asked for one.' -ForegroundColor DarkGray
+        } else {
+            Write-Host ''
+            Write-Host '    New session code from the pricing sheet (Enter to skip): ' -NoNewline -ForegroundColor Cyan
+            $fresh = (Read-Host).Trim().ToUpper()
+            if ($fresh) {
+                $deviceCfg.session_code     = $fresh
+                $deviceCfg.session_saved_at = (Get-Date).ToString('o')
+                [void](Save-DeviceConfig $deviceCfg)
+
+                # Rebuild the body -- the code travels inside it, so the first
+                # one cannot be reused.
+                $payload.code = $fresh
+                $retryBytes = [System.Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Depth 9 -Compress))
+                Write-Host '    Sending' -NoNewline -ForegroundColor DarkGray
+                Write-Host "  session $fresh" -ForegroundColor Cyan
+
+                # ONE retry, deliberately. If the new code is refused too, the
+                # answer is on the screen; looping here is how a bench tool ends
+                # up asking forever at somebody who has already walked away.
+                $result = Send-Capture -Body $retryBytes -Url $PostTo
+                if ($result.dead) {
+                    Write-Host '    That one is not open either. Check the sheet and run this machine again.' -ForegroundColor Yellow
+                    $deviceCfg.session_code     = $null
+                    $deviceCfg.session_saved_at = $null
+                    [void](Save-DeviceConfig $deviceCfg)
+                }
             } else {
-                Write-Host "    Refused: $($resp.error)" -ForegroundColor Yellow
-                break
-            }
-        } catch {
-            # 403 is the closed/unknown-code answer and will not improve on a
-            # retry. Anything else might.
-            $status = $null
-            try { $status = [int]$_.Exception.Response.StatusCode } catch { }
-            if ($status -eq 403) {
-                Write-Host '    Refused: that session is not open. Check the code on the sheet.' -ForegroundColor Yellow
-                break
-            }
-            if ($try -lt 3) {
-                Write-Host "    Attempt $try failed, retrying..." -ForegroundColor DarkYellow
-                Start-Sleep -Seconds ($try * 2)
-            } else {
-                Write-Host '    Could not reach SPEEKSnet -- the USB copy is safe and collates as usual.' -ForegroundColor DarkYellow
-                Write-Host "      $($_.Exception.Message)" -ForegroundColor DarkGray
+                Write-Host '    Skipped. The USB copy is safe and collates as usual.' -ForegroundColor DarkGray
             }
         }
+    }
+
+    if ($result.sent) {
+        Write-Host '    Queued ' -NoNewline -ForegroundColor DarkGray
+        Write-Host 'waiting for someone to accept it on the pricing sheet' -ForegroundColor Green
+    } elseif ($result.offline) {
+        Write-Host '    Could not reach SPEEKSnet -- the USB copy is safe and collates as usual.' -ForegroundColor DarkYellow
+        Write-Host "      $($result.error)" -ForegroundColor DarkGray
+    } elseif (-not $result.dead -and $result.error) {
+        Write-Host "    Refused: $($result.error)" -ForegroundColor Yellow
     }
 }
 
