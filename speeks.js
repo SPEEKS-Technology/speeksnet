@@ -16276,9 +16276,9 @@ function _b2bIntakeStageOk(deal) {
 // The whole block, container included, so a repaint can replace it wholesale.
 // Returns '' when the feature is off, which is what makes this additive: the
 // pricing sheet renders byte-identically to before for everyone else.
-function _b2bIntakeTray(deal) {
+function _b2bBenchTray(deal) {
     if (!_b2bIntakeAllowed() || !_b2bIntakeStageOk(deal)) return '';
-    return `<div class="b2b-intake" id="b2bIntakeTray">${_b2bIntakeInner(deal)}</div>`;
+    return `<div class="b2b-bench" id="b2bBenchTray">${_b2bIntakeInner(deal)}</div>`;
 }
 
 function _b2bIntakeInner(deal) {
@@ -16290,9 +16290,9 @@ function _b2bIntakeInner(deal) {
     // would briefly show the PREVIOUS pallet's waiting machines against this
     // one -- offering to accept a laptop into the wrong deal.
     if (st.dealId !== deal.id || !st.loaded) {
-        return `<div class="b2b-intake-head">
-            <span class="b2b-intake-title">Live bench intake</span>
-            <span class="b2b-intake-hint">Checking…</span>
+        return `<div class="b2b-bench-head">
+            <span class="b2b-bench-title">Live bench intake</span>
+            <span class="b2b-bench-hint">Checking…</span>
         </div>`;
     }
 
@@ -16300,18 +16300,18 @@ function _b2bIntakeInner(deal) {
     // feature that does nothing. Distinct from the no-session state below: there
     // is nothing to start until we know what is already open.
     if (st.error) {
-        return `<div class="b2b-intake-head">
-            <span class="b2b-intake-title">Live bench intake</span>
-            <span class="b2b-intake-hint bad">Couldn't read the tray — ${escapeHtml(st.error)}</span>
+        return `<div class="b2b-bench-head">
+            <span class="b2b-bench-title">Live bench intake</span>
+            <span class="b2b-bench-hint bad">Couldn't read the tray — ${escapeHtml(st.error)}</span>
             <button class="b2b-btn b2b-btn-secondary"
                 onclick="_b2bIntakeLoad('${deal.id}')">Try again</button>
         </div>`;
     }
 
     if (!live) {
-        return `<div class="b2b-intake-head">
-            <span class="b2b-intake-title">Live bench intake</span>
-            <span class="b2b-intake-hint">Let the bench machines report their own specs into this deal.</span>
+        return `<div class="b2b-bench-head">
+            <span class="b2b-bench-title">Live bench intake</span>
+            <span class="b2b-bench-hint">Let the bench machines report their own specs into this deal.</span>
             <button class="b2b-btn b2b-btn-secondary" ${st.busy ? 'disabled' : ''}
                 onclick="b2bIntakeStart('${deal.id}',this)">Start a session</button>
         </div>`;
@@ -16322,10 +16322,10 @@ function _b2bIntakeInner(deal) {
     // duplicate. A bulk button that silently skips rows is worse than no bulk
     // button -- the pricer would have to check afterwards which ones took.
     const bulkable = st.pending.filter(p => !p.duplicate);
-    return `<div class="b2b-intake-head">
-            <span class="b2b-intake-title">Live bench intake</span>
-            <span class="b2b-intake-code" title="Type this into the capture tool on each machine">${escapeHtml(st.session.code)}</span>
-            <span class="b2b-intake-hint">${st.pending.length
+    return `<div class="b2b-bench-head">
+            <span class="b2b-bench-title">Live bench intake</span>
+            <span class="b2b-bench-code" title="Type this into the capture tool on each machine">${escapeHtml(st.session.code)}</span>
+            <span class="b2b-bench-hint">${st.pending.length
                 ? `${st.pending.length} waiting`
                 : 'Open — waiting for machines'}${_b2bIntakeExpiryText(st.session)}</span>
             ${bulkable.length > 1 ? `<button class="b2b-btn b2b-btn-primary" ${st.busy ? 'disabled' : ''}
@@ -16333,7 +16333,7 @@ function _b2bIntakeInner(deal) {
             <button class="b2b-btn b2b-btn-secondary" ${st.busy ? 'disabled' : ''}
                 onclick="b2bIntakeStop('${deal.id}',this)">Close session</button>
         </div>
-        ${rows ? `<div class="b2b-intake-rows">${rows}</div>` : ''}`;
+        ${rows ? `<div class="b2b-bench-rows">${rows}</div>` : ''}`;
 }
 
 function _b2bIntakeExpiryText(session) {
@@ -16350,30 +16350,30 @@ function _b2bIntakeRow(p) {
     const spec = [f.cpu, f.ram, f.storage, f.gpu].filter(Boolean).join(' · ');
     const name = [f.make, f.model].filter(Boolean).join(' ') || 'Unknown machine';
     const verdict = p.match
-        ? `+1 to line ${p.match.line_no} <span class="b2b-intake-q">(qty ${p.match.quantity} → ${p.match.quantity + 1})</span>`
+        ? `+1 to line ${p.match.line_no} <span class="b2b-bench-q">(qty ${p.match.quantity} → ${p.match.quantity + 1})</span>`
         : 'New line';
 
     if (p.duplicate) {
-        return `<div class="b2b-intake-row is-dup">
-            <div class="b2b-intake-what">
-                <span class="b2b-intake-name">${escapeHtml(name)}</span>
-                <span class="b2b-intake-spec">${escapeHtml(spec)}</span>
+        return `<div class="b2b-bench-row is-dup">
+            <div class="b2b-bench-what">
+                <span class="b2b-bench-name">${escapeHtml(name)}</span>
+                <span class="b2b-bench-spec">${escapeHtml(spec)}</span>
             </div>
-            <div class="b2b-intake-verdict bad">Serial ${escapeHtml(p.serial)} is already on the sheet</div>
-            <div class="b2b-intake-acts">
+            <div class="b2b-bench-verdict bad">Serial ${escapeHtml(p.serial)} is already on the sheet</div>
+            <div class="b2b-bench-acts">
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bIntakeReject('${p.id}',this)">Discard</button>
             </div>
         </div>`;
     }
 
-    return `<div class="b2b-intake-row">
-        <div class="b2b-intake-what">
-            <span class="b2b-intake-name">${escapeHtml(name)}</span>
-            <span class="b2b-intake-spec">${escapeHtml(spec)}</span>
-            <span class="b2b-intake-meta">${escapeHtml(p.serial)}${f.condition ? ' · ' + escapeHtml(f.condition) : ''}${p.device ? ' · ' + escapeHtml(p.device) : ''}</span>
+    return `<div class="b2b-bench-row">
+        <div class="b2b-bench-what">
+            <span class="b2b-bench-name">${escapeHtml(name)}</span>
+            <span class="b2b-bench-spec">${escapeHtml(spec)}</span>
+            <span class="b2b-bench-meta">${escapeHtml(p.serial)}${f.condition ? ' · ' + escapeHtml(f.condition) : ''}${p.device ? ' · ' + escapeHtml(p.device) : ''}</span>
         </div>
-        <div class="b2b-intake-verdict">${verdict}</div>
-        <div class="b2b-intake-acts">
+        <div class="b2b-bench-verdict">${verdict}</div>
+        <div class="b2b-bench-acts">
             <button class="b2b-btn b2b-btn-primary" onclick="b2bIntakeAccept('${p.id}',this)">Accept</button>
             ${p.match ? `<button class="b2b-btn b2b-btn-secondary"
                 title="Put it on its own line instead of adding to line ${p.match.line_no}"
@@ -16384,7 +16384,7 @@ function _b2bIntakeRow(p) {
 }
 
 function _b2bIntakeRepaint() {
-    const host = document.getElementById('b2bIntakeTray');
+    const host = document.getElementById('b2bBenchTray');
     if (!host || !_b2bModalDeal) return;
     host.innerHTML = _b2bIntakeInner(_b2bModalDeal);
 }
@@ -16393,7 +16393,7 @@ function _b2bIntakeRepaint() {
 // because a poll missed would be worse than the panel being a few seconds stale.
 async function _b2bIntakeLoad(dealId) {
     if (!_b2bIntakeAllowed()) return;
-    if (!document.getElementById('b2bIntakeTray')) return;
+    if (!document.getElementById('b2bBenchTray')) return;
     try {
         const out = await _b2bIntakeSend({ action: 'tray', deal_id: dealId });
         _b2bIntakeState = {

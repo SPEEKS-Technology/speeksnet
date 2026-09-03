@@ -20126,16 +20126,25 @@ select.dd-native {
    Present only when the 'b2b-live-intake' feature is on for the viewer, so for
    everybody else the pricing sheet is unchanged -- there is no reserved space
    and no empty container. See _b2bIntakeTray in speeks.js. */
-.b2b-intake {
+.b2b-bench {
     margin-bottom: 14px; border-radius: var(--b2b-r-md);
     background: var(--b2b-surface); border: 1px solid var(--b2b-line-2);
+    /* Clips the child rows to the rounded corners. */
     overflow: hidden;
+    /* THESE TWO LINES ARE LOAD-BEARING, for the same reason they are on
+       .b2b-items.b2b-ss above. .manage-content is a column flex container, and
+       the moment overflow is not `visible` a flex item's min-height:auto
+       resolves to 0 -- so this collapsed to an empty bordered sliver with the
+       title, the hint and the button all clipped out of sight. It rendered
+       perfectly in the DOM and showed nothing on screen. Do not drop them. */
+    flex: 0 0 auto;
+    min-height: fit-content;
 }
-.b2b-intake-head {
+.b2b-bench-head {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 10px 13px;
 }
-.b2b-intake-title {
+.b2b-bench-title {
     font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
     text-transform: uppercase; color: var(--b2b-faint); flex: 0 0 auto;
 }
@@ -20143,55 +20152,55 @@ select.dd-native {
    across the bench, so it is monospaced, spaced out and the largest thing in the
    row. Selectable on purpose -- copying it into a chat message is a normal way
    to get it onto the machine. */
-.b2b-intake-code {
+.b2b-bench-code {
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
     font-size: 17px; font-weight: 700; letter-spacing: .18em;
     color: var(--b2b-accent-deep); background: var(--b2b-accent-tint);
     border: 1px solid #cfeada; border-radius: var(--b2b-r-sm);
     padding: 3px 10px 3px 13px; user-select: all;
 }
-.b2b-intake-hint { font-size: 12px; color: var(--b2b-muted); flex: 1 1 auto; }
+.b2b-bench-hint { font-size: 12px; color: var(--b2b-muted); flex: 1 1 auto; }
 /* A failed tray read. Stated in the strip rather than left to the console:
    the pricer is the one who needs to know it did not load. */
-.b2b-intake-hint.bad { color: var(--red-alert); font-weight: 600; }
-.b2b-intake-head .b2b-btn { flex: 0 0 auto; }
+.b2b-bench-hint.bad { color: var(--red-alert); font-weight: 600; }
+.b2b-bench-head .b2b-btn { flex: 0 0 auto; }
 
-.b2b-intake-rows { border-top: 1px solid var(--b2b-line-2); }
-.b2b-intake-row {
+.b2b-bench-rows { border-top: 1px solid var(--b2b-line-2); }
+.b2b-bench-row {
     display: flex; align-items: center; gap: 12px;
     padding: 9px 13px; border-bottom: 1px solid var(--b2b-line-2);
     background: #fff;
 }
-.b2b-intake-row:last-child { border-bottom: 0; }
+.b2b-bench-row:last-child { border-bottom: 0; }
 /* A serial already on the sheet cannot be accepted at all -- the row exists only
    to be discarded, so it is greyed rather than dressed up as a choice. */
-.b2b-intake-row.is-dup { background: #fcfcfd; }
+.b2b-bench-row.is-dup { background: #fcfcfd; }
 
-.b2b-intake-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
-.b2b-intake-name {
+.b2b-bench-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.b2b-bench-name {
     font-size: 12.5px; font-weight: 700; color: var(--b2b-ink, #0f172a);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.b2b-intake-spec { font-size: 11.5px; color: var(--b2b-muted); }
-.b2b-intake-meta { font-size: 10.5px; color: var(--b2b-faint); }
+.b2b-bench-spec { font-size: 11.5px; color: var(--b2b-muted); }
+.b2b-bench-meta { font-size: 10.5px; color: var(--b2b-faint); }
 
 /* What accepting WOULD do, stated before it is done. Fixed width so the column
    of verdicts reads down the tray rather than jittering with the model names. */
-.b2b-intake-verdict {
+.b2b-bench-verdict {
     flex: 0 0 auto; width: 210px; font-size: 12px; font-weight: 600;
     color: var(--b2b-accent-deep);
 }
-.b2b-intake-verdict.bad { color: var(--red-alert); font-weight: 600; }
-.b2b-intake-q { font-weight: 500; color: var(--b2b-muted); }
+.b2b-bench-verdict.bad { color: var(--red-alert); font-weight: 600; }
+.b2b-bench-q { font-weight: 500; color: var(--b2b-muted); }
 
-.b2b-intake-acts { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-.b2b-intake-acts .b2b-btn { padding: 5px 11px; font-size: 11.5px; }
+.b2b-bench-acts { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.b2b-bench-acts .b2b-btn { padding: 5px 11px; font-size: 11.5px; }
 
 /* Narrow: the verdict stops being a column and becomes a line under the name,
    because at this width a 210px reservation squeezes the model down to nothing
    -- and the model is what tells you which machine on the bench this is. */
 @media (max-width: 900px) {
-    .b2b-intake-row { flex-wrap: wrap; }
-    .b2b-intake-what { flex: 1 1 100%; }
-    .b2b-intake-verdict { width: auto; flex: 1 1 auto; }
+    .b2b-bench-row { flex-wrap: wrap; }
+    .b2b-bench-what { flex: 1 1 100%; }
+    .b2b-bench-verdict { width: auto; flex: 1 1 auto; }
 }
