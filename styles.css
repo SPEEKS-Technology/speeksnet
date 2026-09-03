@@ -13553,7 +13553,16 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    from there, so "Computer" leans into Brand even though the cell itself is the
    right width. Both levels have to be released, not just the outer one. */
 .b2b-items.b2b-ss .b2b-pcell > input,
-.b2b-items.b2b-ss .b2b-pcell > select { min-width: 0; }
+.b2b-items.b2b-ss .b2b-pcell > select { min-width: 0; max-width: 100%; }
+/* And the cell clips, so NOTHING can paint over the column beside it whatever
+   the field inside decides its width is. min-width:0 and max-width:100% above
+   should already make that impossible; this is the backstop, because the
+   symptom -- a <select> covering the first letter of Brand -- has now come back
+   twice after being "fixed" at one level and then another, and a column that
+   silently eats its neighbour is worse than one that truncates its own text.
+   Costs the focus ring's outer 3px on these cells; the border and background
+   still show which field has focus. */
+.b2b-items.b2b-ss .b2b-pcell { overflow: hidden; }
 /* The line's own edges close the grid -- no dangling border on the last column. */
 .b2b-items.b2b-ss .b2b-prow > *:last-child { border-right: 0; }
 .b2b-phead .c { text-align: center; }
