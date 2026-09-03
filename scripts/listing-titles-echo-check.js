@@ -38,7 +38,12 @@ const ok = (c, label, got) => {
 // else would pass while the deployed code was broken. Deno's TypeScript is
 // stripped by hand — the annotations used in this block are a short, known list,
 // and a change that breaks the slice fails loudly here rather than silently.
-const src = fs.readFileSync(SRC, 'utf8');
+// ⚠️ NORMALISED TO LF FIRST. The file is LF in the repo, but a `git checkout`
+// on Windows hands it back with CRLF — and the slices below hunt for a blank
+// line ("\n\n"), which then matches nothing until the END OF THE FILE. The
+// harness reported "could not lift the code out of index.ts" and the real cause
+// was a checkout, not the code. See [[editing-speeks-js-safely]].
+const src = fs.readFileSync(SRC, 'utf8').replace(/\r\n/g, '\n');
 const between = (from, to) => {
     const i = src.indexOf(from), j = src.indexOf(to, i);
     if (i < 0 || j < 0) throw new Error(`could not slice ${from.slice(0, 40)}…`);
@@ -299,6 +304,26 @@ console.log('\ncollectSpecFields groups one fact across its copies');
        'one entry lists all three places that state it', m && m.at.join(', '));
     ok(!fields.some(f => f.at.includes('serial_number')),
        'and the serial number is not one of them');
+}
+
+// ⚠️ THE SHAPE OF THE WRITE ITSELF, READ OUT OF THE SOURCE.
+// Everything above proves we compute the right new values. None of it proves
+// Shopify will accept them — and for a month it did not: the mutation sent
+// `{ownerId, id, value}` and MetafieldsSetInput HAS NO `id` FIELD. It identifies
+// a metafield by ownerId + namespace + key, so every write was a validation
+// error, thrown, caught and swallowed. Nothing offline could have caught that,
+// which is exactly why the shape is asserted here rather than trusted.
+console.log('\nThe metafield write is addressed the way the API expects');
+{
+    const call = (src.match(/mf: staleMetafields\.map\([\s\S]{0,240}?\)\),/) || [''])[0];
+    ok(/namespace: m\.namespace/.test(call) && /key: m\.key/.test(call),
+       'metafieldsSet is addressed by namespace + key');
+    ok(!/\bid: m\.id\b/.test(call),
+       'and NOT by id — MetafieldsSetInput does not have one', call.replace(/\s+/g, ' ').slice(0, 90));
+    ok(/type: m\.type/.test(call),
+       'the existing type is restated, so a definition validates against itself');
+    ok(/metafieldsWhy/.test(src),
+       'and a refusal keeps its reason, instead of reading as bad luck');
 }
 
 console.log(fails ? `\n${fails} FAILED\n` : '\nAll checks passed\n');

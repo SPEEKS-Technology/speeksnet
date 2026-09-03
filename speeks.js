@@ -46071,10 +46071,15 @@ async function ltApprove(pid) {
     // only in this case: the reviewer approved a set of changes and got some of
     // them, so the listing is now half-corrected and a person has to finish it.
     if (res.body?.metafieldsLeft) {
+        // ⚠️ NOT "approve it again". The row does NOT come back: the title has
+        // changed, so the queue no longer has anything to offer on it and the
+        // approve refuses a title the product already has. The only routes back
+        // are Shopify by hand or the respec repair — say the true one.
         alert(`The title was changed, but ${res.body.metafieldsLeft} field`
             + `${res.body.metafieldsLeft === 1 ? '' : 's'} that quote it could not be`
-            + ` saved — Shopify refused them. Open the product and fix them by hand,`
-            + ` or approve this row again once it is back in the queue.`);
+            + ` saved — Shopify refused them. The listing is half-corrected: open the`
+            + ` product in Shopify and fix those fields by hand, or send this SKU to`
+            + ` Claude to repair.`);
     }
     // Reload rather than splicing the row out: approving can change the counts
     // on all three tabs, and a store's queue is small enough that one read is
@@ -46093,9 +46098,26 @@ async function ltDeny(pid) {
     // allowed — refusing to record the denial without one would just mean fewer
     // denials and a queue nobody trusts.
     const kind = _ltDenyKind(row);
-    const reason = prompt(`${kind.ask}\n\n${row.current}\n\n`
-        + `(Optional — it is how we find out a rule is wrong.)`, '');
-    if (reason === null) return;
+    // ⚠️ ONLY ONE OF THE TWO ANSWERS HAS ANYTHING TO LEARN FROM.
+    // A Deny says our rule was wrong, and the note is the only place that can
+    // ever say HOW — it is read in the Dismissed drawer and it is what turns
+    // four dismissals of one code into a rule somebody goes and fixes. "Ours Is
+    // Fine" says the opposite: the rule was RIGHT and the stale copy is on eBay,
+    // which is not feedback about anything here. Asking for a note there put an
+    // empty box in front of every dismissal, under a line ("it is how we find
+    // out a rule is wrong") that was not even true of the answer being given.
+    // Ethan, 2026-09-03: "if it does nothing, then we should get rid of that
+    // popup." So that branch is now one confirm, and nothing else.
+    let reason = '';
+    if (kind.as === 'ebay-stale') {
+        if (!confirm(`${kind.ask}\n\n${row.current}`)) return;
+    } else {
+        const typed = prompt(`${kind.ask}\n\n${row.current}\n\n`
+            + `(Optional — it is how we find out a rule is wrong. It is shown in`
+            + ` Dismissed below.)`, '');
+        if (typed === null) return;
+        reason = typed;
+    }
     _ltBusy.add(pid); ecRender();
     const res = await _ltPost({ action: 'deny', store: _ecStore, productId: pid,
                                 reason, as: kind.as });

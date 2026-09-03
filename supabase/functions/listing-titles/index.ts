@@ -3443,7 +3443,8 @@ async function handlePost(req: Request, scope: Scope) {
   let descHits = 0;
   let specRows = 0;
   let html = "";
-  const mfList: { id: string; key: string; value: string }[] = [];
+  const mfList: { id: string; key: string; namespace: string; type: string;
+                  value: string }[] = [];
   // id -> the value to write. One map, so the title swap and the spec echoes
   // below cannot each send their own half of the same metafield.
   const mfChanged = new Map<string, string>();
@@ -3470,14 +3471,24 @@ async function handlePost(req: Request, scope: Scope) {
     // refused title change is the thing somebody came here to do.
   }
   try {
+    // ⚠️ NAMESPACE AND TYPE ARE READ BECAUSE THE WRITE NEEDS THEM, NOT FOR
+    // information. `metafieldsSet` identifies a metafield by ownerId +
+    // namespace + key — there is NO `id` field on MetafieldsSetInput (asked of
+    // the live API: ownerId, namespace, key, value, compareDigest, type). We
+    // were sending `id`, which is a GraphQL VALIDATION error, so Shopify
+    // rejected the whole mutation before touching anything and the catch below
+    // swallowed it. Every metafield write this tool has ever made silently did
+    // nothing until 2026-09-03.
     const cur = await shopifyGql(shop, token,
       `query($id: ID!) { product(id: $id) {
-         metafields(first: 60) { edges { node { id key value } } }
+         metafields(first: 60) { edges { node { id namespace key type value } } }
        } }`, { id: productId });
     for (const e of (cur?.product?.metafields?.edges || [])) {
       const id = String(e?.node?.id || "");
       if (!id) continue;
       mfList.push({ id, key: String(e?.node?.key || ""),
+                    namespace: String(e?.node?.namespace || ""),
+                    type: String(e?.node?.type || ""),
                     value: String(e?.node?.value ?? "") });
     }
     if (item.current_title) {
@@ -3513,7 +3524,15 @@ async function handlePost(req: Request, scope: Scope) {
     stillSays = plan.stillSays;
   }
   if (descHits || specRows) descriptionHtml = html;
-  const staleMetafields = [...mfChanged].map(([id, value]) => ({ id, value }));
+  // Back to the field the id belongs to, because the write is addressed by
+  // namespace + key. `type` is passed through unchanged: a metafield that has a
+  // definition will be validated against it, and re-stating the type it already
+  // has is the only way to be sure we are not proposing a new one.
+  const mfById = new Map(mfList.map(f => [f.id, f]));
+  const staleMetafields = [...mfChanged].map(([id, value]) => {
+    const f = mfById.get(id);
+    return f ? { namespace: f.namespace, key: f.key, type: f.type, value } : null;
+  }).filter(Boolean) as { namespace: string; key: string; type: string; value: string }[];
 
   if (action === "preview") {
     return json({ ok: true, preview: true, title: next,
@@ -3548,20 +3567,30 @@ async function handlePost(req: Request, scope: Scope) {
   // leave the listing half-corrected while the screen said it was done, which is
   // the silent no-op that hid the &amp; bug for a week.
   let metafieldsLeft = 0;
+  // ⚠️ AND THE REASON IS KEPT. "Could not be saved" with no cause is how the
+  // `id` bug survived: the message read as bad luck rather than as a mutation
+  // that had never been valid.
+  let metafieldsWhy = "";
   if (staleMetafields.length) {
     try {
       const res = await shopifyGql(shop, token, `
         mutation($mf: [MetafieldsSetInput!]!) {
           metafieldsSet(metafields: $mf) { userErrors { field message } }
         }`, {
-        mf: staleMetafields.map(m => ({ ownerId: productId, id: m.id, value: m.value })),
+        mf: staleMetafields.map(m => ({ ownerId: productId, namespace: m.namespace,
+                                        key: m.key, type: m.type, value: m.value })),
       });
-      if (!(res?.metafieldsSet?.userErrors || []).length) {
+      const ue = res?.metafieldsSet?.userErrors || [];
+      if (!ue.length) {
         metafieldsFixed = staleMetafields.length;
       } else {
         metafieldsLeft = staleMetafields.length;
+        metafieldsWhy = ue.map((e: any) => e.message).join("; ").slice(0, 300);
       }
-    } catch { metafieldsLeft = staleMetafields.length; }
+    } catch (e) {
+      metafieldsLeft = staleMetafields.length;
+      metafieldsWhy = String((e as Error)?.message || e).slice(0, 300);
+    }
   }
 
   // The ledger first, then the queue row. `current_title` is overwritten by the
@@ -3602,7 +3631,7 @@ async function handlePost(req: Request, scope: Scope) {
                 descriptionCopies: descHits,
                 ...(specRows ? { specRows } : {}),
                 ...(metafieldsFixed ? { metafieldsFixed } : {}),
-                ...(metafieldsLeft ? { metafieldsLeft } : {}),
+                ...(metafieldsLeft ? { metafieldsLeft, metafieldsWhy } : {}),
                 ...(alsoUpdated.length ? { alsoUpdated } : {}),
                 // ⚠️ REPORTED EVEN THOUGH NOTHING WAS DONE ABOUT IT. A field
                 // still stating what the title just stopped stating is the one
@@ -3657,6 +3686,99 @@ Deno.serve(async (req: Request) => {
     // real metafield is the only way to tell a bundle from a box that mentions
     // its own charging cable, and guessing at it from the outside is what
     // produced the bad rule.
+    // --- CARRY A CHANGE INTO THE SPEC FIELDS OF A TITLE ALREADY CHANGED ------
+    // ?respec=1&store=OVL&sku=…&was=1TB&now=960GB&secret=   (dry run)
+    // …&apply=1                                             (writes)
+    //
+    // The approve does this as part of saving a title. This is the same work for
+    // a title that has ALREADY moved — because the approve's metafield half
+    // failed (the `id` bug above), or because somebody edited the title in
+    // Shopify by hand, which happens constantly. Without it a half-corrected
+    // listing has no route back: the row has left the queue, and approve refuses
+    // a title the product already has.
+    //
+    // ⚠️ DRY BY DEFAULT, like every other sweep in this function. `apply=1` is
+    // the only thing here that writes, and it never touches the title.
+    if (url.searchParams.get("respec")) {
+      if (url.searchParams.get("secret") !== SECRET) return json({ error: "forbidden" }, 403);
+      const st = (url.searchParams.get("store") || "").toUpperCase();
+      const sku = url.searchParams.get("sku") || "";
+      const was = (url.searchParams.get("was") || "").trim();
+      const now = (url.searchParams.get("now") || "").trim();
+      if (!STORES.includes(st) || !sku || !was) {
+        return json({ error: "store, sku and was are required" }, 400);
+      }
+      const cat: any[] = await rows(
+        `ebay_catalog?store_code=eq.${st}&sku=eq.${encodeURIComponent(sku)}`
+        + `&select=product_id,title&limit=1`);
+      if (!cat[0]) return json({ error: `no catalog row for ${st} ${sku}` }, 404);
+      const { shop, token } = await shopFor(st);
+      const productId = String(cat[0].product_id);
+      const d = await shopifyGql(shop, token,
+        `query($id: ID!) { product(id: $id) { title descriptionHtml
+           metafields(first: 60) { edges { node { id namespace key type value } } } } }`,
+        { id: productId });
+      const html = String(d?.product?.descriptionHtml || "");
+      const mfs = (d?.product?.metafields?.edges || []).map((e: any) => ({
+        id: String(e?.node?.id || ""), key: String(e?.node?.key || ""),
+        namespace: String(e?.node?.namespace || ""), type: String(e?.node?.type || ""),
+        value: String(e?.node?.value ?? ""),
+      }));
+      const byId = new Map(mfs.map((f: any) => [f.id, f]));
+      const plan = planEchoes(html, mfs, was, now, String(d?.product?.title || ""));
+      const writes = plan.mfUpdates.map(u => {
+        const f: any = byId.get(u.id);
+        return f ? { namespace: f.namespace, key: f.key, type: f.type, value: u.value } : null;
+      }).filter(Boolean) as any[];
+      const out: Record<string, unknown> = {
+        store: st, sku, title: d?.product?.title,
+        was, now, specRows: plan.cellHits, metafields: writes.length,
+        alsoUpdated: plan.echoes, stillSays: plan.stillSays,
+        applied: false,
+      };
+      if (url.searchParams.get("apply") === "1") {
+        if (plan.cellHits) {
+          const r1 = await shopifyGql(shop, token, `
+            mutation($input: ProductInput!) {
+              productUpdate(input: $input) { userErrors { field message } }
+            }`, { input: { id: productId, descriptionHtml: plan.html } });
+          out.descriptionErrors = r1?.productUpdate?.userErrors || [];
+        }
+        if (writes.length) {
+          const r2 = await shopifyGql(shop, token, `
+            mutation($mf: [MetafieldsSetInput!]!) {
+              metafieldsSet(metafields: $mf) { userErrors { field message } }
+            }`, { mf: writes.map(w => ({ ownerId: productId, ...w })) });
+          out.metafieldErrors = r2?.metafieldsSet?.userErrors || [];
+        }
+        out.applied = true;
+      }
+      return json(out);
+    }
+
+    // --- WHAT SHOPIFY WILL ACTUALLY ACCEPT FOR A METAFIELD WRITE -------------
+    // ?mfschema=1&store=OVL&secret= — introspection, writes nothing.
+    //
+    // Here because the metafield half of an approve failed on the first real one
+    // and a swallowed error tells nobody WHY. `MetafieldsSetInput` identifies a
+    // metafield by ownerId + namespace + key, and whether it also takes an `id`
+    // has changed between API versions — which is exactly the kind of thing to
+    // ask the API rather than remember.
+    if (url.searchParams.get("mfschema")) {
+      if (url.searchParams.get("secret") !== SECRET) return json({ error: "forbidden" }, 403);
+      const st = (url.searchParams.get("store") || "OVL").toUpperCase();
+      const { shop, token } = await shopFor(st);
+      const d = await shopifyGql(shop, token,
+        `{ __type(name: "MetafieldsSetInput") { inputFields {
+             name type { kind name ofType { kind name } } } } }`);
+      return json({ apiVersion: SHOPIFY_API_VERSION, shop,
+                    inputFields: (d?.__type?.inputFields || []).map((f: any) => ({
+                      name: f.name,
+                      type: f.type?.name || f.type?.ofType?.name,
+                      required: f.type?.kind === "NON_NULL",
+                    })) });
+    }
+
     // --- what the spec echoes would do, over the whole queue ----------------
     if (url.searchParams.get("echoes")) {
       if (url.searchParams.get("secret") !== SECRET) {
