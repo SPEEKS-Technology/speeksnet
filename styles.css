@@ -13508,7 +13508,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
        The sheet no longer pretends it fits a laptop screen. It is a spreadsheet;
        it scrolls sideways, which is what was asked for, and every column is cut
        to its real content rather than shaved to avoid the scrollbar. */
-    --b2b-pcols: 56px 100px minmax(56px, 0.85fr) minmax(74px, 1fr) 88px 58px 76px 76px 58px 72px 64px 122px 36px minmax(150px, 1.15fr) 96px 184px;
+    --b2b-pcols: 56px 128px minmax(56px, 0.85fr) minmax(74px, 1fr) 88px 58px 76px 76px 58px 72px 64px 122px 36px minmax(150px, 1.15fr) 96px 184px;
     /* The sheet owns its horizontal scroll so it never spills out of the modal
        on a narrow screen (the body clips -- see .manage-content). flex + min-
        height keep it from collapsing to a sliver as a column-flex item once
@@ -13518,11 +13518,15 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     flex: 0 0 auto;
     min-height: fit-content;
 }
-/* Header and rows share one width so they stay aligned while scrolled. 1552px =
-   the sum of the --b2b-pcols tracks above (minmax mins); update it if the
-   template changes. Scoped away from the listing grid, which is narrower. */
+/* Header and rows share one width so they stay aligned while scrolled.
+   1394px = the sum of the --b2b-pcols tracks above, counting each minmax at its
+   MINIMUM: 56+128+56+74+88+58+76+76+58+72+64+122+36+150+96+184.
+   THIS NUMBER IS AN INVARIANT -- change a track and change it here in the same
+   edit, or the header stops lining up with the body once the sheet is scrolled.
+   (It had already drifted: the comment said 1552 while the rule said 1366.)
+   Scoped away from the listing grid, which is narrower. */
 .b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-pline,
-.b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-prow { min-width: 1366px; }
+.b2b-items.b2b-ss:not(.b2b-lgrid) > .b2b-prow { min-width: 1394px; }
 /* True grid: drop the inter-cell gap and draw a hairline down every column
    boundary. The row's own bottom border is the horizontal line, so together they
    read as a spreadsheet rather than a list of chips. */
@@ -13552,17 +13556,22 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    min-width:auto. A <select> still refuses to shrink below its widest option
    from there, so "Computer" leans into Brand even though the cell itself is the
    right width. Both levels have to be released, not just the outer one. */
+   .dd-host is in this list because the Type column has no <select> to match:
+   _ddEnhance() hides the native one (9x1px, clip-path) and builds a custom
+   dropdown in a <div class="dd-host">, so the previous version of this rule
+   matched nothing at all in the cell it was written for. That is a big part of
+   why the overlap survived three attempts at fixing it in CSS. */
 .b2b-items.b2b-ss .b2b-pcell > input,
-.b2b-items.b2b-ss .b2b-pcell > select { min-width: 0; max-width: 100%; }
-/* And the cell clips, so NOTHING can paint over the column beside it whatever
-   the field inside decides its width is. min-width:0 and max-width:100% above
-   should already make that impossible; this is the backstop, because the
-   symptom -- a <select> covering the first letter of Brand -- has now come back
-   twice after being "fixed" at one level and then another, and a column that
-   silently eats its neighbour is worse than one that truncates its own text.
-   Costs the focus ring's outer 3px on these cells; the border and background
-   still show which field has focus. */
-.b2b-items.b2b-ss .b2b-pcell { overflow: hidden; }
+.b2b-items.b2b-ss .b2b-pcell > select,
+.b2b-items.b2b-ss .b2b-pcell > .dd-host { min-width: 0; max-width: 100%; }
+/* NO overflow:hidden on the cell. There was one, as a backstop while the cause
+   was unknown, and it is deliberately gone: it cost the outer 3px of the focus
+   ring on every sheet cell, and it was never what held the dropdown in -- the
+   open .dd-list is position:fixed and escapes the cell regardless.
+   What actually holds the control now is the min() clamp in _ddFit(), which is
+   the only thing that CAN: the floor it was overflowing with is an INLINE
+   min-width, and min-width outranks max-width (CSS 2.1 10.4), so no
+   non-!important rule here could ever have won. */
 /* The line's own edges close the grid -- no dangling border on the last column. */
 .b2b-items.b2b-ss .b2b-prow > *:last-child { border-right: 0; }
 .b2b-phead .c { text-align: center; }

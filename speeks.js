@@ -46487,11 +46487,39 @@ function _ddFit(host) {
     //
     // Trying to detect a shrink-to-fit parent by its `display` does not work
     // either: .hub-select-wrap computes to `flex`, not `inline-flex`, and a flex
-    // ITEM with `flex: 0 1 auto` is just as content-driven. Overflow is held back
-    // by `.dd-host { max-width: 100% }` in CSS, which resolves against the
-    // containing block rather than against this control, plus the two caps below.
+    // ITEM with `flex: 0 1 auto` is just as content-driven.
+    //
+    // What this comment used to claim -- that overflow is "held back by
+    // .dd-host { max-width: 100% } in CSS" -- is FALSE, and it hid a real bug
+    // for a release. `min-width` is resolved AFTER `max-width` and wins over it
+    // (CSS 2.1 section 10.4), so the inline floor written below beats any
+    // max-width, in the stylesheet or otherwise. On the B2B pricing sheet the
+    // Type control measured 112px for its widest option ("Computer") inside an
+    // 87px content box and painted 12px over the Brand input, eating the first
+    // character of every brand: "Apple" read "pple", "HP" read "IP",
+    // "Framework" read "ramework". Three separate CSS fixes bounced off it,
+    // because no non-!important CSS can outrank an inline min-width.
     want = Math.min(want, Math.max(120, window.innerWidth - 24));
-    host.style.minWidth = want + 'px';
+
+    // Inside a sheet cell, clamp with min(): `100%` resolves against the cell's
+    // content box, so the control can never exceed its column, but still grows
+    // to `want` wherever the room exists. This is NOT the circular parent clamp
+    // the note above describes -- it never reads the parent's CURRENT width, so
+    // it cannot pin the control to whatever it already happens to be, and it
+    // can always grow back to fit its options. `_ddNativeMin` keeps its "floor,
+    // not override" meaning too: a 200px CSS floor still applies wherever
+    // 200px fits.
+    //
+    // Scoped to .b2b-pcell deliberately. A sheet cell is a grid item with a
+    // definite track width, so the percentage resolves against a real number.
+    // .hub-select-wrap is content-sized, where a percentage min-width is the
+    // cyclic case browsers resolve as indefinite -- which can collapse the
+    // control instead of clamping it. The feed filter is the reason the parent
+    // clamp was removed in the first place; it does not get to be the reason it
+    // breaks again.
+    host.style.minWidth = host.closest('.b2b-pcell')
+        ? 'min(' + want + 'px, 100%)'
+        : want + 'px';
 }
 
 function _ddSync(host) {
