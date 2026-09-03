@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.6.0';
+const APP_VERSION = '3.6.1';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -91,6 +91,7 @@ const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
 const B2B_OUTREACH_URL  = `${_BASE}/b2b-outreach`;
 const B2B_INTAKE_URL    = `${_BASE}/b2b-intake`;
+const B2B_CAPTURE_URL   = `${_BASE}/b2b-capture-tool`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const BUYING_MARGIN_URL = `${_BASE}/buying-margin`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
@@ -16220,6 +16221,222 @@ function _b2bDealById(id) { return _b2bDeals.find(d => d.id === id) || null; }
 // Realtime ping handler. Only refreshes when the pane is actually on screen and
 // nobody has a deal modal open -- re-rendering underneath someone mid-edit
 // would throw away what they were typing.
+// ===========================================================================
+// SPEEKS CAPTURE TOOL  --  distribution and version history
+// ===========================================================================
+// The bench tool is a ~35KB zip. It used to be a static file in the repo, which
+// meant every update needed a commit and a merge, so in practice it would get
+// passed round on a stick instead and two benches would end up on two different
+// tools.
+//
+// It lives in Supabase now, behind the SAME feature key as the download button:
+// whoever may fetch the tool may also publish a new one and roll one back. That
+// is the point of the hotfix -- MOCD maintains this tool and should not need a
+// developer to ship it.
+//
+// NOTHING IS EVER OVERWRITTEN. Every upload is a new stored object and a new
+// history row; "which one is live" is a pointer that moves. A broken upload
+// cannot destroy the version that worked -- it can only take the pointer, and
+// taking it back is one click. That is the whole backup story, deliberately.
+
+let _b2bCapReleases = [];
+let _b2bCapBusy = false;
+
+// Same gate as the tray: the resolver, not a [data-feature] sweep, because this
+// renders into a modal long after applyRoleBasedUI has swept the page.
+function _b2bCaptureAllowed() {
+    try {
+        return typeof _featureEffectiveVisible === 'function'
+            && _featureEffectiveVisible('b2b-capture-download', _b2bRoleClass(), _b2bUser()) === true;
+    } catch (_) { return false; }
+}
+
+async function _b2bCapSend(payload) {
+    const res = await fetch(B2B_CAPTURE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ ...payload, user: _b2bUser() })
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+    return out;
+}
+
+async function b2bCaptureTool() {
+    if (!_b2bCaptureAllowed()) return;
+    const modal = document.getElementById('b2bCaptureModal');
+    if (!modal) return;
+    document.getElementById('b2bCaptureBody').innerHTML = '<div class="status-message">Loading…</div>';
+    document.getElementById('b2bCaptureFooter').innerHTML = '';
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    await b2bCaptureLoad();
+}
+
+async function b2bCaptureLoad() {
+    try {
+        const out = await _b2bCapSend({ action: 'list' });
+        _b2bCapReleases = out.releases || [];
+    } catch (e) {
+        document.getElementById('b2bCaptureBody').innerHTML =
+            `<div class="b2b-note bad"><span class="b2b-note-k">Error</span>Couldn't read the version history — ${escapeHtml(e.message)}</div>`;
+        return;
+    }
+    b2bCaptureRender();
+}
+
+function _b2bCapSize(n) {
+    const kb = Number(n) / 1024;
+    return kb < 1024 ? `${kb.toFixed(1)} KB` : `${(kb / 1024).toFixed(1)} MB`;
+}
+
+function b2bCaptureRender() {
+    const body = document.getElementById('b2bCaptureBody');
+    if (!body) return;
+    const cur = _b2bCapReleases.find(r => r.is_current) || null;
+
+    const rows = _b2bCapReleases.map(r => `
+        <div class="b2b-cap-row${r.is_current ? ' is-current' : ''}">
+            <div class="b2b-cap-what">
+                <span class="b2b-cap-ver">${escapeHtml(r.version)}${r.is_current ? '<span class="b2b-cap-live">LIVE</span>' : ''}</span>
+                ${r.notes ? `<span class="b2b-cap-notes">${escapeHtml(r.notes)}</span>` : ''}
+                <span class="b2b-cap-meta">${_b2bCapSize(r.size_bytes)} · ${escapeHtml(r.uploaded_by || 'unknown')} · ${new Date(r.uploaded_at).toLocaleString()}
+                    <span class="b2b-cap-sha" title="SHA-256 of the zip — compare it against a stick to see which version it is carrying">${escapeHtml(String(r.sha256).slice(0, 12))}</span></span>
+            </div>
+            <div class="b2b-cap-acts">
+                <a class="b2b-btn b2b-btn-secondary" href="${B2B_CAPTURE_URL}?download=1&id=${encodeURIComponent(r.id)}">Download</a>
+                ${r.is_current ? '' : `<button class="b2b-btn b2b-btn-secondary" ${_b2bCapBusy ? 'disabled' : ''}
+                    title="Make this the version the bench downloads"
+                    onclick="b2bCaptureMakeCurrent('${r.id}','${escapeHtml(r.version).replace(/'/g, "\\'")}',this)">Make live</button>
+                <button class="b2b-btn b2b-btn-secondary b2b-cap-del" ${_b2bCapBusy ? 'disabled' : ''}
+                    title="Delete this version for good. The live version can never be deleted."
+                    onclick="b2bCaptureDelete('${r.id}','${escapeHtml(r.version).replace(/'/g, "\\'")}',this)">Delete</button>`}
+            </div>
+        </div>`).join('');
+
+    body.innerHTML = `
+        <div class="b2b-note${cur ? ' ok' : ' warn'}">
+            <span class="b2b-note-k">Live now</span>
+            ${cur
+                ? `<b>${escapeHtml(cur.version)}</b> — ${_b2bCapSize(cur.size_bytes)}, uploaded by ${escapeHtml(cur.uploaded_by || 'unknown')}. This is what the bench gets.`
+                : 'Nothing has been uploaded yet, so there is nothing for the bench to download.'}
+        </div>
+
+        ${cur ? `<a class="b2b-btn b2b-btn-primary b2b-cap-get" href="${B2B_CAPTURE_URL}?download=1">
+            ⭳ Download ${escapeHtml(cur.version)}
+        </a>` : ''}
+
+        <div class="b2b-cap-up">
+            <span class="b2b-note-k">Publish a new version</span>
+            <p class="b2b-hint">Zip the <b>SPEEKS-Capture</b> folder and upload the zip. The version label is
+               whatever you want to recognise it by — "1.2.0", or "Sep 4 panel fix". The version that is
+               live now is kept either way, so if the new one turns out to be broken you can make the old
+               one live again from the list below.</p>
+            <div class="b2b-cap-form">
+                <input type="file" id="b2bCapFile" accept=".zip,application/zip,application/x-zip-compressed">
+                <input type="text" id="b2bCapVer" maxlength="60" placeholder="Version label (required)">
+                <input type="text" id="b2bCapNotes" maxlength="1000" placeholder="What changed (optional)">
+                <label class="b2b-cap-stage" title="Upload it but leave the current version live, so you can test it first">
+                    <input type="checkbox" id="b2bCapStage"> Upload without making it live
+                </label>
+                <button class="b2b-btn b2b-btn-primary" ${_b2bCapBusy ? 'disabled' : ''}
+                    onclick="b2bCaptureUpload(this)">Upload</button>
+            </div>
+            <span class="b2b-msg" id="b2bCapMsg"></span>
+        </div>
+
+        <div class="b2b-cap-hist">
+            <span class="b2b-note-k">History — ${_b2bCapReleases.length} version${_b2bCapReleases.length === 1 ? '' : 's'}</span>
+            ${rows || '<div class="status-message">No versions yet.</div>'}
+        </div>`;
+}
+
+function _b2bCapSay(msg, bad) {
+    const el = document.getElementById('b2bCapMsg');
+    if (!el) { if (bad) alert(msg); return; }
+    el.textContent = msg || '';
+    el.className = 'b2b-msg' + (bad ? ' bad' : msg ? ' ok' : '');
+}
+
+async function b2bCaptureUpload(btn) {
+    const fileEl = document.getElementById('b2bCapFile');
+    const ver = (document.getElementById('b2bCapVer')?.value || '').trim();
+    const notes = (document.getElementById('b2bCapNotes')?.value || '').trim();
+    const stage = !!document.getElementById('b2bCapStage')?.checked;
+    const file = fileEl?.files?.[0];
+
+    if (!file) return _b2bCapSay('Pick the zip first.', true);
+    if (!ver)  return _b2bCapSay('Give it a version label — it is how you will tell it apart later.', true);
+    // Refused here as well as server-side. The server checks the magic bytes,
+    // which is the check that actually matters; this one just saves a 35KB round
+    // trip and says the same thing sooner.
+    if (!/\.zip$/i.test(file.name)) {
+        return _b2bCapSay('That is not a .zip — zip the SPEEKS-Capture folder and upload the zip itself.', true);
+    }
+
+    _b2bCapBusy = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+    _b2bCapSay('');
+    try {
+        // FileReader rather than arrayBuffer + manual base64: the file is tiny
+        // and readAsDataURL hands back exactly the data: URI the function parses.
+        const dataUri = await new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(String(fr.result));
+            fr.onerror = () => reject(new Error('Could not read that file.'));
+            fr.readAsDataURL(file);
+        });
+        const out = await _b2bCapSend({
+            action: 'upload', version: ver, notes, file: dataUri, make_current: !stage
+        });
+        await b2bCaptureLoad();
+        _b2bCapSay(out.current
+            ? `${out.version} uploaded and is now live.`
+            : `${out.version} uploaded. The previous version is still live — use "Make live" when you are happy with it.`);
+    } catch (e) {
+        _b2bCapSay(e.message, true);
+        if (btn) { btn.disabled = false; btn.textContent = 'Upload'; }
+    } finally {
+        _b2bCapBusy = false;
+    }
+}
+
+async function b2bCaptureDelete(id, version, btn) {
+    // Spelled out rather than a bare "are you sure": this one does not come
+    // back, and the reassurance that matters is that it cannot be the live one.
+    if (!confirm(`Delete "${version}" permanently?\n\nThis cannot be undone. The live version is never deletable, so the bench keeps working either way.`)) return;
+    _b2bCapBusy = true;
+    if (btn) btn.disabled = true;
+    try {
+        await _b2bCapSend({ action: 'delete_version', id });
+        await b2bCaptureLoad();
+        _b2bCapSay(`${version} deleted.`);
+    } catch (e) {
+        _b2bCapSay(`Couldn't delete that version: ${e.message}`, true);
+        if (btn) btn.disabled = false;
+    } finally {
+        _b2bCapBusy = false;
+    }
+}
+
+async function b2bCaptureMakeCurrent(id, version, btn) {
+    // Worth a confirm: it changes what every bench downloads next.
+    if (!confirm(`Make "${version}" the version the bench downloads?`)) return;
+    _b2bCapBusy = true;
+    if (btn) btn.disabled = true;
+    try {
+        await _b2bCapSend({ action: 'set_current', id });
+        await b2bCaptureLoad();
+        _b2bCapSay(`${version} is now live.`);
+    } catch (e) {
+        _b2bCapSay(`Couldn't switch version: ${e.message}`, true);
+        if (btn) btn.disabled = false;
+    } finally {
+        _b2bCapBusy = false;
+    }
+}
+
 // ===========================================================================
 // LIVE BENCH INTAKE  --  an OPTION, off unless 'b2b-live-intake' is switched on
 // ===========================================================================

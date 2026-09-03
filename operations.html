@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260903j">
+  <link rel="stylesheet" href="styles.css?v=20260903k">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260903j" defer></script>
+  <script src="speeks.js?v=20260903k" defer></script>
 </head>
 <body class="preload">
 
@@ -754,13 +754,19 @@
                        an explicit per-user override in Feature Access is the only
                        way in. Currently: Nick Hettinger and Haydn Davis, while
                        the feature is being tested. -->
-                  <a id="b2bCaptureDlBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-none"
+                  <!-- Opens the tool panel rather than downloading directly:
+                       the same people who may download it may also upload a new
+                       version and roll one back, so it needs somewhere to put
+                       the history. Still one feature key, and still `role-none`
+                       so the role gate denies everyone and a per-user override
+                       is the only way in. -->
+                  <button id="b2bCaptureDlBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-none"
                      data-feature="b2b-capture-download"
-                     href="downloads/SPEEKS-Capture.zip" download
-                     title="Download the bench capture tool — unzip onto a USB stick, then run RUN-CAPTURE-LIVE.bat on the machine being tested">
+                     onclick="b2bCaptureTool()"
+                     title="The bench capture tool — download the current version, upload a new one, or roll back to an earlier one">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                       SPEEKS Capture
-                  </a>
+                  </button>
                   <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" onclick="b2bOpenCreate()">＋ New Deal</button>
               </div>
           </div>
@@ -831,6 +837,27 @@
         <button class="crm-tab" data-tab="settings" onclick="crmTab('settings')">Notifications</button>
     </div>
     <div class="manage-content" id="crmBody"><div class="status-message">Loading…</div></div>
+</div>
+
+<!-- ===== SPEEKS CAPTURE TOOL MODAL =====
+     Download the live version, upload a new one, roll back to an older one.
+     Its own modal rather than a section of the deal screen: the tool is not
+     attached to any deal, and borrowing the deal shell would leave realtime
+     believing a deal was open. Body is rendered by b2bCaptureRender(). -->
+<div class="modal-menu manage-menu" id="b2bCaptureModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">SPEEKS Capture</span>
+                <span class="tool-head-sub">The bench tool. Nothing is ever overwritten — every upload is kept and any version can be made live again.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="b2bCaptureBody"><div class="status-message">Loading…</div></div>
+    <div class="manage-footer flex-end" id="b2bCaptureFooter"></div>
 </div>
 
 <!-- ===== B2B NEW DEAL MODAL (inside .main-content so the SPA router carries it) ===== -->
