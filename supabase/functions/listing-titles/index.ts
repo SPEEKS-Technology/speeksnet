@@ -586,7 +586,130 @@ const PRODUCT_NOUNS = [
   "multimeter", "inflator", "gauge", "light", "flashlight", "heater", "pump",
   "base", "servo", "console", "figure", "card", "wheel", "pedal", "stand",
   "motherboard", "headphones", "webcam", "dock", "hub", "lamp", "fan", "chair",
+  // Named by the 2026-09-03 shelf census as titles that DO say what they are
+  // and were being accused anyway: "TI-84+ CE" (Graphing Calculator),
+  // "Nintendo Wii U Gamepad", "1000W Modular PSU", "CPU & Motherboard Combos".
+  "calculator", "gamepad", "psu", "combo",
 ];
+
+// ⚠️ PLURALS. The list is singular and the match used to be exact, so "Bargain
+// Bin Monitors", "Bargain Bin Keyboards" and "Bargain Tech Bags" were all
+// accused of never saying what they are — while saying it plainly. Singularise
+// the token before testing: cards→card, lenses→lens, switches→switch,
+// batteries→battery.
+const singularToken = (t: string): string =>
+  /ies$/.test(t) && t.length > 4 ? t.slice(0, -3) + "y"
+    : /(s|x|z|ch|sh)es$/.test(t) ? t.slice(0, -2)
+      : /[^s]s$/.test(t) && t.length > 3 ? t.slice(0, -1)
+        : t;
+
+// A token counts as naming the product when it IS a listed noun, or when it
+// ENDS with a listed noun of five or more characters — long enough that
+// "smartwatch"/"watch" and "smartphone"/"phone" match while "briefcase"/"case"
+// and "keycard"/"card" (both four) cannot.
+const isProductNoun = (t: string): boolean => {
+  const one = singularToken(t);
+  return [t, one].some(w =>
+    PRODUCT_NOUNS.includes(w)
+    || PRODUCT_NOUNS.some(n => n.length >= 5 && w.length > n.length && w.endsWith(n)));
+};
+
+// Words whose final "s" is not a plural we may strip. Two kinds: product words
+// that ARE plural (nobody searches for "a headphone"), and singulars that merely
+// end in s — "Other Camera Lens" became "Camera Len" the first time this ran,
+// which is the whole reason the list is written down rather than reasoned about.
+const KEEP_PLURAL = new Set([
+  "headphones", "glasses", "airpods", "binoculars", "earbuds",
+  "lens", "bass", "windows", "plus",
+]);
+
+// Shelves are named in the plural ("Nintendo Consoles", "Microphones"); a title
+// wants the singular. Only the LAST word changes — "Windows Laptops" becomes
+// "Windows Laptop", not "Window Laptop".
+// ⚠️ NOT A BARE TRAILING "s". That version turned "Cameras/Lenses" into
+// "Cameras/Lense" and shipped it as a live GoPro suggestion, and would have made
+// "Switches" → "Switche" and "Glasses" → "Glasse".
+function depluralise(v: string): string {
+  const parts = v.split(" ");
+  const last = parts[parts.length - 1] || "";
+  if (KEEP_PLURAL.has(last.toLowerCase())) return v;
+  let one = last;
+  if (/ies$/i.test(last) && last.length > 4) one = last.slice(0, -3) + "y";
+  else if (/(s|x|z|ch|sh)es$/i.test(last)) one = last.slice(0, -2);
+  else if (/[^sS]s$/.test(last) && last.length > 3) one = last.slice(0, -1);
+  parts[parts.length - 1] = one;
+  return parts.join(" ");
+}
+
+// ⚠️ DEPARTMENT NAMES ARE NOT PRODUCT WORDS. Shopify's Type for an Intel CPU is
+// literally "Computer Part"; appending it makes a title worse, not findable.
+// "Tool", "Equipment" and "Device" are departments too — proposing Collection
+// "Tool" produced "Milwaukee 3622-20 M12 12V Laser Level Tool" across ten MPL
+// rows. The 2026-09-03 census found "General/Other" and "Video Gaming" reaching
+// live one-click suggestions on six rows across OVL, MPL and WSP.
+const GENERIC_SHELF =
+  /^(computer\s+part|pc\s+part|part|component|accessory|misc(ellaneous)?|general|electronics?|item|tool|equipment|device|hardware|gear|supply|goods|merchandise|unit|video\s+gaming|gaming|aftermarket\s+gaming|smart\s+home|home)$/i;
+
+// A shelf name is not automatically a title word. PayMore files stock on three
+// levels and only the bottom two reliably name the product:
+//     Collection      "Computer Part"          the DEPARTMENT
+//     Sub-Collection  "Graphics Card (GPU)"    the SHELF — the product word
+//     Type            "Gaming Keyboard"        the item, when a lister typed one
+// Measured over 4,034 products on 2026-09-03: 1,457 carry a Sub-Collection and
+// its vocabulary is 111 values that are overwhelmingly real product words
+// ("RAM", "Motherboard", "Hard Drive", "Power Supply", "Camera Lens"). Nothing
+// read Sub-Collection before, so a graphics card shelved as "Graphics Card
+// (GPU)" was told "no safe automatic fix" while the answer sat in the listing.
+//
+// Returns the words to append, or null for "we have nothing to propose".
+// ⚠️ NULL IS ALWAYS SAFE AND A BAD WORD NEVER IS — this feeds a one-click
+// button over a live listing, so every rule below fails closed.
+function shelfNoun(value: string, title: string, shelfLevel = false): string | null {
+  let v = (value || "").trim();
+  if (!v || PLACEHOLDER.test(v)) return null;
+  // ⚠️ A SLASH MEANS "ONE OF THESE" AND WE DO NOT KNOW WHICH. "Printer/Scanner",
+  // "Keyboard/Mouse", "Routers/Modems" describe the shelf, not the item. This is
+  // also what was putting "General/Other" on the end of five live titles.
+  if (v.includes("/")) return null;
+  // A parenthetical is a disambiguator, and only an ACRONYM earns title space:
+  // "Graphics Card (GPU)" → "Graphics Card GPU" (buyers search both),
+  // "Apple MacBook (Intel)" → "MacBook", "Hard Drive (HDD, SSD)" → "Hard Drive".
+  v = v.replace(/\s*\(([^)]*)\)/g, (_m: string, inner: string) =>
+    /^[A-Z]{2,5}$/.test(String(inner).trim()) ? ` ${String(inner).trim()}` : "");
+  // ⚠️ THE AMPERSAND IS THE TELL — BUT ONLY AT THE DEPARTMENT LEVEL.
+  // PayMore's DEPARTMENTS are named "Audio & Video", "Cameras & Photo"; products
+  // are not, and proposing one gives a title a department label ("New Roku
+  // Streaming Stick 4K Audio & Video"). The product-word test below does not
+  // catch "Cameras & Photo" on its own, because "Cameras" really is a product
+  // word. So the character is only tolerated one level down, on the SHELF, where
+  // the whole 111-value vocabulary contains exactly one: "CPU & Motherboard
+  // Combos", which is a real thing a buyer types.
+  if (v.includes("&")) {
+    if (!shelfLevel) return null;
+    v = v.replace(/\s*&\s*/g, " ");
+  }
+  // Shelf bookkeeping, not words a buyer types.
+  v = v.replace(/^others?\s+/i, "").replace(/\s+brands?$/i, "")
+       .replace(/\s+/g, " ").trim();
+  if (!v) return null;
+  v = depluralise(v);
+  // ⚠️ THE BRAND IS ALREADY IN THE TITLE. "Canon Digital Camera" on a Canon
+  // listing must append "Digital Camera", and "Milwaukee Tool" on a Milwaukee
+  // listing collapses to "Tool" — a department word, which then dies below
+  // exactly as it should.
+  const have = new Set(tokens(title));
+  v = v.split(" ").filter(w => w && !have.has(norm(w))).join(" ").trim();
+  if (!v || GENERIC_SHELF.test(v)) return null;
+  // ⚠️ THE LIST GATES WHAT WE ADD, NOT WHAT WE ACCUSE. `isProductNoun` must
+  // never depend on PRODUCT_NOUNS being complete — a gap there is a false
+  // accusation against a fine title. Here a gap is only silence, so requiring
+  // the PROPOSAL to contain a known product word is safe, and it is what stops a
+  // department name nobody has thought of from being appended to a live listing.
+  if (!tokens(v).some(isProductNoun)) return null;
+  if (v.length > 32) return null;
+  return v;
+}
+
 
 // Measurements and capacities are not model numbers. Without this, "33MP" and
 // "1TB" get sent to Browse as if they were a model name and every camera in the
@@ -1809,7 +1932,8 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   // LED Mini-LED Ultra Wide" — a monitor with no "Monitor" in it, invisible to
   // the search that would have bought it.
   //
-  // The noun comes from the spec table (`Type`, then `Collection`), so the
+  // The noun comes from the listing's own filing (`Type`, then
+  // `Sub-Collection`, then `Collection`), so the
   // finding can PROPOSE the missing word instead of only complaining that it is
   // missing — and so a category we have never thought about is handled without a
   // new rule.
@@ -1833,37 +1957,23 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       const words = tokens(v).filter(w => w.length > 2);
       return words.length > 0 && words.some(w => tokens(original).includes(w));
     });
-  // ⚠️ COMPOUND NOUNS ARE ONE TOKEN. "Smartwatch" does not equal "watch", so a
-  // Galaxy Watch4 titled "…Stainless Steel Smartwatch SM-R880" was reported as
-  // never saying what it is. A token also counts when it ENDS with a listed
-  // noun of five or more characters — long enough that "smartwatch"/"watch" and
-  // "smartphone"/"phone" match while "briefcase"/"case" and "keycard"/"card"
-  // (both four) cannot.
-  const namesItself = tokens(original).some(t =>
-    PRODUCT_NOUNS.includes(t)
-    || PRODUCT_NOUNS.some(n => n.length >= 5 && t.length > n.length && t.endsWith(n)));
+  // ⚠️ COMPOUND NOUNS ARE ONE TOKEN, AND SHELF WORDS ARE OFTEN PLURAL —
+  // `isProductNoun` owns both rules so the accusation and the proposal cannot
+  // drift apart.
+  const namesItself = tokens(original).some(isProductNoun);
   if (!brokenTitle && !isGame && !saysItsOwnType && !namesItself) {
-    const noun = (specType || collection || "").trim();
-    // Only propose a noun that is a noun. "N/A" is not a word to append, and
-    // neither is a SHELF NAME — Shopify's Type for an Intel CPU is literally
-    // "Computer Part", and appending that to a title makes it worse, not
-    // findable. A generic value means we have nothing to propose, not that we
-    // should propose something generic.
-    // ⚠️ "Tool", "Equipment", "Device" are DEPARTMENT names, not product words.
-    // Shopify's Collection for a Milwaukee impact wrench is "Tool", and proposing
-    // it produced "Milwaukee 3622-20 M12 12V Laser Level Tool" — a title made
-    // worse by a suggestion, across ten MPL rows.
-    const generic = /^(computer\s+part|other|others|part|parts|component|accessor(y|ies)|misc|general|electronics?|item|tools?|equipment|devices?|hardware|gear|supplies|goods|merchandise|unit)$/i;
-    // ⚠️ THE AMPERSAND IS THE TELL. PayMore's shelves are named "Audio & Video",
-    // "Cameras & Photo"; products are not. Proposing one gives a title a
-    // department label — "New Roku Streaming Stick 4K Audio & Video".
-    const usable = !!noun && noun.length <= 24 && !PLACEHOLDER.test(noun)
-      && !generic.test(noun) && !/ & /.test(noun)
-      && !tokens(title).includes(norm(noun).split(" ")[0]);
-    // Shopify's collections are plural ("Speakers", "Windows Laptops"); a title
-    // wants the singular. Only the last word is depluralised — "Windows Laptops"
-    // becomes "Windows Laptop", not "Window Laptop".
-    const singular = noun.replace(/([a-z]{3,})s\b(?=[^a-z]*$)/i, "$1");
+    // ⚠️ MOST SPECIFIC FIRST, AND EVERY SOURCE IS ALLOWED TO SAY NO.
+    // Type is what a lister typed about this unit, Sub-Collection is the shelf,
+    // Collection is the department. `shelfNoun` is the gauntlet — a department
+    // name reaching a live suggestion is the failure this whole path guards.
+    let noun: string | null = null;
+    let shelfSaid = "";
+    for (const [v, shelfLevel] of [[specType, false],
+                                   [extra?.specs?.["Sub-Collection"], true],
+                                   [collection, false]] as [unknown, boolean][]) {
+      const n = shelfNoun(String(v || "").trim(), title, shelfLevel);
+      if (n) { noun = n; shelfSaid = String(v).trim(); break; }
+    }
     // ⚠️ SEVERITY DEPENDS ON WHETHER ANYTHING ELSE MAKES IT FINDABLE.
     // "Codi 34\" MO34H-UC 4K LED Mini-LED Ultra Wide" carries a model number, so a
     // buyer CAN reach it — adding "Monitor" is an improvement, not a rescue. A
@@ -1897,12 +2007,18 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // ⚠️ APPEND ONLY IF WE ARE GOING TO REPORT. tryAppend mutates the title and
     // sets `fixable`, so calling it before this gate produced a suggested title
     // with no finding beside it — a diff on the row that nothing explained.
-    const applied = !alreadyStrong && usable && tryAppend(singular);
+    const applied = !alreadyStrong && !!noun && tryAppend(noun);
     if (!alreadyStrong) findings.push({
       code: "missing-noun",
       says: (applied
-        ? `The title never says what the item IS — Shopify calls it a ${singular}. Most buyers type the kind of thing they want, so the words they use never match this listing.`
-        : "The title never says what the item IS. Most buyers type the kind of thing they want, so the words they use never match this listing.")
+        ? `The title never says what the item IS. This listing is filed under "${shelfSaid}", so "${noun}" is the word a buyer would type — most people search for the kind of thing they want, and those words never match this listing.`
+        // ⚠️ WE KNOW THE WORD AND IT WILL NOT FIT. Saying "no safe automatic fix"
+        // here throws away the answer the listing was holding all along. NEVER
+        // TRUNCATE TO MAKE ROOM (see tryAppend) — hand the reviewer the word and
+        // let them choose what comes out.
+        : noun
+          ? `The title never says what the item IS. This listing is filed under "${shelfSaid}", so "${noun}" is the missing word — but the title is already ${original.length} of ${EBAY_TITLE_MAX} characters, so something has to come out before it will fit. Shorten it and add those words.`
+          : "The title never says what the item IS. Most buyers type the kind of thing they want, so the words they use never match this listing.")
         + (findableAnyway ? " It can still be found by its model number, so this is an improvement rather than a rescue." : ""),
       severity: findableAnyway ? 1 : 2, fixable: applied,
     });
@@ -3863,6 +3979,70 @@ Deno.serve(async (req: Request) => {
       const limit = Math.min(Number(url.searchParams.get("limit") || 300), 1000);
       const out = [];
       for (const st of list) out.push(await echoSweep(st, limit));
+      return json({ stores: out });
+    }
+
+    // ?nouns=1&store=ALL&secret=[&limit=400][&offset=0] — READ-ONLY CENSUS
+    // behind the missing-noun check. It answers one question: when the tool says
+    // "the title never says what the item IS" and then offers no fix, IS THE
+    // WORD SITTING IN THE LISTING ALL ALONG? `Collection` is the DEPARTMENT
+    // ("Computer Part") and is deliberately barred as a suggestion;
+    // `Sub-Collection` is the SHELF ("CPU & Motherboard Combos"), and the shelf
+    // is where PayMore keeps the product word. This prints the whole
+    // Sub-Collection vocabulary per store so that answer is measured across five
+    // catalogues rather than inferred from the one row that raised the question.
+    if (url.searchParams.get("nouns")) {
+      if (url.searchParams.get("secret") !== SECRET) {
+        return json({ error: "forbidden" }, 403);
+      }
+      const asked = (url.searchParams.get("store") || "").toUpperCase();
+      const list = asked === "ALL" ? STORES : STORES.includes(asked) ? [asked] : [];
+      if (!list.length) return json({ error: "store required" }, 400);
+      // ⚠️ Bounded on purpose. OVL alone is 1376 products = 56 Shopify calls at
+      // CHUNK 25, and the runtime kills a request long before the catalogue ends.
+      // Page it with &offset= rather than raising this.
+      const limit = Math.min(Number(url.searchParams.get("limit") || 400), 600);
+      const offset = Math.max(Number(url.searchParams.get("offset") || 0), 0);
+      const out = [];
+      for (const st of list) {
+        const cat: any[] = await rows(
+          `ebay_catalog?store_code=eq.${st}&select=sku,product_id,title`
+          + `&order=sku&limit=${limit}&offset=${offset}`);
+        const { shop, token } = await shopFor(st);
+        const ids = [...new Set(cat.map(c => String(c.product_id)).filter(Boolean))];
+        const extras = await extrasFor(shop, token, ids);
+        const vocab: Record<string, number> = {};
+        const flagged: any[] = [];
+        for (const c of cat) {
+          const e = extras[String(c.product_id)];
+          const sub = String(e?.specs?.["Sub-Collection"] || "").trim();
+          if (sub) vocab[sub] = (vocab[sub] || 0) + 1;
+          // The REAL analyser, on the rules basis — a census that reimplemented
+          // the predicate would measure something the product does not do.
+          const a = analyse({
+            store_code: st, product_id: String(c.product_id), sku: String(c.sku),
+            title: String(c.title || ""), product_handle: null, price: null,
+            quantity: 0,
+          } as Row, e, null, null);
+          const f = a.findings.find(x => x.code === "missing-noun");
+          if (!f) continue;
+          flagged.push({
+            sku: c.sku, title: c.title, severity: f.severity, fixable: f.fixable,
+            suggested: a.suggested,
+            collection: String(e?.specs?.["Collection"] || ""),
+            sub, type: String(e?.specs?.["Type"] || ""),
+          });
+        }
+        out.push({
+          store: st, examined: cat.length,
+          missingNoun: flagged.length,
+          noFixOffered: flagged.filter(f => !f.fixable).length,
+          subCollectionKnown: Object.values(vocab).reduce((a, b) => a + b, 0),
+          subCollections: Object.entries(vocab).sort((a, b) => b[1] - a[1])
+            .map(([v, n]) => `${n} x ${v}`),
+          flagged,
+        });
+      }
       return json({ stores: out });
     }
 
