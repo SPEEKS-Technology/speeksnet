@@ -20117,3 +20117,78 @@ select.dd-native {
    its own 430px block near .auth-page) and measures clean at 390px — verified,
    not assumed. Do not add rules here without a measurement showing a real
    problem; a second set of login breakpoints is how the sprawl started. */
+
+/* =========================================================
+   B2B LIVE BENCH INTAKE
+   =========================================================
+   The tray that sits above the pricing sheet while a session is open: the join
+   code, and a row per machine that has reported in and is waiting on a person.
+   Present only when the 'b2b-live-intake' feature is on for the viewer, so for
+   everybody else the pricing sheet is unchanged -- there is no reserved space
+   and no empty container. See _b2bIntakeTray in speeks.js. */
+.b2b-intake {
+    margin-bottom: 14px; border-radius: var(--b2b-r-md);
+    background: var(--b2b-surface); border: 1px solid var(--b2b-line-2);
+    overflow: hidden;
+}
+.b2b-intake-head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 13px;
+}
+.b2b-intake-title {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--b2b-faint); flex: 0 0 auto;
+}
+/* The one thing somebody is reading off this screen and typing into a laptop
+   across the bench, so it is monospaced, spaced out and the largest thing in the
+   row. Selectable on purpose -- copying it into a chat message is a normal way
+   to get it onto the machine. */
+.b2b-intake-code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 17px; font-weight: 700; letter-spacing: .18em;
+    color: var(--b2b-accent-deep); background: var(--b2b-accent-tint);
+    border: 1px solid #cfeada; border-radius: var(--b2b-r-sm);
+    padding: 3px 10px 3px 13px; user-select: all;
+}
+.b2b-intake-hint { font-size: 12px; color: var(--b2b-muted); flex: 1 1 auto; }
+.b2b-intake-head .b2b-btn { flex: 0 0 auto; }
+
+.b2b-intake-rows { border-top: 1px solid var(--b2b-line-2); }
+.b2b-intake-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 13px; border-bottom: 1px solid var(--b2b-line-2);
+    background: #fff;
+}
+.b2b-intake-row:last-child { border-bottom: 0; }
+/* A serial already on the sheet cannot be accepted at all -- the row exists only
+   to be discarded, so it is greyed rather than dressed up as a choice. */
+.b2b-intake-row.is-dup { background: #fcfcfd; }
+
+.b2b-intake-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.b2b-intake-name {
+    font-size: 12.5px; font-weight: 700; color: var(--b2b-ink, #0f172a);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.b2b-intake-spec { font-size: 11.5px; color: var(--b2b-muted); }
+.b2b-intake-meta { font-size: 10.5px; color: var(--b2b-faint); }
+
+/* What accepting WOULD do, stated before it is done. Fixed width so the column
+   of verdicts reads down the tray rather than jittering with the model names. */
+.b2b-intake-verdict {
+    flex: 0 0 auto; width: 210px; font-size: 12px; font-weight: 600;
+    color: var(--b2b-accent-deep);
+}
+.b2b-intake-verdict.bad { color: var(--red-alert); font-weight: 600; }
+.b2b-intake-q { font-weight: 500; color: var(--b2b-muted); }
+
+.b2b-intake-acts { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.b2b-intake-acts .b2b-btn { padding: 5px 11px; font-size: 11.5px; }
+
+/* Narrow: the verdict stops being a column and becomes a line under the name,
+   because at this width a 210px reservation squeezes the model down to nothing
+   -- and the model is what tells you which machine on the bench this is. */
+@media (max-width: 900px) {
+    .b2b-intake-row { flex-wrap: wrap; }
+    .b2b-intake-what { flex: 1 1 100%; }
+    .b2b-intake-verdict { width: auto; flex: 1 1 auto; }
+}
