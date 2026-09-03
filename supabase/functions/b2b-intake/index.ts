@@ -124,8 +124,11 @@ async function callDeals(body: Record<string, unknown>): Promise<any> {
 // tool ever posts a file's bytes rather than a rebuilt string, that BOM arrives
 // at the front of the body and JSON.parse throws on it. Cheap to strip, and the
 // alternative is a failure mode that reads as "the network is broken".
+// Written as the escape rather than a literal BOM: an invisible character is
+// one a later edit, a copy-paste or a re-encode can silently drop, and losing
+// it would bring back exactly the bug this line exists to stop.
 function parseBody(raw: string): any {
-  return JSON.parse(raw.replace(/^﻿/, ""));
+  return JSON.parse(raw.replace(/^\uFEFF/, ""));
 }
 
 // eBay category per item type. Ported from Get-EbayLinks in SPEEKS-Collate.ps1
