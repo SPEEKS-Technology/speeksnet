@@ -14,6 +14,9 @@
 //      eBay-stale ones would make title-drift look like our worst rule exactly
 //      when it was doing its job
 //   6. Undo posts a reopen
+//   7. a suggestion that DELETES a true fact says so in red before it is clicked
+//   8. changing store puts the title tabs back on Wrong — a tab is a place in
+//      ONE store's work, not a preference to carry to a store nobody has read
 const puppeteer = require('puppeteer-core');
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
@@ -291,6 +294,35 @@ const DATA = {
     const undo = await page.evaluate(() => window.__posts);
     ok(undo.length === 1 && undo[0].action === 'reopen', 'Undo posts a reopen',
        JSON.stringify(undo[0] || {}));
+
+    console.log('== Switching store starts the titles on Wrong ==');
+    // ⚠️ A TAB IS A PLACE IN ONE STORE'S WORK, NOT A PREFERENCE. Ethan, arriving
+    // at WSP on the Opportunity tab because that is where he had been left on the
+    // store before: "when switching from store to store, can you reset the
+    // default for the titles to Wrong." Carried across, it opens a store nobody
+    // has looked at on its least urgent pile while the broken titles sit unread.
+    const tierAfterSwitch = await page.evaluate(() => {
+        // Hard To Find, not Opportunity: this fixture has no severity-1 row, and
+        // the tab strip correctly refuses to sit on an EMPTY tier — which would
+        // have made this test pass for the wrong reason.
+        ltSetTier(2);                       // the reviewer wanders off to another tab
+        const before = _ltTier;
+        // ecSetStore also calls ecLoad, which fetches. The fetch is stubbed to
+        // reject in this harness, so the tier is read straight after the reset
+        // rather than waiting for a render that will never come.
+        try { ecSetStore('MPL'); } catch (e) {}
+        return { before, after: _ltTier };
+    });
+    ok(tierAfterSwitch.before === 2, 'the reviewer really was on another tab', tierAfterSwitch.before);
+    ok(tierAfterSwitch.after === 3, 'and a store change puts them back on Wrong', tierAfterSwitch.after);
+    // ⚠️ ONLY ON A STORE CHANGE. Resetting on every reload would throw a reviewer
+    // out of the tab they are working every single time they approved a row.
+    const tierAfterRender = await page.evaluate(() => {
+        ltSetTier(2);
+        ecRender();
+        return _ltTier;
+    });
+    ok(tierAfterRender === 2, 'a plain re-render leaves the tab alone', tierAfterRender);
 
     if (process.env.SHOT) {
         await page.evaluate(() => { const d = document.querySelector(".lt-denied"); d.open = true; d.scrollIntoView(); });

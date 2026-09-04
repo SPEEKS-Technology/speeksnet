@@ -44851,6 +44851,17 @@ function ecSetStore(store) {
     // name is a reassuring statement about a store nobody has checked yet.
     _lhPhotos = null;
     _lhPhotoErr = null;
+    // ⚠️ AND THE TITLE TAB GOES BACK TO WRONG. Ethan, arriving at WSP on
+    // Opportunity because that is where he had been left on the store before:
+    // "when switching from store to store, can you reset the default for the
+    // titles to Wrong." A tab is a place in ONE store's work, not a preference —
+    // carried across, it opens a store nobody has looked at on its least urgent
+    // pile while four broken titles sit unread behind a tab that looks unvisited.
+    // Only on a STORE CHANGE: resetting on every reload would throw a reviewer
+    // out of the tab they are working every time they approved a row.
+    // If Wrong is empty the tab strip already falls through to the first tier
+    // that has rows, so this is a starting point rather than a demand.
+    _ltTier = 3;
     ecLoad();
 }
 window.ecSetStore = ecSetStore;
