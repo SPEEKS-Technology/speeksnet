@@ -300,6 +300,32 @@ console.log('\n== It is in the Tools panel of every shell that has one ==');
     }));
     ok(clear.isClear, 'an empty pile draws the all-clear');
     ok(!clear.btn, 'and offers no button to copy nothing');
+    // ⚠️ TWO LINES, AND THE TICK IS NOT ONE OF THEM. It shipped stacked — tick,
+    // headline, sentence — so one sentence of good news occupied three rows.
+    // (Ethan, 2026-09-04: "make this fix into two lines of text. the checkmark
+    // doesnt need to be it's own line item".) Measured, not eyeballed: the tick
+    // and the headline must share a horizontal band.
+    const box = await page.evaluate(() => {
+        const c = document.querySelector('.lh-tool-clear');
+        if (!c) return null;
+        const tick = c.querySelector('.lh-tool-tick');
+        const head = c.querySelector('b');
+        const say = c.querySelector('.lh-tool-clear-h + span');
+        const r = e => e ? e.getBoundingClientRect() : null;
+        const [t, h, s] = [r(tick), r(head), r(say)];
+        return {
+            sameLine: !!(t && h) && Math.abs((t.top + t.height / 2) - (h.top + h.height / 2)) < 5,
+            tickLeftOfHead: !!(t && h) && t.right <= h.left + 1,
+            sayBelow: !!(h && s) && s.top >= h.bottom - 1,
+            rows: new Set([...c.querySelectorAll('.lh-tool-clear-h, .lh-tool-clear > span')]
+                .map(e => Math.round(e.getBoundingClientRect().top))).size,
+            height: Math.round(c.getBoundingClientRect().height),
+        };
+    });
+    ok(!!box && box.sameLine, 'the tick sits on the headline, not above it');
+    ok(!!box && box.tickLeftOfHead, 'and to the left of it');
+    ok(!!box && box.sayBelow, 'the sentence is the second line');
+    ok(!!box && box.rows === 2, 'two rows of text in total', box && String(box.rows));
 
     ok(errs.length === 0, 'no page errors', errs.join(' | '));
     await browser.close();

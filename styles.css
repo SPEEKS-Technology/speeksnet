@@ -18163,13 +18163,16 @@ body.tv-body { display: block; background: #eef1f5; }
     font-size: 12px; font-weight: 700; color: #065f46;
 }
 .lh-tool-clear, .lh-tool-err {
-    display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
-    padding: 18px 16px; border-radius: 10px;
+    display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+    padding: 14px 16px; border-radius: 10px;
     background: #f0fdf4; border: 1px solid #bbf7d0;
     font-size: 12.5px; color: #14532d; line-height: 1.6;
 }
 .lh-tool-err { background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }
-.lh-tool-tick { font-size: 20px; }
+/* The tick sits ON the headline. Stacked above it, the panel read as three
+   rows for what is one sentence of good news. */
+.lh-tool-clear-h { display: flex; align-items: center; gap: 8px; }
+.lh-tool-tick { font-size: 15px; line-height: 1; }
 /* The ask that goes to Claude. Sits above the tally because it is the ACTION
    the tally argues for, and a person who reads "3 dismissals of one rule" and
    then has to hunt for what to do about it does nothing. */

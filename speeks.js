@@ -45897,12 +45897,13 @@ function renderListingHealthTool() {
     // is never an empty box — and so a copy that has just happened leaves the
     // notes visibly somewhere instead of appearing to delete them.
     if (!n) {
+        // Two lines: the tick belongs ON the headline, not stacked above it as a
+        // row of its own. (Ethan, 2026-09-04.)
         body.innerHTML = `<div class="lh-tool-clear">
-          <span class="lh-tool-tick">✓</span>
-          <b>Nothing waiting on you.</b>
+          <div class="lh-tool-clear-h"><span class="lh-tool-tick">✓</span>
+            <b>Nothing waiting on you.</b></div>
           <span>When somebody dismisses a title suggestion and writes why the rule
-           was wrong, it lands here. A dismissal with no note cannot say which rule
-           to look at, so only the explained ones arrive.</span>
+           was wrong, it lands here.</span>
         </div>${doneHtml}`;
         return;
     }
