@@ -1389,7 +1389,26 @@ const ASK_RECIPE = "v1:title+brand+model";
 // the twice-daily cron shares a primary key with these rows and stamps them
 // `clean`, which is precisely how the market's findings were erased twice a day
 // until 2026-08-28.
-const NAME_CODES = new Set<string>(["name-garbled", "name-wrong"]);
+const NAME_CODES = new Set<string>(["name-garbled", "name-wrong", "name-disputed"]);
+
+// The fields a listing uses to say what it IS. The name check is allowed to
+// disagree with a title; it is not allowed to quietly overwrite one of these,
+// because they are the listing's own account of its identity and a person put
+// them there. Anything outside this list (Color, Condition, Screen Size…) is
+// not an identity claim and does not block a correction.
+//
+// ⚠️ NOT ALL SPECS. Matching on every field would let an incidental value veto a
+// real fix — "Extreme" appearing in a Model field should not protect the word
+// "Extreme" everywhere in the title.
+const IDENTITY_FIELDS = [
+  "MPN", "Model", "Platform", "Type", "Brand", "Release Year",
+];
+
+function identityFields(specs: Record<string, string> | undefined) {
+  const out: Record<string, string> = {};
+  for (const k of IDENTITY_FIELDS) if (specs && specs[k]) out[k] = specs[k];
+  return out;
+}
 
 type NameVerdict = {
   verdict: "ok" | "garbled" | "wrong";
@@ -1813,7 +1832,51 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // No finding is pushed, so the sweep's own check — a non-ok verdict that
     // produced no name finding — counts it as `unverified`, exactly like a quote
     // that could not be located. Same failure, same counter, one rate to watch.
-    if (!placeholder && at >= 0 && right && right !== wrong) {
+    // ⚠️ THE LISTING GETS THE LAST WORD ON ITS OWN IDENTITY.
+    //
+    // This check judges "against outside product knowledge, not against your own
+    // listing" — by design, because that is the only way to catch a name that is
+    // wrong everywhere. But it was never shown the listing's own fields, so it
+    // confidently proposed overwriting them. All three of the first denials
+    // people wrote notes about were this:
+    //
+    //   MPN = T43WD-40      → "not a real product name, it means T34w-40"
+    //   Platform = Xbox One → "there is no Xbox One release, use Xbox 360"
+    //   Type = microSD Card → "the part number says Portable SSD"
+    //
+    // ⚠️ AND APPROVING WOULD HAVE MADE IT WORSE. name-wrong is in
+    // CORRECTING_CODES, so a fix rewrites the spec fields that "still state
+    // something false" — it would have overwritten the very MPN and Platform
+    // that were right, in the description a customer reads.
+    //
+    // ⚠️ DOWNGRADED, NOT SUPPRESSED. Going silent here would lose the real
+    // catches — the Sony a7 IV mangled to "OX 7 IV" is exactly the case where a
+    // lister typed the same error into every field, and a rule that goes quiet
+    // whenever the listing agrees with itself would never see it. So the finding
+    // stays and says what is actually true: two sources disagree, and a person
+    // has to look. What it stops doing is proposing the swap.
+    const saidBy = listingSaysItself(wrong, identityFields(extra?.specs));
+    if (!placeholder && at >= 0 && right && right !== wrong && saidBy) {
+      findings.push({
+        code: "name-disputed",
+        // Lowest, deliberately. It is not a claim the title is wrong — it is a
+        // claim that we cannot tell from here, and a queue of those at the top
+        // of the Wrong tab is how a reviewer learns to skim past everything.
+        severity: 1,
+        // ⚠️ NEVER FIXABLE. There is nothing safe to write: the whole finding is
+        // that we do not know which of the two sources is right.
+        fixable: false,
+        says: `The title and our product knowledge disagree about "${wrong}", and`
+          + ` the listing's own ${saidBy.field} says "${saidBy.value}" — so nothing`
+          + ` here settles it.`
+          + (String(nameVerdict.why || "").trim()
+              ? ` We thought: ${String(nameVerdict.why).trim().replace(/[.;,]$/, "")}.`
+              : ""),
+        warn: `Check the item itself. If the listing is right, dismiss this. If`
+          + ` the ${saidBy.field} field is the wrong one, fix it in Shopify —`
+          + ` correcting the title alone would leave it saying "${saidBy.value}".`,
+      });
+    } else if (!placeholder && at >= 0 && right && right !== wrong) {
       const swapped = (title.slice(0, at) + right + title.slice(at + wrong.length))
         .replace(/\s+/g, " ").trim();
       const wrongIsWrong = nameVerdict.verdict === "wrong";
@@ -3053,6 +3116,7 @@ const IDENTITY_SPECS = [
 const CODE_LABEL: Record<string, string> = {
   "name-wrong": "Name checked against outside knowledge",
   "name-garbled": "Name looks misspelled",
+  "name-disputed": "The listing and our knowledge disagree",
   "missing-screen-size": "Screen size missing from the title",
   "repeated-phrase": "A phrase repeated in the title",
   "title-drift": "Shopify and eBay disagree",

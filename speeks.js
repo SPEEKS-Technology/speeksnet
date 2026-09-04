@@ -45780,6 +45780,7 @@ function _ltGone(from, to) {
 const _LT_CODE_SAYS = {
     'name-wrong': 'Name checked against outside knowledge',
     'name-garbled': 'Name looks misspelled',
+    'name-disputed': 'The listing and our knowledge disagree',
     'missing-screen-size': 'Screen size missing from the title',
     'repeated-phrase': 'A phrase repeated in the title',
     'title-drift': 'Shopify and eBay disagree',
