@@ -1587,6 +1587,15 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     if (title.length + 1 + word.length > EBAY_TITLE_MAX) return false;
     title = `${title} ${word}`; fixable = true; return true;
   };
+  // The length rule is the closure's; WHERE the word goes is placeAfter, which
+  // lives at module scope so the estate's own titles can be asserted against it.
+  const tryPlace = (word: string, after: string): boolean => {
+    if (title.length + 1 + word.length > EBAY_TITLE_MAX) return false;
+    const placed = placeAfter(title, word, after);
+    if (placed === null) return tryAppend(word);
+    title = placed; fixable = true; return true;
+  };
+
 
   // --- 3: the listing is wrong ---------------------------------------------
 
@@ -2370,7 +2379,9 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       && SCREEN_SHELVES.test(shelf) && !SCREEN_NOT.test(shelf)
       && !screenSizePresent(title, screenSpec)) {
     const text = screenSizeText(screenSpec);
-    if (text && tryAppend(text)) {
+    // After the model, which is where every title in the estate that already
+    // carries one puts it. See tryPlace.
+    if (text && tryPlace(text, String(extra?.specs?.["Model"] || "").trim())) {
       findings.push({
         code: "missing-screen-size",
         says: `This listing records a ${text} screen and the title does not say so. Screen size is one of the first things a buyer filters a phone or tablet by, so a title without it is missing from those results entirely. The measurement is the listing's own — only the inch mark is ours.`,
@@ -3253,6 +3264,40 @@ const trimRank = (k: string) =>
 // above, CHEAPEST FIRST. Uses `runRe` so the boundary rule is the one the rest
 // of the tool uses — "ATX" must not match inside "microATX", "8GB" not inside
 // "128GB".
+// ⚠️ WHERE A MEASUREMENT GOES IS PART OF WHETHER IT WORKS.
+// Ethan, on three phones with the size stuck on the end: *"do you think this
+// is the best spot in the title for them?"* No — and PayMore's own catalogue
+// settles it without ambiguity. EVERY phone and tablet title in the estate
+// that already carries a screen size puts it IMMEDIATELY AFTER THE MODEL, and
+// so does every laptop and every monitor:
+//     WiFi Only Apple iPad Pro 12.9" 6th Gen 128GB Space Gray MP5X3LL/A
+//     T-Mobile Samsung Galaxy Tab S9 FE 10.9" 128GB Gray SM-X518U
+//     Dell Inspiron 3521 15.6" i3-3227U 1.9GHz 6GB RAM 500GB HDD
+//
+// Appending put it after the PART NUMBER — behind the one string in the title
+// nobody searches, first to be cut when a search result truncates, and reading
+// like a piece of the SKU. The rows it was actually producing:
+//     Broken Unlocked Apple iPhone 14 128GB 26.2 MPUX3LL/A (Bad Battery 77%) 6.1"
+//     T-Mobile Google Pixel 10a 128GB Obsidian GA10052-US NO SIM TRAY 6.3"
+//     Apple MacBook Air L2RN2LDT9 Gold 15"
+//
+// ⚠️ NOT "BEFORE THE STORAGE", which looks equivalent on an iPhone and is not:
+// "TracFone Samsung Galaxy A14 5G 4GB RAM 64GB" has TWO capacities and the
+// Storage one is the second, so that rule lands the screen size in the middle
+// of the memory. The model is the anchor, and the spec table's `Model` matches
+// these titles verbatim ("iPhone Air", "Galaxy A14 5G", "iPad 1st Gen",
+// "Kindle Colorsoft") because the same lister writes both.
+//
+// Falls back to appending — what it has always done — when there is no model
+// to anchor to. Same length rule either way: an addition that does not fit is
+// not made.
+function placeAfter(title: string, word: string, after: string): string | null {
+  const m = after ? runRe(after).exec(title) : null;
+  if (!m) return null;
+  const end = m.index + m[0].length;
+  return `${title.slice(0, end)} ${word}${title.slice(end)}`;
+}
+
 function alsoInSpecs(title: string, specs: Record<string, string> | undefined): string[] {
   if (!specs) return [];
   const hits: { v: string; rank: number }[] = [];

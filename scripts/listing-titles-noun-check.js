@@ -51,6 +51,7 @@ const block = [
     between('const escapeRe = ', '// ============ WHICH WORDS'),
     between('const EBAY_TITLE_MAX', '\n\n'),
     between('const SECONDARY_SPEC =', '\n// Matched case-insensitively'),
+    between('function placeAfter', '\n\n'),
 ].join('\n\n');
 
 const js = block
@@ -83,14 +84,14 @@ const js = block
              (_m, n, p) => `const ${n} = (${p.replace(/\s*:\s*string/g, '')}) =>`);
 
 let shelfNoun, isProductNoun, depluralise, singularToken, GENERIC_SHELF, PRODUCT_NOUNS,
-    alsoInSpecs, SECONDARY_SPEC, trimToFit;
+    alsoInSpecs, SECONDARY_SPEC, trimToFit, placeAfter;
 try {
     ({ shelfNoun, isProductNoun, depluralise, singularToken, GENERIC_SHELF, PRODUCT_NOUNS,
-       alsoInSpecs, SECONDARY_SPEC, trimToFit } =
+       alsoInSpecs, SECONDARY_SPEC, trimToFit, placeAfter } =
         new Function(js + `
         return { shelfNoun, isProductNoun, depluralise, singularToken,
                  GENERIC_SHELF, PRODUCT_NOUNS, alsoInSpecs, SECONDARY_SPEC,
-                 trimToFit };`)());
+                 trimToFit, placeAfter };`)());
 } catch (e) {
     console.log('  FAIL  could not lift the code out of index.ts   ' + e.message);
     process.exit(1);
@@ -387,6 +388,65 @@ ok(analyseBlock.includes('const room = trimToFit(title, noun, extra?.specs);')
    'and a trim that fails to land puts the title back');
 ok(analyseBlock.includes('...(trimmed.length ? { trimmed } : {}),'),
    'what was spent is carried to the row so it can be shown in red');
+
+// =============================================================================
+console.log('\n10. WHERE A MEASUREMENT GOES IN THE TITLE');
+// ⚠️ MEASURED AGAINST THE ESTATE, NOT AGAINST TASTE. Ethan, on three phones with
+// the screen size stuck on the end: "do you think this is the best spot in the
+// title for them?" Every phone, tablet, laptop and monitor title at the five
+// stores that ALREADY carries a screen size puts it immediately after the model:
+//     WiFi Only Apple iPad Pro 12.9" 6th Gen 128GB Space Gray MP5X3LL/A
+//     T-Mobile Samsung Galaxy Tab S9 FE 10.9" 128GB Gray SM-X518U
+//     Dell Inspiron 3521 15.6" i3-3227U 1.9GHz 6GB RAM 500GB HDD
+// Each pair below is a REAL queued row and what appending was producing.
+[
+    ['Factory Unlocked Apple iPhone Air 256GB Cloud White NG194LL/A', 'iPhone Air', '6.5"',
+     'Factory Unlocked Apple iPhone Air 6.5" 256GB Cloud White NG194LL/A'],
+    ['Factory Unlocked Apple iPhone 17 Pro Max 256GB Deep Blue MFXJ4LL/A', 'iPhone 17 Pro Max', '6.9"',
+     'Factory Unlocked Apple iPhone 17 Pro Max 6.9" 256GB Deep Blue MFXJ4LL/A'],
+    ['Consumer Cellular Apple iPad 1st Gen 16GB White MCA14LL/A', 'iPad 1st Gen', '8.3"',
+     'Consumer Cellular Apple iPad 1st Gen 8.3" 16GB White MCA14LL/A'],
+    ['WiFi Only Amazon Kindle Colorsoft 16GB Black R7528', 'Kindle Colorsoft', '7"',
+     'WiFi Only Amazon Kindle Colorsoft 7" 16GB Black R7528'],
+    // ⚠️ THE ROW THAT KILLS "BEFORE THE STORAGE". Two capacities, and the Storage
+    // one is the SECOND — that rule lands the screen size inside the memory.
+    ['TracFone Samsung Galaxy A14 5G 4GB RAM 64GB SM-S146VL Black', 'Galaxy A14 5G', '6.6"',
+     'TracFone Samsung Galaxy A14 5G 6.6" 4GB RAM 64GB SM-S146VL Black'],
+    // ⚠️ AND THE TWO WORST THINGS APPENDING DID: after a parenthetical note, and
+    // after a hand-typed warning. Both were live suggestions.
+    ['Broken Unlocked Apple iPhone 14 128GB 26.2 MPUX3LL/A (Bad Battery 77%)', 'iPhone 14', '6.1"',
+     'Broken Unlocked Apple iPhone 14 6.1" 128GB 26.2 MPUX3LL/A (Bad Battery 77%)'],
+    ['T-Mobile Google Pixel 10a 128GB Obsidian GA10052-US NO SIM TRAY', 'Pixel 10a', '6.3"',
+     'T-Mobile Google Pixel 10a 6.3" 128GB Obsidian GA10052-US NO SIM TRAY'],
+    ['HP Chromebook x360 Celeron N4120 1.1GHz 4GB RAM 32GB', 'Chromebook x360', '14"',
+     'HP Chromebook x360 14" Celeron N4120 1.1GHz 4GB RAM 32GB'],
+].forEach(([now, model, size, want]) =>
+    ok(placeAfter(now, size, model) === want,
+       '"' + model + '" -> ' + size, placeAfter(now, size, model)));
+
+// ⚠️ NO MODEL TO ANCHOR TO IS NOT A GUESS — it is null, and the caller appends,
+// which is what this path always did. A wrong POSITION is a worse title, and a
+// worse title approved in one click is the failure this whole screen guards.
+ok(placeAfter('Some Untitled Thing 128GB', '6.1"', '') === null,
+   'no model means no placement');
+ok(placeAfter('Some Untitled Thing 128GB', '6.1"', 'iPhone 14') === null,
+   'a model the title does not say means no placement');
+// The boundary rule is shared, so a model name inside a longer word is not a hit.
+ok(placeAfter('Apple iPhone 14Plus 128GB', '6.1"', 'iPhone 14') === null,
+   '"iPhone 14" does not match inside "iPhone 14Plus"');
+// Nothing but the insertion changes.
+const before = 'Factory Unlocked Apple iPhone Air 256GB Cloud White NG194LL/A';
+const after = placeAfter(before, '6.5"', 'iPhone Air');
+ok(after.replace(' 6.5"', '') === before, 'the rest of the title is untouched', after);
+ok((after.match(/"/g) || []).length === 1, 'exactly one inch mark is added');
+
+// The closure still owns the length rule, and still refuses what will not fit.
+ok(/const tryPlace = \(word: string, after: string\): boolean => \{\s*\n\s*if \(title\.length \+ 1 \+ word\.length > EBAY_TITLE_MAX\) return false;/.test(src),
+   'an addition that does not fit is still not made, wherever it would go');
+ok(src.includes('if (placed === null) return tryAppend(word);'),
+   'and appending is the fallback, not an error');
+ok(src.includes('tryPlace(text, String(extra?.specs?.["Model"] || "").trim())'),
+   'the screen size is anchored to the Model the spec table records');
 
 console.log('\n' + (fails ? `${fails} FAILED` : 'all passed'));
 process.exit(fails ? 1 : 0);
