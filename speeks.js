@@ -33292,8 +33292,27 @@ async function checkRecycleReminders() {
             const needsReview   = rows.filter(r => !r.reviewed_at && !r.delete_requested_at && !awaitingMgrReply(r));
             const pendingDelete = rows.filter(r => r.delete_requested_at);
 
+            // ⚠️ THE CLEAR IS WRITTEN TO THE SERVER AND WAS BEING READ FROM THE
+            // DEVICE. Opening the tool POSTs mark_seen, which stamps dm_seen_at on
+            // the row — but this filter only ever consulted a localStorage
+            // high-water mark, so the card cleared on the machine that read it and
+            // stayed up on every other one. Ethan, as DM: "there was a recycle reply
+            // and I viewed it, but the alert didn't go away." His dm_seen_at was
+            // 22:54 against a 21:46 reply — the server already knew.
+            //
+            // A reply is fresh only when it is newer than BOTH marks. The local one
+            // stays as the same-device fast path: it is written the moment the card
+            // renders, so the card cannot re-appear in the seconds before a
+            // mark_seen round trip lands.
+            //
+            // ⚠️ THE REPLY SIGNAL ONLY. dm_seen_at must never gate needsReview or
+            // pendingDelete — a 'seen on open' model for those is exactly what let a
+            // glance silence work a manager was still blocked on, which is why it
+            // was taken off them (see the comment above). A reply blocks nobody, so
+            // a glance IS the right thing to clear it.
             const sRep = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleReplySeen')) || 0);
-            const freshRep = rows.filter(r => getT(r.mgr_reply_at) > sRep);
+            const replySeenOnServer = r => getT(r.dm_seen_at) >= getT(r.mgr_reply_at);
+            const freshRep = rows.filter(r => getT(r.mgr_reply_at) > sRep && !replySeenOnServer(r));
 
             if (!needsReview.length && !pendingDelete.length && !freshRep.length) {
                 // Nothing waiting and no new reply — drop the bubble so the feed row
