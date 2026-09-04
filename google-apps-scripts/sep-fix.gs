@@ -63,6 +63,35 @@
 // $4,885.73 to $5,220.72. That is a different correction from the two above —
 // it says a refund was not a real return — and Ethan asked only for the draft
 // orders. It is left visible rather than quietly bundled in.
+//
+// ---------------------------------------------------------------------------
+// SEP 2 — OVL and MPL. Draft-order invoices only; no duplicate this day.
+//
+// Both detectors were run first and agree the day is clean: dupe-open-pairs
+// over every paid order since Aug 1 (2,929 scanned, 494 eBay ids at OVL alone)
+// found ZERO open pairs, and ebay-alert's check #7 reported no issues. The Sep 1
+// duplicate was a one-off, and its twin was an AUG 16 order — which is why the
+// scan window starts a month back rather than at the incident. A window that
+// only covers the new copy cannot see the old one, and MC back-fills backwards.
+//
+//   OVL  reported 6,453.72 / 3,129.07 cost
+//        − drafts  −459.97 /  −245.00   = 5,993.75 / 2,884.07
+//   MPL  reported 3,287.32 / 1,341.66 cost
+//        − drafts  −229.99 /  −100.00   = 3,057.33 / 1,241.66
+//
+// LEE, WSP and BAL had no draft orders on Sep 2 and are not touched.
+//
+// ⚠️ MPL #MO03-3217 ($229.99) MATCHES NO REFUND WE MADE at that store, so the
+// amount test does not corroborate it — only the date rule does. Three of OVL's
+// four (#KS01-14564 229.99, #KS01-14575 199.99, #KS01-14581 29.99) do match; the
+// fourth, #KS01-14562, is worth 0.00 and moves nothing either way. It is removed
+// because Ethan's instruction is that ALL draft orders come out, not because it
+// was proven to be a repayment. If MPL says that one was an ordinary invoiced
+// sale, it goes back in and this line is the reason to ask.
+//
+// ⚠️ MPL's +$99.99 mirror-back refund is NOT included, on the same reasoning as
+// WSP's Sep 1 above: sales-true-daily would put MPL at 3,157.32, but that folds
+// a refund judgment into a draft-order correction. Drafts only, as asked.
 // ============================================================================
 
 var SEPF_SHEET_ID = '1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8';  // Sales Summary 2026
@@ -87,8 +116,21 @@ var SEPF_NOTE_0901_OVL =
   + '11-15038-98055 already sold on Aug 16 as #KS01-13840. Deleting the copy did not take '
   + 'it out of the day. Real figure. Locked from the daily sync.';
 
+var SEPF_NOTE_0902_OVL =
+  'Sep 2 restated — $459.97 of draft-order invoices removed (cost 245.00): #KS01-14564 '
+  + '(229.99), #KS01-14575 (199.99), #KS01-14581 (29.99) and #KS01-14562 (0.00). Repayment '
+  + 'of the August glitch, not selling. Real figure. Locked from the daily sync.';
+
+var SEPF_NOTE_0902_MPL =
+  'Sep 2 restated — $229.99 draft-order invoice #MO03-3217 removed (cost 100.00). ⚠️ This '
+  + 'one matches no refund MPL made, so only the date rule puts it in the repayment set; if '
+  + 'the store says it was an ordinary invoiced sale it belongs back in the day. Locked from '
+  + 'the daily sync.';
+
 var SEPF_FIX = [
-  { store: 'OVL', day: 1, sales: 949.33, cost: 168.00, note: SEPF_NOTE_0901_OVL }
+  { store: 'OVL', day: 1, sales:  949.33, cost:  168.00, note: SEPF_NOTE_0901_OVL },
+  { store: 'OVL', day: 2, sales: 5993.75, cost: 2884.07, note: SEPF_NOTE_0902_OVL },
+  { store: 'MPL', day: 2, sales: 3057.33, cost: 1241.66, note: SEPF_NOTE_0902_MPL }
 ];
 
 function sepFixPreview() { _sepfAll(true); }
@@ -110,7 +152,8 @@ function _sepfAll(dryRun) {
   // caused it would have logged "wrote 2 cells" and looked fine.
   if (missing) {
     Logger.log('!! %s tab(s) were not found — the restatement is INCOMPLETE and the two '
-             + 'sheets now disagree about Sep 1. Fix the tab name and run it again.', missing);
+             + 'sheets now disagree about the restated day(s). Fix the tab name and run it again.',
+             missing);
   }
   if (dryRun) Logger.log('Nothing was written. Run sepFixApply() to write it.');
 }

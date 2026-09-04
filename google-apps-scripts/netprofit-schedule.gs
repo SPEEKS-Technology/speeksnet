@@ -200,6 +200,28 @@ function npsDailyRefresh() {
     _npxSync(false);
     _npaReport(before, ym, pass.split(' ')[0].toLowerCase() + ' daily refresh');
 
+    // The SALES tab's YoY block — the one thing in this workbook that no job
+    // owned, and which therefore compared September 2026 against August 2025 for
+    // three days. See sales-yoy.gs; the figures come from the same NPX_YOY_2025
+    // this run has already used for the Net Profit tab, so the two tabs cannot
+    // disagree about a store's year-over-year again.
+    //
+    // ⚠️ ITS OWN try/catch, AND AFTER THE REPORT. Net Profit is what this job
+    // exists for and it is finished by here; a Sales tab whose labels moved must
+    // not take the day's net profit down with it. It writes only cells that
+    // differ, so on every day but the 1st this is a read and nothing else.
+    try {
+      _syoySync(false, ym);
+    } catch (yoyErr) {
+      Logger.log('!! the Sales tab YoY pass failed: %s', yoyErr);
+      _npaSendFailure('The Sales tab year-over-year figures',
+        String(yoyErr && yoyErr.stack ? yoyErr.stack : yoyErr),
+        'Claude — the Net Profit tab is fine and its YoY is right; it is the SALES tab that '
+          + 'is now comparing itself against whatever month the rollover copied. Run '
+          + 'salesYoyPreview() to see what it found, and salesYoyAudit() to check the other '
+          + 'months while you are there.');
+    }
+
     Logger.log('Daily refresh done. The current month stays open; it closes at 7pm on %s.',
       _npsMonthCloseDay(ym).date);
   } catch (e) {

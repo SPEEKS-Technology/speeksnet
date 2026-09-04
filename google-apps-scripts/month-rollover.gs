@@ -83,6 +83,15 @@ var MR_HEADER_ROWS = 4;
 // Footer cells worth updating, by the LABEL beside them. Matched as a whole
 // cell, case-insensitively; only the first cell to the right that is NOT a
 // formula gets written.
+//
+// ⚠️ THE YoY BLOCK IS NOT IN HERE, AND THAT COST THREE DAYS OF SEPTEMBER. Its
+// "Last" cell is a typed constant, so copyTo() carried August 2025's figure into
+// the September tab and the Sales tabs compared themselves against the wrong
+// month while the Net Profit tab, whose YoY is written daily, was right. It is
+// owned by sales-yoy.gs in the NET PROFIT project — where the 2025 figures live,
+// rather than in a second copy of them here — and runs from npsDailyRefresh, so
+// it repairs the tab on the 1st whether or not this roll thought about it. Do
+// not add a 'yoy' key here without deleting that one; two writers, one cell.
 var MR_FOOTER = {
   goal:      ['gp goal', 'goal'],
   days:      ['days this month', 'days in month'],
