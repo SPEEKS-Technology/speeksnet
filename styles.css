@@ -18160,6 +18160,14 @@ body.tv-body { display: block; background: #eef1f5; }
 /* Clearing the batch. Quiet and at the bottom on purpose: it is the LAST act,
    after Claude has been through the notes, and it must not compete with the
    Copy button at the top for the press. */
+/* Who listed it, beside the Shopify link the reviewer would open anyway.
+   ⚠️ Deliberately NOT alarm-coloured. It is an attribution, not a verdict — the
+   same name sits beside rows where the tool itself was wrong. */
+.lt-lister {
+    display: inline-flex; align-items: center; padding: 3px 9px;
+    border-radius: 999px; border: 1px solid #e2e8f0; background: #f8fafc;
+    font-size: 11px; font-weight: 700; color: #475569; white-space: nowrap;
+}
 .lh-tool-finish {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #e2e8f0;

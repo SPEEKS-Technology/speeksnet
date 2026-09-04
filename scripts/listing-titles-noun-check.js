@@ -448,5 +448,29 @@ ok(src.includes('if (placed === null) return tryAppend(word);'),
 ok(src.includes('tryPlace(text, String(extra?.specs?.["Model"] || "").trim())'),
    'the screen size is anchored to the Model the spec table records');
 
+// ⚠️ TWO RULES CAN ADD THE SCREEN SIZE, AND THEY MUST AGREE ON WHERE IT GOES.
+// The dedicated rule above places it after the model. lazy-title adds it too —
+// but only when a SECOND detail is missing as well — and it used to append
+// everything to the end. So the same fact landed in two different places
+// depending on whether an unrelated field happened to be blank:
+//
+//   WSP MO02-4613A-E2, screen only   → "iPhone 11 6.1" 64GB 18.5 MWJJ2LL/A READ"
+//   WSP MO02-4723A-E2, screen+colour → "…128GB 26.6 MTXT3LL/A Read 6.7" Pink"
+//
+// (Ethan, 2026-09-04: "why is the screen size and color for this one at the end
+// and the one beneath it where it should be in the middle?") Asserted on the
+// SOURCE because the branch lives mid-way through analyse, which needs a Shopify
+// row to call — and a divergence here is invisible until someone photographs it.
+ok(/const isScreen = m\.k === "Screen Size";/.test(src),
+   'lazy-title singles the screen size out from the fields it appends');
+ok(/const placed = isScreen\s*\n\s*\? tryPlace\(text, String\(extra\?\.specs\?\.\["Model"\] \|\| ""\)\.trim\(\)\)\s*\n\s*: tryAppend\(text\);/.test(src),
+   'and places it after the same Model anchor, not on the end');
+// Through screenSizeText for the same reason: a spec of `6.7` or `6.7 in` has to
+// come out as `6.7"` whichever rule adds it.
+ok(/const text = isScreen \? \(screenSizeText\(m\.v\) \|\| m\.v\) : m\.v;/.test(src),
+   'and writes the measurement the same way the other rule does');
+ok(/added\.push\(`\$\{m\.k\} \$\{text\}`\)/.test(src),
+   'and the reason names what was actually inserted, not the raw spec');
+
 console.log('\n' + (fails ? `${fails} FAILED` : 'all passed'));
 process.exit(fails ? 1 : 0);

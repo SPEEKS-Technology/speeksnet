@@ -221,7 +221,7 @@ async function shopifyGql(shop: string, token: string, query: string, variables?
 // spec table, and the What's Included list that decides whether "Bundle" is a
 // word we have earned. Batched with `nodes(ids:)` so one request covers a page
 // of candidates instead of one request each.
-type Extra = { specs: Record<string, string>; included: string[] };
+type Extra = { specs: Record<string, string>; included: string[]; tags: string[] };
 
 const stripTags = (s: string) =>
   s.replace(/<[^>]*>/g, " ")
@@ -309,7 +309,7 @@ async function extrasFor(shop: string, token: string, productIds: string[]): Pro
     const ids = productIds.slice(i, i + CHUNK);
     const data = await shopifyGql(shop, token, `
       query($ids: [ID!]!) { nodes(ids: $ids) { ... on Product {
-        id descriptionHtml
+        id descriptionHtml tags
         metafields(first: 60) { edges { node { key value } } }
       } } }`, { ids });
     for (const n of (data?.nodes || [])) {
@@ -323,6 +323,9 @@ async function extrasFor(shop: string, token: string, productIds: string[]): Pro
       out[n.id] = {
         specs: { ...parseSpecs(html) },
         included: parseIncluded(mf["whats_include"] || mf["whats_included"] || "", html),
+        // Shopify tags carry, among other things, WHO LISTED IT — "CMeadows"
+        // beside a channel tag like "eBay". See listerFrom.
+        tags: Array.isArray(n.tags) ? n.tags.map((t: unknown) => String(t)) : [],
       };
     }
   }
@@ -862,6 +865,118 @@ const TITLE_SPECS = ["Brand", "Model", "Storage", "Capacity", "Storage 1",
   "Lock Status", "Maximum Resolution", "GPU/Graphics Card", "Wattage", "Size"];
 
 const squash = (v: string) => norm(v).replace(/ /g, "");
+
+// --- who listed it ----------------------------------------------------------
+// Shopify product tags carry the lister's initials beside the channel tags:
+// `eBay`, `CMeadows`. Ethan, 2026-09-04: "we have tags to show employee names.
+// Can we show next to the Shopify listing link that tag, so we know who made
+// the mistake."
+//
+// ⚠️ MATCHED AGAINST THE REAL STAFF LIST, NEVER GUESSED FROM SHAPE. The obvious
+// shortcut is a pattern — one capital then a surname — and it picks up `eBay`
+// on the very first row (e + Bay). Every channel, condition and promo tag in
+// the estate would land in this column as somebody's name. So a tag counts only
+// when it matches a person in `users`, and anything unmatched is left null.
+//
+// ⚠️ NULL IS NOT AN ACCUSATION AND NEITHER IS A NAME. Unmatched means "no tag
+// resolved" — a leaver, a typo, a product listed before the convention. The
+// same name will also appear beside rows where the TOOL was wrong; the denial
+// notes are the proof of that. This exists so a pattern is visible, not so a
+// row has a culprit.
+type Lister = { tag: string; name: string };
+
+// "CMeadows" → Calvin Meadows. Also accepts the other two orderings people
+// actually type, because the convention is a habit rather than a validated
+// field: full first + surname, and first + surname initial.
+// ⚠️ PER STORE FIRST, THEN EVERYONE. `EKushnir` is Ethan (CORP) AND Eli (WSP),
+// so the collision rule below refused it — and threw away a name that is not
+// remotely ambiguous once you notice the product is at WESTPORT, where Eli works
+// and Ethan does not. Sixteen of forty WSP rows in the first real sweep carried
+// that tag. So each store gets its own index, the estate-wide one is the
+// fallback, and a tag ambiguous inside its own store still resolves to nobody.
+type ListerIx = { byStore: Record<string, Record<string, string>>;
+                  all: Record<string, string> };
+
+function listerIndex(users: { name: string; role?: string; store?: string }[]): ListerIx {
+  const stores = new Set<string>();
+  for (const u of users) {
+    const st = String(u?.store || "").trim().toUpperCase();
+    if (st && st !== "CORP") stores.add(st);
+  }
+  const byStore: Record<string, Record<string, string>> = {};
+  for (const st of stores) {
+    // CORP travels: the DM and CEO list at any store, so they belong in every
+    // store's index — they just lose to a local person of the same initials.
+    byStore[st] = indexOf(users.filter(u => {
+      const s = String(u?.store || "").trim().toUpperCase();
+      return s === st || s === "CORP";
+    }), st);
+  }
+  return { byStore, all: indexOf(users, null) };
+}
+
+// ⚠️ A LOCAL PERSON BEATS A VISITOR. Inside one store's index, a user actually
+// based there wins over a CORP user with the same initials rather than
+// colliding with them — otherwise scoping to WSP would still refuse EKushnir,
+// which is the whole thing this was built to fix.
+function indexOf(users: { name: string; role?: string; store?: string }[],
+                 home: string | null): Record<string, string> {
+  const ix: Record<string, string> = {};
+  const local: Record<string, boolean> = {};
+  for (const u of users) {
+    const full = String(u?.name || "").trim();
+    // ⚠️ A SHARED STORE LOGIN IS NOT A LISTER. "Ballwin Team", "Overland Park
+    // Team" and the other three are the TV-board accounts, and they index
+    // perfectly happily as BTeam / OTeam — different initials, so the collision
+    // rule below never catches them and a listing gets attributed to a shop.
+    // Caught by this file's own harness, not by reading the code.
+    //
+    // The role is the fact; the name is the belt and braces for a row whose
+    // role is null or renamed.
+    if (String(u?.role || "").trim().toLowerCase() === "store") continue;
+    if (/\bteam$/i.test(full)) continue;
+    const parts = full.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) continue;
+    const first = parts[0], last = parts[parts.length - 1];
+    for (const form of [
+      first[0] + last,          // CMeadows
+      first + last,             // CalvinMeadows
+      first + last[0],          // CalvinM
+    ]) {
+      const k = squash(form);
+      // ⚠️ A COLLIDING FORM BELONGS TO NOBODY. Two Zachs at one store make
+      // "ZM" ambiguous, and naming the wrong person is worse than naming none.
+      if (k.length < 3) continue;
+      const isLocal = home !== null
+        && String(u?.store || "").trim().toUpperCase() === home;
+      if (!(k in ix)) { ix[k] = full; local[k] = isLocal; continue; }
+      if (ix[k] === full) continue;
+      // Someone already holds this form. A local beats a visitor; a second
+      // local, or two visitors, cancel out.
+      if (isLocal && !local[k]) { ix[k] = full; local[k] = true; }
+      else if (isLocal === local[k]) ix[k] = "";
+    }
+  }
+  return ix;
+}
+
+function listerFrom(tags: string[] | undefined, ix: ListerIx,
+                    store?: string | null): Lister | null {
+  const st = String(store || "").trim().toUpperCase();
+  // The store's own people first, then the estate. A tag that is ambiguous
+  // inside its own store stays ambiguous — falling through to `all` would only
+  // ever make it more ambiguous, never less.
+  for (const table of [st ? ix.byStore[st] : null, ix.all]) {
+    if (!table) continue;
+    for (const t of (tags || [])) {
+      const raw = String(t || "").trim();
+      if (!raw) continue;
+      const hit = table[squash(raw)];
+      if (hit) return { tag: raw, name: hit };
+    }
+  }
+  return null;
+}
 
 // ⚠️ THE TWO RULES BELOW WERE BURIED INSIDE strengthOf AND ARE NOW SHARED.
 // They are what took the lazy-title check from 224 findings to 6, so anything
@@ -2415,7 +2530,30 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     const fits = strength.missing.filter(m => m.v.length + 1 <= room);
     if (fits.length >= 2 && room >= 12) {
       const added: string[] = [];
-      for (const m of fits) if (tryAppend(m.v)) { added.push(`${m.k} ${m.v}`); lazyUsed.add(m.k); }
+      for (const m of fits) {
+        // ⚠️ THE SCREEN SIZE GOES AFTER THE MODEL HERE TOO. Two rules can add
+        // this same fact — the dedicated one below, and this one when a SECOND
+        // detail happens to be missing as well — and only one of them placed it.
+        // So an iPhone 11 missing just its screen got "iPhone 11 6.1" 64GB…"
+        // while an iPhone 15 Plus missing screen AND colour got them both bolted
+        // on the end, past the part number. Same fact, same listing shape, two
+        // different places, decided by whether an unrelated field was also
+        // blank. (Ethan, 2026-09-04: "why is the screen size and color for this
+        // one at the end and the one beneath it where it should be in the
+        // middle?") Every title in the estate that already carries one puts it
+        // after the model; tryPlace falls back to appending when there is no
+        // model to anchor to, so this can only improve the position.
+        //
+        // ⚠️ AND THROUGH screenSizeText, for the same reason. That is what turns
+        // a spec of `6.7` or `6.7 in` into `6.7"`. Appending m.v raw meant the
+        // two rules could write the same measurement two different ways.
+        const isScreen = m.k === "Screen Size";
+        const text = isScreen ? (screenSizeText(m.v) || m.v) : m.v;
+        const placed = isScreen
+          ? tryPlace(text, String(extra?.specs?.["Model"] || "").trim())
+          : tryAppend(text);
+        if (placed) { added.push(`${m.k} ${text}`); lazyUsed.add(m.k); }
+      }
       if (added.length) {
         findings.push({
           code: "lazy-title",
@@ -2622,6 +2760,11 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
   // few milliseconds before the clean batch, so the next run's "least recently
   // swept" ordering put the queue back at the head of the list every time.
   const stampedAt = new Date().toISOString();
+  // ⚠️ ONE STAFF READ PER SWEEP. The index is built once and handed to every
+  // row; looking a tag up per product would be a query per listing for a value
+  // that changes when somebody is hired.
+  const staff: any[] = await rows("users?select=name,role,store").catch(() => []);
+  const listerIx = listerIndex(staff || []);
 
   // What eBay is showing right now, for the drift finding. One read, not one per
   // item; ebay_live is keyed (store_code, sku) exactly as ebay_catalog is.
@@ -2934,6 +3077,11 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
                             ? row.ebay_title ?? null : null,
                           a.findings.map(f => f.code)) ? "denied" : "open",
       swept_at: stampedAt,
+      // Who listed it, from the product's own Shopify tags. Null when no tag
+      // matched a person — a leaver, a typo, or a product listed before the
+      // convention — and that is deliberately indistinguishable from "not swept
+      // since the column existed", because neither is an accusation.
+      lister_tag: listerFrom(extras[row.product_id]?.tags, listerIx, store)?.tag ?? null,
       // Only the market pass may move the market's clock. A rules-only run that
       // stamped it would make eBay look freshly asked when it was not.
       ...(wantMarket ? { market_at: stampedAt } : {}),
@@ -2952,6 +3100,7 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
       basis: "rules", confidence: "high", comps: [],
       price: c.price, quantity: c.quantity,
       severity: 1, status: "clean", swept_at: stampedAt,
+      lister_tag: listerFrom(extras[c.product_id]?.tags, listerIx, store)?.tag ?? null,
       ...(wantMarket ? { market_at: stampedAt } : {}),
       ...askedCols(c.product_id, c.title || ""),
     }));
@@ -3018,7 +3167,7 @@ async function queueFor(store: string) {
   const q: any[] = await rows(
     `listing_title_queue?store_code=eq.${store}`
     + `&select=product_id,sku,current_title,suggested_title,findings,basis,confidence,`
-    + `comps,category_name,ebay_title,severity,price,quantity,swept_at`
+    + `comps,category_name,ebay_title,severity,price,quantity,swept_at,lister_tag`
     + `&order=severity.desc,price.desc.nullslast&limit=250`);
   return q.map(r => ({
     productId: r.product_id, sku: r.sku,
@@ -3027,6 +3176,9 @@ async function queueFor(store: string) {
     comps: r.comps || [], category: r.category_name, ebayTitle: r.ebay_title,
     severity: r.severity, price: r.price, quantity: r.quantity,
     sweptAt: r.swept_at, shop: SHOP_BY_STORE[store],
+    // The Shopify tag verbatim. The panel resolves it to a name; see listerFrom
+    // for why nothing is resolved on the way in.
+    listerTag: r.lister_tag || null,
   }));
 }
 
@@ -3049,7 +3201,7 @@ async function queueFor(store: string) {
 async function deniedFor(store: string) {
   const d: any[] = await rows(
     `listing_title_reviews?store_code=eq.${store}&status=eq.denied`
-    + `&select=product_id,sku,current_title,ebay_title,findings,severity,`
+    + `&select=product_id,sku,current_title,ebay_title,findings,severity,lister_tag,`
     + `decided_by,decided_at,decided_as,decided_note,feedback_triaged_at`
     + `&order=decided_at.desc&limit=100`);
   const tally: Record<string, number> = {};
@@ -3066,7 +3218,7 @@ async function deniedFor(store: string) {
       current: r.current_title, ebayTitle: r.ebay_title,
       findings: r.findings || [], severity: r.severity,
       by: r.decided_by, at: r.decided_at,
-      as: r.decided_as, note: r.decided_note,
+      as: r.decided_as, note: r.decided_note, listerTag: r.lister_tag || null,
       // So the drawer's "N dismissals explained a rule was wrong" counts what is
       // still un-answered rather than everything ever written.
       triagedAt: r.feedback_triaged_at || null,
@@ -4433,11 +4585,22 @@ Deno.serve(async (req: Request) => {
 
       const asked = (url.searchParams.get("store") || "").toUpperCase();
       const store = scope.stores.includes(asked) ? asked : scope.stores[0];
-      const [queue, counts, ebay, denied] = await Promise.all([
-        queueFor(store), totals(scope.stores), ebayScope(store), deniedFor(store)]);
+      const [queue, counts, ebay, denied, staff] = await Promise.all([
+        queueFor(store), totals(scope.stores), ebayScope(store), deniedFor(store),
+        rows("users?select=name,role,store").catch(() => [])]);
+      // ⚠️ RESOLVED HERE, NOT ON THE WAY IN. The tag is the fact Shopify holds;
+      // the person is a lookup that changes when somebody is renamed or leaves,
+      // and writing it down would freeze it wrong. The panel falls back to the
+      // tag itself, which still tells you who a leaver was.
+      const listerIx = listerIndex(staff || []);
+      const listers: Record<string, string> = {};
+      for (const r of [...queue, ...(denied?.rows || [])]) {
+        const t = (r as any).listerTag;
+        if (t && !(t in listers)) listers[t] = listerFrom([String(t)], listerIx, store)?.name || String(t);
+      }
       return json({
         scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
-        store, queue, counts, ebayScope: ebay, denied,
+        store, queue, counts, ebayScope: ebay, denied, listers,
       });
     }
 
@@ -4759,6 +4922,9 @@ Deno.serve(async (req: Request) => {
         store, sku, title: cat[0].title,
         ...(rawMf && rawDesc ? { metafields: rawMf, descriptionHtml: rawDesc } : rawMf && !wantEcho ? { metafields: rawMf } : {}),
         ...(echoPlan ? { echo: echoPlan } : {}),
+        // The product's Shopify tags, so a lister_tag that resolved to nobody
+        // can be looked at rather than guessed about.
+        tags: e?.tags || [],
         specKeys: Object.keys(e?.specs || {}),
         specs: e?.specs || {},
         included: e?.included || [],

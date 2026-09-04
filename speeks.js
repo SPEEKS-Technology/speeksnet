@@ -46019,6 +46019,15 @@ async function lhToolDone() {
 }
 window.lhToolDone = lhToolDone;
 
+// The tag resolved to a person, from the map the server sends. Falls back to
+// the tag verbatim, because "JSmith" still tells you who a leaver was — the
+// server only sends tags that matched somebody, but a rename between the sweep
+// and the read would land here and a bare tag is better than nothing.
+function _ltLister(tag) {
+    if (!tag) return '';
+    return (_ltData && _ltData.listers && _ltData.listers[tag]) || tag;
+}
+
 function _ltDeniedHtml() {
     const d = _ltData && _ltData.denied;
     if (!d || !(d.rows || []).length) return '';
@@ -46058,6 +46067,7 @@ function _ltDeniedHtml() {
                    dismissed with "Ours Is Fine" that reappears here as "eBay Is
                    Stale" reads as a different decision than the one made. -->
               <span class="lt-dn-as ${stale ? 'lt-dn-ebay' : ''}">${stale ? 'Ours Is Fine' : 'Not A Problem'}</span>
+              ${r.listerTag ? `<span class="lt-lister">${_ecEsc(_ltLister(r.listerTag))}</span>` : ''}
               <span>${_ecEsc(r.by || '')}${r.at ? ' · ' + when(r.at) : ''}</span>
             </div>
             ${r.note ? `<div class="lt-dn-note">${_ecEsc(r.note)}</div>` : ''}
@@ -46259,6 +46269,13 @@ function _ltRow(r) {
         <div class="ec-pills rc-links">
           ${numeric ? `<a class="ec-pill ec-pill-shopify" href="https://${shop}/admin/products/${numeric}"
                target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
+          <!-- ⚠️ WHO LISTED IT, FROM SHOPIFY'S OWN TAGS — and it is NOT a blame
+               badge, whatever it gets used for. The same name appears beside
+               rows where the TOOL was wrong; the three denial notes are the
+               proof. It is here so a pattern is visible.
+               Absent when no tag matched a person: a leaver, a typo, or a
+               product listed before the convention. Silence beats a guess. -->
+          ${r.listerTag ? `<span class="lt-lister" title="Listed by ${_ecEsc(_ltLister(r.listerTag))}, from this product's Shopify tags">${_ecEsc(_ltLister(r.listerTag))}</span>` : ''}
         </div>
         <div class="lt-acts">
           <!-- ⚠️ A ROW WITH NO SUGGESTION SAYS "Save My Title" BEFORE IT IS
