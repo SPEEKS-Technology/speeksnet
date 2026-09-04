@@ -268,6 +268,17 @@ const DATA = {
             bodyHidden: body ? getComputedStyle(body).display === 'none' : null,
             rows,
             tally: [...d.querySelectorAll('.lt-tally-row')].map(t => t.textContent.replace(/\s+/g, ' ').trim()),
+            askBar: (d.querySelector('.lt-ask-n') || {}).textContent || '',
+            askBtn: (d.querySelector('.lt-ask-btn') || {}).textContent || '',
+            // The bar has to sit ABOVE the tally: the tally is the argument
+            // ("3 dismissals of one rule") and the button is what to do about
+            // it, and an argument with its conclusion below the fold is a
+            // paragraph nobody acts on.
+            askAboveTally: (() => {
+                const bar = d.querySelector('.lt-ask-bar'), tal = d.querySelector('.lt-tally');
+                if (!bar || !tal) return null;
+                return !!(bar.compareDocumentPosition(tal) & Node.DOCUMENT_POSITION_FOLLOWING);
+            })(),
         };
     });
     ok(!!drawer, 'the drawer rendered');
@@ -285,6 +296,25 @@ const DATA = {
         ok(drawer.rows.every(r => r.undo), 'every row can be undone');
         ok(drawer.tally.length === 1, 'the tally shows only repeat offenders', drawer.tally.join(' | '));
         ok(/repeated/i.test(drawer.tally[0] || ''), 'and names the rule in English', drawer.tally[0]);
+
+        // --- the ask that goes to Claude ------------------------------------
+        // ⚠️ ONE of these two rows carries a note. The other is the "Ours Is
+        // Fine" dismissal, which says the rule was RIGHT and the stale copy is
+        // on eBay — not feedback about a rule, and counting it would send an ask
+        // to go and change the one thing working. Same exclusion the tally makes.
+        ok(/^1 dismissal /.test(drawer.askBar.trim()),
+           'the bar counts only the dismissal that explained a rule was wrong',
+           drawer.askBar.trim());
+        ok(/explained a rule was wrong/.test(drawer.askBar),
+           'and says what the note is FOR, not that a row was dismissed');
+        // ⚠️ "Copy", NOT "Send". Nothing here reaches Claude on its own — the
+        // tool has no way to run one — and a button that implied otherwise would
+        // leave people waiting on an answer that was never coming.
+        ok(/Copy The Ask/.test(drawer.askBtn), 'the button says Copy', drawer.askBtn.trim());
+        ok(!/\bSend\b|\bAsk Claude\b/.test(drawer.askBtn),
+           'and never promises to send it anywhere', drawer.askBtn.trim());
+        ok(drawer.askAboveTally === true,
+           'the bar sits above the tally it acts on', String(drawer.askAboveTally));
     }
 
     console.log('== Undo ==');

@@ -24808,7 +24808,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -40031,6 +40031,17 @@ function _samReminderCfg() {
         title: 'Listings With No Pictures',
         urgency: 2, due: 'Action', cls: 'sam-due-red',
         action: "window.location.href='operations.html#categories'" });
+    // Somebody dismissed a suggestion and wrote WHY the rule was wrong. Not an
+    // alarm — nothing is unbuyable and no customer can see it — but it is the
+    // only evidence this tool ever gets that a rule needs changing, and it went
+    // a full day unread sitting in a drawer. Urgency below both queues above it:
+    // a listing a shopper cannot buy outranks improving the thing that suggests
+    // titles. Indigo rather than red or amber, because it is not a backlog at
+    // all; it is somebody having done the extra work of explaining themselves.
+    cfg.push({ key: 'titleNoteAlert', id: 'titleNoteAlertBubble', text: 'titleNoteAlertBubbleText',
+        title: 'Someone Said Why A Title Rule Was Wrong',
+        urgency: 0, due: 'Action', cls: 'sam-due-amber',
+        action: "window.location.href='operations.html#categories'" });
     return cfg;
 }
 
@@ -45750,6 +45761,79 @@ const _LT_CODE_SAYS = {
     'model-not-found': 'Model not confirmed on eBay',
 };
 
+// --- the ask that goes to Claude ---------------------------------------------
+// ⚠️ THE NOTES WERE ALREADY BEING WRITTEN AND NOBODY WAS READING THEM ON A
+// SCHEDULE. A denial with a note is the only evidence a rule is wrong, and it
+// has been landing in a drawer three clicks down. This button turns the pile
+// into one thing to paste: grouped by the rule that fired, with the listing's
+// own fields beside each note, so the ask is specific enough to be argued with.
+//
+// ⚠️ IT COPIES, IT DOES NOT SEND. Nothing here reaches Claude on its own — the
+// tool has no way to run one — and a button that implied otherwise would leave
+// people waiting on an answer that was never coming. It says Copy.
+let _ltAskBusy = false;
+
+async function ltCopyAsk() {
+    if (_ltAskBusy) return;
+    _ltAskBusy = true; ecRender();
+    let fb;
+    try {
+        fb = await _ltFetch('?view=feedback&days=30');
+    } catch (e) {
+        _ltAskBusy = false; ecRender();
+        await _ltTell('Could Not Gather The Notes', e.message || String(e));
+        return;
+    }
+    _ltAskBusy = false; ecRender();
+    if (!fb.total) {
+        await _ltTell('No Notes To Ask About',
+            'Nothing has been dismissed with a note in the last 30 days. The note'
+            + ' box on a dismissal is what this reads — a dismissal with no note'
+            + ' cannot say which rule was wrong.', 'good');
+        return;
+    }
+    // ⚠️ SHOWN BEFORE IT IS COPIED. This is going to be pasted into a chat, and
+    // it names stores, SKUs and the person who denied each row. Anyone sending
+    // it should have read it first.
+    const settled = fb.settled;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Listing Titles',
+        title: `Copy The Ask For ${fb.total} Dismissed Row${fb.total === 1 ? '' : 's'}?`,
+        body: `<p class="lt-ask-say">Grouped by the rule that raised them, with each
+                listing's own spec fields beside the note.
+                ${settled ? `<b>${settled} of ${fb.total}</b> look like the rule
+                 overruled a fact the listing already records.` : ''}
+                Paste it to Claude — nothing is sent from here, and nothing on any
+                listing changes.</p>
+               <pre class="lt-ask-pre">${_ecEsc(fb.ask || '')}</pre>`,
+        go: 'Copy It', cancel: 'Close' });
+    if (!said) return;
+    try {
+        await navigator.clipboard.writeText(fb.ask || '');
+        // ⚠️ THE MARK IS WRITTEN SERVER-SIDE, and only after the copy actually
+        // succeeded. A localStorage high-water mark is what made the recycle
+        // reply card clear on one machine and stay up on every other (fixed
+        // 2026-09-04, 9cd1e46) — this is the same shape and must not repeat it.
+        // Stamping the exact rows the ask carried, not a time window, so a note
+        // written while it was being read is not swallowed.
+        await _ltPost({ action: 'triaged', store: _ecStore, keys: fb.keys || [] });
+        try { _ltData = await _ltFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`); }
+        catch (_) { /* the copy is what mattered; the drawer catches up on reload */ }
+        ecRender();
+        if (typeof checkTitleNoteReminders === 'function') checkTitleNoteReminders();
+        await _ltTell('Copied', 'Paste it into Claude. It says which file to change'
+            + ' and asks for the reasoning before any rule moves. These notes are'
+            + ' marked as read, so the next ask only carries new ones.', 'good');
+    } catch (_e) {
+        // A denied clipboard permission is common enough that failing silently
+        // would read as the button doing nothing.
+        await _ltTell('Could Not Reach The Clipboard',
+            'Your browser refused the copy. Select the text in the box above and'
+            + ' copy it by hand.');
+    }
+}
+window.ltCopyAsk = ltCopyAsk;
+
 function _ltDeniedHtml() {
     const d = _ltData && _ltData.denied;
     if (!d || !(d.rows || []).length) return '';
@@ -45762,6 +45846,13 @@ function _ltDeniedHtml() {
     // the fix lives in Marketplace Connect; counting them would make title-drift
     // look like our worst rule exactly when it was doing its job.
     const tally = (d.tally || []).filter(t => t.n >= 2);
+    // ⚠️ SAME EXCLUSION AS THE TALLY. "Ours Is Fine" says the rule was RIGHT and
+    // the stale copy is on eBay, so its note is not feedback about a rule and
+    // must not be counted into an ask to go and change one.
+    // ⚠️ AND NOT ALREADY CARRIED INTO AN ASK. Counting every note ever written
+    // would leave the bar up forever, which is how a nag stops being read.
+    const noted = d.rows.filter(r => r.as !== 'ebay-stale' && (r.note || '').trim()
+                                  && !r.triagedAt).length;
     const tallyHtml = tally.length
         ? `<div class="lt-tally">
              <div class="lt-tally-h">Confirmed Correct More Than Once — Worth A Look At The Rule</div>
@@ -45799,6 +45890,15 @@ function _ltDeniedHtml() {
            also the more inviting word: this drawer is a record of work done, not
            a bin of things brushed aside. -->
       <summary>${d.rows.length} Confirmed Correct</summary>
+      <!-- ⚠️ THE NOTE IS THE ONLY EVIDENCE A RULE IS WRONG, and it has been
+           landing in here where nobody reads it on a schedule. This turns the
+           pile into one thing to paste. It says Copy because nothing is sent
+           from the browser — see ltCopyAsk. -->
+      ${noted ? `<div class="lt-ask-bar">
+        <span class="lt-ask-n">${noted} dismissal${noted === 1 ? '' : 's'} explained a rule was wrong</span>
+        <button class="lt-ask-btn" onclick="ltCopyAsk()" ${_ltAskBusy ? 'disabled' : ''}
+                title="Gather the notes and write the ask for Claude">${_ltAskBusy ? 'Gathering…' : 'Copy The Ask For Claude'}</button>
+      </div>` : ''}
       ${tallyHtml}
       <div class="lt-dn-rows">${rows}</div>
     </details>`;
@@ -46922,6 +47022,7 @@ window._dbgRecat = () => ({
 // and new stock breaks through it (see [[feed-suppression-keys]]).
 const RECAT_NAG_MS = 30 * 60 * 1000;
 let _rcNagStarted = false;
+let _ltNagStarted = false;
 
 function _rcHideNag() {
     const b = document.getElementById('recatAlertBubble');
@@ -46947,6 +47048,92 @@ function _rcNagBubbleEl() {
     anchor.parentElement.appendChild(b);
     return b;
 }
+
+// --- Somebody dismissed a suggestion and said why ---------------------------
+//
+// A denial with a note is the ONLY evidence a rule is wrong, and it was landing
+// in a drawer three clicks down that nobody opened on a schedule. Three real
+// notes sat there for a day before anyone read them, and two of the three were
+// the same fixable bug.
+//
+// ⚠️ THE DM ONLY. Managers and ASMs are the ones WRITING these notes; telling a
+// manager that a note exists tells them what they just did. The person on the
+// hook for a rule is the DM — the same rule the recycle review card follows,
+// and the same reason the CEO is left off it: authority inside the tool without
+// the nagging.
+//
+// ⚠️ STATE-BASED, WITH THE STATE ON THE SERVER. It clears when the notes are
+// carried into an ask (feedback_triaged_at, migration 0077), not when somebody
+// looks at the page. A localStorage high-water mark is what made the recycle
+// reply card clear on one machine and stay up on every other.
+//
+// ⚠️ The bubble id has to be in the RETIRED FLOATING ALERT TOASTS list in
+// styles.css or it ships as a visible floating toast. It is there.
+function _ltHideNag() {
+    const b = document.getElementById('titleNoteAlertBubble');
+    if (b) b.style.display = 'none';
+}
+window._ltHideNag = _ltHideNag;
+
+function _ltNagBubbleEl() {
+    let b = document.getElementById('titleNoteAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'titleNoteAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #4338ca, #312e81); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(49, 46, 129, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span style="font-size:16px; flex-shrink:0; margin-top:2px;">📝</span>
+        <span id="titleNoteAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="_ltHideNag()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+// Its OWN fetch, unlike the photo alarm — that one rides the Categories payload
+// because both numbers come from the recat function, and this number comes from
+// listing-titles. ?view=counts is a count with no Shopify read in it; the
+// gathering half is fetched only when the button is pressed.
+async function checkTitleNoteReminders() {
+    if (!document.getElementById('samFeed')) return;
+    if (typeof _jumpFeatureVisible === 'function' && !_jumpFeatureVisible('ec-view-titles')) {
+        _ltHideNag(); return;
+    }
+    if (typeof _vrRole === 'function' && _vrRole() !== 'district manager') { _ltHideNag(); return; }
+    if (!sessionStorage.getItem('speeksUserPin')) { _ltHideNag(); return; }
+    if (!_ltNagStarted) { _ltNagStarted = true; setInterval(checkTitleNoteReminders, 30 * 60 * 1000); }
+    let d = null;
+    try { d = await _ltFetch('?view=counts'); } catch (_) { return; }  // a 401 is a role answer, not an error
+    const n = Number(d && d.noted || 0);
+    if (!n) {
+        _ltHideNag();
+        // The feed only repaints when something asks it to, so a card that has
+        // just been answered has to be cleared here or it sits in the DOM.
+        if (typeof renderActionFeed === 'function') renderActionFeed();
+        return;
+    }
+    const b = _ltNagBubbleEl();
+    if (!b) return;
+    const t = document.getElementById('titleNoteAlertBubbleText');
+    if (t) {
+        // Says what the note IS FOR, not that a row was dismissed. "3 titles
+        // dismissed" reads as work finished; the point is that somebody has
+        // told us a rule is wrong and nothing has been done about it yet.
+        t.dataset.summary = n + ' dismissed title suggestion' + (n === 1 ? '' : 's')
+            + ' came with a note saying why the rule was wrong.'
+            + ' Open SPEEKS Connect → Listing Health → Confirmed Correct and press'
+            + ' Copy The Ask For Claude.';
+        // The count IS the identity, same as the Categories and photo nags:
+        // answer two of three and the third is new information worth surfacing.
+        t.dataset.sig = 'titlenotes:' + n;
+        t.textContent = t.dataset.summary;
+    }
+    b.style.display = 'flex';
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+window.checkTitleNoteReminders = checkTitleNoteReminders;
 
 // --- Listings live on the online store with no picture ----------------------
 //

@@ -9961,7 +9961,11 @@ body.sam-active .hotbar-btn:hover {
 #recatAlertBubble,
 /* Added 2026-08-25 with the no-pictures alarm, listed here in the same commit
    that created it — see the note above for what happens otherwise. */
-#photoAlertBubble {
+#photoAlertBubble,
+/* Added 2026-09-04 with the dismissed-with-a-note card, listed here in the
+   same commit that created it — see the note above for what happens
+   otherwise. */
+#titleNoteAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -18097,6 +18101,31 @@ body.tv-body { display: block; background: #eef1f5; }
 .lt-denied summary:hover { color: var(--cb-muted); }
 
 /* The one sentence in the drawer worth acting on: which RULE keeps being wrong. */
+/* The ask that goes to Claude. Sits above the tally because it is the ACTION
+   the tally argues for, and a person who reads "3 dismissals of one rule" and
+   then has to hunt for what to do about it does nothing. */
+.lt-ask-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    flex-wrap: wrap; margin: 10px 0 0; padding: 9px 12px; border-radius: 9px;
+    background: #eef2ff; border: 1px solid #c7d2fe;
+}
+.lt-ask-n { font-size: 11.5px; font-weight: 700; color: #3730a3; }
+.lt-ask-btn {
+    padding: 6px 12px; border-radius: 7px; border: 1px solid #4f46e5;
+    background: #4f46e5; color: #fff; font-size: 11.5px; font-weight: 800;
+    font-family: inherit; cursor: pointer; white-space: nowrap;
+}
+.lt-ask-btn:hover:not(:disabled) { background: #4338ca; border-color: #4338ca; }
+.lt-ask-btn:disabled { opacity: .55; cursor: default; }
+/* The ask itself, shown before it is copied — it names stores, SKUs and the
+   person who denied each row, and anyone pasting it should have read it. Fixed
+   height so a long pile cannot push the Copy button off the screen. */
+.lt-ask-pre {
+    margin: 10px 0 0; padding: 10px 12px; max-height: 300px; overflow: auto;
+    background: #0f172a; color: #e2e8f0; border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px; line-height: 1.55; white-space: pre; tab-size: 2;
+}
 .lt-tally {
     margin: 10px 0 4px; padding: 10px 12px; border-radius: 9px;
     background: #fffbeb; border: 1px solid #fde68a;

@@ -2987,7 +2987,7 @@ async function deniedFor(store: string) {
   const d: any[] = await rows(
     `listing_title_reviews?store_code=eq.${store}&status=eq.denied`
     + `&select=product_id,sku,current_title,ebay_title,findings,severity,`
-    + `decided_by,decided_at,decided_as,decided_note`
+    + `decided_by,decided_at,decided_as,decided_note,feedback_triaged_at`
     + `&order=decided_at.desc&limit=100`);
   const tally: Record<string, number> = {};
   for (const r of d) {
@@ -3004,11 +3004,284 @@ async function deniedFor(store: string) {
       findings: r.findings || [], severity: r.severity,
       by: r.decided_by, at: r.decided_at,
       as: r.decided_as, note: r.decided_note,
+      // So the drawer's "N dismissals explained a rule was wrong" counts what is
+      // still un-answered rather than everything ever written.
+      triagedAt: r.feedback_triaged_at || null,
     })),
     // Sorted so the rule most often dismissed is the first thing read.
     tally: Object.entries(tally).sort((a, b) => b[1] - a[1])
       .map(([code, n]) => ({ code, n })),
   };
+}
+
+// --- rule feedback: the denials that carry a note ---------------------------
+// A denial with a note is the ONLY evidence a rule is wrong, and until now it
+// landed in a drawer that nobody reads on a schedule. This turns that pile into
+// one thing to ask for: grouped by the RULE that fired, with the listing's own
+// fields beside each note, and the mechanical half of the triage already done.
+//
+// ⚠️ GROUPED BY RULE, NOT BY ROW. One denial is an anecdote; three of the same
+// code is a rule to go and fix. A per-row list hands over the same amount of
+// text and none of the signal.
+//
+// ⚠️ 'ebay-stale' IS NOT FEEDBACK ABOUT A RULE. It says the rule was RIGHT and
+// the stale copy is on eBay. deniedFor's tally already refuses to count those,
+// and folding them in here would ask for a fix to the one thing working.
+//
+// ⚠️ THE MECHANICAL HALF ONLY. `saysItself` compares the words the suggestion
+// CHANGED against the values the listing already records, which is a lookup and
+// not a reading of the note. Nothing here interprets the reviewer's English:
+// free text written fast at a counter is not a safe input to a rule change, and
+// a tool that quietly rewrote its own rules from a misread sentence would get
+// worse in a way nobody could see.
+
+// The fields that identify an item, in the order a person would check them.
+// Anything else is pulled in only when it holds the words under dispute.
+const IDENTITY_SPECS = [
+  "Brand", "Model", "MPN", "Platform", "Type", "Sub-Collection", "Collection",
+  "Release Year", "Storage Capacity", "Screen Size", "Processor", "Color",
+];
+
+// ⚠️ MIRRORS _LT_CODE_SAYS IN speeks.js. Same words the panel shows a reviewer,
+// so the ask names a rule the way the person denying it saw it named. A code
+// missing from here still works: the heading falls back to the code itself.
+//
+// ⚠️ NOT THE FINDING'S OWN `says`. That is written per ROW — the name checks
+// produce a paragraph about one product ("Black Ops II released on Xbox 360 in
+// 2012…") — so using it as the heading named the whole rule after whichever row
+// happened to be first. It belongs under the row, which is where it now goes.
+const CODE_LABEL: Record<string, string> = {
+  "name-wrong": "Name checked against outside knowledge",
+  "name-garbled": "Name looks misspelled",
+  "missing-screen-size": "Screen size missing from the title",
+  "repeated-phrase": "A phrase repeated in the title",
+  "title-drift": "Shopify and eBay disagree",
+  "ebay-not-synced": "eBay has not picked up our fix",
+  "missing-noun": "No noun saying what the thing is",
+  "truncated-title": "Title cut off mid-word",
+  "lazy-title": "Specs in the listing but not the title",
+  "spec-conflict": "Title contradicts the spec table",
+  "hardware-conflict": "Two impossible specs together",
+  "brand-not-found": "Brand not found on eBay",
+  "model-not-found": "Model not confirmed on eBay",
+};
+
+type FbRow = {
+  store: string; sku: string | null; productId: string;
+  current: string; suggested: string | null;
+  note: string; by: string | null; at: string | null;
+  codes: string[]; said: string[]; was: string; now: string;
+  specs: Record<string, string>;
+  saysItself: { field: string; value: string } | null;
+};
+
+// Does the listing itself already state the words the suggestion took out?
+//
+// ⚠️ NOT A WHOLE-RUN TEST. The changed run is whatever sits between the matching
+// head and tail, and that is regularly TWO FACTS GLUED TOGETHER by punctuation:
+// "Black Ops II (Xbox One, 2018)" against "(Xbox 360, 2012)" leaves a run of
+// `One, 2018)`, which no single field can contain even though the listing states
+// both halves (Platform = Microsoft Xbox One, Release Year = 2018). Testing the
+// whole run found the Lenovo case, whose run happened to be one token, and
+// silently missed the Xbox one. So every contiguous window of the run is tried,
+// longest first, and the longest fragment any field states wins.
+//
+// ⚠️ WHOLE TOKENS, NOT SUBSTRINGS. A normalised `includes` makes "one" match
+// "iPhone" and "pro" match "processor" — every short window would find a field
+// somewhere and the hint would fire on coincidences. The comparison is a
+// contiguous run of whole tokens inside the field's own tokens.
+//
+// ⚠️ A ONE-TOKEN WINDOW MUST BE 3+ CHARACTERS. "4K" or "II" alone is in half the
+// catalogue and is never evidence that a rule overruled the listing.
+function listingSaysItself(was: string, specs: Record<string, string>) {
+  const w = tokens(was);
+  if (!w.length) return null;
+  const fields = Object.entries(specs)
+    .map(([field, value]) => ({ field, value: String(value || ""), t: tokens(String(value || "")) }))
+    .filter(f => f.t.length);
+  if (!fields.length) return null;
+  const holds = (hay: string[], needle: string[]) => {
+    for (let i = 0; i + needle.length <= hay.length; i++) {
+      let hit = true;
+      for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) { hit = false; break; }
+      if (hit) return true;
+    }
+    return false;
+  };
+  for (let len = w.length; len >= 1; len--) {
+    for (let i = 0; i + len <= w.length; i++) {
+      const frag = w.slice(i, i + len);
+      if (len === 1 && frag[0].length < 3) continue;
+      for (const f of fields) {
+        if (holds(f.t, frag)) return { field: f.field, value: f.value, matched: frag.join(" ") };
+      }
+    }
+  }
+  return null;
+}
+
+// How many notes nobody has carried into an ask yet. The deck's card is built
+// on this and nothing else, so it must stay a single cheap count.
+async function notedCount(stores: string[]) {
+  let n = 0;
+  for (const store of stores) {
+    const d: any[] = await rows(
+      `listing_title_reviews?store_code=eq.${store}&status=eq.denied`
+      + `&decided_as=eq.not-a-problem&decided_note=not.is.null`
+      + `&feedback_triaged_at=is.null&select=product_id&limit=200`);
+    n += d.length;
+  }
+  return n;
+}
+
+async function feedbackFor(stores: string[], days: number) {
+  const since = new Date(Date.now() - days * 86400e3).toISOString();
+  const out: FbRow[] = [];
+  // The rule's own sentence, kept from the first finding that carries it, so the
+  // ask names the rule the way the panel named it to the person who denied it.
+  for (const store of stores) {
+    const d: any[] = await rows(
+      `listing_title_reviews?store_code=eq.${store}&status=eq.denied`
+      + `&decided_as=eq.not-a-problem&decided_note=not.is.null`
+      // ⚠️ UN-TRIAGED ONLY. Without this the same three notes are handed over
+      // every time the button is pressed, and an ask that repeats itself is one
+      // people stop reading.
+      + `&feedback_triaged_at=is.null`
+      + `&decided_at=gte.${since}`
+      + `&select=product_id,sku,current_title,suggested_title,findings,`
+      + `decided_by,decided_at,decided_note&order=decided_at.desc&limit=40`);
+    if (!d.length) continue;
+    // The listing's own fields, which is the whole point — the note says "it is
+    // an Xbox One version" and the answer is sitting in the spec table.
+    let extras: Record<string, Extra> = {};
+    try {
+      const { shop, token } = await shopFor(store);
+      extras = await extrasFor(shop, token, d.map((r: any) => r.product_id));
+    } catch (_e) { /* the notes are still worth reading without them */ }
+    for (const r of d) {
+      const specs = extras[r.product_id]?.specs || {};
+      const run = titleRun(String(r.current_title || ""), String(r.suggested_title || ""));
+      const keep: Record<string, string> = {};
+      for (const k of IDENTITY_SPECS) if (specs[k]) keep[k] = specs[k];
+      // Plus whatever field holds the words in dispute, wherever it lives.
+      for (const [k, v] of Object.entries(specs)) {
+        if (keep[k]) continue;
+        const nv = norm(String(v || ""));
+        if (!nv) continue;
+        if ((run.was && nv.includes(norm(run.was)))
+            || (run.now && nv.includes(norm(run.now)))) keep[k] = v;
+      }
+      out.push({
+        store, sku: r.sku, productId: r.product_id,
+        current: String(r.current_title || ""),
+        suggested: r.suggested_title || null,
+        note: String(r.decided_note || ""), by: r.decided_by, at: r.decided_at,
+        codes: (r.findings || []).map((f: any) => String(f?.code || "")).filter(Boolean),
+        // What the tool told the reviewer about THIS row, which is the half of
+        // the disagreement the note is answering.
+        said: (r.findings || []).map((f: any) => String(f?.says || "")).filter(Boolean),
+        was: run.was, now: run.now,
+        specs: keep,
+        saysItself: listingSaysItself(run.was, specs),
+      });
+    }
+  }
+  // Group by the rule that fired. A row with two findings appears under both:
+  // which of them the reviewer was answering cannot be known from here, and
+  // dropping it from one would hide the evidence under the other.
+  const groups: Record<string, FbRow[]> = {};
+  for (const r of out) {
+    for (const c of (r.codes.length ? r.codes : ["(no code)"])) {
+      (groups[c] = groups[c] || []).push(r);
+    }
+  }
+  return {
+    days, stores,
+    // What to stamp when the ask is taken. Exactly the rows that were shown —
+    // stamping by a time window instead would swallow a note written while the
+    // reviewer was reading.
+    keys: out.map(r => ({ store: r.store, productId: r.productId })),
+    total: out.length,
+    settled: out.filter(r => r.saysItself).length,
+    groups: Object.entries(groups)
+      .sort((a, b) => b[1].length - a[1].length)
+      .map(([code, rws]) => ({ code, n: rws.length, rows: rws })),
+  };
+}
+
+// The ask itself — plain text, built HERE rather than in the panel so the
+// wording lives in one place and can be improved without a cache bust.
+//
+// ⚠️ IT HAS TO STAND ON ITS OWN. This gets pasted into a fresh session that has
+// never seen this function, so it says what tool it is about, what is being
+// asked, and what every line of evidence means. A prompt that assumes context
+// is a prompt that gets a confident answer about the wrong thing.
+function buildAsk(fb: Awaited<ReturnType<typeof feedbackFor>>): string {
+  const L: string[] = [];
+  const when = (t: string | null) => {
+    const d = t ? new Date(t) : null;
+    return d && !isNaN(d.getTime())
+      ? d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+  };
+  L.push(`SPEEKS Listing Titles — rule feedback from the review queue`);
+  L.push(`${fb.stores.join(", ")} · last ${fb.days} days · ${fb.total} denial${fb.total === 1 ? "" : "s"} with a note`);
+  L.push(``);
+  L.push(`A reviewer read each of these titles, decided our suggestion was wrong,`);
+  L.push(`and wrote why. For each RULE below, read the notes against the listing's`);
+  L.push(`own fields and tell me which it is:`);
+  L.push(``);
+  L.push(`  A. THE RULE IS WRONG — change it in supabase/functions/listing-titles/`);
+  L.push(`     index.ts, add the case to the offline harness, and deploy.`);
+  L.push(`  B. THE LISTING CONTRADICTS ITSELF — two of its own fields disagree, so`);
+  L.push(`     no rule can settle it. Say which fields, and it goes on the list for`);
+  L.push(`     a person (photo review, when that exists).`);
+  L.push(`  C. THE REVIEWER WAS MISTAKEN — the rule was right. Say so plainly and`);
+  L.push(`     say what would have made the suggestion easier to trust.`);
+  L.push(``);
+  L.push(`The "THE LISTING ITSELF ALREADY SAYS THIS" line is a mechanical check already`);
+  L.push(`run for you: the words the suggestion took OUT, found as whole words in one`);
+  L.push(`of the listing's own spec fields. Where it appears, the rule very likely`);
+  L.push(`overruled the listing from outside knowledge — but it is a hint, not a verdict.`);
+  L.push(``);
+  L.push(`Nothing here has been changed. Do not approve or write any title.`);
+  for (const g of fb.groups) {
+    L.push(``);
+    L.push(`${"=".repeat(72)}`);
+    L.push(`RULE: ${g.code}${CODE_LABEL[g.code] ? ` — ${CODE_LABEL[g.code]}` : ""}`);
+    L.push(`${g.n} denial${g.n === 1 ? "" : "s"}`);
+    L.push(`${"=".repeat(72)}`);
+    let i = 0;
+    for (const r of g.rows) {
+      i++;
+      L.push(``);
+      L.push(`${i}. ${r.store} · ${r.sku || "(no sku)"}${r.by ? ` · denied by ${r.by}` : ""}${r.at ? ` on ${when(r.at)}` : ""}`);
+      L.push(`   NOTE:       "${r.note}"`);
+      for (const said of (r.said || [])) L.push(`   WE SAID:    ${said}`);
+      L.push(`   TITLE NOW:  ${r.current}`);
+      if (r.suggested) L.push(`   SUGGESTED:  ${r.suggested}`);
+      if (r.was || r.now) {
+        L.push(`   CHANGED:    "${r.was || "(nothing)"}" -> "${r.now || "(removed)"}"`);
+      }
+      if (r.saysItself) {
+        L.push(`   ⚠ THE LISTING ITSELF ALREADY SAYS THIS — ${r.saysItself.field} = ${r.saysItself.value}`);
+      } else if (r.was) {
+        L.push(`   (no field in the listing states "${r.was}" — nothing here settles it)`);
+      }
+      const keys = Object.keys(r.specs);
+      if (keys.length) {
+        L.push(`   THE LISTING'S OWN FIELDS:`);
+        const pad = Math.min(Math.max(...keys.map(k => k.length)), 20);
+        for (const k of keys) L.push(`     ${k.padEnd(pad)} = ${r.specs[k]}`);
+      } else {
+        L.push(`   THE LISTING'S OWN FIELDS: none readable (no spec table on this product)`);
+      }
+    }
+  }
+  L.push(``);
+  L.push(`${"=".repeat(72)}`);
+  L.push(`When you have decided, say which bucket each rule fell in before changing`);
+  L.push(`anything, so the call can be argued with.`);
+  return L.join("\n");
 }
 
 // ⚠️ THE QUEUE'S THIRD SCOPE RULE IS CONDITIONAL, AND THE PANEL HAS TO SAY SO.
@@ -3697,6 +3970,38 @@ async function echoSweep(store: string, limit: number) {
 async function handlePost(req: Request, scope: Scope) {
   const body = await req.json().catch(() => ({}));
   const action = String(body.action || "");
+  // --- the notes have been carried into an ask ------------------------------
+  // ⚠️ BEFORE THE store / productId GATES BELOW, because this acts on a LIST
+  // spanning every store the reviewer holds — one ask covers the whole estate,
+  // which is the point of grouping by rule rather than by row.
+  //
+  // ⚠️ IT MARKS THE NOTE READ, NOT THE RULE FIXED. Whether the rule then changed
+  // is decided in a conversation this function cannot see. Stamping anything
+  // stronger would let the panel claim a fix that never happened.
+  if (action === "triaged") {
+    const keys = Array.isArray(body.keys) ? body.keys : [];
+    if (!keys.length) return json({ error: "keys required" }, 400);
+    const stamp = { feedback_triaged_at: new Date().toISOString(),
+                    feedback_triaged_by: scope.name };
+    let n = 0;
+    for (const k of keys.slice(0, 60)) {
+      const st = String(k?.store || "").toUpperCase();
+      const pid = String(k?.productId || "");
+      // A store outside the reviewer's scope is skipped rather than refused: the
+      // ask they were shown was built from their own scope, so a mismatch means
+      // a stale tab, and failing the whole batch would leave the card up with no
+      // way to clear it.
+      if (!st || !pid || !scope.stores.includes(st)) continue;
+      await sb(`listing_title_reviews?store_code=eq.${st}&product_id=eq.${encodeURIComponent(pid)}`
+               + `&status=eq.denied`, {
+        method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(stamp),
+      });
+      n++;
+    }
+    return json({ ok: true, triaged: n });
+  }
+
   const store = String(body.store || "").toUpperCase();
   if (!scope.stores.includes(store)) {
     return json({ error: "forbidden", detail: `not your store: ${store}` }, 403);
@@ -4019,7 +4324,8 @@ Deno.serve(async (req: Request) => {
     const pin = req.headers.get("x-user-pin") || "";
     const view = url.searchParams.get("view") || "";
 
-    if (req.method === "POST" || view === "review" || view === "counts") {
+    if (req.method === "POST" || view === "review" || view === "counts"
+        || view === "feedback") {
       const scope = await scopeFor(pin);
       // A stale sessionStorage PIN outlives a PIN change and lands exactly here.
       if (!scope) {
@@ -4029,11 +4335,26 @@ Deno.serve(async (req: Request) => {
       if (req.method === "POST") return await handlePost(req, scope);
 
       if (view === "counts") {
-        const [open, worst] = await Promise.all([totals(scope.stores), worstFor(scope.stores)]);
+        // ⚠️ COUNT ONLY, NO SHOPIFY READ. This runs on a timer on the deck; the
+        // gathering half (?view=feedback) costs a product read per store and is
+        // fetched only when somebody asks for the ask.
+        const [open, worst, noted] = await Promise.all([
+          totals(scope.stores), worstFor(scope.stores), notedCount(scope.stores)]);
         return json({
           scope: { name: scope.name, role: scope.role, stores: scope.stores, corp: scope.corp },
-          titles: open, titlesWorst: worst,
+          titles: open, titlesWorst: worst, noted,
         });
+      }
+
+      // ?view=feedback — the denials that carry a note, grouped by rule, with
+      // the listing's own fields and a ready-to-paste ask. Read-only, and
+      // deliberately NOT part of the review payload: it costs a Shopify read per
+      // store and the panel loads it only when somebody asks for it.
+      if (view === "feedback") {
+        const days = Math.min(Math.max(Number(url.searchParams.get("days") || 30), 1), 180);
+        const fb = await feedbackFor(scope.stores, days);
+        return json({ scope: { name: scope.name, role: scope.role, stores: scope.stores },
+                      ...fb, ask: buildAsk(fb) });
       }
 
       const asked = (url.searchParams.get("store") || "").toUpperCase();
@@ -4172,6 +4493,31 @@ Deno.serve(async (req: Request) => {
     // is where PayMore keeps the product word. This prints the whole
     // Sub-Collection vocabulary per store so that answer is measured across five
     // catalogues rather than inferred from the one row that raised the question.
+    // --- the same ask, dry, without a PIN -----------------------------------
+    // ?feedback=1&store=OVL,LEE&secret=[&days=]  — READ ONLY, and deliberately
+    // separate from ?view=feedback: the panel route is what a reviewer presses
+    // and it STAMPS the notes as read afterwards. This one never writes, so the
+    // gathering half can be dry-run against live data the way every other half
+    // of this function was measured before it was allowed near a catalogue.
+    if (url.searchParams.get("feedback")) {
+      if (url.searchParams.get("secret") !== SECRET) {
+        return json({ error: "forbidden" }, 403);
+      }
+      const asked = (url.searchParams.get("store") || "").toUpperCase();
+      const stores = asked && asked !== "ALL"
+        ? asked.split(",").map(x => x.trim()).filter(Boolean)
+        : ["OVL", "LEE", "WSP", "MPL", "BAL"];
+      const days = Math.min(Math.max(Number(url.searchParams.get("days") || 30), 1), 180);
+      const fb = await feedbackFor(stores, days);
+      // &text=1 prints the ask itself rather than the JSON around it, which is
+      // the whole thing being checked.
+      if (url.searchParams.get("text")) {
+        return new Response(buildAsk(fb),
+          { headers: { ...corsHeaders, "Content-Type": "text/plain; charset=utf-8" } });
+      }
+      return json({ ...fb, ask: buildAsk(fb) });
+    }
+
     if (url.searchParams.get("nouns")) {
       if (url.searchParams.get("secret") !== SECRET) {
         return json({ error: "forbidden" }, 403);
