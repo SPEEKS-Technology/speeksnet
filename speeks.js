@@ -40041,7 +40041,12 @@ function _samReminderCfg() {
     // titles. Indigo rather than red or amber, because it is not a backlog at
     // all; it is somebody having done the extra work of explaining themselves.
     cfg.push({ key: 'titleNoteAlert', id: 'titleNoteAlertBubble', text: 'titleNoteAlertBubbleText',
-        title: 'Someone Said Why A Title Rule Was Wrong',
+        // ⚠️ NAME THE PLACE, NOT THE EVENT. "Someone Said Why A Title Rule Was
+        // Wrong" described what happened and left the reader working out where
+        // to go. The card's job is to name the tool it opens. (Ethan, 2026-09-04:
+        // "simplify the notification title ... to just say like Listing Health
+        // Notes or something easy like that".)
+        title: 'Listing Health Notes',
         urgency: 0, due: 'Action', cls: 'sam-due-amber',
         // ⚠️ THE TOOL, NOT THE PAGE. This pointed at operations.html#categories
         // and left the reviewer standing on the right page with the thing the
@@ -43850,6 +43855,18 @@ function _expPad(s, n) {
     s = String(s == null ? '' : s);
     return s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length);
 }
+// ⚠️ ELLIPSIS, NOT A SILENT CHOP. _expPad cuts at the character, which left
+// "Dropping stuff off at LEE for eve" in an email somebody is reimbursed from.
+// A reader cannot tell a truncation from a typo.
+function _expClip(s, n) {
+    s = String(s == null ? '' : s).trim();
+    if (s.length <= n) return s;
+    const cut = s.slice(0, n - 1);
+    // Back off to the last whole word, unless that would leave almost nothing.
+    const sp = cut.lastIndexOf(' ');
+    return (sp > n * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + '…';
+}
+
 function _expPadL(s, n) {
     s = String(s == null ? '' : s);
     return s.length >= n ? s.slice(0, n) : ' '.repeat(n - s.length) + s;
@@ -43867,29 +43884,38 @@ function _expCompose() {
 
     if (mileageRows.length) {
         body += 'MILEAGE\n';
+        // ⚠️ THE ROUTE IS AN IRS FIELD AND GETS ITS OWN COLUMN. It used to be a
+        // FALLBACK for a missing description — so on every row that HAD one, and
+        // they all do, where the trip started and ended never printed at all.
+        // A mileage log has to carry the date, the destination and the business
+        // purpose; this was filing two of the three. (Ethan, 2026-09-04.)
+        body += '  ' + _expPad('DATE', 12) + _expPad('FROM / TO', 19)
+             + _expPad('PURPOSE', 31) + _expPadL('MILES', 9)
+             + _expPadL('RATE', 9) + _expPadL('AMOUNT', 12) + '\n';
         mileageRows.forEach(e => {
             const trip = [e.from_loc, e.to_loc].filter(Boolean).join(' to ');
-            body += '  ' + _expPad(_expDate(e.entry_date) + ' -', 13)
-                 + _expPad(e.description || trip || 'Trip', 33)
-                 + _expPadL((Number(e.miles) || 0) + ' mi', 10)
+            body += '  ' + _expPad(_expDate(e.entry_date), 12)
+                 + _expPad(_expClip(trip || '—', 17), 19)
+                 + _expPad(_expClip(e.description || 'Trip', 29), 31)
+                 + _expPadL((Number(e.miles) || 0) + ' mi', 9)
                  + _expPadL('@ $' + _expRate(e.rate), 9)
                  + _expPadL(_expMoney(e.amount), 12) + '\n';
         });
         // "Total" leads the row. Sitting it next to the amount instead put it
         // between the two figures, which read as "22 total 15.40".
-        body += '  ' + _expPad('Total', 46) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 10)
+        body += '  ' + _expPad('Total', 62) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 9)
              + _expPadL('', 9) + _expPadL(_expMoney(mileageTotal), 12) + '\n\n';
     }
 
     if (expenseRows.length) {
         body += 'EXPENSES\n';
         expenseRows.forEach(e => {
-            body += '  ' + _expPad(_expDate(e.entry_date) + ' -', 13)
-                 + _expPad(e.category || '', 26)
-                 + _expPad(e.description || '', 26)
+            body += '  ' + _expPad(_expDate(e.entry_date), 12)
+                 + _expPad(_expClip(e.category || '', 24), 26)
+                 + _expPad(_expClip(e.description || '', 32), 34)
                  + _expPadL(_expMoney(e.amount), 12) + '\n';
         });
-        body += '  ' + _expPad('Total', 65) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
+        body += '  ' + _expPad('Total', 72) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
     }
 
     if (!mileageRows.length && !expenseRows.length) {
@@ -45767,78 +45793,11 @@ const _LT_CODE_SAYS = {
     'model-not-found': 'Model not confirmed on eBay',
 };
 
-// --- the ask that goes to Claude ---------------------------------------------
-// ⚠️ THE NOTES WERE ALREADY BEING WRITTEN AND NOBODY WAS READING THEM ON A
-// SCHEDULE. A denial with a note is the only evidence a rule is wrong, and it
-// has been landing in a drawer three clicks down. This button turns the pile
-// into one thing to paste: grouped by the rule that fired, with the listing's
-// own fields beside each note, so the ask is specific enough to be argued with.
-//
-// ⚠️ IT COPIES, IT DOES NOT SEND. Nothing here reaches Claude on its own — the
-// tool has no way to run one — and a button that implied otherwise would leave
-// people waiting on an answer that was never coming. It says Copy.
-let _ltAskBusy = false;
-
-async function ltCopyAsk() {
-    if (_ltAskBusy) return;
-    _ltAskBusy = true; ecRender();
-    let fb;
-    try {
-        fb = await _ltFetch('?view=feedback&days=30');
-    } catch (e) {
-        _ltAskBusy = false; ecRender();
-        await _ltTell('Could Not Gather The Notes', e.message || String(e));
-        return;
-    }
-    _ltAskBusy = false; ecRender();
-    if (!fb.total) {
-        await _ltTell('No Notes To Ask About',
-            'Nothing has been dismissed with a note in the last 30 days. The note'
-            + ' box on a dismissal is what this reads — a dismissal with no note'
-            + ' cannot say which rule was wrong.', 'good');
-        return;
-    }
-    // ⚠️ SHOWN BEFORE IT IS COPIED. This is going to be pasted into a chat, and
-    // it names stores, SKUs and the person who denied each row. Anyone sending
-    // it should have read it first.
-    const settled = fb.settled;
-    const said = await _ltAsk({
-        kind: 'warn', eyebrow: 'Listing Titles',
-        title: `Copy The Ask For ${fb.total} Dismissed Row${fb.total === 1 ? '' : 's'}?`,
-        body: `<p class="lt-ask-say">Grouped by the rule that raised them, with each
-                listing's own spec fields beside the note.
-                ${settled ? `<b>${settled} of ${fb.total}</b> look like the rule
-                 overruled a fact the listing already records.` : ''}
-                Paste it to Claude — nothing is sent from here, and nothing on any
-                listing changes.</p>
-               <pre class="lt-ask-pre">${_ecEsc(fb.ask || '')}</pre>`,
-        go: 'Copy It', cancel: 'Close' });
-    if (!said) return;
-    try {
-        await navigator.clipboard.writeText(fb.ask || '');
-        // ⚠️ THE MARK IS WRITTEN SERVER-SIDE, and only after the copy actually
-        // succeeded. A localStorage high-water mark is what made the recycle
-        // reply card clear on one machine and stay up on every other (fixed
-        // 2026-09-04, 9cd1e46) — this is the same shape and must not repeat it.
-        // Stamping the exact rows the ask carried, not a time window, so a note
-        // written while it was being read is not swallowed.
-        await _ltPost({ action: 'triaged', store: _ecStore, keys: fb.keys || [] });
-        try { _ltData = await _ltFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`); }
-        catch (_) { /* the copy is what mattered; the drawer catches up on reload */ }
-        ecRender();
-        if (typeof checkTitleNoteReminders === 'function') checkTitleNoteReminders();
-        await _ltTell('Copied', 'Paste it into Claude. It says which file to change'
-            + ' and asks for the reasoning before any rule moves. These notes are'
-            + ' marked as read, so the next ask only carries new ones.', 'good');
-    } catch (_e) {
-        // A denied clipboard permission is common enough that failing silently
-        // would read as the button doing nothing.
-        await _ltTell('Could Not Reach The Clipboard',
-            'Your browser refused the copy. Select the text in the box above and'
-            + ' copy it by hand.');
-    }
-}
-window.ltCopyAsk = ltCopyAsk;
+// ⚠️ ONE PATH TO THE ASK, NOT TWO. This drawer used to gather the notes and copy
+// them itself, which meant the same job existed here AND in the Listing Health
+// tool — two confirm dialogs, two copies of the wording, and two things to keep
+// in step. The drawer keeps the COUNT, because that is the argument the tally
+// beside it is making; pressing it opens the tool that does the work.
 
 // --- SPEEKS Tool: Listing Health --------------------------------------------
 //
@@ -45880,6 +45839,12 @@ function _lhToolEl() {
 
 let _lhToolFb = null;
 
+function _lhWhen(t) {
+    const d = t ? new Date(t) : null;
+    return d && !isNaN(d.getTime())
+        ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+}
+
 async function openListingHealthTool() {
     _lhToolEl();
     closeAllModals();
@@ -45911,17 +45876,36 @@ function renderListingHealthTool() {
     const body = document.getElementById('listingHealthToolBody');
     if (!body) return;
     const fb = _lhToolFb;
-    if (!fb || !fb.total) {
+    if (!fb) return;
+    const n = fb.total;
+    // ⚠️ TAKEN, NOT GONE. Ethan asked whether wiping them on copy was the right
+    // call (2026-09-04). It is not: a note that disappears cannot be re-copied
+    // when a paste is lost, cannot be matched to the answer that comes back
+    // later, and tells the person who bothered to explain themselves that it
+    // went nowhere. They move here instead, shut, and out of the count.
+    const done = fb.done || [];
+    const doneHtml = done.length ? `
+      <details class="lh-tool-done">
+        <summary>${done.length} already sent</summary>
+        ${done.map(r => `<div class="lh-tool-done-row">
+          <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+          <span class="lh-tool-done-note">“${_ecEsc(r.note || '')}”</span>
+          <span class="lh-tool-done-when">${_lhWhen(r.takenAt)}</span>
+        </div>`).join('')}
+      </details>` : '';
+    // Nothing waiting. The already-sent list still renders under it, so the tool
+    // is never an empty box — and so a copy that has just happened leaves the
+    // notes visibly somewhere instead of appearing to delete them.
+    if (!n) {
         body.innerHTML = `<div class="lh-tool-clear">
           <span class="lh-tool-tick">✓</span>
-          <b>Every note has been answered.</b>
+          <b>Nothing waiting on you.</b>
           <span>When somebody dismisses a title suggestion and writes why the rule
            was wrong, it lands here. A dismissal with no note cannot say which rule
            to look at, so only the explained ones arrive.</span>
-        </div>`;
+        </div>${doneHtml}`;
         return;
     }
-    const n = fb.total;
     // Grouped by the rule that fired, the same way the ask is — one dismissal is
     // an anecdote, three of one code is a rule to go and fix, and a flat list of
     // rows hides that completely.
@@ -45965,10 +45949,7 @@ function renderListingHealthTool() {
         reasoning before any rule changes. Nothing is sent from here, and no
         listing changes.</p>
       ${groups}
-      <details class="lh-tool-raw">
-        <summary>See exactly what gets copied</summary>
-        <pre class="lt-ask-pre">${_ecEsc(fb.ask || '')}</pre>
-      </details>`;
+      ${doneHtml}`;
 }
 
 // Copies, then marks these notes read so the next ask carries only new ones.
@@ -45989,15 +45970,17 @@ async function lhToolCopy() {
     // ⚠️ ONLY AFTER THE COPY SUCCEEDED. Stamping first would mark notes read that
     // never reached anybody's clipboard, and there is no way back to them.
     await _ltPost({ action: 'triaged', store: (fb.stores || [])[0] || '', keys: fb.keys || [] });
-    _lhToolFb = null;
     if (typeof checkTitleNoteReminders === 'function') checkTitleNoteReminders();
+    // ⚠️ RE-READ AND RE-DRAW, don't paint a static message over the body. Doing
+    // that left a confirmation floating in a modal the height of the list it had
+    // replaced, and — worse — made the notes look deleted. Re-drawing puts them
+    // in "already sent" where they can be read and copied again.
+    try { _lhToolFb = await _ltFetch('?view=feedback&days=30'); }
+    catch (_) { _lhToolFb = { total: 0, groups: [], done: (fb.done || []) }; }
+    renderListingHealthTool();
     const body = document.getElementById('listingHealthToolBody');
-    if (body) body.innerHTML = `<div class="lh-tool-clear">
-      <span class="lh-tool-tick">✓</span>
-      <b>Copied. Paste it into Claude.</b>
-      <span>These notes are marked as read, so the next ask carries only new ones.
-       Nothing on any listing changed.</span>
-    </div>`;
+    if (body) body.insertAdjacentHTML('afterbegin', `<div class="lh-tool-copied">
+      Copied — paste it into Claude. Nothing on any listing changed.</div>`);
 }
 window.lhToolCopy = lhToolCopy;
 
@@ -46057,14 +46040,15 @@ function _ltDeniedHtml() {
            also the more inviting word: this drawer is a record of work done, not
            a bin of things brushed aside. -->
       <summary>${d.rows.length} Confirmed Correct</summary>
-      <!-- ⚠️ THE NOTE IS THE ONLY EVIDENCE A RULE IS WRONG, and it has been
-           landing in here where nobody reads it on a schedule. This turns the
-           pile into one thing to paste. It says Copy because nothing is sent
-           from the browser — see ltCopyAsk. -->
+      <!-- ⚠️ THE NOTE IS THE ONLY EVIDENCE A RULE IS WRONG, and it was landing
+           in here where nobody read it on a schedule. The COUNT belongs beside
+           the tally, which is the argument it is making; the work itself is the
+           Listing Health tool, so this opens that rather than doing the job a
+           second time in a second place. -->
       ${noted ? `<div class="lt-ask-bar">
         <span class="lt-ask-n">${noted} dismissal${noted === 1 ? '' : 's'} explained a rule was wrong</span>
-        <button class="lt-ask-btn" onclick="ltCopyAsk()" ${_ltAskBusy ? 'disabled' : ''}
-                title="Gather the notes and write the ask for Claude">${_ltAskBusy ? 'Gathering…' : 'Copy The Ask For Claude'}</button>
+        <button class="lt-ask-btn" onclick="openListingHealthTool()"
+                title="Read the notes and copy the ask for Claude">Open Listing Health Notes</button>
       </div>` : ''}
       ${tallyHtml}
       <div class="lt-dn-rows">${rows}</div>
@@ -47288,10 +47272,13 @@ async function checkTitleNoteReminders() {
         // Says what the note IS FOR, not that a row was dismissed. "3 titles
         // dismissed" reads as work finished; the point is that somebody has
         // told us a rule is wrong and nothing has been done about it yet.
+        // ⚠️ NO DIRECTIONS ANY MORE. This used to end "Open SPEEKS Connect →
+        // Listing Health → Confirmed Correct and press…", which was a route the
+        // reader had to follow by hand. The card opens the tool now, so it says
+        // what is waiting and stops.
         t.dataset.summary = n + ' dismissed title suggestion' + (n === 1 ? '' : 's')
             + ' came with a note saying why the rule was wrong.'
-            + ' Open SPEEKS Connect → Listing Health → Confirmed Correct and press'
-            + ' Copy The Ask For Claude.';
+            + ' Open it to read them and copy the ask for Claude.';
         // The count IS the identity, same as the Categories and photo nags:
         // answer two of three and the third is new information worth surfacing.
         t.dataset.sig = 'titlenotes:' + n;

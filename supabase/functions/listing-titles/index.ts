@@ -3070,7 +3070,7 @@ type FbRow = {
   store: string; sku: string | null; productId: string;
   current: string; suggested: string | null;
   note: string; by: string | null; at: string | null;
-  codes: string[]; said: string[]; was: string; now: string;
+  codes: string[]; said: string[]; was: string; now: string; takenAt?: string | null;
   specs: Record<string, string>;
   saysItself: { field: string; value: string } | null;
 };
@@ -3137,19 +3137,23 @@ async function notedCount(stores: string[]) {
 async function feedbackFor(stores: string[], days: number) {
   const since = new Date(Date.now() - days * 86400e3).toISOString();
   const out: FbRow[] = [];
+  // Notes already carried into an ask. They are NOT thrown away when they are
+  // taken: a note that vanishes cannot be re-copied when a paste is lost, cannot
+  // be matched to the answer that eventually comes back, and tells the person
+  // who wrote it that explaining themselves led nowhere. Ethan asked whether
+  // removing them was right (2026-09-04); this is the answer — they move, they
+  // do not disappear.
+  const done: FbRow[] = [];
   // The rule's own sentence, kept from the first finding that carries it, so the
   // ask names the rule the way the panel named it to the person who denied it.
   for (const store of stores) {
     const d: any[] = await rows(
       `listing_title_reviews?store_code=eq.${store}&status=eq.denied`
       + `&decided_as=eq.not-a-problem&decided_note=not.is.null`
-      // ⚠️ UN-TRIAGED ONLY. Without this the same three notes are handed over
-      // every time the button is pressed, and an ask that repeats itself is one
-      // people stop reading.
-      + `&feedback_triaged_at=is.null`
       + `&decided_at=gte.${since}`
       + `&select=product_id,sku,current_title,suggested_title,findings,`
-      + `decided_by,decided_at,decided_note&order=decided_at.desc&limit=40`);
+      + `decided_by,decided_at,decided_note,feedback_triaged_at`
+      + `&order=decided_at.desc&limit=60`);
     if (!d.length) continue;
     // The listing's own fields, which is the whole point — the note says "it is
     // an Xbox One version" and the answer is sitting in the spec table.
@@ -3171,8 +3175,11 @@ async function feedbackFor(stores: string[], days: number) {
         if ((run.was && nv.includes(norm(run.was)))
             || (run.now && nv.includes(norm(run.now)))) keep[k] = v;
       }
-      out.push({
+      // ⚠️ ONE QUERY, PARTITIONED HERE. Fetching the taken ones separately would
+      // double the Shopify read this route already pays for per store.
+      (r.feedback_triaged_at ? done : out).push({
         store, sku: r.sku, productId: r.product_id,
+        takenAt: r.feedback_triaged_at || null,
         current: String(r.current_title || ""),
         suggested: r.suggested_title || null,
         note: String(r.decided_note || ""), by: r.decided_by, at: r.decided_at,
@@ -3203,6 +3210,9 @@ async function feedbackFor(stores: string[], days: number) {
     keys: out.map(r => ({ store: r.store, productId: r.productId })),
     total: out.length,
     settled: out.filter(r => r.saysItself).length,
+    // Already taken, newest first, so the tool can show them without letting
+    // them crowd out the ones still waiting.
+    done: done.sort((a, b) => String(b.takenAt || "").localeCompare(String(a.takenAt || ""))).slice(0, 25),
     groups: Object.entries(groups)
       .sort((a, b) => b[1].length - a[1].length)
       .map(([code, rws]) => ({ code, n: rws.length, rows: rws })),

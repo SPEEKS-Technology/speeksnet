@@ -59,6 +59,13 @@ const FB = {
               saysItself: null },
         ] },
     ],
+    // Notes already carried into an ask. They are NOT deleted on copy — they
+    // move here, so a lost paste can be re-copied and an answer that comes back
+    // later can be matched to the note it belongs to.
+    done: [
+        { store: 'OVL', sku: 'KS01-Z', note: 'the model name really does repeat on the barrel',
+          takenAt: '2026-09-02T15:00:00Z' },
+    ],
     ask: 'SPEEKS Listing Titles — rule feedback from the review queue\nA. THE RULE IS WRONG',
 };
 
@@ -67,7 +74,8 @@ console.log('\n== The card opens the tool, not a page ==');
 {
     const js = fs.readFileSync(REPO + '/speeks.js', 'utf8');
     const i = js.indexOf("key: 'titleNoteAlert'");
-    const card = i < 0 ? '' : js.slice(i, i + 700);
+    // Wide enough to reach the action past the comments that sit above it.
+    const card = i < 0 ? '' : js.slice(i, i + 1400);
     ok(i > -1, 'the feed card is registered');
     ok(/action: "openListingHealthTool\(\)"/.test(card),
        'and its action opens the tool');
@@ -75,6 +83,14 @@ console.log('\n== The card opens the tool, not a page ==');
     // right page, nothing to press.
     ok(!/action: "window\.location/.test(card),
        'and never navigates to a page the reviewer then has to search');
+    // ⚠️ NAME THE PLACE, NOT THE EVENT. "Someone Said Why A Title Rule Was
+    // Wrong" described what happened and left the reader working out where to
+    // go. (Ethan, 2026-09-04: "simplify the notification title".)
+    ok(/title: 'Listing Health Notes'/.test(card), 'and the card names the tool it opens');
+    // The summary used to end with a route to follow by hand. The card opens
+    // the tool now, so directions in it are stale the moment they are read.
+    const sum = js.slice(js.indexOf('t.dataset.summary = n +'), js.indexOf('t.dataset.summary = n +') + 400);
+    ok(!/SPEEKS Connect →/.test(sum), 'and the wording no longer gives directions');
 }
 
 console.log('\n== It is in the Tools panel of every shell that has one ==');
@@ -159,7 +175,13 @@ console.log('\n== It is in the Tools panel of every shell that has one ==');
             notes: [...m.querySelectorAll('.lh-tool-note')].map(n => n.textContent.trim()),
             says: [...m.querySelectorAll('.lh-tool-says')].map(n => n.textContent.replace(/\s+/g, ' ').trim()),
             unsettled: m.querySelectorAll('.lh-tool-unsettled').length,
-            raw: (m.querySelector('.lt-ask-pre') || {}).textContent || '',
+            // ⚠️ The raw "See exactly what gets copied" block is GONE (Ethan,
+            // 2026-09-04: "You can remove the what you actually copy."). It was
+            // a wall of monospace under a button that already works.
+            raw: m.querySelectorAll('.lt-ask-pre, .lh-tool-raw').length,
+            doneOpen: (m.querySelector('.lh-tool-done') || {}).open,
+            doneSummary: (m.querySelector('.lh-tool-done summary') || {}).textContent || '',
+            doneRows: m.querySelectorAll('.lh-tool-done-row').length,
         };
     });
     ok(!!view, 'the tool rendered');
@@ -187,10 +209,38 @@ console.log('\n== It is in the Tools panel of every shell that has one ==');
         // The row nothing settles must SAY nothing settles it. Silence there
         // reads as agreement with the rule.
         ok(view.unsettled === 1, 'the row nothing settles says so', String(view.unsettled));
-        ok(/SPEEKS Listing Titles/.test(view.raw), 'the exact text is available to read');
+        ok(view.raw === 0, 'the raw copy-preview wall is gone', String(view.raw));
+
+        // ⚠️ TAKEN, NOT DELETED. Ethan asked whether removing them on copy was
+        // the right call. It is not: a note that vanishes cannot be re-copied
+        // when a paste is lost, cannot be matched to the answer that comes back
+        // later, and tells the person who explained themselves it went nowhere.
+        ok(view.doneRows === 1, 'notes already sent are still listed', String(view.doneRows));
+        ok(view.doneOpen === false, 'but shut, so they cannot crowd out what is waiting');
+        ok(/1 already sent/.test(view.doneSummary), 'and the drawer says how many',
+           view.doneSummary.trim());
+        // The count above must be the WAITING ones only, or the sent pile keeps
+        // the card up forever.
+        ok(/^3 dismissals/.test(view.bar.trim()),
+           'the count is what is waiting, not waiting plus sent', view.bar.slice(0, 20));
     }
 
     console.log('\n== Copy stamps the notes read, server-side ==');
+    // ⚠️ SET BEFORE THE COPY, because the copy RE-READS. The tool used to paint
+    // a static "Copied" message over the body, which left a confirmation
+    // floating in a modal the height of the list it replaced and made the notes
+    // look deleted. It now re-reads and re-draws, so the stub has to answer the
+    // second read the way the server would: nothing waiting, everything moved
+    // into `done`.
+    await page.evaluate(fb => {
+        window._ltFetch = async () => ({
+            days: 30, stores: fb.stores, total: 0, settled: 0, keys: [], groups: [],
+            done: fb.groups.flatMap(g => g.rows)
+                    .map(r => Object.assign({}, r, { takenAt: '2026-09-04T12:00:00Z' }))
+                    .concat(fb.done),
+            ask: '',
+        });
+    }, FB);
     await page.evaluate(() => lhToolCopy());
     await new Promise(r => setTimeout(r, 300));
     const after = await page.evaluate(() => ({
@@ -208,7 +258,19 @@ console.log('\n== It is in the Tools panel of every shell that has one ==');
     ok(((after.posts[0] || {}).keys || []).length === 3,
        'stamping exactly the three rows the ask carried',
        String(((after.posts[0] || {}).keys || []).length));
-    ok(/marked as read/.test(after.body), 'and the tool says the notes are read now');
+    ok(/Copied/.test(after.body), 'the tool confirms the copy');
+    // ⚠️ THE NOTES MUST STILL BE THERE. Wiping them was the first behaviour and
+    // it is the thing being fixed: the copy moves them, it does not delete them.
+    ok(/already sent/.test(after.body), 'and the notes have moved to "already sent"');
+    ok(/Xbox One version/.test(after.body), 'the note itself is still readable');
+    const post = await page.evaluate(() => ({
+        clear: !!document.querySelector('.lh-tool-clear'),
+        done: document.querySelectorAll('.lh-tool-done-row').length,
+        btn: !!document.querySelector('#listingHealthToolModal .lt-ask-btn'),
+    }));
+    ok(post.clear, 'the tool now reads as nothing waiting');
+    ok(post.done === 4, 'and lists all four sent notes', String(post.done));
+    ok(!post.btn, 'with no button offering to copy an empty ask');
 
     console.log('\n== A failed read is not an all clear ==');
     await page.evaluate(() => {

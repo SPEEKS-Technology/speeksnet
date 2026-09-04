@@ -307,12 +307,15 @@ const DATA = {
            drawer.askBar.trim());
         ok(/explained a rule was wrong/.test(drawer.askBar),
            'and says what the note is FOR, not that a row was dismissed');
-        // ⚠️ "Copy", NOT "Send". Nothing here reaches Claude on its own — the
-        // tool has no way to run one — and a button that implied otherwise would
-        // leave people waiting on an answer that was never coming.
-        ok(/Copy The Ask/.test(drawer.askBtn), 'the button says Copy', drawer.askBtn.trim());
+        // ⚠️ ONE PATH TO THE ASK. This drawer used to gather and copy the notes
+        // itself, so the same job existed here AND in the Listing Health tool —
+        // two dialogs, two copies of the wording, two things to keep in step.
+        // The count stays, because it is what the tally beside it argues for;
+        // the work is the tool.
+        ok(/Open Listing Health Notes/.test(drawer.askBtn),
+           'the button opens the tool that does the work', drawer.askBtn.trim());
         ok(!/\bSend\b|\bAsk Claude\b/.test(drawer.askBtn),
-           'and never promises to send it anywhere', drawer.askBtn.trim());
+           'and never promises to send anything anywhere', drawer.askBtn.trim());
         ok(drawer.askAboveTally === true,
            'the bar sits above the tally it acts on', String(drawer.askAboveTally));
     }

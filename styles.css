@@ -18143,10 +18143,24 @@ body.tv-body { display: block; background: #eef1f5; }
     background: #f1f5f9; border: 1px solid #e2e8f0;
     font-size: 11.5px; color: #64748b; line-height: 1.5;
 }
-.lh-tool-raw { margin: 4px 0 0; }
-.lh-tool-raw summary {
-    cursor: pointer; font-size: 11.5px; font-weight: 700; color: #4f46e5;
-    padding: 4px 0;
+/* Notes already carried into an ask. Shut, and out of the count — but kept, so
+   a lost paste can be re-copied and an answer can be matched to the note it
+   belongs to. They move here on copy; they are never deleted. */
+.lh-tool-done { margin: 6px 0 0; }
+.lh-tool-done summary {
+    cursor: pointer; font-size: 11.5px; font-weight: 700; color: #64748b; padding: 5px 0;
+}
+.lh-tool-done-row {
+    display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+    padding: 6px 10px; margin: 4px 0 0; border-radius: 7px;
+    background: #f8fafc; border: 1px solid #eef2f7; font-size: 11.5px; color: #64748b;
+}
+.lh-tool-done-note { flex: 1; min-width: 180px; color: #475569; }
+.lh-tool-done-when { color: #94a3b8; white-space: nowrap; }
+.lh-tool-copied {
+    margin: 0 0 12px; padding: 9px 12px; border-radius: 8px;
+    background: #ecfdf5; border: 1px solid #a7f3d0;
+    font-size: 12px; font-weight: 700; color: #065f46;
 }
 .lh-tool-clear, .lh-tool-err {
     display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
