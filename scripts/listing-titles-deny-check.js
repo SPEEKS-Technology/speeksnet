@@ -33,7 +33,13 @@ const DATA = {
     ebayScope: { active: true, lastSeen: new Date().toISOString(), hours: 1, maxAgeHours: 36 },
     counts: { OVL: 4 },
     queue: [
+        // ⚠️ ROW 1 HAS A LISTER, ROW 2 DOES NOT — that pairing is the point.
+        // JJernigan is the real WSP tag that started this: a person-shaped tag
+        // belonging to somebody who has left, so it matches nobody and the row
+        // must read "Unknown" rather than showing a name the tool cannot stand
+        // behind (or, worse, nothing at all).
         { productId: 'gid://shopify/Product/1', sku: 'KS01-A', severity: 3,
+          listerTag: 'CMeadows',
           current: 'GoPro Hero11 Black 27MP 360 Action Camera CHDHX-111',
           suggested: 'GoPro Hero11 Black 27MP Action Camera CHDHX-111',
           findings: [{ code: 'name-wrong', severity: 3,
@@ -68,6 +74,9 @@ const DATA = {
           basis: 'rules', confidence: 'high', comps: [], price: 249.99, quantity: 1,
           shop: 'paymore-overland-park.myshopify.com' },
     ],
+    // The map the server resolves at read time: tag -> person. JJernigan is
+    // absent on purpose — he has left, so nothing resolves him.
+    listers: { CMeadows: 'Calvin Meadows' },
     denied: {
         rows: [
             { productId: 'gid://shopify/Product/9', sku: 'KS01-Z',
@@ -135,6 +144,56 @@ const DATA = {
         ok(btns[1].okLabel.trim() === 'Save My Title' && btns[1].okOff,
            'a row with no safe fix says Save My Title, greyed until one is typed',
            btns[1].okLabel.trim());
+    }
+
+    console.log('== Who listed it, and Unknown when nobody can be named ==');
+    {
+        // ⚠️ THE PILL IS ALWAYS THERE. Showing it only when a tag resolves left
+        // a ragged row AND made the absence ambiguous — no pill could mean "no
+        // tag" or "a tag matching nobody". It also invited a shape test to
+        // rescue the unmatched ones, and a shape test reads `eBay` as a person
+        // (e + Bay), which is what the whole matcher exists to avoid.
+        const pills = await page.evaluate(() => [...document.querySelectorAll('.lt-row')].map(row => {
+            const p = row.querySelector('.lt-lister');
+            if (!p) return null;
+            const r = p.getBoundingClientRect();
+            const cs = getComputedStyle(p);
+            return {
+                text: p.textContent.trim(),
+                unknown: p.classList.contains('lt-lister-unknown'),
+                title: p.getAttribute('title') || '',
+                h: Math.round(r.height),
+                pad: cs.paddingTop + '/' + cs.paddingLeft,
+                size: cs.fontSize,
+                radius: cs.borderRadius,
+            };
+        }));
+        ok(pills.length === 3 && pills.every(Boolean),
+           'every row carries a lister pill, with no gaps',
+           pills.map(p => p && p.text).join(' | '));
+        if (pills.every(Boolean)) {
+            ok(pills[0].text === 'Calvin Meadows',
+               'the tag resolves to the person, not the tag', pills[0].text);
+            ok(!pills[0].unknown, 'and is not marked unknown');
+            ok(pills[1].text === 'Unknown' && pills[1].unknown,
+               'a row with no tag reads Unknown', pills[1].text);
+            ok(/no longer|has left|No employee tag/i.test(pills[1].title),
+               'and explains itself on hover', pills[1].title.slice(0, 48));
+            // ⚠️ "the same size as the users name pill" — Ethan asked for this
+            // explicitly, so it is measured rather than eyeballed. A smaller or
+            // borderless Unknown makes an unattributed row read as a different
+            // KIND of row.
+            const a = pills[0], b = pills[1];
+            ok(a.h === b.h, 'the two pills are the same height', a.h + ' vs ' + b.h);
+            ok(a.pad === b.pad, 'the same padding', a.pad + ' vs ' + b.pad);
+            ok(a.size === b.size, 'the same font size', a.size + ' vs ' + b.size);
+            ok(a.radius === b.radius, 'and the same corners', a.radius + ' vs ' + b.radius);
+            // It must never render a raw tag it could not resolve — that would
+            // look like an accusation the tool cannot stand behind.
+            ok(!pills.some(p => /^[A-Z][a-z]*[A-Z]/.test(p.text) && p.text !== 'Calvin Meadows'),
+               'and no unresolved tag is ever shown raw',
+               pills.map(p => p.text).join(' | '));
+        }
     }
 
     console.log('== A suggestion that DELETES says so, in red ==');

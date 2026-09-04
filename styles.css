@@ -18168,6 +18168,13 @@ body.tv-body { display: block; background: #eef1f5; }
     border-radius: 999px; border: 1px solid #e2e8f0; background: #f8fafc;
     font-size: 11px; font-weight: 700; color: #475569; white-space: nowrap;
 }
+/* ⚠️ SAME BOX AS A NAME, ONLY QUIETER. Ethan asked for it "the same size as the
+   users name pill" — so every metric that decides the box is inherited from
+   .lt-lister and only the colours change. A smaller or borderless Unknown would
+   make a row with no attribution read as a different KIND of row. */
+.lt-lister-unknown {
+    color: #94a3b8; background: #fff; border-style: dashed; font-weight: 600;
+}
 .lh-tool-finish {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #e2e8f0;

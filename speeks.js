@@ -45703,7 +45703,45 @@ function _ltRun(from, to) {
 }
 
 // One side of that diff, drawn with its changed run marked.
-function _ltMark(words, head, tail, cls) {
+// ⚠️ THE CHANGED RUN IS NOT THE SAME THING AS THE CHANGED WORDS. _ltRun finds
+// one span between a common head and tail, which is right for a replacement and
+// wrong the moment a title gains a word in the MIDDLE and another at the END:
+//
+//   now        …iPhone 15 Plus   128GB 26.6 MTXT3LL/A Read
+//   suggested  …iPhone 15 Plus   6.7" 128GB 26.6 MTXT3LL/A Read Pink
+//
+// The head stops at "Plus" and the tail never starts, so the run swallows
+// everything between — and the Now line struck "128GB 26.6 MTXT3LL/A Read"
+// through in red, claiming the tool was DELETING words it keeps verbatim. Red
+// means removed on this screen; saying it about kept words is a lie about the
+// action the reviewer is one click from taking. (Appeared the moment the screen
+// size started being placed after the model rather than appended.)
+//
+// So within the run, a word that also appears in the other side's run is
+// unchanged and stays unmarked. Counted, not set-membership: a title that
+// genuinely loses one of two "Black"s must still show one struck through.
+function _ltChanged(words, head, tail, other, oHead, oTail) {
+    const pool = new Map();
+    for (let i = oHead; i < other.length - oTail; i++) {
+        pool.set(other[i], (pool.get(other[i]) || 0) + 1);
+    }
+    const marks = new Set();
+    for (let i = head; i < words.length - tail; i++) {
+        const n = pool.get(words[i]) || 0;
+        if (n > 0) pool.set(words[i], n - 1);
+        else marks.add(i);
+    }
+    return marks;
+}
+
+function _ltMark(words, head, tail, cls, marks) {
+    // The word-level path. Every word is emitted and the whole thing joined
+    // with single spaces, so the welding bug below cannot come back through it.
+    if (marks) {
+        return words.map((w, i) => marks.has(i)
+            ? '<mark class="' + cls + '">' + _ecEsc(w) + '</mark>'
+            : _ecEsc(w)).join(' ');
+    }
     // ⚠️ JOIN THE PARTS — NEVER CONCATENATE WITH CONDITIONAL SPACES. The build
     // this replaces put a space between the head and the tail only when the
     // middle had something in it, so a PURE DELETION welded the two halves
@@ -45755,7 +45793,8 @@ function _ltTrimLine(findings) {
 // it as the title they are approving, so nothing may be inserted into it.
 function _ltDiff(from, to) {
     const r = _ltRun(from, to);
-    return _ltMark(r.b, r.head, r.tail, 'lt-add');
+    return _ltMark(r.b, r.head, r.tail, 'lt-add',
+                   _ltChanged(r.b, r.head, r.tail, r.a, r.head, r.tail));
 }
 
 // The current title, with the words it LOSES marked. A deletion leaves nothing
@@ -45764,7 +45803,8 @@ function _ltDiff(from, to) {
 // by eye ("360", "Digital SLR", a doubled word).
 function _ltGone(from, to) {
     const r = _ltRun(from, to);
-    return _ltMark(r.a, r.head, r.tail, 'lt-cut');
+    return _ltMark(r.a, r.head, r.tail, 'lt-cut',
+                   _ltChanged(r.a, r.head, r.tail, r.b, r.head, r.tail));
 }
 
 // WHAT WAS DISMISSED, FOLDED AWAY UNDER THE QUEUE.
@@ -46028,6 +46068,31 @@ function _ltLister(tag) {
     return (_ltData && _ltData.listers && _ltData.listers[tag]) || tag;
 }
 
+// ⚠️ THE PILL IS ALWAYS THERE — a name, or "Unknown". Never nothing.
+//
+// This started out as "show it only when a tag resolves", which left a ragged
+// row and, worse, made the absence ambiguous: no pill could mean the product
+// had no tag, or that it had one nobody could match. It also invited a shape
+// test to rescue the unmatched ones, and a shape test reads `eBay` as a person
+// (e + Bay) — which is the thing this whole matcher exists to avoid.
+//
+// Always rendering removes both problems. Unknown covers every case the tag
+// cannot answer: no employee tag at all, or a tag belonging to somebody no
+// longer in the staff list. Ethan, 2026-09-04, on JJernigan: "He is no longer
+// with the company so when you can't find a name, just put an Unknown pill."
+//
+// ⚠️ AND IT IS NEVER A GUESS. Unknown says the tool cannot tell you, which is
+// honest; a tag rendered raw would look like an accusation the tool cannot
+// stand behind.
+function _ltListerPill(r) {
+    const name = r && r.listerTag ? _ltLister(r.listerTag) : '';
+    if (!name) {
+        return `<span class="lt-lister lt-lister-unknown"
+            title="No employee tag on this listing, or the tag belongs to somebody who has left. Shopify tags are where this comes from.">Unknown</span>`;
+    }
+    return `<span class="lt-lister" title="Listed by ${_ecEsc(name)}, from this product's Shopify tags">${_ecEsc(name)}</span>`;
+}
+
 function _ltDeniedHtml() {
     const d = _ltData && _ltData.denied;
     if (!d || !(d.rows || []).length) return '';
@@ -46067,7 +46132,7 @@ function _ltDeniedHtml() {
                    dismissed with "Ours Is Fine" that reappears here as "eBay Is
                    Stale" reads as a different decision than the one made. -->
               <span class="lt-dn-as ${stale ? 'lt-dn-ebay' : ''}">${stale ? 'Ours Is Fine' : 'Not A Problem'}</span>
-              ${r.listerTag ? `<span class="lt-lister">${_ecEsc(_ltLister(r.listerTag))}</span>` : ''}
+              ${_ltListerPill(r)}
               <span>${_ecEsc(r.by || '')}${r.at ? ' · ' + when(r.at) : ''}</span>
             </div>
             ${r.note ? `<div class="lt-dn-note">${_ecEsc(r.note)}</div>` : ''}
@@ -46275,7 +46340,7 @@ function _ltRow(r) {
                proof. It is here so a pattern is visible.
                Absent when no tag matched a person: a leaver, a typo, or a
                product listed before the convention. Silence beats a guess. -->
-          ${r.listerTag ? `<span class="lt-lister" title="Listed by ${_ecEsc(_ltLister(r.listerTag))}, from this product's Shopify tags">${_ecEsc(_ltLister(r.listerTag))}</span>` : ''}
+          ${_ltListerPill(r)}
         </div>
         <div class="lt-acts">
           <!-- ⚠️ A ROW WITH NO SUGGESTION SAYS "Save My Title" BEFORE IT IS
