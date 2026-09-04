@@ -217,7 +217,9 @@ console.log('\n== It is in the Tools panel of every shell that has one ==');
         // later, and tells the person who explained themselves it went nowhere.
         ok(view.doneRows === 1, 'notes already sent are still listed', String(view.doneRows));
         ok(view.doneOpen === false, 'but shut, so they cannot crowd out what is waiting');
-        ok(/1 already sent/.test(view.doneSummary), 'and the drawer says how many',
+        // "handled", not "sent" — copying is not finishing, so the stamp is made
+        // when the work is done rather than when the text left the tool.
+        ok(/1 already handled/.test(view.doneSummary), 'and the drawer says how many',
            view.doneSummary.trim());
         // The count above must be the WAITING ones only, or the sent pile keeps
         // the card up forever.
@@ -225,12 +227,37 @@ console.log('\n== It is in the Tools panel of every shell that has one ==');
            'the count is what is waiting, not waiting plus sent', view.bar.slice(0, 20));
     }
 
-    console.log('\n== Copy stamps the notes read, server-side ==');
-    // ⚠️ SET BEFORE THE COPY, because the copy RE-READS. The tool used to paint
-    // a static "Copied" message over the body, which left a confirmation
-    // floating in a modal the height of the list it replaced and made the notes
-    // look deleted. It now re-reads and re-draws, so the stub has to answer the
-    // second read the way the server would: nothing waiting, everything moved
+    console.log('\n== Copy is a copy button, and nothing more ==');
+    // ⚠️ COPYING IS NOT FINISHING. One press used to copy the ask AND mark every
+    // note read — so a lost paste, a dead session, or Claude deciding the rule
+    // was right after all all took the reminder with them. Ethan, 2026-09-04:
+    // "the copy button acts as a copy button like others on the site and stays
+    // there with the notes until you've done your work".
+    await page.evaluate(() => lhToolCopy(document.querySelector('.lt-ask-btn')));
+    await new Promise(r => setTimeout(r, 200));
+    const copied = await page.evaluate(() => ({
+        copied: window.__copied,
+        posts: window.__posts.length,
+        label: (document.querySelector('.lt-ask-btn') || {}).textContent || '',
+        stillListed: document.querySelectorAll('.lh-tool-note').length,
+        stillHasFinish: !!document.querySelector('.lh-tool-done-btn'),
+    }));
+    ok(/SPEEKS Listing Titles/.test(copied.copied || ''), 'the ask reached the clipboard');
+    ok(copied.posts === 0, 'and NOTHING was written to the server', String(copied.posts));
+    ok(copied.stillListed === 3, 'the notes are all still on screen',
+       String(copied.stillListed));
+    ok(copied.stillHasFinish, 'and the clear button is still waiting for the work');
+    // Same feedback as every other copy button on the site (expCopyReport):
+    // swap the label, put it back.
+    ok(/Copied/.test(copied.label), 'the button says Copied', copied.label.trim());
+    await new Promise(r => setTimeout(r, 1700));
+    const reverted = await page.evaluate(() =>
+        (document.querySelector('.lt-ask-btn') || {}).textContent || '');
+    ok(/Copy The Ask/.test(reverted), 'and goes back to itself', reverted.trim());
+
+    console.log('\n== Clearing is the separate, later act ==');
+    // ⚠️ SET BEFORE THE CLEAR, because clearing RE-READS. The stub has to answer
+    // the second read the way the server would: nothing waiting, the batch moved
     // into `done`.
     await page.evaluate(fb => {
         window._ltFetch = async () => ({
@@ -241,14 +268,33 @@ console.log('\n== It is in the Tools panel of every shell that has one ==');
             ask: '',
         });
     }, FB);
-    await page.evaluate(() => lhToolCopy());
+    // ⚠️ DO NOT RETURN THE PROMISE. lhToolDone awaits _ltAsk, which does not
+    // settle until somebody clicks the dialog — so `() => lhToolDone()` hands
+    // puppeteer a promise that cannot resolve and the run dies on a protocol
+    // timeout. Fire it and let the dialog open.
+    await page.evaluate(() => { lhToolDone(); });
     await new Promise(r => setTimeout(r, 300));
+    // It asks first — pressing this early loses the reminder, so it is not a
+    // thing to do by accident.
+    const confirming = await page.evaluate(() => {
+        const go = [...document.querySelectorAll('button')]
+            .find(b => /Clear Them/.test(b.textContent));
+        return { asked: !!go, posts: window.__posts.length };
+    });
+    ok(confirming.asked, 'it asks before clearing');
+    ok(confirming.posts === 0, 'and has written nothing yet', String(confirming.posts));
+    await page.evaluate(() => {
+        [...document.querySelectorAll('button')]
+            .find(b => /Clear Them/.test(b.textContent)).click();
+    });
+    await new Promise(r => setTimeout(r, 400));
     const after = await page.evaluate(() => ({
-        copied: window.__copied,
         posts: window.__posts,
         body: (document.getElementById('listingHealthToolBody') || {}).textContent || '',
+        clear: !!document.querySelector('.lh-tool-clear'),
+        done: document.querySelectorAll('.lh-tool-done-row').length,
+        btn: !!document.querySelector('#listingHealthToolModal .lt-ask-btn'),
     }));
-    ok(/SPEEKS Listing Titles/.test(after.copied || ''), 'the ask reached the clipboard');
     ok(after.posts.length === 1, 'exactly one post', String(after.posts.length));
     ok((after.posts[0] || {}).action === 'triaged', 'and it is the triaged stamp',
        (after.posts[0] || {}).action);
@@ -256,21 +302,14 @@ console.log('\n== It is in the Tools panel of every shell that has one ==');
     // high-water mark is what made the recycle reply card clear on one machine
     // and stay up on every other (fixed 2026-09-04, 9cd1e46).
     ok(((after.posts[0] || {}).keys || []).length === 3,
-       'stamping exactly the three rows the ask carried',
+       'stamping exactly the three rows that were on screen',
        String(((after.posts[0] || {}).keys || []).length));
-    ok(/Copied/.test(after.body), 'the tool confirms the copy');
-    // ⚠️ THE NOTES MUST STILL BE THERE. Wiping them was the first behaviour and
-    // it is the thing being fixed: the copy moves them, it does not delete them.
-    ok(/already sent/.test(after.body), 'and the notes have moved to "already sent"');
-    ok(/Xbox One version/.test(after.body), 'the note itself is still readable');
-    const post = await page.evaluate(() => ({
-        clear: !!document.querySelector('.lh-tool-clear'),
-        done: document.querySelectorAll('.lh-tool-done-row').length,
-        btn: !!document.querySelector('#listingHealthToolModal .lt-ask-btn'),
-    }));
-    ok(post.clear, 'the tool now reads as nothing waiting');
-    ok(post.done === 4, 'and lists all four sent notes', String(post.done));
-    ok(!post.btn, 'with no button offering to copy an empty ask');
+    // ⚠️ THE NOTES MUST STILL BE THERE. Clearing moves them; it does not delete.
+    ok(/already handled/.test(after.body), 'the notes have moved to "already handled"');
+    ok(/Xbox One version/.test(after.body), 'and the note itself is still readable');
+    ok(after.clear, 'the tool now reads as nothing waiting');
+    ok(after.done === 4, 'and lists all four handled notes', String(after.done));
+    ok(!after.btn, 'with no button offering to copy an empty ask');
 
     console.log('\n== A failed read is not an all clear ==');
     await page.evaluate(() => {

@@ -45886,16 +45886,18 @@ function renderListingHealthTool() {
     const done = fb.done || [];
     const doneHtml = done.length ? `
       <details class="lh-tool-done">
-        <summary>${done.length} already sent</summary>
+        <!-- "handled", not "sent" — copying is not finishing, and the stamp is
+             now made when the work is done rather than when the text left. -->
+        <summary>${done.length} already handled</summary>
         ${done.map(r => `<div class="lh-tool-done-row">
           <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
           <span class="lh-tool-done-note">“${_ecEsc(r.note || '')}”</span>
           <span class="lh-tool-done-when">${_lhWhen(r.takenAt)}</span>
         </div>`).join('')}
       </details>` : '';
-    // Nothing waiting. The already-sent list still renders under it, so the tool
-    // is never an empty box — and so a copy that has just happened leaves the
-    // notes visibly somewhere instead of appearing to delete them.
+    // Nothing waiting. The handled list still renders under it, so the tool is
+    // never an empty box — and so clearing a batch leaves the notes visibly
+    // somewhere instead of appearing to delete them.
     if (!n) {
         // Two lines: the tick belongs ON the headline, not stacked above it as a
         // row of its own. (Ethan, 2026-09-04.)
@@ -45943,13 +45945,21 @@ function renderListingHealthTool() {
       <div class="lt-ask-bar">
         <span class="lt-ask-n">${n} dismissal${n === 1 ? '' : 's'} explained a rule was wrong${
           fb.settled ? ` · ${fb.settled} look like the rule overruled the listing` : ''}</span>
-        <button class="lt-ask-btn" onclick="lhToolCopy()">Copy The Ask For Claude</button>
+        <button class="lt-ask-btn" onclick="lhToolCopy(this)">Copy The Ask For Claude</button>
       </div>
       <p class="lh-tool-say">Paste it into Claude. It groups these by the rule that
         raised them, attaches each listing's own spec fields, and asks for the
         reasoning before any rule changes. Nothing is sent from here, and no
         listing changes.</p>
       ${groups}
+      <!-- ⚠️ CLEARING IS A SEPARATE, LATER ACT, and it is at the BOTTOM because
+           that is where you are once the work is done. Copying used to clear
+           these, which meant a lost paste or a "the rule was right after all"
+           took the reminder with it. -->
+      <div class="lh-tool-finish">
+        <span>Once Claude has been through them:</span>
+        <button class="lh-tool-done-btn" onclick="lhToolDone()">Clear These ${n}</button>
+      </div>
       ${doneHtml}`;
 }
 
@@ -45957,33 +45967,56 @@ function renderListingHealthTool() {
 // The stamp is written SERVER-SIDE (feedback_triaged_at, migration 0077): a
 // localStorage high-water mark is what made the recycle reply card clear on one
 // machine and stay up on every other.
-async function lhToolCopy() {
+// ⚠️ COPYING IS NOT FINISHING, and this used to conflate the two — one press
+// copied the ask AND marked every note read. That is wrong in both directions:
+// a paste can be lost, a session can die, and Claude can read a note and decide
+// the rule was right, none of which is "handled". Meanwhile the reminder was
+// already gone. Ethan, 2026-09-04: "the copy button acts as a copy button like
+// others on the site and stays there with the notes until you've done your work
+// then you get rid of the notes."
+//
+// So: this copies. Nothing else. Same behaviour as every other copy button here
+// (see expCopyReport) — swap the label, put it back.
+function lhToolCopy(button) {
     const fb = _lhToolFb;
     if (!fb || !fb.ask) return;
-    try {
-        await navigator.clipboard.writeText(fb.ask);
-    } catch (_e) {
-        await _ltTell('Could Not Reach The Clipboard',
-            'Your browser refused the copy. Open “See exactly what gets copied”,'
-            + ' select the text and copy it by hand.');
-        return;
-    }
-    // ⚠️ ONLY AFTER THE COPY SUCCEEDED. Stamping first would mark notes read that
-    // never reached anybody's clipboard, and there is no way back to them.
+    navigator.clipboard.writeText(fb.ask).then(() => {
+        if (!button) return;
+        const was = button.textContent;
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = was; }, 1600);
+    }).catch(() => _ltTell('Could Not Reach The Clipboard',
+        'Your browser refused the copy. Select the notes above and copy them by hand.'));
+}
+window.lhToolCopy = lhToolCopy;
+
+// The other half: the work is done, clear them. This is the ONLY thing that
+// stamps feedback_triaged_at, and it is an assertion a person makes — the tool
+// cannot see whether a rule changed, so it must not guess. Same shape as the
+// expense report's "filed" flag for the same reason.
+async function lhToolDone() {
+    const fb = _lhToolFb;
+    if (!fb || !fb.total) return;
+    const n = fb.total;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Listing Health',
+        title: `Clear ${n} Note${n === 1 ? '' : 's'}?`,
+        body: `<p class="lt-ask-say">Do this once Claude has been through them —
+                it clears the reminder. The notes are kept and stay readable
+                under <b>already handled</b>; nothing on any listing changes
+                either way.</p>`,
+        go: 'Clear Them', cancel: 'Not Yet' });
+    if (!said) return;
     await _ltPost({ action: 'triaged', store: (fb.stores || [])[0] || '', keys: fb.keys || [] });
     if (typeof checkTitleNoteReminders === 'function') checkTitleNoteReminders();
-    // ⚠️ RE-READ AND RE-DRAW, don't paint a static message over the body. Doing
-    // that left a confirmation floating in a modal the height of the list it had
-    // replaced, and — worse — made the notes look deleted. Re-drawing puts them
-    // in "already sent" where they can be read and copied again.
+    // Re-read rather than painting over the body: a static message left a
+    // confirmation floating in a modal the height of the list it replaced, and
+    // made the notes look deleted rather than moved.
     try { _lhToolFb = await _ltFetch('?view=feedback&days=30'); }
     catch (_) { _lhToolFb = { total: 0, groups: [], done: (fb.done || []) }; }
     renderListingHealthTool();
-    const body = document.getElementById('listingHealthToolBody');
-    if (body) body.insertAdjacentHTML('afterbegin', `<div class="lh-tool-copied">
-      Copied — paste it into Claude. Nothing on any listing changed.</div>`);
 }
-window.lhToolCopy = lhToolCopy;
+window.lhToolDone = lhToolDone;
 
 function _ltDeniedHtml() {
     const d = _ltData && _ltData.denied;

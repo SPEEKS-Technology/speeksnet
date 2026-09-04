@@ -18157,11 +18157,20 @@ body.tv-body { display: block; background: #eef1f5; }
 }
 .lh-tool-done-note { flex: 1; min-width: 180px; color: #475569; }
 .lh-tool-done-when { color: #94a3b8; white-space: nowrap; }
-.lh-tool-copied {
-    margin: 0 0 12px; padding: 9px 12px; border-radius: 8px;
-    background: #ecfdf5; border: 1px solid #a7f3d0;
-    font-size: 12px; font-weight: 700; color: #065f46;
+/* Clearing the batch. Quiet and at the bottom on purpose: it is the LAST act,
+   after Claude has been through the notes, and it must not compete with the
+   Copy button at the top for the press. */
+.lh-tool-finish {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #e2e8f0;
+    font-size: 12px; color: #64748b;
 }
+.lh-tool-done-btn {
+    padding: 6px 12px; border-radius: 7px; border: 1px solid #cbd5e1;
+    background: #fff; color: #334155; font-size: 11.5px; font-weight: 700;
+    font-family: inherit; cursor: pointer; white-space: nowrap;
+}
+.lh-tool-done-btn:hover { background: #f1f5f9; border-color: #94a3b8; }
 .lh-tool-clear, .lh-tool-err {
     display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
     padding: 14px 16px; border-radius: 10px;
