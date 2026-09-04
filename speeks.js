@@ -33951,6 +33951,7 @@ const FEATURE_CATALOG = [
     { key: 'tool-claims-store',        label: 'Insurance Claims (Store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
     { key: 'tool-claims-oversight',    label: 'Insurance Claims (Oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
+    { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
     { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
@@ -35053,6 +35054,7 @@ const JUMP_KEYWORDS = {
     'ec-view-categories':        'speeks connect categories other collection wrong category shelf file shopify',
     'ec-view-photos':            'speeks connect listing health no pictures photos missing image online store',
     'ec-view-titles':            'speeks connect listing health titles title fix keywords seo rename wrong title bundle cib ebay',
+    'tool-listing-health':       'listing health title notes denied dismissed rule wrong feedback ask claude copy prompt',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
     'widget-variance-replies':   'variance replies gm notes dm notes markdown discount negative',
@@ -40041,7 +40043,11 @@ function _samReminderCfg() {
     cfg.push({ key: 'titleNoteAlert', id: 'titleNoteAlertBubble', text: 'titleNoteAlertBubbleText',
         title: 'Someone Said Why A Title Rule Was Wrong',
         urgency: 0, due: 'Action', cls: 'sam-due-amber',
-        action: "window.location.href='operations.html#categories'" });
+        // ⚠️ THE TOOL, NOT THE PAGE. This pointed at operations.html#categories
+        // and left the reviewer standing on the right page with the thing the
+        // card was about shut inside a <details> three sections down. A card
+        // that names a job has to open the job.
+        action: "openListingHealthTool()" });
     return cfg;
 }
 
@@ -45833,6 +45839,167 @@ async function ltCopyAsk() {
     }
 }
 window.ltCopyAsk = ltCopyAsk;
+
+// --- SPEEKS Tool: Listing Health --------------------------------------------
+//
+// ⚠️ WHY A TOOL AND NOT A LINK TO THE PAGE. The deck card used to navigate to
+// operations.html#categories, which is the right PAGE — and then the reviewer
+// stood on it with nothing to do, because the thing the card was about lives in
+// a shut <details> three sections down. Ethan, 2026-09-04: "The notification I
+// got only took me to Listing Health on Operations tab and did not show me
+// anything to copy." A card that names a job has to open the job.
+//
+// ⚠️ THE MODAL IS BUILT HERE, NOT PASTED INTO FIVE SHELLS. Every other tool's
+// chrome is duplicated markup in index/operations/workspace/stats/docs, and
+// [[tools-panel-role-sync]] is the record of what that costs — the copies drift
+// and the tool half-exists on two pages. Its body is rendered by JS anyway, so
+// static markup would buy nothing. The PANEL LINK still has to be in all five
+// (it is markup the panel reads), and tv.html has no tools panel at all.
+function _lhToolEl() {
+    let el = document.getElementById('listingHealthToolModal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.className = 'modal-menu manage-menu';
+    el.id = 'listingHealthToolModal';
+    el.innerHTML = `
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Listing Health</span>
+          <span class="tool-head-sub">What reviewers told us about the title rules.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="listingHealthToolBody"></div>`;
+    document.body.appendChild(el);
+    return el;
+}
+
+let _lhToolFb = null;
+
+async function openListingHealthTool() {
+    _lhToolEl();
+    closeAllModals();
+    toggleModal('listingHealthToolModal');
+    const body = document.getElementById('listingHealthToolBody');
+    if (body) body.innerHTML = '<div class="status-message">Reading the notes…</div>';
+    _lhToolFb = null;
+    try {
+        _lhToolFb = await _ltFetch('?view=feedback&days=30');
+    } catch (e) {
+        if (body) {
+            // ⚠️ A FAILED READ IS NOT AN ALL CLEAR — the same rule the photo
+            // alarm and the titles panel follow. Drawing the empty state for a
+            // request that never answered would say "nothing to answer" about a
+            // pile nobody has seen.
+            body.innerHTML = `<div class="lh-tool-err">
+              <b>Could not read the notes.</b>
+              <span>${_ecEsc(e.message || String(e))}</span>
+              <button class="lt-ask-btn" onclick="openListingHealthTool()">Try Again</button>
+            </div>`;
+        }
+        return;
+    }
+    renderListingHealthTool();
+}
+window.openListingHealthTool = openListingHealthTool;
+
+function renderListingHealthTool() {
+    const body = document.getElementById('listingHealthToolBody');
+    if (!body) return;
+    const fb = _lhToolFb;
+    if (!fb || !fb.total) {
+        body.innerHTML = `<div class="lh-tool-clear">
+          <span class="lh-tool-tick">✓</span>
+          <b>Every note has been answered.</b>
+          <span>When somebody dismisses a title suggestion and writes why the rule
+           was wrong, it lands here. A dismissal with no note cannot say which rule
+           to look at, so only the explained ones arrive.</span>
+        </div>`;
+        return;
+    }
+    const n = fb.total;
+    // Grouped by the rule that fired, the same way the ask is — one dismissal is
+    // an anecdote, three of one code is a rule to go and fix, and a flat list of
+    // rows hides that completely.
+    const groups = (fb.groups || []).map(g => `
+      <div class="lh-tool-grp">
+        <div class="lh-tool-grp-h">
+          <span class="lh-tool-grp-n">${g.n}</span>
+          <span>${_ecEsc(_LT_CODE_SAYS[g.code] || g.code)}</span>
+        </div>
+        ${(g.rows || []).map(r => `
+          <div class="lh-tool-row">
+            <div class="lh-tool-note">“${_ecEsc(r.note || '')}”</div>
+            <div class="lh-tool-meta">
+              <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+              <span>${_ecEsc(r.store || '')}</span>
+              <span>${_ecEsc(r.by || '')}</span>
+            </div>
+            <div class="lh-tool-ttl"><span class="lt-lab">Title</span>
+              <span>${_ecEsc(r.current || '')}</span></div>
+            ${r.suggested ? `<div class="lh-tool-ttl"><span class="lt-lab">We said</span>
+              <span>${_ecEsc(r.suggested)}</span></div>` : ''}
+            ${r.saysItself ? `<div class="lh-tool-says">
+              The listing itself already says this —
+              <b>${_ecEsc(r.saysItself.field)} = ${_ecEsc(r.saysItself.value)}</b>
+            </div>` : `<div class="lh-tool-unsettled">
+              Nothing in the listing settles this one.
+            </div>`}
+          </div>`).join('')}
+      </div>`).join('');
+    // ⚠️ THE COPY BUTTON IS THE FIRST THING IN THE TOOL. What sent Ethan here was
+    // a card he could not act on; putting the action under a scroll of evidence
+    // would reproduce that one level down.
+    body.innerHTML = `
+      <div class="lt-ask-bar">
+        <span class="lt-ask-n">${n} dismissal${n === 1 ? '' : 's'} explained a rule was wrong${
+          fb.settled ? ` · ${fb.settled} look like the rule overruled the listing` : ''}</span>
+        <button class="lt-ask-btn" onclick="lhToolCopy()">Copy The Ask For Claude</button>
+      </div>
+      <p class="lh-tool-say">Paste it into Claude. It groups these by the rule that
+        raised them, attaches each listing's own spec fields, and asks for the
+        reasoning before any rule changes. Nothing is sent from here, and no
+        listing changes.</p>
+      ${groups}
+      <details class="lh-tool-raw">
+        <summary>See exactly what gets copied</summary>
+        <pre class="lt-ask-pre">${_ecEsc(fb.ask || '')}</pre>
+      </details>`;
+}
+
+// Copies, then marks these notes read so the next ask carries only new ones.
+// The stamp is written SERVER-SIDE (feedback_triaged_at, migration 0077): a
+// localStorage high-water mark is what made the recycle reply card clear on one
+// machine and stay up on every other.
+async function lhToolCopy() {
+    const fb = _lhToolFb;
+    if (!fb || !fb.ask) return;
+    try {
+        await navigator.clipboard.writeText(fb.ask);
+    } catch (_e) {
+        await _ltTell('Could Not Reach The Clipboard',
+            'Your browser refused the copy. Open “See exactly what gets copied”,'
+            + ' select the text and copy it by hand.');
+        return;
+    }
+    // ⚠️ ONLY AFTER THE COPY SUCCEEDED. Stamping first would mark notes read that
+    // never reached anybody's clipboard, and there is no way back to them.
+    await _ltPost({ action: 'triaged', store: (fb.stores || [])[0] || '', keys: fb.keys || [] });
+    _lhToolFb = null;
+    if (typeof checkTitleNoteReminders === 'function') checkTitleNoteReminders();
+    const body = document.getElementById('listingHealthToolBody');
+    if (body) body.innerHTML = `<div class="lh-tool-clear">
+      <span class="lh-tool-tick">✓</span>
+      <b>Copied. Paste it into Claude.</b>
+      <span>These notes are marked as read, so the next ask carries only new ones.
+       Nothing on any listing changed.</span>
+    </div>`;
+}
+window.lhToolCopy = lhToolCopy;
 
 function _ltDeniedHtml() {
     const d = _ltData && _ltData.denied;
