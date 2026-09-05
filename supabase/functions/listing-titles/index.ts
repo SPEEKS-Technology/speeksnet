@@ -1723,6 +1723,16 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
   };
   // The length rule is the closure's; WHERE the word goes is placeAfter, which
   // lives at module scope so the estate's own titles can be asserted against it.
+  // Colour goes before the part number; see placeBeforePartCode for the census
+  // that decided it. Falls back to appending when the title has no part number,
+  // which is the other 29% of the estate.
+  const tryPlaceColour = (word: string): boolean => {
+    if (title.length + 1 + word.length > EBAY_TITLE_MAX) return false;
+    const placed = placeBeforePartCode(title, word);
+    if (placed === null) return tryAppend(word);
+    title = placed; fixable = true; return true;
+  };
+
   const tryPlace = (word: string, after: string): boolean => {
     if (title.length + 1 + word.length > EBAY_TITLE_MAX) return false;
     const placed = placeAfter(title, word, after);
@@ -2551,7 +2561,8 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
         const text = isScreen ? (screenSizeText(m.v) || m.v) : m.v;
         const placed = isScreen
           ? tryPlace(text, String(extra?.specs?.["Model"] || "").trim())
-          : tryAppend(text);
+          : m.k === "Color" ? tryPlaceColour(text)
+            : tryAppend(text);
         if (placed) { added.push(`${m.k} ${text}`); lazyUsed.add(m.k); }
       }
       if (added.length) {
@@ -3790,6 +3801,56 @@ const trimRank = (k: string) =>
 // Falls back to appending — what it has always done — when there is no model
 // to anchor to. Same length rule either way: an addition that does not fit is
 // not made.
+// ⚠️ A MEASUREMENT IS NOT A PART NUMBER, and titleWorthy's version of this test
+// cannot tell them apart — "128GB" passes it (letters, digits, no vowel in "GB")
+// which is harmless when the job is REJECTING a value for a title, and wrong
+// when the job is finding a position IN one. This is the stricter reading, for
+// placement only.
+const TITLE_UNIT =
+  /^\d+(\.\d+)?\s*(gb|tb|mb|kb|mm|cm|in|ft|hz|khz|mhz|ghz|mp|mah|w|wh|v|k|p|x|xl)$/i;
+
+function isTitlePartCode(w: string): boolean {
+  const v = String(w || "").trim();
+  if (v.length < 5) return false;
+  if (!/[A-Za-z]/.test(v) || !/\d/.test(v)) return false;
+  if (TITLE_UNIT.test(v)) return false;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_\-/.]*$/.test(v)) return false;
+  const letters = v.replace(/[^A-Za-z]/g, "");
+  // ⚠️ THE VOWEL TEST NEEDS ENOUGH LETTERS TO BE A WORD. "A3140" (a real Beats
+  // part number) and "A2727" are one letter and four digits, and that letter is
+  // a vowel — so "has no vowel" said "not a part code" about the clearest part
+  // codes in the sample. One or two letters IS the code.
+  if (letters.length <= 2) return true;
+  return squash(v).length >= 7 || !/[aeiou]/i.test(letters);
+}
+
+// WHERE A COLOUR GOES, measured rather than guessed — the same way the screen
+// size was settled. Of the 207 titles across the estate that already carry their
+// Color value, only 59 (29%) end on it; of the 148 that do not, 82 are followed
+// by a PART NUMBER, which is the single dominant shape at nearly 7:1:
+//
+//   Google Nest Hub 1st Gen Smart Speaker White 10395A-H0A
+//   Apple AirPods Max Wireless Over-Ear Headphones Silver MGYJ3AM/A
+//   Beats Solo4 Wireless On-Ear Bluetooth Headphones Cloud Pink A3140
+//
+// (Ethan, 2026-09-04: "Color should probably also not be the last word as other
+// listings have it in the middle I believe." It is not the middle — it is
+// immediately before the part number.)
+//
+// ⚠️ THE MINORITY PATTERN IS REAL AND THIS RULE GETS IT SLIGHTLY WRONG. Twelve
+// titles read "New HP 902XL T0A39AN Black Ink Cartridge", with the colour AFTER
+// the part number and before the noun. 82 against 12 decides it, and the cost is
+// a colour one word out of place on a row a person reads before approving.
+function placeBeforePartCode(title: string, word: string): string | null {
+  const w = title.trim().split(/\s+/);
+  for (let i = w.length - 1; i >= 1; i--) {
+    if (isTitlePartCode(w[i])) {
+      return w.slice(0, i).concat(word, w.slice(i)).join(" ");
+    }
+  }
+  return null;
+}
+
 function placeAfter(title: string, word: string, after: string): string | null {
   const m = after ? runRe(after).exec(title) : null;
   if (!m) return null;
@@ -4753,6 +4814,90 @@ Deno.serve(async (req: Request) => {
           { headers: { ...corsHeaders, "Content-Type": "text/plain; charset=utf-8" } });
       }
       return json({ ...fb, ask: buildAsk(fb) });
+    }
+
+    // --- WHERE DOES A COLOUR ACTUALLY GO IN A TITLE? ------------------------
+    // ?colors=1&store=ALL&secret=[&limit=][&offset=]  — READ ONLY.
+    //
+    // Ethan, 2026-09-04: "Color should probably also not be the last word as
+    // other listings have it in the middle I believe." The screen-size
+    // placement was settled by measuring the estate rather than by either of us
+    // guessing, and the same question deserves the same answer: of the titles
+    // that ALREADY carry their colour, where do the people who wrote them put
+    // it, and what follows it when it is not last?
+    //
+    // Only titles that already contain the Color value count. A title without
+    // one says nothing about the convention.
+    if (url.searchParams.get("colors")) {
+      if (url.searchParams.get("secret") !== SECRET) {
+        return json({ error: "forbidden" }, 403);
+      }
+      const asked = (url.searchParams.get("store") || "").toUpperCase();
+      const list = asked === "ALL" ? STORES : STORES.includes(asked) ? [asked] : [];
+      if (!list.length) return json({ error: "store required" }, 400);
+      const limit = Math.min(Number(url.searchParams.get("limit") || 400), 600);
+      const offset = Math.max(Number(url.searchParams.get("offset") || 0), 0);
+      let withColor = 0, inTitle = 0, last = 0;
+      const after: Record<string, number> = {};
+      const tailShapes: Record<string, number> = {};
+      const samples: any[] = [];
+      for (const st of list) {
+        const cat: any[] = await rows(
+          `ebay_catalog?store_code=eq.${st}&select=sku,product_id,title`
+          + `&order=sku&limit=${limit}&offset=${offset}`);
+        const { shop, token } = await shopFor(st);
+        const ids = [...new Set(cat.map(c => String(c.product_id)).filter(Boolean))];
+        const extras = await extrasFor(shop, token, ids);
+        for (const c of cat) {
+          const e = extras[String(c.product_id)];
+          const col = String(e?.specs?.["Color"] || "").trim();
+          if (!col || PLACEHOLDER.test(col)) continue;
+          withColor++;
+          const title = String(c.title || "");
+          const words = title.trim().split(/\s+/);
+          // Where the colour's LAST word sits, so a two-word colour ("Space
+          // Grey") is measured by where it ends rather than where it starts.
+          const colWords = col.trim().split(/\s+/).map(w => norm(w)).filter(Boolean);
+          let at = -1;
+          for (let i = 0; i + colWords.length <= words.length; i++) {
+            let hit = true;
+            for (let j = 0; j < colWords.length; j++) {
+              if (norm(words[i + j]) !== colWords[j]) { hit = false; break; }
+            }
+            if (hit) { at = i + colWords.length - 1; break; }
+          }
+          if (at < 0) continue;
+          inTitle++;
+          const rest = words.slice(at + 1);
+          if (!rest.length) { last++; continue; }
+          // What FOLLOWS a colour that is not last. This is the half that says
+          // where a colour should be INSERTED, rather than only that it is not
+          // always at the end.
+          after[norm(rest[0])] = (after[norm(rest[0])] || 0) + 1;
+          // And the shape of the tail, because "a part number" matters more
+          // than which part number.
+          const shape = rest.map(w =>
+            /^\d+(\.\d+)?("|in|gb|tb|mp|hz)?$/i.test(w) ? "<num>"
+              : /^[A-Z0-9][A-Z0-9\-\/]{4,}$/.test(w) ? "<partno>"
+                : w.toLowerCase()).join(" ");
+          tailShapes[shape] = (tailShapes[shape] || 0) + 1;
+          if (samples.length < 40) samples.push({ store: st, sku: c.sku, color: col, title });
+        }
+      }
+      const top = (o: Record<string, number>, n: number) =>
+        Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n)
+          .map(([k, v]) => `${v} x ${k}`);
+      return json({
+        withColorSpec: withColor,
+        colourInTitle: inTitle,
+        lastWord: last,
+        notLast: inTitle - last,
+        pctLast: inTitle ? Math.round((last / inTitle) * 100) : null,
+        // The two questions that decide a placement rule.
+        wordAfterColour: top(after, 25),
+        tailShape: top(tailShapes, 25),
+        samples,
+      });
     }
 
     if (url.searchParams.get("nouns")) {

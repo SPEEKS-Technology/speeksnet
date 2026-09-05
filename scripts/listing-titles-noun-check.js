@@ -463,14 +463,72 @@ ok(src.includes('tryPlace(text, String(extra?.specs?.["Model"] || "").trim())'),
 // row to call — and a divergence here is invisible until someone photographs it.
 ok(/const isScreen = m\.k === "Screen Size";/.test(src),
    'lazy-title singles the screen size out from the fields it appends');
-ok(/const placed = isScreen\s*\n\s*\? tryPlace\(text, String\(extra\?\.specs\?\.\["Model"\] \|\| ""\)\.trim\(\)\)\s*\n\s*: tryAppend\(text\);/.test(src),
+ok(/const placed = isScreen\s*\n\s*\? tryPlace\(text, String\(extra\?\.specs\?\.\["Model"\] \|\| ""\)\.trim\(\)\)/.test(src),
    'and places it after the same Model anchor, not on the end');
+// Everything that is NOT a screen size or a colour still appends, so a new
+// special case cannot quietly become the default.
+ok(/\n\s*: tryAppend\(text\);/.test(src),
+   'and every other field still appends');
 // Through screenSizeText for the same reason: a spec of `6.7` or `6.7 in` has to
 // come out as `6.7"` whichever rule adds it.
 ok(/const text = isScreen \? \(screenSizeText\(m\.v\) \|\| m\.v\) : m\.v;/.test(src),
    'and writes the measurement the same way the other rule does');
 ok(/added\.push\(`\$\{m\.k\} \$\{text\}`\)/.test(src),
    'and the reason names what was actually inserted, not the raw spec');
+
+// --- WHERE A COLOUR GOES -----------------------------------------------------
+// ⚠️ MEASURED, NOT GUESSED. Of the 207 titles across the estate that already
+// carry their Color value, only 59 (29%) end on it; of the 148 that do not, 82
+// are followed by a PART NUMBER — the dominant shape at nearly 7:1:
+//
+//   Google Nest Hub 1st Gen Smart Speaker White 10395A-H0A
+//   Apple AirPods Max Wireless Over-Ear Headphones Silver MGYJ3AM/A
+//
+// (Ethan, 2026-09-04: "Color should probably also not be the last word as other
+// listings have it in the middle I believe." Not the middle — before the part
+// number.) The census route is ?colors=1&store=ALL&secret=.
+console.log('\n== 11. The colour goes before the part number ==');
+{
+    const place = new Function('squash', `
+        ${between('const TITLE_UNIT =', '\n\nfunction placeAfter')
+            .replace(/\(w: string\): boolean/g, '(w)')
+            .replace(/\(title: string, word: string\): string \| null/g, '(title, word)')}
+        return { isTitlePartCode: isTitlePartCode, placeBeforePartCode: placeBeforePartCode };
+    `)(v => String(v).toLowerCase().replace(/[^a-z0-9]/g, ''));
+
+    // The row Ethan was looking at.
+    ok(place.placeBeforePartCode(
+        'Broken Unlocked Apple iPhone 15 Plus 6.7" 128GB 26.6 MTXT3LL/A Read', 'Pink')
+        === 'Broken Unlocked Apple iPhone 15 Plus 6.7" 128GB 26.6 Pink MTXT3LL/A Read',
+       'Pink lands before MTXT3LL/A, not after Read',
+       place.placeBeforePartCode('Broken Unlocked Apple iPhone 15 Plus 6.7" 128GB 26.6 MTXT3LL/A Read', 'Pink'));
+
+    // ⚠️ A MEASUREMENT IS NOT A PART NUMBER. titleWorthy's version of this test
+    // calls "128GB" a part code — letters, a digit, no vowel in "GB" — which is
+    // harmless when REJECTING a value and wrong when finding a position, and
+    // would have put the colour in the middle of the specs.
+    for (const m of ['128GB', '64GB', '44MM', '2025', '720G', '15', '6.7"', '902XL']) {
+        ok(!place.isTitlePartCode(m), `"${m}" is not read as a part number`);
+    }
+    for (const p of ['MTXT3LL/A', '10395A-H0A', 'TMRV07P5G', 'XT2513-1',
+                     'MC007791', 'A3140', 'CUH-ZVR1', 'MGYJ3AM/A']) {
+        ok(place.isTitlePartCode(p), `"${p}" is`);
+    }
+
+    // The 29% with no part number at all: nothing to anchor to, so the caller
+    // appends. null is how it says so.
+    ok(place.placeBeforePartCode('New HP 64XL Tri-color Ink Cartridge', 'Black') === null,
+       'a title with no part number returns null, so the caller appends');
+    // Never before the first word — a colour cannot lead a title.
+    ok(place.placeBeforePartCode('A3140 Beats Solo4', 'Pink') === null,
+       'and a part code in first position is not an anchor');
+
+    // The closure obeys the same 80-character rule as every other addition.
+    ok(/const tryPlaceColour = \(word: string\): boolean => \{\s*\n\s*if \(title\.length \+ 1 \+ word\.length > EBAY_TITLE_MAX\) return false;/.test(src),
+       'an addition that does not fit is still not made');
+    ok(/: m\.k === "Color" \? tryPlaceColour\(text\)/.test(src),
+       'and lazy-title routes the colour through it');
+}
 
 console.log('\n' + (fails ? `${fails} FAILED` : 'all passed'));
 process.exit(fails ? 1 : 0);
