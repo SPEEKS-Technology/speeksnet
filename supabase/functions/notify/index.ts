@@ -67,7 +67,7 @@ const corsHeaders = {
 
 const CATEGORIES = [
   "announcements", "store_messages", "requests",
-  "claims", "variance_aging", "deadlines", "scores", "categories",
+  "claims", "variance_aging", "deadlines", "scores", "categories", "listing_photos",
 ] as const;
 type Category = typeof CATEGORIES[number];
 
@@ -89,6 +89,13 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   // Named for the queue, not the mechanism: a manager knows what "a listing
   // with no category" is and has never heard of the `other` collection.
   categories:     { label: "Listing Categories",         blurb: "Online-store listings with no category, or on a shelf that looks wrong." },
+  // ITS OWN SWITCH, NOT PART OF "categories", even though both queues live on
+  // the same page. Two reasons, and either alone would be enough: the audience
+  // differs (this one includes ASMs, who are absent from the categories set),
+  // and the urgency differs — a miscategorised listing is untidy, a listing with
+  // no photo cannot be bought. Folding them together would mean muting the
+  // storefront-tidiness nag also silences the one that costs a sale.
+  listing_photos: { label: "Listings With No Pictures",  blurb: "A listing live on the online store with no photo at all. This should always be none." },
 };
 
 // PER-ROLE LABEL OVERRIDES.
@@ -333,6 +340,19 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
   // purpose: the DM lives in this panel and their queue is a standing backlog
   // across five stores, which is not news once a week.
   categories: new Set(["manager", "owner (manager)", "owner manager"]),
+  // ASMs ARE IN, unlike categories above: they already hold the tool (the
+  // ec-view-categories role override grants Listing Health to assistant
+  // manager), and photographing an item is squarely their work.
+  //
+  // ⚠️ MULTI-STORE MANAGER IS IN, AND HAS TO BE. MPL has no Manager row at all
+  // and BAL's manager IS the MSM, so a set that omits the role leaves two of the
+  // five stores with no manager-level recipient — the mail simply never arrives
+  // and nothing says so. `categories` above has that gap today; left alone here
+  // rather than widened silently, because that is a different tool's audience.
+  listing_photos: new Set([
+    "manager", "owner (manager)", "owner manager", "multi-store manager",
+    "assistant manager",
+  ]),
 };
 
 // The categories worth showing THIS person, in the canonical order.
@@ -919,6 +939,11 @@ type Due = {
   // always accepted it. The narrower type was simply wrong, and quietly: Deno
   // Deploy does not type-check, so the file ran and only `deno check` knew.
   title: string; body: string; link: string; tone: "red" | "amber" | "sage";
+  // The badge word. Defaults to "Overdue" for red and "Due" for everything else;
+  // set it explicitly where the colour is about SEVERITY rather than lateness —
+  // the storefront queues are red because they cost sales, not because a
+  // deadline passed.
+  meta?: string;
   for: (p: Person) => boolean;      // who owes this
   store?: string;
   // The feature_overrides key of the surface this chases, so somebody the tool
@@ -1425,9 +1450,71 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
         // "83 Listings with no category", which reads like a typo.
         body: `On the online store: ${bits.join(" and ")}. `
           + `Open SPEEKS Connect, then Categories, to sort them.`,
-        link: "operations.html#categories", tone: "amber",
+        // Red, matching the no-pictures alarm: both are the storefront being
+        // wrong in front of a customer, and one of them being amber made the
+        // pair read as two different grades of problem. "Action", not "Overdue"
+        // — see the meta note on the Due type.
+        link: "operations.html#categories", tone: "red", meta: "Action",
         for: (p) => CAT_ROLES.has(p.role) && covers(p, store),
         feature: "ec-view-categories",
+      });
+    }
+  }
+
+  // ---- Listings live on the online store with no picture -------------------
+  //
+  // An ALARM WHOSE CORRECT READING IS ZERO, not a backlog — which is why this is
+  // DAILY (`period: t.date`) where the categories queue beside it is weekly. A
+  // category queue is a standing pile you work down; a published listing with no
+  // photo is an exception that should not survive the day. If this mails two
+  // days running, the answer is to photograph the item, not to lengthen the
+  // dedupe window.
+  //
+  // ⚠️ PUBLISHED ONLY. `listing_no_photos` filters on online_published, so the
+  // ~515 UNPUBLISHED no-photo products are deliberately not in here: they are a
+  // real pile, but they belong to the unlisted backlog, and folding them in
+  // would turn the one number that should read zero into a 500-row queue nobody
+  // can alarm on. See migration 0065.
+  {
+    const PHOTO_ROLES = new Set([
+      "manager", "owner (manager)", "owner manager", "multi-store manager",
+      "assistant manager",
+    ]);
+    const { data: noPhoto } = await sb
+      .from("listing_no_photos").select("store_code,sku");
+    const byStore: Record<string, string[]> = {};
+    for (const r of noPhoto || []) {
+      const s = String(r.store_code || "").toUpperCase();
+      (byStore[s] ??= []).push(String(r.sku || "").trim());
+    }
+    for (const store of STORES) {
+      const skus = (byStore[store] || []).filter(Boolean);
+      const n = byStore[store]?.length || 0;
+      if (!n) continue;
+      // The SKU goes IN THE MAIL when the list is short enough to read, because
+      // the whole errand is "find this item and photograph it" and the SKU is
+      // what gets read out to whoever is holding the camera. Past a handful the
+      // sentence stops being readable, so it defers to the panel.
+      const named = skus.length && skus.length <= 5 ? ` (${skus.join(", ")})` : "";
+      due.push({
+        slug: "listingNoPhotos", period: t.date, cat: "listing_photos", store,
+        title: `Listings with no pictures — ${STORE_NAME[store] || store}`,
+        // LEADS WITH A WORD, not a number — the mailer sentence-cases the first
+        // WORD of a body and skips leading digits, so "1 listing..." renders as
+        // a typo. Same trap the categories body above documents.
+        body: `Photos are missing on ${n} listing${n === 1 ? "" : "s"}`
+          + ` that ${n === 1 ? "is" : "are"} live on the online store${named}.`
+          + ` A shopper sees an empty picture box, so ${n === 1 ? "it" : "they"}`
+          + ` will not sell. Open SPEEKS Connect, then Listing Health, for the`
+          + ` Shopify link — the fix is adding a photo in Shopify.`,
+        // Red, and "Action" rather than the "Overdue" red used to force — the
+        // meta field exists precisely so this can be urgent without claiming a
+        // deadline passed.
+        link: "operations.html#categories", tone: "red", meta: "Action",
+        for: (p) => PHOTO_ROLES.has(p.role) && covers(p, store),
+        // Its own key since the two halves of Listing Health were split, so
+        // revoking the alarm stops the alarm's mail and nothing else.
+        feature: "ec-view-photos",
       });
     }
   }
@@ -1474,7 +1561,12 @@ async function runDigest(sb: any, opts: { dryRun: boolean; to: string | null; on
     const box = newOutbox(boxes, h.person, String(p.email));
     box.items.push({
       title: cardTitle(h.d.title, h.person), body: h.d.body, link: h.d.link, tone: h.d.tone,
-      meta: h.d.tone === "red" ? "Overdue" : "Due", key: h.key,
+      // ⚠️ TONE AND LABEL ARE NO LONGER THE SAME DECISION. Deriving the label
+      // from the colour meant anything urgent enough to draw in red also claimed
+      // to be late — which is false for the two storefront queues, where nothing
+      // has a deadline to have missed. An item may now say what it is; only
+      // items that set nothing fall back to the old rule.
+      meta: h.d.meta ?? (h.d.tone === "red" ? "Overdue" : "Due"), key: h.key,
     });
   }
 

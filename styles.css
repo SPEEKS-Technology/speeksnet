@@ -1947,16 +1947,30 @@ select.bs-hidden-select:focus {
    Light-only; dark handled by the global <html> filter.
    ========================================================= */
 /* --- sub-navigation: Champions · Awards · Records --- */
+/* Three equal segments. As a flex row each tab sized to its own label, so
+   "Champions" was half again the width of "Awards" and the control read as three
+   unrelated buttons rather than one switch.
+   `grid-auto-columns: 1fr` inside a `width: max-content` box is the equal-columns
+   trick: every 1fr track resolves to the WIDEST track's max-content, so the group
+   still hugs its content but each tab is the same size.
+   auto-flow COLUMN rather than a fixed 3-track template on purpose — Awards
+   carries data-mobile="hide", and a fixed template would hold an empty third
+   column open on phones. */
 .stats-subnav {
-    display: flex; width: max-content; max-width: 100%; margin: 2px auto 30px;
+    display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    width: max-content; max-width: 100%; margin: 2px auto 30px;
     gap: 4px; background: #eef2f6; border: 1px solid #e6ebf1;
     border-radius: 14px; padding: 4px;
 }
 .stats-seg {
-    display: inline-flex; align-items: center; gap: 8px; font-family: inherit;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    font-family: inherit;
     font-size: 13.5px; font-weight: 750; color: #647082; background: transparent;
     border: 0; border-radius: 10px; padding: 9px 18px; cursor: pointer;
     transition: background .15s ease, color .15s ease;
+    /* Equal tracks are only equal if nothing inside forces a track wider than the
+       others; a long label would otherwise push its own column out. */
+    min-width: 0; white-space: nowrap;
 }
 .stats-seg svg { width: 16px; height: 16px; }
 .stats-seg:hover { color: var(--slate-charcoal); background: rgba(255,255,255,.6); }
@@ -2034,7 +2048,13 @@ select.bs-hidden-select:focus {
 .aw-cap { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #94a3b8; margin-top: 3px; }
 
 /* --- all-time records: quiet header, mint hero, clean list --- */
-.records-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: start; }
+/* Three even rows of three. `align-items: start` let every card shrink to its own
+   content, so a sparse card left a ragged step and the row read as broken rather
+   than as a card with room to grow. Stretching keeps each row a single height —
+   which matters most for Single Day Google Reviews, whose card is short today
+   and will fill as more people land on the board. Grid never reflows a card
+   upward into a gap the way a masonry layout would, so nothing below can climb. */
+.records-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: stretch; }
 .rec {
     background: #fff; border: 1px solid #e6ebf1; border-radius: 14px;
     box-shadow: 0 1px 2px rgba(16,24,40,.05); overflow: hidden; display: flex;
@@ -2053,12 +2073,24 @@ select.bs-hidden-select:focus {
 .rec-champ .cs .ch { color: #178048; font-weight: 850; letter-spacing: .015em; }
 .rec-champ .cs .cd { color: #cbd5e1; margin: 0 5px; }
 .rec-list { padding: 6px 8px 4px; display: flex; flex-direction: column; }
+/* A leader-only card holds nothing but its collapsed board, so the list's top
+   padding would sit as a blank strip under the hero. Dropping it also lands the
+   first revealed row flush against the hero's divider, which is where the
+   fourth row lands on every other card. */
+.rec-list.lead { padding-top: 0; }
 .rec-li { display: flex; align-items: center; gap: 11px; padding: 9px 8px; }
 .rec-li + .rec-li { border-top: 1px solid #f1f5f9; }
 .hidden-board .rec-li:first-child { border-top: 1px solid #f1f5f9; }
 .rec-li .lr { width: 18px; text-align: center; font-size: 12px; font-weight: 850; color: #94a3b8; flex: none; font-variant-numeric: tabular-nums; }
 .rec-li .lr.g { color: #c99a17; }
 .rec-li .ls { font-size: 13px; font-weight: 800; color: var(--slate-charcoal); }
+/* Person-held metrics: the name is the holder, the store is where they work.
+   Stacked so the name keeps the weight the store code has on every other card. */
+.rec-li .ls .lsub {
+    display: block; margin-top: 1px;
+    font-size: 10px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: #94a3b8;
+}
 .rec-li .lv { margin-left: auto; text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
 .rec-li .lv b { font-size: 14px; font-weight: 850; line-height: 1.15; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
 .rec-li .lv span { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
@@ -9844,6 +9876,12 @@ body.sam-active .hotbar-btn:hover {
     font-size: 13px;
 }
 .tools-panel-close:hover { background: #fcecec; color: var(--red-alert); }
+/* The Tools X used to be a text glyph, so it never needed this. It is the same
+   inline SVG as every other close control now (25 Aug), which is what makes it the
+   same BUTTON and not merely the same box -- a text x and a 15px SVG read as two
+   different sizes inside identical squares. 14 against this 28px button matches the
+   15/32 the modal headers use. */
+.tools-panel-close svg { width: 14px; height: 14px; display: block; }
 
 .tools-panel-body { padding: 14px 10px 22px; }
 
@@ -9920,7 +9958,14 @@ body.sam-active .hotbar-btn:hover {
 /* Added 2026-08-21 with the Categories nag. A new bubble id is NOT covered by
    this rule until it is listed here — mine shipped visible, and a floating
    teal toast is exactly what the feed replaced. */
-#recatAlertBubble {
+#recatAlertBubble,
+/* Added 2026-08-25 with the no-pictures alarm, listed here in the same commit
+   that created it — see the note above for what happens otherwise. */
+#photoAlertBubble,
+/* Added 2026-09-04 with the dismissed-with-a-note card, listed here in the
+   same commit that created it — see the note above for what happens
+   otherwise. */
+#titleNoteAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -10313,7 +10358,16 @@ body.sam-active .hotbar-btn:hover {
    value + date. Redesign only — every cell keeps .record-manage-row so
    saveManageRecords() reads exactly the same fields. */
 #manageRecordsList .cr-hint { font-size: 12px; color: #647082; margin: 0 0 12px; }
-#manageRecordsList .cr-grid-scroll { overflow-x: auto; padding-bottom: 4px; }
+/* This is the vertical scroller, not .manage-content — overflow-x:auto makes
+   overflow-y compute to auto too, which is also what lets the header freeze.
+   Everything the tool edits sits inside it so there is exactly ONE scrollbar:
+   nesting a second one hid the person editor below the fold on a short screen
+   with nothing to say it was there. flex:1 1 auto so it takes the modal's
+   height rather than its content's. */
+#manageRecordsList .cr-grid-scroll {
+    overflow-x: auto; padding-bottom: 4px;
+    flex: 1 1 auto;
+}
 #manageRecordsList .cr-grid { display: grid; gap: 6px; min-width: min-content; align-items: stretch; }
 #manageRecordsList .cr-cell { display: flex; box-sizing: border-box; }
 #manageRecordsList .cr-colhead {
@@ -10322,6 +10376,35 @@ body.sam-active .hotbar-btn:hover {
     color: #475569; background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 8px; padding: 9px 6px;
     position: sticky; top: 0; z-index: 3;
 }
+/* The frozen header is not one bar — it is six separate cells with the grid's
+   6px gutters between and below them, and a gutter is transparent. So a row
+   scrolling underneath stayed visible through the gaps and around the pills'
+   rounded corners, which is what read as content clipping through the header.
+   These fill the gutters with the panel's own colour: opaque, but the same
+   shade the gaps already appeared to be, so the header looks unchanged and
+   simply stops leaking. The shadow is what says "this floats above the rows"
+   rather than "this is the first row" — the same fix as .b2b-phead.
+   A pseudo-element cannot do this: these cells are sticky WITH a z-index, so
+   they open a stacking context and even a z-index:-1 child paints over their
+   own background. A box-shadow paints outside the border box and behind it. */
+#manageRecordsList .cr-colhead,
+#manageRecordsList .cr-corner {
+    /* Square along the bottom. A box-shadow follows the border-radius, so a
+       rounded corner leaves a notch the shadow cannot fill, and a row shows
+       through it — that was the last of the leak after the gutters were
+       closed. Squaring the pills is what makes the cover total rather than
+       nearly total, and it reads as a spreadsheet header, which this is. */
+    border-radius: 0;
+    box-shadow:
+        0 0 0 5px #f6f8fa,                    /* close the gutters either side */
+        0 5px 0 5px #f6f8fa,                  /* and the one underneath */
+        0 12px 12px -9px rgba(16, 24, 34, .5);
+}
+/* The left column freezes against the HORIZONTAL scroll, so only the gutter it
+   is scrolled across needs closing. Top and bottom stay open on purpose: those
+   gaps separate one metric from the next, and this cell travels with its row,
+   so nothing ever passes behind it vertically. */
+#manageRecordsList .cr-rowhead { box-shadow: 7px 0 0 0 #f6f8fa; }
 #manageRecordsList .cr-corner {
     align-items: center; padding: 9px 12px;
     font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8;
@@ -10354,6 +10437,112 @@ body.sam-active .hotbar-btn:hover {
 }
 #manageRecordsList .cr-company input:focus { box-shadow: none; border-color: #d6e9dd; }
 #manageRecordsList .cr-company input.r-date { color: #5f8f74; font-weight: 600; }
+
+/* ── Person-held records ───────────────────────────────────────────────────
+   A list, not a grid: the holder is a person, so there is no column to put
+   them in and the number of holders is not fixed at five. Sits below the
+   grid, inside the same scroll container. */
+#manageRecordsList .cr-people {
+    margin-top: 18px; padding: 14px; background: #fff;
+    border: 1px solid #e3e8ee; border-radius: 12px;
+    /* Above the frozen header (z-index 3/4). Scrolling down to this section
+       slides it over the store columns, which is right: those column names
+       describe the grid, and nothing here belongs to them. */
+    position: relative; z-index: 5;
+}
+#manageRecordsList .cr-people-h { display: flex; flex-direction: column; gap: 3px; margin-bottom: 11px; }
+#manageRecordsList .cr-people-t {
+    font-size: 12.5px; font-weight: 800; color: var(--slate-charcoal);
+}
+#manageRecordsList .cr-people-s { font-size: 11.5px; color: #647082; line-height: 1.35; }
+#manageRecordsList .cr-prow {
+    display: grid; grid-template-columns: minmax(120px, 1.6fr) minmax(96px, .9fr) 80px minmax(130px, 1.2fr) 32px;
+    gap: 8px; align-items: center;
+}
+#manageRecordsList .cr-phead {
+    padding: 0 2px 6px; font-size: 9.5px; font-weight: 800; letter-spacing: .07em;
+    text-transform: uppercase; color: #94a3b8;
+    /* The move column sits outside the field grid, so the headings have to be
+       pushed by exactly its width plus the row gap or every label is off by one
+       control. Kept as one custom property so the two can never drift. */
+    margin-left: calc(var(--cr-move-w) + 8px);
+}
+#manageRecordsList .cr-people { --cr-move-w: 26px; }
+
+/* A person row is now [ move handles ][ the field grid ]. The grid keeps its own
+   .cr-prow columns; only the handles are new, so the fields still line up with
+   the headings above. */
+#manageRecordsList .cr-person-row { display: flex; align-items: center; gap: 8px; }
+#manageRecordsList .cr-pfields { flex: 1 1 auto; min-width: 0; }
+#manageRecordsList .cr-person-row + .cr-person-row { margin-top: 7px; }
+
+#manageRecordsList .cr-pmove {
+    flex: none; width: var(--cr-move-w);
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+}
+#manageRecordsList .cr-prank {
+    font-size: 10px; font-weight: 850; color: #94a3b8;
+    font-variant-numeric: tabular-nums; line-height: 1;
+}
+#manageRecordsList .cr-pmv {
+    display: flex; align-items: center; justify-content: center;
+    width: 24px; height: 16px; padding: 0; flex: none;
+    /* ⚠️ The global button{min-height:44px} rule ovals anything it is not told
+       about — these would become 44px tall lozenges without this. */
+    min-height: 0;
+    border: 0; background: none; border-radius: 5px;
+    color: #8f9dad; cursor: pointer; transition: color .14s, background .14s;
+}
+#manageRecordsList .cr-pmv svg { width: 14px; height: 14px; }
+#manageRecordsList .cr-pmv:hover:not(:disabled) { color: #178048; background: #eef7f1; }
+#manageRecordsList .cr-pmv:disabled { opacity: .28; cursor: default; }
+#manageRecordsList .cr-pmv:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
+
+/* Shown only when a bigger number is sitting below a smaller one. */
+#manageRecordsList .cr-pwarn {
+    display: flex; align-items: flex-start; gap: 7px; margin: 0 0 10px;
+    padding: 7px 9px; border-radius: 8px;
+    background: #fffbeb; border: 1px solid #fde9a9; color: #8a6100;
+    font-size: 11px; font-weight: 650; line-height: 1.4;
+}
+#manageRecordsList .cr-pwarn[hidden] { display: none; }
+#manageRecordsList .cr-pwarn svg { width: 14px; height: 14px; flex: none; margin-top: 1px; }
+#manageRecordsList .cr-psort {
+    min-height: 0; padding: 0; border: 0; background: none;
+    font: inherit; color: #8a6100; font-weight: 850;
+    text-decoration: underline; cursor: pointer;
+}
+#manageRecordsList .cr-person-row input {
+    width: 100%; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 7px;
+    font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal); outline: none; background: #fff;
+}
+#manageRecordsList .cr-person-row input:focus {
+    border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(31, 157, 87, .12);
+}
+#manageRecordsList .cr-person-row .p-val { font-variant-numeric: tabular-nums; }
+#manageRecordsList .cr-person-row .p-date { font-size: 11.5px; color: #64748b; }
+/* The native <select> is moved into a .dd-host and covered by a .dd-btn face,
+   so the face is what has to be sized here — styling the select alone would
+   leave a control that reads at the wrong height. */
+#manageRecordsList .cr-person-row .dd-host { width: 100%; min-width: 0; }
+#manageRecordsList .cr-person-row .dd-btn {
+    width: 100%; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 7px;
+    font-size: 12.5px; font-weight: 600; background: #fff; min-height: 0;
+}
+#manageRecordsList .cr-prm {
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; min-height: 0; padding: 0; flex: none;
+    border: 1px solid #e3e8ee; border-radius: 8px; background: #f8fafc;
+    color: #94a3b8; cursor: pointer; transition: background .15s, color .15s;
+}
+#manageRecordsList .cr-prm svg { width: 15px; height: 15px; }
+#manageRecordsList .cr-prm:hover { background: #fef2f2; color: var(--red-alert); border-color: #fbd5d5; }
+#manageRecordsList .cr-padd {
+    margin-top: 10px; width: 100%; padding: 8px; border-radius: 8px;
+    background: #f4faf6; border: 1px solid #e3ede7; color: #178048;
+    font-size: 11.5px; font-weight: 800; cursor: pointer; transition: background .15s;
+}
+#manageRecordsList .cr-padd:hover { background: #e8f7ee; }
 #boxOrderModal .box-order-footer button svg { width: 15px; height: 15px; }
 /* Recycle report footer (JS-rendered) mirrors Box Order's arrow/info buttons. */
 #recycleInvModal .btn-primary svg, #recycleInvModal .btn-secondary svg { width: 15px; height: 15px; flex: 0 0 auto; }
@@ -17554,6 +17743,10 @@ body.tv-body { display: block; background: #eef1f5; }
 }
 .ec-ok { color: #178048; }
 .ec-warn { color: #b7791f; }
+/* Red, not amber, and only on the All Stores card's No Photos row. Everything
+   else on that card is work waiting in a queue; this one is a shopper looking
+   at an empty square on the live storefront right now. */
+.ec-bad { color: #d1443b; }
 .ec-off { color: var(--cb-faint); }
 .ec-hfoot { padding: 0 13px 13px; display: flex; gap: 8px; }
 .ec-hfoot .ec-btn { flex: 1; justify-content: center; }
@@ -17590,6 +17783,104 @@ body.tv-body { display: block; background: #eef1f5; }
 .ec-fbtn.active .ec-fcount { background: #fff; color: #178048; }
 
 .ec-empty { padding: 34px 10px; text-align: center; color: var(--cb-muted); font-size: 13px; font-weight: 600; }
+
+/* --- LISTING HEALTH: two sections on one page ----------------------------- *
+   Upload keeps its own pill. It was briefly folded into a drawer at the bottom
+   of All Stores; what actually needed collapsing was the three eBay ROWS on each
+   store card (see .ec-hebay). .lh-folded is kept only so a stale cached render
+   cannot leave the Upload tab hidden — _ecSyncChrome clears it on every pass. */
+.lh-folded { display: none !important; }
+
+.lh-sec + .lh-sec { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--cb-line); }
+.lh-sechead { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.lh-sectitles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.lh-eyebrow {
+    font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--cb-faint);
+}
+.lh-title { font-size: 15px; font-weight: 800; color: var(--cb-ink); line-height: 1.25; }
+/* The count sits at the far right of its own header, so the two sections'
+   numbers line up down the page and can be compared without reading. */
+.lh-count {
+    margin-left: auto; flex: 0 0 auto; min-width: 30px; text-align: center;
+    border-radius: 20px; padding: 3px 10px; font-size: 12px; font-weight: 800;
+}
+.lh-count-ok   { background: var(--cb-sage-tint); color: #178048; }
+.lh-count-warn { background: var(--cb-gold-tint); color: #b7791f; }
+.lh-count-bad  { background: var(--cb-red-tint);  color: #d1443b; }
+
+/* ALL CLEAR IS ONE LINE. This section is an alarm whose correct reading is
+   zero, and it is directly above a working queue — given a full-height empty
+   state it would push the actual work off the screen every single day for the
+   sake of saying nothing happened. */
+.lh-clear {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--cb-sage-tint); border: 1px solid #cfe6d4; border-radius: 10px;
+    padding: 11px 14px; font-size: 12.5px; font-weight: 700; color: #178048;
+}
+.lh-clear svg { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ...and NOT-KNOWN is its own state, never folded into either of the other
+   two. A check that failed must not borrow the green line. */
+.lh-unknown {
+    display: flex; flex-direction: column; gap: 3px;
+    background: var(--cb-line-2); border: 1px solid var(--cb-line); border-radius: 10px;
+    padding: 11px 14px;
+}
+.lh-unknown-t { font-size: 12.5px; font-weight: 800; color: var(--cb-ink); }
+.lh-why { font-size: 11.5px; font-weight: 600; color: var(--cb-muted); }
+
+.lh-alarm {
+    display: flex; align-items: flex-start; gap: 10px;
+    background: var(--cb-red-tint); border: 1px solid #f2c8c4; border-radius: 10px;
+    padding: 11px 14px; margin-bottom: 14px;
+    font-size: 12.5px; font-weight: 600; color: #a3352c; line-height: 1.55;
+}
+.lh-alarm svg { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.lh-alarm strong { font-weight: 800; }
+
+/* The SKU is the thing somebody reads out or carries onto the floor, so it is
+   monospaced and selectable-looking rather than styled as a faint subtitle. */
+.lh-sku {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px; font-weight: 700; color: var(--cb-ink);
+    background: var(--cb-line-2); border-radius: 5px; padding: 2px 6px;
+    white-space: nowrap;
+}
+.lh-instock { font-size: 12px; font-weight: 800; color: var(--cb-ink); }
+.lh-soldout { font-size: 11px; font-weight: 700; color: var(--cb-faint); white-space: nowrap; }
+.lh-since   { font-size: 11.5px; font-weight: 700; color: var(--cb-muted); white-space: nowrap; }
+/* Past a fortnight this is not a listing waiting on its photos, it is one
+   nobody is coming back to — and the table is sorted by stock, so the worst
+   offender is not necessarily the one at the top. */
+.lh-stale { color: #d1443b; font-weight: 800; }
+/* Nothing truncates the title — it is how somebody recognises the unit — so
+   the cell wraps rather than ellipsing, exactly as the filing queue's does. */
+.lh-table td { vertical-align: middle; }
+
+/* The eBay upload rows, folded away INSIDE each All Stores card. SPEEKS Connect
+   uploading is parked at all five stores, so three rows of zeroes were doubling
+   the height of every card above the part anybody still reads. Quieter than an
+   .ec-hrow on purpose — it is a drawer, not a stat. */
+.ec-hebay { border-top: 1px dashed var(--cb-line); margin-top: 2px; }
+.ec-hebay > summary {
+    display: flex; align-items: center; gap: 6px;
+    cursor: pointer; list-style: none; user-select: none;
+    padding: 8px 0 7px; font-size: 11px; font-weight: 700;
+    letter-spacing: .01em; color: var(--cb-faint);
+}
+.ec-hebay > summary::-webkit-details-marker { display: none; }
+.ec-hebay > summary:before { content: "▸"; font-size: 10px; }
+.ec-hebay[open] > summary:before { content: "▾"; }
+.ec-hebay > summary:hover { color: var(--cb-muted); }
+/* ⚠️ A CLOSED <details> DOES NOT HIDE THESE ON ITS OWN. The browser's own rule
+   is `details:not([open]) > *:not(summary) { display: none }` — a UA style, so
+   the author rule `.ec-hrow { display: flex }` beats it and every row renders
+   with the drawer shut. Without this line the collapse silently does nothing;
+   the UI harness asserts the rows are really unrendered, not merely unstyled. */
+.ec-hebay:not([open]) > .ec-hrow { display: none; }
+/* The last row inside the drawer keeps the card's own bottom rhythm. */
+.ec-hebay > .ec-hrow:last-child { border-bottom: 0; }
 
 /* --- Categories: the filing queue ---------------------------------------- *
    A queue of SUGGESTIONS, so it is deliberately quieter than the eBay feed
@@ -17738,6 +18029,608 @@ body.tv-body { display: block; background: #eef1f5; }
 .rc-note {
     font-size: 11px; font-weight: 700; letter-spacing: .01em;
     color: var(--cb-faint); margin: -6px 0 12px;
+}
+
+/* --- Listing Titles (Listing Health, section three) ------------------------
+   A ROW HERE IS A DECISION, NOT A TABLE CELL. The other two queues on this page
+   are tables, because their rows are one fact each. A title review is three
+   pieces of prose stacked — what it says now, what it would say, and why — plus
+   an editable field, and none of that survives being squeezed into a column. So
+   the row is a card and the reading order is top to bottom. */
+.lt-modes { flex-wrap: wrap; }
+/* The count on each tab is coloured by SEVERITY, not by the tab being active —
+   a red 3 on an inactive tab is the whole point of the number. */
+.lt-t-bad  { background: var(--cb-red-tint)  !important; color: #d1443b !important; }
+.lt-t-warn { background: var(--cb-gold-tint) !important; color: #b7791f !important; }
+.lt-t-ok   { background: var(--cb-sage-tint) !important; color: #178048 !important; }
+
+/* The blurb above the rows for the two calmer tiers. Not .lh-alarm: those are
+   red-bordered panels for something wrong in front of a customer, and reusing
+   one to say "these could work harder" would make the page cry wolf. */
+.lt-said {
+    font-size: 12px; font-weight: 600; color: var(--cb-muted); line-height: 1.55;
+    background: var(--cb-line-2); border-radius: 10px; padding: 10px 13px; margin-bottom: 14px;
+}
+.lt-said strong { font-weight: 800; color: var(--cb-ink); }
+
+.lt-rows { display: flex; flex-direction: column; gap: 10px; }
+.lt-row {
+    display: flex; gap: 16px; align-items: flex-start;
+    border: 1px solid var(--cb-line); border-radius: 12px;
+    background: var(--cb-card); padding: 13px 15px;
+}
+/* Severity as a left edge rather than a whole tinted card: the reviewer is
+   reading TEXT in here, and a red background behind a title makes the title
+   harder to judge, which is the one thing this panel must not do. */
+.lt-sev-3 { border-left: 3px solid #d1443b; }
+.lt-sev-2 { border-left: 3px solid #d69e2e; }
+.lt-sev-1 { border-left: 3px solid var(--cb-sage); }
+
+.lt-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.lt-side { flex: 0 0 210px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+
+.lt-now, .lt-new { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+/* Fixed-width labels so the three stacked titles start at the same column and
+   can be read as a comparison instead of three separate sentences. */
+.lt-lab {
+    flex: 0 0 76px; font-size: 10px; font-weight: 800; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--cb-faint); padding-top: 2px;
+}
+/* ⚠️ A TITLE MUST WRAP, NEVER TRUNCATE. These run to 80 characters and the
+   reviewer is deciding on the exact words — an ellipsis in the middle of the
+   part that changed would hide the only thing worth looking at. This is the
+   table-layout trap from the other tools, avoided by not using a table. */
+.lt-cur, .lt-sug {
+    font-size: 13px; font-weight: 700; color: var(--cb-ink); line-height: 1.4;
+    overflow-wrap: anywhere; min-width: 0;
+}
+.lt-sug { color: #178048; }
+.lt-len { font-size: 10.5px; font-weight: 700; color: var(--cb-faint); flex: 0 0 auto; }
+/* What eBay is showing right now, when it disagrees with Shopify. Red because
+   one of the two is wrong in front of a buyer and we do not know which. */
+.lt-drift .lt-cur { color: #a3352c; }
+.lt-drift .lt-lab { color: #d1443b; }
+/* WHAT THE SUGGESTION TOOK OUT. Red because it is a LOSS the reviewer is
+   approving, and it sits in the Now/Suggested column so the eye meets it in
+   the same downward skim. The value is struck through: somebody who reads
+   nothing else still sees a word with a line through it. */
+.lt-trim { display: flex; gap: 8px; align-items: baseline; margin: 2px 0 0; flex-wrap: wrap; }
+.lt-trim .lt-lab { color: #a3352c; }
+.lt-trim-v { color: #a3352c; font-weight: 600; }
+.lt-trim-v s { text-decoration-thickness: 2px; margin-right: 6px; }
+.lt-trim-why { color: #64748b; font-size: 12px; }
+@media (max-width: 900px) { .lt-trim-why { font-size: 11px; } }
+.lt-nosug { font-size: 12px; font-weight: 700; color: #b7791f; }
+/* The words the suggestion ADDS or CHANGES. A word-level mark, so the reviewer
+   can see at a glance whether the new words are true of the item in their hand. */
+.lt-add {
+    background: var(--cb-sage-tint); color: #146c3d; border-radius: 4px;
+    padding: 0 3px; font-weight: 800;
+}
+/* The words the suggestion REMOVES, marked on the Now line rather than the
+   Suggested one: the Suggested line has to stay equal to the title being
+   approved, and a removal has nowhere to live on it anyway. */
+.lt-cut {
+    background: rgba(209, 68, 59, 0.10); color: #a3352c;
+    text-decoration: line-through; border-radius: 4px;
+    padding: 0 3px; font-weight: 800;
+}
+
+.lt-edit { display: flex; align-items: center; gap: 9px; margin-top: 2px; }
+
+/* THE DISMISSED DRAWER — work already done, folded under the work that is not.
+   Quieter than every row above it on purpose: nothing in here is waiting on
+   anybody, and it must never compete with the queue for attention. */
+.lt-denied { width: 100%; margin-top: 14px; border-top: 1px solid var(--cb-line); padding-top: 10px; }
+/* ⚠️ COLLAPSE STATED EXPLICITLY — the same Chrome 151 reason .lt-comps carries.
+   A closed <details> no longer puts display:none on its children, and .lt-dn-row
+   IS display:flex, which is exactly the author rule that beat the UA rule once
+   before and shipped the eBay rows visible with the drawer shut. */
+.lt-denied:not([open]) > *:not(summary) { display: none; }
+.lt-denied summary {
+    font-size: 11px; font-weight: 800; color: var(--cb-faint); cursor: pointer;
+    letter-spacing: .01em; text-transform: uppercase;
+}
+.lt-denied summary:hover { color: var(--cb-muted); }
+
+/* The one sentence in the drawer worth acting on: which RULE keeps being wrong. */
+/* --- SPEEKS Tool: Listing Health ------------------------------------------
+   The notes people wrote when they dismissed a title suggestion. Opened by the
+   deck card, which used to navigate to the Operations page and leave the
+   reviewer standing there with nothing to press. */
+.lh-tool-say { margin: 8px 0 14px; font-size: 12px; color: #64748b; line-height: 1.6; }
+.lh-tool-grp { margin: 0 0 14px; }
+.lh-tool-grp-h {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 8px;
+    font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+    color: #3730a3;
+}
+.lh-tool-grp-n {
+    min-width: 20px; height: 20px; padding: 0 6px; border-radius: 6px;
+    background: #4f46e5; color: #fff; font-size: 11px; font-weight: 800;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.lh-tool-row {
+    padding: 10px 12px; margin: 0 0 8px; border-radius: 9px;
+    background: #f8fafc; border: 1px solid #e2e8f0;
+}
+/* The note is what the tool exists for, so it is the biggest thing in the row —
+   everything under it is the evidence for reading it. */
+.lh-tool-note { font-size: 13px; font-weight: 700; color: #0f172a; line-height: 1.5; }
+.lh-tool-meta {
+    display: flex; gap: 10px; flex-wrap: wrap; margin: 5px 0 7px;
+    font-size: 11px; color: #64748b;
+}
+.lh-tool-ttl {
+    display: flex; gap: 8px; align-items: baseline; font-size: 12px;
+    color: #334155; line-height: 1.5; margin: 2px 0;
+}
+.lh-tool-ttl .lt-lab { flex-shrink: 0; }
+.lh-tool-says {
+    margin: 7px 0 0; padding: 6px 9px; border-radius: 7px;
+    background: #fffbeb; border: 1px solid #fde68a;
+    font-size: 11.5px; color: #92400e; line-height: 1.5;
+}
+.lh-tool-unsettled {
+    margin: 7px 0 0; padding: 6px 9px; border-radius: 7px;
+    background: #f1f5f9; border: 1px solid #e2e8f0;
+    font-size: 11.5px; color: #64748b; line-height: 1.5;
+}
+/* Notes already carried into an ask. Shut, and out of the count — but kept, so
+   a lost paste can be re-copied and an answer can be matched to the note it
+   belongs to. They move here on copy; they are never deleted. */
+.lh-tool-done { margin: 6px 0 0; }
+.lh-tool-done summary {
+    cursor: pointer; font-size: 11.5px; font-weight: 700; color: #64748b; padding: 5px 0;
+}
+.lh-tool-done-row {
+    display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+    padding: 6px 10px; margin: 4px 0 0; border-radius: 7px;
+    background: #f8fafc; border: 1px solid #eef2f7; font-size: 11.5px; color: #64748b;
+}
+.lh-tool-done-note { flex: 1; min-width: 180px; color: #475569; }
+.lh-tool-done-when { color: #94a3b8; white-space: nowrap; }
+/* Clearing the batch. Quiet and at the bottom on purpose: it is the LAST act,
+   after Claude has been through the notes, and it must not compete with the
+   Copy button at the top for the press. */
+/* Who listed it, beside the Shopify link the reviewer would open anyway.
+   ⚠️ Deliberately NOT alarm-coloured. It is an attribution, not a verdict — the
+   same name sits beside rows where the tool itself was wrong. */
+.lt-lister {
+    display: inline-flex; align-items: center; padding: 3px 9px;
+    border-radius: 999px; border: 1px solid #e2e8f0; background: #f8fafc;
+    font-size: 11px; font-weight: 700; color: #475569; white-space: nowrap;
+}
+/* ⚠️ SAME BOX AS A NAME, ONLY QUIETER. Ethan asked for it "the same size as the
+   users name pill" — so every metric that decides the box is inherited from
+   .lt-lister and only the colours change. A smaller or borderless Unknown would
+   make a row with no attribution read as a different KIND of row. */
+.lt-lister-unknown {
+    color: #94a3b8; background: #fff; border-style: dashed; font-weight: 600;
+}
+.lh-tool-finish {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #e2e8f0;
+    font-size: 12px; color: #64748b;
+}
+.lh-tool-done-btn {
+    padding: 6px 12px; border-radius: 7px; border: 1px solid #cbd5e1;
+    background: #fff; color: #334155; font-size: 11.5px; font-weight: 700;
+    font-family: inherit; cursor: pointer; white-space: nowrap;
+}
+.lh-tool-done-btn:hover { background: #f1f5f9; border-color: #94a3b8; }
+.lh-tool-clear, .lh-tool-err {
+    display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+    padding: 14px 16px; border-radius: 10px;
+    background: #f0fdf4; border: 1px solid #bbf7d0;
+    font-size: 12.5px; color: #14532d; line-height: 1.6;
+}
+.lh-tool-err { background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }
+/* The tick sits ON the headline. Stacked above it, the panel read as three
+   rows for what is one sentence of good news. */
+.lh-tool-clear-h { display: flex; align-items: center; gap: 8px; }
+.lh-tool-tick { font-size: 15px; line-height: 1; }
+/* The ask that goes to Claude. Sits above the tally because it is the ACTION
+   the tally argues for, and a person who reads "3 dismissals of one rule" and
+   then has to hunt for what to do about it does nothing. */
+.lt-ask-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    flex-wrap: wrap; margin: 10px 0 0; padding: 9px 12px; border-radius: 9px;
+    background: #eef2ff; border: 1px solid #c7d2fe;
+}
+.lt-ask-n { font-size: 11.5px; font-weight: 700; color: #3730a3; }
+.lt-ask-btn {
+    padding: 6px 12px; border-radius: 7px; border: 1px solid #4f46e5;
+    background: #4f46e5; color: #fff; font-size: 11.5px; font-weight: 800;
+    font-family: inherit; cursor: pointer; white-space: nowrap;
+}
+.lt-ask-btn:hover:not(:disabled) { background: #4338ca; border-color: #4338ca; }
+.lt-ask-btn:disabled { opacity: .55; cursor: default; }
+/* The ask itself, shown before it is copied — it names stores, SKUs and the
+   person who denied each row, and anyone pasting it should have read it. Fixed
+   height so a long pile cannot push the Copy button off the screen. */
+.lt-ask-pre {
+    margin: 10px 0 0; padding: 10px 12px; max-height: 300px; overflow: auto;
+    background: #0f172a; color: #e2e8f0; border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px; line-height: 1.55; white-space: pre; tab-size: 2;
+}
+.lt-tally {
+    margin: 10px 0 4px; padding: 10px 12px; border-radius: 9px;
+    background: #fffbeb; border: 1px solid #fde68a;
+}
+.lt-tally-h {
+    font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+    color: #92400e; margin-bottom: 6px;
+}
+.lt-tally-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px; font-weight: 700; color: #92400e; line-height: 1.7;
+}
+.lt-tally-n {
+    flex: 0 0 auto; min-width: 18px; text-align: center; font-weight: 900;
+    background: #fef3c7; border-radius: 5px; padding: 0 4px;
+}
+
+.lt-dn-rows { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.lt-dn-row {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 2px; border-bottom: 1px solid var(--cb-line);
+}
+.lt-dn-row:last-child { border-bottom: none; }
+.lt-dn-main { flex: 1 1 auto; min-width: 0; }
+.lt-dn-title {
+    font-size: 12px; font-weight: 700; color: var(--cb-muted);
+    line-height: 1.4; overflow-wrap: anywhere;
+}
+.lt-dn-meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 3px;
+    font-size: 10.5px; font-weight: 700; color: var(--cb-faint);
+}
+/* Which of the two answers it was. These mean opposite things about the tool,
+   so they must not look alike at a glance. */
+.lt-dn-as {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase;
+    color: var(--cb-muted); background: var(--cb-bg); border: 1px solid var(--cb-line);
+    border-radius: 20px; padding: 2px 8px;
+}
+.lt-dn-ebay { color: #b45309; background: #fffbeb; border-color: #fde68a; }
+.lt-dn-note {
+    font-size: 11px; font-weight: 600; color: var(--cb-faint);
+    line-height: 1.45; margin-top: 4px; font-style: italic;
+}
+.lt-dn-undo {
+    flex: 0 0 auto; font-size: 10.5px; font-weight: 800; cursor: pointer;
+    color: var(--cb-muted); background: var(--cb-card);
+    border: 1px solid var(--cb-line); border-radius: 7px; padding: 5px 11px;
+}
+.lt-dn-undo:hover:not(:disabled) { border-color: var(--cb-sage); color: #146c3d; }
+.lt-dn-undo:disabled { color: var(--cb-faint); cursor: not-allowed; }
+.lt-input {
+    flex: 1 1 auto; min-width: 0; font-family: inherit;
+    font-size: 12.5px; font-weight: 700; color: var(--cb-ink);
+    border: 1px solid var(--cb-line); border-radius: 8px; padding: 7px 10px;
+    background: var(--cb-bg);
+}
+.lt-input:focus { outline: none; border-color: var(--cb-sage); background: var(--cb-card); }
+.lt-input:disabled { color: var(--cb-faint); }
+/* Typed-over-the-suggestion looks different from the suggestion, because the
+   button changes meaning with it ("Approve" becomes "Save My Title"). */
+.lt-dirty { border-color: #b7791f; background: var(--cb-card); }
+.lt-count { font-size: 10.5px; font-weight: 800; color: var(--cb-faint); flex: 0 0 auto; }
+.lt-over  { color: #d1443b; }
+
+/* WHY, in the server's own sentences. Small but not hidden behind a fold: the
+   reason is what somebody is actually deciding on, and a reviewer who has to
+   click to find out why will just press Approve. */
+.lt-why { margin: 3px 0 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+/* The check-this-yourself line, as its own bullet under the reason. Red, and
+   asked for in red: it is the one line on the row that is an instruction to the
+   reviewer rather than a description of the listing, and it only appears where
+   we genuinely cannot settle the question from the data — is the game really
+   complete, is this really what the product is called. */
+.lt-caution {
+    margin: 5px 0 1px;
+    padding: 6px 10px;
+    border-left: 3px solid #d1443b;
+    border-radius: 0 6px 6px 0;
+    background: #fef2f2;
+    line-height: 1.45;
+    list-style: none;
+    margin-left: -16px;   /* out of the ul's bullet indent, back to the edge */
+}
+.lt-why li.lt-caution { color: #a3352c; font-weight: 700; }
+
+/* The scope line. Quiet by default — it is context, not an alarm — and amber
+   when it has to admit half the scope is not being applied. */
+.lt-scope {
+    margin: 0 0 10px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: .01em;
+    color: var(--cb-muted);
+    line-height: 1.5;
+}
+
+.lt-scope-part {
+    padding: 7px 10px;
+    border-left: 3px solid #d97706;
+    border-radius: 0 6px 6px 0;
+    background: #fffbeb;
+    color: #92400e;
+    font-weight: 600;
+}
+
+.lt-why li { font-size: 11.5px; font-weight: 600; color: var(--cb-muted); line-height: 1.5; }
+
+.lt-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lt-price { font-size: 12.5px; font-weight: 800; color: var(--cb-ink); }
+/* How much the suggestion is worth trusting. Deliberately quiet — it qualifies
+   the suggestion, it is not a status. */
+.lt-basis {
+    font-size: 10px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase;
+    border-radius: 5px; padding: 2px 6px; white-space: nowrap;
+    background: var(--cb-line-2); color: var(--cb-muted); cursor: help;
+}
+.lt-basis-category { background: var(--cb-gold-tint); color: #b7791f; }
+.lt-basis-gtin, .lt-basis-model { background: var(--cb-sage-tint); color: #178048; }
+
+.lt-acts { display: flex; gap: 6px; width: 100%; }
+.lt-ok, .lt-no {
+    flex: 1 1 0; font-family: inherit; font-size: 12px; font-weight: 800;
+    border-radius: 8px; padding: 7px 10px; cursor: pointer; border: 1px solid transparent;
+    transition: filter .12s, border-color .12s;
+}
+.lt-ok { background: var(--cb-sage); color: #fff; }
+.lt-ok:hover:not(:disabled) { filter: brightness(1.06); }
+/* ⚠️ Disabled must LOOK disabled. Approve is refused for a row with no
+   suggestion until somebody types one, and a button that looks pressable but
+   does nothing reads as the tool being broken. */
+.lt-ok:disabled { background: var(--cb-line-2); color: var(--cb-faint); cursor: not-allowed; }
+.lt-no { background: var(--cb-card); border-color: var(--cb-line); color: var(--cb-muted); }
+.lt-no:hover:not(:disabled) { border-color: #d1443b; color: #d1443b; }
+.lt-no:disabled { color: var(--cb-faint); cursor: not-allowed; }
+
+/* The comps, folded. Unlike the reason, these are evidence you go looking for
+   rather than something you need to decide — and they are other sellers' words,
+   which should never outweigh our own title on the page.
+   ⚠️ A closed <details> does not hide a flex child on its own: the UA rule
+   loses to any author display rule, which is what made the eBay rows on the All
+   Stores cards render with the drawer shut. Nothing in here is display:flex, so
+   it collapses correctly — keep it that way. */
+.lt-comps { width: 100%; }
+/* ⚠️ COLLAPSE STATED EXPLICITLY, not inherited from whatever the browser does
+   this year. Chrome 151 no longer puts display:none on a closed details'
+   children — it wraps them in ::details-content with content-visibility:hidden,
+   so the children keep a computed display, a layout box and a non-null
+   offsetParent while being genuinely invisible. That is fine here, but it means
+   the collapse depends on a UA mechanism that has already changed once and that
+   any author display rule on a child could still defeat (the way .ec-hrow beat
+   the old rule and shipped the eBay rows visible with the drawer shut). This
+   rule makes it ours. */
+.lt-comps:not([open]) > *:not(summary) { display: none; }
+.lt-comps summary {
+    font-size: 11px; font-weight: 800; color: var(--cb-muted); cursor: pointer;
+    letter-spacing: .01em;
+}
+.lt-comps ul { margin: 6px 0 0; padding-left: 15px; }
+.lt-comps li {
+    font-size: 11px; font-weight: 600; color: var(--cb-faint); line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+
+
+/* =========================================================
+   THE QUESTIONS THE TITLES TOOL ASKS  (lt-ask-*)  [2026-09-03]
+
+   Every decision in this tool used to be a browser confirm()
+   or prompt(): a grey OS box headed "127.0.0.1:5501 says",
+   with the two titles as plain text and an empty field under
+   a line of small print. Ethan: "make those popups small
+   actual designed HTML popups that match the site. It will
+   help people feel like they can and want to answer those
+   questions."
+
+   That is the whole point of the redesign. These are not
+   warnings to click past — they are the questions the queue
+   exists to collect answers to, and a box that looks like the
+   product is one people answer.
+
+   Airy V4 chrome, deliberately the same as the CSV export
+   picker (.ex-*): 18px card, icon tile + eyebrow header,
+   sage primary. What is NOT borrowed from it is the body —
+   this one reuses the ROW's own classes (.lt-lab, .lt-cur,
+   .lt-sug, .lt-add, .lt-cut), so the titles and the changed
+   words look identical to the row the question came from.
+   Reading the same diff twice in two different visual
+   languages is how a reviewer loses their place.
+   ========================================================= */
+.lt-ask-ov {
+    display: none;
+    position: fixed; inset: 0; z-index: 3300;
+    background: rgba(15, 23, 42, .42);
+    align-items: center; justify-content: center;
+    padding: 24px;
+}
+.lt-ask-ov.open { display: flex; }
+
+.lt-ask-card {
+    --lta-line: #eef1f5;
+    --lta-line-2: #e3e8ee;
+    --lta-muted: #647082;
+    --lta-faint: #8a94a3;
+    --lta-ink: #2f3a45;
+    width: 100%; max-width: 570px;
+    background: #fff;
+    border: 1px solid var(--lta-line-2);
+    border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(16, 24, 40, .20), 0 2px 8px rgba(16, 24, 40, .06);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    max-height: calc(100vh - 48px);
+}
+
+/* --- header --- */
+.lt-ask-head {
+    display: flex; align-items: flex-start; gap: 13px;
+    padding: 16px 18px; border-bottom: 1px solid var(--lta-line);
+}
+.lt-ask-ico {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px;
+    display: grid; place-items: center;
+    background: #e8f7ee; color: #1f9d57;
+}
+.lt-ask-ico svg {
+    width: 20px; height: 20px;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.lt-ask-ico.lta-warn { background: #fdf3e1; color: #b7791f; }
+.lt-ask-ico.lta-bad  { background: #fcecec; color: #d1443b; }
+
+.lt-ask-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+.lt-ask-eyebrow {
+    font-size: 10px; font-weight: 800; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--lta-faint);
+}
+.lt-ask-title {
+    font-size: 17px; font-weight: 800; letter-spacing: -.01em;
+    color: var(--slate-charcoal); line-height: 1.25;
+}
+.lt-ask-close {
+    flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid var(--lta-line-2);
+    background: #fff; border-radius: 9px; color: var(--lta-muted);
+    font-size: 18px; font-weight: 700; line-height: 1; cursor: pointer;
+    transition: background .15s, color .15s;
+}
+.lt-ask-close:hover { background: #f6f8fa; color: var(--slate-charcoal); }
+
+/* --- body --- */
+.lt-ask-body { padding: 15px 18px 4px; overflow: auto; }
+.lt-ask-say {
+    font-size: 12.5px; font-weight: 600; color: var(--lta-muted);
+    line-height: 1.55; margin: 0 0 12px;
+}
+.lt-ask-say:last-child { margin-bottom: 12px; }
+.lt-ask-say b { font-weight: 800; color: var(--lta-ink); }
+
+/* The two titles, in the row's own shape. */
+.lt-ask-pair {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 11px 13px; margin-bottom: 13px;
+    background: #f7faf8; border: 1px solid var(--lta-line); border-radius: 12px;
+}
+
+/* A section of fields this decision also moves. Quiet heading, because the
+   heading is not the information — the rows under it are. */
+.lt-ask-sec { margin-bottom: 13px; }
+.lt-ask-sec-h {
+    font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--lta-faint); margin-bottom: 6px;
+}
+.lt-ask-fields { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.lt-ask-fields li {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 7px;
+    font-size: 12.5px; line-height: 1.45;
+}
+.lt-ask-f { font-weight: 800; color: var(--lta-ink); }
+.lt-ask-f::after { content: ':'; color: var(--lta-faint); font-weight: 700; }
+.lt-ask-arrow { color: var(--lta-faint); font-weight: 800; }
+/* Where else the same value is written down. Faint and full-width: it is the
+   receipt for the line above, not part of the sentence. */
+.lt-ask-where {
+    flex: 1 1 100%;
+    font-size: 10.5px; font-weight: 700; color: var(--lta-faint);
+    overflow-wrap: anywhere;
+}
+.lt-ask-sec.lta-left .lt-ask-f { color: #b7791f; }
+
+/* Still reading the listing. The button is refused while this shows — a
+   confirm offered before we know what it changes is a question asked too
+   early. */
+.lt-ask-wait {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 700; color: var(--lta-faint);
+    padding: 4px 0 12px;
+}
+.lt-ask-spin {
+    width: 11px; height: 11px; flex: 0 0 auto; border-radius: 50%;
+    border: 2px solid rgba(31, 157, 87, .25); border-top-color: #1f9d57;
+    animation: lt-ask-spin .7s linear infinite;
+}
+@keyframes lt-ask-spin { to { transform: rotate(360deg); } }
+
+/* --- the note --- */
+.lt-ask-note { display: flex; flex-direction: column; gap: 6px; margin-bottom: 13px; }
+.lt-ask-note > label {
+    font-size: 10px; font-weight: 800; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--lta-faint);
+}
+.lt-ask-input {
+    font-family: inherit; font-size: 13px; font-weight: 600; color: var(--lta-ink);
+    padding: 10px 12px; border: 1.5px solid var(--lta-line-2); border-radius: 10px;
+    background: #fff; width: 100%; box-sizing: border-box;
+    transition: border-color .15s, box-shadow .15s;
+}
+.lt-ask-input::placeholder { color: #b3bcc6; font-weight: 600; }
+.lt-ask-input:focus {
+    outline: none; border-color: #1f9d57;
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .12);
+}
+.lt-ask-hint { font-size: 11px; font-weight: 650; color: var(--lta-faint); line-height: 1.45; }
+
+/* --- actions --- */
+.lt-ask-acts {
+    display: flex; justify-content: flex-end; gap: 9px;
+    padding: 4px 18px 18px;
+}
+.lt-ask-go, .lt-ask-cancel {
+    font-family: inherit; font-size: 12.5px; font-weight: 800;
+    padding: 10px 18px; border-radius: 10px; cursor: pointer;
+    border: 1.5px solid transparent; transition: filter .15s, background .15s, color .15s, border-color .15s;
+}
+.lt-ask-go { background: #1f9d57; color: #fff; }
+/* Sage is the button that writes to a live listing. A decision that only
+   clears a row is amber, and an acknowledgement is neutral — the colour is
+   the difference between the two, and the words alone are not enough at the
+   speed a queue gets worked. */
+.lt-ask-go.lta-warn { background: #b7791f; }
+.lt-ask-go.lta-bad  { background: #3d4852; }
+.lt-ask-go:hover:not(:disabled) { filter: brightness(1.06); }
+.lt-ask-go:disabled { background: var(--lta-line); color: var(--lta-faint); cursor: not-allowed; }
+.lt-ask-cancel { background: #fff; border-color: var(--lta-line-2); color: var(--lta-muted); }
+.lt-ask-cancel:hover { background: #f6f8fa; color: var(--slate-charcoal); }
+/* ⚠️ NOT A GREEN RING ON A GREEN BUTTON. An outline offset outside a filled
+   primary reads as a second border, and it has to work on three different
+   fills — so the ring goes INSIDE in white with a neutral halo behind it. */
+.lt-ask-go:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, .95); outline-offset: -4px;
+    box-shadow: 0 0 0 3px rgba(15, 23, 42, .17);
+}
+.lt-ask-cancel:focus-visible { outline: 2px solid #1f9d57; outline-offset: 2px; }
+
+@media (max-width: 560px) {
+    .lt-ask-ov { padding: 14px; align-items: flex-start; }
+    .lt-ask-card { margin-top: 22px; }
+    .lt-ask-acts { flex-direction: column-reverse; }
+    .lt-ask-go, .lt-ask-cancel { width: 100%; }
+    /* The label column costs a third of a phone screen and says nothing the
+       colour does not. */
+    .lt-ask-pair .lt-lab { flex-basis: 52px; }
+}
+
+/* ⚠️ THE BLANKET button{min-height:44px} IN THE TAP-TARGET BLOCK OVALS ANY
+   BUTTON IT IS NOT TOLD ABOUT, and this X is 30x30 by design — the same trap
+   the close-button standard was written for. Higher specificity than a bare
+   `button`, so source order does not matter. The two ACTION buttons are left
+   alone: 44px is exactly what they want on a phone. */
+@media (max-width: 900px) {
+    .lt-ask-close { min-height: 30px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lt-ask-spin { animation: none; border-top-color: rgba(31, 157, 87, .25); }
 }
 
 /* --- The session feed ---------------------------------------------------- *
@@ -18356,22 +19249,65 @@ select.dd-native {
     .gi-panel-header .modal-close-btn,
     .cl-panel-header .modal-close-btn,
     .cl-close {
-        /* !important on the geometry only. Four modals size their X by ID
-           (#ideaModal, #quickMsgDropdown, #hotkeysDropdown, #calendarDropdown at
-           32px) and .modal-menu.manage-menu does it at (0,3,0) — no class-level
-           rule can reach past either, and "standardize the x button" means all of
-           them. Colours and hovers are left to those rules. */
+        /* !important on the geometry AND on the design now. This block used to leave
+           "colours and hovers to those rules" -- and those rules are per-modal ID
+           selectors, which is exactly how three different X buttons ended up on one
+           phone (user report, 25 Aug). Measured at 390px before this change,
+           scripts/close-btn-audit.js found 10 distinct designs across 228 controls:
+           #settingsModal still wore the base transparent circle with #999 ink,
+           #crmModal sat at 9px radius against everyone elses 8px, and two greys were
+           in play (#647082 and #647b8b). !important beats an ID selector whatever its
+           specificity, so ONE class-level rule settles all of them without naming a
+           single #id -- name an id here and the next modal added is a new exception.
+
+           9px, not the 8px this block used to name: 145 of the 228 were already 9px,
+           so the majority keeps the look it had and only the outliers move.
+
+           THE SIZES WERE ALREADY EQUAL HERE -- THE GLYPH WAS NOT. Tools, Submit an
+           Idea and the CRM modal drew a TEXT x where the other 220 drew a 15px SVG,
+           so identical 30px boxes still read as three different buttons. No CSS can
+           fix that: those three sites now emit the same inline SVG, and the audit
+           script is the guard against a fourth creeping back in. */
         width: 30px !important; height: 30px !important;
         min-width: 30px !important; min-height: 30px !important;
         padding: 0;
         font-size: 13px;
-        border-radius: 8px;
+        border-radius: 9px !important;
+        background: #f1f5f9 !important;
+        color: #647082 !important;
+        border: none !important;
         flex: 0 0 auto;
         display: inline-flex;
         align-items: center;
         justify-content: center;
     }
-    .tools-panel-close svg, .modal-close-btn svg, .cl-close svg { width: 15px; height: 15px; }
+    .tools-panel-close svg, .modal-close-btn svg, .cl-close svg { width: 15px; height: 15px; display: block; }
+    .tools-panel-close:hover, .modal-close-btn:hover, .cl-close:hover {
+        background: #fcecec !important; color: var(--red-alert) !important;
+    }
+
+    /* The two X-es that sit on a coloured or dark surface. They keep their own ink --
+       a pale grey chip on a coloured alert bubble, or floating over arbitrary video,
+       would either clash or vanish -- but they take the same box as everything else.
+
+       BOTH WERE BEING STRETCHED INTO OVALS, AND NEITHER OWNS THE BUG. The blanket
+       `button { min-height: 44px }` in the tap-target block at the very end of this
+       file is only (0,0,1), but it is LATER, so against a bare class it wins: the
+       alert-bubble X measured 22 wide by 44 tall and the video X 34 by 44. Naming an
+       explicit height is the fix, not trimming the padding around it -- the same
+       lesson as .lv-mode in round 7 and .modal-close-btn in round 9. */
+    .daily-bubble-close,
+    .award-video-close-btn {
+        width: 30px !important; height: 30px !important;
+        min-width: 30px !important; min-height: 30px !important;
+        padding: 0;
+        border-radius: 9px !important;
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .daily-bubble-close svg, .award-video-close-btn svg { width: 15px; height: 15px; display: block; }
 
     /* The Tools search box. The input keeps 16px text — anything smaller and iOS
        Safari zooms the viewport on focus and never zooms back — so the box is

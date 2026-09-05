@@ -596,10 +596,49 @@ async function phaseOrders(sb: any, stores: any[], codes: string[], dryRun: bool
 
 // ---------------------------------------------------------------------------
 
+// ⚠️⚠️ DISABLED 2026-08-25. DO NOT RE-ENABLE WITHOUT READING THIS. ⚠️⚠️
+//
+// THE PREMISE OF THIS ENTIRE FUNCTION IS NO LONGER TRUE. The header above says
+// refunding here is a bookkeeping entry because "Shopify does not propagate
+// refunds to eBay, so no buyer is touched". That held while the duplicate sat on
+// a manual `ebay` gateway that only we ever wrote to.
+//
+// PayMore's new Marketplace Connect DOES propagate a Shopify refund to eBay,
+// roughly EIGHT MINUTES LATER. Measured 2026-08-25 across all five stores:
+//
+//   338 refunds written here -> 166 of them refunded the real eBay buyer,
+//   $33,038.73 paid back on orders that were FULFILLED and where
+//   cancelStatus.cancelState is NONE_REQUESTED. The buyers kept the goods.
+//
+//   e.g. LEE MO01-5226A-F1R1, eBay order 08-15041-22272 (Razer Blade 18):
+//        Shopify refund 16:58:31 -> eBay refunded $1,587.14 at 17:35:43.
+//
+// Every confirmed case shows the same 8-11 minute lag and no cancellation
+// request, so this is a sync, not a coincidence.
+//
+// A run that "only writes to Shopify" now moves real money to real customers.
+// Until either MC's refund sync is off, or the duplicate is reversed WITHOUT a
+// refund (an order edit or a manual journal), this function must not act.
+//
+// The code below is left intact on purpose so the remediation logic is not lost
+// and can be re-read. To re-enable, delete this block deliberately — and prove
+// the propagation is gone first by refunding ONE low-value duplicate and
+// watching that eBay order's orderPaymentStatus for 20 minutes.
+const DISABLED = true;
+const DISABLED_WHY = "dup-cleanup is disabled: Marketplace Connect now propagates Shopify refunds "
+  + "to eBay (~8 min), so this refunds real buyers who keep the goods. 166 of 338 refunds already "
+  + "went through, $33,038.73. See the block comment above Deno.serve in dup-cleanup/index.ts.";
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   const url = new URL(req.url);
   if (url.searchParams.get("secret") !== SECRET) return json({ ok: false, error: "unauthorized" }, 401);
+
+  // BEFORE ANYTHING ELSE, including the read-only phases. A report is harmless,
+  // but the phases share one entry point and a caller who gets a 200 from
+  // `phase=report` reasonably assumes the next call will work too. Refusing
+  // everything is the honest signal that this tool is out of service.
+  if (DISABLED) return json({ ok: false, disabled: true, error: DISABLED_WHY }, 403);
 
   const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const { data: stores } = await sb.from("shopify_stores").select("shop, access_token");

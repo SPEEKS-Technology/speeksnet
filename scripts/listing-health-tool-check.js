@@ -1,0 +1,373 @@
+// THE SPEEKS TOOL CALLED LISTING HEALTH — the popup the deck card opens.
+//
+// ⚠️ WHAT THIS EXISTS TO STOP HAPPENING AGAIN. The card shipped pointing at
+// operations.html#categories. That is the right PAGE, and the reviewer arrived
+// on it with nothing to press: the notes it was about live in a shut <details>
+// three sections down. Ethan, 2026-09-04: "The notification I got only took me
+// to Listing Health on Operations tab and did not show me anything to copy."
+// A card that names a job has to open the job, and the job has to be the first
+// thing in it.
+//
+// What this asserts, in the real page:
+//    1. the card's action opens the TOOL, and never navigates to a page
+//    2. the tool is reachable from the Tools panel in every shell that has one
+//    3. opening it shows the Copy button ABOVE the evidence, not under it
+//    4. the notes are grouped by rule and each one carries the listing's own
+//       field where there is one
+//    5. Copy stamps the notes read SERVER-side (action:"triaged") and only
+//       after the clipboard actually took it
+//    6. a failed read draws an error, never the all-clear — a request that
+//       never answered is not "no notes"
+//    7. the button says Copy and never promises to send
+//
+// Run: node scripts/listing-health-tool-check.js
+const fs = require('fs');
+const puppeteer = require('puppeteer-core');
+const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
+
+let fails = 0;
+const ok = (c, l, g) => {
+    console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g === undefined ? '' : '   ' + g));
+    if (!c) fails++;
+};
+
+// The real shape ?view=feedback returns, with the three real denials in it.
+const FB = {
+    days: 30, stores: ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'], total: 3, settled: 3,
+    keys: [{ store: 'LEE', productId: 'gid://p/2' }, { store: 'LEE', productId: 'gid://p/3' },
+           { store: 'WSP', productId: 'gid://p/1' }],
+    groups: [
+        { code: 'name-wrong', n: 2, rows: [
+            { store: 'LEE', sku: 'MO01-5126C2-F1R1', productId: 'gid://p/2',
+              current: 'Call of Duty: Black Ops II (Microsoft Xbox One, 2018)',
+              suggested: 'Call of Duty: Black Ops II (Microsoft Xbox 360, 2012)',
+              note: 'This is an Xbox One version of the game', by: 'Ethan Kushnir',
+              saysItself: { field: 'Platform', value: 'Microsoft Xbox One', matched: 'one' } },
+            { store: 'LEE', sku: 'MO01-5435C-F1R1', productId: 'gid://p/3',
+              current: 'SanDisk Extreme 2TB microSD Card 4K SDSSDE61-2T00-G25',
+              suggested: 'SanDisk Extreme 2TB Portable SSD 4K SDSSDE61-2T00-G25',
+              note: 'This is a MicroSD card.', by: 'Ethan Kushnir',
+              saysItself: { field: 'Type', value: 'microSD Card', matched: 'microsd card' } },
+        ] },
+        { code: 'name-garbled', n: 1, rows: [
+            { store: 'WSP', sku: 'MO02-4097A-R11R4', productId: 'gid://p/1',
+              current: 'Lenovo 34" T43WD-40 WQHD VA Business Monitor',
+              suggested: 'Lenovo 34" T34w-40 WQHD VA Business Monitor',
+              note: 'I think T43WD-40 is an actual model.', by: 'Ethan Kushnir',
+              // The one with nothing to settle it, so the "unsettled" branch renders.
+              saysItself: null },
+        ] },
+    ],
+    // Notes already carried into an ask. They are NOT deleted on copy — they
+    // move here, so a lost paste can be re-copied and an answer that comes back
+    // later can be matched to the note it belongs to.
+    done: [
+        { store: 'OVL', sku: 'KS01-Z', note: 'the model name really does repeat on the barrel',
+          takenAt: '2026-09-02T15:00:00Z' },
+    ],
+    ask: 'SPEEKS Listing Titles — rule feedback from the review queue\nA. THE RULE IS WRONG',
+};
+
+// --- 1 & 2: the wiring, read straight out of the shipped files ---------------
+console.log('\n== The card opens the tool, not a page ==');
+{
+    const js = fs.readFileSync(REPO + '/speeks.js', 'utf8');
+    const i = js.indexOf("key: 'titleNoteAlert'");
+    // Wide enough to reach the action past the comments that sit above it.
+    const card = i < 0 ? '' : js.slice(i, i + 1400);
+    ok(i > -1, 'the feed card is registered');
+    ok(/action: "openListingHealthTool\(\)"/.test(card),
+       'and its action opens the tool');
+    // ⚠️ THE REGRESSION. A navigation here is the exact shape of the bug: the
+    // right page, nothing to press.
+    ok(!/action: "window\.location/.test(card),
+       'and never navigates to a page the reviewer then has to search');
+    // ⚠️ NAME THE PLACE, NOT THE EVENT. "Someone Said Why A Title Rule Was
+    // Wrong" described what happened and left the reader working out where to
+    // go. (Ethan, 2026-09-04: "simplify the notification title".)
+    ok(/title: 'Listing Health Notes'/.test(card), 'and the card names the tool it opens');
+    // The summary used to end with a route to follow by hand. The card opens
+    // the tool now, so directions in it are stale the moment they are read.
+    const sum = js.slice(js.indexOf('t.dataset.summary = n +'), js.indexOf('t.dataset.summary = n +') + 400);
+    ok(!/SPEEKS Connect →/.test(sum), 'and the wording no longer gives directions');
+}
+
+console.log('\n== It is in the Tools panel of every shell that has one ==');
+{
+    // tv.html is deliberately excluded: the store TV board has no tools panel
+    // at all, and giving it one would put a DM tool on a screen in the lobby.
+    for (const f of ['index.html', 'operations.html', 'workspace.html', 'stats.html', 'docs.html']) {
+        const h = fs.readFileSync(REPO + '/' + f, 'utf8');
+        const m = h.match(/<a[^>]*data-feature="tool-listing-health"[^>]*>/);
+        ok(!!m, 'the link is in ' + f);
+        if (m) {
+            ok(/openListingHealthTool\(\)/.test(m[0]), '  and it opens the tool — ' + f);
+            // ⚠️ button == panel == link roles, or the tool half-exists.
+            // See [[tools-panel-role-sync]] for what drift here costs.
+            ok(/role-district-manager/.test(m[0]) && /role-ceo/.test(m[0]),
+               '  and carries the DM+CEO roles the catalogue gives it — ' + f);
+        }
+    }
+    const tv = fs.readFileSync(REPO + '/tv.html', 'utf8');
+    ok(!/tool-listing-health/.test(tv), 'and is NOT on the store TV board');
+    const js = fs.readFileSync(REPO + '/speeks.js', 'utf8');
+    ok(/key: 'tool-listing-health'[\s\S]{0,200}def: \['district-manager', 'ceo'\]/.test(js),
+       'the feature switch matches those roles');
+}
+
+(async () => {
+    const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--no-sandbox'] });
+    const page = await browser.newPage();
+    const errs = [];
+    const IGNORE = /calendar\.google\.com|toDataURL|[Tt]ainted canvas|Failed to fetch|net::ERR/;
+    page.on('pageerror', e => { if (!IGNORE.test(e.message)) errs.push(e.message); });
+    await page.setViewport({ width: 1500, height: 1200 });
+    await page.evaluateOnNewDocument(() => {
+        sessionStorage.setItem('speeksUnlocked', 'true');
+        sessionStorage.setItem('speeksUserName', 'Ethan Kushnir');
+        sessionStorage.setItem('speeksUserRole', 'district manager');
+        sessionStorage.setItem('speeksUserStore', 'CORP');
+    });
+    await page.goto('file:///' + REPO + '/index.html', { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2400));
+
+    // Capture what the page WOULD post, and hand it the feedback payload.
+    await page.evaluate(fb => {
+        window.__posts = [];
+        window.__copied = null;
+        window._ltPost = async (b) => { window.__posts.push(b); return { ok: true, body: { ok: true } }; };
+        window._ltFetch = async () => fb;
+        // The real clipboard is unavailable to a headless file:// page, and a
+        // rejected write is a DIFFERENT path (the "could not reach the
+        // clipboard" branch). Stub the success so the stamping half is what is
+        // under test here.
+        // ⚠️ defineProperty, NOT ASSIGNMENT. navigator.clipboard is a read-only
+        // accessor: `navigator.clipboard = {...}` is silently ignored, the real
+        // API answers instead, and the assertion on what was copied fails while
+        // every other assertion passes — which reads as a bug in the tool.
+        Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: { writeText: async t => { window.__copied = t; } },
+        });
+    }, FB);
+
+    console.log('\n== Opening it shows the thing to copy ==');
+    await page.evaluate(() => openListingHealthTool());
+    await new Promise(r => setTimeout(r, 400));
+    const view = await page.evaluate(() => {
+        const m = document.getElementById('listingHealthToolModal');
+        if (!m) return null;
+        const bar = m.querySelector('.lt-ask-bar');
+        const btn = m.querySelector('.lt-ask-btn');
+        const grp = m.querySelector('.lh-tool-grp');
+        return {
+            shown: m.classList.contains('show'),
+            title: (m.querySelector('.tool-head-title') || {}).textContent || '',
+            eyebrow: (m.querySelector('.tool-head-eyebrow') || {}).textContent || '',
+            bar: bar ? bar.textContent.replace(/\s+/g, ' ').trim() : '',
+            btn: btn ? btn.textContent.trim() : '',
+            // ⚠️ THE ORDER IS THE WHOLE POINT. Evidence above the action is the
+            // same bug one level down from the card that started this.
+            btnAboveEvidence: (bar && grp)
+                ? !!(bar.compareDocumentPosition(grp) & Node.DOCUMENT_POSITION_FOLLOWING) : null,
+            groups: [...m.querySelectorAll('.lh-tool-grp-h')].map(g => g.textContent.replace(/\s+/g, ' ').trim()),
+            notes: [...m.querySelectorAll('.lh-tool-note')].map(n => n.textContent.trim()),
+            says: [...m.querySelectorAll('.lh-tool-says')].map(n => n.textContent.replace(/\s+/g, ' ').trim()),
+            unsettled: m.querySelectorAll('.lh-tool-unsettled').length,
+            // ⚠️ The raw "See exactly what gets copied" block is GONE (Ethan,
+            // 2026-09-04: "You can remove the what you actually copy."). It was
+            // a wall of monospace under a button that already works.
+            raw: m.querySelectorAll('.lt-ask-pre, .lh-tool-raw').length,
+            doneOpen: (m.querySelector('.lh-tool-done') || {}).open,
+            doneSummary: (m.querySelector('.lh-tool-done summary') || {}).textContent || '',
+            doneRows: m.querySelectorAll('.lh-tool-done-row').length,
+        };
+    });
+    ok(!!view, 'the tool rendered');
+    if (view) {
+        ok(view.shown, 'and it is actually open');
+        ok(view.title.trim() === 'Listing Health', 'it is called Listing Health', view.title.trim());
+        ok(/SPEEKS Tools/.test(view.eyebrow), 'and reads as a SPEEKS Tool', view.eyebrow.trim());
+        ok(/3 dismissals explained a rule was wrong/.test(view.bar),
+           'the bar says how many notes are waiting', view.bar);
+        ok(/Copy The Ask For Claude/.test(view.btn), 'the Copy button is there', view.btn);
+        // ⚠️ "Copy", NOT "Send". Nothing reaches Claude on its own.
+        ok(!/\bSend\b/.test(view.btn), 'and it never promises to send', view.btn);
+        ok(view.btnAboveEvidence === true,
+           'the button sits ABOVE the evidence, not under a scroll of it',
+           String(view.btnAboveEvidence));
+        ok(view.groups.length === 2, 'the notes are grouped by rule', view.groups.join(' | '));
+        ok(/Name checked against outside knowledge/.test(view.groups[0] || ''),
+           'and the rule is named in English', view.groups[0]);
+        ok(view.notes.length === 3, 'all three notes are shown', String(view.notes.length));
+        ok(view.notes.some(n => /Xbox One version/.test(n)), 'the note is quoted');
+        ok(view.says.length === 2, 'the two settled rows name the listing\'s own field',
+           String(view.says.length));
+        ok(/Platform = Microsoft Xbox One/.test(view.says[0] || ''),
+           'and print the field and its value', view.says[0]);
+        // The row nothing settles must SAY nothing settles it. Silence there
+        // reads as agreement with the rule.
+        ok(view.unsettled === 1, 'the row nothing settles says so', String(view.unsettled));
+        ok(view.raw === 0, 'the raw copy-preview wall is gone', String(view.raw));
+
+        // ⚠️ TAKEN, NOT DELETED. Ethan asked whether removing them on copy was
+        // the right call. It is not: a note that vanishes cannot be re-copied
+        // when a paste is lost, cannot be matched to the answer that comes back
+        // later, and tells the person who explained themselves it went nowhere.
+        ok(view.doneRows === 1, 'notes already sent are still listed', String(view.doneRows));
+        ok(view.doneOpen === false, 'but shut, so they cannot crowd out what is waiting');
+        // "handled", not "sent" — copying is not finishing, so the stamp is made
+        // when the work is done rather than when the text left the tool.
+        ok(/1 already handled/.test(view.doneSummary), 'and the drawer says how many',
+           view.doneSummary.trim());
+        // The count above must be the WAITING ones only, or the sent pile keeps
+        // the card up forever.
+        ok(/^3 dismissals/.test(view.bar.trim()),
+           'the count is what is waiting, not waiting plus sent', view.bar.slice(0, 20));
+    }
+
+    console.log('\n== Copy is a copy button, and nothing more ==');
+    // ⚠️ COPYING IS NOT FINISHING. One press used to copy the ask AND mark every
+    // note read — so a lost paste, a dead session, or Claude deciding the rule
+    // was right after all all took the reminder with them. Ethan, 2026-09-04:
+    // "the copy button acts as a copy button like others on the site and stays
+    // there with the notes until you've done your work".
+    await page.evaluate(() => lhToolCopy(document.querySelector('.lt-ask-btn')));
+    await new Promise(r => setTimeout(r, 200));
+    const copied = await page.evaluate(() => ({
+        copied: window.__copied,
+        posts: window.__posts.length,
+        label: (document.querySelector('.lt-ask-btn') || {}).textContent || '',
+        stillListed: document.querySelectorAll('.lh-tool-note').length,
+        stillHasFinish: !!document.querySelector('.lh-tool-done-btn'),
+    }));
+    ok(/SPEEKS Listing Titles/.test(copied.copied || ''), 'the ask reached the clipboard');
+    ok(copied.posts === 0, 'and NOTHING was written to the server', String(copied.posts));
+    ok(copied.stillListed === 3, 'the notes are all still on screen',
+       String(copied.stillListed));
+    ok(copied.stillHasFinish, 'and the clear button is still waiting for the work');
+    // Same feedback as every other copy button on the site (expCopyReport):
+    // swap the label, put it back.
+    ok(/Copied/.test(copied.label), 'the button says Copied', copied.label.trim());
+    await new Promise(r => setTimeout(r, 1700));
+    const reverted = await page.evaluate(() =>
+        (document.querySelector('.lt-ask-btn') || {}).textContent || '');
+    ok(/Copy The Ask/.test(reverted), 'and goes back to itself', reverted.trim());
+
+    console.log('\n== Clearing is the separate, later act ==');
+    // ⚠️ SET BEFORE THE CLEAR, because clearing RE-READS. The stub has to answer
+    // the second read the way the server would: nothing waiting, the batch moved
+    // into `done`.
+    await page.evaluate(fb => {
+        window._ltFetch = async () => ({
+            days: 30, stores: fb.stores, total: 0, settled: 0, keys: [], groups: [],
+            done: fb.groups.flatMap(g => g.rows)
+                    .map(r => Object.assign({}, r, { takenAt: '2026-09-04T12:00:00Z' }))
+                    .concat(fb.done),
+            ask: '',
+        });
+    }, FB);
+    // ⚠️ DO NOT RETURN THE PROMISE. lhToolDone awaits _ltAsk, which does not
+    // settle until somebody clicks the dialog — so `() => lhToolDone()` hands
+    // puppeteer a promise that cannot resolve and the run dies on a protocol
+    // timeout. Fire it and let the dialog open.
+    await page.evaluate(() => { lhToolDone(); });
+    await new Promise(r => setTimeout(r, 300));
+    // It asks first — pressing this early loses the reminder, so it is not a
+    // thing to do by accident.
+    const confirming = await page.evaluate(() => {
+        const go = [...document.querySelectorAll('button')]
+            .find(b => /Clear Them/.test(b.textContent));
+        return { asked: !!go, posts: window.__posts.length };
+    });
+    ok(confirming.asked, 'it asks before clearing');
+    ok(confirming.posts === 0, 'and has written nothing yet', String(confirming.posts));
+    await page.evaluate(() => {
+        [...document.querySelectorAll('button')]
+            .find(b => /Clear Them/.test(b.textContent)).click();
+    });
+    await new Promise(r => setTimeout(r, 400));
+    const after = await page.evaluate(() => ({
+        posts: window.__posts,
+        body: (document.getElementById('listingHealthToolBody') || {}).textContent || '',
+        clear: !!document.querySelector('.lh-tool-clear'),
+        done: document.querySelectorAll('.lh-tool-done-row').length,
+        btn: !!document.querySelector('#listingHealthToolModal .lt-ask-btn'),
+    }));
+    ok(after.posts.length === 1, 'exactly one post', String(after.posts.length));
+    ok((after.posts[0] || {}).action === 'triaged', 'and it is the triaged stamp',
+       (after.posts[0] || {}).action);
+    // ⚠️ SERVER-SIDE, KEYED ON THE ROWS THAT WERE SHOWN. A localStorage
+    // high-water mark is what made the recycle reply card clear on one machine
+    // and stay up on every other (fixed 2026-09-04, 9cd1e46).
+    ok(((after.posts[0] || {}).keys || []).length === 3,
+       'stamping exactly the three rows that were on screen',
+       String(((after.posts[0] || {}).keys || []).length));
+    // ⚠️ THE NOTES MUST STILL BE THERE. Clearing moves them; it does not delete.
+    ok(/already handled/.test(after.body), 'the notes have moved to "already handled"');
+    ok(/Xbox One version/.test(after.body), 'and the note itself is still readable');
+    ok(after.clear, 'the tool now reads as nothing waiting');
+    ok(after.done === 4, 'and lists all four handled notes', String(after.done));
+    ok(!after.btn, 'with no button offering to copy an empty ask');
+
+    console.log('\n== A failed read is not an all clear ==');
+    await page.evaluate(() => {
+        window.__posts = [];
+        window._ltFetch = async () => { throw new Error('Request failed (503)'); };
+    });
+    await page.evaluate(() => openListingHealthTool());
+    await new Promise(r => setTimeout(r, 300));
+    const err = await page.evaluate(() => ({
+        body: (document.getElementById('listingHealthToolBody') || {}).textContent || '',
+        isErr: !!document.querySelector('.lh-tool-err'),
+        isClear: !!document.querySelector('.lh-tool-clear'),
+    }));
+    ok(err.isErr, 'a failed read draws the error state');
+    ok(!err.isClear, 'and never the all-clear');
+    ok(/503/.test(err.body), 'and says what went wrong', err.body.replace(/\s+/g, ' ').slice(0, 60));
+
+    console.log('\n== Nothing to answer ==');
+    await page.evaluate(() => {
+        window._ltFetch = async () => ({ days: 30, stores: ['OVL'], total: 0, groups: [], keys: [], ask: '' });
+    });
+    await page.evaluate(() => openListingHealthTool());
+    await new Promise(r => setTimeout(r, 300));
+    const clear = await page.evaluate(() => ({
+        isClear: !!document.querySelector('.lh-tool-clear'),
+        btn: !!document.querySelector('#listingHealthToolModal .lt-ask-btn'),
+    }));
+    ok(clear.isClear, 'an empty pile draws the all-clear');
+    ok(!clear.btn, 'and offers no button to copy nothing');
+    // ⚠️ TWO LINES, AND THE TICK IS NOT ONE OF THEM. It shipped stacked — tick,
+    // headline, sentence — so one sentence of good news occupied three rows.
+    // (Ethan, 2026-09-04: "make this fix into two lines of text. the checkmark
+    // doesnt need to be it's own line item".) Measured, not eyeballed: the tick
+    // and the headline must share a horizontal band.
+    const box = await page.evaluate(() => {
+        const c = document.querySelector('.lh-tool-clear');
+        if (!c) return null;
+        const tick = c.querySelector('.lh-tool-tick');
+        const head = c.querySelector('b');
+        const say = c.querySelector('.lh-tool-clear-h + span');
+        const r = e => e ? e.getBoundingClientRect() : null;
+        const [t, h, s] = [r(tick), r(head), r(say)];
+        return {
+            sameLine: !!(t && h) && Math.abs((t.top + t.height / 2) - (h.top + h.height / 2)) < 5,
+            tickLeftOfHead: !!(t && h) && t.right <= h.left + 1,
+            sayBelow: !!(h && s) && s.top >= h.bottom - 1,
+            rows: new Set([...c.querySelectorAll('.lh-tool-clear-h, .lh-tool-clear > span')]
+                .map(e => Math.round(e.getBoundingClientRect().top))).size,
+            height: Math.round(c.getBoundingClientRect().height),
+        };
+    });
+    ok(!!box && box.sameLine, 'the tick sits on the headline, not above it');
+    ok(!!box && box.tickLeftOfHead, 'and to the left of it');
+    ok(!!box && box.sayBelow, 'the sentence is the second line');
+    ok(!!box && box.rows === 2, 'two rows of text in total', box && String(box.rows));
+
+    ok(errs.length === 0, 'no page errors', errs.join(' | '));
+    await browser.close();
+    console.log('\n' + (fails ? '*** ' + fails + ' FAILED ***' : 'all pass') + '\n');
+    process.exit(fails ? 1 : 0);
+})();

@@ -44,10 +44,19 @@ const RENAG_HOURS         = 24;  // an unfixed problem is raised again after thi
 const SWEEP_STALE_MIN     = 90;  // live sweep runs every 20 min per store
 // How far back the duplicate scan reads Shopify. This bounds only the SECOND
 // copy's creation date, never ours — our side comes from the ebay_orders ledger,
-// which has no window at all. Five days because Shopify caps a page at 250 and
-// the busiest store books ~37 eBay orders a day.
+// which has no window at all.
+//
+// ⚠️ THE PAGE CAP IS NOT A VOLUME CAP. It used to read ONE page of 250 and warn
+// when Shopify said there was more, on the theory that 250 in five days meant a
+// store was simply selling well. That theory broke on 2026-08-28: OVL returned
+// 270, of which 195 were Aug 25 alone and 176 of THOSE were reversed duplicate
+// copies sitting at $0. The cap is applied to the raw fetch, before cleaned-up
+// copies are filtered out, so the wreckage of the duplicate incident consumed
+// 70% of the budget and pushed 20 genuine orders past the edge — the duplicate
+// flood blinding the duplicate check. It pages now.
 const DUP_WINDOW_DAYS     = 5;
-const DUP_PAGE            = 250; // orders read per store per duplicate scan
+const DUP_PAGE            = 250; // orders per page; Shopify's own maximum
+const DUP_MAX_PAGES       = 8;   // 2,000 orders per store — a runaway guard, not a budget
 const DUP_LEDGER_DAYS     = 90;  // how much of our own import history to load
 const CRON_STALE_MIN      = 30;  // order poll runs every 2 min per store
 const LISTING_STUCK_MIN   = 60;  // pending longer than this is not "in flight"
@@ -141,33 +150,53 @@ const TRANSIENT_EBAY = /\b25001\b|internal error|service unavailable|temporarily
 // query narrows to eBay-tagged orders in the window and the grouping happens
 // here. Both importers stamp the attribute, which is what makes the check
 // source-blind.
+const DUP_ORDERS_QUERY = `query($q: String!, $after: String) {
+  orders(first: ${DUP_PAGE}, query: $q, sortKey: CREATED_AT, reverse: true, after: $after) {
+    edges { node {
+      id name cancelledAt
+      totalPriceSet { shopMoney { amount } }
+      totalRefundedSet { shopMoney { amount } }
+      transactions { kind status amountSet { shopMoney { amount } } }
+      customAttributes { key value }
+    } }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+
 async function shopifyEbayOrders(shop: string, token: string, sinceDay: string) {
-  const res = await fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-    body: JSON.stringify({
-      query: `{
-        orders(first: ${DUP_PAGE}, query: "tag:eBay created_at:>=${sinceDay}", sortKey: CREATED_AT, reverse: true) {
-          edges { node {
-            id name cancelledAt
-            totalPriceSet { shopMoney { amount } }
-            totalRefundedSet { shopMoney { amount } }
-            transactions { kind status amountSet { shopMoney { amount } } }
-            customAttributes { key value }
-          } }
-          pageInfo { hasNextPage }
-        }
-      }`,
-    }),
-  });
-  if (!res.ok) throw new Error(`Shopify HTTP ${res.status}`);
-  const body = await res.json();
-  // A GraphQL error arrives as a 200 with an errors array, which is exactly how
-  // a broken query would otherwise read as "this store has no duplicates".
-  if (body.errors) throw new Error(JSON.stringify(body.errors).slice(0, 200));
-  const conn = body?.data?.orders;
-  const orders = ((conn?.edges || []) as any[]).map((e) => {
-    const n = e.node || {};
+  const orders: Array<{ id: string; name: string; cancelled: boolean; refunded: boolean; ebayId: string | null }> = [];
+  let after: string | null = null;
+  let pages = 0;
+  let truncated = false;
+
+  do {
+    const res = await fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+      body: JSON.stringify({
+        query: DUP_ORDERS_QUERY,
+        variables: { q: `tag:eBay created_at:>=${sinceDay}`, after },
+      }),
+    });
+    if (!res.ok) throw new Error(`Shopify HTTP ${res.status}`);
+    const body = await res.json();
+    // A GraphQL error arrives as a 200 with an errors array, which is exactly how
+    // a broken query would otherwise read as "this store has no duplicates".
+    if (body.errors) throw new Error(JSON.stringify(body.errors).slice(0, 200));
+    const conn = body?.data?.orders;
+    orders.push(...((conn?.edges || []) as any[]).map((e) => mapDupOrder(e.node || {})));
+
+    // ⚠️ STOP ONLY WHEN SHOPIFY SAYS THERE IS NO MORE. Paging on a non-empty
+    // page instead would loop forever on the last one.
+    if (!conn?.pageInfo?.hasNextPage) { after = null; break; }
+    after = String(conn.pageInfo.endCursor);
+    if (++pages >= DUP_MAX_PAGES) { truncated = true; break; }
+  } while (after);
+
+  return { orders, truncated };
+}
+
+function mapDupOrder(n: any) {
     const total = Number(n.totalPriceSet?.shopMoney?.amount ?? 0);
     const refunded = Number(n.totalRefundedSet?.shopMoney?.amount ?? 0);
     // ⚠️ A COPY IS CLEANED UP WHEN THE PAYMENT IS REVERSED, NOT WHEN THE
@@ -199,8 +228,6 @@ async function shopifyEbayOrders(shop: string, token: string, sinceDay: string) 
       ebayId: ((n.customAttributes || []) as any[])
         .find((a) => a?.key === "eBay Order Id")?.value ?? null,
     };
-  });
-  return { orders, truncated: !!conn?.pageInfo?.hasNextPage };
 }
 
 // The state of specific orders by id. Needed because a duplicate is only a
@@ -265,6 +292,16 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     counts[name] = (data || []).length;
     return data || [];
   };
+
+  // WHICH STORES ARE PARKED. Read before anything else because more than one
+  // check below has to know: at a standby store Marketplace Connect owns the
+  // channel and our own jobs are deliberately off, so an absence of activity is
+  // the intended state rather than a fault. Check 4 re-reads this table for its
+  // other columns; five rows twice is cheaper than threading state through.
+  const parked = new Set((await read("ebay_stores.modes", sb.from("ebay_stores")
+    .select("store_code, channel_mode")))
+    .filter((r: any) => String(r.channel_mode || "active") === "standby")
+    .map((r: any) => String(r.store_code)));
 
   // --- 1. listings that failed, errored, or never left pending ---------------
   // Only rows that could BE a problem. Pulling the whole table works today at a
@@ -332,7 +369,18 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     .or("last_error.not.is.null,status.eq.imported,and(tracking_number.not.is.null,tracking_pushed_at.is.null)"));
   for (const o of orders) {
     const label = o.shopify_order_name || o.ebay_order_id;
-    if (o.last_error) {
+    // A PARKED STORE'S IMPORT FAILURES ARE NOT FAILURES, AND THEY CANNOT CLEAR.
+    // At a standby store Marketplace Connect imports the eBay sale, not us, so our
+    // attempt failing on "Unable to reserve inventory" means only that MC got there
+    // first and took the stock -- the order IS in Shopify, and there is nothing on the
+    // shelf to count. Worse, the poll is off, so nothing will ever retry the row: the
+    // error is frozen at the moment of cutover and re-nags every RENAG_HOURS forever.
+    // Two such rows survived the handover (LEE 07-15079-74562, WSP 24-15063-49743) and
+    // both mailed "go and look for it" about orders that were already fine.
+    // Only the last_error branch is skipped. Tracking captured and never pushed stays
+    // live for parked stores: that one is about an order WE own and a buyer who can see
+    // no tracking, which standby does not make untrue.
+    if (o.last_error && !parked.has(String(o.store_code))) {
       // THE COMMON ONE, AND IT IS NOT A TOOL FAULT. Shopify says
       // "Unable to reserve inventory" when it holds zero of the thing eBay just
       // sold, so the sale cannot be written down. That is the shelf and Shopify
@@ -616,6 +664,9 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
     // A cancelled or fully-refunded copy is a cleaned-up copy, and counting it
     // would keep the alert lit forever after the cleanup is done.
     const live = recent.filter((o) => !o.cancelled && !o.refunded && o.ebayId);
+    // Both numbers, because the gap between them IS the story whenever a store
+    // looks busy: 270 fetched against 75 live is a cleanup, not a sales record.
+    counts[`shopify_ebay_live_${code}`] = live.length;
     const extras: Record<string, Set<string>> = {};
     const note = (ebayId: string, name: string) => (extras[ebayId] ||= new Set()).add(name);
 
@@ -672,12 +723,17 @@ async function collect(sb: any): Promise<{ issues: Issue[]; counts: Record<strin
       });
     }
     if (truncated) {
+      // ⚠️ SAY NOTHING ABOUT SELLING. The old wording called this "good news in
+      // itself", which was wrong the one time it ever fired: the count was made
+      // of reversed duplicate copies, not sales. It now reports what it read and
+      // what it could not, and leaves the interpreting alone.
       push({
         key: `dup_scan_truncated:${code}`, store: code, severity: "warning",
-        title: `${code} sold too much for the duplicate check to read it all`,
-        detail: `${code} booked more than ${DUP_PAGE} eBay orders in ${DUP_WINDOW_DAYS} days — good `
-          + `news in itself — but the check only read the newest of them, so an older double-counted `
-          + `sale could be hiding behind that. Our end: the limit needs raising.`,
+        title: `Could not read all of ${code}'s eBay orders to check for duplicates`,
+        detail: `${code} has more than ${DUP_PAGE * DUP_MAX_PAGES} eBay orders on file for the last `
+          + `${DUP_WINDOW_DAYS} days, so the check stopped before reaching the oldest of them and a `
+          + `double-counted sale could be hiding there. Note this counts every copy, including ones `
+          + `already cancelled or refunded, so a past duplicate incident inflates it. Our end.`,
         fix: "claude",
       });
     }
@@ -750,7 +806,7 @@ function build(issues: Issue[], firstSeen: Record<string, string>) {
   <tr><td style="padding:12px 20px;border-top:1px solid ${C.line};background:#f7faf8;color:${C.muted};font-size:11px;line-height:1.7;">
     <b style="color:${C.charcoal};">The tag on each one says who can fix it.</b><br>
     <b>Store Can Fix</b> — the shop floor sorts it out: count something, cancel something,
-    correct a listing. No code needed.<br>
+    correct a listing, press Try Again. No code needed.<br>
     <b>You Can Fix</b> — a setting or a reconnect only you can do, and the mail says where.<br>
     <b>Needs Claude</b> — the tool itself is broken. Nobody on the floor can help; forward it.
   </td></tr>
@@ -798,9 +854,9 @@ Deno.serve(async (req: Request) => {
         title: "This error check is partly blind",
         detail: "We cannot read ebay_orders, so any problem in it goes unreported — meaning a quiet inbox no longer proves everything is fine. Our end, and it is the most important one on this list. The error: permission denied for relation ebay_orders",
         fix: "claude" },
-      { key: "s4", store: "WSP", severity: "critical",
-        title: "One item is for sale twice on eBay — MO02-4518A-E10",
-        detail: "MO02-4518A-E10 has 2 listings at the same time and there is only one of it. Whoever buys second gets cancelled, and eBay counts that against the store. End all but one of those listings on eBay.",
+      { key: "s6", store: "WSP", severity: "critical",
+        title: "eBay hiccuped putting a listing up — MO02-4649A-R2R2",
+        detail: "eBay's own systems errored while MO02-4649A-R2R2 — 2020 Apple MacBook Air 13.3\" M1 was going up, so it is not live. Nothing is wrong with the item, and nothing is wrong with SPEEKS Connect. Open SPEEKS Connect, find this SKU under Listings and press Try Again — it normally goes straight up. If it fails twice more, forward this. eBay's words: inventory_item: 25001: A system error has occurred. Core Inventory Service internal error",
         fix: "store" },
       { key: "s5", store: "OVL", severity: "warning",
         title: "OVL's eBay listings are not being checked",
@@ -851,7 +907,7 @@ Deno.serve(async (req: Request) => {
             // busy system means the checks are blind, which looks identical to
             // "nothing is wrong" in the issue list alone. -1 means that read failed.
             rowsRead: counts,
-            issues: issues.map((i) => ({ severity: i.severity, store: i.store, title: i.title, key: i.key })),
+            issues: issues.map((i) => ({ severity: i.severity, store: i.store, title: i.title, key: i.key, fix: i.fix })),
           });
     }
 
