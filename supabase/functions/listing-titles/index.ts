@@ -1515,8 +1515,32 @@ const NAME_CODES = new Set<string>(["name-garbled", "name-wrong", "name-disputed
 // ⚠️ NOT ALL SPECS. Matching on every field would let an incidental value veto a
 // real fix — "Extreme" appearing in a Model field should not protect the word
 // "Extreme" everywhere in the title.
+//
+// ⚠️ FOR SOME THINGS THE SPEC IS THE NAME, AND A LENS IS THE CLEAREST CASE.
+// MPL's Rokinon (MO03-2519C-E10, denied 2026-09-04) is the same bug as the
+// T43WD-40 and Xbox One denials, on a field this list had not reached:
+//
+//   Maximum Aperture = f/2.2, title says f/2.2  →  we proposed f/2.0
+//   note: "This is a 2.2 lens. Shown in the pictures"
+//
+// Our knowledge was not even unreasonable — the 16mm ED AS UMC CS everyone
+// knows IS f/2.0. But Samyang/Rokinon also sell the CINE version of that same
+// optic marked T2.2, so "2.2" on the barrel is a real marking on a real
+// variant, not a mangling of 2.0. Nothing available from here settles which one
+// is in the box; the person holding it settled it in a second.
+//
+// A lens is NAMED by its focal length and maximum aperture — "16mm f/2.0" is
+// the product name, not a description of it — so both belong here for the same
+// reason Model does. Focal Length is included by symmetry rather than from a
+// denial: the identical failure is available on "16mm should be 14mm", and
+// waiting for someone to be told their lens is the wrong length first is not a
+// good reason to leave it out.
+//
+// Both values are specific measurements ("f/2.2", "16mm"), so neither can veto
+// a fix by coincidence the way a Color of "Red" would.
 const IDENTITY_FIELDS = [
   "MPN", "Model", "Platform", "Type", "Brand", "Release Year",
+  "Maximum Aperture", "Focal Length",
 ];
 
 function identityFields(specs: Record<string, string> | undefined) {
