@@ -4,11 +4,15 @@
 // contains them. A parent switch that can contradict its children is a way to
 // turn a tool half-off — Categories granted, tab revoked, nothing on screen and
 // nothing saying why — so the tab lost its switch and is now DERIVED:
-// data-feature-any="ec-upload,ec-view-categories" on the Operations tab button,
+// data-feature-any over its sub-tab keys on the Operations tab button,
 // which is the same OR that _SECTION_TABS already applies one level up to the
 // page nav link.
 //
 // The whole point is that the four combinations behave, so all four are driven:
+//
+// Listing Health is itself TWO switches since 2026-08-25 (ec-view-categories
+// and ec-view-photos), so its pill is data-feature-any over both and "Listing
+// Health off" means both revoked. A fifth case drives one half alone.
 //
 //   both      → tab shows, lands on Upload, toggle offers both
 //   upload    → tab shows, no Categories button, no toggle (one option is a
@@ -29,12 +33,22 @@ let fails = 0;
 const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g === undefined ? '' : '   ' + g)); if (!c) fails++; };
 const IGNORE = /calendar\.google\.com|toDataURL|[Tt]ainted canvas|Failed to fetch|net::ERR|401/;
 
-async function withGrants(browser, upload, cats) {
+async function withGrants(browser, upload, cats, photos, titles) {
+    // `photos` defaults to `cats` so the four original cases keep meaning what
+    // they meant: "Listing Health off" is both halves off. Pass it explicitly
+    // to drive one half on its own.
+    if (photos === undefined) photos = cats;
+    // `titles` (2026-08-28) follows the same rule, and it HAS to: it is a third
+    // half of the same pill, and it defaults ON for a manager. Leaving it out of
+    // the seed left it resolving to its role default, so every "Listing Health
+    // off" case in this file started reporting the pill as visible. A new
+    // data-feature-any key must be added here the day it is added to the pill.
+    if (titles === undefined) titles = cats;
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => { const m = String(e.message || e); if (!IGNORE.test(m)) errs.push(m); });
     await page.setViewport({ width: 1500, height: 1000 });
-    await page.evaluateOnNewDocument(([u, c]) => {
+    await page.evaluateOnNewDocument(([u, c, ph, t]) => {
         sessionStorage.setItem('speeksUnlocked', 'true');
         sessionStorage.setItem('speeksUserName', 'Test Manager');
         sessionStorage.setItem('speeksUserRole', 'manager');
@@ -42,10 +56,11 @@ async function withGrants(browser, upload, cats) {
         // The resolved lookup maps the page keeps overrides in, keyed the way
         // _featureOverrideFor reads them: role slug, not role class.
         window.__FA_SEED = {
-            role: { 'ec-upload': { manager: u }, 'ec-view-categories': { manager: c } },
+            role: { 'ec-upload': { manager: u }, 'ec-view-categories': { manager: c },
+                    'ec-view-photos': { manager: ph }, 'ec-view-titles': { manager: t } },
             user: {},
         };
-    }, [upload, cats]);
+    }, [upload, cats, photos, titles]);
     await page.goto('file:///' + REPO + '/operations.html', { waitUntil: 'domcontentloaded' }).catch(() => {});
     await new Promise(r => setTimeout(r, 2300));
     // Seed and re-run the pass the page runs at login.
@@ -130,6 +145,31 @@ const read = page => page.evaluate(() => {
     ok(s.jump === false, 'and Jump To cannot reach it either', String(s.jump));
 
     console.log('');
+    console.log('== Listing Health is two switches ==');
+    // Upload off, Categories off, PHOTOS ON. The pill must still appear — the
+    // tab shows whichever halves are enabled — and Jump To must reach it on the
+    // alarm key alone. This is the case that would silently regress if anything
+    // went back to gating the pill on ec-view-categories by itself.
+    ({ page } = await withGrants(browser, false, false, true));
+    s = await read(page);
+    ok(s.tab, 'the tab shows for the photo alarm alone', String(s.tab));
+    ok(!s.upload && s.cats, 'and the Listing Health pill is the half that is on',
+        `upload=${s.upload} listingHealth=${s.cats}`);
+    ok(s.jump === true, 'Jump To reaches it on the alarm key alone', String(s.jump));
+    await page.close();
+
+    // Upload off, Categories off, Photos off, TITLES ON. Same assertion one key
+    // over: a grant is not proven by the control existing, only by the control
+    // being reachable — which is why the TAB is checked and not just the pill.
+    ({ page } = await withGrants(browser, false, false, false, true));
+    s = await read(page);
+    ok(s.tab, 'the tab shows for title review alone', String(s.tab));
+    ok(!s.upload && s.cats, 'and the Listing Health pill is the half that is on',
+        `upload=${s.upload} listingHealth=${s.cats}`);
+    ok(s.jump === true, 'Jump To reaches it on the titles key alone', String(s.jump));
+    await page.close();
+
+    console.log('');
     console.log('== The retired switch is really gone ==');
     const gone = await p4.evaluate(() => ({
         catalog: FEATURE_CATALOG.some(f => f.key === 'widget-ops-ebay'),
@@ -140,6 +180,55 @@ const read = page => page.evaluate(() => {
     }));
     ok(!gone.catalog && !gone.section && !gone.dom, 'widget-ops-ebay is out of the catalog, the section map and the DOM');
     ok(gone.upload, 'and Upload has a switch of its own', gone.label);
+
+    console.log('');
+    console.log('== The switch labels name the thing, not its shape ==');
+    // "Upload tab" / "No Pictures alarm" described the WIDGET. In a list of
+    // switches every row is a tab or a panel or an alarm, so the suffix is noise
+    // that pushes the part you are scanning for further right.
+    const labels = await p4.evaluate(() =>
+        ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles']
+        .map(k => (FEATURE_CATALOG.find(f => f.key === k) || {}).label));
+    ok(labels.every(Boolean), 'every SPEEKS Connect switch is in the catalog', labels.join(' | '));
+    ok(labels.every(l => l && !/\b(tab|alarm|panel|widget)$/i.test(l)),
+        'no trailing tab / alarm on the SPEEKS Connect switches', labels.join(' | '));
+    ok(labels.every(l => /^SPEEKS Connect · /.test(l)),
+        'and they all group under one name', labels.join(' | '));
+
+    console.log('');
+    console.log('== Where each role opens ==');
+    // The landing view is chosen BEFORE the first request, so this stubs both
+    // fetches: the question is where the panel opens, not what the server says.
+    const landsOn = async (role, store) => {
+        const pg = await browser.newPage();
+        pg.on('pageerror', e => { const m = String(e.message || e); if (!IGNORE.test(m)) errs.push(m); });
+        await pg.setViewport({ width: 1500, height: 1000 });
+        await pg.evaluateOnNewDocument(([r, st]) => {
+            sessionStorage.setItem('speeksUnlocked', 'true');
+            sessionStorage.setItem('speeksUserName', 'Test Person');
+            sessionStorage.setItem('speeksUserRole', r);
+            sessionStorage.setItem('speeksUserStore', st);
+            sessionStorage.setItem('speeksUserPin', '0000');
+        }, [role, store]);
+        await pg.goto('file:///' + REPO + '/operations.html', { waitUntil: 'domcontentloaded' }).catch(() => {});
+        await new Promise(r => setTimeout(r, 2300));
+        const view = await pg.evaluate(async (r) => {
+            const corp = r === 'district manager' || r === 'ceo';
+            const all = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+            window._ecFetch = async () => ({ scope: { allStores: corp, stores: corp ? all : ['OVL'] }, stores: [] });
+            window._rcFetch = async () => ({ scope: { corp, stores: corp ? all : ['OVL'], mayCats: true, mayPhotos: true },
+                                             other: {}, misfiled: {}, unmatched: {}, photos: {}, counts: {}, queue: [] });
+            _ecView = 'listings'; _ecData = null; _ecScope = null; _ecHealth = null;
+            await ecLoad();
+            return _ecView;
+        }, role);
+        await pg.close();
+        return view;
+    };
+    ok(await landsOn('district manager', 'CORP') === 'health', 'a DM opens on All Stores');
+    ok(await landsOn('ceo', 'CORP') === 'health', 'so does the CEO');
+    // Unchanged: a store role has no All Stores view to open on.
+    ok(await landsOn('manager', 'OVL') === 'cats', 'a manager still opens on Listing Health');
 
     ok(errs.length === 0, 'no console errors', errs.slice(0, 3).join(' | ') || 'clean');
     await p4.close();

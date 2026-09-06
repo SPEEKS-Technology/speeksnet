@@ -60,6 +60,11 @@ const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 
 const API_VERSION = Deno.env.get("SHOPIFY_API_VERSION") || "2026-07";
 const CACHE_KEY = "shopify_live";
+
+// Store codes forced onto the orders fallback for this request only. Set from
+// &forceOrders= on the secret-gated refresh and cleared straight after, so it
+// can never leak into the next pass. See the hook in fetchStore.
+let FORCE_ORDERS = new Set<string>();
 const TZ = "America/Chicago";
 
 // Stale threshold for the closed-hours cadence.
@@ -457,7 +462,83 @@ type StoreMetrics = {
   // filling with zeros.
   cmp?: StoreCompare | null;
   error?: string;
+  // ⚠️ WHERE THE FIGURES CAME FROM, AND IT IS NOT DECORATION. "shopifyql" is the
+  // real thing: net sales and cost of goods as Shopify reports them, the same
+  // basis as the Sales Summary sheet. "orders" is the fallback below — a
+  // different basis entirely, with no cost of goods at all — and a row built
+  // that way must never be presented as though it were the same number.
+  source?: "shopifyql" | "orders";
+  sourceNote?: string;
 };
+
+// Rebuild the per-day rows from the Orders API, in the shape the ShopifyQL
+// branch produces, for a shop whose sales dataset is refusing. See the block in
+// fetchStore for when this runs and what it deliberately cannot supply.
+//
+// ⚠️ BUCKETED IN CENTRAL TIME, NOT UTC. createdAt is an instant; a sale at 7pm
+// Central is already tomorrow in UTC, so bucketing on the raw string would move
+// every evening sale to the next day and make "today" wrong all afternoon —
+// the same class of bug as the checklist reset. Intl with an explicit zone.
+//
+// ⚠️ NO cost_of_goods_sold KEY AT ALL, not a zero. A zero would flow into
+// gpToday = net - 0 and render a 100% margin, which is the single most
+// convincing wrong number this dashboard could show. The caller nulls the
+// derived fields; this function simply never invents the input.
+async function dayRowsFromOrders(
+  shop: string, token: string, c: Central, sinceDays: number,
+): Promise<any[]> {
+  const start = new Date(Date.UTC(c.y, c.m - 1, c.d));
+  start.setUTCDate(start.getUTCDate() - sinceDays);
+  const startIso = start.toISOString().slice(0, 10);
+
+  const dayOf = (instant: string) => {
+    const p = new Intl.DateTimeFormat("en-CA", {
+      timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date(instant));
+    return p;                       // en-CA formats as YYYY-MM-DD
+  };
+
+  const by = new Map<string, { net: number; orders: number; returns: number }>();
+  let cursor: string | null = null;
+  // Paged, and capped. A month of orders at one store is a few hundred; the cap
+  // stops a runaway loop from eating the per-minute cron's whole budget.
+  for (let page = 0; page < 12; page++) {
+    const after: string = cursor ? `, after: "${cursor}"` : "";
+    const d = await gql(shop, token, `{
+      orders(first: 250, query: "created_at:>=${startIso}", sortKey: CREATED_AT${after}) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          createdAt
+          currentTotalPriceSet { shopMoney { amount } }
+          totalRefundedSet { shopMoney { amount } }
+        }
+      }
+    }`);
+    const o = d?.orders;
+    for (const n of (o?.nodes ?? [])) {
+      const day = dayOf(String(n.createdAt));
+      const cur = by.get(day) ?? { net: 0, orders: 0, returns: 0 };
+      cur.net += Number(n?.currentTotalPriceSet?.shopMoney?.amount ?? 0);
+      cur.returns += Number(n?.totalRefundedSet?.shopMoney?.amount ?? 0);
+      cur.orders += 1;
+      by.set(day, cur);
+    }
+    if (!o?.pageInfo?.hasNextPage) break;
+    cursor = o.pageInfo.endCursor;
+  }
+
+  return [...by.entries()]
+    .sort((a, b) => a[0] < b[0] ? -1 : 1)
+    .map(([day, v]) => ({
+      day,
+      net_sales: v.net,
+      orders: v.orders,
+      // Negative to match ShopifyQL's sign convention, which the caller takes
+      // the magnitude of. Matching the convention rather than the caller's
+      // handling keeps the two branches interchangeable.
+      returns: -v.returns,
+    }));
+}
 
 async function fetchStore(
   shop: string, token: string, c: Central, goal: number, pd: PrevDay,
@@ -484,19 +565,74 @@ async function fetchStore(
     // being folded into the MTD totals and then thrown away. Reporting it costs
     // no extra Shopify call; only the window start moves, and only on the 1st.
     const sinceDays = pd.sinceDays;
-    const data = await gql(shop, token, `{
-      shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, orders, returns GROUP BY day SINCE -${sinceDays}d UNTIL today ORDER BY day") {
-        parseErrors
-        tableData { rows }
-      }
+
+    // ⚠️ THESE ARE TWO CALLS ON PURPOSE, AND THEY USED TO BE ONE.
+    // gql() throws whenever Shopify returns an `errors` array, and Shopify
+    // returns one for a partial failure — so when LEE's sales dataset started
+    // answering INTERNAL_SERVER_ERROR on 2026-08-31 the throw took the ORDERS
+    // half down with it, even though orders had answered perfectly. The store
+    // lost its whole row, its activity strip and its last-order time over a
+    // fault in one of the two halves. Split, each half fails on its own.
+    const ordersData = await gql(shop, token, `{
       orders(first: ${RECENT_ORDERS}, reverse: true, sortKey: CREATED_AT) {
         nodes { createdAt currentTotalPriceSet { shopMoney { amount } } }
       }
     }`);
 
-    const q = data?.shopifyqlQuery;
-    if (q?.parseErrors?.length) throw new Error(`ShopifyQL: ${q.parseErrors.join("; ")}`);
-    const rows: any[] = q?.tableData?.rows ?? [];
+    let rows: any[] = [];
+    let qlError: string | null = null;
+    try {
+      // ⚠️ A TEST HOOK, AND IT EARNS ITS PLACE. The fallback below only ever runs
+      // during a Shopify outage, which is precisely when nobody wants to be
+      // finding out whether it works — the same reason the opaque-part-code
+      // guard sat dead for three days. `&forceOrders=LEE` on the secret-gated
+      // refresh makes this store take the fallback path on demand. Secret-gated
+      // by construction: only the cron entry point reaches fetchStore at all.
+      if (FORCE_ORDERS.has(code)) throw new Error("forced: fallback test hook");
+      const data = await gql(shop, token, `{
+        shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, orders, returns GROUP BY day SINCE -${sinceDays}d UNTIL today ORDER BY day") {
+          parseErrors
+          tableData { rows }
+        }
+      }`);
+      const q = data?.shopifyqlQuery;
+      if (q?.parseErrors?.length) throw new Error(`ShopifyQL: ${q.parseErrors.join("; ")}`);
+      rows = q?.tableData?.rows ?? [];
+      base.source = "shopifyql";
+    } catch (e) {
+      qlError = String(e).slice(0, 200);
+      rows = [];
+    }
+
+    // ================= THE FALLBACK, AND WHAT IT CANNOT DO =================
+    // ⚠️ SHOPIFY'S SALES REPORTING CAN FAIL FOR ONE SHOP AT A TIME. Measured
+    // 2026-08-31: LEE returned INTERNAL_SERVER_ERROR for every `FROM sales`
+    // query, on every API version from 2025-07 to 2026-07, while the other four
+    // stores answered the identical query. It was not auth and not our code —
+    // `FROM orders` at the same shop still returned a proper parse error, so the
+    // engine and the token were both fine. Only that shop's sales dataset was.
+    //
+    // A blank row for days on end is worse than a different number honestly
+    // labelled, so the day figures are rebuilt from the Orders API.
+    //
+    // ⚠️ IT IS A DIFFERENT BASIS AND THE ROW MUST SAY SO. Orders carry the total
+    // the customer paid — tax and shipping included, refunds not netted off —
+    // where net_sales excludes all three. So this figure runs HIGH against the
+    // Sales Summary, and the gap is not a bug to chase.
+    // ⚠️ AND THERE IS NO COST OF GOODS. Nothing in the Orders API carries it, so
+    // GP, margin and the goal bar go NULL rather than being computed from a
+    // cost of zero — which would render a flawless 100% margin and read as the
+    // best day the store had ever had.
+    if (qlError) {
+      rows = await dayRowsFromOrders(shop, token, c, sinceDays);
+      base.source = "orders";
+      base.sourceNote = "Shopify's sales reporting is not answering for this store, "
+        + "so these figures are counted from orders instead. They include tax and "
+        + "shipping and do not subtract refunds, so they read higher than the Sales "
+        + "Summary. Profit and margin are blank because order data carries no cost "
+        + "of goods. Nothing is wrong with the store's data — Claude is chasing it "
+        + "with Shopify.";
+    }
     const todayIso = iso(c);
     const monthPrefix = `${c.y}-${String(c.m).padStart(2, "0")}`;
 
@@ -549,6 +685,17 @@ async function fetchStore(
     base.mtdMargin = base.mtdNet > 0
       ? round2((base.mtdNet - base.mtdCogs) / base.mtdNet * 100) : null;
 
+    // ⚠️ THE FALLBACK KNOWS NOTHING ABOUT COST, SO IT MUST CLAIM NOTHING.
+    // Everything above derived cost as 0 for these rows, which makes gp == net
+    // and margin == 100% — a number that would read as the best trading day the
+    // store has ever had, on the one row that is least trustworthy. Null is the
+    // honest answer and the UI already dashes it out.
+    if (base.source === "orders") {
+      base.cogsToday = 0; base.gpToday = 0; base.marginToday = null;
+      base.mtdCogs = 0; base.mtdGp = 0; base.mtdMargin = null;
+      base.pctOfGoal = null; base.paceIndex = null;
+    }
+
     if (pd.iso) {
       // When the previous open day belongs to last month there is no meaningful
       // "month to date" to show beside it, so those fields go null and the UI
@@ -574,9 +721,15 @@ async function fetchStore(
         // MISSING key would let today's pace show through under a past date.
         pctOfGoal: null, paceIndex: null,
       };
+      // Yesterday is built from the same cost-free rows, so it carries the same
+      // false margin if left alone.
+      if (base.source === "orders") {
+        base.prev.cogsToday = 0; base.prev.gpToday = 0; base.prev.marginToday = null;
+        base.prev.mtdCogs = 0; base.prev.mtdGp = 0; base.prev.mtdMargin = null;
+      }
     }
 
-    const nodes: any[] = data?.orders?.nodes ?? [];
+    const nodes: any[] = ordersData?.orders?.nodes ?? [];
     const last = nodes[0];
     if (last) {
       base.lastOrderAt = last.createdAt ?? null;
@@ -725,7 +878,11 @@ async function refresh(sb: any, now: Date, force: boolean) {
   const elapsedPct = sd.total > 0 ? sd.elapsed / sd.total * 100 : 0;
   const prevElapsedPct = psd && sd.total > 0 ? psd.elapsed / sd.total * 100 : 0;
   for (const m of metrics) {
-    if (m.goal > 0) {
+    // ⚠️ A COST-FREE ROW CANNOT BE SCORED AGAINST A GP GOAL. Its mtdGp is 0 by
+    // construction, so this would print "0% of goal" beside a real target and
+    // read as a store that had sold nothing all month — the opposite lie to the
+    // 100% margin, and just as convincing. It stays null and the UI dashes it.
+    if (m.goal > 0 && m.source !== "orders") {
       m.pctOfGoal = round2(m.mtdGp / m.goal * 100);
       m.paceIndex = elapsedPct > 0 ? Math.round(m.pctOfGoal / elapsedPct * 100) : null;
       if (m.prev && pd.inMonth) {
@@ -739,7 +896,13 @@ async function refresh(sb: any, now: Date, force: boolean) {
   const ordered = STORE_ORDER
     .map(code => metrics.find(m => m.code === code))
     .filter(Boolean) as StoreMetrics[];
-  const healthy = ordered.filter(m => !m.error);
+  // ⚠️ AN ORDERS-SOURCED ROW IS EXCLUDED FROM THE DISTRICT, EXACTLY LIKE AN
+  // ERRORED ONE. Its sales are on a different basis (tax and shipping in,
+  // refunds not netted) and its cost is unknown, so adding it to the roll-up
+  // would inflate district revenue and drag district margin toward zero — one
+  // store's outage quietly corrupting the number every other store is judged
+  // against. Better to roll up four stores and say so than five and be wrong.
+  const healthy = ordered.filter(m => !m.error && m.source !== "orders");
 
   const sum = (f: (m: StoreMetrics) => number) => round2(healthy.reduce((a, m) => a + f(m), 0));
   const dNet = sum(m => m.netToday), dCogs = sum(m => m.cogsToday);
@@ -932,7 +1095,18 @@ Deno.serve(async (req: Request) => {
 
   // ---- machine path: refresh from Shopify ----
   if (url.searchParams.get("secret") === SECRET) {
-    return json(await refresh(sb, now, url.searchParams.get("force") === "1"));
+    // &forceOrders=LEE — exercise the Shopify-outage fallback on demand. Set for
+    // this request only and cleared in the finally, because the runtime reuses
+    // an isolate between invocations: left set, the next cron pass a minute
+    // later would quietly serve that store from orders forever.
+    FORCE_ORDERS = new Set(
+      (url.searchParams.get("forceOrders") || "")
+        .split(",").map(s => s.trim().toUpperCase()).filter(Boolean));
+    try {
+      return json(await refresh(sb, now, url.searchParams.get("force") === "1"));
+    } finally {
+      FORCE_ORDERS = new Set<string>();
+    }
   }
 
   // ---- browser path: read the cache, scoped ----

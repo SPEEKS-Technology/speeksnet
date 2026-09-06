@@ -28,6 +28,13 @@ const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
 
 let fails = 0;
 const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g === undefined ? '' : '   ' + g)); if (!c) fails++; };
+// A SKIP IS ANNOUNCED, NEVER SILENT. The "nothing was removed" group asserts the
+// Upload view is intact, which cannot be true while ec-upload is revoked for
+// every role (Ethan, 2026-08-25 — Upload is paused). Skipping quietly would let
+// this harness report all-clear on a panel it never looked at; skipping out loud
+// keeps the coverage gap visible until Upload comes back.
+let skipped = 0;
+const skip = (l, why) => { console.log('  SKIP ' + l + '   — ' + why); skipped++; };
 const IGNORE = /calendar\.google\.com|toDataURL|[Tt]ainted canvas|Failed to fetch|net::ERR|401|403/;
 const read = p => fs.readFileSync(REPO + '/' + p, 'utf8');
 
@@ -156,12 +163,22 @@ const read = p => fs.readFileSync(REPO + '/' + p, 'utf8');
         } };
         ecRender();
         const b = document.getElementById('ecBody');
-        const banner = b.querySelector('.ec-standby');
+        // ⚠️ THE BANNER IS NO LONGER INSIDE #ecBody (2026-08-25). It renders into
+        // #ecStandbyHost above it, so that revoking ec-upload cannot take the
+        // Take The Channel Back button off the screen along with the Upload
+        // view — which is exactly what happened. Scope the banner checks to the
+        // PANEL; the Upload-specific ones below stay scoped to the body, since
+        // "the tool is still there" is a claim about the body.
+        const host = document.getElementById('ecStandbyHost');
+        const banner = host && host.querySelector('.ec-standby');
         return {
             banner: !!banner,
+            // Belt and braces: if it ever creeps back into the body, say so
+            // rather than passing because it was found somewhere.
+            inBody: !!b.querySelector('.ec-standby'),
             title: banner ? banner.querySelector('.ec-standby-t').textContent.trim() : '',
             note: banner ? banner.querySelector('.ec-standby-n').textContent.replace(/\s+/g, ' ').trim() : '',
-            takeOver: !!b.querySelector('.ec-btn-glass'),
+            takeOver: !!(host && host.querySelector('.ec-btn-glass')),
             // Break-glass means the tool is still THERE.
             scanBox: !!b.querySelector('#ecSkuInput'),
             uploadBtn: [...b.querySelectorAll('button')].some(x => /Upload To eBay/.test(x.textContent)),
@@ -171,6 +188,7 @@ const read = p => fs.readFileSync(REPO + '/' + p, 'utf8');
 
     const sb = await draw('standby', 'district manager');
     ok(sb.banner, 'standby draws the banner');
+    ok(!sb.inBody, 'outside the Upload view, so revoking ec-upload cannot hide the switch');
     ok(/Marketplace Connect Owns OVL/i.test(sb.title), 'naming who owns the channel', sb.title);
     ok(/twice/i.test(sb.note), 'and saying WHY, in terms of the actual consequence',
         sb.note.slice(0, 120) + '…');
@@ -180,9 +198,20 @@ const read = p => fs.readFileSync(REPO + '/' + p, 'utf8');
 
     console.log('');
     console.log('-- nothing was removed --');
-    ok(sb.scanBox && sb.uploadBtn,
-        'the scan box and Upload button are STILL THERE — this is break-glass, not a teardown');
-    ok(sb.failedBtn, 'and a store can still open its own failed uploads');
+    // The Upload view only renders when ec-upload is granted; _ecSyncChrome
+    // moves the panel off it otherwise, which is why the scan box is absent.
+    // That is Feature Access doing its job, not standby tearing the tool out —
+    // so the claim is untestable right now rather than false.
+    const UPLOAD_ON = sb.scanBox || sb.uploadBtn || sb.failedBtn;
+    if (!UPLOAD_ON) {
+        skip('the scan box and Upload button are STILL THERE',
+             'ec-upload is revoked for every role, so the Upload view never renders');
+        skip('and a store can still open its own failed uploads', 'same');
+    } else {
+        ok(sb.scanBox && sb.uploadBtn,
+            'the scan box and Upload button are STILL THERE — this is break-glass, not a teardown');
+        ok(sb.failedBtn, 'and a store can still open its own failed uploads');
+    }
 
     console.log('');
     console.log('-- who may break the glass --');
@@ -191,22 +220,27 @@ const read = p => fs.readFileSync(REPO + '/' + p, 'utf8');
     ok(mgr.banner && !mgr.takeOver,
         'a store manager sees the banner but is NOT offered the switch',
         'banner ' + mgr.banner + ', button ' + mgr.takeOver);
-    ok(mgr.scanBox, 'and still has the whole panel');
+    if (UPLOAD_ON) ok(mgr.scanBox, 'and still has the whole panel');
+    else skip('and still has the whole panel', 'ec-upload revoked — no Upload view to have');
 
     console.log('');
     console.log('-- active is unchanged --');
     const act = await draw('active', 'district manager');
     ok(!act.banner, 'an active store shows no banner at all');
-    ok(act.scanBox && act.uploadBtn, 'and the panel is exactly as it was');
+    if (UPLOAD_ON) ok(act.scanBox && act.uploadBtn, 'and the panel is exactly as it was');
+    else skip('and the panel is exactly as it was', 'ec-upload revoked — no Upload view to compare');
     const missing = await page.evaluate(() => {
         // A store on a build predating migration 0060 sends no channelMode.
         delete _ecData.summary.channelMode;
         ecRender();
-        return { banner: !!document.querySelector('#ecBody .ec-standby'),
+        return { banner: !!document.querySelector('#ecStandbyHost .ec-standby'),
                  scanBox: !!document.getElementById('ecSkuInput') };
     });
-    ok(!missing.banner && missing.scanBox,
-        'and a summary with NO channelMode field behaves as active, not as parked');
+    // The BANNER half is the real assertion; the scan box was only corroboration
+    // that the panel still drew, and it cannot draw with Upload switched off.
+    ok(!missing.banner, 'and a summary with NO channelMode field behaves as active, not as parked');
+    if (UPLOAD_ON) ok(missing.scanBox, 'with the panel still drawn');
+    else skip('with the panel still drawn', 'ec-upload revoked');
 
     console.log('');
     ok(errs.length === 0, 'no console errors', errs.slice(0, 3).join(' | ') || 'clean');

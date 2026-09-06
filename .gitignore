@@ -4,6 +4,11 @@
 # Supabase CLI local state (project ref, session scratch) — not repo content
 supabase/.temp/
 
+# puppeteer-core, installed with --no-save so the DOM harnesses in scripts/ can
+# drive headless Chrome. There is no package.json here on purpose — this is a
+# static site, not a build — so the modules are a local tool, not repo content.
+node_modules/
+
 # Screenshots written by the layout harnesses in scripts/. They are evidence for
 # one run, not repo content — every harness rewrites its own on the next pass.
 *.png

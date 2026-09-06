@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.6.1';
+const APP_VERSION = '3.7.0';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -4506,6 +4506,35 @@ function _mbDefaultView() {
     return (role === 'ceo' || role === 'district manager') ? 'overview' : 'store';
 }
 
+// WHICH STORE Store View is looking at. One function, used by the fetch, the
+// save and the subtitle, because they were each working it out for themselves
+// and getting three different answers.
+//
+// ⚠️ DECIDED BY ROLE, NEVER BY WHETHER A CONTROL IS ON SCREEN. The fetch used to
+// ask `sel.offsetParent === null` — "is the picker laid out?" — as a stand-in for
+// "may this person choose a store?". Those are not the same question, and on
+// 2026-09-02 they gave opposite answers: the picker's .dd-host was stuck hidden
+// (see _mbSyncControls below), so a District Manager on Store View was read as
+// somebody with no picker, fell back to their own store — which for a DM is
+// "ALL" — and fetched a store that does not exist. The subtitle said "OVL ·
+// Store View" the whole time, because IT read the select's value directly. Store
+// managers were unaffected, so it looked like a permissions problem and was not.
+//
+// It also fixes a quieter one the same way: mbSaveBriefStore read sel.value with
+// no role check at all, and sel.value is "OVL" until somebody touches it — so an
+// owner-manager at LEE saving Store View would have written into OVL.
+function _mbStore() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const own  = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase().trim();
+    const canPick = (role === 'ceo' || role === 'district manager');
+    const sel = document.getElementById('mbStoreSelect');
+    if (canPick && sel && MB_STORES.indexOf(sel.value) >= 0) return sel.value;
+    // Anyone else gets their own store, and a store that is not one of the five
+    // (a DM's "ALL", a blank session) falls to the first rather than being sent
+    // to the API to come back empty.
+    return MB_STORES.indexOf(own) >= 0 ? own : MB_STORES[0];
+}
+
 // Reflect the active view in the controls: highlight the toggle, and only show
 // the store picker in Store View (and only for CEO/DM — Overview spans all stores).
 function _mbSyncControls() {
@@ -4514,7 +4543,18 @@ function _mbSyncControls() {
     document.getElementById('mbViewOverviewBtn')?.classList.toggle('active', _mbView === 'overview');
     document.getElementById('mbViewStoreBtn')?.classList.toggle('active', _mbView === 'store');
     const sel = document.getElementById('mbStoreSelect');
-    if (sel) sel.style.display = (_mbView === 'store' && canPickStore) ? '' : 'none';
+    // ⚠️ SHOWING A SELECT DOES NOT SHOW A SELECT — the mirror image of the trap
+    // _ddMirrorGate was written for. This one is born `style="display:none"` in
+    // workspace.html, so _ddEnhance wraps it into a host that is born hidden
+    // ("a face born into a hidden select is born hidden"), and clearing the
+    // inline display on the native control afterwards leaves the host still
+    // carrying `display: none !important`. The DM's store picker was therefore
+    // never on screen, on any view, since the day the toggle was added.
+    if (sel) {
+        const show = (_mbView === 'store' && canPickStore);
+        sel.style.display = show ? '' : 'none';
+        _ddMirrorGate(sel, show);
+    }
     // Manage Rows edits the catalog, which is the same on both views — but hide
     // it mid-edit so the shape of the report can't change under an open form.
     const rowsBtn = document.getElementById('mbRowsBtn');
@@ -4522,8 +4562,7 @@ function _mbSyncControls() {
     _mbSyncOverviewMonths();
     const sub = document.getElementById('mbSubtitle');
     if (sub) {
-        const store = (sel && canPickStore ? sel.value : null) || sessionStorage.getItem('speeksUserStore') || '';
-        sub.textContent = _mbView === 'overview' ? 'All Stores' : (store + ' · Store View');
+        sub.textContent = _mbView === 'overview' ? 'All Stores' : (_mbStore() + ' · Store View');
     }
 }
 
@@ -4536,7 +4575,9 @@ function _mbSyncControls() {
 function _mbSyncOverviewMonths() {
     const sel = document.getElementById('mbOverviewMonth');
     if (!sel) return;
-    if (_mbView !== 'overview') { sel.style.display = 'none'; return; }
+    // Same host-mirroring as the store picker above, and for the same reason:
+    // this one is born display:none in the markup too.
+    if (_mbView !== 'overview') { sel.style.display = 'none'; _ddMirrorGate(sel, false); return; }
 
     // Only months that actually carry values for some store. The API lists the
     // open edit window in `months` before anything is entered for it, and an
@@ -4553,7 +4594,7 @@ function _mbSyncOverviewMonths() {
     // PICKER — nothing else is windowed, so the YoY rows still reach back into
     // the full history for their prior-year figure.
     const list = [...months].sort().reverse().slice(0, MB_OVERVIEW_MONTHS);
-    if (!list.length) { sel.style.display = 'none'; return; }
+    if (!list.length) { sel.style.display = 'none'; _ddMirrorGate(sel, false); return; }
 
     // A pick that no longer exists (store switch, fresh load) falls back to the
     // newest month rather than leaving the select pointing at nothing.
@@ -4565,6 +4606,7 @@ function _mbSyncOverviewMonths() {
     ).join('');
     sel.value = current;
     sel.style.display = '';
+    _ddMirrorGate(sel, true);
     // While editing, the view is pinned to the open month — offering a picker
     // that can't move would be a lie, and moving it mid-edit would silently
     // retarget the inputs at a locked month.
@@ -4641,10 +4683,7 @@ async function fetchMonthlyBriefOverview() {
 async function fetchMonthlyBriefStore() {
     const body = document.getElementById('mbBody');
     if (!body) return;
-    const sel = document.getElementById('mbStoreSelect');
-    let store = sel ? sel.value : (sessionStorage.getItem('speeksUserStore') || 'OVL');
-    // Managers without the picker default to their own store
-    if (sel && sel.offsetParent === null) { store = sessionStorage.getItem('speeksUserStore') || store; }
+    const store = _mbStore();
     _mbEditing = false;
     body.innerHTML = '<div class="status-message">Syncing Performance Brief…</div>';
     try {
@@ -5636,7 +5675,7 @@ function mbSaveBrief() {
 }
 
 async function mbSaveBriefStore() {
-    const store = document.getElementById('mbStoreSelect')?.value || sessionStorage.getItem('speeksUserStore');
+    const store = _mbStore();
     const pin   = sessionStorage.getItem('speeksUserPin');
     if (!pin) { alert('Session expired — please sign in again.'); return; }
 
@@ -8221,6 +8260,50 @@ function _recHolders(champ, stores) {
     return (exact.length ? exact : hits).map(s => String(s.section).trim());
 }
 
+/* Records whose hero IS first place, rather than a company-wide total.
+ *
+ * Every other metric on this page has a real Company figure — the best day the
+ * company as a whole bought, the month it as a whole billed — so the hero is a
+ * number in its own right and the board underneath starts again at 1. A metric
+ * listed here has no such total: the hero IS first place, so printing that
+ * holder again at rank 1 directly beneath their own headline would just say it
+ * twice. The hero takes first place and the dropdown carries 2-5.
+ *
+ * `by: 'person'` means the holder is a PERSON and the store is only where they
+ * work. That changes the whole row: the name is the headline, the store is
+ * supporting detail, two rows can share a store, and there is no Company row to
+ * auto-fill — the leader is simply whoever is top. It also changes how the
+ * Company Records tool edits it, which is why the tool reads this same map.
+ */
+// `show`/`hide` override the button's wording. Single Day Google Reviews used to
+// say "See Places 2-5" because its hero spends the first place, but the rest of
+// the page says "See Full Leaderboard" and one card wording itself differently
+// read as a different kind of control. Omit them and the default applies —
+// they stay supported for any metric that genuinely needs its own words.
+const RECORD_LEADER_ONLY = {
+    'Single Day Google Reviews': { by: 'person' },
+};
+const RECORD_PERSON_LABELS = Object.keys(RECORD_LEADER_ONLY)
+    .filter(l => RECORD_LEADER_ONLY[l].by === 'person');
+
+/* The order the cards sit in, which is a layout decision and not something the
+ * API should be deciding. It arrived in whatever order the rows came back,
+ * so adding a metric could silently reshuffle the whole page.
+ *
+ * Reads as three rows of three: the daily records together on the top row, the
+ * monthly ones underneath, and Customer Conversion alone on the third. Anything
+ * not named here is appended, so a new metric shows up at the end rather than
+ * disappearing. */
+const RECORD_CARD_ORDER = [
+    'Daily Buy Record',
+    'Daily Sell Record',
+    'Single Day Google Reviews',
+    'Monthly Revenue Record',
+    'Monthly Gross Profit Record',
+    'Monthly Sell Margin Record',
+    'Monthly Customer Conversion Record',
+];
+
 function renderRecords() {
     const cont = document.getElementById('recordsContainer');
     if (!cont) return;
@@ -8243,11 +8326,26 @@ function renderRecords() {
     let bC = 0;
     let html = '<div class="records-grid">';
 
-    Object.keys(map).forEach(l => {
+    const rank = l => {
+        const i = RECORD_CARD_ORDER.indexOf(l);
+        return i === -1 ? RECORD_CARD_ORDER.length : i;
+    };
+    Object.keys(map).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).forEach(l => {
         let d = map[l];
+        const only = RECORD_LEADER_ONLY[l];
+        const byPerson = only?.by === 'person';
+
+        // A person-held metric with nobody on it yet renders NOTHING. An empty
+        // card would sit on the page for the whole rollout announcing that the
+        // company has no record — the same reason the reviews tiles hide until
+        // the hub carries reviews.
+        if (byPerson && !d.s.some(s => String(s.value || '').trim())) return;
+
         bC++;
         let oId = 'overflow-board-' + bC;
-        d.s.sort((a, b) => parseNum(b.value) - parseNum(a.value));
+        // A store board ranks by the number. A person board ranks by the place
+        // the DM set with the arrows in the tool, falling back to the number.
+        d.s.sort(byPerson ? _recPersonOrder : (a, b) => parseNum(b.value) - parseNum(a.value));
         let cR = d.c || d.s[0];
 
         html += `
@@ -8255,8 +8353,17 @@ function renderRecords() {
             <div class="rec-h">${l}</div>`;
 
         if (cR) {
-            const who = _recHolders(cR, d.s).map(escapeHtml).join(' &middot; ');
-            const when = cR.subtext || '';
+            // Who holds it. For a person metric that is the name on the row —
+            // no lookup, because the row already says. _recHolders exists only
+            // because a store metric's Company row carries no store.
+            const who = byPerson
+                ? [String(cR.person || '').trim()].filter(Boolean).map(escapeHtml).join('')
+                : _recHolders(cR, d.s).map(escapeHtml).join(' &middot; ');
+            // The store is where they work, so it rides with the date as
+            // supporting detail rather than standing in for the holder.
+            const when = byPerson
+                ? [cR.section, cR.subtext].filter(Boolean).map(escapeHtml).join(' &middot; ')
+                : (cR.subtext || '');
             html += `
             <div class="rec-champ">
                 <div class="cc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></svg> Company Record</div>
@@ -8266,34 +8373,41 @@ function renderRecords() {
         }
 
         if (d.s.length) {
-            html += `<div class="rec-list">`;
-            html += d.s.slice(0, 3).map((s, i) => `
-                <div class="rec-li">
-                    <span class="lr${i===0 ? ' g' : ''}">${i+1}</span>
-                    <span class="ls">${s.section}</span>
-                    <span class="lv">
-                        <b>${s.value || '-'}</b>
-                        <span>${s.subtext || ''}</span>
-                    </span>
-                </div>`).join('');
+            // How many places the card shows before the dropdown. A leader-only
+            // card spends its first place on the hero above, so it opens the
+            // dropdown at 2 while everyone else opens it at 4.
+            const cut = only ? 1 : 3;
+            const inline = only ? [] : d.s.slice(0, cut);
+            const hidden = d.s.slice(cut);
 
-            if (d.s.length > 3) {
+            // One row of the board. A person row names the person and puts the
+            // store underneath in small type; a store row is the store, and has
+            // nothing to put on a second line.
+            const li = (s, rank, gold) => `
+                <div class="rec-li">
+                    <span class="lr${gold ? ' g' : ''}">${rank}</span>
+                    <span class="ls">${escapeHtml(byPerson ? (s.person || '—') : s.section)}${
+                        byPerson ? `<span class="lsub">${escapeHtml(s.section || '')}</span>` : ''}</span>
+                    <span class="lv">
+                        <b>${escapeHtml(s.value || '-')}</b>
+                        <span>${escapeHtml(s.subtext || '')}</span>
+                    </span>
+                </div>`;
+
+            html += `<div class="rec-list${only ? ' lead' : ''}">`;
+            html += inline.map((s, i) => li(s, i + 1, i === 0)).join('');
+
+            if (hidden.length) {
                 html += `
                 <div id="${oId}" class="hidden-board">
-                    ${d.s.slice(3).map((s, i) => `
-                    <div class="rec-li">
-                        <span class="lr">${i+4}</span>
-                        <span class="ls">${s.section}</span>
-                        <span class="lv">
-                            <b>${s.value || '-'}</b>
-                            <span>${s.subtext || ''}</span>
-                        </span>
-                    </div>`).join('')}
+                    ${hidden.map((s, i) => li(s, i + cut + 1, false)).join('')}
                 </div>`;
             }
             html += `</div>`;
-            if (d.s.length > 3) {
-                html += `<button class="rec-more" onclick="toggleBoard('${oId}', this)">See Full Leaderboard ▾</button>`;
+            if (hidden.length) {
+                const show = (only && only.show) || 'See Full Leaderboard';
+                const hide = (only && only.hide) || 'Hide Leaderboard';
+                html += `<button class="rec-more" data-show="${escapeHtml(show)}" data-hide="${escapeHtml(hide)}" onclick="toggleBoard('${oId}', this)">${escapeHtml(show)} ▾</button>`;
             }
         }
         html += `</div>`;
@@ -8303,10 +8417,16 @@ function renderRecords() {
     cont.innerHTML = html;
 }
 
-function toggleBoard(id, btn) { 
-    const el = document.getElementById(id); 
-    el.classList.toggle('open'); 
-    btn.innerText = el.classList.contains('open') ? 'Hide Leaderboard ▴' : 'See Full Leaderboard ▾'; 
+function toggleBoard(id, btn) {
+    const el = document.getElementById(id);
+    el.classList.toggle('open');
+    // The wording is the card's, not this function's, so a metric can override it.
+    // The fallbacks matter mid-deploy: a cached page can hold a button rendered
+    // by the old code, and it has to keep reading the way it was drawn.
+    const open = el.classList.contains('open');
+    const show = btn.dataset.show || 'See Full Leaderboard';
+    const hide = btn.dataset.hide || 'Hide Leaderboard';
+    btn.innerText = open ? `${hide} ▴` : `${show} ▾`;
 }
 
 async function toggleManageRecords() {
@@ -8328,6 +8448,17 @@ async function toggleManageRecords() {
                 const res = await fetch(`${RECORDS_URL}?v=${Date.now()}`);
                 recordsCache = await res.json();
                 localStorage.setItem('speeksRecordsCache', JSON.stringify(recordsCache));
+            }
+            // Person-held metrics offer a name picker. Warm the same cache the
+            // Permissions tool uses; failing is not fatal — the field is still
+            // free text, it just stops suggesting.
+            if (!globalUsersData.length) {
+                try {
+                    const cached = JSON.parse(localStorage.getItem('speeksAuthCache') || 'null');
+                    const data = cached || await fetch(`${AUTH_URL}?v=${Date.now()}`).then(r => r.json());
+                    globalUsersData = data.users || [];
+                    if (!cached) localStorage.setItem('speeksAuthCache', JSON.stringify(data));
+                } catch (e) {}
             }
             populateRecordsModal();
         } catch (e) {
@@ -8355,6 +8486,9 @@ function populateRecordsModal() {
     recordsCache.forEach(r => {
         const label = String(r.label || '').trim();
         if (!label) return;
+        // Person-held metrics have no place in a store grid — two people at one
+        // store would collide in a single cell. They get their own editor below.
+        if (RECORD_PERSON_LABELS.includes(label)) return;
         const section = String(r.section || 'COMPANY').trim();
         if (!byLabel[label]) { byLabel[label] = {}; labels.push(label); }
         byLabel[label][section] = r;
@@ -8404,8 +8538,235 @@ function populateRecordsModal() {
     const cols = `minmax(150px, 1.3fr) repeat(${sections.length}, minmax(118px, 1fr))`;
     list.innerHTML =
         `<p class="cr-hint">Each column is a store. Fill a metric across the stores — the <strong>Company</strong> column auto-fills with the highest value.</p>` +
-        `<div class="cr-grid-scroll"><div class="cr-grid" style="grid-template-columns:${cols};">${head}${body}</div></div>`;
+        // The person editors live INSIDE the scroller, not after it. Two nested
+        // scrollers would otherwise hide them below the fold on a short screen
+        // with no scrollbar to say they were there — the tool would look like
+        // it had simply lost the metric.
+        `<div class="cr-grid-scroll">` +
+            `<div class="cr-grid" style="grid-template-columns:${cols};">${head}${body}</div>` +
+            RECORD_PERSON_LABELS.map(_recPersonSection).join('') +
+        `</div>`;
     _recomputeCompanyRecords();
+    // Numbers the places and greys the arrow that has nowhere to go. Runs after
+    // the markup lands because it is derived from position, not from the data.
+    document.querySelectorAll('#manageRecordsList .cr-people').forEach(_recRenumber);
+}
+
+/* ── Person-held records ──────────────────────────────────────────────────
+ * The grid above is stores across the top, which cannot hold these: the
+ * holder is a person, the store is only where they work, and two people at
+ * one store can both be on the board. So each person metric gets a list you
+ * add rows to, and the whole label is replaced on save rather than updated
+ * cell by cell — see the records function for why.
+ */
+const RECORD_STORE_CODES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+
+// Names for the picker, so the DM types "Ja" rather than the whole name and
+// cannot invent a speling of somebody who already exists. Read from the same
+// cache the Permissions tool fills; an empty cache just means free text.
+function _recStaff() {
+    try {
+        const d = globalUsersData.length
+            ? { users: globalUsersData }
+            : JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        return (d.users || []).filter(u => u && u.name);
+    } catch (e) { return []; }
+}
+
+// Options for the name picker. A <datalist> was the obvious fit and was wrong:
+// the browser draws that suggestion popup itself, so it ignored every dropdown
+// style on the site and came up as a full-height black native list beside a
+// properly dressed Store control. A real <select> gets picked up by _ddScan's
+// MutationObserver and wears the same .dd-btn face as everything else.
+//
+// The CURRENT holder is kept as an option even when they are no longer in the
+// staff cache. A record set by somebody who has since left must not vanish from
+// the editor — without this the select would fall back to the placeholder and
+// the next save would drop the row, because a row with no name is discarded.
+function _recStaffOptions(current) {
+    const cur = String(current || '').trim();
+    const names = _recStaff().map(u => String(u.name).trim()).filter(Boolean);
+    if (cur && !names.some(n => n.toLowerCase() === cur.toLowerCase())) names.unshift(cur);
+    return names
+        .map(n => `<option value="${escapeHtml(n)}"${
+            n.toLowerCase() === cur.toLowerCase() ? ' selected' : ''}>${escapeHtml(n)}</option>`)
+        .join('');
+}
+
+function _recPersonSection(label) {
+    // _recPersonOrder is the same comparator the board uses, so what the editor
+    // shows top to bottom is exactly what the page will show. Sorting here by
+    // value alone (as this did) meant the arrows appeared to do nothing after a
+    // reload, because the saved order was thrown away on the way back in.
+    const rows = (recordsCache || [])
+        .filter(r => String(r.label || '').trim() === label)
+        .sort(_recPersonOrder);
+    // Always offer an empty row, so an unpopulated metric is one you can type
+    // into rather than one you first have to work out how to start.
+    const shown = rows.length ? rows : [{}];
+
+    return `
+    <div class="cr-people" data-label="${escapeHtml(label)}">
+        <div class="cr-people-h">
+            <span class="cr-people-t">${escapeHtml(label)}</span>
+            <span class="cr-people-s">Held by a person, not a store. The board shows them in this order &mdash; use the arrows to move somebody up or down.</span>
+        </div>
+        <div class="cr-pwarn" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+            <span>A higher number is sitting below a lower one. Fine for a tie you have ranked by hand &mdash; otherwise
+                  <button type="button" class="cr-psort" onclick="_recSortByValue(this)">sort by number</button>.</span>
+        </div>
+        <div class="cr-prow cr-phead">
+            <span>Name</span><span>Store</span><span>Reviews</span><span>Date</span><span></span>
+        </div>
+        <div class="cr-people-rows">${shown.map(_recPersonRow).join('')}</div>
+        <button type="button" class="cr-padd" onclick="_recAddPerson(this)">+ Add Person</button>
+    </div>`;
+}
+
+/* Where a person sits on the board. The DM's saved place wins; anything never
+   ordered falls back to the number, so a label that predates the ordinal column
+   still ranks sensibly instead of collapsing into insertion order. */
+function _recPersonOrder(a, b) {
+    const ao = a.ordinal, bo = b.ordinal;
+    const aHas = ao !== null && ao !== undefined && ao !== '';
+    const bHas = bo !== null && bo !== undefined && bo !== '';
+    if (aHas && bHas) return Number(ao) - Number(bo);
+    if (aHas !== bHas) return aHas ? -1 : 1;
+    return parseNum(b.value) - parseNum(a.value);
+}
+
+function _recPersonRow(r) {
+    r = r || {};
+    const store = String(r.section || '').toUpperCase();
+    return `
+    <div class="cr-person-row">
+        <div class="cr-pmove">
+            <button type="button" class="cr-pmv up" title="Move up" aria-label="Move up" onclick="_recMovePerson(this,-1)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>
+            </button>
+            <span class="cr-prank"></span>
+            <button type="button" class="cr-pmv down" title="Move down" aria-label="Move down" onclick="_recMovePerson(this,1)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+        </div>
+        <div class="cr-prow cr-pfields">
+            <select class="p-name" onchange="_recFillStore(this)">
+                <option value="">Name</option>
+                ${_recStaffOptions(r.person)}
+            </select>
+            <select class="p-store">
+                <option value="">Store</option>
+                ${RECORD_STORE_CODES.map(c =>
+                    `<option value="${c}"${c === store ? ' selected' : ''}>${c}</option>`).join('')}
+            </select>
+            <input type="text" class="p-val" placeholder="0" value="${escapeHtml(r.value || '')}"
+                   oninput="_recOrderWarn(this.closest('.cr-people'))">
+            <input type="text" class="p-date" placeholder="August 21, 2026" value="${escapeHtml(r.subtext || '')}">
+            <button type="button" class="cr-prm" title="Remove" onclick="_recRemovePerson(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+    </div>`;
+}
+
+// Swap a row with its neighbour. This is the whole reason the board stores an
+// ordinal: moving somebody between 1st and 2nd is one click, instead of retyping
+// four fields on two rows and hoping you did not transpose anything.
+function _recMovePerson(btn, dir) {
+    const row = btn.closest('.cr-person-row');
+    const other = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+    if (!other) return;
+    // insertBefore MOVES the node, so every control inside keeps its live value
+    // and the .dd-host face the enhancer already built around it. Re-rendering
+    // the row from markup would throw away anything typed but not yet saved.
+    row.parentNode.insertBefore(dir < 0 ? row : other, dir < 0 ? other : row);
+    _recRenumber(row.closest('.cr-people'));
+    // Keep the keyboard on the button that just moved, not on wherever the row
+    // used to be — otherwise a second press acts on the neighbour.
+    const again = row.querySelector('.cr-pmv.' + (dir < 0 ? 'up' : 'down'));
+    if (again && !again.disabled) again.focus();
+}
+
+function _recRemovePerson(btn) {
+    const box = btn.closest('.cr-people');
+    btn.closest('.cr-person-row').remove();
+    _recRenumber(box);
+}
+
+// Places are positional, so they are read off the DOM rather than stored on each
+// row. One function to call after any move, add or remove.
+function _recRenumber(box) {
+    if (!box) return;
+    const rows = Array.from(box.querySelectorAll('.cr-person-row'));
+    rows.forEach((row, i) => {
+        const rank = row.querySelector('.cr-prank');
+        if (rank) rank.textContent = i + 1;
+        const up = row.querySelector('.cr-pmv.up');
+        const down = row.querySelector('.cr-pmv.down');
+        if (up) up.disabled = i === 0;
+        if (down) down.disabled = i === rows.length - 1;
+    });
+    _recOrderWarn(box);
+}
+
+// The board shows the DM's order, not the numbers, so it is possible to leave a
+// smaller number above a bigger one. That is legitimate for a tie broken by hand
+// and wrong the rest of the time — so say so here rather than silently re-sorting
+// and undoing a deliberate move.
+function _recOrderWarn(box) {
+    const warn = box && box.querySelector('.cr-pwarn');
+    if (!warn) return;
+    const vals = Array.from(box.querySelectorAll('.cr-person-row'))
+        .map(r => r.querySelector('.p-val').value.trim())
+        .filter(v => v !== '')
+        .map(parseNum);
+    warn.hidden = !vals.some((v, i) => i > 0 && v > vals[i - 1]);
+}
+
+// Put the rows back in number order, for when the board has drifted and the
+// obvious answer is the right one.
+function _recSortByValue(btn) {
+    const box = btn.closest('.cr-people');
+    const wrap = box.querySelector('.cr-people-rows');
+    Array.from(wrap.children)
+        .sort((a, b) => parseNum(b.querySelector('.p-val').value) - parseNum(a.querySelector('.p-val').value))
+        .forEach(row => wrap.appendChild(row));
+    _recRenumber(box);
+}
+
+// Picking a known name fills in where they work. Only ever fills a BLANK store:
+// somebody who has since transferred still set their record at the old store,
+// and overwriting that would quietly rewrite history.
+function _recFillStore(input) {
+    const row = input.closest('.cr-person-row');
+    const sel = row && row.querySelector('.p-store');
+    if (!sel || sel.value) return;
+    const name = input.value.trim().toLowerCase();
+    const hit = _recStaff().find(u => String(u.name).trim().toLowerCase() === name);
+    if (!hit || !hit.store) return;
+    sel.value = String(hit.store).toUpperCase();
+    // The native select is authoritative but it is covered by a .dd-btn face,
+    // so the visible label only follows if the change event is dispatched.
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function _recAddPerson(btn) {
+    const people = btn.closest('.cr-people');
+    const box = people.querySelector('.cr-people-rows');
+    box.insertAdjacentHTML('beforeend', _recPersonRow({}));
+    _recRenumber(people);
+    // ⚠️ The name control is a <select>, and the enhancer HIDES it behind a
+    // .dd-btn face — focusing the select itself puts the caret nowhere visible.
+    // The face is built by a MutationObserver, so wait a frame for it to exist
+    // and fall back to the native control if the enhancer is not running.
+    const added = box.lastElementChild;
+    requestAnimationFrame(() => {
+        const sel = added.querySelector('.p-name');
+        const host = sel && sel.closest('.dd-host');
+        const face = host && host.querySelector('.dd-btn');
+        (face || sel || added).focus();
+    });
 }
 
 // The Company column mirrors whichever store has the highest value for each
@@ -8457,12 +8818,42 @@ async function saveManageRecords() {
         });
     });
 
+    // Person-held metrics are a separate POST per label: they are replaced
+    // wholesale, so a row the DM deleted has to be absent from the payload
+    // rather than simply not updated.
+    const personPayloads = Array.from(document.querySelectorAll('.cr-people')).map(box => ({
+        type: 'person-records',
+        label: box.getAttribute('data-label'),
+        rows: Array.from(box.querySelectorAll('.cr-person-row')).map(row => ({
+            person: row.querySelector('.p-name').value.trim(),
+            store: row.querySelector('.p-store').value.trim(),
+            value: row.querySelector('.p-val').value.trim(),
+            date: row.querySelector('.p-date').value.trim()
+        }))
+    }));
+
+    // A named person with no number (or the reverse) is a half-filled row, and
+    // the save would silently drop it. Say so before writing anything, because
+    // after the replace there is nothing left to compare against.
+    const halfFilled = personPayloads.flatMap(p =>
+        p.rows.filter(r => (r.person || r.value) && !(r.person && r.value)));
+    if (halfFilled.length) {
+        alert(`${halfFilled.length} row${halfFilled.length > 1 ? 's need' : ' needs'} both a name and a number.\n\n`
+            + `Fill them in or clear them, then save again.`);
+        btn.textContent = "Save Changes";
+        btn.style.opacity = "1";
+        return;
+    }
+
     try {
-        const res = await fetch(RECORDS_URL, {
+        const post = (payload) => fetch(RECORDS_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(updatedRecords)
+            body: JSON.stringify(payload)
         });
+
+        const results = await Promise.all([post(updatedRecords), ...personPayloads.map(post)]);
+        const res = { ok: results.every(r => r.ok) };
 
         if (res.ok) {
             alert("Company Records successfully updated!");
@@ -9078,7 +9469,7 @@ function injectIdeaModal() {
         <div class="modal-menu idea-menu" id="ideaModal">
             <div class="modal-header">
                 <h3>Submit an Idea</h3>
-                <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+                <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
             <div class="modal-content" style="padding: 25px;">
                 <form id="ideaForm" action="https://formsubmit.co/ethan.kushnir@speekstechnology.com" method="POST" enctype="multipart/form-data" target="hidden_iframe" onsubmit="prepareIdeaSubmit()">
@@ -24605,6 +24996,30 @@ try {
     });
 } catch (_) { /* older browsers: the initial pass still applies */ }
 
+// ⚠️ HIDING A SELECT DOES NOT HIDE A SELECT. The custom dropdown (_ddEnhance)
+// moves the native control into a `.dd-host` and covers it with a `.dd-btn`
+// face, so a role gate written onto the <select> alone hides the half nobody can
+// see and leaves the visible half on screen. That is how a store manager could
+// still be looking at a district store picker on Variance Replies (Ethan,
+// 2026-09-01) even though the data underneath was correctly scoped to their own
+// store the whole time.
+//
+// This is the third time the same trap has been paid for — see _cbShowFilter and
+// the Command Center store picker, both of which fix it one control at a time.
+// Doing it in the sweep instead covers every role-gated select there is
+// (vr-store-select, ag-store-select, bm-store-select, kpiModalStoreSelect) and
+// every one added later, without anyone having to remember.
+//
+// The host carries no inline display when visible: `.dd-host { display: block }`
+// is its natural state, and writing block over it would fight any future layout.
+function _ddMirrorGate(el, visible) {
+    if (!el || el.tagName !== 'SELECT') return;
+    const host = el.closest('.dd-host');
+    if (!host) return;                       // not wrapped (yet) — see _ddEnhance
+    if (visible) host.style.removeProperty('display');
+    else host.style.setProperty('display', 'none', 'important');
+}
+
 function applyRoleBasedUI() {
     const userRole = sessionStorage.getItem('speeksUserRole') || 'employee';
     const userStore = sessionStorage.getItem('speeksUserStore') || 'ALL';
@@ -24653,6 +25068,7 @@ function applyRoleBasedUI() {
         } else {
             module.style.setProperty('display', 'none', 'important');
         }
+        _ddMirrorGate(module, visible);
     });
 
     // Feature overrides on plain (non role-gated) elements — e.g. individual
@@ -24957,7 +25373,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -32918,6 +33334,44 @@ function _recycleCanReview() {
     return role === 'ceo' || role === 'district manager';
 }
 
+// The search box over My Requests. Held here rather than read off the input at
+// render time for the same reason the Listing Titles edit box is: the table is
+// rebuilt by innerHTML on every change, and anything living inside it is gone.
+// The input itself sits in the panel ABOVE #recycle-table-wrap, so it survives
+// the rebuild and keeps focus and caret while somebody types.
+let _recycleQuery = '';
+
+// Matched against the columns a person can actually see, and nothing else. A
+// search that quietly matched a hidden field would return a row whose reason
+// for matching is invisible — the reader is left doubting the search instead
+// of reading the row.
+function _recycleMatches(r, q) {
+    if (!q) return true;
+    const hay = [r.sku, r.description, r.created_by, r.store]
+        .map(v => String(v == null ? '' : v).toLowerCase()).join(' \u0001 ');
+    // Every word must appear somewhere, in any order: "iphone lee" finds the
+    // LEE iPhone line without anybody having to guess the column order.
+    return q.split(/\s+/).filter(Boolean).every(w => hay.includes(w));
+}
+
+// The month names in the empty state are buttons, not advice. Being told the
+// line is in July and then having to go and find July in a dropdown is the
+// same dead end one step further along.
+function _recycleJumpMonth(m) {
+    const sel = document.getElementById('recycle-month-filter');
+    if (!sel) return;
+    if (![...sel.options].some(o => o.value === m)) return;
+    sel.value = m;
+    renderMyRecycleTable();
+}
+window._recycleJumpMonth = _recycleJumpMonth;
+
+function filterRecycleRequests(v) {
+    _recycleQuery = String(v == null ? '' : v).toLowerCase().trim();
+    renderMyRecycleTable();
+}
+window.filterRecycleRequests = filterRecycleRequests;
+
 function renderMyRecycleTable() {
     const wrap = document.getElementById('recycle-table-wrap');
     if (!wrap) return;
@@ -32928,6 +33382,22 @@ function renderMyRecycleTable() {
     const filterStore = (document.getElementById('recycle-view-filter') || {}).value || '';
     let rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
     if (filterStore) rows = rows.filter(r => (r.store || '').toUpperCase() === filterStore);
+    const q = _recycleQuery;
+    // Counted BEFORE the search narrows anything, because "3 of 47" is the
+    // number that tells somebody whether their search worked.
+    const monthCount = rows.length;
+    if (q) rows = rows.filter(r => _recycleMatches(r, q));
+    // ⚠️ A SEARCH THAT FINDS NOTHING HERE IS NOT THE SAME AS NOTHING TO FIND.
+    // The month filter defaults to the current month, so looking up a SKU
+    // recycled in July while August is selected returns an empty table and no
+    // hint that the line exists at all — the exact dead end this box was added
+    // to remove. _recycleMine holds every month already fetched, so we can say
+    // where it actually is.
+    const elsewhere = q && !rows.length
+        ? _recycleMine.filter(r => _recycleMonthKey(r.created_at) !== month
+                                   && (!filterStore || (r.store || '').toUpperCase() === filterStore)
+                                   && _recycleMatches(r, q))
+        : [];
     // Keep the Store column whenever the user spans multiple stores — even with
     // a single store filtered — so columns don't jump around as filters change.
     const showStore = multi;
@@ -32942,7 +33412,24 @@ function renderMyRecycleTable() {
                 <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
             </div>`
             : '';
-        wrap.innerHTML = `${emptyBtns}${_recycleDeleteReqPanel(canReview)}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
+        // Three different empty states, because they need three different
+        // answers: nothing was recycled, nothing matched, or it matched in
+        // another month and here is the button that takes you there.
+        let emptyMsg;
+        if (!q) {
+            emptyMsg = `No recycle requests for ${_recycleMonthLabel(month)}.`;
+        } else if (elsewhere.length) {
+            const months = [...new Set(elsewhere.map(r => _recycleMonthKey(r.created_at)))]
+                .sort().reverse();
+            emptyMsg = `Nothing matching “${escapeHtml(q)}” in ${_recycleMonthLabel(month)}`
+                + ` — but ${elsewhere.length} line${elsewhere.length === 1 ? '' : 's'} match`
+                + `${elsewhere.length === 1 ? 'es' : ''} in `
+                + months.map(m => `<button onclick="_recycleJumpMonth('${m}')" style="background:none; border:none; padding:0 2px; font:inherit; font-weight:800; color:var(--sage-professional, #5a8d3b); text-decoration:underline; cursor:pointer;">${_recycleMonthLabel(m)}</button>`).join(' · ')
+                + '.';
+        } else {
+            emptyMsg = `Nothing matches “${escapeHtml(q)}”.`;
+        }
+        wrap.innerHTML = `${emptyBtns}${_recycleDeleteReqPanel(canReview)}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600; line-height:1.6;">${emptyMsg}</div>`;
         return;
     }
     rows = [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -33131,7 +33618,9 @@ function renderMyRecycleTable() {
     const labelSpan = 1 + (showStore ? 1 : 0) + 5;
     const footLabel = (t, c) => `<td colspan="${labelSpan}" style="padding:${c ? '4px' : '11px'} 10px; font-weight:800; font-size:${c ? '10.5px' : '12px'}; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">${t}</td>`;
     html += `</tbody><tfoot><tr>
-        ${footLabel(`Total recycled cost · ${_recycleMonthLabel(month)}`)}
+        ${footLabel(q
+            ? `${rows.length} of ${monthCount} lines · “${escapeHtml(q)}”`
+            : `Total recycled cost · ${_recycleMonthLabel(month)}`)}
         <td style="padding:11px 10px; font-weight:900; font-size:14px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(total)}</td>
         <td colspan="2"></td>
     </tr>`;
@@ -33368,8 +33857,27 @@ async function checkRecycleReminders() {
             const needsReview   = rows.filter(r => !r.reviewed_at && !r.delete_requested_at && !awaitingMgrReply(r));
             const pendingDelete = rows.filter(r => r.delete_requested_at);
 
+            // ⚠️ THE CLEAR IS WRITTEN TO THE SERVER AND WAS BEING READ FROM THE
+            // DEVICE. Opening the tool POSTs mark_seen, which stamps dm_seen_at on
+            // the row — but this filter only ever consulted a localStorage
+            // high-water mark, so the card cleared on the machine that read it and
+            // stayed up on every other one. Ethan, as DM: "there was a recycle reply
+            // and I viewed it, but the alert didn't go away." His dm_seen_at was
+            // 22:54 against a 21:46 reply — the server already knew.
+            //
+            // A reply is fresh only when it is newer than BOTH marks. The local one
+            // stays as the same-device fast path: it is written the moment the card
+            // renders, so the card cannot re-appear in the seconds before a
+            // mark_seen round trip lands.
+            //
+            // ⚠️ THE REPLY SIGNAL ONLY. dm_seen_at must never gate needsReview or
+            // pendingDelete — a 'seen on open' model for those is exactly what let a
+            // glance silence work a manager was still blocked on, which is why it
+            // was taken off them (see the comment above). A reply blocks nobody, so
+            // a glance IS the right thing to clear it.
             const sRep = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleReplySeen')) || 0);
-            const freshRep = rows.filter(r => getT(r.mgr_reply_at) > sRep);
+            const replySeenOnServer = r => getT(r.dm_seen_at) >= getT(r.mgr_reply_at);
+            const freshRep = rows.filter(r => getT(r.mgr_reply_at) > sRep && !replySeenOnServer(r));
 
             if (!needsReview.length && !pendingDelete.length && !freshRep.length) {
                 // Nothing waiting and no new reply — drop the bubble so the feed row
@@ -34008,6 +34516,7 @@ const FEATURE_CATALOG = [
     { key: 'tool-claims-store',        label: 'Insurance Claims (Store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
     { key: 'tool-claims-oversight',    label: 'Insurance Claims (Oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
+    { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
     { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
@@ -34128,7 +34637,7 @@ const FEATURE_CATALOG = [
     // and nothing saying why. The tab is DERIVED (data-feature-any on the
     // button): grant either sub-tab and the tab appears carrying it, revoke both
     // and the tab goes. One fact, one switch.
-    { key: 'ec-upload',                label: 'SPEEKS Connect · Upload tab',   tab: 'widgets', group: 'Operations', def: 'all' },
+    { key: 'ec-upload',                label: 'SPEEKS Connect · Upload',   tab: 'widgets', group: 'Operations', def: 'all' },
     // The Categories queue inside SPEEKS Connect. Managers and the DM to start —
     // it writes to the live storefront, so it is not something to hand out by
     // accident. This switch is the WHOLE gate, not a cosmetic one: shopify-recat
@@ -34136,7 +34645,21 @@ const FEATURE_CATALOG = [
     // turning it on for somebody genuinely grants them the tool and turning it
     // off genuinely takes it away. See the KPI role gate for what happens when a
     // frontend switch and a backend allow-list disagree.
-    { key: 'ec-view-categories',       label: 'SPEEKS Connect · Categories tab', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager'] },
+    { key: 'ec-view-categories',       label: 'SPEEKS Connect · Categories', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager'] },
+    // The other half of Listing Health. Its own switch since 2026-08-25: the two
+    // share a tab but not a job, and one key meant granting the read-only alarm
+    // forced the filing queue on with it. The tab shows whichever halves are on.
+    //
+    // ⚠️ `mocd` is deliberately absent from this default even though Categories
+    // lists it — the MOCD's ec-view-categories was revoked by hand, and a new key
+    // defaulting ON would quietly re-open the page to them under a new name.
+    // ASM is present: photographing an item is their job (see the notify roles).
+    { key: 'ec-view-photos',           label: 'SPEEKS Connect · No Pictures', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
+    // Same audience as the alarm, and for the same reason: an ASM is usually
+    // the person who wrote the title. ⚠️ This list must match `byRole` in the
+    // listing-titles function — a backend that says yes while the button says no
+    // is a tool reachable by URL that nobody can see.
+    { key: 'ec-view-titles',           label: 'SPEEKS Connect · Titles', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // Live bench intake: the capture tool on a machine being tested posts its
     // own specs into the open deal. `def: []` is the whole point -- it ships off
@@ -34340,7 +34863,8 @@ const _SECTION_TABS = {
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks',
-                        'widget-ops-b2b', 'ec-upload', 'ec-view-categories'],
+                        'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos',
+                        'ec-view-titles'],
 };
 
 function _applySectionNavVisibility(userRoleClass, userName) {
@@ -35105,6 +35629,9 @@ const JUMP_KEYWORDS = {
     'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
     'ec-upload':                 'speeks connect ebay listings upload list publish online marketplace sku',
     'ec-view-categories':        'speeks connect categories other collection wrong category shelf file shopify',
+    'ec-view-photos':            'speeks connect listing health no pictures photos missing image online store',
+    'ec-view-titles':            'speeks connect listing health titles title fix keywords seo rename wrong title bundle cib ebay',
+    'tool-listing-health':       'listing health title notes denied dismissed rule wrong feedback ask claude copy prompt',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
     'widget-variance-replies':   'variance replies gm notes dm notes markdown discount negative',
@@ -35163,7 +35690,7 @@ const JUMP_PLACES = [
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
-    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
+    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
     // card are separate Feature Access keys, and a single row would be invisible to
@@ -40066,8 +40593,43 @@ function _samReminderCfg() {
     const _rcOnly = (_rqT && _rqT.dataset && _rqT.dataset.only) || '';
     cfg.push({ key: 'recatQueue', id: 'recatAlertBubble', text: 'recatAlertBubbleText',
         title: _rcOnly === 'wrong' ? 'Listings In The Wrong Category' : 'Listings Need A Category',
-        urgency: 1, due: 'Action', cls: 'sam-due-amber',
+        // Red, matching the no-pictures card. Both are the storefront being
+        // wrong where a customer can see it, and the two sitting side by side in
+        // different colours read as two different grades of problem. Urgency
+        // still 1 against the alarm's 2, so photos sort above it — the ORDER
+        // carries which is worse now that the colour no longer does.
+        urgency: 1, due: 'Action', cls: 'sam-due-red',
         action: "window.location.href='operations.html#categories'" });
+    // Live on the online store with no picture. RED where the category queue
+    // beside it is amber, and a higher urgency, because the two are not the same
+    // kind of finding: a category queue is a standing backlog that is never
+    // really empty, while this number should read zero every single day. Any
+    // other reading is an exception, and an unbuyable listing outranks an untidy
+    // one. Still "Action", not "Overdue" — nothing has a deadline to have missed.
+    cfg.push({ key: 'photoAlert', id: 'photoAlertBubble', text: 'photoAlertBubbleText',
+        title: 'Listings With No Pictures',
+        urgency: 2, due: 'Action', cls: 'sam-due-red',
+        action: "window.location.href='operations.html#categories'" });
+    // Somebody dismissed a suggestion and wrote WHY the rule was wrong. Not an
+    // alarm — nothing is unbuyable and no customer can see it — but it is the
+    // only evidence this tool ever gets that a rule needs changing, and it went
+    // a full day unread sitting in a drawer. Urgency below both queues above it:
+    // a listing a shopper cannot buy outranks improving the thing that suggests
+    // titles. Indigo rather than red or amber, because it is not a backlog at
+    // all; it is somebody having done the extra work of explaining themselves.
+    cfg.push({ key: 'titleNoteAlert', id: 'titleNoteAlertBubble', text: 'titleNoteAlertBubbleText',
+        // ⚠️ NAME THE PLACE, NOT THE EVENT. "Someone Said Why A Title Rule Was
+        // Wrong" described what happened and left the reader working out where
+        // to go. The card's job is to name the tool it opens. (Ethan, 2026-09-04:
+        // "simplify the notification title ... to just say like Listing Health
+        // Notes or something easy like that".)
+        title: 'Listing Health Notes',
+        urgency: 0, due: 'Action', cls: 'sam-due-amber',
+        // ⚠️ THE TOOL, NOT THE PAGE. This pointed at operations.html#categories
+        // and left the reviewer standing on the right page with the thing the
+        // card was about shut inside a <details> three sections down. A card
+        // that names a job has to open the job.
+        action: "openListingHealthTool()" });
     return cfg;
 }
 
@@ -43870,6 +44432,18 @@ function _expPad(s, n) {
     s = String(s == null ? '' : s);
     return s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length);
 }
+// ⚠️ ELLIPSIS, NOT A SILENT CHOP. _expPad cuts at the character, which left
+// "Dropping stuff off at LEE for eve" in an email somebody is reimbursed from.
+// A reader cannot tell a truncation from a typo.
+function _expClip(s, n) {
+    s = String(s == null ? '' : s).trim();
+    if (s.length <= n) return s;
+    const cut = s.slice(0, n - 1);
+    // Back off to the last whole word, unless that would leave almost nothing.
+    const sp = cut.lastIndexOf(' ');
+    return (sp > n * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + '…';
+}
+
 function _expPadL(s, n) {
     s = String(s == null ? '' : s);
     return s.length >= n ? s.slice(0, n) : ' '.repeat(n - s.length) + s;
@@ -43887,29 +44461,38 @@ function _expCompose() {
 
     if (mileageRows.length) {
         body += 'MILEAGE\n';
+        // ⚠️ THE ROUTE IS AN IRS FIELD AND GETS ITS OWN COLUMN. It used to be a
+        // FALLBACK for a missing description — so on every row that HAD one, and
+        // they all do, where the trip started and ended never printed at all.
+        // A mileage log has to carry the date, the destination and the business
+        // purpose; this was filing two of the three. (Ethan, 2026-09-04.)
+        body += '  ' + _expPad('DATE', 12) + _expPad('FROM / TO', 19)
+             + _expPad('PURPOSE', 31) + _expPadL('MILES', 9)
+             + _expPadL('RATE', 9) + _expPadL('AMOUNT', 12) + '\n';
         mileageRows.forEach(e => {
             const trip = [e.from_loc, e.to_loc].filter(Boolean).join(' to ');
-            body += '  ' + _expPad(_expDate(e.entry_date) + ' -', 13)
-                 + _expPad(e.description || trip || 'Trip', 33)
-                 + _expPadL((Number(e.miles) || 0) + ' mi', 10)
+            body += '  ' + _expPad(_expDate(e.entry_date), 12)
+                 + _expPad(_expClip(trip || '—', 17), 19)
+                 + _expPad(_expClip(e.description || 'Trip', 29), 31)
+                 + _expPadL((Number(e.miles) || 0) + ' mi', 9)
                  + _expPadL('@ $' + _expRate(e.rate), 9)
                  + _expPadL(_expMoney(e.amount), 12) + '\n';
         });
         // "Total" leads the row. Sitting it next to the amount instead put it
         // between the two figures, which read as "22 total 15.40".
-        body += '  ' + _expPad('Total', 46) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 10)
+        body += '  ' + _expPad('Total', 62) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 9)
              + _expPadL('', 9) + _expPadL(_expMoney(mileageTotal), 12) + '\n\n';
     }
 
     if (expenseRows.length) {
         body += 'EXPENSES\n';
         expenseRows.forEach(e => {
-            body += '  ' + _expPad(_expDate(e.entry_date) + ' -', 13)
-                 + _expPad(e.category || '', 26)
-                 + _expPad(e.description || '', 26)
+            body += '  ' + _expPad(_expDate(e.entry_date), 12)
+                 + _expPad(_expClip(e.category || '', 24), 26)
+                 + _expPad(_expClip(e.description || '', 32), 34)
                  + _expPadL(_expMoney(e.amount), 12) + '\n';
         });
-        body += '  ' + _expPad('Total', 65) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
+        body += '  ' + _expPad('Total', 72) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
     }
 
     if (!mileageRows.length && !expenseRows.length) {
@@ -44611,9 +45194,31 @@ async function ecLoad() {
     // two buttons with a switch are resolved in the DOM by page load, so this is
     // knowable here; All Stores is not (it needs the server's scope) and is left
     // to _ecSyncChrome.
-    if (_ecView === 'listings') {
-        const v = _ecViewsOn();
-        if (!v.listings && v.cats) { _ecView = 'cats'; _ecMarkView('cats'); }
+    // ANYONE WITH LISTING HEALTH OPENS ON IT. Upload is a drawer on the All
+    // Stores page now, so it is nobody's landing page — and this cannot wait for
+    // _ecSyncChrome, which runs after the request is already in flight. Deciding
+    // it from the buttons means no wasted listings fetch and no flash of a view
+    // the panel is about to move away from. The fold itself needs the SERVER's
+    // scope, which is why the landing is keyed on the grant instead.
+    //
+    // ⚠️ THE DM AND THE CEO LAND ON ALL STORES, and they are the exception the
+    // comment above says is not knowable — because they are keyed on the ROLE,
+    // not on the scope. Whether the All Stores PILL may be shown needs the
+    // server's answer; whether this person is the DM does not, and it is sitting
+    // in sessionStorage before the first request. Their job is the estate, so
+    // opening them on one store's queue is the wrong first screen.
+    //
+    // Deliberately these two roles by name rather than "corp": MOCD is corp for
+    // some tools and is locked out of this one entirely, so landing them on a
+    // view they will be bounced off is worse than not trying.
+    const _ecRoleLc = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const _ecLandsAllStores = _ecRoleLc === 'district manager' || _ecRoleLc === 'ceo';
+    if (_ecView === 'listings' && _ecLandsAllStores) {
+        _ecView = 'health';
+        _ecMarkView('health');
+    } else if (_ecView === 'listings' && _ecGranted('ecViewCatsBtn')) {
+        _ecView = 'cats';
+        _ecMarkView('cats');
     }
     if (!_ecData) body.innerHTML = '<div class="status-message">Loading SPEEKS Connect…</div>';
     try {
@@ -44629,7 +45234,67 @@ async function ecLoad() {
             // file stock — a narrower list than who may list on eBay — so the
             // eBay scope is left exactly as it was rather than overwritten
             // with an answer from a different question.
-            await rcLoad();
+            // ONLY FETCH THE HALVES THIS READER HOLDS. ?view=review now 403s for
+            // somebody granted the alarm alone, and a 403 on load would take the
+            // whole page down over a section they were never going to see.
+            const wantCats = typeof _jumpFeatureVisible !== 'function'
+                || _jumpFeatureVisible('ec-view-categories');
+            if (wantCats) await rcLoad();
+            // ⚠️ THE ALL STORES PILL IS FED BY THE EBAY SCOPE, and only the
+            // listings fetch brings that back. Listing Health never makes that
+            // fetch — so the moment Upload stopped being the landing view, All
+            // Stores vanished for the DM, on a page that had never touched it.
+            // shopify-recat answers the same question about the same person, so
+            // it stands in until a real eBay payload replaces it.
+            if (!_ecScope && _rcData?.scope) {
+                _ecScope = { allStores: !!_rcData.scope.corp, stores: _rcData.scope.stores };
+            }
+            _lhScope = _rcData?.scope || null;
+            // Its own request, after rcLoad so it asks about the store rcLoad
+            // actually settled on — passing a null store would let the server
+            // pick a default, and the two halves of one page would then be
+            // describing two different stores.
+            //
+            // A failure must not take the filing queue down with it, and must
+            // not read as an all clear either: _lhPhotoErr is what the section
+            // draws instead of the green line.
+            const wantPhotos = _lhScope && typeof _lhScope.mayPhotos === 'boolean'
+                ? _lhScope.mayPhotos
+                : (typeof _jumpFeatureVisible !== 'function' || _jumpFeatureVisible('ec-view-photos'));
+            if (!wantPhotos) {
+                _lhPhotos = null; _lhPhotoErr = null;
+            } else try {
+                _lhPhotos = await _rcFetch(`?view=photos&store=${encodeURIComponent(_ecStore || '')}`);
+                _lhPhotoErr = null;
+                // The photos payload carries the same scope, so a reader granted
+                // ONLY the alarm still gets a store list and an All Stores pill —
+                // rcLoad never ran for them.
+                if (_lhPhotos?.scope) {
+                    _lhScope = _lhPhotos.scope;
+                    if (!_ecScope) _ecScope = { allStores: !!_lhPhotos.scope.corp, stores: _lhPhotos.scope.stores };
+                }
+            } catch (e) {
+                _lhPhotos = null;
+                _lhPhotoErr = e.message || String(e);
+            }
+            // Titles, same posture as the photo alarm: its own function, its own
+            // gate, and a failure that must not take the rest of the page down.
+            // Asked AFTER rcLoad for the same reason — so both halves of one page
+            // are describing the same store rather than two server defaults.
+            const wantTitles = typeof _jumpFeatureVisible !== 'function'
+                || _jumpFeatureVisible('ec-view-titles');
+            if (!wantTitles) {
+                _ltData = null; _ltErr = null;
+            } else try {
+                _ltData = await _ltFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`);
+                _ltErr = null;
+                if (!_ecScope && _ltData?.scope) {
+                    _ecScope = { allStores: !!_ltData.scope.corp, stores: _ltData.scope.stores };
+                }
+            } catch (e) {
+                _ltData = null;
+                _ltErr = e.message || String(e);
+            }
         } else {
             _ecData = await _ecFetch(`?view=listings${_ecStore ? `&store=${_ecStore}` : ''}`);
             _ecScope = _ecData.scope;
@@ -44642,6 +45307,11 @@ async function ecLoad() {
     } catch (e) {
         body.innerHTML = `<div class="ec-empty">Could not load SPEEKS Connect.<br>
             <span style="font-weight:600;color:var(--cb-faint);">${_ecEsc(e.message)}</span></div>`;
+        // The CHROME still has to be right when the BODY could not load. Without
+        // this the toggle keeps whatever it was showing before the failure — and
+        // since the Upload fold is applied here, a failed load left an Upload
+        // pill on screen beside the page that had already absorbed it.
+        _ecSyncChrome();
     }
 }
 
@@ -44658,15 +45328,26 @@ async function ecLoad() {
 // instead — the inline style is exactly what _applyFeatureOverridesToPlainEls
 // left behind, and reading the COMPUTED style would be useless while the toggle
 // around it is still hidden.
+// What Feature Access GRANTED, read off the buttons it owns. The inline display
+// is its answer and nothing else writes one — which is exactly why the fold
+// below hides the Upload pill with a CLASS. Hiding it inline would make a
+// folded tab indistinguishable from a revoked one, and the dropdown that
+// replaced it would disappear along with the pill.
+const _ecGranted = id => {
+    const b = document.getElementById(id);
+    return !!b && b.style.display !== 'none';
+};
+
+// UPLOAD STAYS A TAB. It was briefly folded into a drawer at the bottom of the
+// All Stores page; that was the wrong reading of "collapse the upload parts".
+// What was actually making the page long was the three eBay ROWS on every store
+// card, and those are now a per-card <details> in _ecHealthHtml. The panel
+// itself is break-glass and keeps its own pill, reachable in one click.
 function _ecViewsOn() {
-    const on = id => {
-        const b = document.getElementById(id);
-        return !!b && b.style.display !== 'none';
-    };
     return {
-        listings: on('ecViewListingsBtn'),
+        listings: _ecGranted('ecViewListingsBtn'),
         health: !!_ecScope?.allStores,
-        cats: on('ecViewCatsBtn'),
+        cats: _ecGranted('ecViewCatsBtn'),
     };
 }
 
@@ -44675,6 +45356,11 @@ function _ecSyncChrome() {
     const sel = document.getElementById('ecStoreFilter');
     const health = document.getElementById('ecViewHealthBtn');
     if (health) health.style.display = _ecScope?.allStores ? '' : 'none';
+    // The Upload pill is Feature Access's to show or hide and nothing else's.
+    // A previous round folded it away with .lh-folded; that class is cleared
+    // here so an old cached render cannot leave the tab hidden.
+    const up = document.getElementById('ecViewListingsBtn');
+    if (up) up.classList.remove('lh-folded');
     const views = _ecViewsOn();
     const n = ['listings', 'health', 'cats'].filter(v => views[v]).length;
     // A toggle offering a single option is a button that does nothing, so it
@@ -44693,7 +45379,18 @@ function _ecSyncChrome() {
 
     if (sel) {
         const many = (_ecScope?.stores || []).length > 1;
-        sel.style.display = many && _ecView !== 'health' ? '' : 'none';
+        // ⚠️ HIDING A SELECT DOES NOT HIDE A SELECT. The custom dropdown (_ddInit)
+        // moves the native one into a `.dd-host` and covers it with a `.dd-btn`
+        // face, so setting display on the select alone hides the half nobody can
+        // see and leaves the visible half on screen. This line intended to drop the
+        // picker on All Stores -- which is every store at once, so a one-store
+        // picker beside it means nothing -- and never did. Both halves are set: the
+        // host is what shows, and the enhancer may not have wrapped it yet on the
+        // first paint. Same fix as _cbShowFilter.
+        const showSel = many && _ecView !== 'health';
+        const selHost = sel.closest('.dd-host');
+        sel.style.display = showSel ? '' : 'none';
+        if (selHost) selHost.style.display = showSel ? '' : 'none';
         if (many) {
             sel.innerHTML = _ecScope.stores
                 .map(s => `<option value="${s}"${s === _ecStore ? ' selected' : ''}>${s}</option>`).join('');
@@ -44707,8 +45404,17 @@ function _ecSyncChrome() {
         const cats = _rcData?.counts;
         const toFile = cats ? (cats.other || 0) + (cats.misfiled || 0) + (cats.unmatched || 0)
                             : (_rcData?.queue || []).length;
+        // BOTH SECTIONS, because the page is now both. The photo count leads:
+        // it is the one that is supposed to read zero, so it is the one worth
+        // seeing without scrolling. A photo check that FAILED says so rather
+        // than being left out — silence here would read as a clean store.
+        const pics = _lhPhotos ? (_lhPhotos.queue || []).length : null;
+        const bits = [];
+        if (_lhPhotoErr) bits.push('Photo Check Failed');
+        else if (pics) bits.push(`${pics} Missing A Photo`);
+        if (toFile) bits.push(`${toFile} Item${toFile === 1 ? '' : 's'} To Submit`);
         sub.textContent = _ecView === 'cats'
-            ? `${_ecStore || ''} · ${toFile ? `${toFile} Item${toFile === 1 ? '' : 's'} To Submit` : 'Everything Is Fixed'}`
+            ? `${_ecStore || ''} · ${bits.length ? bits.join(' · ') : 'All Clear'}`
             : _ecView === 'health' ? 'Every store, at a glance'
             : !_ecData?.summary?.connected ? `${_ecStore || ''} · Not connected to eBay yet`
             : !_ecFeed.length ? `${_ecStore} · Scan a SKU to list it on eBay`
@@ -44780,6 +45486,21 @@ function ecSetStore(store) {
     // The filing queue is per store too, and a stale one would draw the last
     // store's rows under the new store's name for as long as the fetch takes.
     _rcData = null;
+    // Same for the photo alarm, and worse: a stale ALL CLEAR under a new store's
+    // name is a reassuring statement about a store nobody has checked yet.
+    _lhPhotos = null;
+    _lhPhotoErr = null;
+    // ⚠️ AND THE TITLE TAB GOES BACK TO WRONG. Ethan, arriving at WSP on
+    // Opportunity because that is where he had been left on the store before:
+    // "when switching from store to store, can you reset the default for the
+    // titles to Wrong." A tab is a place in ONE store's work, not a preference —
+    // carried across, it opens a store nobody has looked at on its least urgent
+    // pile while four broken titles sit unread behind a tab that looks unvisited.
+    // Only on a STORE CHANGE: resetting on every reload would throw a reviewer
+    // out of the tab they are working every time they approved a row.
+    // If Wrong is empty the tab strip already falls through to the first tier
+    // that has rows, so this is a starting point rather than a demand.
+    _ltTier = 3;
     ecLoad();
 }
 window.ecSetStore = ecSetStore;
@@ -44790,9 +45511,18 @@ function ecRender() {
     const body = document.getElementById('ecBody');
     if (!body) return;
     _ecSyncChrome();
+    // EVERY view, before any of the early returns below. See _ecStandbySync.
+    _ecStandbySync();
 
     if (_ecView === 'health') { body.innerHTML = _ecHealthHtml(); return; }
-    if (_ecView === 'cats') { body.innerHTML = _rcHtml(); return; }
+    if (_ecView === 'cats') {
+        body.innerHTML = _lhHtml();
+        // The shelf picker and the eBay category popover can both be open over
+        // this page now that Upload renders inside it, and the rows beneath
+        // either of them have just been rebuilt.
+        if (document.getElementById('ecCatPop')) _ecCatPlace();
+        return;
+    }
 
     const s = _ecData?.summary;
     if (!s) { body.innerHTML = '<div class="ec-empty">No store selected.</div>'; return; }
@@ -44801,7 +45531,7 @@ function ecRender() {
         return;
     }
 
-    body.innerHTML = _ecStandbyHtml() + _ecQuickHtml() + _ecFeedHtml();
+    body.innerHTML = _ecQuickHtml() + _ecFeedHtml();
 
     // The table was just rebuilt beneath any open category picker: its anchor
     // button is a new element and the rows may have shifted. Re-place so the
@@ -44823,6 +45553,53 @@ function ecRender() {
 // The banner exists because the alternative is worse: a store scans a SKU, gets
 // a 409 they have never seen, and reads it as the tool being broken. Say it
 // first, on load, where the scan box is about to be.
+// ⚠️ WHY THIS RENDERS OUTSIDE #ecBody (moved 2026-08-25).
+//
+// The banner and its Take The Channel Back button used to be concatenated into
+// the Upload view's HTML. Then ec-upload was revoked for every role — Upload is
+// paused, so that was correct — and the break-glass switch vanished with the
+// view that held it. The one control you need on the day MC hands a store back
+// was unreachable in the UI, and nothing said so.
+//
+// A banner about WHO OWNS THE CHANNEL is not a fact about the Upload tab. It
+// belongs to the panel, so it renders into #ecStandbyHost above the body on
+// every view, and that host carries no data-feature of its own.
+function _ecStandbySync() {
+    const host = document.getElementById('ecStandbyHost');
+    if (!host) return;
+    // All Stores knows about five stores at once; the single-store views know
+    // about one. Same banner either way — the DM is the only role offered the
+    // button, and All Stores is the view they actually live on.
+    host.innerHTML = _ecView === 'health' ? _ecStandbyAllHtml() : _ecStandbyHtml();
+}
+
+// The All Stores form: one banner naming every parked store, each with its own
+// button. Per store rather than one "take them all back" — the stores came off
+// SPEEKS Connect one at a time as MC adopted them, and they come back the same
+// way. A single button for five stores is the kind of convenience that causes
+// duplicate orders at the four you were not thinking about.
+function _ecStandbyAllHtml() {
+    const parked = (_ecHealth?.stores || [])
+        .filter(s => String(s.channelMode || 'active') === 'standby');
+    if (!parked.length) return '';
+    const canFlip = !!_ecScope?.allStores;
+    const names = parked.map(s => s.store).join(', ');
+    return `
+    <div class="ec-standby">
+      <div class="ec-standby-l">
+        <div class="ec-standby-t">On Standby &middot; Marketplace Connect Owns ${parked.length === 1
+            ? _ecEsc(names) + "'s eBay" : _ecEsc(names) + ' &mdash; ' + parked.length + ' Stores'}</div>
+        <div class="ec-standby-n">Nothing is uploaded, imported or price-synced from here for
+          ${parked.length === 1 ? 'that store' : 'those stores'} &mdash; two systems on one item
+          would put the same sale into Shopify twice. Everything still works; it is just parked.</div>
+      </div>
+      ${canFlip ? `<div class="ec-standby-r">${parked.map(s => `
+        <button class="ec-btn ec-btn-glass" onclick="ecTakeOver('${_ecEsc(s.store)}')"
+          title="Hands ${_ecEsc(s.store)}'s eBay channel back to SPEEKS Connect">Take ${_ecEsc(s.store)} Back</button>`
+      ).join('')}</div>` : ''}
+    </div>`;
+}
+
 function _ecStandbyHtml() {
     if ((_ecData?.summary?.channelMode || 'active') !== 'standby') return '';
     const s = _ecData.summary;
@@ -44857,8 +45634,11 @@ function _ecStandbyHtml() {
 // consequence rather than asking "are you sure": the danger is not the click,
 // it is doing it while MC still holds the listings, and only the person clicking
 // knows whether that is true.
-async function ecTakeOver() {
-    const store = _ecStore;
+// `which` is passed by the All Stores banner, where five stores are on screen
+// and _ecStore is not the one whose button was clicked. Defaults to the single
+// store the other views are about.
+async function ecTakeOver(which) {
+    const store = which || _ecStore;
     if (!confirm(
         `Hand ${store}'s eBay channel back to SPEEKS Connect?\n\n`
         + `Only do this if Marketplace Connect is NOT managing ${store}'s listings any more.\n\n`
@@ -45081,34 +45861,52 @@ function _ecHealthHtml() {
         <div class="ec-hcard">
           <div class="ec-hhead"><span class="ec-hstore">${_ecEsc(s.store)}</span>${chip}</div>
           <div class="ec-hbody">
-            ${row('Live On eBay', s.connected ? c.live : '—', s.connected ? 'ec-ok' : 'ec-off')}
-            ${row('Did Not Upload',
-                  !s.connected ? '—'
-                    : c.failed
-                      // A COUNT NOBODY CAN OPEN IS A DEAD END. "Did Not Upload: 1"
-                      // says a listing failed and gives no way to find out which,
-                      // and the store view is session-scoped so signing in again
-                      // shows nothing. Clicking pulls those rows into the feed,
-                      // where the error, both links and Try Again already live.
-                      ? `<button type="button" class="ec-hbtn"
-                           onclick="ecShowFailed('${_ecEsc(s.store)}')"
-                           title="Show what did not upload">${c.failed} To Fix</button>`
-                      : c.failed,
-                  !s.connected ? 'ec-off' : c.failed ? 'ec-warn' : 'ec-ok')}
-            ${row('Checked Against eBay', s.freshness.liveMinutes == null ? 'Never'
-                  : _ecAgo(new Date(Date.now() - s.freshness.liveMinutes * 60000).toISOString()),
-                  s.freshness.liveMinutes == null ? 'ec-off'
-                  : s.freshness.liveMinutes > 90 ? 'ec-warn' : 'ec-ok')}
+            <!-- LISTING HEALTH FIRST, BARE. These are the numbers that still
+                 mean something day to day, so they are what the card reads as. -->
             ${_ecHealthCats(s.store)}
+            <!-- ...and the eBay upload numbers folded away underneath. SPEEKS
+                 Connect uploading is parked at all five stores, so three rows of
+                 zeroes were making every card twice as tall as the part anybody
+                 reads. Collapsed, not deleted: the channel is break-glass and
+                 the moment it comes back these are the first numbers to check.
+                 "Checked Against eBay" is in here too — the live sweeps are off
+                 with the channel, so that timestamp only grows staler, and on
+                 the face of the card it reads as something being wrong. -->
+            <details class="ec-hebay">
+              <summary>eBay Upload${!s.connected ? ' · Not Connected' : c.failed ? ` · ${c.failed} To Fix` : ''}</summary>
+              ${row('Live On eBay', s.connected ? c.live : '—', s.connected ? 'ec-ok' : 'ec-off')}
+              ${row('Did Not Upload',
+                    !s.connected ? '—'
+                      : c.failed
+                        // A COUNT NOBODY CAN OPEN IS A DEAD END. "Did Not Upload: 1"
+                        // says a listing failed and gives no way to find out which,
+                        // and the store view is session-scoped so signing in again
+                        // shows nothing. Clicking pulls those rows into the feed,
+                        // where the error, both links and Try Again already live.
+                        ? `<button type="button" class="ec-hbtn"
+                             onclick="ecShowFailed('${_ecEsc(s.store)}')"
+                             title="Show what did not upload">${c.failed} To Fix</button>`
+                        : c.failed,
+                    !s.connected ? 'ec-off' : c.failed ? 'ec-warn' : 'ec-ok')}
+              ${row('Checked Against eBay', s.freshness.liveMinutes == null ? 'Never'
+                    : _ecAgo(new Date(Date.now() - s.freshness.liveMinutes * 60000).toISOString()),
+                    s.freshness.liveMinutes == null ? 'ec-off'
+                    : s.freshness.liveMinutes > 90 ? 'ec-warn' : 'ec-ok')}
+            </details>
           </div>
         </div>`;
     }).join('')}</div>`;
 }
 
-// The two Categories numbers, on the All Stores card. This is where the store
+// The Listing Health numbers, on the All Stores card. This is where the store
 // chips used to live inside the queue — "where is the work" is a whole-district
 // question, and it belongs next to the other whole-district numbers rather than
 // above a list of one store's rows.
+//
+// ⚠️ IN THE SAME ORDER AS THE PANEL: photos, then titles, then categories. A DM
+// reads a card here, picks a store, and lands on a page whose sections have to
+// be in the order they just scanned — reshuffling them makes the card and the
+// page feel like two different tools.
 //
 // Amber TEXT, not a control (user's call, 21 Aug). The "Did Not Upload" count
 // next to it is a button because the rows behind it are session-scoped and
@@ -45126,12 +45924,1455 @@ function _ecHealthCats(store) {
     // "somebody has to pick" — two different jobs, so two numbers rather than
     // one that hides the harder half.
     const none = _rcCounts.unmatched?.[store] ?? null;
-    if (other == null && wrong == null && none == null) return '';
-    const row = (k, n) => `<div class="ec-hrow"><span class="ec-hk">${k}</span>`
-        + `<span class="ec-hv ${n ? 'ec-warn' : 'ec-ok'}">${n == null ? '—' : n}</span></div>`;
-    return row('In &ldquo;Other&rdquo;', other) + row('No Suggestion', none)
-         + row('Wrong Category', wrong);
+    // The photo alarm, per store. RED rather than amber when it is not zero:
+    // everything else on this card is work queued up, and this one is a shopper
+    // looking at an empty square on the live storefront right now.
+    const pics = _rcCounts.photos?.[store] ?? null;
+    // TITLES ARE TWO NUMBERS FOR THE SAME REASON THE PILE IS. `titles` is every
+    // open review; `titlesWrong` is the severity-3 subset — a listing describing
+    // the WRONG THING to a buyer, which is a misdescribed sale rather than a
+    // missed one. One combined number would bury five urgent rows under thirty
+    // optional ones, which is the whole reason the panel has tiers.
+    const titles = _rcCounts.titles?.[store] ?? null;
+    const titlesBad = _rcCounts.titlesWrong?.[store] ?? null;
+    if (other == null && wrong == null && none == null && pics == null
+        && titles == null && titlesBad == null) return '';
+    const row = (k, n, bad) => `<div class="ec-hrow"><span class="ec-hk">${k}</span>`
+        + `<span class="ec-hv ${n ? (bad || 'ec-warn') : 'ec-ok'}">${n == null ? '—' : n}</span></div>`;
+    // ⚠️ A HALF YOU DO NOT HOLD IS ABSENT, NOT A DASH. The server OMITS the
+    // counts for a switched-off half, and `—` on this card means "we could not
+    // read it" — a real state, and the wrong one to show somebody who simply
+    // was not given the tool. Presence of the key, not the value, decides.
+    const hasPics = Object.prototype.hasOwnProperty.call(_rcCounts, 'photos');
+    const hasCats = Object.prototype.hasOwnProperty.call(_rcCounts, 'other');
+    const hasTitles = Object.prototype.hasOwnProperty.call(_rcCounts, 'titles');
+    return (hasPics ? row('No Photos', pics, 'ec-bad') : '')
+         // RED, alongside No Photos, and for the same reason: everything else on
+         // this card is work queued up, while these two are a shopper being shown
+         // something wrong on the live storefront right now.
+         + (hasTitles ? row('Wrong Titles', titlesBad, 'ec-bad')
+                      + row('Titles To Review', titles) : '')
+         + (hasCats ? row('In &ldquo;Other&rdquo;', other) + row('No Suggestion', none)
+                    + row('Wrong Category', wrong) : '');
 }
+
+// --- LISTING HEALTH: one page, because it is one question -------------------
+//
+// "Is this listing fit for a shopper to land on" gets asked two ways — does it
+// sit on a shelf anyone can find, and is there anything to look at — of the
+// same catalogue, by the same person, under the same permission. Two tabs made
+// that two things to remember to check. One page makes it one.
+//
+// Upload comes along as a collapsed dropdown rather than a tab. eBay listing is
+// in standby at all five stores, so it is break-glass; break-glass belongs
+// behind glass, not in the first row of controls on a page somebody opens daily.
+//
+// ⚠️ THE TWO SECTIONS ARE DIFFERENT KINDS OF THING AND MUST NOT LOOK ALIKE.
+// Categories is a WORKING QUEUE — a list you sit down and grind through, and a
+// long one is normal. Photos is an ALARM — the right reading is zero, the user
+// checks it by hand every week, and any row on it is a shopper looking at an
+// empty square right now. So Photos renders as one calm line when it is clear
+// and takes the top of the page when it is not, while Categories always looks
+// like the list it is.
+
+let _lhPhotos = null;     // { store, queue } from shopify-recat?view=photos
+let _lhPhotoErr = null;   // why the check could not run, when it could not
+// THE SERVER'S ANSWER about which halves of Listing Health this reader holds,
+// from whichever of the two payloads arrived (`?view=review` or `?view=photos` —
+// a reader granted one half only ever fetches that one). Preferred over the
+// local switch in _lhMay: the server decides whether the data comes, so drawing
+// a section from the local answer alone can put a heading over a 403.
+let _lhScope = null;      // { mayCats, mayPhotos, stores, corp } | null
+
+// HOW LONG THE EMPTY SQUARE HAS BEEN THERE, always as a duration.
+//
+// _ecAgo is the house formatter and is deliberately not used here: past 14 days
+// it gives up on "ago" and prints a date. That is right for the upload feed,
+// where a row is something you did and the question is when — and wrong here,
+// where the number IS the severity and only gets more important as it grows.
+// "Jul 2" makes a reader do the subtraction; "54 days" is the finding.
+function _lhFor(iso) {
+    if (!iso) return '—';
+    const ms = Date.now() - Date.parse(iso);
+    if (!isFinite(ms) || ms < 0) return '—';
+    const days = Math.floor(ms / 86400000);
+    if (days < 1) return 'Today';
+    if (days < 60) return `${days} Day${days === 1 ? '' : 's'}`;
+    const months = Math.round(days / 30.44);
+    return `${months} Month${months === 1 ? '' : 's'}`;
+}
+
+// Two weeks live with no photograph is not a listing waiting on its photos any
+// more; it is one nobody is coming back to. Worth marking, since the sort is by
+// stock and the oldest offender is not necessarily at the top.
+const _lhStale = iso => {
+    const ms = Date.now() - Date.parse(iso || '');
+    return isFinite(ms) && ms > 14 * 86400000;
+};
+
+// One header for both sections, so two things that share a page read as two
+// parts of it rather than two panels that happened to land together.
+function _lhSec(eyebrow, title, inner, badge) {
+    return `<section class="lh-sec">
+      <div class="lh-sechead">
+        <div class="lh-sectitles">
+          <span class="lh-eyebrow">${_ecEsc(eyebrow)}</span>
+          <span class="lh-title">${_ecEsc(title)}</span>
+        </div>
+        ${badge || ''}
+      </div>
+      ${inner}
+    </section>`;
+}
+
+// ONE TAB, TWO TOOLS, TWO SWITCHES. Listing Health shows whichever halves the
+// reader holds — grant only the alarm and that is the whole page; grant only
+// Categories and the page is what it was before the alarm existed. The pill
+// itself is data-feature-any over the same two keys, so it appears for either.
+//
+// ⚠️ Read the SERVER's answer where we have it (`_rcData.scope.mayPhotos`), and
+// fall back to the local switch only before the first payload lands. The two
+// agree by construction — same keys, same override table — but the server is the
+// one that decides whether the data arrives, so a section drawn from the local
+// answer alone can render a heading over a 403.
+function _lhMay(half) {
+    // Titles is served by its OWN edge function, so shopify-recat's scope says
+    // nothing about it — its answer arrives on _ltData.scope instead. Falling
+    // through to the local switch before the first payload is the same posture
+    // the other two halves take.
+    if (half === 'titles') {
+        if (_ltData?.scope) return true;
+        return typeof _jumpFeatureVisible === 'function'
+            ? _jumpFeatureVisible('ec-view-titles') : true;
+    }
+    const scope = _lhScope || _rcData?.scope;
+    const key = half === 'photos' ? 'mayPhotos' : 'mayCats';
+    if (scope && typeof scope[key] === 'boolean') return scope[key];
+    return typeof _jumpFeatureVisible === 'function'
+        ? _jumpFeatureVisible(half === 'photos' ? 'ec-view-photos' : 'ec-view-categories')
+        : true;
+}
+
+function _lhHtml() {
+    // No Upload drawer here — it lives at the bottom of the All Stores page,
+    // with the other whole-estate things. This page is the daily one.
+    const photos = _lhMay('photos') ? _lhPhotosHtml() : '';
+    // ⚠️ TITLES GOES LAST, AND IT IS ABOUT LENGTH, NOT IMPORTANCE. It sat
+    // between the alarm and the filing queue on the argument that its top tier
+    // (a title that is WRONG) belongs beside the photo alarm. True, but it is
+    // now the longest section on the page by a wide margin — 138 rows against
+    // the alarm's handful — so placing it second pushed Categories off the
+    // bottom of the screen and out of the day. Ethan, 2026-08-31: "move
+    // categories under no pictures since there will be a lot more titles."
+    // The two SHORT sections stay where a manager can see both without
+    // scrolling; the long grind goes underneath them.
+    const cats = _lhMay('cats') ? _lhCatsHtml() : '';
+    const titles = _lhMay('titles') ? _ltHtml() : '';
+    // Reachable only by a race: the pill needs one of the two, so losing both
+    // between the click and the render means an override changed underneath.
+    // Say that, rather than drawing an empty page that looks broken.
+    if (!photos && !cats && !titles) {
+        return '<div class="ec-empty">Listing Health is not switched on for you.</div>';
+    }
+    return photos + cats + titles;
+}
+
+// --- the photo alarm --------------------------------------------------------
+//
+// Live on the online store, zero photographs. Read-only on purpose: the fix is
+// a camera and a Shopify upload, so every row carries the SKU to find the unit
+// by and a link to the page to fix it on, and offers no button that could only
+// ever mean "I did it somewhere else".
+//
+// See the 0065 migration for what is deliberately NOT counted here — 515
+// in-stock products with no photos that were never published. That is a real
+// and much bigger problem, and folding it in would turn the one number in this
+// panel that should read zero into a 500-row backlog nobody could alarm on.
+function _lhPhotosHtml() {
+    const store = _ecEsc(_ecStore || '');
+    const head = (inner, badge) => _lhSec('Photos', 'Live With No Photos', inner, badge);
+
+    // ⚠️ A FAILED CHECK IS NOT AN ALL CLEAR. Same rule the All Stores card
+    // follows: drawing the calm green line for a request that never answered
+    // would be a lie about the storefront, and a zero nobody can trust is worth
+    // less than no zero at all.
+    if (_lhPhotoErr) {
+        return head(`<div class="lh-unknown">
+            <span class="lh-unknown-t">Could Not Check ${store}</span>
+            <span class="lh-why">${_ecEsc(_lhPhotoErr)}</span>
+            <span class="lh-why">This is not an all clear — nobody has looked yet.</span>
+          </div>`);
+    }
+    if (!_lhPhotos) return '';
+
+    const q = _lhPhotos.queue || [];
+    if (!q.length) {
+        return head(`<div class="lh-clear">
+            <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>All Clear — Every Listing Live At ${store} Has A Photo</span>
+          </div>`, '<span class="lh-count lh-count-ok">0</span>');
+    }
+
+    const n = q.length;
+    const rows = q.map(p => {
+        // ⚠️ THE ADMIN LINK NEEDS THE NUMERIC ID, not the handle — a
+        // handle-based admin URL 404s and looks perfectly right until clicked.
+        const numeric = _ecEsc(String(p.productId || '').split('/').pop());
+        const shop = _ecEsc(p.shop || '');
+        return `
+        <tr class="cb-row">
+          <td><div class="rc-title">${_ecEsc(p.title || 'Untitled Listing')}</div></td>
+          <td class="cb-col-status"><span class="lh-sku">${_ecEsc(p.sku || '—')}</span></td>
+          <td class="cb-col-status">${_ecMoney(p.price)}</td>
+          <td class="cb-col-status">${p.quantity > 0
+              ? `<span class="lh-instock">${p.quantity}</span>`
+              : '<span class="lh-soldout">Sold Out</span>'}</td>
+          <td class="cb-col-status"><span class="lh-since${_lhStale(p.listedAt) ? ' lh-stale' : ''}">${_lhFor(p.listedAt)}</span></td>
+          <td class="cb-col-status">
+            <div class="ec-pills rc-links">
+              ${p.handle ? `<a class="ec-pill ec-pill-store" href="https://${shop}/products/${_ecEsc(p.handle)}"
+                   target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}
+              ${numeric ? `<a class="ec-pill ec-pill-shopify" href="https://${shop}/admin/products/${numeric}"
+                   target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
+            </div>
+          </td>
+        </tr>`;
+    }).join('');
+
+    // Plain English, and it says who fixes it — the house rule for anything
+    // that reads as an alert. "image_count = 0" is not a sentence anybody can act on.
+    const said = `<div class="lh-alarm">
+        <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>${n === 1 ? 'One listing is' : n + ' listings are'} live on ${store}'s online store with no
+        photograph, so a shopper reaching ${n === 1 ? 'it' : 'them'} sees an empty square.
+        <strong>The store fixes ${n === 1 ? 'this' : 'these'}</strong> — open the SKU in Shopify and add photos.</span>
+      </div>`;
+
+    return head(said + `
+      <table class="cb-table rc-table lh-table">
+        <thead><tr>
+          <th style="width:34%;">Item</th>
+          <!-- The SKU gets its OWN column rather than the faint line under the
+               title it has in the Categories queue. This is the thing somebody
+               reads out to a manager, or walks the floor holding — it has to be
+               findable at a glance, not hunted for in a subtitle. -->
+          <th style="width:16%;" class="cb-col-status">SKU</th>
+          <th style="width:10%;" class="cb-col-status">Price</th>
+          <th style="width:8%;"  class="cb-col-status">Stock</th>
+          <!-- How long a shopper has been able to see the empty square. It is
+               the only urgency signal on the row, and the difference between
+               "listed an hour ago, the photos are coming" and a month. -->
+          <th style="width:14%;" class="cb-col-status">Live For</th>
+          <th style="width:18%;" class="cb-col-status">Open</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`, `<span class="lh-count lh-count-bad">${n}</span>`);
+}
+
+// --- the filing queue, unchanged, in a section ------------------------------
+// _rcHtml is untouched: its three tabs, its skipped list and every state it
+// carries work exactly as they did as a whole view.
+function _lhCatsHtml() {
+    const c = _rcData?.counts;
+    const total = c ? (c.other || 0) + (c.misfiled || 0) + (c.unmatched || 0) : null;
+    return _lhSec('Categories', 'Waiting On A Category', _rcHtml(),
+        total == null ? ''
+          : `<span class="lh-count${total ? ' lh-count-warn' : ' lh-count-ok'}">${total}</span>`);
+}
+
+
+// --- Listing Titles ---------------------------------------------------------
+//
+// THE THIRD TOOL ON THIS PAGE, and the one that reads a title rather than a
+// picture or a shelf. Built 2026-08-28.
+//
+// It exists because a title can be WRONG, not merely unoptimised. The estate
+// carries listings whose eBay title names a different product than Shopify's
+// (a Nintendo NES "Super C" listed as "Tecmo Super Bowl"; a 16GB DDR4 module
+// listed as a different part at a different speed), mirrorless cameras sold as
+// DSLRs, and RAM that never says the word RAM. Those cost sales or produce
+// misdescribed ones; the unused characters are the smaller half.
+//
+// THREE TABS, BY WHAT IS WRONG WITH THE LISTING — not by store and not by age:
+//   Wrong          the listing misdescribes the item (severity 3)
+//   Hard To Find   the listing cannot be searched for (severity 2)
+//   Opportunity    the listing works and could work harder (severity 1)
+// Without the split the tabs would be one list of 575 rows in which the eight
+// genuinely wrong listings sat below four hundred games wanting the letters
+// CIB. The counts on the tabs are what makes "nothing is actually wrong here"
+// readable at a glance.
+//
+// NOTHING HERE HAPPENS UNTIL SOMEBODY PRESSES APPROVE. Approve writes the
+// SHOPIFY product title, which Marketplace Connect mirrors onto eBay verbatim
+// (1,254 of 1,283 live titles are byte-identical to Shopify's, and 25 of the 29
+// differences are only &amp; encoding). So this changes the storefront title
+// too — accepted deliberately, and the reason there is no bulk apply.
+const LT_URL = `${_BASE}/listing-titles`;
+
+let _ltData = null;   // { store, queue, counts } from listing-titles?view=review
+let _ltErr = null;    // why the queue could not be read, when it could not
+let _ltTier = 3;      // which tab: 3 Wrong, 2 Hard To Find, 1 Opportunity
+// Titles the reviewer has typed over the suggestion, by productId. Held here
+// rather than read off the DOM at submit time because the reconciler replaces
+// the subtree on every state change and an in-progress edit would be lost.
+let _ltEdits = new Map();
+let _ltBusy = new Set();
+// Reading what else the change would touch, before anybody is asked to confirm
+// it. Its own state and its own word on the button: "Saving…" over a request
+// that has not saved anything yet is the button lying about a live catalogue.
+let _ltChecking = new Set();
+
+async function _ltFetch(path) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(`${LT_URL}${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`,
+        { headers: { 'x-user-pin': pin } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || body.error || `Request failed (${r.status})`);
+    return body;
+}
+
+async function _ltPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(LT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok && body.ok !== false, status: r.status, body };
+}
+
+const _LT_TIERS = [
+    { n: 3, label: 'Wrong', cls: 'lt-t-bad' },
+    { n: 2, label: 'Hard To Find', cls: 'lt-t-warn' },
+    { n: 1, label: 'Opportunity', cls: 'lt-t-ok' },
+];
+
+// WHY A ROW IS WHAT IT IS, in the words the server sent. The findings are
+// already written as sentences a manager can read (the house rule for anything
+// alert-shaped), so this renders them rather than mapping codes to strings here
+// — one place writes the English, and it is the place that knows what it found.
+function _ltWhy(f) {
+    // A finding's `warn` is a caution the reviewer has to act on BEFORE
+    // approving, and it gets its OWN BULLET rather than a clause on the end of
+    // the reason. It used to be appended to the sentence, which made the one
+    // line a reviewer most needed to act on the tail of the line they were
+    // already skimming — and made every checked-name row read as a paragraph.
+    // Two findings carry one: CIB (only the person holding the game can settle
+    // whether it is complete) and the checked-name results (judged against
+    // outside product knowledge, not against anything in the listing).
+    return (f || []).map(x => `<li>${_ecEsc(x.says || '')}</li>`
+        + (x.warn ? `<li class="lt-caution">${_ecEsc(x.warn)}</li>` : '')).join('');
+}
+
+// The changed run, located as word indexes into BOTH titles. A word-level diff
+// rather than a character one: the reviewer is deciding whether the NEW WORDS
+// are right, and a character diff of "Digital SLR DSLR" -> "DSLR" is unreadable.
+function _ltRun(from, to) {
+    const a = String(from || '').trim().split(/\s+/);
+    const b = String(to || '').trim().split(/\s+/);
+    let head = 0;
+    while (head < a.length && head < b.length && a[head] === b[head]) head++;
+    let tail = 0;
+    while (tail < a.length - head && tail < b.length - head
+           && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+    return { a, b, head, tail };
+}
+
+// One side of that diff, drawn with its changed run marked.
+// ⚠️ THE CHANGED RUN IS NOT THE SAME THING AS THE CHANGED WORDS. _ltRun finds
+// one span between a common head and tail, which is right for a replacement and
+// wrong the moment a title gains a word in the MIDDLE and another at the END:
+//
+//   now        …iPhone 15 Plus   128GB 26.6 MTXT3LL/A Read
+//   suggested  …iPhone 15 Plus   6.7" 128GB 26.6 MTXT3LL/A Read Pink
+//
+// The head stops at "Plus" and the tail never starts, so the run swallows
+// everything between — and the Now line struck "128GB 26.6 MTXT3LL/A Read"
+// through in red, claiming the tool was DELETING words it keeps verbatim. Red
+// means removed on this screen; saying it about kept words is a lie about the
+// action the reviewer is one click from taking. (Appeared the moment the screen
+// size started being placed after the model rather than appended.)
+//
+// So within the run, a word that also appears in the other side's run is
+// unchanged and stays unmarked. Counted, not set-membership: a title that
+// genuinely loses one of two "Black"s must still show one struck through.
+function _ltChanged(words, head, tail, other, oHead, oTail) {
+    const pool = new Map();
+    for (let i = oHead; i < other.length - oTail; i++) {
+        pool.set(other[i], (pool.get(other[i]) || 0) + 1);
+    }
+    const marks = new Set();
+    for (let i = head; i < words.length - tail; i++) {
+        const n = pool.get(words[i]) || 0;
+        if (n > 0) pool.set(words[i], n - 1);
+        else marks.add(i);
+    }
+    return marks;
+}
+
+function _ltMark(words, head, tail, cls, marks) {
+    // The word-level path. Every word is emitted and the whole thing joined
+    // with single spaces, so the welding bug below cannot come back through it.
+    if (marks) {
+        return words.map((w, i) => marks.has(i)
+            ? '<mark class="' + cls + '">' + _ecEsc(w) + '</mark>'
+            : _ecEsc(w)).join(' ');
+    }
+    // ⚠️ JOIN THE PARTS — NEVER CONCATENATE WITH CONDITIONAL SPACES. The build
+    // this replaces put a space between the head and the tail only when the
+    // middle had something in it, so a PURE DELETION welded the two halves
+    // together: the suggestion "GoPro Hero11 Black 27MP Action Camera" was
+    // shown to the reviewer as "27MPAction Camera". The suggested string was
+    // always right — Approve would have saved the correct title — but this is
+    // the line somebody reads BEFORE approving, so it is the line that matters.
+    // Deletions are the commonest fix this tool makes, which is exactly the
+    // case the old spacing rule got wrong.
+    const pre = words.slice(0, head).join(' ');
+    const midTxt = words.slice(head, words.length - tail).join(' ');
+    const post = words.slice(words.length - tail).join(' ');
+    const parts = [];
+    if (pre) parts.push(_ecEsc(pre));
+    if (midTxt) parts.push('<mark class="' + cls + '">' + _ecEsc(midTxt) + '</mark>');
+    if (post) parts.push(_ecEsc(post));
+    return parts.join(' ');
+}
+
+// WHAT THE SUGGESTION TOOK OUT TO FIT THE REST IN, and why that was safe.
+//
+// ⚠️ THIS IS THE ONE SUGGESTION THAT DELETES SOMETHING TRUE. Every other fix on
+// this screen corrects a mistake or removes a repeat. This one spends a real
+// fact — a clock speed, a form factor — to buy room for the words that name the
+// item, so it has to be the most legible thing on the row rather than the least:
+// named in full, struck through, in red, with where the fact still lives. The
+// server chooses them (trimToFit, which may only spend a value the SPEC TABLE
+// also states) and sends them on the finding; nothing here decides anything.
+function _ltTrimLine(findings) {
+    const f = (findings || []).find(x => Array.isArray(x && x.trimmed) && x.trimmed.length);
+    if (!f) return '';
+    const cut = f.trimmed;
+    // Its own line rather than a clause in the reasons underneath: a reviewer
+    // skims Now / Suggested and stops. A deletion nobody asked for has to be
+    // caught in that skim, or the row is not safe to approve quickly — and being
+    // safe to approve quickly is the whole point of this screen.
+    return '<div class="lt-trim">'
+        + '<span class="lt-lab">Removed</span>'
+        + '<span class="lt-trim-v">'
+        + cut.map(v => '<s>' + _ecEsc(v) + '</s>').join(' ')
+        + '</span>'
+        + '<span class="lt-trim-why">to make room — the spec table still says '
+        + (cut.length === 1 ? 'it' : 'them') + ', so only the title is shorter</span>'
+        + '</div>';
+}
+
+// The suggestion, with the words it ADDS marked. This line stays character for
+// character equal to the string in the edit box below it — the reviewer reads
+// it as the title they are approving, so nothing may be inserted into it.
+function _ltDiff(from, to) {
+    const r = _ltRun(from, to);
+    return _ltMark(r.b, r.head, r.tail, 'lt-add',
+                   _ltChanged(r.b, r.head, r.tail, r.a, r.head, r.tail));
+}
+
+// The current title, with the words it LOSES marked. A deletion leaves nothing
+// green on the Suggested line, so without this the row showed two long titles
+// and no sign of what differed — on exactly the edits that are hardest to spot
+// by eye ("360", "Digital SLR", a doubled word).
+function _ltGone(from, to) {
+    const r = _ltRun(from, to);
+    return _ltMark(r.a, r.head, r.tail, 'lt-cut',
+                   _ltChanged(r.a, r.head, r.tail, r.b, r.head, r.tail));
+}
+
+// WHAT WAS DISMISSED, FOLDED AWAY UNDER THE QUEUE.
+//
+// Shut by default and never a number in the header: this is not work waiting,
+// it is work already done, and a count beside the queue's own count would read
+// as a second pile to get through.
+//
+// It earns its place twice. A dismissal can be taken back — a decision you
+// cannot undo is one people hesitate over, and hesitation is how a review queue
+// stops being worked. And the tally turns fifty individual judgements into the
+// one sentence worth acting on: which RULE keeps being wrong.
+const _LT_CODE_SAYS = {
+    'name-wrong': 'Name checked against outside knowledge',
+    'name-garbled': 'Name looks misspelled',
+    'name-disputed': 'The listing and our knowledge disagree',
+    'missing-screen-size': 'Screen size missing from the title',
+    'repeated-phrase': 'A phrase repeated in the title',
+    'title-drift': 'Shopify and eBay disagree',
+    'ebay-not-synced': 'eBay has not picked up our fix',
+    'missing-noun': 'No noun saying what the thing is',
+    'truncated-title': 'Title cut off mid-word',
+    'lazy-title': 'Specs in the listing but not the title',
+    'spec-conflict': 'Title contradicts the spec table',
+    'hardware-conflict': 'Two impossible specs together',
+    'brand-not-found': 'Brand not found on eBay',
+    'model-not-found': 'Model not confirmed on eBay',
+};
+
+// ⚠️ ONE PATH TO THE ASK, NOT TWO. This drawer used to gather the notes and copy
+// them itself, which meant the same job existed here AND in the Listing Health
+// tool — two confirm dialogs, two copies of the wording, and two things to keep
+// in step. The drawer keeps the COUNT, because that is the argument the tally
+// beside it is making; pressing it opens the tool that does the work.
+
+// --- SPEEKS Tool: Listing Health --------------------------------------------
+//
+// ⚠️ WHY A TOOL AND NOT A LINK TO THE PAGE. The deck card used to navigate to
+// operations.html#categories, which is the right PAGE — and then the reviewer
+// stood on it with nothing to do, because the thing the card was about lives in
+// a shut <details> three sections down. Ethan, 2026-09-04: "The notification I
+// got only took me to Listing Health on Operations tab and did not show me
+// anything to copy." A card that names a job has to open the job.
+//
+// ⚠️ THE MODAL IS BUILT HERE, NOT PASTED INTO FIVE SHELLS. Every other tool's
+// chrome is duplicated markup in index/operations/workspace/stats/docs, and
+// [[tools-panel-role-sync]] is the record of what that costs — the copies drift
+// and the tool half-exists on two pages. Its body is rendered by JS anyway, so
+// static markup would buy nothing. The PANEL LINK still has to be in all five
+// (it is markup the panel reads), and tv.html has no tools panel at all.
+function _lhToolEl() {
+    let el = document.getElementById('listingHealthToolModal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.className = 'modal-menu manage-menu';
+    el.id = 'listingHealthToolModal';
+    el.innerHTML = `
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Listing Health</span>
+          <span class="tool-head-sub">What reviewers told us about the title rules.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="listingHealthToolBody"></div>`;
+    document.body.appendChild(el);
+    return el;
+}
+
+let _lhToolFb = null;
+
+function _lhWhen(t) {
+    const d = t ? new Date(t) : null;
+    return d && !isNaN(d.getTime())
+        ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+}
+
+async function openListingHealthTool() {
+    _lhToolEl();
+    closeAllModals();
+    toggleModal('listingHealthToolModal');
+    const body = document.getElementById('listingHealthToolBody');
+    if (body) body.innerHTML = '<div class="status-message">Reading the notes…</div>';
+    _lhToolFb = null;
+    try {
+        _lhToolFb = await _ltFetch('?view=feedback&days=30');
+    } catch (e) {
+        if (body) {
+            // ⚠️ A FAILED READ IS NOT AN ALL CLEAR — the same rule the photo
+            // alarm and the titles panel follow. Drawing the empty state for a
+            // request that never answered would say "nothing to answer" about a
+            // pile nobody has seen.
+            body.innerHTML = `<div class="lh-tool-err">
+              <b>Could not read the notes.</b>
+              <span>${_ecEsc(e.message || String(e))}</span>
+              <button class="lt-ask-btn" onclick="openListingHealthTool()">Try Again</button>
+            </div>`;
+        }
+        return;
+    }
+    renderListingHealthTool();
+}
+window.openListingHealthTool = openListingHealthTool;
+
+function renderListingHealthTool() {
+    const body = document.getElementById('listingHealthToolBody');
+    if (!body) return;
+    const fb = _lhToolFb;
+    if (!fb) return;
+    const n = fb.total;
+    // ⚠️ TAKEN, NOT GONE. Ethan asked whether wiping them on copy was the right
+    // call (2026-09-04). It is not: a note that disappears cannot be re-copied
+    // when a paste is lost, cannot be matched to the answer that comes back
+    // later, and tells the person who bothered to explain themselves that it
+    // went nowhere. They move here instead, shut, and out of the count.
+    const done = fb.done || [];
+    const doneHtml = done.length ? `
+      <details class="lh-tool-done">
+        <!-- "handled", not "sent" — copying is not finishing, and the stamp is
+             now made when the work is done rather than when the text left. -->
+        <summary>${done.length} already handled</summary>
+        ${done.map(r => `<div class="lh-tool-done-row">
+          <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+          <span class="lh-tool-done-note">“${_ecEsc(r.note || '')}”</span>
+          <span class="lh-tool-done-when">${_lhWhen(r.takenAt)}</span>
+        </div>`).join('')}
+      </details>` : '';
+    // Nothing waiting. The handled list still renders under it, so the tool is
+    // never an empty box — and so clearing a batch leaves the notes visibly
+    // somewhere instead of appearing to delete them.
+    if (!n) {
+        // Two lines: the tick belongs ON the headline, not stacked above it as a
+        // row of its own. (Ethan, 2026-09-04.)
+        body.innerHTML = `<div class="lh-tool-clear">
+          <div class="lh-tool-clear-h"><span class="lh-tool-tick">✓</span>
+            <b>Nothing waiting on you.</b></div>
+          <span>When somebody dismisses a title suggestion and writes why the rule
+           was wrong, it lands here.</span>
+        </div>${doneHtml}`;
+        return;
+    }
+    // Grouped by the rule that fired, the same way the ask is — one dismissal is
+    // an anecdote, three of one code is a rule to go and fix, and a flat list of
+    // rows hides that completely.
+    const groups = (fb.groups || []).map(g => `
+      <div class="lh-tool-grp">
+        <div class="lh-tool-grp-h">
+          <span class="lh-tool-grp-n">${g.n}</span>
+          <span>${_ecEsc(_LT_CODE_SAYS[g.code] || g.code)}</span>
+        </div>
+        ${(g.rows || []).map(r => `
+          <div class="lh-tool-row">
+            <div class="lh-tool-note">“${_ecEsc(r.note || '')}”</div>
+            <div class="lh-tool-meta">
+              <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+              <span>${_ecEsc(r.store || '')}</span>
+              <span>${_ecEsc(r.by || '')}</span>
+            </div>
+            <div class="lh-tool-ttl"><span class="lt-lab">Title</span>
+              <span>${_ecEsc(r.current || '')}</span></div>
+            ${r.suggested ? `<div class="lh-tool-ttl"><span class="lt-lab">We said</span>
+              <span>${_ecEsc(r.suggested)}</span></div>` : ''}
+            ${r.saysItself ? `<div class="lh-tool-says">
+              The listing itself already says this —
+              <b>${_ecEsc(r.saysItself.field)} = ${_ecEsc(r.saysItself.value)}</b>
+            </div>` : `<div class="lh-tool-unsettled">
+              Nothing in the listing settles this one.
+            </div>`}
+          </div>`).join('')}
+      </div>`).join('');
+    // ⚠️ THE COPY BUTTON IS THE FIRST THING IN THE TOOL. What sent Ethan here was
+    // a card he could not act on; putting the action under a scroll of evidence
+    // would reproduce that one level down.
+    body.innerHTML = `
+      <div class="lt-ask-bar">
+        <span class="lt-ask-n">${n} dismissal${n === 1 ? '' : 's'} explained a rule was wrong${
+          fb.settled ? ` · ${fb.settled} look like the rule overruled the listing` : ''}</span>
+        <button class="lt-ask-btn" onclick="lhToolCopy(this)">Copy The Ask For Claude</button>
+      </div>
+      <p class="lh-tool-say">Paste it into Claude. It groups these by the rule that
+        raised them, attaches each listing's own spec fields, and asks for the
+        reasoning before any rule changes. Nothing is sent from here, and no
+        listing changes.</p>
+      ${groups}
+      <!-- ⚠️ CLEARING IS A SEPARATE, LATER ACT, and it is at the BOTTOM because
+           that is where you are once the work is done. Copying used to clear
+           these, which meant a lost paste or a "the rule was right after all"
+           took the reminder with it. -->
+      <div class="lh-tool-finish">
+        <span>Once Claude has been through them:</span>
+        <button class="lh-tool-done-btn" onclick="lhToolDone()">Clear These ${n}</button>
+      </div>
+      ${doneHtml}`;
+}
+
+// Copies, then marks these notes read so the next ask carries only new ones.
+// The stamp is written SERVER-SIDE (feedback_triaged_at, migration 0077): a
+// localStorage high-water mark is what made the recycle reply card clear on one
+// machine and stay up on every other.
+// ⚠️ COPYING IS NOT FINISHING, and this used to conflate the two — one press
+// copied the ask AND marked every note read. That is wrong in both directions:
+// a paste can be lost, a session can die, and Claude can read a note and decide
+// the rule was right, none of which is "handled". Meanwhile the reminder was
+// already gone. Ethan, 2026-09-04: "the copy button acts as a copy button like
+// others on the site and stays there with the notes until you've done your work
+// then you get rid of the notes."
+//
+// So: this copies. Nothing else. Same behaviour as every other copy button here
+// (see expCopyReport) — swap the label, put it back.
+function lhToolCopy(button) {
+    const fb = _lhToolFb;
+    if (!fb || !fb.ask) return;
+    navigator.clipboard.writeText(fb.ask).then(() => {
+        if (!button) return;
+        const was = button.textContent;
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = was; }, 1600);
+    }).catch(() => _ltTell('Could Not Reach The Clipboard',
+        'Your browser refused the copy. Select the notes above and copy them by hand.'));
+}
+window.lhToolCopy = lhToolCopy;
+
+// The other half: the work is done, clear them. This is the ONLY thing that
+// stamps feedback_triaged_at, and it is an assertion a person makes — the tool
+// cannot see whether a rule changed, so it must not guess. Same shape as the
+// expense report's "filed" flag for the same reason.
+async function lhToolDone() {
+    const fb = _lhToolFb;
+    if (!fb || !fb.total) return;
+    const n = fb.total;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Listing Health',
+        title: `Clear ${n} Note${n === 1 ? '' : 's'}?`,
+        body: `<p class="lt-ask-say">Do this once Claude has been through them —
+                it clears the reminder. The notes are kept and stay readable
+                under <b>already handled</b>; nothing on any listing changes
+                either way.</p>`,
+        go: 'Clear Them', cancel: 'Not Yet' });
+    if (!said) return;
+    await _ltPost({ action: 'triaged', store: (fb.stores || [])[0] || '', keys: fb.keys || [] });
+    if (typeof checkTitleNoteReminders === 'function') checkTitleNoteReminders();
+    // Re-read rather than painting over the body: a static message left a
+    // confirmation floating in a modal the height of the list it replaced, and
+    // made the notes look deleted rather than moved.
+    try { _lhToolFb = await _ltFetch('?view=feedback&days=30'); }
+    catch (_) { _lhToolFb = { total: 0, groups: [], done: (fb.done || []) }; }
+    renderListingHealthTool();
+}
+window.lhToolDone = lhToolDone;
+
+// The tag resolved to a person, from the map the server sends. Falls back to
+// the tag verbatim, because "JSmith" still tells you who a leaver was — the
+// server only sends tags that matched somebody, but a rename between the sweep
+// and the read would land here and a bare tag is better than nothing.
+function _ltLister(tag) {
+    if (!tag) return '';
+    return (_ltData && _ltData.listers && _ltData.listers[tag]) || tag;
+}
+
+// ⚠️ THE PILL IS ALWAYS THERE — a name, or "Unknown". Never nothing.
+//
+// This started out as "show it only when a tag resolves", which left a ragged
+// row and, worse, made the absence ambiguous: no pill could mean the product
+// had no tag, or that it had one nobody could match. It also invited a shape
+// test to rescue the unmatched ones, and a shape test reads `eBay` as a person
+// (e + Bay) — which is the thing this whole matcher exists to avoid.
+//
+// Always rendering removes both problems. Unknown covers every case the tag
+// cannot answer: no employee tag at all, or a tag belonging to somebody no
+// longer in the staff list. Ethan, 2026-09-04, on JJernigan: "He is no longer
+// with the company so when you can't find a name, just put an Unknown pill."
+//
+// ⚠️ AND IT IS NEVER A GUESS. Unknown says the tool cannot tell you, which is
+// honest; a tag rendered raw would look like an accusation the tool cannot
+// stand behind.
+function _ltListerPill(r) {
+    const name = r && r.listerTag ? _ltLister(r.listerTag) : '';
+    if (!name) {
+        return `<span class="lt-lister lt-lister-unknown"
+            title="No employee tag on this listing, or the tag belongs to somebody who has left. Shopify tags are where this comes from.">Unknown</span>`;
+    }
+    return `<span class="lt-lister" title="Listed by ${_ecEsc(name)}, from this product's Shopify tags">${_ecEsc(name)}</span>`;
+}
+
+function _ltDeniedHtml() {
+    const d = _ltData && _ltData.denied;
+    if (!d || !(d.rows || []).length) return '';
+    const when = t => {
+        const x = new Date(t);
+        return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+    // ⚠️ THE TALLY EXCLUDES eBay-STALE DISMISSALS, and the server already did
+    // that — repeated here only in the wording. Those say the rule was RIGHT and
+    // the fix lives in Marketplace Connect; counting them would make title-drift
+    // look like our worst rule exactly when it was doing its job.
+    const tally = (d.tally || []).filter(t => t.n >= 2);
+    // ⚠️ SAME EXCLUSION AS THE TALLY. "Ours Is Fine" says the rule was RIGHT and
+    // the stale copy is on eBay, so its note is not feedback about a rule and
+    // must not be counted into an ask to go and change one.
+    // ⚠️ AND NOT ALREADY CARRIED INTO AN ASK. Counting every note ever written
+    // would leave the bar up forever, which is how a nag stops being read.
+    const noted = d.rows.filter(r => r.as !== 'ebay-stale' && (r.note || '').trim()
+                                  && !r.triagedAt).length;
+    const tallyHtml = tally.length
+        ? `<div class="lt-tally">
+             <div class="lt-tally-h">Confirmed Correct More Than Once — Worth A Look At The Rule</div>
+             ${tally.map(t => `<div class="lt-tally-row">
+                 <span class="lt-tally-n">${t.n}</span>
+                 <span>${_ecEsc(_LT_CODE_SAYS[t.code] || t.code)}</span></div>`).join('')}
+           </div>`
+        : '';
+    const rows = d.rows.map(r => {
+        const busy = _ltBusy.has(r.productId);
+        const stale = r.as === 'ebay-stale';
+        return `<div class="lt-dn-row">
+          <div class="lt-dn-main">
+            <div class="lt-dn-title">${_ecEsc(r.current || '')}</div>
+            <div class="lt-dn-meta">
+              <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+              <!-- The same word the button carried when it was clicked. A row
+                   dismissed with "Ours Is Fine" that reappears here as "eBay Is
+                   Stale" reads as a different decision than the one made. -->
+              <span class="lt-dn-as ${stale ? 'lt-dn-ebay' : ''}">${stale ? 'Ours Is Fine' : 'Not A Problem'}</span>
+              ${_ltListerPill(r)}
+              <span>${_ecEsc(r.by || '')}${r.at ? ' · ' + when(r.at) : ''}</span>
+            </div>
+            ${r.note ? `<div class="lt-dn-note">${_ecEsc(r.note)}</div>` : ''}
+          </div>
+          <button class="lt-dn-undo" onclick="ltReopen('${_ecEsc(r.productId)}')" ${busy ? 'disabled' : ''}
+                  title="Put this back in the queue">${busy ? '…' : 'Undo'}</button>
+        </div>`;
+    }).join('');
+    return `<details class="lt-denied">
+      <!-- ⚠️ "CONFIRMED CORRECT", NOT "DISMISSED". Ethan, 2026-09-03: "change
+           the Dismissed name to something more direct". Dismissed named what
+           happened to the ROW; every row in here is a person having read a title
+           and decided it is right — which is what both answers assert (the rule
+           was wrong, or the rule was right and eBay holds the stale copy). It is
+           also the more inviting word: this drawer is a record of work done, not
+           a bin of things brushed aside. -->
+      <summary>${d.rows.length} Confirmed Correct</summary>
+      <!-- ⚠️ THE NOTE IS THE ONLY EVIDENCE A RULE IS WRONG, and it was landing
+           in here where nobody read it on a schedule. The COUNT belongs beside
+           the tally, which is the argument it is making; the work itself is the
+           Listing Health tool, so this opens that rather than doing the job a
+           second time in a second place. -->
+      ${noted ? `<div class="lt-ask-bar">
+        <span class="lt-ask-n">${noted} dismissal${noted === 1 ? '' : 's'} explained a rule was wrong</span>
+        <button class="lt-ask-btn" onclick="openListingHealthTool()"
+                title="Read the notes and copy the ask for Claude">Open Listing Health Notes</button>
+      </div>` : ''}
+      ${tallyHtml}
+      <div class="lt-dn-rows">${rows}</div>
+    </details>`;
+}
+
+function _ltHtml() {
+    const head = (inner, badge) => _lhSec('Titles', 'Listing Titles', inner, badge);
+    const store = _ecEsc(_ecStore || '');
+
+    // ⚠️ A FAILED READ IS NOT AN ALL CLEAR — the same rule the photo alarm
+    // follows. Drawing the calm line for a request that never answered would be
+    // a claim about the catalogue that nobody has checked.
+    if (_ltErr) {
+        return head(`<div class="lh-unknown">
+            <span class="lh-unknown-t">Could Not Check ${store}</span>
+            <span class="lh-why">${_ecEsc(_ltErr)}</span>
+            <span class="lh-why">This is not an all clear — nobody has looked yet.</span>
+          </div>`);
+    }
+    if (!_ltData) return '';
+
+    const all = _ltData.queue || [];
+    const byTier = n => all.filter(r => r.severity === n);
+    const total = all.length;
+    if (!total) {
+        // The scope line matters MOST here. "All clear" over a list narrowed to
+        // eBay is a much smaller claim than "all clear" over the whole storefront,
+        // and the reader cannot tell which they are looking at without it.
+        return head(`<div class="lh-clear">
+            <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>All Clear — No Title Problems Found At ${store}</span>
+          </div>` + _ltScopeNote(_ltData.ebayScope),
+          '<span class="lh-count lh-count-ok">0</span>');
+    }
+
+    // Land on the worst tier that has anything in it. Opening on an empty
+    // "Wrong" tab hides the work and reads as a broken panel.
+    if (!byTier(_ltTier).length) {
+        const first = _LT_TIERS.find(t => byTier(t.n).length);
+        if (first) _ltTier = first.n;
+    }
+
+    const tabs = _LT_TIERS.map(t => {
+        const n = byTier(t.n).length;
+        // .rc-mode, not a tab class of its own: the Categories queue lower down
+        // this same page already has three tabs, and two tab dialects on one page
+        // read as two panels that happened to land together.
+        return `<button type="button" class="rc-mode${t.n === _ltTier ? ' rc-mode-on' : ''}"
+                onclick="ltSetTier(${t.n})">${t.label}
+                <span class="rc-chip-n ${n ? t.cls : ''}">${n}</span></button>`;
+    }).join('');
+
+    const rows = byTier(_ltTier).map(_ltRow).join('');
+    const worst = Math.max(...all.map(r => r.severity));
+    return head(`
+      ${_ltScopeNote(_ltData.ebayScope)}
+      <div class="rc-modes lt-modes">${tabs}</div>
+      ${_ltTierSaid(_ltTier, byTier(_ltTier).length, store)}
+      <div class="lt-rows">${rows}</div>
+      ${_ltDeniedHtml()}`,
+      `<span class="lh-count ${worst === 3 ? 'lh-count-bad' : worst === 2 ? 'lh-count-warn' : 'lh-count-ok'}">${total}</span>`);
+}
+
+// WHAT IS AND IS NOT IN THIS LIST, in one line. The queue is customer-facing
+// stock only — in stock, on the online store, and live on eBay (Ethan,
+// 2026-08-28: "this will help make sure everything customer facing is being
+// fixed") — and a reviewer who does not know that reads a short list as a clean
+// catalogue. The Categories queue below it already carries the same kind of line.
+//
+// ⚠️ THE EBAY HALF IS CONDITIONAL AND THE HONEST STATE IS THE UNCOMFORTABLE ONE.
+// It only applies while our eBay snapshot is fresh; the five sweeps that fill it
+// are paused, so today it does not apply at all. Saying "and live on eBay" then
+// would describe a filter that is not running. Saying nothing would be worse —
+// somebody would assume it is.
+function _ltScopeNote(sc) {
+    const base = 'In Stock And Live On The Online Store';
+    if (sc && sc.active) {
+        return `<div class="lt-scope">${base} And On eBay — Nothing Else Is Listed Here</div>`;
+    }
+    const age = sc && sc.hours != null
+        ? (sc.hours < 48 ? `${sc.hours} hours old`
+                         : `${Math.floor(sc.hours / 24)} days old`)
+        : 'missing';
+    return `<div class="lt-scope lt-scope-part">${base}. The eBay check is
+        <strong>not being applied</strong> — our eBay snapshot is ${age} because the live
+        sweeps are paused, so this list is not narrowed to eBay and nothing is being
+        hidden from it.</div>`;
+}
+
+// Plain English, and it says who fixes it. Each tier is a different KIND of
+// problem, so one blurb for all three would have to be vague enough to fit a
+// misdescribed listing and a missing keyword at once.
+function _ltTierSaid(tier, n, store) {
+    if (!n) return '';
+    const isAre = n === 1 ? 'listing is' : 'listings are';
+    if (tier === 3) {
+        return `<div class="lh-alarm">
+            <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>${n} ${isAre} describing the wrong thing to a buyer at ${store} — a mismatched
+            title is a misdescribed sale, not just a missed one.
+            <strong>Read both titles before deciding</strong>, then fix the one that is wrong.</span>
+          </div>`;
+    }
+    if (tier === 2) {
+        return `<div class="lt-said">${n} ${isAre} missing the words a buyer would search for, so they
+            are close to invisible however good the price is. <strong>The store fixes these</strong> —
+            approve the suggestion or type a better title.</div>`;
+    }
+    return `<div class="lt-said">${n} ${isAre} findable and could be more so. Nothing here is broken,
+        so this is the pile to work when the other two are empty.</div>`;
+}
+
+function ltSetTier(n) { _ltTier = n; ecRender(); }
+window.ltSetTier = ltSetTier;
+
+function _ltRow(r) {
+    const id = String(r.productId || '');
+    const numeric = _ecEsc(id.split('/').pop());
+    const shop = _ecEsc(r.shop || '');
+    const checking = _ltChecking.has(id);
+    const busy = _ltBusy.has(id) || checking;
+    const edited = _ltEdits.get(id);
+    // The box holds, in order of preference: what the reviewer typed, the
+    // suggestion, or the current title. A row with NO suggestion arrives with
+    // the current title in the box on purpose — it is the starting point for
+    // somebody who has to write one, and Approve stays refused until they do.
+    const boxVal = edited != null ? edited : (r.suggested || r.current || '');
+    const dirty = edited != null && edited !== (r.suggested || '');
+    const canApprove = !busy && !!boxVal.trim() && boxVal.trim() !== (r.current || '');
+    const len = boxVal.length;
+
+    return `<div class="lt-row lt-sev-${r.severity}">
+      <div class="lt-main">
+        <div class="lt-now">
+          <span class="lt-lab">Now</span>
+          <span class="lt-cur">${r.suggested
+            ? _ltGone(r.current, r.suggested) : _ecEsc(r.current || '')}</span>
+          <span class="lt-len">${(r.current || '').length}</span>
+        </div>
+        ${r.ebayTitle ? `<div class="lt-now lt-drift">
+          <span class="lt-lab">On eBay</span>
+          <span class="lt-cur">${_ecEsc(r.ebayTitle)}</span>
+        </div>` : ''}
+        <div class="lt-new">
+          <!-- Always "Suggested", even when there is nothing to suggest. The
+               three labels are a fixed column that the eye reads down (Now /
+               On eBay / Suggested); "Needs A Title" wrapped to two lines and
+               broke that alignment on exactly the rows a reviewer has to read
+               most carefully. What is different about those rows is said in
+               the VALUE, where there is room for a sentence. -->
+          <span class="lt-lab">Suggested</span>
+          ${r.suggested
+            ? `<span class="lt-sug">${_ltDiff(r.current, r.suggested)}</span>`
+            : `<span class="lt-nosug">No safe automatic fix — type one below.</span>`}
+        </div>
+        ${_ltTrimLine(r.findings)}
+        <div class="lt-edit">
+          <input type="text" maxlength="80" class="lt-input${dirty ? ' lt-dirty' : ''}"
+                 value="${_ecEsc(boxVal)}" data-pid="${_ecEsc(id)}"
+                 oninput="ltEdit(this)" ${busy ? 'disabled' : ''}
+                 aria-label="Title to save">
+          <span class="lt-count${len > 80 ? ' lt-over' : ''}">${len}/80</span>
+        </div>
+        <ul class="lt-why">${_ltWhy(r.findings)}</ul>
+      </div>
+      <div class="lt-side">
+        <div class="lt-meta">
+          <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+          <span class="lt-price">${_ecMoney(r.price)}</span>
+          ${_ltBasis(r)}
+        </div>
+        <div class="ec-pills rc-links">
+          ${numeric ? `<a class="ec-pill ec-pill-shopify" href="https://${shop}/admin/products/${numeric}"
+               target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
+          <!-- ⚠️ WHO LISTED IT, FROM SHOPIFY'S OWN TAGS — and it is NOT a blame
+               badge, whatever it gets used for. The same name appears beside
+               rows where the TOOL was wrong; the three denial notes are the
+               proof. It is here so a pattern is visible.
+               Absent when no tag matched a person: a leaver, a typo, or a
+               product listed before the convention. Silence beats a guess. -->
+          ${_ltListerPill(r)}
+        </div>
+        <div class="lt-acts">
+          <!-- ⚠️ A ROW WITH NO SUGGESTION SAYS "Save My Title" BEFORE IT IS
+               TYPED IN, NOT "Approve". There is nothing on that row to approve —
+               the button sat greyed out beside a line reading "No safe automatic
+               fix", carrying the name of an action that could never happen
+               there. Naming the action that CAN happen turns the greyed button
+               into an instruction: type one, and this saves it. -->
+          <button class="lt-ok" onclick="ltApprove('${_ecEsc(id)}')"
+                  ${canApprove ? '' : 'disabled'}>${checking ? 'Checking…' : busy ? 'Saving…' : ((dirty || !r.suggested) ? 'Save My Title' : 'Approve')}</button>
+          <button class="lt-no" onclick="ltDeny('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
+                  title="${_ecEsc(_ltDenyKind(r).hint)}">${_ltDenyKind(r).label}</button>
+        </div>
+        ${r.comps && r.comps.length ? `<details class="lt-comps">
+          <summary>${r.comps.length} Live eBay Listings</summary>
+          <ul>${r.comps.map(c => `<li>${_ecEsc(c.title)}</li>`).join('')}</ul>
+        </details>` : ''}
+      </div>
+    </div>`;
+}
+
+// HOW MUCH THE SUGGESTION IS WORTH TRUSTING, on the row. A suggestion built
+// from our own rules (a doubled phrase, a spec table that names the product) is
+// more trustworthy than one built from what other sellers happen to write, and a
+// reviewer deciding in two seconds needs to see which they are looking at.
+//
+// ⚠️ It says Active, never Sold. eBay's sold-data API (Marketplace Insights) is
+// a Limited Release we do not hold, so the market sample is live listings.
+// Labelling it "sold" would be the single most misleading word on the page.
+function _ltBasis(r) {
+    const map = {
+        rules: ['Our Rules', 'Found by reading the title and the Shopify spec table — no outside data.'],
+        gtin: ['Barcode Match', 'Live listings sharing this item\u2019s barcode, so the same product.'],
+        model: ['Model Match', 'Live listings naming the same model number.'],
+        category: ['Active Listings', 'Words most live listings in this eBay category use. Active listings, not sold — eBay does not give us sold data.'],
+    };
+    // ⚠️ NO BADGE FOR THE ORDINARY CASE. Almost every row is found by our own
+    // rules, so an "Our Rules" chip on almost every row said nothing — it was
+    // the default wearing a label. The badge exists to mark the rows that came
+    // from somewhere ELSE (a barcode match, a model match, what live listings
+    // say), and a badge that only appears when there is something to say is
+    // read; one that is always there is furniture.
+    if (!r.basis || r.basis === 'rules') return '';
+    const m = map[r.basis];
+    if (!m) return '';
+    return `<span class="lt-basis lt-basis-${_ecEsc(r.basis)}" title="${_ecEsc(m[1])}">${m[0]}</span>`;
+}
+
+function ltEdit(el) {
+    // Kept in the Map, not the DOM: ecRender replaces this subtree whenever any
+    // row changes state, and an edit read off the input at submit time would be
+    // gone. No re-render here — retyping every keystroke would move the caret.
+    _ltEdits.set(el.dataset.pid, el.value);
+    const box = el.parentElement && el.parentElement.querySelector('.lt-count');
+    if (box) {
+        box.textContent = `${el.value.length}/80`;
+        box.classList.toggle('lt-over', el.value.length > 80);
+    }
+    // The buttons' enabled state depends on the text, so it has to keep up
+    // without a full re-render.
+    const row = el.closest('.lt-row');
+    const ok = row && row.querySelector('.lt-ok');
+    if (ok) {
+        const cur = row.querySelector('.lt-cur');
+        const v = el.value.trim();
+        ok.disabled = !v || v === (cur ? cur.textContent : '');
+        ok.textContent = 'Save My Title';
+    }
+    el.classList.add('lt-dirty');
+}
+window.ltEdit = ltEdit;
+
+// ⚠️ ONE BUTTON, TWO MEANINGS, AND THE ROW DECIDES WHICH.
+// On a name or spec finding, denying says "the rule is wrong, this title is
+// fine" — feedback about us. On a DRIFT row it says nothing of the kind: that
+// row is not a claim the title is wrong, it is a claim Shopify and eBay
+// disagree, and the usual answer is "our title is right, the eBay copy is
+// stale" — the rule being RIGHT, with the fix living in Marketplace Connect
+// where this tool cannot reach.
+//
+// The old button asked "Why is this title fine as it is?" on both. On a drift
+// row that is the wrong question about the wrong system, and the only one-click
+// action available, so a reviewer had to answer it to clear a row they had read
+// correctly. Ethan hit exactly that on the 3DR drone, 2026-09-01.
+const _LT_EBAY_CODES = new Set(['title-drift', 'ebay-not-synced']);
+
+function _ltDenyKind(r) {
+    const ebay = (r.findings || []).some(f => _LT_EBAY_CODES.has(f.code));
+    return ebay
+        // ⚠️ THE LABEL SAYS WHAT THE REVIEWER IS ANSWERING, NOT WHAT eBAY IS
+        // DOING. "eBay Is Stale" read as a statement about a system this button
+        // cannot touch, next to a greyed-out Approve and a row that says there
+        // is no safe automatic fix — three things at once and no obvious move.
+        // Ethan, 2026-09-03: "change it to something more clear like ours is
+        // fine". The answer being recorded is unchanged (`ebay-stale`, kept out
+        // of the bad-rule tally); only the word on the button is now the
+        // reviewer's own verdict about OUR listing, which is the one thing they
+        // are actually in a position to give.
+        ? { as: 'ebay-stale', label: 'Ours Is Fine',
+            hint: 'Our Shopify title is right as it is — it is the eBay copy that needs correcting, and Marketplace Connect owns that. Clears the row without recording this as a bad rule.',
+            ask: 'Confirm our Shopify title here is the right one?\n\nThis clears the row and records that the EBAY listing is the copy that needs correcting. Nothing is changed on either listing.' }
+        : { as: 'not-a-problem', label: 'Deny',
+            hint: 'This title is fine as it is — the finding was wrong.',
+            ask: 'Why is this title fine as it is?' };
+}
+
+// THE QUESTIONS THIS TOOL ASKS, ASKED IN THE PRODUCT.
+//
+// Every decision here used to be a browser confirm() or prompt(): a grey OS box
+// headed "127.0.0.1:5501 says", the two titles as plain text, an empty field
+// under a line of small print. Ethan, 2026-09-03: "make those popups small
+// actual designed HTML popups that match the site. It will help people feel like
+// they can and want to answer those questions."
+//
+// That is the reason, and it is not decoration. This queue is worth exactly what
+// people are willing to answer, and a native dialog reads as an obstacle in
+// front of the page rather than a part of it — it looks like the browser
+// interrupting, its buttons say OK and Cancel whatever is being asked, and it
+// cannot show a word-level diff of the two titles at all.
+//
+// One dialog, three shapes (approve / dismiss / something went wrong), told
+// apart by the icon tile and the words. It returns a PROMISE so the callers keep
+// reading top to bottom exactly as they did around confirm():
+//
+//     const said = await _ltAsk({ ... });
+//     if (!said) return;              // cancelled, closed, or Escape
+//     ... said.note ...
+//
+// ⚠️ ONE AT A TIME. A second open would orphan the first promise, so opening
+// while one is up resolves the old one as a cancel first — nothing can be
+// answered by a box the person cannot see.
+let _ltAskEl = null;
+let _ltAskDone = null;
+
+const _LT_ASK_ICONS = {
+    // A pen: this writes.
+    ok: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+    // A crossed circle: this clears a row without changing anything.
+    warn: '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/>',
+    // The house alert shape, same as everywhere else something is half-done.
+    bad: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+};
+
+function _ltAskEnsure() {
+    if (_ltAskEl) return _ltAskEl;
+    const el = document.createElement('div');
+    el.id = 'ltAskOverlay';
+    el.className = 'lt-ask-ov';
+    // The overlay is a cancel, like every other modal on the site. The card
+    // swallows its own clicks so a stray click inside never closes the question.
+    el.addEventListener('click', (e) => { if (e.target === el) _ltAskClose(null); });
+    document.body.appendChild(el);
+    _ltAskEl = el;
+    return el;
+}
+
+function _ltAskClose(answer) {
+    const done = _ltAskDone;
+    _ltAskDone = null;
+    document.removeEventListener('keydown', _ltAskKey, true);
+    if (_ltAskEl) { _ltAskEl.classList.remove('open'); _ltAskEl.innerHTML = ''; }
+    if (done) done(answer);
+}
+
+// Answering with the keyboard, because the fastest way through a queue is not
+// the mouse: Enter is the primary button, Escape is cancel. Enter inside the
+// note field submits too — it is one line, and a newline in a 300-character
+// note buys nothing.
+// ⚠️ REGISTERED IN THE CAPTURE PHASE, and it stops the event. The page's own
+// Escape handler peels one layer at a time and ends at closeAllModals() — which
+// would take the whole Listing Health panel down behind a question that is still
+// waiting to be answered. Capture puts this box first in the queue, which is
+// where a modal awaiting an answer belongs.
+function _ltAskKey(e) {
+    if (!_ltAskDone) return;
+    if (e.key === 'Escape') {
+        e.preventDefault(); e.stopPropagation();
+        _ltAskClose(null);
+        return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+        const go = _ltAskEl && _ltAskEl.querySelector('.lt-ask-go');
+        if (go && !go.disabled) { e.preventDefault(); e.stopPropagation(); go.click(); }
+    }
+}
+
+function _ltAsk(o) {
+    if (_ltAskDone) _ltAskClose(null);
+    const el = _ltAskEnsure();
+    const kind = o.kind || 'ok';
+    const noteBox = o.note
+        ? `<div class="lt-ask-note">
+             <label for="ltAskNote">${_ecEsc(o.note.label || 'Note')}</label>
+             <input id="ltAskNote" class="lt-ask-input" type="text" maxlength="300"
+                    autocomplete="off" placeholder="${_ecEsc(o.note.placeholder || '')}">
+             ${o.note.hint ? `<span class="lt-ask-hint">${_ecEsc(o.note.hint)}</span>` : ''}
+           </div>`
+        : '';
+    el.innerHTML = `
+      <div class="lt-ask-card" role="dialog" aria-modal="true" aria-labelledby="ltAskTitle">
+        <div class="lt-ask-head">
+          <span class="lt-ask-ico ${kind === 'ok' ? '' : 'lta-' + kind}">
+            <svg viewBox="0 0 24 24">${_LT_ASK_ICONS[kind] || _LT_ASK_ICONS.ok}</svg>
+          </span>
+          <div class="lt-ask-titles">
+            <span class="lt-ask-eyebrow">${_ecEsc(o.eyebrow || '')}</span>
+            <span class="lt-ask-title" id="ltAskTitle">${_ecEsc(o.title || '')}</span>
+          </div>
+          <button type="button" class="lt-ask-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="lt-ask-body" id="ltAskBody">${o.body || ''}${noteBox}</div>
+        <div class="lt-ask-acts">
+          ${o.cancel === null ? '' : `<button type="button" class="lt-ask-cancel">${_ecEsc(o.cancel || 'Cancel')}</button>`}
+          <!-- ⚠️ THE PRIMARY IS COLOURED BY WHAT IT DOES, not by being primary.
+               Sage is reserved for the button that writes to a live listing;
+               a decision that only clears a row is amber, and an acknowledgement
+               is neutral. "Dismiss It" in the same green as "Change The Title"
+               tells a reviewer the two are the same kind of act, and they are
+               not. -->
+          <button type="button" class="lt-ask-go ${kind === 'ok' ? '' : 'lta-' + kind}"${o.busy ? ' disabled' : ''}>${_ecEsc(o.go || 'Confirm')}</button>
+        </div>
+      </div>`;
+    el.classList.add('open');
+    el.querySelector('.lt-ask-close').onclick = () => _ltAskClose(null);
+    const cancel = el.querySelector('.lt-ask-cancel');
+    if (cancel) cancel.onclick = () => _ltAskClose(null);
+    el.querySelector('.lt-ask-go').onclick = () => {
+        const box = el.querySelector('#ltAskNote');
+        _ltAskClose({ note: box ? box.value.trim() : '' });
+    };
+    // The field first when there is one — the question has already been read by
+    // then, and the answer is what we are waiting for.
+    const first = el.querySelector('#ltAskNote') || el.querySelector('.lt-ask-go');
+    if (first) setTimeout(() => first.focus(), 30);
+    document.addEventListener('keydown', _ltAskKey, true);
+    return new Promise(resolve => { _ltAskDone = resolve; });
+}
+
+// Filling in a question that was opened before its answer was known. The
+// approve asks Shopify what else the change touches while the box is already up,
+// so the reviewer is not left looking at a frozen button for a second.
+function _ltAskFill(bodyHtml, goLabel) {
+    if (!_ltAskDone || !_ltAskEl) return;
+    const body = _ltAskEl.querySelector('#ltAskBody');
+    if (body) body.innerHTML = bodyHtml;
+    const go = _ltAskEl.querySelector('.lt-ask-go');
+    if (go) { go.disabled = false; if (goLabel) go.textContent = goLabel; go.focus(); }
+}
+
+// Something went wrong, or something landed half-done. One button, and it is
+// never called for anything the person can act on inside the dialog.
+function _ltTell(title, say, kind) {
+    return _ltAsk({ kind: kind || 'bad', eyebrow: 'Listing Titles', title,
+                    body: `<p class="lt-ask-say">${_ecEsc(say)}</p>`,
+                    cancel: null, go: 'Got It' });
+}
+
+// The two titles in the row's own shape, so the box reads as the row it came
+// from rather than as a second opinion about it.
+function _ltAskPair(from, to) {
+    return `<div class="lt-ask-pair">
+      <div class="lt-now"><span class="lt-lab">Now</span>
+        <span class="lt-cur">${_ltGone(from, to)}</span></div>
+      <div class="lt-new"><span class="lt-lab">Saving</span>
+        <span class="lt-sug">${_ltDiff(from, to)}</span></div>
+    </div>`;
+}
+
+// The other fields this approve rewrites, and the ones it has to leave. Same
+// green/red marks as the title diff above them: it is the same kind of change,
+// so it should not need a second reading.
+function _ltAskEchoes(pre) {
+    const up = (pre && pre.alsoUpdated) || [];
+    const left = (pre && pre.stillSays) || [];
+    let html = '';
+    if (up.length) {
+        html += `<div class="lt-ask-sec">
+          <div class="lt-ask-sec-h">Also Updated, So The Listing Agrees With Itself</div>
+          <ul class="lt-ask-fields">${up.map(u => `<li>
+            <span class="lt-ask-f">${_ecEsc(u.field)}</span>
+            <span class="lt-cut">${_ecEsc(u.was)}</span>
+            <span class="lt-ask-arrow">&rarr;</span>
+            <span class="lt-add">${_ecEsc(u.now)}</span>
+            <span class="lt-ask-where">${_ecEsc((u.where || []).join(' · '))}</span>
+          </li>`).join('')}</ul>
+        </div>`;
+    }
+    if (left.length) {
+        html += `<div class="lt-ask-sec lta-left">
+          <div class="lt-ask-sec-h">Left As It Is — There Is No Replacement To Write</div>
+          <ul class="lt-ask-fields">${left.map(l => `<li>
+            <span class="lt-ask-f">${_ecEsc(l.field)}</span>
+            <span>still says &ldquo;${_ecEsc(l.value)}&rdquo;</span>
+            <span class="lt-ask-where">${_ecEsc((Array.isArray(l.where) ? l.where : [l.where || '']).join(' · '))}</span>
+          </li>`).join('')}</ul>
+        </div>`;
+    }
+    return html;
+}
+
+async function ltApprove(pid) {
+    const row = (_ltData?.queue || []).find(r => r.productId === pid);
+    if (!row) return;
+    const typed = _ltEdits.get(pid);
+    const title = (typed != null ? typed : (row.suggested || '')).trim();
+    if (!title) return;
+    // ⚠️ THIS WRITES A LIVE STOREFRONT TITLE, so it asks first and it shows what
+    // changes. A box that only says "are you sure" gets clicked through; one
+    // that draws the diff gets read.
+    //
+    // ⚠️ AND THE TITLE IS NOT THE ONLY FIELD IT WRITES. The same words are
+    // carried into the description's spec table and into every metafield that
+    // states them, so the question has to name those too. The preview runs the
+    // approve's own reading half against the LIVE listing a second before the
+    // write — the only way this box can promise what the write will do.
+    //
+    // The box opens FIRST and fills in when the answer lands: a second of dead
+    // button after a click reads as a broken screen, and the two titles — the
+    // part they came to check — are ready immediately either way.
+    const asking = _ltAsk({
+        kind: 'ok', eyebrow: 'Approve Title', title: 'Change This Listing’s Title?',
+        body: _ltAskPair(row.current, title)
+            + '<div class="lt-ask-wait"><span class="lt-ask-spin"></span>'
+            + 'Checking what else on this listing says the same thing…</div>',
+        busy: true, go: 'Checking…', cancel: 'Cancel',
+    });
+    _ltChecking.add(pid); ecRender();
+    const pre = await _ltPost({ action: 'preview', store: _ecStore, productId: pid, title });
+    _ltChecking.delete(pid); ecRender();
+    // ⚠️ A FAILED PREVIEW IS NOT A FAILED FIX. If it cannot be had, the question
+    // falls back to the titles alone rather than blocking a correction somebody
+    // came here to make.
+    _ltAskFill(_ltAskPair(row.current, title)
+        + (pre.ok && pre.body ? _ltAskEchoes(pre.body) : '')
+        + '<p class="lt-ask-say">This updates the Shopify product, so it changes'
+        + ' <b>the online store</b> and <b>eBay</b>.</p>', 'Change The Title');
+    const said = await asking;
+    if (!said) return;
+    _ltBusy.add(pid); ecRender();
+    const res = await _ltPost({ action: 'approve', store: _ecStore, productId: pid, title });
+    _ltBusy.delete(pid);
+    if (!res.ok) {
+        // The server's detail is written for a person (it explains a 409 as "the
+        // title changed in Shopify since the list was drawn"), so show it rather
+        // than a status code.
+        await _ltTell('That Title Was Not Saved',
+            res.body?.detail || res.body?.error || 'Could not save that title.');
+        ecRender();
+        return;
+    }
+    _ltEdits.delete(pid);
+    // The title landed but the fields that quote it did not. Said out loud, and
+    // only in this case: the reviewer approved a set of changes and got some of
+    // them, so the listing is now half-corrected and a person has to finish it.
+    if (res.body?.metafieldsLeft) {
+        // ⚠️ NOT "approve it again". The row does NOT come back: the title has
+        // changed, so the queue no longer has anything to offer on it and the
+        // approve refuses a title the product already has. The only routes back
+        // are Shopify by hand or the respec repair — say the true one.
+        await _ltTell('The Title Changed, The Rest Of The Listing Did Not',
+            `Shopify refused ${res.body.metafieldsLeft} field`
+            + `${res.body.metafieldsLeft === 1 ? '' : 's'} that quote this title, so the`
+            + ` listing is half-corrected. Open the product in Shopify and fix those`
+            + ` fields by hand, or send this SKU to Claude to repair.`);
+    }
+    // Reload rather than splicing the row out: approving can change the counts
+    // on all three tabs, and a store's queue is small enough that one read is
+    // cheaper than keeping three numbers in step by hand.
+    try { _ltData = await _ltFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`); }
+    catch (e) { _ltErr = e.message || String(e); }
+    ecRender();
+}
+window.ltApprove = ltApprove;
+
+async function ltDeny(pid) {
+    const row = (_ltData?.queue || []).find(r => r.productId === pid);
+    if (!row) return;
+    // A reason, because a denial is information: it is the only signal that a
+    // rule is wrong, and "denied" with no note teaches nobody anything. Blank is
+    // allowed — refusing to record the denial without one would just mean fewer
+    // denials and a queue nobody trusts.
+    const kind = _ltDenyKind(row);
+    // ⚠️ ONLY ONE OF THE TWO ANSWERS HAS ANYTHING TO LEARN FROM.
+    // A Deny says our rule was wrong, and the note is the only place that can
+    // ever say HOW — it is read in the Confirmed Correct drawer, and it is what turns
+    // four dismissals of one code into a rule somebody goes and fixes. "Ours Is
+    // Fine" says the opposite: the rule was RIGHT and the stale copy is on eBay,
+    // which is not feedback about anything here. Asking for a note there put an
+    // empty box in front of every dismissal, under a line ("it is how we find
+    // out a rule is wrong") that was not even true of the answer being given.
+    // Ethan, 2026-09-03: "if it does nothing, then we should get rid of that
+    // popup." So that branch is now one confirm, and nothing else.
+    const said = kind.as === 'ebay-stale'
+        ? await _ltAsk({
+            kind: 'warn', eyebrow: 'Our Title Is Right',
+            title: 'Confirm Our Shopify Title Is The Right One?',
+            body: `<div class="lt-ask-pair"><div class="lt-now">
+                     <span class="lt-lab">Ours</span>
+                     <span class="lt-cur">${_ecEsc(row.current || '')}</span></div>
+                   ${row.ebayTitle ? `<div class="lt-now lt-drift">
+                     <span class="lt-lab">On eBay</span>
+                     <span class="lt-cur">${_ecEsc(row.ebayTitle)}</span></div>` : ''}
+                   </div>
+                   <p class="lt-ask-say">This clears the row and records that the
+                    <b>eBay listing</b> is the copy that needs correcting.
+                    Nothing is changed on either listing, and it is not counted
+                    against the rule that raised it.</p>`,
+            go: 'Ours Is Fine', cancel: 'Cancel' })
+        : await _ltAsk({
+            kind: 'warn', eyebrow: 'Dismiss This Finding',
+            title: 'Is This Title Fine As It Is?',
+            body: `<div class="lt-ask-pair"><div class="lt-now">
+                     <span class="lt-lab">Title</span>
+                     <span class="lt-cur">${_ecEsc(row.current || '')}</span></div></div>`,
+            note: { label: 'Why Is It Fine? (Optional)',
+                    placeholder: 'e.g. the model name really does repeat on the box',
+                    hint: 'Shown in Confirmed Correct below, and it is how we find out a rule'
+                        + ' is wrong. Four dismissals of one rule is a rule to go and fix.' },
+            go: 'Dismiss It', cancel: 'Cancel' });
+    if (!said) return;
+    const reason = said.note || '';
+    _ltBusy.add(pid); ecRender();
+    const res = await _ltPost({ action: 'deny', store: _ecStore, productId: pid,
+                                reason, as: kind.as });
+    _ltBusy.delete(pid);
+    if (!res.ok) {
+        await _ltTell('That Dismissal Was Not Recorded',
+            res.body?.detail || res.body?.error || 'Could not record that.');
+        ecRender();
+        return;
+    }
+    _ltEdits.delete(pid);
+    try { _ltData = await _ltFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`); }
+    catch (e) { _ltErr = e.message || String(e); }
+    ecRender();
+}
+// Taking a dismissal back. Same refetch as every other action, because the row
+// has to reappear in the queue above for the undo to have visibly worked.
+async function ltReopen(pid) {
+    _ltBusy.add(pid); ecRender();
+    const res = await _ltPost({ action: 'reopen', store: _ecStore, productId: pid });
+    _ltBusy.delete(pid);
+    if (!res.ok) {
+        await _ltTell('That Row Was Not Put Back',
+            res.body?.detail || res.body?.error || 'Could not put that back.');
+        ecRender();
+        return;
+    }
+    try { _ltData = await _ltFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`); }
+    catch (e) { _ltErr = e.message || String(e); }
+    ecRender();
+}
+window.ltReopen = ltReopen;
+
+window.ltDeny = ltDeny;
 
 // --- Categories: filing the `other` pile ------------------------------------
 //
@@ -45626,6 +47867,7 @@ window._dbgRecat = () => ({
 // and new stock breaks through it (see [[feed-suppression-keys]]).
 const RECAT_NAG_MS = 30 * 60 * 1000;
 let _rcNagStarted = false;
+let _ltNagStarted = false;
 
 function _rcHideNag() {
     const b = document.getElementById('recatAlertBubble');
@@ -45652,6 +47894,157 @@ function _rcNagBubbleEl() {
     return b;
 }
 
+// --- Somebody dismissed a suggestion and said why ---------------------------
+//
+// A denial with a note is the ONLY evidence a rule is wrong, and it was landing
+// in a drawer three clicks down that nobody opened on a schedule. Three real
+// notes sat there for a day before anyone read them, and two of the three were
+// the same fixable bug.
+//
+// ⚠️ THE DM ONLY. Managers and ASMs are the ones WRITING these notes; telling a
+// manager that a note exists tells them what they just did. The person on the
+// hook for a rule is the DM — the same rule the recycle review card follows,
+// and the same reason the CEO is left off it: authority inside the tool without
+// the nagging.
+//
+// ⚠️ STATE-BASED, WITH THE STATE ON THE SERVER. It clears when the notes are
+// carried into an ask (feedback_triaged_at, migration 0077), not when somebody
+// looks at the page. A localStorage high-water mark is what made the recycle
+// reply card clear on one machine and stay up on every other.
+//
+// ⚠️ The bubble id has to be in the RETIRED FLOATING ALERT TOASTS list in
+// styles.css or it ships as a visible floating toast. It is there.
+function _ltHideNag() {
+    const b = document.getElementById('titleNoteAlertBubble');
+    if (b) b.style.display = 'none';
+}
+window._ltHideNag = _ltHideNag;
+
+function _ltNagBubbleEl() {
+    let b = document.getElementById('titleNoteAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'titleNoteAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #4338ca, #312e81); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(49, 46, 129, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span style="font-size:16px; flex-shrink:0; margin-top:2px;">📝</span>
+        <span id="titleNoteAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="_ltHideNag()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+// Its OWN fetch, unlike the photo alarm — that one rides the Categories payload
+// because both numbers come from the recat function, and this number comes from
+// listing-titles. ?view=counts is a count with no Shopify read in it; the
+// gathering half is fetched only when the button is pressed.
+async function checkTitleNoteReminders() {
+    if (!document.getElementById('samFeed')) return;
+    if (typeof _jumpFeatureVisible === 'function' && !_jumpFeatureVisible('ec-view-titles')) {
+        _ltHideNag(); return;
+    }
+    if (typeof _vrRole === 'function' && _vrRole() !== 'district manager') { _ltHideNag(); return; }
+    if (!sessionStorage.getItem('speeksUserPin')) { _ltHideNag(); return; }
+    if (!_ltNagStarted) { _ltNagStarted = true; setInterval(checkTitleNoteReminders, 30 * 60 * 1000); }
+    let d = null;
+    try { d = await _ltFetch('?view=counts'); } catch (_) { return; }  // a 401 is a role answer, not an error
+    const n = Number(d && d.noted || 0);
+    if (!n) {
+        _ltHideNag();
+        // The feed only repaints when something asks it to, so a card that has
+        // just been answered has to be cleared here or it sits in the DOM.
+        if (typeof renderActionFeed === 'function') renderActionFeed();
+        return;
+    }
+    const b = _ltNagBubbleEl();
+    if (!b) return;
+    const t = document.getElementById('titleNoteAlertBubbleText');
+    if (t) {
+        // Says what the note IS FOR, not that a row was dismissed. "3 titles
+        // dismissed" reads as work finished; the point is that somebody has
+        // told us a rule is wrong and nothing has been done about it yet.
+        // ⚠️ NO DIRECTIONS ANY MORE. This used to end "Open SPEEKS Connect →
+        // Listing Health → Confirmed Correct and press…", which was a route the
+        // reader had to follow by hand. The card opens the tool now, so it says
+        // what is waiting and stops.
+        t.dataset.summary = n + ' dismissed title suggestion' + (n === 1 ? '' : 's')
+            + ' came with a note saying why the rule was wrong.'
+            + ' Open it to read them and copy the ask for Claude.';
+        // The count IS the identity, same as the Categories and photo nags:
+        // answer two of three and the third is new information worth surfacing.
+        t.dataset.sig = 'titlenotes:' + n;
+        t.textContent = t.dataset.summary;
+    }
+    b.style.display = 'flex';
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+window.checkTitleNoteReminders = checkTitleNoteReminders;
+
+// --- Listings live on the online store with no picture ----------------------
+//
+// Rides the SAME ?view=counts fetch as the Categories nag rather than adding a
+// second request: this runs on a 30-minute timer on every dashboard load, both
+// numbers come back in one payload, and two pollers for one endpoint is just a
+// bigger bill for the same answer.
+//
+// ⚠️ The bubble id has to be in the RETIRED FLOATING ALERT TOASTS list in
+// styles.css or it ships as a visible floating toast. It is there.
+function _lhHideNag() {
+    const b = document.getElementById('photoAlertBubble');
+    if (b) b.style.display = 'none';
+}
+window._lhHideNag = _lhHideNag;
+
+function _lhNagBubbleEl() {
+    let b = document.getElementById('photoAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'photoAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #b91c1c, #7f1d1d); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(127, 29, 29, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span style="font-size:16px; flex-shrink:0; margin-top:2px;">📷</span>
+        <span id="photoAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="_lhHideNag()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+// Called from inside checkCategoryQueueReminders with that function's payload,
+// BEFORE its own early-returns — the two queues empty independently, and a store
+// with a clean category queue must still hear about a photo-less listing.
+function _lhUpdateNag(d, stores) {
+    const n = stores.reduce((t, s) => t + (d.photos?.[s] || 0), 0);
+    if (!n) { _lhHideNag(); return; }
+    const b = _lhNagBubbleEl();
+    if (!b) return;
+    const t = document.getElementById('photoAlertBubbleText');
+    if (t) {
+        const where = stores.length > 1 ? stores.join(' & ') : (stores[0] || 'Your store');
+        // Says what a shopper sees, not what the table contains. "1 listing with
+        // no image_count" is a database sentence; an empty picture box is the
+        // thing that costs the sale, and it tells the reader why to care.
+        // "BAL & MPL has" is wrong; the verb follows the SUBJECT (the stores),
+        // not the count. A two-store MSM reads this line every day.
+        t.dataset.summary = where + (stores.length > 1 ? ' have ' : ' has ')
+            + n + ' listing' + (n === 1 ? '' : 's')
+            + ' live on the online store with no pictures — a shopper sees an empty box, so '
+            + (n === 1 ? 'it will' : 'they will') + ' not sell. Add a photo in Shopify.';
+        // The count IS the identity, same as the Categories nag: photograph one
+        // of three and the remaining two are new information worth surfacing
+        // again; photograph them all and the card leaves on its own.
+        t.dataset.sig = 'photos:' + n;
+        t.dataset.stores = stores.join(',');
+        t.textContent = t.dataset.summary;
+    }
+    b.style.display = 'flex';
+}
+
 async function checkCategoryQueueReminders() {
     // THE DECK IS THE ONLY PLACE THIS IS EVER SEEN. The bubble is an invisible
     // state-carrier for _samGatherReminders, and the feed lives on the dashboard
@@ -45660,25 +48053,41 @@ async function checkCategoryQueueReminders() {
     // panel is closed to a 401 in their console on every page.
     if (!document.getElementById('samFeed')) return;
     // The same switch as the button: no tool, no nag about the tool.
-    if (typeof _jumpFeatureVisible === 'function' && !_jumpFeatureVisible('ec-view-categories')) {
-        _rcHideNag(); return;
+    // EITHER half is reason enough to poll — the two nags have separate switches
+    // now. Which cards then appear is decided by the payload: the server OMITS
+    // the counts for a half you do not hold, so the `|| 0` below reads as
+    // "nothing to do" and that nag hides itself. No second gate needed here.
+    if (typeof _jumpFeatureVisible === 'function'
+        && !_jumpFeatureVisible('ec-view-categories') && !_jumpFeatureVisible('ec-view-photos')
+        && !_jumpFeatureVisible('ec-view-titles')) {
+        _rcHideNag(); _lhHideNag(); return;
     }
     const pin = sessionStorage.getItem('speeksUserPin') || '';
-    if (!pin) { _rcHideNag(); return; }
+    if (!pin) { _rcHideNag(); _lhHideNag(); return; }
     if (!_rcNagStarted) { _rcNagStarted = true; setInterval(checkCategoryQueueReminders, RECAT_NAG_MS); }
     // ?view=counts, not ?view=review: the review payload carries a whole store
     // queue with it, and this runs on a timer on every page.
     let d = null;
     try { d = await _rcFetch('?view=counts'); } catch (_) { return; }  // a 401 is a role answer, not an error to show
-    if (!d || d.scope?.corp) { _rcHideNag(); return; }
+    if (!d || d.scope?.corp) { _rcHideNag(); _lhHideNag(); return; }
     const stores = d.scope?.stores || [];
+    // Before the category early-return below, so an empty category queue cannot
+    // swallow a photo alarm on the same store.
+    _lhUpdateNag(d, stores);
     const other = stores.reduce((n, s) => n + (d.other?.[s] || 0), 0);
     const mis = stores.reduce((n, s) => n + (d.misfiled?.[s] || 0), 0);
     // The No Suggestion pile counts here too, and it is the half that had NO
     // screen at all until now. Leaving it out of the nag would be the same bug
     // one level up: work that exists and nothing that says so.
     const unm = stores.reduce((n, s) => n + (d.unmatched?.[s] || 0), 0);
-    if (!other && !mis && !unm) { _rcHideNag(); return; }
+    // Categories clean. The photo card may still have just appeared, and the
+    // feed only repaints when something asks it to — so this path has to render
+    // before it leaves, or the alarm sits in the DOM unseen until the next tick.
+    if (!other && !mis && !unm) {
+        _rcHideNag();
+        if (typeof renderActionFeed === 'function') renderActionFeed();
+        return;
+    }
     const b = _rcNagBubbleEl();
     if (!b) return;
     const t = document.getElementById('recatAlertBubbleText');
@@ -47032,7 +49441,15 @@ function _ddEnhance(sel) {
 
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'dd-btn ' + sel.className;
+    // LAYOUT CLASSES ONLY. The face needs .kpi-select / .form-input and friends
+    // to inherit its width (see the note above), but it must NOT inherit the
+    // ROLE-GATING ones: applyRoleBasedUI matches anything carrying
+    // .dynamic-module-*, so the face was being found by the sweep and given
+    // `display: block !important` — over a control that is `display: flex` and
+    // relies on space-between to put its chevron on the right. Gating now lives
+    // on the host (_ddMirrorGate), which is the element that should carry it.
+    btn.className = 'dd-btn ' + sel.className.split(/\s+/)
+        .filter(c => c && !/^(dynamic-module|role-|store-)/.test(c)).join(' ');
     btn.setAttribute('aria-haspopup', 'listbox');
     btn.setAttribute('aria-expanded', 'false');
     if (sel.id) btn.setAttribute('aria-labelledby', sel.id + '-ddlab');
@@ -47058,6 +49475,16 @@ function _ddEnhance(sel) {
     host.appendChild(sel);
     host.appendChild(btn);
     host.appendChild(list);
+
+    // ⚠️ THE OTHER HALF OF THE ORDERING PROBLEM. _ddScan runs off a
+    // MutationObserver, so a select can be wrapped LONG AFTER applyRoleBasedUI
+    // decided it should not be on screen — and the sweep cannot mirror onto a
+    // host that did not exist when it ran. A face born into a hidden select is
+    // born hidden; between this and _ddMirrorGate, neither order can leak a
+    // control the user is not allowed to see.
+    if (sel.style.getPropertyValue('display') === 'none') {
+        host.style.setProperty('display', 'none', 'important');
+    }
 
     // CARRY OVER A WIDTH THE PAGE SET ON THE SELECT ITSELF. The face inherits the
     // select's CLASSES, which covers .form-input and friends — but a good deal of
