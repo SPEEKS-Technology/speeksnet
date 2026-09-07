@@ -72,7 +72,7 @@ Deno.serve(async (req: Request) => {
   if (req.method === "GET") {
     const [cats, shots] = await Promise.all([
       supabase.from("pg_categories")
-        .select("id, slug, name, sort_order, updated_at, updated_by")
+        .select("id, slug, name, group_name, sort_order, updated_at, updated_by")
         .eq("active", true).order("sort_order").order("id"),
       supabase.from("pg_shots")
         .select("id, category_id, label, cond_label, repeatable, note, image_path, sort_order")
@@ -97,6 +97,10 @@ Deno.serve(async (req: Request) => {
       success: true,
       categories: (cats.data || []).map((c) => ({
         id: c.id, slug: c.slug, name: c.name,
+        // null = ungrouped, which the rail draws at the top level rather than
+        // under an "Other" heading it never asked to be in. A group exists
+        // because a category names it — see migration 0081.
+        group_name: c.group_name,
         updatedAt: c.updated_at, updatedBy: c.updated_by,
         shots: byCat[c.id] || [],
       })),
@@ -123,10 +127,16 @@ Deno.serve(async (req: Request) => {
     if (body.action === "saveCategory") {
       const name = String(body.name || "").trim();
       if (!name) return json({ success: false, error: "A category needs a name" }, 400);
+      // Absent means "leave the group alone"; a blank string means "ungroup it",
+      // which is a real thing to ask for and must not read as "no opinion".
+      // Stored NULL rather than "" so there is one way to be ungrouped.
+      const hasGroup = "group" in body;
+      const group = hasGroup ? (String(body.group ?? "").trim() || null) : undefined;
 
       if (body.id) {
         const { error } = await supabase.from("pg_categories")
-          .update({ name, ...stamp }).eq("id", body.id);
+          .update({ name, ...(hasGroup ? { group_name: group } : {}), ...stamp })
+          .eq("id", body.id);
         if (error) return json({ success: false, error: error.message }, 500);
         return await ok();
       }
@@ -137,7 +147,8 @@ Deno.serve(async (req: Request) => {
         .select("sort_order").order("sort_order", { ascending: false }).limit(1);
       const { data, error } = await supabase.from("pg_categories").insert({
         slug: `${slugify(name) || "category"}-${Date.now().toString(36)}`,
-        name, sort_order: (last?.[0]?.sort_order ?? 0) + STEP, ...stamp,
+        name, group_name: group ?? null,
+        sort_order: (last?.[0]?.sort_order ?? 0) + STEP, ...stamp,
       }).select("id, slug").single();
       if (error) return json({ success: false, error: error.message }, 500);
       await broadcastChange("pictureguide");

@@ -21370,7 +21370,35 @@ select.dd-native {
 .pg-cat:hover { background: #f1f5f9; color: var(--pg-ink); }
 .pg-cat.on { background: var(--pg-ink); color: #fff; }
 .pg-cat-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pg-cat-n { margin-left: auto; font-size: 10.5px; font-weight: 800; opacity: .55; flex-shrink: 0; }
+
+/* ---- groups: the rail's one level of nesting ------------------------------ *
+   With 10-15 sheets the differences that matter (Apple vs Android) sit at the
+   END of near-identical labels, which is the worst place to scan for them. A
+   heading pulls that difference up to where the eye already is. */
+.pg-grp { display: flex; flex-direction: column; }
+.pg-grp-hd {
+    display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+    border: none; background: none; font: inherit; font-size: 11px; font-weight: 850;
+    text-transform: uppercase; letter-spacing: .05em;
+    color: var(--pg-muted); cursor: pointer; padding: 9px 10px 7px; border-radius: 9px;
+}
+.pg-grp-hd:hover { background: #f1f5f9; color: var(--pg-ink); }
+.pg-grp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* How many SHEETS are behind the heading, not how many photos are on them. */
+.pg-grp-n {
+    margin-left: auto; flex-shrink: 0; min-width: 18px; text-align: center;
+    font-size: 10px; font-weight: 800; letter-spacing: 0;
+    color: var(--pg-muted); background: #eef2f7; border-radius: 99px; padding: 1px 6px;
+}
+.pg-grp-chev { display: inline-flex; flex-shrink: 0; transition: transform .16s ease; }
+.pg-grp-chev svg { width: 12px; height: 12px; }
+.pg-grp.open > .pg-grp-hd { color: var(--pg-ink); }
+.pg-grp.open > .pg-grp-hd .pg-grp-chev { transform: rotate(90deg); }
+/* Collapsed is display:none rather than height:0 — a rail that animates open
+   under someone reaching for a sheet is a moving target, and there is nothing
+   here worth a transition. */
+.pg-grp-body { display: none; padding-left: 9px; }
+.pg-grp.open > .pg-grp-body { display: flex; flex-direction: column; gap: 2px; }
 .pg-rail-foot { border-top: 1px solid #eef2f7; margin: 10px 0 0; padding: 10px 0 0; }
 .pg-addcat {
     display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%;

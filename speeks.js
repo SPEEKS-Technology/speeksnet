@@ -7837,9 +7837,6 @@ function pgRender() {
     if (!_pgTracked) { _pgTracked = true; trackUsage('open', 'pg:sheet', _usageLabel('pg:sheet')); }
 
     _pgSyncHead();
-    const shots = _pgShots();
-    const always = shots.filter(s => !s.cond).length;
-    const optional = shots.length - always;
 
     body.innerHTML = `
       <div class="pg-shell">
@@ -7848,10 +7845,8 @@ function pgRender() {
           <div class="pg-legend">
             <span class="pg-lg"><span class="pg-sw pg-sw-req"></span> Take on every item</span>
             <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> Only if it applies to yours</span>
-            <span class="pg-count">Work left to right. <b>${always}</b> on every item${
-                optional ? `, plus <b>${optional}</b> that depend on the unit` : ''}.</span>
           </div>
-          <div class="pg-board">${shots.map(_pgCardHtml).join('')}</div>
+          <div class="pg-board">${_pgShots().map(_pgCardHtml).join('')}</div>
         </div>
       </div>`;
 }
@@ -7875,8 +7870,55 @@ function _pgSyncHead() {
     }
 }
 
+// The rail in reading order: a run of GROUPS, with any ungrouped category
+// standing on its own between them.
+//
+// A section's position is the sort_order of its first category, so the DM keeps
+// dragging categories and the groups fall out of that — there is no separate
+// group order to maintain and no way for the two to disagree. See migration 0081.
+function _pgSections() {
+    const out = [];
+    const byName = {};
+    _pgCats().forEach(c => {
+        const g = (c.group_name || '').trim();
+        if (!g) { out.push({ group: null, cats: [c] }); return; }
+        if (!byName[g]) { byName[g] = { group: g, cats: [] }; out.push(byName[g]); }
+        byName[g].cats.push(c);
+    });
+    return out;
+}
+
+// Which group is open. One at a time, and the one holding the sheet on screen
+// opens itself — arriving on Apple Watches with every group shut would hide the
+// only thing that tells you where you are.
+let _pgOpenGroup = null;
+
 function _pgRailHtml(admin) {
     const activeId = admin ? _pgAdmin.catId : _pgState.catId;
+    const catBtn = c => `
+        <button type="button" class="pg-cat${c.id === activeId ? ' on' : ''}" data-name="${_pgEsc(c.name.toLowerCase())}"
+                onclick="${admin ? `pgAdminPick(${c.id})` : `pgPick(${c.id})`}">
+          <span class="pg-cat-name">${_pgEsc(c.name)}</span>
+        </button>`;
+
+    const body = _pgSections().map(sec => {
+        if (!sec.group) return catBtn(sec.cats[0]);
+        // The count is how many SHEETS are in the group, not how many photos are
+        // on them (user, 2026-09-07). A photo count answered a question nobody
+        // was asking; this one says how much is behind the heading.
+        const holdsActive = sec.cats.some(c => c.id === activeId);
+        const open = _pgOpenGroup === null ? holdsActive : _pgOpenGroup === sec.group;
+        return `
+        <section class="pg-grp${open ? ' open' : ''}" data-group="${_pgEsc(sec.group.toLowerCase())}">
+          <button type="button" class="pg-grp-hd" onclick="pgToggleGroup(this)" aria-expanded="${open}">
+            <span class="pg-grp-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></span>
+            <span class="pg-grp-name">${_pgEsc(sec.group)}</span>
+            <span class="pg-grp-n">${sec.cats.length}</span>
+          </button>
+          <div class="pg-grp-body">${sec.cats.map(catBtn).join('')}</div>
+        </section>`;
+    }).join('');
+
     return `
       <aside class="pg-rail">
         <h5 class="pg-rail-hd">Categories</h5>
@@ -7884,26 +7926,57 @@ function _pgRailHtml(admin) {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
           <input type="text" id="pg-search-input" placeholder="Search&hellip;" oninput="_pgFilterRail(this.value)">
         </label>
-        <div class="pg-catlist" id="pg-catlist">
-          ${_pgCats().map(c => `
-            <button type="button" class="pg-cat${c.id === activeId ? ' on' : ''}" data-name="${_pgEsc(c.name.toLowerCase())}"
-                    onclick="${admin ? `pgAdminPick(${c.id})` : `pgPick(${c.id})`}">
-              <span class="pg-cat-name">${_pgEsc(c.name)}</span>
-              <span class="pg-cat-n">${c.shots.length || '&mdash;'}</span>
-            </button>`).join('')}
-        </div>
+        <div class="pg-catlist" id="pg-catlist">${body}</div>
         ${admin ? `<div class="pg-rail-foot">
             <button type="button" class="pg-addcat" onclick="pgAddCategory()">&#43;&nbsp; New category</button>
           </div>` : ''}
       </aside>`;
 }
 
+// Toggled by class rather than by re-render, for the same reason the search
+// filters in place: a re-render rebuilds the search input and throws away
+// whatever was typed in it.
+function pgToggleGroup(btn) {
+    const sec = btn.closest('.pg-grp');
+    if (!sec) return;
+    const open = !sec.classList.contains('open');
+    document.querySelectorAll('#pg-catlist .pg-grp').forEach(s => {
+        s.classList.remove('open');
+        s.querySelector('.pg-grp-hd')?.setAttribute('aria-expanded', 'false');
+    });
+    if (open) { sec.classList.add('open'); btn.setAttribute('aria-expanded', 'true'); }
+    // The heading's own text, because data-group is lowercased for matching and
+    // _pgRailHtml compares against the real name. '' is "everything shut", which
+    // is different from null — null means nobody has chosen yet, so the group
+    // holding the open sheet decides.
+    _pgOpenGroup = open ? (sec.querySelector('.pg-grp-name')?.textContent || '') : '';
+}
+
 // Filtering in place rather than through a re-render: re-rendering the rail
 // rebuilds the input and the caret jumps to the end after every keystroke.
+//
+// A search matches a CATEGORY name or its group's, and any group holding a match
+// is forced open — typing "apple watches" has to land you on Apple Watches, not
+// on a collapsed heading that happens to contain it. Groups with no match are
+// hidden outright rather than left as empty headings.
 function _pgFilterRail(v) {
     const f = String(v || '').toLowerCase().trim();
     document.querySelectorAll('#pg-catlist .pg-cat').forEach(b => {
         b.style.display = (!f || (b.dataset.name || '').includes(f)) ? '' : 'none';
+    });
+    document.querySelectorAll('#pg-catlist .pg-grp').forEach(sec => {
+        if (!f) {
+            sec.style.display = '';
+            sec.classList.toggle('open', sec.dataset.group === (_pgOpenGroup || '').toLowerCase());
+            return;
+        }
+        const groupHit = (sec.dataset.group || '').includes(f);
+        const hits = [...sec.querySelectorAll('.pg-cat')].filter(b => b.style.display !== 'none');
+        // A group whose own NAME matches shows everything under it: someone
+        // typing "watches" wants the watch sheets, not an empty Smart Watches.
+        if (groupHit) sec.querySelectorAll('.pg-cat').forEach(b => { b.style.display = ''; });
+        sec.style.display = (groupHit || hits.length) ? '' : 'none';
+        sec.classList.toggle('open', groupHit || hits.length > 0);
     });
 }
 
@@ -7987,6 +8060,7 @@ function _pgRenderAdmin(body) {
                 <span>${cat.shots.length} shot${cat.shots.length === 1 ? '' : 's'}</span>
               </div>
               <button type="button" class="pg-ebtn" onclick="pgRenameCategory()">Rename</button>
+              <button type="button" class="pg-ebtn" onclick="pgSetCategoryGroup()">Group&hellip;</button>
               <button type="button" class="pg-ebtn pg-ebtn-del" onclick="pgDeleteCategory()">Remove category</button>
             </div>
             <p class="pg-ehint">Order here is the order on the listing. Conditional shots stay in place
@@ -8149,13 +8223,47 @@ async function pgMoveShot(id, dir) {
     if (!await _pgPost({ action: 'reorderShots', ids })) await _pgReload();
 }
 
+// Every group name currently in use, for the prompts to offer. A group exists
+// because a category names it (see migration 0081), so this IS the list.
+function _pgGroupNames() {
+    const seen = [];
+    _pgCats().forEach(c => {
+        const g = (c.group_name || '').trim();
+        if (g && !seen.includes(g)) seen.push(g);
+    });
+    return seen;
+}
+const _pgGroupHint = () => {
+    const g = _pgGroupNames();
+    return g.length ? `\n\nGroups in use: ${g.join(', ')}` : '';
+};
+
 async function pgAddCategory() {
     const name = prompt('Name of the new category?\n\ne.g. Graphics Cards');
     if (name === null || !name.trim()) return;
-    const out = await _pgPost({ action: 'saveCategory', name: name.trim() });
+    // Asked at create time because a category with no group sits on its own at
+    // the top level, which is fine but is rarely what someone means.
+    const group = prompt(`Which group does "${name.trim()}" belong in?`
+        + `\n\nLeave blank to leave it ungrouped.${_pgGroupHint()}`, '');
+    if (group === null) return;
+    const out = await _pgPost({ action: 'saveCategory', name: name.trim(), group: group.trim() });
     if (!out) return;
     await _pgReload();
     if (out.id) { _pgAdmin.catId = out.id; pgRender(); }
+}
+
+// Moving a sheet between groups, and the only way to rename a group: rename it
+// on each category that names it. See migration 0081 for why that cost was
+// accepted over a groups table.
+async function pgSetCategoryGroup() {
+    const cat = _pgAdminCat();
+    if (!cat) return;
+    const group = prompt(`Which group does "${cat.name}" belong in?`
+        + `\n\nLeave blank to leave it ungrouped.${_pgGroupHint()}`, cat.group_name || '');
+    if (group === null) return;
+    if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: cat.name, group: group.trim() })) return;
+    _pgOpenGroup = null;
+    await _pgReload();
 }
 
 async function pgRenameCategory() {
@@ -8163,7 +8271,7 @@ async function pgRenameCategory() {
     if (!cat) return;
     const name = prompt('Rename this category:', cat.name);
     if (name === null || !name.trim() || name.trim() === cat.name) return;
-    if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: name.trim() })) return;
+    if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: name.trim(), group: cat.group_name || '' })) return;
     await _pgReload();
 }
 
