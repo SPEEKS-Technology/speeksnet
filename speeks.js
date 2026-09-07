@@ -29257,6 +29257,20 @@ async function _refreshScCatalog() {
     renderAuditEntry({ preserve: _auditHasWork() });
 }
 
+// Which row is open for editing, by database id — one at a time, and never both
+// lists at once. Kept at module scope rather than in the DOM because this panel
+// re-renders wholesale on every change (see _refreshScCatalog), so a value held
+// inside it would not survive the render that has to draw the open row.
+//
+// Renaming exists so a wording change does not cost an item its identity
+// (user, 2026-09-07): "I want to change it from 2 social posts to 1, but I don't
+// want to have to delete it and create a new line just to do that." Delete-and-
+// re-add would mint a fresh item_key, and every past score is keyed by item_key
+// — so the old item's history would be orphaned and the new one would start
+// empty. An update keeps the key, so the history follows the item.
+let _scEditId = null;
+let _auEditId = null;
+
 function renderManageItems() {
     const panel = document.getElementById('sc-panel-manage');
     if (!panel) return;
@@ -29275,17 +29289,32 @@ function renderManageItems() {
     const rowStyle = active => `display:flex; align-items:center; gap:9px; padding:7px 4px; border-bottom:1px solid #f1f5f9; ${active ? '' : 'opacity:.45;'}`;
     const delBtn = (fn, id, label) => `<button onclick="${fn}('${id}', this)" title="Delete ${label} — past scores keep their history" style="flex:none; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:7px; cursor:pointer; font-size:13px; line-height:1;">🗑</button>`;
     const pauseBox = (fn, id, active) => `<input type="checkbox" ${active ? 'checked' : ''} onchange="${fn}('${id}', this.checked, this)" title="${active ? 'Active — untick to pause (hidden from scoring, history kept)' : 'Paused — tick to reactivate'}" style="flex:none; width:16px; height:16px; cursor:pointer; accent-color:#059669;">`;
+    // Same 26px square as the bin, so a row's controls stay on one grid whether
+    // it is being read or edited.
+    const sqBtn = (onclick, glyph, title, bg, border) => `<button onclick="${onclick}" title="${title}" style="flex:none; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; background:${bg}; border:1.5px solid ${border}; border-radius:7px; cursor:pointer; font-size:13px; line-height:1;">${glyph}</button>`;
+    const editBtn = (fn, id, label) => sqBtn(`${fn}('${id}')`, '✎', `Rename ${label} — keeps its scoring history`, '#f8fafc', '#cbd5e1');
+    const saveBtn = (fn, id) => sqBtn(`${fn}('${id}', this)`, '✓', 'Save', '#ecfdf5', '#a7f3d0');
+    const stopBtn = (fn) => sqBtn(`${fn}()`, '✕', 'Cancel', '#fff', '#e2e8f0');
+    // Enter saves, Escape backs out. Typed straight into the attribute because
+    // the panel is innerHTML and there is no element to bind to until after it
+    // has been written.
+    const editKeys = (saveFn, id) => `onkeydown="if(event.key==='Enter'){event.preventDefault();${saveFn}('${id}',this);}else if(event.key==='Escape'){event.preventDefault();scCancelEdit();}"`;
 
-    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:2px;">Tick = active. Unticking <b>pauses</b> an item — it disappears from scoring and the totals but keeps its history. 🗑 deletes it from the checklist going forward.</div>`;
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:2px;">Tick = active. Unticking <b>pauses</b> an item — it disappears from scoring and the totals but keeps its history. ✎ <b>renames</b> it, keeping every past score attached. 🗑 deletes it from the checklist going forward.</div>`;
 
     // ---- Scorecard categories ----
     html += secHdr(`Scorecard Categories (scored 0–5)`);
     scRows.forEach(c => {
+        const editing = String(_scEditId) === String(c.id);
         html += `<div style="${rowStyle(c.active)}">
             ${pauseBox('scToggleItem', c.id, c.active)}
-            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${escapeHtml(c.label)}</span>
+            ${editing
+                ? `<input id="sc-edit-label" value="${escapeHtml(c.label)}" ${editKeys('scSaveEdit', c.id)} style="${inp} flex:1;">`
+                : `<span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${escapeHtml(c.label)}</span>`}
             <span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">/ ${Number(c.max_score) || 5}</span>
-            ${delBtn('scDeleteItem', c.id, 'this category')}
+            ${editing
+                ? saveBtn('scSaveEdit', c.id) + stopBtn('scCancelEdit')
+                : editBtn('scStartEdit', c.id, 'this category') + delBtn('scDeleteItem', c.id, 'this category')}
         </div>`;
     });
     html += `<div style="display:flex; gap:8px; margin-top:8px;">
@@ -29298,11 +29327,18 @@ function renderManageItems() {
     auSections.forEach(sec => {
         html += `<div style="font-size:10.5px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.4px; margin:10px 0 2px;">${escapeHtml(sec.title)}</div>`;
         sec.items.forEach(item => {
+            const editing = String(_auEditId) === String(item.dbId);
             html += `<div style="${rowStyle(item.active !== false)}">
                 ${pauseBox('auToggleItem', item.dbId, item.active !== false)}
-                <span style="flex:1; font-size:12px; color:var(--slate-charcoal); line-height:1.35;">${escapeHtml(item.text)}</span>
-                <span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">${item.pts} pt${item.pts === 1 ? '' : 's'}</span>
-                ${delBtn('auDeleteItem', item.dbId, 'this item')}
+                ${editing
+                    ? `<input id="au-edit-text" value="${escapeHtml(item.text)}" ${editKeys('auSaveEdit', item.dbId)} style="${inp} flex:1;">`
+                    : `<span style="flex:1; font-size:12px; color:var(--slate-charcoal); line-height:1.35;">${escapeHtml(item.text)}</span>`}
+                ${editing
+                    ? `<input id="au-edit-pts" type="number" min="0" step="1" value="${Number(item.pts) || 0}" title="Points" ${editKeys('auSaveEdit', item.dbId)} style="${inp} width:64px; flex:none; text-align:center;">`
+                    : `<span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">${item.pts} pt${item.pts === 1 ? '' : 's'}</span>`}
+                ${editing
+                    ? saveBtn('auSaveEdit', item.dbId) + stopBtn('scCancelEdit')
+                    : editBtn('auStartEdit', item.dbId, 'this item') + delBtn('auDeleteItem', item.dbId, 'this item')}
             </div>`;
         });
     });
@@ -29322,11 +29358,53 @@ function renderManageItems() {
     </div>`;
 
     panel.innerHTML = html;
+
+    // The panel is rebuilt to open a row, so focusing has to happen after the
+    // write. Selected, not just focused: renaming usually means replacing the
+    // whole label, and "2 Social Media Posts" is a lot to delete by hand.
+    const open = document.getElementById('sc-edit-label') || document.getElementById('au-edit-text');
+    if (open) { open.focus(); open.select(); }
 }
 
 function _manageActionFail(e) {
     alert('Could not save that change: ' + (e.message || e));
     renderManageItems();
+}
+
+// Renaming. Both lists share one cancel, because only one row is ever open.
+function scStartEdit(id) { _scEditId = id; _auEditId = null; renderManageItems(); }
+function auStartEdit(id) { _auEditId = id; _scEditId = null; renderManageItems(); }
+function scCancelEdit() { _scEditId = null; _auEditId = null; renderManageItems(); }
+
+// A blank name is refused rather than saved: the server would reject it anyway
+// (its patch only includes a label that survives trim, so an empty one would
+// come back as "Nothing to update"), and an item with no name is not a thing
+// anyone wants — pausing or deleting is what that gesture actually means.
+function scSaveEdit(id, btn) {
+    const label = (document.getElementById('sc-edit-label')?.value || '').trim();
+    if (!label) { alert('A category needs a name. To take it out of scoring, pause it or delete it instead.'); return; }
+    const item = (window._scCatalog || []).find(c => String(c.id) === String(id));
+    // Nothing typed: close the row rather than spending a write on it.
+    if (item && label === item.label) { _scEditId = null; renderManageItems(); return; }
+    if (btn) btn.disabled = true;
+    _scEditId = null;
+    _scorecardAdminPost({ action: 'scorecard_item_upsert', id, label })
+        .then(_refreshScCatalog).catch(_manageActionFail);
+}
+
+function auSaveEdit(id, btn) {
+    const text = (document.getElementById('au-edit-text')?.value || '').trim();
+    const ptsEl = document.getElementById('au-edit-pts');
+    const points = Math.max(0, parseInt(ptsEl?.value) || 0);
+    if (!text) { alert('An audit item needs its wording. To take it off the checklist, pause it or delete it instead.'); return; }
+    const item = (window._auCatalog || []).find(c => String(c.id) === String(id));
+    if (item && text === item.item_text && points === (Number(item.points) || 0)) {
+        _auEditId = null; renderManageItems(); return;
+    }
+    if (btn) btn.disabled = true;
+    _auEditId = null;
+    _scorecardAdminPost({ action: 'audit_item_upsert', id, item_text: text, points })
+        .then(_refreshScCatalog).catch(_manageActionFail);
 }
 
 function scToggleItem(id, active) {
