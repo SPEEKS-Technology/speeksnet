@@ -9520,6 +9520,25 @@ body.sam-active .hotbar-btn:hover {
 .top-nav .nav-link svg { width: 17px; height: 17px; stroke-width: 1.9; opacity: .96; }
 .top-nav .nav-link.active svg { opacity: 1; color: #3ddc84; }   /* active icon lights up green */
 
+/* All five page links the same width (user, 2026-09-07).
+   A grid of equal auto columns sizes every track to the WIDEST label rather
+   than to a number typed in here, so the row stays even when a page is renamed
+   — "Processes & Policies" sets the width today, something else can set it
+   tomorrow, and nobody has to remember this rule exists.
+   It costs width: five columns at the widest label is wider than five columns
+   at their own labels, so checkNavCompact() drops to icons-only at a wider
+   viewport than it used to. That is handled, not ignored — measureNaturalWidth()
+   reads the bar at width:max-content, which resolves these fr tracks the same
+   way, so the threshold moves with the change instead of going stale.
+   The mobile bottom tab bar re-declares display:flex further down this file and
+   wins on source order, so this shapes the desktop bar only. */
+.top-nav .nav-bar {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+}
+.top-nav .nav-link { justify-content: center; }
+
 /* --- utility chip buttons (idea / messages / hotkeys / calendar / bell) --- */
 .top-nav .user-profile-nav { gap: 10px; border-right-color: rgba(255,255,255,.08); padding-right: 16px; }
 .top-nav .action-btn {

@@ -7745,8 +7745,17 @@ async function pgLoad(opts) {
     if (_pgSheets) { pgRender(); return; }
     try {
         const res = await fetch(`${PICTURE_GUIDE_URL}?v=${Date.now()}`);
-        const json = await res.json();
-        if (!json.success) throw new Error(json.error || 'Could not load the guide');
+        const json = await res.json().catch(() => null);
+        // Three different failures used to arrive as one sentence. json.message
+        // is what Supabase itself answers when the function is not deployed
+        // ("Requested function was not found"), json.error is ours, and neither
+        // being present means something answered that was not this API at all.
+        // The old fallback said "Could not load the guide" under a heading that
+        // already said the same thing, so the screen carried no information.
+        if (!json || !json.success) {
+            throw new Error((json && (json.error || json.message))
+                || `the server answered ${res.status} with nothing this tool understands.`);
+        }
         _pgSheets = json.categories || [];
         pgRender();
     } catch (e) {
