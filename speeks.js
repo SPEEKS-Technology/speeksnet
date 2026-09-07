@@ -8406,7 +8406,8 @@ function _pgAsk(opt) {
                 <input type="text" class="pg-ask-in pg-ask-cin" data-i="${i}" value="${_pgEsc(f.value || '')}"
                        placeholder="${_pgEsc(f.placeholder || '')}" autocomplete="off" spellcheck="false"
                        role="combobox" aria-expanded="false" aria-autocomplete="list">
-                <span class="pg-ask-menu" data-i="${i}" hidden></span>
+                <span class="pg-ask-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+                <span class="pg-ask-menu" data-i="${i}" role="listbox"></span>
               </span>`;
         };
 
@@ -8472,11 +8473,22 @@ function _pgAsk(opt) {
         };
 
         /* ---- the combo menus ------------------------------------------------ */
+        // Open/closed is a CLASS on the container, and the menu is emptied when
+        // it shuts. It was the `hidden` attribute, which .pg-ask-menu's own
+        // `display: flex` silently overrode — hidden only works while nothing
+        // sets display, so the menu never went away once opened and an empty one
+        // sat under the box as a thin bubble. Same shape as .mg-picker, which
+        // renders its menu only while open for exactly this reason.
+        const comboOf = i => at('.pg-ask-combo', i);
         const closeMenu = (i) => {
-            at('.pg-ask-menu', i).hidden = true;
+            const c = comboOf(i);
+            if (!c) return;
+            c.classList.remove('open');
+            at('.pg-ask-menu', i).innerHTML = '';
             inputOf(i).setAttribute('aria-expanded', 'false');
         };
-        const anyMenuOpen = () => !!wrap.querySelector('.pg-ask-menu:not([hidden])');
+        const closeMenus = () => fields.forEach((f, i) => { if (f.kind === 'combo') closeMenu(i); });
+        const anyMenuOpen = () => !!wrap.querySelector('.pg-ask-combo.open');
 
         // `filter` is false when the list is opened by clicking into the box and
         // true while typing. Filtering on open is what a <select> would never do
@@ -8494,11 +8506,16 @@ function _pgAsk(opt) {
             const mk = typed && !exact
                 ? `<button type="button" class="pg-ask-opt pg-ask-opt-new" data-v="${_pgEsc(typed)}">Create &ldquo;${_pgEsc(typed)}&rdquo;</button>`
                 : '';
+            // .on marks the row that is already the answer, the same as
+            // .mg-picker-opt.on does in the Margin Guide's picker.
             menu.innerHTML = rows.map(o =>
-                `<button type="button" class="pg-ask-opt" data-v="${_pgEsc(o.value)}">${_pgEsc(o.label)}</button>`
+                `<button type="button" class="pg-ask-opt${String(o.value).toLowerCase() === low ? ' on' : ''}"
+                         role="option" aria-selected="${String(o.value).toLowerCase() === low}"
+                         data-v="${_pgEsc(o.value)}">${_pgEsc(o.label)}</button>`
             ).join('') + mk;
-            menu.hidden = !menu.innerHTML;
-            inputOf(i).setAttribute('aria-expanded', String(!menu.hidden));
+            const open = !!menu.innerHTML;
+            comboOf(i).classList.toggle('open', open);
+            inputOf(i).setAttribute('aria-expanded', String(open));
         };
 
         fields.forEach((f, i) => {
@@ -8511,7 +8528,12 @@ function _pgAsk(opt) {
             // done anything — including on the Group dialog, where that field IS
             // the first one. Clicking in is the ask; being handed the dialog is
             // not.
-            inp.addEventListener('click', () => drawMenu(f, i, false));
+            // Toggles, the way .mg-picker-btn does: a second click on the box
+            // puts the list away rather than redrawing it in place.
+            inp.addEventListener('click', () => {
+                if (comboOf(i).classList.contains('open')) closeMenu(i);
+                else drawMenu(f, i, false);
+            });
             // mousedown, not click: blur fires first on click and would close the
             // menu out from under the pointer.
             menu.addEventListener('mousedown', (e) => {
@@ -8523,8 +8545,16 @@ function _pgAsk(opt) {
                 inp.focus();
                 sync();
             });
-            inp.addEventListener('blur', () => setTimeout(() => closeMenu(i), 0));
         });
+
+        // Any click that is not inside a combo shuts every menu. This is what
+        // .mg-dismiss does for the Margin Guide's picker, done as one listener
+        // rather than a full-screen layer, because a layer over a dialog would
+        // also swallow the click that was meant for Cancel. Blur alone was not
+        // enough: clicking the card's own background never moves focus.
+        wrap.addEventListener('mousedown', (e) => {
+            if (!e.target.closest('.pg-ask-combo')) closeMenus();
+        }, true);
 
         okBtn.addEventListener('click', () => {
             if (okBtn.disabled) return;
@@ -8553,7 +8583,7 @@ function _pgAsk(opt) {
         const onKey = (e) => {
             if (e.key === 'Escape') {
                 e.stopPropagation();
-                if (anyMenuOpen()) { fields.forEach((f, i) => { if (f.kind === 'combo') closeMenu(i); }); return; }
+                if (anyMenuOpen()) { closeMenus(); return; }
                 done(null);
             } else if (e.key === 'ArrowDown' && e.target.classList.contains('pg-ask-cin')) {
                 // The way in without a mouse, now that focus alone no longer
@@ -8563,7 +8593,7 @@ function _pgAsk(opt) {
                 drawMenu(fields[i], i, false);
             } else if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
                 e.preventDefault();
-                if (anyMenuOpen()) { fields.forEach((f, i) => { if (f.kind === 'combo') closeMenu(i); }); return; }
+                if (anyMenuOpen()) { closeMenus(); return; }
                 okBtn.click();
             }
         };

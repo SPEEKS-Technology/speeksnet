@@ -21289,6 +21289,16 @@ select.dd-native {
     --pg-red-line: #f0c9c9;
     --pg-ink: #1a1c1e;
 }
+/* The hidden ATTRIBUTE has to actually hide. Its UA rule is display:none at the
+   lowest specificity there is, so any author rule setting display on the same
+   element beats it silently — and two already did. .pg-ask-menu was display:flex,
+   so a combo list could never be put away and an empty one drew as a bar under
+   the box. .pg-f is display:flex, so #pg-f-rep-wrap never hid and the "take as
+   many photos as needed" checkbox showed on always-taken photos, which the
+   database refuses outright. Fixed here rather than one rule at a time, because
+   the next one would break the same way. */
+.pg-panel [hidden], .pg-ask [hidden] { display: none !important; }
+
 .pg-panel {
     padding: 0;
     /* Same escape hatch as .mg-panel: .ws-panel pins panes to a viewport-derived
@@ -21586,19 +21596,40 @@ select.dd-native {
    database once). A combo box needs neither: an existing group is a row you
    pick, a new one is a name you finish typing. */
 .pg-ask-combo { display: block; position: relative; }
+/* The chevron the rest of the site puts on a picker, and it turns over when the
+   list is down — same affordance as .mg-picker-btn's. pointer-events: none so it
+   is decoration sitting on the box, not a second thing to aim at. */
+.pg-ask-chev {
+    position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+    display: inline-flex; pointer-events: none; color: var(--pg-muted);
+    transition: transform .15s;
+}
+.pg-ask-chev svg { width: 15px; height: 15px; }
+.pg-ask-combo.open .pg-ask-chev { transform: translateY(-50%) rotate(180deg); }
+.pg-ask-combo input { padding-right: 34px; }
+.pg-ask-combo.open input { border-color: var(--pg-accent); box-shadow: 0 0 0 3px var(--pg-ring); }
+/* display: none by default, NOT the hidden attribute. A rule that sets display
+   on the element itself beats [hidden] outright, which is exactly what went
+   wrong: the menu could never be put away and an empty one showed as a bar
+   under the box. Open is a class on the container now, and the menu is emptied
+   when it shuts. Geometry copied from .mg-picker-menu. */
 .pg-ask-menu {
-    position: absolute; z-index: 2; left: 0; right: 0; top: calc(100% + 4px);
-    display: flex; flex-direction: column; padding: 4px;
-    background: #fff; border: 1px solid var(--pg-line); border-radius: 10px;
-    box-shadow: 0 10px 26px rgba(12, 16, 22, .16);
-    max-height: 190px; overflow-y: auto;
+    display: none;
+    position: absolute; z-index: 2; left: 0; right: 0; top: calc(100% + 5px);
+    flex-direction: column; padding: 5px;
+    background: #fff; border: 1px solid var(--pg-line); border-radius: 11px;
+    box-shadow: 0 12px 34px rgba(16, 24, 40, .18);
+    max-height: 220px; overflow-y: auto;
 }
+.pg-ask-combo.open .pg-ask-menu { display: flex; }
 .pg-ask-opt {
-    font: inherit; font-size: 13px; font-weight: 650; text-align: left; cursor: pointer;
-    border: none; background: none; color: var(--pg-ink);
-    padding: 8px 10px; border-radius: 7px;
+    display: block; width: 100%; text-align: left; cursor: pointer; font: inherit;
+    font-size: 12.5px; font-weight: 650; color: var(--pg-ink);
+    background: none; border: 0; border-radius: 7px; padding: 7px 9px;
 }
-.pg-ask-opt:hover { background: var(--pg-accent-tint); color: var(--pg-accent-deep); }
+.pg-ask-opt:hover { background: #f1f5f9; }
+/* The row that is already the answer, same as .mg-picker-opt.on. */
+.pg-ask-opt.on { background: var(--pg-accent-tint); color: var(--pg-accent-deep); font-weight: 780; }
 /* The row that makes a group rather than picking one. Separated, because
    "Computer Parts" and "Create Computer Parts" doing different things while
    looking identical is how you get a duplicate group. */
