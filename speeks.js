@@ -7679,16 +7679,26 @@ function _mgRenderAdmin(body) {
  * Every picture station has a binder of laminated sheets: one page per category,
  * showing each photo a lister must take, in the order it goes on the listing.
  * This replaces the binder, so the board is laid out like the page — same grid,
- * same numbers in the corner, same red on the shots that are conditional.
+ * same red on the shots that are conditional.
  *
- * THE NUMBERS ARE COMPUTED, AND THAT IS THE WHOLE POINT.
+ * THERE ARE NO NUMBERS, AND THAT IS DELIBERATE.
  * Paper cannot resolve a conditional shot, so the printouts fudge it: on the
  * tablet sheet "Everything Included" and "About Phone" are BOTH numbered 2,
  * because whichever one applies is the real number 2. Three separate shots are
- * numbered 4. The lister does that arithmetic in their head, on every item, all
- * day. Here they tick what they can actually see on the unit in their hand and
- * _pgSequence() walks the sheet, stepping over what does not apply, so the board
- * shows the positions this item genuinely has. Nothing stores a shot number.
+ * numbered 4.
+ *
+ * This tool briefly answered that by asking the lister which conditionals
+ * applied and computing an exact number from the answer. It worked, and it was
+ * cut on sight (user, 2026-09-07): "I don't want the user to have any steps."
+ * A reference you have to configure before it tells you anything is not a
+ * reference. So the board asks nothing, and therefore cannot know a number —
+ * and rather than print one that is wrong for every item that skips a
+ * conditional, it prints none and lets READING ORDER carry the sequence. Order
+ * is something the board can always state truthfully.
+ *
+ * Nothing stores a shot number. That was true when the numbers were computed and
+ * it is still true now that there are none, which is why removing them touched
+ * no data at all.
  *
  * The sheets are store-agnostic reference data, so they are fetched once per
  * session and everything after is local — switching category mid-item is an
@@ -7698,15 +7708,10 @@ function _mgRenderAdmin(body) {
 const PICTURE_GUIDE_URL = `${_BASE}/picture-guide`;
 
 let _pgSheets = null;               // [{ id, slug, name, shots: [...] }]
-// `applies` and `reps` are keyed by SHOT ID, not index: the DM editor reorders
-// and deletes rows underneath this, and an index-keyed map would silently
-// re-point a lister's ticks at the wrong shots after any move.
-// `fresh` means "the ticks belong to nobody yet" — set on every entry to the tab
-// and cleared once pgRender() has rebuilt them. It exists because an empty
-// applies map is ambiguous: it is also what a lister legitimately produces by
-// switching every conditional off, and treating that as "needs defaulting" would
-// switch them all back on under their hands.
-let _pgState = { catId: null, applies: {}, reps: {}, fresh: true };
+// Which sheet is on screen, and nothing else. There is deliberately no per-item
+// state here any more: the board is the same board for everyone looking at that
+// category, which is the whole point of a reference you can walk up to.
+let _pgState = { catId: null };
 let _pgAdmin = { open: false, catId: null, editing: null, busy: false };
 // One usage signal per visit to the tab, not one per category clicked.
 let _pgTracked = false;
@@ -7735,9 +7740,6 @@ async function pgLoad(opts) {
         // last unit's flaws ticked on the next one's board — that is how a lister
         // ends up taking a photo of damage that isn't there, or missing damage
         // that is. So the ticks reset, and never into the DM editor.
-        _pgState.applies = {};
-        _pgState.reps = {};
-        _pgState.fresh = true;
         _pgTracked = false;
         _pgAdmin.open = false;
         _pgAdmin.editing = null;
@@ -7771,53 +7773,30 @@ async function _pgReload() {
     await pgLoad({ keep: true });
 }
 
-/* ---- THE RULE, in code --------------------------------------------------- *
- * Walk the sheet in order. A conditional shot that does not apply to this item
- * is stepped over, and the shot behind it takes the number it would have had.
- * A repeatable shot ("4+" on the paper) occupies a RANGE, so everything after it
- * shifts by however many the lister says they need.
+/* ---- WHY THERE ARE NO NUMBERS ON THE CARDS -------------------------------- *
+ * This tool used to ask the lister which conditionals applied to the unit in
+ * their hand, and derived an exact number for every shot from the answer. That
+ * was correct and nobody wanted it (user, 2026-09-07): "The picture guide should
+ * only be like a click the item you need and look. I don't want the user to have
+ * any steps."
+ *
+ * With nothing asked, nothing can be known. A board that prints "9" under Screen
+ * Off is telling most listers a lie, because most items skip at least one
+ * conditional and everything behind it shifts. So the board prints no number at
+ * all and lets READING ORDER carry the sequence — left to right, top to bottom,
+ * skipping the flagged ones that do not apply. Order is a thing the board can
+ * always state truthfully; a number is not.
+ *
+ * This is why the shots are stored with sort_order and nothing else. That design
+ * is unchanged and still load-bearing: it is what lets the board be rearranged
+ * by a DM without anything having to be renumbered, here or on paper.
  * ------------------------------------------------------------------------- */
-function _pgSequence() {
-    let n = 1;
-    return _pgShots().map(s => {
-        if (s.cond && !_pgState.applies[s.id]) return { s, off: true };
-        const count = s.rep ? Math.max(1, _pgState.reps[s.id] || 1) : 1;
-        const row = { s, from: n, to: n + count - 1, count };
-        n += count;
-        return row;
-    });
-}
-const _pgNum   = r => r.off ? 'N/A' : (r.from === r.to ? String(r.from) : `${r.from}–${r.to}`);
-const _pgLive  = () => _pgSequence().filter(r => !r.off);
-const _pgTotal = () => _pgLive().reduce((a, r) => a + r.count, 0);
-
-// Default every conditional ON, so the first thing anyone sees is the printed
-// page they already know. Ticking is then subtractive — "no, this one has no
-// box" — which is the direction a lister actually thinks in, and it means
-// forgetting to touch the bar leaves you with MORE photos than needed rather
-// than fewer. Extra photos are a nuisance; missing ones are a relist.
-function _pgDefaultApplies() {
-    _pgState.applies = {};
-    _pgState.reps = {};
-    _pgShots().forEach(s => {
-        if (s.cond) { _pgState.applies[s.id] = true; if (s.rep) _pgState.reps[s.id] = 1; }
-    });
-    _pgState.fresh = false;
-}
 
 function pgPick(catId) {
     const c = _pgCats().find(x => x.id === catId);
     if (!c) return;
     _pgState.catId = c.id;
-    _pgDefaultApplies();
     if (_pgAdmin.open) { _pgAdmin.catId = c.id; _pgAdmin.editing = null; }
-    pgRender();
-}
-function pgResetApplies() { _pgDefaultApplies(); pgRender(); }
-function pgToggleApply(id) { _pgState.applies[id] = !_pgState.applies[id]; pgRender(); }
-function pgBump(id, d, ev) {
-    if (ev) ev.stopPropagation();
-    _pgState.reps[id] = Math.max(1, Math.min(9, (_pgState.reps[id] || 1) + d));
     pgRender();
 }
 
@@ -7849,7 +7828,6 @@ function pgRender() {
     // Land on the first sheet rather than an empty panel: a lister arriving here
     // wants a board, and picking a category is a step they would take every time.
     if (!_pgCat()) _pgState.catId = _pgCats()[0].id;
-    if (_pgState.fresh) _pgDefaultApplies();
     if (can && _pgAdmin.open) { _pgRenderAdmin(body); return; }
 
     // A board actually drawn for a lister IS the use of this tool; landing on the
@@ -7859,22 +7837,21 @@ function pgRender() {
     if (!_pgTracked) { _pgTracked = true; trackUsage('open', 'pg:sheet', _usageLabel('pg:sheet')); }
 
     _pgSyncHead();
-    const seq = _pgSequence();
-    const skipped = seq.filter(r => r.off).length;
+    const shots = _pgShots();
+    const always = shots.filter(s => !s.cond).length;
+    const optional = shots.length - always;
 
     body.innerHTML = `
       <div class="pg-shell">
         ${_pgRailHtml(false)}
         <div class="pg-main">
-          ${_pgAppliesHtml(seq)}
           <div class="pg-legend">
-            <span class="pg-lg"><span class="pg-sw pg-sw-req"></span> Always take this</span>
-            <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> Applies to this item</span>
-            <span class="pg-lg"><span class="pg-sw pg-sw-na"></span> Not needed &mdash; skipped</span>
-            <span class="pg-count"><b>${_pgTotal()}</b> photo${_pgTotal() === 1 ? '' : 's'} for this item${
-                skipped ? ` <em>&middot; ${skipped} skipped</em>` : ''}</span>
+            <span class="pg-lg"><span class="pg-sw pg-sw-req"></span> Take on every item</span>
+            <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> Only if it applies to yours</span>
+            <span class="pg-count">Work left to right. <b>${always}</b> on every item${
+                optional ? `, plus <b>${optional}</b> that depend on the unit` : ''}.</span>
           </div>
-          <div class="pg-board">${seq.map(_pgCardHtml).join('')}</div>
+          <div class="pg-board">${shots.map(_pgCardHtml).join('')}</div>
         </div>
       </div>`;
 }
@@ -7894,7 +7871,7 @@ function _pgSyncHead() {
     } else {
         eyebrow.textContent = 'Listing Reference';
         title.textContent = 'Picture Guide';
-        sub.textContent = 'Pick the category, tick what applies to the item in your hand, and work the board left to right.';
+        sub.textContent = 'Pick the category and work the board left to right. Red cards are only taken when they apply to the unit in your hand.';
     }
 }
 
@@ -7930,49 +7907,23 @@ function _pgFilterRail(v) {
     });
 }
 
-function _pgAppliesHtml(seq) {
-    const conds = seq.filter(r => r.s.cond);
-    if (!conds.length) {
-        return `<div class="pg-applies pg-applies-none">Every shot on this sheet is always taken &mdash; nothing to tick.</div>`;
-    }
+function _pgCardHtml(s) {
+    // The caption stays the SHOT's name — the paper prints "Setting Unlock
+    // Screen" in red and that is the only instruction on the card. The condition
+    // now prints under it as a flag rather than living in a control above the
+    // board, because there is no longer a control: the card has to say for
+    // itself when it applies, or nothing does.
+    //
+    // "as many as you need" is said in words for a repeatable shot. On paper it
+    // is a "+" appended to a number, and with no numbers a bare "+" would mean
+    // nothing at all.
+    const flag = !s.cond ? '' : `
+        <span class="pg-only">Only if: ${_pgEsc(s.cond)}${
+            s.rep ? ' <em>&mdash; as many as you need</em>' : ''}</span>`;
     return `
-      <div class="pg-applies">
-        <div class="pg-applies-hd">
-          <b>Applies to this item</b>
-          <span>Tick what you can actually see on the unit in your hand.</span>
-          <button type="button" class="pg-reset" onclick="pgResetApplies()">Reset</button>
-        </div>
-        <div class="pg-chips">
-          ${conds.map(r => {
-            const on = !r.off;
-            const stepper = on && r.s.rep
-                ? `<span class="pg-stepper">
-                     <button type="button" onclick="pgBump(${r.s.id},-1,event)" aria-label="One fewer">&minus;</button>
-                     <i>${r.count}</i>
-                     <button type="button" onclick="pgBump(${r.s.id},1,event)" aria-label="One more">&#43;</button>
-                   </span>`
-                : (on ? '' : `<span class="pg-chip-off">no</span>`);
-            return `<span class="pg-chip${on ? ' on' : ''}${(on && r.s.rep) ? '' : ' pg-chip-pad'}">
-                      <span class="pg-chip-lbl" onclick="pgToggleApply(${r.s.id})">
-                        <span class="pg-dot"></span>${_pgEsc(r.s.cond)}</span>${stepper}
-                    </span>`;
-          }).join('')}
-        </div>
-      </div>`;
-}
-
-function _pgCardHtml(r) {
-    const s = r.s;
-    const cls = s.cond ? (r.off ? 'na' : 'cond') : '';
-    // The caption is the SHOT's name, not the condition's — the paper prints
-    // "Setting Unlock Screen" in red, and replacing that with the toggle's
-    // wording would throw away the only instruction on the card. The condition
-    // lives in the applies bar, where it is a control rather than a caption.
-    return `
-      <figure class="pg-shot ${cls}"${s.cond ? ` title="Only when: ${_pgEsc(s.cond)}"` : ''}>
-        <figcaption class="pg-cap">${_pgEsc(s.label)}</figcaption>
+      <figure class="pg-shot ${s.cond ? 'cond' : ''}">
+        <figcaption class="pg-cap">${_pgEsc(s.label)}${flag}</figcaption>
         <div class="pg-frame"${s.img ? ` onclick="pgZoom(${s.id})"` : ''}>
-          <span class="pg-badge">${_pgNum(r)}</span>
           ${_pgArt(s)}
         </div>
       </figure>`;
@@ -8016,9 +7967,6 @@ function pgOpenAdmin() {
 function pgCloseAdmin() {
     _pgAdmin.open = false;
     _pgAdmin.editing = null;
-    // The sheet may have moved under the lister's ticks while it was open, so
-    // they are rebuilt from what the sheet says now rather than carried across.
-    _pgDefaultApplies();
     pgRender();
 }
 function pgAdminPick(catId) { _pgAdmin.catId = catId; _pgAdmin.editing = null; pgRender(); }
