@@ -7844,7 +7844,7 @@ function pgRender() {
         <div class="pg-main">
           <div class="pg-legend">
             <span class="pg-lg"><span class="pg-sw pg-sw-req"></span> Take on every item</span>
-            <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> Only if it applies to yours</span>
+            <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> <b>Optional</b> &mdash; only if it applies to yours</span>
           </div>
           <div class="pg-board">${_pgShots().map(_pgCardHtml).join('')}</div>
         </div>
@@ -7927,9 +7927,18 @@ function _pgRailHtml(admin) {
           <input type="text" id="pg-search-input" placeholder="Search&hellip;" oninput="_pgFilterRail(this.value)">
         </label>
         <div class="pg-catlist" id="pg-catlist">${body}</div>
-        ${admin ? `<div class="pg-rail-foot">
-            <button type="button" class="pg-addcat" onclick="pgAddCategory()">&#43;&nbsp; New category</button>
-          </div>` : ''}
+        <div class="pg-rail-foot">
+          ${admin
+            ? `<button type="button" class="pg-addcat" onclick="pgAddCategory()">&#43;&nbsp; New category</button>`
+            // Same shape as the Margin Guide's, and for the same reason: the foot
+            // of the picker is where the gap gets discovered, by someone who has
+            // just scrolled the list looking for something that is not on it.
+            // Wired to the existing idea modal rather than a new form, so
+            // requests land where every other suggestion already goes.
+            : `<p class="pg-missing">Category missing? Send it over with the
+                 <button type="button" class="pg-inline-link" onclick="toggleIdeaModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z"/></svg>Have an Idea</button>
+                 button and we'll add it.</p>`}
+        </div>
       </aside>`;
 }
 
@@ -7980,23 +7989,54 @@ function _pgFilterRail(v) {
     });
 }
 
+// Strip a phrase to its letters so two ways of writing the same thing compare
+// equal: "Cosmetic Flaws" and "Cosmetic flaws" are not two facts.
+const _pgNorm = t => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+// What a conditional card has left to say once its own name has said it.
+//
+// This is the fix for a board that read as shouting. On the seeded sheets FOUR
+// of the six conditions are the shot's own label — "Cosmetic Flaws" under a
+// condition of "Cosmetic flaws", "Extra Accessories" under "Extra accessories" —
+// so the card printed the same phrase twice, the second time in red capitals.
+// Five cards doing that is most of what made the grid feel loud, and none of it
+// was information.
+//
+// So the condition prints only where it adds something the label does not:
+// "Setting Unlock Screen" genuinely needs "only if the unlock screen is set",
+// and "Apple Warranty" needs "only if the warranty is still active". The rest
+// carry the OPTIONAL tag and nothing else.
+function _pgCondNote(s) {
+    const bits = [];
+    const a = _pgNorm(s.label), b = _pgNorm(s.cond);
+    if (b && a !== b && !a.includes(b) && !b.includes(a)) {
+        // Lower-cased first letter so it reads as the tail of a sentence rather
+        // than a second heading.
+        const c = String(s.cond).trim();
+        bits.push('Only if ' + _pgEsc(c.charAt(0).toLowerCase() + c.slice(1)));
+    }
+    // The printout writes this as a "+" on a number. With no numbers a bare "+"
+    // would mean nothing, so it is said in words.
+    if (s.rep) bits.push('Take as many as you need');
+    return bits.join(' &middot; ');
+}
+
 function _pgCardHtml(s) {
-    // The caption stays the SHOT's name — the paper prints "Setting Unlock
-    // Screen" in red and that is the only instruction on the card. The condition
-    // now prints under it as a flag rather than living in a control above the
-    // board, because there is no longer a control: the card has to say for
-    // itself when it applies, or nothing does.
-    //
-    // "as many as you need" is said in words for a repeatable shot. On paper it
-    // is a "+" appended to a number, and with no numbers a bare "+" would mean
-    // nothing at all.
-    const flag = !s.cond ? '' : `
-        <span class="pg-only">Only if: ${_pgEsc(s.cond)}${
-            s.rep ? ' <em>&mdash; as many as you need</em>' : ''}</span>`;
+    const note = s.cond ? _pgCondNote(s) : '';
+    // The OPTIONAL tag sits in the frame's top-left — the corner the printout
+    // marks and, until this design, where the shot number used to sit. One small
+    // flag in the picture beats a red title plus a red subtitle above it: the
+    // caption goes back to being the shot's name in the same ink as every other
+    // card, so the grid reads as one board with five things flagged on it rather
+    // than as two competing kinds of card.
     return `
       <figure class="pg-shot ${s.cond ? 'cond' : ''}">
-        <figcaption class="pg-cap">${_pgEsc(s.label)}${flag}</figcaption>
+        <figcaption class="pg-cap">
+          <span class="pg-cap-name">${_pgEsc(s.label)}</span>
+          ${note ? `<span class="pg-note">${note}</span>` : ''}
+        </figcaption>
         <div class="pg-frame"${s.img ? ` onclick="pgZoom(${s.id})"` : ''}>
+          ${s.cond ? '<span class="pg-optional">Optional</span>' : ''}
           ${_pgArt(s)}
         </div>
       </figure>`;
