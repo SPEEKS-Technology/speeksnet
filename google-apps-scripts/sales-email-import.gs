@@ -289,6 +289,26 @@ var CASH_TOTAL_TOLERANCE = 1;
 // makes anything past this impossible rather than merely surprising.
 var REVIEW_MAX_JUMP = 25;
 
+// ⚠️ THE FIRST OF THE MONTH IS A KNOWN LIAR, and gets its own tighter ceiling.
+// PROVEN on 2026-09-01, from five Day End Reports read side by side: every store
+// reported its AUGUST month-to-date on the 1st (OVL 45, WSP 42, MPL 38, LEE 37,
+// BAL 36) and then its real September count from the 2nd onward (2, 1, 1, 0, 1).
+// The report's month-to-date field had not rolled over when it was generated.
+//
+// REVIEW_MAX_JUMP alone is not enough to catch that, and it is important to be
+// honest about why it appeared to be: it only rejected those five because all
+// five stores' monthly totals happen to exceed 25. That is a fact about how the
+// stores performed, not a fact about the data — a store with a 15/month goal
+// would carry over 15, slip under the ceiling, and poison its column exactly as
+// September was poisoned. So the day-1 figure is judged as what it claims to be:
+// ONE DAY of reviews. Eight is already most of a week's worth for a store
+// averaging a review a day, so anything past it on day 1 is last month's total.
+//
+// The cost is one day of review data in the month a report is genuinely right on
+// the 1st. That is a day at the start of the month, against a whole month of
+// refusals if the guess goes the other way.
+var REVIEW_MAX_FIRST_DAY = 8;
+
 // Days back to consider, ending yesterday. The ask was "just the previous day";
 // this is 3 purely as a self-healing gap-filler, because the Apps Script /exec
 // endpoint has been throwing transient 404s (2 of the last 14 runs). Since the
@@ -977,8 +997,27 @@ function _findCountNear(body, labels, stopLabels, windowChars) {
 // Two checks, both against the column's own history rather than a fixed ceiling,
 // because "normal" differs by store: a count may not go DOWN (month to date
 // cannot), and it may not jump further in one day than any store plausibly earns.
-// On an empty column neither can fire, which is the one case worth naming: the
-// first write of a month has nothing to be checked against and goes in on trust.
+//
+// ⚠️ AN EMPTY COLUMN IS A BASELINE OF ZERO, NOT AN ABSENCE OF ONE. This used to
+// return null on an empty column — "the first write of a month has nothing to be
+// checked against and goes in on trust" — and that trust cost September 2026 six
+// days of review data. The Sept 1 report carried a month-to-date figure that was
+// still August's (OVL 45 against a 40/month goal), the column was empty, so it
+// went in unchallenged on day 1. Every genuine count after it was smaller, which
+// tripped the "went DOWN" check, so all five stores were refused every day for
+// the rest of the week and the sheet kept showing August's finals as though the
+// goals were already met.
+//
+// A month starts at zero reviews. That IS the history, so it is what an empty
+// column is checked against, and REVIEW_MAX_JUMP guards the first write exactly
+// as it guards every other one. 45 on day 1 is refused as the all-time-total
+// shape it is.
+//
+// The cost is a false refusal if the first report of a month only arrives after
+// enough days to legitimately bank more than REVIEW_MAX_JUMP. That is a fortnight
+// of missing reports, which is loudly wrong on its own and separately reported —
+// and the failure is safe either way: the cell stays blank and says why, rather
+// than being poisoned for the month.
 function _reviewSanity(values, rcol, rowIdx, value) {
   if (value < 0) return 'negative review count (' + value + ')';
   var prev = null;
@@ -995,7 +1034,19 @@ function _reviewSanity(values, rcol, rowIdx, value) {
     var v = _num(values[r][rcol]);
     if (v != null) { prev = v; break; }
   }
-  if (prev == null) return null;
+  // No earlier day in the block carries a count, so the month has banked nothing
+  // yet. See the header: zero is the baseline, not a reason to skip the checks.
+  if (prev == null) prev = 0;
+
+  // Day 1 is held to one day's worth rather than REVIEW_MAX_JUMP — see
+  // REVIEW_MAX_FIRST_DAY for the five reports that proved this is needed, and for
+  // why the wider ceiling only looked sufficient.
+  var day = _num(values[rowIdx] ? values[rowIdx][0] : null);
+  if (day === 1 && value > REVIEW_MAX_FIRST_DAY) {
+    return 'day 1 reported ' + value + ' reviews, past REVIEW_MAX_FIRST_DAY ('
+      + REVIEW_MAX_FIRST_DAY + ') — the first report of a month carries LAST'
+      + " month's month-to-date, so this is not day one's count";
+  }
   if (value < prev) {
     return 'month-to-date reviews went DOWN (' + prev + ' -> ' + value
       + '), so this is probably not a month-to-date figure';
@@ -2178,7 +2229,13 @@ function diagnoseBuyingEmails() {
   });
 
   var out = { ok: true, messages_found: msgs.length, distinct_subjects: Object.keys(bySubject).length, samples: [] };
-  Logger.log(out.distinct_subjects + ' distinct subject shape(s) — expecting 5 if the store is in the subject, 1 if not.\n');
+  // TEN shapes is the healthy answer, not five: pmdev.site sends a Day End Report
+  // per store AND a Weekly Report per store, and grouping by subject shape keeps
+  // them apart. Unlike the other two diagnostics this one is not filtered — "why
+  // has nothing arrived" wants to see everything in the mailbox — so each sample
+  // carries is_day_end instead, and only the true ones are what the ingest reads.
+  Logger.log(out.distinct_subjects + ' distinct subject shape(s) — expecting 5 Day End'
+    + ' shapes (one per store) plus 5 Weekly ones. Check is_day_end on each sample.\n');
 
   Object.keys(bySubject).slice(0, 8).forEach(function (key) {
     var m = bySubject[key];
@@ -2189,6 +2246,10 @@ function diagnoseBuyingEmails() {
       subject: m.getSubject(),
       received: Utilities.formatDate(m.getDate(), TIMEZONE, 'yyyy-MM-dd HH:mm'),
       attachments: atts,
+      // False means the ingest skips it. The Weekly Report parses as plausibly as
+      // the daily one — same sender, same subject shape, same money labels — so
+      // this is the only field that says whether the sample is even relevant.
+      is_day_end: DAY_END_SUBJECT.test(String(m.getSubject() || '')),
       subject_parse: _buyParseSubject(m.getSubject()),
       store_hint_subject: _buyStoreGuess(m.getSubject()),
       store_hint_body: _buyStoreGuess(body),
@@ -2237,52 +2298,123 @@ function diagnoseBuyingEmails() {
  * Digits are NOT masked here, unlike diagnoseBuyingEmails: the number IS the
  * thing being verified, and one look at it against the store's Google page
  * settles month-to-date versus all-time faster than any heuristic.
+ *
+ * ⚠️ DAY END REPORTS ONLY, AND THAT IS NOT WHAT THIS USED TO DO. The search
+ * matches everything pmdev.site sends, and the Saturday WEEKLY report shares the
+ * sender, the subject shape and a pile of "review" wording of its own. This took
+ * one message per store, newest first — so run on a Sunday or Monday it handed
+ * back five Weekly Reports and reported "NO MATCH" five times, which says nothing
+ * whatsoever about the figure the importer actually reads. ingestBuyingEmails has
+ * skipped non-day-end mail since the weekly report first landed in Saturday's
+ * cells; the diagnostics never learned it. Same DAY_END_SUBJECT test here.
+ *
+ * SEVERAL DAYS PER STORE, oldest first, because the question that matters is not
+ * "does the wording parse" but "does the number MOVE". A month-to-date count
+ * climbs; an all-time total barely does; a stale one sits still. One sample per
+ * store cannot tell those apart, and telling them apart is the whole job.
  */
+var REVIEW_DIAG_DAYS = 5;      // how many recent Day End Reports to show per store
+
 function diagnoseBuyingReviews() {
   var q = '(from:(' + BUY_SENDER + ') OR subject:("Day End Report")) newer_than:' + LOOKBACK + 'd';
-  var msgs = [];
+  var all = [];
   try {
     GmailApp.search(q, 0, 200).forEach(function (t) {
-      t.getMessages().forEach(function (m) { msgs.push(m); });
+      t.getMessages().forEach(function (m) { all.push(m); });
     });
   } catch (e) {
     Logger.log('search failed: ' + e);
     return { ok: false, error: String(e) };
   }
-  msgs.sort(function (a, b) { return b.getDate().getTime() - a.getDate().getTime(); });
 
-  Logger.log('=== ' + msgs.length + ' Day End Report(s) in the last ' + LOOKBACK + ' days ===');
+  // The filter the ingest has always applied. Counted rather than silently
+  // dropped, so "45 messages, 5 of them weekly" is visible instead of looking
+  // like the mailbox is short.
+  var msgs = [], ignored = 0;
+  all.forEach(function (m) {
+    if (DAY_END_SUBJECT.test(String(m.getSubject() || ''))) msgs.push(m);
+    else ignored++;
+  });
+  msgs.sort(function (a, b) { return a.getDate().getTime() - b.getDate().getTime(); });
+
+  Logger.log('=== ' + msgs.length + ' Day End Report(s) in the last ' + LOOKBACK + ' days'
+    + (ignored ? ' (' + ignored + ' other pmdev.site email(s) ignored — weekly reports)' : '')
+    + ' ===');
   if (!msgs.length) {
-    Logger.log('NONE FOUND — see diagnoseBuyingEmails() for why (they may still be arriving forwarded).');
-    return { ok: true, messages_found: 0, samples: [] };
+    Logger.log(ignored
+      ? 'NO DAY END REPORTS AT ALL, only weekly ones. The daily report has stopped arriving.'
+      : 'NONE FOUND — see diagnoseBuyingEmails() for why (they may still be arriving forwarded).');
+    return { ok: true, messages_found: 0, ignored: ignored, stores: {} };
   }
 
-  // One per STORE, newest first, so all five wordings are visible at once — the
-  // five Shopify templates each turned out worded differently, and there is no
-  // reason to assume these five agree either.
+  // Oldest first above, so pushing keeps each store's list in date order and the
+  // trend reads down the page the way the sheet column does.
   var byStore = {};
   msgs.forEach(function (m) {
     var sub = _buyParseSubject(m.getSubject());
     var k = sub.store || ('?' + String(m.getSubject() || '').replace(/\d+/g, '#').trim());
-    if (!byStore[k]) byStore[k] = m;       // msgs is newest-first
+    (byStore[k] = byStore[k] || []).push(m);
   });
 
-  var out = { ok: true, messages_found: msgs.length, samples: [] };
-  Object.keys(byStore).forEach(function (store) {
-    var m = byStore[store];
-    var body = _plainBody(m);
-    var lines = body.split(/\r?\n/).filter(function (l) { return /review/i.test(l); });
-    var parsed = _findCountNear(body, REVIEW_LABELS, REVIEW_STOPS);
-    out.samples.push({ store: store, subject: m.getSubject(), review_lines: lines, parsed: parsed });
+  var out = { ok: true, messages_found: msgs.length, ignored: ignored, stores: {} };
+  Object.keys(byStore).sort().forEach(function (store) {
+    var list = byStore[store].slice(-REVIEW_DIAG_DAYS);
+    var rows = [], seen = [];
+    Logger.log('\n--- ' + store + ' | last ' + list.length + ' Day End Report(s) ---');
+    list.forEach(function (m) {
+      var body = _plainBody(m);
+      var parsed = _findCountNear(body, REVIEW_LABELS, REVIEW_STOPS);
+      var when = Utilities.formatDate(m.getDate(), Session.getScriptTimeZone(), 'MMM d');
+      rows.push({ sent: when, subject: m.getSubject(), parsed: parsed });
+      if (parsed != null) seen.push(parsed);
+      Logger.log('  ' + when + '  parser: '
+        + (parsed == null ? 'NO MATCH' : String(parsed)));
+    });
 
-    Logger.log('\n--- ' + store + ' | ' + m.getSubject() + ' ---');
-    Logger.log(lines.length
-      ? 'lines mentioning "review":\n  ' + lines.join('\n  ')
-      : 'NO LINE MENTIONS "review" — this store\'s report does not carry it yet.');
-    Logger.log(parsed == null
-      ? 'parser: NO MATCH  <-- add the exact wording above to REVIEW_LABELS'
-      : 'parser: MATCHED ' + parsed + '  <-- check this against the store\'s Google page. '
-        + 'It must be THIS MONTH\'s count, not all-time.');
+    // The verdict, said out loud, because five numbers in a column still need
+    // reading and this is the reading that decides what to do next.
+    if (!seen.length) {
+      Logger.log('  => NO MATCH on any of them. Every line mentioning "review" in the'
+        + ' newest report is printed below; copy the real wording into REVIEW_LABELS.');
+      var lastBody = _plainBody(list[list.length - 1]);
+      var lines = lastBody.split(/\r?\n/).filter(function (l) { return /review/i.test(l); });
+      Logger.log(lines.length
+        ? '     ' + lines.join('\n     ')
+        : '     NO LINE MENTIONS "review" — this store\'s daily report does not carry it.');
+    } else {
+      // ⚠️ READ THE SEQUENCE IN ORDER. This first compared min against max, which
+      // threw the order away and called "36 -> 1 -> 2 -> 2 -> 2" a climb from 1 to
+      // 36 — the exact opposite of what those numbers say, printed as a verdict.
+      // A diagnostic that states a wrong conclusion is worse than one that states
+      // none, because the conclusion is the part people act on.
+      var drops = [];
+      for (var si = 1; si < seen.length; si++) {
+        if (seen[si] < seen[si - 1]) drops.push(si);
+      }
+      var flat = seen.length > 1 && seen[0] === seen[seen.length - 1] && !drops.length;
+      var verdict;
+      if (drops.length === 1 && drops[0] === 1) {
+        // The month-boundary carryover: the first report of a month still carries
+        // LAST month's month-to-date, then the rest are this month's. Confirmed on
+        // 2026-09-01, when all five stores reported their August finals and the
+        // importer banked one on day 1 — see the header of _reviewSanity.
+        verdict = '  CARRYOVER. The first report is ' + seen[0] + ' and the next is '
+          + seen[1] + ', then it climbs normally. The first report of a month is'
+          + ' carrying LAST month\'s month-to-date; every report after it is right.';
+      } else if (flat) {
+        verdict = '  FLAT across ' + seen.length + ' days. A month-to-date count climbs,'
+          + ' so this is an all-time total or a stale figure — NOT month to date.';
+      } else if (!drops.length) {
+        verdict = '  climbs ' + seen[0] + ' -> ' + seen[seen.length - 1]
+          + ' without ever going backwards, which is what a month-to-date count does.'
+          + ' Check the newest against the store\'s Google page.';
+      } else {
+        verdict = '  GOES BACKWARDS ' + drops.length + ' time(s). A month-to-date count'
+          + ' cannot decrease, so at least one of these is not one.';
+      }
+      Logger.log('  => parsed ' + seen.join(' -> ') + verdict);
+    }
+    out.stores[store] = rows;
   });
   return out;
 }
@@ -2310,18 +2442,27 @@ function diagnoseBuyingReviews() {
  */
 function diagnoseCashSection() {
   var q = '(from:(' + BUY_SENDER + ') OR subject:("Day End Report")) newer_than:' + LOOKBACK + 'd';
-  var msgs = [];
+  var all = [];
   try {
     GmailApp.search(q, 0, 200).forEach(function (t) {
-      t.getMessages().forEach(function (m) { msgs.push(m); });
+      t.getMessages().forEach(function (m) { all.push(m); });
     });
   } catch (e) {
     Logger.log('search failed: ' + e);
     return { ok: false, error: String(e) };
   }
+  // Day End Reports only — same reason as diagnoseBuyingReviews. Taking one
+  // message per store newest-first hands back the Saturday WEEKLY report on a
+  // Sunday or Monday, and its cash wording is not the daily one's.
+  var msgs = [], ignored = 0;
+  all.forEach(function (m) {
+    if (DAY_END_SUBJECT.test(String(m.getSubject() || ''))) msgs.push(m);
+    else ignored++;
+  });
   msgs.sort(function (a, b) { return b.getDate().getTime() - a.getDate().getTime(); });
 
-  Logger.log('=== ' + msgs.length + ' Day End Report(s) in the last ' + LOOKBACK + ' days ===');
+  Logger.log('=== ' + msgs.length + ' Day End Report(s) in the last ' + LOOKBACK + ' days'
+    + (ignored ? ' (' + ignored + ' weekly/other pmdev.site email(s) ignored)' : '') + ' ===');
   if (!msgs.length) {
     Logger.log('NONE FOUND — see diagnoseBuyingEmails() for why.');
     return { ok: true, messages_found: 0, samples: [] };
@@ -2531,6 +2672,35 @@ function runBuyingImportNow() {
   return r;
 }
 
+// ---- wider window, for repairing a column rather than filling yesterday ----
+// BUY_BACKFILL is 3 because the daily job only ever needs yesterday plus a
+// self-healing margin. That is too narrow to REPAIR anything: when September
+// 2026's review column had to be refilled after the day-1 carryover was cleared,
+// a normal run reached Sept 4-6 and left Sept 2-3 blank.
+//
+// Safe to run over a wide window because every write here is idempotent — buy and
+// sell land as `unchanged` when they already match, and a cumulative review count
+// re-read from the same email is the same number. The only limit that matters is
+// Gmail's: _searchBuyingMessages searches LOOKBACK (9) days, so asking for more
+// than that finds no emails for the earlier days and reports them as missing.
+//
+// ⚠️ DRY RUN FIRST. This is the live one.
+var BUY_REPAIR_DAYS = 9;
+
+function dryRunBuyingRepair() {
+  var r = ingestBuyingEmails({ dryRun: true, backfill: BUY_REPAIR_DAYS });
+  Logger.log(JSON.stringify(r, null, 2));
+  _logBuySummary(r);
+  return r;
+}
+
+function runBuyingRepairNow() {
+  var r = ingestBuyingEmails({ backfill: BUY_REPAIR_DAYS });
+  Logger.log(JSON.stringify(r, null, 2));
+  _logBuySummary(r);
+  return r;
+}
+
 function _logBuySummary(r) {
   if (!r || r.ok === false) { Logger.log('FAILED: ' + (r && r.error)); return; }
   Logger.log('\nfilled ' + r.written.length + ' / overwrote-existing ' + r.corrected.length
@@ -2554,8 +2724,19 @@ function _logBuySummary(r) {
                    : d.from + ' -> ' + d.to));
   });
   (r.warnings || []).forEach(function (w) {
-    // Two warning shapes too: the buying-days cross-check carries sheet/expected,
-    // the days-thru bail-out carries only a hint.
+    // THREE warning shapes, not two. The buying-days cross-check carries
+    // sheet/expected, the days-thru bail-out carries only a hint — and a refused
+    // field (reviews) carries store/date/field/value/reason and no `note` or
+    // `tab` at all, so it printed as the literal string
+    // "WARNING [undefined] undefined" for every refusal. Six days of September
+    // review data were refused and the log said nothing about any of it, which is
+    // most of why nobody caught it. A warning nobody can read is not a warning.
+    if (w.note === undefined && w.reason) {
+      Logger.log('  WARNING ' + (w.store || '?') + ' ' + (w.date || '?')
+        + ' ' + (w.field || 'field') + ' REFUSED'
+        + (w.value === undefined ? '' : ' (' + w.value + ')') + ' — ' + w.reason);
+      return;
+    }
     Logger.log('  WARNING [' + w.tab + '] ' + w.note
       + (w.expected === undefined ? '' : ': sheet=' + w.sheet + ' expected=' + w.expected)
       + (w.hint ? ' — ' + w.hint : ''));
