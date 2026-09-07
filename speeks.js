@@ -37386,7 +37386,11 @@ function _vrBuyerPickerHtml() {
     if (!rows.length) return '';
     const cells = rows.map(b => {
         const on = _vrSelBuyers.has(b.name);
-        const n = _vrBuyerReplyLines(b).length;
+        // What this row would owe given the selection it would be part of: a row
+        // that is already ticked counts the current selection, an unticked one
+        // counts itself joining. So the counts fall the moment a second person
+        // goes on, which is the only warning the DM gets that the rule changed.
+        const n = _vrBuyerReplyLines(b, (_vrSelBuyers.size + (on ? 0 : 1)) <= _VR_TOPUP_MAX_BUYERS).length;
         return `<label style="display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:8px; cursor:pointer;
                 background:${on ? '#eff6ff' : '#fff'}; border:1.5px solid ${on ? '#93c5fd' : '#e2e8f0'};">
             <input type="checkbox" ${on ? 'checked' : ''} ${_vrAllClear ? 'disabled' : ''}
@@ -37441,7 +37445,9 @@ function _vrUploadPanelHtml() {
                 <button class="btn-primary" style="font-size:12px; padding:7px 16px;" onclick="vrConfirmUpload(this)">${cta}</button>
                 <span style="margin-left:10px; font-size:11.5px; color:#94a3b8; font-weight:600;">${
                     _vrAllClear ? 'Manager is still notified to review — nothing to answer.'
-                    : _vrSelBuyers.size ? 'Everyone else’s lines upload as read-only context.'
+                    : _vrSelBuyers.size > _VR_TOPUP_MAX_BUYERS
+                    ? `${_vrSelBuyers.size} people picked — ${_VR_VARIANCE_CUTOFF}% and worse only, no top-up to ${_VR_BUYER_MIN_LINES}. Everyone else’s lines upload as read-only context.`
+                    : _vrSelBuyers.size ? `One person picked — topped up to their ${_VR_BUYER_MIN_LINES} worst. Everyone else’s lines upload as read-only context.`
                     : 'No buyers picked — the whole store replies, as before.'
                 }</span>
             </div>`;
@@ -37616,6 +37622,17 @@ function _vrParseRows(rows) {
 // round number would be indefensible.
 const _VR_BUYER_MIN_LINES = 12;
 
+// ...and the top-up only happens when ONE person is being singled out.
+//
+// The floor above is an exercise for a buyer whose month went wrong. Applied to
+// a whole team it stops being an exercise and becomes a pile: MPL August had
+// four people negative, so four top-ups to twelve put 30 lines on the board,
+// most of them at -5% — small enough that nobody can say anything useful about
+// them, numerous enough that nobody starts. Past one person the tool goes back
+// to what it was before the floor existed: the lines at or below the cutoff,
+// and nothing else.
+const _VR_TOPUP_MAX_BUYERS = 1;
+
 // Per-buyer roll-up of a parsed file, worst first. Drives the pick-list.
 function _vrBuyerSummary(parsed) {
     const by = {};
@@ -37632,10 +37649,16 @@ function _vrBuyerSummary(parsed) {
 }
 
 // The lines a selected buyer actually has to answer for: every line at/below the
-// cutoff, topped up with their next-worst negatives to _VR_BUYER_MIN_LINES.
-function _vrBuyerReplyLines(summary) {
+// cutoff, topped up with their next-worst negatives to _VR_BUYER_MIN_LINES —
+// but only when they are the only one picked. See _VR_TOPUP_MAX_BUYERS.
+//
+// topUp is passed rather than read off _vrSelBuyers, because the pick-list has
+// to show each row the count it would owe if it were ticked, which is a
+// different answer per row from the one the upload uses.
+function _vrBuyerReplyLines(summary, topUp) {
     const sorted = summary.lines.slice().sort((a, b) => a.variance_pct - b.variance_pct);
     const major = sorted.filter(l => l.variance_pct <= _VR_VARIANCE_CUTOFF);
+    if (!topUp) return major;
     if (major.length >= _VR_BUYER_MIN_LINES) return major;
     return sorted.slice(0, Math.min(_VR_BUYER_MIN_LINES, sorted.length));
 }
@@ -37701,10 +37724,11 @@ function _vrUploadSet() {
     const all = _vrParsed.items || [];
     if (_vrAllClear) return { items: all.map(l => ({ ...l, needs_reply: false })), buyers: [] };
     if (!_vrSelBuyers.size) return { items: all.map(l => ({ ...l, needs_reply: true })), buyers: null };
+    const topUp = _vrSelBuyers.size <= _VR_TOPUP_MAX_BUYERS;
     const owed = new Set();
     _vrBuyerSummary(_vrParsed)
         .filter(b => _vrSelBuyers.has(b.name))
-        .forEach(b => _vrBuyerReplyLines(b).forEach(l => owed.add(l)));
+        .forEach(b => _vrBuyerReplyLines(b, topUp).forEach(l => owed.add(l)));
     // Context lines are cutoff lines only — a minor negative belonging to nobody
     // in particular has no reason to be stored.
     const context = all.filter(l => !owed.has(l)).map(l => ({ ...l, needs_reply: false }));
