@@ -173,6 +173,30 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, id: data.id, slug: data.slug });
     }
 
+    // A group has no row of its own (migration 0081): it exists because some
+    // categories name it. So renaming one is renaming the name they share, in a
+    // single statement — not the DM visiting each sheet, which is what they had
+    // to do before this existed, and which left a badly named group unfixable
+    // once it had more than a couple of sheets under it.
+    //
+    // Renaming onto an existing group merges them. That falls out of the update
+    // rather than being built, and it is a real thing to want; the dialog says
+    // so before it is clicked.
+    //
+    // No active filter: an inactive category still carries a group name, and
+    // leaving it pointing at a name nothing else uses would be a stale row
+    // waiting to reappear under the old heading if it is ever restored.
+    if (body.action === "renameGroup") {
+      const from = String(body.from ?? "").trim();
+      const to = String(body.to ?? "").trim();
+      if (!from) return json({ success: false, error: "Which group?" }, 400);
+      if (!to) return json({ success: false, error: "A group needs a name" }, 400);
+      const { error } = await supabase.from("pg_categories")
+        .update({ group_name: to, ...stamp }).eq("group_name", from);
+      if (error) return json({ success: false, error: error.message }, 500);
+      return await ok();
+    }
+
     // Soft delete. The shots stay, so a category removed by mistake comes back
     // whole — and so nothing silently orphans images that other rows may share.
     if (body.action === "deleteCategory" && body.id) {

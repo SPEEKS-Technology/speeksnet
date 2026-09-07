@@ -21382,6 +21382,19 @@ select.dd-native {
    END of near-identical labels, which is the worst place to scan for them. A
    heading pulls that difference up to where the eye already is. */
 .pg-grp { display: flex; flex-direction: column; }
+/* The heading and, for a DM, the pencil that renames the group. A row rather
+   than the heading alone, because a button cannot be nested inside a button. */
+.pg-grp-top { display: flex; align-items: center; }
+.pg-grp-top .pg-grp-hd { flex: 1; min-width: 0; }
+.pg-grp-edit {
+    display: none; flex-shrink: 0; border: none; background: none; cursor: pointer;
+    color: var(--pg-faint); padding: 6px; border-radius: 7px; line-height: 0;
+}
+.pg-grp-edit svg { width: 12px; height: 12px; }
+.pg-grp-edit:hover { color: var(--pg-accent-deep); background: var(--pg-accent-tint); }
+/* Only on hover or focus: fifteen pencils down the rail is noise, and the DM
+   renaming a group is already pointing at the one they mean. */
+.pg-grp-top:hover .pg-grp-edit, .pg-grp-edit:focus-visible { display: inline-flex; }
 .pg-grp-hd {
     display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
     border: none; background: none; font: inherit; font-size: 11px; font-weight: 850;
@@ -21398,8 +21411,8 @@ select.dd-native {
 }
 .pg-grp-chev { display: inline-flex; flex-shrink: 0; transition: transform .16s ease; }
 .pg-grp-chev svg { width: 12px; height: 12px; }
-.pg-grp.open > .pg-grp-hd { color: var(--pg-ink); }
-.pg-grp.open > .pg-grp-hd .pg-grp-chev { transform: rotate(90deg); }
+.pg-grp.open .pg-grp-hd { color: var(--pg-ink); }
+.pg-grp.open .pg-grp-hd .pg-grp-chev { transform: rotate(90deg); }
 /* Collapsed is display:none rather than height:0 — a rail that animates open
    under someone reaching for a sheet is a moving target, and there is nothing
    here worth a transition. */
@@ -21567,18 +21580,32 @@ select.dd-native {
 .pg-ask-f input:focus, .pg-ask-sel:focus {
     outline: none; border-color: var(--pg-accent); box-shadow: 0 0 0 3px var(--pg-ring);
 }
-/* The groups already in use, as a dropdown. This was a wrapping row of pills,
-   which is fine at three groups and a wall at fifteen — and a list is also the
-   only shape that can carry "New group…" as a deliberate choice rather than as
-   a text box sitting next to the pills hoping to be understood. */
-.pg-ask-sel { cursor: pointer; appearance: none;
-    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364707c' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-    background-repeat: no-repeat; background-position: right 10px center; background-size: 15px;
-    padding-right: 32px;
+/* The groups already in use: a text box that filters a list under it. It was a
+   row of pills (a wall at fifteen groups), then a <select> (cannot be typed
+   into, and needed a magic "+ New group…" row whose value leaked into the
+   database once). A combo box needs neither: an existing group is a row you
+   pick, a new one is a name you finish typing. */
+.pg-ask-combo { display: block; position: relative; }
+.pg-ask-menu {
+    position: absolute; z-index: 2; left: 0; right: 0; top: calc(100% + 4px);
+    display: flex; flex-direction: column; padding: 4px;
+    background: #fff; border: 1px solid var(--pg-line); border-radius: 10px;
+    box-shadow: 0 10px 26px rgba(12, 16, 22, .16);
+    max-height: 190px; overflow-y: auto;
 }
-/* The box "New group…" reveals. Indented under the dropdown that opened it, so
-   it reads as that choice being filled in rather than as a second question. */
-.pg-ask-f input.pg-ask-new { margin: 8px 0 0 14px; width: calc(100% - 14px); }
+.pg-ask-opt {
+    font: inherit; font-size: 13px; font-weight: 650; text-align: left; cursor: pointer;
+    border: none; background: none; color: var(--pg-ink);
+    padding: 8px 10px; border-radius: 7px;
+}
+.pg-ask-opt:hover { background: var(--pg-accent-tint); color: var(--pg-accent-deep); }
+/* The row that makes a group rather than picking one. Separated, because
+   "Computer Parts" and "Create Computer Parts" doing different things while
+   looking identical is how you get a duplicate group. */
+.pg-ask-opt-new {
+    margin-top: 4px; border-top: 1px solid var(--pg-line); border-radius: 0 0 7px 7px;
+    padding-top: 9px; color: var(--pg-accent-deep); font-weight: 750;
+}
 /* A check the dialog failed without closing — a name already taken, say. Sits
    where the eye lands after the fields and before the buttons. */
 .pg-ask-err {

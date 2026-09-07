@@ -7928,11 +7928,17 @@ function _pgRailHtml(admin) {
         const open = _pgOpenGroup === null ? holdsActive : _pgOpenGroup === sec.group;
         return `
         <section class="pg-grp${open ? ' open' : ''}" data-group="${_pgEsc(sec.group.toLowerCase())}">
-          <button type="button" class="pg-grp-hd" onclick="pgToggleGroup(this)" aria-expanded="${open}">
-            <span class="pg-grp-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></span>
-            <span class="pg-grp-name">${_pgEsc(sec.group)}</span>
-            <span class="pg-grp-n">${sec.cats.length}</span>
-          </button>
+          <div class="pg-grp-top">
+            <button type="button" class="pg-grp-hd" onclick="pgToggleGroup(this)" aria-expanded="${open}">
+              <span class="pg-grp-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></span>
+              <span class="pg-grp-name">${_pgEsc(sec.group)}</span>
+              <span class="pg-grp-n">${sec.cats.length}</span>
+            </button>
+            ${admin ? `<button type="button" class="pg-grp-edit" onclick="pgRenameGroup(this)"
+                       title="Rename this group">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+            </button>` : ''}
+          </div>
           <div class="pg-grp-body">${sec.cats.map(catBtn).join('')}</div>
         </section>`;
     }).join('');
@@ -8348,9 +8354,12 @@ const _pgDupeMsg = name => `There is already a category called “${name}”.`;
 //     const a = await _pgAsk(...); if (!a) return;
 let _pgAskClose = null;
 
-// A dropdown's "type something new" option. Never a real answer: readField()
-// swaps it for whatever was typed in the box it reveals.
-const PG_ASK_NEW = ' new';
+// Nothing stands in for "a new one" any more. A magic option value used to, and
+// it was written with a stray control character in it, which the browser
+// rewrote inside the attribute — so the comparison that was meant to catch it
+// silently failed and the sentinel itself was saved as a group name. A combo
+// box has no sentinel to leak: what the DM typed is the answer.
+let _pgAskScrollY = 0;
 
 function _pgAsk(opt) {
     const fields = opt.fields || [];
@@ -8359,27 +8368,34 @@ function _pgAsk(opt) {
         // promise forever, and its caller is sitting on _pgAdmin.busy.
         if (_pgAskClose) _pgAskClose(null);
 
-        // A dropdown rather than a row of chips. There are three groups today
-        // and there will be fifteen; a wrapping row of pills at that count is a
-        // wall, and it also gave no way to say "a group I have not made yet"
-        // except typing into a box that looked like it belonged to the pills.
+        // Same lock every other modal on the site uses. body.no-scroll is
+        // position:fixed, so the scroll offset has to be captured and pinned or
+        // the page silently jumps to the top behind the dialog. Skipped when
+        // something else already holds the lock, and released only if we took it.
+        const tookLock = !document.body.classList.contains('no-scroll');
+        if (tookLock) {
+            _pgAskScrollY = window.scrollY || window.pageYOffset || 0;
+            document.body.style.top = `-${_pgAskScrollY}px`;
+            document.body.classList.add('no-scroll');
+        }
+
         const fieldHtml = (f, i) => {
-            if (f.kind !== 'select') {
+            if (f.kind !== 'combo') {
                 return `<input type="text" class="pg-ask-in" data-i="${i}" value="${_pgEsc(f.value || '')}"
                                placeholder="${_pgEsc(f.placeholder || '')}" autocomplete="off" spellcheck="false">`;
             }
-            const cur = String(f.value || '');
-            const known = (f.options || []).some((o) => String(o.value) === cur);
+            // A text box with a filtered list under it, not a <select>. A select
+            // cannot be typed into, and at fifteen groups scrolling one to find
+            // "Smart Watches" is worse than typing "wat". It also collapses two
+            // questions into one: an existing group is a row you pick, a new one
+            // is a name you finish typing.
             return `
-              <select class="pg-ask-sel" data-i="${i}">
-                ${(f.options || []).map((o) =>
-                    `<option value="${_pgEsc(o.value)}"${String(o.value) === cur ? ' selected' : ''}>${_pgEsc(o.label)}</option>`
-                ).join('')}
-                <option value="${PG_ASK_NEW}"${known ? '' : ' selected'}>${_pgEsc(f.newLabel || '+ New…')}</option>
-              </select>
-              <input type="text" class="pg-ask-new" data-i="${i}" ${known ? 'hidden' : ''}
-                     value="${known ? '' : _pgEsc(cur)}"
-                     placeholder="${_pgEsc(f.newPlaceholder || '')}" autocomplete="off" spellcheck="false">`;
+              <span class="pg-ask-combo">
+                <input type="text" class="pg-ask-in pg-ask-cin" data-i="${i}" value="${_pgEsc(f.value || '')}"
+                       placeholder="${_pgEsc(f.placeholder || '')}" autocomplete="off" spellcheck="false"
+                       role="combobox" aria-expanded="false" aria-autocomplete="list">
+                <span class="pg-ask-menu" data-i="${i}" hidden></span>
+              </span>`;
         };
 
         const wrap = document.createElement('div');
@@ -8404,12 +8420,16 @@ function _pgAsk(opt) {
         const okBtn = wrap.querySelector('.pg-ask-ok');
         const errEl = wrap.querySelector('.pg-ask-err');
         const at = (sel, i) => wrap.querySelector(`${sel}[data-i="${i}"]`);
-        const newBox = (i) => at('input.pg-ask-new', i);
+        const inputOf = i => at('input', i);
 
+        // What the DM typed, except that typing an existing group's name in the
+        // wrong case must not make a second group that only differs by case. An
+        // exact (case-insensitive) match resolves to the stored spelling.
         const readField = (f, i) => {
-            if (f.kind !== 'select') return at('input.pg-ask-in', i).value.trim();
-            const sel = at('select.pg-ask-sel', i);
-            return sel.value === PG_ASK_NEW ? newBox(i).value.trim() : sel.value;
+            const raw = inputOf(i).value.trim();
+            if (f.kind !== 'combo' || !raw) return raw;
+            const hit = (f.options || []).find(o => String(o.value).toLowerCase() === raw.toLowerCase());
+            return hit ? hit.value : raw;
         };
         const readAll = () => {
             const out = {};
@@ -8422,32 +8442,66 @@ function _pgAsk(opt) {
             _pgAskClose = null;
             document.removeEventListener('keydown', onKey, true);
             wrap.remove();
+            if (tookLock) {
+                document.body.classList.remove('no-scroll');
+                document.body.style.top = '';
+                window.scrollTo(0, _pgAskScrollY);
+            }
             resolve(val);
         };
         _pgAskClose = done;
 
         // A required field greys the button rather than rejecting the answer
         // after the fact: an empty name was never going to be accepted, so the
-        // dialog says so before it is clicked. Choosing "New group…" and then
-        // typing nothing is the same empty answer wearing a dropdown.
+        // dialog says so before it is clicked.
         const sync = () => {
-            okBtn.disabled = fields.some((f, i) => {
-                const v = readField(f, i);
-                if (f.required && !v) return true;
-                return f.kind === 'select' && at('select.pg-ask-sel', i).value === PG_ASK_NEW && !v;
-            });
+            okBtn.disabled = fields.some((f, i) => f.required && !readField(f, i));
             errEl.hidden = true;
         };
 
+        /* ---- the combo menus ------------------------------------------------ */
+        const closeMenu = (i) => {
+            at('.pg-ask-menu', i).hidden = true;
+            inputOf(i).setAttribute('aria-expanded', 'false');
+        };
+        const anyMenuOpen = () => !!wrap.querySelector('.pg-ask-menu:not([hidden])');
+
+        const drawMenu = (f, i) => {
+            const menu = at('.pg-ask-menu', i);
+            const typed = inputOf(i).value.trim();
+            const low = typed.toLowerCase();
+            const rows = (f.options || []).filter(o => !low || String(o.label).toLowerCase().includes(low));
+            const exact = (f.options || []).some(o => String(o.value).toLowerCase() === low);
+            // "Create X" only when X is genuinely not on the list. Offering it
+            // next to an identical existing row is how you end up with two.
+            const mk = typed && !exact
+                ? `<button type="button" class="pg-ask-opt pg-ask-opt-new" data-v="${_pgEsc(typed)}">Create &ldquo;${_pgEsc(typed)}&rdquo;</button>`
+                : '';
+            menu.innerHTML = rows.map(o =>
+                `<button type="button" class="pg-ask-opt" data-v="${_pgEsc(o.value)}">${_pgEsc(o.label)}</button>`
+            ).join('') + mk;
+            menu.hidden = !menu.innerHTML;
+            inputOf(i).setAttribute('aria-expanded', String(!menu.hidden));
+        };
+
         fields.forEach((f, i) => {
-            if (f.kind !== 'select') { at('input.pg-ask-in', i).addEventListener('input', sync); return; }
-            const sel = at('select.pg-ask-sel', i), box = newBox(i);
-            box.addEventListener('input', sync);
-            sel.addEventListener('change', () => {
-                box.hidden = sel.value !== PG_ASK_NEW;
-                if (!box.hidden) box.focus();
+            const inp = inputOf(i);
+            if (f.kind !== 'combo') { inp.addEventListener('input', sync); return; }
+            const menu = at('.pg-ask-menu', i);
+            inp.addEventListener('input', () => { drawMenu(f, i); sync(); });
+            inp.addEventListener('focus', () => drawMenu(f, i));
+            // mousedown, not click: blur fires first on click and would close the
+            // menu out from under the pointer.
+            menu.addEventListener('mousedown', (e) => {
+                const btn = e.target.closest('.pg-ask-opt');
+                if (!btn) return;
+                e.preventDefault();
+                inp.value = btn.dataset.v;
+                closeMenu(i);
+                inp.focus();
                 sync();
             });
+            inp.addEventListener('blur', () => setTimeout(() => closeMenu(i), 0));
         });
 
         okBtn.addEventListener('click', () => {
@@ -8460,7 +8514,7 @@ function _pgAsk(opt) {
             if (bad) {
                 errEl.textContent = bad;
                 errEl.hidden = false;
-                const first = at('input.pg-ask-in', 0) || at('input.pg-ask-new', 0);
+                const first = wrap.querySelector('.pg-ask-in');
                 if (first) { first.focus(); first.select(); }
                 return;
             }
@@ -8472,16 +8526,25 @@ function _pgAsk(opt) {
         wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) done(null); });
 
         // Captured, so Escape closes this and not whatever modal is underneath.
+        // An open menu eats the first Escape: closing the list is what the DM
+        // meant, and losing the whole dialog to it would be a nasty surprise.
         const onKey = (e) => {
-            if (e.key === 'Escape') { e.stopPropagation(); done(null); }
-            else if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); okBtn.click(); }
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                if (anyMenuOpen()) { fields.forEach((f, i) => { if (f.kind === 'combo') closeMenu(i); }); return; }
+                done(null);
+            } else if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+                e.preventDefault();
+                if (anyMenuOpen()) { fields.forEach((f, i) => { if (f.kind === 'combo') closeMenu(i); }); return; }
+                okBtn.click();
+            }
         };
         document.addEventListener('keydown', onKey, true);
 
         sync();
-        const focusable = wrap.querySelector('.pg-ask-in, .pg-ask-new:not([hidden]), .pg-ask-sel') || okBtn;
-        focusable.focus();
-        if (focusable.select) focusable.select();
+        const first = wrap.querySelector('.pg-ask-in') || okBtn;
+        first.focus();
+        if (first.select) first.select();
     });
 }
 
@@ -8497,9 +8560,9 @@ async function pgAddCategory() {
         fields: [
             { key: 'name', label: 'Category Name', placeholder: 'Graphics Cards', required: true },
             {
-                key: 'group', label: 'Group', kind: 'select', value: '',
-                options: _pgGroupOptions(),
-                newLabel: '+ New group…', newPlaceholder: 'Computer Parts',
+                key: 'group', label: 'Group', hint: '(leave blank to keep it on its own)',
+                kind: 'combo', value: '', options: _pgGroupOptions(),
+                placeholder: 'Computer Parts',
             },
         ],
         validate: a => _pgNameTaken(a.name) ? _pgDupeMsg(a.name) : null,
@@ -8511,9 +8574,33 @@ async function pgAddCategory() {
     if (out.id) { _pgAdmin.catId = out.id; pgRender(); }
 }
 
-// Moving a sheet between groups, and the only way to rename a group: rename it
-// on each category that names it. See migration 0081 for why that cost was
-// accepted over a groups table.
+// Renaming a group, which until now was not possible at all: a group is only a
+// name its categories share (migration 0081), so it had no edit screen of its
+// own and the only route was moving every sheet out one at a time — and a group
+// with a bad name could not be fixed, only abandoned. One action renames it on
+// every category at once.
+//
+// Renaming onto a name that already exists MERGES the two, which is a real
+// thing to want and is what the DM just asked for in plain words. It is said
+// out loud in the dialog rather than refused.
+async function pgRenameGroup(btn) {
+    const from = (btn.closest('.pg-grp')?.querySelector('.pg-grp-name')?.textContent || '').trim();
+    if (!from) return;
+    const n = _pgCats().filter(c => String(c.group_name || '').trim() === from).length;
+    const a = await _pgAsk({
+        title: 'Rename Group',
+        body: `Renames it on all ${n} categor${n === 1 ? 'y' : 'ies'} under it. `
+            + 'Give it the name of another group and the two are merged.',
+        ok: 'Rename Group',
+        fields: [{ key: 'name', label: 'Group Name', value: from, required: true }],
+    });
+    if (!a || a.name === from) return;
+    if (!await _pgPost({ action: 'renameGroup', from, to: a.name })) return;
+    _pgOpenGroup = a.name;
+    await _pgReload();
+}
+
+// Moving one sheet between groups. Renaming the group itself is pgRenameGroup().
 async function pgSetCategoryGroup() {
     const cat = _pgAdminCat();
     if (!cat) return;
@@ -8522,9 +8609,9 @@ async function pgSetCategoryGroup() {
         body: 'Sheets in the same group share one dropdown in the sidebar.',
         ok: 'Save Group',
         fields: [{
-            key: 'group', label: 'Group', kind: 'select',
-            value: cat.group_name || '', options: _pgGroupOptions(),
-            newLabel: '+ New group…', newPlaceholder: 'Smart Tablets',
+            key: 'group', label: 'Group', hint: '(leave blank to keep it on its own)',
+            kind: 'combo', value: cat.group_name || '', options: _pgGroupOptions(),
+            placeholder: 'Smart Tablets',
         }],
     });
     if (!a) return;
