@@ -53,9 +53,9 @@ const is = (what, got, want) => {
 console.log('the seeded sheets: a condition that only repeats the label says nothing');
 // Straight off the three printouts, exactly as migration 0080 seeds them.
 is('Everything Included',  _pgCondNote({ label: 'Everything Included', cond: 'Everything Included' }), '');
-is('LCD Flaws (repeatable)', _pgCondNote({ label: 'LCD Flaws', cond: 'LCD flaws', rep: true }), 'Take as many as you need');
-is('Cosmetic Flaws (repeatable)', _pgCondNote({ label: 'Cosmetic Flaws', cond: 'Cosmetic flaws', rep: true }), 'Take as many as you need');
-is('Extra Accessories (repeatable)', _pgCondNote({ label: 'Extra Accessories', cond: 'Extra accessories', rep: true }), 'Take as many as you need');
+is('LCD Flaws (repeatable)', _pgCondNote({ label: 'LCD Flaws', cond: 'LCD flaws', rep: true }), 'Take as many photos as needed');
+is('Cosmetic Flaws (repeatable)', _pgCondNote({ label: 'Cosmetic Flaws', cond: 'Cosmetic flaws', rep: true }), 'Take as many photos as needed');
+is('Extra Accessories (repeatable)', _pgCondNote({ label: 'Extra Accessories', cond: 'Extra accessories', rep: true }), 'Take as many photos as needed');
 
 console.log('\n...and a condition that adds something still says it');
 // Migration 0082. The condition is a sentence about the tablet in the lister's
@@ -84,7 +84,7 @@ console.log('\nthe sameness test');
 console.log('\nboth halves together');
 is('different condition AND repeatable',
     _pgCondNote({ label: 'Charging Port', cond: 'Port is damaged', rep: true }),
-    'Only if port is damaged &middot; Take as many as you need');
+    'Only if port is damaged &middot; Take as many photos as needed');
 
 console.log('\nnothing goes through unescaped');
 {

@@ -8023,7 +8023,7 @@ function _pgCondNote(s) {
     }
     // The printout writes this as a "+" on a number. With no numbers a bare "+"
     // would mean nothing, so it is said in words.
-    if (s.rep) bits.push('Take as many as you need');
+    if (s.rep) bits.push('Take as many photos as needed');
     return bits.join(' &middot; ');
 }
 
@@ -8131,8 +8131,8 @@ function _pgAdminRowHtml(s, i, n) {
         <div class="pg-ename">
           <b>${_pgEsc(s.label)}</b>
           <small>${s.cond
-            ? `Only when: ${_pgEsc(s.cond)}${s.rep ? ' &middot; take as many as needed' : ''}`
-            : 'Always taken'}${s.img ? '' : ' &middot; no photo yet'}</small>
+            ? `Only when: ${_pgEsc(s.cond)}${s.rep ? ' &middot; Take as many photos as needed' : ''}`
+            : 'Always taken'}${s.img ? '' : ' &middot; No photo yet'}</small>
         </div>
         <div class="pg-etools">
           <label class="pg-ephoto" title="${s.img ? 'Replace the photo' : 'Add a photo'}">
@@ -8160,7 +8160,7 @@ function _pgAdminEditHtml(s) {
           </label>
           <label class="pg-f pg-f-check" id="pg-f-rep-wrap"${s.cond ? '' : ' hidden'}>
             <input type="checkbox" id="pg-f-rep"${s.rep ? ' checked' : ''}>
-            <span>Take as many as needed <em>(the &ldquo;&#43;&rdquo; on the printout &mdash; the shots after it shift down)</em></span>
+            <span>Take as many photos as needed</span>
           </label>
           <label class="pg-f">
             <span>Words on the slot <em>(shown when there is no photo)</em></span>
@@ -8175,7 +8175,7 @@ function _pgAdminEditHtml(s) {
       </div>`;
 }
 
-// "Take as many as needed" is meaningless for a shot every item gets exactly one
+// "Take as many photos as needed" is meaningless for a shot every item gets exactly one
 // of, and the database refuses it outright, so the checkbox only exists while
 // there is a condition to hang it on.
 function _pgFormCondChanged() {
@@ -8232,9 +8232,14 @@ async function pgSaveShot(id, btn) {
 async function pgAddShot() {
     const cat = _pgAdminCat();
     if (!cat) return;
-    const label = prompt('What does the lister photograph?\n\nIt lands at the bottom — move it into place afterwards.');
-    if (label === null || !label.trim()) return;
-    const out = await _pgPost({ action: 'saveShot', category_id: cat.id, label: label.trim(), cond: null });
+    const a = await _pgAsk({
+        title: 'Add a shot',
+        body: 'It lands at the bottom of the sheet &mdash; move it into place afterwards.',
+        ok: 'Add shot',
+        fields: [{ key: 'label', label: 'What the lister photographs', placeholder: 'Back of Tablet', required: true }],
+    });
+    if (!a) return;
+    const out = await _pgPost({ action: 'saveShot', category_id: cat.id, label: a.label, cond: null });
     if (!out) return;
     await _pgReload();
     // Straight into the form for the row just made: a bare name is almost never
@@ -8245,7 +8250,11 @@ async function pgAddShot() {
 async function pgDeleteShot(id) {
     const s = _pgShotById(id);
     if (!s) return;
-    if (!confirm(`Delete “${s.label}” from this sheet?\n\nThis cannot be undone, and every store loses it straight away.`)) return;
+    if (!await _pgAsk({
+        title: `Delete &ldquo;${_pgEsc(s.label)}&rdquo;?`,
+        body: 'This cannot be undone, and every store loses it straight away.',
+        ok: 'Delete shot', danger: true,
+    })) return;
     if (!await _pgPost({ action: 'deleteShot', id })) return;
     if (_pgAdmin.editing === id) _pgAdmin.editing = null;
     await _pgReload();
@@ -8279,20 +8288,129 @@ function _pgGroupNames() {
     });
     return seen;
 }
-const _pgGroupHint = () => {
-    const g = _pgGroupNames();
-    return g.length ? `\n\nGroups in use: ${g.join(', ')}` : '';
-};
+// The groups already in use, as things to click rather than as a sentence
+// listing names you then have to retype exactly. A typo here does not fail: it
+// silently makes a NEW group of one, which is the whole reason these are chips.
+const _pgGroupChips = () => _pgGroupNames().map(g => ({ label: g, value: g }));
+
+/* ---- the editor's own dialogs -------------------------------------------- */
+// window.prompt cannot offer a list of existing answers to click, cannot mark a
+// destructive one as destructive, and draws browser chrome with the site's IP
+// address across the top of it. Everything the editor asks goes through here
+// instead.
+//
+// Scoped to the Picture Guide deliberately. There are a hundred-odd confirm()
+// calls elsewhere in this file; replacing them is a separate job, and a
+// half-migrated app is worse than either end of it.
+//
+// `title` and `body` are HTML — callers escape what they interpolate, the same
+// as every other template string in this module.
+//
+// Resolves null when dismissed, and an object of answers otherwise — {} for a
+// plain confirmation, which is truthy, so every call site reads the same way:
+//     const a = await _pgAsk(...); if (!a) return;
+let _pgAskClose = null;
+
+function _pgAsk(opt) {
+    const fields = opt.fields || [];
+    return new Promise((resolve) => {
+        // A second dialog opened over the first would strand the first one's
+        // promise forever, and its caller is sitting on _pgAdmin.busy.
+        if (_pgAskClose) _pgAskClose(null);
+
+        const wrap = document.createElement('div');
+        wrap.className = 'pg-ask';
+        wrap.innerHTML = `
+          <div class="pg-ask-card" role="dialog" aria-modal="true">
+            <h3 class="pg-ask-t">${opt.title}</h3>
+            ${opt.body ? `<p class="pg-ask-b">${opt.body}</p>` : ''}
+            ${fields.map((f, i) => `
+              <label class="pg-ask-f">
+                <span>${_pgEsc(f.label)}${f.hint ? ` <em>${_pgEsc(f.hint)}</em>` : ''}</span>
+                <input type="text" data-i="${i}" value="${_pgEsc(f.value || '')}"
+                       placeholder="${_pgEsc(f.placeholder || '')}" autocomplete="off" spellcheck="false">
+                ${(f.chips || []).length ? `<span class="pg-ask-chips">${f.chips.map((c, j) =>
+                    `<button type="button" class="pg-ask-chip" data-for="${i}" data-j="${j}">${_pgEsc(c.label)}</button>`
+                ).join('')}</span>` : ''}
+              </label>`).join('')}
+            <div class="pg-ask-acts">
+              <button type="button" class="pg-ask-cancel">Cancel</button>
+              <button type="button" class="pg-ask-ok${opt.danger ? ' danger' : ''}">${_pgEsc(opt.ok || 'OK')}</button>
+            </div>
+          </div>`;
+        document.body.appendChild(wrap);
+
+        const inputs = Array.prototype.slice.call(wrap.querySelectorAll('.pg-ask-f input'));
+        const okBtn = wrap.querySelector('.pg-ask-ok');
+
+        const done = (val) => {
+            if (_pgAskClose !== done) return;   // already closed by something else
+            _pgAskClose = null;
+            document.removeEventListener('keydown', onKey, true);
+            wrap.remove();
+            resolve(val);
+        };
+        _pgAskClose = done;
+
+        // A required field greys the button rather than rejecting the answer
+        // after the fact: an empty name was never going to be accepted, so the
+        // dialog says so before it is clicked.
+        const sync = () => {
+            okBtn.disabled = fields.some((f, i) => f.required && !inputs[i].value.trim());
+        };
+        inputs.forEach((inp) => inp.addEventListener('input', sync));
+
+        wrap.querySelectorAll('.pg-ask-chip').forEach((ch) => {
+            ch.addEventListener('click', () => {
+                const i = Number(ch.dataset.for);
+                inputs[i].value = fields[i].chips[Number(ch.dataset.j)].value;
+                inputs[i].focus();
+                sync();
+            });
+        });
+
+        okBtn.addEventListener('click', () => {
+            if (okBtn.disabled) return;
+            const out = {};
+            fields.forEach((f, i) => { out[f.key] = inputs[i].value.trim(); });
+            done(out);
+        });
+        wrap.querySelector('.pg-ask-cancel').addEventListener('click', () => done(null));
+        // mousedown, not click: a drag that starts inside the card and releases
+        // on the backdrop is a text selection, not a dismissal.
+        wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) done(null); });
+
+        // Captured, so Escape closes this and not whatever modal is underneath.
+        const onKey = (e) => {
+            if (e.key === 'Escape') { e.stopPropagation(); done(null); }
+            else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') { e.preventDefault(); okBtn.click(); }
+        };
+        document.addEventListener('keydown', onKey, true);
+
+        sync();
+        if (inputs[0]) { inputs[0].focus(); inputs[0].select(); } else okBtn.focus();
+    });
+}
 
 async function pgAddCategory() {
-    const name = prompt('Name of the new category?\n\ne.g. Graphics Cards');
-    if (name === null || !name.trim()) return;
-    // Asked at create time because a category with no group sits on its own at
-    // the top level, which is fine but is rarely what someone means.
-    const group = prompt(`Which group does "${name.trim()}" belong in?`
-        + `\n\nLeave blank to leave it ungrouped.${_pgGroupHint()}`, '');
-    if (group === null) return;
-    const out = await _pgPost({ action: 'saveCategory', name: name.trim(), group: group.trim() });
+    // Name and group in one card. They were two prompts back to back, which is
+    // two chances to cancel halfway and leave a category stranded ungrouped —
+    // and the group is asked at all because sitting alone at the top level is
+    // fine but is rarely what anybody means.
+    const a = await _pgAsk({
+        title: 'New category',
+        body: 'A category is one printed sheet &mdash; one kind of item, with its own list of shots.',
+        ok: 'Create category',
+        fields: [
+            { key: 'name', label: 'Category name', placeholder: 'Graphics Cards', required: true },
+            {
+                key: 'group', label: 'Group', hint: '(leave blank to keep it on its own)',
+                placeholder: 'Computer Parts', chips: _pgGroupChips(),
+            },
+        ],
+    });
+    if (!a) return;
+    const out = await _pgPost({ action: 'saveCategory', name: a.name, group: a.group });
     if (!out) return;
     await _pgReload();
     if (out.id) { _pgAdmin.catId = out.id; pgRender(); }
@@ -8304,10 +8422,20 @@ async function pgAddCategory() {
 async function pgSetCategoryGroup() {
     const cat = _pgAdminCat();
     if (!cat) return;
-    const group = prompt(`Which group does "${cat.name}" belong in?`
-        + `\n\nLeave blank to leave it ungrouped.${_pgGroupHint()}`, cat.group_name || '');
-    if (group === null) return;
-    if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: cat.name, group: group.trim() })) return;
+    const a = await _pgAsk({
+        title: `Group for &ldquo;${_pgEsc(cat.name)}&rdquo;`,
+        body: 'Sheets in the same group share one dropdown in the sidebar.',
+        ok: 'Save group',
+        fields: [{
+            key: 'group', label: 'Group', hint: '(leave blank to keep it on its own)',
+            value: cat.group_name || '', placeholder: 'Smart Tablets',
+            // "Ungrouped" only when there is something to undo — an empty box
+            // already means ungrouped, so the chip is a shortcut, not the way.
+            chips: _pgGroupChips().concat(cat.group_name ? [{ label: 'Ungrouped', value: '' }] : []),
+        }],
+    });
+    if (!a) return;
+    if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: cat.name, group: a.group })) return;
     _pgOpenGroup = null;
     await _pgReload();
 }
@@ -8315,16 +8443,26 @@ async function pgSetCategoryGroup() {
 async function pgRenameCategory() {
     const cat = _pgAdminCat();
     if (!cat) return;
-    const name = prompt('Rename this category:', cat.name);
-    if (name === null || !name.trim() || name.trim() === cat.name) return;
-    if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: name.trim(), group: cat.group_name || '' })) return;
+    const a = await _pgAsk({
+        title: 'Rename category',
+        body: 'Every store sees the new name straight away. The shots and photos are untouched.',
+        ok: 'Rename',
+        fields: [{ key: 'name', label: 'Category name', value: cat.name, required: true }],
+    });
+    if (!a || a.name === cat.name) return;
+    if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: a.name, group: cat.group_name || '' })) return;
     await _pgReload();
 }
 
 async function pgDeleteCategory() {
     const cat = _pgAdminCat();
     if (!cat) return;
-    if (!confirm(`Remove “${cat.name}” from the Picture Guide?\n\nIts ${cat.shots.length} shot${cat.shots.length === 1 ? '' : 's'} and photos are kept, so this can be undone — but nobody will see the sheet until it is.`)) return;
+    if (!await _pgAsk({
+        title: `Remove &ldquo;${_pgEsc(cat.name)}&rdquo;?`,
+        body: `Its ${cat.shots.length} shot${cat.shots.length === 1 ? '' : 's'} and photos are kept, so this `
+            + 'can be undone &mdash; but nobody sees the sheet until it is.',
+        ok: 'Remove category', danger: true,
+    })) return;
     if (!await _pgPost({ action: 'deleteCategory', id: cat.id })) return;
     _pgAdmin.catId = null;
     _pgAdmin.editing = null;
@@ -8377,7 +8515,11 @@ async function pgUploadShotPhoto(shotId, input) {
 async function pgRemoveShotPhoto(shotId) {
     const s = _pgShotById(shotId);
     if (!s || !s.img) return;
-    if (!confirm(`Remove the example photo from “${s.label}”?\n\nThe slot goes back to showing words instead.`)) return;
+    if (!await _pgAsk({
+        title: 'Remove the example photo?',
+        body: `&ldquo;${_pgEsc(s.label)}&rdquo; goes back to showing words on a grey slot.`,
+        ok: 'Remove photo', danger: true,
+    })) return;
     if (!await _pgPost({
         action: 'saveShot', id: shotId, label: s.label, cond: s.cond,
         rep: s.rep, note: s.note, path: null,
