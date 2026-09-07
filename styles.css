@@ -21549,12 +21549,18 @@ select.dd-native {
 .pg-ask {
     position: fixed; inset: 0; z-index: 3200; background: rgba(12, 16, 22, .55);
     display: flex; align-items: center; justify-content: center; padding: 24px;
+    /* The backdrop scrolls, not the card — the card has to keep overflow
+       visible so the combo menu can hang past its bottom edge. */
+    overflow-y: auto;
 }
 .pg-ask-card {
     width: min(430px, 100%); background: #fff; border-radius: 14px;
     border: 1px solid var(--pg-line); padding: 24px 26px 22px;
     box-shadow: 0 18px 48px rgba(12, 16, 22, .28);
-    max-height: 88vh; overflow-y: auto;
+    /* The card does NOT scroll, and does not cap its own height: an
+       overflow other than visible clips the combo menu, which hangs out of the
+       bottom of the card by design. A tall dialog scrolls on .pg-ask instead. */
+    overflow: visible;
 }
 .pg-ask-t { margin: 0; font-size: 16.5px; font-weight: 800; color: var(--pg-ink); line-height: 1.35; }
 .pg-ask-b { margin: 9px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--pg-muted); }

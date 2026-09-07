@@ -8478,11 +8478,16 @@ function _pgAsk(opt) {
         };
         const anyMenuOpen = () => !!wrap.querySelector('.pg-ask-menu:not([hidden])');
 
-        const drawMenu = (f, i) => {
+        // `filter` is false when the list is opened by clicking into the box and
+        // true while typing. Filtering on open is what a <select> would never do
+        // and it read as broken: the box already holds "Smart Tablets", so the
+        // list opened over the buttons showing one row saying "Smart Tablets" —
+        // hiding every group the DM had opened it to switch to.
+        const drawMenu = (f, i, filter) => {
             const menu = at('.pg-ask-menu', i);
             const typed = inputOf(i).value.trim();
             const low = typed.toLowerCase();
-            const rows = (f.options || []).filter(o => !low || String(o.label).toLowerCase().includes(low));
+            const rows = (f.options || []).filter(o => !filter || !low || String(o.label).toLowerCase().includes(low));
             const exact = (f.options || []).some(o => String(o.value).toLowerCase() === low);
             // "Create X" only when X is genuinely not on the list. Offering it
             // next to an identical existing row is how you end up with two.
@@ -8500,8 +8505,13 @@ function _pgAsk(opt) {
             const inp = inputOf(i);
             if (f.kind !== 'combo') { inp.addEventListener('input', sync); return; }
             const menu = at('.pg-ask-menu', i);
-            inp.addEventListener('input', () => { drawMenu(f, i); sync(); });
-            inp.addEventListener('focus', () => drawMenu(f, i));
+            inp.addEventListener('input', () => { drawMenu(f, i, true); sync(); });
+            // Click, NOT focus. The dialog focuses its first field on open, so a
+            // focus handler dropped the list over the buttons before the DM had
+            // done anything — including on the Group dialog, where that field IS
+            // the first one. Clicking in is the ask; being handed the dialog is
+            // not.
+            inp.addEventListener('click', () => drawMenu(f, i, false));
             // mousedown, not click: blur fires first on click and would close the
             // menu out from under the pointer.
             menu.addEventListener('mousedown', (e) => {
@@ -8545,6 +8555,12 @@ function _pgAsk(opt) {
                 e.stopPropagation();
                 if (anyMenuOpen()) { fields.forEach((f, i) => { if (f.kind === 'combo') closeMenu(i); }); return; }
                 done(null);
+            } else if (e.key === 'ArrowDown' && e.target.classList.contains('pg-ask-cin')) {
+                // The way in without a mouse, now that focus alone no longer
+                // opens the list. Unfiltered, same as clicking the box.
+                e.preventDefault();
+                const i = Number(e.target.dataset.i);
+                drawMenu(fields[i], i, false);
             } else if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
                 e.preventDefault();
                 if (anyMenuOpen()) { fields.forEach((f, i) => { if (f.kind === 'combo') closeMenu(i); }); return; }
