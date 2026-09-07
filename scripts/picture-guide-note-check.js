@@ -58,8 +58,12 @@ is('Cosmetic Flaws (repeatable)', _pgCondNote({ label: 'Cosmetic Flaws', cond: '
 is('Extra Accessories (repeatable)', _pgCondNote({ label: 'Extra Accessories', cond: 'Extra accessories', rep: true }), 'Take as many as you need');
 
 console.log('\n...and a condition that adds something still says it');
-is('Setting Unlock Screen', _pgCondNote({ label: 'Setting Unlock Screen', cond: 'Unlock screen set' }),
-    'Only if unlock screen set');
+// Migration 0082. The condition is a sentence about the tablet in the lister's
+// hand, not a second copy of the label, so "Only if <condition>" comes out as
+// English. The old row said "Unlock screen set", which rendered as "Only if
+// unlock screen set" and read as a PIN rather than a carrier unlock.
+is('Carrier Unlock Status', _pgCondNote({ label: 'Carrier Unlock Status', cond: 'The tablet is a cellular model' }),
+    'Only if the tablet is a cellular model');
 is('Apple Warranty', _pgCondNote({ label: 'Apple Warranty', cond: 'Warranty still active' }),
     'Only if warranty still active');
 
