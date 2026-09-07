@@ -18166,10 +18166,19 @@ body.tv-body { display: block; background: #eef1f5; }
     color: #334155; line-height: 1.5; margin: 2px 0;
 }
 .lh-tool-ttl .lt-lab { flex-shrink: 0; }
+/* ⚠️ RED, NOT AMBER, AND IT IS A VERDICT ABOUT US. This line means the words we
+   proposed removing are sitting in the listing's own spec field — the strongest
+   evidence available here that the RULE was wrong, which is why the bar at the
+   top counts these separately as "look like the rule overruled the listing".
+   Amber read as "have a think about this one" and put it in the same visual
+   class as the grey .lh-tool-unsettled below, which says the opposite thing:
+   that nothing settles it. These are the rows most likely to end in a rule
+   change, so they take the same red as .lh-tool-err rather than a colour of
+   their own — one red in this tool, meaning "we got this wrong". */
 .lh-tool-says {
     margin: 7px 0 0; padding: 6px 9px; border-radius: 7px;
-    background: #fffbeb; border: 1px solid #fde68a;
-    font-size: 11.5px; color: #92400e; line-height: 1.5;
+    background: #fef2f2; border: 1px solid #fecaca;
+    font-size: 11.5px; color: #7f1d1d; line-height: 1.5;
 }
 .lh-tool-unsettled {
     margin: 7px 0 0; padding: 6px 9px; border-radius: 7px;
@@ -21218,3 +21227,334 @@ select.dd-native {
     .b2b-cap-row { flex-wrap: wrap; }
     .b2b-cap-what { flex: 1 1 100%; }
 }
+
+/* ========================================================================== *
+ * PICTURE GUIDE (Operations, next to the Margin Guide)
+ * --------------------------------------------------------------------------
+ * The board is the binder page it replaces: a grid of square frames, the shot's
+ * number in a corner box, black borders on the shots every item gets and red on
+ * the ones that only apply sometimes. A lister who has used the printout should
+ * need nothing explained.
+ *
+ * The one thing the paper cannot do is renumber, so the numbers here are drawn
+ * from _pgSequence() rather than stored, and a switched-off conditional stays on
+ * the page greyed and dashed instead of vanishing — a lister who spots a scratch
+ * halfway through has to be able to find the slot and switch it back on.
+ *
+ * Palette is deliberately the Margin Guide's, not a new one: these are two
+ * reference tools a tab apart, and the second inventing its own greens would
+ * read as a different product.
+ * ========================================================================== */
+.pg-panel {
+    --pg-line: #e3e8ee;
+    --pg-hdr: #f6faf7;
+    --pg-muted: #64707c;
+    --pg-faint: #9aa6ad;
+    --pg-accent: #1f9d57;
+    --pg-accent-deep: #178048;
+    --pg-accent-tint: #e8f7ee;
+    --pg-ring: #c6ecd6;
+    --pg-red: #d13b3b;
+    --pg-red-deep: #7f1d1d;
+    --pg-red-tint: #fdf1f1;
+    --pg-red-line: #f0c9c9;
+    --pg-ink: #1a1c1e;
+    padding: 0;
+    /* Same escape hatch as .mg-panel: .ws-panel pins panes to a viewport-derived
+       height, which clips the tail of a sixteen-slot board. This is a reference
+       sheet, so it grows with its content and the page scrolls. overflow stays
+       visible or the sticky rail silently stops sticking. */
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible;
+}
+.pg-head {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 18px 22px; border-bottom: 1px solid var(--pg-line);
+    background: var(--pg-hdr); border-radius: 16px 16px 0 0;
+}
+.pg-eyebrow {
+    font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--pg-accent-deep);
+}
+.pg-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.pg-title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+.pg-title-acts { display: flex; align-items: center; gap: 10px; }
+.pg-sub { margin: 0; font-size: 13.5px; color: var(--pg-muted); }
+.pg-body { padding: 18px 22px 24px; }
+.pg-loading, .pg-error { padding: 40px 0; text-align: center; color: var(--pg-muted); font-size: 14px; }
+.pg-error { color: var(--pg-red); }
+.pg-retry {
+    display: inline-block; margin-left: 10px; font: inherit; font-size: 12.5px; font-weight: 650;
+    padding: 5px 12px; border-radius: 8px; border: 1px solid var(--pg-line);
+    background: #fff; color: var(--pg-muted); cursor: pointer;
+}
+.pg-retry:hover { border-color: var(--pg-accent); color: var(--pg-accent-deep); }
+
+/* Edit / Back. Hidden by default and revealed by .pg-can from pgRender(), never
+   by an inline style — _applyFeatureOverridesToPlainEls strips inline display
+   from every non-overridden [data-feature] element, which would hand the editor
+   to everyone. Same trap the Margin Guide fell into. */
+.pg-manage { display: none; }
+.pg-panel.pg-can .pg-manage {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 700; color: var(--pg-accent-deep);
+    background: var(--pg-accent-tint); border: 1px solid var(--pg-ring);
+    border-radius: 9px; padding: 7px 13px; white-space: nowrap;
+}
+.pg-panel.pg-can .pg-manage:hover { background: #dcf2e5; }
+.pg-manage svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+/* Edit and Back are one control in one place: whichever applies occupies the
+   slot, so the way out is never somewhere new. */
+.pg-back-top { display: none; }
+.pg-panel.pg-editing .pg-manage { display: none; }
+.pg-panel.pg-editing .pg-back-top {
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 700; color: var(--pg-muted);
+    background: #fff; border: 1px solid var(--pg-line);
+    border-radius: 9px; padding: 7px 13px; white-space: nowrap;
+}
+.pg-panel.pg-editing .pg-back-top:hover { background: var(--pg-hdr); color: var(--pg-accent-deep); }
+.pg-back-top svg { width: 13px; height: 13px; stroke: currentColor; fill: none; }
+
+/* ---- shell: category rail + the board ------------------------------------ */
+.pg-shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 1100px) { .pg-shell { grid-template-columns: 1fr; } }
+.pg-rail {
+    display: flex; flex-direction: column; padding: 14px;
+    border: 1px solid var(--pg-line); border-radius: 12px; background: #fff;
+    box-shadow: 0 1px 2px rgba(16,24,40,.05); position: sticky; top: 16px; min-width: 0;
+}
+@media (max-width: 1100px) { .pg-rail { position: static; } }
+.pg-rail-hd {
+    margin: 0 0 9px; padding: 0 4px; font-size: 10.5px; font-weight: 800;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--pg-faint);
+}
+.pg-search {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 10px;
+    border: 1px solid var(--pg-line); border-radius: 10px; padding: 8px 11px; background: #f8fafc;
+}
+.pg-search svg { width: 14px; height: 14px; color: var(--pg-faint); flex-shrink: 0; }
+.pg-search input { border: none; background: none; font: inherit; font-size: 12.5px; width: 100%; outline: none; }
+.pg-catlist { display: flex; flex-direction: column; gap: 2px; max-height: 58vh; overflow: auto; }
+.pg-cat {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    border: none; background: none; font: inherit; font-size: 12.5px; font-weight: 650;
+    color: var(--pg-muted); cursor: pointer; padding: 8px 10px; border-radius: 9px;
+}
+.pg-cat:hover { background: #f1f5f9; color: var(--pg-ink); }
+.pg-cat.on { background: var(--pg-ink); color: #fff; }
+.pg-cat-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-cat-n { margin-left: auto; font-size: 10.5px; font-weight: 800; opacity: .55; flex-shrink: 0; }
+.pg-rail-foot { border-top: 1px solid #eef2f7; margin: 10px 0 0; padding: 10px 0 0; }
+.pg-addcat {
+    display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%;
+    border: 1px dashed var(--pg-line); background: none; font: inherit; font-size: 12px;
+    font-weight: 700; color: var(--pg-muted); cursor: pointer; padding: 8px 10px; border-radius: 9px;
+}
+.pg-addcat:hover { border-color: var(--pg-accent); color: var(--pg-accent-deep); }
+.pg-main { min-width: 0; }
+
+/* ---- "applies to this item": the control that makes the numbers real ----- */
+.pg-applies { border: 1px solid var(--pg-line); border-radius: 13px; padding: 12px 14px; background: #fbfcfe; }
+.pg-applies-none {
+    font-size: 12.5px; color: var(--pg-muted);
+    border: 1px dashed var(--pg-line); background: #fbfcfd;
+}
+.pg-applies-hd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+.pg-applies-hd b { font-size: 12.5px; font-weight: 800; color: var(--pg-ink); }
+.pg-applies-hd span { font-size: 11.5px; color: var(--pg-muted); }
+.pg-reset {
+    margin-left: auto; border: none; background: none; font: inherit; font-size: 11.5px;
+    font-weight: 700; color: var(--pg-muted); cursor: pointer;
+    text-decoration: underline; text-underline-offset: 2px;
+}
+.pg-reset:hover { color: var(--pg-ink); }
+.pg-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.pg-chip {
+    display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--pg-line);
+    background: #fff; border-radius: 999px; padding: 5px 6px 5px 11px;
+    font-size: 12px; font-weight: 650; color: var(--pg-faint);
+}
+.pg-chip-pad { padding-right: 11px; }
+.pg-chip.on { border-color: var(--pg-red-line); background: var(--pg-red-tint); color: var(--pg-red-deep); }
+.pg-chip-lbl { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
+.pg-dot { width: 9px; height: 9px; border-radius: 99px; background: #e2e8f0; flex-shrink: 0; }
+.pg-chip.on .pg-dot { background: var(--pg-red); }
+.pg-chip-off {
+    font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--pg-faint); padding-right: 5px;
+}
+.pg-stepper {
+    display: inline-flex; align-items: center; background: #fff;
+    border: 1px solid var(--pg-red-line); border-radius: 999px; overflow: hidden;
+}
+.pg-stepper button {
+    border: none; background: none; width: 22px; height: 22px; font: inherit;
+    font-size: 13px; font-weight: 800; color: var(--pg-red-deep); cursor: pointer; line-height: 1; padding: 0;
+}
+.pg-stepper button:hover { background: var(--pg-red-tint); }
+.pg-stepper i { font-style: normal; font-size: 11.5px; font-weight: 800; color: var(--pg-red-deep); min-width: 14px; text-align: center; }
+
+.pg-legend {
+    display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+    margin: 15px 0 0; font-size: 11.5px; color: var(--pg-muted);
+}
+.pg-lg { display: inline-flex; align-items: center; gap: 6px; }
+.pg-sw { width: 13px; height: 13px; border-radius: 4px; flex-shrink: 0; }
+.pg-sw-req { background: #fff; border: 1.5px solid var(--pg-ink); }
+.pg-sw-cond { background: var(--pg-red-tint); border: 1.5px solid var(--pg-red); }
+.pg-sw-na { background: #f1f5f9; border: 1.5px dashed var(--pg-faint); }
+.pg-count { margin-left: auto; font-size: 12px; color: var(--pg-muted); }
+.pg-count b { font-size: 13px; font-weight: 800; color: var(--pg-ink); }
+.pg-count em { font-style: normal; }
+
+/* ---- the board: the binder page ------------------------------------------ */
+.pg-board {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+    gap: 16px 14px; margin: 14px 0 0;
+}
+.pg-shot { display: flex; flex-direction: column; margin: 0; }
+/* The caption is the SHOT's name, and it holds a two-line box whether it needs
+   one or not — an uneven baseline across a sixteen-square grid reads as a
+   mistake, and the frames below have to line up to be scannable. */
+.pg-cap {
+    font-size: 11.5px; font-weight: 750; text-align: center; color: var(--pg-ink);
+    margin: 0 0 5px; min-height: 30px; line-height: 1.3;
+    display: flex; align-items: flex-end; justify-content: center;
+}
+.pg-shot.cond .pg-cap { color: var(--pg-red); }
+.pg-frame {
+    position: relative; aspect-ratio: 1 / 1; border: 1.5px solid var(--pg-ink);
+    border-radius: 8px; overflow: hidden; background: #f8fafc;
+}
+.pg-frame[onclick] { cursor: zoom-in; }
+.pg-shot.cond .pg-frame { border-color: var(--pg-red); border-width: 2px; }
+.pg-badge {
+    position: absolute; top: 0; left: 0; z-index: 2; min-width: 26px; padding: 3px 8px;
+    background: #fff; border-right: 1.5px solid var(--pg-ink); border-bottom: 1.5px solid var(--pg-ink);
+    border-radius: 6px 0 8px 0; font-size: 11.5px; font-weight: 800; color: var(--pg-ink); text-align: center;
+}
+.pg-shot.cond .pg-badge { border-color: var(--pg-red); color: var(--pg-red); }
+/* A conditional the lister has switched off stays ON THE PAGE, greyed. Removing
+   it would leave nowhere to click when they turn the item over and find the
+   scratch they had already said wasn't there. */
+.pg-shot.na { opacity: .42; }
+.pg-shot.na .pg-cap { color: var(--pg-faint); }
+.pg-shot.na .pg-frame { border: 1.5px dashed var(--pg-faint); filter: grayscale(1); }
+.pg-shot.na .pg-badge {
+    border-color: var(--pg-faint); color: var(--pg-faint); border-style: dashed;
+    font-size: 9.5px; letter-spacing: .04em;
+}
+.pg-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* The grey slot with red words on it, for a shot with no example photograph —
+   which is what the printout does in the same situation, so an un-uploaded shot
+   reads as the sheet rather than as something broken. */
+.pg-instr {
+    width: 100%; height: 100%; background: #e8e8e8;
+    display: flex; align-items: center; justify-content: center; padding: 14px;
+}
+.pg-instr span {
+    background: #fff; border: 1.5px solid var(--pg-red); color: var(--pg-red);
+    font-size: 12px; font-weight: 750; text-align: center; padding: 12px 10px; line-height: 1.4;
+}
+.pg-empty {
+    width: 100%; height: 100%; background: #eef2f7;
+    display: flex; align-items: center; justify-content: center; padding: 14px;
+}
+.pg-empty span { font-size: 11px; font-weight: 700; color: var(--pg-faint); text-align: center; line-height: 1.4; }
+
+/* ---- one slot, full size ------------------------------------------------- */
+.pg-zoom {
+    position: fixed; inset: 0; z-index: 3000; background: rgba(12, 16, 22, .82);
+    display: flex; align-items: center; justify-content: center; padding: 28px; cursor: zoom-out;
+}
+.pg-zoom figure { margin: 0; max-width: min(900px, 92vw); text-align: center; }
+.pg-zoom img { max-width: 100%; max-height: 78vh; border-radius: 10px; display: block; margin: 0 auto; }
+.pg-zoom figcaption { margin: 12px 0 0; color: #fff; font-size: 13.5px; font-weight: 650; }
+
+/* ---- the DM editor -------------------------------------------------------- */
+.pg-ebar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    border: 1px solid var(--pg-line); border-radius: 11px; padding: 11px 13px; background: #fff;
+}
+.pg-ebar-name { display: flex; align-items: baseline; gap: 9px; margin-right: auto; min-width: 0; }
+.pg-ebar-name b { font-size: 15px; font-weight: 800; color: var(--pg-ink); }
+.pg-ebar-name span { font-size: 11.5px; color: var(--pg-muted); }
+.pg-ehint { margin: 11px 0 12px; font-size: 12px; color: var(--pg-muted); max-width: 84ch; }
+.pg-ehint em { font-style: italic; }
+.pg-ebtn {
+    border: 1px solid var(--pg-line); background: #fff; border-radius: 8px; padding: 6px 11px;
+    font: inherit; font-size: 11.5px; font-weight: 700; color: var(--pg-muted); cursor: pointer;
+}
+.pg-ebtn:hover { border-color: var(--pg-faint); color: var(--pg-ink); }
+.pg-ebtn-del:hover { border-color: var(--pg-red-line); background: var(--pg-red-tint); color: var(--pg-red); }
+.pg-erow {
+    display: flex; align-items: center; gap: 11px; border: 1px solid var(--pg-line);
+    border-radius: 11px; padding: 9px 11px; background: #fff; margin: 0 0 7px;
+}
+.pg-erow.cond { background: var(--pg-red-tint); border-color: var(--pg-red-line); }
+.pg-erow-busy { opacity: .5; pointer-events: none; }
+.pg-erow-move { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+.pg-erow-move button {
+    border: 1px solid var(--pg-line); background: #fff; border-radius: 6px; width: 24px; height: 19px;
+    font: inherit; font-size: 10px; font-weight: 800; color: var(--pg-muted); cursor: pointer; padding: 0; line-height: 1;
+}
+.pg-erow-move button:hover:not(:disabled) { border-color: var(--pg-accent); color: var(--pg-accent-deep); }
+.pg-erow-move button:disabled { opacity: .3; cursor: default; }
+.pg-ethumb {
+    width: 46px; height: 46px; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--pg-line); flex-shrink: 0;
+}
+.pg-ethumb .pg-instr { padding: 3px; }
+.pg-ethumb .pg-instr span { font-size: 6px; padding: 2px 1px; border-width: 1px; line-height: 1.2; }
+.pg-ethumb .pg-empty { padding: 3px; }
+.pg-ethumb .pg-empty span { font-size: 6px; line-height: 1.2; }
+.pg-ename { flex: 1; min-width: 0; }
+.pg-ename b { display: block; font-size: 13px; font-weight: 750; color: var(--pg-ink); }
+.pg-ename small { font-size: 11px; color: var(--pg-muted); }
+.pg-etools { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+/* The file input is the label, so the camera glyph IS the control — a visible
+   "Choose file" reads as a form to fill in rather than a photo to swap. */
+.pg-ephoto {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border: 1px solid var(--pg-line); border-radius: 8px;
+    background: #fff; color: var(--pg-muted); cursor: pointer;
+}
+.pg-ephoto:hover { border-color: var(--pg-accent); color: var(--pg-accent-deep); }
+.pg-ephoto input { display: none; }
+.pg-ephoto svg { width: 15px; height: 15px; }
+
+.pg-erow-edit { display: block; padding: 13px; }
+.pg-eform { display: flex; flex-direction: column; gap: 11px; }
+.pg-f { display: flex; flex-direction: column; gap: 5px; }
+.pg-f > span { font-size: 11.5px; font-weight: 700; color: var(--pg-muted); }
+.pg-f > span em { font-style: normal; font-weight: 500; color: var(--pg-faint); }
+.pg-f input[type="text"] {
+    border: 1px solid var(--pg-line); border-radius: 8px; padding: 8px 11px;
+    font: inherit; font-size: 13px; background: #fff; color: var(--pg-ink); outline: none;
+}
+.pg-f input[type="text"]:focus { border-color: var(--pg-accent); }
+.pg-f-check { flex-direction: row; align-items: flex-start; gap: 8px; }
+.pg-f-check input { margin-top: 2px; }
+.pg-f-check span { font-size: 12px; font-weight: 650; color: var(--pg-ink); }
+.pg-f-check span em { font-style: normal; font-weight: 500; color: var(--pg-muted); }
+.pg-eform-acts { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.pg-esave {
+    border: 1px solid var(--pg-accent); background: var(--pg-accent); color: #fff;
+    border-radius: 8px; padding: 8px 18px; font: inherit; font-size: 12.5px; font-weight: 750; cursor: pointer;
+}
+.pg-esave:hover { background: var(--pg-accent-deep); }
+.pg-esave:disabled { opacity: .6; cursor: default; }
+.pg-ecancel {
+    border: 1px solid var(--pg-line); background: #fff; color: var(--pg-muted);
+    border-radius: 8px; padding: 8px 15px; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
+.pg-ecancel:hover { color: var(--pg-ink); }
+.pg-erm-photo { margin-left: auto; }
+.pg-eadd {
+    display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;
+    border: 1px dashed var(--pg-line); background: none; font: inherit; font-size: 12.5px;
+    font-weight: 700; color: var(--pg-muted); cursor: pointer; padding: 13px; border-radius: 11px; margin: 5px 0 0;
+}
+.pg-eadd:hover { border-color: var(--pg-accent); color: var(--pg-accent-deep); }

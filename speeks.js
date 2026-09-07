@@ -261,6 +261,10 @@ const USAGE_TRACK = Object.assign(Object.create(null), {
     // not using it. The tracked moment is a category AND an item picked (someone
     // at the counter with a customer), and a document actually opened.
     'mg:lookup':        'Margin Guide',
+    // Same rule as mg:lookup — opening the Picture Guide tab is not using it.
+    // The tracked moment is a category picked, which is someone at a station
+    // with an item in front of them.
+    'pg:sheet':         'Picture Guide',
     'ops:callbacks':    'Customer Call Backs',
     'doc:open':         'Processes & Policies',
     // stats page + the home KPI charts
@@ -6302,6 +6306,8 @@ function switchOperationsTab(name) {
         _startB2bSync();
     } else if (name === 'marginguide') {
         mgLoad();
+    } else if (name === 'pictureguide') {
+        pgLoad();
     } else if (name === 'ebay') {
         ecLoad();
     }
@@ -7667,6 +7673,607 @@ function _mgRenderAdmin(body) {
     }
 }
 
+/* ==========================================================================
+ * PICTURE GUIDE — the binder of photo printouts, moved into SPEEKSNET.
+ * --------------------------------------------------------------------------
+ * Every picture station has a binder of laminated sheets: one page per category,
+ * showing each photo a lister must take, in the order it goes on the listing.
+ * This replaces the binder, so the board is laid out like the page — same grid,
+ * same numbers in the corner, same red on the shots that are conditional.
+ *
+ * THE NUMBERS ARE COMPUTED, AND THAT IS THE WHOLE POINT.
+ * Paper cannot resolve a conditional shot, so the printouts fudge it: on the
+ * tablet sheet "Everything Included" and "About Phone" are BOTH numbered 2,
+ * because whichever one applies is the real number 2. Three separate shots are
+ * numbered 4. The lister does that arithmetic in their head, on every item, all
+ * day. Here they tick what they can actually see on the unit in their hand and
+ * _pgSequence() walks the sheet, stepping over what does not apply, so the board
+ * shows the positions this item genuinely has. Nothing stores a shot number.
+ *
+ * The sheets are store-agnostic reference data, so they are fetched once per
+ * session and everything after is local — switching category mid-item is an
+ * instant redraw, never a spinner, which matters with a camera in one hand.
+ * ========================================================================== */
+
+const PICTURE_GUIDE_URL = `${_BASE}/picture-guide`;
+
+let _pgSheets = null;               // [{ id, slug, name, shots: [...] }]
+// `applies` and `reps` are keyed by SHOT ID, not index: the DM editor reorders
+// and deletes rows underneath this, and an index-keyed map would silently
+// re-point a lister's ticks at the wrong shots after any move.
+// `fresh` means "the ticks belong to nobody yet" — set on every entry to the tab
+// and cleared once pgRender() has rebuilt them. It exists because an empty
+// applies map is ambiguous: it is also what a lister legitimately produces by
+// switching every conditional off, and treating that as "needs defaulting" would
+// switch them all back on under their hands.
+let _pgState = { catId: null, applies: {}, reps: {}, fresh: true };
+let _pgAdmin = { open: false, catId: null, editing: null, busy: false };
+// One usage signal per visit to the tab, not one per category clicked.
+let _pgTracked = false;
+
+const _pgEsc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+// Same role set as the Margin Guide editor, in the session's own spelling
+// ("district manager", a space). The edge function normalizes both spellings and
+// enforces this again on every write — this is only what to draw.
+const PG_EDIT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
+function pgCanEdit() {
+    return PG_EDIT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+}
+
+const _pgCats = () => (_pgSheets || []);
+const _pgCat  = () => _pgCats().find(c => c.id === _pgState.catId) || null;
+const _pgShots = () => { const c = _pgCat(); return (c && c.shots) || []; };
+
+async function pgLoad(opts) {
+    const body = document.getElementById('pg-body');
+    if (!body) return;
+    if (!opts || !opts.keep) {
+        // Every entry to the tab is a fresh item. Coming back must not leave the
+        // last unit's flaws ticked on the next one's board — that is how a lister
+        // ends up taking a photo of damage that isn't there, or missing damage
+        // that is. So the ticks reset, and never into the DM editor.
+        _pgState.applies = {};
+        _pgState.reps = {};
+        _pgState.fresh = true;
+        _pgTracked = false;
+        _pgAdmin.open = false;
+        _pgAdmin.editing = null;
+    }
+    if (_pgSheets) { pgRender(); return; }
+    try {
+        const res = await fetch(`${PICTURE_GUIDE_URL}?v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error || 'Could not load the guide');
+        _pgSheets = json.categories || [];
+        pgRender();
+    } catch (e) {
+        body.innerHTML = `<div class="pg-error">Couldn't load the picture guide. ${_pgEsc(e.message)}
+            <button type="button" class="pg-retry" onclick="_pgSheets=null;pgLoad()">Try again</button></div>`;
+    }
+}
+
+// Buyers and listers read the same cached sheets, so a DM write has to throw the
+// cache away or the editor shows stale rows on the screen it just changed.
+async function _pgReload() {
+    _pgSheets = null;
+    await pgLoad({ keep: true });
+}
+
+/* ---- THE RULE, in code --------------------------------------------------- *
+ * Walk the sheet in order. A conditional shot that does not apply to this item
+ * is stepped over, and the shot behind it takes the number it would have had.
+ * A repeatable shot ("4+" on the paper) occupies a RANGE, so everything after it
+ * shifts by however many the lister says they need.
+ * ------------------------------------------------------------------------- */
+function _pgSequence() {
+    let n = 1;
+    return _pgShots().map(s => {
+        if (s.cond && !_pgState.applies[s.id]) return { s, off: true };
+        const count = s.rep ? Math.max(1, _pgState.reps[s.id] || 1) : 1;
+        const row = { s, from: n, to: n + count - 1, count };
+        n += count;
+        return row;
+    });
+}
+const _pgNum   = r => r.off ? 'N/A' : (r.from === r.to ? String(r.from) : `${r.from}–${r.to}`);
+const _pgLive  = () => _pgSequence().filter(r => !r.off);
+const _pgTotal = () => _pgLive().reduce((a, r) => a + r.count, 0);
+
+// Default every conditional ON, so the first thing anyone sees is the printed
+// page they already know. Ticking is then subtractive — "no, this one has no
+// box" — which is the direction a lister actually thinks in, and it means
+// forgetting to touch the bar leaves you with MORE photos than needed rather
+// than fewer. Extra photos are a nuisance; missing ones are a relist.
+function _pgDefaultApplies() {
+    _pgState.applies = {};
+    _pgState.reps = {};
+    _pgShots().forEach(s => {
+        if (s.cond) { _pgState.applies[s.id] = true; if (s.rep) _pgState.reps[s.id] = 1; }
+    });
+    _pgState.fresh = false;
+}
+
+function pgPick(catId) {
+    const c = _pgCats().find(x => x.id === catId);
+    if (!c) return;
+    _pgState.catId = c.id;
+    _pgDefaultApplies();
+    if (_pgAdmin.open) { _pgAdmin.catId = c.id; _pgAdmin.editing = null; }
+    pgRender();
+}
+function pgResetApplies() { _pgDefaultApplies(); pgRender(); }
+function pgToggleApply(id) { _pgState.applies[id] = !_pgState.applies[id]; pgRender(); }
+function pgBump(id, d, ev) {
+    if (ev) ev.stopPropagation();
+    _pgState.reps[id] = Math.max(1, Math.min(9, (_pgState.reps[id] || 1) + d));
+    pgRender();
+}
+
+/* ---- rendering ----------------------------------------------------------- */
+
+// One slot's picture: the photograph if there is one, otherwise the grey slot
+// with red words on it — which is exactly what the printout does when it has no
+// example either, so an un-uploaded shot reads as the sheet rather than as a
+// bug.
+function _pgArt(s) {
+    if (s.img) return `<img class="pg-img" src="${_pgEsc(s.img)}" alt="${_pgEsc(s.label)}" loading="lazy">`;
+    if (s.note) return `<div class="pg-instr"><span>${_pgEsc(s.note)}</span></div>`;
+    return `<div class="pg-empty"><span>${_pgEsc(s.label)}</span></div>`;
+}
+
+function pgRender() {
+    const body = document.getElementById('pg-body');
+    if (!body) return;
+
+    const can = pgCanEdit();
+    document.querySelector('.pg-panel')?.classList.toggle('pg-can', can);
+    document.querySelector('.pg-panel')?.classList.toggle('pg-editing', can && _pgAdmin.open);
+
+    if (!_pgCats().length) {
+        body.innerHTML = `<div class="pg-error">There are no picture sheets yet.${
+            can ? ' Open <b>Edit</b> to add the first category.' : ''}</div>`;
+        return;
+    }
+    // Land on the first sheet rather than an empty panel: a lister arriving here
+    // wants a board, and picking a category is a step they would take every time.
+    if (!_pgCat()) _pgState.catId = _pgCats()[0].id;
+    if (_pgState.fresh) _pgDefaultApplies();
+    if (can && _pgAdmin.open) { _pgRenderAdmin(body); return; }
+
+    // A board actually drawn for a lister IS the use of this tool; landing on the
+    // tab is only intent, and the Margin Guide draws the same line with mg:lookup.
+    // Tracked here rather than in pgPick() because the first sheet is auto-
+    // selected — someone who lists tablets all day never clicks the picker at all.
+    if (!_pgTracked) { _pgTracked = true; trackUsage('open', 'pg:sheet', _usageLabel('pg:sheet')); }
+
+    _pgSyncHead();
+    const seq = _pgSequence();
+    const skipped = seq.filter(r => r.off).length;
+
+    body.innerHTML = `
+      <div class="pg-shell">
+        ${_pgRailHtml(false)}
+        <div class="pg-main">
+          ${_pgAppliesHtml(seq)}
+          <div class="pg-legend">
+            <span class="pg-lg"><span class="pg-sw pg-sw-req"></span> Always take this</span>
+            <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> Applies to this item</span>
+            <span class="pg-lg"><span class="pg-sw pg-sw-na"></span> Not needed &mdash; skipped</span>
+            <span class="pg-count"><b>${_pgTotal()}</b> photo${_pgTotal() === 1 ? '' : 's'} for this item${
+                skipped ? ` <em>&middot; ${skipped} skipped</em>` : ''}</span>
+          </div>
+          <div class="pg-board">${seq.map(_pgCardHtml).join('')}</div>
+        </div>
+      </div>`;
+}
+
+// The eyebrow and instruction line say something different to a DM who is
+// editing than to a lister who is shooting, so they are rewritten rather than
+// left as generic wording that fits neither.
+function _pgSyncHead() {
+    const eyebrow = document.getElementById('pg-eyebrow');
+    const sub = document.getElementById('pg-sub');
+    const title = document.getElementById('pg-title');
+    if (!eyebrow || !sub || !title) return;
+    if (_pgAdmin.open) {
+        eyebrow.textContent = 'District Manager';
+        title.textContent = 'Edit the Picture Guide';
+        sub.textContent = 'Reorder shots, rename them, swap a photo, or flip one between always and conditional. Every store sees this straight away.';
+    } else {
+        eyebrow.textContent = 'Listing Reference';
+        title.textContent = 'Picture Guide';
+        sub.textContent = 'Pick the category, tick what applies to the item in your hand, and work the board left to right.';
+    }
+}
+
+function _pgRailHtml(admin) {
+    const activeId = admin ? _pgAdmin.catId : _pgState.catId;
+    return `
+      <aside class="pg-rail">
+        <h5 class="pg-rail-hd">Categories</h5>
+        <label class="pg-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input type="text" id="pg-search-input" placeholder="Search&hellip;" oninput="_pgFilterRail(this.value)">
+        </label>
+        <div class="pg-catlist" id="pg-catlist">
+          ${_pgCats().map(c => `
+            <button type="button" class="pg-cat${c.id === activeId ? ' on' : ''}" data-name="${_pgEsc(c.name.toLowerCase())}"
+                    onclick="${admin ? `pgAdminPick(${c.id})` : `pgPick(${c.id})`}">
+              <span class="pg-cat-name">${_pgEsc(c.name)}</span>
+              <span class="pg-cat-n">${c.shots.length || '&mdash;'}</span>
+            </button>`).join('')}
+        </div>
+        ${admin ? `<div class="pg-rail-foot">
+            <button type="button" class="pg-addcat" onclick="pgAddCategory()">&#43;&nbsp; New category</button>
+          </div>` : ''}
+      </aside>`;
+}
+
+// Filtering in place rather than through a re-render: re-rendering the rail
+// rebuilds the input and the caret jumps to the end after every keystroke.
+function _pgFilterRail(v) {
+    const f = String(v || '').toLowerCase().trim();
+    document.querySelectorAll('#pg-catlist .pg-cat').forEach(b => {
+        b.style.display = (!f || (b.dataset.name || '').includes(f)) ? '' : 'none';
+    });
+}
+
+function _pgAppliesHtml(seq) {
+    const conds = seq.filter(r => r.s.cond);
+    if (!conds.length) {
+        return `<div class="pg-applies pg-applies-none">Every shot on this sheet is always taken &mdash; nothing to tick.</div>`;
+    }
+    return `
+      <div class="pg-applies">
+        <div class="pg-applies-hd">
+          <b>Applies to this item</b>
+          <span>Tick what you can actually see on the unit in your hand.</span>
+          <button type="button" class="pg-reset" onclick="pgResetApplies()">Reset</button>
+        </div>
+        <div class="pg-chips">
+          ${conds.map(r => {
+            const on = !r.off;
+            const stepper = on && r.s.rep
+                ? `<span class="pg-stepper">
+                     <button type="button" onclick="pgBump(${r.s.id},-1,event)" aria-label="One fewer">&minus;</button>
+                     <i>${r.count}</i>
+                     <button type="button" onclick="pgBump(${r.s.id},1,event)" aria-label="One more">&#43;</button>
+                   </span>`
+                : (on ? '' : `<span class="pg-chip-off">no</span>`);
+            return `<span class="pg-chip${on ? ' on' : ''}${(on && r.s.rep) ? '' : ' pg-chip-pad'}">
+                      <span class="pg-chip-lbl" onclick="pgToggleApply(${r.s.id})">
+                        <span class="pg-dot"></span>${_pgEsc(r.s.cond)}</span>${stepper}
+                    </span>`;
+          }).join('')}
+        </div>
+      </div>`;
+}
+
+function _pgCardHtml(r) {
+    const s = r.s;
+    const cls = s.cond ? (r.off ? 'na' : 'cond') : '';
+    // The caption is the SHOT's name, not the condition's — the paper prints
+    // "Setting Unlock Screen" in red, and replacing that with the toggle's
+    // wording would throw away the only instruction on the card. The condition
+    // lives in the applies bar, where it is a control rather than a caption.
+    return `
+      <figure class="pg-shot ${cls}"${s.cond ? ` title="Only when: ${_pgEsc(s.cond)}"` : ''}>
+        <figcaption class="pg-cap">${_pgEsc(s.label)}</figcaption>
+        <div class="pg-frame"${s.img ? ` onclick="pgZoom(${s.id})"` : ''}>
+          <span class="pg-badge">${_pgNum(r)}</span>
+          ${_pgArt(s)}
+        </div>
+      </figure>`;
+}
+
+// Full-size look at one example. The board squares are thumbnail-sized on
+// purpose — sixteen of them have to fit — so "is the glare in mine like the
+// glare in theirs?" needs somewhere to go.
+function pgZoom(shotId) {
+    const s = _pgShots().find(x => x.id === shotId);
+    if (!s || !s.img) return;
+    const el = document.createElement('div');
+    el.className = 'pg-zoom';
+    el.onclick = () => el.remove();
+    el.innerHTML = `<figure><img src="${_pgEsc(s.img)}" alt="${_pgEsc(s.label)}">
+        <figcaption>${_pgEsc(s.label)}${s.note ? ` &mdash; ${_pgEsc(s.note)}` : ''}</figcaption></figure>`;
+    document.body.appendChild(el);
+}
+
+/* ==========================================================================
+ * THE DM EDITOR.
+ *
+ * One sheet at a time, in the order it is read. The lister's applies bar is
+ * gone while this is open — it is a control for an item in someone's hand, and
+ * there is no item here — and so is the board, because an editor that leaves the
+ * thing it edits rendered beside it is two tools sharing one panel.
+ *
+ * Every change saves on the spot. There is no basket and no Save button: a DM
+ * editing a sheet does one thing at a time (rename a shot, move it up, swap its
+ * photo), and a basket of unrelated edits is how someone's half-finished thought
+ * gets published because they clicked the wrong exit.
+ * ========================================================================== */
+
+function pgOpenAdmin() {
+    if (!pgCanEdit()) return;
+    _pgAdmin.open = true;
+    _pgAdmin.catId = _pgState.catId || (_pgCats()[0] && _pgCats()[0].id) || null;
+    _pgAdmin.editing = null;
+    pgRender();
+}
+function pgCloseAdmin() {
+    _pgAdmin.open = false;
+    _pgAdmin.editing = null;
+    // The sheet may have moved under the lister's ticks while it was open, so
+    // they are rebuilt from what the sheet says now rather than carried across.
+    _pgDefaultApplies();
+    pgRender();
+}
+function pgAdminPick(catId) { _pgAdmin.catId = catId; _pgAdmin.editing = null; pgRender(); }
+
+const _pgAdminCat = () => _pgCats().find(c => c.id === _pgAdmin.catId) || null;
+
+function _pgRenderAdmin(body) {
+    _pgSyncHead();
+    const cat = _pgAdminCat();
+    body.innerHTML = `
+      <div class="pg-shell">
+        ${_pgRailHtml(true)}
+        <div class="pg-main">
+          ${!cat ? `<div class="pg-error">Pick a category, or add one.</div>` : `
+            <div class="pg-ebar">
+              <div class="pg-ebar-name">
+                <b>${_pgEsc(cat.name)}</b>
+                <span>${cat.shots.length} shot${cat.shots.length === 1 ? '' : 's'}</span>
+              </div>
+              <button type="button" class="pg-ebtn" onclick="pgRenameCategory()">Rename</button>
+              <button type="button" class="pg-ebtn pg-ebtn-del" onclick="pgDeleteCategory()">Remove category</button>
+            </div>
+            <p class="pg-ehint">Order here is the order on the listing. Conditional shots stay in place
+              and step aside when a lister says they don&rsquo;t apply &mdash; so put them where they
+              <em>would</em> go, not at the end.</p>
+            <div class="pg-erows">${cat.shots.map((s, i) => _pgAdminRowHtml(s, i, cat.shots.length)).join('')}</div>
+            <button type="button" class="pg-eadd" onclick="pgAddShot()">&#43;&nbsp; Add a shot</button>
+          `}
+        </div>
+      </div>`;
+}
+
+function _pgAdminRowHtml(s, i, n) {
+    if (_pgAdmin.editing === s.id) return _pgAdminEditHtml(s);
+    return `
+      <div class="pg-erow${s.cond ? ' cond' : ''}">
+        <div class="pg-erow-move">
+          <button type="button" onclick="pgMoveShot(${s.id},-1)"${i === 0 ? ' disabled' : ''} title="Move up">&uarr;</button>
+          <button type="button" onclick="pgMoveShot(${s.id},1)"${i === n - 1 ? ' disabled' : ''} title="Move down">&darr;</button>
+        </div>
+        <div class="pg-ethumb">${_pgArt(s)}</div>
+        <div class="pg-ename">
+          <b>${_pgEsc(s.label)}</b>
+          <small>${s.cond
+            ? `Only when: ${_pgEsc(s.cond)}${s.rep ? ' &middot; take as many as needed' : ''}`
+            : 'Always taken'}${s.img ? '' : ' &middot; no photo yet'}</small>
+        </div>
+        <div class="pg-etools">
+          <label class="pg-ephoto" title="${s.img ? 'Replace the photo' : 'Add a photo'}">
+            <input type="file" accept="image/png,image/jpeg,image/webp" onchange="pgUploadShotPhoto(${s.id}, this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/></svg>
+          </label>
+          <button type="button" class="pg-ebtn" onclick="pgEditShot(${s.id})">Edit</button>
+          <button type="button" class="pg-ebtn pg-ebtn-del" onclick="pgDeleteShot(${s.id})" title="Delete this shot">&times;</button>
+        </div>
+      </div>`;
+}
+
+function _pgAdminEditHtml(s) {
+    return `
+      <div class="pg-erow pg-erow-edit${s.cond ? ' cond' : ''}">
+        <div class="pg-eform">
+          <label class="pg-f">
+            <span>What the lister photographs</span>
+            <input type="text" id="pg-f-label" value="${_pgEsc(s.label)}" placeholder="Back of Tablet">
+          </label>
+          <label class="pg-f">
+            <span>Only when&hellip; <em>(leave blank if every item gets this shot)</em></span>
+            <input type="text" id="pg-f-cond" value="${_pgEsc(s.cond || '')}" placeholder="Cosmetic flaws"
+                   oninput="_pgFormCondChanged()">
+          </label>
+          <label class="pg-f pg-f-check" id="pg-f-rep-wrap"${s.cond ? '' : ' hidden'}>
+            <input type="checkbox" id="pg-f-rep"${s.rep ? ' checked' : ''}>
+            <span>Take as many as needed <em>(the &ldquo;&#43;&rdquo; on the printout &mdash; the shots after it shift down)</em></span>
+          </label>
+          <label class="pg-f">
+            <span>Words on the slot <em>(shown when there is no photo)</em></span>
+            <input type="text" id="pg-f-note" value="${_pgEsc(s.note || '')}" placeholder="LCD Flaws (Bright Spots, Dark Spots, etc.)">
+          </label>
+          <div class="pg-eform-acts">
+            <button type="button" class="pg-esave" onclick="pgSaveShot(${s.id}, this)">Save</button>
+            <button type="button" class="pg-ecancel" onclick="_pgAdmin.editing=null;pgRender()">Cancel</button>
+            ${s.img ? `<button type="button" class="pg-ebtn pg-ebtn-del pg-erm-photo" onclick="pgRemoveShotPhoto(${s.id})">Remove photo</button>` : ''}
+          </div>
+        </div>
+      </div>`;
+}
+
+// "Take as many as needed" is meaningless for a shot every item gets exactly one
+// of, and the database refuses it outright, so the checkbox only exists while
+// there is a condition to hang it on.
+function _pgFormCondChanged() {
+    const cond = (document.getElementById('pg-f-cond') || {}).value || '';
+    const wrap = document.getElementById('pg-f-rep-wrap');
+    if (!wrap) return;
+    wrap.hidden = !cond.trim();
+    if (!cond.trim()) { const cb = document.getElementById('pg-f-rep'); if (cb) cb.checked = false; }
+}
+
+function pgEditShot(id) { _pgAdmin.editing = id; pgRender(); }
+
+async function _pgPost(payload, btn, busyLabel) {
+    if (_pgAdmin.busy) return null;
+    _pgAdmin.busy = true;
+    const was = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = busyLabel || 'Saving…'; }
+    try {
+        const res = await fetch(PICTURE_GUIDE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ...payload,
+                role: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(),
+                user: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || out.success === false) throw new Error(out.error || 'The save did not go through.');
+        return out;
+    } catch (e) {
+        alert(e.message);
+        return null;
+    } finally {
+        _pgAdmin.busy = false;
+        if (btn) { btn.disabled = false; btn.textContent = was; }
+    }
+}
+
+async function pgSaveShot(id, btn) {
+    const label = (document.getElementById('pg-f-label') || {}).value || '';
+    const cond  = (document.getElementById('pg-f-cond')  || {}).value || '';
+    const note  = (document.getElementById('pg-f-note')  || {}).value || '';
+    const rep   = !!(document.getElementById('pg-f-rep') || {}).checked;
+    if (!label.trim()) { alert('The shot needs a name — it is the only instruction on the card.'); return; }
+    const out = await _pgPost({
+        action: 'saveShot', id, label, cond: cond.trim() || null,
+        rep: cond.trim() ? rep : false, note,
+    }, btn);
+    if (!out) return;
+    _pgAdmin.editing = null;
+    await _pgReload();
+}
+
+async function pgAddShot() {
+    const cat = _pgAdminCat();
+    if (!cat) return;
+    const label = prompt('What does the lister photograph?\n\nIt lands at the bottom — move it into place afterwards.');
+    if (label === null || !label.trim()) return;
+    const out = await _pgPost({ action: 'saveShot', category_id: cat.id, label: label.trim(), cond: null });
+    if (!out) return;
+    await _pgReload();
+    // Straight into the form for the row just made: a bare name is almost never
+    // the whole intent, and the alternative is hunting for it at the bottom.
+    if (out.id) { _pgAdmin.editing = out.id; pgRender(); }
+}
+
+async function pgDeleteShot(id) {
+    const s = _pgShotById(id);
+    if (!s) return;
+    if (!confirm(`Delete “${s.label}” from this sheet?\n\nThis cannot be undone, and every store loses it straight away.`)) return;
+    if (!await _pgPost({ action: 'deleteShot', id })) return;
+    if (_pgAdmin.editing === id) _pgAdmin.editing = null;
+    await _pgReload();
+}
+const _pgShotById = id => { const c = _pgAdminCat(); return c && c.shots.find(s => s.id === id); };
+
+// Sends the WHOLE category's order, not "this one moved". Two DMs nudging the
+// same sheet from stale views would otherwise interleave into an order neither
+// of them chose; the full sequence means the last save wins outright.
+async function pgMoveShot(id, dir) {
+    const cat = _pgAdminCat();
+    if (!cat) return;
+    const ids = cat.shots.map(s => s.id);
+    const i = ids.indexOf(id), j = i + dir;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    // Move the local copy first so the row travels under the cursor instead of
+    // after a round-trip — the arrows are meant to be pressed several times.
+    [cat.shots[i], cat.shots[j]] = [cat.shots[j], cat.shots[i]];
+    pgRender();
+    if (!await _pgPost({ action: 'reorderShots', ids })) await _pgReload();
+}
+
+async function pgAddCategory() {
+    const name = prompt('Name of the new category?\n\ne.g. Graphics Cards');
+    if (name === null || !name.trim()) return;
+    const out = await _pgPost({ action: 'saveCategory', name: name.trim() });
+    if (!out) return;
+    await _pgReload();
+    if (out.id) { _pgAdmin.catId = out.id; pgRender(); }
+}
+
+async function pgRenameCategory() {
+    const cat = _pgAdminCat();
+    if (!cat) return;
+    const name = prompt('Rename this category:', cat.name);
+    if (name === null || !name.trim() || name.trim() === cat.name) return;
+    if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: name.trim() })) return;
+    await _pgReload();
+}
+
+async function pgDeleteCategory() {
+    const cat = _pgAdminCat();
+    if (!cat) return;
+    if (!confirm(`Remove “${cat.name}” from the Picture Guide?\n\nIts ${cat.shots.length} shot${cat.shots.length === 1 ? '' : 's'} and photos are kept, so this can be undone — but nobody will see the sheet until it is.`)) return;
+    if (!await _pgPost({ action: 'deleteCategory', id: cat.id })) return;
+    _pgAdmin.catId = null;
+    _pgAdmin.editing = null;
+    await _pgReload();
+    if (!_pgAdminCat()) { _pgAdmin.catId = (_pgCats()[0] && _pgCats()[0].id) || null; pgRender(); }
+}
+
+// One example photo into the public picture-guide bucket, then point the shot at
+// it. Same shape as _uploadAuditPhoto: the object name carries a timestamp, so
+// replacing a photo never collides with the one it replaces and no viewer is
+// left holding a cached image that no longer matches its caption.
+async function pgUploadShotPhoto(shotId, input) {
+    const file = input && input.files && input.files[0];
+    if (!file) return;
+    input.value = '';                      // so re-picking the same file fires again
+    if (file.size > 10 * 1024 * 1024) { alert('That image is over 10MB. Please shrink it first.'); return; }
+    const row = input.closest('.pg-erow');
+    if (row) row.classList.add('pg-erow-busy');
+    try {
+        const safe = `${Date.now()}_${Math.round(Math.random() * 1e6)}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const resp = await fetch(`${_SUPABASE_URL}/storage/v1/object/picture-guide/${safe}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${_SUPABASE_ANON_KEY}`,
+                'apikey': _SUPABASE_ANON_KEY,
+                'Content-Type': file.type || 'application/octet-stream',
+                'x-upsert': 'true',
+            },
+            body: file,
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const s = _pgShotById(shotId);
+        if (!s) throw new Error('That shot is no longer on the sheet.');
+        // saveShot carries the whole row, so the other fields have to be resent
+        // as they are or the upload would quietly blank them.
+        if (!await _pgPost({
+            action: 'saveShot', id: shotId, label: s.label, cond: s.cond,
+            rep: s.rep, note: s.note, path: safe,
+        })) return;
+        await _pgReload();
+    } catch (e) {
+        alert(`The photo didn't upload. ${e.message}`);
+        if (row) row.classList.remove('pg-erow-busy');
+    }
+}
+
+// Clears the row's photo and lets it fall back to the grey instruction slot. The
+// object itself stays in the bucket: it is a few hundred KB, and a DM who meant
+// to swap rather than remove would otherwise have destroyed the original.
+async function pgRemoveShotPhoto(shotId) {
+    const s = _pgShotById(shotId);
+    if (!s || !s.img) return;
+    if (!confirm(`Remove the example photo from “${s.label}”?\n\nThe slot goes back to showing words instead.`)) return;
+    if (!await _pgPost({
+        action: 'saveShot', id: shotId, label: s.label, cond: s.cond,
+        rep: s.rep, note: s.note, path: null,
+    })) return;
+    await _pgReload();
+}
+
 // Detects the operations page and opens the requested sub-tab (defaults to
 // call backs, or honors a #callbacks / #b2b deep-link). Safe no-op elsewhere.
 // A tab can be hidden by its role gate or a Feature Access override, so never
@@ -7684,7 +8291,7 @@ function initOperations() {
     if (hash === 'categories') { _ecView = 'cats'; }
     let initial = sign ? 'b2b'
         : hash === 'categories' ? 'ebay'
-        : ['marginguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
+        : ['marginguide', 'pictureguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
     if (!tabVisible('ops-tab-' + initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ops-tab-"]'))
@@ -34628,6 +35235,11 @@ const FEATURE_CATALOG = [
     // be delegated or pulled back without a code change; mgCanEditLadder() gates it
     // in JS as well, and the edge function enforces the same roles on every write.
     { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    { key: 'widget-ops-pictureguide',  label: 'Picture Guide (Tab)',           tab: 'widgets', group: 'Operations', def: 'all' },
+    // The editor behind the Picture Guide's "Edit" button. Same shape as
+    // tool-margin-manage: pgCanEdit() gates it in JS and the edge function
+    // enforces the same roles on every write, so this is only who SEES it.
+    { key: 'tool-picture-manage',      label: 'Picture Guide — Edit',          tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
     // SPEEKS CONNECT HAS NO TAB SWITCH OF ITS OWN, on purpose. It had three
@@ -34862,7 +35474,8 @@ const _SECTION_TABS = {
     // 'widget-margin-replies' is intentionally omitted — see the parked block in
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
-    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks',
+    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
+                        'tool-picture-manage', 'widget-ops-callbacks',
                         'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos',
                         'ec-view-titles'],
 };
@@ -35625,6 +36238,7 @@ async function faClearUser() {
 // searched; these are the synonyms it would otherwise miss ("callback sheet").
 const JUMP_KEYWORDS = {
     'widget-ops-marginguide':    'margin guide buy ladder buying percentages offer ceiling rebuttals condition testing tips projection what should i offer',
+    'widget-ops-pictureguide':   'picture guide photo guide pictures photos what pictures to take shot list binder printout listing photos camera order of pictures lcd flaws cosmetic flaws',
     'widget-ops-callbacks':      'callback sheet call back call backs customer calls waiting hold looking for item phone',
     'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
     'ec-upload':                 'speeks connect ebay listings upload list publish online marketplace sku',
@@ -35688,6 +36302,7 @@ const JUMP_PLACES = [
     // { id: 'ws-mrep',  label: 'Margin Replies',     sub: 'Workspace',  kind: 'tab', feature: 'widget-margin-replies',       page: 'workspace.html',  hash: 'mreplies',  fn: 'switchWorkspaceTab' },
     { id: 'ws-aging',    label: 'Aging Inventory',    sub: 'Workspace',  kind: 'tab', feature: 'widget-aging-inventory',      page: 'workspace.html',  hash: 'aging',     fn: 'switchWorkspaceTab' },
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
+    { id: 'ops-pg',      label: 'Picture Guide',      sub: 'Operations', kind: 'tab', feature: 'widget-ops-pictureguide',   page: 'operations.html', hash: 'pictureguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
     { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
@@ -46504,9 +47119,13 @@ function renderListingHealthTool() {
     const done = fb.done || [];
     const doneHtml = done.length ? `
       <details class="lh-tool-done">
-        <!-- "handled", not "sent" — copying is not finishing, and the stamp is
-             now made when the work is done rather than when the text left. -->
-        <summary>${done.length} already handled</summary>
+        <!-- "Cleared", not "sent" — copying is not finishing, and the stamp is
+             now made when the work is done rather than when the text left.
+             ⚠️ AND IT IS THE WORD THE BUTTON USES. "already handled" named the
+             same act as "Clear", so the place notes went and the button that
+             sent them there did not share a word; a reader had to infer they
+             were connected. Whatever clears them, they are Cleared. -->
+        <summary>${done.length} Cleared</summary>
         ${done.map(r => `<div class="lh-tool-done-row">
           <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
           <span class="lh-tool-done-note">“${_ecEsc(r.note || '')}”</span>
@@ -46562,7 +47181,7 @@ function renderListingHealthTool() {
     body.innerHTML = `
       <div class="lt-ask-bar">
         <span class="lt-ask-n">${n} dismissal${n === 1 ? '' : 's'} explained a rule was wrong${
-          fb.settled ? ` · ${fb.settled} look like the rule overruled the listing` : ''}</span>
+          fb.settled ? ` · ${fb.settled} look${fb.settled === 1 ? 's' : ''} like the rule overruled the listing` : ''}</span>
         <button class="lt-ask-btn" onclick="lhToolCopy(this)">Copy The Ask For Claude</button>
       </div>
       <p class="lh-tool-say">Paste it into Claude. It groups these by the rule that
@@ -46576,7 +47195,11 @@ function renderListingHealthTool() {
            took the reminder with it. -->
       <div class="lh-tool-finish">
         <span>Once Claude has been through them:</span>
-        <button class="lh-tool-done-btn" onclick="lhToolDone()">Clear These ${n}</button>
+        <!-- ⚠️ SAME WORDS AS THE DIALOG IT OPENS. "Clear These 1" was both
+             ungrammatical and a different sentence from the "Clear 1 Note?" it
+             raised, so the press and the confirmation read as two separate
+             things. The count carries its own noun and pluralises with it. -->
+        <button class="lh-tool-done-btn" onclick="lhToolDone()">Clear ${n} Note${n === 1 ? '' : 's'}</button>
       </div>
       ${doneHtml}`;
 }
@@ -46621,7 +47244,7 @@ async function lhToolDone() {
         title: `Clear ${n} Note${n === 1 ? '' : 's'}?`,
         body: `<p class="lt-ask-say">Do this once Claude has been through them —
                 it clears the reminder. The notes are kept and stay readable
-                under <b>already handled</b>; nothing on any listing changes
+                under <b>Cleared</b>; nothing on any listing changes
                 either way.</p>`,
         go: 'Clear Them', cancel: 'Not Yet' });
     if (!said) return;
