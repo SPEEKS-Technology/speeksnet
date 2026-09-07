@@ -21505,11 +21505,10 @@ select.dd-native {
     border-radius: 6px;
     font-size: 12px; font-weight: 700; text-align: center; padding: 12px 10px; line-height: 1.4;
 }
-.pg-empty {
-    width: 100%; height: 100%; background: #eef2f7;
-    display: flex; align-items: center; justify-content: center; padding: 14px;
-}
-.pg-empty span { font-size: 11px; font-weight: 700; color: var(--pg-faint); text-align: center; line-height: 1.4; }
+/* .pg-empty stood here: a second, fainter placeholder for a shot with no note.
+   Which one a card got came down to whether its row happened to carry note text,
+   and that column is seeded unevenly — so two Cosmetic Flaws cards on two sheets
+   looked like different things. One placeholder now; see _pgArt(). */
 
 /* ---- one slot, full size ------------------------------------------------- */
 .pg-zoom {
@@ -21555,8 +21554,6 @@ select.dd-native {
 }
 .pg-ethumb .pg-instr { padding: 3px; }
 .pg-ethumb .pg-instr span { font-size: 6px; padding: 2px 1px; border-width: 1px; line-height: 1.2; }
-.pg-ethumb .pg-empty { padding: 3px; }
-.pg-ethumb .pg-empty span { font-size: 6px; line-height: 1.2; }
 .pg-ename { flex: 1; min-width: 0; }
 .pg-ename b { display: block; font-size: 13px; font-weight: 750; color: var(--pg-ink); }
 .pg-ename small { font-size: 11px; color: var(--pg-muted); }

@@ -7803,13 +7803,19 @@ function pgPick(catId) {
 /* ---- rendering ----------------------------------------------------------- */
 
 // One slot's picture: the photograph if there is one, otherwise the grey slot
-// with red words on it — which is exactly what the printout does when it has no
+// with words on it — which is exactly what the printout does when it has no
 // example either, so an un-uploaded shot reads as the sheet rather than as a
 // bug.
+//
+// ONE placeholder, not two. There used to be a second, plainer one for a shot
+// with no note, and the note column is seeded unevenly — the Android sheet's
+// Cosmetic Flaws has none, the Processors sheet's has a real one — so two cards
+// sitting side by side in the same grid drew themselves differently over a
+// difference no lister can see or cares about. A note is extra words, not a
+// different kind of slot.
 function _pgArt(s) {
     if (s.img) return `<img class="pg-img" src="${_pgEsc(s.img)}" alt="${_pgEsc(s.label)}" loading="lazy">`;
-    if (s.note) return `<div class="pg-instr"><span>${_pgEsc(s.note)}</span></div>`;
-    return `<div class="pg-empty"><span>${_pgEsc(s.label)}</span></div>`;
+    return `<div class="pg-instr"><span>${_pgEsc(s.note || s.label)}</span></div>`;
 }
 
 function pgRender() {
