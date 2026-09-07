@@ -128,6 +128,15 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, ...extra });
     };
 
+    // 23505 is the unique index from migration 0084 (one active category per
+    // name). Postgres phrases it as a constraint violation naming an index,
+    // which is true and useless to a DM, so it is rewritten into the thing they
+    // actually did. Any other error keeps its own words.
+    const nameClash = (error: { code?: string; message?: string } | null, name: string) =>
+      error?.code === "23505" && String(error.message || "").includes("pg_categories_active_name_unique")
+        ? `There is already a category called "${name}"`
+        : null;
+
     // ---- categories --------------------------------------------------------
     if (body.action === "saveCategory") {
       const name = String(body.name || "").trim();
@@ -142,6 +151,8 @@ Deno.serve(async (req: Request) => {
         const { error } = await supabase.from("pg_categories")
           .update({ name, ...(hasGroup ? { group_name: group } : {}), ...stamp })
           .eq("id", body.id);
+        const clash = nameClash(error, name);
+        if (clash) return json({ success: false, error: clash }, 409);
         if (error) return json({ success: false, error: error.message }, 500);
         return await ok();
       }
@@ -155,6 +166,8 @@ Deno.serve(async (req: Request) => {
         name, group_name: group ?? null,
         sort_order: (last?.[0]?.sort_order ?? 0) + STEP, ...stamp,
       }).select("id, slug").single();
+      const clash = nameClash(error, name);
+      if (clash) return json({ success: false, error: clash }, 409);
       if (error) return json({ success: false, error: error.message }, 500);
       await broadcastChange("pictureguide");
       return json({ success: true, id: data.id, slug: data.slug });
