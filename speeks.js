@@ -14931,6 +14931,13 @@ const ListingGoalsEngine = {
         hours_full_time: 40, hours_part_time: 20, hours_floater: 25, new_hire_weeks: 2,
     },
     _newHires: {},   // store → Set of names inside the new-hire ramp this week
+    // store → that store's own stretch factor. Kept HERE and not in cfg above,
+    // because applyConfig runs once per store against one shared cfg object: a
+    // per-store number in there would leave whichever store's fetch landed last
+    // setting the factor for all five. cfg.goal_factor stays the district
+    // default, which is the same value in every store's payload and so is safe
+    // to merge.
+    _factors: {},
 
     // Absorb one store-targets row. Safe to call with anything, including the
     // pre-capacity payload a cached page might still be holding.
@@ -14938,6 +14945,15 @@ const ListingGoalsEngine = {
         if (!row) return;
         if (row.cfg) Object.assign(this.cfg, row.cfg);
         if (row.store) this._newHires[row.store] = new Set(row.newHires || []);
+        if (row.store && Number.isFinite(row.goalFactor)) this._factors[row.store] = row.goalFactor;
+    },
+
+    // This store's share of capacity, falling back to the district default for a
+    // store whose factor has never been set on its own — and to 0.75 for the
+    // moment before any payload has landed.
+    factorFor(store) {
+        const f = this._factors[store];
+        return Number.isFinite(f) ? f : (this.cfg.goal_factor || 0.75);
     },
     isNewHire(store, employee) {
         const s = this._newHires[store];
@@ -14979,7 +14995,7 @@ const ListingGoalsEngine = {
         const rate = this.rateFor(role, this.isNewHire(o.store, o.employee));
         if (!rate) return 0;
         return Math.round(
-            this.cfg.hours_per_day * rate * this.dayFactorFromDate(dateStr) * this.cfg.goal_factor
+            this.cfg.hours_per_day * rate * this.dayFactorFromDate(dateStr) * this.factorFor(o.store)
         );
     },
 
@@ -14988,7 +15004,7 @@ const ListingGoalsEngine = {
     // assumes everyone is full-time and nobody is ramping, so it will differ from
     // the real number at any store with a part-timer, a floater or a new hire.
     // Mirrors capacityFrom() in the store-targets edge function.
-    weeklyTarget(size) {
+    weeklyTarget(size, store) {
         const c = this.cfg;
         const effDays = (c.open_days - 1) + c.saturday_factor;
         const eff = size * c.hours_full_time * (effDays / c.open_days);
@@ -14997,7 +15013,7 @@ const ListingGoalsEngine = {
         const b2 = Math.min(eff - b1, seat);
         const l = Math.max(0, eff - b1 - b2);
         return Math.round(
-            (b1 * c.rate_buyer_1 + b2 * c.rate_buyer_2 + l * c.rate_lister) * c.goal_factor
+            (b1 * c.rate_buyer_1 + b2 * c.rate_buyer_2 + l * c.rate_lister) * this.factorFor(store)
         );
     }
     // NOTE: ratchet() lived here — it decided when a store "levelled up" (+10) or
@@ -15841,7 +15857,7 @@ async function fetchAllStoreTargets() {
 // Current weekly target for a store (server value; falls back to roster-derived base).
 function targetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].target)
-        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store), store);
 }
 // Effective team size for goal math. Prefers the server's settled size, which
 // honors the timing rule (a subtraction shrinks the goal immediately, an addition
@@ -15865,7 +15881,7 @@ function goalIsSetThisWeek(store) {
 // The ladder's suggestion, used to prefill the DM's input.
 function suggestedTargetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].suggested)
-        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store), store);
 }
 
 // DM writes a store's weekly listing goal. Replaces dmGoalAction(), which only
@@ -42785,9 +42801,9 @@ function renderDmListingModal() {
             + '<div class="dmx-cell"><div class="dmx-cell-l">District listed</div><div class="dmx-cell-v">' + listed + '</div></div>'
             + '<div class="dmx-cell"><div class="dmx-cell-l">District target</div><div class="dmx-cell-v">' + target + '</div></div>'
             + _dmxStatCell('Attainment', _dmxPct(listed, target) + '<small>%</small>', _dmxPct(listed, target))
-            // No stretch-factor cell here. It is ONE number for all five stores,
-            // so a district strip is the wrong place to imply otherwise — and the
-            // control that sets it already states it on every store pane.
+            // No stretch-factor cell here. It is a PER-STORE number now, so a
+            // single district figure would be a fiction; each store's own is on
+            // its own pane, next to the control that sets it.
             + '</div>'
             + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
         return;
@@ -42801,9 +42817,9 @@ function renderDmListingModal() {
         + ' · ' + sel.week + ' this week · ' + sel.names.length + ' on roster</div>'
         + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
 
-    // The stretch factor, not a per-store number. The goal itself is derived from
+    // The stretch factor for THIS store. The goal itself is still derived from
     // who is rostered — there is nothing left here to type by hand.
-    pane += _dmxFactorSetter(all);
+    pane += _dmxFactorSetter(all, sel);
 
     if (!sel.names.length) {
         // Say WHY it is blank. The goal is derived from who gets rostered, so an
@@ -42860,29 +42876,47 @@ function renderDmListingModal() {
 // capacity model and fought it: the whole point of deriving a goal from who is
 // actually rostered is that nobody hand-types it afterwards.
 //
-// What is left is the ONE dial the model has — what fraction of a store's
-// ceiling its weekly goal should be. Raising it pushes every store by the same
-// proportion of what its own people can do, which is the honest way to push for
-// growth; the old ratchet raised whichever store had a lucky fortnight.
+// What is left is the one dial the model has — what share of a store's ceiling
+// its weekly goal should be. It is set PER STORE (user, 2026-09-07): "so I can
+// incrementally move up stores that keep hitting their weekly goals, but keep
+// stores that aren't at lower ones." A single district dial could only ever be
+// set to what the weakest store could take.
 //
-// Saving re-freezes THIS week for every store at the new number (see the server).
+// This is still not a hand-typed goal. Raising OVL to 0.80 pushes OVL by a share
+// of what OVL's own people can do, so the store still moves on its own when it
+// gains or loses somebody — which is the part the old ratchet got wrong.
+//
+// Saving re-freezes THIS week for THIS store at the new number (see the server).
 // Past weeks are untouched, so history can't re-colour itself.
-function _dmxFactorSetter(all) {
-    const f = ListingGoalsEngine.cfg.goal_factor || 0.75;
-    const pctTxt = Math.round(f * 100) + '%';
-    const preview = all.map(s => escapeHtml(s.store) + ' ' + s.suggested).join('  ·  ');
+function _dmxFactorSetter(all, sel) {
+    const store = sel && sel.store;
+    if (!store) return '';
+    const f = ListingGoalsEngine.factorFor(store);
+    const district = ListingGoalsEngine.cfg.goal_factor || 0.75;
+    const own = Math.abs(f - district) > 0.0001;
+    // Every store's factor, so the DM can see the spread they are managing
+    // without clicking through all five panes.
+    const spread = all.map(s => {
+        const sf = ListingGoalsEngine.factorFor(s.store);
+        const txt = escapeHtml(s.store) + ' ' + Math.round(sf * 100) + '%';
+        return s.store === store ? '<b>' + txt + '</b>' : txt;
+    }).join('  ·  ');
     return '<div class="dmx-goalset is-set">'
         + '<div class="dmx-goalset-l">'
-            + '<span class="dmx-goalset-t">Stretch factor · ' + pctTxt + ' of capacity</span>'
-            + '<span class="dmx-goalset-n">Every store’s weekly goal is this share of what its roster could list. '
-                + 'Saving applies it to the week of ' + escapeHtml(_dmxWeekLabel()) + ' — earlier weeks keep the number they ran on.</span>'
-            + '<span class="dmx-goalset-n" style="margin-top:6px;"><b>Now:</b> ' + preview + '</span>'
+            + '<span class="dmx-goalset-t">' + escapeHtml(store) + ' stretch factor · '
+                + Math.round(f * 100) + '% of capacity</span>'
+            + '<span class="dmx-goalset-n">' + escapeHtml(store) + '’s weekly goal is this share of what '
+                + 'its own roster could list. Applies to ' + escapeHtml(store) + ' only — the other stores keep theirs. '
+                + 'Saving moves the week of ' + escapeHtml(_dmxWeekLabel()) + '; earlier weeks keep the number they ran on.</span>'
+            + '<span class="dmx-goalset-n" style="margin-top:6px;"><b>All stores:</b> ' + spread
+                + (own ? '' : '  ·  <i>' + escapeHtml(store) + ' is on the district default</i>') + '</span>'
         + '</div>'
         + '<div class="dmx-goalset-r">'
             + '<input type="number" id="dmx-factor-input" class="dmx-goalset-i" min="0.3" max="1.2" step="0.01"'
                 + ' value="' + f + '"'
-                + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();dmxSaveFactor();}">'
-            + '<button type="button" class="dmx-goalset-b" onclick="dmxSaveFactor()">Apply</button>'
+                + ' onkeydown="if(event.key===&apos;Enter&apos;){event.preventDefault();dmxSaveFactor();}">'
+            + '<button type="button" class="dmx-goalset-b" onclick="dmxSaveFactor()">Apply to '
+                + escapeHtml(store) + '</button>'
             + '<span class="dmx-goalset-msg" id="dmx-goal-msg"></span>'
         + '</div>'
         + '</div>';
@@ -42903,19 +42937,25 @@ async function dmxSaveFactor() {
         return;
     }
     say('Applying…', true);
+    // The pane's own store, read at save time rather than captured when the
+    // control was built: the rail can move under a half-typed number.
+    const store = _dmxSel.lg;
     try {
         const resp = await fetch(STORE_TARGETS_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'factor', value: v, name: sessionStorage.getItem('speeksUserName') || '' }),
+            body: JSON.stringify({
+                action: 'factor', store, value: v,
+                name: sessionStorage.getItem('speeksUserName') || '',
+            }),
         });
         const j = await resp.json();
         if (j.error) { say(j.error, false); return; }
-        // Re-read every store so the rail, the strip and the preview all move
-        // together — the factor changed all five, not just the selected one.
+        // Re-read every store anyway. Only this one's goal moved, but the pane
+        // prints all five factors and the district strip totals all five goals.
         await fetchAllStoreTargets();
         renderDmListingModal();
-        say('Applied', true);
+        say('Applied to ' + store, true);
         setTimeout(() => { const m = document.getElementById('dmx-goal-msg'); if (m) m.textContent = ''; }, 2500);
     } catch (e) { say('Could not reach the server.', false); }
 }

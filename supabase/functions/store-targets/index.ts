@@ -61,6 +61,24 @@ const CFG_FALLBACK: Cfg = {
   saturday_factor: 0.5, customer_time_source: 0,
 };
 
+// The stretch factor, per store.
+//
+// goal_factor is the district default; goal_factor_<STORE> overrides it for one
+// store. Both are rows in listing_config, which is key/value, so this needed no
+// schema change — and a store with no row of its own simply runs the district
+// number, which is what all five did before this existed.
+//
+// Why per store (user, 2026-09-07): "so I can incrementally move up stores that
+// keep hitting their weekly goals, but keep stores that aren't at lower ones."
+// One dial for all five could only be set to what the weakest store could take,
+// which is the opposite of pushing the strong ones. The dial is still a SHARE OF
+// CAPACITY, not a hand-typed goal, so a store that adds a person still moves on
+// its own — the thing the old typed-target ladder got wrong stays fixed.
+function factorFor(store: string, cfg: Cfg): number {
+  const own = cfg["goal_factor_" + String(store).toUpperCase()];
+  return Number.isFinite(own) ? own : cfg.goal_factor;
+}
+
 function weeklyHoursFor(u: any, cfg: Cfg): number {
   // A floater is neither: he is guaranteed a minimum and lands wherever the
   // market needs him, so he carries his own hours figure.
@@ -86,7 +104,11 @@ function isNewHire(u: any, weekStart: string, cfg: Cfg): boolean {
 // Saturday is a real open day but produces about half a weekday's listings —
 // shorter, and the busiest buy day — so hours are discounted by saturday_factor
 // once, at the store level, rather than being tracked per shift.
-function capacityFrom(roster: any[], weekStart: string, cfg: Cfg) {
+// factor is passed in, not read off cfg.goal_factor: it is per store now (see
+// factorFor) and everything else in here is store-agnostic. Required rather than
+// defaulted, so a call site that forgets it fails loudly instead of quietly
+// handing one store another store's goal.
+function capacityFrom(roster: any[], weekStart: string, cfg: Cfg, factor: number) {
   const weekdays = cfg.open_days - 1;
   const effDays = weekdays + cfg.saturday_factor;      // 5.5 of 6 open days
   const dayFactor = effDays / cfg.open_days;           // 0.9167
@@ -133,7 +155,8 @@ function capacityFrom(roster: any[], weekStart: string, cfg: Cfg) {
       lister: round1(listerHours - nhLister), newHire: round1(nhLister),
     },
     capacity: Math.round(capacity),
-    goal: Math.round(capacity * cfg.goal_factor),
+    goal: Math.round(capacity * factor),
+    goalFactor: factor,
   };
 }
 
@@ -204,7 +227,7 @@ Deno.serve(async (req: Request) => {
 
   async function capacityFor(store: string, weekStart: string) {
     const cfg = await config();
-    return capacityFrom(await rosterFor(store), weekStart, cfg);
+    return capacityFrom(await rosterFor(store), weekStart, cfg, factorFor(store, cfg));
   }
 
   // Completed-week listing totals for a store (sum of listed_count), oldest -> newest.
@@ -296,6 +319,13 @@ Deno.serve(async (req: Request) => {
       target,
       base: cap.goal,                    // capacity suggestion / prefill
       suggested: cap.goal,
+      // THIS store's stretch factor, and the district default it may or may not
+      // be following. Deliberately not inside cfg below: the frontend merges
+      // every store's cfg into one shared object (ListingGoalsEngine.
+      // applyConfig), so a per-store number in there would leave whichever
+      // store's fetch landed last deciding the factor for all five.
+      goalFactor: cap.goalFactor,
+      districtGoalFactor: cfg.goal_factor,
       capacity: cap.capacity,            // the ceiling the goal is a fraction of
       hours: cap.totalHours,
       // The frontend computes each person's DAILY goal itself (hours × seat rate)
@@ -310,6 +340,9 @@ Deno.serve(async (req: Request) => {
         rate_lister: cfg.rate_lister,
         rate_new_hire: cfg.rate_new_hire,
         saturday_factor: cfg.saturday_factor,
+        // The DISTRICT DEFAULT. For anything that has to agree with this store's
+        // goal, read goalFactor above instead — these two differ for any store
+        // whose factor has been set on its own.
         goal_factor: cfg.goal_factor,
         // Not used in the goal maths — these label the schedule dropdown and the
         // ramp tooltip in User Permissions, so those read the real numbers
@@ -389,12 +422,13 @@ Deno.serve(async (req: Request) => {
       const rate = dayRate[r] != null
         ? dayRate[r]
         : (newHire ? cfg.rate_new_hire : cfg.rate_lister);   // L1, L2, L3 …
-      return Math.round(cfg.hours_per_day * rate * (isSat ? cfg.saturday_factor : 1) * cfg.goal_factor);
+      return Math.round(cfg.hours_per_day * rate * (isSat ? cfg.saturday_factor : 1) * factorFor(store, cfg));
     };
 
     return {
       store, weekStart, weekEnd: endStr,
       config: cfg,
+      goalFactor: factorFor(store, cfg),
       people: cap.people,
       hours: cap.totalHours,
       seats: cap.seats,
@@ -505,23 +539,61 @@ Deno.serve(async (req: Request) => {
         return json({ error: "Stretch factor must be between 0.30 and 1.20" }, 400);
       }
       const rounded = Math.round(f * 100) / 100;
-      const { error: cErr } = await supabase.from("listing_config")
+      // A store means "set this store's own factor". No store means "move the
+      // district default", which every store that has never been set on its own
+      // then follows. The UI sends a store; the storeless form is kept because it
+      // is what an older cached client sends.
+      const target = body.store ? String(body.store).toUpperCase() : null;
+      if (target && !STORES.includes(target)) return json({ error: "Unknown store" }, 400);
+      const key = target ? "goal_factor_" + target : "goal_factor";
+
+      // Update, then insert only if there was nothing to update: a store's row
+      // does not exist until its factor is first moved off the district default.
+      // Done this way rather than as an upsert so an existing row keeps the note
+      // that explains it — the whole point of that column.
+      const { data: updated, error: uErr } = await supabase.from("listing_config")
         .update({ value: rounded, updated_at: new Date().toISOString() })
-        .eq("key", "goal_factor");
-      if (cErr) return json({ error: cErr.message }, 500);
+        .eq("key", key).select("key");
+      if (uErr) return json({ error: uErr.message }, 500);
+      if (!updated || !updated.length) {
+        const { error: iErr } = await supabase.from("listing_config").insert({
+          key, value: rounded,
+          note: target + " weekly goal = its capacity x this. Overrides goal_factor"
+            + " for this store only; delete this row to put it back on the district default.",
+        });
+        if (iErr) return json({ error: iErr.message }, 500);
+      }
       _cfg = null;   // the cached config for this request is now stale
 
+      // Re-freeze the current week at the new number, because listing_goal_weeks
+      // holds a row per store per week and that row beats the computed
+      // suggestion — without this the stores would keep running last Monday's
+      // figure and the save would change nothing visible. Past weeks are left
+      // exactly as they were: history must not re-colour itself.
+      //
+      // Only the store that changed. When the DISTRICT default moves, only the
+      // stores actually following it — re-freezing a store that has its own
+      // factor would jump its goal to the district number, which is the one
+      // thing a per-store dial exists to prevent.
       const cfg = await config();
+      const touched = target
+        ? [target]
+        : STORES.filter((s) => !Number.isFinite(cfg["goal_factor_" + s]));
       const applied: Record<string, number> = {};
-      for (const s of STORES) {
-        const cap = capacityFrom(await rosterFor(s), thisMonday, cfg);
+      for (const s of touched) {
+        const cap = capacityFrom(await rosterFor(s), thisMonday, cfg, factorFor(s, cfg));
         applied[s] = cap.goal;
         await supabase.from("listing_goal_weeks").upsert({
           store: s, week_start: thisMonday, target: cap.goal,
           set_by: body.name || "Capacity model", set_at: new Date().toISOString(),
         }, { onConflict: "store,week_start" });
       }
-      return json({ ok: true, goal_factor: rounded, applied });
+      const factors: Record<string, number> = {};
+      STORES.forEach((s) => { factors[s] = factorFor(s, cfg); });
+      return json({
+        ok: true, store: target, goal_factor: rounded,
+        district_goal_factor: cfg.goal_factor, factors, applied,
+      });
     }
 
     const store = String(body.store || "").toUpperCase();
