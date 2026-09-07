@@ -36,7 +36,12 @@ const json = (body: unknown, status = 200) =>
 // "district manager" (a space), Feature Access keys it "district-manager".
 // Normalize rather than pick a side — the Margin Guide shipped broken for every
 // DM for exactly this reason, so the fix is copied here deliberately.
-const EDIT_ROLES = ["district-manager", "ceo", "mocd", "tom"];
+//
+// DM and CEO only, matching PG_EDIT_ROLES in speeks.js and the
+// tool-picture-manage default in FEATURE_CATALOG. This list used to carry
+// "mocd" and "tom" as well, so the three layers gave three different answers to
+// "who can edit" and the widest of them was the one that actually counted.
+const EDIT_ROLES = ["district-manager", "ceo"];
 const normRole = (r: unknown) =>
   String(r ?? "").toLowerCase().trim().replace(/[\s_]+/g, "-");
 
@@ -167,7 +172,10 @@ Deno.serve(async (req: Request) => {
     // ---- shots -------------------------------------------------------------
     if (body.action === "saveShot") {
       const label = String(body.label || "").trim();
-      if (!label) return json({ success: false, error: "A shot needs a name" }, 400);
+      // "photo", not "shot": the table is pg_shots and stays that way, but every
+      // word the DM reads in this tool says photo. An error message is one of
+      // those words.
+      if (!label) return json({ success: false, error: "A photo needs a name" }, 400);
       const cond = body.cond === null || body.cond === undefined || String(body.cond).trim() === ""
         ? null : String(body.cond).trim();
       // Mirrors the pg_shots_repeat_needs_cond check: an always-taken shot

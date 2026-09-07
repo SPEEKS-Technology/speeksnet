@@ -37,10 +37,21 @@ const constFn = (name) => {
     if (end < 0) throw new Error('unterminated ' + name);
     return src.slice(i, end + 1).replace('const ', 'var ');
 };
+// A multi-line arrow const. constFn cannot read one: it stops at the first
+// ";\n", which inside a block body is a local declaration, not the end of the
+// statement. This stops at a line that is exactly "};" instead.
+const constBlock = (name) => {
+    const i = src.indexOf('const ' + name + ' =');
+    if (i < 0) throw new Error('missing ' + name);
+    const end = src.indexOf('\n};\n', i);
+    if (end < 0) throw new Error('unterminated ' + name);
+    return src.slice(i, end + 4).replace('const ', 'var ');
+};
 // _pgEsc is what the note escapes through, so the real one is used rather than a
 // stand-in that might let markup past.
 eval(constFn('_pgEsc'));
 eval(constFn('_pgNorm'));
+eval(constBlock('_pgSaysMore'));
 eval(grab('_pgCondNote'));
 
 let fails = 0;
@@ -85,6 +96,21 @@ console.log('\nboth halves together');
 is('different condition AND repeatable',
     _pgCondNote({ label: 'Charging Port', cond: 'Port is damaged', rep: true }),
     'Only if port is damaged &middot; Take as many photos as needed');
+
+console.log('\nthe zoom caption uses the same rule');
+{
+    // The zoom prints "<label> · <note>", and the notes are seeded to LEAD with
+    // the label — "Cosmetic Flaws (Dings, Cracks, Scratches, etc.)" — so without
+    // the containment rule the caption reads the name twice, which is the exact
+    // fault that was fixed on the cards.
+    is('a note that leads with the label adds nothing',
+        _pgSaysMore('Cosmetic Flaws', 'Cosmetic Flaws (Dings, Cracks, Scratches, etc.)'), false);
+    is('a note identical to the label adds nothing',
+        _pgSaysMore('Extra Accessories', 'Extra Accessories'), false);
+    is('a note that names a different screen is kept',
+        _pgSaysMore('Carrier Unlock Status', 'Settings Screen Showing Carrier Unlocked'), true);
+    is('no note at all adds nothing', _pgSaysMore('Back of Tablet', null), false);
+}
 
 console.log('\nnothing goes through unescaped');
 {

@@ -7720,12 +7720,24 @@ const _pgEsc = s => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-// Same role set as the Margin Guide editor, in the session's own spelling
-// ("district manager", a space). The edge function normalizes both spellings and
-// enforces this again on every write — this is only what to draw.
-const PG_EDIT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
+// DM and CEO, in the session's own spelling ("district manager", a space). This
+// deliberately matches the tool-picture-manage default in FEATURE_CATALOG:
+// the two used to disagree — the catalog said DM/CEO while this set also let in
+// MOCD, and the edge function let in MOCD and TOM on top of that. Three
+// different answers to "who can edit" is how a tool ends up open to someone
+// nobody decided to open it to.
+const PG_EDIT_ROLES = new Set(['district manager', 'ceo']);
+
 function pgCanEdit() {
-    return PG_EDIT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+    if (!PG_EDIT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim())) return false;
+    // Feature Access as well as the role. The Edit BUTTON carries
+    // data-feature="tool-picture-manage" and applyRoleBasedUI hides it, but the
+    // rail's "New category" is drawn by pgRender() long after that sweep has
+    // run — so a DM whose editor had been revoked still had a way in. Resolved
+    // from the catalog rather than read back off the DOM for the same reason.
+    // The edge function enforces the role again on every write regardless.
+    return _featureEffectiveVisible('tool-picture-manage', _jumpRoleClass(),
+        sessionStorage.getItem('speeksUserName') || '') === true;
 }
 
 const _pgCats = () => (_pgSheets || []);
@@ -7850,7 +7862,7 @@ function pgRender() {
         <div class="pg-main">
           <div class="pg-legend">
             <span class="pg-lg"><span class="pg-sw pg-sw-req"></span> Take on every item</span>
-            <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> <b>Optional</b> &mdash; only if it applies to yours</span>
+            <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> <b>Optional</b>: only if it applies to yours</span>
           </div>
           <div class="pg-board">${_pgShots().map(_pgCardHtml).join('')}</div>
         </div>
@@ -7868,7 +7880,7 @@ function _pgSyncHead() {
     if (_pgAdmin.open) {
         eyebrow.textContent = 'District Manager';
         title.textContent = 'Edit the Picture Guide';
-        sub.textContent = 'Reorder shots, rename them, swap a photo, or flip one between always and conditional. Every store sees this straight away.';
+        sub.textContent = 'Reorder photos, rename them, swap an example, or flip one between always and optional. Every store sees this straight away.';
     } else {
         eyebrow.textContent = 'Listing Reference';
         title.textContent = 'Picture Guide';
@@ -8012,10 +8024,19 @@ const _pgNorm = t => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 // "Setting Unlock Screen" genuinely needs "only if the unlock screen is set",
 // and "Apple Warranty" needs "only if the warranty is still active". The rest
 // carry the OPTIONAL tag and nothing else.
+// Does `text` tell a reader anything the shot's own name has not? Case and
+// punctuation are not facts, and a label that contains its condition (or the
+// reverse) has already said it. Shared by the board's footnote and the zoom
+// caption, because both sit directly under the label and both would otherwise
+// print it twice.
+const _pgSaysMore = (label, text) => {
+    const a = _pgNorm(label), b = _pgNorm(text);
+    return !!b && a !== b && !a.includes(b) && !b.includes(a);
+};
+
 function _pgCondNote(s) {
     const bits = [];
-    const a = _pgNorm(s.label), b = _pgNorm(s.cond);
-    if (b && a !== b && !a.includes(b) && !b.includes(a)) {
+    if (_pgSaysMore(s.label, s.cond)) {
         // Lower-cased first letter so it reads as the tail of a sentence rather
         // than a second heading.
         const c = String(s.cond).trim();
@@ -8058,7 +8079,8 @@ function pgZoom(shotId) {
     el.className = 'pg-zoom';
     el.onclick = () => el.remove();
     el.innerHTML = `<figure><img src="${_pgEsc(s.img)}" alt="${_pgEsc(s.label)}">
-        <figcaption>${_pgEsc(s.label)}${s.note ? ` &mdash; ${_pgEsc(s.note)}` : ''}</figcaption></figure>`;
+        <figcaption>${_pgEsc(s.label)}${_pgSaysMore(s.label, s.note)
+            ? ` &middot; ${_pgEsc(s.note)}` : ''}</figcaption></figure>`;
     document.body.appendChild(el);
 }
 
@@ -8103,17 +8125,16 @@ function _pgRenderAdmin(body) {
             <div class="pg-ebar">
               <div class="pg-ebar-name">
                 <b>${_pgEsc(cat.name)}</b>
-                <span>${cat.shots.length} shot${cat.shots.length === 1 ? '' : 's'}</span>
+                <span>${cat.shots.length} photo${cat.shots.length === 1 ? '' : 's'}</span>
               </div>
               <button type="button" class="pg-ebtn" onclick="pgRenameCategory()">Rename</button>
               <button type="button" class="pg-ebtn" onclick="pgSetCategoryGroup()">Group&hellip;</button>
               <button type="button" class="pg-ebtn pg-ebtn-del" onclick="pgDeleteCategory()">Remove category</button>
             </div>
-            <p class="pg-ehint">Order here is the order on the listing. Conditional shots stay in place
-              and step aside when a lister says they don&rsquo;t apply &mdash; so put them where they
+            <p class="pg-ehint">Order here is the order on the listing, so put optional photos where they
               <em>would</em> go, not at the end.</p>
             <div class="pg-erows">${cat.shots.map((s, i) => _pgAdminRowHtml(s, i, cat.shots.length)).join('')}</div>
-            <button type="button" class="pg-eadd" onclick="pgAddShot()">&#43;&nbsp; Add a shot</button>
+            <button type="button" class="pg-eadd" onclick="pgAddShot()">&#43;&nbsp; Add a photo</button>
           `}
         </div>
       </div>`;
@@ -8140,7 +8161,7 @@ function _pgAdminRowHtml(s, i, n) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/></svg>
           </label>
           <button type="button" class="pg-ebtn" onclick="pgEditShot(${s.id})">Edit</button>
-          <button type="button" class="pg-ebtn pg-ebtn-del" onclick="pgDeleteShot(${s.id})" title="Delete this shot">&times;</button>
+          <button type="button" class="pg-ebtn pg-ebtn-del" onclick="pgDeleteShot(${s.id})" title="Delete this photo">&times;</button>
         </div>
       </div>`;
 }
@@ -8150,11 +8171,11 @@ function _pgAdminEditHtml(s) {
       <div class="pg-erow pg-erow-edit${s.cond ? ' cond' : ''}">
         <div class="pg-eform">
           <label class="pg-f">
-            <span>What the lister photographs</span>
+            <span>Photo Name</span>
             <input type="text" id="pg-f-label" value="${_pgEsc(s.label)}" placeholder="Back of Tablet">
           </label>
           <label class="pg-f">
-            <span>Only when&hellip; <em>(leave blank if every item gets this shot)</em></span>
+            <span>Only When&hellip; <em>(leave blank if every item gets this photo)</em></span>
             <input type="text" id="pg-f-cond" value="${_pgEsc(s.cond || '')}" placeholder="Cosmetic flaws"
                    oninput="_pgFormCondChanged()">
           </label>
@@ -8163,7 +8184,7 @@ function _pgAdminEditHtml(s) {
             <span>Take as many photos as needed</span>
           </label>
           <label class="pg-f">
-            <span>Words on the slot <em>(shown when there is no photo)</em></span>
+            <span>Words on the Slot <em>(shown when there is no example)</em></span>
             <input type="text" id="pg-f-note" value="${_pgEsc(s.note || '')}" placeholder="LCD Flaws (Bright Spots, Dark Spots, etc.)">
           </label>
           <div class="pg-eform-acts">
@@ -8219,7 +8240,7 @@ async function pgSaveShot(id, btn) {
     const cond  = (document.getElementById('pg-f-cond')  || {}).value || '';
     const note  = (document.getElementById('pg-f-note')  || {}).value || '';
     const rep   = !!(document.getElementById('pg-f-rep') || {}).checked;
-    if (!label.trim()) { alert('The shot needs a name — it is the only instruction on the card.'); return; }
+    if (!label.trim()) { alert('A photo needs a name. It is the only instruction on the card.'); return; }
     const out = await _pgPost({
         action: 'saveShot', id, label, cond: cond.trim() || null,
         rep: cond.trim() ? rep : false, note,
@@ -8233,10 +8254,10 @@ async function pgAddShot() {
     const cat = _pgAdminCat();
     if (!cat) return;
     const a = await _pgAsk({
-        title: 'Add a shot',
-        body: 'It lands at the bottom of the sheet &mdash; move it into place afterwards.',
-        ok: 'Add shot',
-        fields: [{ key: 'label', label: 'What the lister photographs', placeholder: 'Back of Tablet', required: true }],
+        title: 'Add a photo',
+        body: 'It lands at the bottom of the sheet. Move it into place afterwards.',
+        ok: 'Add photo',
+        fields: [{ key: 'label', label: 'Photo Name', placeholder: 'Back of Tablet', required: true }],
     });
     if (!a) return;
     const out = await _pgPost({ action: 'saveShot', category_id: cat.id, label: a.label, cond: null });
@@ -8253,7 +8274,7 @@ async function pgDeleteShot(id) {
     if (!await _pgAsk({
         title: `Delete &ldquo;${_pgEsc(s.label)}&rdquo;?`,
         body: 'This cannot be undone, and every store loses it straight away.',
-        ok: 'Delete shot', danger: true,
+        ok: 'Delete photo', danger: true,
     })) return;
     if (!await _pgPost({ action: 'deleteShot', id })) return;
     if (_pgAdmin.editing === id) _pgAdmin.editing = null;
@@ -8399,10 +8420,10 @@ async function pgAddCategory() {
     // fine but is rarely what anybody means.
     const a = await _pgAsk({
         title: 'New category',
-        body: 'A category is one printed sheet &mdash; one kind of item, with its own list of shots.',
+        body: 'One kind of item, with its own list of photos.',
         ok: 'Create category',
         fields: [
-            { key: 'name', label: 'Category name', placeholder: 'Graphics Cards', required: true },
+            { key: 'name', label: 'Category Name', placeholder: 'Graphics Cards', required: true },
             {
                 key: 'group', label: 'Group', hint: '(leave blank to keep it on its own)',
                 placeholder: 'Computer Parts', chips: _pgGroupChips(),
@@ -8445,9 +8466,8 @@ async function pgRenameCategory() {
     if (!cat) return;
     const a = await _pgAsk({
         title: 'Rename category',
-        body: 'Every store sees the new name straight away. The shots and photos are untouched.',
         ok: 'Rename',
-        fields: [{ key: 'name', label: 'Category name', value: cat.name, required: true }],
+        fields: [{ key: 'name', label: 'Category Name', value: cat.name, required: true }],
     });
     if (!a || a.name === cat.name) return;
     if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: a.name, group: cat.group_name || '' })) return;
@@ -8459,8 +8479,7 @@ async function pgDeleteCategory() {
     if (!cat) return;
     if (!await _pgAsk({
         title: `Remove &ldquo;${_pgEsc(cat.name)}&rdquo;?`,
-        body: `Its ${cat.shots.length} shot${cat.shots.length === 1 ? '' : 's'} and photos are kept, so this `
-            + 'can be undone &mdash; but nobody sees the sheet until it is.',
+        body: `Its ${cat.shots.length} photo${cat.shots.length === 1 ? '' : 's'} are kept, so this can be undone.`,
         ok: 'Remove category', danger: true,
     })) return;
     if (!await _pgPost({ action: 'deleteCategory', id: cat.id })) return;
@@ -8495,7 +8514,7 @@ async function pgUploadShotPhoto(shotId, input) {
         });
         if (!resp.ok) throw new Error(await resp.text());
         const s = _pgShotById(shotId);
-        if (!s) throw new Error('That shot is no longer on the sheet.');
+        if (!s) throw new Error('That photo is no longer on the sheet.');
         // saveShot carries the whole row, so the other fields have to be resent
         // as they are or the upload would quietly blank them.
         if (!await _pgPost({

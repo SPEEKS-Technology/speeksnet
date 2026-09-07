@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260907i">
+  <link rel="stylesheet" href="styles.css?v=20260907j">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260907i" defer></script>
+  <script src="speeks.js?v=20260907j" defer></script>
 </head>
 <body class="preload">
 
@@ -690,7 +690,12 @@
               </button>
             </div>
           </div>
-          <p class="pg-sub" id="pg-sub">Pick the category, tick what applies to the item in your hand, and work the board left to right.</p>
+          <!-- Kept in step with the lister wording in _pgSyncHead(), which
+               overwrites it the moment the sheets land. This is only what shows
+               while they are loading, so it must not describe a different tool:
+               it used to say "tick what applies", which was the chip bar that
+               was cut. -->
+          <p class="pg-sub" id="pg-sub">Pick the category and work the board left to right. Red cards are only taken when they apply to the unit in your hand.</p>
         </div>
         <div class="pg-body" id="pg-body">
           <div class="pg-loading">Loading the photo sheets&hellip;</div>
