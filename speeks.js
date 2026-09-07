@@ -7825,8 +7825,20 @@ function pgPick(catId) {
 // sitting side by side in the same grid drew themselves differently over a
 // difference no lister can see or cares about. A note is extra words, not a
 // different kind of slot.
-function _pgArt(s) {
+// `thumb` is the 40px square in the DM's editor rows, where the words are not
+// words: at 6px "Cosmetic Flaws (Dings, Cracks, Scratches, etc.)" wraps to six
+// unreadable lines, and the row already prints that name in bold immediately to
+// the right of it, at a size a person can read. So the thumbnail answers the
+// only question it can answer at that size — is there a photo yet — with a
+// stand-in picture. On the board itself, where the square is 196px and the words
+// ARE the instruction, nothing changes.
+function _pgArt(s, thumb) {
     if (s.img) return `<img class="pg-img" src="${_pgEsc(s.img)}" alt="${_pgEsc(s.label)}" loading="lazy">`;
+    if (thumb) {
+        return `<div class="pg-ph" aria-label="No photo yet">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M21 16l-5-5-6.5 6.5"/><path d="M3 18.5l4-4 2.5 2.5"/></svg>
+          </div>`;
+    }
     return `<div class="pg-instr"><span>${_pgEsc(s.note || s.label)}</span></div>`;
 }
 
@@ -8154,7 +8166,7 @@ function _pgAdminRowHtml(s, i, n) {
           <button type="button" onclick="pgMoveShot(${s.id},-1)"${i === 0 ? ' disabled' : ''} title="Move up">&uarr;</button>
           <button type="button" onclick="pgMoveShot(${s.id},1)"${i === n - 1 ? ' disabled' : ''} title="Move down">&darr;</button>
         </div>
-        <div class="pg-ethumb">${_pgArt(s)}</div>
+        <div class="pg-ethumb">${_pgArt(s, true)}</div>
         <div class="pg-ename">
           <b>${_pgEsc(s.label)}</b>
           <small>${s.cond

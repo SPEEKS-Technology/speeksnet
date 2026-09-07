@@ -21524,16 +21524,10 @@ select.dd-native {
     border-radius: 6px;
     font-size: 12px; font-weight: 700; text-align: center; padding: 12px 10px; line-height: 1.4;
 }
-/* NOT on an optional card. The white box is standing in for a photograph, and on
-   a tinted card it stops reading that way — it reads as a label stuck on top of
-   the tint, and the longer notes ("Cosmetic Flaws (Dings, Cracks, Scratches,
-   etc.)") wrap inside it into a cramped block of four lines. Optional slots put
-   the words straight on the tint until a real photo replaces them. */
-.pg-shot.cond .pg-instr span,
-.pg-erow.cond .pg-instr span {
-    background: none; border: none; border-radius: 0; padding: 0 4px;
-    color: var(--pg-ink);
-}
+/* The white box briefly came off optional cards here. It is back: at 196px the
+   box reads as the photograph it is standing in for, on a tinted card as much as
+   a plain one. The complaint it was chasing was the 40px THUMBNAIL in the DM's
+   editor, which is dealt with by not putting words in it at all — see _pgArt(). */
 /* .pg-empty stood here: a second, fainter placeholder for a shot with no note.
    Which one a card got came down to whether its row happened to carry note text,
    and that column is seeded unevenly — so two Cosmetic Flaws cards on two sheets
@@ -21665,8 +21659,19 @@ select.dd-native {
     width: 46px; height: 46px; border-radius: 8px; overflow: hidden;
     border: 1px solid var(--pg-line); flex-shrink: 0;
 }
-.pg-ethumb .pg-instr { padding: 3px; }
-.pg-ethumb .pg-instr span { font-size: 6px; padding: 2px 1px; border-width: 1px; line-height: 1.2; }
+/* The stand-in, for a row whose photo has not been uploaded yet. Words used to
+   go here at 6px, which is not a size anybody reads — and the row prints the
+   same name in 13px bold two centimetres to the right. A picture of a picture
+   says the one thing the square is able to say at 46px. */
+.pg-ph {
+    width: 100%; height: 100%; background: #eef2f7; color: var(--pg-faint);
+    display: flex; align-items: center; justify-content: center;
+}
+.pg-ph svg { width: 22px; height: 22px; }
+/* An optional row's thumbnail leans red with the rest of its row, so the square
+   is not the one neutral thing on a tinted line. */
+.pg-erow.cond .pg-ethumb { border-color: var(--pg-red-line); }
+.pg-erow.cond .pg-ph { background: var(--pg-red-tint); color: #d99a9a; }
 .pg-ename { flex: 1; min-width: 0; }
 .pg-ename b { display: block; font-size: 13px; font-weight: 750; color: var(--pg-ink); }
 .pg-ename small { font-size: 11px; color: var(--pg-muted); }
