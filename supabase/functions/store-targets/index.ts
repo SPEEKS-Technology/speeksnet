@@ -104,6 +104,7 @@ function isNewHire(u: any, weekStart: string, cfg: Cfg): boolean {
 // Saturday is a real open day but produces about half a weekday's listings —
 // shorter, and the busiest buy day — so hours are discounted by saturday_factor
 // once, at the store level, rather than being tracked per shift.
+//
 // factor is passed in, not read off cfg.goal_factor: it is per store now (see
 // factorFor) and everything else in here is store-agnostic. Required rather than
 // defaulted, so a call site that forgets it fails loudly instead of quietly
