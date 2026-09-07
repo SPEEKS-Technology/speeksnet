@@ -9130,11 +9130,13 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 #listingGoalsModal .lu-week.red .lu-week-num { color: #b02a2f !important; }
 #listingGoalsModal .lu-week.empty .lu-week-num { color: #8a94a3 !important; }
 
-/* When the Action Menu is live for this user (managers/ASMs), it re-homes the
-   ticker's toggles and the announcements bell -- so hide both. Everyone else
-   (employees, DM, other pages) keeps them until the deck rolls out to them. */
+/* When the Action Menu is live for this user, it re-homes the ticker's toggles
+   -- so hide the ticker. Everyone else (other pages) keeps it.
+
+   The bell rule that used to sit here is gone with the bell itself: it was only
+   ever hidden where the deck exists, which is index.html alone, so it kept
+   reappearing on every other page. The nav no longer carries it at all. */
 body.sam-active #infoTicker { display: none !important; }
-body.sam-active #notifBellBtn { display: none !important; }
 
 /* Condensed one-line hotbar for Action Menu users: the whole stack becomes one
    sleek chip bar (labels hidden, buttons no longer stretch full-width). */
@@ -19169,9 +19171,13 @@ select.dd-native {
        unreachable. clamp() lets the bar give ground continuously instead of
        holding a fixed size until it breaks: 30px at 320, the original 34 from
        ~386 up. Same reasoning for the gap and the Sign Out padding. */
-    /* index.html hides the Announcements bell (body.sam-active — the briefing
-       deck replaces it), so the OTHER four shells carry one control more in the
-       same bar. They are what sets the floor here, not the home page. */
+    /* Every shell now carries the same set of controls: the Announcements bell
+       came out of the nav on 2026-09-07, and it was the one control the other
+       four shells had that index.html did not. The sizes below were set when
+       they carried that extra control, so they are a floor with a little room
+       in it rather than a tight fit — left alone deliberately, because they are
+       measured against real 320px hardware and one fewer button cannot break
+       them. */
     /* One size for every control in the bar and the space shared out evenly
        between them (user's call, 19 Aug). The Tools button was a 45px rounded
        rectangle sitting beside 34px squares, and the group huddled to the right
