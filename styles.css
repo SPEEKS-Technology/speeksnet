@@ -21293,10 +21293,11 @@ select.dd-native {
    lowest specificity there is, so any author rule setting display on the same
    element beats it silently — and two already did. .pg-ask-menu was display:flex,
    so a combo list could never be put away and an empty one drew as a bar under
-   the box. .pg-f is display:flex, so #pg-f-rep-wrap never hid and the "take as
-   many photos as needed" checkbox showed on always-taken photos, which the
-   database refuses outright. Fixed here rather than one rule at a time, because
-   the next one would break the same way. */
+   the box. .pg-f is display:flex, so the "take as many photos as needed"
+   checkbox never hid and showed on always-taken photos, which the database
+   refuses outright. Fixed here rather than one rule at a time, because the next
+   one would break the same way — and it did: #pg-f-opt, the whole optional half
+   of the edit form, is toggled by this attribute too. */
 .pg-panel [hidden], .pg-ask [hidden] { display: none !important; }
 
 .pg-panel {
@@ -21732,6 +21733,28 @@ select.dd-native {
 
 .pg-erow-edit { display: block; padding: 13px; }
 .pg-eform { display: flex; flex-direction: column; gap: 11px; }
+/* Required / Optional. A segmented pair rather than a checkbox because the two
+   states are not "on and off" — each one is a different sheet, with its own
+   fields, and the pair shows both names at once so the choice reads without
+   being clicked. */
+.pg-eseg {
+    display: inline-flex; align-self: flex-start; padding: 3px; gap: 3px;
+    background: var(--pg-hdr); border: 1px solid var(--pg-line); border-radius: 9px;
+}
+.pg-eseg-b {
+    border: 1px solid transparent; background: none; border-radius: 7px;
+    padding: 5px 15px; font: inherit; font-size: 12px; font-weight: 700;
+    color: var(--pg-muted); cursor: pointer; transition: background .12s, color .12s;
+}
+.pg-eseg-b:hover { color: var(--pg-ink); }
+.pg-eseg-b.on {
+    background: #fff; border-color: var(--pg-line); color: var(--pg-accent-deep);
+    box-shadow: 0 1px 2px rgba(16,24,40,.06);
+}
+/* The optional half is a plain div wrapping two labels, so it has no display of
+   its own to fight the [hidden] attribute — but .pg-panel [hidden] carries the
+   !important override anyway, which is what makes toggling it safe. */
+#pg-f-opt { display: flex; flex-direction: column; gap: 11px; }
 .pg-f { display: flex; flex-direction: column; gap: 5px; }
 .pg-f > span { font-size: 11.5px; font-weight: 700; color: var(--pg-muted); }
 .pg-f > span em { font-style: normal; font-weight: 500; color: var(--pg-faint); }

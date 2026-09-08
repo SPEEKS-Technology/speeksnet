@@ -8195,26 +8195,41 @@ function _pgAdminRowHtml(s, i, n) {
 }
 
 function _pgAdminEditHtml(s) {
+    const opt = !!s.cond;
     return `
       <div class="pg-erow pg-erow-edit${s.cond ? ' cond' : ''}">
-        <div class="pg-eform">
+        <div class="pg-eform" id="pg-eform" data-mode="${opt ? 'opt' : 'req'}">
+          <!-- Whether a photo is required was only ever IMPLIED, by whether the
+               "Only When…" box happened to have anything in it. Nobody who had
+               not built the tool could be expected to work that out, so it is a
+               choice now — and the choice decides which fields exist, which is
+               what keeps a required photo down to the one field it needs
+               (Ethan, 2026-09-08). -->
+          <div class="pg-eseg" role="group" aria-label="Is this photo required?">
+            <button type="button" class="pg-eseg-b${opt ? '' : ' on'}" onclick="_pgFormMode('req')">Required</button>
+            <button type="button" class="pg-eseg-b${opt ? ' on' : ''}" onclick="_pgFormMode('opt')">Optional</button>
+          </div>
           <label class="pg-f">
             <span>Photo Name</span>
             <input type="text" id="pg-f-label" value="${_pgEsc(s.label)}" placeholder="Back of Tablet">
           </label>
-          <label class="pg-f">
-            <span>Only When&hellip; <em>(leave blank if every item gets this photo)</em></span>
-            <input type="text" id="pg-f-cond" value="${_pgEsc(s.cond || '')}" placeholder="Cosmetic flaws"
-                   oninput="_pgFormCondChanged()">
-          </label>
-          <label class="pg-f pg-f-check" id="pg-f-rep-wrap"${s.cond ? '' : ' hidden'}>
-            <input type="checkbox" id="pg-f-rep"${s.rep ? ' checked' : ''}>
-            <span>Take as many photos as needed</span>
-          </label>
-          <label class="pg-f">
-            <span>Words on the Slot <em>(shown when there is no example)</em></span>
-            <input type="text" id="pg-f-note" value="${_pgEsc(s.note || '')}" placeholder="LCD Flaws (Bright Spots, Dark Spots, etc.)">
-          </label>
+          <div id="pg-f-opt"${opt ? '' : ' hidden'}>
+            <label class="pg-f">
+              <span>Description <em>(when to take it &mdash; the card reads &ldquo;Only if&hellip;&rdquo;)</em></span>
+              <input type="text" id="pg-f-cond" value="${_pgEsc(s.cond || '')}" placeholder="the screen is cracked">
+            </label>
+            <label class="pg-f pg-f-check">
+              <input type="checkbox" id="pg-f-rep"${s.rep ? ' checked' : ''}>
+              <span>Take as many photos as needed</span>
+            </label>
+          </div>
+          <!-- The slot's own wording is deliberately NOT a field any more. On four
+               of the six optional photos it merely restated the name, and there is
+               nothing sensible to generate it from — "<name> (<description>)" gives
+               "Cosmetic Flaws (Cosmetic flaws)". Carried through untouched so
+               editing a photo can never silently erase it; it is set in a
+               migration, which is how the existing ones were written. -->
+          <input type="hidden" id="pg-f-note" value="${_pgEsc(s.note || '')}">
           <div class="pg-eform-acts">
             <button type="button" class="pg-esave" onclick="pgSaveShot(${s.id}, this)">Save</button>
             <button type="button" class="pg-ecancel" onclick="_pgAdmin.editing=null;pgRender()">Cancel</button>
@@ -8224,15 +8239,22 @@ function _pgAdminEditHtml(s) {
       </div>`;
 }
 
-// "Take as many photos as needed" is meaningless for a shot every item gets exactly one
-// of, and the database refuses it outright, so the checkbox only exists while
-// there is a condition to hang it on.
-function _pgFormCondChanged() {
-    const cond = (document.getElementById('pg-f-cond') || {}).value || '';
-    const wrap = document.getElementById('pg-f-rep-wrap');
-    if (!wrap) return;
-    wrap.hidden = !cond.trim();
-    if (!cond.trim()) { const cb = document.getElementById('pg-f-rep'); if (cb) cb.checked = false; }
+// Flip the form between the two shapes. Deliberately does NOT re-render and does
+// NOT clear the description: nothing here is saved until Save is pressed, so
+// someone who clicks Optional to see what it does, then clicks back, should find
+// their typing where they left it. pgSaveShot reads the mode, so the mode alone
+// decides whether a condition is stored — a leftover description on a Required
+// photo is discarded there, not here.
+function _pgFormMode(mode) {
+    const form = document.getElementById('pg-eform');
+    if (!form) return;
+    form.dataset.mode = mode;
+    const box = document.getElementById('pg-f-opt');
+    if (box) box.hidden = (mode !== 'opt');
+    form.querySelectorAll('.pg-eseg-b').forEach((b, i) => {
+        b.classList.toggle('on', (i === 0) === (mode === 'req'));
+    });
+    if (mode === 'opt') { const c = document.getElementById('pg-f-cond'); if (c) c.focus(); }
 }
 
 function pgEditShot(id) { _pgAdmin.editing = id; pgRender(); }
@@ -8264,14 +8286,27 @@ async function _pgPost(payload, btn, busyLabel) {
 }
 
 async function pgSaveShot(id, btn) {
+    const form  = document.getElementById('pg-eform');
+    // The toggle, not the contents of the description box, is what says whether
+    // this photo is conditional. A description left behind by someone who
+    // switched back to Required is dropped here.
+    const opt   = !!form && form.dataset.mode === 'opt';
     const label = (document.getElementById('pg-f-label') || {}).value || '';
     const cond  = (document.getElementById('pg-f-cond')  || {}).value || '';
     const note  = (document.getElementById('pg-f-note')  || {}).value || '';
     const rep   = !!(document.getElementById('pg-f-rep') || {}).checked;
     if (!label.trim()) { alert('A photo needs a name. It is the only instruction on the card.'); return; }
+    // An optional photo with no description is a required one wearing a red
+    // border: the card would print "Only if" and then stop.
+    if (opt && !cond.trim()) {
+        alert('An optional photo needs a description — it is what the card says after "Only if".');
+        return;
+    }
     const out = await _pgPost({
-        action: 'saveShot', id, label, cond: cond.trim() || null,
-        rep: cond.trim() ? rep : false, note,
+        action: 'saveShot', id, label,
+        cond: opt ? cond.trim() : null,
+        rep:  opt ? rep : false,
+        note,
     }, btn);
     if (!out) return;
     _pgAdmin.editing = null;
