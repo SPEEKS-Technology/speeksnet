@@ -4,7 +4,7 @@
 const puppeteer = require('puppeteer-core');
 const path = require('path');
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
+const REPO = require('path').resolve(__dirname, '..').replace(/\\/g, '/');
 const OUT = process.env.LV_SHOT_DIR || __dirname;
 
 let fails = 0;

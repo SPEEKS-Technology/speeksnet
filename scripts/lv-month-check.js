@@ -24,7 +24,7 @@ const fs = require('fs');
 const path = require('path');
 
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
+const REPO = require('path').resolve(__dirname, '..').replace(/\\/g, '/');
 const args = process.argv.slice(2);
 const mode = (args.find(a => a.startsWith('--mode=')) || '--mode=mtd').split('=')[1];
 const width = parseInt((args.find(a => a.startsWith('--width=')) || '--width=1400').split('=')[1], 10);

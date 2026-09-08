@@ -288,7 +288,7 @@ out.push(rebuttals.map(r =>
   `  (${q(r.key)}, ${q(r.name)}, ${qn(r.say)}, ${q(r.why)}, ` +
   `${r.conds.length ? `array[${r.conds.map(q).join(', ')}]::text[]` : `'{}'::text[]`}, ${r.sort})`).join(',\n') + ';');
 
-const dest = path.join('c:/Users/User/Documents/GitHub/speeksnet/supabase/migrations/0006_margin_guide_seed.sql');
+const dest = path.join(require('path').resolve(__dirname, '..').replace(/\\/g, '/') + '/supabase/migrations/0006_margin_guide_seed.sql');
 fs.writeFileSync(dest, out.join('\n') + '\n');
 
 console.log('devices          ', devices.length);
