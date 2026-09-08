@@ -3943,7 +3943,11 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .kb-table th:nth-child(3) { width: 35%; padding-bottom: 10px; }
 .kb-table th:nth-child(4) { width: 20%; padding-bottom: 10px; }
 
-.form-label-caps { font-size: 12px; font-weight: 900; color: #a0aab2; text-transform: uppercase; display: block; margin-bottom: 6px; }
+/* #a0aab2 measured 2.36 : 1 on white -- less than half the AA threshold, on the
+   text that says which field you are filling in. A form label is the last thing
+   that should be decorative. #5f6b7a is 5.3 : 1 and still reads as a quiet caps
+   label rather than body copy. */
+.form-label-caps { font-size: 12px; font-weight: 900; color: #5f6b7a; text-transform: uppercase; display: block; margin-bottom: 6px; }
 .form-input-lg { width: 100%; box-sizing: border-box; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 15px; margin-top: 6px; outline: none; transition: 0.2s; }
 .form-input-lg:focus { border-color: var(--sage-professional); }
 
@@ -7278,12 +7282,28 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .ws-pane { display: none; }
 .ws-pane.active { display: block; }
 
-/* Each pane's panel fills the viewport below the header for a full-screen feel */
+/* Each pane's panel fills the viewport below the header for a full-screen feel.
+ *
+ * The 250px was a guess at how much chrome sits above the panel, and it is
+ * wrong whenever the guess is: on operations.html the eyebrow, title and the
+ * controls row put the panel's top nearer 300px, and the controls row WRAPS at
+ * around 1100px wide, adding another ~44px. On a 709px-tall window that left a
+ * 460px card (floored by min-height) whose bottom edge fell ~50px BELOW the
+ * fold, so the page grew a second scrollbar and the inner scroller's last row
+ * stayed hidden behind the window edge no matter how far you scrolled it.
+ *
+ * --ws-top is measured from the panel's actual position by _wsFitPanels() and
+ * kept in step on resize, so this self-corrects when the controls row wraps or
+ * a role sees a different header. The literal stays as the fallback for the
+ * first paint and for anything that never runs the JS.
+ *
+ * min-height is now well below the shortest sensible window rather than above
+ * it -- a floor taller than the space available is what forced the overflow. */
 .ws-panel {
     display: flex !important;
     flex-direction: column;
-    height: calc(100vh - 250px) !important;
-    min-height: 460px;
+    height: calc(100dvh - var(--ws-top, 250px)) !important;
+    min-height: 320px;
     margin: 0 !important;
 }
 .ws-scroll   { flex: 1; min-height: 0; }
@@ -12288,7 +12308,10 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-queue, .b2b-items, .b2b-list, .b2b-flight { min-width: 0; }
 .b2b-q-main, .b2b-lmain, .b2b-f { min-width: 0; }
 .b2b-panel .cb-table, .b2b-vtable, .b2b-ctable, .b2b-ftable { table-layout: auto; }
-.b2b-ov { overflow-x: auto; }
+/* Dead as written: the .b2b-ov rule further down sets the `overflow` shorthand,
+   which wins on cascade order and clips instead. The Overview's tables scroll
+   via .b2b-ov-scroll -- see the note beside that rule. Kept as a marker so the
+   next person to reach for overflow-x here knows why it did not work. */
 
 .b2b-panel .c { text-align: center; }
 .b2b-panel .r { text-align: right; }
@@ -12300,10 +12323,33 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 /* Everything in the controls row sits on --b2b-h-md so the segmented control,
    the scope chip and the New Deal button share one baseline and one radius. */
 .b2b-panel .cb-head-controls { gap: 10px; }
-.b2b-view-toggle { height: var(--b2b-h-md); padding: 3px; border-radius: var(--b2b-r-md); }
+/* Six tabs, a scope chip, Delete Requests, CRM Settings and + New Deal share
+ * this row. Without a shrink rule the tab strip took the whole line at around
+ * 1100px, which did two visible things: the last tab (Overview) was clipped by
+ * the card edge with no way to scroll to it, and + New Deal -- the primary
+ * action -- was pushed onto a second line on its own, left-aligned, reading
+ * like a rendering accident.
+ *
+ * So the strip is the thing that gives: it shrinks and scrolls, and the actions
+ * stay on the first line beside it. min-width: 0 is required or a flex item
+ * refuses to shrink below its content. */
+.b2b-view-toggle {
+    height: var(--b2b-h-md); padding: 3px; border-radius: var(--b2b-r-md);
+    flex: 1 1 auto; min-width: 0;
+    overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: thin; scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+}
+/* A 3px-tall bar inside a 34px pill would eat the labels, so the strip scrolls
+   without painting a track. The tabs stay reachable by drag, wheel and keyboard. */
+.b2b-view-toggle::-webkit-scrollbar { height: 0; }
 .b2b-view-toggle .mb-view-btn {
     display: inline-flex; align-items: center; gap: 6px; height: 100%;
     padding: 0 12px; border-radius: var(--b2b-r-sm); font-size: 12.5px;
+    /* "Needs You" was wrapping to "Needs / You" while every other tab stayed on
+       one line, which grew that pill to 41px against its neighbours' 28px and
+       left the whole row's baseline crooked. */
+    white-space: nowrap; flex: 0 0 auto; scroll-snap-align: start;
 }
 .b2b-view-toggle .mb-view-btn svg {
     width: 14px; height: 14px; fill: none; stroke: currentColor;
@@ -12312,16 +12358,37 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-pip {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 17px; height: 17px; padding: 0 5px; margin-left: 2px;
-    border-radius: 999px; background: var(--sage-professional); color: #fff;
+    /* Same AA reasoning as .b2b-btn-primary: 10px/800 white on #1f9d57 is
+       3.49 : 1, and this pill is a count somebody has to actually read. */
+    border-radius: 999px; background: var(--sage-deep); color: #fff;
     font-size: 10px; font-weight: 800; line-height: 1;
 }
+/* A STATUS chip, not a control -- and it has to look like one.
+ *
+ * It sits inline between real <button> tabs and two real buttons, and as a
+ * solid black pill it was the highest-contrast, most clickable-looking thing in
+ * the row. A tester clicked "District-wide" three times expecting a
+ * My-Store/District scope toggle. It isn't one: it reports the scope your role
+ * already has. So it reads as a label now -- outlined rather than filled, the
+ * same muted weight as other metadata, an explicit default cursor, and it says
+ * what it is describing. */
 .b2b-scope-chip {
-    display: inline-flex; align-items: center; height: var(--b2b-h-md);
-    padding: 0 14px; border-radius: var(--b2b-r-md);
-    background: var(--b2b-chip); color: var(--b2b-muted);
-    font-size: 11.5px; font-weight: 800; letter-spacing: .03em; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px; height: var(--b2b-h-md);
+    padding: 0 11px; border-radius: var(--b2b-r-md);
+    background: transparent; color: var(--b2b-muted);
+    border: 1px dashed var(--b2b-line);
+    font-size: 11px; font-weight: 700; letter-spacing: .02em; white-space: nowrap;
+    cursor: default; user-select: none;
 }
-.b2b-scope-chip.b2b-scope-corp { background: #1a1c1e; color: #fff; }
+/* Corp's scope is worth distinguishing, but with a tint rather than by becoming
+   the loudest element on the page. */
+.b2b-scope-chip.b2b-scope-corp {
+    background: var(--b2b-chip); color: var(--b2b-muted);
+    border-style: solid;
+}
+.b2b-scope-chip::before {
+    content: 'Showing'; font-weight: 650; opacity: .7; letter-spacing: 0;
+}
 
 /* --- sections ------------------------------------------------------------- */
 .b2b-sec { margin-bottom: 22px; }
@@ -12387,8 +12454,19 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 }
 /* Header-row size: matches the segmented control it sits beside. */
 .b2b-btn-head { height: var(--b2b-h-md); padding: 0 15px; font-size: 12.5px !important; }
-.b2b-btn-primary { background: var(--sage-professional); color: #fff; }
-.b2b-btn-primary:hover:not(:disabled) { background: var(--sage-deep); }
+/* --sage-deep, not --sage-professional. White on the brand green (#1f9d57)
+   measures 3.49 : 1, which fails WCAG AA for the 13px/750 label it carries --
+   and this is the widest-reaching button in the module (+ New Deal, Price
+   Items, Sign Off Pickup, Submit For Quoting, Add Client…). --sage-deep
+   (#178048) is the brand's own paired darker green, already defined and
+   already used for this button's hover, and measures 4.96 : 1. So this is the
+   existing palette used correctly rather than a new colour, and the difference
+   is barely perceptible next to the accessibility gain.
+
+   Hover now goes to the deeper end of the same pair, keeping the press
+   feedback that flattening both to one colour would have lost. */
+.b2b-btn-primary { background: var(--sage-deep); color: #fff; }
+.b2b-btn-primary:hover:not(:disabled) { background: #106438; }
 .b2b-btn-secondary { background: #fff; color: var(--b2b-muted); border-color: var(--b2b-line); }
 .b2b-btn-secondary:hover:not(:disabled) { border-color: var(--sage-professional); color: var(--sage-deep); }
 .b2b-btn-danger { background: #fcecec; color: #d1443b; border-color: #f7dada; margin-right: auto; }
@@ -12457,7 +12535,13 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-q-top { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .b2b-q-ref {
     font-family: 'Consolas', 'SFMono-Regular', monospace; font-size: 11px;
-    font-weight: 700; color: var(--b2b-faint); letter-spacing: .03em;
+    /* --b2b-faint (#94a3b8) is 2.56 : 1 on white. That is defensible for
+       decoration and not for this: the reference is how a deal is identified,
+       said out loud and searched for. --b2b-muted is 5.0 : 1 and keeps the ref
+       quieter than the company name beside it, which is the hierarchy that was
+       wanted. The faint token is left alone so genuinely decorative text keeps
+       its own level. */
+    font-weight: 700; color: var(--b2b-muted); letter-spacing: .03em;
 }
 .b2b-q-co { font-size: 14.5px; font-weight: 800; color: #1a1c1e; letter-spacing: -.01em; }
 .b2b-q-meta {
@@ -12618,10 +12702,20 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-note-sub { margin-top: 3px; font-size: 11px; color: var(--b2b-muted); font-weight: 650; }
 
 /* --- view: Overview ------------------------------------------------------- */
+/* Flex, not grid, so the LAST ROW FILLS.
+ *
+ * auto-fit fixes the track count from the container width, so a tile count that
+ * does not divide by it left the final row short with a dead gap beside it --
+ * six tiles in four columns put two cards on row 2 and a hole where the other
+ * two would be. The counts here are genuinely variable (Owed To Clients and
+ * Recycled-Out Cost only render when they have something to say), so no column
+ * count is right for all of them. Growing flex items share the leftover width
+ * instead, and every row comes out flush at any count. */
 .b2b-tiles {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    display: flex; flex-wrap: wrap;
     gap: 11px; margin-bottom: 22px;
 }
+.b2b-tiles > * { flex: 1 1 170px; min-width: 170px; }
 .b2b-tile {
     background: #fff; border: 1px solid var(--b2b-line); border-radius: 13px;
     padding: 14px 15px; display: flex; flex-direction: column; gap: 3px;
@@ -12642,6 +12736,18 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     padding: 4px 0 0; margin-bottom: 16px; overflow: hidden;
     box-shadow: 0 1px 2px rgba(16,24,40,.04);
 }
+/* The card keeps `overflow: hidden` because that is what clips its children to
+   the 14px radius. But that shorthand also beat the earlier
+   `.b2b-ov { overflow-x: auto }` further up this file, so a five-column
+   Overview table on a phone was not scrolling -- it was being CLIPPED, and the
+   right-hand columns (amount, and the Mark Paid button) were unreachable with
+   no scrollbar to say so. The scroll belongs on an inner wrapper, so the card
+   can clip and the table can still be read. */
+.b2b-ov-scroll { overflow-x: auto; }
+/* The table is table-layout:fixed at width:100%, which fits any frame -- until
+   a nowrap chip or a button in a cell forces a wider minimum. Below that it
+   scrolls in the wrapper rather than squeezing columns into unreadability. */
+.b2b-ov-scroll .cb-table { min-width: 520px; }
 .b2b-ov-h { padding: 14px 16px 10px; }
 .b2b-ov-t { display: block; font-size: 14px; font-weight: 800; color: #1a1c1e; letter-spacing: -.01em; }
 .b2b-ov-s { display: block; font-size: 11.5px; font-weight: 650; color: var(--b2b-muted); margin-top: 2px; }
@@ -12705,8 +12811,23 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 }
 
 /* --- client picker (new deal) --------------------------------------------- */
+/* The client picker.
+ *
+ * flex: 0 0 auto and a real min-height, not just max-height. This is a
+ * shrinkable child of a column flex container, and because it sets
+ * overflow-y: auto it loses the automatic min-content floor that would
+ * otherwise stop a flex item collapsing. With 13 clients (851px of content) it
+ * was being squeezed to 91px -- one and a half rows, the second sliced through
+ * the middle, scrolling a long list through a porthole -- while the modal body
+ * still had room to spare. It only showed up on the UNFILTERED list, which is
+ * why typing a search made it look fine.
+ *
+ * min-height matches max-height so the box is a stable 230px whatever the list
+ * length. That also stops the centred modal re-centring on every keystroke as
+ * results narrow, which made the whole dialog jump a few pixels while typing. */
 .b2b-picklist {
-    display: flex; flex-direction: column; gap: 5px; max-height: 230px;
+    display: flex; flex-direction: column; gap: 5px;
+    flex: 0 0 auto; height: 230px; min-height: 230px; max-height: 230px;
     overflow-y: auto; margin: 10px 0;
 }
 /* Explicit areas, not auto-placement: the count is optional, and when it was
@@ -13349,12 +13470,47 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 /* The Line cell doubles as the drag handle. Only this cell, not the row: the
    row is fifteen editable fields and a drag must not begin when someone is
    selecting text in one of them. */
-.b2b-pc-grab { cursor: grab; }
-.b2b-pc-grab:active { cursor: grabbing; }
-.b2b-pline.b2b-dragging { opacity: .45; }
-/* The line being dragged over gets a rule on top, which is the convention for
-   "it lands here" and costs no layout. */
-.b2b-pline.b2b-dropto { box-shadow: inset 0 3px 0 var(--sage-professional); }
+/* Reordering the pricing sheet.
+   The whole SKU cell used to be draggable="true", which is why dragging fought
+   text selection: the cell holds the line number, so every attempt to select it
+   started a drag instead. Only this grip is draggable now — a deliberate target
+   you aim at, the way every other reorderable list works. */
+.b2b-grip {
+    flex: 0 0 auto; width: 11px; height: 18px; cursor: grab; border-radius: 3px;
+    opacity: 0; transition: opacity .12s ease, background .12s ease;
+    /* Two dotted columns, drawn rather than shipped as an asset. */
+    background-image: radial-gradient(currentColor 1px, transparent 1.2px);
+    background-size: 5px 5px; background-position: 1px 2px;
+    color: var(--b2b-faint);
+    /* The cell around it is deliberately selectable (that is the conflict this
+       grip resolves), so the grip itself must opt out or a drag-select started
+       on it grabs the row instead. */
+    -webkit-user-select: none; user-select: none;
+}
+.b2b-pline:hover .b2b-grip,
+.b2b-grip:focus-visible { opacity: 1; }
+.b2b-grip:hover { color: var(--sage-deep); background-color: rgba(0, 0, 0, .04); }
+.b2b-grip:active { cursor: grabbing; }
+/* Touch has no hover, so the grip would never appear. */
+@media (hover: none) { .b2b-grip { opacity: .6; } }
+
+/* While a drag is live, every row animates so the gap opening reads as the line
+   making way rather than as a border appearing. */
+.b2b-reordering .b2b-pline { transition: transform .13s ease, box-shadow .13s ease; }
+.b2b-reordering .b2b-pline * { cursor: grabbing !important; }
+.b2b-pline.b2b-dragging { opacity: .35; }
+/* The drop target physically makes way rather than just showing a rule: the row
+   slides clear and a coloured edge marks the slot. A 3px inset line alone told
+   you a row was involved but not which side of it you were landing on, so
+   aiming for "after this line" meant targeting the one past it. */
+.b2b-pline.b2b-dropto {
+    box-shadow: inset 0 3px 0 var(--sage-professional);
+    transform: translateY(5px);
+}
+.b2b-pline.b2b-dropto.b2b-dropto-below {
+    box-shadow: inset 0 -3px 0 var(--sage-professional);
+    transform: translateY(-5px);
+}
 
 /* --- signature capture ---------------------------------------------------- */
 /* The QR and its explanation sit side by side: the code is useless without the
@@ -13956,6 +14112,54 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-lc-name { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .b2b-lc-name b { font-weight: 750; font-size: 12.5px; color: #1a1c1e; }
 .b2b-lc-sub { font-size: 10.5px; color: var(--b2b-muted); }
+/* Notes carried from pricing into the listing screen. Wrapping is deliberate:
+   listing_info holds a long eBay research URL and truncating it would hide the
+   one thing on the row the lister actually clicks. */
+.b2b-lc-note {
+    font-size: 10.5px; color: var(--b2b-muted); line-height: 1.45;
+    white-space: normal; word-break: break-word;
+}
+.b2b-lc-note.lead { color: #1a1c1e; }
+.b2b-lc-note.lead a { color: var(--sage-deep); text-decoration: underline; }
+.b2b-lc-note.int { color: var(--b2b-faint); font-style: italic; }
+/* The pencil beside the collection date in the deal summary. Corp only, and
+   quiet until hovered -- correcting this date should be possible, not inviting. */
+.b2b-sum-edit {
+    display: inline-grid; place-items: center; vertical-align: middle;
+    width: 18px; height: 18px; margin-left: 5px; padding: 0;
+    border: 0; border-radius: 4px; background: transparent; cursor: pointer;
+    opacity: 0; transition: opacity .12s ease, background .12s ease;
+}
+.b2b-sum-cell:hover .b2b-sum-edit, .b2b-sum-edit:focus-visible { opacity: 1; }
+.b2b-sum-edit:hover { background: rgba(0, 0, 0, .06); }
+.b2b-sum-edit svg { width: 11px; height: 11px; stroke: var(--b2b-muted); stroke-width: 2; fill: none; }
+/* Touch has no hover, so a hover-only pencil is a control that does not exist
+   on a phone. Same fix as .b2b-grip. */
+@media (hover: none) { .b2b-sum-edit { opacity: .65; } }
+
+/* The two quote notes, side by side so the client-facing one and the internal
+   one can never be mistaken for each other. */
+.b2b-notespanel textarea { width: 100%; resize: vertical; }
+.b2b-tag-cli {
+    display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 9px;
+    font-size: 8.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    background: #eaf5ee; color: #178048; border: 1px solid #cfe8d8;
+}
+
+/* Saved / not-saved readout on the pricing footer. The sheet autosaves, so this
+   is normally a reassurance rather than a call to action -- amber only while
+   something is genuinely outstanding. */
+.b2b-savestate { font-size: 11px; font-weight: 650; white-space: nowrap; }
+.b2b-savestate.ok { color: var(--b2b-faint); }
+.b2b-savestate.pending { color: #b45309; }
+
+/* Recycle stepper, mirroring the listed-count stepper next to it. */
+.b2b-recstep { display: inline-flex; align-items: center; gap: 5px; }
+.b2b-recstep-n { font-size: 11px; color: var(--b2b-faint); white-space: nowrap; min-width: 38px; text-align: center; }
+.b2b-recstep-n.on { color: var(--b2b-muted); font-weight: 650; }
+/* The written-off cost of units recycled out of a purchase line. Sits under the
+   line cost rather than replacing it: we still paid the client for them. */
+.b2b-lc-reccost { display: block; font-size: 10px; color: var(--b2b-faint); white-space: nowrap; }
 .b2b-lc-spec { font-size: 12px; color: #1a1c1e; }
 .b2b-lc-serials {
     font-family: 'Consolas', 'SFMono-Regular', Menlo, monospace; font-size: 11px;
@@ -14087,9 +14291,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-cdrop > td > *:first-child { margin-top: 16px; }
 .b2b-cdrop > td > *:last-child  { margin-bottom: 18px; }
 
-.b2b-cstats {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 9px;
-}
+/* Same last-row-fills reasoning as .b2b-tiles above: this set runs to seven
+   cards on a deal with recycled units and eight on a client panel, so it left a
+   single card stranded on its own row. */
+.b2b-cstats { display: flex; flex-wrap: wrap; gap: 9px; }
+.b2b-cstats > * { flex: 1 1 132px; min-width: 132px; }
 .b2b-cstat {
     display: flex; flex-direction: column; gap: 2px; padding: 11px 13px;
     background: #fff; border: 1px solid var(--b2b-line); border-radius: 11px;
@@ -14185,6 +14391,16 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    is. No print is forced -- the colour is the reminder. */
 .b2b-linelabel.b2b-label-todo { border-color: #fcd34d; background: #fffbeb; color: #b45309; }
 .b2b-linelabel.b2b-label-todo:hover { border-color: #f59e0b; background: #fef3c7; color: #b45309; }
+/* An outstanding count carried inside a button, so the button keeps its normal
+   treatment. Tinting the whole of Print All SKUs amber made it a fourth button
+   style in one footer and read as a warning about the control rather than about
+   the labels. */
+.b2b-btn-count {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 17px; height: 17px; margin-left: 6px; padding: 0 5px;
+    border-radius: 9px; background: #fef3c7; color: #92400e;
+    font-size: 10px; font-weight: 800; line-height: 1;
+}
 .b2b-linelabel.b2b-label-done { border-color: #86efac; background: #f0fdf4; color: #15803d; }
 .b2b-linelabel.b2b-label-done:hover { border-color: #4ade80; background: #dcfce7; color: #15803d; }
 .b2b-pc-acts .b2b-linelabel { width: var(--b2b-h-md); height: var(--b2b-h-md); }

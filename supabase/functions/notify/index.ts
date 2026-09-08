@@ -76,12 +76,13 @@ type Category = typeof CATEGORIES[number];
 const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   announcements:  { label: "Announcements & Patch Notes", blurb: "New announcements, and what changed in a release." },
   store_messages: { label: "Store Messages",             blurb: "A message sent to your store by a manager, the DM or the CEO." },
-  // B2B is deliberately absent from this blurb. The B2B module is being rebuilt,
-  // so b2b-deals carries no notification hook and nothing in this category ever
-  // comes from it — promising "B2B deals" here would be a toggle that quietly
-  // does nothing. When that module lands, add its queueNotification calls and put
-  // B2B back in this sentence at the same time.
-  requests:       { label: "Requests Waiting On Me" ,     blurb: "Purchase requests and recycle requests." },
+  // B2B is named here again as of 2026-09-07. It was deliberately left out
+  // while the module was being rebuilt, because b2b-deals carried no hook and
+  // promising "B2B deals" would have been a toggle that quietly did nothing.
+  // It now queues on every stage transition that leaves a deal waiting on
+  // somebody -- pricing location, pricing, approval, sendback, listing location
+  // and listing -- so the promise is real. See notifyStage in b2b-deals.
+  requests:       { label: "Requests Waiting On Me" ,     blurb: "B2B deals waiting on you, plus purchase and recycle requests." },
   claims:         { label: "Insurance Claims",           blurb: "A claim that has gone unresolved past a week." },
   variance_aging: { label: "Variance & Aging Inventory",  blurb: "New sheets and notes, plus the reply deadlines on both." },
   deadlines:      { label: "My Deadlines",               blurb: "Store KPIs, listing goals, store goals, expense reports." },
@@ -198,6 +199,19 @@ const SUBS: Record<Category, Sub[]> = {
       roles: new Set(["district manager", "ceo", "owner (manager)", "owner manager"]) },
     { key: "req_out", label: "Verdicts And Replies", blurb: "The DM's answer on something you sent up.",
       kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply"] },
+    // B2B, one switch for the whole pipeline. Deliberately not split per stage:
+    // which transitions reach you is already decided by your store and role
+    // (see notifyStage in b2b-deals), so a per-stage toggle would be six
+    // switches where five are inert for any given person. b2b_delete_request
+    // joins them here -- it was queueing under `requests` with no sub governing
+    // it at all, so it could not be muted even in principle.
+    //
+    // No `roles`: these reach store managers and corp both, and a store manager
+    // who lists B2B goods has as much claim on the toggle as the approver does.
+    { key: "b2b_stage", label: "B2B Deals Waiting On Me",
+      blurb: "A B2B deal that has reached a stage you own: pricing, approval, or listing.",
+      kinds: ["b2b_pricing_location", "b2b_pricing", "b2b_quote_ready", "b2b_sendback",
+              "b2b_listing_location", "b2b_listing", "b2b_delete_request"] },
   ],
   claims: [],
   variance_aging: [
