@@ -1487,11 +1487,37 @@ const COMP_STOPWORDS = new Set([
 // System" (Wave), and an AsRock B650M titled Intel when B650M is AMD.
 
 const NAME_MODEL = "claude-opus-5";
+// ⚠️ THIS IS THE COST DIAL. Thinking tokens bill as OUTPUT, at $25 per million,
+// and on Opus 5 thinking is on by default at effort "high" — which is what this
+// call used to run at, by saying nothing. Ethan, 2026-09-08: three $10 recharges
+// in the first eight days, and ~90% of that was the model deliberating over
+// 25 titles at a time.
+//
+// "low" because of what the task actually is. The system prompt below is a list
+// of rules with an explicit abstention default, and it says the test outright:
+// whether a word is MISSPELLED, not whether the model recognises the product.
+// That is a shallow judgement made 25 times, not one deep one.
+//
+// HOW TO TELL IF THIS IS TOO LOW. The baseline at effort "high" was 52 findings
+// from 3,534 titles asked — 1.47 per 100 (12 garbled, 31 wrong, 9 disputed, on
+// 2026-09-08). Compare against that:
+//   * near zero  -> it has stopped looking. Raise to "medium".
+//   * far above  -> it has started guessing, and the findings are junk a
+//                   reviewer has to wade through. Raise to "medium".
+// Either way ai_usage_log says what the change cost, so the trade is visible in
+// both directions. Query: findings per 100 asked, before and after this date.
+const NAME_EFFORT = "low";
 // Per store per run. Mirrors MARKET_MAX and exists for the same reason: the
 // 150s edge wall cuts the RESPONSE while the function keeps executing, so an
 // over-long run reports IDLE_TIMEOUT and nobody can tell how much was saved.
 const NAME_MAX = 100;
-const NAME_BATCH = 25;          // products per request
+// 50, not 25: the 840-token system prompt is re-sent with every request and
+// nothing caches it (it is under Opus 5's minimum cacheable prefix), so halving
+// the request count halves that overhead. Input is only about a tenth of the
+// bill, so this is the small saving — but it costs nothing to take, and a failed
+// batch of 50 is not lost work: those rows keep no stamp and the next run picks
+// them up again.
+const NAME_BATCH = 50;          // products per request
 const NAME_CONCURRENCY = 4;     // batches in flight — 100 items in one round trip
 
 // ⚠️ BUMP THIS WHEN WHAT WE SEND CHANGES. It is stored next to every answer, so
@@ -1645,7 +1671,9 @@ async function checkNamesBatch(
           shelf: i.shelf || undefined,
         })), null, 1),
     }],
-    output_config: { format: zodOutputFormat(NameReportSchema) },
+    // effort sits beside format in output_config, not at the top level. See
+    // NAME_EFFORT — leaving it unset meant "high", which is where the bill was.
+    output_config: { effort: NAME_EFFORT, format: zodOutputFormat(NameReportSchema) },
   });
 
   const parsed = res?.parsed_output;
@@ -3146,6 +3174,35 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
         headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify(batch),
       });
+    }
+  }
+
+  // ⚠️ WRITE THE BILL DOWN. This block already knew what the run cost and threw
+  // it away with the response, which is why "is this tool using too much?"
+  // could only be answered by estimating from the source. One row per run, and
+  // never on a dry run — a dry run asked the model nothing.
+  //
+  // Fire-and-forget: a logging table must never be able to fail a sweep that
+  // has already paid for its answers and saved them.
+  if (wantLlm && save && nameUsage.batches) {
+    try {
+      await sb("ai_usage_log", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          tool: "listing-titles:names",
+          store_code: store,
+          model: NAME_MODEL,
+          effort: NAME_EFFORT,
+          batches: nameUsage.batches,
+          items: nameUsage.asked,
+          input_tokens: nameUsage.input,
+          output_tokens: nameUsage.output,
+          cost_usd: nameUsage.input / 1e6 * 5 + nameUsage.output / 1e6 * 25,
+        }),
+      });
+    } catch (e) {
+      console.error("ai_usage_log write failed (the sweep itself is fine):", String(e));
     }
   }
 
