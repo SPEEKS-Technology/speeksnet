@@ -19,14 +19,14 @@ canvas{display:block;border:1px solid var(--line);border-radius:4px;background:#
 code{background:#eef2f6;padding:1px 5px;border-radius:4px;font-size:11.5px}
 </style></head><body>
 <h1>Picture Guide &mdash; strip the baked-in borders</h1>
-<p class="sub">The 14 Apple iPhone photos came out of the printed guide with a 4px black or red border
-drawn into the image itself. The app draws its own frame and its own OPTIONAL flag, so that border
-lands as a second outline just inside the first. This finds the border on each photo, trims it off,
-and puts the trimmed photo back under the same filename &mdash; nothing in the database changes.
-Your originals are still on the Desktop as <code>Picture1</code>&ndash;<code>Picture14</code>, so
-this is reversible.</p>
+<p class="sub">Photos taken out of the printed guide carry a border drawn into the image itself:
+a 3px line with a 1px antialias fringe outside it, and on the red ones a second fringe inside
+too, so black borders are 4px and red ones are 5px. The app draws its own frame and its own
+OPTIONAL flag, so that border lands as a second outline just inside the first. This finds the
+border on each photo, trims it off, and puts the trimmed photo back under the same filename
+&mdash; nothing in the database changes. Edit <code>NAMES</code> below for a new batch.</p>
 <div class="bar">
-  <button id="scan">1 &nbsp; Scan the 14 photos</button>
+  <button id="scan">1 &nbsp; Scan</button>
   <button id="go" disabled>2 &nbsp; Crop &amp; re-upload</button>
 </div>
 <table id="t"><thead><tr><th>File</th><th>Before</th><th>After</th><th>Border found</th><th>New size</th><th>Status</th></tr></thead><tbody></tbody></table>
@@ -38,7 +38,7 @@ var NAMES = ["iphones-01-home-lock-screen.jpg","iphones-02-everything-included.j
 "iphones-06-parts-and-service.jpg","iphones-07-screen-off.jpg","iphones-08-back-of-phone.jpg",
 "iphones-09-top-side-of-phone.jpg","iphones-10-bottom-side-of-phone.jpg","iphones-11-side-of-phone.jpg",
 "iphones-12-opposite-side-of-phone.jpg","iphones-13-apple-warranty.png","iphones-14-extra-accessories.jpg"];
-var MAX_INSET = 24, TOL = 46, RING_HIT = 0.88, CONTRAST = 70, MAX_FRAC = 0.03;
+var MAX_INSET = 24, TOL = 46, CONTRAST = 70, MAX_FRAC = 0.03;
 var rows = {}, state = {};
 
 NAMES.forEach(function(name){
@@ -56,44 +56,72 @@ function thumb(src, w){
   return c;
 }
 
-// Find the line the printout drew into the picture. Three things have to hold
-// before a single pixel is cropped, because the cost of guessing wrong is
-// silently trimming a real photograph:
-//   1. all four edge midpoints are the same colour (there IS a ring);
-//   2. the ring is thin enough to be a drawn line, not the studio backdrop;
-//   3. the ring CONTRASTS with what sits just inside it. A plain white margin
-//      fails this and is left alone - without it the walk ate 24px of backdrop
-//      off a clean, borderless photo.
-// The reference pixel comes from the MIDDLE of the top edge: a corner can be
-// rounded or antialiased, and a 1px border has no pixel at (1,1) at all.
-function detectInset(img){
+// Draw onto WHITE, never onto the canvas's transparent default: a PNG export
+// can carry partial alpha along its border, and compositing that over nothing
+// makes its edge read as black rather than as the colour a viewer sees.
+function pixels(src, w, h){
   var c = document.createElement("canvas");
-  c.width = img.naturalWidth; c.height = img.naturalHeight;
-  var x = c.getContext("2d", {willReadFrequently:true});
-  x.drawImage(img, 0, 0);
-  var w = c.width, h = c.height, d = x.getImageData(0, 0, w, h).data;
-  function at(px, py){ var o = (py * w + px) * 4; return [d[o], d[o+1], d[o+2]]; }
-  function diff(a, b){
-    return Math.abs(a[0]-b[0]) + Math.abs(a[1]-b[1]) + Math.abs(a[2]-b[2]);
-  }
-  var ref = at(w >> 1, 0);
-  function near(p){ return diff(p, ref) <= TOL; }
-  if (!(near(at(w>>1, h-1)) && near(at(0, h>>1)) && near(at(w-1, h>>1)))) return 0;
+  c.width = w; c.height = h;
+  var g = c.getContext("2d", {willReadFrequently:true});
+  g.fillStyle = "#fff"; g.fillRect(0, 0, w, h);
+  g.drawImage(src, 0, 0);
+  return { d: g.getImageData(0, 0, w, h).data, w: w, h: h };
+}
+function ringCols(p, k){
+  var out = [], x, y;
+  function at(px, py){ var o = (py * p.w + px) * 4; return [p.d[o], p.d[o+1], p.d[o+2]]; }
+  for (x = k; x < p.w - k; x++){ out.push(at(x, k)); out.push(at(x, p.h - 1 - k)); }
+  for (y = k + 1; y < p.h - 1 - k; y++){ out.push(at(k, y)); out.push(at(p.w - 1 - k, y)); }
+  return out;
+}
+function median(list){
+  return [0,1,2].map(function(c){
+    var v = list.map(function(p){ return p[c]; }).sort(function(a,b){ return a-b; });
+    return v[v.length >> 1];
+  });
+}
+function diff(a, b){ return Math.abs(a[0]-b[0]) + Math.abs(a[1]-b[1]) + Math.abs(a[2]-b[2]); }
+
+// Anchor on the INTERIOR, never on row 0. Whatever colour the photograph's own
+// edge is, walk in from the outside until a ring finally looks like it; the
+// band outside that is whatever the printout drew, fringe and line together,
+// however many colours it is made of. Anchoring on row 0 locks onto the fringe
+// and stops after 1px, which is exactly the bug this replaced.
+//
+// Compare ring MEDIANS, not "what fraction of this ring matches". A drawn
+// border covers its whole ring, so its median IS its colour. A photograph's
+// outermost ring is mostly backdrop with the subject and its shadow poking in,
+// and a genuine interior ring scores anywhere from 71% to 100% by the fraction
+// test - useless as a threshold. The median shrugs the subject off.
+function detectInset(img){
+  var p = pixels(img, img.naturalWidth, img.naturalHeight);
+  var D = Math.min(MAX_INSET + 2, (Math.min(p.w, p.h) >> 1) - 1);
+  var refIn = median(ringCols(p, D));
   var k = 0;
   for (; k < MAX_INSET; k++){
-    var hit = 0, tot = 0, px, py;
-    for (px = k; px < w - k; px++){
-      tot += 2; if (near(at(px, k))) hit++; if (near(at(px, h-1-k))) hit++;
-    }
-    for (py = k + 1; py < h - 1 - k; py++){
-      tot += 2; if (near(at(k, py))) hit++; if (near(at(w-1-k, py))) hit++;
-    }
-    if (hit / tot < RING_HIT) break;
+    if (diff(median(ringCols(p, k)), refIn) <= TOL) break;
   }
-  if (!k) return 0;
-  if (k > Math.max(2, Math.round(MAX_FRAC * Math.min(w, h)))) return 0;
-  if (diff(at(w>>1, k+2), ref) < CONTRAST) return 0;
+  if (!k || k >= MAX_INSET) return 0;
+  // Too thick to be a drawn line: that is the backdrop, not a border.
+  if (k > Math.max(2, Math.round(MAX_FRAC * Math.min(p.w, p.h)))) return 0;
+  // A drawn border CONTRASTS with the picture behind it; a plain margin does
+  // not. This is the guard that stops a clean photo being eaten.
+  var worst = 0;
+  for (var j = 0; j < k; j++) worst = Math.max(worst, diff(median(ringCols(p, j)), refIn));
+  if (worst < CONTRAST) return 0;
   return k;
+}
+
+function cropped(img, inset, png){
+  var w = img.naturalWidth - 2 * inset, h = img.naturalHeight - 2 * inset;
+  var c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  var g = c.getContext("2d");
+  // JPEG cannot carry alpha; without this a transparent source would composite
+  // to black on save rather than to the white it is shown against.
+  if (!png){ g.fillStyle = "#fff"; g.fillRect(0, 0, w, h); }
+  g.drawImage(img, inset, inset, w, h, 0, 0, w, h);
+  return c;
 }
 
 async function load(name){
@@ -104,14 +132,6 @@ async function load(name){
   return img;
 }
 
-function cropped(img, inset){
-  var w = img.naturalWidth - 2 * inset, h = img.naturalHeight - 2 * inset;
-  var c = document.createElement("canvas");
-  c.width = w; c.height = h;
-  c.getContext("2d").drawImage(img, inset, inset, w, h, 0, 0, w, h);
-  return c;
-}
-
 document.getElementById("scan").onclick = async function(){
   this.disabled = true;
   for (var i = 0; i < NAMES.length; i++){
@@ -120,13 +140,14 @@ document.getElementById("scan").onclick = async function(){
       st.textContent = "scanning...";
       var img = await load(name);
       var inset = detectInset(img);
-      var out = inset ? cropped(img, inset) : null;
+      var png = /\.png$/.test(name);
+      var out = inset ? cropped(img, inset, png) : null;
       tr.querySelector(".b").appendChild(thumb(img, 90));
       if (out) tr.querySelector(".a").appendChild(thumb(out, 90));
       tr.querySelector(".d").innerHTML = inset
         ? '<span class="ok">' + inset + 'px</span> &rarr; ' + out.width + "&times;" + out.height
         : "none - will skip";
-      state[name] = {inset: inset, out: out};
+      state[name] = {inset: inset, out: out, png: png};
       st.innerHTML = inset ? "ready" : '<span class="ok">already clean</span>';
     } catch (e) {
       st.innerHTML = '<span class="err">' + e.message + "</span>";
@@ -144,15 +165,14 @@ document.getElementById("go").onclick = async function(){
     var tr = rows[name], st = tr.querySelector(".st");
     try {
       st.textContent = "uploading...";
-      var png = /\.png$/.test(name);
       var blob = await new Promise(function(res){
-        s.out.toBlob(res, png ? "image/png" : "image/jpeg", png ? undefined : 0.94);
+        s.out.toBlob(res, s.png ? "image/png" : "image/jpeg", s.png ? undefined : 0.94);
       });
       var resp = await fetch(URL_BASE + "/storage/v1/object/picture-guide/" + name, {
         method: "POST",
         headers: {
           Authorization: "Bearer " + KEY, apikey: KEY,
-          "Content-Type": png ? "image/png" : "image/jpeg",
+          "Content-Type": s.png ? "image/png" : "image/jpeg",
           "x-upsert": "true"
         },
         body: blob

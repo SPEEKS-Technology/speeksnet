@@ -1,19 +1,31 @@
-// Does the border-stripper find a drawn border, and - much more important -
-// does it leave alone a photograph that has not got one?
+// Does the border-stripper find the line the printout drew, and - much more
+// important - does it leave alone a photograph that has not got one?
 //
-// The 14 Apple iPhone photos came out of the printed guide with a 4px line
-// baked into the image. The app draws its own frame, so that line landed as a
-// second outline just inside the first, and object-fit: cover then cropped it
-// unevenly - kept top and bottom, sliced off at the sides. The tool at
-// scripts/pg-crop-borders.html trims it away. This is that tool's
-// detectInset(), verbatim, with a PNG codec in front of it so the algorithm can
-// be exercised without a browser.
+// The guide exports carry a border baked into the image. The board draws its
+// own frame, so that line arrives as a second outline just inside the first,
+// and object-fit then crops it unevenly. scripts/pg-crop-borders.html trims it
+// away; this is that tool's detectInset(), verbatim, with a PNG codec in front
+// of it so the algorithm can be exercised without a browser.
+//
+// TWO THINGS THIS FILE EXISTS TO REMEMBER, both learned the hard way:
+//
+// 1. The border is not one colour. Measuring the real exports through a browser
+//    showed a 1px antialias FRINGE outside the drawn line - and on the red ones
+//    a second fringe INSIDE it too, which is why red borders are 5px and black
+//    ones are 4px. An algorithm anchored on the outermost row locks onto the
+//    fringe and stops after 1px. That shipped once.
+//
+// 2. A percentage test cannot tell a border from a backdrop. "What fraction of
+//    this ring is the interior colour" scores anywhere from 71% to 100% on a
+//    genuine interior ring, depending on how close the subject and its shadow
+//    come to the edge. Comparing ring MEDIANS is what works: a drawn border
+//    covers its whole ring, so its median IS its colour, while a photograph's
+//    outermost ring is mostly backdrop and the median shrugs the subject off.
 //
 // The failure that matters is not "misses a border" - that leaves a photo as it
 // was, which is harmless. It is "invents a border": a phone photographed on a
-// white counter has a uniform margin on all four sides, and ring-matching alone
-// walked 24px into one before it stopped. Every guard below exists because of
-// that, and the fixtures at the bottom are what hold it shut.
+// white counter has a uniform margin on all four sides, and an early version of
+// this walked 24px into one. The guards at the bottom hold that shut.
 const fs = require('fs'), zlib = require('zlib');
 
 // --- PNG decode, 8-bit non-interlaced ---------------------------------------
@@ -81,51 +93,67 @@ function encode(w, h, rgb) {
     ]);
 }
 
-// --- the tool's detectInset(), kept identical -------------------------------
-const MAX_INSET = 24, TOL = 46, RING_HIT = 0.88, CONTRAST = 70, MAX_FRAC = 0.03;
+// --- the tool's detectInset(), kept identical --------------------------------
+const MAX_INSET = 24, TOL = 46, CONTRAST = 70, MAX_FRAC = 0.03;
 
-function detectInset({ w, h, ch, px }) {
+function ringCols(img, k) {
+    const { w, h, ch, px } = img, out = [];
     const at = (x, y) => { const o = (y * w + x) * ch; return [px[o], px[o + 1], px[o + 2]]; };
-    const diff = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
-    // Middle of the top edge, not a corner: a corner can be rounded or
-    // antialiased, and a 1px border has no pixel at (1,1) at all.
-    const ref = at(w >> 1, 0);
-    const near = p => diff(p, ref) <= TOL;
-    if (!(near(at(w >> 1, h - 1)) && near(at(0, h >> 1)) && near(at(w - 1, h >> 1)))) return 0;
+    for (let x = k; x < w - k; x++) { out.push(at(x, k)); out.push(at(x, h - 1 - k)); }
+    for (let y = k + 1; y < h - 1 - k; y++) { out.push(at(k, y)); out.push(at(w - 1 - k, y)); }
+    return out;
+}
+const median = list => [0, 1, 2].map(c => {
+    const v = list.map(p => p[c]).sort((a, b) => a - b);
+    return v[v.length >> 1];
+});
+const diff = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+
+function detectInset(img) {
+    const { w, h } = img;
+    // Anchor on the INTERIOR, never on row 0: whatever colour the photograph's
+    // own edge is, walk in from the outside until a ring finally looks like it.
+    // Everything outside that is whatever the printout drew, fringe and line
+    // together, however many colours it happens to be made of.
+    const D = Math.min(MAX_INSET + 2, (Math.min(w, h) >> 1) - 1);
+    const refIn = median(ringCols(img, D));
     let k = 0;
     for (; k < MAX_INSET; k++) {
-        let hit = 0, tot = 0;
-        for (let x = k; x < w - k; x++) {
-            tot += 2;
-            if (near(at(x, k))) hit++;
-            if (near(at(x, h - 1 - k))) hit++;
-        }
-        for (let y = k + 1; y < h - 1 - k; y++) {
-            tot += 2;
-            if (near(at(k, y))) hit++;
-            if (near(at(w - 1 - k, y))) hit++;
-        }
-        if (hit / tot < RING_HIT) break;
+        if (diff(median(ringCols(img, k)), refIn) <= TOL) break;
     }
-    if (!k) return 0;
+    if (!k || k >= MAX_INSET) return 0;
     // Too thick to be a drawn line: that is the backdrop, not a border.
     if (k > Math.max(2, Math.round(MAX_FRAC * Math.min(w, h)))) return 0;
     // A drawn border CONTRASTS with the picture behind it; a plain margin does
     // not. This is the guard that stops a clean photo being eaten.
-    if (diff(at(w >> 1, k + 2), ref) < CONTRAST) return 0;
+    let worst = 0;
+    for (let j = 0; j < k; j++) worst = Math.max(worst, diff(median(ringCols(img, j)), refIn));
+    if (worst < CONTRAST) return 0;
     return k;
 }
 
 // --- fixtures ---------------------------------------------------------------
-// A phone-ish dark slab on a near-white studio backdrop, optionally ringed.
-function shot(w, h, border, colour) {
+// A phone-ish dark slab on a near-white studio backdrop, wrapped in `bands`:
+// [[thickness, rgb], ...] from the outside in, so the real exports' fringe over
+// line over fringe can be reproduced exactly.
+function shot(w, h, bands, opts) {
+    opts = opts || {};
+    // The real studio backdrop measures around here - NOT near-white. Getting
+    // this wrong hides the whole point of the fringe fixtures: a 248 fringe on
+    // a 250 backdrop is invisible, so the fixture passes for the wrong reason.
+    const backdrop = opts.backdrop || [203, 202, 198];
+    const depth = [];
+    bands.forEach(([n, c]) => { for (let i = 0; i < n; i++) depth.push(c); });
     const rgb = Buffer.alloc(w * h * 3);
     for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
             const o = (y * w + x) * 3;
-            let c = [248, 250, 252];
-            if (x > w * 0.3 && x < w * 0.7 && y > h * 0.15 && y < h * 0.85) c = [24, 24, 28];
-            if (border && (x < border || y < border || x >= w - border || y >= h - border)) c = colour;
+            let c = backdrop;
+            // Subject, optionally running clean off the edge of the frame.
+            const x0 = opts.bleed ? -1 : w * 0.3, x1 = opts.bleed ? w * 0.75 : w * 0.7;
+            if (x > x0 && x < x1 && y > h * 0.15 && y < h * 0.85) c = [24, 24, 28];
+            const d = Math.min(x, y, w - 1 - x, h - 1 - y);
+            if (d < depth.length) c = depth[d];
             rgb[o] = c[0]; rgb[o + 1] = c[1]; rgb[o + 2] = c[2];
         }
     }
@@ -136,46 +164,57 @@ let fails = 0;
 const eq = (label, got, want) => {
     const ok = got === want;
     if (!ok) fails++;
-    console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}`);
-    if (!ok) console.log(`       got ${got}, want ${want}`);
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}  ->  ${got}${ok ? '' : '  (want ' + want + ')'}`);
 };
 
-// The real export is the evidence that 4px is what the printout bakes in, but
-// it lives on a Desktop that will be tidied up one day. The synthetics carry
-// the suite; this is a bonus while the file happens to be there.
-const REAL = 'C:/Users/User/Desktop/Picture13.png';
-console.log('the real guide export, if it is still on disk');
-if (fs.existsSync(REAL)) {
-    const d = decode(fs.readFileSync(REAL)), k = detectInset(d);
-    eq('Picture13.png is ringed by 4px', k, 4);
-    eq('601 wide, less 4px each side', d.w - 2 * k, 593);
-    eq('576 tall, less 4px each side', d.h - 2 * k, 568);
-    const ratio = (d.w - 2 * k) / (d.h - 2 * k);
-    console.log(`       cropped ratio ${ratio.toFixed(3)} in a 1.000 frame, so contain leaves `
-        + `${(196 - 196 / ratio).toFixed(1)}px of white matte at 196px, top and bottom`);
-} else {
-    console.log('skip  not on disk; the synthetic fixtures cover the same ground');
-}
+const WHITE_FRINGE = [248, 248, 248];
+const PINK_FRINGE = [255, 183, 180];
+const BLACK_LINE = [0, 0, 0];
+const RED_LINE = [227, 12, 12];
 
-console.log('\na drawn border, which it has to find');
-eq('4px black', detectInset(shot(602, 576, 4, [0, 0, 0])), 4);
-eq('4px guide red', detectInset(shot(602, 576, 4, [227, 0, 0])), 4);
-eq('1px hairline', detectInset(shot(602, 576, 1, [0, 0, 0])), 1);
-eq('12px slab', detectInset(shot(602, 576, 12, [0, 0, 0])), 12);
+console.log('the two shapes the real guide exports actually have');
+// Measured off all 14 photographs as a browser decodes them. These are not
+// guesses: the black ones came back 4, the red ones 5, every time.
+eq('black: 1px white fringe over a 3px line',
+    detectInset(shot(602, 576, [[1, WHITE_FRINGE], [3, BLACK_LINE]])), 4);
+eq('red: fringe, 3px line, and a fringe INSIDE it too',
+    detectInset(shot(602, 576, [[1, PINK_FRINGE], [3, RED_LINE], [1, PINK_FRINGE]])), 5);
+eq('the same red band over a dark screenshot',
+    detectInset(shot(602, 576, [[1, PINK_FRINGE], [3, RED_LINE], [1, PINK_FRINGE]],
+        { backdrop: [29, 29, 31] })), 5);
+
+console.log('\na plain drawn border, with no fringe at all');
+eq('4px black', detectInset(shot(602, 576, [[4, BLACK_LINE]])), 4);
+eq('4px guide red', detectInset(shot(602, 576, [[4, RED_LINE]])), 4);
+eq('1px hairline', detectInset(shot(602, 576, [[1, BLACK_LINE]])), 1);
+eq('12px slab', detectInset(shot(602, 576, [[12, BLACK_LINE]])), 12);
 
 console.log('\nno drawn border, which it must not invent');
 // The one that matters. A manager photographs a phone on a white counter and
 // uploads it: uniform margin on all four sides, and it is NOT a border.
-eq('a white studio margin is left alone', detectInset(shot(602, 576, 0, null)), 0);
-eq('a single flat colour is left alone',
+eq('a white studio margin, subject clear of the edge',
+    detectInset(shot(602, 576, [])), 0);
+// And the case that broke the percentage test: the subject running off the
+// frame drags a true interior ring down to ~71% interior-coloured.
+eq('a white studio margin, subject bleeding off frame',
+    detectInset(shot(602, 576, [], { bleed: true })), 0);
+eq('a single flat colour',
     detectInset(decode(encode(200, 200, Buffer.alloc(200 * 200 * 3, 7)))), 0);
 
 console.log('\nthe two guards, each doing its own job');
 // Thick but contrasting: 30px is past MAX_FRAC of 576, so it reads as backdrop.
-eq('a 30px ring is too thick to be a line', detectInset(shot(602, 576, 30, [0, 0, 0])), 0);
+eq('a 30px ring is too thick to be a line',
+    detectInset(shot(602, 576, [[30, BLACK_LINE]])), 0);
 // Thin but not contrasting: a ring a shade off the backdrop is a compression
 // artefact or a vignette, not a line anybody drew.
-eq('a 4px ring that barely contrasts', detectInset(shot(602, 576, 4, [246, 248, 250])), 0);
+eq('a 4px ring that barely contrasts',
+    detectInset(shot(602, 576, [[4, [208, 207, 203]]])), 0);
+
+console.log('\nwhat a crop leaves for the frame to hold');
+const w0 = 602, h0 = 576, k = 4, w1 = w0 - 2 * k, h1 = h0 - 2 * k;
+console.log(`     ${w0}x${h0} less ${k}px all round -> ${w1}x${h1}, ratio ${(w1 / h1).toFixed(3)}`);
+console.log(`     in a square frame at 196px, contain leaves `
+    + `${(196 - 196 / (w1 / h1)).toFixed(1)}px of white matte, split top and bottom`);
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);
