@@ -117,6 +117,25 @@ const PROOF_MAX_BYTES = 6_000_000;
 const PROOF_COLS = "id,deal_id,preval_id,kind,label,from_addr,sent_on,body_text," +
   "file_path,mime,bytes,added_by,added_at,removed_at,removed_by,removed_reason";
 const ACCEPT_ROLES = ["ceo", "mocd", "tom", "district manager"];
+
+// May this caller send, accept or send back a quote?
+//
+// Widened on 2026-09-08 to include a lent corp hat. Every B2B approval in the
+// company was effectively queueing behind one person, and a pipeline that stops
+// when one named individual is unavailable is a worse problem than a delegation
+// being used to accept. Nick: "The B2B Approvals are limited to just paul...
+// (FOR ALL CORP NOW)".
+//
+// The guard that matters is untouched: acceptance still requires the client's
+// approval on record (b2b_approval_proofs, or a recorded waiver reason). This
+// only decides WHO may click, not whether the evidence rule applies.
+//
+// corp_delegated comes from the browser, like `role` has since this function
+// was written -- see the authorization note in the header. Read through one
+// helper so the three gates that use it cannot drift apart.
+const mayApprove = (body: any) =>
+  ACCEPT_ROLES.includes(String(body?.role || "").toLowerCase().trim()) ||
+  body?.corp_delegated === true;
 // 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
 // spelling stays recognised here: existing rows were migrated, but a row saved
 // between this deploying and that running would otherwise stop being asked for
@@ -1298,9 +1317,8 @@ Deno.serve(async (req: Request) => {
           return jsonResponse({ success: false, error: "Only a deal awaiting approval or already quoted can be sent." }, 409);
         }
         if (deal.stage === "review") {
-          const role = String(body.role || "").toLowerCase().trim();
-          if (!ACCEPT_ROLES.includes(role)) {
-            return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can send a quote to the client." }, 403);
+          if (!mayApprove(body)) {
+            return jsonResponse({ success: false, error: "Only corp can send a quote to the client." }, 403);
           }
         }
         const { error } = await supabase.from("b2b_deals").update({
@@ -1323,9 +1341,8 @@ Deno.serve(async (req: Request) => {
         if (deal.stage !== "quote") {
           return jsonResponse({ success: false, error: "This quote hasn't been sent to the client yet." }, 409);
         }
-        const role = String(body.role || "").toLowerCase().trim();
-        if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can accept a quote." }, 403);
+        if (!mayApprove(body)) {
+          return jsonResponse({ success: false, error: "Only corp can accept a quote." }, 403);
         }
         // Either the client's approval is on file, or somebody has said in
         // writing why it is not. Never silently neither -- this is the moment
@@ -1622,9 +1639,8 @@ Deno.serve(async (req: Request) => {
         if (deal.stage !== "review" && deal.stage !== "quote") {
           return jsonResponse({ success: false, error: "Only a quote awaiting approval or out with the client can be sent back." }, 409);
         }
-        const role = String(body.role || "").toLowerCase().trim();
-        if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can send a quote back." }, 403);
+        if (!mayApprove(body)) {
+          return jsonResponse({ success: false, error: "Only corp can send a quote back." }, 403);
         }
         const { error } = await supabase.from("b2b_deals").update({
           stage: "pricing",
@@ -1735,9 +1751,8 @@ Deno.serve(async (req: Request) => {
         // Leaving `review` is the approval, exactly as it is for send_quote --
         // marking a quote sent by hand must not be a way around that gate.
         if (deal.stage === "review") {
-          const role = String(body.role || "").toLowerCase().trim();
-          if (!ACCEPT_ROLES.includes(role)) {
-            return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can mark a quote as sent." }, 403);
+          if (!mayApprove(body)) {
+            return jsonResponse({ success: false, error: "Only corp can mark a quote as sent." }, 403);
           }
         }
         const when = isoDate(body.quote_sent_at, "Sent date", true);

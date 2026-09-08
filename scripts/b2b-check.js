@@ -18,6 +18,12 @@
 // Stub it ONCE, for the whole file. Stubbing per-test and restoring in a
 // `finally` does not work: the send happens in a promise callback, which runs
 // after the finally has already put the real function back.
+// Captured BEFORE the stub replaces it, so a check can still assert about what
+// the real _b2bSend does. Without this, `_b2bSend.toString()` reads the stub
+// below and any assertion about the real request body silently describes the
+// harness instead of the app.
+var B2B_REAL_SEND = _b2bSend;
+
 var B2B_SENT = [];
 _b2bSend = function (payload) {
     B2B_SENT.push(payload);
@@ -787,6 +793,68 @@ t('polish: the payment dialog parses "amount on date"', function () {
     var amt = parseFloat(text.replace(when, '').replace(/[^0-9.]/g, ''));
     if (when !== '2026-09-05') return 'date: ' + when;
     return amt === 1250 || 'amount: ' + amt;
+});
+
+// --- v3.8.1: approvals open to all corp, and Copy is a complete send --------
+// Nick, 2026-09-08: "The B2B Approvals are limited to just paul... I do not
+// like the current work flow of it forcing you to open your email."
+
+t('3.8.1 approving follows corp access, delegation included', function () {
+    // It was role-only, which meant a lent corp hat could see a deal and open
+    // it but not approve it -- so approvals queued behind named individuals.
+    var src = _b2bCanAccept.toString();
+    if (src.indexOf('B2B_ACCEPT_ROLES') > -1) return 'still gated on the narrow role list';
+    return src.indexOf('_b2bIsCorp') > -1 || 'not gated on corp access: ' + src;
+});
+t('3.8.1 a delegated corp user may approve', function () {
+    var role = sessionStorage.getItem('speeksUserRole');
+    var realOverride = window._featureOverrideFor;
+    sessionStorage.setItem('speeksUserRole', 'manager');
+    try {
+        window._featureOverrideFor = function () { return false; };
+        if (_b2bCanAccept()) return 'a plain manager can approve';
+        window._featureOverrideFor = function (cap) { return cap === 'cap-b2b-corp'; };
+        return _b2bCanAccept() || 'a manager lent the corp hat still cannot approve';
+    } finally {
+        window._featureOverrideFor = realOverride;
+        sessionStorage.setItem('speeksUserRole', role);
+    }
+});
+t('3.8.1 the delegation flag reaches the server', function () {
+    // The server gate cannot honour a lent hat it is never told about, and
+    // _b2bSend is the one place every call passes through. Asserted against the
+    // pre-stub capture: the stub at the top of this file is what every other
+    // check needs, and reading it here would test the harness, not the app.
+    return B2B_REAL_SEND.toString().indexOf('corp_delegated') > -1
+        || 'corp_delegated is not sent with requests';
+});
+
+t('3.8.1 copying an unsent quote records the send', function () {
+    var src = b2bCopyQuote.toString();
+    if (src.indexOf("'send_quote'") === -1) return 'copy never records a send';
+    if (src.indexOf('_b2bAwaitingApproval') === -1) return 'does not check the deal is unsent';
+    return src.indexOf('_b2bCanAccept') > -1 || 'does not check the person may approve';
+});
+t('3.8.1 copying an already-sent quote does not bump the send count', function () {
+    // quote_send_count is the only honest record of how many times a quote
+    // actually went to the client; re-reading it must not inflate that.
+    var saveDeal = _b2bModalDeal;
+    _b2bModalDeal = Object.assign({}, B2B_FIXTURE_DEAL, { stage: 'quote' });
+    var unsent = _b2bAwaitingApproval(_b2bModalDeal);
+    _b2bModalDeal = saveDeal;
+    return unsent === false
+        || 'a deal at `quote` still reads as awaiting approval, so copy would re-send it';
+});
+t('3.8.1 the approval evidence rule is untouched', function () {
+    // Widening WHO may approve must not widen WHETHER proof is required.
+    var src = _b2bApprovalGate.toString();
+    if (src.indexOf('_b2bApprovalOnRecord') === -1) return 'no longer checks the record';
+    return b2bAcceptQuote.toString().indexOf('_b2bApprovalGate') > -1
+        || 'accept no longer runs the approval gate';
+});
+t('3.8.1 Copy reads as a real route, not a fallback', function () {
+    var src = _b2bStageReview.toString() + _b2bStageQuote.toString();
+    return src.indexOf('Copy Quote') > -1 || 'the button is still just "Copy"';
 });
 
 // Restore the fixture for anything appended after this point.
