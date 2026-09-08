@@ -1586,7 +1586,12 @@ let _reactionPollInterval = null;
 
 async function pollReactions() {
     try {
-        const response = await fetch(`${CMS_URL}?v=${Date.now()}`);
+        // mode=reactions, not the full board. The cms function has a purpose-
+        // built branch that returns only { rowId, reactions } — same rowId set,
+        // so the hasNew check below still works — for a fraction of the 15.5 KB
+        // the full GET sends. This poll was the single largest consumer of the
+        // edge-function quota; the endpoint existed for it and was never wired up.
+        const response = await fetch(`${CMS_URL}?mode=reactions&v=${Date.now()}`);
         const data = await response.json();
         if (!data.announcements) return;
 
@@ -1632,7 +1637,12 @@ async function pollReactions() {
 
 function startReactionPolling() {
     if (_reactionPollInterval) clearInterval(_reactionPollInterval);
-    _reactionPollInterval = setInterval(pollReactions, 15000);
+    // 60s, not 15s. Reaction *writes* do not broadcast, so this poll is the only
+    // way one person's emoji reaches another's screen — it stays, but four times
+    // a minute was 13k edge invocations a day for a counter nobody watches
+    // tick. A new announcement is unaffected: that arrives over realtime
+    // (the 'announcements' ping -> loadCMS), not here.
+    _reactionPollInterval = setInterval(pollReactions, 60000);
 }
 
 // --- 4B. MODULE: INFO TICKER ---
@@ -6056,7 +6066,7 @@ async function checkKpiDueReminders() {
     if (!_kpiDueEligible()) { _kpiHideDueBubbles(); _kpiDueState = { weekly: { due: false, overdue: false, stores: [] }, monthly: { due: false, overdue: false, stores: [] } }; return; }
     const stores = _kpiMyStores();
     if (!stores.length) { _kpiHideDueBubbles(); return; }
-    if (!_kpiDueStarted) { _kpiDueStarted = true; setInterval(checkKpiDueReminders, 10 * 60 * 1000); }
+    if (!_kpiDueStarted) { _kpiDueStarted = true; setInterval(checkKpiDueReminders, 30 * 60 * 1000); }
     try {
         const parts = _kpiCentralParts();
         const today = parts.date;
@@ -16437,7 +16447,7 @@ function checkListingGoalReminders() {
     // on the District widget. Everything else district-scoped stays shared.
     const _role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (_role !== 'district manager') { if (b) b.style.display = 'none'; return; }
-    if (!_lgDueStarted) { _lgDueStarted = true; setInterval(checkListingGoalReminders, 10 * 60 * 1000); }
+    if (!_lgDueStarted) { _lgDueStarted = true; setInterval(checkListingGoalReminders, 30 * 60 * 1000); }
 
     // Due 8am Monday, store time — half an hour ahead of the stores' own 8:30am
     // "set today's roles" nudge, so the weekly total is in place before anyone
@@ -16543,7 +16553,7 @@ async function checkListingGoalsDailyReminder() {
     };
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (!_LG_DAILY_ROLES.has(role)) { hide(); return; }
-    if (!_lgDailyStarted) { _lgDailyStarted = true; setInterval(checkListingGoalsDailyReminder, 10 * 60 * 1000); }
+    if (!_lgDailyStarted) { _lgDailyStarted = true; setInterval(checkListingGoalsDailyReminder, 30 * 60 * 1000); }
 
     // Store time, not the browser's — a manager on a laptop set to another zone
     // must still get this at 8:30am Central.
@@ -26464,7 +26474,7 @@ function initDashboardData() {
             if (has('scorecard') && typeof fetchScorecardData === 'function') fetchScorecardData();
             if (has('ebay') && typeof fetchAlertsData === 'function') fetchAlertsData();
             if (has('kpis') && typeof fetchAndRenderEmployeeKPIs === 'function') fetchAndRenderEmployeeKPIs();
-        }, 10 * 60 * 1000);
+        }, 30 * 60 * 1000);
         // SAFETY NET for the Live Dashboard, same reasoning as above: realtime is the
         // real path. Skipped while the tab is in the background — a dashboard left open
         // on a back office monitor for a week should not spend a request every five
@@ -31078,7 +31088,7 @@ async function checkAgingClaims() {
 
     if (!_claimAlertPollStarted) {
         _claimAlertPollStarted = true;
-        setInterval(checkAgingClaims, 10 * 60 * 1000);
+        setInterval(checkAgingClaims, 30 * 60 * 1000);
     }
 
     try {
@@ -31155,7 +31165,7 @@ async function checkAgingClaimsDM() {
 
     if (!_dmClaimAlertPollStarted) {
         _dmClaimAlertPollStarted = true;
-        setInterval(checkAgingClaimsDM, 10 * 60 * 1000);
+        setInterval(checkAgingClaimsDM, 30 * 60 * 1000);
     }
 
     try {
@@ -31442,7 +31452,16 @@ let _storeCommentPollingStarted = false;
 function startStoreCommentPolling() {
     if (_storeCommentPollingStarted) return;
     _storeCommentPollingStarted = true;
-    setInterval(() => { fetchAndDisplayStoreComment(); checkClaimReminders(); }, 30 * 1000);
+    // 5 minutes, not 30 seconds. Realtime is the primary path for both of these:
+    // the store-comments fn pings 'comments' -> fetchAndDisplayStoreComment and
+    // shopify-claims pings 'claims' -> checkClaimReminders (see _RT_TOOL_CHECKS),
+    // so a new comment or claim still lands the instant it is written. What is
+    // left here is the safety net for a browser whose socket never connected,
+    // and at 30s it was ~14k edge invocations a day — a fifth of the account's
+    // whole quota — to re-ask a question realtime had already answered.
+    // Two fetches per tick (checkClaimReminders can make two), so the interval
+    // counts double.
+    setInterval(() => { fetchAndDisplayStoreComment(); checkClaimReminders(); }, 5 * 60 * 1000);
 }
 
 // Opens the modal normally from the Speeks Tools menu (Fully Unlocked)
@@ -35013,7 +35032,7 @@ async function checkRecycleReminders() {
     if (!stores.length) return;
     if (!_recycleRemindersStarted) {
         _recycleRemindersStarted = true;
-        setInterval(checkRecycleReminders, 10 * 60 * 1000);
+        setInterval(checkRecycleReminders, 30 * 60 * 1000);
     }
     try {
         const res = await fetch(`${RECYCLE_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
@@ -38392,7 +38411,7 @@ async function checkVarianceReminders() {
     if (!stores.length) return;
     if (!_vrRemindersStarted) {
         _vrRemindersStarted = true;
-        setInterval(checkVarianceReminders, 10 * 60 * 1000);
+        setInterval(checkVarianceReminders, 30 * 60 * 1000);
     }
     try {
         const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
@@ -38437,7 +38456,7 @@ async function checkVarianceDmReminders() {
     if (!_vrIsDM()) return;
     if (!_vrDmRemindersStarted) {
         _vrDmRemindersStarted = true;
-        setInterval(checkVarianceDmReminders, 10 * 60 * 1000);
+        setInterval(checkVarianceDmReminders, 30 * 60 * 1000);
     }
     try {
         const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
@@ -40114,7 +40133,7 @@ async function checkAgingInvReminders() {
     if (!stores.length) return;
     if (!_agRemindersStarted) {
         _agRemindersStarted = true;
-        setInterval(checkAgingInvReminders, 10 * 60 * 1000);
+        setInterval(checkAgingInvReminders, 30 * 60 * 1000);
     }
     try {
         const res = await fetch(`${AGING_INV_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
@@ -40240,7 +40259,7 @@ async function checkAgingInvDmReminders() {
     if (!_agIsDM()) return;
     if (!_agDmRemindersStarted) {
         _agDmRemindersStarted = true;
-        setInterval(checkAgingInvDmReminders, 10 * 60 * 1000);
+        setInterval(checkAgingInvDmReminders, 30 * 60 * 1000);
     }
     try {
         const res = await fetch(`${AGING_INV_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
@@ -42003,8 +42022,17 @@ function _samGatherReminders() {
    each tool's edge fn broadcasts a tiny "changed" ping after a
    successful write; we re-run that tool's existing check*()
    function, which re-fetches through the trusted fn. No table
-   data ever travels over realtime. The 10-min polls stay as a
-   safety net (to be slowed once every tool broadcasts).
+   data ever travels over realtime.
+
+   THE POLLS ARE THE FLOOR, NOT THE PATH. Every tool below now
+   broadcasts, so the old 10-minute safety nets were re-asking a
+   question realtime had already answered — 2M edge invocations a
+   month, over the account's limit, for a handful of browsers.
+   They are 30 minutes now (and the two hot ones, pollReactions
+   and the store-comment/claims tick, 60s and 5min). If a poll
+   here is ever the only way something surfaces, that tool is
+   missing a broadcastChange in its edge fn — fix that end, do
+   not speed this one up.
    ========================================================= */
 const _RT_CHANNEL = 'speeks-notify';
 let _rtClient = null, _rtChannel = null, _rtLoading = null, _rtStarted = false;
@@ -43036,7 +43064,7 @@ async function checkPreferredReminders() {
     _plSyncToolLabels();
     if (!owner && !requester) { _plHideBubble('owner'); _plHideBubble('mine'); return; }
     // Safety net behind the realtime ping, same cadence as the other tools.
-    if (!_plCheckStarted) { _plCheckStarted = true; setInterval(checkPreferredReminders, 10 * 60 * 1000); }
+    if (!_plCheckStarted) { _plCheckStarted = true; setInterval(checkPreferredReminders, 30 * 60 * 1000); }
     try {
         if (owner) {
             const res = await fetch(PREFERRED_URL + '?scope=all&v=' + Date.now());
