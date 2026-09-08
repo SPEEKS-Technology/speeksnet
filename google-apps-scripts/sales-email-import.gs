@@ -84,6 +84,42 @@ var STORE_SENDERS = {
   'mo04@paymore.com': 'BAL'
 };
 
+// ⚠️ THE SENDER IS NO LONGER ENOUGH ON ITS OWN, and the note above is why this
+// took until Sep 8 to bite. "The sender address IS the store identity" is true
+// of the daily report and false of everything else a store's own address sends.
+//
+// Since late August the stores have been emailing DRAFT-ORDER INVOICES to
+// customers — the glitch repayments, and their ordinary PayMore Upgrade deals —
+// and this mailbox receives copies. Parsed as a daily summary, an invoice yields
+// no figures, so it landed in `errors` and fired the "Some numbers need entering
+// by hand" alert while nothing whatever was missing: LEE "Invoice #MO01-6019" on
+// 2026-09-08, on a run that had already filled all five stores (filled 5,
+// missing 0). It recurs for every invoice a store sends, so it had to be a
+// filter rather than something to explain each morning.
+//
+// SKIPPED, NOT ERRORED, and the distinction is the whole point. A report that
+// cannot be read is a problem and must keep alerting. This is not a report at
+// all, and counting it as a broken one trains people to ignore the alert that
+// exists to catch a real gap.
+//
+// The BUYING pass has always guarded its subject this way (DAY_END_SUBJECT, see
+// _buyCollect) for exactly this reason — a different email out of the same
+// address. This is the selling pass catching up.
+//
+// A LIST, because the next one will not be an invoice. Add a pattern here
+// rather than widening one: each entry should name a real email somebody saw.
+var NOT_A_REPORT_SUBJECTS = [
+  /^\s*invoice\b/i        // draft-order invoice a store sent to a customer
+];
+
+function _notAReport(subject) {
+  var s = String(subject || '');
+  for (var i = 0; i < NOT_A_REPORT_SUBJECTS.length; i++) {
+    if (NOT_A_REPORT_SUBJECTS[i].test(s)) return true;
+  }
+  return false;
+}
+
 // "Sales {Mon} {YY}" tab geometry, confirmed against the live sheet 2026-08-04.
 // Each store block is 11 columns wide; TTL sits at 55 and is all formulas.
 var SALES_COL_BASES = { OVL: 0, LEE: 11, WSP: 22, MPL: 33, BAL: 44 };
@@ -577,6 +613,17 @@ function ingestSalesEmails(opts) {
       var msg = messages[i];
       var store = _storeFor(msg);
       if (!store) continue;
+
+      // Not a report — see NOT_A_REPORT_SUBJECTS. Before the thread bookkeeping
+      // on purpose: an invoice the store sent a customer is none of this job's
+      // business, so it is not a candidate for archiving either.
+      if (_notAReport(msg.getSubject())) {
+        report.skipped.push({
+          store: store, subject: msg.getSubject(),
+          reason: 'not a daily report — the store sent this to a customer'
+        });
+        continue;
+      }
 
       var tid = null;
       if (ARCHIVE_AFTER_IMPORT) {
