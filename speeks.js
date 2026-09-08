@@ -8437,22 +8437,32 @@ function _pgAsk(opt) {
         }
 
         const fieldHtml = (f, i) => {
-            if (f.kind !== 'combo') {
+            if (f.kind !== 'pick') {
                 return `<input type="text" class="pg-ask-in" data-i="${i}" value="${_pgEsc(f.value || '')}"
                                placeholder="${_pgEsc(f.placeholder || '')}" autocomplete="off" spellcheck="false">`;
             }
-            // A text box with a filtered list under it, not a <select>. A select
-            // cannot be typed into, and at fifteen groups scrolling one to find
-            // "Smart Watches" is worse than typing "wat". It also collapses two
-            // questions into one: an existing group is a row you pick, a new one
-            // is a name you finish typing.
+            // A REAL dropdown, the same shape as .mg-picker everywhere else on
+            // the site: a button showing the answer, and a menu of every option.
+            // This was a text box with a list that filtered as you typed, which
+            // read as — and was — a text box: the list emptied itself down to
+            // the one row you had already half-typed, so you could not see what
+            // you were choosing between (Ethan, 2026-09-08). Typing moves the
+            // HIGHLIGHT now and the list stays whole, the way a native <select>
+            // behaves.
+            const cur  = (f.options || []).find(o => String(o.value) === String(f.value || ''));
+            const shown = cur || (f.options || [])[0] || { label: '', value: '' };
             return `
-              <span class="pg-ask-combo">
-                <input type="text" class="pg-ask-in pg-ask-cin" data-i="${i}" value="${_pgEsc(f.value || '')}"
-                       placeholder="${_pgEsc(f.placeholder || '')}" autocomplete="off" spellcheck="false"
-                       role="combobox" aria-expanded="false" aria-autocomplete="list">
-                <span class="pg-ask-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+              <span class="pg-ask-pick" data-i="${i}" data-mode="pick">
+                <button type="button" class="pg-ask-pick-btn" data-i="${i}" data-v="${_pgEsc(shown.value)}"
+                        aria-haspopup="listbox" aria-expanded="false">
+                  <span class="pg-ask-pick-v" data-i="${i}">${_pgEsc(shown.label)}</span>
+                  <span class="pg-ask-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+                </button>
                 <span class="pg-ask-menu" data-i="${i}" role="listbox"></span>
+                ${f.allowNew ? `
+                  <input type="text" class="pg-ask-newin" data-i="${i}" hidden
+                         placeholder="${_pgEsc(f.newPlaceholder || 'New name')}" autocomplete="off" spellcheck="false">
+                  <button type="button" class="pg-ask-newback" data-i="${i}" hidden>&larr; Pick an existing one instead</button>` : ''}
               </span>`;
         };
 
@@ -8478,16 +8488,21 @@ function _pgAsk(opt) {
         const okBtn = wrap.querySelector('.pg-ask-ok');
         const errEl = wrap.querySelector('.pg-ask-err');
         const at = (sel, i) => wrap.querySelector(`${sel}[data-i="${i}"]`);
-        const inputOf = i => at('input', i);
 
-        // What the DM typed, except that typing an existing group's name in the
-        // wrong case must not make a second group that only differs by case. An
-        // exact (case-insensitive) match resolves to the stored spelling.
         const readField = (f, i) => {
-            const raw = inputOf(i).value.trim();
-            if (f.kind !== 'combo' || !raw) return raw;
-            const hit = (f.options || []).find(o => String(o.value).toLowerCase() === raw.toLowerCase());
-            return hit ? hit.value : raw;
+            if (f.kind !== 'pick') return at('.pg-ask-in', i).value.trim();
+            const box = at('.pg-ask-pick', i);
+            // In "new" mode the answer is typed, so the case-folding matters
+            // again: naming a group that already exists in the wrong case must
+            // not make a second group differing only by case. An exact
+            // case-insensitive match resolves to the stored spelling.
+            if (box.dataset.mode === 'new') {
+                const raw = at('.pg-ask-newin', i).value.trim();
+                if (!raw) return '';
+                const hit = (f.options || []).find(o => String(o.value).toLowerCase() === raw.toLowerCase());
+                return hit ? hit.value : raw;
+            }
+            return at('.pg-ask-pick-btn', i).dataset.v || '';
         };
         const readAll = () => {
             const out = {};
@@ -8517,88 +8532,157 @@ function _pgAsk(opt) {
             errEl.hidden = true;
         };
 
-        /* ---- the combo menus ------------------------------------------------ */
+        /* ---- the dropdowns -------------------------------------------------- */
         // Open/closed is a CLASS on the container, and the menu is emptied when
         // it shuts. It was the `hidden` attribute, which .pg-ask-menu's own
         // `display: flex` silently overrode — hidden only works while nothing
         // sets display, so the menu never went away once opened and an empty one
         // sat under the box as a thin bubble. Same shape as .mg-picker, which
         // renders its menu only while open for exactly this reason.
-        const comboOf = i => at('.pg-ask-combo', i);
-        const closeMenu = (i) => {
-            const c = comboOf(i);
-            if (!c) return;
-            c.classList.remove('open');
-            at('.pg-ask-menu', i).innerHTML = '';
-            inputOf(i).setAttribute('aria-expanded', 'false');
-        };
-        const closeMenus = () => fields.forEach((f, i) => { if (f.kind === 'combo') closeMenu(i); });
-        const anyMenuOpen = () => !!wrap.querySelector('.pg-ask-combo.open');
+        const pickOf   = i => at('.pg-ask-pick', i);
+        const pickBtn  = i => at('.pg-ask-pick-btn', i);
+        const pickMenu = i => at('.pg-ask-menu', i);
+        const pickRows = i => [...pickMenu(i).querySelectorAll('.pg-ask-opt')];
+        const anyMenuOpen = () => !!wrap.querySelector('.pg-ask-pick.open');
+        // One type-ahead buffer per dropdown, the same as a native select's: the
+        // letters pile up while you keep typing and start over once you pause.
+        const tah = {};
+        const TAH_MS = 900;
 
-        // `filter` is false when the list is opened by clicking into the box and
-        // true while typing. Filtering on open is what a <select> would never do
-        // and it read as broken: the box already holds "Smart Tablets", so the
-        // list opened over the buttons showing one row saying "Smart Tablets" —
-        // hiding every group the DM had opened it to switch to.
-        const drawMenu = (f, i, filter) => {
-            const menu = at('.pg-ask-menu', i);
-            const typed = inputOf(i).value.trim();
-            const low = typed.toLowerCase();
-            const rows = (f.options || []).filter(o => !filter || !low || String(o.label).toLowerCase().includes(low));
-            const exact = (f.options || []).some(o => String(o.value).toLowerCase() === low);
-            // "Create X" only when X is genuinely not on the list. Offering it
-            // next to an identical existing row is how you end up with two.
-            const mk = typed && !exact
-                ? `<button type="button" class="pg-ask-opt pg-ask-opt-new" data-v="${_pgEsc(typed)}">Create &ldquo;${_pgEsc(typed)}&rdquo;</button>`
-                : '';
-            // .on marks the row that is already the answer, the same as
-            // .mg-picker-opt.on does in the Margin Guide's picker.
-            menu.innerHTML = rows.map(o =>
-                `<button type="button" class="pg-ask-opt${String(o.value).toLowerCase() === low ? ' on' : ''}"
-                         role="option" aria-selected="${String(o.value).toLowerCase() === low}"
-                         data-v="${_pgEsc(o.value)}">${_pgEsc(o.label)}</button>`
-            ).join('') + mk;
-            const open = !!menu.innerHTML;
-            comboOf(i).classList.toggle('open', open);
-            inputOf(i).setAttribute('aria-expanded', String(open));
+        const closePick = (i) => {
+            const box = pickOf(i);
+            if (!box) return;
+            box.classList.remove('open');
+            pickMenu(i).innerHTML = '';
+            pickBtn(i).setAttribute('aria-expanded', 'false');
+            if (tah[i]) tah[i].buf = '';
+        };
+        const closeMenus = () => fields.forEach((f, i) => { if (f.kind === 'pick') closePick(i); });
+
+        // Moving the highlight is the whole point: the list never shrinks, so
+        // the neighbours of the match stay on screen and you can see what else
+        // was close. scrollIntoView('nearest') keeps a long list tracking the
+        // highlight without yanking the page about.
+        const highlight = (i, idx) => {
+            const rows = pickRows(i);
+            if (!rows.length) return;
+            const n = ((idx % rows.length) + rows.length) % rows.length;
+            rows.forEach((r, k) => r.classList.toggle('hi', k === n));
+            rows[n].scrollIntoView({ block: 'nearest' });
+            tah[i].hi = n;
+        };
+
+        const openPick = (f, i) => {
+            const cur = pickBtn(i).dataset.v || '';
+            // EVERY option, every time — no filtering, ever. .on marks the row
+            // that is already the answer, the same as .mg-picker-opt.on.
+            pickMenu(i).innerHTML = (f.options || []).map(o => {
+                const on = String(o.value) === String(cur);
+                return `<button type="button" class="pg-ask-opt${on ? ' on' : ''}" role="option"
+                                aria-selected="${on}" data-v="${_pgEsc(o.value)}">${_pgEsc(o.label)}</button>`;
+            }).join('') + (f.allowNew
+                ? `<button type="button" class="pg-ask-opt pg-ask-opt-new" data-new="1">${_pgEsc(f.newLabel || '+ New…')}</button>`
+                : '');
+            pickOf(i).classList.add('open');
+            pickBtn(i).setAttribute('aria-expanded', 'true');
+            // Open on the current answer, not the top of the list.
+            const start = pickRows(i).findIndex(r => r.classList.contains('on'));
+            highlight(i, start < 0 ? 0 : start);
+        };
+
+        // "+ New group…" cannot open a second dialog: this one would have to
+        // close to make room, and its promise is what the caller is sitting on.
+        // The field becomes a text box in place instead, with a way back.
+        const setNewMode = (f, i, on) => {
+            pickOf(i).dataset.mode = on ? 'new' : 'pick';
+            pickBtn(i).hidden = on;
+            const inp = at('.pg-ask-newin', i), back = at('.pg-ask-newback', i);
+            if (inp)  { inp.hidden = !on; if (on) { inp.value = ''; inp.focus(); } }
+            if (back) back.hidden = !on;
+            if (!on) pickBtn(i).focus();
+            sync();
+        };
+
+        const takePick = (f, i, row) => {
+            if (!row) return;
+            if (row.dataset.new) { closePick(i); setNewMode(f, i, true); return; }
+            pickBtn(i).dataset.v = row.dataset.v;
+            at('.pg-ask-pick-v', i).textContent = row.textContent.trim();
+            closePick(i);
+            pickBtn(i).focus();
+            sync();
         };
 
         fields.forEach((f, i) => {
-            const inp = inputOf(i);
-            if (f.kind !== 'combo') { inp.addEventListener('input', sync); return; }
-            const menu = at('.pg-ask-menu', i);
-            inp.addEventListener('input', () => { drawMenu(f, i, true); sync(); });
-            // Click, NOT focus. The dialog focuses its first field on open, so a
-            // focus handler dropped the list over the buttons before the DM had
-            // done anything — including on the Group dialog, where that field IS
-            // the first one. Clicking in is the ask; being handed the dialog is
-            // not.
-            // Toggles, the way .mg-picker-btn does: a second click on the box
-            // puts the list away rather than redrawing it in place.
-            inp.addEventListener('click', () => {
-                if (comboOf(i).classList.contains('open')) closeMenu(i);
-                else drawMenu(f, i, false);
+            if (f.kind !== 'pick') { at('.pg-ask-in', i).addEventListener('input', sync); return; }
+            tah[i] = { buf: '', at: 0, hi: -1 };
+            const btn = pickBtn(i);
+
+            // Toggles, the way .mg-picker-btn does: a second click puts the list
+            // away rather than redrawing it in place.
+            btn.addEventListener('click', () => {
+                if (pickOf(i).classList.contains('open')) closePick(i);
+                else openPick(f, i);
             });
-            // mousedown, not click: blur fires first on click and would close the
-            // menu out from under the pointer.
-            menu.addEventListener('mousedown', (e) => {
-                const btn = e.target.closest('.pg-ask-opt');
-                if (!btn) return;
+            // mousedown, not click: the dismiss listener below runs on mousedown
+            // and would shut the menu out from under the pointer.
+            pickMenu(i).addEventListener('mousedown', (e) => {
+                const row = e.target.closest('.pg-ask-opt');
+                if (!row) return;
                 e.preventDefault();
-                inp.value = btn.dataset.v;
-                closeMenu(i);
-                inp.focus();
-                sync();
+                takePick(f, i, row);
             });
+
+            btn.addEventListener('keydown', (e) => {
+                const open = pickOf(i).classList.contains('open');
+                const k = e.key;
+                if (k === 'ArrowDown' || k === 'ArrowUp') {
+                    e.preventDefault();
+                    if (!open) return openPick(f, i);
+                    return highlight(i, tah[i].hi + (k === 'ArrowDown' ? 1 : -1));
+                }
+                if ((k === 'Home' || k === 'End') && open) {
+                    e.preventDefault();
+                    return highlight(i, k === 'Home' ? 0 : pickRows(i).length - 1);
+                }
+                if (k === 'Enter' || k === ' ') {
+                    e.preventDefault();
+                    if (!open) return openPick(f, i);
+                    return takePick(f, i, pickRows(i)[tah[i].hi]);
+                }
+                if (k === 'Escape') { if (open) { e.stopPropagation(); closePick(i); } return; }
+                // A single printable key: the type-ahead. This is what was
+                // actually asked for — the highlight walks to the nearest match
+                // and the list stays whole.
+                if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                    const now = Date.now();
+                    tah[i].buf = (now - tah[i].at > TAH_MS ? '' : tah[i].buf) + k.toLowerCase();
+                    tah[i].at = now;
+                    if (!open) openPick(f, i);
+                    // The "+ New…" row is not a name and must never be what a
+                    // letter lands on.
+                    const rows = pickRows(i).filter(r => !r.dataset.new);
+                    const buf = tah[i].buf;
+                    // Starts-with first, as a select does; then contains, so
+                    // "wat" still reaches "Smart Watches".
+                    let hit = rows.findIndex(r => r.textContent.trim().toLowerCase().startsWith(buf));
+                    if (hit < 0) hit = rows.findIndex(r => r.textContent.trim().toLowerCase().includes(buf));
+                    if (hit >= 0) { e.preventDefault(); highlight(i, hit); }
+                }
+            });
+
+            const back = at('.pg-ask-newback', i);
+            if (back) back.addEventListener('click', () => setNewMode(f, i, false));
+            const nin = at('.pg-ask-newin', i);
+            if (nin) nin.addEventListener('input', sync);
         });
 
-        // Any click that is not inside a combo shuts every menu. This is what
-        // .mg-dismiss does for the Margin Guide's picker, done as one listener
-        // rather than a full-screen layer, because a layer over a dialog would
-        // also swallow the click that was meant for Cancel. Blur alone was not
-        // enough: clicking the card's own background never moves focus.
+        // Any mousedown that is not inside a dropdown shuts every menu. This is
+        // what .mg-dismiss does for the Margin Guide's picker, done as one
+        // listener rather than a full-screen layer, because a layer over a
+        // dialog would also swallow the click meant for Cancel.
         wrap.addEventListener('mousedown', (e) => {
-            if (!e.target.closest('.pg-ask-combo')) closeMenus();
+            if (!e.target.closest('.pg-ask-pick')) closeMenus();
         }, true);
 
         okBtn.addEventListener('click', () => {
@@ -8611,7 +8695,7 @@ function _pgAsk(opt) {
             if (bad) {
                 errEl.textContent = bad;
                 errEl.hidden = false;
-                const first = wrap.querySelector('.pg-ask-in');
+                const first = wrap.querySelector('.pg-ask-in:not([hidden])');
                 if (first) { first.focus(); first.select(); }
                 return;
             }
@@ -8627,16 +8711,15 @@ function _pgAsk(opt) {
         // meant, and losing the whole dialog to it would be a nasty surprise.
         const onKey = (e) => {
             if (e.key === 'Escape') {
+                // The dropdown's own handler already ate this one and closed
+                // its list; anything left means no list was down.
                 e.stopPropagation();
                 if (anyMenuOpen()) { closeMenus(); return; }
                 done(null);
-            } else if (e.key === 'ArrowDown' && e.target.classList.contains('pg-ask-cin')) {
-                // The way in without a mouse, now that focus alone no longer
-                // opens the list. Unfiltered, same as clicking the box.
-                e.preventDefault();
-                const i = Number(e.target.dataset.i);
-                drawMenu(fields[i], i, false);
             } else if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+                // Enter in a text box submits. Not on the dropdown button —
+                // there Enter opens the list and picks, which its own keydown
+                // handles.
                 e.preventDefault();
                 if (anyMenuOpen()) { closeMenus(); return; }
                 okBtn.click();
@@ -8645,7 +8728,10 @@ function _pgAsk(opt) {
         document.addEventListener('keydown', onKey, true);
 
         sync();
-        const first = wrap.querySelector('.pg-ask-in') || okBtn;
+        // The first thing worth typing into. :not([hidden]) skips a dropdown's
+        // stashed "new name" box, which is in the DOM from the start and would
+        // otherwise be focused invisibly.
+        const first = wrap.querySelector('.pg-ask-in:not([hidden])') || okBtn;
         first.focus();
         if (first.select) first.select();
     });
@@ -8663,9 +8749,9 @@ async function pgAddCategory() {
         fields: [
             { key: 'name', label: 'Category Name', placeholder: 'Graphics Cards', required: true },
             {
-                key: 'group', label: 'Group', hint: '(leave blank to keep it on its own)',
-                kind: 'combo', value: '', options: _pgGroupOptions(),
-                placeholder: 'Computer Parts',
+                key: 'group', label: 'Group', hint: '(or start a new one)',
+                kind: 'pick', value: '', options: _pgGroupOptions(),
+                allowNew: true, newLabel: '+ New group…', newPlaceholder: 'Computer Parts',
             },
         ],
         validate: a => _pgNameTaken(a.name) ? _pgDupeMsg(a.name) : null,
@@ -8712,9 +8798,9 @@ async function pgSetCategoryGroup() {
         body: 'Sheets in the same group share one dropdown in the sidebar.',
         ok: 'Save Group',
         fields: [{
-            key: 'group', label: 'Group', hint: '(leave blank to keep it on its own)',
-            kind: 'combo', value: cat.group_name || '', options: _pgGroupOptions(),
-            placeholder: 'Smart Tablets',
+            key: 'group', label: 'Group', hint: '(or start a new one)',
+            kind: 'pick', value: cat.group_name || '', options: _pgGroupOptions(),
+            allowNew: true, newLabel: '+ New group…', newPlaceholder: 'Smart Tablets',
         }],
     });
     if (!a) return;

@@ -21597,24 +21597,47 @@ select.dd-native {
 .pg-ask-f input:focus, .pg-ask-sel:focus {
     outline: none; border-color: var(--pg-accent); box-shadow: 0 0 0 3px var(--pg-ring);
 }
-/* The groups already in use: a text box that filters a list under it. It was a
-   row of pills (a wall at fifteen groups), then a <select> (cannot be typed
-   into, and needed a magic "+ New group…" row whose value leaked into the
-   database once). A combo box needs neither: an existing group is a row you
-   pick, a new one is a name you finish typing. */
-.pg-ask-combo { display: block; position: relative; }
+/* The groups already in use. This has been a row of pills (a wall at fifteen
+   groups), a real <select> (whose magic "+ New group…" option leaked its
+   sentinel into the database once), and a text box that filtered a list as you
+   typed — which was the worst of the three, because filtering emptied the list
+   down to the row you had half-typed and hid everything you might have picked
+   instead. It is a plain dropdown now, the same as .mg-picker: a button, and a
+   menu of every option. Typing walks the highlight; the list never shrinks. */
+.pg-ask-pick { display: block; position: relative; }
+/* Looks exactly like .pg-ask-f input (it shares that rule) but is a button, so
+   there is nothing to type into and nothing that reads as a text field. */
+.pg-ask-pick-btn {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    width: 100%; box-sizing: border-box; text-align: left; cursor: pointer;
+    font: inherit; font-size: 13.5px; color: var(--pg-ink); background: #fff;
+    border: 1.5px solid var(--pg-line); border-radius: 9px; padding: 9px 11px;
+}
+.pg-ask-pick-btn:focus-visible,
+.pg-ask-pick.open .pg-ask-pick-btn {
+    outline: none; border-color: var(--pg-accent); box-shadow: 0 0 0 3px var(--pg-ring);
+}
+.pg-ask-pick-v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The name of a group that does not exist yet. Lives in the field from the
+   start and is revealed in place, because opening a second _pgAsk over this one
+   would close it and strand the promise its caller is waiting on. */
+.pg-ask-newback {
+    margin: 7px 0 0; padding: 0; border: 0; background: none; cursor: pointer;
+    font: inherit; font-size: 11.5px; font-weight: 650; color: var(--pg-muted);
+}
+.pg-ask-newback:hover { color: var(--pg-accent-deep); text-decoration: underline; }
 /* The chevron the rest of the site puts on a picker, and it turns over when the
    list is down — same affordance as .mg-picker-btn's. pointer-events: none so it
    is decoration sitting on the box, not a second thing to aim at. */
+/* A flex child of the button, not absolutely positioned over it: the button
+   lays the value and the chevron out with space-between, so the value gets
+   ellipsised at the chevron instead of sliding underneath it. */
 .pg-ask-chev {
-    position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
-    display: inline-flex; pointer-events: none; color: var(--pg-muted);
-    transition: transform .15s;
+    display: inline-flex; flex: 0 0 auto; pointer-events: none;
+    color: var(--pg-muted); transition: transform .15s;
 }
 .pg-ask-chev svg { width: 15px; height: 15px; }
-.pg-ask-combo.open .pg-ask-chev { transform: translateY(-50%) rotate(180deg); }
-.pg-ask-combo input { padding-right: 34px; }
-.pg-ask-combo.open input { border-color: var(--pg-accent); box-shadow: 0 0 0 3px var(--pg-ring); }
+.pg-ask-pick.open .pg-ask-chev { transform: rotate(180deg); }
 /* display: none by default, NOT the hidden attribute. A rule that sets display
    on the element itself beats [hidden] outright, which is exactly what went
    wrong: the menu could never be put away and an empty one showed as a bar
@@ -21628,15 +21651,23 @@ select.dd-native {
     box-shadow: 0 12px 34px rgba(16, 24, 40, .18);
     max-height: 220px; overflow-y: auto;
 }
-.pg-ask-combo.open .pg-ask-menu { display: flex; }
+.pg-ask-pick.open .pg-ask-menu { display: flex; }
 .pg-ask-opt {
     display: block; width: 100%; text-align: left; cursor: pointer; font: inherit;
     font-size: 12.5px; font-weight: 650; color: var(--pg-ink);
     background: none; border: 0; border-radius: 7px; padding: 7px 9px;
 }
 .pg-ask-opt:hover { background: #f1f5f9; }
+/* WHERE TYPING PUTS YOU. The one thing the old filtering box could not show:
+   the list stays whole and this walks down it to the nearest match, so the rows
+   either side of the hit are still there to be seen and picked. Distinct from
+   .on, which is what the answer currently IS — both can be on screen at once,
+   and while choosing, this is the one the eye should follow, so it is the
+   heavier of the two. */
+.pg-ask-opt.hi { background: var(--pg-hdr); box-shadow: inset 0 0 0 1.5px var(--pg-accent); }
 /* The row that is already the answer, same as .mg-picker-opt.on. */
 .pg-ask-opt.on { background: var(--pg-accent-tint); color: var(--pg-accent-deep); font-weight: 780; }
+.pg-ask-opt.on.hi { background: var(--pg-accent-tint); }
 /* The row that makes a group rather than picking one. Separated, because
    "Computer Parts" and "Create Computer Parts" doing different things while
    looking identical is how you get a duplicate group. */
