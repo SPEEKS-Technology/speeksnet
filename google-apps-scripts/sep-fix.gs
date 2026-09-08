@@ -58,6 +58,14 @@
 // cells stay pinned and the other three keep updating underneath them. That
 // change is a prerequisite for this one; do not run this against an older copy.
 //
+// ⚠️ AND SO IS THE SCRIPT LOCK — PASTE BOTH FILES OR NEITHER. _sepfAll takes
+// LockService.getScriptLock() so a restatement cannot land inside a refresh's
+// write (see the block there for the 2026-09-08 near-miss). A lock only one side
+// takes serializes nothing: with an OLD netprofit-sheet.gs the refresh will not
+// ask for it, will not wait, and the race is exactly as open as it was — while
+// this file now reads as though it were handled. Updating one file and not the
+// other is worse than updating neither, because it removes the reason to look.
+//
 // ⚠️ WSP's Sep 1 is NOT restated here. It carries a +$334.99 mirror-back refund
 // that sales-true-daily says should be added back, which would take WSP from
 // $4,885.73 to $5,220.72. That is a different correction from the two above —
@@ -203,6 +211,144 @@
 // to it. Nothing draft-related touched LEE that day (its Draft Orders channel
 // is 0.00), so the drafts answer is still no; but if LEE's Sep 5 is ever
 // restated for another reason, that $1,236 has to be explained first.
+//
+// ---------------------------------------------------------------------------
+// SEP 7 — OVL only. One repayment invoice, corroborated both ways.
+//
+//   OVL  reported 4,442.21 / 2,742.44 cost
+//        − draft    −219.99 /  −100.00   = 4,222.22 / 2,642.44   (GP 1,579.78)
+//
+// #KS01-14695, $219.99, an Unlocked Apple iPhone 13 128GB Green (KS01-7359C-E3),
+// invoiced 12:38pm Central. It satisfies BOTH halves of the rule that took
+// effect Sep 6: it is dated on or after Sep 1, AND its amount equals an eBay
+// order total OVL actually refunded — sales-true-daily returns
+// `matches_a_refund_amount: true` on it. Same evidence class as the Sep 4 pin,
+// which is the best-evidenced kind of removal in this file.
+//
+// The two independent checks agree the day is settled, which is the condition
+// the "A ONE-DAY QUERY LIES" note above asks for: the per-order pass and the
+// ShopifyQL channel split both put OVL's Draft Orders at exactly 219.99.
+//
+// Both tabs report the same base figures from their two separate queries —
+// netprofit-collect returns net_sales 4442.21 / cost 2742.44 for OVL Sep 7,
+// cell for cell what the Sales Summary holds. So one correction fits both.
+//
+// WSP, MPL and BAL had no draft orders on Sep 7, and LEE none either (see
+// below). OVL remains the only store still receiving these.
+//
+// ⚠️ THE DRAFT CARRIES $100.00 OF COST, AND THAT IS NOT A CONTRADICTION.
+// The "a repayment invoice has no cost of goods behind it" argument from Sep 6
+// is a TIE-BREAKER for drafts the amount test cannot corroborate — it is what
+// rescued LEE #MO01-9401 and MPL #MO03-3217 — not a veto over one it can. The
+// Sep 2 pin removed $245.00 of cost on exactly this footing. The amount match
+// is the stronger evidence and it is present here.
+//
+// IT IS AUTHORIZED, NOT PAID — the money is not captured yet. That is the
+// NORMAL state for these, not an anomaly: all three of the Sep 4 repayments
+// (#KS01-14625, #KS01-14628, #KS01-14631) are AUTHORIZED too, and the Sep 1/2
+// ones had settled to PAID by the time they were read. It changes nothing
+// either way — ShopifyQL already counts the $219.99 in the day's Draft Orders
+// channel, and an invoice the customer has not actually paid is even less of a
+// sale than one they have.
+//
+// ⚠️ THE `created ...` TAG IS NOT EVIDENCE OF ANYTHING. #KS01-14695 carries
+// `created 2026-08-31T14:01:38Z` and so does EVERY other OVL draft in the
+// window, the seven confirmed repayments included — one bulk edit stamped the
+// lot on Aug 31. It looks like a provenance marker and is not one. Checked so
+// that the next sweep does not mistake it for a discriminator.
+//
+// ⚠️ OVL'S SEP 7 REFUNDS ARE LEFT EXACTLY AS REPORTED, and the pin does not
+// depend on them. The day carries $681.48 of genuine refunds, $414.98 the
+// classifier could not place, and a $99.99 adjustment-only refund (#KS01-14403,
+// eBay 07-15097-93226 — a refund with no line items). All of it stays in.
+//
+// This is NOT the WSP Sep 3 situation despite the shared symptom. There the
+// contemplated restatement was itself a refund judgment, so unpriceable refunds
+// undermined the derivation. Here the derivation is `reported − the draft`:
+// reported_net_sales has already netted every refund, whatever it is, and
+// subtracting one draft order passes all of them through untouched. The day
+// also reconciles to the penny, which WSP's did not — 1,096.46 classified +
+// 99.99 adjustment-only = 1,196.45 reported returns, with an order attached to
+// every dollar.
+//
+// Adding back the $414.98 is a separate judgment needing its own evidence. It
+// is not bundled in here. Drafts only, as asked.
+//
+// ---------------------------------------------------------------------------
+// ⚠️ LEE'S SEP 7 IS NOT RESTATED, AND THIS TIME THE DAY CAME RIGHT ON ITS OWN.
+//
+// dupe-open-pairs found one open duplicate pair on Sep 7 — the only one at any
+// store, over every paid order back to Jun 1 (5,221 scanned). eBay order
+// 04-15048-40910, a broken PlayStation 5 Slim, sold Aug 16 as #MO01-8797
+// through SPEEKS Connect and re-imported by the new PayMore app at 9:30pm
+// Central on Sep 7 as #MO01-9491 ($219.99) — two live, paid, fulfilled Shopify
+// orders for one sale, neither refunded. Ethan cleared the copy on Sep 8.
+//
+// Unlike the Sep 1 duplicate, the deletion DID take it out of the day. Measured
+// after the fact rather than assumed: LEE's Sep 7 went from 21 orders /
+// $5,674.77 to 20 / $5,454.78, and both queries now agree at 5,454.78 /
+// 2,887.44. There is nothing to pin, so LEE stays live on the daily sync.
+//
+// ⚠️ RE-CHECK LEE'S SEP 7 AFTER THE 2PM PASS ANYWAY. The Sep 1 lesson was that
+// the sales dataset does NOT retroactively forget an order, and here it did.
+// The two cases differ in timing — Sep 1's copy lived a full day before being
+// deleted, this one a matter of hours — but "deleted in time" is a guess at the
+// mechanism, not a measurement, and the guess is the sort this file has been
+// wrong about before. If LEE's Sep 7 sales ever read 5,674.77 again the
+// duplicate has come back into the figure and the day needs the pin after all:
+//
+//   LEE  5,454.78 / 2,887.44      ← only if the deleted copy reappears
+//
+// ⚠️ THE DUPLICATE ARRIVED IN A BACKFILL BATCH, which is the part worth
+// watching rather than the single order. #MO01-9491 landed at 02:30:03Z and
+// #MO01-9492 at 02:30:19Z, sixteen seconds apart, both carrying eBay ids from
+// older sales — the new app importing history, not live sales coming through.
+// That is the same mechanism that produced the Sep 1 duplicate. #MO01-9492
+// (20.99, eBay 22-15116-20372) was checked and has no twin; it is a real
+// order and stays in.
+//
+// SEP 6 was checked at OVL and LEE only, as a by-product of running the Sep 7
+// window a day either side. Both clean — zero drafts on the per-order pass and
+// 0.00 on the Draft Orders channel. That is NOT a district-wide result for
+// Sep 6 and should not be read as one.
+//
+// ---------------------------------------------------------------------------
+// ⚠️ WHAT PROTECTS A REAL DRAFT SALE — asked 2026-09-08, and worth writing down
+// because the honest answer is not "we only strip the ones we created".
+//
+// The stores sell through draft orders on purpose: the Drafts list carries
+// PayMore Upgrade and PayMore Consoles deals alongside the glitch repayments.
+// Nothing in looksLikeRepayment() knows who created a draft, who the customer
+// is, what the draft was called, or what is on it. It tests two things only:
+// the day is on or after Aug 26, and — from Sep 1 — the amount equals an eBay
+// order total that store actually refunded.
+//
+// So the real protection is STRUCTURAL, and it sits one level up: the strip only
+// ever considers orders whose `sourceName` matches /draft/i. Measured on the
+// upgrade deals themselves — #D356 and #D355, completed Sep 4 at 1:02 and
+// 1:03pm, land at OVL as #KS01-14633 ($692.78) and #KS01-14634 ($358.79) with
+// sourceName `35264036865`, an app id with no "draft" in it. They are invisible
+// to the test, and ShopifyQL agrees: they sit in the PayMore channel while the
+// repayment sits alone in Draft Orders. The Sep 4 pin above removed $334.97 and
+// left both upgrades in, which is this working correctly on real data.
+//
+// ⚠️ THE AMOUNT TEST IS THE ONLY GUARD LEFT, AND IT IS A COINCIDENCE TEST.
+// If an upgrade deal is ever completed through the invoice route instead — so
+// that it DOES arrive as shopify_draft_order — nothing stands between it and
+// the strip except its total failing to match any of the 81 refunded amounts
+// known at OVL. Those are ordinary retail price points ($219.99, $224.99,
+// $229.99), which is exactly where a real sale is most likely to land. The
+// upgrade deals happen to price at $692.78 and $358.79 and would not collide,
+// but that is luck, not a safeguard.
+//
+// ⚠️ AND THE FIELD THAT WOULD SETTLE IT CANNOT BE READ. `customer` — the
+// column showing "PayMore Upgrade" in the admin — is walled off on all five
+// tokens: "Access denied for customer field. Required access: read_customers".
+// So does `app`, behind read_apps. Adding read_customers to the five custom
+// apps would turn the customer into a real discriminator and make this test
+// evidential instead of circumstantial. Until then, any draft that arrives as
+// shopify_draft_order AND matches a refunded amount should be eyeballed against
+// the store's Drafts list before it is pinned.
 // ============================================================================
 
 var SEPF_SHEET_ID = '1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8';  // Sales Summary 2026
@@ -238,14 +384,26 @@ var SEPF_NOTE_0904_OVL =
   + 'total OVL actually refunded, so these are glitch repayments rather than selling — the '
   + 'date rule and the amount test both agree. Real figure. Locked from the daily sync.';
 
+var SEPF_NOTE_0907_OVL =
+  'Sep 7 restated — $219.99 of draft-order invoice removed (cost 100.00): #KS01-14695, an '
+  + 'iPhone 13 invoiced 12:38pm. Its amount matches an eBay order total OVL actually refunded, '
+  + 'so the date rule and the amount test both agree it is a glitch repayment rather than '
+  + 'selling. Refunds are untouched — the $99.99 adjustment-only refund and $414.98 of '
+  + 'unclassified refunds all stay in. Real figure. Locked from the daily sync.';
+
 var SEPF_FIX = [
   { store: 'OVL', day: 1, sales:  949.33, cost:  168.00, note: SEPF_NOTE_0901_OVL },
   { store: 'OVL', day: 2, sales: 5993.75, cost: 2884.07, note: SEPF_NOTE_0902_OVL },
-  { store: 'OVL', day: 4, sales: 9323.30, cost: 4544.75, note: SEPF_NOTE_0904_OVL }
+  { store: 'OVL', day: 4, sales: 9323.30, cost: 4544.75, note: SEPF_NOTE_0904_OVL },
+  { store: 'OVL', day: 7, sales: 4222.22, cost: 2642.44, note: SEPF_NOTE_0907_OVL }
   // MPL Sep 2: pin REMOVED — an ordinary sale, not a repayment. It is in
   //   SEPF_UNPIN below, because deleting the row does not clear the cell.
   // LEE Sep 3: #MO01-9401 is a real sale and stays in. No row, on purpose.
   // Sep 5: checked 2026-09-06, clean at all five stores. No rows, on purpose.
+  // LEE Sep 7: the duplicate #MO01-9491 left the day when the copy was
+  //   deleted — verified, not assumed. No row unless it comes back; the
+  //   figure to use if it does is in the Sep 7 block above.
+  // Sep 7: WSP, MPL and BAL had no drafts and no duplicate pairs. No rows.
 ];
 
 // ---------------------------------------------------------------------------
@@ -294,8 +452,54 @@ var SEPF_UNPIN = [
 function sepFixPreview() { _sepfAll(true); }
 function sepFixApply()   { _sepfAll(false); }
 
+// A hand run waits longer than a scheduled one, because a person is watching and
+// the thing it is waiting for is a refresh that can take minutes. Refusing is
+// still better than racing: a pin written into the middle of a refresh is the
+// failure this is here to stop.
+var SEPF_LOCK_WAIT_MS = 120000;
+
 function _sepfAll(dryRun) {
   Logger.log(dryRun ? '=== PREVIEW — nothing will be written ===' : '=== APPLYING ===');
+
+  // ⚠️ THE SAME SCRIPT LOCK netprofit-sheet.gs TAKES, AND THE NEAR-MISS THAT
+  // PUT IT HERE. On 2026-09-08 the morning refresh started at 8:44:48 and the
+  // workbook's last write landed at 8:56:27. _npWrite reads every formula on the
+  // tab once at the top of the run and decides what is pinned from that read, so
+  // a pin applied anywhere inside those eleven minutes was invisible to it — and
+  // the refresh would have written the unrestated figure back over it, silently,
+  // with the run logging a perfectly ordinary "written".
+  //
+  // Restating during a refresh is exactly when somebody would do it: the numbers
+  // have just landed, which is what prompts the correction.
+  //
+  // ⚠️ ONE APPS SCRIPT PROJECT IS ONE SCRIPT LOCK. That is the whole mechanism —
+  // netprofit-sheet.gs calls LockService.getScriptLock() too, so the two reach
+  // the same lock without either file knowing about the other. Do not "tidy"
+  // this into a shared helper in the other file: either file has to be able to
+  // be pasted in on its own and still take the lock.
+  //
+  // A PREVIEW TAKES NO LOCK — it writes nothing, and a preview you cannot run
+  // while a refresh is going is a diagnostic missing at the moment you want it.
+  var sepfLock = null;
+  if (!dryRun) {
+    sepfLock = LockService.getScriptLock();
+    if (!sepfLock.tryLock(SEPF_LOCK_WAIT_MS)) {
+      Logger.log('!! another writer holds the script lock — NOTHING WAS WRITTEN.');
+      Logger.log('   A Net Profit refresh is mid-write (they run 8-9am and 2-3pm Central '
+               + 'and take several minutes). Wait for it to finish and run this again. '
+               + 'Pinning now would put these cells inside a write the refresh has '
+               + 'already decided the contents of.');
+      return;
+    }
+  }
+  try {
+    _sepfAllLocked(dryRun);
+  } finally {
+    if (sepfLock) sepfLock.releaseLock();
+  }
+}
+
+function _sepfAllLocked(dryRun) {
   var ss = SpreadsheetApp.openById(SEPF_SHEET_ID);
   var wrote = 0, already = 0, skipped = 0, missing = 0;
   for (var t = 0; t < SEPF_TARGETS.length; t++) {
@@ -416,6 +620,31 @@ function _sepfUnpinAll(dryRun) {
                     : '=== UNPINNING ===');
   if (!SEPF_UNPIN.length) { Logger.log('SEPF_UNPIN is empty — nothing to do.'); return; }
 
+  // Same lock as sepFixApply, and it matters here for the mirror-image reason.
+  // An unpin CLEARS a cell to hand the day back to the daily sync; do that in
+  // the middle of a refresh and the refresh — which decided what was pinned
+  // minutes ago — leaves the now-empty cell alone as though it were still
+  // locked. The day would read blank until the next pass, on a tab whose NP
+  // formula treats a blank as arithmetic zero.
+  var unpinLock = null;
+  if (!dryRun) {
+    unpinLock = LockService.getScriptLock();
+    if (!unpinLock.tryLock(SEPF_LOCK_WAIT_MS)) {
+      Logger.log('!! another writer holds the script lock — NOTHING WAS CLEARED.');
+      Logger.log('   A Net Profit refresh is mid-write. Wait for it to finish and run '
+               + 'this again; a cell cleared inside a refresh stays empty until the '
+               + 'pass after it.');
+      return;
+    }
+  }
+  try {
+    _sepfUnpinAllLocked(dryRun);
+  } finally {
+    if (unpinLock) unpinLock.releaseLock();
+  }
+}
+
+function _sepfUnpinAllLocked(dryRun) {
   var ss = SpreadsheetApp.openById(SEPF_SHEET_ID);
   var cleared = 0, already = 0, refused = 0, missing = 0;
 
