@@ -211,7 +211,69 @@ function _npIsOurPlaceholder(f) {
   return /^=\s*NA\s*\(\s*\)$/i.test(String(f).trim());
 }
 
+// How long a writer waits for the other one to finish before giving up. A
+// restatement takes seconds, so this is almost never spent; a full refresh can
+// run for minutes, which is why a HAND run (see sep-fix.gs) waits longer than a
+// scheduled one. npsDailyRefresh's NPX_BUDGET_MS is computed after _npWrite
+// returns and floors at 30s, so a wait spent here shortens the summary pass
+// rather than breaking it.
+var NP_LOCK_WAIT_MS = 60000;
+
+// ============================================================================
+// _npWrite — take the lock, then do the work.
+//
+// ⚠️ THIS EXISTS BECAUSE OF A REAL NEAR-MISS ON 2026-09-08. The morning refresh
+// fired at 8:44:48 and the workbook's last write landed at 8:56:27 — eleven
+// minutes with a write in flight. _npWriteUnlocked snapshots every formula on
+// the tab ONCE at the top and derives its per-column locks from that snapshot,
+// so a pin applied by sep-fix.gs anywhere inside those eleven minutes was
+// invisible to it: the refresh would have written the unrestated figure straight
+// over a cell somebody had just corrected, and left nothing behind to say so.
+//
+// Two defences went in together and they are not redundant:
+//   * this lock, so a restatement and a refresh cannot overlap at all;
+//   * _npWriteRuns re-reading the column immediately before writing it, so the
+//     writer is correct even when something skips the lock.
+// The lock prevents the interleave; the re-read means the interleave is harmless
+// if it ever happens anyway. Keep both.
+//
+// ⚠️ IT IS THE PROJECT'S SCRIPT LOCK, WHICH IS WHY IT WORKS. sep-fix.gs is a
+// different FILE in the same Apps Script project — one project is one lock — so
+// both callers reach the same lock by calling LockService.getScriptLock()
+// directly. Neither file depends on the other to do it, deliberately: either can
+// be pasted in alone and still take the lock.
+//
+// ⚠️ NOT EVERY WRITER TAKES IT YET. _npxSync (the summary strip) and the
+// rollover write different cells and are not part of this race. The Sales tabs
+// are not exposed to it either — sales-email-import.gs reads each cell's formula
+// immediately before writing that cell, which is the pattern _npWriteRuns has
+// now adopted.
+//
+// A PREVIEW TAKES NO LOCK. It writes nothing, and a preview that could be
+// blocked by a running refresh would be a diagnostic you cannot use at exactly
+// the moment you want it.
+// ============================================================================
 function _npWrite(preview) {
+  if (preview) return _npWriteUnlocked(true);
+  var npLock = LockService.getScriptLock();
+  if (!npLock.tryLock(NP_LOCK_WAIT_MS)) {
+    // ⚠️ THROW, DO NOT RETURN. npsDailyRefresh turns a throw into an email and
+    // a missed refresh repairs itself on the next pass, so the loud version
+    // costs one message. Returning quietly would make "another writer held the
+    // lock" indistinguishable from "the month is up to date", which is the one
+    // confusion this file's header spends its length warning about.
+    throw new Error('another writer holds the script lock — Net Profit not written. '
+      + 'A restatement (sep-fix.gs) or another refresh is mid-write; the next pass '
+      + 'rewrites the whole month to date, so one skipped run is not a data problem.');
+  }
+  try {
+    return _npWriteUnlocked(false);
+  } finally {
+    npLock.releaseLock();
+  }
+}
+
+function _npWriteUnlocked(preview) {
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
   var sh = _npTab(ss);
   if (!sh) return;
@@ -455,21 +517,63 @@ function _npClearIncomplete(sh, values, formulas, base, gridYm, todayYmd, previe
 // after it. A month with one pin costs one extra setValues call.
 //
 // Returns how many cells it actually wrote, so the caller can say what it left.
+// ⚠️ THE LOCK IS RE-READ HERE AND NOT TAKEN FROM _npWrite's SNAPSHOT.
+// rows[].locked came from a read of the whole tab taken at the top of the run,
+// which on a five-store month is minutes old by the time this writes. That is
+// long enough for somebody to pin a cell in between, and a stale lock check
+// would then overwrite the pin — see the header on _npWrite for the 2026-09-08
+// near-miss that put this in.
+//
+// One extra read per column per store, of one column over the day span. That is
+// 25 single-column reads on a full run, against the alternative of silently
+// discarding a hand correction.
+//
+// rows[].locked is still what the REFUSALS LIST reports, and deliberately so:
+// that list answers "what did this run leave alone and why", which is a question
+// about the run, not about this millisecond. The two disagreeing is the race
+// being caught, and it says so out loud when it happens.
 function _npWriteRuns(sh, rows, col1, vals, off) {
-  var i = 0, wrote = 0;
+  if (!rows.length) return 0;
+
+  // Indexed by row offset, not by position in `rows` — days are located by day
+  // number and a missing day leaves a real gap in the row numbers.
+  var firstR = rows[0].r, lastR = rows[rows.length - 1].r;
+  var fresh = sh.getRange(firstR + 1, col1, lastR - firstR + 1, 1).getFormulas();
+
+  // Same rule as the snapshot guard in _npWriteUnlocked: any formula is a lock,
+  // except an =NA() placeholder this script wrote, which is ours to replace.
+  function lockedNow(k) {
+    var f = String(fresh[rows[k].r - firstR][0]).trim();
+    if (f === '') return false;
+    return !_npIsOurPlaceholder(f);
+  }
+
+  var i = 0, wrote = 0, raced = [];
   while (i < rows.length) {
-    if (rows[i].locked[off]) { i++; continue; }
+    if (lockedNow(i)) {
+      if (!rows[i].locked[off]) raced.push(rows[i].day);
+      i++;
+      continue;
+    }
     var j = i;
     // A run ends at a locked cell OR at a break in the row numbers — the rows
     // are located by day number, so a missing day leaves a genuine gap and
     // writing through it would put every later day one row too high.
-    while (j + 1 < rows.length && !rows[j + 1].locked[off]
+    while (j + 1 < rows.length && !lockedNow(j + 1)
            && rows[j + 1].r === rows[j].r + 1) j++;
     var chunk = [];
     for (var k = i; k <= j; k++) chunk.push([vals[k]]);
     sh.getRange(rows[i].r + 1, col1, chunk.length, 1).setValues(chunk);
     wrote += chunk.length;
     i = j + 1;
+  }
+
+  // The whole reason the re-read exists, so it must not be silent.
+  if (raced.length) {
+    Logger.log('  !! day(s) %s were locked in column %s AFTER this run read the sheet — '
+      + 'left alone. Something pinned them while the write was in flight, and the '
+      + 'snapshot could not see it. The figure on the sheet is the newer one.',
+      raced.join(', '), _npColLetter(col1 - 1));
   }
   return wrote;
 }

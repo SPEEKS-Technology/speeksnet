@@ -110,6 +110,21 @@ const CASES = [
       specs: { Brand: 'SanDisk', Model: 'Extreme', MPN: 'SDSSDE61-2T00-G25',
                Type: 'microSD Card' },
       field: 'Type' },
+    // ⚠️ MPL's Rokinon, denied 2026-09-04: "This is a 2.2 lens. Shown in the
+    // pictures". The same bug on a field IDENTITY_FIELDS had not reached.
+    //
+    // Worth keeping because our knowledge was RIGHT about the lens everyone
+    // knows — the 16mm ED AS UMC CS is f/2.0 — and still lost. Samyang/Rokinon
+    // sell the CINE version of that optic marked T2.2, so 2.2 on the barrel is
+    // a real marking on a real variant. A check that cannot be wrong about a
+    // famous product is a check that has not met the second version of it.
+    { what: 'Rokinon lens',
+      title: 'Rokinon AS UMC CS 16mm f/2.2 EF For Canon EF Mount Manual Lens',
+      v: { verdict: 'wrong', wrong_text: 'f/2.2', correct_text: 'f/2.0',
+           why: 'The Rokinon 16mm ED AS UMC CS lens is f/2.0' },
+      specs: { Brand: 'Rokinon', Model: 'AS UMC CS', Collection: 'Camera Lens',
+               'Maximum Aperture': 'f/2.2' },
+      field: 'Maximum Aperture' },
 ];
 for (const c of CASES) {
     const r = run(c.title, c.v, c.specs);
@@ -175,6 +190,16 @@ console.log('\n== 4. Only IDENTITY fields can veto a correction ==');
         { verdict: 'garbled', wrong_text: 'OX 7 IV', correct_text: 'a7 IV' }, {});
     ok((r3.findings[0] || {}).code === 'name-garbled',
        'and no spec table changes nothing', (r3.findings[0] || {}).code);
+    // ⚠️ FOCAL LENGTH IS IN THE LIST WITHOUT A DENIAL BEHIND IT, so it gets its
+    // own assertion rather than riding on the Rokinon case above. A lens is
+    // named by its length as much as by its aperture, and "16mm should be 14mm"
+    // is the identical failure waiting to happen.
+    const r4 = run('Rokinon AS UMC CS 16mm f/2.2 EF For Canon EF Mount Manual Lens',
+        { verdict: 'wrong', wrong_text: '16mm', correct_text: '14mm',
+          why: 'The AS UMC CS in this mount is the 14mm' },
+        { Brand: 'Rokinon', 'Focal Length': '16mm' });
+    ok((r4.findings[0] || {}).code === 'name-disputed',
+       'and Focal Length vetoes too', (r4.findings[0] || {}).code);
 }
 
 console.log('\n== 5. The existing guards still hold ==');

@@ -261,6 +261,10 @@ const USAGE_TRACK = Object.assign(Object.create(null), {
     // not using it. The tracked moment is a category AND an item picked (someone
     // at the counter with a customer), and a document actually opened.
     'mg:lookup':        'Margin Guide',
+    // Same rule as mg:lookup — opening the Picture Guide tab is not using it.
+    // The tracked moment is a category picked, which is someone at a station
+    // with an item in front of them.
+    'pg:sheet':         'Picture Guide',
     'ops:callbacks':    'Customer Call Backs',
     'doc:open':         'Processes & Policies',
     // stats page + the home KPI charts
@@ -1582,7 +1586,12 @@ let _reactionPollInterval = null;
 
 async function pollReactions() {
     try {
-        const response = await fetch(`${CMS_URL}?v=${Date.now()}`);
+        // mode=reactions, not the full board. The cms function has a purpose-
+        // built branch that returns only { rowId, reactions } — same rowId set,
+        // so the hasNew check below still works — for a fraction of the 15.5 KB
+        // the full GET sends. This poll was the single largest consumer of the
+        // edge-function quota; the endpoint existed for it and was never wired up.
+        const response = await fetch(`${CMS_URL}?mode=reactions&v=${Date.now()}`);
         const data = await response.json();
         if (!data.announcements) return;
 
@@ -1628,7 +1637,12 @@ async function pollReactions() {
 
 function startReactionPolling() {
     if (_reactionPollInterval) clearInterval(_reactionPollInterval);
-    _reactionPollInterval = setInterval(pollReactions, 15000);
+    // 60s, not 15s. Reaction *writes* do not broadcast, so this poll is the only
+    // way one person's emoji reaches another's screen — it stays, but four times
+    // a minute was 13k edge invocations a day for a counter nobody watches
+    // tick. A new announcement is unaffected: that arrives over realtime
+    // (the 'announcements' ping -> loadCMS), not here.
+    _reactionPollInterval = setInterval(pollReactions, 60000);
 }
 
 // --- 4B. MODULE: INFO TICKER ---
@@ -6052,7 +6066,7 @@ async function checkKpiDueReminders() {
     if (!_kpiDueEligible()) { _kpiHideDueBubbles(); _kpiDueState = { weekly: { due: false, overdue: false, stores: [] }, monthly: { due: false, overdue: false, stores: [] } }; return; }
     const stores = _kpiMyStores();
     if (!stores.length) { _kpiHideDueBubbles(); return; }
-    if (!_kpiDueStarted) { _kpiDueStarted = true; setInterval(checkKpiDueReminders, 10 * 60 * 1000); }
+    if (!_kpiDueStarted) { _kpiDueStarted = true; setInterval(checkKpiDueReminders, 30 * 60 * 1000); }
     try {
         const parts = _kpiCentralParts();
         const today = parts.date;
@@ -6302,6 +6316,8 @@ function switchOperationsTab(name) {
         _startB2bSync();
     } else if (name === 'marginguide') {
         mgLoad();
+    } else if (name === 'pictureguide') {
+        pgLoad();
     } else if (name === 'ebay') {
         ecLoad();
     }
@@ -7667,6 +7683,1248 @@ function _mgRenderAdmin(body) {
     }
 }
 
+/* ==========================================================================
+ * PICTURE GUIDE — the binder of photo printouts, moved into SPEEKSNET.
+ * --------------------------------------------------------------------------
+ * Every picture station has a binder of laminated sheets: one page per category,
+ * showing each photo a lister must take, in the order it goes on the listing.
+ * This replaces the binder, so the board is laid out like the page — same grid,
+ * same red on the shots that are conditional.
+ *
+ * THERE ARE NO NUMBERS, AND THAT IS DELIBERATE.
+ * Paper cannot resolve a conditional shot, so the printouts fudge it: on the
+ * tablet sheet "Everything Included" and "About Phone" are BOTH numbered 2,
+ * because whichever one applies is the real number 2. Three separate shots are
+ * numbered 4.
+ *
+ * This tool briefly answered that by asking the lister which conditionals
+ * applied and computing an exact number from the answer. It worked, and it was
+ * cut on sight (user, 2026-09-07): "I don't want the user to have any steps."
+ * A reference you have to configure before it tells you anything is not a
+ * reference. So the board asks nothing, and therefore cannot know a number —
+ * and rather than print one that is wrong for every item that skips a
+ * conditional, it prints none and lets READING ORDER carry the sequence. Order
+ * is something the board can always state truthfully.
+ *
+ * Nothing stores a shot number. That was true when the numbers were computed and
+ * it is still true now that there are none, which is why removing them touched
+ * no data at all.
+ *
+ * The sheets are store-agnostic reference data, so they are fetched once per
+ * session and everything after is local — switching category mid-item is an
+ * instant redraw, never a spinner, which matters with a camera in one hand.
+ * ========================================================================== */
+
+const PICTURE_GUIDE_URL = `${_BASE}/picture-guide`;
+
+let _pgSheets = null;               // [{ id, slug, name, shots: [...] }]
+// Which sheet is on screen, and nothing else. There is deliberately no per-item
+// state here any more: the board is the same board for everyone looking at that
+// category, which is the whole point of a reference you can walk up to.
+let _pgState = { catId: null };
+let _pgAdmin = { open: false, catId: null, editing: null, busy: false };
+// One usage signal per visit to the tab, not one per category clicked.
+let _pgTracked = false;
+
+const _pgEsc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+// DM and CEO, in the session's own spelling ("district manager", a space). This
+// deliberately matches the tool-picture-manage default in FEATURE_CATALOG:
+// the two used to disagree — the catalog said DM/CEO while this set also let in
+// MOCD, and the edge function let in MOCD and TOM on top of that. Three
+// different answers to "who can edit" is how a tool ends up open to someone
+// nobody decided to open it to.
+const PG_EDIT_ROLES = new Set(['district manager', 'ceo']);
+
+function pgCanEdit() {
+    if (!PG_EDIT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim())) return false;
+    // Feature Access as well as the role. The Edit BUTTON carries
+    // data-feature="tool-picture-manage" and applyRoleBasedUI hides it, but the
+    // rail's "New category" is drawn by pgRender() long after that sweep has
+    // run — so a DM whose editor had been revoked still had a way in. Resolved
+    // from the catalog rather than read back off the DOM for the same reason.
+    // The edge function enforces the role again on every write regardless.
+    return _featureEffectiveVisible('tool-picture-manage', _jumpRoleClass(),
+        sessionStorage.getItem('speeksUserName') || '') === true;
+}
+
+const _pgCats = () => (_pgSheets || []);
+const _pgCat  = () => _pgCats().find(c => c.id === _pgState.catId) || null;
+const _pgShots = () => { const c = _pgCat(); return (c && c.shots) || []; };
+
+async function pgLoad(opts) {
+    const body = document.getElementById('pg-body');
+    if (!body) return;
+    if (!opts || !opts.keep) {
+        // Every entry to the tab is a fresh item. Coming back must not leave the
+        // last unit's flaws ticked on the next one's board — that is how a lister
+        // ends up taking a photo of damage that isn't there, or missing damage
+        // that is. So the ticks reset, and never into the DM editor.
+        _pgTracked = false;
+        _pgAdmin.open = false;
+        _pgAdmin.editing = null;
+    }
+    if (_pgSheets) { pgRender(); return; }
+    try {
+        const res = await fetch(`${PICTURE_GUIDE_URL}?v=${Date.now()}`);
+        const json = await res.json().catch(() => null);
+        // Three different failures used to arrive as one sentence. json.message
+        // is what Supabase itself answers when the function is not deployed
+        // ("Requested function was not found"), json.error is ours, and neither
+        // being present means something answered that was not this API at all.
+        // The old fallback said "Could not load the guide" under a heading that
+        // already said the same thing, so the screen carried no information.
+        if (!json || !json.success) {
+            throw new Error((json && (json.error || json.message))
+                || `the server answered ${res.status} with nothing this tool understands.`);
+        }
+        _pgSheets = json.categories || [];
+        pgRender();
+    } catch (e) {
+        body.innerHTML = `<div class="pg-error">Couldn't load the picture guide. ${_pgEsc(e.message)}
+            <button type="button" class="pg-retry" onclick="_pgSheets=null;pgLoad()">Try again</button></div>`;
+    }
+}
+
+// Buyers and listers read the same cached sheets, so a DM write has to throw the
+// cache away or the editor shows stale rows on the screen it just changed.
+async function _pgReload() {
+    _pgSheets = null;
+    await pgLoad({ keep: true });
+}
+
+/* ---- WHY THERE ARE NO NUMBERS ON THE CARDS -------------------------------- *
+ * This tool used to ask the lister which conditionals applied to the unit in
+ * their hand, and derived an exact number for every shot from the answer. That
+ * was correct and nobody wanted it (user, 2026-09-07): "The picture guide should
+ * only be like a click the item you need and look. I don't want the user to have
+ * any steps."
+ *
+ * With nothing asked, nothing can be known. A board that prints "9" under Screen
+ * Off is telling most listers a lie, because most items skip at least one
+ * conditional and everything behind it shifts. So the board prints no number at
+ * all and lets READING ORDER carry the sequence — left to right, top to bottom,
+ * skipping the flagged ones that do not apply. Order is a thing the board can
+ * always state truthfully; a number is not.
+ *
+ * This is why the shots are stored with sort_order and nothing else. That design
+ * is unchanged and still load-bearing: it is what lets the board be rearranged
+ * by a DM without anything having to be renumbered, here or on paper.
+ * ------------------------------------------------------------------------- */
+
+function pgPick(catId) {
+    const c = _pgCats().find(x => x.id === catId);
+    if (!c) return;
+    _pgState.catId = c.id;
+    if (_pgAdmin.open) { _pgAdmin.catId = c.id; _pgAdmin.editing = null; }
+    pgRender();
+}
+
+/* ---- rendering ----------------------------------------------------------- */
+
+// One slot's picture: the photograph if there is one, otherwise the grey slot
+// with words on it — which is exactly what the printout does when it has no
+// example either, so an un-uploaded shot reads as the sheet rather than as a
+// bug.
+//
+// ONE placeholder, not two. There used to be a second, plainer one for a shot
+// with no note, and the note column is seeded unevenly — the Android sheet's
+// Cosmetic Flaws has none, the Processors sheet's has a real one — so two cards
+// sitting side by side in the same grid drew themselves differently over a
+// difference no lister can see or cares about. A note is extra words, not a
+// different kind of slot.
+// `thumb` is the 40px square in the DM's editor rows, where the words are not
+// words: at 6px "Cosmetic Flaws (Dings, Cracks, Scratches, etc.)" wraps to six
+// unreadable lines, and the row already prints that name in bold immediately to
+// the right of it, at a size a person can read. So the thumbnail answers the
+// only question it can answer at that size — is there a photo yet — with a
+// stand-in picture. On the board itself, where the square is 196px and the words
+// ARE the instruction, nothing changes.
+function _pgArt(s, thumb) {
+    if (s.img) return `<img class="pg-img" src="${_pgEsc(s.img)}" alt="${_pgEsc(s.label)}" loading="lazy">`;
+    if (thumb) {
+        return `<div class="pg-ph" aria-label="No photo yet">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M21 16l-5-5-6.5 6.5"/><path d="M3 18.5l4-4 2.5 2.5"/></svg>
+          </div>`;
+    }
+    return `<div class="pg-instr"><span>${_pgEsc(s.note || s.label)}</span></div>`;
+}
+
+function pgRender() {
+    const body = document.getElementById('pg-body');
+    if (!body) return;
+
+    const can = pgCanEdit();
+    document.querySelector('.pg-panel')?.classList.toggle('pg-can', can);
+    document.querySelector('.pg-panel')?.classList.toggle('pg-editing', can && _pgAdmin.open);
+
+    if (!_pgCats().length) {
+        body.innerHTML = `<div class="pg-error">There are no picture sheets yet.${
+            can ? ' Open <b>Edit</b> to add the first category.' : ''}</div>`;
+        return;
+    }
+    // Land on the first sheet rather than an empty panel: a lister arriving here
+    // wants a board, and picking a category is a step they would take every time.
+    if (!_pgCat()) _pgState.catId = _pgCats()[0].id;
+    if (can && _pgAdmin.open) { _pgRenderAdmin(body); return; }
+
+    // A board actually drawn for a lister IS the use of this tool; landing on the
+    // tab is only intent, and the Margin Guide draws the same line with mg:lookup.
+    // Tracked here rather than in pgPick() because the first sheet is auto-
+    // selected — someone who lists tablets all day never clicks the picker at all.
+    if (!_pgTracked) { _pgTracked = true; trackUsage('open', 'pg:sheet', _usageLabel('pg:sheet')); }
+
+    _pgSyncHead();
+
+    body.innerHTML = `
+      <div class="pg-shell">
+        ${_pgRailHtml(false)}
+        <div class="pg-main">
+          <div class="pg-legend">
+            <span class="pg-lg"><span class="pg-sw pg-sw-req"></span> Take on every item</span>
+            <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> <b>Optional</b>: only if it applies to yours</span>
+          </div>
+          <div class="pg-board">${_pgShots().map(_pgCardHtml).join('')}</div>
+        </div>
+      </div>`;
+}
+
+// The eyebrow and instruction line say something different to a DM who is
+// editing than to a lister who is shooting, so they are rewritten rather than
+// left as generic wording that fits neither.
+function _pgSyncHead() {
+    const eyebrow = document.getElementById('pg-eyebrow');
+    const sub = document.getElementById('pg-sub');
+    const title = document.getElementById('pg-title');
+    if (!eyebrow || !sub || !title) return;
+    if (_pgAdmin.open) {
+        eyebrow.textContent = 'District Manager';
+        title.textContent = 'Edit the Picture Guide';
+        // Says outright that there is nothing to submit. The editor has always
+        // saved on the spot, but the only way out of it is a button marked
+        // Back — which reads like leaving without keeping anything, so it was
+        // not clear that the work was already safe (Ethan, 2026-09-08).
+        sub.textContent = 'Reorder photos, rename them, swap an example, or flip one between required and optional. Every change saves on the spot and every store sees it straight away.';
+    } else {
+        eyebrow.textContent = 'Listing Reference';
+        title.textContent = 'Picture Guide';
+        sub.textContent = 'Pick the category and work the board left to right. Red cards are only taken when they apply to the unit in your hand.';
+    }
+}
+
+// The rail in reading order: a run of GROUPS, with any ungrouped category
+// standing on its own between them.
+//
+// A section's position is the sort_order of its first category, so the DM keeps
+// dragging categories and the groups fall out of that — there is no separate
+// group order to maintain and no way for the two to disagree. See migration 0081.
+function _pgSections() {
+    const out = [];
+    const byName = {};
+    _pgCats().forEach(c => {
+        const g = (c.group_name || '').trim();
+        if (!g) { out.push({ group: null, cats: [c] }); return; }
+        if (!byName[g]) { byName[g] = { group: g, cats: [] }; out.push(byName[g]); }
+        byName[g].cats.push(c);
+    });
+    return out;
+}
+
+// Which group is open. One at a time, and the one holding the sheet on screen
+// opens itself — arriving on Apple Watches with every group shut would hide the
+// only thing that tells you where you are.
+let _pgOpenGroup = null;
+
+function _pgRailHtml(admin) {
+    const activeId = admin ? _pgAdmin.catId : _pgState.catId;
+    const catBtn = c => `
+        <button type="button" class="pg-cat${c.id === activeId ? ' on' : ''}" data-name="${_pgEsc(c.name.toLowerCase())}"
+                onclick="${admin ? `pgAdminPick(${c.id})` : `pgPick(${c.id})`}">
+          <span class="pg-cat-name">${_pgEsc(c.name)}</span>
+        </button>`;
+
+    const body = _pgSections().map(sec => {
+        if (!sec.group) return catBtn(sec.cats[0]);
+        // The count is how many SHEETS are in the group, not how many photos are
+        // on them (user, 2026-09-07). A photo count answered a question nobody
+        // was asking; this one says how much is behind the heading.
+        const holdsActive = sec.cats.some(c => c.id === activeId);
+        const open = _pgOpenGroup === null ? holdsActive : _pgOpenGroup === sec.group;
+        return `
+        <section class="pg-grp${open ? ' open' : ''}" data-group="${_pgEsc(sec.group.toLowerCase())}">
+          <div class="pg-grp-top">
+            <button type="button" class="pg-grp-hd" onclick="pgToggleGroup(this)" aria-expanded="${open}">
+              <span class="pg-grp-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></span>
+              <span class="pg-grp-name">${_pgEsc(sec.group)}</span>
+              <span class="pg-grp-n">${sec.cats.length}</span>
+            </button>
+            ${admin ? `<button type="button" class="pg-grp-edit" onclick="pgRenameGroup(this)"
+                       title="Rename this group">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+            </button>` : ''}
+          </div>
+          <div class="pg-grp-body">${sec.cats.map(catBtn).join('')}</div>
+        </section>`;
+    }).join('');
+
+    return `
+      <aside class="pg-rail">
+        <h5 class="pg-rail-hd">Categories</h5>
+        <label class="pg-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input type="text" id="pg-search-input" placeholder="Search&hellip;" oninput="_pgFilterRail(this.value)">
+        </label>
+        <div class="pg-catlist" id="pg-catlist">${body}</div>
+        <div class="pg-rail-foot">
+          ${admin
+            ? `<button type="button" class="pg-addcat" onclick="pgAddCategory()">&#43;&nbsp; New Category</button>`
+            // Same shape as the Margin Guide's, and for the same reason: the foot
+            // of the picker is where the gap gets discovered, by someone who has
+            // just scrolled the list looking for something that is not on it.
+            // Wired to the existing idea modal rather than a new form, so
+            // requests land where every other suggestion already goes.
+            : `<p class="pg-missing">Category missing? Send it over with the
+                 <button type="button" class="pg-inline-link" onclick="toggleIdeaModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z"/></svg>Have an Idea</button>
+                 button and we'll add it.</p>`}
+        </div>
+      </aside>`;
+}
+
+// Toggled by class rather than by re-render, for the same reason the search
+// filters in place: a re-render rebuilds the search input and throws away
+// whatever was typed in it.
+function pgToggleGroup(btn) {
+    const sec = btn.closest('.pg-grp');
+    if (!sec) return;
+    const open = !sec.classList.contains('open');
+    document.querySelectorAll('#pg-catlist .pg-grp').forEach(s => {
+        s.classList.remove('open');
+        s.querySelector('.pg-grp-hd')?.setAttribute('aria-expanded', 'false');
+    });
+    if (open) { sec.classList.add('open'); btn.setAttribute('aria-expanded', 'true'); }
+    // The heading's own text, because data-group is lowercased for matching and
+    // _pgRailHtml compares against the real name. '' is "everything shut", which
+    // is different from null — null means nobody has chosen yet, so the group
+    // holding the open sheet decides.
+    _pgOpenGroup = open ? (sec.querySelector('.pg-grp-name')?.textContent || '') : '';
+}
+
+// Filtering in place rather than through a re-render: re-rendering the rail
+// rebuilds the input and the caret jumps to the end after every keystroke.
+//
+// A search matches a CATEGORY name or its group's, and any group holding a match
+// is forced open — typing "apple watches" has to land you on Apple Watches, not
+// on a collapsed heading that happens to contain it. Groups with no match are
+// hidden outright rather than left as empty headings.
+function _pgFilterRail(v) {
+    const f = String(v || '').toLowerCase().trim();
+    document.querySelectorAll('#pg-catlist .pg-cat').forEach(b => {
+        b.style.display = (!f || (b.dataset.name || '').includes(f)) ? '' : 'none';
+    });
+    document.querySelectorAll('#pg-catlist .pg-grp').forEach(sec => {
+        if (!f) {
+            sec.style.display = '';
+            sec.classList.toggle('open', sec.dataset.group === (_pgOpenGroup || '').toLowerCase());
+            return;
+        }
+        const groupHit = (sec.dataset.group || '').includes(f);
+        const hits = [...sec.querySelectorAll('.pg-cat')].filter(b => b.style.display !== 'none');
+        // A group whose own NAME matches shows everything under it: someone
+        // typing "watches" wants the watch sheets, not an empty Smart Watches.
+        if (groupHit) sec.querySelectorAll('.pg-cat').forEach(b => { b.style.display = ''; });
+        sec.style.display = (groupHit || hits.length) ? '' : 'none';
+        sec.classList.toggle('open', groupHit || hits.length > 0);
+    });
+}
+
+// Strip a phrase to its letters so two ways of writing the same thing compare
+// equal: "Cosmetic Flaws" and "Cosmetic flaws" are not two facts.
+const _pgNorm = t => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+// What a conditional card has left to say once its own name has said it.
+//
+// This is the fix for a board that read as shouting. On the seeded sheets FOUR
+// of the six conditions are the shot's own label — "Cosmetic Flaws" under a
+// condition of "Cosmetic flaws", "Extra Accessories" under "Extra accessories" —
+// so the card printed the same phrase twice, the second time in red capitals.
+// Five cards doing that is most of what made the grid feel loud, and none of it
+// was information.
+//
+// So the condition prints only where it adds something the label does not:
+// "Setting Unlock Screen" genuinely needs "only if the unlock screen is set",
+// and "Apple Warranty" needs "only if the warranty is still active". The rest
+// carry the OPTIONAL tag and nothing else.
+// Does `text` tell a reader anything the shot's own name has not? Case and
+// punctuation are not facts, and a label that contains its condition (or the
+// reverse) has already said it. Shared by the board's footnote and the zoom
+// caption, because both sit directly under the label and both would otherwise
+// print it twice.
+const _pgSaysMore = (label, text) => {
+    const a = _pgNorm(label), b = _pgNorm(text);
+    return !!b && a !== b && !a.includes(b) && !b.includes(a);
+};
+
+function _pgCondNote(s) {
+    const bits = [];
+    if (_pgSaysMore(s.label, s.cond)) {
+        // Lower-cased first letter so it reads as the tail of a sentence rather
+        // than a second heading.
+        const c = String(s.cond).trim();
+        bits.push('Only if ' + _pgEsc(c.charAt(0).toLowerCase() + c.slice(1)));
+    }
+    // The printout writes this as a "+" on a number. With no numbers a bare "+"
+    // would mean nothing, so it is said in words.
+    if (s.rep) bits.push('Take as many photos as needed');
+    return bits.join(' &middot; ');
+}
+
+function _pgCardHtml(s) {
+    const note = s.cond ? _pgCondNote(s) : '';
+    // The OPTIONAL tag sits in the frame's top-left — the corner the printout
+    // marks and, until this design, where the shot number used to sit. One small
+    // flag in the picture beats a red title plus a red subtitle above it: the
+    // caption goes back to being the shot's name in the same ink as every other
+    // card, so the grid reads as one board with five things flagged on it rather
+    // than as two competing kinds of card.
+    return `
+      <figure class="pg-shot ${s.cond ? 'cond' : ''}">
+        <figcaption class="pg-cap">
+          <span class="pg-cap-name">${_pgEsc(s.label)}</span>
+          ${note ? `<span class="pg-note">${note}</span>` : ''}
+        </figcaption>
+        <div class="pg-frame"${s.img ? ` onclick="pgZoom(${s.id})"` : ''}>
+          ${s.cond ? '<span class="pg-optional">Optional</span>' : ''}
+          ${_pgArt(s)}
+        </div>
+      </figure>`;
+}
+
+// Full-size look at one example. The board squares are thumbnail-sized on
+// purpose — sixteen of them have to fit — so "is the glare in mine like the
+// glare in theirs?" needs somewhere to go.
+function pgZoom(shotId) {
+    const s = _pgShots().find(x => x.id === shotId);
+    if (!s || !s.img) return;
+    const el = document.createElement('div');
+    el.className = 'pg-zoom';
+    el.onclick = () => el.remove();
+    el.innerHTML = `<figure><img src="${_pgEsc(s.img)}" alt="${_pgEsc(s.label)}">
+        <figcaption>${_pgEsc(s.label)}${_pgSaysMore(s.label, s.note)
+            ? ` &middot; ${_pgEsc(s.note)}` : ''}</figcaption></figure>`;
+    document.body.appendChild(el);
+}
+
+/* ==========================================================================
+ * THE DM EDITOR.
+ *
+ * One sheet at a time, in the order it is read. The lister's applies bar is
+ * gone while this is open — it is a control for an item in someone's hand, and
+ * there is no item here — and so is the board, because an editor that leaves the
+ * thing it edits rendered beside it is two tools sharing one panel.
+ *
+ * Every change saves on the spot. There is no basket and no Save button: a DM
+ * editing a sheet does one thing at a time (rename a shot, move it up, swap its
+ * photo), and a basket of unrelated edits is how someone's half-finished thought
+ * gets published because they clicked the wrong exit.
+ * ========================================================================== */
+
+function pgOpenAdmin() {
+    if (!pgCanEdit()) return;
+    _pgAdmin.open = true;
+    _pgAdmin.catId = _pgState.catId || (_pgCats()[0] && _pgCats()[0].id) || null;
+    _pgAdmin.editing = null;
+    pgRender();
+}
+function pgCloseAdmin() {
+    _pgAdmin.open = false;
+    _pgAdmin.editing = null;
+    pgRender();
+}
+function pgAdminPick(catId) { _pgAdmin.catId = catId; _pgAdmin.editing = null; pgRender(); }
+
+const _pgAdminCat = () => _pgCats().find(c => c.id === _pgAdmin.catId) || null;
+
+function _pgRenderAdmin(body) {
+    _pgSyncHead();
+    const cat = _pgAdminCat();
+    body.innerHTML = `
+      <div class="pg-shell">
+        ${_pgRailHtml(true)}
+        <div class="pg-main">
+          ${!cat ? `<div class="pg-error">Pick a category, or add one.</div>` : `
+            <div class="pg-ebar">
+              <div class="pg-ebar-name">
+                <b>${_pgEsc(cat.name)}</b>
+                <span>${cat.shots.length} photo${cat.shots.length === 1 ? '' : 's'}</span>
+              </div>
+              <button type="button" class="pg-ebtn" onclick="pgRenameCategory()">Rename</button>
+              <button type="button" class="pg-ebtn" onclick="pgSetCategoryGroup()">Group&hellip;</button>
+              <button type="button" class="pg-ebtn pg-ebtn-del" onclick="pgDeleteCategory()">Remove Category</button>
+            </div>
+            <p class="pg-ehint">Order here is the order on the listing, so put optional photos where they
+              <em>would</em> go, not at the end.</p>
+            <div class="pg-erows">${cat.shots.map((s, i) => _pgAdminRowHtml(s, i, cat.shots.length)).join('')}</div>
+            <button type="button" class="pg-eadd" onclick="pgAddShot()">&#43;&nbsp; Add a Photo</button>
+          `}
+        </div>
+      </div>`;
+}
+
+function _pgAdminRowHtml(s, i, n) {
+    if (_pgAdmin.editing === s.id) return _pgAdminEditHtml(s);
+    return `
+      <div class="pg-erow${s.cond ? ' cond' : ''}">
+        <div class="pg-erow-move">
+          <button type="button" onclick="pgMoveShot(${s.id},-1)"${i === 0 ? ' disabled' : ''} title="Move up">&uarr;</button>
+          <button type="button" onclick="pgMoveShot(${s.id},1)"${i === n - 1 ? ' disabled' : ''} title="Move down">&darr;</button>
+        </div>
+        <div class="pg-ethumb">${_pgArt(s, true)}</div>
+        <div class="pg-ename">
+          <b>${_pgEsc(s.label)}</b>
+          <small>${s.cond
+            ? `Only when: ${_pgEsc(s.cond)}${s.rep ? ' &middot; Take as many photos as needed' : ''}`
+            : 'Always taken'}${s.img ? '' : ' &middot; No photo yet'}</small>
+        </div>
+        <div class="pg-etools">
+          <label class="pg-ephoto" title="${s.img ? 'Replace the photo' : 'Add a photo'}">
+            <input type="file" accept="image/png,image/jpeg,image/webp" onchange="pgUploadShotPhoto(${s.id}, this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/></svg>
+          </label>
+          <button type="button" class="pg-ebtn" onclick="pgEditShot(${s.id})">Edit</button>
+          <button type="button" class="pg-ebtn pg-ebtn-del" onclick="pgDeleteShot(${s.id})" title="Delete this photo">&times;</button>
+        </div>
+      </div>`;
+}
+
+function _pgAdminEditHtml(s) {
+    const opt = !!s.cond;
+    return `
+      <div class="pg-erow pg-erow-edit${s.cond ? ' cond' : ''}">
+        <div class="pg-eform" id="pg-eform" data-mode="${opt ? 'opt' : 'req'}">
+          <!-- Whether a photo is required was only ever IMPLIED, by whether the
+               "Only When…" box happened to have anything in it. Nobody who had
+               not built the tool could be expected to work that out, so it is a
+               choice now — and the choice decides which fields exist, which is
+               what keeps a required photo down to the one field it needs
+               (Ethan, 2026-09-08). -->
+          <div class="pg-eseg" role="group" aria-label="Is this photo required?">
+            <button type="button" class="pg-eseg-b${opt ? '' : ' on'}" onclick="_pgFormMode('req')">Required</button>
+            <button type="button" class="pg-eseg-b${opt ? ' on' : ''}" onclick="_pgFormMode('opt')">Optional</button>
+          </div>
+          <label class="pg-f">
+            <span>Photo Name</span>
+            <input type="text" id="pg-f-label" value="${_pgEsc(s.label)}" placeholder="Back of Tablet">
+          </label>
+          <div id="pg-f-opt"${opt ? '' : ' hidden'}>
+            <label class="pg-f">
+              <span>Description <em>(when to take it &mdash; the card reads &ldquo;Only if&hellip;&rdquo;)</em></span>
+              <input type="text" id="pg-f-cond" value="${_pgEsc(s.cond || '')}" placeholder="the screen is cracked">
+            </label>
+            <label class="pg-f pg-f-check">
+              <input type="checkbox" id="pg-f-rep"${s.rep ? ' checked' : ''}>
+              <span>Take as many photos as needed</span>
+            </label>
+          </div>
+          <!-- The slot's own wording is deliberately NOT a field any more. On four
+               of the six optional photos it merely restated the name, and there is
+               nothing sensible to generate it from — "<name> (<description>)" gives
+               "Cosmetic Flaws (Cosmetic flaws)". Carried through untouched so
+               editing a photo can never silently erase it; it is set in a
+               migration, which is how the existing ones were written. -->
+          <input type="hidden" id="pg-f-note" value="${_pgEsc(s.note || '')}">
+          <div class="pg-eform-acts">
+            <button type="button" class="pg-esave" onclick="pgSaveShot(${s.id}, this)">Save</button>
+            <button type="button" class="pg-ecancel" onclick="_pgAdmin.editing=null;pgRender()">Cancel</button>
+            ${s.img ? `<button type="button" class="pg-ebtn pg-ebtn-del pg-erm-photo" onclick="pgRemoveShotPhoto(${s.id})">Remove photo</button>` : ''}
+          </div>
+        </div>
+      </div>`;
+}
+
+// Flip the form between the two shapes. Deliberately does NOT re-render and does
+// NOT clear the description: nothing here is saved until Save is pressed, so
+// someone who clicks Optional to see what it does, then clicks back, should find
+// their typing where they left it. pgSaveShot reads the mode, so the mode alone
+// decides whether a condition is stored — a leftover description on a Required
+// photo is discarded there, not here.
+function _pgFormMode(mode) {
+    const form = document.getElementById('pg-eform');
+    if (!form) return;
+    form.dataset.mode = mode;
+    const box = document.getElementById('pg-f-opt');
+    if (box) box.hidden = (mode !== 'opt');
+    form.querySelectorAll('.pg-eseg-b').forEach((b, i) => {
+        b.classList.toggle('on', (i === 0) === (mode === 'req'));
+    });
+    if (mode === 'opt') { const c = document.getElementById('pg-f-cond'); if (c) c.focus(); }
+}
+
+function pgEditShot(id) { _pgAdmin.editing = id; pgRender(); }
+
+// "Saved", said once, where the eye already is. EVERY write in this editor goes
+// through _pgPost, so this is the one place that can promise it — a per-action
+// confirmation would have missed the reorder arrows, which are the only control
+// here with no dialog and no Save button of their own, and therefore the ones
+// that most needed to say something.
+// Deliberately not a modal or a toast at the far corner of the screen: the
+// question being answered is "did that stick", asked half a second after a
+// click, and the answer belongs next to the way out.
+// One word for every action. It briefly said "Deleted" / "Order saved" per
+// action, on the grounds that "Saved" beside a vanished row reads oddly — but
+// the pill answers one question, "did that stick", and a word that changes with
+// the action makes the reader parse it before they can be reassured. Ethan
+// asked for the one word, and he is right: it is a receipt, not a description.
+let _pgSavedTimer = null;
+function _pgSavedFlash() {
+    const el = document.getElementById('pg-saved');
+    if (!el) return;
+    el.textContent = 'Saved';
+    el.classList.add('on');
+    clearTimeout(_pgSavedTimer);
+    _pgSavedTimer = setTimeout(() => el.classList.remove('on'), 2200);
+}
+
+async function _pgPost(payload, btn, busyLabel) {
+    if (_pgAdmin.busy) return null;
+    _pgAdmin.busy = true;
+    const was = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = busyLabel || 'Saving…'; }
+    try {
+        const res = await fetch(PICTURE_GUIDE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ...payload,
+                role: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(),
+                user: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || out.success === false) throw new Error(out.error || 'The save did not go through.');
+        // Only on the way OUT of the try: a flash that fired before the response
+        // landed would be a promise the server had not made yet.
+        _pgSavedFlash();
+        return out;
+    } catch (e) {
+        alert(e.message);
+        return null;
+    } finally {
+        _pgAdmin.busy = false;
+        if (btn) { btn.disabled = false; btn.textContent = was; }
+    }
+}
+
+async function pgSaveShot(id, btn) {
+    const form  = document.getElementById('pg-eform');
+    // The toggle, not the contents of the description box, is what says whether
+    // this photo is conditional. A description left behind by someone who
+    // switched back to Required is dropped here.
+    const opt   = !!form && form.dataset.mode === 'opt';
+    const label = (document.getElementById('pg-f-label') || {}).value || '';
+    const cond  = (document.getElementById('pg-f-cond')  || {}).value || '';
+    const note  = (document.getElementById('pg-f-note')  || {}).value || '';
+    const rep   = !!(document.getElementById('pg-f-rep') || {}).checked;
+    if (!label.trim()) { alert('A photo needs a name. It is the only instruction on the card.'); return; }
+    // An optional photo with no description is a required one wearing a red
+    // border: the card would print "Only if" and then stop.
+    if (opt && !cond.trim()) {
+        alert('An optional photo needs a description — it is what the card says after "Only if".');
+        return;
+    }
+    const out = await _pgPost({
+        action: 'saveShot', id, label,
+        cond: opt ? cond.trim() : null,
+        rep:  opt ? rep : false,
+        note,
+    }, btn);
+    if (!out) return;
+    _pgAdmin.editing = null;
+    await _pgReload();
+}
+
+async function pgAddShot() {
+    const cat = _pgAdminCat();
+    if (!cat) return;
+    const a = await _pgAsk({
+        title: 'Add a Photo',
+        body: 'It lands at the bottom of the sheet. Move it into place afterwards.',
+        ok: 'Add Photo',
+        fields: [{ key: 'label', label: 'Photo Name', placeholder: 'Back of Tablet', required: true }],
+    });
+    if (!a) return;
+    const out = await _pgPost({ action: 'saveShot', category_id: cat.id, label: a.label, cond: null });
+    if (!out) return;
+    await _pgReload();
+    // Straight into the form for the row just made: a bare name is almost never
+    // the whole intent, and the alternative is hunting for it at the bottom.
+    if (out.id) { _pgAdmin.editing = out.id; pgRender(); }
+}
+
+async function pgDeleteShot(id) {
+    const s = _pgShotById(id);
+    if (!s) return;
+    if (!await _pgAsk({
+        title: `Delete &ldquo;${_pgEsc(s.label)}&rdquo;?`,
+        body: 'This cannot be undone, and every store loses it straight away.',
+        ok: 'Delete Photo', danger: true,
+    })) return;
+    if (!await _pgPost({ action: 'deleteShot', id })) return;
+    if (_pgAdmin.editing === id) _pgAdmin.editing = null;
+    await _pgReload();
+}
+const _pgShotById = id => { const c = _pgAdminCat(); return c && c.shots.find(s => s.id === id); };
+
+// Sends the WHOLE category's order, not "this one moved". Two DMs nudging the
+// same sheet from stale views would otherwise interleave into an order neither
+// of them chose; the full sequence means the last save wins outright.
+async function pgMoveShot(id, dir) {
+    const cat = _pgAdminCat();
+    if (!cat) return;
+    const ids = cat.shots.map(s => s.id);
+    const i = ids.indexOf(id), j = i + dir;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    // Move the local copy first so the row travels under the cursor instead of
+    // after a round-trip — the arrows are meant to be pressed several times.
+    [cat.shots[i], cat.shots[j]] = [cat.shots[j], cat.shots[i]];
+    pgRender();
+    if (!await _pgPost({ action: 'reorderShots', ids })) await _pgReload();
+}
+
+// Every group name currently in use, for the prompts to offer. A group exists
+// because a category names it (see migration 0081), so this IS the list.
+function _pgGroupNames() {
+    const seen = [];
+    _pgCats().forEach(c => {
+        const g = (c.group_name || '').trim();
+        if (g && !seen.includes(g)) seen.push(g);
+    });
+    return seen;
+}
+// The groups already in use, as a dropdown. Never a free-text box on its own: a
+// typo in a group name does not fail, it silently makes a NEW group of one, and
+// the DM finds out when the sidebar grows a stray heading. Picking from a list
+// makes that impossible; "New group…" is the one deliberate way to make one.
+//
+// "On its own" leads, because it is the answer for a category that belongs
+// nowhere yet — the state a brand new sheet is in.
+const _pgGroupOptions = () =>
+    [{ label: 'On its own (no group)', value: '' }]
+        .concat(_pgGroupNames().map(g => ({ label: g, value: g })));
+
+// Two sheets called the same thing are indistinguishable in the rail, and the
+// rail is the only way to reach one. Checked against the loaded sheets, which
+// are the ACTIVE ones — the same rows the unique index in migration 0084
+// covers, so the dialog and the database agree about what counts as taken.
+function _pgNameTaken(name, exceptId) {
+    const n = String(name || '').trim().toLowerCase();
+    return _pgCats().some(c => c.id !== exceptId && String(c.name).trim().toLowerCase() === n);
+}
+const _pgDupeMsg = name => `There is already a category called “${name}”.`;
+
+/* ---- the editor's own dialogs -------------------------------------------- */
+// window.prompt cannot offer a list of existing answers to click, cannot mark a
+// destructive one as destructive, and draws browser chrome with the site's IP
+// address across the top of it. Everything the editor asks goes through here
+// instead.
+//
+// Scoped to the Picture Guide deliberately. There are a hundred-odd confirm()
+// calls elsewhere in this file; replacing them is a separate job, and a
+// half-migrated app is worse than either end of it.
+//
+// `title` and `body` are HTML — callers escape what they interpolate, the same
+// as every other template string in this module.
+//
+// Resolves null when dismissed, and an object of answers otherwise — {} for a
+// plain confirmation, which is truthy, so every call site reads the same way:
+//     const a = await _pgAsk(...); if (!a) return;
+let _pgAskClose = null;
+
+// Nothing stands in for "a new one" any more. A magic option value used to, and
+// it was written with a stray control character in it, which the browser
+// rewrote inside the attribute — so the comparison that was meant to catch it
+// silently failed and the sentinel itself was saved as a group name. A combo
+// box has no sentinel to leak: what the DM typed is the answer.
+let _pgAskScrollY = 0;
+
+function _pgAsk(opt) {
+    const fields = opt.fields || [];
+    return new Promise((resolve) => {
+        // A second dialog opened over the first would strand the first one's
+        // promise forever, and its caller is sitting on _pgAdmin.busy.
+        if (_pgAskClose) _pgAskClose(null);
+
+        // Same lock every other modal on the site uses. body.no-scroll is
+        // position:fixed, so the scroll offset has to be captured and pinned or
+        // the page silently jumps to the top behind the dialog. Skipped when
+        // something else already holds the lock, and released only if we took it.
+        const tookLock = !document.body.classList.contains('no-scroll');
+        if (tookLock) {
+            _pgAskScrollY = window.scrollY || window.pageYOffset || 0;
+            document.body.style.top = `-${_pgAskScrollY}px`;
+            document.body.classList.add('no-scroll');
+        }
+
+        const fieldHtml = (f, i) => {
+            if (f.kind !== 'pick') {
+                return `<input type="text" class="pg-ask-in" data-i="${i}" value="${_pgEsc(f.value || '')}"
+                               placeholder="${_pgEsc(f.placeholder || '')}" autocomplete="off" spellcheck="false">`;
+            }
+            // A REAL dropdown, the same shape as .mg-picker everywhere else on
+            // the site: a button showing the answer, and a menu of every option.
+            // This was a text box with a list that filtered as you typed, which
+            // read as — and was — a text box: the list emptied itself down to
+            // the one row you had already half-typed, so you could not see what
+            // you were choosing between (Ethan, 2026-09-08). Typing moves the
+            // HIGHLIGHT now and the list stays whole, the way a native <select>
+            // behaves.
+            const cur  = (f.options || []).find(o => String(o.value) === String(f.value || ''));
+            const shown = cur || (f.options || [])[0] || { label: '', value: '' };
+            return `
+              <span class="pg-ask-pick" data-i="${i}" data-mode="pick">
+                <button type="button" class="pg-ask-pick-btn" data-i="${i}" data-v="${_pgEsc(shown.value)}"
+                        aria-haspopup="listbox" aria-expanded="false">
+                  <span class="pg-ask-pick-v" data-i="${i}">${_pgEsc(shown.label)}</span>
+                  <span class="pg-ask-chev" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+                </button>
+                <span class="pg-ask-menu" data-i="${i}" role="listbox"></span>
+                ${f.allowNew ? `
+                  <input type="text" class="pg-ask-newin" data-i="${i}" hidden
+                         placeholder="${_pgEsc(f.newPlaceholder || 'New name')}" autocomplete="off" spellcheck="false">
+                  <button type="button" class="pg-ask-newback" data-i="${i}" hidden>&larr; Pick an existing one instead</button>` : ''}
+              </span>`;
+        };
+
+        const wrap = document.createElement('div');
+        wrap.className = 'pg-ask';
+        wrap.innerHTML = `
+          <div class="pg-ask-card" role="dialog" aria-modal="true">
+            <h3 class="pg-ask-t">${opt.title}</h3>
+            ${opt.body ? `<p class="pg-ask-b">${opt.body}</p>` : ''}
+            ${fields.map((f, i) => `
+              <label class="pg-ask-f">
+                <span>${_pgEsc(f.label)}${f.hint ? ` <em>${_pgEsc(f.hint)}</em>` : ''}</span>
+                ${fieldHtml(f, i)}
+              </label>`).join('')}
+            <p class="pg-ask-err" hidden></p>
+            <div class="pg-ask-acts">
+              <button type="button" class="pg-ask-cancel">Cancel</button>
+              <button type="button" class="pg-ask-ok${opt.danger ? ' danger' : ''}">${_pgEsc(opt.ok || 'OK')}</button>
+            </div>
+          </div>`;
+        document.body.appendChild(wrap);
+
+        const okBtn = wrap.querySelector('.pg-ask-ok');
+        const errEl = wrap.querySelector('.pg-ask-err');
+        const at = (sel, i) => wrap.querySelector(`${sel}[data-i="${i}"]`);
+
+        const readField = (f, i) => {
+            if (f.kind !== 'pick') return at('.pg-ask-in', i).value.trim();
+            const box = at('.pg-ask-pick', i);
+            // In "new" mode the answer is typed, so the case-folding matters
+            // again: naming a group that already exists in the wrong case must
+            // not make a second group differing only by case. An exact
+            // case-insensitive match resolves to the stored spelling.
+            if (box.dataset.mode === 'new') {
+                const raw = at('.pg-ask-newin', i).value.trim();
+                if (!raw) return '';
+                const hit = (f.options || []).find(o => String(o.value).toLowerCase() === raw.toLowerCase());
+                return hit ? hit.value : raw;
+            }
+            return at('.pg-ask-pick-btn', i).dataset.v || '';
+        };
+        const readAll = () => {
+            const out = {};
+            fields.forEach((f, i) => { out[f.key] = readField(f, i); });
+            return out;
+        };
+
+        const done = (val) => {
+            if (_pgAskClose !== done) return;   // already closed by something else
+            _pgAskClose = null;
+            document.removeEventListener('keydown', onKey, true);
+            wrap.remove();
+            if (tookLock) {
+                document.body.classList.remove('no-scroll');
+                document.body.style.top = '';
+                window.scrollTo(0, _pgAskScrollY);
+            }
+            resolve(val);
+        };
+        _pgAskClose = done;
+
+        // A required field greys the button rather than rejecting the answer
+        // after the fact: an empty name was never going to be accepted, so the
+        // dialog says so before it is clicked.
+        const sync = () => {
+            okBtn.disabled = fields.some((f, i) => f.required && !readField(f, i));
+            errEl.hidden = true;
+        };
+
+        /* ---- the dropdowns -------------------------------------------------- */
+        // Open/closed is a CLASS on the container, and the menu is emptied when
+        // it shuts. It was the `hidden` attribute, which .pg-ask-menu's own
+        // `display: flex` silently overrode — hidden only works while nothing
+        // sets display, so the menu never went away once opened and an empty one
+        // sat under the box as a thin bubble. Same shape as .mg-picker, which
+        // renders its menu only while open for exactly this reason.
+        const pickOf   = i => at('.pg-ask-pick', i);
+        const pickBtn  = i => at('.pg-ask-pick-btn', i);
+        const pickMenu = i => at('.pg-ask-menu', i);
+        const pickRows = i => [...pickMenu(i).querySelectorAll('.pg-ask-opt')];
+        const anyMenuOpen = () => !!wrap.querySelector('.pg-ask-pick.open');
+        // One type-ahead buffer per dropdown, the same as a native select's: the
+        // letters pile up while you keep typing and start over once you pause.
+        const tah = {};
+        const TAH_MS = 900;
+
+        const closePick = (i) => {
+            const box = pickOf(i);
+            if (!box) return;
+            box.classList.remove('open');
+            pickMenu(i).innerHTML = '';
+            pickBtn(i).setAttribute('aria-expanded', 'false');
+            if (tah[i]) tah[i].buf = '';
+        };
+        const closeMenus = () => fields.forEach((f, i) => { if (f.kind === 'pick') closePick(i); });
+
+        // Moving the highlight is the whole point: the list never shrinks, so
+        // the neighbours of the match stay on screen and you can see what else
+        // was close. scrollIntoView('nearest') keeps a long list tracking the
+        // highlight without yanking the page about.
+        const highlight = (i, idx) => {
+            const rows = pickRows(i);
+            if (!rows.length) return;
+            const n = ((idx % rows.length) + rows.length) % rows.length;
+            rows.forEach((r, k) => r.classList.toggle('hi', k === n));
+            rows[n].scrollIntoView({ block: 'nearest' });
+            tah[i].hi = n;
+        };
+
+        const openPick = (f, i) => {
+            const cur = pickBtn(i).dataset.v || '';
+            // EVERY option, every time — no filtering, ever. .on marks the row
+            // that is already the answer, the same as .mg-picker-opt.on.
+            pickMenu(i).innerHTML = (f.options || []).map(o => {
+                const on = String(o.value) === String(cur);
+                return `<button type="button" class="pg-ask-opt${on ? ' on' : ''}" role="option"
+                                aria-selected="${on}" data-v="${_pgEsc(o.value)}">${_pgEsc(o.label)}</button>`;
+            }).join('') + (f.allowNew
+                ? `<button type="button" class="pg-ask-opt pg-ask-opt-new" data-new="1">${_pgEsc(f.newLabel || '+ New…')}</button>`
+                : '');
+            pickOf(i).classList.add('open');
+            pickBtn(i).setAttribute('aria-expanded', 'true');
+            // Open on the current answer, not the top of the list.
+            const start = pickRows(i).findIndex(r => r.classList.contains('on'));
+            highlight(i, start < 0 ? 0 : start);
+        };
+
+        // "+ New group…" cannot open a second dialog: this one would have to
+        // close to make room, and its promise is what the caller is sitting on.
+        // The field becomes a text box in place instead, with a way back.
+        const setNewMode = (f, i, on) => {
+            pickOf(i).dataset.mode = on ? 'new' : 'pick';
+            pickBtn(i).hidden = on;
+            const inp = at('.pg-ask-newin', i), back = at('.pg-ask-newback', i);
+            if (inp)  { inp.hidden = !on; if (on) { inp.value = ''; inp.focus(); } }
+            if (back) back.hidden = !on;
+            if (!on) pickBtn(i).focus();
+            sync();
+        };
+
+        const takePick = (f, i, row) => {
+            if (!row) return;
+            if (row.dataset.new) { closePick(i); setNewMode(f, i, true); return; }
+            pickBtn(i).dataset.v = row.dataset.v;
+            at('.pg-ask-pick-v', i).textContent = row.textContent.trim();
+            closePick(i);
+            pickBtn(i).focus();
+            sync();
+        };
+
+        fields.forEach((f, i) => {
+            if (f.kind !== 'pick') { at('.pg-ask-in', i).addEventListener('input', sync); return; }
+            tah[i] = { buf: '', at: 0, hi: -1 };
+            const btn = pickBtn(i);
+
+            // Toggles, the way .mg-picker-btn does: a second click puts the list
+            // away rather than redrawing it in place.
+            btn.addEventListener('click', () => {
+                if (pickOf(i).classList.contains('open')) closePick(i);
+                else openPick(f, i);
+            });
+            // mousedown, not click: the dismiss listener below runs on mousedown
+            // and would shut the menu out from under the pointer.
+            pickMenu(i).addEventListener('mousedown', (e) => {
+                const row = e.target.closest('.pg-ask-opt');
+                if (!row) return;
+                e.preventDefault();
+                takePick(f, i, row);
+            });
+
+            btn.addEventListener('keydown', (e) => {
+                const open = pickOf(i).classList.contains('open');
+                const k = e.key;
+                if (k === 'ArrowDown' || k === 'ArrowUp') {
+                    e.preventDefault();
+                    if (!open) return openPick(f, i);
+                    return highlight(i, tah[i].hi + (k === 'ArrowDown' ? 1 : -1));
+                }
+                if ((k === 'Home' || k === 'End') && open) {
+                    e.preventDefault();
+                    return highlight(i, k === 'Home' ? 0 : pickRows(i).length - 1);
+                }
+                if (k === 'Enter' || k === ' ') {
+                    e.preventDefault();
+                    if (!open) return openPick(f, i);
+                    return takePick(f, i, pickRows(i)[tah[i].hi]);
+                }
+                if (k === 'Escape') { if (open) { e.stopPropagation(); closePick(i); } return; }
+                // A single printable key: the type-ahead. This is what was
+                // actually asked for — the highlight walks to the nearest match
+                // and the list stays whole.
+                if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                    const now = Date.now();
+                    tah[i].buf = (now - tah[i].at > TAH_MS ? '' : tah[i].buf) + k.toLowerCase();
+                    tah[i].at = now;
+                    if (!open) openPick(f, i);
+                    // The "+ New…" row is not a name and must never be what a
+                    // letter lands on.
+                    const rows = pickRows(i).filter(r => !r.dataset.new);
+                    const buf = tah[i].buf;
+                    // Starts-with first, as a select does; then contains, so
+                    // "wat" still reaches "Smart Watches".
+                    let hit = rows.findIndex(r => r.textContent.trim().toLowerCase().startsWith(buf));
+                    if (hit < 0) hit = rows.findIndex(r => r.textContent.trim().toLowerCase().includes(buf));
+                    if (hit >= 0) { e.preventDefault(); highlight(i, hit); }
+                }
+            });
+
+            const back = at('.pg-ask-newback', i);
+            if (back) back.addEventListener('click', () => setNewMode(f, i, false));
+            const nin = at('.pg-ask-newin', i);
+            if (nin) nin.addEventListener('input', sync);
+        });
+
+        // Any mousedown that is not inside a dropdown shuts every menu. This is
+        // what .mg-dismiss does for the Margin Guide's picker, done as one
+        // listener rather than a full-screen layer, because a layer over a
+        // dialog would also swallow the click meant for Cancel.
+        wrap.addEventListener('mousedown', (e) => {
+            if (!e.target.closest('.pg-ask-pick')) closeMenus();
+        }, true);
+
+        okBtn.addEventListener('click', () => {
+            if (okBtn.disabled) return;
+            const out = readAll();
+            // A check the dialog can fail without closing — a name already taken
+            // is worth correcting in place, not re-typing from scratch after an
+            // alert has thrown the answer away.
+            const bad = opt.validate ? opt.validate(out) : null;
+            if (bad) {
+                errEl.textContent = bad;
+                errEl.hidden = false;
+                const first = wrap.querySelector('.pg-ask-in:not([hidden])');
+                if (first) { first.focus(); first.select(); }
+                return;
+            }
+            done(out);
+        });
+        wrap.querySelector('.pg-ask-cancel').addEventListener('click', () => done(null));
+        // mousedown, not click: a drag that starts inside the card and releases
+        // on the backdrop is a text selection, not a dismissal.
+        wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) done(null); });
+
+        // Captured, so Escape closes this and not whatever modal is underneath.
+        // An open menu eats the first Escape: closing the list is what the DM
+        // meant, and losing the whole dialog to it would be a nasty surprise.
+        const onKey = (e) => {
+            if (e.key === 'Escape') {
+                // The dropdown's own handler already ate this one and closed
+                // its list; anything left means no list was down.
+                e.stopPropagation();
+                if (anyMenuOpen()) { closeMenus(); return; }
+                done(null);
+            } else if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+                // Enter in a text box submits. Not on the dropdown button —
+                // there Enter opens the list and picks, which its own keydown
+                // handles.
+                e.preventDefault();
+                if (anyMenuOpen()) { closeMenus(); return; }
+                okBtn.click();
+            }
+        };
+        document.addEventListener('keydown', onKey, true);
+
+        sync();
+        // The first thing worth typing into. :not([hidden]) skips a dropdown's
+        // stashed "new name" box, which is in the DOM from the start and would
+        // otherwise be focused invisibly.
+        const first = wrap.querySelector('.pg-ask-in:not([hidden])') || okBtn;
+        first.focus();
+        if (first.select) first.select();
+    });
+}
+
+async function pgAddCategory() {
+    // Name and group in one card. They were two prompts back to back, which is
+    // two chances to cancel halfway and leave a category stranded ungrouped —
+    // and the group is asked at all because sitting alone at the top level is
+    // fine but is rarely what anybody means.
+    const a = await _pgAsk({
+        title: 'New Category',
+        body: 'One kind of item, with its own list of photos.',
+        ok: 'Create Category',
+        fields: [
+            { key: 'name', label: 'Category Name', placeholder: 'Graphics Cards', required: true },
+            {
+                key: 'group', label: 'Group', hint: '(or start a new one)',
+                kind: 'pick', value: '', options: _pgGroupOptions(),
+                allowNew: true, newLabel: '+ New group…', newPlaceholder: 'Computer Parts',
+            },
+        ],
+        validate: a => _pgNameTaken(a.name) ? _pgDupeMsg(a.name) : null,
+    });
+    if (!a) return;
+    const out = await _pgPost({ action: 'saveCategory', name: a.name, group: a.group });
+    if (!out) return;
+    await _pgReload();
+    if (out.id) { _pgAdmin.catId = out.id; pgRender(); }
+}
+
+// Renaming a group, which until now was not possible at all: a group is only a
+// name its categories share (migration 0081), so it had no edit screen of its
+// own and the only route was moving every sheet out one at a time — and a group
+// with a bad name could not be fixed, only abandoned. One action renames it on
+// every category at once.
+//
+// Renaming onto a name that already exists MERGES the two, which is a real
+// thing to want and is what the DM just asked for in plain words. It is said
+// out loud in the dialog rather than refused.
+async function pgRenameGroup(btn) {
+    const from = (btn.closest('.pg-grp')?.querySelector('.pg-grp-name')?.textContent || '').trim();
+    if (!from) return;
+    const n = _pgCats().filter(c => String(c.group_name || '').trim() === from).length;
+    const a = await _pgAsk({
+        title: 'Rename Group',
+        body: `Renames it on all ${n} categor${n === 1 ? 'y' : 'ies'} under it. `
+            + 'Give it the name of another group and the two are merged.',
+        ok: 'Rename Group',
+        fields: [{ key: 'name', label: 'Group Name', value: from, required: true }],
+    });
+    if (!a || a.name === from) return;
+    if (!await _pgPost({ action: 'renameGroup', from, to: a.name })) return;
+    _pgOpenGroup = a.name;
+    await _pgReload();
+}
+
+// Moving one sheet between groups. Renaming the group itself is pgRenameGroup().
+async function pgSetCategoryGroup() {
+    const cat = _pgAdminCat();
+    if (!cat) return;
+    const a = await _pgAsk({
+        title: `Group for &ldquo;${_pgEsc(cat.name)}&rdquo;`,
+        body: 'Sheets in the same group share one dropdown in the sidebar.',
+        ok: 'Save Group',
+        fields: [{
+            key: 'group', label: 'Group', hint: '(or start a new one)',
+            kind: 'pick', value: cat.group_name || '', options: _pgGroupOptions(),
+            allowNew: true, newLabel: '+ New group…', newPlaceholder: 'Smart Tablets',
+        }],
+    });
+    if (!a) return;
+    if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: cat.name, group: a.group })) return;
+    _pgOpenGroup = null;
+    await _pgReload();
+}
+
+async function pgRenameCategory() {
+    const cat = _pgAdminCat();
+    if (!cat) return;
+    const a = await _pgAsk({
+        title: 'Rename Category',
+        ok: 'Rename',
+        fields: [{ key: 'name', label: 'Category Name', value: cat.name, required: true }],
+        validate: a => _pgNameTaken(a.name, cat.id) ? _pgDupeMsg(a.name) : null,
+    });
+    if (!a || a.name === cat.name) return;
+    if (!await _pgPost({ action: 'saveCategory', id: cat.id, name: a.name, group: cat.group_name || '' })) return;
+    await _pgReload();
+}
+
+async function pgDeleteCategory() {
+    const cat = _pgAdminCat();
+    if (!cat) return;
+    if (!await _pgAsk({
+        title: `Remove &ldquo;${_pgEsc(cat.name)}&rdquo;?`,
+        body: `Its ${cat.shots.length} photo${cat.shots.length === 1 ? '' : 's'} are kept, so this can be undone.`,
+        ok: 'Remove Category', danger: true,
+    })) return;
+    if (!await _pgPost({ action: 'deleteCategory', id: cat.id })) return;
+    _pgAdmin.catId = null;
+    _pgAdmin.editing = null;
+    await _pgReload();
+    if (!_pgAdminCat()) { _pgAdmin.catId = (_pgCats()[0] && _pgCats()[0].id) || null; pgRender(); }
+}
+
+// One example photo into the public picture-guide bucket, then point the shot at
+// it. Same shape as _uploadAuditPhoto: the object name carries a timestamp, so
+// replacing a photo never collides with the one it replaces and no viewer is
+// left holding a cached image that no longer matches its caption.
+async function pgUploadShotPhoto(shotId, input) {
+    const file = input && input.files && input.files[0];
+    if (!file) return;
+    input.value = '';                      // so re-picking the same file fires again
+    if (file.size > 10 * 1024 * 1024) { alert('That image is over 10MB. Please shrink it first.'); return; }
+    const row = input.closest('.pg-erow');
+    if (row) row.classList.add('pg-erow-busy');
+    try {
+        const safe = `${Date.now()}_${Math.round(Math.random() * 1e6)}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const resp = await fetch(`${_SUPABASE_URL}/storage/v1/object/picture-guide/${safe}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${_SUPABASE_ANON_KEY}`,
+                'apikey': _SUPABASE_ANON_KEY,
+                'Content-Type': file.type || 'application/octet-stream',
+                'x-upsert': 'true',
+            },
+            body: file,
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const s = _pgShotById(shotId);
+        if (!s) throw new Error('That photo is no longer on the sheet.');
+        // saveShot carries the whole row, so the other fields have to be resent
+        // as they are or the upload would quietly blank them.
+        if (!await _pgPost({
+            action: 'saveShot', id: shotId, label: s.label, cond: s.cond,
+            rep: s.rep, note: s.note, path: safe,
+        })) return;
+        await _pgReload();
+    } catch (e) {
+        alert(`The photo didn't upload. ${e.message}`);
+        if (row) row.classList.remove('pg-erow-busy');
+    }
+}
+
+// Clears the row's photo and lets it fall back to the grey instruction slot. The
+// object itself stays in the bucket: it is a few hundred KB, and a DM who meant
+// to swap rather than remove would otherwise have destroyed the original.
+async function pgRemoveShotPhoto(shotId) {
+    const s = _pgShotById(shotId);
+    if (!s || !s.img) return;
+    if (!await _pgAsk({
+        title: 'Remove the Example Photo?',
+        body: `&ldquo;${_pgEsc(s.label)}&rdquo; goes back to showing words on a grey slot.`,
+        ok: 'Remove Photo', danger: true,
+    })) return;
+    if (!await _pgPost({
+        action: 'saveShot', id: shotId, label: s.label, cond: s.cond,
+        rep: s.rep, note: s.note, path: null,
+    })) return;
+    await _pgReload();
+}
+
 // Detects the operations page and opens the requested sub-tab (defaults to
 // call backs, or honors a #callbacks / #b2b deep-link). Safe no-op elsewhere.
 // A tab can be hidden by its role gate or a Feature Access override, so never
@@ -7684,7 +8942,7 @@ function initOperations() {
     if (hash === 'categories') { _ecView = 'cats'; }
     let initial = sign ? 'b2b'
         : hash === 'categories' ? 'ebay'
-        : ['marginguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
+        : ['marginguide', 'pictureguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
     if (!tabVisible('ops-tab-' + initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ops-tab-"]'))
@@ -14324,6 +15582,13 @@ const ListingGoalsEngine = {
         hours_full_time: 40, hours_part_time: 20, hours_floater: 25, new_hire_weeks: 2,
     },
     _newHires: {},   // store → Set of names inside the new-hire ramp this week
+    // store → that store's own stretch factor. Kept HERE and not in cfg above,
+    // because applyConfig runs once per store against one shared cfg object: a
+    // per-store number in there would leave whichever store's fetch landed last
+    // setting the factor for all five. cfg.goal_factor stays the district
+    // default, which is the same value in every store's payload and so is safe
+    // to merge.
+    _factors: {},
 
     // Absorb one store-targets row. Safe to call with anything, including the
     // pre-capacity payload a cached page might still be holding.
@@ -14331,6 +15596,15 @@ const ListingGoalsEngine = {
         if (!row) return;
         if (row.cfg) Object.assign(this.cfg, row.cfg);
         if (row.store) this._newHires[row.store] = new Set(row.newHires || []);
+        if (row.store && Number.isFinite(row.goalFactor)) this._factors[row.store] = row.goalFactor;
+    },
+
+    // This store's share of capacity, falling back to the district default for a
+    // store whose factor has never been set on its own — and to 0.75 for the
+    // moment before any payload has landed.
+    factorFor(store) {
+        const f = this._factors[store];
+        return Number.isFinite(f) ? f : (this.cfg.goal_factor || 0.75);
     },
     isNewHire(store, employee) {
         const s = this._newHires[store];
@@ -14372,7 +15646,7 @@ const ListingGoalsEngine = {
         const rate = this.rateFor(role, this.isNewHire(o.store, o.employee));
         if (!rate) return 0;
         return Math.round(
-            this.cfg.hours_per_day * rate * this.dayFactorFromDate(dateStr) * this.cfg.goal_factor
+            this.cfg.hours_per_day * rate * this.dayFactorFromDate(dateStr) * this.factorFor(o.store)
         );
     },
 
@@ -14381,7 +15655,7 @@ const ListingGoalsEngine = {
     // assumes everyone is full-time and nobody is ramping, so it will differ from
     // the real number at any store with a part-timer, a floater or a new hire.
     // Mirrors capacityFrom() in the store-targets edge function.
-    weeklyTarget(size) {
+    weeklyTarget(size, store) {
         const c = this.cfg;
         const effDays = (c.open_days - 1) + c.saturday_factor;
         const eff = size * c.hours_full_time * (effDays / c.open_days);
@@ -14390,7 +15664,7 @@ const ListingGoalsEngine = {
         const b2 = Math.min(eff - b1, seat);
         const l = Math.max(0, eff - b1 - b2);
         return Math.round(
-            (b1 * c.rate_buyer_1 + b2 * c.rate_buyer_2 + l * c.rate_lister) * c.goal_factor
+            (b1 * c.rate_buyer_1 + b2 * c.rate_buyer_2 + l * c.rate_lister) * this.factorFor(store)
         );
     }
     // NOTE: ratchet() lived here — it decided when a store "levelled up" (+10) or
@@ -15234,7 +16508,7 @@ async function fetchAllStoreTargets() {
 // Current weekly target for a store (server value; falls back to roster-derived base).
 function targetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].target)
-        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store), store);
 }
 // Effective team size for goal math. Prefers the server's settled size, which
 // honors the timing rule (a subtraction shrinks the goal immediately, an addition
@@ -15258,7 +16532,7 @@ function goalIsSetThisWeek(store) {
 // The ladder's suggestion, used to prefill the DM's input.
 function suggestedTargetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].suggested)
-        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store), store);
 }
 
 // DM writes a store's weekly listing goal. Replaces dmGoalAction(), which only
@@ -15324,7 +16598,7 @@ function checkListingGoalReminders() {
     // on the District widget. Everything else district-scoped stays shared.
     const _role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (_role !== 'district manager') { if (b) b.style.display = 'none'; return; }
-    if (!_lgDueStarted) { _lgDueStarted = true; setInterval(checkListingGoalReminders, 10 * 60 * 1000); }
+    if (!_lgDueStarted) { _lgDueStarted = true; setInterval(checkListingGoalReminders, 30 * 60 * 1000); }
 
     // Due 8am Monday, store time — half an hour ahead of the stores' own 8:30am
     // "set today's roles" nudge, so the weekly total is in place before anyone
@@ -15430,7 +16704,7 @@ async function checkListingGoalsDailyReminder() {
     };
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     if (!_LG_DAILY_ROLES.has(role)) { hide(); return; }
-    if (!_lgDailyStarted) { _lgDailyStarted = true; setInterval(checkListingGoalsDailyReminder, 10 * 60 * 1000); }
+    if (!_lgDailyStarted) { _lgDailyStarted = true; setInterval(checkListingGoalsDailyReminder, 30 * 60 * 1000); }
 
     // Store time, not the browser's — a manager on a laptop set to another zone
     // must still get this at 8:30am Central.
@@ -25351,7 +26625,7 @@ function initDashboardData() {
             if (has('scorecard') && typeof fetchScorecardData === 'function') fetchScorecardData();
             if (has('ebay') && typeof fetchAlertsData === 'function') fetchAlertsData();
             if (has('kpis') && typeof fetchAndRenderEmployeeKPIs === 'function') fetchAndRenderEmployeeKPIs();
-        }, 10 * 60 * 1000);
+        }, 30 * 60 * 1000);
         // SAFETY NET for the Live Dashboard, same reasoning as above: realtime is the
         // real path. Skipped while the tab is in the background — a dashboard left open
         // on a back office monitor for a week should not spend a request every five
@@ -28634,6 +29908,20 @@ async function _refreshScCatalog() {
     renderAuditEntry({ preserve: _auditHasWork() });
 }
 
+// Which row is open for editing, by database id — one at a time, and never both
+// lists at once. Kept at module scope rather than in the DOM because this panel
+// re-renders wholesale on every change (see _refreshScCatalog), so a value held
+// inside it would not survive the render that has to draw the open row.
+//
+// Renaming exists so a wording change does not cost an item its identity
+// (user, 2026-09-07): "I want to change it from 2 social posts to 1, but I don't
+// want to have to delete it and create a new line just to do that." Delete-and-
+// re-add would mint a fresh item_key, and every past score is keyed by item_key
+// — so the old item's history would be orphaned and the new one would start
+// empty. An update keeps the key, so the history follows the item.
+let _scEditId = null;
+let _auEditId = null;
+
 function renderManageItems() {
     const panel = document.getElementById('sc-panel-manage');
     if (!panel) return;
@@ -28652,17 +29940,32 @@ function renderManageItems() {
     const rowStyle = active => `display:flex; align-items:center; gap:9px; padding:7px 4px; border-bottom:1px solid #f1f5f9; ${active ? '' : 'opacity:.45;'}`;
     const delBtn = (fn, id, label) => `<button onclick="${fn}('${id}', this)" title="Delete ${label} — past scores keep their history" style="flex:none; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:7px; cursor:pointer; font-size:13px; line-height:1;">🗑</button>`;
     const pauseBox = (fn, id, active) => `<input type="checkbox" ${active ? 'checked' : ''} onchange="${fn}('${id}', this.checked, this)" title="${active ? 'Active — untick to pause (hidden from scoring, history kept)' : 'Paused — tick to reactivate'}" style="flex:none; width:16px; height:16px; cursor:pointer; accent-color:#059669;">`;
+    // Same 26px square as the bin, so a row's controls stay on one grid whether
+    // it is being read or edited.
+    const sqBtn = (onclick, glyph, title, bg, border) => `<button onclick="${onclick}" title="${title}" style="flex:none; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; background:${bg}; border:1.5px solid ${border}; border-radius:7px; cursor:pointer; font-size:13px; line-height:1;">${glyph}</button>`;
+    const editBtn = (fn, id, label) => sqBtn(`${fn}('${id}')`, '✎', `Rename ${label} — keeps its scoring history`, '#f8fafc', '#cbd5e1');
+    const saveBtn = (fn, id) => sqBtn(`${fn}('${id}', this)`, '✓', 'Save', '#ecfdf5', '#a7f3d0');
+    const stopBtn = (fn) => sqBtn(`${fn}()`, '✕', 'Cancel', '#fff', '#e2e8f0');
+    // Enter saves, Escape backs out. Typed straight into the attribute because
+    // the panel is innerHTML and there is no element to bind to until after it
+    // has been written.
+    const editKeys = (saveFn, id) => `onkeydown="if(event.key==='Enter'){event.preventDefault();${saveFn}('${id}',this);}else if(event.key==='Escape'){event.preventDefault();scCancelEdit();}"`;
 
-    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:2px;">Tick = active. Unticking <b>pauses</b> an item — it disappears from scoring and the totals but keeps its history. 🗑 deletes it from the checklist going forward.</div>`;
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:2px;">Tick = active. Unticking <b>pauses</b> an item — it disappears from scoring and the totals but keeps its history. ✎ <b>renames</b> it, keeping every past score attached. 🗑 deletes it from the checklist going forward.</div>`;
 
     // ---- Scorecard categories ----
     html += secHdr(`Scorecard Categories (scored 0–5)`);
     scRows.forEach(c => {
+        const editing = String(_scEditId) === String(c.id);
         html += `<div style="${rowStyle(c.active)}">
             ${pauseBox('scToggleItem', c.id, c.active)}
-            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${escapeHtml(c.label)}</span>
+            ${editing
+                ? `<input id="sc-edit-label" value="${escapeHtml(c.label)}" ${editKeys('scSaveEdit', c.id)} style="${inp} flex:1;">`
+                : `<span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${escapeHtml(c.label)}</span>`}
             <span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">/ ${Number(c.max_score) || 5}</span>
-            ${delBtn('scDeleteItem', c.id, 'this category')}
+            ${editing
+                ? saveBtn('scSaveEdit', c.id) + stopBtn('scCancelEdit')
+                : editBtn('scStartEdit', c.id, 'this category') + delBtn('scDeleteItem', c.id, 'this category')}
         </div>`;
     });
     html += `<div style="display:flex; gap:8px; margin-top:8px;">
@@ -28675,11 +29978,18 @@ function renderManageItems() {
     auSections.forEach(sec => {
         html += `<div style="font-size:10.5px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.4px; margin:10px 0 2px;">${escapeHtml(sec.title)}</div>`;
         sec.items.forEach(item => {
+            const editing = String(_auEditId) === String(item.dbId);
             html += `<div style="${rowStyle(item.active !== false)}">
                 ${pauseBox('auToggleItem', item.dbId, item.active !== false)}
-                <span style="flex:1; font-size:12px; color:var(--slate-charcoal); line-height:1.35;">${escapeHtml(item.text)}</span>
-                <span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">${item.pts} pt${item.pts === 1 ? '' : 's'}</span>
-                ${delBtn('auDeleteItem', item.dbId, 'this item')}
+                ${editing
+                    ? `<input id="au-edit-text" value="${escapeHtml(item.text)}" ${editKeys('auSaveEdit', item.dbId)} style="${inp} flex:1;">`
+                    : `<span style="flex:1; font-size:12px; color:var(--slate-charcoal); line-height:1.35;">${escapeHtml(item.text)}</span>`}
+                ${editing
+                    ? `<input id="au-edit-pts" type="number" min="0" step="1" value="${Number(item.pts) || 0}" title="Points" ${editKeys('auSaveEdit', item.dbId)} style="${inp} width:64px; flex:none; text-align:center;">`
+                    : `<span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">${item.pts} pt${item.pts === 1 ? '' : 's'}</span>`}
+                ${editing
+                    ? saveBtn('auSaveEdit', item.dbId) + stopBtn('scCancelEdit')
+                    : editBtn('auStartEdit', item.dbId, 'this item') + delBtn('auDeleteItem', item.dbId, 'this item')}
             </div>`;
         });
     });
@@ -28699,11 +30009,53 @@ function renderManageItems() {
     </div>`;
 
     panel.innerHTML = html;
+
+    // The panel is rebuilt to open a row, so focusing has to happen after the
+    // write. Selected, not just focused: renaming usually means replacing the
+    // whole label, and "2 Social Media Posts" is a lot to delete by hand.
+    const open = document.getElementById('sc-edit-label') || document.getElementById('au-edit-text');
+    if (open) { open.focus(); open.select(); }
 }
 
 function _manageActionFail(e) {
     alert('Could not save that change: ' + (e.message || e));
     renderManageItems();
+}
+
+// Renaming. Both lists share one cancel, because only one row is ever open.
+function scStartEdit(id) { _scEditId = id; _auEditId = null; renderManageItems(); }
+function auStartEdit(id) { _auEditId = id; _scEditId = null; renderManageItems(); }
+function scCancelEdit() { _scEditId = null; _auEditId = null; renderManageItems(); }
+
+// A blank name is refused rather than saved: the server would reject it anyway
+// (its patch only includes a label that survives trim, so an empty one would
+// come back as "Nothing to update"), and an item with no name is not a thing
+// anyone wants — pausing or deleting is what that gesture actually means.
+function scSaveEdit(id, btn) {
+    const label = (document.getElementById('sc-edit-label')?.value || '').trim();
+    if (!label) { alert('A category needs a name. To take it out of scoring, pause it or delete it instead.'); return; }
+    const item = (window._scCatalog || []).find(c => String(c.id) === String(id));
+    // Nothing typed: close the row rather than spending a write on it.
+    if (item && label === item.label) { _scEditId = null; renderManageItems(); return; }
+    if (btn) btn.disabled = true;
+    _scEditId = null;
+    _scorecardAdminPost({ action: 'scorecard_item_upsert', id, label })
+        .then(_refreshScCatalog).catch(_manageActionFail);
+}
+
+function auSaveEdit(id, btn) {
+    const text = (document.getElementById('au-edit-text')?.value || '').trim();
+    const ptsEl = document.getElementById('au-edit-pts');
+    const points = Math.max(0, parseInt(ptsEl?.value) || 0);
+    if (!text) { alert('An audit item needs its wording. To take it off the checklist, pause it or delete it instead.'); return; }
+    const item = (window._auCatalog || []).find(c => String(c.id) === String(id));
+    if (item && text === item.item_text && points === (Number(item.points) || 0)) {
+        _auEditId = null; renderManageItems(); return;
+    }
+    if (btn) btn.disabled = true;
+    _auEditId = null;
+    _scorecardAdminPost({ action: 'audit_item_upsert', id, item_text: text, points })
+        .then(_refreshScCatalog).catch(_manageActionFail);
 }
 
 function scToggleItem(id, active) {
@@ -29887,7 +31239,7 @@ async function checkAgingClaims() {
 
     if (!_claimAlertPollStarted) {
         _claimAlertPollStarted = true;
-        setInterval(checkAgingClaims, 10 * 60 * 1000);
+        setInterval(checkAgingClaims, 30 * 60 * 1000);
     }
 
     try {
@@ -29964,7 +31316,7 @@ async function checkAgingClaimsDM() {
 
     if (!_dmClaimAlertPollStarted) {
         _dmClaimAlertPollStarted = true;
-        setInterval(checkAgingClaimsDM, 10 * 60 * 1000);
+        setInterval(checkAgingClaimsDM, 30 * 60 * 1000);
     }
 
     try {
@@ -30251,7 +31603,16 @@ let _storeCommentPollingStarted = false;
 function startStoreCommentPolling() {
     if (_storeCommentPollingStarted) return;
     _storeCommentPollingStarted = true;
-    setInterval(() => { fetchAndDisplayStoreComment(); checkClaimReminders(); }, 30 * 1000);
+    // 5 minutes, not 30 seconds. Realtime is the primary path for both of these:
+    // the store-comments fn pings 'comments' -> fetchAndDisplayStoreComment and
+    // shopify-claims pings 'claims' -> checkClaimReminders (see _RT_TOOL_CHECKS),
+    // so a new comment or claim still lands the instant it is written. What is
+    // left here is the safety net for a browser whose socket never connected,
+    // and at 30s it was ~14k edge invocations a day — a fifth of the account's
+    // whole quota — to re-ask a question realtime had already answered.
+    // Two fetches per tick (checkClaimReminders can make two), so the interval
+    // counts double.
+    setInterval(() => { fetchAndDisplayStoreComment(); checkClaimReminders(); }, 5 * 60 * 1000);
 }
 
 // Opens the modal normally from the Speeks Tools menu (Fully Unlocked)
@@ -33822,7 +35183,7 @@ async function checkRecycleReminders() {
     if (!stores.length) return;
     if (!_recycleRemindersStarted) {
         _recycleRemindersStarted = true;
-        setInterval(checkRecycleReminders, 10 * 60 * 1000);
+        setInterval(checkRecycleReminders, 30 * 60 * 1000);
     }
     try {
         const res = await fetch(`${RECYCLE_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
@@ -34628,6 +35989,11 @@ const FEATURE_CATALOG = [
     // be delegated or pulled back without a code change; mgCanEditLadder() gates it
     // in JS as well, and the edge function enforces the same roles on every write.
     { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    { key: 'widget-ops-pictureguide',  label: 'Picture Guide (Tab)',           tab: 'widgets', group: 'Operations', def: 'all' },
+    // The editor behind the Picture Guide's "Edit" button. Same shape as
+    // tool-margin-manage: pgCanEdit() gates it in JS and the edge function
+    // enforces the same roles on every write, so this is only who SEES it.
+    { key: 'tool-picture-manage',      label: 'Picture Guide — Edit',          tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
     // SPEEKS CONNECT HAS NO TAB SWITCH OF ITS OWN, on purpose. It had three
@@ -34862,7 +36228,8 @@ const _SECTION_TABS = {
     // 'widget-margin-replies' is intentionally omitted — see the parked block in
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
-    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-callbacks',
+    'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
+                        'tool-picture-manage', 'widget-ops-callbacks',
                         'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos',
                         'ec-view-titles'],
 };
@@ -35625,6 +36992,7 @@ async function faClearUser() {
 // searched; these are the synonyms it would otherwise miss ("callback sheet").
 const JUMP_KEYWORDS = {
     'widget-ops-marginguide':    'margin guide buy ladder buying percentages offer ceiling rebuttals condition testing tips projection what should i offer',
+    'widget-ops-pictureguide':   'picture guide photo guide pictures photos what pictures to take shot list binder printout listing photos camera order of pictures lcd flaws cosmetic flaws',
     'widget-ops-callbacks':      'callback sheet call back call backs customer calls waiting hold looking for item phone',
     'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
     'ec-upload':                 'speeks connect ebay listings upload list publish online marketplace sku',
@@ -35688,6 +37056,7 @@ const JUMP_PLACES = [
     // { id: 'ws-mrep',  label: 'Margin Replies',     sub: 'Workspace',  kind: 'tab', feature: 'widget-margin-replies',       page: 'workspace.html',  hash: 'mreplies',  fn: 'switchWorkspaceTab' },
     { id: 'ws-aging',    label: 'Aging Inventory',    sub: 'Workspace',  kind: 'tab', feature: 'widget-aging-inventory',      page: 'workspace.html',  hash: 'aging',     fn: 'switchWorkspaceTab' },
     { id: 'ops-mg',      label: 'Margin Guide',       sub: 'Operations', kind: 'tab', feature: 'widget-ops-marginguide',    page: 'operations.html', hash: 'marginguide', fn: 'switchOperationsTab' },
+    { id: 'ops-pg',      label: 'Picture Guide',      sub: 'Operations', kind: 'tab', feature: 'widget-ops-pictureguide',   page: 'operations.html', hash: 'pictureguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
     { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
@@ -36318,6 +37687,58 @@ async function vrOpenPeriod(pid) {
     }
 }
 
+// THE DEADLINE IS A DAY, NOT AN INSTANT.
+// manager_due_at is stamped seven days after the upload to the second, and every
+// consumer used to compare it as an instant while displaying it as a bare date.
+// Five stores uploaded back-to-back one afternoon therefore got five different
+// deadlines: BAL fell overdue eight minutes before MPL, for no reason but the
+// order the DM happened to open the files in a week earlier (Ethan, 2026-09-08).
+// Comparing STORE-LOCAL CALENDAR DAYS makes the upload minute irrelevant — the
+// whole seventh day counts as on time and midnight ending it is the cutoff, so
+// every store uploaded on one day shares one deadline.
+// 'YYYY-MM-DD' sorts chronologically, so > is the whole comparison; and Intl
+// absorbs the DST shift that hand-rolled offset arithmetic gets wrong twice a
+// year. America/Chicago is store time everywhere else in this file, so a manager
+// on a laptop set to another zone gets the store's deadline, not their own.
+const _vrCtDay  = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+const _vrDueDay = p  => (p && p.manager_due_at) ? _vrCtDay(new Date(p.manager_due_at).getTime()) : '';
+
+// n days on from a 'YYYY-MM-DD', measured at UTC noon so the DST weekends
+// cannot nudge the result onto the neighbouring day. Adding n*86400000 to the
+// INSTANT instead looks equivalent and is not: two days on from 00:30 on the
+// morning the clocks go back lands at 23:30 the previous evening, a day early.
+// Same trick, and same reason, as addDays() in the notify function — these two
+// have to answer identically or the email and the page disagree again.
+const _vrAddDays = (ymd, n) =>
+    new Date(new Date(ymd + 'T12:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
+
+// Has the store's day moved past the day this timestamp lands on (optionally n
+// days later)? The one comparison every variance deadline goes through, so the
+// manager's page, the pink cells, the note columns, the manager alert and the
+// DM's review alert cannot disagree about who is late — which is exactly how
+// the feed came to say "overdue" about a store whose own page said "due".
+const _vrDayPast = (ms, addDays = 0) => {
+    if (!ms) return false;
+    const day = _vrCtDay(ms);
+    return _vrCtDay(Date.now()) > (addDays ? _vrAddDays(day, addDays) : day);
+};
+
+// An all-clear period owes nobody a reply, so it HAS no deadline and nothing can
+// be past it. _vrSubtitleText already said as much in a comment; these two
+// checks never got told. Without the guard WSP's phantom deadline quietly
+// elapsed, which opened the DM note columns, painted seven read-only lines red
+// as "missed", and put an Edit button on a report the banner called clear.
+function _vrIsPastDue(p) {
+    if (!p || p.all_clear || !p.manager_due_at) return false;
+    return _vrDayPast(new Date(p.manager_due_at).getTime());
+}
+// The seventh day itself — still on time, but the last day it will be.
+function _vrIsDueToday(p) {
+    if (!p || p.all_clear) return false;
+    const d = _vrDueDay(p);
+    return !!d && _vrCtDay(Date.now()) === d;
+}
+
 function _vrSubtitleText() {
     if (!_vrCurrent || !_vrCurrent.period) return '';
     const p = _vrCurrent.period;
@@ -36332,10 +37753,16 @@ function _vrSubtitleText() {
     const items = (_vrCurrent.items || []).filter(i => i.needs_reply !== false);
     const answered = items.filter(i => i.gm_note).length;
     const due = new Date(p.manager_due_at);
-    const overdue = Date.now() > due.getTime() && answered < items.length;
+    const outstanding = answered < items.length;
+    // Overdue once the store's day has moved PAST the deadline's day; the day
+    // itself gets its own tag, so the last chance to be on time is visible
+    // instead of silent (which is how MPL read as merely "due" all morning).
+    const tag = (outstanding && _vrIsPastDue(p)) ? ' (overdue)'
+              : (outstanding && _vrIsDueToday(p)) ? ' (Due Today)'
+              : '';
     // The n/n-explained scoreboard is for managers; the DM just gets the date.
     const progress = _vrIsDM() ? '' : ` · ${answered}/${items.length} explained`;
-    return `Replies due ${due.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}${overdue ? ' (overdue)' : ''}${progress}`;
+    return `Replies due ${due.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/Chicago' })}${tag}${progress}`;
 }
 
 function _vrUpdateProgressLine() {
@@ -36509,9 +37936,10 @@ function renderVarianceReplies() {
     html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; min-width:${680 + (showGmCol ? 220 : 0) + (showDmCol ? 220 : 0) + (showReplyCol ? 220 : 0)}px;">
         <thead><tr>${th('Order #')}${th('SKU')}${th('Item Title')}${th('Buyer')}${th('Lister')}${th('Var.')}${showGmCol ? th('GM Notes') : ''}${showDmCol ? th('DM Notes') : ''}${showReplyCol ? th('Replies to DM Notes') : ''}</tr></thead><tbody>`;
 
-    // Empty GM-note boxes turn light red once the managers' deadline has
-    // passed — a visible mark on exactly which lines were missed.
-    const pastDue = p.manager_due_at && Date.now() > new Date(p.manager_due_at).getTime();
+    // Empty GM-note boxes turn light red once the managers' deadline day has
+    // passed — a visible mark on exactly which lines were missed. Never on an
+    // all-clear period: there was nothing to miss.
+    const pastDue = _vrIsPastDue(p);
 
     items.forEach(it => {
         const pct = it.variance_pct == null ? null : Number(it.variance_pct);
@@ -36566,7 +37994,10 @@ function renderVarianceReplies() {
 // DM notes stay locked until the managers' reply window closes — managers
 // explain first, then the DM weighs in.
 function _vrDmNotesOpen(p) {
-    return !p.manager_due_at || new Date(p.manager_due_at) <= new Date();
+    // A cleared period has no reply cycle to open, so the DM gets no note
+    // columns and no Edit button on it — the green banner is the whole story.
+    if (p && p.all_clear) return false;
+    return !p.manager_due_at || _vrIsPastDue(p);
 }
 
 // One note cell: read-only text + author/date caption normally; a textarea
@@ -36771,7 +38202,11 @@ function _vrBuyerPickerHtml() {
     if (!rows.length) return '';
     const cells = rows.map(b => {
         const on = _vrSelBuyers.has(b.name);
-        const n = _vrBuyerReplyLines(b).length;
+        // What this row would owe given the selection it would be part of: a row
+        // that is already ticked counts the current selection, an unticked one
+        // counts itself joining. So the counts fall the moment a second person
+        // goes on, which is the only warning the DM gets that the rule changed.
+        const n = _vrBuyerReplyLines(b, (_vrSelBuyers.size + (on ? 0 : 1)) <= _VR_TOPUP_MAX_BUYERS).length;
         return `<label style="display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:8px; cursor:pointer;
                 background:${on ? '#eff6ff' : '#fff'}; border:1.5px solid ${on ? '#93c5fd' : '#e2e8f0'};">
             <input type="checkbox" ${on ? 'checked' : ''} ${_vrAllClear ? 'disabled' : ''}
@@ -36826,7 +38261,9 @@ function _vrUploadPanelHtml() {
                 <button class="btn-primary" style="font-size:12px; padding:7px 16px;" onclick="vrConfirmUpload(this)">${cta}</button>
                 <span style="margin-left:10px; font-size:11.5px; color:#94a3b8; font-weight:600;">${
                     _vrAllClear ? 'Manager is still notified to review — nothing to answer.'
-                    : _vrSelBuyers.size ? 'Everyone else’s lines upload as read-only context.'
+                    : _vrSelBuyers.size > _VR_TOPUP_MAX_BUYERS
+                    ? `${_vrSelBuyers.size} people picked — ${_VR_VARIANCE_CUTOFF}% and worse only, no top-up to ${_VR_BUYER_MIN_LINES}. Everyone else’s lines upload as read-only context.`
+                    : _vrSelBuyers.size ? `One person picked — topped up to their ${_VR_BUYER_MIN_LINES} worst. Everyone else’s lines upload as read-only context.`
                     : 'No buyers picked — the whole store replies, as before.'
                 }</span>
             </div>`;
@@ -37001,6 +38438,17 @@ function _vrParseRows(rows) {
 // round number would be indefensible.
 const _VR_BUYER_MIN_LINES = 12;
 
+// ...and the top-up only happens when ONE person is being singled out.
+//
+// The floor above is an exercise for a buyer whose month went wrong. Applied to
+// a whole team it stops being an exercise and becomes a pile: MPL August had
+// four people negative, so four top-ups to twelve put 30 lines on the board,
+// most of them at -5% — small enough that nobody can say anything useful about
+// them, numerous enough that nobody starts. Past one person the tool goes back
+// to what it was before the floor existed: the lines at or below the cutoff,
+// and nothing else.
+const _VR_TOPUP_MAX_BUYERS = 1;
+
 // Per-buyer roll-up of a parsed file, worst first. Drives the pick-list.
 function _vrBuyerSummary(parsed) {
     const by = {};
@@ -37017,10 +38465,16 @@ function _vrBuyerSummary(parsed) {
 }
 
 // The lines a selected buyer actually has to answer for: every line at/below the
-// cutoff, topped up with their next-worst negatives to _VR_BUYER_MIN_LINES.
-function _vrBuyerReplyLines(summary) {
+// cutoff, topped up with their next-worst negatives to _VR_BUYER_MIN_LINES —
+// but only when they are the only one picked. See _VR_TOPUP_MAX_BUYERS.
+//
+// topUp is passed rather than read off _vrSelBuyers, because the pick-list has
+// to show each row the count it would owe if it were ticked, which is a
+// different answer per row from the one the upload uses.
+function _vrBuyerReplyLines(summary, topUp) {
     const sorted = summary.lines.slice().sort((a, b) => a.variance_pct - b.variance_pct);
     const major = sorted.filter(l => l.variance_pct <= _VR_VARIANCE_CUTOFF);
+    if (!topUp) return major;
     if (major.length >= _VR_BUYER_MIN_LINES) return major;
     return sorted.slice(0, Math.min(_VR_BUYER_MIN_LINES, sorted.length));
 }
@@ -37086,10 +38540,11 @@ function _vrUploadSet() {
     const all = _vrParsed.items || [];
     if (_vrAllClear) return { items: all.map(l => ({ ...l, needs_reply: false })), buyers: [] };
     if (!_vrSelBuyers.size) return { items: all.map(l => ({ ...l, needs_reply: true })), buyers: null };
+    const topUp = _vrSelBuyers.size <= _VR_TOPUP_MAX_BUYERS;
     const owed = new Set();
     _vrBuyerSummary(_vrParsed)
         .filter(b => _vrSelBuyers.has(b.name))
-        .forEach(b => _vrBuyerReplyLines(b).forEach(l => owed.add(l)));
+        .forEach(b => _vrBuyerReplyLines(b, topUp).forEach(l => owed.add(l)));
     // Context lines are cutoff lines only — a minor negative belonging to nobody
     // in particular has no reason to be stored.
     const context = all.filter(l => !owed.has(l)).map(l => ({ ...l, needs_reply: false }));
@@ -37169,7 +38624,7 @@ async function checkVarianceReminders() {
     if (!stores.length) return;
     if (!_vrRemindersStarted) {
         _vrRemindersStarted = true;
-        setInterval(checkVarianceReminders, 10 * 60 * 1000);
+        setInterval(checkVarianceReminders, 30 * 60 * 1000);
     }
     try {
         const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
@@ -37214,7 +38669,7 @@ async function checkVarianceDmReminders() {
     if (!_vrIsDM()) return;
     if (!_vrDmRemindersStarted) {
         _vrDmRemindersStarted = true;
-        setInterval(checkVarianceDmReminders, 10 * 60 * 1000);
+        setInterval(checkVarianceDmReminders, 30 * 60 * 1000);
     }
     try {
         const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
@@ -37240,14 +38695,17 @@ async function checkVarianceDmReminders() {
             const store = (p.store || '').toUpperCase();
             if (!p.dm_notes_at) {
                 const allDone = p.answered >= p.items;
-                const duePassed = now > new Date(p.manager_due_at).getTime();
+                // Same day-based deadline the managers see, so the DM is told a
+                // store is ready to review on the same day the managers are told
+                // they are late — not at whatever minute the file was uploaded.
+                const duePassed = _vrDayPast(new Date(p.manager_due_at).getTime());
                 if (allDone || duePassed) readyStores.push(store);
             } else {
-                const replyDue = Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
+                const replyClosed = _vrDayPast(Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()), 2);
                 // A period the DM has already looked at since the last manager
                 // reply is done with — dm_reviewed_at is cleared server-side the
                 // moment a newer reply lands, so this cannot hide fresh news.
-                if (now >= replyDue && !p.dm_reviewed_at) {
+                if (replyClosed && !p.dm_reviewed_at) {
                     closedStores.push(store);
                     _vrClosedIds.push(p.id);
                     // A flagged note the manager HAS answered (mgr_replied, from the
@@ -37311,10 +38769,14 @@ function _vrFmtStores(stores) {
 // ONE combined row that lists the stores ("BAL and MPL: …") rather than a
 // separate popup per store. Cleared stores owe nothing, so they add no row.
 function _vrMaybePopup() {
-    const now = Date.now();
     const reviewSeen = _vrGetReviewSeen();
-    const explainStores = [];   // stores with unexplained lines
-    let explainCount = 0, explainOverdue = false, explainDueSoon = false, explainDueAt = 0;
+    // One entry per store with unexplained lines, carrying ITS OWN deadline
+    // state. A single shared explainOverdue flag used to tag the whole combined
+    // row, so BAL being three minutes late announced MPL as overdue as well —
+    // while MPL's own page said merely "due". Same instant, two screens,
+    // opposite answers, and no way for the manager to tell which was right.
+    const explain = [];         // { store, n, state: 'over' | 'today' | 'open' }
+    let explainDueAt = 0;
     const replyStores = [];     // stores with DM notes still awaiting a reply
     let replyCount = 0, replyOverdue = false;
     const reviewedStores = [];  // DM reviewed, no reply needed — FYI until they look
@@ -37335,22 +38797,25 @@ function _vrMaybePopup() {
         const unanswered = (p.items || 0) - (p.answered || 0);
         const due = new Date(p.manager_due_at).getTime();
         if (unanswered > 0) {
-            explainStores.push(store);
-            explainCount += unanswered;
+            explain.push({
+                store, n: unanswered,
+                state: _vrIsPastDue(p) ? 'over' : (_vrIsDueToday(p) ? 'today' : 'open'),
+            });
             // Earliest deadline still outstanding — shown on the feed card so the
             // manager sees WHEN without opening the tool. With several stores the
             // soonest is the one that matters.
             if (due && (!explainDueAt || due < explainDueAt)) explainDueAt = due;
-            if (now > due) explainOverdue = true;
-            else if (due - now < 24 * 3600 * 1000) explainDueSoon = true; // last day before the deadline
         }
         if (p.dm_notes_at) {
             if (p.awaiting_reply > 0) {
                 // Reply REQUESTED → action, nags until answered.
                 replyStores.push(store);
                 replyCount += p.awaiting_reply;
-                const replyDue = Math.max(due, new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
-                if (now > replyDue) replyOverdue = true;
+                // Two days to answer a DM note, counted the same way — the whole
+                // second day is on time. Must match the DM side's replyClosed
+                // exactly, or the manager stops being nagged on a different day
+                // from the one the DM is told the window shut.
+                if (_vrDayPast(Math.max(due, new Date(p.dm_notes_at).getTime()), 2)) replyOverdue = true;
             } else {
                 // DM reviewed with NO reply requested (or all replies already in) →
                 // one-time FYI so the manager reads the notes. Clears when they open
@@ -37360,6 +38825,14 @@ function _vrMaybePopup() {
             }
         }
     }
+
+    // Derived from the per-store states above: these drive the bubble's single
+    // icon and title, which have to pick ONE urgency for a mixed set. The worst
+    // state wins there — but the summary text below still names each group
+    // separately, so nobody reads their own store as later than it is.
+    const explainStores  = explain.map(e => e.store);
+    const explainOverdue = explain.some(e => e.state === 'over');
+    const explainDueSoon = explain.some(e => e.state === 'today');
 
     if (!explainStores.length && !replyStores.length && !reviewedStores.length && !clearedStores.length) {
         // Nothing outstanding — drop the row so it clears once the work's done.
@@ -37372,10 +38845,15 @@ function _vrMaybePopup() {
     }
 
     const parts = [];
-    if (explainStores.length) {
-        const tag = explainOverdue ? ' (overdue)' : (explainDueSoon ? ' (due tomorrow)' : '');
-        parts.push(`${_vrFmtStores(explainStores)}: ${explainCount} variance line${explainCount > 1 ? 's need' : ' needs'} an explanation${tag}`);
-    }
+    // One row PER DEADLINE STATE rather than one row tagged with the worst of
+    // them, so a store is never announced as overdue because a different store
+    // is. Still one bubble: these join with the rest by ' · '.
+    [['over', ' (overdue)'], ['today', ' (Due Today)'], ['open', '']].forEach(([st, tag]) => {
+        const grp = explain.filter(e => e.state === st);
+        if (!grp.length) return;
+        const n = grp.reduce((a, e) => a + e.n, 0);
+        parts.push(`${_vrFmtStores(grp.map(e => e.store))}: ${n} variance line${n > 1 ? 's need' : ' needs'} an explanation${tag}`);
+    });
     if (replyStores.length) {
         parts.push(`${_vrFmtStores(replyStores)}: reply to ${replyCount} DM note${replyCount > 1 ? 's' : ''}${replyOverdue ? ' (overdue)' : ''}`);
     }
@@ -37400,7 +38878,7 @@ function _vrMaybePopup() {
     // count OR a changed urgency tag re-surfaces a snoozed row.
     _vrRenderBubble(overdue ? '🚨' : (explainDueSoon ? '⏰' : '📊'),
         fyiOnly ? 'New variance report to review'
-                : (overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due tomorrow' : 'Variance replies needed')),
+                : (overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due today' : 'Variance replies needed')),
         summary + '.', summary, coveredStores, fyiOnly);
 
     // Deadline for the feed card's title. Stamped after the render (which rewrites
@@ -38891,7 +40369,7 @@ async function checkAgingInvReminders() {
     if (!stores.length) return;
     if (!_agRemindersStarted) {
         _agRemindersStarted = true;
-        setInterval(checkAgingInvReminders, 10 * 60 * 1000);
+        setInterval(checkAgingInvReminders, 30 * 60 * 1000);
     }
     try {
         const res = await fetch(`${AGING_INV_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
@@ -39017,7 +40495,7 @@ async function checkAgingInvDmReminders() {
     if (!_agIsDM()) return;
     if (!_agDmRemindersStarted) {
         _agDmRemindersStarted = true;
-        setInterval(checkAgingInvDmReminders, 10 * 60 * 1000);
+        setInterval(checkAgingInvDmReminders, 30 * 60 * 1000);
     }
     try {
         const res = await fetch(`${AGING_INV_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
@@ -40780,8 +42258,17 @@ function _samGatherReminders() {
    each tool's edge fn broadcasts a tiny "changed" ping after a
    successful write; we re-run that tool's existing check*()
    function, which re-fetches through the trusted fn. No table
-   data ever travels over realtime. The 10-min polls stay as a
-   safety net (to be slowed once every tool broadcasts).
+   data ever travels over realtime.
+
+   THE POLLS ARE THE FLOOR, NOT THE PATH. Every tool below now
+   broadcasts, so the old 10-minute safety nets were re-asking a
+   question realtime had already answered — 2M edge invocations a
+   month, over the account's limit, for a handful of browsers.
+   They are 30 minutes now (and the two hot ones, pollReactions
+   and the store-comment/claims tick, 60s and 5min). If a poll
+   here is ever the only way something surfaces, that tool is
+   missing a broadcastChange in its edge fn — fix that end, do
+   not speed this one up.
    ========================================================= */
 const _RT_CHANNEL = 'speeks-notify';
 let _rtClient = null, _rtChannel = null, _rtLoading = null, _rtStarted = false;
@@ -41813,7 +43300,7 @@ async function checkPreferredReminders() {
     _plSyncToolLabels();
     if (!owner && !requester) { _plHideBubble('owner'); _plHideBubble('mine'); return; }
     // Safety net behind the realtime ping, same cadence as the other tools.
-    if (!_plCheckStarted) { _plCheckStarted = true; setInterval(checkPreferredReminders, 10 * 60 * 1000); }
+    if (!_plCheckStarted) { _plCheckStarted = true; setInterval(checkPreferredReminders, 30 * 60 * 1000); }
     try {
         if (owner) {
             const res = await fetch(PREFERRED_URL + '?scope=all&v=' + Date.now());
@@ -42146,9 +43633,9 @@ function renderDmListingModal() {
             + '<div class="dmx-cell"><div class="dmx-cell-l">District listed</div><div class="dmx-cell-v">' + listed + '</div></div>'
             + '<div class="dmx-cell"><div class="dmx-cell-l">District target</div><div class="dmx-cell-v">' + target + '</div></div>'
             + _dmxStatCell('Attainment', _dmxPct(listed, target) + '<small>%</small>', _dmxPct(listed, target))
-            // No stretch-factor cell here. It is ONE number for all five stores,
-            // so a district strip is the wrong place to imply otherwise — and the
-            // control that sets it already states it on every store pane.
+            // No stretch-factor cell here. It is a PER-STORE number now, so a
+            // single district figure would be a fiction; each store's own is on
+            // its own pane, next to the control that sets it.
             + '</div>'
             + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
         return;
@@ -42162,9 +43649,9 @@ function renderDmListingModal() {
         + ' · ' + sel.week + ' this week · ' + sel.names.length + ' on roster</div>'
         + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
 
-    // The stretch factor, not a per-store number. The goal itself is derived from
+    // The stretch factor for THIS store. The goal itself is still derived from
     // who is rostered — there is nothing left here to type by hand.
-    pane += _dmxFactorSetter(all);
+    pane += _dmxFactorSetter(all, sel);
 
     if (!sel.names.length) {
         // Say WHY it is blank. The goal is derived from who gets rostered, so an
@@ -42221,29 +43708,47 @@ function renderDmListingModal() {
 // capacity model and fought it: the whole point of deriving a goal from who is
 // actually rostered is that nobody hand-types it afterwards.
 //
-// What is left is the ONE dial the model has — what fraction of a store's
-// ceiling its weekly goal should be. Raising it pushes every store by the same
-// proportion of what its own people can do, which is the honest way to push for
-// growth; the old ratchet raised whichever store had a lucky fortnight.
+// What is left is the one dial the model has — what share of a store's ceiling
+// its weekly goal should be. It is set PER STORE (user, 2026-09-07): "so I can
+// incrementally move up stores that keep hitting their weekly goals, but keep
+// stores that aren't at lower ones." A single district dial could only ever be
+// set to what the weakest store could take.
 //
-// Saving re-freezes THIS week for every store at the new number (see the server).
+// This is still not a hand-typed goal. Raising OVL to 0.80 pushes OVL by a share
+// of what OVL's own people can do, so the store still moves on its own when it
+// gains or loses somebody — which is the part the old ratchet got wrong.
+//
+// Saving re-freezes THIS week for THIS store at the new number (see the server).
 // Past weeks are untouched, so history can't re-colour itself.
-function _dmxFactorSetter(all) {
-    const f = ListingGoalsEngine.cfg.goal_factor || 0.75;
-    const pctTxt = Math.round(f * 100) + '%';
-    const preview = all.map(s => escapeHtml(s.store) + ' ' + s.suggested).join('  ·  ');
+function _dmxFactorSetter(all, sel) {
+    const store = sel && sel.store;
+    if (!store) return '';
+    const f = ListingGoalsEngine.factorFor(store);
+    const district = ListingGoalsEngine.cfg.goal_factor || 0.75;
+    const own = Math.abs(f - district) > 0.0001;
+    // Every store's factor, so the DM can see the spread they are managing
+    // without clicking through all five panes.
+    const spread = all.map(s => {
+        const sf = ListingGoalsEngine.factorFor(s.store);
+        const txt = escapeHtml(s.store) + ' ' + Math.round(sf * 100) + '%';
+        return s.store === store ? '<b>' + txt + '</b>' : txt;
+    }).join('  ·  ');
     return '<div class="dmx-goalset is-set">'
         + '<div class="dmx-goalset-l">'
-            + '<span class="dmx-goalset-t">Stretch factor · ' + pctTxt + ' of capacity</span>'
-            + '<span class="dmx-goalset-n">Every store’s weekly goal is this share of what its roster could list. '
-                + 'Saving applies it to the week of ' + escapeHtml(_dmxWeekLabel()) + ' — earlier weeks keep the number they ran on.</span>'
-            + '<span class="dmx-goalset-n" style="margin-top:6px;"><b>Now:</b> ' + preview + '</span>'
+            + '<span class="dmx-goalset-t">' + escapeHtml(store) + ' stretch factor · '
+                + Math.round(f * 100) + '% of capacity</span>'
+            + '<span class="dmx-goalset-n">' + escapeHtml(store) + '’s weekly goal is this share of what '
+                + 'its own roster could list. Applies to ' + escapeHtml(store) + ' only — the other stores keep theirs. '
+                + 'Saving moves the week of ' + escapeHtml(_dmxWeekLabel()) + '; earlier weeks keep the number they ran on.</span>'
+            + '<span class="dmx-goalset-n" style="margin-top:6px;"><b>All stores:</b> ' + spread
+                + (own ? '' : '  ·  <i>' + escapeHtml(store) + ' is on the district default</i>') + '</span>'
         + '</div>'
         + '<div class="dmx-goalset-r">'
             + '<input type="number" id="dmx-factor-input" class="dmx-goalset-i" min="0.3" max="1.2" step="0.01"'
                 + ' value="' + f + '"'
-                + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();dmxSaveFactor();}">'
-            + '<button type="button" class="dmx-goalset-b" onclick="dmxSaveFactor()">Apply</button>'
+                + ' onkeydown="if(event.key===&apos;Enter&apos;){event.preventDefault();dmxSaveFactor();}">'
+            + '<button type="button" class="dmx-goalset-b" onclick="dmxSaveFactor()">Apply to '
+                + escapeHtml(store) + '</button>'
             + '<span class="dmx-goalset-msg" id="dmx-goal-msg"></span>'
         + '</div>'
         + '</div>';
@@ -42264,19 +43769,25 @@ async function dmxSaveFactor() {
         return;
     }
     say('Applying…', true);
+    // The pane's own store, read at save time rather than captured when the
+    // control was built: the rail can move under a half-typed number.
+    const store = _dmxSel.lg;
     try {
         const resp = await fetch(STORE_TARGETS_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'factor', value: v, name: sessionStorage.getItem('speeksUserName') || '' }),
+            body: JSON.stringify({
+                action: 'factor', store, value: v,
+                name: sessionStorage.getItem('speeksUserName') || '',
+            }),
         });
         const j = await resp.json();
         if (j.error) { say(j.error, false); return; }
-        // Re-read every store so the rail, the strip and the preview all move
-        // together — the factor changed all five, not just the selected one.
+        // Re-read every store anyway. Only this one's goal moved, but the pane
+        // prints all five factors and the district strip totals all five goals.
         await fetchAllStoreTargets();
         renderDmListingModal();
-        say('Applied', true);
+        say('Applied to ' + store, true);
         setTimeout(() => { const m = document.getElementById('dmx-goal-msg'); if (m) m.textContent = ''; }, 2500);
     } catch (e) { say('Could not reach the server.', false); }
 }
@@ -46504,9 +48015,13 @@ function renderListingHealthTool() {
     const done = fb.done || [];
     const doneHtml = done.length ? `
       <details class="lh-tool-done">
-        <!-- "handled", not "sent" — copying is not finishing, and the stamp is
-             now made when the work is done rather than when the text left. -->
-        <summary>${done.length} already handled</summary>
+        <!-- "Cleared", not "sent" — copying is not finishing, and the stamp is
+             now made when the work is done rather than when the text left.
+             ⚠️ AND IT IS THE WORD THE BUTTON USES. "already handled" named the
+             same act as "Clear", so the place notes went and the button that
+             sent them there did not share a word; a reader had to infer they
+             were connected. Whatever clears them, they are Cleared. -->
+        <summary>${done.length} Cleared</summary>
         ${done.map(r => `<div class="lh-tool-done-row">
           <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
           <span class="lh-tool-done-note">“${_ecEsc(r.note || '')}”</span>
@@ -46562,7 +48077,7 @@ function renderListingHealthTool() {
     body.innerHTML = `
       <div class="lt-ask-bar">
         <span class="lt-ask-n">${n} dismissal${n === 1 ? '' : 's'} explained a rule was wrong${
-          fb.settled ? ` · ${fb.settled} look like the rule overruled the listing` : ''}</span>
+          fb.settled ? ` · ${fb.settled} look${fb.settled === 1 ? 's' : ''} like the rule overruled the listing` : ''}</span>
         <button class="lt-ask-btn" onclick="lhToolCopy(this)">Copy The Ask For Claude</button>
       </div>
       <p class="lh-tool-say">Paste it into Claude. It groups these by the rule that
@@ -46576,7 +48091,11 @@ function renderListingHealthTool() {
            took the reminder with it. -->
       <div class="lh-tool-finish">
         <span>Once Claude has been through them:</span>
-        <button class="lh-tool-done-btn" onclick="lhToolDone()">Clear These ${n}</button>
+        <!-- ⚠️ SAME WORDS AS THE DIALOG IT OPENS. "Clear These 1" was both
+             ungrammatical and a different sentence from the "Clear 1 Note?" it
+             raised, so the press and the confirmation read as two separate
+             things. The count carries its own noun and pluralises with it. -->
+        <button class="lh-tool-done-btn" onclick="lhToolDone()">Clear ${n} Note${n === 1 ? '' : 's'}</button>
       </div>
       ${doneHtml}`;
 }
@@ -46621,7 +48140,7 @@ async function lhToolDone() {
         title: `Clear ${n} Note${n === 1 ? '' : 's'}?`,
         body: `<p class="lt-ask-say">Do this once Claude has been through them —
                 it clears the reminder. The notes are kept and stay readable
-                under <b>already handled</b>; nothing on any listing changes
+                under <b>Cleared</b>; nothing on any listing changes
                 either way.</p>`,
         go: 'Clear Them', cancel: 'Not Yet' });
     if (!said) return;

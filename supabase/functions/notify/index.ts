@@ -407,6 +407,16 @@ const dayMs = 86400000;
 const parseDate = (s: string) => new Date(`${s}T12:00:00Z`);
 const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
 const addDays = (s: string, n: number) => fmtDate(new Date(parseDate(s).getTime() + n * dayMs));
+// The Central DAY a timestamp falls on. A deadline stored as an instant is a
+// deadline nobody can act on precisely: the variance blocks below used to
+// compare `manager_due_at` to Date.now(), so five reports uploaded across one
+// afternoon got five different cutoffs and a manager could be emailed "overdue"
+// at 1:17pm while the site still said they had until midnight. Deadlines are
+// days here, exactly as they are on the site (Ethan, 2026-09-08).
+const centralDay = (d: Date) => centralParts(d).date;
+// Has the store's day moved past this timestamp's day (optionally n days on)?
+const dayPast = (at: Date | null, n = 0) =>
+  !!at && centralParts().date > (n ? addDays(centralDay(at), n) : centralDay(at));
 // The Sunday that ended the most recently COMPLETED week (today, if it's Sunday).
 const lastSunday = (s: string) => addDays(s, -parseDate(s).getUTCDay());
 // The Monday that starts the week containing s.
@@ -967,6 +977,14 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // Which stores each person answers for, as a test helper.
   const covers = (p: Person, store: string) => p.stores.includes(store);
 
+  // How far back the variance blocks below will look. 45 days, the same window
+  // loadVarianceReplies uses on the site, so the mail and the tool agree about
+  // which periods still exist. WITHOUT this the queries were unbounded: a period
+  // abandoned half-explained would be mailed about for as long as the row lived,
+  // and the dedupe key is the period id, so a fix that made it fire again would
+  // have fired for every period in the table at once.
+  const vrCutoff = new Date(Date.now() - 45 * 86400000).toISOString();
+
   // ---- Store KPIs, weekly + monthly -------------------------------------
   // Gate: _KPI_DUE_ROLES = manager / owner (manager) / owner manager. Assistant
   // Managers are deliberately NOT included (ASM KPI entry is switched off; the
@@ -1111,14 +1129,21 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // upload notifies again but an unanswered one doesn't nag daily.
   {
     const { data: periods } = await sb.from("variance_reply_periods")
-      .select("id, store, manager_due_at, all_clear").is("all_clear", null);
+      .select("id, store, manager_due_at, all_clear, uploaded_at")
+      .eq("all_clear", false).gte("uploaded_at", vrCutoff);
     for (const per of periods || []) {
+      // gm_note, NOT mgr_reply. This notification is "explain your variance
+      // lines", and gm_note is the explanation; mgr_reply is the answer to a DM
+      // note, a later stage that most periods never reach. Counting mgr_reply
+      // meant a store that had explained every line still read as owing every
+      // line — LEE sat at 8/8 explained and would have been emailed "8 items
+      // still need a reply" (Ethan, 2026-09-08).
       const { data: items } = await sb.from("variance_reply_items")
-        .select("id").eq("period_id", per.id).eq("needs_reply", true).is("mgr_reply", null);
+        .select("id").eq("period_id", per.id).eq("needs_reply", true).is("gm_note", null);
       if (!items?.length) continue;
       const store = String(per.store || "").toUpperCase();
       const dueAt = per.manager_due_at ? new Date(per.manager_due_at) : null;
-      const late = !!dueAt && dueAt.getTime() < Date.now();
+      const late = dayPast(dueAt);
       due.push({
         slug: "varianceDue", period: String(per.id), cat: "variance_aging", store,
         title: late ? `Variance replies overdue — ${STORE_NAME[store]}` : `Variance replies due — ${STORE_NAME[store]}`,
@@ -1248,21 +1273,28 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // its `period` key, so an unread one does not nag daily.
   {
     const { data: periods } = await sb.from("variance_reply_periods")
-      .select("id, store, manager_due_at, dm_notes_at, dm_reviewed_at, all_clear").is("all_clear", null);
+      .select("id, store, manager_due_at, dm_notes_at, dm_reviewed_at, all_clear, uploaded_at")
+      .eq("all_clear", false).gte("uploaded_at", vrCutoff);
 
     for (const per of periods || []) {
       const store = String(per.store || "").toUpperCase();
       const { data: items } = await sb.from("variance_reply_items")
-        .select("mgr_reply, dm_note, needs_reply, dm_reply_requested").eq("period_id", per.id);
+        .select("gm_note, mgr_reply, dm_note, needs_reply, dm_reply_requested").eq("period_id", per.id);
       const rows = items || [];
 
       if (!per.dm_notes_at) {
         // STAGE 1 — the manager's explanations are in and it is the DM's turn.
         // Mirrors the site's `readyStores`: everything answered, or the window shut
         // with whatever came in.
-        const owed = rows.filter((r: any) => r.needs_reply && !r.mgr_reply).length;
-        const answered = rows.filter((r: any) => r.needs_reply && r.mgr_reply).length;
-        const duePassed = per.manager_due_at && new Date(per.manager_due_at).getTime() <= Date.now();
+        // gm_note again, for the same reason as the manager block above: an
+        // "explanation" is a gm_note. Reading mgr_reply here made `answered`
+        // zero for every period the DM had not yet noted on — which is all of
+        // them at this stage — so the gate `answered > 0` could never open and
+        // the DM was never told a store was ready. LEE, explained 8 of 8, was
+        // invisible. The site counts gm_note (p.answered); now so does this.
+        const owed     = rows.filter((r: any) => r.needs_reply && !r.gm_note).length;
+        const answered = rows.filter((r: any) => r.needs_reply &&  r.gm_note).length;
+        const duePassed = dayPast(per.manager_due_at ? new Date(per.manager_due_at) : null);
         if (answered > 0 && (owed === 0 || duePassed)) {
           due.push({
             slug: "varianceDmReview", period: String(per.id) + ":s1", cat: "variance_aging", store,
@@ -1277,19 +1309,22 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
       } else {
         // STAGE 2 — the DM asked follow-up questions and that window has now shut.
         // Same clock the site uses: two days past the later of the two stamps.
-        const replyDue = Math.max(
+        const laterStamp = new Date(Math.max(
           per.manager_due_at ? new Date(per.manager_due_at).getTime() : 0,
           new Date(per.dm_notes_at).getTime(),
-        ) + 2 * 86400000;
+        ));
+        // The day the window shuts: two days on from the later stamp, so the
+        // whole second day is still on time — the same count the site makes.
+        const closeDay = addDays(centralDay(laterStamp), 2);
         const replied = rows.filter((r: any) => r.dm_reply_requested && r.mgr_reply).length;
-        if (Date.now() >= replyDue && !per.dm_reviewed_at) {
+        if (dayPast(laterStamp, 2) && !per.dm_reviewed_at) {
           due.push({
             // Keyed on the window's CLOSE DATE, not the period alone. dm_reviewed_at
             // is cleared server-side whenever a newer reply lands, so a second
             // question-and-answer cycle re-opens this condition — and a period-only
             // key would have already fired, silently swallowing every later cycle.
             // The close date moves with dm_notes_at, so each cycle gets exactly one.
-            slug: "varianceDmReview", period: String(per.id) + ":s2:" + fmtDate(new Date(replyDue)),
+            slug: "varianceDmReview", period: String(per.id) + ":s2:" + closeDay,
             cat: "variance_aging", store,
             title: `Variance reply window closed — ${STORE_NAME[store] || store}`,
             body: replied

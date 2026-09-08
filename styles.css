@@ -9130,11 +9130,13 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 #listingGoalsModal .lu-week.red .lu-week-num { color: #b02a2f !important; }
 #listingGoalsModal .lu-week.empty .lu-week-num { color: #8a94a3 !important; }
 
-/* When the Action Menu is live for this user (managers/ASMs), it re-homes the
-   ticker's toggles and the announcements bell -- so hide both. Everyone else
-   (employees, DM, other pages) keeps them until the deck rolls out to them. */
+/* When the Action Menu is live for this user, it re-homes the ticker's toggles
+   -- so hide the ticker. Everyone else (other pages) keeps it.
+
+   The bell rule that used to sit here is gone with the bell itself: it was only
+   ever hidden where the deck exists, which is index.html alone, so it kept
+   reappearing on every other page. The nav no longer carries it at all. */
 body.sam-active #infoTicker { display: none !important; }
-body.sam-active #notifBellBtn { display: none !important; }
 
 /* Condensed one-line hotbar for Action Menu users: the whole stack becomes one
    sleek chip bar (labels hidden, buttons no longer stretch full-width). */
@@ -9517,6 +9519,25 @@ body.sam-active .hotbar-btn:hover {
 .top-nav .nav-link i { width: auto; font-size: 0; display: inline-flex; align-items: center; }
 .top-nav .nav-link svg { width: 17px; height: 17px; stroke-width: 1.9; opacity: .96; }
 .top-nav .nav-link.active svg { opacity: 1; color: #3ddc84; }   /* active icon lights up green */
+
+/* All five page links the same width (user, 2026-09-07).
+   A grid of equal auto columns sizes every track to the WIDEST label rather
+   than to a number typed in here, so the row stays even when a page is renamed
+   — "Processes & Policies" sets the width today, something else can set it
+   tomorrow, and nobody has to remember this rule exists.
+   It costs width: five columns at the widest label is wider than five columns
+   at their own labels, so checkNavCompact() drops to icons-only at a wider
+   viewport than it used to. That is handled, not ignored — measureNaturalWidth()
+   reads the bar at width:max-content, which resolves these fr tracks the same
+   way, so the threshold moves with the change instead of going stale.
+   The mobile bottom tab bar re-declares display:flex further down this file and
+   wins on source order, so this shapes the desktop bar only. */
+.top-nav .nav-bar {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+}
+.top-nav .nav-link { justify-content: center; }
 
 /* --- utility chip buttons (idea / messages / hotkeys / calendar / bell) --- */
 .top-nav .user-profile-nav { gap: 10px; border-right-color: rgba(255,255,255,.08); padding-right: 16px; }
@@ -10137,6 +10158,31 @@ body.sam-active .hotbar-btn:hover {
 /* var(--sage-deep, ...) is used across the redesigned modals/hub with a
    fallback and was never defined — define it to the deep emerald. */
 :root { --sage-deep: #178048; }
+
+/* =========================================================
+   DROPDOWNS — ONE PALETTE, EVERY PICKER
+   ---------------------------------------------------------
+   Every dropdown on the site is one of three things, and until now each had its
+   own hexes: the .dd-* face that _ddEnhance puts over a native <select> (which
+   is nearly all of them), .mg-picker in the Margin Guide, and .pg-ask-pick in
+   the Picture Guide. They are the same control and should look it.
+
+   These are the emerald pair the redesign is rolling out — #1f9d57 / #178048,
+   the same as --sage-deep — so a dropdown is finished rather than waiting for
+   its scope to be flipped. Defined at :root, not on a panel, because .dd-list
+   is MOVED TO <body> when it opens (see _ddOpen) and a token scoped to the
+   panel it came from would resolve to nothing at exactly the moment it is
+   needed. That is why this block is here and not next to .dd-list.
+   ========================================================= */
+:root {
+    --dd-line: #e3e8ee;        /* the face's border, and the menu's */
+    --dd-accent: #1f9d57;      /* focused face, the ring, the highlight ring */
+    --dd-accent-deep: #178048; /* text of the chosen row */
+    --dd-accent-tint: #e8f7ee; /* fill of the chosen row */
+    --dd-ring: #c6ecd6;        /* the soft halo on a focused face */
+    --dd-row-hover: #f1f5f9;   /* hover, which must not read as chosen */
+    --dd-row-hi: #f6faf7;      /* where the type-ahead has got to */
+}
 
 /* Flip var(--sage-professional) to the fresh emerald ONLY inside the
    redesigned surfaces (the global token stays sage for untouched pages). */
@@ -15532,14 +15578,14 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
  * the sage accent, so the rungs read at a glance without inventing brand hues.
  * ========================================================================== */
 .mg-panel {
-    --mg-line: #e3e8ee;
+    --mg-line: var(--dd-line);
     --mg-hdr: #f6faf7;
     --mg-muted: #64707c;
     --mg-faint: #9aa6ad;
-    --mg-accent: #1f9d57;
-    --mg-accent-deep: #178048;
-    --mg-accent-tint: #e8f7ee;
-    --mg-ring: #c6ecd6;
+    --mg-accent: var(--dd-accent);
+    --mg-accent-deep: var(--dd-accent-deep);
+    --mg-accent-tint: var(--dd-accent-tint);
+    --mg-ring: var(--dd-ring);
     --mg-amber: #b45309;
     --mg-amber-tint: #fdf3e1;
     --mg-amber-line: #f0d9a8;
@@ -18166,10 +18212,19 @@ body.tv-body { display: block; background: #eef1f5; }
     color: #334155; line-height: 1.5; margin: 2px 0;
 }
 .lh-tool-ttl .lt-lab { flex-shrink: 0; }
+/* ⚠️ RED, NOT AMBER, AND IT IS A VERDICT ABOUT US. This line means the words we
+   proposed removing are sitting in the listing's own spec field — the strongest
+   evidence available here that the RULE was wrong, which is why the bar at the
+   top counts these separately as "look like the rule overruled the listing".
+   Amber read as "have a think about this one" and put it in the same visual
+   class as the grey .lh-tool-unsettled below, which says the opposite thing:
+   that nothing settles it. These are the rows most likely to end in a rule
+   change, so they take the same red as .lh-tool-err rather than a colour of
+   their own — one red in this tool, meaning "we got this wrong". */
 .lh-tool-says {
     margin: 7px 0 0; padding: 6px 9px; border-radius: 7px;
-    background: #fffbeb; border: 1px solid #fde68a;
-    font-size: 11.5px; color: #92400e; line-height: 1.5;
+    background: #fef2f2; border: 1px solid #fecaca;
+    font-size: 11.5px; color: #7f1d1d; line-height: 1.5;
 }
 .lh-tool-unsettled {
     margin: 7px 0 0; padding: 6px 9px; border-radius: 7px;
@@ -18880,7 +18935,7 @@ select.dd-native {
 :where(.dd-btn) {
     background-color: #fff;
     color: var(--slate-charcoal, #17201c);
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--dd-line);
     border-radius: 8px;
     padding: 0 12px;
     min-height: 34px;
@@ -18911,7 +18966,16 @@ select.dd-native {
 .dd-cur { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dd-chev { width: 15px; height: 15px; flex: 0 0 auto; color: #94a3b8; transition: transform .15s ease; }
 .dd-host.open .dd-chev { transform: rotate(180deg); }
-.dd-btn:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
+/* A soft emerald halo rather than a hard 2px outline: an outline sits OUTSIDE
+   the border and collides with whatever the control is packed against, which in
+   a modal's field grid is the next control. box-shadow spreads without taking
+   layout space. Both states, because a face with its list down is focused
+   whether or not the keyboard put it there. */
+.dd-btn:focus-visible, .dd-host.open .dd-btn {
+    outline: none;
+    border-color: var(--dd-accent) !important;
+    box-shadow: 0 0 0 3px var(--dd-ring) !important;
+}
 
 /* position: fixed, placed by _ddPlace. Half the selects on this site sit inside
    modals and side panels with overflow:hidden, and an absolutely positioned menu
@@ -18928,9 +18992,9 @@ select.dd-native {
     overflow-y: auto;
     padding: 5px;
     background: #fff;
-    border: 1px solid #e3ebe6;
+    border: 1px solid var(--dd-line);
     border-radius: 12px;
-    box-shadow: 0 12px 30px rgba(15, 30, 22, .16);
+    box-shadow: 0 12px 34px rgba(16, 24, 40, .18);
     -webkit-overflow-scrolling: touch;
 }
 /* Hidden: a chevron the page drew for this select before the face existed.
@@ -18956,17 +19020,28 @@ select.dd-native {
     text-overflow: ellipsis;
     cursor: pointer;
 }
-.dd-opt:hover { background: #eef4f0; }
-/* THE OPTION YOU ARE ON WEARS THE SAME BLACK AS THE ONE THAT IS CHOSEN. Typing
-   moves focus, and the pale green tint sat too close to the plain rows to see at
-   a glance which one the letters had found. The question being asked while you
-   type is "what am I on", and the answer should look like an answer.
-   :focus-visible rather than :focus, so a mouse click does not paint a row black
-   on its way to closing the list. */
+.dd-opt:hover { background: var(--dd-row-hover); }
+/* WHAT AM I ON vs WHAT IS CHOSEN — two questions, two answers, and they can both
+   be on screen at once.
+   These were BOTH solid charcoal, deliberately: a pale green tint alone sat too
+   close to the plain rows to see at a glance where typing had got to, and black
+   is unmissable. It was the right call against that alternative — but it made
+   every dropdown on the site answer "what is chosen" in a colour the rest of the
+   control does not use, and it lost the difference between the two states by
+   making them identical.
+   A RING is what fixes it. It reads instantly at a glance — that was black's
+   only real advantage — without a colour the palette has to apologise for, and
+   it stacks over the tint, so the chosen row that you are also on shows both at
+   once. Ported from .pg-ask-opt.hi (Ethan, 2026-09-08).
+   :focus-visible, not :focus, so a mouse click does not paint a row on its way
+   to closing the list. */
 .dd-opt:focus-visible {
-    background: var(--slate-charcoal, #17201c); color: #fff; outline: none;
+    background: var(--dd-row-hi); box-shadow: inset 0 0 0 1.5px var(--dd-accent);
+    outline: none;
 }
-.dd-opt.on { background: var(--slate-charcoal, #17201c); color: #fff; }
+.dd-opt.on {
+    background: var(--dd-accent-tint); color: var(--dd-accent-deep); font-weight: 780;
+}
 .dd-opt.dd-dis { opacity: .45; cursor: not-allowed; }
 
 @media (prefers-reduced-motion: reduce) { .dd-chev { transition: none; } }
@@ -19160,9 +19235,13 @@ select.dd-native {
        unreachable. clamp() lets the bar give ground continuously instead of
        holding a fixed size until it breaks: 30px at 320, the original 34 from
        ~386 up. Same reasoning for the gap and the Sign Out padding. */
-    /* index.html hides the Announcements bell (body.sam-active — the briefing
-       deck replaces it), so the OTHER four shells carry one control more in the
-       same bar. They are what sets the floor here, not the home page. */
+    /* Every shell now carries the same set of controls: the Announcements bell
+       came out of the nav on 2026-09-07, and it was the one control the other
+       four shells had that index.html did not. The sizes below were set when
+       they carried that extra control, so they are a floor with a little room
+       in it rather than a tight fit — left alone deliberately, because they are
+       measured against real 320px hardware and one fewer button cannot break
+       them. */
     /* One size for every control in the bar and the space shared out evenly
        between them (user's call, 19 Aug). The Tools button was a 45px rounded
        rectangle sitting beside 34px squares, and the group huddled to the right
@@ -21218,3 +21297,604 @@ select.dd-native {
     .b2b-cap-row { flex-wrap: wrap; }
     .b2b-cap-what { flex: 1 1 100%; }
 }
+
+/* ========================================================================== *
+ * PICTURE GUIDE (Operations, next to the Margin Guide)
+ * --------------------------------------------------------------------------
+ * The board is the binder page it replaces: a grid of square frames, the shot's
+ * number in a corner box, black borders on the shots every item gets and red on
+ * the ones that only apply sometimes. A lister who has used the printout should
+ * need nothing explained.
+ *
+ * The one thing the paper cannot do is renumber, so the numbers here are drawn
+ * from _pgSequence() rather than stored, and a switched-off conditional stays on
+ * the page greyed and dashed instead of vanishing — a lister who spots a scratch
+ * halfway through has to be able to find the slot and switch it back on.
+ *
+ * Palette is deliberately the Margin Guide's, not a new one: these are two
+ * reference tools a tab apart, and the second inventing its own greens would
+ * read as a different product.
+ * ========================================================================== */
+/* The palette is shared with .pg-ask, which mounts on <body> and so is outside
+   .pg-panel entirely — a dialog that inherited nothing would fall back to
+   whatever the page ambient is. One declaration, two roots, rather than a second
+   copy of thirteen hex values to keep in step by hand. */
+.pg-panel, .pg-ask {
+    /* The five a dropdown shares with every other picker on the site come from
+       the :root block by --sage-deep. Same argument as the note above, one level
+       up: a second copy of the emerald pair is a second thing to keep in step. */
+    --pg-line: var(--dd-line);
+    --pg-hdr: var(--dd-row-hi);
+    --pg-muted: #64707c;
+    --pg-faint: #9aa6ad;
+    --pg-accent: var(--dd-accent);
+    --pg-accent-deep: var(--dd-accent-deep);
+    --pg-accent-tint: var(--dd-accent-tint);
+    --pg-ring: var(--dd-ring);
+    --pg-red: #d13b3b;
+    --pg-red-deep: #7f1d1d;
+    --pg-red-tint: #fdf1f1;
+    --pg-red-line: #f0c9c9;
+    --pg-ink: #1a1c1e;
+}
+/* The hidden ATTRIBUTE has to actually hide. Its UA rule is display:none at the
+   lowest specificity there is, so any author rule setting display on the same
+   element beats it silently — and two already did. .pg-ask-menu was display:flex,
+   so a combo list could never be put away and an empty one drew as a bar under
+   the box. .pg-f is display:flex, so the "take as many photos as needed"
+   checkbox never hid and showed on always-taken photos, which the database
+   refuses outright. Fixed here rather than one rule at a time, because the next
+   one would break the same way — and it did: #pg-f-opt, the whole optional half
+   of the edit form, is toggled by this attribute too. */
+.pg-panel [hidden], .pg-ask [hidden] { display: none !important; }
+
+.pg-panel {
+    padding: 0;
+    /* Same escape hatch as .mg-panel: .ws-panel pins panes to a viewport-derived
+       height, which clips the tail of a sixteen-slot board. This is a reference
+       sheet, so it grows with its content and the page scrolls. overflow stays
+       visible or the sticky rail silently stops sticking. */
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible;
+}
+.pg-head {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 18px 22px; border-bottom: 1px solid var(--pg-line);
+    background: var(--pg-hdr); border-radius: 16px 16px 0 0;
+}
+.pg-eyebrow {
+    font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--pg-accent-deep);
+}
+.pg-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.pg-title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+.pg-title-acts { display: flex; align-items: center; gap: 10px; }
+.pg-sub { margin: 0; font-size: 13.5px; color: var(--pg-muted); }
+.pg-body { padding: 18px 22px 24px; }
+.pg-loading, .pg-error { padding: 40px 0; text-align: center; color: var(--pg-muted); font-size: 14px; }
+.pg-error { color: var(--pg-red); }
+.pg-retry {
+    display: inline-block; margin-left: 10px; font: inherit; font-size: 12.5px; font-weight: 650;
+    padding: 5px 12px; border-radius: 8px; border: 1px solid var(--pg-line);
+    background: #fff; color: var(--pg-muted); cursor: pointer;
+}
+.pg-retry:hover { border-color: var(--pg-accent); color: var(--pg-accent-deep); }
+
+/* Edit / Back. Hidden by default and revealed by .pg-can from pgRender(), never
+   by an inline style — _applyFeatureOverridesToPlainEls strips inline display
+   from every non-overridden [data-feature] element, which would hand the editor
+   to everyone. Same trap the Margin Guide fell into. */
+.pg-manage { display: none; }
+/* Edit and Done are ONE CONTROL IN ONE PLACE: whichever applies occupies the
+   slot, so the way out is never somewhere new. Which means they have to be the
+   same size — they had drifted a pixel apart (14px icon and a 7px gap against
+   13px and 6px), and a slot that changes shape as you step into the editor
+   reads as the page shifting under you (Ethan, 2026-09-08).
+   ONE rule owns the box for both, so they cannot drift again; the two rules
+   after it only colour them. min-width so the box is identical even though
+   "Edit" and "Done" are not the same width in this font. */
+.pg-panel.pg-can .pg-manage,
+.pg-panel.pg-editing .pg-back-top {
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 7px; cursor: pointer; box-sizing: border-box;
+    font: inherit; font-size: 12px; font-weight: 700;
+    border-radius: 9px; padding: 7px 13px; min-width: 92px; white-space: nowrap;
+}
+.pg-panel.pg-can .pg-manage {
+    color: var(--pg-accent-deep);
+    background: var(--pg-accent-tint); border: 1px solid var(--pg-ring);
+}
+.pg-panel.pg-can .pg-manage:hover { background: #dcf2e5; }
+.pg-manage svg, .pg-back-top svg {
+    width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;
+}
+/* The "Saved" pill. Takes no layout when it is not saying anything —
+   visibility, not display, so appearing never shifts the Done button sideways.
+   Only ever visible inside the editor: the reading board writes nothing. */
+.pg-saved {
+    display: none; align-items: center; gap: 5px;
+    padding: 4px 10px; border-radius: 999px;
+    background: var(--pg-accent-tint); color: var(--pg-accent-deep);
+    border: 1px solid var(--pg-ring);
+    font-size: 11.5px; font-weight: 750; white-space: nowrap;
+    visibility: hidden; opacity: 0; transition: opacity .18s ease;
+}
+.pg-panel.pg-editing .pg-saved { display: inline-flex; }
+.pg-saved.on { visibility: visible; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .pg-saved { transition: none; } }
+.pg-back-top { display: none; }
+/* AFTER the shared box rule above, and it has to stay after: both selectors are
+   three classes, so this only wins on ordering. */
+.pg-panel.pg-editing .pg-manage { display: none; }
+.pg-panel.pg-editing .pg-back-top {
+    color: var(--pg-muted); background: #fff; border: 1px solid var(--pg-line);
+}
+.pg-panel.pg-editing .pg-back-top:hover { background: var(--pg-hdr); color: var(--pg-accent-deep); }
+
+/* ---- shell: category rail + the board ------------------------------------ */
+.pg-shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 1100px) { .pg-shell { grid-template-columns: 1fr; } }
+.pg-rail {
+    display: flex; flex-direction: column; padding: 14px;
+    border: 1px solid var(--pg-line); border-radius: 12px; background: #fff;
+    box-shadow: 0 1px 2px rgba(16,24,40,.05); min-width: 0;
+    /* 76px, not 16px: .top-nav is position:fixed with min-height 60px, so a rail
+       stuck at 16px slid 44px UNDERNEATH it and froze there part-hidden — which
+       is what read as a glitch while scrolling a sixteen-slot board (Ethan,
+       2026-09-08). 60 for the nav + 16 to breathe, the same sum .ws-panel-aging
+       and the Variance Replies header already use. */
+    position: sticky; top: 76px;
+}
+@media (max-width: 1100px) { .pg-rail { position: static; } }
+.pg-rail-hd {
+    margin: 0 0 9px; padding: 0 4px; font-size: 10.5px; font-weight: 800;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--pg-faint);
+}
+.pg-search {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 10px;
+    border: 1px solid var(--pg-line); border-radius: 10px; padding: 8px 11px; background: #f8fafc;
+}
+.pg-search svg { width: 14px; height: 14px; color: var(--pg-faint); flex-shrink: 0; }
+.pg-search input { border: none; background: none; font: inherit; font-size: 12.5px; width: 100%; outline: none; }
+.pg-catlist { display: flex; flex-direction: column; gap: 2px; max-height: 58vh; overflow: auto; }
+.pg-cat {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    border: none; background: none; font: inherit; font-size: 12.5px; font-weight: 650;
+    color: var(--pg-muted); cursor: pointer; padding: 8px 10px; border-radius: 9px;
+}
+.pg-cat:hover { background: #f1f5f9; color: var(--pg-ink); }
+.pg-cat.on { background: var(--pg-ink); color: #fff; }
+.pg-cat-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- groups: the rail's one level of nesting ------------------------------ *
+   With 10-15 sheets the differences that matter (Apple vs Android) sit at the
+   END of near-identical labels, which is the worst place to scan for them. A
+   heading pulls that difference up to where the eye already is. */
+.pg-grp { display: flex; flex-direction: column; }
+/* The heading and, for a DM, the pencil that renames the group. A row rather
+   than the heading alone, because a button cannot be nested inside a button. */
+.pg-grp-top { display: flex; align-items: center; }
+.pg-grp-top .pg-grp-hd { flex: 1; min-width: 0; }
+.pg-grp-edit {
+    display: none; flex-shrink: 0; border: none; background: none; cursor: pointer;
+    color: var(--pg-faint); padding: 6px; border-radius: 7px; line-height: 0;
+}
+.pg-grp-edit svg { width: 12px; height: 12px; }
+.pg-grp-edit:hover { color: var(--pg-accent-deep); background: var(--pg-accent-tint); }
+/* Only on hover or focus: fifteen pencils down the rail is noise, and the DM
+   renaming a group is already pointing at the one they mean. */
+.pg-grp-top:hover .pg-grp-edit, .pg-grp-edit:focus-visible { display: inline-flex; }
+.pg-grp-hd {
+    display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+    border: none; background: none; font: inherit; font-size: 11px; font-weight: 850;
+    text-transform: uppercase; letter-spacing: .05em;
+    color: var(--pg-muted); cursor: pointer; padding: 9px 10px 7px; border-radius: 9px;
+}
+.pg-grp-hd:hover { background: #f1f5f9; color: var(--pg-ink); }
+.pg-grp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* How many SHEETS are behind the heading, not how many photos are on them. */
+.pg-grp-n {
+    margin-left: auto; flex-shrink: 0; min-width: 18px; text-align: center;
+    font-size: 10px; font-weight: 800; letter-spacing: 0;
+    color: var(--pg-muted); background: #eef2f7; border-radius: 99px; padding: 1px 6px;
+}
+.pg-grp-chev { display: inline-flex; flex-shrink: 0; transition: transform .16s ease; }
+.pg-grp-chev svg { width: 12px; height: 12px; }
+.pg-grp.open .pg-grp-hd { color: var(--pg-ink); }
+.pg-grp.open .pg-grp-hd .pg-grp-chev { transform: rotate(90deg); }
+/* Collapsed is display:none rather than height:0 — a rail that animates open
+   under someone reaching for a sheet is a moving target, and there is nothing
+   here worth a transition. */
+.pg-grp-body { display: none; padding-left: 9px; }
+.pg-grp.open > .pg-grp-body { display: flex; flex-direction: column; gap: 2px; }
+.pg-rail-foot { border-top: 1px solid #eef2f7; margin: 10px 0 0; padding: 10px 0 0; }
+/* Twin of .mg-missing, deliberately: it is the same offer in the same place on
+   the same kind of picker, and a second visual language for it would be noise. */
+.pg-missing { margin: 0; font-size: 11.5px; line-height: 1.9; color: var(--pg-faint); }
+.pg-inline-link {
+    display: inline-flex; align-items: center; gap: 5px; vertical-align: -3px;
+    font: inherit; font-size: 11.5px; font-weight: 700; line-height: 1.3;
+    cursor: pointer; color: var(--pg-accent-deep);
+    background: var(--pg-accent-tint); border: 1px solid var(--pg-line);
+    border-radius: 999px; padding: 3px 10px 3px 8px; margin: 0 1px;
+    transition: background .12s, border-color .12s, box-shadow .12s;
+}
+.pg-inline-link svg { width: 12px; height: 12px; stroke: currentColor; fill: none; flex: none; }
+.pg-inline-link:hover {
+    background: #fff; border-color: var(--pg-accent);
+    box-shadow: 0 1px 5px rgba(31, 157, 87, .18);
+}
+.pg-inline-link:focus-visible { outline: 2px solid var(--pg-accent); outline-offset: 2px; }
+.pg-addcat {
+    display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%;
+    border: 1px dashed var(--pg-line); background: none; font: inherit; font-size: 12px;
+    font-weight: 700; color: var(--pg-muted); cursor: pointer; padding: 8px 10px; border-radius: 9px;
+}
+.pg-addcat:hover { border-color: var(--pg-accent); color: var(--pg-accent-deep); }
+.pg-main { min-width: 0; }
+
+/* The "applies to this item" chip bar stood here, with its steppers and its
+   Reset. It made the shot numbers exact and it was cut on sight: a reference you
+   have to configure before it tells you anything is not a reference. With it went
+   .pg-badge and the greyed .pg-shot.na state, both of which only existed to show
+   the result of ticking. See the module header in speeks.js. */
+
+.pg-legend {
+    display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+    margin: 15px 0 0; font-size: 11.5px; color: var(--pg-muted);
+}
+.pg-lg { display: inline-flex; align-items: center; gap: 6px; }
+.pg-sw { width: 13px; height: 13px; border-radius: 4px; flex-shrink: 0; }
+.pg-sw-req { background: #fff; border: 1.5px solid var(--pg-ink); }
+.pg-sw-cond { background: var(--pg-red-tint); border: 1.5px solid var(--pg-red-line); }
+.pg-legend b { color: var(--pg-red); font-weight: 850; }
+.pg-count { margin-left: auto; font-size: 12px; color: var(--pg-muted); }
+.pg-count b { font-size: 13px; font-weight: 800; color: var(--pg-ink); }
+
+/* ---- the board: the binder page ------------------------------------------ */
+.pg-board {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+    gap: 16px 14px; margin: 14px 0 0;
+}
+.pg-shot { display: flex; flex-direction: column; margin: 0; }
+/* The caption is the SHOT's name, and it reserves height whether it needs it or
+   not — an uneven baseline across a sixteen-square grid reads as a mistake, and
+   the frames below have to line up to be scannable. A conditional shot carries
+   its condition underneath, so the reserved height covers both lines. */
+.pg-cap {
+    font-size: 11.5px; font-weight: 750; text-align: center; color: var(--pg-ink);
+    margin: 0 0 5px; min-height: 46px; line-height: 1.3;
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+}
+/* The caption is the same ink on every card, conditional or not. It used to go
+   red, which put five shouting titles in a grid of sixteen and made the board
+   read as two kinds of thing rather than one board with five flags on it. The
+   flag now lives in the picture, where it cannot compete with a heading. */
+.pg-cap-name { display: block; }
+/* Only what the label has not already said — see _pgCondNote(). Slate, sentence
+   case, quiet: it is a footnote to the name above it, not a second title. */
+.pg-note {
+    display: block; margin-top: 2px;
+    font-size: 10px; font-weight: 650; line-height: 1.35; color: var(--pg-muted);
+}
+.pg-frame {
+    position: relative; aspect-ratio: 1 / 1; border: 1.5px solid var(--pg-ink);
+    border-radius: 8px; overflow: hidden; background: #f8fafc;
+}
+.pg-frame[onclick] { cursor: zoom-in; }
+/* A conditional frame: the same weight of line as every other card, in red, over
+   the faintest tint. It was 2px and it made five squares sit forward of the
+   other eleven — the grid has to read as one surface. */
+.pg-shot.cond .pg-frame { border-color: var(--pg-red-line); background: var(--pg-red-tint); }
+/* The corner the printout marks, and where the shot number used to sit before
+   the numbers came off. Tucked INTO the frame so it reads as a stamp on the
+   picture rather than as more caption. */
+.pg-optional {
+    position: absolute; top: 0; left: 0; z-index: 2;
+    padding: 3px 9px 4px; border-radius: 7px 0 8px 0;
+    background: var(--pg-red); color: #fff;
+    font-size: 9.5px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase;
+}
+/* contain, not cover. A guide photo IS the instruction, so cropping one shows
+   the wrong example: cover fills a square frame by trimming the long edge, which
+   on a portrait phone shot takes off the notch and the charging port — the two
+   things half these slots exist to photograph. It also cropped unevenly, so a
+   photo with its own border kept it top and bottom and lost it at the sides.
+   The letterbox contain leaves is painted by the img's own background, so it is
+   white on a plain card AND on a tinted one; the photos are shot on white, so
+   the matte disappears into the picture instead of framing it a second time. */
+.pg-img { width: 100%; height: 100%; object-fit: contain; background: #fff; display: block; }
+/* The grey slot with words on it, for a shot with no example photograph — which
+   is what the printout does in the same situation, so an un-uploaded shot reads
+   as the sheet rather than as something broken.
+
+   The words used to be red in a red box, copying the paper. That worked on paper
+   because red meant nothing else there; here it means OPTIONAL, and a red box
+   inside a red-flagged card was the fourth red on one square. Neutral ink, and
+   the flag keeps red to itself. */
+.pg-instr {
+    width: 100%; height: 100%; background: #eceff3;
+    display: flex; align-items: center; justify-content: center; padding: 14px;
+}
+.pg-instr span {
+    background: #fff; border: 1px solid #cbd5e1; color: var(--pg-ink);
+    border-radius: 6px;
+    font-size: 12px; font-weight: 700; text-align: center; padding: 12px 10px; line-height: 1.4;
+}
+/* The white box briefly came off optional cards here. It is back: at 196px the
+   box reads as the photograph it is standing in for, on a tinted card as much as
+   a plain one. The complaint it was chasing was the 40px THUMBNAIL in the DM's
+   editor, which is dealt with by not putting words in it at all — see _pgArt(). */
+/* .pg-empty stood here: a second, fainter placeholder for a shot with no note.
+   Which one a card got came down to whether its row happened to carry note text,
+   and that column is seeded unevenly — so two Cosmetic Flaws cards on two sheets
+   looked like different things. One placeholder now; see _pgArt(). */
+
+/* ---- one slot, full size ------------------------------------------------- */
+.pg-zoom {
+    position: fixed; inset: 0; z-index: 3000; background: rgba(12, 16, 22, .82);
+    display: flex; align-items: center; justify-content: center; padding: 28px; cursor: zoom-out;
+}
+.pg-zoom figure { margin: 0; max-width: min(900px, 92vw); text-align: center; }
+.pg-zoom img { max-width: 100%; max-height: 78vh; border-radius: 10px; display: block; margin: 0 auto; }
+.pg-zoom figcaption { margin: 12px 0 0; color: #fff; font-size: 13.5px; font-weight: 650; }
+
+/* ---- the editor's dialogs ------------------------------------------------- */
+/* Replaces window.prompt/confirm inside this tool. See _pgAsk() for why it is
+   scoped here and not swapped in app-wide. z-index sits above .pg-zoom, since a
+   dialog raised from the editor has to clear anything already on screen. */
+.pg-ask {
+    position: fixed; inset: 0; z-index: 3200; background: rgba(12, 16, 22, .55);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    /* The backdrop scrolls, not the card — the card has to keep overflow
+       visible so the combo menu can hang past its bottom edge. */
+    overflow-y: auto;
+}
+.pg-ask-card {
+    width: min(430px, 100%); background: #fff; border-radius: 14px;
+    border: 1px solid var(--pg-line); padding: 24px 26px 22px;
+    box-shadow: 0 18px 48px rgba(12, 16, 22, .28);
+    /* The card does NOT scroll, and does not cap its own height: an
+       overflow other than visible clips the combo menu, which hangs out of the
+       bottom of the card by design. A tall dialog scrolls on .pg-ask instead. */
+    overflow: visible;
+}
+.pg-ask-t { margin: 0; font-size: 16.5px; font-weight: 800; color: var(--pg-ink); line-height: 1.35; }
+.pg-ask-b { margin: 9px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--pg-muted); }
+/* 22px between fields, and the label sits 7px off its control. Tighter than
+   this and the hint on one row reads as though it belongs to the row below. */
+.pg-ask-f { display: block; margin: 22px 0 0; }
+.pg-ask-f > span {
+    display: block; margin: 0 0 7px;
+    font-size: 11px; font-weight: 750; letter-spacing: .02em; color: var(--pg-ink);
+}
+.pg-ask-f > span em { font-style: normal; font-weight: 600; color: var(--pg-faint); }
+.pg-ask-f input, .pg-ask-sel {
+    width: 100%; box-sizing: border-box; font: inherit; font-size: 13.5px;
+    color: var(--pg-ink); background: #fff;
+    border: 1.5px solid var(--pg-line); border-radius: 9px; padding: 9px 11px;
+}
+.pg-ask-f input:focus, .pg-ask-sel:focus {
+    outline: none; border-color: var(--pg-accent); box-shadow: 0 0 0 3px var(--pg-ring);
+}
+/* The groups already in use. This has been a row of pills (a wall at fifteen
+   groups), a real <select> (whose magic "+ New group…" option leaked its
+   sentinel into the database once), and a text box that filtered a list as you
+   typed — which was the worst of the three, because filtering emptied the list
+   down to the row you had half-typed and hid everything you might have picked
+   instead. It is a plain dropdown now, the same as .mg-picker: a button, and a
+   menu of every option. Typing walks the highlight; the list never shrinks. */
+.pg-ask-pick { display: block; position: relative; }
+/* Looks exactly like .pg-ask-f input (it shares that rule) but is a button, so
+   there is nothing to type into and nothing that reads as a text field. */
+.pg-ask-pick-btn {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    width: 100%; box-sizing: border-box; text-align: left; cursor: pointer;
+    font: inherit; font-size: 13.5px; color: var(--pg-ink); background: #fff;
+    border: 1.5px solid var(--pg-line); border-radius: 9px; padding: 9px 11px;
+}
+.pg-ask-pick-btn:focus-visible,
+.pg-ask-pick.open .pg-ask-pick-btn {
+    outline: none; border-color: var(--pg-accent); box-shadow: 0 0 0 3px var(--pg-ring);
+}
+.pg-ask-pick-v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The name of a group that does not exist yet. Lives in the field from the
+   start and is revealed in place, because opening a second _pgAsk over this one
+   would close it and strand the promise its caller is waiting on. */
+.pg-ask-newback {
+    margin: 7px 0 0; padding: 0; border: 0; background: none; cursor: pointer;
+    font: inherit; font-size: 11.5px; font-weight: 650; color: var(--pg-muted);
+}
+.pg-ask-newback:hover { color: var(--pg-accent-deep); text-decoration: underline; }
+/* The chevron the rest of the site puts on a picker, and it turns over when the
+   list is down — same affordance as .mg-picker-btn's. pointer-events: none so it
+   is decoration sitting on the box, not a second thing to aim at. */
+/* A flex child of the button, not absolutely positioned over it: the button
+   lays the value and the chevron out with space-between, so the value gets
+   ellipsised at the chevron instead of sliding underneath it. */
+.pg-ask-chev {
+    display: inline-flex; flex: 0 0 auto; pointer-events: none;
+    color: var(--pg-muted); transition: transform .15s;
+}
+.pg-ask-chev svg { width: 15px; height: 15px; }
+.pg-ask-pick.open .pg-ask-chev { transform: rotate(180deg); }
+/* display: none by default, NOT the hidden attribute. A rule that sets display
+   on the element itself beats [hidden] outright, which is exactly what went
+   wrong: the menu could never be put away and an empty one showed as a bar
+   under the box. Open is a class on the container now, and the menu is emptied
+   when it shuts. Geometry copied from .mg-picker-menu. */
+.pg-ask-menu {
+    display: none;
+    position: absolute; z-index: 2; left: 0; right: 0; top: calc(100% + 5px);
+    flex-direction: column; padding: 5px;
+    background: #fff; border: 1px solid var(--pg-line); border-radius: 11px;
+    box-shadow: 0 12px 34px rgba(16, 24, 40, .18);
+    max-height: 220px; overflow-y: auto;
+}
+.pg-ask-pick.open .pg-ask-menu { display: flex; }
+.pg-ask-opt {
+    display: block; width: 100%; text-align: left; cursor: pointer; font: inherit;
+    font-size: 12.5px; font-weight: 650; color: var(--pg-ink);
+    background: none; border: 0; border-radius: 7px; padding: 7px 9px;
+}
+.pg-ask-opt:hover { background: #f1f5f9; }
+/* WHERE TYPING PUTS YOU. The one thing the old filtering box could not show:
+   the list stays whole and this walks down it to the nearest match, so the rows
+   either side of the hit are still there to be seen and picked. Distinct from
+   .on, which is what the answer currently IS — both can be on screen at once,
+   and while choosing, this is the one the eye should follow, so it is the
+   heavier of the two. */
+.pg-ask-opt.hi { background: var(--pg-hdr); box-shadow: inset 0 0 0 1.5px var(--pg-accent); }
+/* The row that is already the answer, same as .mg-picker-opt.on. */
+.pg-ask-opt.on { background: var(--pg-accent-tint); color: var(--pg-accent-deep); font-weight: 780; }
+.pg-ask-opt.on.hi { background: var(--pg-accent-tint); }
+/* The row that makes a group rather than picking one. Separated, because
+   "Computer Parts" and "Create Computer Parts" doing different things while
+   looking identical is how you get a duplicate group. */
+.pg-ask-opt-new {
+    margin-top: 4px; border-top: 1px solid var(--pg-line); border-radius: 0 0 7px 7px;
+    padding-top: 9px; color: var(--pg-accent-deep); font-weight: 750;
+}
+/* A check the dialog failed without closing — a name already taken, say. Sits
+   where the eye lands after the fields and before the buttons. */
+.pg-ask-err {
+    margin: 14px 0 0; padding: 9px 11px; border-radius: 9px;
+    background: var(--pg-red-tint); border: 1px solid var(--pg-red-line);
+    color: var(--pg-red-deep); font-size: 12px; font-weight: 700; line-height: 1.45;
+}
+.pg-ask-acts { display: flex; justify-content: flex-end; gap: 8px; margin: 24px 0 0; }
+.pg-ask-acts button {
+    font: inherit; font-size: 12.5px; font-weight: 750; cursor: pointer;
+    border-radius: 9px; padding: 8px 15px; border: 1px solid var(--pg-line);
+}
+.pg-ask-cancel { background: #fff; color: var(--pg-muted); }
+.pg-ask-cancel:hover { background: #f4f7fa; color: var(--pg-ink); }
+.pg-ask-ok { background: var(--pg-accent); border-color: var(--pg-accent); color: #fff; }
+.pg-ask-ok:hover { background: var(--pg-accent-deep); border-color: var(--pg-accent-deep); }
+.pg-ask-ok.danger { background: var(--pg-red); border-color: var(--pg-red); }
+.pg-ask-ok.danger:hover { background: var(--pg-red-deep); border-color: var(--pg-red-deep); }
+/* A required field greys the button rather than rejecting the answer after the
+   click — the dialog says an empty name is not acceptable before it is sent. */
+.pg-ask-ok:disabled { background: #cbd5e1; border-color: #cbd5e1; color: #f8fafc; cursor: not-allowed; }
+@media (max-width: 560px) {
+    .pg-ask { padding: 14px; align-items: flex-start; padding-top: 12vh; }
+    .pg-ask-acts button { flex: 1; }
+}
+
+/* ---- the DM editor -------------------------------------------------------- */
+.pg-ebar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    border: 1px solid var(--pg-line); border-radius: 11px; padding: 11px 13px; background: #fff;
+}
+.pg-ebar-name { display: flex; align-items: baseline; gap: 9px; margin-right: auto; min-width: 0; }
+.pg-ebar-name b { font-size: 15px; font-weight: 800; color: var(--pg-ink); }
+.pg-ebar-name span { font-size: 11.5px; color: var(--pg-muted); }
+.pg-ehint { margin: 11px 0 12px; font-size: 12px; color: var(--pg-muted); max-width: 84ch; }
+.pg-ehint em { font-style: italic; }
+.pg-ebtn {
+    border: 1px solid var(--pg-line); background: #fff; border-radius: 8px; padding: 6px 11px;
+    font: inherit; font-size: 11.5px; font-weight: 700; color: var(--pg-muted); cursor: pointer;
+}
+.pg-ebtn:hover { border-color: var(--pg-faint); color: var(--pg-ink); }
+.pg-ebtn-del:hover { border-color: var(--pg-red-line); background: var(--pg-red-tint); color: var(--pg-red); }
+.pg-erow {
+    display: flex; align-items: center; gap: 11px; border: 1px solid var(--pg-line);
+    border-radius: 11px; padding: 9px 11px; background: #fff; margin: 0 0 7px;
+}
+.pg-erow.cond { background: var(--pg-red-tint); border-color: var(--pg-red-line); }
+.pg-erow-busy { opacity: .5; pointer-events: none; }
+.pg-erow-move { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+.pg-erow-move button {
+    border: 1px solid var(--pg-line); background: #fff; border-radius: 6px; width: 24px; height: 19px;
+    font: inherit; font-size: 10px; font-weight: 800; color: var(--pg-muted); cursor: pointer; padding: 0; line-height: 1;
+}
+.pg-erow-move button:hover:not(:disabled) { border-color: var(--pg-accent); color: var(--pg-accent-deep); }
+.pg-erow-move button:disabled { opacity: .3; cursor: default; }
+.pg-ethumb {
+    width: 46px; height: 46px; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--pg-line); flex-shrink: 0;
+}
+/* The stand-in, for a row whose photo has not been uploaded yet. Words used to
+   go here at 6px, which is not a size anybody reads — and the row prints the
+   same name in 13px bold two centimetres to the right. A picture of a picture
+   says the one thing the square is able to say at 46px. */
+.pg-ph {
+    width: 100%; height: 100%; background: #eef2f7; color: var(--pg-faint);
+    display: flex; align-items: center; justify-content: center;
+}
+.pg-ph svg { width: 22px; height: 22px; }
+/* An optional row's thumbnail leans red with the rest of its row, so the square
+   is not the one neutral thing on a tinted line. */
+.pg-erow.cond .pg-ethumb { border-color: var(--pg-red-line); }
+.pg-erow.cond .pg-ph { background: var(--pg-red-tint); color: #d99a9a; }
+.pg-ename { flex: 1; min-width: 0; }
+.pg-ename b { display: block; font-size: 13px; font-weight: 750; color: var(--pg-ink); }
+.pg-ename small { font-size: 11px; color: var(--pg-muted); }
+.pg-etools { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+/* The file input is the label, so the camera glyph IS the control — a visible
+   "Choose file" reads as a form to fill in rather than a photo to swap. */
+.pg-ephoto {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border: 1px solid var(--pg-line); border-radius: 8px;
+    background: #fff; color: var(--pg-muted); cursor: pointer;
+}
+.pg-ephoto:hover { border-color: var(--pg-accent); color: var(--pg-accent-deep); }
+.pg-ephoto input { display: none; }
+.pg-ephoto svg { width: 15px; height: 15px; }
+
+.pg-erow-edit { display: block; padding: 13px; }
+.pg-eform { display: flex; flex-direction: column; gap: 11px; }
+/* Required / Optional. A segmented pair rather than a checkbox because the two
+   states are not "on and off" — each one is a different sheet, with its own
+   fields, and the pair shows both names at once so the choice reads without
+   being clicked. */
+.pg-eseg {
+    display: inline-flex; align-self: flex-start; padding: 3px; gap: 3px;
+    background: var(--pg-hdr); border: 1px solid var(--pg-line); border-radius: 9px;
+}
+.pg-eseg-b {
+    border: 1px solid transparent; background: none; border-radius: 7px;
+    padding: 5px 15px; font: inherit; font-size: 12px; font-weight: 700;
+    color: var(--pg-muted); cursor: pointer; transition: background .12s, color .12s;
+}
+.pg-eseg-b:hover { color: var(--pg-ink); }
+.pg-eseg-b.on {
+    background: #fff; border-color: var(--pg-line); color: var(--pg-accent-deep);
+    box-shadow: 0 1px 2px rgba(16,24,40,.06);
+}
+/* The optional half is a plain div wrapping two labels, so it has no display of
+   its own to fight the [hidden] attribute — but .pg-panel [hidden] carries the
+   !important override anyway, which is what makes toggling it safe. */
+#pg-f-opt { display: flex; flex-direction: column; gap: 11px; }
+.pg-f { display: flex; flex-direction: column; gap: 5px; }
+.pg-f > span { font-size: 11.5px; font-weight: 700; color: var(--pg-muted); }
+.pg-f > span em { font-style: normal; font-weight: 500; color: var(--pg-faint); }
+.pg-f input[type="text"] {
+    border: 1px solid var(--pg-line); border-radius: 8px; padding: 8px 11px;
+    font: inherit; font-size: 13px; background: #fff; color: var(--pg-ink); outline: none;
+}
+.pg-f input[type="text"]:focus { border-color: var(--pg-accent); }
+.pg-f-check { flex-direction: row; align-items: flex-start; gap: 8px; }
+.pg-f-check input { margin-top: 2px; }
+.pg-f-check span { font-size: 12px; font-weight: 650; color: var(--pg-ink); }
+.pg-f-check span em { font-style: normal; font-weight: 500; color: var(--pg-muted); }
+.pg-eform-acts { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.pg-esave {
+    border: 1px solid var(--pg-accent); background: var(--pg-accent); color: #fff;
+    border-radius: 8px; padding: 8px 18px; font: inherit; font-size: 12.5px; font-weight: 750; cursor: pointer;
+}
+.pg-esave:hover { background: var(--pg-accent-deep); }
+.pg-esave:disabled { opacity: .6; cursor: default; }
+.pg-ecancel {
+    border: 1px solid var(--pg-line); background: #fff; color: var(--pg-muted);
+    border-radius: 8px; padding: 8px 15px; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
+.pg-ecancel:hover { color: var(--pg-ink); }
+.pg-erm-photo { margin-left: auto; }
+.pg-eadd {
+    display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;
+    border: 1px dashed var(--pg-line); background: none; font: inherit; font-size: 12.5px;
+    font-weight: 700; color: var(--pg-muted); cursor: pointer; padding: 13px; border-radius: 11px; margin: 5px 0 0;
+}
+.pg-eadd:hover { border-color: var(--pg-accent); color: var(--pg-accent-deep); }
