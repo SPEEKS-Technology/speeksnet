@@ -37536,6 +37536,46 @@ async function vrOpenPeriod(pid) {
     }
 }
 
+// THE DEADLINE IS A DAY, NOT AN INSTANT.
+// manager_due_at is stamped seven days after the upload to the second, and every
+// consumer used to compare it as an instant while displaying it as a bare date.
+// Five stores uploaded back-to-back one afternoon therefore got five different
+// deadlines: BAL fell overdue eight minutes before MPL, for no reason but the
+// order the DM happened to open the files in a week earlier (Ethan, 2026-09-08).
+// Comparing STORE-LOCAL CALENDAR DAYS makes the upload minute irrelevant — the
+// whole seventh day counts as on time and midnight ending it is the cutoff, so
+// every store uploaded on one day shares one deadline.
+// 'YYYY-MM-DD' sorts chronologically, so > is the whole comparison; and Intl
+// absorbs the DST shift that hand-rolled offset arithmetic gets wrong twice a
+// year. America/Chicago is store time everywhere else in this file, so a manager
+// on a laptop set to another zone gets the store's deadline, not their own.
+const _vrCtDay  = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+const _vrDueDay = p  => (p && p.manager_due_at) ? _vrCtDay(new Date(p.manager_due_at).getTime()) : '';
+
+// Has the store's day moved past the day this timestamp lands on (optionally n
+// days later)? The one comparison every variance deadline goes through, so the
+// manager's page, the pink cells, the note columns, the manager alert and the
+// DM's review alert cannot disagree about who is late — which is exactly how
+// the feed came to say "overdue" about a store whose own page said "due".
+const _vrDayPast = (ms, addDays = 0) =>
+    !!ms && _vrCtDay(Date.now()) > _vrCtDay(ms + addDays * 86400000);
+
+// An all-clear period owes nobody a reply, so it HAS no deadline and nothing can
+// be past it. _vrSubtitleText already said as much in a comment; these two
+// checks never got told. Without the guard WSP's phantom deadline quietly
+// elapsed, which opened the DM note columns, painted seven read-only lines red
+// as "missed", and put an Edit button on a report the banner called clear.
+function _vrIsPastDue(p) {
+    if (!p || p.all_clear || !p.manager_due_at) return false;
+    return _vrDayPast(new Date(p.manager_due_at).getTime());
+}
+// The seventh day itself — still on time, but the last day it will be.
+function _vrIsDueToday(p) {
+    if (!p || p.all_clear) return false;
+    const d = _vrDueDay(p);
+    return !!d && _vrCtDay(Date.now()) === d;
+}
+
 function _vrSubtitleText() {
     if (!_vrCurrent || !_vrCurrent.period) return '';
     const p = _vrCurrent.period;
@@ -37550,10 +37590,16 @@ function _vrSubtitleText() {
     const items = (_vrCurrent.items || []).filter(i => i.needs_reply !== false);
     const answered = items.filter(i => i.gm_note).length;
     const due = new Date(p.manager_due_at);
-    const overdue = Date.now() > due.getTime() && answered < items.length;
+    const outstanding = answered < items.length;
+    // Overdue once the store's day has moved PAST the deadline's day; the day
+    // itself gets its own tag, so the last chance to be on time is visible
+    // instead of silent (which is how MPL read as merely "due" all morning).
+    const tag = (outstanding && _vrIsPastDue(p)) ? ' (overdue)'
+              : (outstanding && _vrIsDueToday(p)) ? ' (due today)'
+              : '';
     // The n/n-explained scoreboard is for managers; the DM just gets the date.
     const progress = _vrIsDM() ? '' : ` · ${answered}/${items.length} explained`;
-    return `Replies due ${due.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}${overdue ? ' (overdue)' : ''}${progress}`;
+    return `Replies due ${due.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/Chicago' })}${tag}${progress}`;
 }
 
 function _vrUpdateProgressLine() {
@@ -37727,9 +37773,10 @@ function renderVarianceReplies() {
     html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; min-width:${680 + (showGmCol ? 220 : 0) + (showDmCol ? 220 : 0) + (showReplyCol ? 220 : 0)}px;">
         <thead><tr>${th('Order #')}${th('SKU')}${th('Item Title')}${th('Buyer')}${th('Lister')}${th('Var.')}${showGmCol ? th('GM Notes') : ''}${showDmCol ? th('DM Notes') : ''}${showReplyCol ? th('Replies to DM Notes') : ''}</tr></thead><tbody>`;
 
-    // Empty GM-note boxes turn light red once the managers' deadline has
-    // passed — a visible mark on exactly which lines were missed.
-    const pastDue = p.manager_due_at && Date.now() > new Date(p.manager_due_at).getTime();
+    // Empty GM-note boxes turn light red once the managers' deadline day has
+    // passed — a visible mark on exactly which lines were missed. Never on an
+    // all-clear period: there was nothing to miss.
+    const pastDue = _vrIsPastDue(p);
 
     items.forEach(it => {
         const pct = it.variance_pct == null ? null : Number(it.variance_pct);
@@ -37784,7 +37831,10 @@ function renderVarianceReplies() {
 // DM notes stay locked until the managers' reply window closes — managers
 // explain first, then the DM weighs in.
 function _vrDmNotesOpen(p) {
-    return !p.manager_due_at || new Date(p.manager_due_at) <= new Date();
+    // A cleared period has no reply cycle to open, so the DM gets no note
+    // columns and no Edit button on it — the green banner is the whole story.
+    if (p && p.all_clear) return false;
+    return !p.manager_due_at || _vrIsPastDue(p);
 }
 
 // One note cell: read-only text + author/date caption normally; a textarea
@@ -38482,14 +38532,17 @@ async function checkVarianceDmReminders() {
             const store = (p.store || '').toUpperCase();
             if (!p.dm_notes_at) {
                 const allDone = p.answered >= p.items;
-                const duePassed = now > new Date(p.manager_due_at).getTime();
+                // Same day-based deadline the managers see, so the DM is told a
+                // store is ready to review on the same day the managers are told
+                // they are late — not at whatever minute the file was uploaded.
+                const duePassed = _vrDayPast(new Date(p.manager_due_at).getTime());
                 if (allDone || duePassed) readyStores.push(store);
             } else {
-                const replyDue = Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
+                const replyClosed = _vrDayPast(Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()), 2);
                 // A period the DM has already looked at since the last manager
                 // reply is done with — dm_reviewed_at is cleared server-side the
                 // moment a newer reply lands, so this cannot hide fresh news.
-                if (now >= replyDue && !p.dm_reviewed_at) {
+                if (replyClosed && !p.dm_reviewed_at) {
                     closedStores.push(store);
                     _vrClosedIds.push(p.id);
                     // A flagged note the manager HAS answered (mgr_replied, from the
@@ -38553,10 +38606,14 @@ function _vrFmtStores(stores) {
 // ONE combined row that lists the stores ("BAL and MPL: …") rather than a
 // separate popup per store. Cleared stores owe nothing, so they add no row.
 function _vrMaybePopup() {
-    const now = Date.now();
     const reviewSeen = _vrGetReviewSeen();
-    const explainStores = [];   // stores with unexplained lines
-    let explainCount = 0, explainOverdue = false, explainDueSoon = false, explainDueAt = 0;
+    // One entry per store with unexplained lines, carrying ITS OWN deadline
+    // state. A single shared explainOverdue flag used to tag the whole combined
+    // row, so BAL being three minutes late announced MPL as overdue as well —
+    // while MPL's own page said merely "due". Same instant, two screens,
+    // opposite answers, and no way for the manager to tell which was right.
+    const explain = [];         // { store, n, state: 'over' | 'today' | 'open' }
+    let explainDueAt = 0;
     const replyStores = [];     // stores with DM notes still awaiting a reply
     let replyCount = 0, replyOverdue = false;
     const reviewedStores = [];  // DM reviewed, no reply needed — FYI until they look
@@ -38577,22 +38634,25 @@ function _vrMaybePopup() {
         const unanswered = (p.items || 0) - (p.answered || 0);
         const due = new Date(p.manager_due_at).getTime();
         if (unanswered > 0) {
-            explainStores.push(store);
-            explainCount += unanswered;
+            explain.push({
+                store, n: unanswered,
+                state: _vrIsPastDue(p) ? 'over' : (_vrIsDueToday(p) ? 'today' : 'open'),
+            });
             // Earliest deadline still outstanding — shown on the feed card so the
             // manager sees WHEN without opening the tool. With several stores the
             // soonest is the one that matters.
             if (due && (!explainDueAt || due < explainDueAt)) explainDueAt = due;
-            if (now > due) explainOverdue = true;
-            else if (due - now < 24 * 3600 * 1000) explainDueSoon = true; // last day before the deadline
         }
         if (p.dm_notes_at) {
             if (p.awaiting_reply > 0) {
                 // Reply REQUESTED → action, nags until answered.
                 replyStores.push(store);
                 replyCount += p.awaiting_reply;
-                const replyDue = Math.max(due, new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
-                if (now > replyDue) replyOverdue = true;
+                // Two days to answer a DM note, counted the same way — the whole
+                // second day is on time. Must match the DM side's replyClosed
+                // exactly, or the manager stops being nagged on a different day
+                // from the one the DM is told the window shut.
+                if (_vrDayPast(Math.max(due, new Date(p.dm_notes_at).getTime()), 2)) replyOverdue = true;
             } else {
                 // DM reviewed with NO reply requested (or all replies already in) →
                 // one-time FYI so the manager reads the notes. Clears when they open
@@ -38602,6 +38662,14 @@ function _vrMaybePopup() {
             }
         }
     }
+
+    // Derived from the per-store states above: these drive the bubble's single
+    // icon and title, which have to pick ONE urgency for a mixed set. The worst
+    // state wins there — but the summary text below still names each group
+    // separately, so nobody reads their own store as later than it is.
+    const explainStores  = explain.map(e => e.store);
+    const explainOverdue = explain.some(e => e.state === 'over');
+    const explainDueSoon = explain.some(e => e.state === 'today');
 
     if (!explainStores.length && !replyStores.length && !reviewedStores.length && !clearedStores.length) {
         // Nothing outstanding — drop the row so it clears once the work's done.
@@ -38614,10 +38682,15 @@ function _vrMaybePopup() {
     }
 
     const parts = [];
-    if (explainStores.length) {
-        const tag = explainOverdue ? ' (overdue)' : (explainDueSoon ? ' (due tomorrow)' : '');
-        parts.push(`${_vrFmtStores(explainStores)}: ${explainCount} variance line${explainCount > 1 ? 's need' : ' needs'} an explanation${tag}`);
-    }
+    // One row PER DEADLINE STATE rather than one row tagged with the worst of
+    // them, so a store is never announced as overdue because a different store
+    // is. Still one bubble: these join with the rest by ' · '.
+    [['over', ' (overdue)'], ['today', ' (due today)'], ['open', '']].forEach(([st, tag]) => {
+        const grp = explain.filter(e => e.state === st);
+        if (!grp.length) return;
+        const n = grp.reduce((a, e) => a + e.n, 0);
+        parts.push(`${_vrFmtStores(grp.map(e => e.store))}: ${n} variance line${n > 1 ? 's need' : ' needs'} an explanation${tag}`);
+    });
     if (replyStores.length) {
         parts.push(`${_vrFmtStores(replyStores)}: reply to ${replyCount} DM note${replyCount > 1 ? 's' : ''}${replyOverdue ? ' (overdue)' : ''}`);
     }
@@ -38642,7 +38715,7 @@ function _vrMaybePopup() {
     // count OR a changed urgency tag re-surfaces a snoozed row.
     _vrRenderBubble(overdue ? '🚨' : (explainDueSoon ? '⏰' : '📊'),
         fyiOnly ? 'New variance report to review'
-                : (overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due tomorrow' : 'Variance replies needed')),
+                : (overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due today' : 'Variance replies needed')),
         summary + '.', summary, coveredStores, fyiOnly);
 
     // Deadline for the feed card's title. Stamped after the render (which rewrites
