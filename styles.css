@@ -21596,7 +21596,15 @@ select.dd-native {
     background: var(--pg-red); color: #fff;
     font-size: 9.5px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase;
 }
-.pg-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* contain, not cover. A guide photo IS the instruction, so cropping one shows
+   the wrong example: cover fills a square frame by trimming the long edge, which
+   on a portrait phone shot takes off the notch and the charging port — the two
+   things half these slots exist to photograph. It also cropped unevenly, so a
+   photo with its own border kept it top and bottom and lost it at the sides.
+   The letterbox contain leaves is painted by the img's own background, so it is
+   white on a plain card AND on a tinted one; the photos are shot on white, so
+   the matte disappears into the picture instead of framing it a second time. */
+.pg-img { width: 100%; height: 100%; object-fit: contain; background: #fff; display: block; }
 /* The grey slot with words on it, for a shot with no example photograph — which
    is what the printout does in the same situation, so an un-uploaded shot reads
    as the sheet rather than as something broken.
