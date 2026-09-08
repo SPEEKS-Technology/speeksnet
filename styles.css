@@ -21386,16 +21386,29 @@ select.dd-native {
    from every non-overridden [data-feature] element, which would hand the editor
    to everyone. Same trap the Margin Guide fell into. */
 .pg-manage { display: none; }
+/* Edit and Done are ONE CONTROL IN ONE PLACE: whichever applies occupies the
+   slot, so the way out is never somewhere new. Which means they have to be the
+   same size — they had drifted a pixel apart (14px icon and a 7px gap against
+   13px and 6px), and a slot that changes shape as you step into the editor
+   reads as the page shifting under you (Ethan, 2026-09-08).
+   ONE rule owns the box for both, so they cannot drift again; the two rules
+   after it only colour them. min-width so the box is identical even though
+   "Edit" and "Done" are not the same width in this font. */
+.pg-panel.pg-can .pg-manage,
+.pg-panel.pg-editing .pg-back-top {
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 7px; cursor: pointer; box-sizing: border-box;
+    font: inherit; font-size: 12px; font-weight: 700;
+    border-radius: 9px; padding: 7px 13px; min-width: 92px; white-space: nowrap;
+}
 .pg-panel.pg-can .pg-manage {
-    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
-    font: inherit; font-size: 12px; font-weight: 700; color: var(--pg-accent-deep);
+    color: var(--pg-accent-deep);
     background: var(--pg-accent-tint); border: 1px solid var(--pg-ring);
-    border-radius: 9px; padding: 7px 13px; white-space: nowrap;
 }
 .pg-panel.pg-can .pg-manage:hover { background: #dcf2e5; }
-.pg-manage svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
-/* Edit and Back are one control in one place: whichever applies occupies the
-   slot, so the way out is never somewhere new. */
+.pg-manage svg, .pg-back-top svg {
+    width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;
+}
 /* The "Saved" pill. Takes no layout when it is not saying anything —
    visibility, not display, so appearing never shifts the Done button sideways.
    Only ever visible inside the editor: the reading board writes nothing. */
@@ -21411,15 +21424,13 @@ select.dd-native {
 .pg-saved.on { visibility: visible; opacity: 1; }
 @media (prefers-reduced-motion: reduce) { .pg-saved { transition: none; } }
 .pg-back-top { display: none; }
+/* AFTER the shared box rule above, and it has to stay after: both selectors are
+   three classes, so this only wins on ordering. */
 .pg-panel.pg-editing .pg-manage { display: none; }
 .pg-panel.pg-editing .pg-back-top {
-    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-    font: inherit; font-size: 12px; font-weight: 700; color: var(--pg-muted);
-    background: #fff; border: 1px solid var(--pg-line);
-    border-radius: 9px; padding: 7px 13px; white-space: nowrap;
+    color: var(--pg-muted); background: #fff; border: 1px solid var(--pg-line);
 }
 .pg-panel.pg-editing .pg-back-top:hover { background: var(--pg-hdr); color: var(--pg-accent-deep); }
-.pg-back-top svg { width: 13px; height: 13px; stroke: currentColor; fill: none; }
 
 /* ---- shell: category rail + the board ------------------------------------ */
 .pg-shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 18px; align-items: start; }

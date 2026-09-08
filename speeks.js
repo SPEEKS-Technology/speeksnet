@@ -8271,18 +8271,16 @@ function pgEditShot(id) { _pgAdmin.editing = id; pgRender(); }
 // Deliberately not a modal or a toast at the far corner of the screen: the
 // question being answered is "did that stick", asked half a second after a
 // click, and the answer belongs next to the way out.
-// "Saved" is wrong for a removal — it reads as though the thing is still there.
-// Anything not listed is a save.
-const _PG_SAVED_WORD = {
-    deleteShot: 'Deleted',
-    deleteCategory: 'Removed',
-    reorderShots: 'Order saved',
-};
+// One word for every action. It briefly said "Deleted" / "Order saved" per
+// action, on the grounds that "Saved" beside a vanished row reads oddly — but
+// the pill answers one question, "did that stick", and a word that changes with
+// the action makes the reader parse it before they can be reassured. Ethan
+// asked for the one word, and he is right: it is a receipt, not a description.
 let _pgSavedTimer = null;
-function _pgSavedFlash(word) {
+function _pgSavedFlash() {
     const el = document.getElementById('pg-saved');
     if (!el) return;
-    el.textContent = word || 'Saved';
+    el.textContent = 'Saved';
     el.classList.add('on');
     clearTimeout(_pgSavedTimer);
     _pgSavedTimer = setTimeout(() => el.classList.remove('on'), 2200);
@@ -8306,7 +8304,7 @@ async function _pgPost(payload, btn, busyLabel) {
         if (!res.ok || out.success === false) throw new Error(out.error || 'The save did not go through.');
         // Only on the way OUT of the try: a flash that fired before the response
         // landed would be a promise the server had not made yet.
-        _pgSavedFlash(_PG_SAVED_WORD[payload && payload.action] || 'Saved');
+        _pgSavedFlash();
         return out;
     } catch (e) {
         alert(e.message);
