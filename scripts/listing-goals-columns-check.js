@@ -28,7 +28,7 @@
 // No credential and no network: _dmxCap is seeded directly.
 const puppeteer = require('puppeteer-core');
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
+const REPO = require('path').resolve(__dirname, '..').replace(/\\/g, '/');
 
 let fails = 0;
 const ok = (c, l, g) => { console.log('  ' + (c ? 'PASS ' : 'FAIL ') + l + (g === undefined ? '' : '   ' + g)); if (!c) fails++; };

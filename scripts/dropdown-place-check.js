@@ -15,7 +15,7 @@
 // NODE_PATH must point at the scratchpad's node_modules (puppeteer-core).
 const puppeteer = require('puppeteer-core');
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
+const REPO = require('path').resolve(__dirname, '..').replace(/\\/g, '/');
 const PAGES = ['index.html', 'operations.html', 'workspace.html', 'docs.html', 'stats.html'];
 
 let fails = 0;
