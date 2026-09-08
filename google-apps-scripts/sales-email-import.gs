@@ -134,6 +134,15 @@ var GOAL_FILL_ROWS   = [1, 2];   // 1-indexed rows to paint
 // Matched by eye to the green already on the sheet; adjust either to taste.
 var GOAL_GREEN = '#00ff00';
 var GOAL_RED   = '#ff5252';
+// ⚠️ AND A THIRD CASE, WHICH WAS MISSING UNTIL 2026-09-01. The rule was
+// "green at 100%, red below", which paints a store RED on the 1st of the month
+// for the crime of not having traded yet. Worse, the roll copies formatting, so
+// September opened carrying August's green — every store looked ahead of a goal
+// it had not started on, and the first paint would have swung them all to red.
+//
+// Red means BEHIND. A month with no sales in it is not behind, it is empty, and
+// the honest fill for it is none at all.
+var GOAL_WHITE = '#ffffff';
 
 // Email when a figure already in the sheet moves by this much or more, up or down.
 // Restatements are applied silently by design, but a swing this size is worth
@@ -1782,13 +1791,32 @@ function _chTh(label, width, extra) {
 // guessed at — an unpainted cell is honest, a wrongly painted one is not.
 function _syncGoalColors(t, dryRun) {
   var out = [];
+
+  // Has ANY store put a figure on the board yet? Read once, because the TTL
+  // block has no store of its own and has to follow the whole district.
+  var globalLast = 0;
+  Object.keys(SALES_COL_BASES).forEach(function (code) {
+    var d = _lastDayWithSales(t.values, SALES_COL_BASES[code]);
+    if (d > globalLast) globalLast = d;
+  });
+
   for (var i = 0; i < GOAL_CELL_BASES.length; i++) {
-    var col = GOAL_CELL_BASES[i] + 4 + 1;                  // +4 = the goal column, +1 = 1-indexed
+    var base = GOAL_CELL_BASES[i];
+    var col = base + 4 + 1;                               // +4 = the goal column, +1 = 1-indexed
     var pctCell = t.sheet.getRange(GOAL_PCT_ROW, col);
     var pct = _asPercent(pctCell.getDisplayValue(), pctCell.getValue());
     if (pct == null) continue;
 
-    var color = pct >= 100 ? GOAL_GREEN : GOAL_RED;
+    // ⚠️ EMPTY IS NOT BEHIND. A block with no day carrying sales has not started
+    // trading, so it gets no fill — which is also what clears the previous
+    // month's green, since the roll copies formatting and cannot know the new
+    // month is empty. Judged on SALES PRESENT rather than on pct === 0: a store
+    // that has genuinely sold nothing by the 4th deserves the red.
+    var isTtl = _blockBaseFor(base) === null || base === GOAL_CELL_BASES[GOAL_CELL_BASES.length - 1];
+    var lastDay = isTtl ? globalLast : _lastDayWithSales(t.values, base);
+    var started = lastDay > 0;
+
+    var color = !started ? GOAL_WHITE : (pct >= 100 ? GOAL_GREEN : GOAL_RED);
     var painted = [];
     for (var r = 0; r < GOAL_FILL_ROWS.length; r++) {
       var cell = t.sheet.getRange(GOAL_FILL_ROWS[r], col);
@@ -1800,7 +1828,7 @@ function _syncGoalColors(t, dryRun) {
     out.push({
       cells: painted.join(' + '),
       pct: Math.round(pct * 100) / 100,
-      color: pct >= 100 ? 'green' : 'red'
+      color: !started ? 'white (no sales yet)' : (pct >= 100 ? 'green' : 'red')
     });
   }
   return out;

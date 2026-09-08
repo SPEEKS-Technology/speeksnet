@@ -72,12 +72,26 @@ var MR_MON_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July
 var MR_SALES_WIDTH = 11;
 var MR_SALES_FIRST_ROW = 4;   // 0-based
 var MR_BUY_WIDTH = 5;
+// The Google-reviews mini-table on a Buy tab: its own day column, then the five
+// stores and a TTL — AE:AK in the layout as built. Seven columns, and NOT a
+// store block, which is exactly why it was invisible to this script until
+// 2026-09-02. See _mrReviewBase.
+var MR_REVIEW_WIDTH = 7;
 var MR_BUY_FIRST_ROW = 1;     // 0-based
 var MR_HEADER_ROWS = 4;
 
 // Footer cells worth updating, by the LABEL beside them. Matched as a whole
 // cell, case-insensitively; only the first cell to the right that is NOT a
 // formula gets written.
+//
+// ⚠️ THE YoY BLOCK IS NOT IN HERE, AND THAT COST THREE DAYS OF SEPTEMBER. Its
+// "Last" cell is a typed constant, so copyTo() carried August 2025's figure into
+// the September tab and the Sales tabs compared themselves against the wrong
+// month while the Net Profit tab, whose YoY is written daily, was right. It is
+// owned by sales-yoy.gs in the NET PROFIT project — where the 2025 figures live,
+// rather than in a second copy of them here — and runs from npsDailyRefresh, so
+// it repairs the tab on the 1st whether or not this roll thought about it. Do
+// not add a 'yoy' key here without deleting that one; two writers, one cell.
 var MR_FOOTER = {
   goal:      ['gp goal', 'goal'],
   days:      ['days this month', 'days in month'],
@@ -365,6 +379,34 @@ function _mrRetarget(f, prevName, srcName, cutRow, delta) {
   return out;
 }
 
+// ⚠️ THE REVIEWS MINI-TABLE IS NOT A STORE BLOCK, AND THAT COST A DAY.
+// _mrBases finds a block by looking for a store code in the header rows and
+// snapping to a MR_BUY_WIDTH boundary. The reviews table at AE:AK carries the
+// same five store codes in its own header, but the main blocks are to its LEFT
+// and win the left-to-right scan — so it is found by nothing, renumbered by
+// nothing and cleared by nothing.
+//
+// Two consequences, both hit on the first short month after it was built:
+//   * going 31 days to 30 the resize deleted DAY 30's row, and with no renumber
+//     the day column was left reading 1..29 then 31
+//   * August's final counts were still sitting in the September block, so the
+//     dashboard reported last month's figures until somebody noticed and
+//     cleared them by hand
+//
+// Located by SHAPE rather than by header text: the reviews day column is the
+// first column to the right of every store block that holds a 1 and a 2 in
+// consecutive day rows. Nothing else on the tab looks like that, and it cannot
+// be broken by relabelling a header.
+function _mrReviewBase(values, bases, firstRow, lastCol, width) {
+  var after = 0;
+  Object.keys(bases).forEach(function (c) { after = Math.max(after, bases[c] + width); });
+  for (var c = after; c < lastCol; c++) {
+    var rows = _mrDayRows(values, c, firstRow);
+    if (rows[1] !== undefined && rows[2] !== undefined) return c;
+  }
+  return -1;
+}
+
 // The 1-based row of the last day in a tab's grid — the anchor everything below
 // it is measured from.
 function _mrLastDayRow(sheet, width, firstRow) {
@@ -446,6 +488,13 @@ function _mrBuildTab(ss, src, targetYm, opts) {
                          + (p.note ? ' (' + p.note + ')' : ''));
       });
     rep.plan = { dayRows: srcCount + ' -> ' + wantCount, sundays: tgtSun.join(',') };
+    if (opts.family === 'buy') {
+      var dryRev = _mrReviewBase(srcValues, bases, firstRow, srcLastCol, width);
+      rep.reviews = dryRev < 0
+        ? { col: null, note: 'no day column found to the right of the store blocks' }
+        : { col: _mrColLetter(dryRev), days: wantCount,
+            width: Math.min(dryRev + MR_REVIEW_WIDTH, srcLastCol) - dryRev };
+    }
     return rep;
   }
   if (ss.getSheetByName(name)) { rep.warn.push('"' + name + '" already exists — SKIPPED'); return rep; }
@@ -518,6 +567,40 @@ function _mrBuildTab(ss, src, targetYm, opts) {
     }
     tab.getRange(start + 1, base + 1, wantCount, w).setValues(grid);
   });
+
+  // ---- the reviews mini-table, same treatment ----
+  // Its day column gets renumbered and last month's counts get cleared, for the
+  // same reasons the store blocks do. Kept separate rather than folded into
+  // tgtBases because it is a different WIDTH and holds no weekly column, and
+  // because a wrong guess here would write over five stores' buying data.
+  if (opts.family === 'buy') {
+    var revBase = _mrReviewBase(values, tgtBases, firstRow, lastCol, width);
+    if (revBase < 0) {
+      rep.warn.push('reviews: no day column found to the right of the store blocks — block left alone');
+    } else {
+      var revRows = _mrDayRows(values, revBase, firstRow);
+      var revStart = revRows[1];
+      var revEnd = Math.min(revBase + MR_REVIEW_WIDTH, lastCol);
+      var revGrid = [];
+      for (var rd = 1; rd <= wantCount; rd++) {
+        var rr = revStart + (rd - 1);
+        var rrow = [rd];                                  // the day number, renumbered
+        for (var rc = revBase + 1; rc < revEnd; rc++) {
+          var rf = (formulas[rr] || [])[rc];
+          // Same rule as a store block: a formula goes back verbatim to the cell
+          // it already occupies, a typed value is last month's count and goes.
+          rrow.push(rf && !_mrIsBareNumberFormula(rf) ? rf : '');
+          if (!rf || _mrIsBareNumberFormula(rf)) {
+            var rv = (values[rr] || [])[rc];
+            if (rv !== '' && rv !== null && rv !== undefined) rep.cleared++;
+          }
+        }
+        revGrid.push(rrow);
+      }
+      tab.getRange(revStart + 1, revBase + 1, wantCount, revEnd - revBase).setValues(revGrid);
+      rep.reviews = { col: _mrColLetter(revBase), days: wantCount, width: revEnd - revBase };
+    }
+  }
 
   // ---- the week-ending column, onto the new month's weeks ----
   // Authored, not copied: where a week ends is a fact about the calendar, and
@@ -594,6 +677,13 @@ function _mrBuildTab(ss, src, targetYm, opts) {
     tab.getRange(1, 1, fLastRow, fLastCol).getValues(),
     tab.getRange(1, 1, fLastRow, fLastCol).getFormulas(),
     tgtBases, width, fLastRow, fLastCol, wantCount, targetYm, opts.goals || {}, opts.family));
+
+  // ---- what the copy carried that is not a figure ----
+  // Last, because both passes read the tab back and the footer writes above are
+  // part of what they should see. Added 2026-09-01: the roll had been leaving
+  // the month name and last month's B2B deals on every new tab since it was
+  // written, and both were being fixed by hand or not at all.
+  rep.carried = _mrCarryOverPass(tab, targetYm, false);
   return rep;
 }
 
@@ -898,8 +988,22 @@ function _mrReport(r) {
     Logger.log('  stores : ' + rep.stores.join('/'));
     if (rep.plan) Logger.log('  plan   : day rows ' + rep.plan.dayRows + ' | sundays ' + rep.plan.sundays
                              + ' | last month ' + rep.plan.lastMonth);
+    if (rep.carried) {
+      Logger.log('  month  : ' + (rep.carried.monthNames.length
+        ? rep.carried.monthNames.join('  ') : 'no typed month cell on this tab'));
+      Logger.log('  b2b    : ' + (rep.carried.b2bCleared.length
+        ? rep.carried.b2bCleared.length + ' typed cells cleared' : 'nothing typed'));
+      Logger.log('  fills  : ' + (rep.carried.fillsCleared.length
+        ? rep.carried.fillsCleared.length + ' goal fills cleared' : 'already clear'));
+    }
     Logger.log('  rows   : +' + rep.rowsInserted + ' / -' + rep.rowsDeleted);
     Logger.log('  cleared: ' + rep.cleared + ' typed cells');
+    if (rep.reviews) {
+      Logger.log('  reviews: ' + (rep.reviews.col
+        ? rep.reviews.col + ' renumbered 1-' + rep.reviews.days
+          + ', ' + rep.reviews.width + ' cols cleared'
+        : 'NOT FOUND — ' + rep.reviews.note));
+    }
     if (rep.retarget) Logger.log('  lastmo : ' + rep.retarget.cells + ' refs  '
       + rep.retarget.from + ' -> ' + rep.retarget.to
       + '   rows below r' + rep.retarget.anchor + ' shift ' + (rep.retarget.shift > 0 ? '+' : '') + rep.retarget.shift);
@@ -1003,6 +1107,395 @@ function mrFooterAudit() {
     }
   });
 }
+
+
+// ============================================================================
+// WHAT THE ROLL LEAVES BEHIND
+//
+// Five things the roll copies from last month and does not correct, all found
+// on the September tabs on 2026-09-01 (Ethan):
+//
+//   1. the month NAME in the header, still reading the source month
+//   2. the GP goals, still last month's, because the roll runs at 4am and the
+//      new goals are entered later that morning
+//   3. the B2B rows on the Buy tab, still carrying last month's named deals
+//   4. the goal-percentage cells, still green or red from a month that ended
+//      at 100%+, when every store is now at 0%
+//   5. "Last month" revenue / GP / Net GP, read before the previous month's
+//      final day had been entered
+//
+// ⚠️ THIS AUDIT IS READ-ONLY AND EXISTS BECAUSE THE FIX MUST NOT GUESS. Every
+// one of the five is a cell position nobody has written down, and mrFooterAudit
+// covers only the first store block and prints no colours. Run this, read the
+// log, and the repair can then be aimed rather than swept. Touches nothing.
+function mrPostRollAudit(ym) {
+  var ss = _mrSs();
+  ym = ym || _mrCentralMonth();
+  var idx = _mrIndex(ss);
+  var entry = idx[ym];
+  if (!entry) { Logger.log('no tabs for %s', ym); return; }
+
+  var mi = Number(ym.slice(5, 7)) - 1;
+  var thisFull = MR_MON_FULL[mi], thisAbbr = MR_MON_ABBR[mi];
+  var prevYm = _mrPrevMonth(ym);
+  var pi = Number(prevYm.slice(5, 7)) - 1;
+  var prevFull = MR_MON_FULL[pi], prevAbbr = MR_MON_ABBR[pi];
+  Logger.log('=== POST-ROLL AUDIT %s (previous month %s) ===', ym, prevYm);
+  Logger.log('looking for stale "%s"/"%s", expecting "%s"/"%s"',
+    prevFull, prevAbbr, thisFull, thisAbbr);
+
+  ['sales', 'buy'].forEach(function (family) {
+    var tab = entry[family];
+    if (!tab) { Logger.log('-- no %s tab', family); return; }
+    var width = family === 'buy' ? MR_BUY_WIDTH : MR_SALES_WIDTH;
+    var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+    var rng = tab.getRange(1, 1, lastRow, lastCol);
+    var values = rng.getValues(), formulas = rng.getFormulas();
+    var colours = rng.getBackgrounds();
+    var bases = _mrBases(values, width);
+
+    Logger.log('');
+    Logger.log('======== %s (%s) %sx%s ========', tab.getName(), family, lastRow, lastCol);
+
+    // ---- 1. any cell naming a month -------------------------------------
+    // Reported whether it is stale or already right, because a header that is
+    // ALREADY correct means the roll handles it and the fix must leave it be.
+    Logger.log('  -- cells naming a month --');
+    var monthCells = 0;
+    for (var r = 0; r < lastRow; r++) {
+      for (var c = 0; c < lastCol; c++) {
+        var v = (values[r] || [])[c];
+        if (v === '' || v === null || v === undefined) continue;
+        // A date-valued month header stringifies to 56 characters and used to be
+        // dropped by the length guard below — so this audit reported "nothing to
+        // change" for the Sales tab while B2 plainly read August on screen.
+        if (v instanceof Date) {
+          Logger.log('   %s  %s  (DATE) %s %s', _mrA1(r, c),
+            (v.getMonth() === mi && v.getFullYear() === Number(ym.slice(0, 4))) ? 'OK' : 'STALE',
+            MR_MON_ABBR[v.getMonth()], v.getFullYear());
+          monthCells++;
+          continue;
+        }
+        var txt = String(v);
+        if (txt.length > 40) continue;
+        var hit = null;
+        for (var m = 0; m < 12; m++) {
+          var re = new RegExp('\\b(' + MR_MON_FULL[m] + '|' + MR_MON_ABBR[m] + ')\\b', 'i');
+          if (re.test(txt)) { hit = MR_MON_ABBR[m]; break; }
+        }
+        if (!hit) continue;
+        var f = (formulas[r] || [])[c];
+        var state = hit === thisAbbr ? 'OK' : (hit === prevAbbr ? 'STALE' : 'other(' + hit + ')');
+        Logger.log('   %s  %s  "%s"%s', _mrA1(r, c), state, txt,
+          f ? '  [FORMULA ' + String(f).slice(0, 50) + ']' : '');
+        monthCells++;
+      }
+    }
+    if (!monthCells) Logger.log('   (none)');
+
+    // ---- 2 + 4. goal cells, their values AND their fill ------------------
+    // The fill is the point: a green left over from a finished month tells every
+    // manager they are ahead on the 1st.
+    Logger.log('  -- goal labels, the cell written, and the fill on that row --');
+    for (var r2 = 0; r2 < lastRow; r2++) {
+      for (var c2 = 0; c2 < lastCol; c2++) {
+        var t2 = String((values[r2] || [])[c2] || '').trim().toLowerCase();
+        if (MR_FOOTER.goal.indexOf(t2) < 0 && t2.indexOf('% of gp') < 0
+            && t2.indexOf('% of goal') < 0) continue;
+        var owner = _mrBlockOf(bases, c2, width) || 'no block';
+        var right = [];
+        for (var k = c2 + 1; k < Math.min(c2 + 4, lastCol); k++) {
+          var fk = (formulas[r2] || [])[k];
+          var vk = (values[r2] || [])[k];
+          right.push(_mrA1(r2, k) + '=' + (fk ? 'F' + String(fk).slice(0, 40)
+            : (vk === '' || vk === null ? '(blank)' : String(vk).slice(0, 24)))
+            + ' fill=' + colours[r2][k]);
+        }
+        Logger.log('   %s [%s] "%s"  ->  %s', _mrA1(r2, c2), owner, t2, right.join('   '));
+      }
+    }
+
+    // ---- 3. the B2B block, which the roll deliberately never touched -----
+    // Ethan 2026-08-12 said leave B2B manual, and it was. The named deals now
+    // carry into the new month, so the decision needs revisiting - but only the
+    // TYPED cells may ever be cleared; the GM column is a formula and the
+    // #DIV/0! on the empty rows is what a cleared row is SUPPOSED to look like.
+    Logger.log('  -- B2B region (typed vs formula) --');
+    var found2b = false;
+    for (var r3 = 0; r3 < lastRow; r3++) {
+      for (var c3 = 0; c3 < lastCol; c3++) {
+        var t3 = String((values[r3] || [])[c3] || '').trim().toLowerCase();
+        if (t3 !== 'b2b') continue;
+        found2b = true;
+        Logger.log('   anchor %s', _mrA1(r3, c3));
+        for (var rr = r3; rr < Math.min(r3 + 14, lastRow); rr++) {
+          var line = [];
+          for (var cc = c3; cc < Math.min(c3 + 6, lastCol); cc++) {
+            var ff = (formulas[rr] || [])[cc];
+            var vv = (values[rr] || [])[cc];
+            if (ff) line.push(_mrA1(rr, cc) + '=F' + String(ff).slice(0, 26));
+            else if (vv !== '' && vv !== null && vv !== undefined)
+              line.push(_mrA1(rr, cc) + '=TYPED[' + String(vv).slice(0, 20) + ']');
+          }
+          if (line.length) Logger.log('     %s', line.join('  '));
+        }
+      }
+    }
+    if (!found2b) Logger.log('   (no cell reads exactly "b2b")');
+
+    // ---- 5. "Last month" — formula or frozen number? --------------------
+    // This decides the whole safeguard. A live formula reading the previous tab
+    // self-heals the moment that tab is completed; a pasted number never does.
+    Logger.log('  -- "last month" cells --');
+    var foundLm = false;
+    for (var r4 = 0; r4 < lastRow; r4++) {
+      for (var c4 = 0; c4 < lastCol; c4++) {
+        var t4 = String((values[r4] || [])[c4] || '').trim().toLowerCase();
+        if (MR_FOOTER.lastMonth.indexOf(t4) < 0) continue;
+        foundLm = true;
+        var out = [];
+        for (var k4 = c4 + 1; k4 < Math.min(c4 + 8, lastCol); k4++) {
+          var f4 = (formulas[r4] || [])[k4];
+          var v4 = (values[r4] || [])[k4];
+          out.push(_mrA1(r4, k4) + '=' + (f4 ? 'FORMULA ' + String(f4).slice(0, 55)
+            : (v4 === '' || v4 === null ? '(blank)' : 'VALUE ' + String(v4).slice(0, 22))));
+        }
+        Logger.log('   %s [%s]  %s', _mrA1(r4, c4),
+          _mrBlockOf(bases, c4, width) || 'no block', out.join('   '));
+      }
+    }
+    if (!foundLm) Logger.log('   (none)');
+  });
+  Logger.log('');
+  Logger.log('=== end of audit — nothing was written ===');
+}
+
+// The GP goals for a month, re-read from SPEEKS and written to that month's
+// Sales tab. Exists because the roll and the goals race each other: the roll
+// fires at 4am on the 1st and the goals are keyed later that morning, so the
+// roll finds none, skips the cells, and last month's numbers stay. gp-goals
+// pushes on save for exactly this reason, and when that push does not land
+// there is currently no way to ask for it again without re-keying all five.
+//
+// Safe to run repeatedly: it writes the same five numbers, and a goal cell that
+// holds a formula is skipped by _mrWriteGoals rather than overwritten.
+function mrFixGoals(ym) {
+  var ss = _mrSs();
+  ym = ym || _mrCentralMonth();
+  var goals = _mrFetchGoals(ym);
+  if (!Object.keys(goals).length) {
+    Logger.log('SPEEKS has no goals for %s — nothing written. Enter them on the '
+      + 'site first; an empty answer means "not decided yet", never zero.', ym);
+    return;
+  }
+  Logger.log('SPEEKS goals for %s: %s', ym, JSON.stringify(goals));
+  Logger.log(JSON.stringify(_mrWriteGoals(ss, ym, goals)));
+}
+
+// ============================================================================
+// THE TWO THINGS THE COPY CARRIES THAT ARE NOT FIGURES
+//
+// Both found on the September tabs, 2026-09-01, by mrPostRollAudit.
+// ============================================================================
+
+// ---- 1. the month printed on the tab ---------------------------------------
+// ⚠️ ONE TYPED CELL, AND FIVE FORMULAS THAT FOLLOW IT. On Buy Sep 26 the audit
+// found C1 = "August 2026" typed, and H1/M1/AB1 = "=C1" with R1 = "=H1" and
+// W1 = "=M1". So exactly one cell needs writing and the other five correct
+// themselves; writing all six would replace working references with literals.
+// The Sales tab has no month cell at all — the tab NAME carries it there.
+//
+// ⚠️ WHOLE-CELL MATCH, DELIBERATELY. A looser search for a month name inside
+// the text hits "Inc/Dec" on the Sales tab, five times — the audit's own first
+// version reported exactly that. A header cell is the month and nothing else,
+// so requiring the whole cell to be "<Month> [year]" is both sufficient and the
+// only form that cannot false-positive.
+function _mrMonthNamePlan(values, formulas, targetYm, lastRow, lastCol) {
+  var mi = Number(targetYm.slice(5, 7)) - 1;
+  var yr = targetYm.slice(0, 4);
+  var plan = [];
+  for (var r = 0; r < lastRow; r++) {
+    for (var c = 0; c < lastCol; c++) {
+      if ((formulas[r] || [])[c]) continue;            // follows another cell
+      var raw = (values[r] || [])[c];
+      if (raw === '' || raw === null || raw === undefined) continue;
+
+      // ⚠️ THE SALES TAB'S MONTH IS A DATE, NOT TEXT, AND THAT IS WHY BOTH THIS
+      // PASS AND THE AUDIT WALKED PAST IT. B2 is a real Date formatted mmmm yyyy,
+      // so it READS "August 2026" and stringifies to
+      //   "Sat Aug 01 2026 00:00:00 GMT-0500 (Central Daylight Time)"
+      // — 56 characters, past the length guard below, and matching no month
+      // regex either. The audit reported "nothing to change" on a tab that was
+      // plainly wrong on screen, which is the worst kind of clean result.
+      //
+      // The tell was in the screenshot before it was in the data: the cell is
+      // RIGHT-aligned, and Sheets right-aligns dates and numbers while text goes
+      // left. A month header that is a date must be written back as a date, or
+      // the mmmm yyyy format has nothing to format.
+      if (raw instanceof Date) {
+        if (raw.getFullYear() === Number(yr) && raw.getMonth() === mi) continue;
+        // Keep the day where it was, clamped: new Date(2026, 8, 31) silently
+        // becomes October 1st, which would move the header a whole month.
+        var dim = new Date(Number(yr), mi + 1, 0).getDate();
+        var d = Math.min(raw.getDate() || 1, dim);
+        plan.push({
+          row: r, col: c, isDate: true,
+          from: MR_MON_ABBR[raw.getMonth()] + ' ' + raw.getFullYear(),
+          to: MR_MON_ABBR[mi] + ' ' + yr,
+          dateValue: new Date(Number(yr), mi, d,
+                              raw.getHours(), raw.getMinutes(), raw.getSeconds()),
+        });
+        continue;
+      }
+
+      var txt = String(raw).trim();
+      if (txt.length > 20) continue;
+      for (var m = 0; m < 12; m++) {
+        var re = new RegExp('^(' + MR_MON_FULL[m] + '|' + MR_MON_ABBR[m] + ')\\.?[ ,]*(\\d{2,4})?$', 'i');
+        var hit = txt.match(re);
+        if (!hit) continue;
+        // Rebuild in the shape it was found: full name stays full, an
+        // abbreviation stays abbreviated, and a cell with no year gains none.
+        var wasFull = new RegExp('^' + MR_MON_FULL[m], 'i').test(txt);
+        var want = (wasFull ? MR_MON_FULL[mi] : MR_MON_ABBR[mi])
+                 + (hit[2] ? ' ' + (hit[2].length === 2 ? yr.slice(2) : yr) : '');
+        if (want !== txt) plan.push({ row: r, col: c, from: txt, to: want });
+        break;
+      }
+    }
+  }
+  return plan;
+}
+
+// ---- 2. the B2B deals ------------------------------------------------------
+// Ethan 2026-08-12 said leave B2B manual and it was left manual — but "manual"
+// meant nobody should INVENT the figures, not that last month's should carry.
+// September opened holding Hovey, Trading Co, Sertoma, Wiese, Maxus, USD417,
+// TVH and Cosentinos with August's money against them (Ethan, 2026-09-01).
+//
+// ⚠️ ONLY TYPED CELLS, AND ONLY BETWEEN THE HEADER AND THE TOTAL. The block is
+// five columns — name, Buy, Sell, GM — repeated six times across the Buy tab at
+// A41/F41/K41/P41/U41/Z41. Three things must survive:
+//   • row 41 itself, which is the "B2B / Buy / Sell / GM" header
+//   • the GM column, a formula (=1-(B42/C42)) whose #DIV/0! on an empty row is
+//     what a correctly-cleared row is SUPPOSED to look like
+//   • the TTL and Combo rows, and the whole SIXTH block at Z41, which is the
+//     district roll-up and is formulas end to end (=B42+G42+L42+Q42+V42)
+// Clearing only cells that hold no formula satisfies the last two for free; the
+// walk below stops at the total row so the first is never in range.
+function _mrB2bPlan(values, formulas, lastRow, lastCol) {
+  var plan = [];
+  for (var r = 0; r < lastRow; r++) {
+    for (var c = 0; c < lastCol; c++) {
+      if (String((values[r] || [])[c] || '').trim().toLowerCase() !== 'b2b') continue;
+      // Down from the header to whatever ends the block. Bounded at 12 rows so a
+      // missing total label cannot run the clear into the rest of the sheet.
+      for (var rr = r + 1; rr < Math.min(r + 13, lastRow); rr++) {
+        var label = String((values[rr] || [])[c] || '').trim().toLowerCase();
+        if (MR_TOTAL_LABELS.indexOf(label) >= 0 || label === 'combo') break;
+        for (var cc = c; cc < Math.min(c + MR_BUY_WIDTH, lastCol); cc++) {
+          if ((formulas[rr] || [])[cc]) continue;       // GM column, and the Z roll-up
+          var v = (values[rr] || [])[cc];
+          if (v === '' || v === null || v === undefined) continue;
+          plan.push({ row: rr, col: cc, was: String(v).slice(0, 24) });
+        }
+      }
+    }
+  }
+  return plan;
+}
+
+// ---- 3. the goal fills ------------------------------------------------------
+// ⚠️ THE ROLL IS THE RIGHT PLACE FOR THIS, NOT THE IMPORTER. The importer paints
+// green at 100% and red below, and it now leaves a block alone until that block
+// has a day with sales on it — but on the 1st the roll has ALREADY copied last
+// month's fill, and the importer's next run is the following morning, by which
+// time the month HAS sales and the honest paint is red. So the white would never
+// actually be seen.
+//
+// The roll knows something the importer cannot: this tab is brand new and has
+// never had a figure in it. That is the one moment "no colour" is certainly
+// right, so that is where it is done.
+//
+// Bounded to labels containing "gp goal" on purpose: the Buy tab has a bare
+// "goal" at AE2 whose neighbours are the 40/35/40 buying-day targets, and those
+// are nobody's business here.
+function _mrGoalFillPlan(values, lastRow, lastCol) {
+  var plan = [];
+  for (var r = 0; r < lastRow; r++) {
+    for (var c = 0; c + 1 < lastCol; c++) {
+      var t = String((values[r] || [])[c] || '').trim().toLowerCase();
+      if (t.indexOf('gp goal') < 0) continue;
+      plan.push({ row: r, col: c + 1 });     // the figure sits one to the right
+    }
+  }
+  return plan;
+}
+
+// Both passes against one tab. Returns what it did, or would do.
+function _mrCarryOverPass(tab, targetYm, dryRun) {
+  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+  var rng = tab.getRange(1, 1, lastRow, lastCol);
+  var values = rng.getValues(), formulas = rng.getFormulas();
+
+  var names = _mrMonthNamePlan(values, formulas, targetYm, lastRow, lastCol);
+  var b2b = _mrB2bPlan(values, formulas, lastRow, lastCol);
+  var fills = _mrGoalFillPlan(values, lastRow, lastCol);
+  var out = { monthNames: [], b2bCleared: [], fillsCleared: [] };
+
+  names.forEach(function (p) {
+    out.monthNames.push(_mrA1(p.row, p.col) + ' ' + (p.isDate ? '(date) ' : '')
+      + '"' + p.from + '" -> "' + p.to + '"');
+    // A date cell gets a Date. Writing the string "September 2026" over it would
+    // read correctly and quietly break every formula that does date arithmetic
+    // on it, plus the mmmm yyyy format it is displayed through.
+    if (!dryRun) tab.getRange(p.row + 1, p.col + 1)
+      .setValue(p.isDate ? p.dateValue : p.to);
+  });
+  b2b.forEach(function (p) {
+    out.b2bCleared.push(_mrA1(p.row, p.col) + '[' + p.was + ']');
+    if (!dryRun) tab.getRange(p.row + 1, p.col + 1).clearContent();
+  });
+  fills.forEach(function (p) {
+    var cell = tab.getRange(p.row + 1, p.col + 1);
+    var had = String(cell.getBackground()).toLowerCase();
+    if (had === '#ffffff' || had === 'white') return;      // already clear
+    out.fillsCleared.push(_mrA1(p.row, p.col) + '[' + had + ']');
+    if (!dryRun) cell.setBackground(null);
+  });
+  return out;
+}
+
+// Run the two passes over a month that has ALREADY been rolled. September needed
+// this because the roll that made it predates both passes; after that, the roll
+// does it and this is only ever a repair tool.
+//
+// Dry run by default. mrPostRollRepair('2026-09', true) writes.
+function mrPostRollRepair(ym, apply) {
+  var ss = _mrSs();
+  ym = ym || _mrCentralMonth();
+  var entry = _mrIndex(ss)[ym];
+  if (!entry) { Logger.log('no tabs for %s', ym); return; }
+  Logger.log('=== %s %s ===', apply ? 'REPAIRING' : 'PREVIEW (nothing written)', ym);
+  ['sales', 'buy'].forEach(function (family) {
+    var tab = entry[family];
+    if (!tab) return;
+    var r = _mrCarryOverPass(tab, ym, !apply);
+    Logger.log('-- %s', tab.getName());
+    Logger.log('   month name : %s', r.monthNames.length ? r.monthNames.join('  ') : 'nothing to change');
+    Logger.log('   B2B cleared: %s', r.b2bCleared.length ? r.b2bCleared.length + ' cells  ' + r.b2bCleared.join(' ') : 'nothing typed');
+    Logger.log('   goal fills : %s', r.fillsCleared.length ? r.fillsCleared.length + ' cleared  ' + r.fillsCleared.join(' ') : 'already clear');
+  });
+  if (!apply) Logger.log('Nothing was written. Run mrRepairApply to write it.');
+}
+
+// ⚠️ THE RUN DROPDOWN CANNOT PASS AN ARGUMENT. It lists bare function names, so
+// mrPostRollRepair picked from the menu always arrives with apply undefined and
+// always dry-runs — which is safe, and completely undiscoverable as the reason
+// nothing happened. These two are the pair you actually run, named the way
+// mirror-fix.gs names its own (mrfFixPreview / mrfFixApply).
+function mrRepairPreview() { mrPostRollRepair(_mrCentralMonth(), false); }
+function mrRepairApply()   { mrPostRollRepair(_mrCentralMonth(), true); }
 
 // Next month's tabs with a (PREVIEW) suffix, to be checked beside the real ones.
 // Nothing reads a PREVIEW tab — the name does not match what the site's parsers

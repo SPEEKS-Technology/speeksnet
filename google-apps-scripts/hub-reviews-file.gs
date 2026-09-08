@@ -37,6 +37,18 @@
 //   AF35  =IFERROR(MAX(AF4:AF34),0)                 fill across to AK35
 //   AF36  =IFERROR(AF35/$E$40*$E$39,0)              fill across to AK36
 //
+// ⚠️ THOSE ROW NUMBERS ARE FOR A 31-DAY MONTH ONLY, and the reader below no
+// longer trusts them. month-rollover.gs deletes a day row when the new month is
+// shorter, so in September 2026 the grid ended at row 33, the total moved to 34
+// and the projection to 35 — and a reader pinned to 35/36 served the projection
+// as the month-to-date count. The rows come from _hubRows() in Code.gs, which
+// derives them from the length of the month.
+//
+// ⚠️ AND THE DAY NUMBERS IN AE ARE NOT RELIABLE. The rollover renumbers the day
+// column of each STORE block, found from the header row; this mini-table is not
+// one of them, so after a 31-to-30 month it reads 1..29 then 31 — day 30's row
+// having been the one deleted. The rows here are counted, never read off it.
+//
 // BUYING DAYS, NOT CALENDAR DAYS (user's call 2026-08-08, and the righter one):
 // a review comes from someone at the counter asking for one, and the stores are
 // shut on Sundays.
@@ -106,12 +118,45 @@ function addGoogleReviews(data) {
     // browser as text; the client treats 0 as "nothing yet".
     var num = function (v) { var x = Number(v); return isFinite(x) ? x : 0; };
 
+    // ⚠️⚠️ NEVER PIN THESE TO ROW 35 AGAIN — THE GRID IS AS LONG AS THE MONTH.
+    // This read row 35 for the total and 36 for the projection, which is where
+    // they sit in a 31-DAY month. month-rollover.gs deletes a day row when the
+    // new month is shorter, so on 2026-09-01 everything below the grid moved up
+    // one row: this then served the PROJECTION as the month-to-date figure —
+    // every store reported exactly 26x its real count (36 became 936, and the
+    // company tile read 5,148 five-star reviews against a goal of 185) — while
+    // the projection read the blank row below it and reported 0.
+    //
+    // Nothing announced it. The figures were the right SHAPE from the wrong
+    // cells, which is the one failure this file's try/catch cannot help with.
+    //
+    // ⚠️ THE ROWS COME FROM THE CALENDAR, NOT FROM READING THE DAY COLUMN.
+    // The first attempt at this scanned AE downwards for consecutive day
+    // numbers and stopped where they stopped. It was wrong on the very first
+    // run, because THE REVIEWS BLOCK'S DAY COLUMN IS NOT RENUMBERED BY THE
+    // ROLLOVER. month-rollover.gs renumbers the day column of each STORE block
+    // — found from the header row — and this mini-table at AE:AK is not one of
+    // them. Going 31 days to 30 it simply deleted day 30's row, leaving AE
+    // reading 1..29 then 31. The scan stopped at 29, put the total two rows too
+    // high, and served 0 for every store while the projection cell answered
+    // with the total. Reading the sheet is not automatically safer than
+    // computing: it is only safer when the thing you read is maintained.
+    //
+    // The length of the month is not in doubt and needs no lookup, and it is
+    // the same number month-rollover.gs sized the grid to. _hubRows lives in
+    // Code.gs, in this same project, so both files derive every row from one
+    // place — this block cannot drift away from the hub's own arithmetic.
+    var R = _hubRows(new Date());
+    var lastDay  = R.buyLast;    // 34 in a 31-day month
+    var totalRow = R.buyTotal;   // 35
+    var projRow  = R.buyProj;    // 36
+
     var cols = { ovl: 'AF', lee: 'AG', wsp: 'AH', mpl: 'AI', bal: 'AJ' };
     Object.keys(cols).forEach(function (s) {
       var c = cols[s];
-      data[s + 'Reviews']     = num(tab.getRange(c + '35').getValue());  // month to date
-      data[s + 'ReviewsProj'] = num(tab.getRange(c + '36').getValue());  // projected month-end
-      data[s + 'ReviewsGoal'] = num(tab.getRange(c + '2').getValue());   // monthly target
+      data[s + 'Reviews']     = num(tab.getRange(c + totalRow).getValue()); // month to date
+      data[s + 'ReviewsProj'] = num(tab.getRange(c + projRow).getValue());  // projected month-end
+      data[s + 'ReviewsGoal'] = num(tab.getRange(c + '2').getValue());      // monthly target
     });
 
     // ---- the DAY COLUMN, so the dashboard can see movement ------------------
@@ -132,7 +177,11 @@ function addGoogleReviews(data) {
     // so a real 0 (a store that genuinely has none yet) and a day the importer has
     // not reached are different facts, and collapsing them would make every store
     // read as "no movement" for the whole back half of the month.
-    var grid = tab.getRange('AF4:AJ34').getValues();
+    // Read to the grid's real end for the same reason. A fixed AF4:AJ34 in a
+    // 30-day month swept the TOTAL row in as "day 31", so every store's last day
+    // carried the whole month's count — and that is the exact shape
+    // _lvReviewStale reads to decide whether a store has stopped asking.
+    var grid = tab.getRange('AF4:AJ' + lastDay).getValues();
     var codes = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
     var daily = {};
     codes.forEach(function (code, ci) {
@@ -142,6 +191,13 @@ function addGoogleReviews(data) {
         var x = Number(v);
         return isFinite(x) ? x : null;
       });
+    });
+    // ⚠️ PADDED BACK TO 31. The client indexes these by day-1 and every other
+    // day array on the payload is 31 long; a 30-long array would read correctly
+    // by accident today and wrongly from anything assuming a fixed width.
+    // Trailing nulls say "this month has no such day", which is the truth.
+    codes.forEach(function (code) {
+      while (daily[code].length < 31) daily[code].push(null);
     });
     data.wkReviews = daily;
   } catch (err) {

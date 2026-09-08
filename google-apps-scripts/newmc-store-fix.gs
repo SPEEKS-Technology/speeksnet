@@ -80,15 +80,43 @@
 // in the list. Derive the days for every store; never copy another store range.
 //
 // ---------------------------------------------------------------------------
-// AUG 24 STILL HAS TO BE DONE — TOMORROW MORNING
+// WSP AUG 15 — A COST GAP THAT IS CORRECT AND ALREADY PROTECTED. LEAVE IT.
 // ---------------------------------------------------------------------------
-// Aug 24 carries the ENTIRE reversal for each store, so until it is locked at its
-// true value that store August month total is understated by it:
-//   MPL 6709.79     BAL 3529.84
+// WSP Aug 15 sales agree with Shopify to the cent; the COST is 900.00 higher
+// (sheet 2846.25, Shopify 1946.25) with ZERO phantom orders that day.
 //
-// Tomorrow: take each real final Aug 24 figure, uncomment the rows at the bottom
-// of NMC_FIX, put the numbers in, re-run preview then apply. Month totals are
-// then correct and so is the day-by-day split.
+// RESOLVED 2026-08-25 (Ethan): order #MO02-6574 (1,999.99) was a DIRECTLY LISTED
+// eBay item, so Shopify never had a cost for it — it reports
+// cost_of_goods_sold 0 and always did. The 900.00 is a deliberate hardcoded cost
+// in the sheet, entered by hand to account for exactly that. **The sheet is
+// right and Shopify is the incomplete record here.**
+//
+// Confirmed independently: the importer re-verifies REVERIFY = 32 days on every
+// run (sales-email-import.gs), so Aug 15 has been inside the window every single
+// morning since it happened — and the cell still reads 2846.25. It could only
+// have survived that if it is already formula-protected. Nothing to do.
+//
+// ⚠️ SO DO NOT ADD A WSP AUG 15 ROW. Writing the derived 1946.25 would overwrite
+// a hand-entered correct figure with an incomplete one — the exact inverse of
+// what every other row in NMC_FIX does.
+//
+// GENERAL RULE THIS ESTABLISHES: sales match + cost does not + no phantom on that
+// day  ⇒  it is NOT a duplicate. Look for an order with revenue and
+// cost_of_goods_sold 0, and expect a directly-listed eBay item with a hardcoded
+// cost behind it. Shopify's cost is not authoritative for those.
+//
+// ---------------------------------------------------------------------------
+// AUG 24 — DONE, 2026-08-25
+// ---------------------------------------------------------------------------
+// Aug 24 carried the ENTIRE reversal for each store. It is now complete and its
+// three rows are in NMC_FIX below, so each August month total is whole again.
+//
+// ⚠️ DO NOT USE THE MIDDAY ESTIMATES THIS FILE CARRIED YESTERDAY. Every one of
+// them was wrong by thousands, because the day was still trading — MPL read
+// 957.59 midday and finished at 9756.42, and BAL was predicted NEGATIVE and
+// finished at +3377.72 on the back of one 2949.99 sale that landed at 12:59pm.
+// A part-day figure is not a small error on a final one; it is a different
+// number. Re-derive after midnight, always.
 //
 // ---------------------------------------------------------------------------
 // HOW TO RUN — no deployment, this is a Run-from-the-editor script
@@ -188,21 +216,104 @@ var NMC_FIX = [
   { store: 'LEE', day: 22, sales: 4904.82, cost: 2051.50 },
   { store: 'LEE', day: 23, sales: 3074.61, cost: 1603.89 }
 
-  // TOMORROW (2026-08-25), once Aug 24 real final figures are known. Uncomment,
-  // replace the numbers, re-run nmcFixPreview then nmcFixApply.
-  // Until Aug 24 is locked, each store August month total is understated by the
-  // reversal its Aug 24 is carrying: MPL 6709.79, BAL 4229.83, LEE 16879.12.
+  // -------------------------------------------------------------------------
+  // AUG 24, added 2026-08-25 — the day that carried every store's reversal.
+  // -------------------------------------------------------------------------
+  // Derived after midnight from the completed day, same rule as every row above:
+  // the day total with every phantom order removed ENTIRELY, by Shopify's own day
+  // attribution. Removing the order takes out both its backdated sale and its
+  // Aug 24 refund credit at once, which is why one rule covers the reversal day.
   //
-  // Measured midday and still moving: MPL 957.59 / 371.00,
-  // BAL -984.99 / -428.00, LEE 1466.90 / 662.43.
-  // Do not use these -- re-derive after midnight.
+  // PROOF THE METHOD IS RIGHT: re-derived from scratch today, it reproduced all
+  // 14 previously-locked days — every MPL, BAL and LEE figure in this file and in
+  // mpc-dupe-fix.gs — to the cent, including BAL Aug 22's 2118.93 and LEE Aug 19's
+  // 4775.67, the two that needed the #MO04-2844 / #MO01-9103 corrections.
   //
-  // BAL's true Aug 24 is NEGATIVE and that is REAL: BAL has genuine returns
-  // exceeding sales today, nothing to do with the duplicates. Take the final
-  // figure whatever its sign, and do not "correct" a negative day.
-  // , { store: 'MPL', day: 24, sales: 0.00, cost: 0.00 }
-  // , { store: 'BAL', day: 24, sales: 0.00, cost: 0.00 }
-  // , { store: 'LEE', day: 24, sales: 0.00, cost: 0.00 }
+  // ⚠️ THE PHANTOM SET IS THE UNION OF TWO LISTS, NOT EITHER ONE ALONE.
+  // dup_order_cleanup alone misses #MO04-2844 and #MO01-9103 (phantoms refunded
+  // from outside this work, so never staged) and gets BAL Aug 22 and LEE Aug 19
+  // wrong by 699.99 and 88.99. Tag-matching alone misses the 2026-08-20 old-MC
+  // pairs whose own copy predates the search window. Use both.
+  //
+  // BAL's Aug 24 is POSITIVE after all — yesterday's note predicted a negative day.
+  // It still carries three genuine returns (-699.99, -339.99, -124.99), two of them
+  // real eBay buyer cancellations of our own Aug 22/24 sales. Those are real and
+  // stay in.
+  , { store: 'MPL', day: 24, sales: 9756.42, cost: 4115.00 }
+  , { store: 'BAL', day: 24, sales: 3377.72, cost: 1084.00 }
+  , { store: 'LEE', day: 24, sales: 7466.41, cost: 3585.55 }
+
+  // -------------------------------------------------------------------------
+  // WSP, added 2026-08-25 — the fourth store to move. NINE DAYS, Aug 16-24.
+  // -------------------------------------------------------------------------
+  // 44 phantom orders, 12,206.57 refunded (43 by dup-cleanup batch
+  // wsp-new-mc-adoption-2026-08-25, 1 already reversed from outside this work).
+  //
+  // ⚠️ AT WSP THE FOREIGN COPIES CARRY THE **OLD** MC TAG VOCABULARY
+  // (`eBay-US` + `paymore_westport`), NOT the bare `["eBay"]` seen at MPL, BAL
+  // and LEE. 325 of WSP's 420 eBay orders are old-MC tagged and MOST ARE
+  // LEGITIMATE — MC has always imported the sales for its own listings there.
+  // So the tag does NOT identify a phantom at this store. What identifies one is
+  // a SHARED eBay Order Id with a copy of ours, which is source-blind. Proof the
+  // cutover is real and not a long-standing overlap: the earliest foreign copy of
+  // one of our sales is 2026-08-24T17:27Z, and there are none before it.
+  //
+  // Verified before refunding: 0 foreign orders lack an eBay Order Id (so the id
+  // test is complete), 0 duplicates carry a different tracking number from ours
+  // (no buyer got two labels), and 7 foreign orders since the cutover have no
+  // twin — genuine sales MC captured that we never did. Those stay in the books.
+  //
+  // ⚠️ AUG 15 IS DELIBERATELY NOT IN THIS LIST, AND MUST NEVER BE ADDED —
+  // its cost is a hand-entered figure for a directly-listed eBay item.
+  , { store: 'WSP', day: 16, sales: 6407.77, cost: 2270.01 }
+  , { store: 'WSP', day: 17, sales: 5434.80, cost: 2822.00 }
+  , { store: 'WSP', day: 18, sales: 7304.41, cost: 3195.98 }
+  , { store: 'WSP', day: 19, sales: 3486.29, cost: 1630.45 }
+  , { store: 'WSP', day: 20, sales: 8493.29, cost: 3206.48 }
+  , { store: 'WSP', day: 21, sales: 1894.85, cost: 1140.01 }
+  , { store: 'WSP', day: 22, sales: 3209.96, cost: 1990.00 }
+  , { store: 'WSP', day: 23, sales:  696.92, cost:  202.14 }
+  , { store: 'WSP', day: 24, sales: 4899.90, cost: 2724.69 }
+
+  // -------------------------------------------------------------------------
+  // OVL, added 2026-08-25 — the fifth and last store. TEN DAYS, Aug 15-24.
+  // -------------------------------------------------------------------------
+  // 173 phantom orders, 31,381.19 refunded (batch ovl-new-mc-adoption-2026-08-25),
+  // 163 SKUs raised from negative to 0, and the 6 unfulfilled copies cancelled.
+  //
+  // ⚠️ EVERY VALUE HERE EXCEPT AUG 20 EQUALS WHAT THE SHEET ALREADY HOLDS, AND
+  // THAT IS THE POINT. OVL's duplicates were created at 16:00Z today — AFTER this
+  // morning's 06:00 import — so the sheet is still correct as this is written. It
+  // is the NEXT import that restates these ten days with the phantom sales folded
+  // in: refunding puts the credit on Aug 25, not back on the original sale day, so
+  // Aug 15-24 would each come back overstated. These rows are therefore a FORMULA
+  // LOCK on figures that are already right. An unlocked cell is what the next
+  // import overwrites — a correct-but-unlocked day still needs the lock.
+  //
+  // ⚠️ AUG 20 IS 5762.17, NOT THE 5748.18 THE SHEET SHOWS — AND THE SHEET IS THE
+  // ONE THAT IS WRONG. #KS01-14293 (13.99 net / 4.00 cost) is a GENUINE MC sale
+  // with no copy of ours; it arrived at 16:06:56Z today and Shopify correctly
+  // booked it to its Aug 20 sale date, five hours after the 06:00 email went out.
+  // Stale, not contaminated. Exactly the #MO03-3042 case from the MPL Aug 22 note
+  // above, so the direction of a mismatch has to be read before it is "corrected".
+  //
+  // ⚠️ OVL WAS THE ONE STORE WHERE THE ITEM-ID TEST LIED. All 66 published SKUs are
+  // STILL live under OUR eBay item ids — MC adopted them IN PLACE rather than
+  // relisting — so the check that proved the transition at MPL/BAL/LEE/WSP reads
+  // "not transitioned" here and is a false negative. What proved it instead: MC has
+  // imported copies of our sales spanning Aug 16-25 including one from today, and
+  // 60 of 60 of our last-five-days sales are covered (the 2 apparent gaps were
+  // cancelled+refunded buyer cancellations MC rightly skipped).
+  , { store: 'OVL', day: 15, sales:  4404.11, cost: 1984.52 }
+  , { store: 'OVL', day: 16, sales: 12640.40, cost: 5624.60 }
+  , { store: 'OVL', day: 17, sales:  7692.73, cost: 3369.03 }
+  , { store: 'OVL', day: 18, sales: 10419.95, cost: 6103.29 }
+  , { store: 'OVL', day: 19, sales:  3666.62, cost: 1623.75 }
+  , { store: 'OVL', day: 20, sales:  5762.17, cost: 2865.35 }   // +13.99 / +4.00 vs the sheet: a real sale, see above
+  , { store: 'OVL', day: 21, sales:  7427.59, cost: 3381.90 }
+  , { store: 'OVL', day: 22, sales:  4687.26, cost: 2098.31 }
+  , { store: 'OVL', day: 23, sales:  1686.87, cost:  740.00 }
+  , { store: 'OVL', day: 24, sales:  9764.29, cost: 5349.05 }
 ];
 
 function nmcFixPreview() { _nmcRun(true); }
@@ -306,9 +417,16 @@ function _nmcRun(dryRun) {
   } else {
     Logger.log('Done. The daily import will now skip these cells and say so '
       + '(deliberate: true, "cell holds a formula").');
-    Logger.log('STILL OUTSTANDING: MPL Aug 24 carries the whole -6709.79 reversal. '
-      + 'Until it is locked at its real final figure the August month total is '
-      + 'understated by that amount. See the note at the top of this file.');
+    Logger.log('Aug 15-24 are now locked at their true figures for all five stores.');
+    Logger.log('NEXT: AUG 25 IS NOT DONE AND IT IS THE BIGGEST ONE. Every refund '
+      + 'issued on 2026-08-25 credits to Aug 25, not to the original sale day, so '
+      + 'that day currently reads far below what the stores actually did:');
+    Logger.log('   OVL 173 refunds  -31,381.19   |   WSP 43 refunds  -12,206.57');
+    Logger.log('   LEE  1 refund       -539.99   |   MPL  1 refund       -389.99');
+    Logger.log('   = -44,517.74 of reversal sitting on one day across four stores.');
+    Logger.log('Once Aug 25 is final, derive each store the same way (day total with '
+      + 'every phantom order removed entirely) and add four rows. BAL had no refunds '
+      + 'on the 25th, so BAL needs no Aug 25 row.');
   }
 }
 
