@@ -10159,6 +10159,31 @@ body.sam-active .hotbar-btn:hover {
    fallback and was never defined — define it to the deep emerald. */
 :root { --sage-deep: #178048; }
 
+/* =========================================================
+   DROPDOWNS — ONE PALETTE, EVERY PICKER
+   ---------------------------------------------------------
+   Every dropdown on the site is one of three things, and until now each had its
+   own hexes: the .dd-* face that _ddEnhance puts over a native <select> (which
+   is nearly all of them), .mg-picker in the Margin Guide, and .pg-ask-pick in
+   the Picture Guide. They are the same control and should look it.
+
+   These are the emerald pair the redesign is rolling out — #1f9d57 / #178048,
+   the same as --sage-deep — so a dropdown is finished rather than waiting for
+   its scope to be flipped. Defined at :root, not on a panel, because .dd-list
+   is MOVED TO <body> when it opens (see _ddOpen) and a token scoped to the
+   panel it came from would resolve to nothing at exactly the moment it is
+   needed. That is why this block is here and not next to .dd-list.
+   ========================================================= */
+:root {
+    --dd-line: #e3e8ee;        /* the face's border, and the menu's */
+    --dd-accent: #1f9d57;      /* focused face, the ring, the highlight ring */
+    --dd-accent-deep: #178048; /* text of the chosen row */
+    --dd-accent-tint: #e8f7ee; /* fill of the chosen row */
+    --dd-ring: #c6ecd6;        /* the soft halo on a focused face */
+    --dd-row-hover: #f1f5f9;   /* hover, which must not read as chosen */
+    --dd-row-hi: #f6faf7;      /* where the type-ahead has got to */
+}
+
 /* Flip var(--sage-professional) to the fresh emerald ONLY inside the
    redesigned surfaces (the global token stays sage for untouched pages). */
 .speeks-action-menu,
@@ -15553,14 +15578,14 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
  * the sage accent, so the rungs read at a glance without inventing brand hues.
  * ========================================================================== */
 .mg-panel {
-    --mg-line: #e3e8ee;
+    --mg-line: var(--dd-line);
     --mg-hdr: #f6faf7;
     --mg-muted: #64707c;
     --mg-faint: #9aa6ad;
-    --mg-accent: #1f9d57;
-    --mg-accent-deep: #178048;
-    --mg-accent-tint: #e8f7ee;
-    --mg-ring: #c6ecd6;
+    --mg-accent: var(--dd-accent);
+    --mg-accent-deep: var(--dd-accent-deep);
+    --mg-accent-tint: var(--dd-accent-tint);
+    --mg-ring: var(--dd-ring);
     --mg-amber: #b45309;
     --mg-amber-tint: #fdf3e1;
     --mg-amber-line: #f0d9a8;
@@ -18910,7 +18935,7 @@ select.dd-native {
 :where(.dd-btn) {
     background-color: #fff;
     color: var(--slate-charcoal, #17201c);
-    border: 1px solid #d1d5db;
+    border: 1px solid var(--dd-line);
     border-radius: 8px;
     padding: 0 12px;
     min-height: 34px;
@@ -18941,7 +18966,16 @@ select.dd-native {
 .dd-cur { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dd-chev { width: 15px; height: 15px; flex: 0 0 auto; color: #94a3b8; transition: transform .15s ease; }
 .dd-host.open .dd-chev { transform: rotate(180deg); }
-.dd-btn:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
+/* A soft emerald halo rather than a hard 2px outline: an outline sits OUTSIDE
+   the border and collides with whatever the control is packed against, which in
+   a modal's field grid is the next control. box-shadow spreads without taking
+   layout space. Both states, because a face with its list down is focused
+   whether or not the keyboard put it there. */
+.dd-btn:focus-visible, .dd-host.open .dd-btn {
+    outline: none;
+    border-color: var(--dd-accent) !important;
+    box-shadow: 0 0 0 3px var(--dd-ring) !important;
+}
 
 /* position: fixed, placed by _ddPlace. Half the selects on this site sit inside
    modals and side panels with overflow:hidden, and an absolutely positioned menu
@@ -18958,9 +18992,9 @@ select.dd-native {
     overflow-y: auto;
     padding: 5px;
     background: #fff;
-    border: 1px solid #e3ebe6;
+    border: 1px solid var(--dd-line);
     border-radius: 12px;
-    box-shadow: 0 12px 30px rgba(15, 30, 22, .16);
+    box-shadow: 0 12px 34px rgba(16, 24, 40, .18);
     -webkit-overflow-scrolling: touch;
 }
 /* Hidden: a chevron the page drew for this select before the face existed.
@@ -18986,17 +19020,28 @@ select.dd-native {
     text-overflow: ellipsis;
     cursor: pointer;
 }
-.dd-opt:hover { background: #eef4f0; }
-/* THE OPTION YOU ARE ON WEARS THE SAME BLACK AS THE ONE THAT IS CHOSEN. Typing
-   moves focus, and the pale green tint sat too close to the plain rows to see at
-   a glance which one the letters had found. The question being asked while you
-   type is "what am I on", and the answer should look like an answer.
-   :focus-visible rather than :focus, so a mouse click does not paint a row black
-   on its way to closing the list. */
+.dd-opt:hover { background: var(--dd-row-hover); }
+/* WHAT AM I ON vs WHAT IS CHOSEN — two questions, two answers, and they can both
+   be on screen at once.
+   These were BOTH solid charcoal, deliberately: a pale green tint alone sat too
+   close to the plain rows to see at a glance where typing had got to, and black
+   is unmissable. It was the right call against that alternative — but it made
+   every dropdown on the site answer "what is chosen" in a colour the rest of the
+   control does not use, and it lost the difference between the two states by
+   making them identical.
+   A RING is what fixes it. It reads instantly at a glance — that was black's
+   only real advantage — without a colour the palette has to apologise for, and
+   it stacks over the tint, so the chosen row that you are also on shows both at
+   once. Ported from .pg-ask-opt.hi (Ethan, 2026-09-08).
+   :focus-visible, not :focus, so a mouse click does not paint a row on its way
+   to closing the list. */
 .dd-opt:focus-visible {
-    background: var(--slate-charcoal, #17201c); color: #fff; outline: none;
+    background: var(--dd-row-hi); box-shadow: inset 0 0 0 1.5px var(--dd-accent);
+    outline: none;
 }
-.dd-opt.on { background: var(--slate-charcoal, #17201c); color: #fff; }
+.dd-opt.on {
+    background: var(--dd-accent-tint); color: var(--dd-accent-deep); font-weight: 780;
+}
 .dd-opt.dd-dis { opacity: .45; cursor: not-allowed; }
 
 @media (prefers-reduced-motion: reduce) { .dd-chev { transition: none; } }
@@ -21275,14 +21320,17 @@ select.dd-native {
    whatever the page ambient is. One declaration, two roots, rather than a second
    copy of thirteen hex values to keep in step by hand. */
 .pg-panel, .pg-ask {
-    --pg-line: #e3e8ee;
-    --pg-hdr: #f6faf7;
+    /* The five a dropdown shares with every other picker on the site come from
+       the :root block by --sage-deep. Same argument as the note above, one level
+       up: a second copy of the emerald pair is a second thing to keep in step. */
+    --pg-line: var(--dd-line);
+    --pg-hdr: var(--dd-row-hi);
     --pg-muted: #64707c;
     --pg-faint: #9aa6ad;
-    --pg-accent: #1f9d57;
-    --pg-accent-deep: #178048;
-    --pg-accent-tint: #e8f7ee;
-    --pg-ring: #c6ecd6;
+    --pg-accent: var(--dd-accent);
+    --pg-accent-deep: var(--dd-accent-deep);
+    --pg-accent-tint: var(--dd-accent-tint);
+    --pg-ring: var(--dd-ring);
     --pg-red: #d13b3b;
     --pg-red-deep: #7f1d1d;
     --pg-red-tint: #fdf1f1;
