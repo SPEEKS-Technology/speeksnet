@@ -8,7 +8,7 @@
 // that is not where it is declared, is the smell.
 const fs = require('fs');
 const esbuild = require('esbuild');
-const P = process.argv[2] || 'c:/Users/User/Documents/GitHub/speeksnet/supabase/functions/ebay-sync/index.ts';
+const P = process.argv[2] || require('path').resolve(__dirname, '..').replace(/\\/g, '/') + '/supabase/functions/ebay-sync/index.ts';
 const src = fs.readFileSync(P, 'utf8');
 const lines = src.split(/\r?\n/);
 

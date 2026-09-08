@@ -10,7 +10,7 @@
 // this checks the real source rather than a copy of the rules that could drift
 // away from it. No browser, no network — it is arithmetic.
 const fs = require('fs');
-const SRC = 'c:/Users/User/Documents/GitHub/speeksnet/supabase/functions/shopify-live/index.ts';
+const SRC = require('path').resolve(__dirname, '..').replace(/\\/g, '/') + '/supabase/functions/shopify-live/index.ts';
 
 const src = fs.readFileSync(SRC, 'utf8');
 const grab = (name) => {
