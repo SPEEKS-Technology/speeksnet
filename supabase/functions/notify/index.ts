@@ -977,6 +977,14 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // Which stores each person answers for, as a test helper.
   const covers = (p: Person, store: string) => p.stores.includes(store);
 
+  // How far back the variance blocks below will look. 45 days, the same window
+  // loadVarianceReplies uses on the site, so the mail and the tool agree about
+  // which periods still exist. WITHOUT this the queries were unbounded: a period
+  // abandoned half-explained would be mailed about for as long as the row lived,
+  // and the dedupe key is the period id, so a fix that made it fire again would
+  // have fired for every period in the table at once.
+  const vrCutoff = new Date(Date.now() - 45 * 86400000).toISOString();
+
   // ---- Store KPIs, weekly + monthly -------------------------------------
   // Gate: _KPI_DUE_ROLES = manager / owner (manager) / owner manager. Assistant
   // Managers are deliberately NOT included (ASM KPI entry is switched off; the
@@ -1121,7 +1129,8 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // upload notifies again but an unanswered one doesn't nag daily.
   {
     const { data: periods } = await sb.from("variance_reply_periods")
-      .select("id, store, manager_due_at, all_clear").is("all_clear", null);
+      .select("id, store, manager_due_at, all_clear, uploaded_at")
+      .eq("all_clear", false).gte("uploaded_at", vrCutoff);
     for (const per of periods || []) {
       // gm_note, NOT mgr_reply. This notification is "explain your variance
       // lines", and gm_note is the explanation; mgr_reply is the answer to a DM
@@ -1264,7 +1273,8 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // its `period` key, so an unread one does not nag daily.
   {
     const { data: periods } = await sb.from("variance_reply_periods")
-      .select("id, store, manager_due_at, dm_notes_at, dm_reviewed_at, all_clear").is("all_clear", null);
+      .select("id, store, manager_due_at, dm_notes_at, dm_reviewed_at, all_clear, uploaded_at")
+      .eq("all_clear", false).gte("uploaded_at", vrCutoff);
 
     for (const per of periods || []) {
       const store = String(per.store || "").toUpperCase();

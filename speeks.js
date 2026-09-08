@@ -7902,7 +7902,11 @@ function _pgSyncHead() {
     if (_pgAdmin.open) {
         eyebrow.textContent = 'District Manager';
         title.textContent = 'Edit the Picture Guide';
-        sub.textContent = 'Reorder photos, rename them, swap an example, or flip one between always and optional. Every store sees this straight away.';
+        // Says outright that there is nothing to submit. The editor has always
+        // saved on the spot, but the only way out of it is a button marked
+        // Back — which reads like leaving without keeping anything, so it was
+        // not clear that the work was already safe (Ethan, 2026-09-08).
+        sub.textContent = 'Reorder photos, rename them, swap an example, or flip one between required and optional. Every change saves on the spot and every store sees it straight away.';
     } else {
         eyebrow.textContent = 'Listing Reference';
         title.textContent = 'Picture Guide';
@@ -8259,6 +8263,31 @@ function _pgFormMode(mode) {
 
 function pgEditShot(id) { _pgAdmin.editing = id; pgRender(); }
 
+// "Saved", said once, where the eye already is. EVERY write in this editor goes
+// through _pgPost, so this is the one place that can promise it — a per-action
+// confirmation would have missed the reorder arrows, which are the only control
+// here with no dialog and no Save button of their own, and therefore the ones
+// that most needed to say something.
+// Deliberately not a modal or a toast at the far corner of the screen: the
+// question being answered is "did that stick", asked half a second after a
+// click, and the answer belongs next to the way out.
+// "Saved" is wrong for a removal — it reads as though the thing is still there.
+// Anything not listed is a save.
+const _PG_SAVED_WORD = {
+    deleteShot: 'Deleted',
+    deleteCategory: 'Removed',
+    reorderShots: 'Order saved',
+};
+let _pgSavedTimer = null;
+function _pgSavedFlash(word) {
+    const el = document.getElementById('pg-saved');
+    if (!el) return;
+    el.textContent = word || 'Saved';
+    el.classList.add('on');
+    clearTimeout(_pgSavedTimer);
+    _pgSavedTimer = setTimeout(() => el.classList.remove('on'), 2200);
+}
+
 async function _pgPost(payload, btn, busyLabel) {
     if (_pgAdmin.busy) return null;
     _pgAdmin.busy = true;
@@ -8275,6 +8304,9 @@ async function _pgPost(payload, btn, busyLabel) {
         });
         const out = await res.json().catch(() => ({}));
         if (!res.ok || out.success === false) throw new Error(out.error || 'The save did not go through.');
+        // Only on the way OUT of the try: a flash that fired before the response
+        // landed would be a promise the server had not made yet.
+        _pgSavedFlash(_PG_SAVED_WORD[payload && payload.action] || 'Saved');
         return out;
     } catch (e) {
         alert(e.message);
