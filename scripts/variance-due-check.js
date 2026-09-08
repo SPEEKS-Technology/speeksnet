@@ -1,8 +1,19 @@
 // Does the day-based variance deadline behave, against the REAL rows?
 // Mirrors the helpers added to speeks.js verbatim.
-const _vrCtDay  = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-const _vrDayPast = (nowMs, ms, addDays = 0) =>
-    !!ms && _vrCtDay(nowMs) > _vrCtDay(ms + addDays * 86400000);
+const _vrCtDay = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+const _vrAddDays = (ymd, n) =>
+    new Date(new Date(ymd + 'T12:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
+const _vrDayPast = (nowMs, ms, addDays = 0) => {
+    if (!ms) return false;
+    const day = _vrCtDay(ms);
+    return _vrCtDay(nowMs) > (addDays ? _vrAddDays(day, addDays) : day);
+};
+// The notify edge function's independent implementation. These two decide who
+// gets an email vs what the page says, so they must agree on every input.
+const _notifyAddDays = (ymd, n) =>
+    new Date(new Date(ymd + 'T12:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
+const _notifyDayPast = (nowMs, ms, n = 0) =>
+    !!ms && _vrCtDay(nowMs) > (n ? _notifyAddDays(_vrCtDay(ms), n) : _vrCtDay(ms));
 
 const T = s => new Date(s).getTime();
 
@@ -65,6 +76,31 @@ console.log('\nthe 2-day DM-note reply window counts the same way');
 const noted = T('2026-09-10T15:00:00Z');   // DM notes land Sep 10
 eq('Sep 12 (day 2) is still on time', _vrDayPast(T('2026-09-12T23:00:00Z'), noted, 2), false);
 eq('Sep 13 is past it',              _vrDayPast(T('2026-09-13T15:00:00Z'), noted, 2), true);
+
+console.log('\nadding days moves the DAY, not the clock (the DST weekend)');
+// 00:30 CDT on the morning the clocks go back. Two days on is Nov 3 — but
+// at + 2*86400000 lands at 23:30 on Nov 2, a day early, which is what the
+// first version of this helper did.
+const dstEdge = T('2026-11-01T05:30:00Z');           // Nov 1, 00:30 CDT
+eq('two days on from Nov 1 is Nov 3', _vrAddDays(_vrCtDay(dstEdge), 2), '2026-11-03');
+eq('still on time during Nov 3', _vrDayPast(T('2026-11-03T18:00:00Z'), dstEdge, 2), false);
+eq('past it on Nov 4',           _vrDayPast(T('2026-11-04T18:00:00Z'), dstEdge, 2), true);
+eq('the naive ms version would have been a day early',
+   _vrCtDay(dstEdge + 2 * 86400000), '2026-11-02');
+
+console.log('\nthe site and the notify function never disagree');
+// Every hour across both DST weekends and the real deadlines, both windows.
+let checked = 0, drift = 0;
+for (const at of [dstEdge, T('2026-03-08T07:30:00Z'), T('2026-09-08T18:17:22Z'), T('2026-10-31T20:00:00Z')]) {
+    for (let h = -72; h <= 144; h++) {
+        const now = at + h * 3600000;
+        for (const n of [0, 2]) {
+            checked++;
+            if (_vrDayPast(now, at, n) !== _notifyDayPast(now, at, n)) drift++;
+        }
+    }
+}
+eq(`${checked} hourly comparisons, zero drift`, drift, 0);
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);

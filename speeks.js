@@ -37552,13 +37552,25 @@ async function vrOpenPeriod(pid) {
 const _vrCtDay  = ms => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
 const _vrDueDay = p  => (p && p.manager_due_at) ? _vrCtDay(new Date(p.manager_due_at).getTime()) : '';
 
+// n days on from a 'YYYY-MM-DD', measured at UTC noon so the DST weekends
+// cannot nudge the result onto the neighbouring day. Adding n*86400000 to the
+// INSTANT instead looks equivalent and is not: two days on from 00:30 on the
+// morning the clocks go back lands at 23:30 the previous evening, a day early.
+// Same trick, and same reason, as addDays() in the notify function — these two
+// have to answer identically or the email and the page disagree again.
+const _vrAddDays = (ymd, n) =>
+    new Date(new Date(ymd + 'T12:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
+
 // Has the store's day moved past the day this timestamp lands on (optionally n
 // days later)? The one comparison every variance deadline goes through, so the
 // manager's page, the pink cells, the note columns, the manager alert and the
 // DM's review alert cannot disagree about who is late — which is exactly how
 // the feed came to say "overdue" about a store whose own page said "due".
-const _vrDayPast = (ms, addDays = 0) =>
-    !!ms && _vrCtDay(Date.now()) > _vrCtDay(ms + addDays * 86400000);
+const _vrDayPast = (ms, addDays = 0) => {
+    if (!ms) return false;
+    const day = _vrCtDay(ms);
+    return _vrCtDay(Date.now()) > (addDays ? _vrAddDays(day, addDays) : day);
+};
 
 // An all-clear period owes nobody a reply, so it HAS no deadline and nothing can
 // be past it. _vrSubtitleText already said as much in a comment; these two
@@ -37595,7 +37607,7 @@ function _vrSubtitleText() {
     // itself gets its own tag, so the last chance to be on time is visible
     // instead of silent (which is how MPL read as merely "due" all morning).
     const tag = (outstanding && _vrIsPastDue(p)) ? ' (overdue)'
-              : (outstanding && _vrIsDueToday(p)) ? ' (due today)'
+              : (outstanding && _vrIsDueToday(p)) ? ' (Due Today)'
               : '';
     // The n/n-explained scoreboard is for managers; the DM just gets the date.
     const progress = _vrIsDM() ? '' : ` · ${answered}/${items.length} explained`;
@@ -38685,7 +38697,7 @@ function _vrMaybePopup() {
     // One row PER DEADLINE STATE rather than one row tagged with the worst of
     // them, so a store is never announced as overdue because a different store
     // is. Still one bubble: these join with the rest by ' · '.
-    [['over', ' (overdue)'], ['today', ' (due today)'], ['open', '']].forEach(([st, tag]) => {
+    [['over', ' (overdue)'], ['today', ' (Due Today)'], ['open', '']].forEach(([st, tag]) => {
         const grp = explain.filter(e => e.state === st);
         if (!grp.length) return;
         const n = grp.reduce((a, e) => a + e.n, 0);
