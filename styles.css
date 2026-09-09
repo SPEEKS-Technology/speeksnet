@@ -21578,9 +21578,14 @@ select.dd-native {
     display: block; margin-top: 2px;
     font-size: 10px; font-weight: 650; line-height: 1.35; color: var(--pg-muted);
 }
+/* Square corners, like the printout's. A photograph is a rectangle, so a
+   rounded frame can only hold one by cutting four little bites out of it, and
+   at 196px those bites are big enough to see. Rounding the picture to match is
+   not an option either: JPEG carries no alpha, so a baked-in curve comes out as
+   four white wedges. The box gives way instead of the photograph. */
 .pg-frame {
     position: relative; aspect-ratio: 1 / 1; border: 1.5px solid var(--pg-ink);
-    border-radius: 8px; overflow: hidden; background: #f8fafc;
+    border-radius: 0; overflow: hidden; background: #f8fafc;
 }
 .pg-frame[onclick] { cursor: zoom-in; }
 /* A conditional frame: the same weight of line as every other card, in red, over
@@ -21589,10 +21594,12 @@ select.dd-native {
 .pg-shot.cond .pg-frame { border-color: var(--pg-red-line); background: var(--pg-red-tint); }
 /* The corner the printout marks, and where the shot number used to sit before
    the numbers came off. Tucked INTO the frame so it reads as a stamp on the
-   picture rather than as more caption. */
+   picture rather than as more caption. Its outer corner follows the frame's, so
+   when the frame went square this one had to go with it — a 7px curve sitting
+   in a square corner leaves a red crescent of frame showing through. */
 .pg-optional {
     position: absolute; top: 0; left: 0; z-index: 2;
-    padding: 3px 9px 4px; border-radius: 7px 0 8px 0;
+    padding: 3px 9px 4px; border-radius: 0 0 8px 0;
     background: var(--pg-red); color: #fff;
     font-size: 9.5px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase;
 }
