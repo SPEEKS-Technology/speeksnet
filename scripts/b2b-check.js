@@ -964,6 +964,102 @@ t('3.8.2 email headers are parsed out of a dropped message', function () {
     return src.indexOf('Subject') > -1 || 'does not look for a subject';
 });
 
+// --- v3.8.3: employees can actually list ------------------------------------
+// Reported as a Feature Access bug: granting the B2B tab to an employee gave
+// them everything except the listing screen. _b2bActionFor had no `listing`
+// branch for them, so the deal never entered Needs Your Action, opening it
+// showed the read-only item table instead of the scan bar, and the reminder
+// bubble never mentioned it. Nothing on the server ever refused them.
+function _asRole(role, store, fn) {
+    var r = sessionStorage.getItem('speeksUserRole');
+    var s = sessionStorage.getItem('speeksUserStore');
+    sessionStorage.setItem('speeksUserRole', role);
+    sessionStorage.setItem('speeksUserStore', store);
+    try { return fn(); }
+    finally {
+        sessionStorage.setItem('speeksUserRole', r);
+        sessionStorage.setItem('speeksUserStore', s);
+    }
+}
+var EMP_LISTING = { id: 'el', ref: 'EMP-001', stage: 'listing', pricing_store: 'LEE',
+                    listing_store: 'LEE', total_units: 2, listed_units: 0,
+                    client: { company: 'Empco' }, stage_changed_at: '2026-09-08T00:00:00Z' };
+
+t('3.8.3 an employee owns the listing on their own store', function () {
+    return _asRole('employee', 'LEE', function () {
+        var a = _b2bActionFor(EMP_LISTING);
+        if (!a) return 'no action at all — the deal would fall out of their queue';
+        return a.kind === 'listing' || 'wrong action: ' + a.kind;
+    });
+});
+t('3.8.3 opening it goes to the listing screen, not the read-only sheet', function () {
+    // This is the "weird sheet": _b2bClickKind fell through to 'view', which
+    // renders a table of figures with no scan bar.
+    return _asRole('employee', 'LEE', function () {
+        var k = _b2bClickKind(EMP_LISTING);
+        return k === 'listing' || 'routed to "' + k + '" instead of the listing screen';
+    });
+});
+t('3.8.3 a trainee gets the same', function () {
+    return _asRole('training', 'LEE', function () {
+        var a = _b2bActionFor(EMP_LISTING);
+        return (a && a.kind === 'listing') || 'trainees still cannot list';
+    });
+});
+t('3.8.3 pricing still works for them', function () {
+    return _asRole('employee', 'LEE', function () {
+        var a = _b2bActionFor({ id: 'p', stage: 'pricing', pricing_store: 'LEE' });
+        return (a && a.kind === 'pricing') || 'pricing regressed';
+    });
+});
+t('3.8.3 but not another store’s deal', function () {
+    return _asRole('employee', 'OVL', function () {
+        if (_b2bActionFor(EMP_LISTING)) return 'an OVL employee can list a LEE deal';
+        return !_b2bActionFor({ id: 'p', stage: 'pricing', pricing_store: 'LEE' })
+            || 'an OVL employee can price a LEE deal';
+    });
+});
+t('3.8.3 escalations stay closed to them', function () {
+    return _asRole('employee', 'LEE', function () {
+        var shut = ['review', 'quote', 'listing_location', 'pricing_location'];
+        var open = shut.filter(function (st) {
+            return !!_b2bActionFor({ id: 'x', stage: st, pricing_store: 'LEE', listing_store: 'LEE' });
+        });
+        if (open.length) return 'employee got an action at: ' + open.join(', ');
+        if (_b2bCanAccept()) return 'employee can accept a quote';
+        return !_b2bIsCorp() || 'employee reads as corp';
+    });
+});
+t('3.8.3 no Move Store button for them', function () {
+    return _asRole('employee', 'LEE', function () {
+        return _b2bMoveBtn(EMP_LISTING) === '' || 'an employee can move a deal between stores';
+    });
+});
+t('3.8.3 they can finish a fully-listed deal, but not accept one', function () {
+    return _asRole('employee', 'LEE', function () {
+        var done = Object.assign({}, EMP_LISTING, { listed_units: 2, total_units: 2 });
+        var q = _b2bQuickAction(done);
+        if (!q) return 'no Complete Deal on a finished listing';
+        if (q.label.indexOf('Complete') === -1) return 'unexpected action: ' + q.label;
+        // Mark Accepted must stay shut — it is gated on _b2bCanAccept.
+        var acc = _b2bQuickAction({ id: 'q', stage: 'quote', total_units: 1 });
+        return acc === null || 'employee offered: ' + acc.label;
+    });
+});
+t('3.8.3 the deal lands in the action queue, opening the listing screen', function () {
+    return _asRole('employee', 'LEE', function () {
+        var deal = Object.assign({}, EMP_LISTING, { recycled_units: 0 });
+        // _b2bRenderQueue(scoped, queue) — the caller pre-filters the owned set,
+        // which is exactly what was empty for employees before this fix.
+        var queue = [deal].filter(_b2bActionFor);
+        if (!queue.length) return 'the deal never reaches the queue';
+        var html = _b2bRenderQueue([deal], queue);
+        if (html.indexOf('Also In Flight') > -1) return 'it fell through to Also In Flight';
+        return html.indexOf("b2bOpenDeal('listing'") > -1
+            || 'the card does not open the listing screen';
+    });
+});
+
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();
