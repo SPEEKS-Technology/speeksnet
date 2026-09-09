@@ -1119,14 +1119,68 @@ t('3.8.4 items are read synchronously, before any await', function () {
     if (collect === -1) return 'not using the collector';
     return collect < firstAwait || 'the DataTransfer is read after an await';
 });
-t('3.8.4 a virtual file named off an odd subject is still accepted', function () {
-    // Outlook names the file after the SUBJECT, so the extension is at the mercy
-    // of whatever the client typed.
+t('3.8.5 a message named off an odd subject is accepted outright', function () {
+    // Was: rejected unless the virtual fixup renamed it. Now accepted directly —
+    // the allowlist was inverted, because a saved message arrives named all
+    // sorts of ways and refusing a real email for its NAME is the worse failure.
     var odd = new File(['x'], 'Re: pricing v2.1', { type: '' });
-    if (_b2bIsMailFile(odd)) return 'fixture is wrong — that name should not pass on its own';
+    if (!_b2bIsMailFile(odd)) return 'still refused for how it was named';
+    var noExt = new File(['x'], 'Quote confirmation', { type: '' });
+    if (!_b2bIsMailFile(noExt)) return 'a name with no extension at all is refused';
+    // Windows hides known extensions, so this is a routine shape.
+    return _b2bMailMime(noExt) === 'message/rfc822'
+        || 'unknown files should be treated as a saved email, got ' + _b2bMailMime(noExt);
+});
+t('3.8.5 the virtual fixup still normalises the name', function () {
+    var odd = new File(['x'], 'Re: pricing v2.1', { type: '' });
     var fixed = _b2bAsMailFile(odd, true);
-    if (!_b2bIsMailFile(fixed)) return 'still refused after the virtual fixup: ' + fixed.name;
-    return _b2bMailMime(fixed) === 'application/vnd.ms-outlook' || 'wrong mime: ' + _b2bMailMime(fixed);
+    return _b2bMailMime(fixed) === 'application/vnd.ms-outlook'
+        || 'virtual file not typed as Outlook: ' + _b2bMailMime(fixed);
+});
+t('3.8.5 an .eml keeps its own type, whatever the browser said', function () {
+    // The user's guess was that it might be a .eml. Every plausible shape of
+    // one has to land on message/rfc822.
+    var shapes = [
+        new File(['x'], 'Re Quote.eml', { type: '' }),
+        new File(['x'], 'Re Quote.EML', { type: 'application/octet-stream' }),
+        new File(['x'], 'Re Quote.eml', { type: 'message/rfc822' }),
+    ];
+    var bad = shapes.filter(function (f) { return _b2bMailMime(f) !== 'message/rfc822'; });
+    if (bad.length) return bad.length + ' .eml shape(s) mistyped';
+    return shapes.every(_b2bIsMailFile) || 'an .eml was refused';
+});
+t('3.8.5 a failed drop reports what actually arrived', function () {
+    // "Nothing arrived" hid whether the mail app offered no file, offered one it
+    // would not release, or offered something that was not a file. Without that
+    // distinction the bug was unfixable from a report.
+    var diag = _b2bDropDiag({
+        types: ['Files', 'text/plain'],
+        items: [{ kind: 'file', type: '' }, { kind: 'string', type: 'text/plain' }],
+        files: [],
+    });
+    if (diag.indexOf('Files') === -1) return 'does not report the offered formats';
+    if (diag.indexOf('file') === -1) return 'does not report the item kinds';
+    if (diag.indexOf('files: none') === -1) return 'does not report an empty file list';
+    // And it must be read synchronously, like the file collection.
+    var src = b2bProofDrop.toString();
+    return src.indexOf('_b2bDropDiag') < src.indexOf('await')
+        || 'the diagnostic is built after an await, by which point the DataTransfer is empty';
+});
+t('3.8.5 the file picker no longer filters real emails out', function () {
+    // accept= only hides files in the dialog, and a saved message is named more
+    // ways than a filter can list — filtering just makes a real email
+    // un-pickable, the same mistake the drop check was making.
+    var src = _b2bPaintProofModal.toString();
+    if (src.indexOf('id="b2bPfFile"') === -1) return 'the picker moved — update this check';
+    // accept=" with the quote: a bare 'accept=' also matches the comment
+    // explaining why there isn't one, which is how this check first failed.
+    return src.indexOf('accept="') === -1 || 'still filtering the picker';
+});
+t('3.8.5 the picked file goes through the same permissive check', function () {
+    // The dialog and the drop must agree, or one route accepts what the other
+    // refuses.
+    var src = b2bProofFilePicked.toString();
+    return src.indexOf('_b2bIsMailFile') > -1 || 'the picker uses its own rule';
 });
 t('3.8.4 the fixup does NOT rescue a non-mail file dragged from Explorer', function () {
     // virtual=false must be left alone, or dropping a PNG would be renamed into
@@ -1138,8 +1192,36 @@ t('3.8.4 the error no longer blames the user for dragging correctly', function (
     var src = b2bProofDrop.toString();
     if (src.indexOf('not from a preview pane') > -1) return 'still says they dragged from the wrong spot';
     // And it distinguishes "no file offered" from "offered but withheld".
-    return src.indexOf('would not hand over the file') > -1
+    return src.indexOf('would not release the file') > -1
         || 'no message for a mail app that offers a file it will not release';
+});
+
+// The header parse has now been broken twice by the same thing: a raw NUL byte
+// typed into the strip regex. It made the whole file read as binary to ripgrep
+// (so content searches silently found nothing), and "fixing" the byte to a
+// space quietly turned the strip into a space-stripper, which mangles every
+// subject. Both directions are pinned here.
+t('3.8.5 a UTF-16 .msg header still decodes to an address', function () {
+    // How a UTF-16LE .msg reads once decoded as latin1: a NUL after every char.
+    var wide = 'From: p\u0000a\u0000u\u0000l\u0000@\u0000x\u0000.\u0000c\u0000o\u0000m\u0000\r\n';
+    var f = new File([wide], 'saved.msg', { type: '' });
+    return _b2bMailHeaders(f).then(function (m) {
+        return m.from === 'paul@x.com' || 'from parsed as: ' + JSON.stringify(m.from);
+    });
+});
+t('3.8.5 the subject keeps its spaces', function () {
+    var f = new File(['Subject: Re: Quote for the pallet\r\n'], 'saved.eml', { type: '' });
+    return _b2bMailHeaders(f).then(function (m) {
+        return m.subject === 'Re: Quote for the pallet'
+            || 'subject came back as: ' + JSON.stringify(m.subject);
+    });
+});
+t('3.8.5 no raw control byte is left in the source', function () {
+    // Cheap guard on the real failure mode: one NUL anywhere makes every
+    // content search over speeks.js return nothing, with no error to say so.
+    var src = _b2bMailHeaders.toString();
+    return !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(src)
+        || 'a raw control byte is back in _b2bMailHeaders';
 });
 
 // Restore the fixture for anything appended after this point.
