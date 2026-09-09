@@ -21602,23 +21602,26 @@ select.dd-native {
    at 196px those bites are big enough to see. Rounding the picture to match is
    not an option either: JPEG carries no alpha, so a baked-in curve comes out as
    four white wedges. The box gives way instead of the photograph. */
-/* The frame is the shape of the photographs — and each sheet has its own shape.
-   The iPhone exports came off the guide sheet at 591x565 and the Android ones at
-   563x593: one wider than tall, one taller than wide. A single hard-coded ratio
-   can only be right for one of them, and being wrong is not subtle — it shows as
-   a white bar down both sides of every card on the other sheet.
-   So the ratio is set at runtime from the first photograph the board actually
-   holds (_pgSetFrameShape in speeks.js), and the value below is only the
-   fallback: what a sheet with no photographs in it yet gets to look like.
-   Measured rather than stored, deliberately. There is no second number to keep
-   in step by hand, and a sheet whose photos are re-exported at a new size
-   corrects itself on the next load. What still has to be true is that the photos
-   within one sheet agree with EACH OTHER — that is the job of
-   scripts/pg-crop-borders.html, which centre-crops a batch to one size (cropped,
-   not scaled, so nothing is resampled and no photo is stretched into a shape it
-   was never shot in). Photos that disagree leave the odd ones letterboxed. */
+/* One square, every sheet. Not a shape chosen for a batch: the guide's photos
+   are all stored 593x593 (scripts/pg-crop-borders.html puts them there), so the
+   frame is square and every photograph fills its own frame exactly.
+   This replaced a per-sheet ratio measured off the photos at runtime, which did
+   fit each sheet perfectly but made the sheets differ from each other — the
+   iPhone board landscape, the Android board portrait. Standard across the whole
+   guide is worth more than a perfect fit per sheet: a lister moving between
+   sheets is comparing their own photo to an example, and the frame should not be
+   one of the things that changed.
+   The exports arrive in two shapes and are PADDED to the square, never cropped
+   to it — every Android photo has its subject within 12px of the top or bottom
+   edge and five iPhone photos have theirs touching the left or right, so
+   trimming to a common shape would cut off notches and charging ports. The pad
+   is the photo's own backdrop colour, sampled from its edge, so it does not read
+   as a border.
+   If a batch ever goes in un-standardised, this squareness is what makes that
+   visible: that sheet's cards letterbox, which is a bug you can see, rather than
+   the whole board quietly changing shape. Keep this square and GUIDE in step. */
 .pg-frame {
-    position: relative; aspect-ratio: var(--pg-ar, 591 / 565);
+    position: relative; aspect-ratio: 1 / 1;
     border: 1.5px solid var(--pg-ink);
     border-radius: 0; overflow: hidden; background: #f8fafc;
 }

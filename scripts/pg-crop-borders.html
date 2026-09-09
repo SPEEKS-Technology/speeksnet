@@ -24,13 +24,23 @@ a 3px line with a 1px antialias fringe outside it, and on the red ones a second 
 too, so black borders are 4px and red ones are 5px. The app draws its own frame and its own
 OPTIONAL flag, so that border lands as a second outline just inside the first. This finds the
 border on each photo, trims it off, and puts the trimmed photo back under the same filename
-&mdash; nothing in the database changes. It then centre-crops every photo to one size, the largest the whole batch can share, so the board can set a single frame shape and have nothing left over.</p>
-<p class="sub">You do not have to tell the app the size afterwards. The board measures
-its own first photograph and sets the frame to it, so each sheet gets its own shape
-&mdash; the iPhone batch is 591&times;565 and the Android one 563&times;593, one wider
-than tall and one taller than wide. What this tool is for is making the photos
-<em>within</em> one sheet agree with each other; the odd one out is the one that ends
-up letterboxed. Edit <code>NAMES</code> below for a new batch.</p>
+&mdash; nothing in the database changes. It then puts every photo onto one standard canvas &mdash; <b>593&times;593</b>, the
+same for every sheet in the guide &mdash; so all the boxes on the board are identical
+and each photo fills its own completely.</p>
+<p class="sub"><b>It pads; it does not crop to fit.</b> That is measured, not assumed.
+The exports arrive in two shapes, 591&times;565 for iPhones and 563&times;593 for
+Android, and trimming either one down to a shared shape would cut about 14px off two
+sides. Every one of the ten Android photos has its subject within 12px of the top or
+bottom edge, and five of the fourteen iPhone photos have theirs touching the left or
+right &mdash; the phone body, the charging port, the notch. So the short side is filled
+out instead, with the photo's own backdrop colour sampled from its edge, which is why
+the padding does not read as a border. A photo larger than the canvas in some direction
+is centre-cropped down to it, but only by the few pixels the export happened to be
+over.</p>
+<p class="sub">Edit <code>NAMES</code> below for a new batch. The canvas is
+<code>GUIDE</code>, and <code>.pg-frame</code> in styles.css is square to match &mdash;
+those two go together, and a batch left un-standardised shows up on the board as a
+letterboxed card rather than quietly reshaping the whole sheet.</p>
 <p class="sub"><b>Scan first and read the border column.</b> A batch whose borders were
 already removed before saving should report <code>none</code> on every row &mdash; that
 is the expected result, not a failure, and it means the crop is a pure centring. Any row
@@ -45,7 +55,22 @@ continue: this trims pixels off originals and puts them back under the same name
 <script>
 var URL_BASE = "https://ejzaqmyxxrkmxvzbjeuo.supabase.co";
 var KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVqemFxbXl4eHJrbXh2emJqZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNzA2NjAsImV4cCI6MjA5NDY0NjY2MH0.-SrbSaF-n8WkNW6tieDiA2FhGHB7qP4b6XrEyy2JF74";
-var NAMES = ["android-phones-01-home-lock-screen.jpg",
+var NAMES = [
+"iphones-01-home-lock-screen.jpg",
+"iphones-02-everything-included.jpg",
+"iphones-03-settings-page-1.jpg",
+"iphones-04-settings-page-2.jpg",
+"iphones-05-battery-health.jpg",
+"iphones-06-parts-and-service.jpg",
+"iphones-07-screen-off.jpg",
+"iphones-08-back-of-phone.jpg",
+"iphones-09-top-side-of-phone.jpg",
+"iphones-10-bottom-side-of-phone.jpg",
+"iphones-11-side-of-phone.jpg",
+"iphones-12-opposite-side-of-phone.jpg",
+"iphones-13-apple-warranty.png",
+"iphones-14-extra-accessories.jpg",
+"android-phones-01-home-lock-screen.jpg",
 "android-phones-02-about-phone.jpg",
 "android-phones-03-storage-information.jpg",
 "android-phones-04-software-information.jpg",
@@ -56,6 +81,10 @@ var NAMES = ["android-phones-01-home-lock-screen.jpg",
 "android-phones-09-top-side-of-phone.jpg",
 "android-phones-10-bottom-side-of-phone.jpg"];
 var MAX_INSET = 24, TOL = 46, CONTRAST = 70, MAX_FRAC = 0.03;
+// The one canvas every photograph in the guide ends up on. 593 is the largest
+// edge any batch has arrived at, so it is reached by padding rather than by
+// throwing pixels away. Keep .pg-frame square if this ever stops being square.
+var GUIDE = 593;
 var rows = {}, state = {};
 
 NAMES.forEach(function(name){
@@ -137,19 +166,46 @@ async function load(name){
   return img;
 }
 
-// Strip the border, then take a target-sized window out of the middle of what
-// is left. Cropping, not scaling: nothing is resampled and no photo is
-// stretched into a shape it was never shot in.
-function normalise(img, inset, png, tw, th){
+// The colour to pad with: the median of the ring just inside the border, which
+// is the photo's own backdrop. A flat #fff pad would be plainly visible - these
+// backdrops measure around 190-218 grey, and one of them (a dark-mode
+// screenshot) is 29. Sampled per photo, the pad reads as more backdrop.
+//
+// Median, not mean, for the same reason detectInset uses it: the subject and its
+// shadow poke into that ring, and a mean would drag the colour toward them.
+function backdrop(img, inset){
+  var p = pixels(img, img.naturalWidth, img.naturalHeight);
+  var ring = ringCols(p, inset);
+  var m = median(ring);
+  return "rgb(" + m[0] + "," + m[1] + "," + m[2] + ")";
+}
+
+// Put the photo on the guide's standard canvas. Two things happen, in this
+// order, and only the first can lose anything:
+//   - if the photo is BIGGER than the canvas in some direction, a centred window
+//     of canvas size is taken (in practice a few pixels an export ran over);
+//   - whatever is left over is filled with the photo's own backdrop colour.
+//
+// Never scaled. A guide photo is a reference for what a real photo should look
+// like, so resampling it to fit would be softening the thing being referenced,
+// and squeezing it to a new shape would misreport the object's proportions.
+function standardise(img, inset, png){
   var iw = img.naturalWidth, ih = img.naturalHeight;
-  var sx = Math.round(inset + ((iw - 2 * inset) - tw) / 2);
-  var sy = Math.round(inset + ((ih - 2 * inset) - th) / 2);
-  if (sx < 0 || sy < 0) throw new Error("smaller than the batch target");
+  var cw = iw - 2 * inset, ch = ih - 2 * inset;      // the photo, border off
+  var takeW = Math.min(cw, GUIDE), takeH = Math.min(ch, GUIDE);
+  var sx = Math.round(inset + (cw - takeW) / 2);
+  var sy = Math.round(inset + (ch - takeH) / 2);
+  var dx = Math.round((GUIDE - takeW) / 2), dy = Math.round((GUIDE - takeH) / 2);
+
   var c = document.createElement("canvas");
-  c.width = tw; c.height = th;
+  c.width = GUIDE; c.height = GUIDE;
   var g = c.getContext("2d");
-  if (!png){ g.fillStyle = "#fff"; g.fillRect(0, 0, tw, th); }
-  g.drawImage(img, sx, sy, tw, th, 0, 0, tw, th);
+  // Filled for PNGs too. A transparent pad would composite to black in some
+  // viewers, and the board's frame is not the only place these get opened.
+  g.fillStyle = backdrop(img, inset);
+  g.fillRect(0, 0, GUIDE, GUIDE);
+  g.drawImage(img, sx, sy, takeW, takeH, dx, dy, takeW, takeH);
+  c._pad = { x: dx, y: dy, cropW: cw - takeW, cropH: ch - takeH };
   return c;
 }
 
@@ -169,33 +225,36 @@ document.getElementById("scan").onclick = async function(){
       st.innerHTML = '<span class="err">' + e.message + "</span>";
     }
   }
-  // One size for the whole batch: the largest every photo can give, which is
-  // the smallest content box among them. Exports off the same sheet come back
-  // a few pixels apart, and a frame can only be one shape - so the pictures
-  // agree on a shape first and the frame is set to it. Keep .pg-frame's
-  // aspect-ratio in step with whatever this prints.
-  var tw = Infinity, th = Infinity;
-  loaded.forEach(function(s){
-    tw = Math.min(tw, s.img.naturalWidth - 2 * s.inset);
-    th = Math.min(th, s.img.naturalHeight - 2 * s.inset);
-  });
-  document.getElementById("target").textContent =
-    loaded.length ? "Batch size: " + tw + "×" + th + " — set .pg-frame aspect-ratio to "
-      + tw + " / " + th : "";
+  // No batch minimum to work out any more: the canvas is the same for every
+  // sheet in the guide, so a batch cannot pull the frame shape around after it.
+  var worstCrop = 0;
   loaded.forEach(function(s){
     var tr = rows[s.name], st = tr.querySelector(".st");
     try {
-      s.out = normalise(s.img, s.inset, s.png, tw, th);
+      s.out = standardise(s.img, s.inset, s.png);
+      var pad = s.out._pad;
+      worstCrop = Math.max(worstCrop, pad.cropW, pad.cropH);
       tr.querySelector(".a").appendChild(thumb(s.out, 90));
       tr.querySelector(".d").innerHTML = (s.inset
-        ? '<span class="ok">' + s.inset + 'px</span>' : 'none')
-        + ' &rarr; ' + s.out.width + "&times;" + s.out.height;
+        ? '<span class="ok">' + s.inset + 'px</span>' : 'none');
+      // Say what happened per side, because "padded 15" and "cropped 15" are
+      // very different news and the old column could not tell them apart.
+      tr.querySelector(".s").innerHTML = GUIDE + "&times;" + GUIDE
+        + '<br><small>pad ' + pad.x + '/' + pad.y + ' a side'
+        + (pad.cropW || pad.cropH
+          ? ', <span class="err">crop ' + pad.cropW + '/' + pad.cropH + '</span>' : '')
+        + '</small>';
       state[s.name] = s;
       st.textContent = "ready";
     } catch (e) {
       st.innerHTML = '<span class="err">' + e.message + "</span>";
     }
   });
+  document.getElementById("target").innerHTML = loaded.length
+    ? "Standard canvas: " + GUIDE + "×" + GUIDE + " for every sheet. Worst crop in this batch: "
+      + worstCrop + "px total" + (worstCrop > 6
+        ? ' &mdash; <span class="err">check that one before uploading</span>' : ' (padding only otherwise).')
+    : "";
   document.getElementById("go").disabled = !Object.keys(state).length;
 };
 
@@ -220,7 +279,7 @@ document.getElementById("go").onclick = async function(){
         body: blob
       });
       if (!resp.ok) throw new Error("HTTP " + resp.status + " " + (await resp.text()));
-      tr.querySelector(".s").textContent = Math.round(blob.size / 1024) + " KB";
+      tr.querySelector(".st").title = Math.round(blob.size / 1024) + " KB";
       st.innerHTML = '<span class="ok">done</span>';
     } catch (e) {
       st.innerHTML = '<span class="err">' + e.message + "</span>";

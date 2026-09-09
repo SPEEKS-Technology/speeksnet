@@ -7884,55 +7884,20 @@ function pgRender() {
         <div class="pg-main">
           <div class="pg-legend">
             <span class="pg-lg"><span class="pg-sw pg-sw-req"></span> Take on every item</span>
-            <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> <b>Optional</b>: only if it applies to yours</span>
+            <span class="pg-lg"><span class="pg-sw pg-sw-cond"></span> <b>Optional</b>: Only if it applies to yours</span>
           </div>
           <div class="pg-board">${_pgShots().map(_pgCardHtml).join('')}</div>
         </div>
       </div>`;
-    _pgSetFrameShape();
 }
 
-// Every frame on a board is the shape of that board's photographs. The sheets
-// do not agree with each other on that shape — the iPhone exports are 591x565
-// and the Android ones 563x593, one wider than tall and one taller than wide —
-// so it cannot live in the stylesheet as a single number. It is read off the
-// first photograph the sheet actually has and handed to CSS as --pg-ar.
-//
-// Read rather than recorded: a size written into the database is a second copy
-// that can drift from the file it claims to describe, and the file is the thing
-// that decides whether a picture fits its frame. So this asks the picture.
-//
-// Cached per category because switching sheets re-renders, and a board that
-// measured again every time would show the fallback ratio for a frame or two
-// before settling — a visible twitch, on the exact thing four rounds of work
-// went into making sit still.
-const _pgArCache = {};
-
-function _pgSetFrameShape() {
-    const board = document.querySelector('.pg-board');
-    if (!board) return;
-    const cat = _pgState.catId;
-    const known = _pgArCache[cat];
-    if (known) { board.style.setProperty('--pg-ar', known); return; }
-
-    // A sheet with no photographs in it yet keeps the stylesheet fallback.
-    const first = _pgShots().find(s => s.img);
-    if (!first) return;
-
-    const probe = new Image();
-    probe.onload = () => {
-        if (!probe.naturalWidth || !probe.naturalHeight) return;
-        _pgArCache[cat] = probe.naturalWidth + ' / ' + probe.naturalHeight;
-        // Re-find the board rather than closing over it: the lister may have
-        // switched sheets while this was loading, and stamping one sheet's
-        // ratio onto another is worse than leaving the fallback alone.
-        if (_pgState.catId === cat) {
-            document.querySelector('.pg-board')
-                ?.style.setProperty('--pg-ar', _pgArCache[cat]);
-        }
-    };
-    probe.src = first.img;
-}
+// The frame shape used to be measured here, off the first photograph each sheet
+// had, and written to --pg-ar. It fitted every sheet perfectly and that was the
+// problem: the sheets then differed from each other, the iPhone board landscape
+// and the Android board portrait. The photographs are all stored on one square
+// canvas now (scripts/pg-crop-borders.html), so .pg-frame is simply square and
+// there is nothing to measure. Left as a note because "why is this a constant
+// rather than read from the image?" is a fair question with a real answer.
 
 // The eyebrow and instruction line say something different to a DM who is
 // editing than to a lister who is shooting, so they are rewritten rather than

@@ -226,6 +226,8 @@ const cropWindow = (s, t) => ({
 });
 
 // The real batch: measured sizes with the border insets this file verifies.
+const GUIDE = 593;   // scripts/pg-crop-borders.html
+
 const BATCH = [
     { w: 602, h: 576, inset: 4 }, { w: 601, h: 575, inset: 5 },
     { w: 602, h: 576, inset: 4 }, { w: 601, h: 576, inset: 4 },
@@ -252,54 +254,53 @@ eq('every window ends inside the border', offsetsOk, 14);
 eq('nothing is trimmed by more than 3px a side',
     Math.max(...BATCH.map(s => (s.w - 2 * s.inset - t.w) / 2)) <= 3, true);
 
-// A second sheet arrived at a different shape, which is the case a single
-// hard-coded ratio cannot serve. The Android exports came off the guide sheet
-// taller than wide; the iPhone ones came off wider than tall.
-console.log('\na second sheet, its own shape');
-const ANDROID = [
-    { w: 563, h: 596, inset: 0 }, { w: 564, h: 596, inset: 0 },
-    { w: 566, h: 596, inset: 0 }, { w: 563, h: 593, inset: 0 },
-    { w: 564, h: 594, inset: 0 }, { w: 566, h: 594, inset: 0 },
-    { w: 563, h: 594, inset: 0 }, { w: 563, h: 596, inset: 0 },
-    { w: 563, h: 596, inset: 0 }, { w: 564, h: 596, inset: 0 },
-];
-const ta = batchTarget(ANDROID);
-eq('the size all ten can share', `${ta.w}x${ta.h}`, '563x593');
-// The point of the whole --pg-ar change, stated as an assertion: these two
-// batches genuinely disagree, so no one number can fit both.
-eq('and it is a different shape from the iPhone batch',
-    (ta.w / ta.h > 1) === (t.w / t.h > 1), false);
+// Two sheets, two shapes, and one canvas they both land on. This is the case
+// the old per-batch target could not serve: it made each sheet internally
+// perfect and made the sheets differ from each other.
+console.log('\ntwo sheets, one standard canvas');
+const IPHONE_SIZE = { w: 591, h: 565 };
+const ANDROID_SIZE = { w: 563, h: 593 };
+eq('the two sheets really do disagree on shape',
+    (IPHONE_SIZE.w / IPHONE_SIZE.h > 1) === (ANDROID_SIZE.w / ANDROID_SIZE.h > 1), false);
+eq('and the canvas is big enough for both without cropping',
+    GUIDE >= Math.max(IPHONE_SIZE.w, IPHONE_SIZE.h, ANDROID_SIZE.w, ANDROID_SIZE.h), true);
 
-// The thing that can silently come apart: the photos are one shape and the
-// frame is set to another. Nothing in the app would complain - the board would
-// just quietly grow a gap again, which is where this whole thread started.
+// PADDED to the square, not cropped to it. These are the measured distances
+// from subject to edge in the real photos, and they are what rules cropping
+// out: the pad each sheet needs is larger than the margin its tightest photo
+// has, so a crop of that size would eat into the subject.
 //
-// The frame shape is no longer a number in the stylesheet; it is measured off
-// the first photograph a sheet has and written to --pg-ar. That splits the
-// invariant in two, and BOTH halves have to be checked. A stylesheet that
-// stopped reading the variable would pin every sheet to the fallback; a
-// speeks.js that stopped writing it would do exactly the same thing, silently,
-// and the old single-number test would have passed either way.
-console.log('\nthe frame takes its shape from the pictures');
+// Android: every one of the ten has its subject within 12px of top or bottom.
+// iPhone: five of fourteen have theirs touching the left or right edge.
+console.log('\npadding, because cropping would cut the subject');
+const TIGHTEST_ANDROID_VERTICAL = 0;   // seven of the ten sit on the bottom row
+const TIGHTEST_IPHONE_HORIZONTAL = 0;  // iphones-09 and -10 run to the right edge
+const androidPad = Math.round((GUIDE - ANDROID_SIZE.w) / 2);
+const iphonePad = Math.round((GUIDE - IPHONE_SIZE.h) / 2);
+eq('Android is padded sideways, 15px a side', androidPad, 15);
+eq('iPhone is padded top and bottom, 14px a side', iphonePad, 14);
+eq('cropping Android to the square would cut into the subject',
+    androidPad > TIGHTEST_ANDROID_VERTICAL, true);
+eq('cropping iPhone to the square would cut into the subject',
+    iphonePad > TIGHTEST_IPHONE_HORIZONTAL, true);
+
+// The frame and the canvas are one decision in two files. Either half alone
+// is a letterboxed board, so both are checked.
+console.log('\nthe frame is the canvas');
 const root = require('path').join(__dirname, '..');
 const css = fs.readFileSync(require('path').join(root, 'styles.css'), 'utf8');
 const rule = css.slice(css.indexOf('.pg-frame {'), css.indexOf('}', css.indexOf('.pg-frame {')));
-const ar = (rule.match(/aspect-ratio:\s*var\(\s*--pg-ar\s*,\s*([0-9.]+)\s*\/\s*([0-9.]+)\s*\)/) || []).slice(1);
-eq('.pg-frame defers to --pg-ar', ar.length, 2);
-// The fallback is what a sheet with no photographs yet looks like, so it has to
-// be a real batch size rather than a square guess - otherwise the one board
-// nobody has photographed yet is the one board shaped wrong.
-eq('with a real batch size as the fallback', `${ar[0]} / ${ar[1]}`, `${t.w} / ${t.h}`);
-
+eq('.pg-frame is square', /aspect-ratio:\s*1\s*\/\s*1\s*;/.test(rule), true);
+// A ratio read off the photos at runtime is what this replaced. If it comes
+// back, the sheets go back to differing from each other.
+eq('and does not take its shape from the photos', /--pg-ar/.test(css), false);
 const js = fs.readFileSync(require('path').join(root, 'speeks.js'), 'utf8');
-eq('the board measures its own photograph',
-    /_pgArCache\[cat\] = probe\.naturalWidth \+ ' \/ ' \+ probe\.naturalHeight/.test(js), true);
-eq('and writes it to --pg-ar', /setProperty\('--pg-ar'/.test(js), true);
-eq('pgRender asks for it', /_pgSetFrameShape\(\);/.test(js), true);
-// Switching sheets mid-load must not stamp one sheet's ratio onto another: the
-// probe finishes after the board it was measuring for is already gone.
-eq('a sheet switched mid-load is left alone',
-    /if \(_pgState\.catId === cat\) \{/.test(js), true);
+eq('nor does the board measure them', /_pgSetFrameShape/.test(js), false);
+
+const tool = fs.readFileSync(require('path').join(root, 'scripts', 'pg-crop-borders.html'), 'utf8');
+eq('the tool targets the same square', new RegExp('var GUIDE = ' + GUIDE + ';').test(tool), true);
+eq('and fills the pad with the photo backdrop, not white',
+    /function backdrop\(/.test(tool) && /fillStyle = backdrop\(/.test(tool), true);
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);
