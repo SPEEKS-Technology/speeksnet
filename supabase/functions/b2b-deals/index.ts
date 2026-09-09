@@ -104,12 +104,25 @@ const PREVAL_SETTABLE = ["draft", "sent", "accepted", "declined"];
 // What a piece of approval evidence can be. A plain note is the odd one out and is
 // deliberately allowed: a typed account of a phone call is weak evidence, but it
 // is evidence, and forcing it to masquerade as an email would be worse.
-const PROOF_KINDS = ["email", "screenshot", "document", "note"];
+// One creatable kind as of 2026-09-08. Nick: "You can actually get rid of all of
+// the other ways to save proof of acceptance, this is the only way we want for
+// him going forward" -- the client's actual email, dragged out of Outlook.
+//
+// The CHECK constraint on b2b_approval_proofs still permits all four, and
+// deliberately so: rows already on the record say `screenshot` or `note`, and an
+// evidence log that fails to load its own history is worse than one with mixed
+// kinds in it. This list governs what can be CREATED.
+const PROOF_KINDS = ["email"];
 // Mirrors the b2b-proofs bucket's allowlist. Refused here as well as there so a
 // bad upload gets a sentence instead of a storage error.
+//
+// Narrowed to mail files with the same change. A dropped .msg frequently arrives
+// with an empty or octet-stream type depending on whether Outlook is registered
+// for the extension, so the client sends file_mime derived from the filename and
+// that is what is checked -- see _b2bMailMime in speeks.js.
 const PROOF_MIMES: Record<string, string> = {
-  "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
-  "application/pdf": "pdf", "message/rfc822": "eml", "text/plain": "txt",
+  "message/rfc822": "eml",
+  "application/vnd.ms-outlook": "msg",
 };
 // The bucket caps at 10MB. This is the decoded ceiling, lower because the base64
 // has to survive a JSON request body on the way in.
@@ -2154,16 +2167,32 @@ Deno.serve(async (req: Request) => {
         // A data URI, same shape the signature pad posts. Refused rather than
         // coerced if the type is not on the allowlist: the bucket would reject
         // it anyway, later and far less helpfully.
+        // The file is now mandatory. Pasted body text was the other half of the
+        // old "one or the other" rule and is no longer a route on its own: the
+        // point of the change is that the MESSAGE is what gets kept, headers and
+        // all, rather than a transcription of it.
         const raw = String(body.file || "");
-        if (raw) {
-          const m = raw.match(/^data:([a-z0-9.+\/-]+);base64,([A-Za-z0-9+\/=]+)$/i);
+        if (!raw) {
+          return jsonResponse({
+            success: false,
+            error: "Attach the client's email itself — drop the .msg or .eml onto the deal.",
+          }, 400);
+        }
+        {
+          // The data URI's own type is unreliable for this: a .msg dragged out of
+          // Outlook reports an empty or octet-stream type unless Windows has the
+          // extension registered, so the browser writes that into the URI. The
+          // client derives the real type from the filename and sends it as
+          // file_mime; prefer it, and fall back to the URI for a saved .eml.
+          const m = raw.match(/^data:([a-z0-9.+\/-]*);base64,([A-Za-z0-9+\/=]+)$/i);
           if (!m) return jsonResponse({ success: false, error: "That file didn't arrive in a readable form." }, 400);
-          mime = m[1].toLowerCase();
+          const claimed = String(body.file_mime || "").toLowerCase().trim();
+          mime = PROOF_MIMES[claimed] ? claimed : m[1].toLowerCase();
           const ext = PROOF_MIMES[mime];
           if (!ext) {
             return jsonResponse({
               success: false,
-              error: `${mime} isn't a file type we can store — use a PNG, JPEG, PDF or saved email.`,
+              error: "Only the client's email can be attached — a .msg from Outlook or a saved .eml.",
             }, 400);
           }
           let bytes: Uint8Array;
@@ -2186,10 +2215,6 @@ Deno.serve(async (req: Request) => {
           const up = await supabase.storage.from("b2b-proofs")
             .upload(filePath, bytes, { contentType: mime, upsert: false });
           if (up.error) return jsonResponse({ success: false, error: up.error.message }, 500);
-        }
-
-        if (!filePath && !bodyText) {
-          throw new Invalid("Paste the email or attach a file — one or the other.");
         }
 
         const { data, error } = await supabase.from("b2b_approval_proofs").insert({
@@ -2230,29 +2255,26 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
-      // Accepting without evidence, on the record. Same authority that accepts
-      // the quote, because it is the same decision: this is the sentence that
-      // stands in for the client's email if it is ever questioned.
+      // RETIRED 2026-09-08. Accepting without the client's email on record is no
+      // longer a route: Nick asked for the dropped message to be the only way
+      // proof of acceptance is kept, and was told plainly that this closes the
+      // phone-approval path. He chose it knowing that.
+      //
+      // The action is kept, refusing, rather than deleted -- a tab left open
+      // since before this shipped would otherwise get "Unknown action", which
+      // explains nothing. The reply says what to do instead, because there IS a
+      // way through: send the client a note confirming what they agreed to, and
+      // drop that message on the deal. Then the record holds an email either way.
+      //
+      // approval_waived_by / _reason stay on the tables and still read out in the
+      // panel: deals waived before this are a real part of the history.
       if (action === "waive_approval") {
-        const dealId = str(body.deal_id, 64, "Deal");
-        const prevalId = str(body.preval_id, 64, "Evaluation");
-        if (!!dealId === !!prevalId) {
-          throw new Invalid("A waiver applies to exactly one deal or one evaluation.");
-        }
-        const role = String(body.role || "").toLowerCase().trim();
-        if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can accept without the client's approval on record." }, 403);
-        }
-        const patch = {
-          approval_waived_by: str(body.user, 120, "User") || "Unknown",
-          approval_waived_reason: str(body.reason, 1000, "A reason for going without written approval", true),
-        };
-        const { error } = dealId
-          ? await supabase.from("b2b_deals").update(patch).eq("id", dealId)
-          : await supabase.from("b2b_prevals").update(patch).eq("id", prevalId!);
-        if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", null, { deal: dealId, by: str(body.user, 80, "User") });
-        return jsonResponse({ success: true });
+        return jsonResponse({
+          success: false,
+          error: "Accepting without the client's approval on file isn't possible any more. "
+            + "If they agreed by phone, email them confirming what they agreed to, then drag "
+            + "that message onto the deal — that is the record.",
+        }, 409);
       }
 
       // ================================================= deletion requests
