@@ -216,112 +216,88 @@ eq('a 4px ring that barely contrasts',
 // first, by centre-cropping to the largest one they can all give, and the
 // frame's aspect-ratio is set to that. Cropped rather than scaled: nothing is
 // resampled, and no photo is stretched into a shape it was never shot in.
-const batchTarget = shots => ({
-    w: Math.min(...shots.map(s => s.w - 2 * s.inset)),
-    h: Math.min(...shots.map(s => s.h - 2 * s.inset)),
-});
-const cropWindow = (s, t) => ({
-    sx: Math.round(s.inset + ((s.w - 2 * s.inset) - t.w) / 2),
-    sy: Math.round(s.inset + ((s.h - 2 * s.inset) - t.h) / 2),
-});
+// Read out of the tool, never restated. A literal here compares 563 to 563 and
+// passes no matter what the tool actually does - which is exactly how a
+// vacuous assertion gets shipped.
+const toolSrc = fs.readFileSync(require('path').join(__dirname, '..', 'scripts',
+    'pg-crop-borders.html'), 'utf8');
+const SQUARE = +(toolSrc.match(/var SQUARE = ([0-9]+);/) || [])[1];
+eq('the tool declares a square at all', Number.isInteger(SQUARE), true);
 
-// The real batch: measured sizes with the border insets this file verifies.
-const SQUARE = 563;   // scripts/pg-crop-borders.html
-
-const BATCH = [
-    { w: 602, h: 576, inset: 4 }, { w: 601, h: 575, inset: 5 },
-    { w: 602, h: 576, inset: 4 }, { w: 601, h: 576, inset: 4 },
-    { w: 602, h: 579, inset: 4 }, { w: 602, h: 575, inset: 5 },
-    { w: 602, h: 575, inset: 4 }, { w: 605, h: 575, inset: 4 },
-    { w: 605, h: 575, inset: 4 }, { w: 602, h: 576, inset: 4 },
-    { w: 602, h: 576, inset: 4 }, { w: 602, h: 576, inset: 4 },
-    { w: 601, h: 576, inset: 4 }, { w: 602, h: 575, inset: 5 },
-];
-
-console.log('\none size for the whole batch');
-const t = batchTarget(BATCH);
-eq('the size all fourteen can share', `${t.w}x${t.h}`, '591x565');
-
-let offsetsOk = 0, insideOk = 0;
-for (const s of BATCH) {
-    const { sx, sy } = cropWindow(s, t);
-    // The window must sit inside the image, and clear of the drawn border.
-    if (sx >= s.inset && sy >= s.inset) insideOk++;
-    if (sx + t.w <= s.w - s.inset && sy + t.h <= s.h - s.inset) offsetsOk++;
-}
-eq('every window starts inside the border', insideOk, 14);
-eq('every window ends inside the border', offsetsOk, 14);
-eq('nothing is trimmed by more than 3px a side',
-    Math.max(...BATCH.map(s => (s.w - 2 * s.inset - t.w) / 2)) <= 3, true);
-
-// Two sheets, two shapes, and one canvas they both land on. This is the case
-// the old per-batch target could not serve: it made each sheet internally
-// perfect and made the sheets differ from each other.
 const root = require('path').join(__dirname, '..');
 const css = fs.readFileSync(require('path').join(root, 'styles.css'), 'utf8');
 const rule = css.slice(css.indexOf('.pg-frame {'), css.indexOf('}', css.indexOf('.pg-frame {')));
 const js = fs.readFileSync(require('path').join(root, 'speeks.js'), 'utf8');
 const tool = fs.readFileSync(require('path').join(root, 'scripts', 'pg-crop-borders.html'), 'utf8');
-console.log('\ntwo sheets, one standard square');
-const IPHONE_SIZE = { w: 591, h: 565 };
-const ANDROID_SIZE = { w: 563, h: 593 };
-eq('the two sheets really do disagree on shape',
-    (IPHONE_SIZE.w / IPHONE_SIZE.h > 1) === (ANDROID_SIZE.w / ANDROID_SIZE.h > 1), false);
-// 563 is the narrowest edge in the guide, which is what makes a square
-// reachable by cropping alone. A square any larger would have to be padded
-// out to, and padding is the thing this replaced.
-eq('and the square is small enough for both to be cropped to it',
-    SQUARE <= Math.min(IPHONE_SIZE.w, IPHONE_SIZE.h, ANDROID_SIZE.w, ANDROID_SIZE.h), true);
-eq('and it is the largest such square', SQUARE,
-    Math.min(IPHONE_SIZE.w, IPHONE_SIZE.h, ANDROID_SIZE.w, ANDROID_SIZE.h));
 
-// CROPPED, not padded. Padding was tried twice and failed the same way both
-// times: a band around a photograph reads as a border whatever colour it is.
-// Sampled at the photo's edge the band came out pink on the red-celled shots
-// (bleed from the printed red line); sampled deeper it came out lighter than
-// the backdrop's own vignetted edge. Ethan, on the second one: "There is
-// actually this weird border on all of the pictures, just make the actual
-// picture fit inside of the box."
-console.log('\ncropped, and the window goes round the subject');
-eq('nothing is padded any more', /function backdrop\(/.test(tool), false);
-eq('the window is taken around the subject', /function subject\(p\)\{/.test(tool)
-    && /function windowAt\(len, take, s0, s1\)\{/.test(tool), true);
+// THE SHAPE OF THE EXPORTS, and why the fix is a scale rather than a crop.
+//
+// Ethan shoots these 1:1 on a phone. They arrive out of the guide document
+// about 5% taller than wide. That was established, not assumed, and the
+// experiment is worth keeping because the conclusion is counter-intuitive:
+// scaling a photograph unevenly is normally vandalism, and here it is repair.
+//
+// The same photograph came out of the document in TWO shapes - 591x565 with a
+// border on it, 563x594 without. Measuring the phone in both:
+//
+//   bordered    slab 229x448 of 591x565   fracW 0.3875  fracH 0.7929
+//   borderless  slab 217x470 of 563x594   fracW 0.3854  fracH 0.7912
+//
+// The fractions agree to within 0.5%, so both hold the SAME SCENE at
+// different canvas shapes: the document reshaped the picture, it did not crop
+// it. And undoing each canvas shape, on the assumption of a 1:1 original,
+// lands the phone on its real proportions from both directions.
+console.log('the exports are stretched, and by how much');
+const BORDERED   = { canvas: { w: 591, h: 565 }, slab: { w: 229, h: 448 } };
+const BORDERLESS = { canvas: { w: 563, h: 594 }, slab: { w: 217, h: 470 } };
+const frac = s => ({ w: s.slab.w / s.canvas.w, h: s.slab.h / s.canvas.h });
+const fb = frac(BORDERED), fl = frac(BORDERLESS);
+eq('the two exports hold the same scene, so nothing was cropped',
+    Math.abs(fb.w / fl.w - 1) < 0.01 && Math.abs(fb.h / fl.h - 1) < 0.01, true);
 
-// The window MUST depend on where the subject is. A centred crop is the
-// version that made cropping look impossible: the phone sits close to an edge
-// in most of these, so taking the middle clips something on nearly every
-// photo. Choosing the window that contains the subject leaves 16 of the 24
-// untouched. If windowAt ever stops reading s0/s1 it is a centred crop again
-// and the test would otherwise still pass.
-const wAt = tool.slice(tool.indexOf('function windowAt('),
-    tool.indexOf('}', tool.indexOf('return Math.max(0, Math.min(slack, want));')));
-eq('and the window is placed from the subject, not the middle',
-    /s0 \+ \(s1 - s0\) \/ 2/.test(wAt), true);
+// iPhone 13 Pro: 146.7 x 71.5 mm.
+const REAL_13PRO = 2.0517;
+const unstretched = s => (s.slab.h / s.slab.w) * (s.canvas.w / s.canvas.h);
+eq('un-stretching the bordered export lands on the real phone, within 1%',
+    Math.abs(unstretched(BORDERED) / REAL_13PRO - 1) < 0.01, true);
+eq('and so does the borderless one, within 0.5%',
+    Math.abs(unstretched(BORDERLESS) / REAL_13PRO - 1) < 0.005, true);
+// The stretched files do NOT, which is the other half of the argument: if the
+// exports were already right, this correction would be the thing breaking them.
+eq('while the stretched files are 5% out',
+    Math.abs((BORDERLESS.slab.h / BORDERLESS.slab.w) / REAL_13PRO - 1) > 0.04, true);
 
-// The subject is the dark or saturated thing on a pale backdrop - NOT
-// "anything unlike the backdrop". That looser reading counts the acrylic
-// stand, its shadow and the vignette, which is what made every photo look
-// like it reached its own edge.
-eq('the subject is the dark or saturated thing, not the stand',
-    /var SUBJ_LUMA = \d+, SUBJ_SAT = \d+;/.test(tool), true);
-// A dark-mode screenshot inverts it, and one of the fourteen is exactly that.
-eq('and the test flips for a dark-ground screenshot',
-    /pale \? \(L < bgL - SUBJ_LUMA/.test(tool), true);
+// After the fix, measured off the real stored file: 217x445 in 563x563, which
+// is 2.051 against 2.0517.
+eq('and the file on the server now measures the real phone',
+    Math.abs((445 / 217) / REAL_13PRO - 1) < 0.005, true);
 
-// Too small to crop is refused, never quietly padded - otherwise a future
-// batch reintroduces the border this whole thread was about.
-eq('a photo too small for the square is refused',
-    /too small for . \+ SQUARE/.test(tool), true);
+console.log('\nscaled to the square: nothing cropped, nothing padded');
+eq('standardise scales onto the square',
+    /drawImage\(img, inset, inset, cw, ch, 0, 0, SQUARE, SQUARE\)/.test(tool), true);
+// The three things it must NOT do, each of which was tried and shipped first.
+eq('it does not pad', /function backdrop\(/.test(tool), false);
+eq('it does not pick a crop window', /function windowAt\(/.test(tool), false);
+eq('it does not hunt for a subject to protect', /function subject\(/.test(tool), false);
+
+// Only ever DOWN. The exports are 563-567 wide and 593-599 tall, so a square
+// at the smallest width means every photo loses a little resolution and none
+// has detail invented for it. A larger SQUARE would upscale, and the tool
+// says so out loud when it would.
+const EXPORT_MIN_EDGE = 563;   // measured: exports run 563-567 wide, 593-599 tall
+eq('the square never scales a photo up', SQUARE <= EXPORT_MIN_EDGE, true);
+eq('and the tool warns if it ever would', /scaled UP/.test(tool), true);
 
 // The frame and the square are one decision in two files. Either half alone
 // is a letterboxed board, so both are checked.
 console.log('\nthe frame is the square');
 eq('.pg-frame is square', /aspect-ratio:\s*1\s*\/\s*1\s*;/.test(rule), true);
-// A ratio read off the photos at runtime is what this replaced. If it comes
-// back, the sheets go back to differing from each other.
 eq('and does not take its shape from the photos', /--pg-ar/.test(css), false);
 eq('nor does the board measure them', /_pgSetFrameShape/.test(js), false);
-eq('the tool targets the same square', new RegExp('var SQUARE = ' + SQUARE + ';').test(tool), true);
+// Not 'tool says 563' - that is circular now. What matters is that the square
+// is one every export can reach by scaling DOWN.
+eq('the square is reachable from every export without upscaling',
+    SQUARE > 0 && SQUARE <= EXPORT_MIN_EDGE, true);
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);

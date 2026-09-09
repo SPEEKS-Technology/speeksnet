@@ -24,26 +24,27 @@ a 3px line with a 1px antialias fringe outside it, and on the red ones a second 
 too, so black borders are 4px and red ones are 5px. The app draws its own frame and its own
 OPTIONAL flag, so that border lands as a second outline just inside the first. This finds the
 border on each photo, trims it off, and puts the trimmed photo back under the same filename
-&mdash; nothing in the database changes. It then crops every photo to one standard square &mdash; <b>563&times;563</b>, the
-same for every sheet in the guide &mdash; so all the boxes on the board are identical
-and each photo fills its own to the edge.</p>
-<p class="sub"><b>Cropped, never padded and never scaled.</b> Padding was tried first
-and is what this replaced: filling a photo out to a shared shape leaves a band around
-it, and a band around a photograph reads as a border no matter what colour it is. Two
-attempts at making that band invisible both failed in the same way &mdash; sampled at
-the photo's edge it came out pink on the red-celled shots, sampled further in it came
-out lighter than the vignetted edge. So the picture fills the box instead.</p>
-<p class="sub">The crop window is chosen <b>per photo, around its subject</b>, not
-taken from the middle. That is what makes cropping affordable here. A centred crop
-would clip something on nearly every photo, because the phone sits close to an edge in
-most of them; picking the window that contains the subject leaves 16 of the 24
-untouched, and the worst case among the rest is 13px off a subject nearly 600px tall.
-The subject is found as the dark or saturated thing on a pale backdrop, so the acrylic
-stand, its shadow and the backdrop's own vignette do not count as things to protect.</p>
+&mdash; nothing in the database changes. It then puts every photo back to the square it was shot at &mdash;
+<b>563&times;563</b>, the same for every sheet &mdash; so all the boxes on the board are
+identical and each photo fills its own to the edge, with nothing cropped and nothing
+padded.</p>
+<p class="sub"><b>The exports are stretched, and this un-stretches them.</b> Ethan shoots
+these at 1:1 on a phone, but they arrive out of the guide document at about 563&times;596
+&mdash; taller than wide. That was established rather than assumed: the same photograph
+came out of the document in two different shapes (591&times;565 with a border on it,
+563&times;594 without), and measuring the phone in both shows the same scene at the same
+fractions of the canvas, so the document reshaped the picture instead of cropping it.
+Undoing that canvas shape makes the phone measure 2.0529 against a real iPhone 13 Pro's
+146.7/71.5 = 2.0517 &mdash; 0.06% out, from two independent exports. So scaling each
+photo back to a square is not a distortion, it is the repair of one.</p>
+<p class="sub">This is the only step here that resamples, and it only ever scales DOWN
+(563-567 wide and 593-599 tall, both to 563), so no detail is invented. Two earlier
+approaches are what it replaced: padding out to a shared shape, which leaves a band that
+reads as a border whatever colour it is; and cropping to a shared square, which fits but
+takes 13-14px off the phones on the taller sheet.</p>
 <p class="sub">Edit <code>NAMES</code> below for a new batch. The square is
-<code>SQUARE</code>, and <code>.pg-frame</code> in styles.css is square to match &mdash;
-those two go together. A photo whose shorter side is under <code>SQUARE</code> cannot be
-cropped to it and is refused rather than quietly padded.</p>
+<code>SQUARE</code>, and <code>.pg-frame</code> in styles.css is square to match. If a
+future batch arrives already 1:1, this becomes a no-op rather than a problem.</p>
 <p class="sub"><b>Scan first and read the border column.</b> A batch whose borders were
 already removed before saving should report <code>none</code> on every row &mdash; that
 is the expected result, not a failure, and it means the crop is a pure centring. Any row
@@ -170,84 +171,39 @@ async function load(name){
   return img;
 }
 
-// What has to survive a crop: the SUBJECT, not "anything unlike the backdrop".
-// Measuring the latter makes every photo look like it reaches its own edge,
-// because the acrylic stand, its shadow and the backdrop's own vignette all
-// qualify - and that reading is what made cropping look impossible and sent
-// this tool down the padding road twice. The thing to protect is the phone (or
-// the box, or the cable): the genuinely dark or saturated object on a pale
-// backdrop. The stand is pale and almost grey, so it does not count.
+// Put the photo back to the square it was taken at. Border off, then scaled -
+// separately in x and y - onto SQUARE x SQUARE.
 //
-// The luma test flips for a dark-mode screenshot, where the subject is the
-// light thing on a dark ground.
-var SUBJ_LUMA = 58, SUBJ_SAT = 46;
-
-function subject(p){
-  var ring = [], x, y;
-  function at(px, py){ var o = (py * p.w + px) * 4; return [p.d[o], p.d[o+1], p.d[o+2]]; }
-  for (x = 0; x < p.w; x++){ ring.push(at(x, 0)); ring.push(at(x, p.h - 1)); }
-  for (y = 1; y < p.h - 1; y++){ ring.push(at(0, y)); ring.push(at(p.w - 1, y)); }
-  var bg = median(ring), bgL = 0.299*bg[0] + 0.587*bg[1] + 0.114*bg[2];
-  var pale = bgL > 90;
-  var x0 = p.w, y0 = p.h, x1 = -1, y1 = -1;
-  for (y = 0; y < p.h; y++){
-    for (x = 0; x < p.w; x++){
-      var q = at(x, y), L = 0.299*q[0] + 0.587*q[1] + 0.114*q[2];
-      var sat = Math.max(q[0], q[1], q[2]) - Math.min(q[0], q[1], q[2]);
-      var hit = pale ? (L < bgL - SUBJ_LUMA || sat > SUBJ_SAT)
-                     : (L > bgL + SUBJ_LUMA || sat > SUBJ_SAT);
-      if (hit){ if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-    }
-  }
-  return x1 < 0 ? null : { x0: x0, y0: y0, x1: x1, y1: y1 };
-}
-
-// Where to take the window from along one axis. Keep the subject WHOLE if it
-// fits, rather than taking the middle and hoping; only a subject longer than the
-// square itself loses anything, and then it is centred on the subject so the
-// loss is split between its two ends instead of falling all on one.
-function windowAt(len, take, s0, s1){
-  var slack = len - take;
-  if (slack <= 0) return 0;
-  var want = Math.round(s0 + (s1 - s0) / 2 - take / 2);
-  return Math.max(0, Math.min(slack, want));
-}
-
-// Put the photo on the guide's standard square. Border off, then a window of
-// SQUARE x SQUARE taken around the subject. Nothing is added and nothing is
-// resampled: a guide photo is the reference for what a real photo should look
-// like, so softening it or squeezing it into a new shape would be corrupting
-// the thing being referenced.
+// Scaling the two axes by different amounts is normally the thing you must never
+// do to a photograph. Here it is the correction: the guide document renders a
+// 1:1 original into a cell about 563x596, and that stretch is already in the
+// file. See the copy above for the measurement that establishes it - the short
+// version is that the same photo exported in two different shapes, both showing
+// the same scene, and undoing the shape lands within 0.06% of the phone's real
+// proportions.
+//
+// Nothing is cropped, so no photo can lose its notch or its charging port, and
+// nothing is padded, so there is no band around anything. Both of those were
+// tried first and both were wrong.
 function standardise(img, inset, png){
   var iw = img.naturalWidth, ih = img.naturalHeight;
   var cw = iw - 2 * inset, ch = ih - 2 * inset;
-  if (cw < SQUARE || ch < SQUARE){
-    throw new Error("only " + cw + "x" + ch + ", too small for " + SQUARE + "\u00b2");
-  }
 
-  // Find the subject in the bordered-off photo, then map back to source coords.
-  var inner = document.createElement("canvas");
-  inner.width = cw; inner.height = ch;
-  inner.getContext("2d").drawImage(img, inset, inset, cw, ch, 0, 0, cw, ch);
-  var p = pixels(inner, cw, ch);
-  var s = subject(p) || { x0: 0, y0: 0, x1: cw - 1, y1: ch - 1 };
-
-  var ox = windowAt(cw, SQUARE, s.x0, s.x1), oy = windowAt(ch, SQUARE, s.y0, s.y1);
   var c = document.createElement("canvas");
   c.width = SQUARE; c.height = SQUARE;
   var g = c.getContext("2d");
-  // White underneath even though the window covers every pixel: a source PNG
-  // can carry partial alpha, and a canvas whose base is transparent lets that
-  // through to be composited by whatever opens the file - black, in some
-  // viewers. Cheap insurance, and it costs nothing when the source is opaque.
+  // White underneath: a source PNG can carry partial alpha, and a transparent
+  // base lets that through to be composited as black by some viewers.
   g.fillStyle = "#fff"; g.fillRect(0, 0, SQUARE, SQUARE);
-  g.drawImage(inner, ox, oy, SQUARE, SQUARE, 0, 0, SQUARE, SQUARE);
+  g.imageSmoothingQuality = "high";
+  g.drawImage(img, inset, inset, cw, ch, 0, 0, SQUARE, SQUARE);
 
-  // How much of the subject the window could not contain, for the report: this
-  // is the number worth looking at before letting the upload run.
-  c._crop = { ox: ox, oy: oy, lost: Math.max(
-    Math.max(0, ox - s.x0), Math.max(0, s.x1 - (ox + SQUARE - 1)),
-    Math.max(0, oy - s.y0), Math.max(0, s.y1 - (oy + SQUARE - 1))) };
+  c._fit = { from: cw + "x" + ch,
+    sx: +(SQUARE / cw).toFixed(4), sy: +(SQUARE / ch).toFixed(4),
+    // How far off square the export was. This is the number that says whether
+    // the un-stretch did anything, and a batch already at 1:1 reads 0.0%.
+    skew: +((((cw / ch) / 1) - 1) * 100).toFixed(1),
+    up: (cw < SQUARE || ch < SQUARE) };
   return c;
 }
 
@@ -267,22 +223,23 @@ document.getElementById("scan").onclick = async function(){
       st.innerHTML = '<span class="err">' + e.message + "</span>";
     }
   }
-  // No batch minimum to work out: the square is the same for every sheet in the
-  // guide, so a batch cannot pull the frame shape around after it.
-  var worstLost = 0;
+  // No batch minimum to work out: the square is the same for every sheet, so a
+  // batch cannot pull the frame shape around after it.
+  var worstSkew = 0, anyUp = false;
   loaded.forEach(function(s){
     var tr = rows[s.name], st = tr.querySelector(".st");
     try {
       s.out = standardise(s.img, s.inset, s.png);
-      worstLost = Math.max(worstLost, s.out._crop.lost);
+      var f = s.out._fit;
+      worstSkew = Math.max(worstSkew, Math.abs(f.skew));
+      if (f.up) anyUp = true;
       tr.querySelector(".a").appendChild(thumb(s.out, 90));
       tr.querySelector(".d").innerHTML = (s.inset
         ? '<span class="ok">' + s.inset + 'px</span>' : 'none');
       tr.querySelector(".s").innerHTML = SQUARE + "&times;" + SQUARE
-        + '<br><small>window at ' + s.out._crop.ox + ',' + s.out._crop.oy
-        + (s.out._crop.lost
-          ? ' &middot; <span class="err">subject clipped ' + s.out._crop.lost + 'px</span>'
-          : ' &middot; subject whole') + '</small>';
+        + '<br><small>' + f.from + ', ' + (f.skew < 0 ? 'tall by ' : 'wide by ')
+        + Math.abs(f.skew) + '%'
+        + (f.up ? ' &middot; <span class="err">scaled UP</span>' : '') + '</small>';
       state[s.name] = s;
       st.textContent = "ready";
     } catch (e) {
@@ -290,10 +247,10 @@ document.getElementById("scan").onclick = async function(){
     }
   });
   document.getElementById("target").innerHTML = loaded.length
-    ? "Standard square: " + SQUARE + "×" + SQUARE + " for every sheet, no padding. "
-      + "Worst subject clip in this batch: " + worstLost + "px"
-      + (worstLost > 20 ? ' &mdash; <span class="err">look at that one before uploading</span>'
-                        : '.')
+    ? "Standard square: " + SQUARE + "×" + SQUARE + " for every sheet. Nothing cropped, "
+      + "nothing padded. Worst stretch undone in this batch: " + worstSkew.toFixed(1) + "%"
+      + (anyUp ? ' &mdash; <span class="err">something had to be scaled UP; lower SQUARE'
+                 + ' so every photo only ever scales down</span>' : '.')
     : "";
   document.getElementById("go").disabled = !Object.keys(state).length;
 };
