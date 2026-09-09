@@ -21583,8 +21583,16 @@ select.dd-native {
    at 196px those bites are big enough to see. Rounding the picture to match is
    not an option either: JPEG carries no alpha, so a baked-in curve comes out as
    four white wedges. The box gives way instead of the photograph. */
+/* 1.046, not 1. The frame was square and the photographs are not: every export
+   off the guide sheet lands between 1.040 and 1.053 wide, so a square box left
+   six or seven pixels of nothing above and below each picture. That gap is the
+   whole of "the pictures do not fit" — the photo was already the right shape,
+   the box was not. At the batch mean the worst card is now under 2px out, which
+   is less than the border drawn around it.
+   A portrait photo uploaded from a phone will still letterbox here, and should:
+   contain never crops an example, it just centres what it cannot fill. */
 .pg-frame {
-    position: relative; aspect-ratio: 1 / 1; border: 1.5px solid var(--pg-ink);
+    position: relative; aspect-ratio: 1.046 / 1; border: 1.5px solid var(--pg-ink);
     border-radius: 0; overflow: hidden; background: #f8fafc;
 }
 .pg-frame[onclick] { cursor: zoom-in; }
