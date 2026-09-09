@@ -9,7 +9,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // Google reviews; the Apps Script parses them and `sales-ingest` writes them to
 // `store_cash`. This function only reads that table and mails it.
 //
-// It is CALLED BY sales-ingest at the end of its 7am run rather than by a cron
+// It is CALLED BY sales-ingest at the end of its morning run rather than by a cron
 // job of its own, which is the only way "7:00am" can be honest: a second cron at
 // the same minute would race the import that produces the data. Standalone use
 // is still supported for re-sends and testing (?day=, ?dryRun=1, ?force=1).
@@ -260,7 +260,7 @@ Deno.serve(async (req: Request) => {
 
     const relay = await sendEmail(sendTo, subject, html);
     // A ?to= test must NOT be recorded as the day's send. Recording it would
-    // make the real 7am run see the day as already handled and stay silent —
+    // make the real morning run see the day as already handled and stay silent —
     // testing the email would be the thing that stopped it arriving.
     if (!override.length) {
       await sb.from('cash_report_sends').upsert({

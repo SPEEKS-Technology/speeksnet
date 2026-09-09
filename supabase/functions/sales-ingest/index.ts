@@ -20,6 +20,32 @@
 //
 // Auth: verify_jwt=false, with two paths — ?secret= for pg_cron, and an
 // x-user-pin header re-checked against the users table for the DM/CEO button.
+//
+// WHEN IT RUNS: 8:00am Central, with a retry at 9:00 (user, 2026-09-09). It was
+// 7:00am until then; it moved so the Sales Summary and the NET PROFIT tab land
+// together — netprofit-schedule.gs has always fired its morning pass at 8:00
+// Central (NPS_MORNING_HOUR), so the hour between them was this side being
+// early, not that side being late.
+//
+// The schedule lives in pg_cron, NOT in this repo, and it is FOUR jobs, not
+// two, because pg_cron only speaks UTC: a -cdt job and a -cst job an hour
+// apart, so that one of each pair is right for the current offset and the other
+// is a harmless extra pass over the same idempotent restatement. Today
+// 13:00 UTC is 8am and 14:00 UTC is 9am; in January they are 7am and 8am, and
+// the -cst pair takes over.
+//
+//   jobid  8  0 13 * * *   main, correct Mar–Nov
+//   jobid  9  0 14 * * *   main, correct Nov–Mar
+//   jobid 10  0 14 * * *   retry, correct Mar–Nov
+//   jobid 11  0 15 * * *   retry, correct Nov–Mar
+//
+// ⚠️ THE JOB NAMES STILL SAY 7am. Supabase grants cron.alter_job but not UPDATE
+// on cron.job, so the schedules could be moved and the labels could not. Read
+// the schedule, never the name.
+//
+// ⚠️ THE CASH EMAIL MOVED WITH IT, because cash-report is called from the end of
+// this run rather than from a cron of its own. If it ever needs to be back at
+// 7am it needs its own job; it cannot be pulled earlier from here.
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -34,7 +60,7 @@ const corsHeaders = {
 // secret guards weekly-report, which emails real store managers, and the Gmail
 // relay. The browser gets the pin path below instead.
 const SECRET = "sp33ks-sync-k3y-2026-x9mq";
-// The 7am cash email. Called from this run rather than by a cron of its own —
+// The morning cash email. Called from this run rather than by a cron of its own —
 // see the cash block below for why.
 const CASH_REPORT_URL = (Deno.env.get("SUPABASE_URL") || "") + "/functions/v1/cash-report";
 
@@ -195,7 +221,7 @@ async function ingest(sb: any, p: Record<string, string>) {
 
   // ---- cash on hand -------------------------------------------------------
   // The Day End Report carries the closing count as well as buying and reviews.
-  // It does NOT go to the sheet — it lands here, and the 7am email reads it.
+  // It does NOT go to the sheet — it lands here, and the morning email reads it.
   //
   // Wrapped whole: cash is a bonus rider on this run and must never be able to
   // fail the import that carries it. Same rule the Apps Script applies to
