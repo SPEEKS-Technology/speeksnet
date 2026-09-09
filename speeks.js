@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.5';
+const APP_VERSION = '3.8.6';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -16415,7 +16415,7 @@ async function b2bQuickAccept(id, btn) {
     // not know about evidence yet, which is not the same as a deal having none.
     // Undefined lets it through; zero does not.
     if (d.proof_count !== undefined && !d.approval_waived_by && !Number(d.proof_count)) {
-        return _b2bApprovalGate({ approval_waived_by: null });
+        return _b2bApprovalGate({ approval_waived_by: null }, id, 'deal');
     }
     const msg = `Accept ${d.client?.company || 'this'} quote at ${_b2bMoney(_b2bNetOffer(d), 2)}?\n\n`
         + 'The offers lock in as our cost and the items become inventory to list. This cannot be undone.';
@@ -19565,10 +19565,12 @@ function _b2bProofPanel(owner) {
                 It is what answers them later if they say they never agreed to the price.</div>` : ''}
             ${live.map(row).join('')}
             ${gone.length ? `<details class="b2b-proof-gone"><summary>${gone.length} withdrawn</summary>${gone.map(row).join('')}</details>` : ''}
-            <!-- Drag and drop, because that is the gesture being replaced: Paul was
-                 dragging these emails into a Google Drive folder. Same movement,
-                 different destination. The button stays for anyone who would
-                 rather pick a file, and it opens the same one-field dialog. -->
+            <!-- Drag and drop, because that is the gesture being replaced: Paul
+                 was dragging these emails into a Google Drive folder. Same
+                 movement, different destination. There is no "choose a file"
+                 button here any more (Nick, 2026-09-09) -- the picker survives
+                 in one place only, the accept popup, where somebody is actually
+                 blocked and needs a way through. -->
             <div class="b2b-proof-drop" id="b2bProofDrop-${owner.id}"
                 ondragover="b2bProofDragOver(event,'${owner.id}')"
                 ondragleave="b2bProofDragOut(event,'${owner.id}')"
@@ -19580,23 +19582,25 @@ function _b2bProofPanel(owner) {
                      to fight it. Desktop-then-drop always works. -->
                 <span class="b2b-proof-droptxt"><b>Drop the client's email here</b>
                     <span>Drag it straight from Outlook, or onto your desktop first and then here</span></span>
-                <button class="b2b-mini" onclick="b2bOpenProofAdd(${ownerAttr})">Choose a file</button>
             </div>
         </div>`;
 }
 
 // --- attaching -------------------------------------------------------------
 
-// Outlook hands over a real file on drop, so this is an ordinary file drop --
-// no clipboard formats, no CF_HDROP trickery. The only care needed is telling
-// a dropped message from a dropped anything-else.
-function b2bProofDragOver(ev, id) {
+// Two drop zones can be on screen at once -- the one on the deal's proof panel
+// and the one in the accept popup -- so the zone is addressed separately from
+// the deal it attaches to. Element ids have to be unique or the hover state and
+// the busy spinner land on whichever the browser found first.
+const B2B_PROOF_POP = 'pop';
+
+function b2bProofDragOver(ev, zone) {
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'copy';
-    document.getElementById(`b2bProofDrop-${id}`)?.classList.add('over');
+    document.getElementById(`b2bProofDrop-${zone}`)?.classList.add('over');
 }
-function b2bProofDragOut(ev, id) {
-    document.getElementById(`b2bProofDrop-${id}`)?.classList.remove('over');
+function b2bProofDragOut(ev, zone) {
+    document.getElementById(`b2bProofDrop-${zone}`)?.classList.remove('over');
 }
 
 // A dropped .msg often arrives with an EMPTY type, and sometimes as
@@ -19659,51 +19663,141 @@ function _b2bDropDiag(dt) {
         files = Array.from(dt?.files || [])
             .map(f => `${f.name || '(no name)'} · ${f.size}b · ${f.type || 'no type'}`);
     } catch (_) {}
-    return `formats: ${list(types)}\nitems: ${list(items)}\nfiles: ${list(files)}`;
+    // How much text came with it decides whether the reconstruction fallback can
+    // run, so it belongs in the report -- otherwise "no file AND no fallback"
+    // and "no file but the text was too thin" look identical from the outside.
+    const t = _b2bDragText(dt);
+    const chars = (s) => (s ? s.length + ' chars' : 'none');
+    return `formats: ${list(types)}\nitems: ${list(items)}\nfiles: ${list(files)}\n`
+        + `text/plain: ${chars(t.plain)} · text/html: ${chars(t.html)}`;
 }
 
 // OUTLOOK DOES NOT PUT A FILE IN dataTransfer.files, AND THAT IS THE WHOLE BUG.
 //
 // Dragging a message out of the Outlook message list hands it over as a VIRTUAL
 // file: Windows offers it as the FileGroupDescriptorW + FileContents clipboard
-// pair, and the bytes are never written to disk. So `dataTransfer.files` is
-// empty, `item.getAsFile()` returns null, and the first version of this handler
-// concluded nothing had been dropped -- then told the user they had dragged from
-// the wrong place, which they had not. Dragging from the message list is exactly
-// right; the code was reading the wrong side of the DataTransfer.
+// pair, and the bytes live in the PST/OST or on Exchange, never on disk. So
+// `dataTransfer.files` is empty and `item.getAsFile()` returns null. The first
+// version concluded nothing had been dropped, then told the user they had
+// dragged from the wrong place -- which they had not. Dragging from the message
+// list is exactly right.
 //
-// Chromium exposes virtual files through DataTransferItem.webkitGetAsEntry(),
-// added for precisely this case. So: try the real file list, then getAsFile,
-// then the entry. One of the three has it.
+// Chromium has handled this natively since Chrome 76: it streams FileContents
+// out of Outlook (IStream or IStorage), writes a temp file, and exposes it to
+// the page. So on classic Outlook + Chrome/Edge the bytes ARE available. Getting
+// them, though, means asking the right way:
 //
-// EVERYTHING IS COLLECTED SYNCHRONOUSLY. A DataTransfer is neutered the moment
+//   1. DO NOT FILTER ON item.kind. This is what version two got wrong. The
+//      virtual-file item does not reliably report kind "file" -- it has been
+//      seen reporting "string" -- so `if (kind !== 'file') continue` skipped the
+//      only item that had the message in it. getAsFile/webkitGetAsEntry/
+//      getAsFileSystemHandle all return null harmlessly on a genuine string
+//      item, so there is nothing to gain by pre-filtering and a whole feature to
+//      lose.
+//   2. TRY EVERY ROUTE ON EVERY ITEM, and do not stop at the first item that
+//      offers something. Version two returned as soon as one item produced an
+//      entry, so a dud entry on item[0] hid a good one on item[1].
+//   3. getAsFileSystemHandle() is tried as well as webkitGetAsEntry(). It is the
+//      standard replacement and is wired to a different code path inside the
+//      browser, so it can succeed where the older one comes back empty.
+//   4. A directory entry is followed. Some clients offer the message inside a
+//      one-entry folder rather than on its own.
+//
+// EVERYTHING IS STARTED SYNCHRONOUSLY. A DataTransfer is neutered the moment
 // this handler yields, so `items` cannot be touched after an await -- reading it
-// later returns an empty list and looks identical to an empty drop.
-// Resolves to { file, virtual }. `virtual` marks the Outlook path, which is
-// treated more leniently on naming below.
-function _b2bDropFilePromise(dt) {
-    const direct = dt?.files?.[0];
-    if (direct) return Promise.resolve({ file: direct, virtual: false });
-    const items = dt?.items ? Array.from(dt.items) : [];
-    for (const item of items) {
-        if (item.kind !== 'file') continue;
-        let f = null;
-        try { f = item.getAsFile?.() || null; } catch (_) { f = null; }
-        if (f) return Promise.resolve({ file: f, virtual: false });
-        let entry = null;
-        try { entry = item.webkitGetAsEntry?.() || null; } catch (_) { entry = null; }
-        if (entry && entry.isFile) {
-            return new Promise((res) => {
-                try {
-                    entry.file(
-                        (file) => res({ file, virtual: true }),
-                        () => res({ file: null, virtual: true }),
-                    );
-                } catch (_) { res({ file: null, virtual: true }); }
-            });
-        }
+// later returns an empty list and looks identical to an empty drop. Every route
+// is therefore KICKED OFF here and the promises are settled afterwards.
+//
+// Resolves to { file, virtual, route }. `virtual` marks the mail-client path,
+// which is treated more leniently on naming below; `route` is kept for the
+// diagnostic, because which route won is the single most useful fact when this
+// misbehaves on someone else's machine.
+
+// A route that never calls back must not hang the drop. Outlook can stall
+// mid-stream on a large message or a disconnected mailbox, and entry.file()
+// simply never fires its callback -- no error, no rejection. Losing one slow
+// route is better than a dead modal.
+function _b2bDropTimeout(p, ms, label) {
+    return Promise.race([
+        p,
+        new Promise((res) => setTimeout(() => res({ file: null, timedOut: label }), ms)),
+    ]);
+}
+
+function _b2bEntryToFile(entry) {
+    if (!entry) return Promise.resolve(null);
+    if (entry.isFile) {
+        return new Promise((res) => {
+            try { entry.file((f) => res(f || null), () => res(null)); }
+            catch (_) { res(null); }
+        });
     }
-    return Promise.resolve({ file: null, virtual: false });
+    if (entry.isDirectory) {
+        // One level only. A mail client offering a folder is offering one
+        // message in it, not a tree, and recursing invites a stall.
+        return new Promise((res) => {
+            let reader;
+            try { reader = entry.createReader(); } catch (_) { return res(null); }
+            try {
+                reader.readEntries(
+                    (kids) => {
+                        const f = (kids || []).find((k) => k && k.isFile);
+                        f ? _b2bEntryToFile(f).then(res) : res(null);
+                    },
+                    () => res(null),
+                );
+            } catch (_) { res(null); }
+        });
+    }
+    return Promise.resolve(null);
+}
+
+function _b2bDropFilePromise(dt) {
+    const tries = [];
+    const push = (route, virtual, p) => tries.push({ route, virtual, p });
+
+    const direct = dt?.files?.[0];
+    if (direct) push('files[0]', false, Promise.resolve(direct));
+
+    const items = dt?.items ? Array.from(dt.items) : [];
+    items.forEach((item, i) => {
+        // Deliberately no `item.kind` check -- see (1) above.
+        try {
+            const f = item.getAsFile?.();
+            if (f) push(`items[${i}].getAsFile`, false, Promise.resolve(f));
+        } catch (_) {}
+        try {
+            const handle = item.getAsFileSystemHandle?.();
+            if (handle && typeof handle.then === 'function') {
+                push(`items[${i}].getAsFileSystemHandle`, true, handle
+                    .then((h) => (h && h.kind === 'file' && h.getFile ? h.getFile() : null))
+                    .catch(() => null));
+            }
+        } catch (_) {}
+        try {
+            const entry = item.webkitGetAsEntry?.();
+            if (entry) push(`items[${i}].webkitGetAsEntry`, true, _b2bEntryToFile(entry));
+        } catch (_) {}
+    });
+
+    if (!tries.length) return Promise.resolve({ file: null, virtual: false, route: 'none offered' });
+
+    // Settle them all, then take the first that produced bytes, in the order
+    // they were queued -- files[0] beats getAsFile beats the async handles.
+    const guarded = tries.map((tr) =>
+        _b2bDropTimeout(Promise.resolve(tr.p).catch(() => null), 20000, tr.route)
+            .then((r) => ({ ...tr, file: r && r.file === null ? null : r, timedOut: r && r.timedOut })));
+    return Promise.all(guarded).then((settled) => {
+        const won = settled.find((s) => s.file && s.file.size !== undefined);
+        if (won) return { file: won.file, virtual: won.virtual, route: won.route };
+        const stalled = settled.filter((s) => s.timedOut).map((s) => s.route);
+        return {
+            file: null,
+            virtual: settled.some((s) => s.virtual),
+            route: (stalled.length ? 'timed out: ' + stalled.join(', ') + ' | ' : '')
+                + 'tried: ' + settled.map((s) => s.route).join(', '),
+        };
+    });
 }
 
 // Outlook names its virtual file after the SUBJECT, so the extension is at the
@@ -19729,32 +19823,111 @@ function _b2bAsMailFile(file, virtual) {
     }
 }
 
-async function b2bProofDrop(ev, ownerId, ownerKind) {
+// LAST RESORT, AND ONLY WHEN THE BYTES ARE GENUINELY UNAVAILABLE.
+//
+// If no route yields the file, the drag is not necessarily empty: a mail client
+// that will not release FileContents will usually still put the message on the
+// drag as text and/or HTML. That is enough to build a real RFC822 message in
+// the browser and file THAT, so the one gesture the whole feature was asked for
+// never dead-ends.
+//
+// Gated hard, because a fabricated record is worse than no record. Outlook will
+// happily put just the subject line on a drag, and "Re: your quote" is not
+// evidence that anybody accepted anything. So it is used only when the text
+// carries recognisable mail headers, or is long enough to be the actual message
+// body. Anything thinner and the user gets told the truth instead.
+const B2B_DRAG_TEXT_MIN = 400;
+
+function _b2bDragText(dt) {
+    // Synchronous: getData is dead the moment the handler yields.
+    const get = (t) => { try { return String(dt?.getData?.(t) || ''); } catch (_) { return ''; } };
+    return { html: get('text/html'), plain: get('text/plain') };
+}
+
+function _b2bDragTextIsMessage(txt) {
+    const body = (txt.plain || txt.html || '').replace(/<[^>]*>/g, ' ');
+    if (/^\s*(from|sent|to|subject)\s*:/im.test(body) && /\S+@\S+/.test(body)) return true;
+    return body.trim().length >= B2B_DRAG_TEXT_MIN;
+}
+
+// Build an .eml the mail client did not give us. Marked as reconstructed in its
+// own headers -- whoever opens this later must be able to tell it apart from the
+// message as the client stored it, without having to know this code exists.
+function _b2bEmlFromDragText(txt) {
+    const flat = (txt.plain || txt.html || '').replace(/<[^>]*>/g, ' ');
+    const hdr = (name) => {
+        const m = flat.match(new RegExp('^\s*' + name + '\s*:[ \t]*(.+)$', 'im'));
+        return m ? m[1].trim().replace(/\s+/g, ' ').slice(0, 200) : '';
+    };
+    const subject = hdr('Subject') || 'Message dragged from mail app';
+    const from = hdr('From') || (flat.match(/[^\s<>,;"]+@[^\s<>,;"]+/) || [])[0] || '';
+    const sent = hdr('Sent') || hdr('Date') || '';
+    const isHtml = !!txt.html && !txt.plain;
+    const lines = [
+        from ? `From: ${from}` : null,
+        `Subject: ${subject}`,
+        `Date: ${sent || new Date().toUTCString()}`,
+        'MIME-Version: 1.0',
+        `Content-Type: text/${isHtml ? 'html' : 'plain'}; charset=utf-8`,
+        'X-Speeks-Proof-Source: reconstructed from the drag text; the mail app did'
+            + ' not release the original message file',
+        '',
+        txt.html || txt.plain,
+    ].filter((l) => l !== null);
+    const name = (subject.replace(/[\/:*?"<>|]+/g, ' ').trim() || 'message').slice(0, 80);
+    return new File([lines.join('\r\n')], `${name}.eml`, { type: 'message/rfc822' });
+}
+
+// Which of the several ways this can fail is it, and what should the person
+// actually do about it. Worth telling apart: on Firefox no amount of retrying
+// will help, and saying "try again" there wastes their afternoon.
+function _b2bDropAdvice() {
+    const ua = String(navigator.userAgent || '');
+    if (/Firefox\//.test(ua)) {
+        return 'Firefox cannot take a message straight out of Outlook — it has never supported '
+            + 'the format Outlook offers. Open this page in Chrome or Edge and the drag will '
+            + 'work, or drag the email onto your desktop first and drop that file here.';
+    }
+    const m = ua.match(/Chrome\/(\d+)/);
+    if (m && Number(m[1]) < 76) {
+        return `This browser is Chrome ${m[1]}, and dragging straight out of Outlook needs 76 or `
+            + 'newer. Update it, or drag the email onto your desktop first and drop that here.';
+    }
+    return 'Outlook can only hand a message to a browser as a "virtual file", and the classic '
+        + 'desktop Outlook plus Chrome or Edge is the combination that manages it. Outlook in a '
+        + 'browser tab and the new Outlook app cannot do it at all. The route that always works: '
+        + 'drag the email onto your desktop first, then drop that file here.';
+}
+
+async function b2bProofDrop(ev, ownerId, ownerKind, zone) {
     ev.preventDefault();
-    b2bProofDragOut(ev, ownerId);
-    // All read synchronously, before anything can yield.
+    b2bProofDragOut(ev, zone || ownerId);
+    // All started synchronously, before anything can yield.
     const pending = _b2bDropFilePromise(ev.dataTransfer);
+    const dragText = _b2bDragText(ev.dataTransfer);
     const sawFileItem = !!(ev.dataTransfer?.files?.length)
-        || Array.from(ev.dataTransfer?.items || []).some(i => i.kind === 'file');
+        || Array.from(ev.dataTransfer?.items || []).length > 0;
     const diag = _b2bDropDiag(ev.dataTransfer);
 
     const got = await pending;
     const file = got.file ? _b2bAsMailFile(got.file, got.virtual) : null;
+    const full = `${diag}\nroutes: ${got.route || 'n/a'}`;
+    try {
+        console.warn(`[b2b] proof drop ${file ? 'ok via ' + got.route : 'produced no file'}\n${full}`);
+    } catch (_) {}
+
     if (!file) {
-        // Logged as well as shown: the alert is what the user reports back, the
-        // console line is what survives for anyone looking afterwards.
-        try { console.warn('[b2b] proof drop produced no file\n' + diag); } catch (_) {}
+        // Before giving up: the message text, if the client left enough of it.
+        if (_b2bDragTextIsMessage(dragText)) {
+            const eml = _b2bEmlFromDragText(dragText);
+            await _b2bAttachMailFile(eml, ownerId, ownerKind, 'text', zone);
+            return;
+        }
         return alert(sawFileItem
             ? 'Your mail app offered the message but would not release the file.\n\n'
-              + 'Outlook can only hand a message to a browser as a "virtual file", and not every '
-              + 'version will. The dependable way: drag the email onto your desktop first, then '
-              + 'drop that file here — or use Choose a file.\n\n'
-              + 'What the drop contained:\n' + diag
-            : 'That drop did not contain a file.\n\n'
-              + 'If you are using Outlook in a browser tab, or the new Outlook app, it cannot pass '
-              + 'a message to another page at all. Drag the email onto your desktop first, then '
-              + 'drop that file here — or use Choose a file.\n\n'
-              + 'What the drop contained:\n' + diag);
+              + _b2bDropAdvice() + '\n\nOr use Choose a file.\n\nWhat the drop contained:\n' + full
+            : 'That drop did not contain a message.\n\n'
+              + _b2bDropAdvice() + '\n\nOr use Choose a file.\n\nWhat the drop contained:\n' + full);
     }
     if (!_b2bIsMailFile(file)) {
         return alert(`"${file.name}" looks like a document rather than an email.\n\nDrop the `
@@ -19765,14 +19938,20 @@ async function b2bProofDrop(ev, ownerId, ownerKind) {
         return alert(`That message is ${Math.round(file.size / 1e6)}MB — the limit is 6MB.\n\n`
             + 'Forward it to yourself without the attachments and drop that instead.');
     }
-    await _b2bAttachMailFile(file, ownerId, ownerKind);
+    await _b2bAttachMailFile(file, ownerId, ownerKind, 'file', zone);
 }
 
 // Read it, pull what headers we can, and save. No dialog: the whole request was
 // to make this one gesture, and everything the form used to ask for is either in
 // the file or not worth asking twice.
-async function _b2bAttachMailFile(file, ownerId, ownerKind) {
-    const drop = document.getElementById(`b2bProofDrop-${ownerId}`);
+//
+// `source` is 'file' (the message as the mail client stored it) or 'text' (built
+// from the drag text because the client would not release the file). The label
+// says which, on the record and in the confirmation, because someone reading
+// this list a year from now has to be able to tell how good the evidence is
+// without knowing that a fallback exists.
+async function _b2bAttachMailFile(file, ownerId, ownerKind, source, zone) {
+    const drop = document.getElementById(`b2bProofDrop-${zone || ownerId}`);
     if (drop) drop.classList.add('busy');
     try {
         const dataUri = await new Promise((res, rej) => {
@@ -19782,10 +19961,12 @@ async function _b2bAttachMailFile(file, ownerId, ownerKind) {
             r.readAsDataURL(file);
         });
         const meta = await _b2bMailHeaders(file);
+        const subject = meta.subject || file.name;
+        const rebuilt = source === 'text';
         const payload = {
             action: 'add_proof',
             kind: 'email',
-            label: meta.subject || file.name,
+            label: rebuilt ? `${subject} (message text only)` : subject,
             from_addr: meta.from || undefined,
             sent_on: meta.date || undefined,
             file: dataUri,
@@ -19794,11 +19975,20 @@ async function _b2bAttachMailFile(file, ownerId, ownerKind) {
         };
         payload[ownerKind === 'preval' ? 'preval_id' : 'deal_id'] = ownerId;
         await _b2bSend(payload);
+        // Attached from the accept popup: that modal has to go before the deal
+        // is reopened, or two modals are up at once and the deal renders behind
+        // the popup that is now stale.
+        if (zone === B2B_PROOF_POP) closeAllModals();
         await _b2bLoadProofs(ownerId);
         await b2bRefresh();
         if (ownerKind === 'preval') b2bOpenPreval(ownerId);
         else { const d = _b2bDealById(ownerId); if (d) b2bOpenDeal(_b2bClickKind(d), d.id); }
-        _b2bSay(`${meta.subject || file.name} is on the record.`);
+        _b2bSay(rebuilt
+            ? `${subject} is on the record — the message text only, because Outlook would not `
+              + 'release the file itself. Drop the saved email over it if you want the original.'
+            : zone === B2B_PROOF_POP
+                ? `${subject} is on the record. Mark Accepted will go through now.`
+                : `${subject} is on the record.`);
     } catch (e) {
         alert(`Couldn't attach that message: ${e.message}`);
     } finally {
@@ -19857,155 +20047,85 @@ async function _b2bMailHeaders(file) {
 }
 
 let _b2bProofOwner = null;      // { id, kind: 'deal' | 'preval' }
-let _b2bProofKindPick = 'email';
-let _b2bProofFile = null;       // { name, mime, dataUri, bytes }
 
-function b2bOpenProofAdd(ownerId, ownerKind) {
-    _b2bProofOwner = { id: ownerId, kind: ownerKind };
-    _b2bProofKindPick = 'email';
-    _b2bProofFile = null;
+// ATTACH-THE-ACCEPTANCE POPUP.
+//
+// This replaced the old dialog outright (Nick, 2026-09-09). That one offered a
+// kind picker for screenshot / document / note, From and Dated inputs, a Label,
+// a paste-the-body textarea and a file picker. Every one of those fields was
+// asking for something a dropped message already carries -- the sender, the
+// date, the subject and the headers are in the file -- so all of it was the
+// pre-drag way of doing this and none of it is wanted. Rows attached the old
+// way still render on the panel; this is only about how new ones arrive.
+//
+// It exists because "Mark Accepted" with nothing on file used to be a dead end:
+// an alert telling you to go and drag an email onto the deal, which meant
+// dismissing the dialog you were in and finding the drop zone yourself. The
+// drop zone now comes to you at the moment you are stopped.
+function b2bOpenAcceptProof(ownerId, ownerKind) {
+    _b2bProofOwner = { id: ownerId, kind: ownerKind || 'deal' };
     _b2bPaintProofModal();
     toggleModal('b2bProofModal');
-}
-
-function b2bPickProofKind(k) {
-    _b2bProofKindPick = k;
-    _b2bPaintProofModal();
 }
 
 function _b2bPaintProofModal() {
     const body = document.getElementById('b2bProofBody');
     if (!body) return;
-    const k = _b2bProofKind(_b2bProofKindPick);
-    // Kept: whatever has been typed already, so switching kind mid-entry does
-    // not throw the work away.
-    const keepLabel = document.getElementById('b2bPfLabel')?.value || '';
-    const keepFrom  = document.getElementById('b2bPfFrom')?.value || '';
-    const keepDate  = document.getElementById('b2bPfDate')?.value || '';
-    const keepBody  = document.getElementById('b2bPfBody')?.value || '';
+    const o = _b2bProofOwner || {};
+    const attr = `'${o.id}','${o.kind === 'preval' ? 'preval' : 'deal'}','${B2B_PROOF_POP}'`;
 
     body.innerHTML = `
-        <label class="form-label-caps">What is it</label>
-        <div class="b2b-intake-pick" id="b2bPfKinds">
-            ${B2B_PROOF_KINDS.map(x => `
-                <button class="b2b-intake ${x.key === _b2bProofKindPick ? 'on' : ''}" data-kind="${x.key}"
-                    onclick="b2bPickProofKind('${x.key}')">
-                    <span class="b2b-intake-t">${escapeHtml(x.label)}</span>
-                    <span class="b2b-intake-s">${escapeHtml(x.hint)}</span>
-                </button>`).join('')}
+        <div class="b2b-note warn">
+            <span class="b2b-note-k">This one still needs the client's approval</span>
+            <div>Drop their email on and the acceptance goes straight through. It is what
+                answers them later if they say they never agreed to the price.</div>
         </div>
-        <div class="b2b-grid2" style="margin-top:14px;">
-            <div><label class="form-label-caps">From</label>
-                <input id="b2bPfFrom" class="form-input-lg" placeholder="dana@acme.com" value="${escapeHtml(keepFrom)}"></div>
-            <div><label class="form-label-caps">Dated</label>
-                <input id="b2bPfDate" type="date" class="form-input-lg" value="${escapeHtml(keepDate)}"></div>
+        <div class="b2b-proof-drop lg" id="b2bProofDrop-${B2B_PROOF_POP}"
+            ondragover="b2bProofDragOver(event,'${B2B_PROOF_POP}')"
+            ondragleave="b2bProofDragOut(event,'${B2B_PROOF_POP}')"
+            ondrop="b2bProofDrop(event,${attr})">
+            <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
+            <span class="b2b-proof-droptxt"><b>Drop the client's email here</b>
+                <span>Drag it straight out of Outlook, or onto your desktop first and then here</span></span>
         </div>
-        <label class="form-label-caps" style="margin-top:12px;">Label</label>
-        <input id="b2bPfLabel" class="form-input-lg" maxlength="200" value="${escapeHtml(keepLabel)}"
-            placeholder="e.g. Dana confirming the revised numbers">
-        <label class="form-label-caps" style="margin-top:12px;">${
-            _b2bProofKindPick === 'note' ? 'What was said' : 'Paste the email'}</label>
-        <textarea id="b2bPfBody" class="form-input-lg" rows="7" placeholder="${
-            _b2bProofKindPick === 'note'
-                ? 'Who approved it, when, and what they actually said.'
-                : 'Paste the whole thing including the From / Sent / Subject lines — the headers are the part that proves it came from them.'
-        }">${escapeHtml(keepBody)}</textarea>
-        <p class="b2b-hint">${escapeHtml(k.hint)}</p>
-        <!-- Email files only. The picker used to take PNG/JPEG/PDF/text as well,
-             and pasted body text instead of a file at all; a dropped message is
-             the only route now (Nick, 2026-09-08) because it is the only one that
-             carries the sender, the date and the headers with it. Rows attached
-             the old way stay on the record and still render. -->
-        <label class="form-label-caps" style="margin-top:12px;">The client's email</label>
-        <!-- No accept= filter. It only ever hides files in the dialog, and a
-             saved message turns up named more ways than a filter can list --
-             .msg, .eml, or nothing at all where Windows hides the extension.
-             Filtering it out just makes a real email un-pickable, which is the
-             same mistake the drop check was making. The type is inferred from
-             the file and the server is the gate. -->
+        <!-- The one picker left in the product, and deliberately only here.
+             Dragging out of Outlook depends on the browser and the Outlook
+             build agreeing (classic Outlook plus Chrome or Edge manage it;
+             Outlook in a tab cannot), and if it does not work on somebody's
+             machine then with no picker at all they cannot accept a deal --
+             which is the same trap that retiring the waiver set. One way
+             through, on the screen that blocks them. -->
+        <label class="form-label-caps" style="margin-top:14px;">Or pick the saved email</label>
         <input id="b2bPfFile" type="file" class="form-input-lg"
             onchange="b2bProofFilePicked(this)">
-        <p class="b2b-hint">The message saved out of your mail app — .msg or .eml, up to 6MB.
-            Dropping it straight onto the deal does the same thing in one step.</p>
-        <div id="b2bPfFileState"></div>`;
+        <p class="b2b-hint">A message saved out of your mail app — .msg or .eml, up to 6MB.
+            No filter on the dialog: Windows hides extensions and Outlook names a saved
+            message after its subject, so filtering only ever hides real emails.</p>`;
 
     const foot = document.getElementById('b2bProofFooter');
     if (foot) {
         foot.innerHTML = `
             <span class="b2b-msg" id="b2bPfMsg"></span>
-            <button class="kpi-cancel-btn" onclick="closeAllModals()">Cancel</button>
-            <button class="b2b-btn b2b-btn-primary" onclick="b2bSaveProof(this)">Attach</button>`;
+            <button class="kpi-cancel-btn" onclick="closeAllModals()">Close</button>`;
     }
-    if (_b2bProofFile) _b2bPaintProofFile();
 }
 
-function _b2bPaintProofFile() {
-    const el = document.getElementById('b2bPfFileState');
-    if (!el) return;
-    el.innerHTML = _b2bProofFile
-        ? `<div class="b2b-note ok"><span class="b2b-note-k">Attached</span>
-             ${escapeHtml(_b2bProofFile.name)} · ${Math.max(1, Math.round(_b2bProofFile.bytes / 1024))} KB</div>`
-        : '';
-}
-
-// Read once, here, rather than at save time: a file input's contents can be
-// gone by the time an async save runs if the dialog has been touched since.
+// The picker hands its file to exactly the same path as a drop, so there is one
+// set of rules about what an email is and one place that attaches it.
 function b2bProofFilePicked(input) {
     const f = input.files && input.files[0];
-    if (!f) { _b2bProofFile = null; _b2bPaintProofFile(); return; }
-    // Same gate as the drop zone -- the accept= attribute is a filter in the
-    // file dialog, not a rule, and "All files" defeats it.
+    if (!f || !_b2bProofOwner) return;
     if (!_b2bIsMailFile(f)) {
-        _b2bProofFile = null;
-        _b2bPaintProofFile();
         input.value = '';
-        return alert(`"${f.name}" isn't an email.\n\nAttach the client's message itself — a .msg `
-            + 'from Outlook or a saved .eml.');
+        return alert(`"${f.name}" looks like a document rather than an email.\n\nAttach the `
+            + "client's message itself — saved out of Outlook as .msg or .eml.");
     }
     if (f.size > 6_000_000) {
-        _b2bProofFile = null;
-        _b2bPaintProofFile();
+        input.value = '';
         return alert(`That file is ${Math.round(f.size / 1e6)}MB — the limit is 6MB.\n\n`
-            + 'A screenshot of the relevant part is usually enough.');
+            + 'Forward it to yourself without the attachments and attach that instead.');
     }
-    const r = new FileReader();
-    r.onload = () => {
-        _b2bProofFile = { name: f.name, mime: f.type || 'application/octet-stream',
-                          dataUri: String(r.result || ''), bytes: f.size };
-        _b2bPaintProofFile();
-    };
-    r.onerror = () => { _b2bProofFile = null; alert("Couldn't read that file."); };
-    r.readAsDataURL(f);
-}
-
-async function b2bSaveProof(btn) {
-    if (!_b2bProofOwner) return;
-    const text = document.getElementById('b2bPfBody')?.value.trim() || '';
-    if (!text && !_b2bProofFile) {
-        return _b2bSay('Paste the email or attach a file — one or the other.', true);
-    }
-    const payload = {
-        action: 'add_proof',
-        kind: _b2bProofKindPick,
-        label: document.getElementById('b2bPfLabel')?.value.trim(),
-        from_addr: document.getElementById('b2bPfFrom')?.value.trim(),
-        sent_on: document.getElementById('b2bPfDate')?.value || undefined,
-        body_text: text || undefined,
-        file: _b2bProofFile?.dataUri,
-    };
-    payload[_b2bProofOwner.kind === 'preval' ? 'preval_id' : 'deal_id'] = _b2bProofOwner.id;
-    try {
-        await _b2bBusy(btn, 'Attaching…', () => _b2bSend(payload));
-        const owner = _b2bProofOwner;
-        closeAllModals();
-        await _b2bLoadProofs(owner.id);
-        await b2bRefresh();
-        // Straight back to whatever it was attached to, so the panel shows it.
-        if (owner.kind === 'preval') b2bOpenPreval(owner.id);
-        else { const d = _b2bDealById(owner.id); if (d) b2bOpenDeal(_b2bClickKind(d), d.id); }
-    } catch (e) {
-        alert(`Couldn't attach that: ${e.message}`);
-    }
+    _b2bAttachMailFile(f, _b2bProofOwner.id, _b2bProofOwner.kind, 'file', B2B_PROOF_POP);
 }
 
 async function b2bRemoveProof(id) {
@@ -20038,7 +20158,12 @@ async function b2bWaiveApproval() {
 
 // The one gate, shared by every path that accepts. Returns true when it is safe
 // to go ahead; otherwise it has already told the user what is missing.
-function _b2bApprovalGate(owner) {
+// Blocked on missing evidence, and the popup is the answer rather than the
+// message (Nick, 2026-09-09). This used to alert "open the deal and drag their
+// email onto it", which told somebody standing in the accept dialog to dismiss
+// it, go and find a drop zone, and start again. The drop zone comes to them
+// instead: attach the email, and Mark Accepted goes through on the next click.
+function _b2bApprovalGate(owner, ownerId, ownerKind) {
     // Fail OPEN when we could not read the evidence. The server enforces this
     // too, and it is the authority; this copy exists to explain the rule before
     // somebody hits it, not to be the thing that stops them. Blocking on a
@@ -20046,6 +20171,12 @@ function _b2bApprovalGate(owner) {
     // acceptance in the company.
     if (!_b2bProofsOk) return true;
     if (_b2bApprovalOnRecord(owner)) return true;
+    const id = ownerId || owner?.id;
+    if (id) {
+        b2bOpenAcceptProof(id, ownerKind || (owner && owner.eval_no !== undefined ? 'preval' : 'deal'));
+        return false;
+    }
+    // No deal to attach it to -- nothing to open, so say it instead.
     alert("The client's approval isn't on record yet.\n\n"
         + "Open the deal and drag their email onto it — straight out of Outlook. That is what "
         + 'answers them later if they say they never agreed to the price.\n\n'
@@ -23591,7 +23722,7 @@ async function b2bOpenDraft(id, to, copied) {
 }
 
 async function b2bAcceptQuote(id, btn) {
-    if (!_b2bApprovalGate(_b2bDealById(id) || _b2bModalDeal)) return;
+    if (!_b2bApprovalGate(_b2bDealById(id) || _b2bModalDeal, id, 'deal')) return;
     // The same readiness gate as submitting, because the server runs the same
     // one here -- checking only the reasons would let a line with two of five
     // serials get all the way to a 400 from the accept call.

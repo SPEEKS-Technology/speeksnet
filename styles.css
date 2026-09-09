@@ -13279,6 +13279,16 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
 }
 .b2b-proof-drop.over .b2b-proof-dropico svg { stroke: var(--sage-deep); }
+/* The accept popup's zone. Taller and centred because it is the only thing on
+   that screen and the whole point of the popup is that it is an obvious target
+   -- on the deal panel the zone sits under a list and has to stay compact. */
+.b2b-proof-drop.lg {
+    flex-direction: column; text-align: center; gap: 8px;
+    padding: 26px 18px; border-width: 2px;
+}
+.b2b-proof-drop.lg .b2b-proof-dropico svg { width: 30px; height: 30px; }
+.b2b-proof-drop.lg .b2b-proof-droptxt { margin-right: 0; align-items: center; }
+.b2b-proof-drop.lg .b2b-proof-droptxt b { font-size: 14px; }
 .b2b-proof-droptxt { display: flex; flex-direction: column; gap: 2px; margin-right: auto; }
 .b2b-proof-droptxt b { font-size: 12.5px; font-weight: 750; color: #1a1c1e; }
 .b2b-proof-droptxt span { font-size: 11px; font-weight: 650; color: var(--b2b-muted); }
