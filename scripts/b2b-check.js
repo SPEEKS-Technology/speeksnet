@@ -1060,6 +1060,88 @@ t('3.8.3 the deal lands in the action queue, opening the listing screen', functi
     });
 });
 
+// --- v3.8.4: the Outlook drag actually works --------------------------------
+// Dragging from the Outlook message list gave "you're dragging from the wrong
+// spot" when the user was doing it right. Outlook hands the message over as a
+// VIRTUAL file (FileGroupDescriptorW + FileContents), so the bytes are never on
+// disk: dataTransfer.files is empty and getAsFile() returns null. Chromium
+// exposes it through webkitGetAsEntry(), which the first version never called.
+
+// Fakes of the three shapes a real drop arrives in.
+function _dtDirect(name) {
+    var f = new File(['x'], name, { type: '' });
+    return { files: [f], items: [{ kind: 'file', getAsFile: function () { return f; } }] };
+}
+function _dtVirtual(name) {
+    var f = new File(['From: a@b.c\r\nSubject: Re Quote\r\n'], name, { type: '' });
+    return {
+        files: [],
+        items: [{
+            kind: 'file',
+            getAsFile: function () { return null; },          // as Outlook behaves
+            webkitGetAsEntry: function () {
+                return { isFile: true, file: function (ok) { ok(f); } };
+            },
+        }],
+    };
+}
+function _dtNothing() { return { files: [], items: [{ kind: 'string' }] }; }
+
+// These three return PROMISES — the runner awaits them. Written synchronously
+// at first, which reported three failures that were not real: the whole check
+// file runs in one script block, so a .then() microtask has not run by the time
+// the next line executes.
+t('3.8.4 a virtual Outlook file is picked up', function () {
+    // The regression: files[] empty and getAsFile() null must still find it.
+    return _b2bDropFilePromise(_dtVirtual('Re Quote.msg')).then(function (got) {
+        if (!got.file) return 'the virtual file was not read';
+        if (!got.virtual) return 'not flagged as the virtual path';
+        return got.file.name === 'Re Quote.msg' || 'wrong file: ' + got.file.name;
+    });
+});
+t('3.8.4 an ordinary dragged file still works', function () {
+    return _b2bDropFilePromise(_dtDirect('saved.eml')).then(function (got) {
+        if (!got.file) return 'a real file drop broke';
+        return got.virtual === false || 'a real file was flagged virtual';
+    });
+});
+t('3.8.4 a drop with no file at all resolves to nothing', function () {
+    return _b2bDropFilePromise(_dtNothing()).then(function (got) {
+        return got.file === null || 'expected no file';
+    });
+});
+t('3.8.4 items are read synchronously, before any await', function () {
+    // A DataTransfer is neutered once the handler yields, so reading items after
+    // an await returns an empty list and looks exactly like an empty drop.
+    var src = b2bProofDrop.toString();
+    var collect = src.indexOf('_b2bDropFilePromise');
+    var firstAwait = src.indexOf('await');
+    if (collect === -1) return 'not using the collector';
+    return collect < firstAwait || 'the DataTransfer is read after an await';
+});
+t('3.8.4 a virtual file named off an odd subject is still accepted', function () {
+    // Outlook names the file after the SUBJECT, so the extension is at the mercy
+    // of whatever the client typed.
+    var odd = new File(['x'], 'Re: pricing v2.1', { type: '' });
+    if (_b2bIsMailFile(odd)) return 'fixture is wrong — that name should not pass on its own';
+    var fixed = _b2bAsMailFile(odd, true);
+    if (!_b2bIsMailFile(fixed)) return 'still refused after the virtual fixup: ' + fixed.name;
+    return _b2bMailMime(fixed) === 'application/vnd.ms-outlook' || 'wrong mime: ' + _b2bMailMime(fixed);
+});
+t('3.8.4 the fixup does NOT rescue a non-mail file dragged from Explorer', function () {
+    // virtual=false must be left alone, or dropping a PNG would be renamed into
+    // an email.
+    var png = new File(['x'], 'shot.png', { type: 'image/png' });
+    return _b2bAsMailFile(png, false) === png || 'a real file was rewritten';
+});
+t('3.8.4 the error no longer blames the user for dragging correctly', function () {
+    var src = b2bProofDrop.toString();
+    if (src.indexOf('not from a preview pane') > -1) return 'still says they dragged from the wrong spot';
+    // And it distinguishes "no file offered" from "offered but withheld".
+    return src.indexOf('would not hand over the file') > -1
+        || 'no message for a mail app that offers a file it will not release';
+});
+
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();

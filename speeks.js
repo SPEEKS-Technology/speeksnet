@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.3';
+const APP_VERSION = '3.8.4';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -19610,13 +19610,87 @@ function _b2bIsMailFile(file) {
     return m === B2B_MSG_MIME || m === 'message/rfc822';
 }
 
+// OUTLOOK DOES NOT PUT A FILE IN dataTransfer.files, AND THAT IS THE WHOLE BUG.
+//
+// Dragging a message out of the Outlook message list hands it over as a VIRTUAL
+// file: Windows offers it as the FileGroupDescriptorW + FileContents clipboard
+// pair, and the bytes are never written to disk. So `dataTransfer.files` is
+// empty, `item.getAsFile()` returns null, and the first version of this handler
+// concluded nothing had been dropped -- then told the user they had dragged from
+// the wrong place, which they had not. Dragging from the message list is exactly
+// right; the code was reading the wrong side of the DataTransfer.
+//
+// Chromium exposes virtual files through DataTransferItem.webkitGetAsEntry(),
+// added for precisely this case. So: try the real file list, then getAsFile,
+// then the entry. One of the three has it.
+//
+// EVERYTHING IS COLLECTED SYNCHRONOUSLY. A DataTransfer is neutered the moment
+// this handler yields, so `items` cannot be touched after an await -- reading it
+// later returns an empty list and looks identical to an empty drop.
+// Resolves to { file, virtual }. `virtual` marks the Outlook path, which is
+// treated more leniently on naming below.
+function _b2bDropFilePromise(dt) {
+    const direct = dt?.files?.[0];
+    if (direct) return Promise.resolve({ file: direct, virtual: false });
+    const items = dt?.items ? Array.from(dt.items) : [];
+    for (const item of items) {
+        if (item.kind !== 'file') continue;
+        let f = null;
+        try { f = item.getAsFile?.() || null; } catch (_) { f = null; }
+        if (f) return Promise.resolve({ file: f, virtual: false });
+        let entry = null;
+        try { entry = item.webkitGetAsEntry?.() || null; } catch (_) { entry = null; }
+        if (entry && entry.isFile) {
+            return new Promise((res) => {
+                try {
+                    entry.file(
+                        (file) => res({ file, virtual: true }),
+                        () => res({ file: null, virtual: true }),
+                    );
+                } catch (_) { res({ file: null, virtual: true }); }
+            });
+        }
+    }
+    return Promise.resolve({ file: null, virtual: false });
+}
+
+// Outlook names its virtual file after the SUBJECT, so the extension is at the
+// mercy of whatever the client wrote in it -- a subject ending in a version
+// number or an ellipsis can arrive without a usable ".msg" on the end. Anything
+// that came down the virtual path came out of a mail client (a file dragged from
+// Explorer lands in dataTransfer.files instead), so give it the extension it
+// should have had rather than refusing a message for how it was titled.
+function _b2bAsMailFile(file, virtual) {
+    if (!virtual || _b2bIsMailFile(file)) return file;
+    const base = String(file.name || 'message').replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'message';
+    try {
+        return new File([file], `${base}.msg`, { type: B2B_MSG_MIME, lastModified: file.lastModified });
+    } catch (_) {
+        return file;   // very old browser: fall through to the normal check
+    }
+}
+
 async function b2bProofDrop(ev, ownerId, ownerKind) {
     ev.preventDefault();
     b2bProofDragOut(ev, ownerId);
-    const file = ev.dataTransfer?.files?.[0];
+    // Synchronous, before anything can yield.
+    const pending = _b2bDropFilePromise(ev.dataTransfer);
+    const sawFileItem = !!(ev.dataTransfer?.files?.length)
+        || Array.from(ev.dataTransfer?.items || []).some(i => i.kind === 'file');
+
+    const got = await pending;
+    const file = got.file ? _b2bAsMailFile(got.file, got.virtual) : null;
     if (!file) {
-        return alert('Nothing arrived with that drop.\n\nDrag the message itself out of your '
-            + 'mail app — from the message list, not from a preview pane.');
+        // Distinguish "your mail app would not hand the bytes over" from "you
+        // dropped something that isn't a file at all". New Outlook and Outlook
+        // on the web behave like a web page and offer no file of any kind, so
+        // the honest answer there is to save the message out first.
+        return alert(sawFileItem
+            ? 'Your mail app offered the message but would not hand over the file.\n\n'
+              + 'This happens with the new Outlook and with Outlook in a browser tab. Drag the '
+              + 'message to your desktop first, then drop that file here — or use Choose a file.'
+            : 'That drop did not contain a message.\n\n'
+              + 'Drag the email itself out of your mail app, or use Choose a file.');
     }
     if (!_b2bIsMailFile(file)) {
         return alert(`"${file.name}" isn't an email.\n\nDrop the client's message itself — a .msg `
