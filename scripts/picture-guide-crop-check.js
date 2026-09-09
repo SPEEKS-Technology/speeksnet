@@ -302,5 +302,23 @@ eq('the tool targets the same square', new RegExp('var GUIDE = ' + GUIDE + ';').
 eq('and fills the pad with the photo backdrop, not white',
     /function backdrop\(/.test(tool) && /fillStyle = backdrop\(/.test(tool), true);
 
+// ...and sampled from INSIDE the picture, which is the half that actually
+// matters. Sampling the edge ring looks right and is the bug it caused: the
+// red-celled shots carry a warm bleed from the printed red line reaching about
+// 25px in, so the edge is not the backdrop. iphones-02 got a pad at R-B +22
+// against its own interior of +11 - a flat pink band 14px wide all round the
+// photograph, which is precisely the "weird red border" the pad exists to
+// avoid. Of the 24 photos, the three that came out of red cells were three of
+// the four the repair had to touch; that is not a coincidence worth losing.
+eq('sampled from inside the picture, not off its edge',
+    /var SAFE_IN = \d+, SAFE_BAND = \d+;/.test(tool)
+    && /var from = Math\.min\(inset \+ SAFE_IN, half\);/.test(tool), true);
+eq('and over a band of rings, so one unlucky row cannot decide it',
+    /for \(var k = from; k < Math\.min\(from \+ SAFE_BAND, half\); k\+\+\)/.test(tool), true);
+// Deep enough to clear the bleed that caused this. 25px was where iphones-02
+// stopped changing, so a SAFE_IN under about 12 would be back inside it.
+eq('deep enough to clear the bleed',
+    +(tool.match(/var SAFE_IN = (\d+)/) || [0, 0])[1] >= 12, true);
+
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);

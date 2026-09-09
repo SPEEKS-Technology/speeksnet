@@ -33,8 +33,11 @@ Android, and trimming either one down to a shared shape would cut about 14px off
 sides. Every one of the ten Android photos has its subject within 12px of the top or
 bottom edge, and five of the fourteen iPhone photos have theirs touching the left or
 right &mdash; the phone body, the charging port, the notch. So the short side is filled
-out instead, with the photo's own backdrop colour sampled from its edge, which is why
-the padding does not read as a border. A photo larger than the canvas in some direction
+out instead, with the photo's own backdrop colour, which is why the padding does not
+read as a border. That colour is sampled from a band <em>well inside</em> the picture,
+never from its edge: the red-celled shots carry a warm bleed from the printed red line
+that reaches about 25px in, and sampling at the edge turns that bleed into a flat pink
+band around the whole photograph. A photo larger than the canvas in some direction
 is centre-cropped down to it, but only by the few pixels the export happened to be
 over.</p>
 <p class="sub">Edit <code>NAMES</code> below for a new batch. The canvas is
@@ -166,17 +169,36 @@ async function load(name){
   return img;
 }
 
-// The colour to pad with: the median of the ring just inside the border, which
-// is the photo's own backdrop. A flat #fff pad would be plainly visible - these
-// backdrops measure around 190-218 grey, and one of them (a dark-mode
-// screenshot) is 29. Sampled per photo, the pad reads as more backdrop.
+// The colour to pad with: the photo's own backdrop. A flat #fff pad would be
+// plainly visible - these backdrops measure around 190-218 grey, and one of them
+// (a dark-mode screenshot) is 29. Sampled per photo, the pad reads as more
+// backdrop rather than as a border.
 //
-// Median, not mean, for the same reason detectInset uses it: the subject and its
-// shadow poke into that ring, and a mean would drag the colour toward them.
+// Sampled from a BAND WELL INSIDE the edge, not from the edge itself, and this
+// is the whole point of the function. Sampling the ring at "inset" looks obviously
+// right and is wrong: the red-celled photos on the printed sheet carry a soft
+// warm bleed from that red line which reaches ~25px into the picture, decaying
+// as it goes, and detectInset does not trim it because it is a gradient rather
+// than a drawn line. Sampling there gave iphones-02 a pad at R-B +22 against
+// its own interior of +11 - a flat pink band 14px wide around the photograph,
+// which is exactly the "weird red border" it was supposed to avoid. Read from
+// SAFE_IN inwards and the pad matches what the eye reads as the backdrop.
+//
+// Median over the whole band, not a mean, for the reason detectInset uses one:
+// the subject and its shadow poke in, and a mean would drag the colour toward
+// them. Several rings rather than one so a single unlucky row cannot decide it.
+var SAFE_IN = 18, SAFE_BAND = 10;
+
 function backdrop(img, inset){
   var p = pixels(img, img.naturalWidth, img.naturalHeight);
-  var ring = ringCols(p, inset);
-  var m = median(ring);
+  var half = (Math.min(p.w, p.h) >> 1) - 1;
+  var from = Math.min(inset + SAFE_IN, half);
+  var cols = [];
+  for (var k = from; k < Math.min(from + SAFE_BAND, half); k++){
+    cols = cols.concat(ringCols(p, k));
+  }
+  if (!cols.length) cols = ringCols(p, Math.min(inset, half));
+  var m = median(cols);
   return "rgb(" + m[0] + "," + m[1] + "," + m[2] + ")";
 }
 
