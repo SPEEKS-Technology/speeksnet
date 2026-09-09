@@ -122,5 +122,26 @@ console.log('\nnothing goes through unescaped');
     is('...and the ampersand with it', /&amp;/.test(out), true);
 }
 
+console.log('\nthe zoomed name reads against the backdrop, not the board');
+{
+    // The backdrop is 82% opaque, so the board's own captions show faintly
+    // through it. White text laid over faint white text was the complaint, and
+    // under a near-full-height photo the caption landed exactly there. A figure
+    // takes its figcaption at either end, so the fix is the order in the markup.
+    const zoom = src.slice(src.indexOf('function pgZoom('));
+    const body = zoom.slice(0, zoom.indexOf('document.body.appendChild'));
+    is('the name is written before the picture',
+        body.indexOf('<figcaption>') < body.indexOf('<img src='), true);
+
+    // .pg-zoom centres its figure with flex and cannot scroll, so a figure
+    // taller than the viewport is clipped at BOTH ends - and the top end is now
+    // the name. The photograph has to give way on a short window instead.
+    const zcss = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+    const rule = zcss.slice(zcss.indexOf('.pg-zoom img {'),
+        zcss.indexOf('}', zcss.indexOf('.pg-zoom img {')));
+    is('and the photograph yields to it on a short window',
+        /max-height:\s*min\(\s*78vh\s*,\s*calc\(100vh - 116px\)\s*\)/.test(rule), true);
+}
+
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);

@@ -21679,8 +21679,25 @@ select.dd-native {
     display: flex; align-items: center; justify-content: center; padding: 28px; cursor: zoom-out;
 }
 .pg-zoom figure { margin: 0; max-width: min(900px, 92vw); text-align: center; }
-.pg-zoom img { max-width: 100%; max-height: 78vh; border-radius: 10px; display: block; margin: 0 auto; }
-.pg-zoom figcaption { margin: 12px 0 0; color: #fff; font-size: 13.5px; font-weight: 650; }
+/* 78vh on a tall window, as before. The second term is what protects the
+   caption now that it sits on top: .pg-zoom centres its figure with flex and
+   cannot scroll, so anything taller than the viewport is clipped at BOTH ends
+   and the top end is now the name rather than a spare strip of photograph.
+   116px covers the 28px padding at each end plus a caption that wraps to two
+   lines and its 12px gap. */
+.pg-zoom img {
+    max-width: 100%; max-height: min(78vh, calc(100vh - 116px));
+    border-radius: 10px; display: block; margin: 0 auto;
+}
+/* Sits above the photo now — see pgZoom for why. The shadow is not decoration:
+   the backdrop is only 82% opaque, so the board's own captions read faintly
+   through it, and white text laid over faint white text is the thing that was
+   actually hard to see. The shadow separates it from whatever is behind
+   without darkening the backdrop further and dimming the photograph with it. */
+.pg-zoom figcaption {
+    margin: 0 0 12px; color: #fff; font-size: 14.5px; font-weight: 750;
+    text-shadow: 0 1px 4px rgba(8, 11, 16, .85), 0 0 12px rgba(8, 11, 16, .6);
+}
 
 /* ---- the editor's dialogs ------------------------------------------------- */
 /* Replaces window.prompt/confirm inside this tool. See _pgAsk() for why it is

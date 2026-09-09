@@ -8153,9 +8153,16 @@ function pgZoom(shotId) {
     const el = document.createElement('div');
     el.className = 'pg-zoom';
     el.onclick = () => el.remove();
-    el.innerHTML = `<figure><img src="${_pgEsc(s.img)}" alt="${_pgEsc(s.label)}">
+    // Caption FIRST. A figure takes its figcaption at either end, and under a
+    // near-full-height photo the bottom is the worst of the two: the name lands
+    // low against the dimmed board still showing through the backdrop, so it
+    // competes with whichever row's shot names happen to be behind it. Above the
+    // photo it is the first thing read, and it is read against the backdrop
+    // rather than into the tail of the board.
+    el.innerHTML = `<figure>
         <figcaption>${_pgEsc(s.label)}${_pgSaysMore(s.label, s.note)
-            ? ` &middot; ${_pgEsc(s.note)}` : ''}</figcaption></figure>`;
+            ? ` &middot; ${_pgEsc(s.note)}` : ''}</figcaption>
+        <img src="${_pgEsc(s.img)}" alt="${_pgEsc(s.label)}"></figure>`;
     document.body.appendChild(el);
 }
 
