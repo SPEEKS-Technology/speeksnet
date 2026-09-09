@@ -675,8 +675,10 @@ Deno.serve(async (req: Request) => {
   // --- eBay fees (and eBay-billed labels) -----------------------------------
   // A FEE is attributed by its ORDER, not by its own transaction date, so a
   // refund settled weeks later credits its fee back to the day the item SOLD.
-  // Fee rows whose order is not in this month's map belong to another month and
-  // are counted, not guessed at.
+  // A CHARGE whose order is not in this month's map belongs to another month,
+  // was already counted there, and is reported rather than guessed at. A CREDIT
+  // in the same position is RESCUED onto the day it posted — it was in no month
+  // at all — see the fee attribution block for the full reasoning.
   //
   // ⚠️ A LABEL IS THE EXCEPTION AND BOOKS BY ITS OWN DATE. It is billed weeks
   // after the sale, so requiring an order match dropped every one of them into
@@ -693,6 +695,13 @@ Deno.serve(async (req: Request) => {
     // Voided / refunded eBay labels. Non-zero here means postage came back.
     label_credits: 0, label_credit_count: 0,
     rows: 0, matched: 0, unmatched: 0,
+    // A fee credit whose order sold in an earlier month, re-booked onto the day
+    // the credit itself posted rather than discarded. The fee attribution block
+    // below says why a CREDIT is rescued and a CHARGE is not.
+    refund_credits_rebooked: 0, refund_credits_rebooked_amount: 0,
+    // `unmatched` split by direction, because the two mean opposite things: a
+    // stranded credit understates Net Profit, a stranded charge OVERSTATES it.
+    unmatched_sale_fees: 0, unmatched_refund_credits: 0,
     // Labels booked by their own post date, so an order this window cannot see is
     // not a failure the way it is for a fee. `label_outside_window` is postage
     // that belongs to a day outside the range — the tie between two months.
@@ -726,6 +735,18 @@ Deno.serve(async (req: Request) => {
       new Date(`${to}T00:00:00.000Z`).getTime(), today.getTime()));
     upper.setUTCDate(upper.getUTCDate() + 1);
     const filter = `transactionDate:[${from}T00:00:00.000Z..${upper.toISOString().slice(0, 23)}Z]`;
+
+    // The day last month stopped accepting charges. A fee credit dated AFTER it
+    // was never in that month's figures and can be rescued onto a day in this
+    // window; one dated on or before it already is, and rescuing it would count
+    // it twice. Same calendar the shipping rule uses, one month back.
+    const prevMonthClose = (() => {
+      const y = Number(from.slice(0, 4));
+      const m = Number(from.slice(5, 7));
+      const py = m === 1 ? y - 1 : y;
+      const pm = m === 1 ? 12 : m - 1;
+      return monthCloseDay(`${py}-${String(pm).padStart(2, "0")}`);
+    })();
 
     // ⚠️ OFFSET PAGING OVER A LIVE SET. The window deliberately runs to TODAY,
     // so eBay is still writing into the range while we page through it. Offset
@@ -921,9 +942,58 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
+      // ── WHICH DAY A FEE BELONGS TO, and the one case where it is not the sale
+      // A fee is the cost of a sale, so it books to the day the item SOLD, and
+      // a refund settled weeks later credits its fee back to that original sale
+      // date. That is the whole point of the ebayOrderDay join and it stays.
+      //
+      // ⚠️ BUT A CREDIT ON AN ORDER THIS WINDOW CANNOT SEE USED TO BE THROWN
+      // AWAY, which silently leaves the fee too HIGH. Caught by Ethan tying
+      // LEE's Sep 1-6 against eBay's own transaction report, 2026-09-09: eBay
+      // credited $94.32 of fees back, we booked $41.27, and the missing $53.05
+      // was five refunds and a claim against orders sold in August or earlier.
+      // Same guard that was eating the return labels — and it fails in the SAFE
+      // direction, a fee left too high making Net Profit too LOW, so no guard in
+      // this file was ever going to notice. Company-wide: $766.13 of credits
+      // dropped in six days, against $228.05 of postage dropped the other way.
+      //
+      // ⚠️ THE ASYMMETRY IS DELIBERATE: A CHARGE IS DROPPED, A CREDIT IS KEPT.
+      // An unmatched SALE fee belongs to a sale in an earlier month and was
+      // already charged there, so booking it here would count it twice. An
+      // unmatched CREDIT was not in that month's figures — the return had not
+      // happened when the month closed — so it belongs to nobody unless this
+      // month takes it. That is exactly the rule shippingBookingDay() already
+      // applies to a label bought after the close.
+      //
+      // ⚠️ AND THE RESCUE IS GUARDED ON LAST MONTH'S CLOSE, or it would double
+      // count. That close run scanned up to its own close day, so a credit dated
+      // on or before it is already in the closed figures; only one dated AFTER
+      // it fell through both months. Measured on LEE: four of the five strays
+      // qualify ($48.19), and the Sep 1 one does not, because August's 7pm close
+      // on Sep 1 had already caught it.
       const hit = ebayOrderDay[oid];
-      if (!oid || !hit || !days[hit.day]) { ebay.unmatched++; continue; }
-      const d = hit.day;
+      let d = hit && days[hit.day] ? hit.day : "";
+      if (!d && type === "REFUND") {
+        const creditDay = x.transactionDate ? chicagoDay(String(x.transactionDate)) : "";
+        if (creditDay && days[creditDay] && creditDay > prevMonthClose) {
+          d = creditDay;
+          ebay.refund_credits_rebooked++;
+          ebay.refund_credits_rebooked_amount =
+            round2(ebay.refund_credits_rebooked_amount + fee);
+        }
+      }
+      if (!d) {
+        // Still nowhere to put it. Counted BY DIRECTION, because the two mean
+        // opposite things: a stranded credit only understates Net Profit, while
+        // a stranded CHARGE overstates it and is the one worth chasing.
+        ebay.unmatched++;
+        if (type === "REFUND") {
+          ebay.unmatched_refund_credits = round2(ebay.unmatched_refund_credits + fee);
+        } else {
+          ebay.unmatched_sale_fees = round2(ebay.unmatched_sale_fees + fee);
+        }
+        continue;
+      }
       ebay.matched++;
 
       if (type === "SALE" || type === "REFUND") {
@@ -981,8 +1051,25 @@ Deno.serve(async (req: Request) => {
 
     if (ebay.unmatched) {
       warnings.push(`${ebay.unmatched} eBay FEE row(s) had no matching order in `
-        + "this month — expected, they belong to sales outside the range. Labels are "
-        + "not in this count: they book by their own post date and need no match");
+        + "this month — they belong to sales outside the range. Labels are not in "
+        + "this count: they book by their own post date and need no match");
+    }
+    if (ebay.refund_credits_rebooked) {
+      warnings.push(`${ebay.refund_credits_rebooked} fee credit(s) worth `
+        + `$${ebay.refund_credits_rebooked_amount} were for orders sold before this `
+        + "window and are booked on the day the credit posted. These were dropped "
+        + "entirely before 2026-09-09, which is why the fee column ran high");
+    }
+    if (ebay.unmatched_refund_credits) {
+      warnings.push(`$${ebay.unmatched_refund_credits} of fee CREDITS arrived on or `
+        + "before last month's close, so they are already in that closed month. Not "
+        + "rescued here, deliberately, to avoid counting them twice");
+    }
+    if (ebay.unmatched_sale_fees) {
+      warnings.push(`$${ebay.unmatched_sale_fees} of eBay fee CHARGES belong to sales `
+        + "outside this window and are in no day. They should already sit in the month "
+        + "those sales closed in — this is the direction that OVERSTATES Net Profit, so "
+        + "a large figure here is worth chasing");
     }
     if (ebay.overlap_orders.length) {
       warnings.push(`${ebay.overlap_orders.length} order(s) carry BOTH a Shopify label and `
