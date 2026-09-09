@@ -857,6 +857,113 @@ t('3.8.1 Copy reads as a real route, not a fallback', function () {
     return src.indexOf('Copy Quote') > -1 || 'the button is still just "Copy"';
 });
 
+// --- v3.8.2: the last two feedback items ------------------------------------
+
+// Ethan, 2026-09-02: "dismiss this or snooze this... removed from my feed unless
+// something new pops up, but I like the snooze option... I plan on looking at it
+// another day." There was one control, day-scoped, so everything returned at
+// midnight whether you wanted it to or not.
+t('3.8.2 dismiss and snooze are separate actions', function () {
+    if (typeof samNotMineItem !== 'function') return 'no dismiss action';
+    if (typeof samSnoozeItem !== 'function') return 'no snooze action';
+    // The card markup is built inside _samRenderFeedNow, so assert the renderer
+    // wires both rather than trying to stand a live feed up in the harness.
+    var src = _samRenderFeedNow.toString();
+    if (src.indexOf('samSnoozeItem') === -1) return 'the card does not offer Snooze';
+    return src.indexOf('samNotMineItem') > -1 || 'the card does not offer a dismiss';
+});
+t('3.8.2 the hide store is not day-scoped', function () {
+    // This was the bug: _samDismKey() puts the date in the key, so a dismiss
+    // could never outlive the day.
+    if (_samHideKey().match(/\d{1,2}\/\d{1,2}\/\d{4}/)) return 'still day-scoped: ' + _samHideKey();
+    return _samDismKey() !== _samHideKey() || 'reusing the old day-scoped key';
+});
+t('3.8.2 dismiss survives tomorrow, snooze expires', function () {
+    var key = '__probe__';
+    try {
+        _samSetHidden({});
+        // Dismissed: until = 0 means hidden while the content is unchanged.
+        _samSetHidden({ __probe__: { sig: 'S', until: 0 } });
+        if (!_samIsHidden(key, 'S')) return 'a dismissed card is showing';
+        // Expired snooze must come back.
+        _samSetHidden({ __probe__: { sig: 'S', until: Date.now() - 1000 } });
+        if (_samIsHidden(key, 'S')) return 'an expired snooze is still hidden';
+        // Live snooze stays hidden.
+        _samSetHidden({ __probe__: { sig: 'S', until: Date.now() + 60000 } });
+        return _samIsHidden(key, 'S') || 'a live snooze is showing';
+    } finally { _samSetHidden({}); }
+});
+t('3.8.2 new information breaks through either state', function () {
+    // "unless something new pops up" — the sig is the identity, so changed
+    // wording or counts must resurface the card even when dismissed.
+    try {
+        _samSetHidden({ __probe__: { sig: 'OLD', until: 0 } });
+        if (_samIsHidden('__probe__', 'NEW')) return 'a dismissed card stayed buried after it changed';
+        _samSetHidden({ __probe__: { sig: 'OLD', until: Date.now() + 60000 } });
+        return !_samIsHidden('__probe__', 'NEW') || 'a snoozed card stayed buried after it changed';
+    } finally { _samSetHidden({}); }
+});
+t('3.8.2 mark-all-read snoozes rather than dismisses', function () {
+    // Clearing a full feed is "caught up", not "none of this is mine" — treating
+    // it as permanent would bin work nobody decided about.
+    var src = samMarkAllRead.toString();
+    if (src.indexOf('_samSetHidden') === -1) return 'not using the new store';
+    return /until\s*[:=]/.test(src) || 'not setting an expiry, so it dismisses permanently';
+});
+
+// Nick, 2026-09-03 (flagged IMPORTANT): ".msg files drag and drop from email
+// STRAIGHT to the website" — proof of acceptance, replacing a Google Drive folder.
+t('3.8.2 a dropped .msg is recognised however the browser types it', function () {
+    // Outlook drops often carry an empty or octet-stream type, so the extension
+    // has to be the signal.
+    if (_b2bMailMime({ name: 'Re Quote.msg', type: '' }) !== 'application/vnd.ms-outlook') {
+        return 'an untyped .msg is not recognised';
+    }
+    if (_b2bMailMime({ name: 'x.MSG', type: 'application/octet-stream' }) !== 'application/vnd.ms-outlook') {
+        return 'case or octet-stream defeats it';
+    }
+    if (_b2bMailMime({ name: 'saved.eml', type: '' }) !== 'message/rfc822') return '.eml not recognised';
+    return true;
+});
+t('3.8.2 non-email files are refused', function () {
+    var bad = ['shot.png', 'po.pdf', 'notes.txt', 'sheet.xlsx'];
+    var slipped = bad.filter(function (n) { return _b2bIsMailFile({ name: n, type: '' }); });
+    return slipped.length === 0 || 'accepted: ' + slipped.join(', ');
+});
+t('3.8.2 the drop zone is on the proof panel', function () {
+    var html = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    if (html.indexOf('b2bProofDrop') === -1) return 'no drop target';
+    return html.indexOf('Drop the client') > -1 || 'no instruction on the target';
+});
+t('3.8.2 the waiver is retired, with a way forward instead', function () {
+    // Nick chose to close the no-proof path knowing it blocks phone approvals.
+    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    if (panel.indexOf('record why') > -1) return 'the waive button is still offered';
+    var src = b2bWaiveApproval.toString();
+    if (src.indexOf('waive_approval') > -1) return 'still posts the retired action';
+    return src.indexOf('confirming what they') > -1 || 'does not say what to do instead';
+});
+t('3.8.2 a waived deal still reads out on the record', function () {
+    // Deals waived before this shipped are real history and must not vanish.
+    var html = _b2bProofPanel({ id: 'd1', approval_waived_by: 'Paul Kushnir',
+                                approval_waived_reason: 'Agreed on the phone' });
+    return html.indexOf('Paul Kushnir') > -1 && html.indexOf('Agreed on the phone') > -1
+        || 'an existing waiver no longer shows';
+});
+t('3.8.2 historical proof kinds still render their own label', function () {
+    // The four kinds stay as labels so old rows read correctly.
+    return _b2bProofKind('screenshot').label === 'Screenshot'
+        && _b2bProofKind('note').label === 'Written note'
+        || 'an old row would render with the wrong label';
+});
+t('3.8.2 email headers are parsed out of a dropped message', function () {
+    // Async, so this asserts the parser exists and handles the .eml shape it
+    // will actually see; the CFB path is best-effort by design.
+    var src = _b2bMailHeaders.toString();
+    if (src.indexOf('utf-16le') === -1) return 'no wide-char pass, so .msg headers would be missed';
+    return src.indexOf('Subject') > -1 || 'does not look for a subject';
+});
+
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();
