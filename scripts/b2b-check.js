@@ -1224,6 +1224,199 @@ t('3.8.5 no raw control byte is left in the source', function () {
         || 'a raw control byte is back in _b2bMailHeaders';
 });
 
+
+// --- v3.8.6: classic Outlook, and the accept flow --------------------------
+//
+// Nick, 2026-09-09: "The CEO uses the classic version of outlook. I need you to
+// make it work by dragging the message over."
+//
+// Chrome has supported this natively since 76 -- it streams FileContents out of
+// Outlook and writes a temp file -- so on classic Outlook the bytes ARE there.
+// The reason 3.8.5 could still come up empty was in our own retrieval: it
+// filtered on item.kind, and the virtual-file item does not reliably report
+// "file". These checks pin the retrieval being exhaustive rather than fussy.
+
+// A virtual item reporting kind "string", which is how this has been seen to
+// arrive -- and exactly what the old `if (kind !== 'file') continue` skipped.
+function _dtVirtualAsString(name) {
+    var f = new File(['From: a@b.c\r\nSubject: Re Quote\r\n'], name, { type: '' });
+    return {
+        files: [],
+        items: [{
+            kind: 'string',
+            getAsFile: function () { return null; },
+            webkitGetAsEntry: function () { return { isFile: true, file: function (ok) { ok(f); } }; },
+        }],
+    };
+}
+t('3.8.6 a virtual file is found even when the item says kind "string"', function () {
+    return _b2bDropFilePromise(_dtVirtualAsString('Re Quote.msg')).then(function (got) {
+        return (got.file && got.file.size > 0) || 'skipped the item because of its kind';
+    });
+});
+t('3.8.6 no kind filter is left in the retrieval', function () {
+    var src = _b2bDropFilePromise.toString();
+    return (src.indexOf("kind !== 'file'") === -1 && src.indexOf('kind != "file"') === -1)
+        || 'still filtering items on kind';
+});
+t('3.8.6 a dud first item does not hide a good second one', function () {
+    // 3.8.5 returned on the first item that offered anything, so an empty entry
+    // on items[0] ended the search before items[1] was ever asked.
+    var f = new File(['From: a@b.c\r\n'], 'msg.msg', { type: '' });
+    var dt = {
+        files: [],
+        items: [
+            { kind: 'file', getAsFile: function () { return null; },
+              webkitGetAsEntry: function () {
+                  return { isFile: true, file: function (ok, no) { no(new Error('nope')); } };
+              } },
+            { kind: 'file', getAsFile: function () { return null; },
+              webkitGetAsEntry: function () {
+                  return { isFile: true, file: function (ok) { ok(f); } };
+              } },
+        ],
+    };
+    return _b2bDropFilePromise(dt).then(function (got) {
+        return (got.file && got.file.name === 'msg.msg') || 'gave up after the first item';
+    });
+});
+t('3.8.6 getAsFileSystemHandle is tried as well', function () {
+    // The standard replacement for webkitGetAsEntry, wired to a different code
+    // path inside the browser, so it can succeed where the older one is empty.
+    var f = new File(['From: a@b.c\r\n'], 'h.msg', { type: '' });
+    var dt = {
+        files: [],
+        items: [{
+            kind: 'file',
+            getAsFile: function () { return null; },
+            getAsFileSystemHandle: function () {
+                return Promise.resolve({
+                    kind: 'file',
+                    getFile: function () { return Promise.resolve(f); },
+                });
+            },
+        }],
+    };
+    return _b2bDropFilePromise(dt).then(function (got) {
+        return (got.file && got.file.name === 'h.msg') || 'the handle route is not tried';
+    });
+});
+t('3.8.6 a message offered inside a folder is followed', function () {
+    var f = new File(['From: a@b.c\r\n'], 'in-folder.msg', { type: '' });
+    var dt = {
+        files: [],
+        items: [{
+            kind: 'file',
+            getAsFile: function () { return null; },
+            webkitGetAsEntry: function () {
+                return {
+                    isDirectory: true,
+                    createReader: function () {
+                        return { readEntries: function (ok) {
+                            ok([{ isFile: true, file: function (cb) { cb(f); } }]);
+                        } };
+                    },
+                };
+            },
+        }],
+    };
+    return _b2bDropFilePromise(dt).then(function (got) {
+        return (got.file && got.file.name === 'in-folder.msg') || 'a directory entry is ignored';
+    });
+});
+t('3.8.6 the winning route is reported', function () {
+    return _b2bDropFilePromise(_dtDirect('a.eml')).then(function (got) {
+        return !!got.route || 'no route recorded, so a field failure says nothing useful';
+    });
+});
+
+// The text fallback, guarded hard: a fabricated record is worse than no record.
+// Outlook will happily put nothing but the subject line on a drag, and
+// "Re: your quote" is not evidence that anybody accepted anything.
+t('3.8.6 a thin drag is NOT turned into a proof', function () {
+    return _b2bDragTextIsMessage({ plain: 'Re: your quote', html: '' }) === false
+        || 'a subject line alone would be filed as the acceptance';
+});
+t('3.8.6 a drag carrying real headers is accepted', function () {
+    var txt = {
+        plain: 'From: dana@acme.com\r\nSent: 1 Sep 2026\r\nSubject: Re: quote\r\n\r\nYes, agreed.',
+        html: '',
+    };
+    return _b2bDragTextIsMessage(txt) === true || 'a headered message was refused';
+});
+t('3.8.6 the rebuilt file is a real .eml and says so', function () {
+    var txt = {
+        plain: 'From: dana@acme.com\r\nSubject: Re: quote\r\n\r\nYes, agreed to the numbers.',
+        html: '',
+    };
+    var f = _b2bEmlFromDragText(txt);
+    if (!/\.eml$/i.test(f.name)) return 'not named as an email: ' + f.name;
+    if (f.type !== 'message/rfc822') return 'wrong type: ' + f.type;
+    return f.text().then(function (s) {
+        if (s.indexOf('From: dana@acme.com') === -1) return 'the sender was lost';
+        return s.indexOf('X-Speeks-Proof-Source') > -1
+            || 'nothing marks the file as reconstructed rather than the original';
+    });
+});
+t('3.8.6 a proof built from text is labelled as text only', function () {
+    var src = _b2bAttachMailFile.toString();
+    return src.indexOf('message text only') > -1
+        || 'a rebuilt proof would read on the record as if it were the original message';
+});
+
+// Firefox has never supported the format Outlook offers, so "try again" is the
+// wrong advice there and wastes somebody an afternoon.
+t('3.8.6 the advice names Firefox as a dead end', function () {
+    var src = _b2bDropAdvice.toString();
+    return src.indexOf('Firefox') > -1 || 'no browser-specific advice';
+});
+
+// Nick, 2026-09-09: "The mark accepted quick button should pull up an attach
+// file popup if there is still an acceptance email needed. Also please remove
+// the ability to click choose file on the quote itself... That whole modal just
+// doesnt need to be there anymore"
+t('3.8.6 Mark Accepted with no proof opens the attach popup', function () {
+    var src = _b2bApprovalGate.toString();
+    if (src.indexOf('b2bOpenAcceptProof') === -1) return 'still only alerts, so it is a dead end';
+    return src.indexOf('return false') > -1 || 'does not stop the acceptance';
+});
+t('3.8.6 both accept buttons hand the deal id to the gate', function () {
+    // Without an id the popup has nothing to attach to and falls back to the
+    // old alert, which is the behaviour being replaced.
+    // Matched as a plain substring, not a regex: the deal-screen call passes
+    // `_b2bDealById(id) || _b2bModalDeal` as the first argument, so a `[^)]*`
+    // pattern for the arguments stops dead at that inner paren. It reported a
+    // failure that was not real.
+    var quick = b2bQuickAccept.toString();
+    var full  = b2bAcceptQuote.toString();
+    if (quick.indexOf(", id, 'deal')") === -1) return 'the quick button passes no id';
+    return full.indexOf(", id, 'deal')") > -1 || 'the deal screen passes no id';
+});
+t('3.8.6 the quote screen no longer offers Choose a file', function () {
+    var html = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    if (html.indexOf('b2bOpenProofAdd') > -1) return 'the old opener is still wired up';
+    return html.indexOf('Choose a file') === -1 || 'the button is still on the panel';
+});
+t('3.8.6 the legacy proof dialog is gone', function () {
+    // The kind picker, the From / Dated / Label inputs and the paste-the-body
+    // textarea were all asking for what a dropped message already carries.
+    if (typeof b2bPickProofKind !== 'undefined') return 'the kind picker still exists';
+    if (typeof b2bSaveProof !== 'undefined') return 'the old save path still exists';
+    _b2bProofOwner = { id: 'd1', kind: 'deal' };
+    var src = _b2bPaintProofModal.toString();
+    if (src.indexOf('b2bPfBody') > -1) return 'still offers a paste-the-body textarea';
+    if (src.indexOf('b2bPfLabel') > -1 || src.indexOf('b2bPfFrom') > -1) return 'still asks label/from';
+    return src.indexOf('b2bProofDrop') > -1 || 'the popup has no drop zone';
+});
+t('3.8.6 the popup and the panel do not share an element id', function () {
+    // Two drop zones can be on screen at once; duplicate ids put the hover
+    // state and the busy spinner on whichever the browser found first.
+    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    var pop = _b2bPaintProofModal.toString();
+    if (panel.indexOf('b2bProofDrop-d1') === -1) return 'the panel zone is not keyed on the deal';
+    return pop.indexOf('b2bProofDrop-') > -1 && pop.indexOf('B2B_PROOF_POP') > -1
+        || 'the popup zone is not keyed separately from the panel';
+});
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();

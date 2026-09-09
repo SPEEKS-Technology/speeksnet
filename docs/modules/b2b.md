@@ -294,10 +294,58 @@ who edited an item's `value`/`offer`.
   `OPEN_STAGES`), `mark_paid` (corp only, accepted deals only, `paid_at: null`
   clears), `start_pricing` (idempotent; stamps `pricing_started_at` the first
   time the sheet is opened).
-- **Approval evidence** `speeks.js:18675`, attaching `:18785`, schema
-  `0050_b2b_approval_proofs.sql` — private bucket, path on the row (never a signed
-  URL), bytes streamed back through the edge function, removal is a tombstone not
-  a delete. `kind in ('email','screenshot','document','note')`.
+- **Approval evidence** panel `_b2bProofPanel`, attaching `_b2bAttachMailFile`,
+  schema `0050_b2b_approval_proofs.sql` — private bucket, path on the row (never
+  a signed URL), bytes streamed back through the edge function, removal is a
+  tombstone not a delete. The `kind` CHECK still allows
+  `('email','screenshot','document','note')` because historical rows use them,
+  but **only `email` is written now** and the server's `PROOF_KINDS` is
+  `["email"]`.
+
+  **Dragging a message out of Outlook is the whole feature, and it is where the
+  bodies are buried.** Read `_b2bDropFilePromise`'s banner before touching any
+  of it — three releases went into it and each fixed a different wrong
+  assumption:
+
+  - Outlook offers a message as a **virtual file** (`FileGroupDescriptorW` +
+    `FileContents`); the bytes live in the PST/OST or on Exchange, never on
+    disk. `dataTransfer.files` is empty and `getAsFile()` returns null. Chrome
+    76+ and Edge handle it natively (it streams the contents and writes a temp
+    file); **Firefox never has**, and Outlook in a browser tab or the new
+    Outlook app cannot offer a file at all. `_b2bDropAdvice` tells these apart.
+  - **Do not filter on `item.kind`.** The virtual-file item does not reliably
+    report `"file"` — `"string"` has been seen — and a `kind !== 'file'` guard
+    skips the only item carrying the message. Every retrieval call returns null
+    harmlessly on a real string item, so there is nothing to gain by filtering.
+  - **Try every route on every item and do not stop at the first item** that
+    offers something: `files[0]`, `getAsFile`, `getAsFileSystemHandle`,
+    `webkitGetAsEntry` (following a directory entry one level). A dud entry on
+    `items[0]` used to hide a good one on `items[1]`.
+  - **Everything is started synchronously.** A `DataTransfer` is neutered the
+    moment the handler yields, so reading `items` after an `await` returns an
+    empty list and looks identical to an empty drop. Every route is kicked off
+    in the handler and the promises settled afterwards, each with a 20s timeout
+    because `entry.file()` can fire neither callback.
+  - Naming is **accept-by-exclusion** (`B2B_NOT_MAIL_RX`), because Windows hides
+    extensions and Outlook names the virtual file after the subject line.
+    `_b2bAsMailFile` renames a virtual file to `.msg`, gated on the extension
+    regex directly — gating it on `_b2bIsMailFile` left MSG bytes under an
+    `.eml` MIME, which Outlook then refuses to open.
+  - Last resort: `_b2bEmlFromDragText` builds a real `.eml` from the drag's
+    text when no route yields bytes, gated on the text carrying mail headers or
+    passing `B2B_DRAG_TEXT_MIN`. Labelled "(message text only)" on the record —
+    a fabricated proof is worse than none.
+  - `tools/outlook-drop-test.html` is a standalone probe (no app, no session, no
+    network) that runs the same routes and reports each one. It exists because a
+    real Outlook drag cannot be reproduced from a dev machine or headless
+    Chrome — there is no Outlook in either.
+- **Attaching when blocked** — `_b2bApprovalGate(owner, ownerId, ownerKind)`
+  opens `b2bOpenAcceptProof` instead of alerting, so Mark Accepted with no
+  evidence on file presents the drop zone rather than telling the user to go
+  and find one. The old multi-field dialog (kind picker, From/Dated/Label,
+  paste-the-body) was removed 2026-09-09; the popup is drop-zone plus the one
+  remaining file picker in the product. Two zones can be live at once, so the
+  zone id is separate from the deal id (`B2B_PROOF_POP`).
 - **Transfers between stores** `_b2bTransferKind` `:19714`, `b2bOpenTransfer`
   `:19728`, server `index.ts:1080-1093`.
 - **Labels** `b2bPrintLabels(dealId, itemId, count)` `:23029`; holding tag
