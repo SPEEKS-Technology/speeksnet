@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Picture Guide - strip baked borders</title>
+<!doctype html><html><head><meta charset="utf-8"><title>Picture Guide - strip borders, standardise sizes</title>
 <style>
 :root{--ink:#0f172a;--line:#e3e8ee;--em:#1f9d57;--em2:#178048;--bad:#c02626;--mut:#64748b}
 *{box-sizing:border-box}
@@ -18,17 +18,18 @@ canvas{display:block;border:1px solid var(--line);border-radius:4px;background:#
 .err{color:var(--bad);font-weight:750}
 code{background:#eef2f6;padding:1px 5px;border-radius:4px;font-size:11.5px}
 </style></head><body>
-<h1>Picture Guide &mdash; strip the baked-in borders</h1>
+<h1>Picture Guide &mdash; strip borders, standardise sizes</h1>
 <p class="sub">Photos taken out of the printed guide carry a border drawn into the image itself:
 a 3px line with a 1px antialias fringe outside it, and on the red ones a second fringe inside
 too, so black borders are 4px and red ones are 5px. The app draws its own frame and its own
 OPTIONAL flag, so that border lands as a second outline just inside the first. This finds the
 border on each photo, trims it off, and puts the trimmed photo back under the same filename
-&mdash; nothing in the database changes. Edit <code>NAMES</code> below for a new batch.</p>
+&mdash; nothing in the database changes. It then centre-crops every photo to one size, the largest the whole batch can share, so the board can set a single frame shape and have nothing left over. Set <code>.pg-frame</code>'s <code>aspect-ratio</code> to the size it prints. Edit <code>NAMES</code> below for a new batch.</p>
 <div class="bar">
   <button id="scan">1 &nbsp; Scan</button>
   <button id="go" disabled>2 &nbsp; Crop &amp; re-upload</button>
 </div>
+<p id="target" style="margin:0 0 14px;font-weight:750;color:var(--em2)"></p>
 <table id="t"><thead><tr><th>File</th><th>Before</th><th>After</th><th>Border found</th><th>New size</th><th>Status</th></tr></thead><tbody></tbody></table>
 <script>
 var URL_BASE = "https://ejzaqmyxxrkmxvzbjeuo.supabase.co";
@@ -112,18 +113,6 @@ function detectInset(img){
   return k;
 }
 
-function cropped(img, inset, png){
-  var w = img.naturalWidth - 2 * inset, h = img.naturalHeight - 2 * inset;
-  var c = document.createElement("canvas");
-  c.width = w; c.height = h;
-  var g = c.getContext("2d");
-  // JPEG cannot carry alpha; without this a transparent source would composite
-  // to black on save rather than to the white it is shown against.
-  if (!png){ g.fillStyle = "#fff"; g.fillRect(0, 0, w, h); }
-  g.drawImage(img, inset, inset, w, h, 0, 0, w, h);
-  return c;
-}
-
 async function load(name){
   var img = new Image();
   img.crossOrigin = "anonymous";
@@ -132,36 +121,73 @@ async function load(name){
   return img;
 }
 
+// Strip the border, then take a target-sized window out of the middle of what
+// is left. Cropping, not scaling: nothing is resampled and no photo is
+// stretched into a shape it was never shot in.
+function normalise(img, inset, png, tw, th){
+  var iw = img.naturalWidth, ih = img.naturalHeight;
+  var sx = Math.round(inset + ((iw - 2 * inset) - tw) / 2);
+  var sy = Math.round(inset + ((ih - 2 * inset) - th) / 2);
+  if (sx < 0 || sy < 0) throw new Error("smaller than the batch target");
+  var c = document.createElement("canvas");
+  c.width = tw; c.height = th;
+  var g = c.getContext("2d");
+  if (!png){ g.fillStyle = "#fff"; g.fillRect(0, 0, tw, th); }
+  g.drawImage(img, sx, sy, tw, th, 0, 0, tw, th);
+  return c;
+}
+
 document.getElementById("scan").onclick = async function(){
   this.disabled = true;
+  var loaded = [];
   for (var i = 0; i < NAMES.length; i++){
     var name = NAMES[i], tr = rows[name], st = tr.querySelector(".st");
     try {
       st.textContent = "scanning...";
       var img = await load(name);
       var inset = detectInset(img);
-      var png = /\.png$/.test(name);
-      var out = inset ? cropped(img, inset, png) : null;
+      loaded.push({ name: name, img: img, inset: inset, png: /\.png$/.test(name) });
       tr.querySelector(".b").appendChild(thumb(img, 90));
-      if (out) tr.querySelector(".a").appendChild(thumb(out, 90));
-      tr.querySelector(".d").innerHTML = inset
-        ? '<span class="ok">' + inset + 'px</span> &rarr; ' + out.width + "&times;" + out.height
-        : "none - will skip";
-      state[name] = {inset: inset, out: out, png: png};
-      st.innerHTML = inset ? "ready" : '<span class="ok">already clean</span>';
+      st.textContent = "sizing...";
     } catch (e) {
       st.innerHTML = '<span class="err">' + e.message + "</span>";
     }
   }
-  var any = NAMES.some(function(n){ return state[n] && state[n].inset; });
-  document.getElementById("go").disabled = !any;
+  // One size for the whole batch: the largest every photo can give, which is
+  // the smallest content box among them. Exports off the same sheet come back
+  // a few pixels apart, and a frame can only be one shape - so the pictures
+  // agree on a shape first and the frame is set to it. Keep .pg-frame's
+  // aspect-ratio in step with whatever this prints.
+  var tw = Infinity, th = Infinity;
+  loaded.forEach(function(s){
+    tw = Math.min(tw, s.img.naturalWidth - 2 * s.inset);
+    th = Math.min(th, s.img.naturalHeight - 2 * s.inset);
+  });
+  document.getElementById("target").textContent =
+    loaded.length ? "Batch size: " + tw + "×" + th + " — set .pg-frame aspect-ratio to "
+      + tw + " / " + th : "";
+  loaded.forEach(function(s){
+    var tr = rows[s.name], st = tr.querySelector(".st");
+    try {
+      s.out = normalise(s.img, s.inset, s.png, tw, th);
+      tr.querySelector(".a").appendChild(thumb(s.out, 90));
+      tr.querySelector(".d").innerHTML = (s.inset
+        ? '<span class="ok">' + s.inset + 'px</span>' : 'none')
+        + ' &rarr; ' + s.out.width + "&times;" + s.out.height;
+      state[s.name] = s;
+      st.textContent = "ready";
+    } catch (e) {
+      st.innerHTML = '<span class="err">' + e.message + "</span>";
+    }
+  });
+  document.getElementById("go").disabled = !Object.keys(state).length;
 };
 
 document.getElementById("go").onclick = async function(){
   this.disabled = true;
   for (var i = 0; i < NAMES.length; i++){
     var name = NAMES[i], s = state[name];
-    if (!s || !s.inset) continue;
+    if (!s || !s.out) continue;
     var tr = rows[name], st = tr.querySelector(".st");
     try {
       st.textContent = "uploading...";

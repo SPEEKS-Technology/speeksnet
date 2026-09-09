@@ -210,11 +210,60 @@ eq('a 30px ring is too thick to be a line',
 eq('a 4px ring that barely contrasts',
     detectInset(shot(602, 576, [[4, [208, 207, 203]]])), 0);
 
-console.log('\nwhat a crop leaves for the frame to hold');
-const w0 = 602, h0 = 576, k = 4, w1 = w0 - 2 * k, h1 = h0 - 2 * k;
-console.log(`     ${w0}x${h0} less ${k}px all round -> ${w1}x${h1}, ratio ${(w1 / h1).toFixed(3)}`);
-console.log(`     in a square frame at 196px, contain leaves `
-    + `${(196 - 196 / (w1 / h1)).toFixed(1)}px of white matte, split top and bottom`);
+// --- the second job: one size for the whole batch ---------------------------
+// A frame can only be one shape, and the exports come back a few pixels apart -
+// 591x565 to 597x571 across the fourteen. So the pictures agree on a size
+// first, by centre-cropping to the largest one they can all give, and the
+// frame's aspect-ratio is set to that. Cropped rather than scaled: nothing is
+// resampled, and no photo is stretched into a shape it was never shot in.
+const batchTarget = shots => ({
+    w: Math.min(...shots.map(s => s.w - 2 * s.inset)),
+    h: Math.min(...shots.map(s => s.h - 2 * s.inset)),
+});
+const cropWindow = (s, t) => ({
+    sx: Math.round(s.inset + ((s.w - 2 * s.inset) - t.w) / 2),
+    sy: Math.round(s.inset + ((s.h - 2 * s.inset) - t.h) / 2),
+});
+
+// The real batch: measured sizes with the border insets this file verifies.
+const BATCH = [
+    { w: 602, h: 576, inset: 4 }, { w: 601, h: 575, inset: 5 },
+    { w: 602, h: 576, inset: 4 }, { w: 601, h: 576, inset: 4 },
+    { w: 602, h: 579, inset: 4 }, { w: 602, h: 575, inset: 5 },
+    { w: 602, h: 575, inset: 4 }, { w: 605, h: 575, inset: 4 },
+    { w: 605, h: 575, inset: 4 }, { w: 602, h: 576, inset: 4 },
+    { w: 602, h: 576, inset: 4 }, { w: 602, h: 576, inset: 4 },
+    { w: 601, h: 576, inset: 4 }, { w: 602, h: 575, inset: 5 },
+];
+
+console.log('\none size for the whole batch');
+const t = batchTarget(BATCH);
+eq('the size all fourteen can share', `${t.w}x${t.h}`, '591x565');
+
+let offsetsOk = 0, insideOk = 0;
+for (const s of BATCH) {
+    const { sx, sy } = cropWindow(s, t);
+    // The window must sit inside the image, and clear of the drawn border.
+    if (sx >= s.inset && sy >= s.inset) insideOk++;
+    if (sx + t.w <= s.w - s.inset && sy + t.h <= s.h - s.inset) offsetsOk++;
+}
+eq('every window starts inside the border', insideOk, 14);
+eq('every window ends inside the border', offsetsOk, 14);
+eq('nothing is trimmed by more than 3px a side',
+    Math.max(...BATCH.map(s => (s.w - 2 * s.inset - t.w) / 2)) <= 3, true);
+
+// The one thing that can silently come apart later: the photos are one shape
+// and the frame is set to another. Nothing in the app would complain - the
+// board would just quietly grow a gap again, which is where this whole thread
+// started. So read the stylesheet and make it say so out loud.
+console.log('\nthe stylesheet agrees with the pictures');
+const css = fs.readFileSync(require('path').join(__dirname, '..', 'styles.css'), 'utf8');
+const rule = css.slice(css.indexOf('.pg-frame {'), css.indexOf('}', css.indexOf('.pg-frame {')));
+const ar = (rule.match(/aspect-ratio:\s*([0-9.]+)\s*\/\s*([0-9.]+)/) || []).slice(1);
+eq('.pg-frame declares an aspect-ratio', ar.length, 2);
+eq('and it is the batch size', `${ar[0]} / ${ar[1]}`, `${t.w} / ${t.h}`);
+eq('so a 290px card leaves nothing over',
+    Math.round(Math.abs(290 - 290 * ((t.w / t.h) / (+ar[0] / +ar[1]))) * 100) / 100, 0);
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);

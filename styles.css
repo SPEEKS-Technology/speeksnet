@@ -21583,16 +21583,20 @@ select.dd-native {
    at 196px those bites are big enough to see. Rounding the picture to match is
    not an option either: JPEG carries no alpha, so a baked-in curve comes out as
    four white wedges. The box gives way instead of the photograph. */
-/* 1.046, not 1. The frame was square and the photographs are not: every export
-   off the guide sheet lands between 1.040 and 1.053 wide, so a square box left
-   six or seven pixels of nothing above and below each picture. That gap is the
-   whole of "the pictures do not fit" — the photo was already the right shape,
-   the box was not. At the batch mean the worst card is now under 2px out, which
-   is less than the border drawn around it.
+/* 591/565, which is not a guess: it is the size every photograph on this board
+   is stored at. The exports came off the guide sheet at fourteen slightly
+   different sizes, 591x565 to 597x571, so a square frame left six or seven
+   pixels of nothing above and below each one and no two cards were let down by
+   quite the same amount. They are all centre-cropped to one size now — cropped,
+   not scaled, so nothing is resampled and no photo is stretched into a shape it
+   was never shot in — and the frame is that size. Nothing is left over.
+   Keep this ratio and the stored size in step. If a future batch lands at a
+   different size, normalise the batch first, then change this; a frame tuned to
+   one shape and photos in another is the gap this pair of numbers closes.
    A portrait photo uploaded from a phone will still letterbox here, and should:
    contain never crops an example, it just centres what it cannot fill. */
 .pg-frame {
-    position: relative; aspect-ratio: 1.046 / 1; border: 1.5px solid var(--pg-ink);
+    position: relative; aspect-ratio: 591 / 565; border: 1.5px solid var(--pg-ink);
     border-radius: 0; overflow: hidden; background: #f8fafc;
 }
 .pg-frame[onclick] { cursor: zoom-in; }
