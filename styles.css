@@ -8860,6 +8860,12 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-done-btn:hover { color: #fff; background: var(--sage-professional); border-color: var(--sage-professional); }
 .speeks-action-menu .sam-ann .sam-done-btn + .sam-done-btn,
 .speeks-action-menu .sam-snooze-btn + .sam-done-btn { margin-left: 6px; }
+/* "Not mine" sits beside Snooze and must read as the quieter of the two — it is
+   the more final action, so it should not be the more eye-catching button. */
+.speeks-action-menu .sam-snooze-btn + .sam-notmine-btn { margin-left: 6px; }
+.speeks-action-menu .sam-notmine-btn { color: var(--cb-muted); opacity: .78; }
+.speeks-action-menu .sam-notmine-btn:hover { opacity: 1; color: var(--red-alert); border-color: var(--red-alert); }
+.speeks-action-menu .sam-notmine-btn svg { width: 12px; height: 12px; stroke-width: 2.4; }
 .speeks-action-menu .sam-ann.rem { cursor: default; }
 .speeks-action-menu .sam-adot.urgent { background: var(--red-alert); box-shadow: 0 0 0 4px var(--sam-red-tint); }
 .speeks-action-menu .sam-adot.warn { background: var(--idea-gold); box-shadow: 0 0 0 4px var(--sam-gold-tint); }
@@ -13252,6 +13258,36 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-proof-gone > summary {
     cursor: pointer; font-size: 11px; font-weight: 700; color: var(--b2b-faint);
 }
+/* Drop the client's email here. Deliberately looks like a target rather than a
+   button: the gesture being replaced is dragging the message into a Drive
+   folder, so it should read as somewhere things land. */
+.b2b-proof-drop {
+    display: flex; align-items: center; gap: 12px;
+    margin-top: 10px; padding: 13px 14px;
+    border: 1.5px dashed var(--b2b-line); border-radius: 12px;
+    background: rgba(255, 255, 255, .55);
+    transition: border-color .14s ease, background .14s ease;
+}
+.b2b-proof-drop.over {
+    border-color: var(--sage-deep); border-style: solid;
+    background: #eaf5ee;
+}
+.b2b-proof-drop.busy { opacity: .6; pointer-events: none; }
+.b2b-proof-dropico { display: inline-grid; place-items: center; flex: 0 0 auto; }
+.b2b-proof-dropico svg {
+    width: 20px; height: 20px; fill: none; stroke: var(--b2b-muted);
+    stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.b2b-proof-drop.over .b2b-proof-dropico svg { stroke: var(--sage-deep); }
+.b2b-proof-droptxt { display: flex; flex-direction: column; gap: 2px; margin-right: auto; }
+.b2b-proof-droptxt b { font-size: 12.5px; font-weight: 750; color: #1a1c1e; }
+.b2b-proof-droptxt span { font-size: 11px; font-weight: 650; color: var(--b2b-muted); }
+/* Touch has no drag-and-drop worth relying on, so the file picker leads there. */
+@media (hover: none) {
+    .b2b-proof-drop { flex-wrap: wrap; }
+    .b2b-proof-droptxt b::after { content: ' — or choose a file'; font-weight: 650; opacity: .7; }
+}
+
 .b2b-proof-add { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 3px; }
 
 /* --- evaluations ----------------------------------------------------------

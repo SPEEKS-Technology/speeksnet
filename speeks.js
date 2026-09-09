@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.1';
+const APP_VERSION = '3.8.2';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -19440,11 +19440,20 @@ async function b2bDoPrevalConvert(id, btn) {
 // deal at exactly its prices, so it carries the same argument.
 // ===========================================================================
 
+// ONE KIND, as of 2026-09-08. Nick: "You can actually get rid of all of the
+// other ways to save proof of acceptance, this is the only way we want for him
+// going forward" -- the way being the client's actual email, dragged out of
+// Outlook and dropped on the deal, instead of into a Google Drive folder.
+//
+// The four kinds are kept in this list as HISTORICAL labels only: rows already
+// on the record say `screenshot` or `note`, and the panel still has to render
+// them with the right word. Nothing can be created as one any more -- the
+// server's PROOF_KINDS is down to `email` alone.
 const B2B_PROOF_KINDS = [
-    { key: 'email',      label: 'Their email',   hint: 'Paste it whole, headers and all — that is the strongest version of it' },
-    { key: 'screenshot', label: 'Screenshot',    hint: 'A picture of the email, or of a text message' },
-    { key: 'document',   label: 'Document',      hint: 'A signed PDF, a purchase order' },
-    { key: 'note',       label: 'Written note',  hint: 'Approved over the phone or across the counter — say who, when and what they said' },
+    { key: 'email',      label: 'Their email',   hint: 'Drop the message straight out of Outlook — headers, sender and date all come with it' },
+    { key: 'screenshot', label: 'Screenshot',    hint: 'Historical — attached before dropped emails became the only route' },
+    { key: 'document',   label: 'Document',      hint: 'Historical — attached before dropped emails became the only route' },
+    { key: 'note',       label: 'Written note',  hint: 'Historical — attached before dropped emails became the only route' },
 ];
 const _b2bProofKind = (k) => B2B_PROOF_KINDS.find(x => x.key === k) || B2B_PROOF_KINDS[0];
 
@@ -19524,19 +19533,151 @@ function _b2bProofPanel(owner) {
             <span class="b2b-note-k">${ok ? "The client's approval is on record" : "No approval on record yet"}</span>
             ${waived ? `<div class="b2b-proof-waived">Accepted without written approval by
                 ${escapeHtml(waived)} — ${escapeHtml(owner.approval_waived_reason || '')}</div>` : ''}
-            ${!ok ? `<div>Attach the client's email or a screenshot of it before this is accepted.
+            ${!ok ? `<div>Drag the client's email onto the box below before this is accepted.
                 It is what answers them later if they say they never agreed to the price.</div>` : ''}
             ${live.map(row).join('')}
             ${gone.length ? `<details class="b2b-proof-gone"><summary>${gone.length} withdrawn</summary>${gone.map(row).join('')}</details>` : ''}
-            <div class="b2b-proof-add">
-                <button class="b2b-btn b2b-btn-secondary b2b-mini" onclick="b2bOpenProofAdd(${ownerAttr})">＋ Attach approval</button>
-                ${!ok && _b2bCanAccept()
-                    ? `<button class="b2b-mini" onclick="b2bWaiveApproval(${ownerAttr})">No written approval — record why</button>` : ''}
+            <!-- Drag and drop, because that is the gesture being replaced: Paul was
+                 dragging these emails into a Google Drive folder. Same movement,
+                 different destination. The button stays for anyone who would
+                 rather pick a file, and it opens the same one-field dialog. -->
+            <div class="b2b-proof-drop" id="b2bProofDrop-${owner.id}"
+                ondragover="b2bProofDragOver(event,'${owner.id}')"
+                ondragleave="b2bProofDragOut(event,'${owner.id}')"
+                ondrop="b2bProofDrop(event,${ownerAttr})">
+                <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
+                <span class="b2b-proof-droptxt"><b>Drop the client's email here</b>
+                    <span>Straight out of Outlook — a .msg or .eml file</span></span>
+                <button class="b2b-mini" onclick="b2bOpenProofAdd(${ownerAttr})">Choose a file</button>
             </div>
         </div>`;
 }
 
 // --- attaching -------------------------------------------------------------
+
+// Outlook hands over a real file on drop, so this is an ordinary file drop --
+// no clipboard formats, no CF_HDROP trickery. The only care needed is telling
+// a dropped message from a dropped anything-else.
+function b2bProofDragOver(ev, id) {
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'copy';
+    document.getElementById(`b2bProofDrop-${id}`)?.classList.add('over');
+}
+function b2bProofDragOut(ev, id) {
+    document.getElementById(`b2bProofDrop-${id}`)?.classList.remove('over');
+}
+
+// A dropped .msg often arrives with an EMPTY type, and sometimes as
+// application/octet-stream -- whether Outlook is registered for the extension
+// decides it, so the extension is the reliable signal and the MIME is the hint.
+const B2B_MSG_MIME = 'application/vnd.ms-outlook';
+function _b2bMailMime(file) {
+    const n = (file.name || '').toLowerCase();
+    if (n.endsWith('.msg')) return B2B_MSG_MIME;
+    if (n.endsWith('.eml')) return 'message/rfc822';
+    return file.type || '';
+}
+function _b2bIsMailFile(file) {
+    const m = _b2bMailMime(file);
+    return m === B2B_MSG_MIME || m === 'message/rfc822';
+}
+
+async function b2bProofDrop(ev, ownerId, ownerKind) {
+    ev.preventDefault();
+    b2bProofDragOut(ev, ownerId);
+    const file = ev.dataTransfer?.files?.[0];
+    if (!file) {
+        return alert('Nothing arrived with that drop.\n\nDrag the message itself out of your '
+            + 'mail app — from the message list, not from a preview pane.');
+    }
+    if (!_b2bIsMailFile(file)) {
+        return alert(`"${file.name}" isn't an email.\n\nDrop the client's message itself — a .msg `
+            + 'dragged out of Outlook, or a saved .eml. That is what carries the sender, the date '
+            + 'and the headers, which is the whole point of keeping it.');
+    }
+    if (file.size > 6_000_000) {
+        return alert(`That message is ${Math.round(file.size / 1e6)}MB — the limit is 6MB.\n\n`
+            + 'Forward it to yourself without the attachments and drop that instead.');
+    }
+    await _b2bAttachMailFile(file, ownerId, ownerKind);
+}
+
+// Read it, pull what headers we can, and save. No dialog: the whole request was
+// to make this one gesture, and everything the form used to ask for is either in
+// the file or not worth asking twice.
+async function _b2bAttachMailFile(file, ownerId, ownerKind) {
+    const drop = document.getElementById(`b2bProofDrop-${ownerId}`);
+    if (drop) drop.classList.add('busy');
+    try {
+        const dataUri = await new Promise((res, rej) => {
+            const r = new FileReader();
+            r.onload = () => res(String(r.result || ''));
+            r.onerror = () => rej(new Error("couldn't be read"));
+            r.readAsDataURL(file);
+        });
+        const meta = await _b2bMailHeaders(file);
+        const payload = {
+            action: 'add_proof',
+            kind: 'email',
+            label: meta.subject || file.name,
+            from_addr: meta.from || undefined,
+            sent_on: meta.date || undefined,
+            file: dataUri,
+            file_name: file.name,
+            file_mime: _b2bMailMime(file),
+        };
+        payload[ownerKind === 'preval' ? 'preval_id' : 'deal_id'] = ownerId;
+        await _b2bSend(payload);
+        await _b2bLoadProofs(ownerId);
+        await b2bRefresh();
+        if (ownerKind === 'preval') b2bOpenPreval(ownerId);
+        else { const d = _b2bDealById(ownerId); if (d) b2bOpenDeal(_b2bClickKind(d), d.id); }
+        _b2bSay(`${meta.subject || file.name} is on the record.`);
+    } catch (e) {
+        alert(`Couldn't attach that message: ${e.message}`);
+    } finally {
+        if (drop) drop.classList.remove('busy');
+    }
+}
+
+// Best-effort sender / subject / date.
+//
+// A .eml is RFC822 text, so its headers parse properly. A .msg is a Compound
+// File Binary container and a full parser is not worth writing for three
+// fields -- but the transport headers are usually present verbatim inside it,
+// often UTF-16LE, so decoding both ways and scanning for the header lines finds
+// them in practice. When it does not, the filename is used as the label and the
+// file itself is still the evidence: these fields are a convenience for reading
+// the list, not the record.
+async function _b2bMailHeaders(file) {
+    let text = '';
+    try {
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        const ascii = new TextDecoder('latin1').decode(bytes);
+        // UTF-16LE strings in a .msg read as "S.u.b.j.e.c.t" in latin1, so decode
+        // that way too and search whichever actually contains headers.
+        const wide = new TextDecoder('utf-16le').decode(bytes);
+        text = /^(from|subject|date)\s*:/im.test(ascii) ? ascii
+             : /^(from|subject|date)\s*:/im.test(wide) ? wide
+             : ascii + '\n' + wide;
+    } catch (_) { return {}; }
+
+    const grab = (name) => {
+        const m = text.match(new RegExp('^' + name + '\\s*:[ \\t]*(.+)$', 'im'));
+        return m ? m[1].replace(/[\r ]/g, '').trim().slice(0, 200) : '';
+    };
+    const fromRaw = grab('From');
+    // "Dana Reyes <dana@acme.com>" -> the address, which is the useful half.
+    const addr = (fromRaw.match(/[^\s<>,;]+@[^\s<>,;]+/) || [])[0] || '';
+    const sent = grab('Date');
+    let iso = '';
+    if (sent) {
+        const d = new Date(sent);
+        if (!isNaN(d)) iso = d.toISOString().slice(0, 10);
+    }
+    return { from: addr || fromRaw, subject: grab('Subject'), date: iso };
+}
 
 let _b2bProofOwner = null;      // { id, kind: 'deal' | 'preval' }
 let _b2bProofKindPick = 'email';
@@ -19593,12 +19734,17 @@ function _b2bPaintProofModal() {
                 : 'Paste the whole thing including the From / Sent / Subject lines — the headers are the part that proves it came from them.'
         }">${escapeHtml(keepBody)}</textarea>
         <p class="b2b-hint">${escapeHtml(k.hint)}</p>
-        <label class="form-label-caps" style="margin-top:12px;">Or attach a file</label>
+        <!-- Email files only. The picker used to take PNG/JPEG/PDF/text as well,
+             and pasted body text instead of a file at all; a dropped message is
+             the only route now (Nick, 2026-09-08) because it is the only one that
+             carries the sender, the date and the headers with it. Rows attached
+             the old way stay on the record and still render. -->
+        <label class="form-label-caps" style="margin-top:12px;">The client's email</label>
         <input id="b2bPfFile" type="file" class="form-input-lg"
-            accept="image/png,image/jpeg,image/webp,application/pdf,message/rfc822,.eml,text/plain"
+            accept=".msg,.eml,application/vnd.ms-outlook,message/rfc822"
             onchange="b2bProofFilePicked(this)">
-        <p class="b2b-hint">PNG, JPEG, PDF or a saved .eml, up to 6MB. You can paste the text, attach
-            a file, or both — one of the two is enough.</p>
+        <p class="b2b-hint">A .msg dragged out of Outlook, or a saved .eml — up to 6MB.
+            Dropping it straight onto the deal does the same thing in one step.</p>
         <div id="b2bPfFileState"></div>`;
 
     const foot = document.getElementById('b2bProofFooter');
@@ -19625,6 +19771,15 @@ function _b2bPaintProofFile() {
 function b2bProofFilePicked(input) {
     const f = input.files && input.files[0];
     if (!f) { _b2bProofFile = null; _b2bPaintProofFile(); return; }
+    // Same gate as the drop zone -- the accept= attribute is a filter in the
+    // file dialog, not a rule, and "All files" defeats it.
+    if (!_b2bIsMailFile(f)) {
+        _b2bProofFile = null;
+        _b2bPaintProofFile();
+        input.value = '';
+        return alert(`"${f.name}" isn't an email.\n\nAttach the client's message itself — a .msg `
+            + 'from Outlook or a saved .eml.');
+    }
     if (f.size > 6_000_000) {
         _b2bProofFile = null;
         _b2bPaintProofFile();
@@ -19689,23 +19844,14 @@ async function b2bRemoveProof(id) {
     }
 }
 
-async function b2bWaiveApproval(ownerId, ownerKind) {
-    const reason = prompt('Accept WITHOUT the client\'s written approval.\n\n'
-        + 'Say how they approved — who said it, when, and by what means. This is recorded '
-        + 'against your name and it is what stands in for their email if they ever say '
-        + 'they never agreed.');
-    if (reason === null) return;
-    if (!reason.trim()) return alert('A reason is required.');
-    const payload = { action: 'waive_approval', reason: reason.trim() };
-    payload[ownerKind === 'preval' ? 'preval_id' : 'deal_id'] = ownerId;
-    try {
-        await _b2bSend(payload);
-        await b2bRefresh();
-        if (ownerKind === 'preval') b2bOpenPreval(ownerId);
-        else { const d = _b2bDealById(ownerId); if (d) b2bOpenDeal(_b2bClickKind(d), d.id); }
-    } catch (e) {
-        alert(`Couldn't record that: ${e.message}`);
-    }
+// RETIRED 2026-09-08 along with the server action. Kept as a function because
+// nothing good comes of a stale tab calling a name that no longer exists, and
+// because the replacement is worth saying rather than just refusing.
+async function b2bWaiveApproval() {
+    alert("Accepting without the client's approval on file isn't possible any more.\n\n"
+        + 'If they agreed by phone or across the counter, email them confirming what they '
+        + 'agreed to and drag that message onto the deal. That way the record holds an '
+        + 'email either way, which is the whole point of keeping it.');
 }
 
 // The one gate, shared by every path that accepts. Returns true when it is safe
@@ -19719,9 +19865,10 @@ function _b2bApprovalGate(owner) {
     if (!_b2bProofsOk) return true;
     if (_b2bApprovalOnRecord(owner)) return true;
     alert("The client's approval isn't on record yet.\n\n"
-        + 'Open the deal and attach their email or a screenshot of it — or, if they approved '
-        + 'by phone or in person, record that instead. This is what answers them later if '
-        + 'they say they never agreed to the price.');
+        + "Open the deal and drag their email onto it — straight out of Outlook. That is what "
+        + 'answers them later if they say they never agreed to the price.\n\n'
+        + 'If they agreed by phone, email them confirming what they agreed to and drop that '
+        + 'message on instead.');
     return false;
 }
 
@@ -31212,7 +31359,17 @@ window._dbgClaims = async function () {
     const el = document.getElementById('claimAlertBubble');
     out.bubbleDisplay = el ? getComputedStyle(el).display : 'MISSING';
     out.feedSummary = (document.getElementById('claimAlertBubbleText') || {}).dataset?.summary || '(none)';
-    out.dismissedToday = Object.keys(_samGetDismissedRem()).join(', ') || '(none)';
+    // Snoozed vs dismissed, told apart, because "why is this card not showing"
+    // now has two possible answers and the diagnostic has to say which.
+    {
+        const h = _samGetHidden();
+        const snoozed = Object.keys(h).filter(k => h[k] && h[k].until);
+        const notMine = Object.keys(h).filter(k => h[k] && !h[k].until);
+        out.dismissedToday = [
+            snoozed.length ? 'snoozed: ' + snoozed.join(', ') : '',
+            notMine.length ? 'not mine: ' + notMine.join(', ') : '',
+        ].filter(Boolean).join(' | ') || '(none)';
+    }
     out.claimsInFeed = _samGatherReminders().some(r => r.key === 'claims');
     out.reminderOwnsBubble = _reminderBubbleActive;
 
@@ -40917,7 +41074,11 @@ function _samRenderFeedNow() {
     const readBtn = onclick => `<button class="sam-markread-btn" onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Mark read</button>`;
     // Reminders are live task-nags, so theirs is a "Snooze" (quiets today, returns
     // tomorrow if still outstanding, auto-clears for good once the work is done).
-    const snoozeBtn = onclick => `<button class="sam-markread-btn sam-snooze-btn" data-tip="Snoozes for today — comes back tomorrow if it's still outstanding, and disappears for good once the work is done." onclick="${onclick}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Snooze</button>`;
+    const snoozeBtn = onclick => `<button class="sam-markread-btn sam-snooze-btn" data-tip="Hides it until tomorrow morning. Comes back if it's still outstanding, and disappears for good once the work is done." onclick="${onclick}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Snooze</button>`;
+    // "Not mine" rather than "Dismiss": the word says which of the two it is, and
+    // the tooltip is explicit that it is not a permanent mute of the subject --
+    // anything new on the same card still comes through.
+    const notMineBtn = onclick => `<button class="sam-markread-btn sam-notmine-btn" data-tip="Removes it from your feed for good. If something new happens on it, it comes back." onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>Not mine</button>`;
     // Completion the app can't observe for itself — the only way this card ever
     // goes away for good. Distinguished from Snooze so the two aren't confused.
     const doneBtn = (onclick, label) => `<button class="sam-markread-btn sam-done-btn" data-tip="Clears this for good. Snooze only quiets it until tomorrow." onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>${_samEsc(label || 'Mark done')}</button>`;
@@ -40946,7 +41107,12 @@ function _samRenderFeedNow() {
             // expense report leaves via the person's own mail client), so it gets
             // BOTH — Snooze to quiet it today, and an explicit completion that is
             // the only thing that clears it for good.
-            const snoozeHtml = it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`);
+            // Two controls, because they answer different questions (Ethan,
+            // 2026-09-02): Snooze is "later", Not mine is "stop showing me this".
+            // Snooze keeps the prominent slot -- it is the common case.
+            const snoozeHtml = it.noSnooze ? ''
+                : (snoozeBtn(`samSnoozeItem(event,'${_samEsc(it.key)}',20)`)
+                   + notMineBtn(`samNotMineItem(event,'${_samEsc(it.key)}')`));
             const ctrl = it.doneAction ? (snoozeHtml + doneBtn(it.doneAction, it.doneLabel))
                 : (it.readAction ? readBtn(it.readAction) : snoozeHtml);
             desired.push({ key: 'rem:' + it.key, html: `<div class="sam-ann rem"${remClick}>
@@ -41202,15 +41368,50 @@ function _samMarkAnnRead(rowId) {
     if (typeof updateMainBadge === 'function') updateMainBadge();
 }
 
+// Hide a reminder. `hours` distinguishes the two things Ethan asked for:
+// 0/absent = dismiss (until the content changes), a number = snooze that long.
+// Recorded against WHAT was on the card, so either way new information on the
+// same subject comes back -- see _samIsHidden.
+function _samHideRem(key, hours) {
+    const cur = _samGatherReminders().find(r => r.key === key);
+    const map = _samGetHidden();
+    map[key] = {
+        sig: cur ? cur.sig : '',
+        until: hours ? Date.now() + hours * 3600000 : 0,
+    };
+    _samSetHidden(map);
+}
+
+// Snooze: back later, same as the old single control but with a real duration
+// rather than "until midnight". Tomorrow morning is the common case, so it is
+// the default and one click.
+function samSnoozeItem(ev, key, hours) {
+    if (ev) ev.stopPropagation();
+    _samHideRem(key, Number(hours) || 20);
+    const row = ev && ev.target ? ev.target.closest('.sam-ann') : null;
+    if (row) row.remove();
+    renderActionFeed();
+    if (typeof updateMainBadge === 'function') updateMainBadge();
+}
+
+// Dismiss: "this doesn't apply to me". Gone for good UNLESS the card changes,
+// which is the "unless something new pops up" half of the request.
+function samNotMineItem(ev, key) {
+    if (ev) ev.stopPropagation();
+    _samHideRem(key, 0);
+    const row = ev && ev.target ? ev.target.closest('.sam-ann') : null;
+    if (row) row.remove();
+    renderActionFeed();
+    if (typeof updateMainBadge === 'function') updateMainBadge();
+}
+
 function samDismissItem(ev, kind, key) {
     if (ev) ev.stopPropagation();
     const row = ev && ev.target ? ev.target.closest('.sam-ann') : null;
     if (kind === 'rem') {
-        // Record WHAT was snoozed, not just that it was — see _samGetDismissedRem.
-        const cur = _samGatherReminders().find(r => r.key === key);
-        const map = _samGetDismissedRem();
-        map[key] = cur ? cur.sig : '';
-        _samSetDismissedRem(map);
+        // Kept as the snooze path so the 20-odd existing callers (Mark-all-read,
+        // the alert bubbles) keep their old behaviour of quieting until tomorrow.
+        _samHideRem(key, 20);
     } else if (kind === 'note') {
         // Record locally FIRST, so the read survives the next re-fetch even if the
         // POST below is slow, fails, or races a poll.
@@ -41254,9 +41455,14 @@ function samMarkAllRead() {
     // yet: clearing the feed in the morning meant a claim that aged out at noon never
     // showed for the rest of the day. You can't "read" something that doesn't exist,
     // so use the same liveness test the feed itself uses (_samGatherReminders).
-    const map = _samGetDismissedRem();
-    _samGatherReminders().forEach(r => { map[r.key] = r.sig; });
-    _samSetDismissedRem(map);
+    // Mark-all-read SNOOZES rather than dismisses. Clearing a full feed is a
+    // "caught up for now" gesture, not a statement that none of it is yours --
+    // treating it as the permanent kind would quietly bin work nobody decided
+    // about, which is exactly the failure the two separate controls avoid.
+    const map = _samGetHidden();
+    const until = Date.now() + 20 * 3600000;
+    _samGatherReminders().forEach(r => { map[r.key] = { sig: r.sig, until }; });
+    _samSetHidden(map);
     if (typeof updateMainBadge === 'function') updateMainBadge();
     renderActionFeed();
 }
@@ -41661,6 +41867,57 @@ function _samDismKey() {
     const day = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
     return 'samRemDismissed_' + u + '_' + day;
 }
+
+// DISMISS AND SNOOZE ARE DIFFERENT THINGS (Ethan, 2026-09-02).
+//
+// "Can you make a way for me to dismiss this or snooze this. Since this doesn't
+// apply to [me] I'd like to have this removed from my feed unless something new
+// pops up, but I like the snooze option in case it does apply to me, but I plan
+// on looking at it another day."
+//
+// There was only ever one control, and its key was scoped to the DAY
+// (_samDismKey above), so everything came back at midnight whether you wanted it
+// to or not. That is a snooze, and it was labelled Snooze -- but there was no way
+// to say "this is not mine, stop showing it to me".
+//
+// So this store is NOT day-scoped, and carries an `until` per key:
+//   until === 0   dismissed: hidden until the card's content changes
+//   until > now   snoozed:   hidden until then, or until the content changes
+//
+// The sig check is what "unless something new pops up" means, and it already
+// existed -- a card whose wording or counts move is new information and breaks
+// through either state. Dismiss is therefore never permanent in the dangerous
+// sense: it hides THIS news, not the subject forever.
+//
+// The old day-scoped key is still read as a fallback so a snooze taken before
+// this shipped is honoured for the rest of that day, then ages out on its own.
+function _samHideKey() {
+    const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
+    return 'samRemHidden_' + u;
+}
+function _samGetHidden() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(_samHideKey()) || '{}');
+        return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    } catch (_) { return {}; }
+}
+function _samSetHidden(map) {
+    try { localStorage.setItem(_samHideKey(), JSON.stringify(map || {})); } catch (_) {}
+}
+// One place decides whether a card is currently hidden, so the feed and the
+// badge can never disagree about it.
+function _samIsHidden(key, sig) {
+    const rec = _samGetHidden()[key];
+    if (rec && typeof rec === 'object') {
+        // Content moved on: new information, so it comes back regardless.
+        if (rec.sig !== sig) return false;
+        if (!rec.until) return true;                       // dismissed
+        return Date.now() < Number(rec.until);             // still snoozed
+    }
+    // Fallback: today's legacy map, written before dismiss and snooze split.
+    const old = _samGetDismissedRem();
+    return Object.prototype.hasOwnProperty.call(old, key) && old[key] === sig;
+}
 // Dismissals are stored as { key: snippetAtSnoozeTime }, NOT a bare list of keys.
 // A snooze must quiet the reminder AS IT READ WHEN SNOOZED — with a plain key list
 // it also swallowed every later update that same day, so a DM could send a fresh
@@ -41738,7 +41995,7 @@ function _samGatherReminders() {
         // a new sender — counts as new information and breaks through the snooze
         // rather than staying buried until tomorrow.
         const sig = (t && t.dataset && t.dataset.sig) ? t.dataset.sig : sub;
-        if (Object.prototype.hasOwnProperty.call(dismissed, c.key) && dismissed[c.key] === sig) return;
+        if (_samIsHidden(c.key, sig)) return;
         // For an MSM: if this alert covers exactly ONE store (the bubble stamps the
         // covered stores on data-stores), clicking it opens that store's tool even
         // while he's on the other store's dashboard — without switching dashboards.
