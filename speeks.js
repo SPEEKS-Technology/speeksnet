@@ -40959,7 +40959,10 @@ function _dbRenderReview(force) {
                 ? _samEsc(pending.length + ' Draft' + (pending.length === 1 ? '' : 's') + ' waiting on you. Edit anything before you send it.')
                 : 'Nothing is waiting on you.'}</div>
         </div>
-        ${pending.length > 1 ? `<button class="dbr-btn dbr-all" onclick="_dbApproveAll()">Approve All ${pending.length}</button>` : ''}
+        ${pending.length > 1 ? `<div class="dbr-head-btns">
+            <button class="dbr-btn ghost" onclick="_dbSkipAll()">Skip All ${pending.length}</button>
+            <button class="dbr-btn dbr-all" onclick="_dbApproveAll()">Approve All ${pending.length}</button>
+        </div>` : ''}
     </div>`;
 
     // --- one card per pending draft ---
@@ -41133,6 +41136,33 @@ async function _dbApproveAll() {
     await checkDailyBriefDrafts();
     _dbRenderReview(true);
     if (failed) alert(`${sent} sent, ${failed} could not be sent. The ones that failed are still waiting.`);
+}
+
+// The mirror of Approve All, for a morning where nothing is worth saying. It
+// exists because the alternative was five clicks and five confirms to say no,
+// which is enough friction that the real outcome was leaving them to expire at
+// noon — the same result, reached by forgetting rather than by deciding.
+async function _dbSkipAll() {
+    const pending = _dbDrafts.filter(d => d.status === 'pending');
+    if (!pending.length) return;
+    // Store names, not the messages. Approve All prints every message in full
+    // because one click later five stores have been written to and that confirm
+    // is the last chance to read them. This click sends nothing, so what is
+    // worth confirming is WHICH stores go quiet and that the drafts do not come
+    // back — and the messages themselves are still on screen behind the dialog.
+    const names = pending.map(d => d.store).join(', ');
+    if (!confirm(`Skip all ${pending.length} today?\n\n${names}\n\n`
+        + 'Nothing will be sent, and these drafts will not come back.')) return;
+
+    let done = 0, failed = 0;
+    for (const d of pending) {
+        const ok = await _dbDecide(String(d.id), 'skipped', { silent: true });
+        if (ok) done++; else failed++;
+        _dbRenderReview(true);
+    }
+    await checkDailyBriefDrafts();
+    _dbRenderReview(true);
+    if (failed) alert(`${done} skipped, ${failed} could not be skipped. The ones that failed are still waiting.`);
 }
 
 function startDailyBriefReminder() {

@@ -17300,6 +17300,13 @@ body.tv-body { display: block; background: #eef1f5; }
 .dbr-btn.ghost:hover:not(:disabled) { background: #f7f9fa; border-color: #d5dee5; }
 .dbr-all { background: var(--dbr-accent); color: #fff; flex-shrink: 0; }
 .dbr-all:hover { background: #178048; }
+/* Two bulk controls need a holder of their own: .dbr-head is space-between, so
+   a second button dropped straight into it would have been pushed to the far
+   side of the gap instead of sitting with its pair. Skip All is the ghost of the
+   two — it is the safe direction, since it sends nothing, and it must not
+   compete with the green for the eye. Same left-to-right order as the buttons
+   on each card, so the safe one is always on the same side. */
+.dbr-head-btns { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
 /* --- already decided, and the stores that got nothing --- */
 .dbr-sec-label {
@@ -17339,7 +17346,9 @@ body.tv-body { display: block; background: #eef1f5; }
 @media (max-width: 640px) {
     .dbr-head { flex-direction: column; align-items: stretch; }
     .dbr-strip { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
-    .dbr-actions { flex-direction: column-reverse; }
+    /* column-reverse on both, so Approve All lands above Skip All exactly as
+       Approve & Send lands above Skip Today on every card. */
+    .dbr-actions, .dbr-head-btns { flex-direction: column-reverse; }
     .dbr-btn { width: 100%; }
 }
 
