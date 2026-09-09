@@ -27,6 +27,15 @@
 // five stores since Jul 1, zero of them shipping); and ShopifyPaymentsPayoutSummary
 // has no shipping field. These stores bill labels to the Shopify invoice, not to
 // the Payments balance. The timeline is the only per-order source that exists.
+//
+// ⚠️ SHIPPING COST IS THE SUM OF TWO SOURCES ON TWO DIFFERENT BOOKING RULES.
+// Our OWN outbound label comes off the Shopify order timeline and books to the
+// SALE day, because the store chooses when to buy it. EBAY-BILLED labels — the
+// buyer's return leg, which eBay buys and charges to us — come off the eBay
+// Finances feed and book to the day EBAY CHARGED them, because nobody here
+// controls that timing. The asymmetry is deliberate; see the SHIPPING_LABEL
+// branch in the eBay pass for the full reasoning and for what it cost to get
+// wrong (25 charges, $311.80, booked nowhere at all until 2026-09-09).
 // ============================================================================
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -663,11 +672,17 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // --- eBay fees (and eBay-bought labels) -----------------------------------
-  // Every row is attributed by its ORDER, not by its own transaction date, so a
+  // --- eBay fees (and eBay-billed labels) -----------------------------------
+  // A FEE is attributed by its ORDER, not by its own transaction date, so a
   // refund settled weeks later credits its fee back to the day the item SOLD.
-  // Rows whose order is not in this month's map belong to another month and are
-  // counted, not guessed at.
+  // Fee rows whose order is not in this month's map belong to another month and
+  // are counted, not guessed at.
+  //
+  // ⚠️ A LABEL IS THE EXCEPTION AND BOOKS BY ITS OWN DATE. It is billed weeks
+  // after the sale, so requiring an order match dropped every one of them into
+  // `unmatched` and lost the postage from both months. See the SHIPPING_LABEL
+  // branch below — it is handled before the order lookup for exactly that
+  // reason, and `unmatched` now counts fees only.
   //
   // ⚠️ The scan window runs from `from` to TODAY, not to `to`. Fees and refunds
   // settle days after the sale, so a window that stops at month end misses them
@@ -678,6 +693,11 @@ Deno.serve(async (req: Request) => {
     // Voided / refunded eBay labels. Non-zero here means postage came back.
     label_credits: 0, label_credit_count: 0,
     rows: 0, matched: 0, unmatched: 0,
+    // Labels booked by their own post date, so an order this window cannot see is
+    // not a failure the way it is for a fee. `label_outside_window` is postage
+    // that belongs to a day outside the range — the tie between two months.
+    label_outside_window: 0, label_outside_window_count: 0,
+    label_no_order_in_window: 0,
     account_fees_unattributed: 0, skipped_disputes: 0, skipped_transfers: 0,
     unhandled_types: {} as Record<string, number>,
     overlap_orders: [] as string[],
@@ -819,6 +839,88 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
+      // ── EBAY-BILLED SHIPPING LABELS BOOK ON THE DAY EBAY CHARGED THEM ─────
+      // Handled BEFORE the order lookup below, and that placement is the whole
+      // fix. These rows used to fall through to `ebayOrderDay[oid]` like a fee —
+      // but a return label is billed weeks after the sale, so its order was
+      // almost never inside the window, every row landed in `unmatched`, and the
+      // postage was dropped from BOTH months. Measured 2026-09-09: 25 charges,
+      // $311.80, every one a "Return shipping label", and `label_count` read 0
+      // at all five stores. A real cost that reads as zero is the one direction
+      // this file must never fail in.
+      //
+      // ⚠️ THE POST DATE, NOT THE SALE DATE (Ethan's call, 2026-09-09). WE DO
+      // NOT BUY THESE. The buyer opens a return, eBay buys the label and bills
+      // us, and the row carries exactly ONE date — `transactionDate`, all 25
+      // already `PAYOUT`. So there is no purchase-vs-post choice to make: the
+      // day eBay stamps the charge is the only day that exists. It is also the
+      // rule shippingBookingDay() already applies to a carrier price
+      // adjustment, for the same reason — a cost whose timing the store does not
+      // control cannot be gamed, so it books when it was charged. Note the
+      // asymmetry this leaves, which is deliberate: our OWN outbound Shopify
+      // label still books to the SALE day, because we choose when to buy it.
+      //
+      // ⚠️ IT NEEDS NO ORDER MATCH, and that is why nothing can be silently
+      // dropped again — the date comes off the transaction itself. A label whose
+      // post day falls outside this window belongs to another day's row and is
+      // COUNTED, not discarded: `label_outside_window` is what says so, and on a
+      // month boundary it is the figure that ties one month's postage to the
+      // next. It is also why booking here can never re-open a closed month, the
+      // way sale-day attribution would have to for an August sale returned in
+      // September.
+      if (type === "SHIPPING_LABEL") {
+        const postDay = x.transactionDate ? chicagoDay(String(x.transactionDate)) : "";
+        // ⚠️ THE SIGN COMES FROM bookingEntry, NOT FROM THE TYPE NAME — the same
+        // rule the NON_SALE_CHARGE branch above follows. A voided or refunded
+        // label arrives as SHIPPING_LABEL with bookingEntry CREDIT and a
+        // POSITIVE amount: it is money handed back. Adding it unsigned charged
+        // us for postage twice — once when the label was bought, again when eBay
+        // refunded it. Confirmed against the CFO's consolidated report, which
+        // carries these as negative "Ebay Shipping" (OVL #KS01-12833, 7/23:
+        // ($65.90)).
+        const credit = String(x.bookingEntry) === "CREDIT";
+        const signed = credit ? -amt : amt;
+        // The window guard comes FIRST so every tally below describes exactly
+        // what was booked. Counting a row we then refuse to book would make
+        // `labels` disagree with the sum of the days, which is the kind of
+        // quiet drift that took a month to find the first time.
+        if (!postDay || !days[postDay]) {
+          ebay.label_outside_window = round2(ebay.label_outside_window + signed);
+          ebay.label_outside_window_count++;
+          continue;
+        }
+        if (credit) {
+          ebay.label_credits = round2(ebay.label_credits + amt);
+          ebay.label_credit_count++;
+        }
+        // Most are the buyer's return leg — verified by transactionMemo "Return
+        // shipping label" and a RETURN_ID reference. An order legitimately
+        // carries BOTH legs: we buy the outbound label on Shopify, eBay bills us
+        // the return. That is a return costing postage twice, not a double
+        // count, and it is exactly the cost the GP-based view never charged
+        // anyone for.
+        //
+        // A NON-return eBay label on an order that ALREADY has a Shopify label
+        // is a different matter and still worth flagging. That check needs the
+        // Shopify order name, so it can only fire when the order happens to sit
+        // in this window — the booking above never waits for it, and
+        // `label_no_order_in_window` says how often the name was unavailable.
+        const isReturn = /return/i.test(String(x.transactionMemo || ""))
+          || (x.references || []).some((r: any) => String(r?.referenceType) === "RETURN_ID");
+        const owner = ebayOrderDay[oid];
+        if (isReturn) {
+          ebay.return_labels = round2(ebay.return_labels + signed);
+          ebay.return_label_count++;
+        } else if (!credit && owner && ordersWithShopifyLabel.has(owner.name)) {
+          ebay.overlap_orders.push(owner.name);
+        }
+        if (!owner) ebay.label_no_order_in_window++;
+        ebay.labels = round2(ebay.labels + signed);
+        ebay.label_count++;
+        days[postDay].shipping_cost = round2((days[postDay].shipping_cost || 0) + signed);
+        continue;
+      }
+
       const hit = ebayOrderDay[oid];
       if (!oid || !hit || !days[hit.day]) { ebay.unmatched++; continue; }
       const d = hit.day;
@@ -874,48 +976,13 @@ Deno.serve(async (req: Request) => {
           ebay.refund_fee_credits = round2(ebay.refund_fee_credits + fee);
           days[d].ebay_fee = round2((days[d].ebay_fee || 0) - fee);
         }
-      } else {
-        // An eBay label never appears in the Shopify timeline, so it is real
-        // ADDITIONAL postage. Most are RETURN labels — verified by
-        // transactionMemo "Return shipping label" and a RETURN_ID reference —
-        // and an order legitimately carries BOTH: we buy the outbound label on
-        // Shopify, eBay bills us the buyer's return leg. That is a return
-        // costing postage twice, not a double count, and it is exactly the kind
-        // of cost the GP-based view never charged anyone for.
-        //
-        // A NON-return eBay label on an order that already has a Shopify label
-        // is a different matter and still worth flagging.
-        // ⚠️ THE SIGN COMES FROM bookingEntry, NOT FROM THE TYPE NAME — the same
-        // rule the NON_SALE_CHARGE branch above already follows. A voided or
-        // refunded label comes back as SHIPPING_LABEL with bookingEntry CREDIT
-        // and a POSITIVE amount: it is money handed back. Adding it unsigned
-        // charged us for postage twice — once when we bought the label, again
-        // when eBay refunded it. Confirmed against the CFO's consolidated
-        // report, which carries these as negative "Ebay Shipping" (OVL
-        // #KS01-12833, 7/23: ($65.90)).
-        const credit = String(x.bookingEntry) === "CREDIT";
-        const signed = credit ? -amt : amt;
-        if (credit) {
-          ebay.label_credits = round2(ebay.label_credits + amt);
-          ebay.label_credit_count++;
-        }
-        const isReturn = /return/i.test(String(x.transactionMemo || ""))
-          || (x.references || []).some((r: any) => String(r?.referenceType) === "RETURN_ID");
-        if (isReturn) {
-          ebay.return_labels = round2(ebay.return_labels + signed);
-          ebay.return_label_count++;
-        } else if (!credit && ordersWithShopifyLabel.has(hit.name)) {
-          ebay.overlap_orders.push(hit.name);
-        }
-        ebay.labels = round2(ebay.labels + signed);
-        ebay.label_count++;
-        days[d].shipping_cost = round2((days[d].shipping_cost || 0) + signed);
       }
     }
 
     if (ebay.unmatched) {
-      warnings.push(`${ebay.unmatched} eBay finance row(s) had no matching order in `
-        + "this month — expected, they belong to sales outside the range");
+      warnings.push(`${ebay.unmatched} eBay FEE row(s) had no matching order in `
+        + "this month — expected, they belong to sales outside the range. Labels are "
+        + "not in this count: they book by their own post date and need no match");
     }
     if (ebay.overlap_orders.length) {
       warnings.push(`${ebay.overlap_orders.length} order(s) carry BOTH a Shopify label and `
@@ -1093,8 +1160,9 @@ Deno.serve(async (req: Request) => {
     paymentsLedger: ledger,
     shippingLabelShapes: labelShapes,
     shippingAttribution: {
-      rule: "a label books to the SALE day unless it was charged after that month "
-          + "closed; a carrier price adjustment always books to the day charged",
+      rule: "OUR outbound label books to the SALE day unless it was charged after "
+          + "that month closed; a carrier price adjustment, and an EBAY-BILLED "
+          + "label (the buyer's return leg), always book to the day charged",
       month_closes: monthCloseDay(from.slice(0, 7)) + " 19:00 America/Chicago",
       scanned_orders_from: scanFrom,
       rebooked_to_a_different_day: rebooked,
