@@ -81,10 +81,34 @@ $harness = @"
     window.__fetches.push(String(u));
     return Promise.reject(new Error('network blocked in browser-check'));
   };
+  // A check may return true, a failure string, OR a promise of either.
+  //
+  // The whole check file runs in one synchronous script block, so a microtask
+  // queued by .then() has NOT run by the time the next t() executes. An
+  // assertion written that way reads its own variables before they are set and
+  // reports a failure that is not real -- which is exactly what happened to the
+  // first attempt at the Outlook virtual-file checks. Returning the promise
+  // reserves the log slot now and fills it when it settles; the output write
+  // below waits on all of them.
+  window.__pending = [];
   window.t = function (name, fn) {
+    var verdict = function (r) {
+      return (r === true ? 'PASS  ' : 'FAIL  ') + name + (r === true ? '' : ' -> ' + r);
+    };
     try {
       var r = fn();
-      window.__log.push((r === true ? 'PASS  ' : 'FAIL  ') + name + (r === true ? '' : ' -> ' + r));
+      if (r && typeof r.then === 'function') {
+        var slot = window.__log.length;
+        // Placeholder, so a promise that never settles reports itself rather
+        // than vanishing from the output.
+        window.__log.push('STALLED  ' + name + ' -> never settled');
+        window.__pending.push(r.then(
+          function (v) { window.__log[slot] = verdict(v); },
+          function (e) { window.__log[slot] = 'ERROR ' + name + ' -> ' + ((e && e.message) || e); }
+        ));
+        return;
+      }
+      window.__log.push(verdict(r));
     } catch (e) { window.__log.push('ERROR ' + name + ' -> ' + e.message); }
   };
 </script>
@@ -115,9 +139,21 @@ $checkJs
     window.__log.push('NOTE  ' + window.__fetches.length + ' network call(s) blocked: '
       + window.__fetches.slice(0, 3).join(' / '));
   }
-  document.getElementById('speeks-check-out').textContent =
-    window.__log.join('\u0000') + '\u0000LOAD-ERRORS=' +
-    (window.__err.length ? window.__err.join(' | ') : 'none');
+  // Wait for any promise-returning checks before writing, but never wait
+  // forever: a check that hangs must still produce a report, with its own
+  // STALLED placeholder naming it. --virtual-time-budget advances the clock,
+  // so this timer costs no real seconds.
+  var write = function () {
+    document.getElementById('speeks-check-out').textContent =
+      window.__log.join('\u0000') + '\u0000LOAD-ERRORS=' +
+      (window.__err.length ? window.__err.join(' | ') : 'none');
+  };
+  write();   // immediately, so a later crash still leaves a readable report
+  var settled = window.__pending.map(function (p) { return p.catch(function () {}); });
+  Promise.race([
+    Promise.all(settled),
+    new Promise(function (res) { setTimeout(res, 5000); }),
+  ]).then(write, write);
 </script>
 </body></html>
 "@
