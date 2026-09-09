@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Outlook drag test — SPEEKS</title>
+<!--
+  A DIAGNOSTIC, NOT A FEATURE. Deliberately standalone: no speeks.js, no
+  styles.css, no session, no network. It exists because dragging a message out
+  of Outlook cannot be reproduced from a dev machine or a headless browser --
+  there is no Outlook in either -- so the only way to find out what a particular
+  Outlook and browser pairing actually hands over is to have the person with
+  that pairing do the drag and read the report back.
+
+  It tries every route in the same order speeks.js does and reports each one
+  separately, so a failure says WHICH route failed rather than "nothing
+  arrived". Kept out of the app's navigation on purpose; it is a link you send
+  somebody, once.
+-->
+<style>
+  :root {
+      --ink: #1a1c1e; --muted: #6b7280; --line: #d8dee4;
+      --ok: #15803d; --bad: #b91c1c; --sage: #2f6f4e;
+      --card: #ffffff; --page: #f6f7f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+      margin: 0; padding: 28px 20px 60px;
+      font: 14px/1.55 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+      color: var(--ink); background: var(--page);
+  }
+  .wrap { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 0 0 22px; }
+  .card {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 14px; padding: 18px; margin-bottom: 16px;
+  }
+  ol { margin: 0; padding-left: 20px; }
+  ol li { margin-bottom: 5px; }
+  #zone {
+      display: grid; place-items: center; gap: 8px; text-align: center;
+      min-height: 190px; padding: 26px;
+      border: 2px dashed var(--line); border-radius: 14px;
+      background: #fff; transition: background .14s, border-color .14s;
+  }
+  #zone.over { border-color: var(--sage); border-style: solid; background: #eaf5ee; }
+  #zone b { font-size: 16px; }
+  #zone span { color: var(--muted); }
+  .verdict { font-weight: 700; padding: 12px 14px; border-radius: 10px; margin-bottom: 14px; }
+  .verdict.ok  { background: #e8f6ed; color: var(--ok);  border: 1px solid #bfe3cd; }
+  .verdict.bad { background: #fdeaea; color: var(--bad); border: 1px solid #f3c6c6; }
+  pre {
+      margin: 0; padding: 14px; overflow-x: auto;
+      background: #14161a; color: #e6edf3; border-radius: 10px;
+      font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
+      white-space: pre-wrap; word-break: break-word;
+  }
+  button {
+      font: inherit; font-weight: 650; cursor: pointer;
+      padding: 9px 16px; border-radius: 9px;
+      border: 1px solid var(--sage); background: var(--sage); color: #fff;
+  }
+  button.ghost { background: #fff; color: var(--ink); border-color: var(--line); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  [hidden] { display: none !important; }
+  @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+          --ink: #e8eaed; --muted: #9aa4b2; --line: #333940;
+          --card: #1d2125; --page: #14161a;
+      }
+      :root:not([data-theme="light"]) #zone { background: #1d2125; }
+      :root:not([data-theme="light"]) #zone.over { background: #1b2f24; }
+      :root:not([data-theme="light"]) button.ghost { background: #1d2125; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Outlook drag test</h1>
+  <p class="sub">Finds out what your Outlook and your browser actually hand over when
+     you drag a message. Nothing is uploaded or saved — this page does not talk to a server.</p>
+
+  <div class="card">
+    <ol>
+      <li>Open Outlook next to this window.</li>
+      <li>Drag <b>one email</b> out of the message list and drop it in the box below.</li>
+      <li>Press <b>Copy report</b> and paste it back to Nick.</li>
+    </ol>
+  </div>
+
+  <div id="zone">
+    <b>Drop an email here</b>
+    <span>Straight from the Outlook message list</span>
+  </div>
+
+  <div class="card" id="out" hidden>
+    <div class="verdict" id="verdict"></div>
+    <pre id="report"></pre>
+    <div class="row">
+      <button onclick="copyReport(this)">Copy report</button>
+      <button class="ghost" onclick="location.reload()">Try another</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var zone = document.getElementById('zone');
+var lines = [];
+function say(s) { lines.push(s); }
+
+function browserLine() {
+    var ua = navigator.userAgent;
+    var m = ua.match(/Edg\/([\d.]+)/) ? 'Edge ' + ua.match(/Edg\/([\d.]+)/)[1]
+          : ua.match(/Firefox\/([\d.]+)/) ? 'Firefox ' + ua.match(/Firefox\/([\d.]+)/)[1]
+          : ua.match(/Chrome\/([\d.]+)/) ? 'Chrome ' + ua.match(/Chrome\/([\d.]+)/)[1]
+          : 'unknown';
+    return m + '  |  ' + ua;
+}
+
+// Everything that touches the DataTransfer runs here, synchronously. It is
+// emptied the instant this handler yields, so anything read after an await
+// comes back empty and looks exactly like an empty drop.
+function harvest(dt) {
+    var res = { tries: [], text: {} };
+    try { say('formats:   ' + (Array.prototype.slice.call(dt.types).join(' | ') || 'none')); }
+    catch (e) { say('formats:   threw ' + e.name); }
+
+    var items = [];
+    try { items = Array.prototype.slice.call(dt.items || []); } catch (e) {}
+    say('items:     ' + (items.length
+        ? items.map(function (i, n) { return '[' + n + '] kind=' + i.kind + ' type=' + (i.type || '(none)'); }).join('\n           ')
+        : 'none'));
+
+    var files = [];
+    try { files = Array.prototype.slice.call(dt.files || []); } catch (e) {}
+    say('files:     ' + (files.length
+        ? files.map(function (f) { return f.name + ' · ' + f.size + 'b · ' + (f.type || 'no type'); }).join('\n           ')
+        : 'none (expected — Outlook does not put a real file here)'));
+
+    ['text/plain', 'text/html', 'text/uri-list'].forEach(function (t) {
+        var v = '';
+        try { v = dt.getData(t) || ''; } catch (e) {}
+        res.text[t] = v;
+        say('  ' + t + ': ' + (v ? v.length + ' chars' : 'none'));
+    });
+
+    // Route 1
+    if (files[0]) res.tries.push({ route: 'dataTransfer.files[0]', p: Promise.resolve(files[0]) });
+
+    items.forEach(function (item, n) {
+        // No kind filter on purpose: the virtual-file item does not reliably
+        // report kind "file", and every one of these calls returns null
+        // harmlessly on a genuine string item.
+        try {
+            var f = item.getAsFile && item.getAsFile();
+            res.tries.push({ route: 'items[' + n + '].getAsFile()',
+                             p: Promise.resolve(f || null) });
+        } catch (e) {
+            res.tries.push({ route: 'items[' + n + '].getAsFile()', p: Promise.reject(e) });
+        }
+        try {
+            var h = item.getAsFileSystemHandle && item.getAsFileSystemHandle();
+            if (h && h.then) {
+                res.tries.push({
+                    route: 'items[' + n + '].getAsFileSystemHandle()',
+                    p: h.then(function (hh) {
+                        if (!hh) return null;
+                        return hh.kind === 'file' && hh.getFile ? hh.getFile() : null;
+                    })
+                });
+            } else {
+                res.tries.push({ route: 'items[' + n + '].getAsFileSystemHandle()',
+                                 p: Promise.resolve(null), note: 'not supported by this browser' });
+            }
+        } catch (e) {
+            res.tries.push({ route: 'items[' + n + '].getAsFileSystemHandle()', p: Promise.reject(e) });
+        }
+        try {
+            var entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+            if (!entry) {
+                res.tries.push({ route: 'items[' + n + '].webkitGetAsEntry()',
+                                 p: Promise.resolve(null), note: 'returned null' });
+            } else {
+                res.tries.push({
+                    route: 'items[' + n + '].webkitGetAsEntry() -> '
+                         + (entry.isFile ? 'file' : entry.isDirectory ? 'directory' : 'neither')
+                         + ' "' + (entry.name || '') + '"',
+                    p: new Promise(function (ok, no) {
+                        if (!entry.isFile) return ok(null);
+                        entry.file(function (f) { ok(f); }, function (err) { no(err); });
+                    })
+                });
+            }
+        } catch (e) {
+            res.tries.push({ route: 'items[' + n + '].webkitGetAsEntry()', p: Promise.reject(e) });
+        }
+    });
+    return res;
+}
+
+zone.addEventListener('dragover', function (ev) {
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'copy';
+    zone.classList.add('over');
+});
+zone.addEventListener('dragleave', function () { zone.classList.remove('over'); });
+
+zone.addEventListener('drop', function (ev) {
+    ev.preventDefault();
+    zone.classList.remove('over');
+    lines = [];
+    say('SPEEKS Outlook drag test — ' + new Date().toString());
+    say('browser:   ' + browserLine());
+    say('');
+    var got = harvest(ev.dataTransfer);
+    say('');
+    say('--- routes ---');
+
+    // A route that never calls back must not hang the page. Outlook can stall
+    // mid-stream and entry.file() then fires neither callback.
+    var guarded = got.tries.map(function (tr) {
+        return Promise.race([
+            Promise.resolve(tr.p).then(
+                function (f) { return { ok: true, f: f }; },
+                function (e) { return { ok: false, e: e }; }
+            ),
+            new Promise(function (r) { setTimeout(function () { r({ stalled: true }); }, 20000); })
+        ]).then(function (r) { return { tr: tr, r: r }; });
+    });
+
+    Promise.all(guarded).then(function (all) {
+        var win = null;
+        all.forEach(function (x) {
+            var r = x.r, label = x.tr.route;
+            if (r.stalled) return say('TIMEOUT  ' + label + '  (no callback after 20s)');
+            if (!r.ok) return say('THREW    ' + label + '  -> ' + (r.e && (r.e.name + ': ' + r.e.message)));
+            if (!r.f) return say('empty    ' + label + (x.tr.note ? '  (' + x.tr.note + ')' : ''));
+            say('GOT FILE ' + label);
+            say('           name="' + r.f.name + '"  size=' + r.f.size + 'b  type="' + (r.f.type || '') + '"');
+            if (!win) win = r.f;
+        });
+        if (!win) {
+            var t = got.text['text/plain'] || got.text['text/html'] || '';
+            say('');
+            say(t ? 'No route produced bytes, but ' + t.length + ' chars of message text came with the '
+                  + 'drag, so the app can rebuild an .eml from it.'
+                  : 'No route produced bytes and no message text came with the drag either.');
+        }
+        finish(win, got);
+    });
+});
+
+function finish(win, got) {
+    var v = document.getElementById('verdict');
+    if (win) {
+        v.className = 'verdict ok';
+        v.textContent = 'Works. Got "' + win.name + '" (' + win.size + ' bytes).';
+    } else {
+        var t = (got.text['text/plain'] || got.text['text/html'] || '').length;
+        v.className = 'verdict bad';
+        v.textContent = t
+            ? 'No file — but ' + t + ' characters of message text arrived, which is enough to rebuild one.'
+            : 'No file and no message text. Send this report over.';
+    }
+    document.getElementById('report').textContent = lines.join('\n');
+    document.getElementById('out').hidden = false;
+}
+
+function copyReport(btn) {
+    var txt = document.getElementById('report').textContent;
+    var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy report'; }, 1800); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(done, fallback);
+    } else { fallback(); }
+    function fallback() {
+        var ta = document.createElement('textarea');
+        ta.value = txt; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); done(); } catch (e) { alert('Select the text and copy it manually.'); }
+        document.body.removeChild(ta);
+    }
+}
+</script>
+</body>
+</html>
