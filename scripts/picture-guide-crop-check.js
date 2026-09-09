@@ -252,18 +252,54 @@ eq('every window ends inside the border', offsetsOk, 14);
 eq('nothing is trimmed by more than 3px a side',
     Math.max(...BATCH.map(s => (s.w - 2 * s.inset - t.w) / 2)) <= 3, true);
 
-// The one thing that can silently come apart later: the photos are one shape
-// and the frame is set to another. Nothing in the app would complain - the
-// board would just quietly grow a gap again, which is where this whole thread
-// started. So read the stylesheet and make it say so out loud.
-console.log('\nthe stylesheet agrees with the pictures');
-const css = fs.readFileSync(require('path').join(__dirname, '..', 'styles.css'), 'utf8');
+// A second sheet arrived at a different shape, which is the case a single
+// hard-coded ratio cannot serve. The Android exports came off the guide sheet
+// taller than wide; the iPhone ones came off wider than tall.
+console.log('\na second sheet, its own shape');
+const ANDROID = [
+    { w: 563, h: 596, inset: 0 }, { w: 564, h: 596, inset: 0 },
+    { w: 566, h: 596, inset: 0 }, { w: 563, h: 593, inset: 0 },
+    { w: 564, h: 594, inset: 0 }, { w: 566, h: 594, inset: 0 },
+    { w: 563, h: 594, inset: 0 }, { w: 563, h: 596, inset: 0 },
+    { w: 563, h: 596, inset: 0 }, { w: 564, h: 596, inset: 0 },
+];
+const ta = batchTarget(ANDROID);
+eq('the size all ten can share', `${ta.w}x${ta.h}`, '563x593');
+// The point of the whole --pg-ar change, stated as an assertion: these two
+// batches genuinely disagree, so no one number can fit both.
+eq('and it is a different shape from the iPhone batch',
+    (ta.w / ta.h > 1) === (t.w / t.h > 1), false);
+
+// The thing that can silently come apart: the photos are one shape and the
+// frame is set to another. Nothing in the app would complain - the board would
+// just quietly grow a gap again, which is where this whole thread started.
+//
+// The frame shape is no longer a number in the stylesheet; it is measured off
+// the first photograph a sheet has and written to --pg-ar. That splits the
+// invariant in two, and BOTH halves have to be checked. A stylesheet that
+// stopped reading the variable would pin every sheet to the fallback; a
+// speeks.js that stopped writing it would do exactly the same thing, silently,
+// and the old single-number test would have passed either way.
+console.log('\nthe frame takes its shape from the pictures');
+const root = require('path').join(__dirname, '..');
+const css = fs.readFileSync(require('path').join(root, 'styles.css'), 'utf8');
 const rule = css.slice(css.indexOf('.pg-frame {'), css.indexOf('}', css.indexOf('.pg-frame {')));
-const ar = (rule.match(/aspect-ratio:\s*([0-9.]+)\s*\/\s*([0-9.]+)/) || []).slice(1);
-eq('.pg-frame declares an aspect-ratio', ar.length, 2);
-eq('and it is the batch size', `${ar[0]} / ${ar[1]}`, `${t.w} / ${t.h}`);
-eq('so a 290px card leaves nothing over',
-    Math.round(Math.abs(290 - 290 * ((t.w / t.h) / (+ar[0] / +ar[1]))) * 100) / 100, 0);
+const ar = (rule.match(/aspect-ratio:\s*var\(\s*--pg-ar\s*,\s*([0-9.]+)\s*\/\s*([0-9.]+)\s*\)/) || []).slice(1);
+eq('.pg-frame defers to --pg-ar', ar.length, 2);
+// The fallback is what a sheet with no photographs yet looks like, so it has to
+// be a real batch size rather than a square guess - otherwise the one board
+// nobody has photographed yet is the one board shaped wrong.
+eq('with a real batch size as the fallback', `${ar[0]} / ${ar[1]}`, `${t.w} / ${t.h}`);
+
+const js = fs.readFileSync(require('path').join(root, 'speeks.js'), 'utf8');
+eq('the board measures its own photograph',
+    /_pgArCache\[cat\] = probe\.naturalWidth \+ ' \/ ' \+ probe\.naturalHeight/.test(js), true);
+eq('and writes it to --pg-ar', /setProperty\('--pg-ar'/.test(js), true);
+eq('pgRender asks for it', /_pgSetFrameShape\(\);/.test(js), true);
+// Switching sheets mid-load must not stamp one sheet's ratio onto another: the
+// probe finishes after the board it was measuring for is already gone.
+eq('a sheet switched mid-load is left alone',
+    /if \(_pgState\.catId === cat\) \{/.test(js), true);
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);

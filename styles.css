@@ -21602,20 +21602,24 @@ select.dd-native {
    at 196px those bites are big enough to see. Rounding the picture to match is
    not an option either: JPEG carries no alpha, so a baked-in curve comes out as
    four white wedges. The box gives way instead of the photograph. */
-/* 591/565, which is not a guess: it is the size every photograph on this board
-   is stored at. The exports came off the guide sheet at fourteen slightly
-   different sizes, 591x565 to 597x571, so a square frame left six or seven
-   pixels of nothing above and below each one and no two cards were let down by
-   quite the same amount. They are all centre-cropped to one size now — cropped,
+/* The frame is the shape of the photographs — and each sheet has its own shape.
+   The iPhone exports came off the guide sheet at 591x565 and the Android ones at
+   563x593: one wider than tall, one taller than wide. A single hard-coded ratio
+   can only be right for one of them, and being wrong is not subtle — it shows as
+   a white bar down both sides of every card on the other sheet.
+   So the ratio is set at runtime from the first photograph the board actually
+   holds (_pgSetFrameShape in speeks.js), and the value below is only the
+   fallback: what a sheet with no photographs in it yet gets to look like.
+   Measured rather than stored, deliberately. There is no second number to keep
+   in step by hand, and a sheet whose photos are re-exported at a new size
+   corrects itself on the next load. What still has to be true is that the photos
+   within one sheet agree with EACH OTHER — that is the job of
+   scripts/pg-crop-borders.html, which centre-crops a batch to one size (cropped,
    not scaled, so nothing is resampled and no photo is stretched into a shape it
-   was never shot in — and the frame is that size. Nothing is left over.
-   Keep this ratio and the stored size in step. If a future batch lands at a
-   different size, normalise the batch first, then change this; a frame tuned to
-   one shape and photos in another is the gap this pair of numbers closes.
-   A portrait photo uploaded from a phone will still letterbox here, and should:
-   contain never crops an example, it just centres what it cannot fill. */
+   was never shot in). Photos that disagree leave the odd ones letterboxed. */
 .pg-frame {
-    position: relative; aspect-ratio: 591 / 565; border: 1.5px solid var(--pg-ink);
+    position: relative; aspect-ratio: var(--pg-ar, 591 / 565);
+    border: 1.5px solid var(--pg-ink);
     border-radius: 0; overflow: hidden; background: #f8fafc;
 }
 .pg-frame[onclick] { cursor: zoom-in; }

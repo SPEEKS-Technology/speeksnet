@@ -24,7 +24,18 @@ a 3px line with a 1px antialias fringe outside it, and on the red ones a second 
 too, so black borders are 4px and red ones are 5px. The app draws its own frame and its own
 OPTIONAL flag, so that border lands as a second outline just inside the first. This finds the
 border on each photo, trims it off, and puts the trimmed photo back under the same filename
-&mdash; nothing in the database changes. It then centre-crops every photo to one size, the largest the whole batch can share, so the board can set a single frame shape and have nothing left over. Set <code>.pg-frame</code>'s <code>aspect-ratio</code> to the size it prints. Edit <code>NAMES</code> below for a new batch.</p>
+&mdash; nothing in the database changes. It then centre-crops every photo to one size, the largest the whole batch can share, so the board can set a single frame shape and have nothing left over.</p>
+<p class="sub">You do not have to tell the app the size afterwards. The board measures
+its own first photograph and sets the frame to it, so each sheet gets its own shape
+&mdash; the iPhone batch is 591&times;565 and the Android one 563&times;593, one wider
+than tall and one taller than wide. What this tool is for is making the photos
+<em>within</em> one sheet agree with each other; the odd one out is the one that ends
+up letterboxed. Edit <code>NAMES</code> below for a new batch.</p>
+<p class="sub"><b>Scan first and read the border column.</b> A batch whose borders were
+already removed before saving should report <code>none</code> on every row &mdash; that
+is the expected result, not a failure, and it means the crop is a pure centring. Any row
+claiming a border on a photo you know is clean is a reason to stop rather than to
+continue: this trims pixels off originals and puts them back under the same name.</p>
 <div class="bar">
   <button id="scan">1 &nbsp; Scan</button>
   <button id="go" disabled>2 &nbsp; Crop &amp; re-upload</button>
@@ -34,11 +45,16 @@ border on each photo, trims it off, and puts the trimmed photo back under the sa
 <script>
 var URL_BASE = "https://ejzaqmyxxrkmxvzbjeuo.supabase.co";
 var KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVqemFxbXl4eHJrbXh2emJqZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNzA2NjAsImV4cCI6MjA5NDY0NjY2MH0.-SrbSaF-n8WkNW6tieDiA2FhGHB7qP4b6XrEyy2JF74";
-var NAMES = ["iphones-01-home-lock-screen.jpg","iphones-02-everything-included.jpg",
-"iphones-03-settings-page-1.jpg","iphones-04-settings-page-2.jpg","iphones-05-battery-health.jpg",
-"iphones-06-parts-and-service.jpg","iphones-07-screen-off.jpg","iphones-08-back-of-phone.jpg",
-"iphones-09-top-side-of-phone.jpg","iphones-10-bottom-side-of-phone.jpg","iphones-11-side-of-phone.jpg",
-"iphones-12-opposite-side-of-phone.jpg","iphones-13-apple-warranty.png","iphones-14-extra-accessories.jpg"];
+var NAMES = ["android-phones-01-home-lock-screen.jpg",
+"android-phones-02-about-phone.jpg",
+"android-phones-03-storage-information.jpg",
+"android-phones-04-software-information.jpg",
+"android-phones-05-screen-off.jpg",
+"android-phones-06-back-of-phone.jpg",
+"android-phones-07-side-of-phone.jpg",
+"android-phones-08-opposite-side-of-phone.jpg",
+"android-phones-09-top-side-of-phone.jpg",
+"android-phones-10-bottom-side-of-phone.jpg"];
 var MAX_INSET = 24, TOL = 46, CONTRAST = 70, MAX_FRAC = 0.03;
 var rows = {}, state = {};
 
