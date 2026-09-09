@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.0';
+const APP_VERSION = '3.8.1';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -16236,8 +16236,21 @@ function _b2bHasCorpDelegation() {
 }
 function _b2bIsCorp()    { return B2B_CORP_ROLES.includes(_b2bRole()) || _b2bHasCorpDelegation(); }
 function _b2bIsDM()      { return _b2bRole() === 'district manager' || _b2bHasCorpDelegation(); }
-// Accepting a quote is deliberately NOT delegable -- it locks the money.
-function _b2bCanAccept()  { return B2B_ACCEPT_ROLES.includes(_b2bRole()); }
+// Accepting a quote IS delegable, as of 2026-09-08.
+//
+// It used to be role-only, on the reasoning that locking the money in should
+// not travel with a delegation. In practice that made the whole company's B2B
+// approvals wait on one person -- Nick: "The B2B Approvals are limited to just
+// paul... (FOR ALL CORP NOW)". A pipeline where every accepted quote needs one
+// named individual stalls whenever he is unavailable, which is a worse failure
+// than a lent corp hat being used.
+//
+// The safeguard that actually matters is unchanged and is enforced on both
+// sides: _b2bApprovalGate still requires the client's approval on record (an
+// email, a screenshot, or a recorded reason it was given by phone) before
+// anything can be accepted. Who clicks it is now the same question as who can
+// see the deal at all.
+function _b2bCanAccept()  { return _b2bIsCorp(); }
 // The full CRM: contact details, the add/edit form, the outreach cadence.
 // Corp business -- a store prices and lists goods, it never rings the client.
 function _b2bCanClients() { return ['ceo', 'district manager', 'mocd'].includes(_b2bRole()); }
@@ -16532,7 +16545,15 @@ async function _b2bSend(payload) {
     const res = await fetch(B2B_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ ...payload, role: _b2bRole(), user: _b2bUser() })
+        // corp_delegated rides on every call so the server's ACCEPT_ROLES gate
+        // can honour a lent corp hat without each caller remembering to send
+        // it. Same trust model as `role` itself, which this app has always taken
+        // from the browser (see the header in b2b-deals) -- it is not a security
+        // boundary, it is the client telling the server which rule to apply.
+        body: JSON.stringify({
+            ...payload, role: _b2bRole(), user: _b2bUser(),
+            corp_delegated: _b2bHasCorpDelegation(),
+        })
     });
     const out = await res.json().catch(() => ({}));
     if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
@@ -22539,7 +22560,11 @@ function _b2bStageReview(deal) {
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>
                 <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
                     value="${escapeHtml(deal.client?.contact_email || '')}">
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
+                <!-- A complete route, not a fallback: on an unsent quote this
+                     also records the send, so Mark Accepted becomes available
+                     without anyone having to open a mail draft first. -->
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
+                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
                 <!-- For a quote sent by hand, outside the tool. Paul asked for
                      this twice; Open In Email stays the normal route. Same label
                      as the one on the quote screen's send bar -- one action
@@ -22581,7 +22606,11 @@ function _b2bStageQuote(deal) {
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
                 <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
                     value="${escapeHtml(deal.client?.contact_email || '')}">
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
+                <!-- A complete route, not a fallback: on an unsent quote this
+                     also records the send, so Mark Accepted becomes available
+                     without anyone having to open a mail draft first. -->
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
+                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
                 <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')" data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
                 <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
@@ -22635,7 +22664,11 @@ function _b2bStageQuote(deal) {
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
                 <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
                     value="${escapeHtml(deal.client?.contact_email || '')}">
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
+                <!-- A complete route, not a fallback: on an unsent quote this
+                     also records the send, so Mark Accepted becomes available
+                     without anyone having to open a mail draft first. -->
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
+                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
                 <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')" data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
                 <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
@@ -23052,25 +23085,60 @@ function _b2bQuoteText(deal, items) {
     ].filter(l => l !== null).join('\n');
 }
 
+// Copy is a COMPLETE way to send a quote, not a fallback for the mailto.
+//
+// Nick, 2026-09-08: "I do not like the current work flow of it forcing you to
+// open your email. Need to make it so that way you just select copy, and in
+// that state you automatically have the ability to mark it as accepted."
+//
+// He is right that it was forced. Accepting requires stage `quote`, and the
+// ONLY route from `review` to `quote` was b2bOpenDraft -- which fires a mailto:
+// first. So anyone who preferred to paste into a webmail tab, or whose machine
+// has no mail client registered, had to trigger a draft they did not want
+// before the deal would let them accept.
+//
+// So a copy off the review screen records the send itself. The stage moves, the
+// Accept button appears, and the person pastes wherever they like.
+//
+// Recording is deliberately limited to leaving `review`. On a deal already at
+// `quote` there is nothing to unlock -- accept is available and the client has
+// had it -- and bumping quote_send_count for somebody copying the quote to
+// re-read it would corrupt the one honest record of how many times it actually
+// went out.
 async function b2bCopyQuote() {
     const deal = _b2bModalDeal;
     if (!deal) return;
     const html = _b2bQuoteInlineHtml(deal, _b2bModalItems);
     const text = _b2bQuoteText(deal, _b2bModalItems);
+
+    let copied = false;
     try {
         await navigator.clipboard.write([new ClipboardItem({
             'text/html':  new Blob([html], { type: 'text/html' }),
             'text/plain': new Blob([text], { type: 'text/plain' }),
         })]);
-        alert('Quote copied — paste it into Gmail or Outlook.');
+        copied = true;
     } catch (_) {
-        try {
-            await navigator.clipboard.writeText(text);
-            alert('Quote copied as plain text.');
-        } catch (e) {
-            alert(`Couldn't copy the quote: ${e.message}`);
-        }
+        try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
     }
+    if (!copied) return _b2bSay("Your browser blocked the clipboard — use Open In Email instead.", true);
+
+    // Nothing to record: already sent, or this person may not approve. Copying
+    // still works, it just doesn't move the deal.
+    if (!_b2bAwaitingApproval(deal) || !_b2bCanAccept()) {
+        return _b2bSay('Quote copied — paste it into Gmail or Outlook.');
+    }
+
+    try {
+        await _b2bSend({ action: 'send_quote', id: deal.id, to: '' });
+    } catch (e) {
+        // The copy succeeded, so say so rather than implying it failed.
+        return _b2bSay(`Quote copied, but it couldn't be recorded as sent: ${e.message}`, true);
+    }
+    await b2bRefresh();
+    const next = _b2bDealById(deal.id);
+    if (next) { _b2bModalDeal = next; _b2bStageQuote(next); }
+    _b2bSay('Quote copied and recorded as sent — paste it, then Mark Accepted once they agree.');
 }
 
 // Smart punctuation survives a clipboard paste but mangles in a mailto body,
