@@ -226,7 +226,7 @@ const cropWindow = (s, t) => ({
 });
 
 // The real batch: measured sizes with the border insets this file verifies.
-const GUIDE = 593;   // scripts/pg-crop-borders.html
+const SQUARE = 563;   // scripts/pg-crop-borders.html
 
 const BATCH = [
     { w: 602, h: 576, inset: 4 }, { w: 601, h: 575, inset: 5 },
@@ -257,68 +257,71 @@ eq('nothing is trimmed by more than 3px a side',
 // Two sheets, two shapes, and one canvas they both land on. This is the case
 // the old per-batch target could not serve: it made each sheet internally
 // perfect and made the sheets differ from each other.
-console.log('\ntwo sheets, one standard canvas');
+const root = require('path').join(__dirname, '..');
+const css = fs.readFileSync(require('path').join(root, 'styles.css'), 'utf8');
+const rule = css.slice(css.indexOf('.pg-frame {'), css.indexOf('}', css.indexOf('.pg-frame {')));
+const js = fs.readFileSync(require('path').join(root, 'speeks.js'), 'utf8');
+const tool = fs.readFileSync(require('path').join(root, 'scripts', 'pg-crop-borders.html'), 'utf8');
+console.log('\ntwo sheets, one standard square');
 const IPHONE_SIZE = { w: 591, h: 565 };
 const ANDROID_SIZE = { w: 563, h: 593 };
 eq('the two sheets really do disagree on shape',
     (IPHONE_SIZE.w / IPHONE_SIZE.h > 1) === (ANDROID_SIZE.w / ANDROID_SIZE.h > 1), false);
-eq('and the canvas is big enough for both without cropping',
-    GUIDE >= Math.max(IPHONE_SIZE.w, IPHONE_SIZE.h, ANDROID_SIZE.w, ANDROID_SIZE.h), true);
+// 563 is the narrowest edge in the guide, which is what makes a square
+// reachable by cropping alone. A square any larger would have to be padded
+// out to, and padding is the thing this replaced.
+eq('and the square is small enough for both to be cropped to it',
+    SQUARE <= Math.min(IPHONE_SIZE.w, IPHONE_SIZE.h, ANDROID_SIZE.w, ANDROID_SIZE.h), true);
+eq('and it is the largest such square', SQUARE,
+    Math.min(IPHONE_SIZE.w, IPHONE_SIZE.h, ANDROID_SIZE.w, ANDROID_SIZE.h));
 
-// PADDED to the square, not cropped to it. These are the measured distances
-// from subject to edge in the real photos, and they are what rules cropping
-// out: the pad each sheet needs is larger than the margin its tightest photo
-// has, so a crop of that size would eat into the subject.
-//
-// Android: every one of the ten has its subject within 12px of top or bottom.
-// iPhone: five of fourteen have theirs touching the left or right edge.
-console.log('\npadding, because cropping would cut the subject');
-const TIGHTEST_ANDROID_VERTICAL = 0;   // seven of the ten sit on the bottom row
-const TIGHTEST_IPHONE_HORIZONTAL = 0;  // iphones-09 and -10 run to the right edge
-const androidPad = Math.round((GUIDE - ANDROID_SIZE.w) / 2);
-const iphonePad = Math.round((GUIDE - IPHONE_SIZE.h) / 2);
-eq('Android is padded sideways, 15px a side', androidPad, 15);
-eq('iPhone is padded top and bottom, 14px a side', iphonePad, 14);
-eq('cropping Android to the square would cut into the subject',
-    androidPad > TIGHTEST_ANDROID_VERTICAL, true);
-eq('cropping iPhone to the square would cut into the subject',
-    iphonePad > TIGHTEST_IPHONE_HORIZONTAL, true);
+// CROPPED, not padded. Padding was tried twice and failed the same way both
+// times: a band around a photograph reads as a border whatever colour it is.
+// Sampled at the photo's edge the band came out pink on the red-celled shots
+// (bleed from the printed red line); sampled deeper it came out lighter than
+// the backdrop's own vignetted edge. Ethan, on the second one: "There is
+// actually this weird border on all of the pictures, just make the actual
+// picture fit inside of the box."
+console.log('\ncropped, and the window goes round the subject');
+eq('nothing is padded any more', /function backdrop\(/.test(tool), false);
+eq('the window is taken around the subject', /function subject\(p\)\{/.test(tool)
+    && /function windowAt\(len, take, s0, s1\)\{/.test(tool), true);
 
-// The frame and the canvas are one decision in two files. Either half alone
+// The window MUST depend on where the subject is. A centred crop is the
+// version that made cropping look impossible: the phone sits close to an edge
+// in most of these, so taking the middle clips something on nearly every
+// photo. Choosing the window that contains the subject leaves 16 of the 24
+// untouched. If windowAt ever stops reading s0/s1 it is a centred crop again
+// and the test would otherwise still pass.
+const wAt = tool.slice(tool.indexOf('function windowAt('),
+    tool.indexOf('}', tool.indexOf('return Math.max(0, Math.min(slack, want));')));
+eq('and the window is placed from the subject, not the middle',
+    /s0 \+ \(s1 - s0\) \/ 2/.test(wAt), true);
+
+// The subject is the dark or saturated thing on a pale backdrop - NOT
+// "anything unlike the backdrop". That looser reading counts the acrylic
+// stand, its shadow and the vignette, which is what made every photo look
+// like it reached its own edge.
+eq('the subject is the dark or saturated thing, not the stand',
+    /var SUBJ_LUMA = \d+, SUBJ_SAT = \d+;/.test(tool), true);
+// A dark-mode screenshot inverts it, and one of the fourteen is exactly that.
+eq('and the test flips for a dark-ground screenshot',
+    /pale \? \(L < bgL - SUBJ_LUMA/.test(tool), true);
+
+// Too small to crop is refused, never quietly padded - otherwise a future
+// batch reintroduces the border this whole thread was about.
+eq('a photo too small for the square is refused',
+    /too small for . \+ SQUARE/.test(tool), true);
+
+// The frame and the square are one decision in two files. Either half alone
 // is a letterboxed board, so both are checked.
-console.log('\nthe frame is the canvas');
-const root = require('path').join(__dirname, '..');
-const css = fs.readFileSync(require('path').join(root, 'styles.css'), 'utf8');
-const rule = css.slice(css.indexOf('.pg-frame {'), css.indexOf('}', css.indexOf('.pg-frame {')));
+console.log('\nthe frame is the square');
 eq('.pg-frame is square', /aspect-ratio:\s*1\s*\/\s*1\s*;/.test(rule), true);
 // A ratio read off the photos at runtime is what this replaced. If it comes
 // back, the sheets go back to differing from each other.
 eq('and does not take its shape from the photos', /--pg-ar/.test(css), false);
-const js = fs.readFileSync(require('path').join(root, 'speeks.js'), 'utf8');
 eq('nor does the board measure them', /_pgSetFrameShape/.test(js), false);
-
-const tool = fs.readFileSync(require('path').join(root, 'scripts', 'pg-crop-borders.html'), 'utf8');
-eq('the tool targets the same square', new RegExp('var GUIDE = ' + GUIDE + ';').test(tool), true);
-eq('and fills the pad with the photo backdrop, not white',
-    /function backdrop\(/.test(tool) && /fillStyle = backdrop\(/.test(tool), true);
-
-// ...and sampled from INSIDE the picture, which is the half that actually
-// matters. Sampling the edge ring looks right and is the bug it caused: the
-// red-celled shots carry a warm bleed from the printed red line reaching about
-// 25px in, so the edge is not the backdrop. iphones-02 got a pad at R-B +22
-// against its own interior of +11 - a flat pink band 14px wide all round the
-// photograph, which is precisely the "weird red border" the pad exists to
-// avoid. Of the 24 photos, the three that came out of red cells were three of
-// the four the repair had to touch; that is not a coincidence worth losing.
-eq('sampled from inside the picture, not off its edge',
-    /var SAFE_IN = \d+, SAFE_BAND = \d+;/.test(tool)
-    && /var from = Math\.min\(inset \+ SAFE_IN, half\);/.test(tool), true);
-eq('and over a band of rings, so one unlucky row cannot decide it',
-    /for \(var k = from; k < Math\.min\(from \+ SAFE_BAND, half\); k\+\+\)/.test(tool), true);
-// Deep enough to clear the bleed that caused this. 25px was where iphones-02
-// stopped changing, so a SAFE_IN under about 12 would be back inside it.
-eq('deep enough to clear the bleed',
-    +(tool.match(/var SAFE_IN = (\d+)/) || [0, 0])[1] >= 12, true);
+eq('the tool targets the same square', new RegExp('var SQUARE = ' + SQUARE + ';').test(tool), true);
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);

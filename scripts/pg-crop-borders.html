@@ -24,26 +24,26 @@ a 3px line with a 1px antialias fringe outside it, and on the red ones a second 
 too, so black borders are 4px and red ones are 5px. The app draws its own frame and its own
 OPTIONAL flag, so that border lands as a second outline just inside the first. This finds the
 border on each photo, trims it off, and puts the trimmed photo back under the same filename
-&mdash; nothing in the database changes. It then puts every photo onto one standard canvas &mdash; <b>593&times;593</b>, the
+&mdash; nothing in the database changes. It then crops every photo to one standard square &mdash; <b>563&times;563</b>, the
 same for every sheet in the guide &mdash; so all the boxes on the board are identical
-and each photo fills its own completely.</p>
-<p class="sub"><b>It pads; it does not crop to fit.</b> That is measured, not assumed.
-The exports arrive in two shapes, 591&times;565 for iPhones and 563&times;593 for
-Android, and trimming either one down to a shared shape would cut about 14px off two
-sides. Every one of the ten Android photos has its subject within 12px of the top or
-bottom edge, and five of the fourteen iPhone photos have theirs touching the left or
-right &mdash; the phone body, the charging port, the notch. So the short side is filled
-out instead, with the photo's own backdrop colour, which is why the padding does not
-read as a border. That colour is sampled from a band <em>well inside</em> the picture,
-never from its edge: the red-celled shots carry a warm bleed from the printed red line
-that reaches about 25px in, and sampling at the edge turns that bleed into a flat pink
-band around the whole photograph. A photo larger than the canvas in some direction
-is centre-cropped down to it, but only by the few pixels the export happened to be
-over.</p>
-<p class="sub">Edit <code>NAMES</code> below for a new batch. The canvas is
-<code>GUIDE</code>, and <code>.pg-frame</code> in styles.css is square to match &mdash;
-those two go together, and a batch left un-standardised shows up on the board as a
-letterboxed card rather than quietly reshaping the whole sheet.</p>
+and each photo fills its own to the edge.</p>
+<p class="sub"><b>Cropped, never padded and never scaled.</b> Padding was tried first
+and is what this replaced: filling a photo out to a shared shape leaves a band around
+it, and a band around a photograph reads as a border no matter what colour it is. Two
+attempts at making that band invisible both failed in the same way &mdash; sampled at
+the photo's edge it came out pink on the red-celled shots, sampled further in it came
+out lighter than the vignetted edge. So the picture fills the box instead.</p>
+<p class="sub">The crop window is chosen <b>per photo, around its subject</b>, not
+taken from the middle. That is what makes cropping affordable here. A centred crop
+would clip something on nearly every photo, because the phone sits close to an edge in
+most of them; picking the window that contains the subject leaves 16 of the 24
+untouched, and the worst case among the rest is 13px off a subject nearly 600px tall.
+The subject is found as the dark or saturated thing on a pale backdrop, so the acrylic
+stand, its shadow and the backdrop's own vignette do not count as things to protect.</p>
+<p class="sub">Edit <code>NAMES</code> below for a new batch. The square is
+<code>SQUARE</code>, and <code>.pg-frame</code> in styles.css is square to match &mdash;
+those two go together. A photo whose shorter side is under <code>SQUARE</code> cannot be
+cropped to it and is refused rather than quietly padded.</p>
 <p class="sub"><b>Scan first and read the border column.</b> A batch whose borders were
 already removed before saving should report <code>none</code> on every row &mdash; that
 is the expected result, not a failure, and it means the crop is a pure centring. Any row
@@ -84,10 +84,11 @@ var NAMES = [
 "android-phones-09-top-side-of-phone.jpg",
 "android-phones-10-bottom-side-of-phone.jpg"];
 var MAX_INSET = 24, TOL = 46, CONTRAST = 70, MAX_FRAC = 0.03;
-// The one canvas every photograph in the guide ends up on. 593 is the largest
-// edge any batch has arrived at, so it is reached by padding rather than by
-// throwing pixels away. Keep .pg-frame square if this ever stops being square.
-var GUIDE = 593;
+// The one square every photograph in the guide ends up on. 563 is the NARROWEST
+// edge any batch has arrived at, which makes it the largest square reachable by
+// cropping alone - no photo has to be padded out and none has to be resampled.
+// Keep .pg-frame square if this ever stops being square.
+var SQUARE = 563;
 var rows = {}, state = {};
 
 NAMES.forEach(function(name){
@@ -169,65 +170,84 @@ async function load(name){
   return img;
 }
 
-// The colour to pad with: the photo's own backdrop. A flat #fff pad would be
-// plainly visible - these backdrops measure around 190-218 grey, and one of them
-// (a dark-mode screenshot) is 29. Sampled per photo, the pad reads as more
-// backdrop rather than as a border.
+// What has to survive a crop: the SUBJECT, not "anything unlike the backdrop".
+// Measuring the latter makes every photo look like it reaches its own edge,
+// because the acrylic stand, its shadow and the backdrop's own vignette all
+// qualify - and that reading is what made cropping look impossible and sent
+// this tool down the padding road twice. The thing to protect is the phone (or
+// the box, or the cable): the genuinely dark or saturated object on a pale
+// backdrop. The stand is pale and almost grey, so it does not count.
 //
-// Sampled from a BAND WELL INSIDE the edge, not from the edge itself, and this
-// is the whole point of the function. Sampling the ring at "inset" looks obviously
-// right and is wrong: the red-celled photos on the printed sheet carry a soft
-// warm bleed from that red line which reaches ~25px into the picture, decaying
-// as it goes, and detectInset does not trim it because it is a gradient rather
-// than a drawn line. Sampling there gave iphones-02 a pad at R-B +22 against
-// its own interior of +11 - a flat pink band 14px wide around the photograph,
-// which is exactly the "weird red border" it was supposed to avoid. Read from
-// SAFE_IN inwards and the pad matches what the eye reads as the backdrop.
-//
-// Median over the whole band, not a mean, for the reason detectInset uses one:
-// the subject and its shadow poke in, and a mean would drag the colour toward
-// them. Several rings rather than one so a single unlucky row cannot decide it.
-var SAFE_IN = 18, SAFE_BAND = 10;
+// The luma test flips for a dark-mode screenshot, where the subject is the
+// light thing on a dark ground.
+var SUBJ_LUMA = 58, SUBJ_SAT = 46;
 
-function backdrop(img, inset){
-  var p = pixels(img, img.naturalWidth, img.naturalHeight);
-  var half = (Math.min(p.w, p.h) >> 1) - 1;
-  var from = Math.min(inset + SAFE_IN, half);
-  var cols = [];
-  for (var k = from; k < Math.min(from + SAFE_BAND, half); k++){
-    cols = cols.concat(ringCols(p, k));
+function subject(p){
+  var ring = [], x, y;
+  function at(px, py){ var o = (py * p.w + px) * 4; return [p.d[o], p.d[o+1], p.d[o+2]]; }
+  for (x = 0; x < p.w; x++){ ring.push(at(x, 0)); ring.push(at(x, p.h - 1)); }
+  for (y = 1; y < p.h - 1; y++){ ring.push(at(0, y)); ring.push(at(p.w - 1, y)); }
+  var bg = median(ring), bgL = 0.299*bg[0] + 0.587*bg[1] + 0.114*bg[2];
+  var pale = bgL > 90;
+  var x0 = p.w, y0 = p.h, x1 = -1, y1 = -1;
+  for (y = 0; y < p.h; y++){
+    for (x = 0; x < p.w; x++){
+      var q = at(x, y), L = 0.299*q[0] + 0.587*q[1] + 0.114*q[2];
+      var sat = Math.max(q[0], q[1], q[2]) - Math.min(q[0], q[1], q[2]);
+      var hit = pale ? (L < bgL - SUBJ_LUMA || sat > SUBJ_SAT)
+                     : (L > bgL + SUBJ_LUMA || sat > SUBJ_SAT);
+      if (hit){ if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
   }
-  if (!cols.length) cols = ringCols(p, Math.min(inset, half));
-  var m = median(cols);
-  return "rgb(" + m[0] + "," + m[1] + "," + m[2] + ")";
+  return x1 < 0 ? null : { x0: x0, y0: y0, x1: x1, y1: y1 };
 }
 
-// Put the photo on the guide's standard canvas. Two things happen, in this
-// order, and only the first can lose anything:
-//   - if the photo is BIGGER than the canvas in some direction, a centred window
-//     of canvas size is taken (in practice a few pixels an export ran over);
-//   - whatever is left over is filled with the photo's own backdrop colour.
-//
-// Never scaled. A guide photo is a reference for what a real photo should look
-// like, so resampling it to fit would be softening the thing being referenced,
-// and squeezing it to a new shape would misreport the object's proportions.
+// Where to take the window from along one axis. Keep the subject WHOLE if it
+// fits, rather than taking the middle and hoping; only a subject longer than the
+// square itself loses anything, and then it is centred on the subject so the
+// loss is split between its two ends instead of falling all on one.
+function windowAt(len, take, s0, s1){
+  var slack = len - take;
+  if (slack <= 0) return 0;
+  var want = Math.round(s0 + (s1 - s0) / 2 - take / 2);
+  return Math.max(0, Math.min(slack, want));
+}
+
+// Put the photo on the guide's standard square. Border off, then a window of
+// SQUARE x SQUARE taken around the subject. Nothing is added and nothing is
+// resampled: a guide photo is the reference for what a real photo should look
+// like, so softening it or squeezing it into a new shape would be corrupting
+// the thing being referenced.
 function standardise(img, inset, png){
   var iw = img.naturalWidth, ih = img.naturalHeight;
-  var cw = iw - 2 * inset, ch = ih - 2 * inset;      // the photo, border off
-  var takeW = Math.min(cw, GUIDE), takeH = Math.min(ch, GUIDE);
-  var sx = Math.round(inset + (cw - takeW) / 2);
-  var sy = Math.round(inset + (ch - takeH) / 2);
-  var dx = Math.round((GUIDE - takeW) / 2), dy = Math.round((GUIDE - takeH) / 2);
+  var cw = iw - 2 * inset, ch = ih - 2 * inset;
+  if (cw < SQUARE || ch < SQUARE){
+    throw new Error("only " + cw + "x" + ch + ", too small for " + SQUARE + "\u00b2");
+  }
 
+  // Find the subject in the bordered-off photo, then map back to source coords.
+  var inner = document.createElement("canvas");
+  inner.width = cw; inner.height = ch;
+  inner.getContext("2d").drawImage(img, inset, inset, cw, ch, 0, 0, cw, ch);
+  var p = pixels(inner, cw, ch);
+  var s = subject(p) || { x0: 0, y0: 0, x1: cw - 1, y1: ch - 1 };
+
+  var ox = windowAt(cw, SQUARE, s.x0, s.x1), oy = windowAt(ch, SQUARE, s.y0, s.y1);
   var c = document.createElement("canvas");
-  c.width = GUIDE; c.height = GUIDE;
+  c.width = SQUARE; c.height = SQUARE;
   var g = c.getContext("2d");
-  // Filled for PNGs too. A transparent pad would composite to black in some
-  // viewers, and the board's frame is not the only place these get opened.
-  g.fillStyle = backdrop(img, inset);
-  g.fillRect(0, 0, GUIDE, GUIDE);
-  g.drawImage(img, sx, sy, takeW, takeH, dx, dy, takeW, takeH);
-  c._pad = { x: dx, y: dy, cropW: cw - takeW, cropH: ch - takeH };
+  // White underneath even though the window covers every pixel: a source PNG
+  // can carry partial alpha, and a canvas whose base is transparent lets that
+  // through to be composited by whatever opens the file - black, in some
+  // viewers. Cheap insurance, and it costs nothing when the source is opaque.
+  g.fillStyle = "#fff"; g.fillRect(0, 0, SQUARE, SQUARE);
+  g.drawImage(inner, ox, oy, SQUARE, SQUARE, 0, 0, SQUARE, SQUARE);
+
+  // How much of the subject the window could not contain, for the report: this
+  // is the number worth looking at before letting the upload run.
+  c._crop = { ox: ox, oy: oy, lost: Math.max(
+    Math.max(0, ox - s.x0), Math.max(0, s.x1 - (ox + SQUARE - 1)),
+    Math.max(0, oy - s.y0), Math.max(0, s.y1 - (oy + SQUARE - 1))) };
   return c;
 }
 
@@ -247,25 +267,22 @@ document.getElementById("scan").onclick = async function(){
       st.innerHTML = '<span class="err">' + e.message + "</span>";
     }
   }
-  // No batch minimum to work out any more: the canvas is the same for every
-  // sheet in the guide, so a batch cannot pull the frame shape around after it.
-  var worstCrop = 0;
+  // No batch minimum to work out: the square is the same for every sheet in the
+  // guide, so a batch cannot pull the frame shape around after it.
+  var worstLost = 0;
   loaded.forEach(function(s){
     var tr = rows[s.name], st = tr.querySelector(".st");
     try {
       s.out = standardise(s.img, s.inset, s.png);
-      var pad = s.out._pad;
-      worstCrop = Math.max(worstCrop, pad.cropW, pad.cropH);
+      worstLost = Math.max(worstLost, s.out._crop.lost);
       tr.querySelector(".a").appendChild(thumb(s.out, 90));
       tr.querySelector(".d").innerHTML = (s.inset
         ? '<span class="ok">' + s.inset + 'px</span>' : 'none');
-      // Say what happened per side, because "padded 15" and "cropped 15" are
-      // very different news and the old column could not tell them apart.
-      tr.querySelector(".s").innerHTML = GUIDE + "&times;" + GUIDE
-        + '<br><small>pad ' + pad.x + '/' + pad.y + ' a side'
-        + (pad.cropW || pad.cropH
-          ? ', <span class="err">crop ' + pad.cropW + '/' + pad.cropH + '</span>' : '')
-        + '</small>';
+      tr.querySelector(".s").innerHTML = SQUARE + "&times;" + SQUARE
+        + '<br><small>window at ' + s.out._crop.ox + ',' + s.out._crop.oy
+        + (s.out._crop.lost
+          ? ' &middot; <span class="err">subject clipped ' + s.out._crop.lost + 'px</span>'
+          : ' &middot; subject whole') + '</small>';
       state[s.name] = s;
       st.textContent = "ready";
     } catch (e) {
@@ -273,9 +290,10 @@ document.getElementById("scan").onclick = async function(){
     }
   });
   document.getElementById("target").innerHTML = loaded.length
-    ? "Standard canvas: " + GUIDE + "×" + GUIDE + " for every sheet. Worst crop in this batch: "
-      + worstCrop + "px total" + (worstCrop > 6
-        ? ' &mdash; <span class="err">check that one before uploading</span>' : ' (padding only otherwise).')
+    ? "Standard square: " + SQUARE + "×" + SQUARE + " for every sheet, no padding. "
+      + "Worst subject clip in this batch: " + worstLost + "px"
+      + (worstLost > 20 ? ' &mdash; <span class="err">look at that one before uploading</span>'
+                        : '.')
     : "";
   document.getElementById("go").disabled = !Object.keys(state).length;
 };
