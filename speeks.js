@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.4';
+const APP_VERSION = '3.8.5';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -19574,8 +19574,12 @@ function _b2bProofPanel(owner) {
                 ondragleave="b2bProofDragOut(event,'${owner.id}')"
                 ondrop="b2bProofDrop(event,${ownerAttr})">
                 <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
+                <!-- Says the dependable route out loud. Outlook can only hand a
+                     message to a browser as a virtual file and not every version
+                     will, so "drag it out of Outlook" on its own sets people up
+                     to fight it. Desktop-then-drop always works. -->
                 <span class="b2b-proof-droptxt"><b>Drop the client's email here</b>
-                    <span>Straight out of Outlook — a .msg or .eml file</span></span>
+                    <span>Drag it straight from Outlook, or onto your desktop first and then here</span></span>
                 <button class="b2b-mini" onclick="b2bOpenProofAdd(${ownerAttr})">Choose a file</button>
             </div>
         </div>`;
@@ -19599,15 +19603,63 @@ function b2bProofDragOut(ev, id) {
 // application/octet-stream -- whether Outlook is registered for the extension
 // decides it, so the extension is the reliable signal and the MIME is the hint.
 const B2B_MSG_MIME = 'application/vnd.ms-outlook';
+
+// ACCEPT BY EXCLUSION, NOT BY ALLOWLIST.
+//
+// The first version required the name to end .msg or .eml. That is the wrong way
+// round, and it is the likeliest reason this kept failing: a message saved out
+// of a mail app arrives named all sorts of ways. Windows hides known extensions,
+// so a drag can carry a name with none at all; Outlook's virtual file is named
+// after the SUBJECT; and "Save As" produces .eml, .msg or .htm depending on the
+// dialog. Refusing a genuine email for how it happened to be named is a far
+// worse failure than accepting a file somebody meant to attach.
+//
+// So only things that are definitely NOT a message are turned away, and the
+// server's MIME allowlist stays the real gate.
+//
+// .txt and .rtf are turned away on purpose, and are the one place this errs
+// towards refusing. No mail app hands a browser either one; the only way to
+// produce them is Outlook's "Save as Text Only", which deliberately discards the
+// structure that makes the file evidence, so accepting one would put something on
+// the record that cannot prove what it claims to. .htm is deliberately NOT in the
+// list -- "Save as HTML" is a real route and that file still carries the message.
+const B2B_NOT_MAIL_RX =
+    /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|pdf|docx?|xlsx?|pptx?|zip|rar|7z|gz|csv|txt|rtf|mp3|mp4|mov|avi|exe|dll)$/i;
+
 function _b2bMailMime(file) {
-    const n = (file.name || '').toLowerCase();
+    const n = String(file.name || '').trim().toLowerCase();
     if (n.endsWith('.msg')) return B2B_MSG_MIME;
     if (n.endsWith('.eml')) return 'message/rfc822';
-    return file.type || '';
+    const t = String(file.type || '').toLowerCase();
+    if (t === B2B_MSG_MIME || t === 'message/rfc822') return t;
+    // No usable extension and no useful type -- which is exactly how a dragged
+    // message routinely arrives. Treat it as a saved email rather than refusing
+    // it; the bytes are the evidence either way, and the alternative is telling
+    // somebody their own email is not an email.
+    return 'message/rfc822';
 }
 function _b2bIsMailFile(file) {
-    const m = _b2bMailMime(file);
-    return m === B2B_MSG_MIME || m === 'message/rfc822';
+    return !B2B_NOT_MAIL_RX.test(String(file.name || '').trim());
+}
+
+// What the browser actually handed over. Built for the failure message, because
+// an Outlook drag can fail for several unrelated reasons and they are
+// indistinguishable from the outside -- "nothing arrived" was hiding whether the
+// mail app offered no file, offered one it would not release, or offered
+// something that was not a file at all. Must be read synchronously: a
+// DataTransfer is emptied the moment the handler yields.
+function _b2bDropDiag(dt) {
+    const list = (v) => (v && v.length ? v.join(' | ') : 'none');
+    let types = [], items = [], files = [];
+    try { types = Array.from(dt?.types || []); } catch (_) {}
+    try {
+        items = Array.from(dt?.items || []).map(i => `${i.kind}${i.type ? ':' + i.type : ''}`);
+    } catch (_) {}
+    try {
+        files = Array.from(dt?.files || [])
+            .map(f => `${f.name || '(no name)'} · ${f.size}b · ${f.type || 'no type'}`);
+    } catch (_) {}
+    return `formats: ${list(types)}\nitems: ${list(items)}\nfiles: ${list(files)}`;
 }
 
 // OUTLOOK DOES NOT PUT A FILE IN dataTransfer.files, AND THAT IS THE WHOLE BUG.
@@ -19661,7 +19713,14 @@ function _b2bDropFilePromise(dt) {
 // Explorer lands in dataTransfer.files instead), so give it the extension it
 // should have had rather than refusing a message for how it was titled.
 function _b2bAsMailFile(file, virtual) {
-    if (!virtual || _b2bIsMailFile(file)) return file;
+    // Gated on the EXTENSION, not on _b2bIsMailFile. Once that check became
+    // permissive it started returning true for a subject-named file, which
+    // short-circuited this and left an Outlook .msg stored as message/rfc822 --
+    // a file whose bytes are MSG but whose name says .eml, which Outlook then
+    // refuses to open. The question here is only "does it already carry a mail
+    // extension", so ask that directly.
+    const named = /\.(msg|eml)$/i.test(String(file.name || '').trim());
+    if (!virtual || named) return file;
     const base = String(file.name || 'message').replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'message';
     try {
         return new File([file], `${base}.msg`, { type: B2B_MSG_MIME, lastModified: file.lastModified });
@@ -19673,29 +19732,34 @@ function _b2bAsMailFile(file, virtual) {
 async function b2bProofDrop(ev, ownerId, ownerKind) {
     ev.preventDefault();
     b2bProofDragOut(ev, ownerId);
-    // Synchronous, before anything can yield.
+    // All read synchronously, before anything can yield.
     const pending = _b2bDropFilePromise(ev.dataTransfer);
     const sawFileItem = !!(ev.dataTransfer?.files?.length)
         || Array.from(ev.dataTransfer?.items || []).some(i => i.kind === 'file');
+    const diag = _b2bDropDiag(ev.dataTransfer);
 
     const got = await pending;
     const file = got.file ? _b2bAsMailFile(got.file, got.virtual) : null;
     if (!file) {
-        // Distinguish "your mail app would not hand the bytes over" from "you
-        // dropped something that isn't a file at all". New Outlook and Outlook
-        // on the web behave like a web page and offer no file of any kind, so
-        // the honest answer there is to save the message out first.
+        // Logged as well as shown: the alert is what the user reports back, the
+        // console line is what survives for anyone looking afterwards.
+        try { console.warn('[b2b] proof drop produced no file\n' + diag); } catch (_) {}
         return alert(sawFileItem
-            ? 'Your mail app offered the message but would not hand over the file.\n\n'
-              + 'This happens with the new Outlook and with Outlook in a browser tab. Drag the '
-              + 'message to your desktop first, then drop that file here — or use Choose a file.'
-            : 'That drop did not contain a message.\n\n'
-              + 'Drag the email itself out of your mail app, or use Choose a file.');
+            ? 'Your mail app offered the message but would not release the file.\n\n'
+              + 'Outlook can only hand a message to a browser as a "virtual file", and not every '
+              + 'version will. The dependable way: drag the email onto your desktop first, then '
+              + 'drop that file here — or use Choose a file.\n\n'
+              + 'What the drop contained:\n' + diag
+            : 'That drop did not contain a file.\n\n'
+              + 'If you are using Outlook in a browser tab, or the new Outlook app, it cannot pass '
+              + 'a message to another page at all. Drag the email onto your desktop first, then '
+              + 'drop that file here — or use Choose a file.\n\n'
+              + 'What the drop contained:\n' + diag);
     }
     if (!_b2bIsMailFile(file)) {
-        return alert(`"${file.name}" isn't an email.\n\nDrop the client's message itself — a .msg `
-            + 'dragged out of Outlook, or a saved .eml. That is what carries the sender, the date '
-            + 'and the headers, which is the whole point of keeping it.');
+        return alert(`"${file.name}" looks like a document rather than an email.\n\nDrop the `
+            + "client's message itself — dragged out of your mail app, or saved out of it. That "
+            + 'is what carries the sender, the date and the headers.');
     }
     if (file.size > 6_000_000) {
         return alert(`That message is ${Math.round(file.size / 1e6)}MB — the limit is 6MB.\n\n`
@@ -19767,7 +19831,18 @@ async function _b2bMailHeaders(file) {
 
     const grab = (name) => {
         const m = text.match(new RegExp('^' + name + '\\s*:[ \\t]*(.+)$', 'im'));
-        return m ? m[1].replace(/[\r ]/g, '').trim().slice(0, 200) : '';
+        // The NUL is written as the escape \u0000 and must NEVER be typed as the
+        // byte. It originally WAS the raw byte in this character class, which
+        // made the whole 2.7MB file read as BINARY to ripgrep and to git --
+        // content searches over speeks.js silently returned nothing at all,
+        // which is its own kind of nasty to debug.
+        //
+        // The NUL itself has to stay. When a UTF-16LE .msg is decoded as latin1
+        // every character comes back with a NUL after it, and stripping those is
+        // what turns "p\u0000a\u0000u\u0000l\u0000@\u0000x" back into an address.
+        // Do not "tidy" it into a space either -- that strips the spaces out of
+        // every subject line instead.
+        return m ? m[1].replace(/[\r\u0000]/g, '').trim().slice(0, 200) : '';
     };
     const fromRaw = grab('From');
     // "Dana Reyes <dana@acme.com>" -> the address, which is the useful half.
@@ -19842,10 +19917,15 @@ function _b2bPaintProofModal() {
              carries the sender, the date and the headers with it. Rows attached
              the old way stay on the record and still render. -->
         <label class="form-label-caps" style="margin-top:12px;">The client's email</label>
+        <!-- No accept= filter. It only ever hides files in the dialog, and a
+             saved message turns up named more ways than a filter can list --
+             .msg, .eml, or nothing at all where Windows hides the extension.
+             Filtering it out just makes a real email un-pickable, which is the
+             same mistake the drop check was making. The type is inferred from
+             the file and the server is the gate. -->
         <input id="b2bPfFile" type="file" class="form-input-lg"
-            accept=".msg,.eml,application/vnd.ms-outlook,message/rfc822"
             onchange="b2bProofFilePicked(this)">
-        <p class="b2b-hint">A .msg dragged out of Outlook, or a saved .eml — up to 6MB.
+        <p class="b2b-hint">The message saved out of your mail app — .msg or .eml, up to 6MB.
             Dropping it straight onto the deal does the same thing in one step.</p>
         <div id="b2bPfFileState"></div>`;
 
