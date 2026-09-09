@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.2';
+const APP_VERSION = '3.8.3';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -16317,9 +16317,32 @@ function _b2bActionFor(deal) {
     if (st === 'completed' || st === 'declined') return null;
     const mine = _b2bMyStores();
 
-    // Employees/trainees may only help price their own store's pickups — no escalation.
+    // Employees/trainees do the bench work at their own store -- pricing AND
+    // listing -- but never the escalations between and after them: no submit for
+    // quoting, no quoting, no accepting, no moving a deal to another store.
+    //
+    // Listing was missing here, and the effect was worse than a hidden button.
+    // With no action for a listing-stage deal, three things followed from this
+    // one line: the deal never appeared in Needs Your Action (it fell through to
+    // Also In Flight), _b2bClickKind returned 'view' so opening it showed the
+    // read-only item table -- a sheet of figures with no scan bar, which is the
+    // "weird sheet" that got reported -- and checkB2BReminders never nudged them
+    // about it. So a deal whose own chip said Listing could not be listed by the
+    // person whose job it is.
+    //
+    // Nothing on the server ever refused them: list_unit, unlist_unit,
+    // recycle_units, un_recycle and complete carry no role gate at all. This was
+    // a client-side gate with no server counterpart, which is why it read as a
+    // Feature Access bug -- granting the B2B tab genuinely did grant everything
+    // except the one screen that mattered.
+    //
+    // mark_wiped stays corp-only, and that one IS enforced server-side: certifying
+    // a data wipe is a claim we make to the client, not bench work. The listing
+    // row already says "Corp records the certification" rather than hiding it.
     if (_b2bIsEmployee()) {
-        return (st === 'pricing' && mine.includes(deal.pricing_store)) ? B2B_ACTIONS.pricing : null;
+        if (st === 'pricing' && mine.includes(deal.pricing_store)) return B2B_ACTIONS.pricing;
+        if (st === 'listing' && mine.includes(deal.listing_store)) return B2B_ACTIONS.listing;
+        return null;
     }
 
     if (st === 'pickup') {
@@ -16363,7 +16386,12 @@ function _b2bClickKind(deal) {
 // screen -- each still confirms first, because both are one-way doors.
 // Anything needing input (a store, a name, prices) is deliberately absent.
 function _b2bQuickAction(d) {
-    if (_b2bIsEmployee()) return null;   // employees never escalate from a card
+    // Employees may finish their own listing work from the card -- completing a
+    // fully-listed deal is the last step of the job, not an escalation past it,
+    // and the server allows it (complete has no role gate, and refuses anyway
+    // while any unit is unaccounted for). Mark Accepted is unaffected: it is
+    // gated on _b2bCanAccept below, which an employee never satisfies.
+    if (_b2bIsEmployee() && d.stage !== 'listing') return null;
     // `quote` means sent. "Mark Accepted" on a deal still at `review` would be
     // recording a decision from a client who has never seen it -- and it would
     // skip the send, leaving no quote on record at all. The server refuses it
