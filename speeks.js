@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.5';
+const APP_VERSION = '3.8.6';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -18347,6 +18347,8 @@ async function crmLoadSettings() {
 }
 
 
+
+
 // ---------------------------------------------------------------------------
 // B2B FEEDBACK -- straight to Nick, no category
 // ---------------------------------------------------------------------------
@@ -20794,6 +20796,166 @@ function _b2bItemName(it) { return [it.make, it.model].filter(Boolean).join(' ')
 // lost or damaged label can be reprinted from whichever screen you're on.
 const B2B_ICO_BARCODE = '<path d="M3 5v14"/><path d="M7 5v14"/><path d="M11 5v14"/>'
                       + '<path d="M14 5v14"/><path d="M18 5v14"/><path d="M21 5v14"/>';
+
+// ---------------------------------------------------------------------------
+// PER-ROW ACTIONS MENU on the listing sheet (trial)
+// ---------------------------------------------------------------------------
+//
+// Feedback, 2026-09-10: the listing row's action cell was "kind of cluttered and
+// hard to follow". It carried, per row: a listed stepper (- 0/1 +), a recycle
+// stepper (- 0 rec +), a "Recycle..." button and a barcode button. Four
+// controls, two of them near-identical steppers next to each other, on every
+// row of a fifty-line sheet.
+//
+// WHAT STAYS ON THE ROW is the loop a lister actually runs: - listed/qty +.
+// That green + is pressed once per unit all day and burying it behind a click
+// would be a straight tax on the main job.
+//
+// WHAT MOVES INTO THE MENU is everything occasional: recycle one out, put one
+// back, recycle several at once, print labels.
+//
+// TWO SIGNALS THAT MUST SURVIVE BEING COLLAPSED. This is the same trap as
+// hiding a notification badge in a menu -- the control was carrying information
+// as well as an action:
+//
+//   - The barcode button is COLOUR-CODED: amber while any unit still needs a
+//     label, green once they are all printed. That colour is the entire
+//     reminder, and no print is ever forced. So the trigger inherits it.
+//   - "N rec" told you at a glance that units had been recycled off this line.
+//     A chip beside the trigger shows it, and only when it is not zero.
+//
+// ONE MENU ELEMENT, POSITIONED FIXED. Not a menu per row: fifty rows would mean
+// fifty hidden menus in the DOM, and an absolutely-positioned one would be
+// clipped anyway -- the sheet scrolls horizontally inside .b2b-ss and has a
+// sticky header. Fixed coordinates read off the trigger at open time escape
+// both. The trade is that a fixed menu does not follow a scroll, so scrolling
+// closes it.
+
+let _b2bRowMenuFor = null;      // item id the open menu belongs to
+
+function _b2bRowMenuEl() {
+    let el = document.getElementById('b2bRowMenu');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'b2bRowMenu';
+    el.className = 'b2b-rowmenu';
+    el.setAttribute('role', 'menu');
+    // On the body, so no ancestor's overflow can clip it.
+    document.body.appendChild(el);
+    return el;
+}
+
+function b2bRowMenuClose() {
+    _b2bRowMenuFor = null;
+    const el = document.getElementById('b2bRowMenu');
+    if (el) el.classList.remove('open');
+    document.querySelectorAll('.b2b-rowacts.on').forEach(b => b.classList.remove('on'));
+}
+
+// The trigger on each row. Carries the label state and the recycled count,
+// because collapsing the controls must not collapse what they were telling you.
+function _b2bRowActsBtn(it, ok) {
+    const recycled = Number(it.recycled_qty) || 0;
+    const short = it.sku ? _b2bLabelsShort(it) : 0;
+    const printed = Number(it.label_printed_qty) || 0;
+    const labelState = short > 0 ? 'b2b-rowacts-todo' : (printed > 0 ? 'b2b-rowacts-done' : '');
+    const bits = [];
+    if (short > 0) bits.push(`${short} label${short === 1 ? '' : 's'} to print`);
+    if (recycled) bits.push(`${recycled} recycled out`);
+    const tip = bits.length ? bits.join(' · ') : 'Recycle units, print labels';
+    return `${recycled ? `<span class="b2b-rec-chip" title="Recycled out of this line">${recycled} rec</span>` : ''}
+        <button class="b2b-rowacts ${labelState}" data-tip="${escapeHtml(tip)}"
+            aria-haspopup="true" aria-label="More actions for this line"
+            onclick="b2bRowActions(event,'${it.id}')">${_b2bIco('<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>')}</button>`;
+}
+
+function b2bRowActions(ev, itemId) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    // Second click on the same row closes, like every other menu.
+    if (_b2bRowMenuFor === itemId) return b2bRowMenuClose();
+    b2bRowMenuClose();
+
+    const it = _b2bLocalItem(itemId);
+    if (!it) return;
+    const qty = Number(it.quantity) || 1;
+    const recycled = Number(it.recycled_qty) || 0;
+    const scrap = _b2bIsScrap(it);
+    const ok = _b2bSatisfied(it);
+    const short = it.sku ? _b2bLabelsShort(it) : 0;
+    const printed = Number(it.label_printed_qty) || 0;
+
+    // The same disabled rules the buttons carried, in one place rather than
+    // spread across four onclicks.
+    const row = (label, sub, onclick, opts) => {
+        const o = opts || {};
+        if (o.hide) return '';
+        const dis = o.disabled ? 'disabled' : '';
+        return `<button class="b2b-rowmenu-item ${o.cls || ''}" ${dis}
+            title="${escapeHtml(o.title || '')}"
+            onclick="b2bRowMenuClose();${o.disabled ? '' : onclick}">
+            <span class="b2b-rowmenu-ico">${_b2bIco(o.ico || '')}</span>
+            <span class="b2b-rowmenu-txt"><b>${escapeHtml(label)}</b>${
+                sub ? `<span>${escapeHtml(sub)}</span>` : ''}</span>
+        </button>`;
+    };
+
+    const el = _b2bRowMenuEl();
+    el.innerHTML = [
+        `<div class="b2b-rowmenu-head">${escapeHtml(_b2bItemName(it))}
+            <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}</span></div>`,
+        row('Print labels', short > 0
+                ? `${short} of ${qty} still to print`
+                : (printed > 0 ? 'All printed — reprint' : `${qty === 1 ? 'One label' : 'It asks how many'}`),
+            `b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')`,
+            { hide: !it.sku, ico: B2B_ICO_BARCODE,
+              cls: short > 0 ? 'todo' : (printed > 0 ? 'done' : '') }),
+        row('Recycle one out', ok ? 'Every unit is accounted for' : `${qty - recycled} left on this line`,
+            `b2bRecycleUnit('${it.id}')`,
+            { disabled: ok, ico: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' }),
+        row('Recycle several…', 'Choose how many at once',
+            `b2bRecycleUnits('${it.id}')`,
+            { disabled: ok, ico: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>' }),
+        row('Put one back', recycled ? `${recycled} recycled out` : 'Nothing recycled out',
+            `b2bUnRecycleUnit('${it.id}')`,
+            { disabled: recycled <= 0, ico: '<path d="M3 12a9 9 0 1 0 9-9"/><polyline points="3 3 3 9 9 9"/>' }),
+    ].filter(Boolean).join('');
+
+    // Fixed coordinates off the trigger, clamped to the viewport. Right-aligned
+    // to the button because the cell sits at the end of the row, and flipped
+    // above when there is no room below -- the last rows of a long sheet are
+    // exactly where this gets used.
+    const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+    el.classList.add('open');
+    if (btn) {
+        btn.classList.add('on');
+        const r = btn.getBoundingClientRect();
+        const h = el.offsetHeight;
+        const w = el.offsetWidth;
+        const below = window.innerHeight - r.bottom;
+        const top = (below < h + 12 && r.top > h + 12) ? r.top - h - 6 : r.bottom + 6;
+        el.style.top = `${Math.max(8, Math.min(top, window.innerHeight - h - 8))}px`;
+        el.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`;
+    }
+    _b2bRowMenuFor = itemId;
+}
+
+// Bound once. A fixed-position menu does not travel with the row it belongs to,
+// so a scroll has to close it rather than leave it pointing at nothing.
+document.addEventListener('click', (ev) => {
+    if (!_b2bRowMenuFor) return;
+    if (ev.target.closest('#b2bRowMenu') || ev.target.closest('.b2b-rowacts')) return;
+    b2bRowMenuClose();
+});
+document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape' || !_b2bRowMenuFor) return;
+    // Swallowed so one Escape closes one thing -- not the menu AND the deal
+    // modal behind it.
+    ev.stopPropagation();
+    b2bRowMenuClose();
+});
+window.addEventListener('scroll', () => { if (_b2bRowMenuFor) b2bRowMenuClose(); }, true);
+window.addEventListener('resize', () => { if (_b2bRowMenuFor) b2bRowMenuClose(); });
+
 
 function _b2bLabelBtn(it, cls) {
     if (!it.sku) return '';
@@ -24201,7 +24363,7 @@ function _b2bListRows() {
             <span>Line</span><span>Item</span>
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Serials</span>
-            <span class="r">Value ea</span><span class="r">Cost ea</span>
+            <span class="r">Value ea</span><span class="r">Cost ea</span><span class="r">Line total</span>
             <span class="c">Listed</span><span></span>
         </div>`;
 
@@ -24230,6 +24392,16 @@ function _b2bListRows() {
         // lost -- and the deal totals above (_b2bDealStatsHtml) are unchanged,
         // because THOSE are meant to be totals.
         const lineValue = scrap ? 0 : (Number(it.value) || 0);
+        // The whole line's resale, quantity included. Nick, 2026-09-10: "so
+        // people can know if its worth their time to list all of them together
+        // or now" -- the per-unit figures answer "what do I price this at", and
+        // this answers "is the pile worth the afternoon".
+        //
+        // Deliberately Value ea x FULL quantity, so it is arithmetic anybody can
+        // check in their head against the two columns beside it. Netting the
+        // recycled units out would be a more precise answer to a question nobody
+        // asked, at the cost of a column that does not add up.
+        const lineTotal = scrap ? 0 : lineValue * qty;
         const unitCost  = Number(it.cost != null ? it.cost : it.offer) || 0;
         const lineCost  = _b2bIsBuy(it) ? unitCost : 0;
         // What the recycled units on this line cost us. Deliberately still a
@@ -24305,23 +24477,21 @@ function _b2bListRows() {
                 <span class="b2b-pcell n">${scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(lineValue)}</span>
                 <span class="b2b-pcell n">${_b2bIsBuy(it) ? _b2bMoney(lineCost) : '<span class="b2b-f-off">—</span>'}
                     ${recCost ? `<span class="b2b-lc-reccost" title="Paid for, then recycled out — written off">−${_b2bMoney(recCost)} rec</span>` : ''}</span>
+                <span class="b2b-pcell n b2b-lc-tot"
+                    title="${scrap ? '' : `Every unit on this line: ${qty} x ${_b2bMoney(lineValue)}`}">${
+                    scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(lineTotal)}</span>
                 <span class="b2b-pcell b2b-lc-prog">
                     <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo the last one" onclick="b2bUnlistUnit('${it.id}')">−</button>
                     <span class="b2b-lc-count"><b>${listed}</b>/${qty}</span>
                     <button class="b2b-step up" ${ok || scrap || needsWipe ? 'disabled' : ''} title="${escapeHtml(blockTitle)}" onclick="b2bAskShopify('${it.id}')">+</button>
                 </span>
-                <span class="b2b-pcell b2b-pc-acts">
-                    <span class="b2b-recstep" title="Recycle units out of this line">
-                        <button class="b2b-step" ${recycled <= 0 ? 'disabled' : ''}
-                            title="Put one recycled unit back" onclick="b2bUnRecycleUnit('${it.id}')">−</button>
-                        <span class="b2b-recstep-n ${recycled ? 'on' : ''}">${recycled} rec</span>
-                        <button class="b2b-step up" ${ok ? 'disabled' : ''}
-                            title="${escapeHtml(ok ? 'Every unit is accounted for' : 'Recycle one unit out')}"
-                            onclick="b2bRecycleUnit('${it.id}')">+</button>
-                    </span>
-                    <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle several units out at once" onclick="b2bRecycleUnits('${it.id}')">Recycle…</button>
-                    ${_b2bLabelBtn(it)}
-                </span>
+                <!-- Four controls became one. The listed stepper next door is
+                     the loop a lister runs all day and stays on the row; the
+                     recycle stepper, "Recycle..." and the barcode button move
+                     into the menu, which inherits the barcode's colour and the
+                     recycled count so neither signal is lost. See
+                     _b2bRowActsBtn. -->
+                <span class="b2b-pcell b2b-pc-acts">${_b2bRowActsBtn(it, ok)}</span>
             </div>
             ${(wipeStrip || codes) ? `<div class="b2b-lextra">${wipeStrip}${codes}</div>` : ''}
         </div>`;

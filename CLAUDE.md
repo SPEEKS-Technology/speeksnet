@@ -94,9 +94,10 @@ attribution (scorecards, variance-by-employee) needs real identity first.
 ```
 powershell -File scripts/browser-check.ps1 b2b-check.js         # behaviour
 powershell -File scripts/browser-check.ps1 b2b-layout-check.js  # rendering
+powershell -File scripts/browser-check.ps1 b2b-header-check.js -Html operations.html
 ```
 
-Two suites, because they catch different things. `b2b-check.js` asserts about
+Three suites, because they catch different things. `b2b-check.js` asserts about
 the HTML a renderer returns — it cannot see a row overflowing its grid or a
 control rendered at zero size. `b2b-layout-check.js` loads the real
 `styles.css`, puts markup in the DOM at 390 / 820 / 1440px and **measures**.
@@ -104,6 +105,18 @@ It found a bug no string assertion could: the Overview cards set
 `overflow: hidden` for their radius, which clipped five-column tables on a
 phone so the right-hand columns were unreachable with no scrollbar to say so.
 Add to the layout suite whenever you add markup that can wrap, scroll or clip.
+
+**`-Html <page>` inlines that page's real markup** (scripts stripped) so a check
+can assert about the DOM as the `.html` file actually declares it — ids, role
+classes, `data-feature`, which element sits inside which. That matters because
+visibility here is driven by attributes on the real elements: `applyRoleBasedUI`
+sweeps `.dynamic-module-flex` and writes `display` onto each one, so a control
+moved between containers keeps its gate only if the attributes moved with it.
+`b2b-header-check.js` is the suite that needs it. Building the markup inside a
+check instead proves only that the copy agrees with itself.
+
+The flag is opt-in and the other two suites run unchanged without it — keep
+DOM-dependent checks in their own file so the main suite never needs a flag.
 
 `scripts/browser-check.ps1` drives headless Chrome directly, so it needs **no
 Node and no npm**. It loads `speeks.js`, parse-checks the whole file (a syntax

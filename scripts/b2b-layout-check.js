@@ -92,14 +92,57 @@ t('layout: every new block renders non-empty', function () {
     return empty.length === 0 || 'empty: ' + empty.join(', ');
 });
 
-t('layout: the recycle stepper and its cost note render at a real size', function () {
+// The recycle stepper moved off the row into the per-row actions menu on the
+// trial branch, so what has to be measured moved with it: the trigger has to be
+// a real tap target, the recycled chip has to be readable, and the floating menu
+// has to have actual size once opened. A 28px icon button is exactly the kind of
+// control that ends up 0x0 and invisible to any string assertion.
+t('layout: the row actions trigger is a real tap target', function () {
     var host = stage(1200, '<div class="b2b-items b2b-ss b2b-lgrid">' + _b2bListRows() + '</div>');
-    var step = host.querySelector('.b2b-recstep');
+    var btn = host.querySelector('.b2b-rowacts');
+    if (!btn) return 'no actions trigger in the DOM';
+    var r = btn.getBoundingClientRect();
+    if (r.width < 24 || r.height < 24) {
+        return 'trigger is ' + Math.round(r.width) + 'x' + Math.round(r.height);
+    }
+    // The fixture recycles one unit, so the chip that replaced "N rec" must be
+    // there and legible -- it is the only remaining sign on the row.
+    var chip = host.querySelector('.b2b-rec-chip');
+    if (!chip) return 'no recycled chip (fixture has recycled_qty 1)';
+    if (chip.getBoundingClientRect().height < 12) return 'recycled chip has no height';
     var cost = host.querySelector('.b2b-lc-reccost');
-    if (!step) return 'no recycle stepper in the DOM';
-    if (step.getBoundingClientRect().width < 40) return 'stepper is ' + Math.round(step.getBoundingClientRect().width) + 'px wide';
     if (!cost) return 'no recycled-cost note (fixture has recycled_qty 1)';
     return cost.getBoundingClientRect().height > 0 || 'recycled-cost note has no height';
+});
+
+t('layout: the opened row menu has size and stays on screen', function () {
+    var host = stage(1200, '<div class="b2b-items b2b-ss b2b-lgrid">' + _b2bListRows() + '</div>');
+    var btn = host.querySelector('.b2b-rowacts');
+    if (!btn) return 'no actions trigger to open';
+    var id = (_b2bModalItems[0] || {}).id;
+    b2bRowActions({ preventDefault: function () {}, stopPropagation: function () {},
+                    currentTarget: btn }, id);
+    try {
+        var menu = document.getElementById('b2bRowMenu');
+        if (!menu || !menu.classList.contains('open')) return 'the menu did not open';
+        var r = menu.getBoundingClientRect();
+        if (r.width < 180 || r.height < 60) {
+            return 'menu is ' + Math.round(r.width) + 'x' + Math.round(r.height);
+        }
+        // Clamped to the viewport. A menu opened from the last row of a long
+        // sheet is exactly where this goes wrong.
+        if (r.left < 0 || r.top < 0) return 'menu is off the top-left at ' + Math.round(r.left) + ',' + Math.round(r.top);
+        if (r.right > window.innerWidth + 1) return 'menu runs off the right edge';
+        // Every action row has to be tall enough to hit.
+        var rows = menu.querySelectorAll('.b2b-rowmenu-item');
+        if (!rows.length) return 'the menu rendered no actions';
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].getBoundingClientRect().height < 26) {
+                return 'action row ' + i + ' is only ' + Math.round(rows[i].getBoundingClientRect().height) + 'px tall';
+            }
+        }
+        return true;
+    } finally { b2bRowMenuClose(); }
 });
 
 t('layout: the drag grip exists and is not zero-sized', function () {
