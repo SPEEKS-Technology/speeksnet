@@ -2412,17 +2412,48 @@ Deno.serve(async (req: Request) => {
     // Streamed through here rather than handed out as a signed URL, for the same
     // reason the signature is: a signed URL keeps working after it leaves the
     // page, and this is evidence about a named client.
+    //
+    // IT COMES BACK WITH A FILENAME, and that is not cosmetic. Without a
+    // Content-Disposition the browser names the download after the URL path --
+    // so a .msg saved as "b2b-deals", with no extension, which Windows cannot
+    // open with anything. Nick, 2026-09-10: "It saves it as just a file. What
+    // would I open it with". Named properly it lands as "<subject>.msg" and
+    // double-clicks straight into Outlook, which is the entire point of keeping
+    // the original message rather than a transcription of it.
     const proofFile = url.searchParams.get("proof_file");
     if (proofFile) {
       const { data: pr } = await supabase.from("b2b_approval_proofs")
-        .select("file_path, mime").eq("id", proofFile).maybeSingle();
+        .select("file_path, mime, label, from_addr, sent_on").eq("id", proofFile).maybeSingle();
       if (!pr?.file_path) return jsonResponse({ success: false, error: "That entry has no attachment." }, 404);
       const dl = await supabase.storage.from("b2b-proofs").download(pr.file_path);
       if (dl.error || !dl.data) return jsonResponse({ success: false, error: "Couldn't read that attachment." }, 500);
+
+      // The extension has to come from the stored MIME, not from the label: the
+      // label is the subject line and routinely ends in something that looks
+      // like an extension ("Re: pricing v2.1", "invoice.pdf?").
+      const ext = PROOF_MIMES[String(pr.mime || "")]
+        || String(pr.file_path).split(".").pop()
+        || "bin";
+      // Windows refuses \ / : * ? " < > | in a filename, and a Content-Disposition
+      // header cannot carry a raw newline or quote at all.
+      const base = String(pr.label || "client email")
+        .replace(/[\\/:*?"<>|\r\n]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 80) || "client email";
+      const name = `${base}.${ext}`;
+      // Two spellings on purpose. filename= must be ASCII, so it carries a
+      // stripped version for anything old or fussy; filename*= carries the real
+      // one, percent-encoded, and every current browser prefers it. A subject
+      // with an accent or an em dash in it would otherwise arrive mangled or
+      // truncated at the first byte the header cannot hold.
+      const ascii = name.replace(/[^\x20-\x7E]/g, "_");
       return new Response(await dl.data.arrayBuffer(), {
         headers: {
           ...corsHeaders,
           "Content-Type": pr.mime || "application/octet-stream",
+          "Content-Disposition":
+            `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
           "Cache-Control": "private, max-age=60",
         },
       });
