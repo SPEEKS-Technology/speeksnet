@@ -1849,6 +1849,55 @@ t('3.9.2 the extension comes from the MIME, not the subject line', function () {
     if (_b2bProofExt({ mime: 'image/png' }) !== '') return 'guessed at a legacy row';
     return _b2bProofExt({}) === '' || 'guessed with no mime at all';
 });
+
+// --- v3.8.5: feedback button on the B2B header -----------------------------
+//
+// Nick, 2026-09-10: "a button at the top next to the header thats pretty
+// prominent that allows users to submit feedback, no category just a subject
+// line and free form text that sends the feedback directly to my email".
+t('3.8.5 the feedback dialog asks for a subject and free text, and nothing else', function () {
+    // No category on purpose: the lightbulb form makes people classify what
+    // they are reporting first, and that decision stops some of them writing
+    // anything at all. A subject line does the same job for free.
+    var src = _srcOf(b2bFeedbackSend);
+    if (src.indexOf('b2bFbSubject') === -1) return 'no subject field';
+    if (src.indexOf('b2bFbBody') === -1) return 'no message field';
+    return src.indexOf('category') === -1 || 'it is asking for a category';
+});
+t('3.8.5 an empty submission is refused before it is sent', function () {
+    var src = _srcOf(b2bFeedbackSend);
+    if (src.indexOf('subject line') === -1) return 'an empty subject is not caught';
+    return /if \(!body\)/.test(src) || 'an empty message is not caught';
+});
+t('3.8.5 it goes through the function that owns the mail path', function () {
+    // b2b-outreach, not b2b-deals: sendEmail there falls back from the Gmail
+    // relay to Resend and holds the keys for both.
+    var src = _srcOf(b2bFeedbackSend);
+    if (src.indexOf('B2B_OUTREACH_URL') === -1) return 'not posting to b2b-outreach';
+    return src.indexOf('send_feedback') > -1 || 'wrong action name';
+});
+t('3.8.5 it carries who sent it and what they were looking at', function () {
+    // The one bit of context that costs the sender nothing and saves a round
+    // trip asking "where were you when this happened".
+    var src = _srcOf(b2bFeedbackSend);
+    if (src.indexOf('_b2bUser()') === -1) return 'the sender is not named';
+    if (src.indexOf('_b2bRole()') === -1) return 'the role is not sent';
+    return src.indexOf('_b2bView') > -1 || 'the view is not sent';
+});
+t('3.8.5 what was typed survives a failed send', function () {
+    // Throwing away somebody's words because the network blinked is the fastest
+    // way to make sure they never bother again.
+    var src = _srcOf(b2bFeedbackSend);
+    var cleared = src.indexOf("s.value = ''");
+    var thrown = src.indexOf('throw new Error');
+    if (cleared === -1) return 'the fields are never cleared, even on success';
+    return thrown < cleared || 'the fields are cleared before the send is known to have worked';
+});
+t('3.8.5 the failure stays in the dialog rather than an alert', function () {
+    var src = _srcOf(b2bFeedbackSend);
+    return src.indexOf("didn't send") > -1 && src.indexOf('b2bFbMsg') > -1
+        || 'the error is not shown next to what they wrote';
+});
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();
