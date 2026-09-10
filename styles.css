@@ -14371,7 +14371,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 /* --- listing grid: the pricing sheet's look, read-only, with specs/serials the
    lister needs plus the list / recycle / label actions. --------------------- */
 .b2b-items.b2b-ss.b2b-lgrid {
-    --b2b-pcols: 78px minmax(150px, 1.2fr) 96px 78px 96px minmax(150px, 1.5fr) 74px 74px 132px 118px;
+    /* 11 tracks: Line, Item, cpu, ram, storage, Serials, Value ea, Cost ea,
+       Line total, Listed, actions. Add a column to the header AND the row AND
+       this list in the same edit -- a grid that disagrees with its header slides
+       every cell one place left. */
+    --b2b-pcols: 78px minmax(150px, 1.2fr) 96px 78px 96px minmax(150px, 1.5fr) 74px 74px 84px 132px 118px;
 }
 .b2b-lline .b2b-pcell { align-items: flex-start; padding-top: 9px; padding-bottom: 9px; }
 .b2b-lline .b2b-pc-sku { gap: 5px; color: var(--b2b-faint); }
@@ -21513,4 +21517,79 @@ select.dd-native {
 @media (max-width: 720px) {
     .b2b-cap-row { flex-wrap: wrap; }
     .b2b-cap-what { flex: 1 1 100%; }
+}
+/* The line total reads as the summary figure of the three money columns, so it
+   carries the weight the per-unit ones do not. */
+.b2b-lc-tot { font-weight: 800 !important; color: #1a1c1e; }
+
+/* =========================================================
+   B2B ACTIONS MENU (trial — try/b2b-header-actions-menu)
+   The header carried six view tabs plus five buttons on one line and read as
+   clutter. The tabs and + New Deal stay out; the occasional and administrative
+   buttons collapse in here.
+   ========================================================= */
+.b2b-actions { position: relative; flex: 0 0 auto; }
+.b2b-actions-btn { gap: 6px; }
+.b2b-actions-btn svg:first-of-type { width: 14px; height: 14px; }
+.b2b-actions-chev { width: 12px; height: 12px; transition: transform .16s ease; }
+.b2b-actions.open .b2b-actions-chev { transform: rotate(180deg); }
+.b2b-actions.open .b2b-actions-btn { border-color: var(--sage-deep); color: var(--sage-deep); }
+/* The rolled-up signal. Delete Requests and CRM Settings carry counts that are
+   the whole reason those buttons exist to be noticed, and putting them behind a
+   menu would bury them -- so any pending count lights a dot out here. Count-less
+   on purpose: two sources would have to be added together and "3" next to
+   "Actions" invites the wrong reading. */
+.b2b-actions-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--red-alert, #c0392b);
+    box-shadow: 0 0 0 3px rgba(192, 57, 43, .16);
+    flex: 0 0 auto;
+}
+.b2b-actions-menu {
+    display: none;
+    position: absolute; top: calc(100% + 6px); right: 0;
+    min-width: 232px; padding: 6px;
+    background: #fff; border: 1px solid var(--b2b-line);
+    border-radius: 12px;
+    box-shadow: 0 14px 36px rgba(16, 24, 32, .16), 0 2px 6px rgba(16, 24, 32, .06);
+    /* Above the panel body and the sticky sheet headers underneath it. */
+    z-index: 60;
+}
+.b2b-actions.open .b2b-actions-menu { display: block; }
+/* The items are the SAME buttons that used to sit in the header, moved
+   wholesale so their ids, role classes, data-feature and handlers stay intact.
+   applyRoleBasedUI writes `display: flex !important` onto each one, so nothing
+   here may key off display -- the row shape is width + justify instead. */
+.b2b-actions-menu > button {
+    width: 100%;
+    justify-content: flex-start !important;
+    gap: 9px;
+    height: auto !important;
+    min-height: 34px;
+    padding: 8px 10px !important;
+    border: 0 !important;
+    border-radius: 8px !important;
+    background: transparent !important;
+    color: #1a1c1e !important;
+    font-size: 12.5px !important;
+    font-weight: 650 !important;
+    text-align: left;
+    box-shadow: none !important;
+}
+.b2b-actions-menu > button:hover { background: var(--b2b-tint, #f1f5f2) !important; }
+.b2b-actions-menu > button svg { width: 15px; height: 15px; flex: 0 0 auto; opacity: .8; }
+/* The badge sits at the end of its row rather than tight against the label. */
+.b2b-actions-menu > button .crm-badge { margin-left: auto; }
+/* Feedback keeps its gold, quietly: a left bar rather than a filled pill, so it
+   still reads as the odd one out in the list without shouting inside a menu. */
+.b2b-actions-menu > button.b2b-btn-feedback {
+    color: #7a4f05 !important;
+    box-shadow: inset 2px 0 0 var(--idea-gold, #f0b429) !important;
+}
+.b2b-actions-menu > button.b2b-btn-feedback:hover {
+    background: var(--sam-gold-tint, #fdf6e3) !important;
+}
+@media (max-width: 560px) {
+    /* Right-anchored would run off a narrow screen. */
+    .b2b-actions-menu { right: auto; left: 0; min-width: 200px; }
 }

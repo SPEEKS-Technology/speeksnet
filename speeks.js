@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.5';
+const APP_VERSION = '3.8.6-trial';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -17614,6 +17614,8 @@ function b2bRender() {
         delBadge.textContent = n;
         delBadge.style.display = n ? 'inline-flex' : 'none';
     }
+    // The Delete Requests badge just moved; roll it up onto the Actions trigger.
+    _b2bActionsSync();
     const sub = document.getElementById('b2bSubtitle');
     if (sub) {
         sub.textContent = _b2bIsCorp()
@@ -18331,6 +18333,8 @@ function crmRefreshBadge() {
         const el = document.getElementById(id);
         if (el) { el.textContent = n; el.style.display = n > 0 ? '' : 'none'; }
     });
+    // Same signal, same roll-up: the gear may be inside the Actions menu now.
+    if (typeof _b2bActionsSync === 'function') _b2bActionsSync();
 }
 
 async function crmLoadSettings() {
@@ -18346,6 +18350,94 @@ async function crmLoadSettings() {
     } catch (_) { /* keep what we have */ }
 }
 
+
+
+// ---------------------------------------------------------------------------
+// B2B ACTIONS MENU (trial) -- collapsing the header's secondary buttons
+// ---------------------------------------------------------------------------
+//
+// Feedback, 2026-09-10: the header was "kind of cluttered and hard to follow".
+// A CEO saw six view tabs and five buttons on one line.
+//
+// The view tabs and + New Deal stay in the header -- one is navigation, the
+// other is the thing people come to this header to do. Delete Requests, CRM
+// Settings, SPEEKS Capture and Feedback are occasional or administrative and
+// live in the menu.
+//
+// The buttons themselves were MOVED, not rebuilt: same ids, same role classes,
+// same data-feature, same handlers. applyRoleBasedUI writes display:flex/none
+// onto each one wherever it sits, so the role gate and Feature Access keep
+// working with no knowledge of the menu. What the menu has to add is the two
+// things collapsing would otherwise break:
+//
+//   1. A trigger that disappears when a user can see nothing inside it. An
+//      "Actions" button that opens an empty box is worse than no button.
+//   2. The badge signal. Delete Requests and CRM Settings carry counts that are
+//      the entire reason those buttons need noticing, and a menu hides them --
+//      so any pending count lights a dot on the trigger.
+
+function b2bActionsToggle(ev) {
+    if (ev) ev.stopPropagation();
+    const wrap = document.getElementById('b2bActionsWrap');
+    if (!wrap) return;
+    const open = !wrap.classList.contains('open');
+    wrap.classList.toggle('open', open);
+    document.getElementById('b2bActionsBtn')?.setAttribute('aria-expanded', String(open));
+}
+
+function _b2bActionsClose() {
+    const wrap = document.getElementById('b2bActionsWrap');
+    if (!wrap || !wrap.classList.contains('open')) return;
+    wrap.classList.remove('open');
+    document.getElementById('b2bActionsBtn')?.setAttribute('aria-expanded', 'false');
+}
+
+// Bound once, at load, rather than per open: a listener added on every open is a
+// listener leaked on every open.
+document.addEventListener('click', (ev) => {
+    const wrap = document.getElementById('b2bActionsWrap');
+    if (wrap && wrap.classList.contains('open') && !wrap.contains(ev.target)) _b2bActionsClose();
+});
+document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    const wrap = document.getElementById('b2bActionsWrap');
+    if (!wrap || !wrap.classList.contains('open')) return;
+    // Swallowed so Escape closes the menu WITHOUT also closing the deal modal
+    // or the panel behind it -- one Escape, one thing.
+    ev.stopPropagation();
+    _b2bActionsClose();
+    document.getElementById('b2bActionsBtn')?.focus();
+});
+
+// Called after every render and after the role sweep. Cheap enough to be
+// unconditional, and being wrong here is invisible until somebody is missing a
+// button they should have.
+function _b2bActionsSync() {
+    const wrap = document.getElementById('b2bActionsWrap');
+    const menu = document.getElementById('b2bActionsMenu');
+    if (!wrap || !menu) return;
+
+    // "Visible" is what the role sweep decided, which it writes as an inline
+    // display. offsetParent would be null for everything while the B2B pane
+    // itself is hidden, which is most of the time on other tabs.
+    const items = Array.from(menu.children).filter((el) => el.tagName === 'BUTTON');
+    const shown = items.filter((el) => el.style.display !== 'none');
+    wrap.style.display = shown.length ? '' : 'none';
+    if (!shown.length) _b2bActionsClose();
+
+    const pending = shown.some((el) => {
+        const badge = el.querySelector('.crm-badge');
+        return badge && badge.style.display !== 'none' && (Number(badge.textContent) || 0) > 0;
+    });
+    const dot = document.getElementById('b2bActionsDot');
+    if (dot) dot.style.display = pending ? '' : 'none';
+    const btn = document.getElementById('b2bActionsBtn');
+    if (btn) {
+        btn.title = pending
+            ? 'Tools and settings for B2B — something in here needs you'
+            : 'Tools and settings for B2B';
+    }
+}
 
 // ---------------------------------------------------------------------------
 // B2B FEEDBACK -- straight to Nick, no category
@@ -24201,7 +24293,7 @@ function _b2bListRows() {
             <span>Line</span><span>Item</span>
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Serials</span>
-            <span class="r">Value ea</span><span class="r">Cost ea</span>
+            <span class="r">Value ea</span><span class="r">Cost ea</span><span class="r">Line total</span>
             <span class="c">Listed</span><span></span>
         </div>`;
 
@@ -24230,6 +24322,16 @@ function _b2bListRows() {
         // lost -- and the deal totals above (_b2bDealStatsHtml) are unchanged,
         // because THOSE are meant to be totals.
         const lineValue = scrap ? 0 : (Number(it.value) || 0);
+        // The whole line's resale, quantity included. Nick, 2026-09-10: "so
+        // people can know if its worth their time to list all of them together
+        // or now" -- the per-unit figures answer "what do I price this at", and
+        // this answers "is the pile worth the afternoon".
+        //
+        // Deliberately Value ea x FULL quantity, so it is arithmetic anybody can
+        // check in their head against the two columns beside it. Netting the
+        // recycled units out would be a more precise answer to a question nobody
+        // asked, at the cost of a column that does not add up.
+        const lineTotal = scrap ? 0 : lineValue * qty;
         const unitCost  = Number(it.cost != null ? it.cost : it.offer) || 0;
         const lineCost  = _b2bIsBuy(it) ? unitCost : 0;
         // What the recycled units on this line cost us. Deliberately still a
@@ -24305,6 +24407,9 @@ function _b2bListRows() {
                 <span class="b2b-pcell n">${scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(lineValue)}</span>
                 <span class="b2b-pcell n">${_b2bIsBuy(it) ? _b2bMoney(lineCost) : '<span class="b2b-f-off">—</span>'}
                     ${recCost ? `<span class="b2b-lc-reccost" title="Paid for, then recycled out — written off">−${_b2bMoney(recCost)} rec</span>` : ''}</span>
+                <span class="b2b-pcell n b2b-lc-tot"
+                    title="${scrap ? '' : `Every unit on this line: ${qty} x ${_b2bMoney(lineValue)}`}">${
+                    scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(lineTotal)}</span>
                 <span class="b2b-pcell b2b-lc-prog">
                     <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo the last one" onclick="b2bUnlistUnit('${it.id}')">−</button>
                     <span class="b2b-lc-count"><b>${listed}</b>/${qty}</span>
@@ -26801,6 +26906,9 @@ function applyRoleBasedUI() {
     // Feature overrides on plain (non role-gated) elements — e.g. individual
     // hotbar links, which normally just inherit their bar's visibility.
     _applyFeatureOverridesToPlainEls(userRoleClass, userName);
+    // The role sweep decides which Actions items this user can see, so the
+    // trigger's own visibility can only be settled after it has run.
+    if (typeof _b2bActionsSync === 'function') _b2bActionsSync();
     // Section nav links (Workspace, Operations) have no toggle of their own —
     // they're derived: show whenever the user can see at least one sub-tab
     // inside, so granting just one tab (e.g. Variance Replies) reveals the

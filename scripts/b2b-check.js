@@ -1766,8 +1766,14 @@ t('3.9.1 the drag still reads the pointer synchronously', function () {
 // single item"
 t('3.9.1 the listing grid shows value and cost PER UNIT', function () {
     // A line of five identical laptops is priced ONCE, as one laptop, and the
-    // autolister takes the quantity from there. Showing 5 x $350 = $1,750 on the
-    // listing screen invites somebody to type 1750 into a listing for one of them.
+    // autolister takes the quantity from there. Showing 5 x $350 = $1,750 in the
+    // Value column invites somebody to type 1750 into a listing for one of them.
+    //
+    // Split at the Line total cell rather than searching the whole row: the
+    // trial branch ADDED a deliberate quantity-inclusive figure in that last
+    // column, and a blanket "$1,750 must not appear" then failed on correct
+    // markup. The rule was never "that number is forbidden" -- it is "the
+    // per-unit columns must not be the ones showing it".
     var keep = _b2bModalItems;
     try {
         _b2bModalItems = [{
@@ -1776,10 +1782,13 @@ t('3.9.1 the listing grid shows value and cost PER UNIT', function () {
             disposition: 'purchase', cpu: 'i5', ram: '16GB', storage: '512GB',
         }];
         var html = _b2bListRows();
-        if (html.indexOf('$1,750') > -1) return 'value is still multiplied by the quantity';
-        if (html.indexOf('$1,000') > -1) return 'cost is still multiplied by the quantity';
-        if (html.indexOf('$350') === -1) return 'the per-unit value is not shown';
-        return html.indexOf('$200') > -1 || 'the per-unit cost is not shown';
+        var cut = html.indexOf('b2b-lc-tot');
+        if (cut === -1) return 'no line-total cell to measure against';
+        var perUnit = html.slice(0, cut);
+        if (perUnit.indexOf('$1,750') > -1) return 'value is still multiplied by the quantity';
+        if (perUnit.indexOf('$1,000') > -1) return 'cost is still multiplied by the quantity';
+        if (perUnit.indexOf('$350') === -1) return 'the per-unit value is not shown';
+        return perUnit.indexOf('$200') > -1 || 'the per-unit cost is not shown';
     } finally { _b2bModalItems = keep; }
 });
 t('3.9.1 the columns say they are per unit', function () {
@@ -1898,6 +1907,63 @@ t('3.8.5 the failure stays in the dialog rather than an alert', function () {
     return src.indexOf("didn't send") > -1 && src.indexOf('b2bFbMsg') > -1
         || 'the error is not shown next to what they wrote';
 });
+
+// --- TRIAL BRANCH: actions menu + line total -------------------------------
+//
+// Labelled "trial" rather than with a version, because this branch is a thing
+// to look at and decide on -- not something that shipped.
+//
+// Feedback, 2026-09-10: the B2B header was "kind of cluttered and hard to
+// follow". A CEO saw six view tabs and five buttons on one line.
+
+t('trial: the line total is quantity-inclusive and checkable', function () {
+    // Nick: "a total value per line item (accounting for quantity) after value
+    // each and cost each so people can know if its worth their time to list all
+    // of them together". Value ea x FULL quantity on purpose, so it is
+    // arithmetic anybody can verify against the two columns beside it.
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [{ id: 'u1', line_no: 1, quantity: 5, value: 350, cost: 200,
+                            disposition: 'purchase', item_type: 'other' }];
+        var html = _b2bListRows();
+        if (html.indexOf('Line total') === -1) return 'no Line total column';
+        var cut = html.indexOf('b2b-lc-tot');
+        if (cut === -1) return 'no line-total cell';
+        return html.slice(cut).indexOf('$1,750') > -1 || 'the total is not 5 x $350';
+    } finally { _b2bModalItems = keep; }
+});
+t('trial: a recycle line shows no line total to add up', function () {
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [{ id: 'u1', line_no: 1, quantity: 4, value: 90, cost: 40,
+                            disposition: 'recycle', item_type: 'other' }];
+        var html = _b2bListRows();
+        var cut = html.indexOf('b2b-lc-tot');
+        if (cut === -1) return 'no line-total cell';
+        return html.slice(cut, cut + 220).indexOf('$360') === -1
+            || 'a scrap line is being valued as if it will be listed';
+    } finally { _b2bModalItems = keep; }
+});
+t('trial: the grid header and the row have the same column count', function () {
+    // The header, the row and --b2b-pcols all have to agree, or every cell
+    // slides one place left. Counted rather than trusted, because adding a
+    // column and forgetting one of the three is the obvious way to break it.
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [{ id: 'u1', line_no: 1, quantity: 1, value: 10, cost: 5,
+                            disposition: 'purchase', item_type: 'other' }];
+        var html = _b2bListRows();
+        var hs = html.indexOf('b2b-phead');
+        if (hs === -1) return 'no header row';
+        var head = html.slice(hs, html.indexOf('</div>', hs));
+        var heads = (head.match(/<span/g) || []).length;
+        var rs = html.indexOf('b2b-lline');
+        if (rs === -1) return 'no item row';
+        var cells = (html.slice(rs).match(/class="b2b-pcell/g) || []).length;
+        return heads === cells || heads + ' headers but ' + cells + ' cells';
+    } finally { _b2bModalItems = keep; }
+});
+
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();
