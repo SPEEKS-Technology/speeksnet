@@ -2088,6 +2088,220 @@ t('trial: a scroll closes it, because a fixed menu cannot follow the row', funct
     b2bRowMenuClose();
     return _b2bRowMenuFor === null || 'close left the menu marked open';
 });
+
+// --- v3.9.0: splitting a deal across listing locations --------------------
+//
+// Nick, 2026-09-10: "I need the ability to split a deal thats been priced out
+// between multiple listing locations... This way each store can only see the
+// part of the B2b DEAL that was actually brought to their store."
+
+function _b2bSplitFixture() {
+    return [
+        { id: 'i1', line_no: 1, sku: 'A-1', quantity: 2, value: 100, cost: 40,
+          disposition: 'purchase', item_type: 'other', listing_store: 'OVL' },
+        { id: 'i2', line_no: 2, sku: 'A-2', quantity: 3, value: 200, cost: 90,
+          disposition: 'purchase', item_type: 'other', listing_store: 'MPL' },
+    ];
+}
+function _b2bSplitDeal(over) {
+    var d = {
+        id: 'd-split', ref: 'SPL-001', stage: 'listing',
+        listing_store: null, listing_stores: ['MPL', 'OVL'],
+        total_units: 5, listed_units: 1, recycled_units: 0,
+        listing_parts: [
+            { store: 'MPL', total_units: 3, listed_units: 0, recycled_units: 0,
+              outstanding_units: 3, completed_at: null, completed_by: null },
+            { store: 'OVL', total_units: 2, listed_units: 1, recycled_units: 1,
+              outstanding_units: 0, completed_at: '2026-09-10T12:00:00Z', completed_by: 'Ethan' },
+        ],
+    };
+    Object.keys(over || {}).forEach(function (k) { d[k] = over[k]; });
+    return d;
+}
+
+// A split deal has listing_store NULL and names its stores only in the roll-up,
+// so checking the single column alone would hide it from every store on it.
+t('3.9.0 a split deal is in scope for each store that has lines on it', function () {
+    return _asRole('manager', 'MPL', function () {
+        var d = _b2bSplitDeal();
+        if (!_b2bListsHere(d, ['MPL'])) return 'MPL cannot see a deal it has lines on';
+        if (!_b2bListsHere(d, ['OVL'])) return 'OVL cannot see a deal it has lines on';
+        return !_b2bListsHere(d, ['BAL']) || 'BAL can see a deal it has no lines on';
+    });
+});
+t('3.9.0 an unsplit deal still works off the single column', function () {
+    var d = _b2bSplitDeal({ listing_store: 'WSP', listing_stores: ['WSP'] });
+    if (!_b2bListsHere(d, ['WSP'])) return 'the single-store path broke';
+    return !_b2bListsHere(d, ['OVL']) || 'a store with nothing on it is in scope';
+});
+t('3.9.0 the listing screen opens for a store on a split deal', function () {
+    return _asRole('manager', 'MPL', function () {
+        var act = _b2bActionFor(_b2bSplitDeal());
+        // B2B_ACTIONS entries carry cta/why/kind -- not key or label.
+        return (act && act.kind === 'listing') || 'no listing action for a store on the split';
+    });
+});
+
+// The privacy requirement is enforced by the SERVER, but the client has to ask
+// for its own slice -- and both fetch sites have to ask, or a store sees the
+// whole deal on a background refresh and its own share on open.
+t('3.9.0 a store asks the server for only its own lines', function () {
+    return _asRole('manager', 'MPL', function () {
+        var qs = _b2bScopeQs();
+        return qs === '&store=MPL' || 'a store is not scoping its item fetch: ' + JSON.stringify(qs);
+    });
+});
+t('3.9.0 corp asks for the whole deal', function () {
+    return _asRole('ceo', 'CORP', function () {
+        return _b2bScopeQs() === '' || 'corp is scoping itself out of its own deals';
+    });
+});
+t('3.9.0 both item fetches are scoped, not just one', function () {
+    // Intermittent leaks are the worst kind: one path scoped and the other not
+    // means a store sees the whole deal only after a poll.
+    var src = _srcOf(_b2bSyncOpenDeal) + _srcOf(b2bOpenDeal);
+    var fetches = (src.match(/deal_id=\$\{encodeURIComponent/g) || []).length;
+    var scoped = (src.match(/_b2bScopeQs\(\)/g) || []).length;
+    if (!fetches) return 'no item fetch found — this check needs updating';
+    return fetches === scoped || `${fetches} item fetches but only ${scoped} scoped`;
+});
+
+// The split picker.
+t('3.9.0 splitting is an explicit choice, not a hidden mode', function () {
+    var src = _srcOf(_b2bStageListingLocation);
+    if (src.indexOf('b2bSplitToggle') === -1) return 'no way to choose';
+    return src.indexOf('All to one store') > -1 || 'the one-store option is not offered';
+});
+t('3.9.0 every line has to be placed before a split can be sent', function () {
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = _b2bSplitFixture();
+        _b2bSplitMode = true;
+        _b2bSplitPlan = { i1: 'OVL' };          // i2 left unplaced
+        if (_b2bSplitUnplaced().length !== 1) return 'unplaced lines are not counted';
+        var html = _b2bSplitPickerHtml();
+        if (html.indexOf('still to place') === -1) return 'nothing says a line is unplaced';
+        _b2bSplitPlan = { i1: 'OVL', i2: 'MPL' };
+        if (_b2bSplitUnplaced().length !== 0) return 'a placed line still reads as unplaced';
+        return _b2bSplitStores().join(',') === 'MPL,OVL' || 'the store set is wrong: ' + _b2bSplitStores();
+    } finally { _b2bModalItems = keep; _b2bSplitMode = false; _b2bSplitPlan = {}; }
+});
+t('3.9.0 the picker tallies each store as the plan is built', function () {
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = _b2bSplitFixture();
+        _b2bSplitMode = true;
+        _b2bSplitPlan = { i1: 'OVL', i2: 'MPL' };
+        var html = _b2bSplitPickerHtml();
+        // OVL: 1 line, 2 units, $200. MPL: 1 line, 3 units, $600.
+        if (html.indexOf('2 units') === -1) return 'no unit tally per store';
+        return html.indexOf('$600') > -1 || 'no value tally per store';
+    } finally { _b2bModalItems = keep; _b2bSplitMode = false; _b2bSplitPlan = {}; }
+});
+t('3.9.0 the brush places everything left in one go', function () {
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = _b2bSplitFixture();
+        _b2bSplitPlan = {};
+        b2bSplitRest('BAL');
+        return Object.keys(_b2bSplitPlan).length === 2 || 'everything-left did not place every line';
+    } finally { _b2bModalItems = keep; _b2bSplitPlan = {}; }
+});
+
+// Corp's per-store breakdown, and a store seeing only its own numbers.
+t('3.9.0 corp gets a bar per store under the deal bar', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var keep = _b2bModalDeal;
+        try {
+            _b2bModalDeal = _b2bSplitDeal();
+            var html = _b2bListProgress();
+            if (html.indexOf('b2b-prog-parts') === -1) return 'no per-store breakdown';
+            if (html.indexOf('split across 2 stores') === -1) return 'the main bar does not say it is split';
+            if (html.indexOf('MPL') === -1 || html.indexOf('OVL') === -1) return 'a store is missing a bar';
+            if (html.indexOf('finished by Ethan') === -1) return 'a finished part does not say who finished it';
+            return html.indexOf('Waiting on MPL') > -1 || 'does not say who it is waiting on';
+        } finally { _b2bModalDeal = keep; }
+    });
+});
+t('3.9.0 a store sees its own part, not the deal', function () {
+    return _asRole('manager', 'MPL', function () {
+        var keepD = _b2bModalDeal, keepI = _b2bModalItems;
+        try {
+            _b2bModalDeal = _b2bSplitDeal();
+            _b2bModalItems = [_b2bSplitFixture()[1]];      // only MPL's line came back
+            var html = _b2bListProgress();
+            if (html.indexOf('b2b-prog-parts') > -1) return 'a store is shown the other store breakdown';
+            if (html.indexOf('Your part') === -1) return 'it does not read as their own part';
+            // MPL's part is 3 units, 0 done. The DEAL is 5 units, 1 done.
+            if (html.indexOf('of 3 units') === -1) return 'showing the deal total instead of their own';
+            return html.indexOf('of 5 units') === -1 || 'the deal total leaked into a store view';
+        } finally { _b2bModalDeal = keepD; _b2bModalItems = keepI; }
+    });
+});
+
+// Moving lines: corp only, and never a line already live on Shopify.
+t('3.9.0 only corp is offered Move Lines', function () {
+    var d = _b2bSplitDeal();
+    var asStore = _asRole('manager', 'MPL', function () { return _b2bMoveLinesBtn(d); });
+    if (asStore) return 'a store manager is offered Move Lines';
+    var asCorp = _asRole('ceo', 'CORP', function () { return _b2bMoveLinesBtn(d); });
+    return asCorp.indexOf('b2bOpenMoveLines') > -1 || 'corp is not offered Move Lines';
+});
+t('3.9.0 Move Lines is only offered while the deal is being listed', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var done = _b2bMoveLinesBtn(_b2bSplitDeal({ stage: 'completed' }));
+        return done === '' || 'offered on a completed deal';
+    });
+});
+t('3.9.0 a line with units already listed cannot be moved', function () {
+    // The Shopify listing belongs to the store that made it, so moving the line
+    // would put their listings under another store's name. The server refuses
+    // too; this is so the row says why before anybody tries.
+    return _asRole('ceo', 'CORP', function () {
+        var keepD = _b2bModalDeal, keepI = _b2bModalItems;
+        try {
+            _b2bModalDeal = _b2bSplitDeal();
+            _b2bModalItems = [
+                { id: 'i1', line_no: 1, sku: 'A-1', quantity: 2, listed_qty: 1, listing_store: 'OVL' },
+                { id: 'i2', line_no: 2, sku: 'A-2', quantity: 3, listed_qty: 0, listing_store: 'MPL' },
+            ];
+            var host = document.createElement('div');
+            host.innerHTML = '<div id="b2bMoveLinesBody"></div><div id="b2bMoveLinesFooter"></div>';
+            document.body.appendChild(host);
+            try {
+                _b2bMoveSel = {}; _b2bMoveTo = null;
+                _b2bPaintMoveLines();
+                var html = document.getElementById('b2bMoveLinesBody').innerHTML;
+                var rows = html.split('b2b-moverow');
+                if (html.indexOf('locked') === -1) return 'a listed line is not locked';
+                if (html.indexOf('already listed') === -1) return 'it does not say why';
+                // The locked row must not be clickable.
+                return rows[1].indexOf('onclick="b2bMoveToggle') === -1
+                    || 'the locked row is still clickable';
+            } finally { host.remove(); }
+        } finally { _b2bModalDeal = keepD; _b2bModalItems = keepI; _b2bMoveSel = {}; }
+    });
+});
+t('3.9.0 a move names the store it came from and goes through the audit path', function () {
+    var src = _srcOf(b2bMoveLines);
+    if (src.indexOf('transfer_items') === -1) return 'not calling the server action';
+    return src.indexOf('to_store') > -1 || 'no destination sent';
+});
+
+// Completion: per store, and labelled as such.
+t('3.9.0 a store completing a split deal completes its own part', function () {
+    return _asRole('manager', 'MPL', function () {
+        var src = _srcOf(b2bCompleteDeal);
+        return src.indexOf('caller_store') > -1
+            || 'the server is not told whose part is finished';
+    });
+});
+t('3.9.0 the button says whose part it finishes', function () {
+    var src = _srcOf(_b2bStageListing);
+    // Rendered inside the listing stage; assert on the string the renderer holds.
+        return src.indexOf('My Part Is Done') > -1
+        || 'the split label is missing';
+});
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();

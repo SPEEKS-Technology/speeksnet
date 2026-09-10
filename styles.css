@@ -21598,3 +21598,121 @@ select.dd-native {
 .b2b-rowmenu-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .b2b-rowmenu-txt b { font-size: 12.5px; font-weight: 700; color: #1a1c1e; }
 .b2b-rowmenu-txt span { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }
+
+/* =========================================================
+   B2B SPLIT LISTING LOCATIONS (0081)
+   Assigning a priced deal to one store or several, moving individual lines
+   between stores afterwards, and the per-store progress breakdown.
+   ========================================================= */
+
+/* The one-or-several choice, made up front and deliberately not a checkbox:
+   splitting a deal is a different job from routing one, and a tick nobody
+   notices is how somebody ends up on the wrong screen. */
+.b2b-splitmode { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+.b2b-splitmode-b {
+    display: flex; flex-direction: column; gap: 2px; text-align: left;
+    padding: 11px 13px; cursor: pointer;
+    border: 1.5px solid var(--b2b-line); border-radius: 11px;
+    background: #fff; transition: border-color .13s, background .13s;
+}
+.b2b-splitmode-b:hover { border-color: var(--sage-deep); }
+.b2b-splitmode-b.on { border-color: var(--sage-deep); background: var(--b2b-accent-tint, #eaf5ee); }
+.b2b-splitmode-b b { font-size: 13px; font-weight: 750; color: #1a1c1e; }
+.b2b-splitmode-b span { font-size: 11px; font-weight: 650; color: var(--b2b-muted); }
+@media (max-width: 560px) { .b2b-splitmode { grid-template-columns: 1fr; } }
+
+/* The brush bar. Picking a store once and then clicking rows is thirty clicks
+   for a thirty-line pallet; a dropdown on every row is thirty dropdowns. */
+.b2b-splitbar {
+    display: flex; flex-direction: column; gap: 8px;
+    margin-top: 14px; padding: 12px 13px;
+    border: 1px solid var(--b2b-line); border-radius: 11px;
+    background: var(--b2b-tint, #f6f8f6);
+}
+.b2b-loc-pick.sm { gap: 6px; flex-wrap: wrap; }
+.b2b-splitacts { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Per-store tally, built as the plan is. "Did I give MPL the laptops or the
+   monitors" is the question this screen answers, and counting rows by eye is
+   how it gets answered wrong. */
+.b2b-splittallies { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.b2b-splittally {
+    display: flex; align-items: center; gap: 7px;
+    padding: 7px 11px; border-radius: 999px;
+    border: 1px solid var(--b2b-line); background: #fff;
+    font-size: 11.5px;
+}
+.b2b-splittally b { font-weight: 800; color: #1a1c1e; }
+.b2b-splittally span { color: var(--b2b-muted); font-weight: 650; }
+
+.b2b-splitrows, .b2b-moverows {
+    display: flex; flex-direction: column; gap: 4px;
+    margin-top: 10px; max-height: 46vh; overflow-y: auto;
+}
+.b2b-splitrow, .b2b-moverow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; cursor: pointer;
+    border: 1px solid var(--b2b-line); border-radius: 9px;
+    background: #fff; transition: border-color .12s, background .12s;
+}
+.b2b-splitrow:hover, .b2b-moverow:hover { border-color: var(--sage-deep); }
+/* Placed rows recede. What is left to do should be what stands out, since the
+   screen cannot be submitted until nothing is. */
+.b2b-splitrow.set { background: var(--b2b-tint, #f6f8f6); opacity: .78; }
+.b2b-splitrow-n {
+    font-size: 10.5px; font-weight: 800; color: var(--b2b-faint);
+    min-width: 30px; font-variant-numeric: tabular-nums;
+}
+.b2b-splitrow-m { display: flex; flex-direction: column; gap: 1px; min-width: 0; margin-right: auto; }
+.b2b-splitrow-m b {
+    font-size: 12.5px; font-weight: 700; color: #1a1c1e;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40ch;
+}
+.b2b-splitrow-m span { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }
+.b2b-splitrow-s { display: flex; gap: 4px; flex: 0 0 auto; }
+.b2b-splitchip {
+    font-size: 10px; font-weight: 800; letter-spacing: .02em;
+    padding: 4px 7px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--b2b-line); background: #fff; color: var(--b2b-muted);
+}
+.b2b-splitchip:hover { border-color: var(--sage-deep); color: var(--sage-deep); }
+.b2b-splitchip.on {
+    background: var(--sage-professional, #4a7c59); border-color: var(--sage-professional, #4a7c59);
+    color: #fff;
+}
+@media (max-width: 620px) {
+    .b2b-splitrow { flex-wrap: wrap; }
+    .b2b-splitrow-m b { max-width: 100%; white-space: normal; }
+    .b2b-splitrow-s { width: 100%; }
+}
+
+/* Move Lines. A tick list rather than chips: here the destination is picked once
+   for the whole selection, so the row only has to say in or out. */
+.b2b-movecheck {
+    display: inline-grid; place-items: center; flex: 0 0 auto;
+    width: 20px; height: 20px; border-radius: 6px;
+    border: 1.5px solid var(--b2b-line); background: #fff;
+}
+.b2b-moverow.on .b2b-movecheck {
+    background: var(--sage-professional, #4a7c59); border-color: var(--sage-professional, #4a7c59);
+}
+.b2b-movecheck svg { width: 12px; height: 12px; stroke: #fff; stroke-width: 3; fill: none; }
+.b2b-moverow.on { border-color: var(--sage-deep); background: var(--b2b-accent-tint, #eaf5ee); }
+/* A line with units already live on Shopify cannot move -- the listing belongs
+   to the store that made it -- so it reads as unavailable rather than being
+   hidden, and its tooltip says why. */
+.b2b-moverow.locked { opacity: .5; cursor: not-allowed; }
+.b2b-moverow.locked:hover { border-color: var(--b2b-line); }
+.b2b-movenow { flex: 0 0 auto; font-size: 11px; }
+
+/* The per-store progress bars, dropped out of the deal's own. */
+.b2b-prog-parts {
+    display: flex; flex-direction: column; gap: 8px;
+    margin-top: 10px; padding-left: 12px;
+    border-left: 2px solid var(--b2b-line);
+}
+.b2b-prog-part .b2b-prog-h { font-size: 11px; }
+.b2b-prog-part .b2b-prog-h span { display: flex; align-items: center; gap: 6px; }
+.b2b-pace-bar.sm { height: 5px; }
+.b2b-prog-part.done .b2b-pace-bar i { background: var(--sage-professional, #4a7c59); }
+.b2b-prog-wait { margin-top: 8px; font-size: 11px; font-weight: 650; color: var(--b2b-muted); }
