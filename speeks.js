@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.9.0';
+const APP_VERSION = '3.9.1';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -19561,170 +19561,42 @@ function _b2bProofPanel(owner) {
             <span class="b2b-note-k">${ok ? "The client's approval is on record" : "No approval on record yet"}</span>
             ${waived ? `<div class="b2b-proof-waived">Accepted without written approval by
                 ${escapeHtml(waived)} — ${escapeHtml(owner.approval_waived_reason || '')}</div>` : ''}
-            ${!ok ? `<div>Drag the client's email onto the box below before this is accepted.
-                It is what answers them later if they say they never agreed to the price.</div>` : ''}
+            ${!ok ? `<div>Upload the client's email before this is accepted. It is what answers
+                them later if they say they never agreed to the price.</div>` : ''}
             ${live.map(row).join('')}
             ${gone.length ? `<details class="b2b-proof-gone"><summary>${gone.length} withdrawn</summary>${gone.map(row).join('')}</details>` : ''}
-            <!-- Drag and drop, because that is the gesture being replaced: Paul
-                 was dragging these emails into a Google Drive folder. Same
-                 movement, different destination. There is no "choose a file"
-                 button here any more (Nick, 2026-09-09) -- the picker survives
-                 in one place only, the accept popup, where somebody is actually
-                 blocked and needs a way through.
-                 tabindex + onpaste: the new Outlook and Outlook in a tab have no
-                 file to give a browser at all, but Ctrl+C on a message puts its
-                 text on the clipboard in every version, so click-then-paste is
-                 the route that works when dragging cannot. -->
-            <div class="b2b-proof-drop" id="b2bProofDrop-${owner.id}" tabindex="0"
+            <!-- UPLOAD IS THE ROUTE. Nick, 2026-09-10: "Go back to just the file
+                 upload of that msg file and I will teach everyone how to
+                 download the email and upload it to speeksnet".
+                 That is the right call and it is worth recording why, because
+                 four releases were spent trying to avoid it. Outlook can only
+                 hand a message to a browser as a "virtual file"; classic
+                 desktop Outlook plus Chrome or Edge manages it, and the new
+                 Outlook cannot -- it offers a pointer to the message on
+                 Microsoft's server and nothing else. Downloading the message
+                 first turns it into an ordinary file, and an ordinary file
+                 upload works everywhere, forever, with nothing to go wrong.
+                 The drop zone stays because it IS the file input's own drop
+                 target -- no extra UI, and it still works when the drag does. -->
+            <div class="b2b-proof-drop" id="b2bProofDrop-${owner.id}"
                 ondragover="b2bProofDragOver(event,'${owner.id}')"
                 ondragleave="b2bProofDragOut(event,'${owner.id}')"
-                ondrop="b2bProofDrop(event,${ownerAttr})"
-                onpaste="b2bProofPaste(event,${ownerAttr})">
+                ondrop="b2bProofDrop(event,${ownerAttr})">
                 <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
-                <!-- Two routes, and the button is the one that always works.
-                     Outlook can only hand a message to a browser as a virtual
-                     file and not every build will, so leading with "drag it out
-                     of Outlook" sets people up to fight it -- but Ctrl+C on a
-                     message works in every version, and the button reads that
-                     off the clipboard without anyone needing to know about
-                     focus or Ctrl+V. -->
-                <span class="b2b-proof-droptxt"><b>Drop the client's email here</b>
-                    <span>Or copy it in Outlook and press the button</span></span>
-                <!-- ownerAttr is id + kind, so the zone id has to be passed
-                     explicitly here. On this panel the zone IS the deal id; in
-                     the accept popup it is not, which is the whole reason the
-                     two are separate arguments. -->
-                <button class="b2b-mini" onclick="b2bPasteFromClipboard(${ownerAttr},'${owner.id}',this)">Paste
-                    the copied email</button>
+                <span class="b2b-proof-droptxt"><b>Upload the client's email</b>
+                    <span>In Outlook, open it and use Download or Save As — then upload that
+                        file here. Or drag it straight on, if your Outlook lets you.</span></span>
+                <!-- The label IS the button. A styled label wired to a hidden
+                     input avoids the unstyleable native "Choose file" control
+                     while staying a real file input, so it keeps the OS picker,
+                     the keyboard behaviour and the drop target for free. -->
+                <label class="b2b-btn b2b-btn-primary b2b-proof-pickbtn">
+                    Choose the email file
+                    <input type="file" hidden onchange="b2bProofFilePicked(this,${ownerAttr})">
+                </label>
             </div>
             <div id="b2bDropFail-${owner.id}"></div>
-            ${_b2bDrivePanel(owner)}
         </div>`;
-}
-
-// ---------------------------------------------------------------------------
-// THE DRIVE FOLDER -- the route that works from every version of Outlook
-// ---------------------------------------------------------------------------
-//
-// Paul drags the acceptance email into a Google Drive folder. That already
-// works, reliably, and it is worth being precise about why: dragging into a
-// Drive-for-desktop folder is an OS-LEVEL drop, and Explorer fully supports the
-// virtual-file format Outlook offers. Dragging into a WEB PAGE is a different
-// mechanism, and the new Outlook puts nothing on it but a pointer to the message
-// on Microsoft's server -- measured 2026-09-10, and unfixable from a browser at
-// any price.
-//
-// So this stops trying to replace his gesture and reads the folder instead. He
-// drops the email where he always has; the list below shows what landed there,
-// newest first, and one click files it against the deal.
-//
-// It is collapsed by default. Dragging onto the zone above is still the one-step
-// route and works fine on classic Outlook -- this is the way through when it
-// does not, not a replacement for it.
-let _b2bDriveFiles = null;      // null = not fetched yet, [] = fetched and empty
-let _b2bDriveErr = '';
-let _b2bDriveBusy = false;
-
-function _b2bDrivePanel(owner) {
-    if (!owner) return '';
-    const attr = owner.eval_no !== undefined
-        ? `'${owner.id}','preval'` : `'${owner.id}','deal'`;
-    return `
-        <details class="b2b-drivewrap" id="b2bDrive-${owner.id}"
-            ontoggle="if(this.open)b2bDriveRefresh(${attr})">
-            <summary>Or pick it out of the Drive folder</summary>
-            <p class="b2b-hint">Drag the email into the shared Drive folder the way you always
-                have — that works from every version of Outlook, because it is Windows doing it
-                and not the browser. Then pick it out here.</p>
-            <div id="b2bDriveList-${owner.id}">${_b2bDriveListHtml(owner)}</div>
-        </details>`;
-}
-
-function _b2bDriveListHtml(owner) {
-    if (_b2bDriveBusy) return '<div class="b2b-hint">Looking in the folder…</div>';
-    if (_b2bDriveErr) {
-        return `<div class="b2b-note warn"><span class="b2b-note-k">Couldn't read the folder</span>
-            <div>${escapeHtml(_b2bDriveErr)}</div></div>`;
-    }
-    if (_b2bDriveFiles === null) return '';
-    if (!_b2bDriveFiles.length) {
-        return `<div class="b2b-hint">Nothing in the folder yet. Drag the email in, then
-            <button class="b2b-mini" onclick="b2bDriveRefresh('${owner.id}','${
-                owner.eval_no !== undefined ? 'preval' : 'deal'}')">check again</button>.</div>`;
-    }
-    const kb = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
-    const rows = _b2bDriveFiles.map((f) => `
-        <div class="b2b-driverow">
-            <div class="b2b-driverow-main">
-                <b>${escapeHtml(f.name || '(no name)')}</b>
-                <span>${escapeHtml(_b2bDriveWhen(f.modified))} · ${kb(Number(f.bytes) || 0)}</span>
-            </div>
-            <button class="b2b-mini" onclick="b2bDriveAttach('${escapeHtml(String(f.id))}','${
-                owner.id}','${owner.eval_no !== undefined ? 'preval' : 'deal'}',this)">Attach</button>
-        </div>`).join('');
-    return rows + `<div class="b2b-driveacts"><button class="b2b-mini"
-        onclick="b2bDriveRefresh('${owner.id}','${
-            owner.eval_no !== undefined ? 'preval' : 'deal'}')">Refresh</button></div>`;
-}
-
-// "2 minutes ago" beats a timestamp here: the file being looked for is almost
-// always the one that just landed, and recency is the whole basis for picking it.
-function _b2bDriveWhen(iso) {
-    const t = Date.parse(iso || '');
-    if (!t) return 'unknown date';
-    const mins = Math.round((Date.now() - t) / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins} min ago`;
-    const hrs = Math.round(mins / 60);
-    if (hrs < 24) return `${hrs} hr ago`;
-    return _b2bDate(new Date(t).toISOString().slice(0, 10));
-}
-
-function _b2bDriveRepaint(ownerId) {
-    const el = document.getElementById(`b2bDriveList-${ownerId}`);
-    const owner = _b2bModalDeal && _b2bModalDeal.id === ownerId ? _b2bModalDeal : { id: ownerId };
-    if (el) el.innerHTML = _b2bDriveListHtml(owner);
-}
-
-async function b2bDriveRefresh(ownerId, ownerKind) {
-    _b2bDriveBusy = true;
-    _b2bDriveErr = '';
-    _b2bDriveRepaint(ownerId);
-    try {
-        const out = await _b2bSend({ action: 'drive_list', limit: 25 });
-        _b2bDriveFiles = Array.isArray(out.files) ? out.files : [];
-    } catch (e) {
-        _b2bDriveFiles = null;
-        // The server's own words. When this fails it is nearly always a setup
-        // problem -- a deployment set to the wrong access, a missing secret --
-        // and the message that says which is the one worth showing.
-        _b2bDriveErr = e.message || 'the folder could not be read';
-    } finally {
-        _b2bDriveBusy = false;
-        _b2bDriveRepaint(ownerId);
-    }
-}
-
-// Straight into the same pipeline as a drop or a paste: the bytes come back as
-// a data URI, become a File, and go through _b2bAttachMailFile -- which parses
-// the headers, labels the row and inserts it. One path, deliberately. This
-// feature's whole history is bugs from having several routes that were supposed
-// to agree with each other.
-async function b2bDriveAttach(fileId, ownerId, ownerKind, btn) {
-    const label = btn ? btn.textContent : '';
-    if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
-    try {
-        const out = await _b2bSend({ action: 'drive_file', file_id: fileId });
-        const m = String(out.data_uri || '').match(/^data:([^;]*);base64,(.*)$/);
-        if (!m) throw new Error("that file didn't come back in a readable form");
-        const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
-        const file = new File([bytes], out.name || 'message.msg', { type: m[1] || '' });
-        await _b2bAttachMailFile(file, ownerId, ownerKind, 'file', ownerId);
-    } catch (e) {
-        alert(`Couldn't attach that: ${e.message}`);
-    } finally {
-        if (btn) { btn.disabled = false; btn.textContent = label; }
-    }
 }
 
 // --- attaching -------------------------------------------------------------
@@ -19964,21 +19836,16 @@ function _b2bAsMailFile(file, virtual) {
     }
 }
 
-// LAST RESORT, AND ONLY WHEN THE BYTES ARE GENUINELY UNAVAILABLE.
+// What came with the drag, for the DIAGNOSTIC and for spotting a new-Outlook
+// pointer. Not for building a message out of.
 //
-// If no route yields the file, the drag is not necessarily empty: a mail client
-// that will not release FileContents will usually still put the message on the
-// drag as text and/or HTML. That is enough to build a real RFC822 message in
-// the browser and file THAT, so the one gesture the whole feature was asked for
-// never dead-ends.
-//
-// Gated hard, because a fabricated record is worse than no record. Outlook will
-// happily put just the subject line on a drag, and "Re: your quote" is not
-// evidence that anybody accepted anything. So it is used only when the text
-// carries recognisable mail headers, or is long enough to be the actual message
-// body. Anything thinner and the user gets told the truth instead.
-const B2B_DRAG_TEXT_MIN = 400;
-
+// There was a reconstruction path here -- if no route produced the file, it made
+// an .eml out of the drag's text and filed that as "message text only". Removed
+// 2026-09-10. Nick: "Go back to just the file upload of that msg file and I will
+// teach everyone how to download the email and upload it to speeksnet." That
+// leaves ONE kind of evidence on the record: the message as Outlook stored it.
+// Two kinds, one of them a partial reconstruction, is a worse evidence log than
+// one kind and a clear instruction.
 function _b2bDragText(dt) {
     // Synchronous: getData is dead the moment the handler yields, so the mail
     // client's own format is read HERE even though it is only wanted much later
@@ -19994,73 +19861,6 @@ function _b2bDragText(dt) {
     return { html: get('text/html'), plain: get('text/plain'), owa };
 }
 
-// BOTH sources, not whichever one exists first.
-//
-// THIS is what failed on the new Outlook (Nick, 2026-09-09, with the screenshot
-// to prove it). New Outlook puts a SHORT text/plain on the drag -- often just
-// the subject line -- alongside a full text/html body. Reading
-// `plain || html` tested the short one, found a dozen characters, decided the
-// drag was too thin to be a message, and threw away the entire body that was
-// sitting in the other slot. So the drop reported "would not release the file"
-// when the message had in fact arrived, just not as a file.
-function _b2bDragBody(txt) {
-    const strip = (s) => String(s || '')
-        .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<\/(p|div|tr|li|h[1-6])>/gi, '\n')
-        .replace(/<[^>]*>/g, ' ')
-        .replace(/&nbsp;/gi, ' ')
-        .replace(/&amp;/gi, '&')
-        .replace(/&lt;/gi, '<')
-        .replace(/&gt;/gi, '>')
-        .replace(/[ \t]+/g, ' ');
-    const plain = strip(txt.plain);
-    const html = strip(txt.html);
-    return html.trim().length > plain.trim().length ? html : plain;
-}
-
-function _b2bDragTextIsMessage(txt) {
-    const body = _b2bDragBody(txt);
-    if (/^\s*(from|sent|to|subject)\s*:/im.test(body) && /\S+@\S+/.test(body)) return true;
-    return body.trim().length >= B2B_DRAG_TEXT_MIN;
-}
-
-// Build an .eml the mail client did not give us. Marked as reconstructed in its
-// own headers -- whoever opens this later must be able to tell it apart from the
-// message as the client stored it, without having to know this code exists.
-function _b2bEmlFromDragText(txt) {
-    const flat = _b2bDragBody(txt);
-    const hdr = (name) => {
-        // DOUBLE backslashes, and it matters. These were single for one release
-        // -- and a single backslash inside a quoted string is just the bare
-        // letter, so the pattern read "^s*From s*:[ t]*(.+)$" and matched
-        // nothing ever. Every rebuilt message came out titled "Message dragged
-        // from mail app" with no sender. A regex built from a string needs its
-        // escapes escaped; a regex literal does not. Do not "simplify" these.
-        const m = flat.match(new RegExp('^\\s*' + name + '\\s*:[ \\t]*(.+)$', 'im'));
-        return m ? m[1].trim().replace(/\s+/g, ' ').slice(0, 200) : '';
-    };
-    const subject = hdr('Subject') || 'Message dragged from mail app';
-    const from = hdr('From') || (flat.match(/[^\s<>,;"]+@[^\s<>,;"]+/) || [])[0] || '';
-    const sent = hdr('Sent') || hdr('Date') || '';
-    // Whichever slot actually held the message decides the content type, rather
-    // than assuming HTML only exists when there is no plain text at all.
-    const useHtml = String(txt.html || '').trim().length > String(txt.plain || '').trim().length;
-    const body = (useHtml ? txt.html : txt.plain) || flat;
-    const lines = [
-        from ? `From: ${from}` : null,
-        `Subject: ${subject}`,
-        `Date: ${sent || new Date().toUTCString()}`,
-        'MIME-Version: 1.0',
-        `Content-Type: text/${useHtml ? 'html' : 'plain'}; charset=utf-8`,
-        'X-Speeks-Proof-Source: reconstructed from the message text; the mail app'
-            + ' did not release the original message file',
-        '',
-        body,
-    ].filter((l) => l !== null);
-    const name = (subject.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'message').slice(0, 80);
-    return new File([lines.join('\r\n')], `${name}.eml`, { type: 'message/rfc822' });
-}
 // Which of the several ways this can fail is it, and what should the person
 // actually do about it. Worth telling apart: on Firefox no amount of retrying
 // will help, and saying "try again" there wastes their afternoon.
@@ -20234,127 +20034,6 @@ function _b2bOwaAdvice(subjects) {
         + 'so it gets filed as "message text only".';
 }
 
-// ONE BUTTON THAT TAKES THE EMAIL OFF THE CLIPBOARD.
-//
-// The onpaste handler below still works and costs nothing, but "click this box,
-// then press Ctrl+V" is two instructions and a focus rule the user has to know
-// about. Reading the clipboard directly is one button and no explanation.
-//
-// It needs the async Clipboard API, a user gesture (the click) and a secure
-// context -- https, or localhost, which is why this works on the dev server
-// too. Chrome may prompt for permission the first time. If any of that is
-// refused the Ctrl+V route is still there, and that is what the failure says.
-//
-// EVERY type is fetched, including the "web ..." custom formats. The first
-// version listed those in the report and never opened them, which is how a
-// clipboard holding only an OWA reference came back as a blank mystery.
-async function b2bPasteFromClipboard(ownerId, ownerKind, zone, btn) {
-    const z = zone || ownerId;
-    const focusZone = () => document.getElementById(`b2bProofDrop-${z}`)?.focus();
-    if (!navigator.clipboard?.read) {
-        focusZone();
-        return _b2bDropFail(z, 'This browser will not let the page read your clipboard by itself. '
-            + 'The box below is focused now — press Ctrl+V and it will come through that way.',
-            'navigator.clipboard.read is unavailable');
-    }
-    const label = btn ? btn.textContent : '';
-    if (btn) { btn.disabled = true; btn.textContent = 'Reading…'; }
-    try {
-        _b2bDropFailClear(z);
-        const items = await navigator.clipboard.read();
-        const txt = { html: '', plain: '' };
-        const seen = [];
-        const extras = [];
-        let file = null;
-        let owaSubjects = [];
-        for (const item of items) {
-            for (const type of item.types || []) {
-                seen.push(type);
-                let blob = null;
-                try { blob = await item.getType(type); } catch (_) { continue; }
-                if (!blob) continue;
-                if (type === 'text/html') txt.html = await blob.text();
-                else if (type === 'text/plain') txt.plain = await blob.text();
-                else if (/rfc822|ms-outlook/i.test(type)) {
-                    // A real message on the clipboard beats rebuilding one.
-                    file = new File([blob], 'clipboard-message.msg', { type });
-                } else if (/^(text|application)\//.test(type.replace(/^web /, ''))) {
-                    // Opened and reported, not used as evidence. A mail client's
-                    // private format is a pointer to something on a server --
-                    // but reading it is how the next one of these gets diagnosed
-                    // without another round trip, and the new Outlook's happens
-                    // to carry the subject, which makes the message specific.
-                    let body = '';
-                    try { body = await blob.text(); } catch (_) { body = '(unreadable)'; }
-                    if (B2B_OWA_REF_RX.test(type)) owaSubjects = _b2bOwaSubjects(body);
-                    extras.push(`${type} (${blob.size}b): ${body.slice(0, 400)}`);
-                }
-            }
-        }
-        if (!file && !_b2bDragTextIsMessage(txt)) {
-            const chars = (s) => (s ? s.length + ' chars' : 'none');
-            const diag = `clipboard types: ${seen.length ? seen.join(' | ') : 'none'}\n`
-                + `text/plain: ${chars(txt.plain)}\ntext/html: ${chars(txt.html)}`
-                + (extras.length ? `\n\ncontents of the other formats:\n${extras.join('\n')}` : '');
-            focusZone();
-            return _b2bDropFail(z, _b2bOwaRefOnly(seen)
-                ? _b2bOwaAdvice(owaSubjects)
-                : "Your clipboard does not have an email on it — or not enough of one to keep. "
-                  + 'Open the email, click into the message text, press Ctrl+A then Ctrl+C, and '
-                  + 'press this again.', diag);
-        }
-        const out = file || _b2bEmlFromDragText(txt);
-        if (out.size > 6_000_000) {
-            return alert(`That message is ${Math.round(out.size / 1e6)}MB — the limit is 6MB.\n\n`
-                + 'Forward it to yourself without the attachments and use that instead.');
-        }
-        await _b2bAttachMailFile(out, ownerId, ownerKind, file ? 'file' : 'text', z);
-    } catch (e) {
-        focusZone();
-        _b2bDropFail(z, 'The browser blocked the page from reading your clipboard. The box below '
-            + 'is focused now — press Ctrl+V instead, which needs no permission.',
-            `${e.name || 'Error'}: ${e.message || e}`);
-    } finally {
-        if (btn) { btn.disabled = false; btn.textContent = label; }
-    }
-}
-
-// PASTE, BECAUSE COPYING A MESSAGE WORKS WHERE DRAGGING ONE DOES NOT.
-//
-// The new Outlook and Outlook in a browser tab are web apps in a shell. They
-// have no OS-level file to hand over, so no amount of work on the drop side can
-// make a drag produce one -- that is a limit of the mail client, not of this
-// code. But Ctrl+C on a message puts its text and HTML on the clipboard in
-// EVERY version of Outlook, and a paste event carries both. So the same
-// reconstruction that rescues a fileless drag rescues a paste, and the gesture
-// works everywhere.
-//
-// If the clipboard holds an actual file, that is preferred -- it is the real
-// message rather than a rebuild of it.
-async function b2bProofPaste(ev, ownerId, ownerKind, zone) {
-    const cd = ev.clipboardData;
-    if (!cd) return;
-    const get = (t) => { try { return String(cd.getData(t) || ''); } catch (_) { return ''; } };
-    const txt = { html: get('text/html'), plain: get('text/plain') };
-    let file = (cd.files && cd.files[0]) || null;
-    if (file && !_b2bIsMailFile(file)) file = null;
-
-    if (!file && !_b2bDragTextIsMessage(txt)) {
-        // Not a message. Left alone deliberately: this handler sits on a drop
-        // zone inside a screen full of note fields, and hijacking an ordinary
-        // paste would be worse than not offering the shortcut at all.
-        return;
-    }
-    ev.preventDefault();
-    _b2bDropFailClear(zone);
-    const out = file || _b2bEmlFromDragText(txt);
-    if (out.size > 6_000_000) {
-        return alert(`That message is ${Math.round(out.size / 1e6)}MB — the limit is 6MB.\n\n`
-            + 'Forward it to yourself without the attachments and use that instead.');
-    }
-    await _b2bAttachMailFile(out, ownerId, ownerKind, file ? 'file' : 'text', zone);
-}
-
 async function b2bProofDrop(ev, ownerId, ownerKind, zone) {
     ev.preventDefault();
     const z = zone || ownerId;
@@ -20375,24 +20054,17 @@ async function b2bProofDrop(ev, ownerId, ownerKind, zone) {
     } catch (_) {}
 
     if (!file) {
-        // Before giving up: the message text, if the client left enough of it.
-        // Checks BOTH text/plain and text/html -- see _b2bDragBody.
-        if (_b2bDragTextIsMessage(dragText)) {
-            const eml = _b2bEmlFromDragText(dragText);
-            await _b2bAttachMailFile(eml, ownerId, ownerKind, 'text', z);
-            return;
-        }
-        // A drag out of the new Outlook carries the same server-side reference
-        // as a copy out of it does, so name it here too rather than making
-        // somebody try the button to find out.
+        // A drag out of the new Outlook carries a pointer to the message on
+        // Microsoft's server and nothing else, so it is named specifically --
+        // "that didn't work" would just invite trying the same gesture again.
         let types = [];
         try { types = Array.from(ev.dataTransfer?.types || []); } catch (_) {}
         if (_b2bOwaRefOnly(types)) {
             return _b2bDropFail(z, _b2bOwaAdvice(_b2bOwaSubjects(dragText.owa)), full);
         }
         return _b2bDropFail(z, sawFileItem
-            ? 'Your mail app offered the message but would not release the file, and the drag '
-              + 'carried too little of the message to rebuild one. ' + _b2bDropAdvice()
+            ? 'Your mail app offered the message but would not release the file. '
+              + _b2bDropAdvice()
             : 'That drop did not contain a message. ' + _b2bDropAdvice(), full);
     }
     if (!_b2bIsMailFile(file)) {
@@ -20533,10 +20205,6 @@ function b2bOpenAcceptProof(ownerId, ownerKind) {
     _b2bProofOwner = { id: ownerId, kind: ownerKind || 'deal' };
     _b2bPaintProofModal();
     toggleModal('b2bProofModal');
-    // Focused so Ctrl+V lands here without anyone having to know they must
-    // click the box first. A paste event only reaches an element that has
-    // focus, and on this screen there is nothing else it could be meant for.
-    setTimeout(() => { document.getElementById(`b2bProofDrop-${B2B_PROOF_POP}`)?.focus(); }, 60);
 }
 
 function _b2bPaintProofModal() {
@@ -20551,33 +20219,28 @@ function _b2bPaintProofModal() {
             <div>Drop their email on and the acceptance goes straight through. It is what
                 answers them later if they say they never agreed to the price.</div>
         </div>
-        <div class="b2b-proof-drop lg" id="b2bProofDrop-${B2B_PROOF_POP}" tabindex="0"
+        <!-- UPLOAD LEADS HERE TOO. Nick, 2026-09-10: download the email out of
+             Outlook and upload the file. The drop zone stays because it is the
+             file input's own drop target and still works where the drag does --
+             but the button is the instruction, because it is the one that works
+             on every Outlook and every browser. -->
+        <div class="b2b-proof-drop lg" id="b2bProofDrop-${B2B_PROOF_POP}"
             ondragover="b2bProofDragOver(event,'${B2B_PROOF_POP}')"
             ondragleave="b2bProofDragOut(event,'${B2B_PROOF_POP}')"
-            ondrop="b2bProofDrop(event,${attr})"
-            onpaste="b2bProofPaste(event,${attr})">
+            ondrop="b2bProofDrop(event,${attr})">
             <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
-            <span class="b2b-proof-droptxt"><b>Drop the client's email here</b>
-                <span>Or copy it in Outlook and press the button — that works even where dragging
-                    does not</span></span>
-            <!-- attr already carries id + kind + zone, so this one takes it whole. -->
-            <button class="b2b-btn b2b-btn-primary"
-                onclick="b2bPasteFromClipboard(${attr},this)">Paste the copied email</button>
+            <span class="b2b-proof-droptxt"><b>Upload the client's email</b>
+                <span>In Outlook, open the email and use Download or Save As — then upload that
+                    file here. Or drag it straight on, if your Outlook lets you.</span></span>
+            <label class="b2b-btn b2b-btn-primary b2b-proof-pickbtn">
+                Choose the email file
+                <input id="b2bPfFile" type="file" hidden onchange="b2bProofFilePicked(this)">
+            </label>
         </div>
         <div id="b2bDropFail-${B2B_PROOF_POP}"></div>
-        <!-- The one picker left in the product, and deliberately only here.
-             Dragging out of Outlook depends on the browser and the Outlook
-             build agreeing (classic Outlook plus Chrome or Edge manage it;
-             Outlook in a tab cannot), and if it does not work on somebody's
-             machine then with no picker at all they cannot accept a deal --
-             which is the same trap that retiring the waiver set. One way
-             through, on the screen that blocks them. -->
-        <label class="form-label-caps" style="margin-top:14px;">Or pick the saved email</label>
-        <input id="b2bPfFile" type="file" class="form-input-lg"
-            onchange="b2bProofFilePicked(this)">
-        <p class="b2b-hint">A message saved out of your mail app — .msg or .eml, up to 6MB.
-            No filter on the dialog: Windows hides extensions and Outlook names a saved
-            message after its subject, so filtering only ever hides real emails.</p>`;
+        <p class="b2b-hint">A .msg or .eml, up to 6MB. No filter on the dialog: Windows hides
+            extensions and Outlook names a saved message after its subject, so filtering only ever
+            hides real emails.</p>`;
 
     const foot = document.getElementById('b2bProofFooter');
     if (foot) {
@@ -20587,22 +20250,32 @@ function _b2bPaintProofModal() {
     }
 }
 
-// The picker hands its file to exactly the same path as a drop, so there is one
-// set of rules about what an email is and one place that attaches it.
-function b2bProofFilePicked(input) {
+// Both the panel and the accept popup feed this. The panel passes its owner
+// explicitly because it can render for a deal that is not the one the popup
+// last had; the popup passes nothing and the module-level owner it just set is
+// correct. One function either way, so there is one set of rules about what an
+// email is and one place that attaches it.
+function b2bProofFilePicked(input, ownerId, ownerKind) {
     const f = input.files && input.files[0];
-    if (!f || !_b2bProofOwner) return;
+    if (!f) return;
+    const id = ownerId || (_b2bProofOwner && _b2bProofOwner.id);
+    const kind = ownerKind || (_b2bProofOwner && _b2bProofOwner.kind) || 'deal';
+    const zone = ownerId ? ownerId : B2B_PROOF_POP;
+    if (!id) return;
     if (!_b2bIsMailFile(f)) {
         input.value = '';
-        return alert(`"${f.name}" looks like a document rather than an email.\n\nAttach the `
-            + "client's message itself — saved out of Outlook as .msg or .eml.");
+        return alert(`"${f.name}" looks like a document rather than an email.\n\nUpload the `
+            + "client's message itself — downloaded out of Outlook as a .msg or .eml.");
     }
     if (f.size > 6_000_000) {
         input.value = '';
         return alert(`That file is ${Math.round(f.size / 1e6)}MB — the limit is 6MB.\n\n`
-            + 'Forward it to yourself without the attachments and attach that instead.');
+            + 'Forward it to yourself without the attachments and upload that instead.');
     }
-    _b2bAttachMailFile(f, _b2bProofOwner.id, _b2bProofOwner.kind, 'file', B2B_PROOF_POP);
+    // Cleared so picking the SAME file twice still fires a change event -- after
+    // a failed upload the obvious next move is to try the same file again.
+    input.value = '';
+    _b2bAttachMailFile(f, id, kind, 'file', zone);
 }
 
 async function b2bRemoveProof(id) {
@@ -24421,7 +24094,7 @@ function _b2bListRows() {
             <span>Line</span><span>Item</span>
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Serials</span>
-            <span class="r">Value</span><span class="r">Cost</span>
+            <span class="r">Value ea</span><span class="r">Cost ea</span>
             <span class="c">Listed</span><span></span>
         </div>`;
 
@@ -24437,12 +24110,26 @@ function _b2bListRows() {
         const carries = _b2bSpecsFor(it);
         const serials = _b2bSerials(it);
         const extra = _b2bSpecsFor(it).filter(f => !f.req).map(f => it[f.key]).filter(Boolean);
-        const lineValue = scrap ? 0 : (Number(it.value) || 0) * qty;
+        // PER UNIT, NOT PER LINE (Nick, 2026-09-10).
+        //
+        // These two columns used to read value x quantity and cost x quantity.
+        // That is not the number the lister needs: a line of five identical
+        // laptops is priced ONCE, as one laptop, and PayMore's POS autolister
+        // takes the quantity from there. So a listing screen showing $1,750 for
+        // five $350 machines is inviting somebody to type 1750 into a listing
+        // that is for one of them.
+        //
+        // The quantity is still right there in the Listed column, so nothing is
+        // lost -- and the deal totals above (_b2bDealStatsHtml) are unchanged,
+        // because THOSE are meant to be totals.
+        const lineValue = scrap ? 0 : (Number(it.value) || 0);
         const unitCost  = Number(it.cost != null ? it.cost : it.offer) || 0;
-        const lineCost  = _b2bIsBuy(it) ? unitCost * qty : 0;
-        // What the recycled units on this line cost us. Shown against the cost
-        // rather than silently netted out of it: we still paid the client for
-        // them, and the person recycling should see the size of that.
+        const lineCost  = _b2bIsBuy(it) ? unitCost : 0;
+        // What the recycled units on this line cost us. Deliberately still a
+        // TOTAL, and labelled "rec", because it answers a different question --
+        // how much did we pay for units that got scrapped -- and one recycled
+        // unit at the per-unit cost would be indistinguishable from the cost
+        // column beside it.
         const recCost   = _b2bIsBuy(it) ? unitCost * recycled : 0;
 
         // You may list exactly as many units as have been certified wiped. The

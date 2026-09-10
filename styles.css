@@ -13273,12 +13273,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
 }
 .b2b-proof-drop.over .b2b-proof-dropico svg { stroke: var(--sage-deep); }
-/* Focusable because it takes a paste as well as a drop -- Ctrl+V only reaches
-   an element that has focus. Needs a visible focus ring for the same reason:
-   "click this box, then paste" is nonsense if clicking it looks like nothing
-   happened. */
-.b2b-proof-drop:focus { outline: none; }
-.b2b-proof-drop:focus-visible,
+/* The pick button is a styled LABEL wrapping a hidden file input, which keeps
+   the OS picker and the keyboard behaviour while losing the unstyleable native
+   "Choose file" control. focus-within is what shows the keyboard ring, since the
+   thing actually focused is the input inside it. */
+.b2b-proof-pickbtn { cursor: pointer; flex: 0 0 auto; }
 .b2b-proof-drop:focus-within {
     border-color: var(--sage-deep); border-style: solid;
     box-shadow: 0 0 0 3px rgba(47, 111, 78, .18);
@@ -13298,34 +13297,6 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     white-space: pre; overflow: auto;
 }
 .b2b-dropreport-t:focus { outline: 2px solid var(--sage-deep); outline-offset: 1px; }
-/* The Drive folder list. Collapsed by default and visually quieter than the drop
-   zone: dragging straight on is still the one-step route, and this is the way
-   through when the mail client will not cooperate -- not a competing option. */
-.b2b-drivewrap { margin-top: 10px; }
-.b2b-drivewrap > summary {
-    cursor: pointer; font-size: 11.5px; font-weight: 700;
-    color: var(--b2b-muted); letter-spacing: .01em; padding: 4px 0;
-}
-.b2b-drivewrap > summary:hover { color: var(--sage-deep); }
-.b2b-driverow {
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 10px; margin-top: 6px;
-    border: 1px solid var(--b2b-line); border-radius: 9px;
-    background: rgba(255, 255, 255, .6);
-}
-.b2b-driverow-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; margin-right: auto; }
-.b2b-driverow-main b {
-    font-size: 12px; font-weight: 700; color: #1a1c1e;
-    /* Explorer names a dropped Outlook message after its subject, so these run
-       long and must not push the Attach button off the row. */
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch;
-}
-.b2b-driverow-main span { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }
-.b2b-driveacts { margin-top: 8px; }
-@media (max-width: 560px) {
-    .b2b-driverow { flex-wrap: wrap; }
-    .b2b-driverow-main b { max-width: 100%; white-space: normal; }
-}
 /* The accept popup's zone. Taller and centred because it is the only thing on
    that screen and the whole point of the popup is that it is an obvious target
    -- on the deal panel the zone sits under a list and has to stay compact. */

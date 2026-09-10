@@ -974,7 +974,7 @@ t('3.8.2 non-email files are refused', function () {
 t('3.8.2 the drop zone is on the proof panel', function () {
     var html = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
     if (html.indexOf('b2bProofDrop') === -1) return 'no drop target';
-    return html.indexOf('Drop the client') > -1 || 'no instruction on the target';
+    return html.indexOf('Upload the client') > -1 || 'no instruction on the target';
 });
 t('3.8.2 the waiver is retired, with a way forward instead', function () {
     // Nick chose to close the no-proof path knowing it blocks phone approvals.
@@ -1374,31 +1374,6 @@ t('3.8.6 the winning route is reported', function () {
 // The text fallback, guarded hard: a fabricated record is worse than no record.
 // Outlook will happily put nothing but the subject line on a drag, and
 // "Re: your quote" is not evidence that anybody accepted anything.
-t('3.8.6 a thin drag is NOT turned into a proof', function () {
-    return _b2bDragTextIsMessage({ plain: 'Re: your quote', html: '' }) === false
-        || 'a subject line alone would be filed as the acceptance';
-});
-t('3.8.6 a drag carrying real headers is accepted', function () {
-    var txt = {
-        plain: 'From: dana@acme.com\r\nSent: 1 Sep 2026\r\nSubject: Re: quote\r\n\r\nYes, agreed.',
-        html: '',
-    };
-    return _b2bDragTextIsMessage(txt) === true || 'a headered message was refused';
-});
-t('3.8.6 the rebuilt file is a real .eml and says so', function () {
-    var txt = {
-        plain: 'From: dana@acme.com\r\nSubject: Re: quote\r\n\r\nYes, agreed to the numbers.',
-        html: '',
-    };
-    var f = _b2bEmlFromDragText(txt);
-    if (!/\.eml$/i.test(f.name)) return 'not named as an email: ' + f.name;
-    if (f.type !== 'message/rfc822') return 'wrong type: ' + f.type;
-    return f.text().then(function (s) {
-        if (s.indexOf('From: dana@acme.com') === -1) return 'the sender was lost';
-        return s.indexOf('X-Speeks-Proof-Source') > -1
-            || 'nothing marks the file as reconstructed rather than the original';
-    });
-});
 t('3.8.6 a proof built from text is labelled as text only', function () {
     var src = _b2bAttachMailFile.toString();
     return src.indexOf('message text only') > -1
@@ -1492,54 +1467,12 @@ function _b2bAttachedFor(id) {
 // text/html body. `plain || html` tested the short one, found a dozen
 // characters, called the drag too thin to be a message, and discarded the whole
 // body that was sitting in the other slot.
-t('3.8.7 a short text/plain does not hide a full text/html body', function () {
-    var txt = {
-        plain: 'Re: quote',
-        html: '<html><body><p>From: dana@acme.com</p><p>Sent: 1 September 2026</p>'
-            + '<p>Subject: Re: quote</p><p>Yes, we are happy with those numbers, go ahead.</p>'
-            + '</body></html>',
-    };
-    return _b2bDragTextIsMessage(txt) === true
-        || 'the subject-length text/plain won, so the real message was thrown away';
-});
-t('3.8.7 the richer of the two sources is the one used', function () {
-    var body = _b2bDragBody({ plain: 'Re: quote', html: '<p>a much longer body than the subject</p>' });
-    return body.indexOf('much longer body') > -1 || 'took the shorter source';
-});
-t('3.8.7 the tag stripper does not leave script or style text in the body', function () {
-    var body = _b2bDragBody({ plain: '', html: '<style>p{color:red}</style><p>Real text</p>' });
-    if (body.indexOf('color:red') > -1) return 'stylesheet text is being counted as message body';
-    return body.indexOf('Real text') > -1 || 'the body was stripped away with the markup';
-});
 
 // FAULT 2: the header pattern was built from a string with SINGLE backslashes,
 // and a single backslash in a quoted string is just the bare letter. So the
 // pattern read "^s*From s*:[ t]*(.+)$" and matched nothing, ever -- every
 // rebuilt message came out titled "Message dragged from mail app", with no
 // sender, even when the headers were right there in the text.
-t('3.8.7 the rebuilt message keeps the real subject and sender', function () {
-    var txt = {
-        plain: 'From: dana@acme.com\r\nSent: 1 Sep 2026\r\nSubject: Re: the pallet quote\r\n\r\n'
-            + 'Yes, agreed to those numbers.',
-        html: '',
-    };
-    var f = _b2bEmlFromDragText(txt);
-    if (f.name.indexOf('Message dragged from mail app') > -1) {
-        return 'the header pattern still matches nothing, so the subject was never read';
-    }
-    if (f.name.indexOf('Re') === -1) return 'the subject is not in the filename: ' + f.name;
-    return f.text().then(function (s) {
-        if (s.indexOf('Subject: Re: the pallet quote') === -1) return 'the subject header was lost';
-        return s.indexOf('From: dana@acme.com') > -1 || 'the sender was lost';
-    });
-});
-t('3.8.7 an HTML-only message is declared as HTML', function () {
-    var f = _b2bEmlFromDragText({ plain: '', html: '<p>From: a@b.c</p><p>' + new Array(60).join('body ') + '</p>' });
-    return f.text().then(function (s) {
-        return s.indexOf('Content-Type: text/html') > -1
-            || 'an HTML body was declared as text/plain, so it reads as tag soup';
-    });
-});
 
 // The report has to be readable. It was inside an alert() for one release, and
 // Chrome caps a native dialog's height and scrolls the overflow -- so the
@@ -1567,64 +1500,6 @@ t('3.8.7 the report is copyable', function () {
 // Outlook and Outlook in a tab are web apps in a shell: they have no OS-level
 // file to hand over, so no drop-side work can make a drag produce one. Ctrl+C
 // puts the message on the clipboard in every version.
-t('3.8.7 both drop zones accept a paste', function () {
-    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
-    if (panel.indexOf('onpaste="b2bProofPaste') === -1) return 'the panel zone takes no paste';
-    if (panel.indexOf('tabindex="0"') === -1) return 'the panel zone cannot take focus, so Ctrl+V never reaches it';
-    _b2bProofOwner = { id: 'd1', kind: 'deal' };
-    var pop = _b2bPaintProofModal.toString();
-    if (pop.indexOf('onpaste="b2bProofPaste') === -1) return 'the popup zone takes no paste';
-    return pop.indexOf('tabindex="0"') > -1 || 'the popup zone cannot take focus';
-});
-t('3.8.7 the popup focuses its zone so Ctrl+V just works', function () {
-    return b2bOpenAcceptProof.toString().indexOf('focus') > -1
-        || 'the user would have to know to click the box first';
-});
-t('3.8.7 an ordinary paste is left alone', function () {
-    // This handler sits on a screen full of note fields. Hijacking a normal
-    // paste would be worse than not offering the shortcut at all.
-    var src = b2bProofPaste.toString();
-    var guard = src.indexOf('_b2bDragTextIsMessage');
-    var prevent = src.indexOf('preventDefault');
-    if (guard === -1) return 'nothing checks whether the clipboard holds a message';
-    return guard < prevent || 'preventDefault runs before the check, so every paste is swallowed';
-});
-t('3.8.7 a pasted message is rebuilt and attached', function () {
-    var ev = {
-        preventDefault: function () {},
-        clipboardData: {
-            files: [],
-            getData: function (t) {
-                return t === 'text/plain'
-                    ? 'From: dana@acme.com\r\nSubject: Re: quote\r\n\r\nYes, agreed to the numbers.'
-                    : '';
-            },
-        },
-    };
-    return Promise.resolve(b2bProofPaste(ev, 'paste-text', 'deal', 'paste-text')).then(function () {
-        var got = _b2bAttachedFor('paste-text');
-        if (!got.length) return 'a pasted message was not attached';
-        if (got[0].source !== 'text') return 'not marked as rebuilt from text';
-        return /\.eml$/i.test(got[0].file.name) || 'not built as an email file';
-    }, function (e) {
-        return 'threw: ' + e.message;
-    });
-});
-t('3.8.7 a real file on the clipboard beats rebuilding one', function () {
-    var msg = new File(['From: a@b.c\r\n'], 'real.msg', { type: '' });
-    var ev = {
-        preventDefault: function () {},
-        clipboardData: { files: [msg], getData: function () { return ''; } },
-    };
-    return Promise.resolve(b2bProofPaste(ev, 'paste-file', 'deal', 'paste-file')).then(function () {
-        var got = _b2bAttachedFor('paste-file');
-        if (!got.length) return 'the clipboard file was ignored';
-        if (got[0].source !== 'file') return 'the real message was recorded as a rebuild';
-        return got[0].file.name === 'real.msg' || 'attached something other than the file';
-    }, function (e) {
-        return 'threw: ' + e.message;
-    });
-});
 
 // --- v3.8.8: one button, and a report you can actually read ----------------
 //
@@ -1646,23 +1521,6 @@ function _b2bFailHost(zone) {
     return el;
 }
 
-t('3.8.8 both drop zones carry one clipboard button', function () {
-    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
-    if (panel.indexOf('b2bPasteFromClipboard') === -1) return 'the panel has no clipboard button';
-    _b2bProofOwner = { id: 'd1', kind: 'deal' };
-    var pop = _b2bPaintProofModal.toString();
-    return pop.indexOf('b2bPasteFromClipboard') > -1 || 'the popup has no clipboard button';
-});
-t('3.8.8 the panel button passes its zone, not the button, as the zone', function () {
-    // ownerAttr is id + kind only, so a bare `(${ownerAttr},this)` would land
-    // the element in the `zone` parameter and the report would render nowhere.
-    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
-    var m = panel.match(/b2bPasteFromClipboard\(([^)]*)\)/);
-    if (!m) return 'no call found';
-    var args = m[1].split(',').map(function (s) { return s.trim(); });
-    if (args.length !== 4) return 'expected 4 arguments, got ' + args.length + ': ' + m[1];
-    return args[2] === "'d1'" || 'the third argument is not the zone: ' + args[2];
-});
 
 // The report. View first, copy second -- the copy button was the only way in
 // and it did not work.
@@ -1716,47 +1574,6 @@ t('3.8.8 a failed copy no longer claims it worked', function () {
         || 'the return value of execCommand is still ignored';
 });
 
-// The clipboard button itself.
-function _b2bFakeClipboard(entries) {
-    Object.defineProperty(navigator, 'clipboard', {
-        configurable: true,
-        value: entries === null ? {} : {
-            read: function () { return Promise.resolve(entries); },
-            writeText: function () { return Promise.resolve(); },
-        },
-    });
-}
-function _b2bClipItem(map) {
-    return {
-        types: Object.keys(map),
-        getType: function (t) { return Promise.resolve(new Blob([map[t]], { type: t })); },
-    };
-}
-
-t('3.8.8 the button reads a copied message off the clipboard and files it', function () {
-    _b2bFakeClipboard([_b2bClipItem({
-        'text/plain': 'From: dana@acme.com\r\nSubject: Re: quote\r\n\r\nYes, agreed to the numbers.',
-    })]);
-    _b2bFailHost('z5');
-    return b2bPasteFromClipboard('clip-plain', 'deal', 'z5', null).then(function () {
-        var got = _b2bAttachedFor('clip-plain');
-        if (!got.length) return 'nothing was attached';
-        if (got[0].source !== 'text') return 'not marked as rebuilt from text';
-        return /\.eml$/i.test(got[0].file.name) || 'not built as an email: ' + got[0].file.name;
-    });
-});
-t('3.8.8 a real message on the clipboard beats rebuilding one', function () {
-    _b2bFakeClipboard([_b2bClipItem({
-        'text/plain': 'From: dana@acme.com\r\nSubject: Re: quote\r\n\r\nYes, agreed to the numbers.',
-        'application/vnd.ms-outlook': 'MSG-BYTES',
-    })]);
-    _b2bFailHost('z6');
-    return b2bPasteFromClipboard('clip-file', 'deal', 'z6', null).then(function () {
-        var got = _b2bAttachedFor('clip-file');
-        if (!got.length) return 'nothing was attached';
-        return got[0].source === 'file' || 'rebuilt from text when the real message was there';
-    });
-});
 
 // MEASURED, not guessed. Nick ran the button on the new Outlook and the report
 // came back with exactly one clipboard type and nothing else:
@@ -1766,21 +1583,6 @@ t('3.8.8 a real message on the clipboard beats rebuilding one', function () {
 // nothing to rescue, so the job is to SAY so and give the routes that work --
 // telling somebody their clipboard has no email on it reads as though they did
 // it wrong, and they did not.
-t('3.8.8 the new Outlook reference is recognised, not blamed on the user', function () {
-    _b2bFakeClipboard([_b2bClipItem({ 'web application/owa-item-drag-data': '{"itemIds":["AAM"]}' })]);
-    _b2bFailHost('zowa');
-    return b2bPasteFromClipboard('clip-owa', 'deal', 'zowa', null).then(function () {
-        var el = document.getElementById('b2bDropFail-zowa');
-        var html = el.innerHTML;
-        if (_b2bAttachedFor('clip-owa').length) return 'a server reference was filed as evidence';
-        if (html.indexOf('does not have an email on it') > -1) {
-            return 'still the generic message, which blames the user for a limit of Outlook';
-        }
-        if (html.indexOf('Download') === -1) return 'does not name the route that actually works';
-        return html.indexOf('link to the message on its server') > -1
-            || 'does not explain what the new Outlook actually handed over';
-    });
-});
 
 // The payload turned out to carry the subject. Nick's report, 2026-09-10:
 //   {"itemType":"multimaillistconversationrows", ...
@@ -1789,22 +1591,6 @@ t('3.8.8 the new Outlook reference is recognised, not blamed on the user', funct
 // Naming the email back proves the app understood exactly what was dragged,
 // which is the difference between "that didn't work" -- which invites a retry
 // of the same failing gesture -- and "that didn't work, and here is what does".
-t('3.8.9 the failure names the email the new Outlook was pointing at', function () {
-    var payload = JSON.stringify({
-        itemType: 'multimaillistconversationrows',
-        rowKeys: ['AQAAAEsemUoBAAACHSuxQQAAAAA='],
-        subjects: ['Adding Approval Request - Please'],
-        latestItemIds: ['AAkALgAAAAAAHYQDEapmEc2byACqAC/EWg0A'],
-    });
-    _b2bFakeClipboard([_b2bClipItem({ 'web application/owa-item-drag-data': payload })]);
-    _b2bFailHost('zsub');
-    return b2bPasteFromClipboard('clip-sub', 'deal', 'zsub', null).then(function () {
-        var html = document.getElementById('b2bDropFail-zsub').innerHTML;
-        if (_b2bAttachedFor('clip-sub').length) return 'a server reference was filed as evidence';
-        return html.indexOf('Adding Approval Request') > -1
-            || 'the subject was in the payload and the message did not use it';
-    });
-});
 t('3.8.9 subject extraction survives a payload it does not recognise', function () {
     // Somebody else's private format; it can change shape without notice, and a
     // parse failure must degrade to a less specific message, not an exception.
@@ -1817,17 +1603,6 @@ t('3.8.9 several messages at once are counted, not listed', function () {
     var three = _b2bOwaAdvice(['First one', 'Second', 'Third']);
     if (three.indexOf('First one') === -1) return 'does not name the first';
     return three.indexOf('2 others') > -1 || 'does not say how many others: ' + three.slice(0, 90);
-});
-t('3.8.9 a drag reads the OWA payload synchronously', function () {
-    // A DataTransfer is emptied the moment the handler yields, so the mail
-    // client's own format has to be read with the rest of the synchronous
-    // harvest even though it is only wanted later, in the failure path.
-    var src = _b2bDragText.toString();
-    if (src.indexOf('B2B_OWA_REF_RX') === -1) return 'the drag never reads the OWA format';
-    // And it must not leak into the body, or a pointer payload could be
-    // mistaken for a message and filed as evidence.
-    var body = _b2bDragBody({ plain: '', html: '', owa: new Array(200).join('x ') });
-    return body.trim() === '' || 'the pointer payload leaked into the message body';
 });
 t('3.8.8 the OWA detector needs the reference AND no usable content', function () {
     if (!_b2bOwaRefOnly(['web application/owa-item-drag-data'])) return 'missed a bare OWA reference';
@@ -1845,21 +1620,6 @@ t('3.8.8 a drag out of the new Outlook says the same thing as a copy', function 
     return src.indexOf('_b2bOwaRefOnly') > -1
         || 'the drop path still reports the generic failure for a new-Outlook drag';
 });
-t('3.8.8 the other clipboard formats are opened, not just listed', function () {
-    // The first version named the type in the report and never fetched it,
-    // which is how a clipboard holding only an OWA reference came back as a
-    // blank mystery and cost a round trip.
-    _b2bFakeClipboard([_b2bClipItem({ 'web application/owa-item-drag-data': 'ITEMID-PAYLOAD-XYZ' })]);
-    _b2bFailHost('zpay');
-    return b2bPasteFromClipboard('clip-pay', 'deal', 'zpay', null).then(function () {
-        var el = document.getElementById('b2bDropFail-zpay');
-        var btn = el.querySelector('[onclick*="b2bViewDropReport"]');
-        if (!btn) return 'no report rendered';
-        b2bViewDropReport(btn);
-        return el.querySelector('.b2b-dropreport-t').value.indexOf('ITEMID-PAYLOAD-XYZ') > -1
-            || 'the contents of the unknown format are not in the report';
-    });
-});
 t('3.8.8 two failed zones keep their own reports', function () {
     // The report used to live in one module-level variable, so the second
     // failure overwrote the first and clicking View on the older panel showed
@@ -1873,52 +1633,6 @@ t('3.8.8 two failed zones keep their own reports', function () {
     var v = a.querySelector('.b2b-dropreport-t').value;
     if (v.indexOf('BBB') > -1) return 'zone A is showing zone B’s report';
     return v.indexOf('AAA') > -1 || 'zone A lost its own report';
-});
-t('3.8.8 an empty clipboard reports what was on it instead of failing silently', function () {
-    var realClip = navigator.clipboard;
-    _b2bFakeClipboard([_b2bClipItem({ 'image/png': 'not-an-email' })]);
-    _b2bFailHost('z7');
-    return b2bPasteFromClipboard('d1', 'deal', 'z7', null).then(function () {
-        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClip });
-        var el = document.getElementById('b2bDropFail-z7');
-        var btn = el.querySelector('[onclick*="b2bViewDropReport"]');
-        if (!btn) return 'no report was rendered';
-        b2bViewDropReport(btn);
-        var v = el.querySelector('.b2b-dropreport-t').value;
-        return v.indexOf('image/png') > -1
-            || 'the report does not say what was actually on the clipboard';
-    });
-});
-t('3.8.8 a blocked clipboard read points at Ctrl+V rather than dead-ending', function () {
-    var realClip = navigator.clipboard;
-    Object.defineProperty(navigator, 'clipboard', {
-        configurable: true,
-        value: { read: function () { return Promise.reject(new DOMException('denied', 'NotAllowedError')); } },
-    });
-    _b2bFailHost('z8');
-    return b2bPasteFromClipboard('d1', 'deal', 'z8', null).then(function () {
-        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClip });
-        var el = document.getElementById('b2bDropFail-z8');
-        if (el.innerHTML.indexOf('Ctrl+V') === -1) return 'does not offer the route that needs no permission';
-        var btn = el.querySelector('[onclick*="b2bViewDropReport"]');
-        if (!btn) return 'no report to look at';
-        b2bViewDropReport(btn);
-        return el.querySelector('.b2b-dropreport-t').value.indexOf('NotAllowedError') > -1
-            || 'the report does not name why the browser refused';
-    });
-});
-t('3.8.8 a browser with no clipboard read falls back rather than throwing', function () {
-    var realClip = navigator.clipboard;
-    _b2bFakeClipboard(null);
-    _b2bFailHost('z9');
-    return b2bPasteFromClipboard('d1', 'deal', 'z9', null).then(function () {
-        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClip });
-        return document.getElementById('b2bDropFail-z9').innerHTML.indexOf('Ctrl+V') > -1
-            || 'no fallback offered where the API is missing';
-    }, function (e) {
-        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClip });
-        return 'threw instead of falling back: ' + e.message;
-    });
 });
 
 // --- v3.9.0: read the Drive folder instead of being the drop target --------
@@ -1934,83 +1648,6 @@ t('3.8.8 a browser with no clipboard read falls back rather than throwing', func
 // virtual-file format -- it works precisely because it is not a browser.
 //
 // So the direction is inverted: read the folder he already drops into.
-t('3.9.0 the proof panel offers the Drive folder', function () {
-    var html = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
-    if (html.indexOf('b2bDriveRefresh') === -1) return 'no way to list the folder';
-    return html.indexOf('b2bDriveList-d1') > -1 || 'nowhere to render the list';
-});
-t('3.9.0 it is collapsed until asked for', function () {
-    // Dragging straight on is still the one-step route; this is the way through
-    // when the mail client will not cooperate, not a competing option.
-    var html = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
-    if (html.indexOf('<details class="b2b-drivewrap"') === -1) return 'not a collapsed section';
-    return html.indexOf(' open') === -1 || 'the folder list is expanded by default';
-});
-t('3.9.0 opening it fetches, rather than needing a second click', function () {
-    var html = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
-    return /ontoggle="if\(this\.open\)b2bDriveRefresh/.test(html)
-        || 'expanding it does not load anything';
-});
-t('3.9.0 a Drive attach goes through the same path as a drop', function () {
-    // One pipeline on purpose. This feature's whole history is bugs from having
-    // several routes that were supposed to agree with each other.
-    var src = b2bDriveAttach.toString();
-    if (src.indexOf('_b2bAttachMailFile') === -1) return 'it inserts by its own route';
-    return src.indexOf('drive_file') > -1 || 'it does not ask the server for the bytes';
-});
-t('3.9.0 the browser never holds the Drive secret', function () {
-    // speeks.js is static and readable by anyone who can load the page, so a
-    // shared secret in it is not a secret. Everything goes through the edge
-    // function, which holds it in its own environment.
-    // _srcOf, not toString: the comment right next to this code explains why
-    // the secret is not here, and searching the raw text matches that comment.
-    var src = _srcOf(b2bDriveRefresh) + _srcOf(b2bDriveAttach);
-    if (/secret/i.test(src)) return 'a secret is being handled in the browser';
-    if (/script\.google\.com|googleusercontent/i.test(src)) return 'the browser calls Apps Script directly';
-    return src.indexOf('_b2bSend') > -1 || 'not going through the edge function';
-});
-t('3.9.0 a setup failure says what to fix, in the server words', function () {
-    var src = b2bDriveRefresh.toString();
-    // When this fails it is nearly always a deployment set to the wrong access
-    // or a missing secret, and the message naming which is the useful one.
-    if (src.indexOf('_b2bDriveErr') === -1) return 'the error is not surfaced';
-    return /e\.message/.test(src) || 'it replaces the server message with its own';
-});
-t('3.9.0 an empty folder reads as empty, not as broken', function () {
-    _b2bDriveFiles = [];
-    _b2bDriveErr = '';
-    _b2bDriveBusy = false;
-    var html = _b2bDriveListHtml({ id: 'd1' });
-    if (html.indexOf('warn') > -1) return 'an empty folder is shown as an error';
-    return html.indexOf('Nothing in the folder yet') > -1 || 'says nothing useful when empty';
-});
-t('3.9.0 files list newest-first with a readable age', function () {
-    _b2bDriveErr = '';
-    _b2bDriveBusy = false;
-    _b2bDriveFiles = [
-        { id: 'f1', name: 'Adding Approval Request.msg', bytes: 41000,
-          modified: new Date(Date.now() - 120000).toISOString() },
-        { id: 'f2', name: 'older.eml', bytes: 9000,
-          modified: new Date(Date.now() - 7200000).toISOString() },
-    ];
-    var html = _b2bDriveListHtml({ id: 'd1' });
-    if (html.indexOf('Adding Approval Request.msg') === -1) return 'the file is not listed';
-    if (html.indexOf('2 min ago') === -1) return 'no relative age, which is how the row is picked';
-    if (html.indexOf('40 KB') === -1) return 'no size on the row';
-    return html.indexOf('b2bDriveAttach(&#39;f1&#39;') > -1 || html.indexOf("b2bDriveAttach('f1'") > -1
-        || 'no attach button wired to the file id';
-});
-t('3.9.0 the folder list does not filter on the filename', function () {
-    // Same lesson as the drop zone: Explorer names a dropped message after its
-    // subject, so refusing rows for how they are named would hide real emails.
-    // The person picking can see which is which.
-    _b2bDriveErr = '';
-    _b2bDriveBusy = false;
-    _b2bDriveFiles = [{ id: 'f3', name: 'Re pricing v2.1', bytes: 3000,
-                        modified: new Date().toISOString() }];
-    return _b2bDriveListHtml({ id: 'd1' }).indexOf('Re pricing v2.1') > -1
-        || 'an extension-less message was hidden from the list';
-});
 // The comment-stripping helper itself, because three checks have now been
 // broken by searching prose instead of code.
 t('3.9.0 _srcOf strips comments before a source search', function () {
@@ -2019,6 +1656,178 @@ t('3.9.0 _srcOf strips comments before a source search', function () {
     var s = _srcOf(sample);
     if (/secret/.test(s)) return 'comments survived, so a search still matches prose';
     return s.indexOf('var a = 1') > -1 || 'the code was stripped along with the comments';
+});
+
+// --- v3.9.1: upload is the route, and everything else came out ------------
+//
+// Nick, 2026-09-10: "im bailing out of this new google drive idea. The issue is
+// that I dont like one shared folder of all the receipts its just not right. Go
+// back to just the file upload of that msg file and I will teach everyone how to
+// download the email and upload it to speeksnet"
+//
+// Right call, and worth recording why after four releases spent avoiding it.
+// Outlook can only hand a message to a BROWSER as a virtual file: classic
+// desktop Outlook plus Chrome or Edge manages it, the new Outlook cannot, and
+// Firefox never could. Downloading the message first turns it into an ordinary
+// file, and an ordinary file upload works everywhere, forever, with nothing to
+// go wrong. Every clever route around that is now gone.
+
+t('3.9.1 the Drive folder is gone, all of it', function () {
+    var names = ['_b2bDrivePanel', '_b2bDriveListHtml', '_b2bDriveWhen', '_b2bDriveRepaint',
+                 'b2bDriveRefresh', 'b2bDriveAttach'];
+    var left = names.filter(function (n) { return typeof window[n] !== 'undefined'; });
+    if (left.length) return 'still defined: ' + left.join(', ');
+    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    return panel.indexOf('Drive') === -1 || 'the panel still mentions Drive';
+});
+t('3.9.1 the clipboard and paste routes are gone', function () {
+    // Two more ways to hand over evidence, each with its own failure modes.
+    // One route, taught once, beats four that mostly work.
+    if (typeof b2bPasteFromClipboard !== 'undefined') return 'the clipboard button still exists';
+    if (typeof b2bProofPaste !== 'undefined') return 'the paste handler still exists';
+    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    return panel.indexOf('onpaste') === -1 || 'the zone still listens for a paste';
+});
+t('3.9.1 the text reconstruction is gone', function () {
+    // It filed a rebuilt .eml as "message text only" when the real file could
+    // not be had. That is a second KIND of evidence on the record, and one
+    // kind plus a clear instruction is a better log than two kinds.
+    if (typeof _b2bEmlFromDragText !== 'undefined') return 'the rebuilder still exists';
+    if (typeof _b2bDragTextIsMessage !== 'undefined') return 'the gate still exists';
+    var src = _srcOf(_b2bAttachMailFile);
+    return src.indexOf('message text only') === -1
+        || 'the attach path can still label a proof as text-only';
+});
+
+t('3.9.1 upload is the instruction on both surfaces', function () {
+    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    if (panel.indexOf('Upload the client') === -1) return 'the panel does not lead with upload';
+    if (panel.indexOf('Download or Save As') === -1) return 'the panel does not say how to get the file';
+    _b2bProofOwner = { id: 'd1', kind: 'deal' };
+    var pop = _b2bPaintProofModal.toString();
+    return pop.indexOf('Upload the client') > -1 || 'the accept popup does not lead with upload';
+});
+t('3.9.1 the panel has a real file input, wired to its own deal', function () {
+    // The picker came OFF this panel in 3.8.6 and is back by request. It has to
+    // carry the deal id: the panel can render for a deal that is not the one the
+    // accept popup last set, and reading the popup's global here would file the
+    // email against the wrong deal.
+    var panel = _b2bProofPanel({ id: 'd7', approval_waived_by: null });
+    if (panel.indexOf('type="file"') === -1) return 'no file input on the panel';
+    var m = panel.match(/b2bProofFilePicked\(([^)]*)\)/);
+    if (!m) return 'the input is not wired up';
+    return m[1].indexOf("'d7'") > -1 || 'the picker does not name its deal: ' + m[1];
+});
+t('3.9.1 the popup picker still works with no arguments', function () {
+    // It passes none and relies on the owner it just set, so the panel's extra
+    // arguments must be optional rather than required.
+    var src = _srcOf(b2bProofFilePicked);
+    if (src.indexOf('_b2bProofOwner') === -1) return 'the popup route lost its fallback';
+    return /ownerId \|\||\|\| \(_b2bProofOwner/.test(src) || 'the arguments are not optional';
+});
+t('3.9.1 the same file can be picked twice', function () {
+    // A file input fires no change event when re-picking the same file, so
+    // after a failed upload the obvious next move -- try that file again --
+    // would do nothing at all.
+    var src = _srcOf(b2bProofFilePicked);
+    return /input\.value = ''/.test(src) || 'the input is never cleared';
+});
+t('3.9.1 the picker and the drop agree on what an email is', function () {
+    var src = _srcOf(b2bProofFilePicked);
+    if (src.indexOf('_b2bIsMailFile') === -1) return 'the picker uses its own rule';
+    return src.indexOf('_b2bAttachMailFile') > -1 || 'the picker inserts by its own route';
+});
+t('3.9.1 dragging still works where the mail app allows it', function () {
+    // Kept because the drop zone IS the file input's drop target -- no extra UI,
+    // and on classic Outlook it is still one gesture instead of three.
+    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    return panel.indexOf('ondrop="b2bProofDrop') > -1 || 'the drop target was removed too';
+});
+t('3.9.1 a new-Outlook drag is still named rather than blamed', function () {
+    // The pointer detection stays: it costs no UI and it is the difference
+    // between "that didn't work" and knowing why.
+    var src = _srcOf(b2bProofDrop);
+    if (src.indexOf('_b2bOwaRefOnly') === -1) return 'the pointer is no longer recognised';
+    var advice = _b2bOwaAdvice(['Adding Approval Request - Please']);
+    if (advice.indexOf('Adding Approval Request') === -1) return 'the subject is not named back';
+    return advice.indexOf('Download') > -1 || 'does not name the route that works';
+});
+t('3.9.1 the drag still reads the pointer synchronously', function () {
+    // A DataTransfer is emptied the moment the handler yields.
+    return _srcOf(_b2bDragText).indexOf('B2B_OWA_REF_RX') > -1
+        || 'the drag no longer reads the OWA format';
+});
+
+// Nick, 2026-09-10: "The listing UI for B2B currently says the total cost and
+// the total price per line item quantity. this sohuld just be the cost and price
+// of a single one of those quantities since this is the way they price out the
+// item and put the cost for it. They just tick up the quantity on Paymores POS
+// Autolister so it adjusts the quantity as well but the listing is made for a
+// single item"
+t('3.9.1 the listing grid shows value and cost PER UNIT', function () {
+    // A line of five identical laptops is priced ONCE, as one laptop, and the
+    // autolister takes the quantity from there. Showing 5 x $350 = $1,750 on the
+    // listing screen invites somebody to type 1750 into a listing for one of them.
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [{
+            id: 'u1', line_no: 1, sku: 'SP-1', make: 'Dell', model: 'X1',
+            item_type: 'laptop', quantity: 5, value: 350, cost: 200,
+            disposition: 'purchase', cpu: 'i5', ram: '16GB', storage: '512GB',
+        }];
+        var html = _b2bListRows();
+        if (html.indexOf('$1,750') > -1) return 'value is still multiplied by the quantity';
+        if (html.indexOf('$1,000') > -1) return 'cost is still multiplied by the quantity';
+        if (html.indexOf('$350') === -1) return 'the per-unit value is not shown';
+        return html.indexOf('$200') > -1 || 'the per-unit cost is not shown';
+    } finally { _b2bModalItems = keep; }
+});
+t('3.9.1 the columns say they are per unit', function () {
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [{ id: 'u1', line_no: 1, quantity: 2, value: 10, cost: 5,
+                            disposition: 'purchase', item_type: 'other' }];
+        var html = _b2bListRows();
+        return /Value ea/.test(html) && /Cost ea/.test(html)
+            || 'the headers still read as line totals';
+    } finally { _b2bModalItems = keep; }
+});
+t('3.9.1 the recycled-out figure stays a total', function () {
+    // It answers a different question -- what did we pay for units that got
+    // scrapped -- and at the per-unit cost it would be indistinguishable from
+    // the cost column next to it.
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [{ id: 'u1', line_no: 1, quantity: 5, value: 350, cost: 200,
+                            recycled_qty: 3, disposition: 'purchase', item_type: 'other' }];
+        var html = _b2bListRows();
+        return html.indexOf('$600') > -1 || 'three recycled units at $200 should read as $600';
+    } finally { _b2bModalItems = keep; }
+});
+t('3.9.1 the deal totals above are still totals', function () {
+    // Only the per-line columns changed. The stats block is meant to total.
+    var src = _srcOf(_b2bDealStatRaw);
+    return /\*\s*qty|qty\s*\*|quantity/.test(src)
+        || 'the deal stats stopped multiplying by quantity, which they must still do';
+});
+
+// The .msg MIME has to be in FOUR places that agree: _b2bMailMime here, the
+// edge function's PROOF_MIMES, the b2b-proofs bucket's allowed_mime_types, and
+// 0050's kind CHECK. The bucket was the one nobody updated, and storage refused
+// every .msg for two days with "mime type application/vnd.ms-outlook is not
+// supported" -- after the browser and the server had both approved it. This
+// cannot catch the bucket from in here, but it can catch the client drifting
+// from the constant the server was told about.
+t('3.9.1 the .msg MIME the server expects is the one the client sends', function () {
+    if (B2B_MSG_MIME !== 'application/vnd.ms-outlook') {
+        return 'the constant changed: ' + B2B_MSG_MIME + ' — the bucket and PROOF_MIMES '
+            + 'both have to change with it (see migration 0080)';
+    }
+    if (_b2bMailMime({ name: 'x.msg', type: '' }) !== 'application/vnd.ms-outlook') {
+        return 'a .msg is not typed as Outlook';
+    }
+    return _b2bMailMime({ name: 'x.eml', type: '' }) === 'message/rfc822'
+        || 'an .eml is not typed as rfc822';
 });
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
