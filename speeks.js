@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.9.1';
+const APP_VERSION = '3.9.2';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -19485,6 +19485,14 @@ const B2B_PROOF_KINDS = [
 ];
 const _b2bProofKind = (k) => B2B_PROOF_KINDS.find(x => x.key === k) || B2B_PROOF_KINDS[0];
 
+// Which format a stored proof actually is, for the download label. Read from
+// the stored MIME rather than the label -- the label is the subject line and
+// routinely ends in something that looks like an extension ("Re: pricing v2.1").
+// Historical rows from the screenshot/document era have other MIMEs, so this
+// returns '' rather than guessing, and the label just reads "Download".
+const B2B_PROOF_EXT = { 'application/vnd.ms-outlook': 'msg', 'message/rfc822': 'eml' };
+const _b2bProofExt = (p) => B2B_PROOF_EXT[String(p && p.mime || '').toLowerCase()] || '';
+
 // Live evidence only. A withdrawn entry stays on the record so the removal is
 // visible, but it stops counting toward "is this approved".
 function _b2bLiveProofs() { return _b2bProofs.filter(p => !p.removed_at); }
@@ -19545,8 +19553,16 @@ function _b2bProofPanel(owner) {
                 </div>
             </div>
             <div class="b2b-proof-acts">
+                <!-- Says which format, because that answers "what do I open it
+                     with" on the row rather than after the download. A .msg
+                     double-clicks into Outlook; an .eml opens in Outlook or any
+                     mail client. The server sends it with a real filename and
+                     extension, so it lands ready to open -- see the
+                     Content-Disposition in b2b-deals. -->
                 ${p.file_path ? `<a class="b2b-mini" target="_blank" rel="noopener"
-                    href="${B2B_URL}?proof_file=${encodeURIComponent(p.id)}">Open file</a>` : ''}
+                    title="Downloads the message itself. Double-click it to open it in Outlook."
+                    href="${B2B_URL}?proof_file=${encodeURIComponent(p.id)}">Download${
+                        _b2bProofExt(p) ? ` .${_b2bProofExt(p)}` : ''}</a>` : ''}
                 ${!p.removed_at && _b2bCanAccept()
                     ? `<button class="b2b-mini" onclick="b2bRemoveProof('${p.id}')">Withdraw</button>` : ''}
             </div>

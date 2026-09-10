@@ -1829,6 +1829,26 @@ t('3.9.1 the .msg MIME the server expects is the one the client sends', function
     return _b2bMailMime({ name: 'x.eml', type: '' }) === 'message/rfc822'
         || 'an .eml is not typed as rfc822';
 });
+
+// Nick, 2026-09-10: "It saves it as just a file . What would I open it with to
+// make sure that it is working". Without a Content-Disposition the browser names
+// a download after the URL path -- so the message arrived as "b2b-deals" with no
+// extension, which Windows cannot open with anything.
+t('3.9.2 the download row says which format it is', function () {
+    var html = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    if (html.indexOf('Download') === -1) return 'the row does not offer a download';
+    return html.indexOf('Outlook') > -1 || 'nothing on the row says what opens it';
+});
+t('3.9.2 the extension comes from the MIME, not the subject line', function () {
+    // A subject routinely ends in something that looks like an extension.
+    if (_b2bProofExt({ mime: 'application/vnd.ms-outlook' }) !== 'msg') return 'a .msg is not labelled msg';
+    if (_b2bProofExt({ mime: 'message/rfc822' }) !== 'eml') return 'an .eml is not labelled eml';
+    if (_b2bProofExt({ mime: 'APPLICATION/VND.MS-OUTLOOK' }) !== 'msg') return 'case defeats it';
+    // Historical rows from the screenshot/document era: say nothing rather than
+    // guess, and the label just reads "Download".
+    if (_b2bProofExt({ mime: 'image/png' }) !== '') return 'guessed at a legacy row';
+    return _b2bProofExt({}) === '' || 'guessed with no mime at all';
+});
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();
