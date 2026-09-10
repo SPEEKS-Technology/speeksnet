@@ -268,18 +268,35 @@ function finish(win, got) {
     document.getElementById('out').hidden = false;
 }
 
+// The report is in a <pre> that can be selected, so a failed copy is an
+// inconvenience rather than a dead end -- but it has to SAY it failed.
+// execCommand returns FALSE on failure instead of throwing, and the first
+// version here only caught a throw, so a copy that put nothing on the clipboard
+// still reported "Copied". Check the return value.
 function copyReport(btn) {
-    var txt = document.getElementById('report').textContent;
-    var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy report'; }, 1800); };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(txt).then(done, fallback);
-    } else { fallback(); }
+    var pre = document.getElementById('report');
+    var txt = pre.textContent;
+    var done = function (ok) {
+        btn.textContent = ok ? 'Copied' : 'Select the report and press Ctrl+C';
+        setTimeout(function () { btn.textContent = 'Copy report'; }, 2400);
+    };
     function fallback() {
-        var ta = document.createElement('textarea');
-        ta.value = txt; document.body.appendChild(ta); ta.select();
-        try { document.execCommand('copy'); done(); } catch (e) { alert('Select the text and copy it manually.'); }
-        document.body.removeChild(ta);
+        // Select the report itself rather than a throwaway textarea, so that if
+        // the copy fails the text the person needs is already highlighted.
+        var ok = false;
+        try {
+            var range = document.createRange();
+            range.selectNodeContents(pre);
+            var sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            ok = document.execCommand('copy') === true;
+        } catch (e) { ok = false; }
+        done(ok);
     }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(function () { done(true); }, fallback);
+    } else { fallback(); }
 }
 </script>
 </body>
