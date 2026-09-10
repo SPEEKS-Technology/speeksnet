@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.8';
+const APP_VERSION = '3.8.9';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -19854,9 +19854,18 @@ function _b2bAsMailFile(file, virtual) {
 const B2B_DRAG_TEXT_MIN = 400;
 
 function _b2bDragText(dt) {
-    // Synchronous: getData is dead the moment the handler yields.
+    // Synchronous: getData is dead the moment the handler yields, so the mail
+    // client's own format is read HERE even though it is only wanted much later
+    // in the failure path. Reading it after the await gets an empty string.
     const get = (t) => { try { return String(dt?.getData?.(t) || ''); } catch (_) { return ''; } };
-    return { html: get('text/html'), plain: get('text/plain') };
+    let owa = '';
+    try {
+        const t = Array.from(dt?.types || []).find((x) => B2B_OWA_REF_RX.test(String(x)));
+        if (t) owa = get(t);
+    } catch (_) {}
+    // `owa` is deliberately NOT part of the body -- _b2bDragBody reads plain and
+    // html by name, so a pointer payload can never be mistaken for a message.
+    return { html: get('text/html'), plain: get('text/plain'), owa };
 }
 
 // BOTH sources, not whichever one exists first.
@@ -20038,25 +20047,29 @@ function b2bCopyDropDiag(btn) {
     } else { manual(); }
 }
 
-// WHAT THE NEW OUTLOOK ACTUALLY PUTS ON THE CLIPBOARD, MEASURED.
+// WHAT THE NEW OUTLOOK ACTUALLY PUTS ON THE CLIPBOARD, MEASURED, AND WHAT IS
+// INSIDE IT.
 //
-// Nick ran the button on the new Outlook, 2026-09-10, and the report said:
+// Nick ran the button on the new Outlook (2026-09-10) and the report came back
+// with one clipboard type, no text and no HTML. Opening that one type settled
+// what it is:
 //
-//     clipboard types: web application/owa-item-drag-data
-//     text/plain: none
-//     text/html: none
-//     browser: Chrome/152   secure context: true
+//   web application/owa-item-drag-data (1138b):
+//   {"itemType":"multimaillistconversationrows",
+//    "tableViewId":"folderId:AQMkAGM4...;lVT:0;vF:All;...",
+//    "rowKeys":["AQAAAEsemUoBAAACHSuxQQAAAAA="],
+//    "subjects":["Adding Approval Request - Please"],
+//    "latestItemIds":["AAkALgAAAAAAHYQDEapmEc2byACqAC/EWg0A..."]}
 //
-// That settles it. The new Outlook and Outlook on the web put exactly ONE thing
-// on a copy or a drag: their own private "web application/owa-item-drag-data",
-// which is a REFERENCE to the message sitting on the server -- an item id, and
-// sometimes a subject. No text, no HTML, no file, nothing to rebuild from, and
-// nothing any website can resolve. It is not that the user copied the wrong
-// thing; there is nothing else on offer.
+// So it is a pointer: a folder id, a row key, an Exchange item id -- and, useful
+// for once, the SUBJECT. No body, no headers, no sender, no file. The message
+// itself never leaves the server, and resolving those ids means an authenticated
+// Microsoft Graph call, which is an OAuth integration and a different project.
 //
-// So this is not a bug to fix, it is a case to NAME. "Your clipboard does not
-// have an email on it" was true and useless -- it reads as though they did it
-// wrong. Detected explicitly now, with the two routes that do work.
+// The subject is worth using though. Naming the email back to the person proves
+// the app understood exactly what they dragged, which is the difference between
+// "that didn't work" and "that didn't work, and here is why, and here is what
+// does" -- the first invites a retry of the same failing gesture.
 const B2B_OWA_REF_RX = /owa-item|owa-drag|x-owa|outlook-item/i;
 
 function _b2bOwaRefOnly(types) {
@@ -20065,16 +20078,35 @@ function _b2bOwaRefOnly(types) {
         && !t.some((x) => /^(text\/plain|text\/html|Files)$/i.test(x));
 }
 
-const B2B_OWA_ADVICE =
-    'That is the new Outlook handing over a link to the message on its server rather than the '
-    + 'message itself. There is nothing in it to keep, and no website can open it — this is a '
-    + 'limit of the new Outlook, not something you did wrong. Two ways through:\n\n'
-    + '1. BEST — open the email, open its "..." menu and choose Download (or Save as). You get '
-    + 'a file: drop it here, or use the picker. It keeps the sender, the date and the headers, '
-    + 'which is the whole point of holding on to it.\n\n'
-    + '2. Or open the email, click into the message text, press Ctrl+A then Ctrl+C, and press '
-    + 'the Paste button again. That keeps the client’s wording but not the headers, so it '
-    + 'gets filed as "message text only".';
+// Best effort: it is somebody else's private format and may change shape
+// without notice, so a parse failure just means a less specific message.
+function _b2bOwaSubjects(raw) {
+    try {
+        const o = JSON.parse(String(raw || ''));
+        return [].concat(o.subjects || o.subject || [])
+            .filter(Boolean).map((s) => String(s).trim()).filter(Boolean);
+    } catch (_) { return []; }
+}
+
+function _b2bOwaAdvice(subjects) {
+    const s = subjects || [];
+    const extra = s.length > 2 ? ` and ${s.length - 1} others`
+        : s.length === 2 ? ' and one other' : '';
+    const lead = s.length
+        ? `That was “${s[0]}”${extra} — but what the new Outlook handed over is a link to `
+          + 'the message on its server, not the message. '
+        : 'That is the new Outlook handing over a link to the message on its server rather than '
+          + 'the message itself. ';
+    return lead
+        + 'There is nothing in it to keep, and no website can open it — this is a limit of the '
+        + 'new Outlook, not something you did wrong. Two ways through:\n\n'
+        + '1. BEST — open the email, open its "..." menu and choose Download (or Save as). You '
+        + 'get a file: drop it here, or use the picker. It keeps the sender, the date and the '
+        + 'headers, which is the whole point of holding on to it.\n\n'
+        + '2. Or open the email, click into the message text, press Ctrl+A then Ctrl+C, and '
+        + 'press the Paste button again. That keeps the client’s wording but not the headers, '
+        + 'so it gets filed as "message text only".';
+}
 
 // ONE BUTTON THAT TAKES THE EMAIL OFF THE CLIPBOARD.
 //
@@ -20108,6 +20140,7 @@ async function b2bPasteFromClipboard(ownerId, ownerKind, zone, btn) {
         const seen = [];
         const extras = [];
         let file = null;
+        let owaSubjects = [];
         for (const item of items) {
             for (const type of item.types || []) {
                 seen.push(type);
@@ -20120,13 +20153,15 @@ async function b2bPasteFromClipboard(ownerId, ownerKind, zone, btn) {
                     // A real message on the clipboard beats rebuilding one.
                     file = new File([blob], 'clipboard-message.msg', { type });
                 } else if (/^(text|application)\//.test(type.replace(/^web /, ''))) {
-                    // Opened and reported, not used. A private format from a
-                    // mail client is a pointer to something on a server, not
-                    // evidence -- but seeing its contents is how the next one of
-                    // these gets diagnosed without another round trip.
-                    let head = '';
-                    try { head = (await blob.text()).slice(0, 400); } catch (_) { head = '(unreadable)'; }
-                    extras.push(`${type} (${blob.size}b): ${head}`);
+                    // Opened and reported, not used as evidence. A mail client's
+                    // private format is a pointer to something on a server --
+                    // but reading it is how the next one of these gets diagnosed
+                    // without another round trip, and the new Outlook's happens
+                    // to carry the subject, which makes the message specific.
+                    let body = '';
+                    try { body = await blob.text(); } catch (_) { body = '(unreadable)'; }
+                    if (B2B_OWA_REF_RX.test(type)) owaSubjects = _b2bOwaSubjects(body);
+                    extras.push(`${type} (${blob.size}b): ${body.slice(0, 400)}`);
                 }
             }
         }
@@ -20137,7 +20172,7 @@ async function b2bPasteFromClipboard(ownerId, ownerKind, zone, btn) {
                 + (extras.length ? `\n\ncontents of the other formats:\n${extras.join('\n')}` : '');
             focusZone();
             return _b2bDropFail(z, _b2bOwaRefOnly(seen)
-                ? B2B_OWA_ADVICE
+                ? _b2bOwaAdvice(owaSubjects)
                 : "Your clipboard does not have an email on it — or not enough of one to keep. "
                   + 'Open the email, click into the message text, press Ctrl+A then Ctrl+C, and '
                   + 'press this again.', diag);
@@ -20226,7 +20261,9 @@ async function b2bProofDrop(ev, ownerId, ownerKind, zone) {
         // somebody try the button to find out.
         let types = [];
         try { types = Array.from(ev.dataTransfer?.types || []); } catch (_) {}
-        if (_b2bOwaRefOnly(types)) return _b2bDropFail(z, B2B_OWA_ADVICE, full);
+        if (_b2bOwaRefOnly(types)) {
+            return _b2bDropFail(z, _b2bOwaAdvice(_b2bOwaSubjects(dragText.owa)), full);
+        }
         return _b2bDropFail(z, sawFileItem
             ? 'Your mail app offered the message but would not release the file, and the drag '
               + 'carried too little of the message to rebuild one. ' + _b2bDropAdvice()
@@ -31986,15 +32023,18 @@ window._dbgClaims = async function () {
     const el = document.getElementById('claimAlertBubble');
     out.bubbleDisplay = el ? getComputedStyle(el).display : 'MISSING';
     out.feedSummary = (document.getElementById('claimAlertBubbleText') || {}).dataset?.summary || '(none)';
-    // Snoozed vs dismissed, told apart, because "why is this card not showing"
-    // now has two possible answers and the diagnostic has to say which.
+    // Snoozed cards, and any leftover Not-mine records. The second kind can no
+    // longer be created (the control was removed 2026-09-10) and no longer
+    // hides anything, but they are still listed: "why is this card not showing"
+    // must not have an answer the diagnostic keeps to itself, and a stale record
+    // sitting in someone's browser is worth being able to see.
     {
         const h = _samGetHidden();
         const snoozed = Object.keys(h).filter(k => h[k] && h[k].until);
-        const notMine = Object.keys(h).filter(k => h[k] && !h[k].until);
+        const stale = Object.keys(h).filter(k => h[k] && !h[k].until);
         out.dismissedToday = [
             snoozed.length ? 'snoozed: ' + snoozed.join(', ') : '',
-            notMine.length ? 'not mine: ' + notMine.join(', ') : '',
+            stale.length ? 'stale not-mine records, no longer hiding: ' + stale.join(', ') : '',
         ].filter(Boolean).join(' | ') || '(none)';
     }
     out.claimsInFeed = _samGatherReminders().some(r => r.key === 'claims');
@@ -41699,13 +41739,14 @@ function _samRenderFeedNow() {
     // Each item gets an explicit "Mark read" button (no bulk skip) — a checkmark
     // + label so reading is a deliberate action, not a reflex ✕.
     const readBtn = onclick => `<button class="sam-markread-btn" onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Mark read</button>`;
-    // Reminders are live task-nags, so theirs is a "Snooze" (quiets today, returns
-    // tomorrow if still outstanding, auto-clears for good once the work is done).
+    // Snooze is the only hide on a reminder card. There WAS a second one, "Not
+    // mine", which hid a card until its content changed -- removed 2026-09-10
+    // at Nick's word: "That is not how i intended that to be". Two controls that
+    // both make a card go away, differing only in how long, is a choice nobody
+    // wants to have to make on a feed they are trying to clear. Anything a
+    // person genuinely should not be seeing is a feature-access or role
+    // question, not something to be swept off one card at a time.
     const snoozeBtn = onclick => `<button class="sam-markread-btn sam-snooze-btn" data-tip="Hides it until tomorrow morning. Comes back if it's still outstanding, and disappears for good once the work is done." onclick="${onclick}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Snooze</button>`;
-    // "Not mine" rather than "Dismiss": the word says which of the two it is, and
-    // the tooltip is explicit that it is not a permanent mute of the subject --
-    // anything new on the same card still comes through.
-    const notMineBtn = onclick => `<button class="sam-markread-btn sam-notmine-btn" data-tip="Removes it from your feed for good. If something new happens on it, it comes back." onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>Not mine</button>`;
     // Completion the app can't observe for itself — the only way this card ever
     // goes away for good. Distinguished from Snooze so the two aren't confused.
     const doneBtn = (onclick, label) => `<button class="sam-markread-btn sam-done-btn" data-tip="Clears this for good. Snooze only quiets it until tomorrow." onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>${_samEsc(label || 'Mark done')}</button>`;
@@ -41734,12 +41775,10 @@ function _samRenderFeedNow() {
             // expense report leaves via the person's own mail client), so it gets
             // BOTH — Snooze to quiet it today, and an explicit completion that is
             // the only thing that clears it for good.
-            // Two controls, because they answer different questions (Ethan,
-            // 2026-09-02): Snooze is "later", Not mine is "stop showing me this".
-            // Snooze keeps the prominent slot -- it is the common case.
+            // One hide control, not two. "Not mine" sat next to Snooze here
+            // until 2026-09-10 and is gone -- see the note above snoozeBtn.
             const snoozeHtml = it.noSnooze ? ''
-                : (snoozeBtn(`samSnoozeItem(event,'${_samEsc(it.key)}',20)`)
-                   + notMineBtn(`samNotMineItem(event,'${_samEsc(it.key)}')`));
+                : snoozeBtn(`samSnoozeItem(event,'${_samEsc(it.key)}',20)`);
             const ctrl = it.doneAction ? (snoozeHtml + doneBtn(it.doneAction, it.doneLabel))
                 : (it.readAction ? readBtn(it.readAction) : snoozeHtml);
             desired.push({ key: 'rem:' + it.key, html: `<div class="sam-ann rem"${remClick}>
@@ -41995,16 +42034,20 @@ function _samMarkAnnRead(rowId) {
     if (typeof updateMainBadge === 'function') updateMainBadge();
 }
 
-// Hide a reminder. `hours` distinguishes the two things Ethan asked for:
-// 0/absent = dismiss (until the content changes), a number = snooze that long.
-// Recorded against WHAT was on the card, so either way new information on the
-// same subject comes back -- see _samIsHidden.
+// Snooze a reminder for `hours`, recorded against WHAT was on the card so new
+// information on the same subject comes back regardless -- see _samIsHidden.
+//
+// `hours` used to be allowed to be 0, which meant "hide until the content
+// changes" and was the Not-mine control. That control is gone (2026-09-10), and
+// so is the 0: a falsy duration now falls back to the ordinary overnight snooze
+// rather than writing a record with no expiry. Otherwise one stray call site
+// passing nothing silently reintroduces the permanent kind of hide.
 function _samHideRem(key, hours) {
     const cur = _samGatherReminders().find(r => r.key === key);
     const map = _samGetHidden();
     map[key] = {
         sig: cur ? cur.sig : '',
-        until: hours ? Date.now() + hours * 3600000 : 0,
+        until: Date.now() + (Number(hours) || 20) * 3600000,
     };
     _samSetHidden(map);
 }
@@ -42015,17 +42058,6 @@ function _samHideRem(key, hours) {
 function samSnoozeItem(ev, key, hours) {
     if (ev) ev.stopPropagation();
     _samHideRem(key, Number(hours) || 20);
-    const row = ev && ev.target ? ev.target.closest('.sam-ann') : null;
-    if (row) row.remove();
-    renderActionFeed();
-    if (typeof updateMainBadge === 'function') updateMainBadge();
-}
-
-// Dismiss: "this doesn't apply to me". Gone for good UNLESS the card changes,
-// which is the "unless something new pops up" half of the request.
-function samNotMineItem(ev, key) {
-    if (ev) ev.stopPropagation();
-    _samHideRem(key, 0);
     const row = ev && ev.target ? ev.target.closest('.sam-ann') : null;
     if (row) row.remove();
     renderActionFeed();
@@ -42495,29 +42527,37 @@ function _samDismKey() {
     return 'samRemDismissed_' + u + '_' + day;
 }
 
-// DISMISS AND SNOOZE ARE DIFFERENT THINGS (Ethan, 2026-09-02).
+// THE SNOOZE STORE, AND THE DISMISS THAT USED TO SHARE IT.
 //
-// "Can you make a way for me to dismiss this or snooze this. Since this doesn't
-// apply to [me] I'd like to have this removed from my feed unless something new
-// pops up, but I like the snooze option in case it does apply to me, but I plan
-// on looking at it another day."
+// Ethan asked for two controls (2026-09-02): "Can you make a way for me to
+// dismiss this or snooze this. Since this doesn't apply to [me] I'd like to have
+// this removed from my feed unless something new pops up, but I like the snooze
+// option in case it does apply to me, but I plan on looking at it another day."
 //
-// There was only ever one control, and its key was scoped to the DAY
-// (_samDismKey above), so everything came back at midnight whether you wanted it
-// to or not. That is a snooze, and it was labelled Snooze -- but there was no way
-// to say "this is not mine, stop showing it to me".
+// Both were built. The dismiss half, labelled "Not mine", was REMOVED on
+// 2026-09-10 -- Nick: "please also remove the Not mine feature on the your feed
+// completely. That is not how i intended that to be". Two controls that both
+// make a card disappear, differing only in for how long, is a decision nobody
+// wants on a feed they are trying to clear; and a card someone genuinely should
+// not be seeing is a feature-access or role question, not something to sweep off
+// one card at a time.
 //
-// So this store is NOT day-scoped, and carries an `until` per key:
-//   until === 0   dismissed: hidden until the card's content changes
-//   until > now   snoozed:   hidden until then, or until the content changes
+// What that leaves, and why the store still looks like this:
 //
-// The sig check is what "unless something new pops up" means, and it already
-// existed -- a card whose wording or counts move is new information and breaks
-// through either state. Dismiss is therefore never permanent in the dangerous
-// sense: it hides THIS news, not the subject forever.
+//   until > now   snoozed: hidden until then, or until the content changes
+//   until === 0   a leftover Not-mine record. Treated as EXPIRED, so anything
+//                 hidden that way is visible again -- see _samIsHidden.
+//
+// Still not day-scoped, which was the original bug worth keeping fixed: the key
+// used to carry the date (_samDismKey above), so a snooze could not outlive the
+// day and everything came back at midnight whether you wanted it to or not.
+//
+// The sig check is what "unless something new pops up" means, and it predates
+// all of this -- a card whose wording or counts move is new information and
+// breaks through a snooze. So a snooze hides THIS news, never the subject.
 //
 // The old day-scoped key is still read as a fallback so a snooze taken before
-// this shipped is honoured for the rest of that day, then ages out on its own.
+// the split shipped is honoured for the rest of that day, then ages out.
 function _samHideKey() {
     const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
     return 'samRemHidden_' + u;
@@ -42538,10 +42578,18 @@ function _samIsHidden(key, sig) {
     if (rec && typeof rec === 'object') {
         // Content moved on: new information, so it comes back regardless.
         if (rec.sig !== sig) return false;
-        if (!rec.until) return true;                       // dismissed
+        // until === 0 was a Not-mine record: hidden with no expiry until the
+        // card's wording changed. That control is gone (2026-09-10), so its
+        // records are treated as expired and everything hidden that way comes
+        // BACK. Deliberate: removing a feature has to remove what it did, or
+        // people are left with cards they can no longer see and no control that
+        // put them there. Nothing needs migrating -- the records age out as
+        // their keys stop being written.
+        if (!rec.until) return false;
         return Date.now() < Number(rec.until);             // still snoozed
     }
-    // Fallback: today's legacy map, written before dismiss and snooze split.
+    // Fallback: today's legacy map, written before the store stopped being
+    // day-scoped.
     const old = _samGetDismissedRem();
     return Object.prototype.hasOwnProperty.call(old, key) && old[key] === sig;
 }
