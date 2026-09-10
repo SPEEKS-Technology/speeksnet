@@ -14371,7 +14371,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 /* --- listing grid: the pricing sheet's look, read-only, with specs/serials the
    lister needs plus the list / recycle / label actions. --------------------- */
 .b2b-items.b2b-ss.b2b-lgrid {
-    --b2b-pcols: 78px minmax(150px, 1.2fr) 96px 78px 96px minmax(150px, 1.5fr) 74px 74px 132px 118px;
+    /* 11 tracks: Line, Item, cpu, ram, storage, Serials, Value ea, Cost ea,
+       Line total, Listed, actions. Add a column to the header AND the row AND
+       this list in the same edit -- a grid that disagrees with its header slides
+       every cell one place left. */
+    --b2b-pcols: 78px minmax(150px, 1.2fr) 96px 78px 96px minmax(150px, 1.5fr) 74px 74px 84px 132px 118px;
 }
 .b2b-lline .b2b-pcell { align-items: flex-start; padding-top: 9px; padding-bottom: 9px; }
 .b2b-lline .b2b-pc-sku { gap: 5px; color: var(--b2b-faint); }
@@ -21514,3 +21518,83 @@ select.dd-native {
     .b2b-cap-row { flex-wrap: wrap; }
     .b2b-cap-what { flex: 1 1 100%; }
 }
+/* The line total reads as the summary figure of the three money columns, so it
+   carries the weight the per-unit ones do not. */
+.b2b-lc-tot { font-weight: 800 !important; color: #1a1c1e; }
+
+/* =========================================================
+   PER-ROW ACTIONS MENU on the listing sheet (trial)
+   The action cell carried a listed stepper, a recycle stepper, "Recycle..." and
+   a barcode button on every row of a fifty-line sheet. The listed stepper stays
+   (it is the loop); the rest collapse behind one trigger.
+   ========================================================= */
+.b2b-pc-acts { gap: 6px; justify-content: flex-end; }
+.b2b-rowacts {
+    display: inline-grid; place-items: center;
+    width: 28px; height: 28px; flex: 0 0 auto;
+    border: 1px solid var(--b2b-line); border-radius: 8px;
+    background: #fff; cursor: pointer;
+    transition: background .13s, border-color .13s, color .13s;
+}
+.b2b-rowacts svg { width: 15px; height: 15px; stroke: var(--b2b-muted); stroke-width: 2.2; }
+.b2b-rowacts:hover { border-color: var(--sage-deep); background: var(--b2b-tint, #f1f5f2); }
+.b2b-rowacts:hover svg { stroke: var(--sage-deep); }
+.b2b-rowacts.on { border-color: var(--sage-deep); background: var(--b2b-tint, #f1f5f2); }
+/* THE BARCODE BUTTON'S COLOUR WAS THE WHOLE REMINDER -- amber while any unit
+   still needs a label, green once they are all printed, and no print is ever
+   forced. Collapsing the button into a menu would have thrown that away, so the
+   trigger wears it. */
+.b2b-rowacts.b2b-rowacts-todo {
+    border-color: var(--idea-gold, #f0b429);
+    background: var(--sam-gold-tint, #fdf6e3);
+}
+.b2b-rowacts.b2b-rowacts-todo svg { stroke: #b07d09; }
+.b2b-rowacts.b2b-rowacts-done { border-color: var(--sage-professional, #4a7c59); }
+.b2b-rowacts.b2b-rowacts-done svg { stroke: var(--sage-professional, #4a7c59); }
+/* "N rec" also said something at a glance, so it stays as a chip -- and only
+   when it is not zero, which is most of the time. */
+.b2b-rec-chip {
+    font-size: 10px; font-weight: 800; letter-spacing: .01em;
+    padding: 2px 6px; border-radius: 999px; white-space: nowrap;
+    color: #7a4f05; background: var(--sam-gold-tint, #fdf6e3);
+    border: 1px solid var(--idea-gold, #f0b429);
+}
+
+/* The menu itself lives on <body> and is positioned FIXED from the trigger's
+   rect. Not absolute inside the cell: the sheet scrolls horizontally and has a
+   sticky header, either of which would clip it. One element reused for every
+   row, so a fifty-line sheet does not carry fifty hidden menus. */
+.b2b-rowmenu {
+    display: none;
+    position: fixed; z-index: 9000;
+    min-width: 244px; max-width: 300px; padding: 6px;
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 12px;
+    box-shadow: 0 18px 44px rgba(16, 24, 32, .18), 0 2px 8px rgba(16, 24, 32, .08);
+}
+.b2b-rowmenu.open { display: block; }
+/* Which line you are acting on. With one shared menu floating over a sheet of
+   near-identical rows, this is the only thing that says so. */
+.b2b-rowmenu-head {
+    display: flex; flex-direction: column; gap: 1px;
+    padding: 6px 10px 9px; margin-bottom: 4px;
+    border-bottom: 1px solid var(--b2b-line-2);
+    font-size: 12px; font-weight: 750; color: #1a1c1e;
+}
+.b2b-rowmenu-head span { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }
+.b2b-rowmenu-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 8px 10px; border: 0; border-radius: 8px;
+    background: transparent; cursor: pointer; text-align: left;
+}
+.b2b-rowmenu-item:hover:not(:disabled) { background: var(--b2b-tint, #f1f5f2); }
+/* Disabled rows are kept rather than removed: a menu whose contents move around
+   between rows is harder to use than one where the same thing is always in the
+   same place, and the subtitle says WHY it is unavailable. */
+.b2b-rowmenu-item:disabled { opacity: .45; cursor: default; }
+.b2b-rowmenu-ico { display: inline-grid; place-items: center; flex: 0 0 auto; }
+.b2b-rowmenu-ico svg { width: 15px; height: 15px; stroke: var(--b2b-muted); stroke-width: 2; }
+.b2b-rowmenu-item.todo .b2b-rowmenu-ico svg { stroke: #b07d09; }
+.b2b-rowmenu-item.done .b2b-rowmenu-ico svg { stroke: var(--sage-professional, #4a7c59); }
+.b2b-rowmenu-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.b2b-rowmenu-txt b { font-size: 12.5px; font-weight: 700; color: #1a1c1e; }
+.b2b-rowmenu-txt span { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }

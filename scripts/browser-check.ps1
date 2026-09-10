@@ -22,6 +22,17 @@
 
 param(
     [Parameter(Mandatory = $true)][string]$Check,
+    # -Html <page>: inline that page's markup into the harness, so a check can
+    # assert about the REAL DOM -- ids, role classes, data-feature, which
+    # element sits inside which -- rather than about a copy of the markup
+    # written into the check, which only ever proves the copy agrees with
+    # itself.
+    #
+    # Opt-in: without it every existing run is byte-for-byte unchanged.
+    # <script> blocks are stripped, because the page bootstrap would either
+    # navigate the harness away or fire against half-built globals, and the
+    # markup is the only part being asserted about.
+    [string]$Html = "",
     [switch]$Keep,
     [int]$TimeoutMs = 20000
 )
@@ -41,6 +52,25 @@ $checkPath = if (Test-Path $Check) { (Resolve-Path $Check).Path } else { Join-Pa
 if (-not (Test-Path $checkPath)) { Write-Error "Check file not found: $Check" }
 $checkJs = [IO.File]::ReadAllText($checkPath)
 
+# -Html: the page's own markup, scripts removed. Everything between <body> and
+# </body> so the harness keeps its own <head> (the stylesheet link and the
+# session seeding both live there).
+$pageMarkup = ""
+if ($Html) {
+    $htmlPath = if (Test-Path $Html) { (Resolve-Path $Html).Path } else { Join-Path $repo $Html }
+    if (-not (Test-Path $htmlPath)) { Write-Error "HTML file not found: $Html" }
+    $raw = [IO.File]::ReadAllText($htmlPath)
+    $m = [regex]::Match($raw, '(?is)<body[^>]*>(.*)</body>')
+    $pageMarkup = if ($m.Success) { $m.Groups[1].Value } else { $raw }
+    # Singleline so a multi-line script block goes in one bite, and the lazy
+    # quantifier so two of them are not swallowed as one.
+    $pageMarkup = [regex]::Replace($pageMarkup, '(?is)<script.*?</script>', '')
+    # noscript carries a duplicate of parts of the page in some shells, which
+    # would put a second copy of an id in the DOM and quietly break every
+    # getElementById assertion.
+    $pageMarkup = [regex]::Replace($pageMarkup, '(?is)<noscript.*?</noscript>', '')
+}
+
 $harness = @"
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -50,6 +80,7 @@ $harness = @"
 <link rel="stylesheet" href="file:///$repoUrl/styles.css">
 </head><body>
 <div id="speeks-check-out">not-run</div>
+$pageMarkup
 <script>
   try {
     sessionStorage.setItem('speeksUnlocked', 'true');
