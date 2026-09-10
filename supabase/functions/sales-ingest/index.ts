@@ -27,17 +27,26 @@
 // Central (NPS_MORNING_HOUR), so the hour between them was this side being
 // early, not that side being late.
 //
-// The schedule lives in pg_cron, NOT in this repo, and it is FOUR jobs, not
-// two, because pg_cron only speaks UTC: a -cdt job and a -cst job an hour
-// apart, so that one of each pair is right for the current offset and the other
-// is a harmless extra pass over the same idempotent restatement. Today
-// 13:00 UTC is 8am and 14:00 UTC is 9am; in January they are 7am and 8am, and
-// the -cst pair takes over.
+// The schedule lives in pg_cron, NOT in this repo. It is TWO jobs, and each
+// fires HOURLY: pg_cron only speaks UTC, so the Central-hour guard inside the
+// command is the only authority on when the run happens. Exactly one firing a
+// day lands in the guarded hour whatever the current offset is — verified over
+// the next 398 days, across both DST transitions, always exactly once, never
+// twice. The other 23 firings cost one `extract` each and do nothing.
 //
-//   jobid  8  0 13 * * *   main, correct Mar–Nov
-//   jobid  9  0 14 * * *   main, correct Nov–Mar
-//   jobid 10  0 14 * * *   retry, correct Mar–Nov
-//   jobid 11  0 15 * * *   retry, correct Nov–Mar
+//   jobid  8  0 * * * *   main,  guard = 8   (8:00am Central)
+//   jobid 10  0 * * * *   retry, guard = 9   (9:00am Central)
+//
+// ⚠️ THE HOUR MUST ONLY EVER BE CHANGED IN THE GUARD, and that is the whole
+// point of this shape. It is the lesson of 2026-09-10. The run time used to
+// live in FOUR places — a -cdt schedule, a -cst schedule (a hand-maintained
+// DST table) and a Central-hour guard inside each — and moving 7am to 8am on
+// 2026-09-09 edited the two schedules and neither guard. Every job then fired
+// an hour after the only hour it was permitted to act in, did nothing, and
+// recorded "succeeded". The Sales Summary write and the cash-report email were
+// both lost, and nothing alerted: the alert lives inside the retry job, so it
+// can only fire if the run happens. jobids 9 and 11 are the retired DST twins,
+// left inactive rather than dropped.
 //
 // ⚠️ THE JOB NAMES STILL SAY 7am. Supabase grants cron.alter_job but not UPDATE
 // on cron.job, so the schedules could be moved and the labels could not. Read
