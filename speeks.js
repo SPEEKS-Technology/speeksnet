@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.6';
+const APP_VERSION = '3.8.7';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -19570,19 +19570,26 @@ function _b2bProofPanel(owner) {
                  movement, different destination. There is no "choose a file"
                  button here any more (Nick, 2026-09-09) -- the picker survives
                  in one place only, the accept popup, where somebody is actually
-                 blocked and needs a way through. -->
-            <div class="b2b-proof-drop" id="b2bProofDrop-${owner.id}"
+                 blocked and needs a way through.
+                 tabindex + onpaste: the new Outlook and Outlook in a tab have no
+                 file to give a browser at all, but Ctrl+C on a message puts its
+                 text on the clipboard in every version, so click-then-paste is
+                 the route that works when dragging cannot. -->
+            <div class="b2b-proof-drop" id="b2bProofDrop-${owner.id}" tabindex="0"
                 ondragover="b2bProofDragOver(event,'${owner.id}')"
                 ondragleave="b2bProofDragOut(event,'${owner.id}')"
-                ondrop="b2bProofDrop(event,${ownerAttr})">
+                ondrop="b2bProofDrop(event,${ownerAttr})"
+                onpaste="b2bProofPaste(event,${ownerAttr})">
                 <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
-                <!-- Says the dependable route out loud. Outlook can only hand a
+                <!-- Says the dependable routes out loud. Outlook can only hand a
                      message to a browser as a virtual file and not every version
                      will, so "drag it out of Outlook" on its own sets people up
-                     to fight it. Desktop-then-drop always works. -->
+                     to fight it. -->
                 <span class="b2b-proof-droptxt"><b>Drop the client's email here</b>
-                    <span>Drag it straight from Outlook, or onto your desktop first and then here</span></span>
+                    <span>Drag it from Outlook — or copy the message, click this box and press
+                        Ctrl+V</span></span>
             </div>
+            <div id="b2bDropFail-${owner.id}"></div>
         </div>`;
 }
 
@@ -19844,8 +19851,33 @@ function _b2bDragText(dt) {
     return { html: get('text/html'), plain: get('text/plain') };
 }
 
+// BOTH sources, not whichever one exists first.
+//
+// THIS is what failed on the new Outlook (Nick, 2026-09-09, with the screenshot
+// to prove it). New Outlook puts a SHORT text/plain on the drag -- often just
+// the subject line -- alongside a full text/html body. Reading
+// `plain || html` tested the short one, found a dozen characters, decided the
+// drag was too thin to be a message, and threw away the entire body that was
+// sitting in the other slot. So the drop reported "would not release the file"
+// when the message had in fact arrived, just not as a file.
+function _b2bDragBody(txt) {
+    const strip = (s) => String(s || '')
+        .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|tr|li|h[1-6])>/gi, '\n')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/[ \t]+/g, ' ');
+    const plain = strip(txt.plain);
+    const html = strip(txt.html);
+    return html.trim().length > plain.trim().length ? html : plain;
+}
+
 function _b2bDragTextIsMessage(txt) {
-    const body = (txt.plain || txt.html || '').replace(/<[^>]*>/g, ' ');
+    const body = _b2bDragBody(txt);
     if (/^\s*(from|sent|to|subject)\s*:/im.test(body) && /\S+@\S+/.test(body)) return true;
     return body.trim().length >= B2B_DRAG_TEXT_MIN;
 }
@@ -19854,30 +19886,38 @@ function _b2bDragTextIsMessage(txt) {
 // own headers -- whoever opens this later must be able to tell it apart from the
 // message as the client stored it, without having to know this code exists.
 function _b2bEmlFromDragText(txt) {
-    const flat = (txt.plain || txt.html || '').replace(/<[^>]*>/g, ' ');
+    const flat = _b2bDragBody(txt);
     const hdr = (name) => {
-        const m = flat.match(new RegExp('^\s*' + name + '\s*:[ \t]*(.+)$', 'im'));
+        // DOUBLE backslashes, and it matters. These were single for one release
+        // -- and a single backslash inside a quoted string is just the bare
+        // letter, so the pattern read "^s*From s*:[ t]*(.+)$" and matched
+        // nothing ever. Every rebuilt message came out titled "Message dragged
+        // from mail app" with no sender. A regex built from a string needs its
+        // escapes escaped; a regex literal does not. Do not "simplify" these.
+        const m = flat.match(new RegExp('^\\s*' + name + '\\s*:[ \\t]*(.+)$', 'im'));
         return m ? m[1].trim().replace(/\s+/g, ' ').slice(0, 200) : '';
     };
     const subject = hdr('Subject') || 'Message dragged from mail app';
     const from = hdr('From') || (flat.match(/[^\s<>,;"]+@[^\s<>,;"]+/) || [])[0] || '';
     const sent = hdr('Sent') || hdr('Date') || '';
-    const isHtml = !!txt.html && !txt.plain;
+    // Whichever slot actually held the message decides the content type, rather
+    // than assuming HTML only exists when there is no plain text at all.
+    const useHtml = String(txt.html || '').trim().length > String(txt.plain || '').trim().length;
+    const body = (useHtml ? txt.html : txt.plain) || flat;
     const lines = [
         from ? `From: ${from}` : null,
         `Subject: ${subject}`,
         `Date: ${sent || new Date().toUTCString()}`,
         'MIME-Version: 1.0',
-        `Content-Type: text/${isHtml ? 'html' : 'plain'}; charset=utf-8`,
-        'X-Speeks-Proof-Source: reconstructed from the drag text; the mail app did'
-            + ' not release the original message file',
+        `Content-Type: text/${useHtml ? 'html' : 'plain'}; charset=utf-8`,
+        'X-Speeks-Proof-Source: reconstructed from the message text; the mail app'
+            + ' did not release the original message file',
         '',
-        txt.html || txt.plain,
+        body,
     ].filter((l) => l !== null);
-    const name = (subject.replace(/[\/:*?"<>|]+/g, ' ').trim() || 'message').slice(0, 80);
+    const name = (subject.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'message').slice(0, 80);
     return new File([lines.join('\r\n')], `${name}.eml`, { type: 'message/rfc822' });
 }
-
 // Which of the several ways this can fail is it, and what should the person
 // actually do about it. Worth telling apart: on Firefox no amount of retrying
 // will help, and saying "try again" there wastes their afternoon.
@@ -19899,9 +19939,104 @@ function _b2bDropAdvice() {
         + 'drag the email onto your desktop first, then drop that file here.';
 }
 
+// THE REPORT GOES IN THE PAGE, NOT IN AN ALERT.
+//
+// It was in an alert() for one release and that was a mistake: Chrome caps the
+// height of a native dialog and scrolls the overflow, so the diagnostic --
+// the entire reason the message exists -- sat below the fold behind a scrollbar
+// nobody thinks to drag. Nick reported the failure with a screenshot and the
+// useful half had been cut off, which cost a round trip.
+//
+// In the page it can be read, expanded, and copied in one click. The
+// console.warn stays as well, for whoever looks afterwards.
+let _B2B_LAST_DIAG = '';
+
+function _b2bDropFail(zone, headline, diag) {
+    _B2B_LAST_DIAG = `${headline}\n\n${diag}\n\nbrowser: ${navigator.userAgent}`;
+    try { console.warn('[b2b] proof drop failed\n' + _B2B_LAST_DIAG); } catch (_) {}
+    const el = document.getElementById(`b2bDropFail-${zone}`);
+    // No panel to render into (an older screen, or a zone that was replaced
+    // mid-drop) -- say it the old way rather than swallowing it.
+    if (!el) return alert(`${headline}\n\nWhat the drop contained:\n${diag}`);
+    el.innerHTML = `
+        <div class="b2b-note warn">
+            <span class="b2b-note-k">That drop did not come through</span>
+            <div>${escapeHtml(headline)}</div>
+            <details class="b2b-dropdiag">
+                <summary>What the drop actually contained</summary>
+                <pre>${escapeHtml(diag)}</pre>
+            </details>
+            <button class="b2b-mini" onclick="b2bCopyDropDiag(this)">Copy this report</button>
+        </div>`;
+}
+
+function _b2bDropFailClear(zone) {
+    const el = document.getElementById(`b2bDropFail-${zone}`);
+    if (el) el.innerHTML = '';
+}
+
+function b2bCopyDropDiag(btn) {
+    const done = () => {
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = 'Copy this report'; }, 1800);
+    };
+    const manual = () => {
+        // execCommand is deprecated and still the only thing that works without
+        // the clipboard permission, which a page served over plain http on a
+        // dev box does not get.
+        const ta = document.createElement('textarea');
+        ta.value = _B2B_LAST_DIAG;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); done(); }
+        catch (_) { alert(_B2B_LAST_DIAG); }
+        document.body.removeChild(ta);
+    };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(_B2B_LAST_DIAG).then(done, manual);
+    else manual();
+}
+
+// PASTE, BECAUSE COPYING A MESSAGE WORKS WHERE DRAGGING ONE DOES NOT.
+//
+// The new Outlook and Outlook in a browser tab are web apps in a shell. They
+// have no OS-level file to hand over, so no amount of work on the drop side can
+// make a drag produce one -- that is a limit of the mail client, not of this
+// code. But Ctrl+C on a message puts its text and HTML on the clipboard in
+// EVERY version of Outlook, and a paste event carries both. So the same
+// reconstruction that rescues a fileless drag rescues a paste, and the gesture
+// works everywhere.
+//
+// If the clipboard holds an actual file, that is preferred -- it is the real
+// message rather than a rebuild of it.
+async function b2bProofPaste(ev, ownerId, ownerKind, zone) {
+    const cd = ev.clipboardData;
+    if (!cd) return;
+    const get = (t) => { try { return String(cd.getData(t) || ''); } catch (_) { return ''; } };
+    const txt = { html: get('text/html'), plain: get('text/plain') };
+    let file = (cd.files && cd.files[0]) || null;
+    if (file && !_b2bIsMailFile(file)) file = null;
+
+    if (!file && !_b2bDragTextIsMessage(txt)) {
+        // Not a message. Left alone deliberately: this handler sits on a drop
+        // zone inside a screen full of note fields, and hijacking an ordinary
+        // paste would be worse than not offering the shortcut at all.
+        return;
+    }
+    ev.preventDefault();
+    _b2bDropFailClear(zone);
+    const out = file || _b2bEmlFromDragText(txt);
+    if (out.size > 6_000_000) {
+        return alert(`That message is ${Math.round(out.size / 1e6)}MB — the limit is 6MB.\n\n`
+            + 'Forward it to yourself without the attachments and use that instead.');
+    }
+    await _b2bAttachMailFile(out, ownerId, ownerKind, file ? 'file' : 'text', zone);
+}
+
 async function b2bProofDrop(ev, ownerId, ownerKind, zone) {
     ev.preventDefault();
-    b2bProofDragOut(ev, zone || ownerId);
+    const z = zone || ownerId;
+    b2bProofDragOut(ev, z);
+    _b2bDropFailClear(z);
     // All started synchronously, before anything can yield.
     const pending = _b2bDropFilePromise(ev.dataTransfer);
     const dragText = _b2bDragText(ev.dataTransfer);
@@ -19918,27 +20053,27 @@ async function b2bProofDrop(ev, ownerId, ownerKind, zone) {
 
     if (!file) {
         // Before giving up: the message text, if the client left enough of it.
+        // Checks BOTH text/plain and text/html -- see _b2bDragBody.
         if (_b2bDragTextIsMessage(dragText)) {
             const eml = _b2bEmlFromDragText(dragText);
-            await _b2bAttachMailFile(eml, ownerId, ownerKind, 'text', zone);
+            await _b2bAttachMailFile(eml, ownerId, ownerKind, 'text', z);
             return;
         }
-        return alert(sawFileItem
-            ? 'Your mail app offered the message but would not release the file.\n\n'
-              + _b2bDropAdvice() + '\n\nOr use Choose a file.\n\nWhat the drop contained:\n' + full
-            : 'That drop did not contain a message.\n\n'
-              + _b2bDropAdvice() + '\n\nOr use Choose a file.\n\nWhat the drop contained:\n' + full);
+        return _b2bDropFail(z, sawFileItem
+            ? 'Your mail app offered the message but would not release the file, and the drag '
+              + 'carried too little of the message to rebuild one. ' + _b2bDropAdvice()
+            : 'That drop did not contain a message. ' + _b2bDropAdvice(), full);
     }
     if (!_b2bIsMailFile(file)) {
-        return alert(`"${file.name}" looks like a document rather than an email.\n\nDrop the `
-            + "client's message itself — dragged out of your mail app, or saved out of it. That "
-            + 'is what carries the sender, the date and the headers.');
+        return _b2bDropFail(z, `"${file.name}" looks like a document rather than an email. Drop `
+            + "the client's message itself — dragged out of your mail app, or saved out of it. "
+            + 'That is what carries the sender, the date and the headers.', full);
     }
     if (file.size > 6_000_000) {
         return alert(`That message is ${Math.round(file.size / 1e6)}MB — the limit is 6MB.\n\n`
             + 'Forward it to yourself without the attachments and drop that instead.');
     }
-    await _b2bAttachMailFile(file, ownerId, ownerKind, 'file', zone);
+    await _b2bAttachMailFile(file, ownerId, ownerKind, 'file', z);
 }
 
 // Read it, pull what headers we can, and save. No dialog: the whole request was
@@ -19978,6 +20113,7 @@ async function _b2bAttachMailFile(file, ownerId, ownerKind, source, zone) {
         // Attached from the accept popup: that modal has to go before the deal
         // is reopened, or two modals are up at once and the deal renders behind
         // the popup that is now stale.
+        _b2bDropFailClear(zone || ownerId);
         if (zone === B2B_PROOF_POP) closeAllModals();
         await _b2bLoadProofs(ownerId);
         await b2bRefresh();
@@ -20066,6 +20202,10 @@ function b2bOpenAcceptProof(ownerId, ownerKind) {
     _b2bProofOwner = { id: ownerId, kind: ownerKind || 'deal' };
     _b2bPaintProofModal();
     toggleModal('b2bProofModal');
+    // Focused so Ctrl+V lands here without anyone having to know they must
+    // click the box first. A paste event only reaches an element that has
+    // focus, and on this screen there is nothing else it could be meant for.
+    setTimeout(() => { document.getElementById(`b2bProofDrop-${B2B_PROOF_POP}`)?.focus(); }, 60);
 }
 
 function _b2bPaintProofModal() {
@@ -20080,14 +20220,17 @@ function _b2bPaintProofModal() {
             <div>Drop their email on and the acceptance goes straight through. It is what
                 answers them later if they say they never agreed to the price.</div>
         </div>
-        <div class="b2b-proof-drop lg" id="b2bProofDrop-${B2B_PROOF_POP}"
+        <div class="b2b-proof-drop lg" id="b2bProofDrop-${B2B_PROOF_POP}" tabindex="0"
             ondragover="b2bProofDragOver(event,'${B2B_PROOF_POP}')"
             ondragleave="b2bProofDragOut(event,'${B2B_PROOF_POP}')"
-            ondrop="b2bProofDrop(event,${attr})">
+            ondrop="b2bProofDrop(event,${attr})"
+            onpaste="b2bProofPaste(event,${attr})">
             <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
             <span class="b2b-proof-droptxt"><b>Drop the client's email here</b>
-                <span>Drag it straight out of Outlook, or onto your desktop first and then here</span></span>
+                <span>Drag it out of Outlook — or copy the message and just press Ctrl+V, which
+                    works even where dragging does not</span></span>
         </div>
+        <div id="b2bDropFail-${B2B_PROOF_POP}"></div>
         <!-- The one picker left in the product, and deliberately only here.
              Dragging out of Outlook depends on the browser and the Outlook
              build agreeing (classic Outlook plus Chrome or Edge manage it;

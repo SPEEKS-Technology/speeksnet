@@ -13279,6 +13279,29 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
 }
 .b2b-proof-drop.over .b2b-proof-dropico svg { stroke: var(--sage-deep); }
+/* Focusable because it takes a paste as well as a drop -- Ctrl+V only reaches
+   an element that has focus. Needs a visible focus ring for the same reason:
+   "click this box, then paste" is nonsense if clicking it looks like nothing
+   happened. */
+.b2b-proof-drop:focus { outline: none; }
+.b2b-proof-drop:focus-visible,
+.b2b-proof-drop:focus-within {
+    border-color: var(--sage-deep); border-style: solid;
+    box-shadow: 0 0 0 3px rgba(47, 111, 78, .18);
+}
+/* The drop diagnostic, in the page rather than inside a native alert that
+   scrolls the important half out of sight. */
+.b2b-dropdiag { margin-top: 8px; }
+.b2b-dropdiag summary {
+    cursor: pointer; font-size: 11px; font-weight: 700;
+    color: var(--b2b-muted); letter-spacing: .02em;
+}
+.b2b-dropdiag pre {
+    margin: 8px 0 0; padding: 10px 12px; max-height: 260px;
+    overflow: auto; white-space: pre-wrap; word-break: break-word;
+    background: #14161a; color: #e6edf3; border-radius: 8px;
+    font: 11px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
 /* The accept popup's zone. Taller and centred because it is the only thing on
    that screen and the whole point of the popup is that it is an obvious target
    -- on the deal panel the zone sits under a list and has to stay compact. */

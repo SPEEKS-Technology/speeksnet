@@ -1417,6 +1417,159 @@ t('3.8.6 the popup and the panel do not share an element id', function () {
     return pop.indexOf('b2bProofDrop-') > -1 && pop.indexOf('B2B_PROOF_POP') > -1
         || 'the popup zone is not keyed separately from the panel';
 });
+
+// --- v3.8.7: the new Outlook, and two bugs I shipped -----------------------
+//
+// Nick, 2026-09-09, with a screenshot: the drop failed on the new Outlook with
+// "offered the message but would not release the file". Two separate faults,
+// both mine, both in 3.8.6.
+
+// FAULT 1, and the one that caused the reported failure. The new Outlook puts a
+// SHORT text/plain on the drag -- often just the subject -- alongside a full
+// text/html body. `plain || html` tested the short one, found a dozen
+// characters, called the drag too thin to be a message, and discarded the whole
+// body that was sitting in the other slot.
+t('3.8.7 a short text/plain does not hide a full text/html body', function () {
+    var txt = {
+        plain: 'Re: quote',
+        html: '<html><body><p>From: dana@acme.com</p><p>Sent: 1 September 2026</p>'
+            + '<p>Subject: Re: quote</p><p>Yes, we are happy with those numbers, go ahead.</p>'
+            + '</body></html>',
+    };
+    return _b2bDragTextIsMessage(txt) === true
+        || 'the subject-length text/plain won, so the real message was thrown away';
+});
+t('3.8.7 the richer of the two sources is the one used', function () {
+    var body = _b2bDragBody({ plain: 'Re: quote', html: '<p>a much longer body than the subject</p>' });
+    return body.indexOf('much longer body') > -1 || 'took the shorter source';
+});
+t('3.8.7 the tag stripper does not leave script or style text in the body', function () {
+    var body = _b2bDragBody({ plain: '', html: '<style>p{color:red}</style><p>Real text</p>' });
+    if (body.indexOf('color:red') > -1) return 'stylesheet text is being counted as message body';
+    return body.indexOf('Real text') > -1 || 'the body was stripped away with the markup';
+});
+
+// FAULT 2: the header pattern was built from a string with SINGLE backslashes,
+// and a single backslash in a quoted string is just the bare letter. So the
+// pattern read "^s*From s*:[ t]*(.+)$" and matched nothing, ever -- every
+// rebuilt message came out titled "Message dragged from mail app", with no
+// sender, even when the headers were right there in the text.
+t('3.8.7 the rebuilt message keeps the real subject and sender', function () {
+    var txt = {
+        plain: 'From: dana@acme.com\r\nSent: 1 Sep 2026\r\nSubject: Re: the pallet quote\r\n\r\n'
+            + 'Yes, agreed to those numbers.',
+        html: '',
+    };
+    var f = _b2bEmlFromDragText(txt);
+    if (f.name.indexOf('Message dragged from mail app') > -1) {
+        return 'the header pattern still matches nothing, so the subject was never read';
+    }
+    if (f.name.indexOf('Re') === -1) return 'the subject is not in the filename: ' + f.name;
+    return f.text().then(function (s) {
+        if (s.indexOf('Subject: Re: the pallet quote') === -1) return 'the subject header was lost';
+        return s.indexOf('From: dana@acme.com') > -1 || 'the sender was lost';
+    });
+});
+t('3.8.7 an HTML-only message is declared as HTML', function () {
+    var f = _b2bEmlFromDragText({ plain: '', html: '<p>From: a@b.c</p><p>' + new Array(60).join('body ') + '</p>' });
+    return f.text().then(function (s) {
+        return s.indexOf('Content-Type: text/html') > -1
+            || 'an HTML body was declared as text/plain, so it reads as tag soup';
+    });
+});
+
+// The report has to be readable. It was inside an alert() for one release, and
+// Chrome caps a native dialog's height and scrolls the overflow -- so the
+// diagnostic sat below the fold behind a scrollbar nobody drags. The screenshot
+// Nick sent had the useful half cut off.
+t('3.8.7 the drop report is rendered in the page, not in an alert', function () {
+    var src = b2bProofDrop.toString();
+    if (src.indexOf('_b2bDropFail') === -1) return 'still alerting the diagnostic';
+    if (/return alert\([^)]*diag/.test(src)) return 'the diagnostic still goes through alert()';
+    return _b2bDropFail.toString().indexOf('b2bDropFail-') > -1
+        || 'no in-page container is targeted';
+});
+t('3.8.7 both drop zones have somewhere to render the report', function () {
+    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    if (panel.indexOf('b2bDropFail-d1') === -1) return 'the panel has no report container';
+    _b2bProofOwner = { id: 'd1', kind: 'deal' };
+    return _b2bPaintProofModal.toString().indexOf('b2bDropFail-') > -1
+        || 'the popup has no report container';
+});
+t('3.8.7 the report is copyable', function () {
+    return typeof b2bCopyDropDiag === 'function' || 'no way to copy the report back';
+});
+
+// Paste, because copying a message works where dragging one does not. The new
+// Outlook and Outlook in a tab are web apps in a shell: they have no OS-level
+// file to hand over, so no drop-side work can make a drag produce one. Ctrl+C
+// puts the message on the clipboard in every version.
+t('3.8.7 both drop zones accept a paste', function () {
+    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    if (panel.indexOf('onpaste="b2bProofPaste') === -1) return 'the panel zone takes no paste';
+    if (panel.indexOf('tabindex="0"') === -1) return 'the panel zone cannot take focus, so Ctrl+V never reaches it';
+    _b2bProofOwner = { id: 'd1', kind: 'deal' };
+    var pop = _b2bPaintProofModal.toString();
+    if (pop.indexOf('onpaste="b2bProofPaste') === -1) return 'the popup zone takes no paste';
+    return pop.indexOf('tabindex="0"') > -1 || 'the popup zone cannot take focus';
+});
+t('3.8.7 the popup focuses its zone so Ctrl+V just works', function () {
+    return b2bOpenAcceptProof.toString().indexOf('focus') > -1
+        || 'the user would have to know to click the box first';
+});
+t('3.8.7 an ordinary paste is left alone', function () {
+    // This handler sits on a screen full of note fields. Hijacking a normal
+    // paste would be worse than not offering the shortcut at all.
+    var src = b2bProofPaste.toString();
+    var guard = src.indexOf('_b2bDragTextIsMessage');
+    var prevent = src.indexOf('preventDefault');
+    if (guard === -1) return 'nothing checks whether the clipboard holds a message';
+    return guard < prevent || 'preventDefault runs before the check, so every paste is swallowed';
+});
+t('3.8.7 a pasted message is rebuilt and attached', function () {
+    var calls = [];
+    var realAttach = _b2bAttachMailFile;
+    _b2bAttachMailFile = function (file, id, kind, source) { calls.push({ file: file, source: source }); };
+    var ev = {
+        preventDefault: function () {},
+        clipboardData: {
+            files: [],
+            getData: function (t) {
+                return t === 'text/plain'
+                    ? 'From: dana@acme.com\r\nSubject: Re: quote\r\n\r\nYes, agreed to the numbers.'
+                    : '';
+            },
+        },
+    };
+    return Promise.resolve(b2bProofPaste(ev, 'd1', 'deal', 'd1')).then(function () {
+        _b2bAttachMailFile = realAttach;
+        if (!calls.length) return 'a pasted message was not attached';
+        if (calls[0].source !== 'text') return 'not marked as rebuilt from text';
+        return /\.eml$/i.test(calls[0].file.name) || 'not built as an email file';
+    }, function (e) {
+        _b2bAttachMailFile = realAttach;
+        return 'threw: ' + e.message;
+    });
+});
+t('3.8.7 a real file on the clipboard beats rebuilding one', function () {
+    var calls = [];
+    var realAttach = _b2bAttachMailFile;
+    _b2bAttachMailFile = function (file, id, kind, source) { calls.push({ file: file, source: source }); };
+    var msg = new File(['From: a@b.c\r\n'], 'real.msg', { type: '' });
+    var ev = {
+        preventDefault: function () {},
+        clipboardData: { files: [msg], getData: function () { return ''; } },
+    };
+    return Promise.resolve(b2bProofPaste(ev, 'd1', 'deal', 'd1')).then(function () {
+        _b2bAttachMailFile = realAttach;
+        if (!calls.length) return 'the clipboard file was ignored';
+        if (calls[0].source !== 'file') return 'the real message was recorded as a rebuild';
+        return calls[0].file.name === 'real.msg' || 'attached something other than the file';
+    }, function (e) {
+        _b2bAttachMailFile = realAttach;
+        return 'threw: ' + e.message;
+    });
+});
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();
