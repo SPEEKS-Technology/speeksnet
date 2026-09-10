@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.9';
+const APP_VERSION = '3.9.0';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -19598,7 +19598,133 @@ function _b2bProofPanel(owner) {
                     the copied email</button>
             </div>
             <div id="b2bDropFail-${owner.id}"></div>
+            ${_b2bDrivePanel(owner)}
         </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// THE DRIVE FOLDER -- the route that works from every version of Outlook
+// ---------------------------------------------------------------------------
+//
+// Paul drags the acceptance email into a Google Drive folder. That already
+// works, reliably, and it is worth being precise about why: dragging into a
+// Drive-for-desktop folder is an OS-LEVEL drop, and Explorer fully supports the
+// virtual-file format Outlook offers. Dragging into a WEB PAGE is a different
+// mechanism, and the new Outlook puts nothing on it but a pointer to the message
+// on Microsoft's server -- measured 2026-09-10, and unfixable from a browser at
+// any price.
+//
+// So this stops trying to replace his gesture and reads the folder instead. He
+// drops the email where he always has; the list below shows what landed there,
+// newest first, and one click files it against the deal.
+//
+// It is collapsed by default. Dragging onto the zone above is still the one-step
+// route and works fine on classic Outlook -- this is the way through when it
+// does not, not a replacement for it.
+let _b2bDriveFiles = null;      // null = not fetched yet, [] = fetched and empty
+let _b2bDriveErr = '';
+let _b2bDriveBusy = false;
+
+function _b2bDrivePanel(owner) {
+    if (!owner) return '';
+    const attr = owner.eval_no !== undefined
+        ? `'${owner.id}','preval'` : `'${owner.id}','deal'`;
+    return `
+        <details class="b2b-drivewrap" id="b2bDrive-${owner.id}"
+            ontoggle="if(this.open)b2bDriveRefresh(${attr})">
+            <summary>Or pick it out of the Drive folder</summary>
+            <p class="b2b-hint">Drag the email into the shared Drive folder the way you always
+                have — that works from every version of Outlook, because it is Windows doing it
+                and not the browser. Then pick it out here.</p>
+            <div id="b2bDriveList-${owner.id}">${_b2bDriveListHtml(owner)}</div>
+        </details>`;
+}
+
+function _b2bDriveListHtml(owner) {
+    if (_b2bDriveBusy) return '<div class="b2b-hint">Looking in the folder…</div>';
+    if (_b2bDriveErr) {
+        return `<div class="b2b-note warn"><span class="b2b-note-k">Couldn't read the folder</span>
+            <div>${escapeHtml(_b2bDriveErr)}</div></div>`;
+    }
+    if (_b2bDriveFiles === null) return '';
+    if (!_b2bDriveFiles.length) {
+        return `<div class="b2b-hint">Nothing in the folder yet. Drag the email in, then
+            <button class="b2b-mini" onclick="b2bDriveRefresh('${owner.id}','${
+                owner.eval_no !== undefined ? 'preval' : 'deal'}')">check again</button>.</div>`;
+    }
+    const kb = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+    const rows = _b2bDriveFiles.map((f) => `
+        <div class="b2b-driverow">
+            <div class="b2b-driverow-main">
+                <b>${escapeHtml(f.name || '(no name)')}</b>
+                <span>${escapeHtml(_b2bDriveWhen(f.modified))} · ${kb(Number(f.bytes) || 0)}</span>
+            </div>
+            <button class="b2b-mini" onclick="b2bDriveAttach('${escapeHtml(String(f.id))}','${
+                owner.id}','${owner.eval_no !== undefined ? 'preval' : 'deal'}',this)">Attach</button>
+        </div>`).join('');
+    return rows + `<div class="b2b-driveacts"><button class="b2b-mini"
+        onclick="b2bDriveRefresh('${owner.id}','${
+            owner.eval_no !== undefined ? 'preval' : 'deal'}')">Refresh</button></div>`;
+}
+
+// "2 minutes ago" beats a timestamp here: the file being looked for is almost
+// always the one that just landed, and recency is the whole basis for picking it.
+function _b2bDriveWhen(iso) {
+    const t = Date.parse(iso || '');
+    if (!t) return 'unknown date';
+    const mins = Math.round((Date.now() - t) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins} min ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs} hr ago`;
+    return _b2bDate(new Date(t).toISOString().slice(0, 10));
+}
+
+function _b2bDriveRepaint(ownerId) {
+    const el = document.getElementById(`b2bDriveList-${ownerId}`);
+    const owner = _b2bModalDeal && _b2bModalDeal.id === ownerId ? _b2bModalDeal : { id: ownerId };
+    if (el) el.innerHTML = _b2bDriveListHtml(owner);
+}
+
+async function b2bDriveRefresh(ownerId, ownerKind) {
+    _b2bDriveBusy = true;
+    _b2bDriveErr = '';
+    _b2bDriveRepaint(ownerId);
+    try {
+        const out = await _b2bSend({ action: 'drive_list', limit: 25 });
+        _b2bDriveFiles = Array.isArray(out.files) ? out.files : [];
+    } catch (e) {
+        _b2bDriveFiles = null;
+        // The server's own words. When this fails it is nearly always a setup
+        // problem -- a deployment set to the wrong access, a missing secret --
+        // and the message that says which is the one worth showing.
+        _b2bDriveErr = e.message || 'the folder could not be read';
+    } finally {
+        _b2bDriveBusy = false;
+        _b2bDriveRepaint(ownerId);
+    }
+}
+
+// Straight into the same pipeline as a drop or a paste: the bytes come back as
+// a data URI, become a File, and go through _b2bAttachMailFile -- which parses
+// the headers, labels the row and inserts it. One path, deliberately. This
+// feature's whole history is bugs from having several routes that were supposed
+// to agree with each other.
+async function b2bDriveAttach(fileId, ownerId, ownerKind, btn) {
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
+    try {
+        const out = await _b2bSend({ action: 'drive_file', file_id: fileId });
+        const m = String(out.data_uri || '').match(/^data:([^;]*);base64,(.*)$/);
+        if (!m) throw new Error("that file didn't come back in a readable form");
+        const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+        const file = new File([bytes], out.name || 'message.msg', { type: m[1] || '' });
+        await _b2bAttachMailFile(file, ownerId, ownerKind, 'file', ownerId);
+    } catch (e) {
+        alert(`Couldn't attach that: ${e.message}`);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+    }
 }
 
 // --- attaching -------------------------------------------------------------
