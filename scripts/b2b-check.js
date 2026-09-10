@@ -863,52 +863,73 @@ t('3.8.1 Copy reads as a real route, not a fallback', function () {
 // something new pops up, but I like the snooze option... I plan on looking at it
 // another day." There was one control, day-scoped, so everything returned at
 // midnight whether you wanted it to or not.
-t('3.8.2 dismiss and snooze are separate actions', function () {
-    if (typeof samNotMineItem !== 'function') return 'no dismiss action';
-    if (typeof samSnoozeItem !== 'function') return 'no snooze action';
-    // The card markup is built inside _samRenderFeedNow, so assert the renderer
-    // wires both rather than trying to stand a live feed up in the harness.
+//
+// The dismiss half ("Not mine") was REMOVED on 2026-09-10 -- Nick: "please also
+// remove the Not mine feature on the your feed completely. That is not how i
+// intended that to be". These checks now pin it staying gone, and pin the
+// snooze half that survives.
+t('3.8.9 Not mine is gone from the feed', function () {
+    if (typeof samNotMineItem !== 'undefined') return 'the handler still exists';
     var src = _samRenderFeedNow.toString();
-    if (src.indexOf('samSnoozeItem') === -1) return 'the card does not offer Snooze';
-    return src.indexOf('samNotMineItem') > -1 || 'the card does not offer a dismiss';
+    if (src.indexOf('samNotMineItem') > -1) return 'the card still wires the action';
+    // MARKUP, not the words. A bare 'Not mine' also matches the comment that
+    // explains why the control was removed -- which is exactly how this check
+    // first failed, and the same trap as the 'accept=' grep in 3.8.5.
+    if (/>\s*Not mine\s*</.test(src)) return 'the button is still rendered';
+    if (src.indexOf('sam-notmine-btn') > -1) return 'the button class is still emitted';
+    return src.indexOf('notMineBtn(') === -1 || 'the button builder is still called';
+});
+t('3.8.9 Snooze is still on the card', function () {
+    if (typeof samSnoozeItem !== 'function') return 'no snooze action';
+    return _samRenderFeedNow.toString().indexOf('samSnoozeItem') > -1
+        || 'the card does not offer Snooze';
+});
+t('3.8.9 anything hidden by Not mine comes back', function () {
+    // Removing a feature has to remove what it DID, or people are left with
+    // cards they cannot see and no control that put them there. A record with
+    // no expiry is what Not mine wrote; it must no longer hide anything.
+    try {
+        _samSetHidden({ __probe__: { sig: 'S', until: 0 } });
+        return _samIsHidden('__probe__', 'S') === false
+            || 'a card hidden by the removed control is still buried';
+    } finally { _samSetHidden({}); }
+});
+t('3.8.9 a snooze with no duration is a snooze, not a permanent hide', function () {
+    // hours=0 used to mean "dismiss". With that gone, a falsy duration must
+    // fall back to the overnight snooze rather than writing a record with no
+    // expiry and quietly reintroducing the permanent kind.
+    var src = _samHideRem.toString();
+    if (/until:\s*hours\s*\?/.test(src)) return 'still writing until:0 for a falsy duration';
+    return /Number\(hours\)\s*\|\|\s*\d/.test(src) || 'no fallback duration';
 });
 t('3.8.2 the hide store is not day-scoped', function () {
-    // This was the bug: _samDismKey() puts the date in the key, so a dismiss
-    // could never outlive the day.
+    // This was the original bug: _samDismKey() puts the date in the key, so a
+    // snooze could never outlive the day.
     if (_samHideKey().match(/\d{1,2}\/\d{1,2}\/\d{4}/)) return 'still day-scoped: ' + _samHideKey();
     return _samDismKey() !== _samHideKey() || 'reusing the old day-scoped key';
 });
-t('3.8.2 dismiss survives tomorrow, snooze expires', function () {
+t('3.8.2 a snooze expires and a live one holds', function () {
     var key = '__probe__';
     try {
-        _samSetHidden({});
-        // Dismissed: until = 0 means hidden while the content is unchanged.
-        _samSetHidden({ __probe__: { sig: 'S', until: 0 } });
-        if (!_samIsHidden(key, 'S')) return 'a dismissed card is showing';
-        // Expired snooze must come back.
         _samSetHidden({ __probe__: { sig: 'S', until: Date.now() - 1000 } });
         if (_samIsHidden(key, 'S')) return 'an expired snooze is still hidden';
-        // Live snooze stays hidden.
         _samSetHidden({ __probe__: { sig: 'S', until: Date.now() + 60000 } });
         return _samIsHidden(key, 'S') || 'a live snooze is showing';
     } finally { _samSetHidden({}); }
 });
-t('3.8.2 new information breaks through either state', function () {
+t('3.8.2 new information breaks through a snooze', function () {
     // "unless something new pops up" — the sig is the identity, so changed
-    // wording or counts must resurface the card even when dismissed.
+    // wording or counts must resurface the card.
     try {
-        _samSetHidden({ __probe__: { sig: 'OLD', until: 0 } });
-        if (_samIsHidden('__probe__', 'NEW')) return 'a dismissed card stayed buried after it changed';
         _samSetHidden({ __probe__: { sig: 'OLD', until: Date.now() + 60000 } });
         return !_samIsHidden('__probe__', 'NEW') || 'a snoozed card stayed buried after it changed';
     } finally { _samSetHidden({}); }
 });
-t('3.8.2 mark-all-read snoozes rather than dismisses', function () {
-    // Clearing a full feed is "caught up", not "none of this is mine" — treating
-    // it as permanent would bin work nobody decided about.
+t('3.8.2 mark-all-read snoozes rather than hiding for good', function () {
+    // Clearing a full feed is "caught up", not a decision about any one card.
     var src = samMarkAllRead.toString();
     if (src.indexOf('_samSetHidden') === -1) return 'not using the new store';
-    return /until\s*[:=]/.test(src) || 'not setting an expiry, so it dismisses permanently';
+    return /until\s*[:=]/.test(src) || 'not setting an expiry, so it hides permanently';
 });
 
 // Nick, 2026-09-03 (flagged IMPORTANT): ".msg files drag and drop from email
@@ -1739,6 +1760,54 @@ t('3.8.8 the new Outlook reference is recognised, not blamed on the user', funct
         return html.indexOf('link to the message on its server') > -1
             || 'does not explain what the new Outlook actually handed over';
     });
+});
+
+// The payload turned out to carry the subject. Nick's report, 2026-09-10:
+//   {"itemType":"multimaillistconversationrows", ...
+//    "subjects":["Adding Approval Request - Please"],
+//    "latestItemIds":["AAkALgAAAAAAHYQDEapmEc2byACqAC/EWg0A..."]}
+// Naming the email back proves the app understood exactly what was dragged,
+// which is the difference between "that didn't work" -- which invites a retry
+// of the same failing gesture -- and "that didn't work, and here is what does".
+t('3.8.9 the failure names the email the new Outlook was pointing at', function () {
+    var payload = JSON.stringify({
+        itemType: 'multimaillistconversationrows',
+        rowKeys: ['AQAAAEsemUoBAAACHSuxQQAAAAA='],
+        subjects: ['Adding Approval Request - Please'],
+        latestItemIds: ['AAkALgAAAAAAHYQDEapmEc2byACqAC/EWg0A'],
+    });
+    _b2bFakeClipboard([_b2bClipItem({ 'web application/owa-item-drag-data': payload })]);
+    _b2bFailHost('zsub');
+    return b2bPasteFromClipboard('clip-sub', 'deal', 'zsub', null).then(function () {
+        var html = document.getElementById('b2bDropFail-zsub').innerHTML;
+        if (_b2bAttachedFor('clip-sub').length) return 'a server reference was filed as evidence';
+        return html.indexOf('Adding Approval Request') > -1
+            || 'the subject was in the payload and the message did not use it';
+    });
+});
+t('3.8.9 subject extraction survives a payload it does not recognise', function () {
+    // Somebody else's private format; it can change shape without notice, and a
+    // parse failure must degrade to a less specific message, not an exception.
+    if (_b2bOwaSubjects('not json at all').length) return 'invented a subject from junk';
+    if (_b2bOwaSubjects('{"nope":1}').length) return 'invented a subject from an unknown shape';
+    var one = _b2bOwaSubjects('{"subjects":["A","B"]}');
+    return (one.length === 2 && one[0] === 'A') || 'did not read the subjects it does understand';
+});
+t('3.8.9 several messages at once are counted, not listed', function () {
+    var three = _b2bOwaAdvice(['First one', 'Second', 'Third']);
+    if (three.indexOf('First one') === -1) return 'does not name the first';
+    return three.indexOf('2 others') > -1 || 'does not say how many others: ' + three.slice(0, 90);
+});
+t('3.8.9 a drag reads the OWA payload synchronously', function () {
+    // A DataTransfer is emptied the moment the handler yields, so the mail
+    // client's own format has to be read with the rest of the synchronous
+    // harvest even though it is only wanted later, in the failure path.
+    var src = _b2bDragText.toString();
+    if (src.indexOf('B2B_OWA_REF_RX') === -1) return 'the drag never reads the OWA format';
+    // And it must not leak into the body, or a pointer payload could be
+    // mistaken for a message and filed as evidence.
+    var body = _b2bDragBody({ plain: '', html: '', owa: new Array(200).join('x ') });
+    return body.trim() === '' || 'the pointer payload leaked into the message body';
 });
 t('3.8.8 the OWA detector needs the reference AND no usable content', function () {
     if (!_b2bOwaRefOnly(['web application/owa-item-drag-data'])) return 'missed a bare OWA reference';
