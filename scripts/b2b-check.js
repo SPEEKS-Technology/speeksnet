@@ -309,22 +309,60 @@ t('2.4 the tile stays hidden when nothing is recycled', function () {
 });
 
 // --- 3.6 recycle stepper --------------------------------------------------
-t('3.6 the listing row has a recycle stepper', function () {
+//
+// The stepper itself moved off the row and into the per-row actions menu on the
+// trial branch, so these two now open the menu and assert about that. What is
+// being protected has not changed: the recycle actions must be reachable from
+// the row, and putting one back must be refused when nothing has been recycled.
+//
+// Opened through b2bRowActions rather than by reading a string, because the menu
+// is built at click time from _b2bLocalItem -- so this exercises the same path a
+// person does.
+function _b2bOpenRowMenu(itemId) {
+    var btn = document.createElement('button');
+    btn.className = 'b2b-rowacts';
+    document.body.appendChild(btn);
+    try {
+        b2bRowActions({ preventDefault: function () {}, stopPropagation: function () {},
+                        currentTarget: btn }, itemId);
+        var el = document.getElementById('b2bRowMenu');
+        return el ? el.innerHTML : '';
+    } finally {
+        btn.remove();
+        b2bRowMenuClose();
+    }
+}
+
+t('3.6 the recycle actions are reachable from the listing row', function () {
     var save = _b2bModalItems;
     _b2bModalItems = b2bRecycleFixture(1);
-    var html = _b2bListRows();
-    _b2bModalItems = save;
-    if (html.indexOf('b2bRecycleUnit(') === -1) return 'no + handler';
-    if (html.indexOf('b2bUnRecycleUnit(') === -1) return 'no - handler';
-    return html.indexOf('b2b-recstep') > -1 || 'no stepper markup';
+    try {
+        var row = _b2bListRows();
+        if (row.indexOf('b2bRowActions(') === -1) return 'no way into the actions from the row';
+        var menu = _b2bOpenRowMenu('r1');
+        if (menu.indexOf('b2bRecycleUnit(') === -1) return 'no recycle-one action';
+        if (menu.indexOf('b2bUnRecycleUnit(') === -1) return 'no put-one-back action';
+        return menu.indexOf('b2bRecycleUnits(') > -1 || 'no recycle-several action';
+    } finally { _b2bModalItems = save; }
 });
-t('3.6 the minus is disabled with nothing recycled', function () {
+t('3.6 putting one back is disabled with nothing recycled', function () {
     var save = _b2bModalItems;
     _b2bModalItems = b2bRecycleFixture(0);
-    var html = _b2bListRows();
-    _b2bModalItems = save;
-    var m = html.match(/<button class="b2b-step" (disabled)?[^>]*b2bUnRecycleUnit/);
-    return (m && m[1] === 'disabled') || 'minus is live at zero recycled';
+    try {
+        var menu = _b2bOpenRowMenu('r1');
+        // The row is kept and disabled rather than dropped: a menu whose
+        // contents move around between lines is harder to use than one where
+        // the same thing is always in the same place.
+        var at = menu.indexOf('Put one back');
+        if (at === -1) return 'the action vanished instead of disabling';
+        // Read the button THIS label belongs to, positionally. A regex over the
+        // whole menu matched the first .b2b-rowmenu-item instead -- an optional
+        // (disabled)? group that never participated, so it reported a live
+        // button while the markup said disabled="". The label is the anchor.
+        var open = menu.lastIndexOf('<button', at);
+        var tagEnd = menu.indexOf('>', open);
+        return menu.slice(open, tagEnd).indexOf('disabled') > -1 || 'live at zero recycled';
+    } finally { _b2bModalItems = save; }
 });
 t('3.6 un-recycle refuses to go below zero', function () {
     var it = b2bRecycleFixture(0)[0];
@@ -1964,6 +2002,92 @@ t('trial: the grid header and the row have the same column count', function () {
     } finally { _b2bModalItems = keep; }
 });
 
+
+// --- TRIAL: the per-row actions menu on the listing sheet -----------------
+//
+// Nick, 2026-09-10, pointing at the row's action cell: "this was meant for the
+// per item listing actions". Four controls per row -- a listed stepper, a
+// recycle stepper, "Recycle..." and a barcode button -- on a fifty-line sheet.
+
+function _b2bRowFixture(over) {
+    var base = { id: 'r1', line_no: 1, sku: 'SP-9', make: 'Dell', model: 'X1',
+                 item_type: 'other', quantity: 4, value: 100, cost: 50,
+                 disposition: 'purchase' };
+    Object.keys(over || {}).forEach(function (k) { base[k] = over[k]; });
+    return base;
+}
+
+t('trial: the listed stepper stays on the row', function () {
+    // That green + is pressed once per unit all day. Burying it behind a click
+    // would be a straight tax on the main job.
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [_b2bRowFixture()];
+        var html = _b2bListRows();
+        if (html.indexOf('b2bAskShopify') === -1) return 'the list action left the row';
+        return html.indexOf('b2bUnlistUnit') > -1 || 'the undo-one action left the row';
+    } finally { _b2bModalItems = keep; }
+});
+t('trial: the occasional actions left the row for the menu', function () {
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [_b2bRowFixture()];
+        var html = _b2bListRows();
+        if (html.indexOf('b2bRecycleUnits(') > -1) return 'Recycle... is still on the row';
+        if (html.indexOf('b2b-recstep') > -1) return 'the recycle stepper is still on the row';
+        if (html.indexOf('b2b-linelabel') > -1) return 'the barcode button is still on the row';
+        return html.indexOf('b2bRowActions(') > -1 || 'no trigger to reach them by';
+    } finally { _b2bModalItems = keep; }
+});
+t('trial: the trigger wears the label state it swallowed', function () {
+    // The barcode button was colour-coded -- amber while any unit still needs a
+    // label, green once printed -- and no print is ever forced, so that colour
+    // was the entire reminder. Collapsing it must not lose it.
+    var todo = _b2bRowActsBtn(_b2bRowFixture({ label_printed_qty: 0 }), false);
+    if (todo.indexOf('b2b-rowacts-todo') === -1) return 'an unprinted line does not flag';
+    var done = _b2bRowActsBtn(_b2bRowFixture({ label_printed_qty: 4 }), false);
+    if (done.indexOf('b2b-rowacts-done') === -1) return 'a fully printed line does not read as done';
+    return done.indexOf('b2b-rowacts-todo') === -1 || 'a printed line still says there is work';
+});
+t('trial: a recycled count is still visible without opening anything', function () {
+    // "N rec" was information, not just a control.
+    var none = _b2bRowActsBtn(_b2bRowFixture({ recycled_qty: 0 }), false);
+    if (none.indexOf('b2b-rec-chip') > -1) return 'a zero count is being shown as a chip';
+    var some = _b2bRowActsBtn(_b2bRowFixture({ recycled_qty: 2 }), false);
+    if (some.indexOf('b2b-rec-chip') === -1) return 'a real recycled count is hidden in the menu';
+    return some.indexOf('2 rec') > -1 || 'the chip does not say how many';
+});
+t('trial: no SKU means no label row, not a broken one', function () {
+    var btn = _b2bRowActsBtn(_b2bRowFixture({ sku: '' }), false);
+    // No label state to wear when there is nothing to print.
+    return btn.indexOf('b2b-rowacts-todo') === -1 || 'a line with no SKU claims labels are outstanding';
+});
+t('trial: one shared menu, not one per row', function () {
+    // Fifty rows would otherwise mean fifty hidden menus in the DOM.
+    var keep = _b2bModalItems;
+    try {
+        _b2bModalItems = [_b2bRowFixture({ id: 'a' }), _b2bRowFixture({ id: 'b', line_no: 2 })];
+        var html = _b2bListRows();
+        return (html.match(/class="b2b-rowmenu"/g) || []).length === 0
+            || 'the menu markup is being rendered per row';
+    } finally { _b2bModalItems = keep; }
+});
+t('trial: the menu is fixed-positioned and escapes the scrolling sheet', function () {
+    // The sheet scrolls horizontally inside .b2b-ss and has a sticky header,
+    // either of which would clip an absolutely-positioned menu.
+    var src = _srcOf(b2bRowActions) + _srcOf(_b2bRowMenuEl);
+    if (src.indexOf('document.body.appendChild') === -1) return 'the menu is not on the body';
+    if (src.indexOf('getBoundingClientRect') === -1) return 'not positioned off the trigger';
+    return /innerHeight|innerWidth/.test(src) || 'not clamped to the viewport';
+});
+t('trial: a scroll closes it, because a fixed menu cannot follow the row', function () {
+    var src = _srcOf(b2bRowMenuClose);
+    if (src.indexOf('_b2bRowMenuFor') === -1) return 'close does not clear the open row';
+    // The listener is bound at load; assert the close path exists and works.
+    _b2bRowMenuFor = 'r1';
+    b2bRowMenuClose();
+    return _b2bRowMenuFor === null || 'close left the menu marked open';
+});
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();

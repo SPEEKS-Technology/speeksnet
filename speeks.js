@@ -17614,8 +17614,6 @@ function b2bRender() {
         delBadge.textContent = n;
         delBadge.style.display = n ? 'inline-flex' : 'none';
     }
-    // The Delete Requests badge just moved; roll it up onto the Actions trigger.
-    _b2bActionsSync();
     const sub = document.getElementById('b2bSubtitle');
     if (sub) {
         sub.textContent = _b2bIsCorp()
@@ -18333,8 +18331,6 @@ function crmRefreshBadge() {
         const el = document.getElementById(id);
         if (el) { el.textContent = n; el.style.display = n > 0 ? '' : 'none'; }
     });
-    // Same signal, same roll-up: the gear may be inside the Actions menu now.
-    if (typeof _b2bActionsSync === 'function') _b2bActionsSync();
 }
 
 async function crmLoadSettings() {
@@ -18352,92 +18348,6 @@ async function crmLoadSettings() {
 
 
 
-// ---------------------------------------------------------------------------
-// B2B ACTIONS MENU (trial) -- collapsing the header's secondary buttons
-// ---------------------------------------------------------------------------
-//
-// Feedback, 2026-09-10: the header was "kind of cluttered and hard to follow".
-// A CEO saw six view tabs and five buttons on one line.
-//
-// The view tabs and + New Deal stay in the header -- one is navigation, the
-// other is the thing people come to this header to do. Delete Requests, CRM
-// Settings, SPEEKS Capture and Feedback are occasional or administrative and
-// live in the menu.
-//
-// The buttons themselves were MOVED, not rebuilt: same ids, same role classes,
-// same data-feature, same handlers. applyRoleBasedUI writes display:flex/none
-// onto each one wherever it sits, so the role gate and Feature Access keep
-// working with no knowledge of the menu. What the menu has to add is the two
-// things collapsing would otherwise break:
-//
-//   1. A trigger that disappears when a user can see nothing inside it. An
-//      "Actions" button that opens an empty box is worse than no button.
-//   2. The badge signal. Delete Requests and CRM Settings carry counts that are
-//      the entire reason those buttons need noticing, and a menu hides them --
-//      so any pending count lights a dot on the trigger.
-
-function b2bActionsToggle(ev) {
-    if (ev) ev.stopPropagation();
-    const wrap = document.getElementById('b2bActionsWrap');
-    if (!wrap) return;
-    const open = !wrap.classList.contains('open');
-    wrap.classList.toggle('open', open);
-    document.getElementById('b2bActionsBtn')?.setAttribute('aria-expanded', String(open));
-}
-
-function _b2bActionsClose() {
-    const wrap = document.getElementById('b2bActionsWrap');
-    if (!wrap || !wrap.classList.contains('open')) return;
-    wrap.classList.remove('open');
-    document.getElementById('b2bActionsBtn')?.setAttribute('aria-expanded', 'false');
-}
-
-// Bound once, at load, rather than per open: a listener added on every open is a
-// listener leaked on every open.
-document.addEventListener('click', (ev) => {
-    const wrap = document.getElementById('b2bActionsWrap');
-    if (wrap && wrap.classList.contains('open') && !wrap.contains(ev.target)) _b2bActionsClose();
-});
-document.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'Escape') return;
-    const wrap = document.getElementById('b2bActionsWrap');
-    if (!wrap || !wrap.classList.contains('open')) return;
-    // Swallowed so Escape closes the menu WITHOUT also closing the deal modal
-    // or the panel behind it -- one Escape, one thing.
-    ev.stopPropagation();
-    _b2bActionsClose();
-    document.getElementById('b2bActionsBtn')?.focus();
-});
-
-// Called after every render and after the role sweep. Cheap enough to be
-// unconditional, and being wrong here is invisible until somebody is missing a
-// button they should have.
-function _b2bActionsSync() {
-    const wrap = document.getElementById('b2bActionsWrap');
-    const menu = document.getElementById('b2bActionsMenu');
-    if (!wrap || !menu) return;
-
-    // "Visible" is what the role sweep decided, which it writes as an inline
-    // display. offsetParent would be null for everything while the B2B pane
-    // itself is hidden, which is most of the time on other tabs.
-    const items = Array.from(menu.children).filter((el) => el.tagName === 'BUTTON');
-    const shown = items.filter((el) => el.style.display !== 'none');
-    wrap.style.display = shown.length ? '' : 'none';
-    if (!shown.length) _b2bActionsClose();
-
-    const pending = shown.some((el) => {
-        const badge = el.querySelector('.crm-badge');
-        return badge && badge.style.display !== 'none' && (Number(badge.textContent) || 0) > 0;
-    });
-    const dot = document.getElementById('b2bActionsDot');
-    if (dot) dot.style.display = pending ? '' : 'none';
-    const btn = document.getElementById('b2bActionsBtn');
-    if (btn) {
-        btn.title = pending
-            ? 'Tools and settings for B2B — something in here needs you'
-            : 'Tools and settings for B2B';
-    }
-}
 
 // ---------------------------------------------------------------------------
 // B2B FEEDBACK -- straight to Nick, no category
@@ -20886,6 +20796,166 @@ function _b2bItemName(it) { return [it.make, it.model].filter(Boolean).join(' ')
 // lost or damaged label can be reprinted from whichever screen you're on.
 const B2B_ICO_BARCODE = '<path d="M3 5v14"/><path d="M7 5v14"/><path d="M11 5v14"/>'
                       + '<path d="M14 5v14"/><path d="M18 5v14"/><path d="M21 5v14"/>';
+
+// ---------------------------------------------------------------------------
+// PER-ROW ACTIONS MENU on the listing sheet (trial)
+// ---------------------------------------------------------------------------
+//
+// Feedback, 2026-09-10: the listing row's action cell was "kind of cluttered and
+// hard to follow". It carried, per row: a listed stepper (- 0/1 +), a recycle
+// stepper (- 0 rec +), a "Recycle..." button and a barcode button. Four
+// controls, two of them near-identical steppers next to each other, on every
+// row of a fifty-line sheet.
+//
+// WHAT STAYS ON THE ROW is the loop a lister actually runs: - listed/qty +.
+// That green + is pressed once per unit all day and burying it behind a click
+// would be a straight tax on the main job.
+//
+// WHAT MOVES INTO THE MENU is everything occasional: recycle one out, put one
+// back, recycle several at once, print labels.
+//
+// TWO SIGNALS THAT MUST SURVIVE BEING COLLAPSED. This is the same trap as
+// hiding a notification badge in a menu -- the control was carrying information
+// as well as an action:
+//
+//   - The barcode button is COLOUR-CODED: amber while any unit still needs a
+//     label, green once they are all printed. That colour is the entire
+//     reminder, and no print is ever forced. So the trigger inherits it.
+//   - "N rec" told you at a glance that units had been recycled off this line.
+//     A chip beside the trigger shows it, and only when it is not zero.
+//
+// ONE MENU ELEMENT, POSITIONED FIXED. Not a menu per row: fifty rows would mean
+// fifty hidden menus in the DOM, and an absolutely-positioned one would be
+// clipped anyway -- the sheet scrolls horizontally inside .b2b-ss and has a
+// sticky header. Fixed coordinates read off the trigger at open time escape
+// both. The trade is that a fixed menu does not follow a scroll, so scrolling
+// closes it.
+
+let _b2bRowMenuFor = null;      // item id the open menu belongs to
+
+function _b2bRowMenuEl() {
+    let el = document.getElementById('b2bRowMenu');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'b2bRowMenu';
+    el.className = 'b2b-rowmenu';
+    el.setAttribute('role', 'menu');
+    // On the body, so no ancestor's overflow can clip it.
+    document.body.appendChild(el);
+    return el;
+}
+
+function b2bRowMenuClose() {
+    _b2bRowMenuFor = null;
+    const el = document.getElementById('b2bRowMenu');
+    if (el) el.classList.remove('open');
+    document.querySelectorAll('.b2b-rowacts.on').forEach(b => b.classList.remove('on'));
+}
+
+// The trigger on each row. Carries the label state and the recycled count,
+// because collapsing the controls must not collapse what they were telling you.
+function _b2bRowActsBtn(it, ok) {
+    const recycled = Number(it.recycled_qty) || 0;
+    const short = it.sku ? _b2bLabelsShort(it) : 0;
+    const printed = Number(it.label_printed_qty) || 0;
+    const labelState = short > 0 ? 'b2b-rowacts-todo' : (printed > 0 ? 'b2b-rowacts-done' : '');
+    const bits = [];
+    if (short > 0) bits.push(`${short} label${short === 1 ? '' : 's'} to print`);
+    if (recycled) bits.push(`${recycled} recycled out`);
+    const tip = bits.length ? bits.join(' · ') : 'Recycle units, print labels';
+    return `${recycled ? `<span class="b2b-rec-chip" title="Recycled out of this line">${recycled} rec</span>` : ''}
+        <button class="b2b-rowacts ${labelState}" data-tip="${escapeHtml(tip)}"
+            aria-haspopup="true" aria-label="More actions for this line"
+            onclick="b2bRowActions(event,'${it.id}')">${_b2bIco('<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>')}</button>`;
+}
+
+function b2bRowActions(ev, itemId) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    // Second click on the same row closes, like every other menu.
+    if (_b2bRowMenuFor === itemId) return b2bRowMenuClose();
+    b2bRowMenuClose();
+
+    const it = _b2bLocalItem(itemId);
+    if (!it) return;
+    const qty = Number(it.quantity) || 1;
+    const recycled = Number(it.recycled_qty) || 0;
+    const scrap = _b2bIsScrap(it);
+    const ok = _b2bSatisfied(it);
+    const short = it.sku ? _b2bLabelsShort(it) : 0;
+    const printed = Number(it.label_printed_qty) || 0;
+
+    // The same disabled rules the buttons carried, in one place rather than
+    // spread across four onclicks.
+    const row = (label, sub, onclick, opts) => {
+        const o = opts || {};
+        if (o.hide) return '';
+        const dis = o.disabled ? 'disabled' : '';
+        return `<button class="b2b-rowmenu-item ${o.cls || ''}" ${dis}
+            title="${escapeHtml(o.title || '')}"
+            onclick="b2bRowMenuClose();${o.disabled ? '' : onclick}">
+            <span class="b2b-rowmenu-ico">${_b2bIco(o.ico || '')}</span>
+            <span class="b2b-rowmenu-txt"><b>${escapeHtml(label)}</b>${
+                sub ? `<span>${escapeHtml(sub)}</span>` : ''}</span>
+        </button>`;
+    };
+
+    const el = _b2bRowMenuEl();
+    el.innerHTML = [
+        `<div class="b2b-rowmenu-head">${escapeHtml(_b2bItemName(it))}
+            <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}</span></div>`,
+        row('Print labels', short > 0
+                ? `${short} of ${qty} still to print`
+                : (printed > 0 ? 'All printed — reprint' : `${qty === 1 ? 'One label' : 'It asks how many'}`),
+            `b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')`,
+            { hide: !it.sku, ico: B2B_ICO_BARCODE,
+              cls: short > 0 ? 'todo' : (printed > 0 ? 'done' : '') }),
+        row('Recycle one out', ok ? 'Every unit is accounted for' : `${qty - recycled} left on this line`,
+            `b2bRecycleUnit('${it.id}')`,
+            { disabled: ok, ico: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' }),
+        row('Recycle several…', 'Choose how many at once',
+            `b2bRecycleUnits('${it.id}')`,
+            { disabled: ok, ico: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>' }),
+        row('Put one back', recycled ? `${recycled} recycled out` : 'Nothing recycled out',
+            `b2bUnRecycleUnit('${it.id}')`,
+            { disabled: recycled <= 0, ico: '<path d="M3 12a9 9 0 1 0 9-9"/><polyline points="3 3 3 9 9 9"/>' }),
+    ].filter(Boolean).join('');
+
+    // Fixed coordinates off the trigger, clamped to the viewport. Right-aligned
+    // to the button because the cell sits at the end of the row, and flipped
+    // above when there is no room below -- the last rows of a long sheet are
+    // exactly where this gets used.
+    const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+    el.classList.add('open');
+    if (btn) {
+        btn.classList.add('on');
+        const r = btn.getBoundingClientRect();
+        const h = el.offsetHeight;
+        const w = el.offsetWidth;
+        const below = window.innerHeight - r.bottom;
+        const top = (below < h + 12 && r.top > h + 12) ? r.top - h - 6 : r.bottom + 6;
+        el.style.top = `${Math.max(8, Math.min(top, window.innerHeight - h - 8))}px`;
+        el.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`;
+    }
+    _b2bRowMenuFor = itemId;
+}
+
+// Bound once. A fixed-position menu does not travel with the row it belongs to,
+// so a scroll has to close it rather than leave it pointing at nothing.
+document.addEventListener('click', (ev) => {
+    if (!_b2bRowMenuFor) return;
+    if (ev.target.closest('#b2bRowMenu') || ev.target.closest('.b2b-rowacts')) return;
+    b2bRowMenuClose();
+});
+document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape' || !_b2bRowMenuFor) return;
+    // Swallowed so one Escape closes one thing -- not the menu AND the deal
+    // modal behind it.
+    ev.stopPropagation();
+    b2bRowMenuClose();
+});
+window.addEventListener('scroll', () => { if (_b2bRowMenuFor) b2bRowMenuClose(); }, true);
+window.addEventListener('resize', () => { if (_b2bRowMenuFor) b2bRowMenuClose(); });
+
 
 function _b2bLabelBtn(it, cls) {
     if (!it.sku) return '';
@@ -24415,18 +24485,13 @@ function _b2bListRows() {
                     <span class="b2b-lc-count"><b>${listed}</b>/${qty}</span>
                     <button class="b2b-step up" ${ok || scrap || needsWipe ? 'disabled' : ''} title="${escapeHtml(blockTitle)}" onclick="b2bAskShopify('${it.id}')">+</button>
                 </span>
-                <span class="b2b-pcell b2b-pc-acts">
-                    <span class="b2b-recstep" title="Recycle units out of this line">
-                        <button class="b2b-step" ${recycled <= 0 ? 'disabled' : ''}
-                            title="Put one recycled unit back" onclick="b2bUnRecycleUnit('${it.id}')">−</button>
-                        <span class="b2b-recstep-n ${recycled ? 'on' : ''}">${recycled} rec</span>
-                        <button class="b2b-step up" ${ok ? 'disabled' : ''}
-                            title="${escapeHtml(ok ? 'Every unit is accounted for' : 'Recycle one unit out')}"
-                            onclick="b2bRecycleUnit('${it.id}')">+</button>
-                    </span>
-                    <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle several units out at once" onclick="b2bRecycleUnits('${it.id}')">Recycle…</button>
-                    ${_b2bLabelBtn(it)}
-                </span>
+                <!-- Four controls became one. The listed stepper next door is
+                     the loop a lister runs all day and stays on the row; the
+                     recycle stepper, "Recycle..." and the barcode button move
+                     into the menu, which inherits the barcode's colour and the
+                     recycled count so neither signal is lost. See
+                     _b2bRowActsBtn. -->
+                <span class="b2b-pcell b2b-pc-acts">${_b2bRowActsBtn(it, ok)}</span>
             </div>
             ${(wipeStrip || codes) ? `<div class="b2b-lextra">${wipeStrip}${codes}</div>` : ''}
         </div>`;
@@ -26906,9 +26971,6 @@ function applyRoleBasedUI() {
     // Feature overrides on plain (non role-gated) elements — e.g. individual
     // hotbar links, which normally just inherit their bar's visibility.
     _applyFeatureOverridesToPlainEls(userRoleClass, userName);
-    // The role sweep decides which Actions items this user can see, so the
-    // trigger's own visibility can only be settled after it has run.
-    if (typeof _b2bActionsSync === 'function') _b2bActionsSync();
     // Section nav links (Workspace, Operations) have no toggle of their own —
     // they're derived: show whenever the user can see at least one sub-tab
     // inside, so granting just one tab (e.g. Variance Replies) reveals the

@@ -728,33 +728,6 @@
                       <button id="b2bViewOverviewBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo" role="tab" aria-selected="false" onclick="b2bSetView('overview')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Overview</button>
                   </div>
                   <span id="b2bScopeChip" class="b2b-scope-chip" style="display:none;"></span>
-                  <!-- ACTIONS MENU (trial — try/b2b-header-actions-menu).
-                       Feedback, 2026-09-10: the header row was "kind of cluttered
-                       and hard to follow". On a CEO's screen it carried six view
-                       tabs plus five buttons on one line.
-                       What stays out here is what people use constantly: the view
-                       tabs, because they are navigation rather than actions, and
-                       + New Deal, because it is the one thing anybody comes to
-                       this header to DO. Everything else is occasional or
-                       administrative and moves in here.
-                       The items keep their own ids, role classes, data-feature
-                       and onclick untouched, so the role gate and Feature Access
-                       still drive them exactly as before -- applyRoleBasedUI
-                       writes display:flex/none on each one wherever it happens to
-                       live. _b2bActionsSync then hides the whole trigger when a
-                       user can see nothing inside it, and rolls any pending badge
-                       up onto the trigger so collapsing the menu cannot bury the
-                       one signal these buttons exist to give. -->
-                  <div class="b2b-actions" id="b2bActionsWrap">
-                      <button id="b2bActionsBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head b2b-actions-btn"
-                          aria-haspopup="true" aria-expanded="false" aria-controls="b2bActionsMenu"
-                          onclick="b2bActionsToggle(event)" title="Tools and settings for B2B">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>
-                          Actions
-                          <span class="b2b-actions-dot" id="b2bActionsDot" style="display:none;"></span>
-                          <svg class="b2b-actions-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-                      </button>
-                      <div class="b2b-actions-menu" id="b2bActionsMenu" role="menu">
                   <!-- Deals a store has asked to delete. CORP-only; the red-dot
                        badge lights when any are pending (wired in b2bRender). -->
                   <button id="b2bDelReqBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd" onclick="b2bDeleteRequests()" title="Deals a store has asked to delete — approve or deny">
@@ -805,8 +778,6 @@
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                       Feedback
                   </button>
-                      </div>
-                  </div>
                   <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" onclick="b2bOpenCreate()">＋ New Deal</button>
               </div>
           </div>

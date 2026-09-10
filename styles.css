@@ -21523,73 +21523,78 @@ select.dd-native {
 .b2b-lc-tot { font-weight: 800 !important; color: #1a1c1e; }
 
 /* =========================================================
-   B2B ACTIONS MENU (trial — try/b2b-header-actions-menu)
-   The header carried six view tabs plus five buttons on one line and read as
-   clutter. The tabs and + New Deal stay out; the occasional and administrative
-   buttons collapse in here.
+   PER-ROW ACTIONS MENU on the listing sheet (trial)
+   The action cell carried a listed stepper, a recycle stepper, "Recycle..." and
+   a barcode button on every row of a fifty-line sheet. The listed stepper stays
+   (it is the loop); the rest collapse behind one trigger.
    ========================================================= */
-.b2b-actions { position: relative; flex: 0 0 auto; }
-.b2b-actions-btn { gap: 6px; }
-.b2b-actions-btn svg:first-of-type { width: 14px; height: 14px; }
-.b2b-actions-chev { width: 12px; height: 12px; transition: transform .16s ease; }
-.b2b-actions.open .b2b-actions-chev { transform: rotate(180deg); }
-.b2b-actions.open .b2b-actions-btn { border-color: var(--sage-deep); color: var(--sage-deep); }
-/* The rolled-up signal. Delete Requests and CRM Settings carry counts that are
-   the whole reason those buttons exist to be noticed, and putting them behind a
-   menu would bury them -- so any pending count lights a dot out here. Count-less
-   on purpose: two sources would have to be added together and "3" next to
-   "Actions" invites the wrong reading. */
-.b2b-actions-dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--red-alert, #c0392b);
-    box-shadow: 0 0 0 3px rgba(192, 57, 43, .16);
-    flex: 0 0 auto;
+.b2b-pc-acts { gap: 6px; justify-content: flex-end; }
+.b2b-rowacts {
+    display: inline-grid; place-items: center;
+    width: 28px; height: 28px; flex: 0 0 auto;
+    border: 1px solid var(--b2b-line); border-radius: 8px;
+    background: #fff; cursor: pointer;
+    transition: background .13s, border-color .13s, color .13s;
 }
-.b2b-actions-menu {
+.b2b-rowacts svg { width: 15px; height: 15px; stroke: var(--b2b-muted); stroke-width: 2.2; }
+.b2b-rowacts:hover { border-color: var(--sage-deep); background: var(--b2b-tint, #f1f5f2); }
+.b2b-rowacts:hover svg { stroke: var(--sage-deep); }
+.b2b-rowacts.on { border-color: var(--sage-deep); background: var(--b2b-tint, #f1f5f2); }
+/* THE BARCODE BUTTON'S COLOUR WAS THE WHOLE REMINDER -- amber while any unit
+   still needs a label, green once they are all printed, and no print is ever
+   forced. Collapsing the button into a menu would have thrown that away, so the
+   trigger wears it. */
+.b2b-rowacts.b2b-rowacts-todo {
+    border-color: var(--idea-gold, #f0b429);
+    background: var(--sam-gold-tint, #fdf6e3);
+}
+.b2b-rowacts.b2b-rowacts-todo svg { stroke: #b07d09; }
+.b2b-rowacts.b2b-rowacts-done { border-color: var(--sage-professional, #4a7c59); }
+.b2b-rowacts.b2b-rowacts-done svg { stroke: var(--sage-professional, #4a7c59); }
+/* "N rec" also said something at a glance, so it stays as a chip -- and only
+   when it is not zero, which is most of the time. */
+.b2b-rec-chip {
+    font-size: 10px; font-weight: 800; letter-spacing: .01em;
+    padding: 2px 6px; border-radius: 999px; white-space: nowrap;
+    color: #7a4f05; background: var(--sam-gold-tint, #fdf6e3);
+    border: 1px solid var(--idea-gold, #f0b429);
+}
+
+/* The menu itself lives on <body> and is positioned FIXED from the trigger's
+   rect. Not absolute inside the cell: the sheet scrolls horizontally and has a
+   sticky header, either of which would clip it. One element reused for every
+   row, so a fifty-line sheet does not carry fifty hidden menus. */
+.b2b-rowmenu {
     display: none;
-    position: absolute; top: calc(100% + 6px); right: 0;
-    min-width: 232px; padding: 6px;
-    background: #fff; border: 1px solid var(--b2b-line);
-    border-radius: 12px;
-    box-shadow: 0 14px 36px rgba(16, 24, 32, .16), 0 2px 6px rgba(16, 24, 32, .06);
-    /* Above the panel body and the sticky sheet headers underneath it. */
-    z-index: 60;
+    position: fixed; z-index: 9000;
+    min-width: 244px; max-width: 300px; padding: 6px;
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 12px;
+    box-shadow: 0 18px 44px rgba(16, 24, 32, .18), 0 2px 8px rgba(16, 24, 32, .08);
 }
-.b2b-actions.open .b2b-actions-menu { display: block; }
-/* The items are the SAME buttons that used to sit in the header, moved
-   wholesale so their ids, role classes, data-feature and handlers stay intact.
-   applyRoleBasedUI writes `display: flex !important` onto each one, so nothing
-   here may key off display -- the row shape is width + justify instead. */
-.b2b-actions-menu > button {
-    width: 100%;
-    justify-content: flex-start !important;
-    gap: 9px;
-    height: auto !important;
-    min-height: 34px;
-    padding: 8px 10px !important;
-    border: 0 !important;
-    border-radius: 8px !important;
-    background: transparent !important;
-    color: #1a1c1e !important;
-    font-size: 12.5px !important;
-    font-weight: 650 !important;
-    text-align: left;
-    box-shadow: none !important;
+.b2b-rowmenu.open { display: block; }
+/* Which line you are acting on. With one shared menu floating over a sheet of
+   near-identical rows, this is the only thing that says so. */
+.b2b-rowmenu-head {
+    display: flex; flex-direction: column; gap: 1px;
+    padding: 6px 10px 9px; margin-bottom: 4px;
+    border-bottom: 1px solid var(--b2b-line-2);
+    font-size: 12px; font-weight: 750; color: #1a1c1e;
 }
-.b2b-actions-menu > button:hover { background: var(--b2b-tint, #f1f5f2) !important; }
-.b2b-actions-menu > button svg { width: 15px; height: 15px; flex: 0 0 auto; opacity: .8; }
-/* The badge sits at the end of its row rather than tight against the label. */
-.b2b-actions-menu > button .crm-badge { margin-left: auto; }
-/* Feedback keeps its gold, quietly: a left bar rather than a filled pill, so it
-   still reads as the odd one out in the list without shouting inside a menu. */
-.b2b-actions-menu > button.b2b-btn-feedback {
-    color: #7a4f05 !important;
-    box-shadow: inset 2px 0 0 var(--idea-gold, #f0b429) !important;
+.b2b-rowmenu-head span { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }
+.b2b-rowmenu-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 8px 10px; border: 0; border-radius: 8px;
+    background: transparent; cursor: pointer; text-align: left;
 }
-.b2b-actions-menu > button.b2b-btn-feedback:hover {
-    background: var(--sam-gold-tint, #fdf6e3) !important;
-}
-@media (max-width: 560px) {
-    /* Right-anchored would run off a narrow screen. */
-    .b2b-actions-menu { right: auto; left: 0; min-width: 200px; }
-}
+.b2b-rowmenu-item:hover:not(:disabled) { background: var(--b2b-tint, #f1f5f2); }
+/* Disabled rows are kept rather than removed: a menu whose contents move around
+   between rows is harder to use than one where the same thing is always in the
+   same place, and the subtitle says WHY it is unavailable. */
+.b2b-rowmenu-item:disabled { opacity: .45; cursor: default; }
+.b2b-rowmenu-ico { display: inline-grid; place-items: center; flex: 0 0 auto; }
+.b2b-rowmenu-ico svg { width: 15px; height: 15px; stroke: var(--b2b-muted); stroke-width: 2; }
+.b2b-rowmenu-item.todo .b2b-rowmenu-ico svg { stroke: #b07d09; }
+.b2b-rowmenu-item.done .b2b-rowmenu-ico svg { stroke: var(--sage-professional, #4a7c59); }
+.b2b-rowmenu-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.b2b-rowmenu-txt b { font-size: 12.5px; font-weight: 700; color: #1a1c1e; }
+.b2b-rowmenu-txt span { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }
