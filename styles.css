@@ -13290,18 +13290,20 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     box-shadow: 0 0 0 3px rgba(47, 111, 78, .18);
 }
 /* The drop diagnostic, in the page rather than inside a native alert that
-   scrolls the important half out of sight. */
-.b2b-dropdiag { margin-top: 8px; }
-.b2b-dropdiag summary {
-    cursor: pointer; font-size: 11px; font-weight: 700;
-    color: var(--b2b-muted); letter-spacing: .02em;
-}
-.b2b-dropdiag pre {
-    margin: 8px 0 0; padding: 10px 12px; max-height: 260px;
-    overflow: auto; white-space: pre-wrap; word-break: break-word;
-    background: #14161a; color: #e6edf3; border-radius: 8px;
+   scrolls the important half out of sight -- and in a textarea rather than a
+   <pre>, because a textarea can be selected and copied with Ctrl+C and needs no
+   clipboard permission to do it. */
+.b2b-dropacts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.b2b-dropreport { margin-top: 10px; }
+.b2b-dropreport .form-label-caps { display: block; margin-bottom: 6px; }
+.b2b-dropreport-t {
+    width: 100%; resize: vertical; display: block; margin-bottom: 8px;
+    padding: 10px 12px; border-radius: 8px; border: 1px solid var(--b2b-line);
+    background: #14161a; color: #e6edf3;
     font: 11px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    white-space: pre; overflow: auto;
 }
+.b2b-dropreport-t:focus { outline: 2px solid var(--sage-deep); outline-offset: 1px; }
 /* The accept popup's zone. Taller and centred because it is the only thing on
    that screen and the whole point of the popup is that it is an obvious target
    -- on the deal panel the zone sits under a list and has to stay compact. */

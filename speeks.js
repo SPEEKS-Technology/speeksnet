@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.7';
+const APP_VERSION = '3.8.8';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -19581,13 +19581,21 @@ function _b2bProofPanel(owner) {
                 ondrop="b2bProofDrop(event,${ownerAttr})"
                 onpaste="b2bProofPaste(event,${ownerAttr})">
                 <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
-                <!-- Says the dependable routes out loud. Outlook can only hand a
-                     message to a browser as a virtual file and not every version
-                     will, so "drag it out of Outlook" on its own sets people up
-                     to fight it. -->
+                <!-- Two routes, and the button is the one that always works.
+                     Outlook can only hand a message to a browser as a virtual
+                     file and not every build will, so leading with "drag it out
+                     of Outlook" sets people up to fight it -- but Ctrl+C on a
+                     message works in every version, and the button reads that
+                     off the clipboard without anyone needing to know about
+                     focus or Ctrl+V. -->
                 <span class="b2b-proof-droptxt"><b>Drop the client's email here</b>
-                    <span>Drag it from Outlook — or copy the message, click this box and press
-                        Ctrl+V</span></span>
+                    <span>Or copy it in Outlook and press the button</span></span>
+                <!-- ownerAttr is id + kind, so the zone id has to be passed
+                     explicitly here. On this panel the zone IS the deal id; in
+                     the accept popup it is not, which is the whole reason the
+                     two are separate arguments. -->
+                <button class="b2b-mini" onclick="b2bPasteFromClipboard(${ownerAttr},'${owner.id}',this)">Paste
+                    the copied email</button>
             </div>
             <div id="b2bDropFail-${owner.id}"></div>
         </div>`;
@@ -19939,35 +19947,52 @@ function _b2bDropAdvice() {
         + 'drag the email onto your desktop first, then drop that file here.';
 }
 
-// THE REPORT GOES IN THE PAGE, NOT IN AN ALERT.
+// THE REPORT GOES IN THE PAGE, NOT IN AN ALERT, AND IT IS VIEWABLE BEFORE IT IS
+// COPYABLE.
 //
-// It was in an alert() for one release and that was a mistake: Chrome caps the
-// height of a native dialog and scrolls the overflow, so the diagnostic --
-// the entire reason the message exists -- sat below the fold behind a scrollbar
-// nobody thinks to drag. Nick reported the failure with a screenshot and the
-// useful half had been cut off, which cost a round trip.
+// History, because this has been wrong three times running. First it was inside
+// alert(): Chrome caps a native dialog's height and scrolls the overflow, so the
+// diagnostic -- the entire reason the message exists -- sat below the fold
+// behind a scrollbar nobody thinks to drag. Then it was in the page but
+// reachable only through a Copy button, and that button did not work either:
+// execCommand returns FALSE on failure rather than throwing, and only a throw
+// was being caught, so a failed copy reported success and put nothing on the
+// clipboard. Then the text lived in one module-level variable, which is wrong
+// as soon as two zones exist -- the deal panel and the accept popup can both be
+// on screen, and the second failure overwrote the first one's report, so
+// clicking View on the older panel showed someone else's diagnostic.
 //
-// In the page it can be read, expanded, and copied in one click. The
-// console.warn stays as well, for whoever looks afterwards.
-let _B2B_LAST_DIAG = '';
-
+// So: View Report is the primary and copying is the extra; the report opens
+// into a readonly textarea with its contents already selected, which means
+// Ctrl+C works natively with no permission and nothing to go wrong; and each
+// panel HOLDS ITS OWN report rather than reading a shared one. A diagnostic
+// nobody can get at, or that belongs to a different failure, is not a
+// diagnostic.
 function _b2bDropFail(zone, headline, diag) {
-    _B2B_LAST_DIAG = `${headline}\n\n${diag}\n\nbrowser: ${navigator.userAgent}`;
-    try { console.warn('[b2b] proof drop failed\n' + _B2B_LAST_DIAG); } catch (_) {}
+    const report = `${headline}\n\n${diag}\n\nbrowser: ${navigator.userAgent}`
+        + `\nsecure context: ${window.isSecureContext}\npage: ${location.origin}`;
+    try { console.warn('[b2b] proof drop failed\n' + report); } catch (_) {}
     const el = document.getElementById(`b2bDropFail-${zone}`);
-    // No panel to render into (an older screen, or a zone that was replaced
-    // mid-drop) -- say it the old way rather than swallowing it.
+    // No panel to render into (an older screen, or a zone replaced mid-drop) --
+    // say it the old way rather than swallowing it.
     if (!el) return alert(`${headline}\n\nWhat the drop contained:\n${diag}`);
     el.innerHTML = `
         <div class="b2b-note warn">
-            <span class="b2b-note-k">That drop did not come through</span>
+            <span class="b2b-note-k">That did not come through</span>
             <div>${escapeHtml(headline)}</div>
-            <details class="b2b-dropdiag">
-                <summary>What the drop actually contained</summary>
-                <pre>${escapeHtml(diag)}</pre>
-            </details>
-            <button class="b2b-mini" onclick="b2bCopyDropDiag(this)">Copy this report</button>
+            <div class="b2b-dropacts">
+                <button class="b2b-mini" onclick="b2bViewDropReport(this)">View report</button>
+            </div>
+            <div class="b2b-dropreport" hidden>
+                <label class="form-label-caps">Report — already selected, press Ctrl+C</label>
+                <textarea class="b2b-dropreport-t" readonly rows="12"></textarea>
+                <button class="b2b-mini" onclick="b2bCopyDropDiag(this)">Copy it for me</button>
+            </div>
         </div>`;
+    // On the element, not in a global. Set as a property rather than an
+    // attribute so a report containing markup or quotes cannot break the panel.
+    const note = el.querySelector('.b2b-note');
+    if (note) note._b2bReport = report;
 }
 
 function _b2bDropFailClear(zone) {
@@ -19975,25 +20000,162 @@ function _b2bDropFailClear(zone) {
     if (el) el.innerHTML = '';
 }
 
+const _b2bReportOf = (btn) => String(btn?.closest('.b2b-note')?._b2bReport || '');
+
+// Reveal it and select it. Filled here rather than in the markup so the text
+// never passes through an HTML string.
+function b2bViewDropReport(btn) {
+    const note = btn.closest('.b2b-note');
+    const wrap = note?.querySelector('.b2b-dropreport');
+    if (!wrap) return;
+    const ta = wrap.querySelector('.b2b-dropreport-t');
+    if (ta) ta.value = _b2bReportOf(btn);
+    wrap.hidden = false;
+    note.querySelector('.b2b-dropacts')?.remove();
+    if (ta) { ta.focus(); ta.select(); }
+}
+
 function b2bCopyDropDiag(btn) {
-    const done = () => {
-        btn.textContent = 'Copied';
-        setTimeout(() => { btn.textContent = 'Copy this report'; }, 1800);
+    const text = _b2bReportOf(btn);
+    const done = (ok) => {
+        btn.textContent = ok ? 'Copied' : 'Select it above and press Ctrl+C';
+        setTimeout(() => { btn.textContent = 'Copy it for me'; }, 2400);
     };
     const manual = () => {
-        // execCommand is deprecated and still the only thing that works without
-        // the clipboard permission, which a page served over plain http on a
-        // dev box does not get.
-        const ta = document.createElement('textarea');
-        ta.value = _B2B_LAST_DIAG;
-        document.body.appendChild(ta);
-        ta.select();
-        try { document.execCommand('copy'); done(); }
-        catch (_) { alert(_B2B_LAST_DIAG); }
-        document.body.removeChild(ta);
+        // The textarea is already on screen with the text in it, so the honest
+        // fallback is to re-select it and say so, rather than pretending.
+        const ta = btn.closest('.b2b-note')?.querySelector('.b2b-dropreport-t');
+        if (ta) { ta.focus(); ta.select(); }
+        let ok = false;
+        // execCommand returns FALSE on failure instead of throwing. Checking
+        // only for a throw is what made the old Copy button claim success while
+        // doing nothing at all.
+        try { ok = document.execCommand('copy') === true; } catch (_) { ok = false; }
+        done(ok);
     };
-    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(_B2B_LAST_DIAG).then(done, manual);
-    else manual();
+    if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).then(() => done(true), manual);
+    } else { manual(); }
+}
+
+// WHAT THE NEW OUTLOOK ACTUALLY PUTS ON THE CLIPBOARD, MEASURED.
+//
+// Nick ran the button on the new Outlook, 2026-09-10, and the report said:
+//
+//     clipboard types: web application/owa-item-drag-data
+//     text/plain: none
+//     text/html: none
+//     browser: Chrome/152   secure context: true
+//
+// That settles it. The new Outlook and Outlook on the web put exactly ONE thing
+// on a copy or a drag: their own private "web application/owa-item-drag-data",
+// which is a REFERENCE to the message sitting on the server -- an item id, and
+// sometimes a subject. No text, no HTML, no file, nothing to rebuild from, and
+// nothing any website can resolve. It is not that the user copied the wrong
+// thing; there is nothing else on offer.
+//
+// So this is not a bug to fix, it is a case to NAME. "Your clipboard does not
+// have an email on it" was true and useless -- it reads as though they did it
+// wrong. Detected explicitly now, with the two routes that do work.
+const B2B_OWA_REF_RX = /owa-item|owa-drag|x-owa|outlook-item/i;
+
+function _b2bOwaRefOnly(types) {
+    const t = (types || []).map(String);
+    return t.some((x) => B2B_OWA_REF_RX.test(x))
+        && !t.some((x) => /^(text\/plain|text\/html|Files)$/i.test(x));
+}
+
+const B2B_OWA_ADVICE =
+    'That is the new Outlook handing over a link to the message on its server rather than the '
+    + 'message itself. There is nothing in it to keep, and no website can open it — this is a '
+    + 'limit of the new Outlook, not something you did wrong. Two ways through:\n\n'
+    + '1. BEST — open the email, open its "..." menu and choose Download (or Save as). You get '
+    + 'a file: drop it here, or use the picker. It keeps the sender, the date and the headers, '
+    + 'which is the whole point of holding on to it.\n\n'
+    + '2. Or open the email, click into the message text, press Ctrl+A then Ctrl+C, and press '
+    + 'the Paste button again. That keeps the client’s wording but not the headers, so it '
+    + 'gets filed as "message text only".';
+
+// ONE BUTTON THAT TAKES THE EMAIL OFF THE CLIPBOARD.
+//
+// The onpaste handler below still works and costs nothing, but "click this box,
+// then press Ctrl+V" is two instructions and a focus rule the user has to know
+// about. Reading the clipboard directly is one button and no explanation.
+//
+// It needs the async Clipboard API, a user gesture (the click) and a secure
+// context -- https, or localhost, which is why this works on the dev server
+// too. Chrome may prompt for permission the first time. If any of that is
+// refused the Ctrl+V route is still there, and that is what the failure says.
+//
+// EVERY type is fetched, including the "web ..." custom formats. The first
+// version listed those in the report and never opened them, which is how a
+// clipboard holding only an OWA reference came back as a blank mystery.
+async function b2bPasteFromClipboard(ownerId, ownerKind, zone, btn) {
+    const z = zone || ownerId;
+    const focusZone = () => document.getElementById(`b2bProofDrop-${z}`)?.focus();
+    if (!navigator.clipboard?.read) {
+        focusZone();
+        return _b2bDropFail(z, 'This browser will not let the page read your clipboard by itself. '
+            + 'The box below is focused now — press Ctrl+V and it will come through that way.',
+            'navigator.clipboard.read is unavailable');
+    }
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Reading…'; }
+    try {
+        _b2bDropFailClear(z);
+        const items = await navigator.clipboard.read();
+        const txt = { html: '', plain: '' };
+        const seen = [];
+        const extras = [];
+        let file = null;
+        for (const item of items) {
+            for (const type of item.types || []) {
+                seen.push(type);
+                let blob = null;
+                try { blob = await item.getType(type); } catch (_) { continue; }
+                if (!blob) continue;
+                if (type === 'text/html') txt.html = await blob.text();
+                else if (type === 'text/plain') txt.plain = await blob.text();
+                else if (/rfc822|ms-outlook/i.test(type)) {
+                    // A real message on the clipboard beats rebuilding one.
+                    file = new File([blob], 'clipboard-message.msg', { type });
+                } else if (/^(text|application)\//.test(type.replace(/^web /, ''))) {
+                    // Opened and reported, not used. A private format from a
+                    // mail client is a pointer to something on a server, not
+                    // evidence -- but seeing its contents is how the next one of
+                    // these gets diagnosed without another round trip.
+                    let head = '';
+                    try { head = (await blob.text()).slice(0, 400); } catch (_) { head = '(unreadable)'; }
+                    extras.push(`${type} (${blob.size}b): ${head}`);
+                }
+            }
+        }
+        if (!file && !_b2bDragTextIsMessage(txt)) {
+            const chars = (s) => (s ? s.length + ' chars' : 'none');
+            const diag = `clipboard types: ${seen.length ? seen.join(' | ') : 'none'}\n`
+                + `text/plain: ${chars(txt.plain)}\ntext/html: ${chars(txt.html)}`
+                + (extras.length ? `\n\ncontents of the other formats:\n${extras.join('\n')}` : '');
+            focusZone();
+            return _b2bDropFail(z, _b2bOwaRefOnly(seen)
+                ? B2B_OWA_ADVICE
+                : "Your clipboard does not have an email on it — or not enough of one to keep. "
+                  + 'Open the email, click into the message text, press Ctrl+A then Ctrl+C, and '
+                  + 'press this again.', diag);
+        }
+        const out = file || _b2bEmlFromDragText(txt);
+        if (out.size > 6_000_000) {
+            return alert(`That message is ${Math.round(out.size / 1e6)}MB — the limit is 6MB.\n\n`
+                + 'Forward it to yourself without the attachments and use that instead.');
+        }
+        await _b2bAttachMailFile(out, ownerId, ownerKind, file ? 'file' : 'text', z);
+    } catch (e) {
+        focusZone();
+        _b2bDropFail(z, 'The browser blocked the page from reading your clipboard. The box below '
+            + 'is focused now — press Ctrl+V instead, which needs no permission.',
+            `${e.name || 'Error'}: ${e.message || e}`);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+    }
 }
 
 // PASTE, BECAUSE COPYING A MESSAGE WORKS WHERE DRAGGING ONE DOES NOT.
@@ -20059,6 +20221,12 @@ async function b2bProofDrop(ev, ownerId, ownerKind, zone) {
             await _b2bAttachMailFile(eml, ownerId, ownerKind, 'text', z);
             return;
         }
+        // A drag out of the new Outlook carries the same server-side reference
+        // as a copy out of it does, so name it here too rather than making
+        // somebody try the button to find out.
+        let types = [];
+        try { types = Array.from(ev.dataTransfer?.types || []); } catch (_) {}
+        if (_b2bOwaRefOnly(types)) return _b2bDropFail(z, B2B_OWA_ADVICE, full);
         return _b2bDropFail(z, sawFileItem
             ? 'Your mail app offered the message but would not release the file, and the drag '
               + 'carried too little of the message to rebuild one. ' + _b2bDropAdvice()
@@ -20227,8 +20395,11 @@ function _b2bPaintProofModal() {
             onpaste="b2bProofPaste(event,${attr})">
             <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
             <span class="b2b-proof-droptxt"><b>Drop the client's email here</b>
-                <span>Drag it out of Outlook — or copy the message and just press Ctrl+V, which
-                    works even where dragging does not</span></span>
+                <span>Or copy it in Outlook and press the button — that works even where dragging
+                    does not</span></span>
+            <!-- attr already carries id + kind + zone, so this one takes it whole. -->
+            <button class="b2b-btn b2b-btn-primary"
+                onclick="b2bPasteFromClipboard(${attr},this)">Paste the copied email</button>
         </div>
         <div id="b2bDropFail-${B2B_PROOF_POP}"></div>
         <!-- The one picker left in the product, and deliberately only here.
