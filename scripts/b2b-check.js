@@ -1418,6 +1418,28 @@ t('3.8.6 the popup and the panel do not share an element id', function () {
         || 'the popup zone is not keyed separately from the panel';
 });
 
+// ONE ATTACH RECORDER FOR EVERY CHECK BELOW, INSTALLED ONCE AND NEVER RESTORED.
+//
+// The per-test stub-and-restore that was here reported three failures that were
+// not real. Every check that exercises pasting is ASYNC, and the runner starts
+// them all before any of them finish -- so test B captured test A's stub as
+// "the real one", and whichever settled first put its captured value back while
+// the others were still in flight. Their attach then went to the real function
+// and their `calls` array stayed empty: "nothing was attached", for code that
+// was working.
+//
+// Same lesson as the promise-aware t() and the shared _b2bSend stub: in this
+// file, global state gets set up ONCE at the top, and each test isolates itself
+// by using its own owner id instead of by putting things back.
+var _B2B_ATTACHED = [];
+_b2bAttachMailFile = function (file, id, kind, source, zone) {
+    _B2B_ATTACHED.push({ file: file, id: id, kind: kind, source: source, zone: zone });
+    return Promise.resolve();
+};
+function _b2bAttachedFor(id) {
+    return _B2B_ATTACHED.filter(function (a) { return a.id === id; });
+}
+
 // --- v3.8.7: the new Outlook, and two bugs I shipped -----------------------
 //
 // Nick, 2026-09-09, with a screenshot: the drop failed on the new Outlook with
@@ -1527,9 +1549,6 @@ t('3.8.7 an ordinary paste is left alone', function () {
     return guard < prevent || 'preventDefault runs before the check, so every paste is swallowed';
 });
 t('3.8.7 a pasted message is rebuilt and attached', function () {
-    var calls = [];
-    var realAttach = _b2bAttachMailFile;
-    _b2bAttachMailFile = function (file, id, kind, source) { calls.push({ file: file, source: source }); };
     var ev = {
         preventDefault: function () {},
         clipboardData: {
@@ -1541,33 +1560,275 @@ t('3.8.7 a pasted message is rebuilt and attached', function () {
             },
         },
     };
-    return Promise.resolve(b2bProofPaste(ev, 'd1', 'deal', 'd1')).then(function () {
-        _b2bAttachMailFile = realAttach;
-        if (!calls.length) return 'a pasted message was not attached';
-        if (calls[0].source !== 'text') return 'not marked as rebuilt from text';
-        return /\.eml$/i.test(calls[0].file.name) || 'not built as an email file';
+    return Promise.resolve(b2bProofPaste(ev, 'paste-text', 'deal', 'paste-text')).then(function () {
+        var got = _b2bAttachedFor('paste-text');
+        if (!got.length) return 'a pasted message was not attached';
+        if (got[0].source !== 'text') return 'not marked as rebuilt from text';
+        return /\.eml$/i.test(got[0].file.name) || 'not built as an email file';
     }, function (e) {
-        _b2bAttachMailFile = realAttach;
         return 'threw: ' + e.message;
     });
 });
 t('3.8.7 a real file on the clipboard beats rebuilding one', function () {
-    var calls = [];
-    var realAttach = _b2bAttachMailFile;
-    _b2bAttachMailFile = function (file, id, kind, source) { calls.push({ file: file, source: source }); };
     var msg = new File(['From: a@b.c\r\n'], 'real.msg', { type: '' });
     var ev = {
         preventDefault: function () {},
         clipboardData: { files: [msg], getData: function () { return ''; } },
     };
-    return Promise.resolve(b2bProofPaste(ev, 'd1', 'deal', 'd1')).then(function () {
-        _b2bAttachMailFile = realAttach;
-        if (!calls.length) return 'the clipboard file was ignored';
-        if (calls[0].source !== 'file') return 'the real message was recorded as a rebuild';
-        return calls[0].file.name === 'real.msg' || 'attached something other than the file';
+    return Promise.resolve(b2bProofPaste(ev, 'paste-file', 'deal', 'paste-file')).then(function () {
+        var got = _b2bAttachedFor('paste-file');
+        if (!got.length) return 'the clipboard file was ignored';
+        if (got[0].source !== 'file') return 'the real message was recorded as a rebuild';
+        return got[0].file.name === 'real.msg' || 'attached something other than the file';
     }, function (e) {
-        _b2bAttachMailFile = realAttach;
         return 'threw: ' + e.message;
+    });
+});
+
+// --- v3.8.8: one button, and a report you can actually read ----------------
+//
+// Nick, 2026-09-10: "make it so that way theres just one button that that takes
+// it from your clipboard. Also make it so theres a view report if it doesnt
+// work for this cause the copy wasnt really working"
+
+// A test container, because _b2bDropFail renders into the page and falls back to
+// alert() when there is nowhere to put it.
+function _b2bFailHost(zone) {
+    var id = 'b2bDropFail-' + zone;
+    var el = document.getElementById(id);
+    if (!el) {
+        el = document.createElement('div');
+        el.id = id;
+        document.body.appendChild(el);
+    }
+    el.innerHTML = '';
+    return el;
+}
+
+t('3.8.8 both drop zones carry one clipboard button', function () {
+    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    if (panel.indexOf('b2bPasteFromClipboard') === -1) return 'the panel has no clipboard button';
+    _b2bProofOwner = { id: 'd1', kind: 'deal' };
+    var pop = _b2bPaintProofModal.toString();
+    return pop.indexOf('b2bPasteFromClipboard') > -1 || 'the popup has no clipboard button';
+});
+t('3.8.8 the panel button passes its zone, not the button, as the zone', function () {
+    // ownerAttr is id + kind only, so a bare `(${ownerAttr},this)` would land
+    // the element in the `zone` parameter and the report would render nowhere.
+    var panel = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    var m = panel.match(/b2bPasteFromClipboard\(([^)]*)\)/);
+    if (!m) return 'no call found';
+    var args = m[1].split(',').map(function (s) { return s.trim(); });
+    if (args.length !== 4) return 'expected 4 arguments, got ' + args.length + ': ' + m[1];
+    return args[2] === "'d1'" || 'the third argument is not the zone: ' + args[2];
+});
+
+// The report. View first, copy second -- the copy button was the only way in
+// and it did not work.
+t('3.8.8 the failure offers a View report button', function () {
+    _b2bFailHost('z1');
+    _b2bDropFail('z1', 'nope', 'formats: none');
+    var el = document.getElementById('b2bDropFail-z1');
+    if (el.innerHTML.indexOf('b2bViewDropReport') === -1) return 'no View report button';
+    return el.querySelector('.b2b-dropreport-t') !== null || 'no report field to read it in';
+});
+t('3.8.8 viewing the report fills it and selects it', function () {
+    _b2bFailHost('z2');
+    _b2bDropFail('z2', 'headline here', 'formats: Files\nitems: none');
+    var el = document.getElementById('b2bDropFail-z2');
+    var btn = el.querySelector('[onclick*="b2bViewDropReport"]');
+    if (!btn) return 'no view button';
+    b2bViewDropReport(btn);
+    var wrap = el.querySelector('.b2b-dropreport');
+    var ta = el.querySelector('.b2b-dropreport-t');
+    if (wrap.hidden) return 'the report is still hidden after clicking View';
+    if (!ta.value || ta.value.indexOf('headline here') === -1) return 'the report field is empty';
+    if (ta.value.indexOf('formats: Files') === -1) return 'the diagnostic is not in the field';
+    // Pre-selected so Ctrl+C works with no permission and no API.
+    return (ta.selectionEnd - ta.selectionStart) === ta.value.length
+        || 'the text is not selected, so Ctrl+C copies nothing';
+});
+t('3.8.8 the report field is readonly but selectable', function () {
+    _b2bFailHost('z3');
+    _b2bDropFail('z3', 'x', 'y');
+    var ta = document.getElementById('b2bDropFail-z3').querySelector('.b2b-dropreport-t');
+    if (!ta.hasAttribute('readonly')) return 'the report can be typed over';
+    return ta.tagName === 'TEXTAREA' || 'not a textarea, so it cannot be selected natively';
+});
+t('3.8.8 the report carries the browser and the secure-context flag', function () {
+    // Both decide whether the clipboard button can work at all, so they belong
+    // in the report rather than being asked for afterwards.
+    _b2bFailHost('z4');
+    _b2bDropFail('z4', 'x', 'y');
+    var ta = document.getElementById('b2bDropFail-z4').querySelector('.b2b-dropreport-t');
+    b2bViewDropReport(document.getElementById('b2bDropFail-z4').querySelector('[onclick*="View"]'));
+    if (ta.value.indexOf('browser:') === -1) return 'no browser line';
+    return ta.value.indexOf('secure context') > -1 || 'no secure-context line';
+});
+t('3.8.8 a failed copy no longer claims it worked', function () {
+    // THE BUG: execCommand returns FALSE on failure rather than throwing, and
+    // only a throw was caught -- so a copy that put nothing on the clipboard
+    // still flipped the button to "Copied". That is why the copy "wasnt really
+    // working" with nothing to show it.
+    var src = b2bCopyDropDiag.toString();
+    return /execCommand\(['"]copy['"]\)\s*===\s*true/.test(src)
+        || 'the return value of execCommand is still ignored';
+});
+
+// The clipboard button itself.
+function _b2bFakeClipboard(entries) {
+    Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: entries === null ? {} : {
+            read: function () { return Promise.resolve(entries); },
+            writeText: function () { return Promise.resolve(); },
+        },
+    });
+}
+function _b2bClipItem(map) {
+    return {
+        types: Object.keys(map),
+        getType: function (t) { return Promise.resolve(new Blob([map[t]], { type: t })); },
+    };
+}
+
+t('3.8.8 the button reads a copied message off the clipboard and files it', function () {
+    _b2bFakeClipboard([_b2bClipItem({
+        'text/plain': 'From: dana@acme.com\r\nSubject: Re: quote\r\n\r\nYes, agreed to the numbers.',
+    })]);
+    _b2bFailHost('z5');
+    return b2bPasteFromClipboard('clip-plain', 'deal', 'z5', null).then(function () {
+        var got = _b2bAttachedFor('clip-plain');
+        if (!got.length) return 'nothing was attached';
+        if (got[0].source !== 'text') return 'not marked as rebuilt from text';
+        return /\.eml$/i.test(got[0].file.name) || 'not built as an email: ' + got[0].file.name;
+    });
+});
+t('3.8.8 a real message on the clipboard beats rebuilding one', function () {
+    _b2bFakeClipboard([_b2bClipItem({
+        'text/plain': 'From: dana@acme.com\r\nSubject: Re: quote\r\n\r\nYes, agreed to the numbers.',
+        'application/vnd.ms-outlook': 'MSG-BYTES',
+    })]);
+    _b2bFailHost('z6');
+    return b2bPasteFromClipboard('clip-file', 'deal', 'z6', null).then(function () {
+        var got = _b2bAttachedFor('clip-file');
+        if (!got.length) return 'nothing was attached';
+        return got[0].source === 'file' || 'rebuilt from text when the real message was there';
+    });
+});
+
+// MEASURED, not guessed. Nick ran the button on the new Outlook and the report
+// came back with exactly one clipboard type and nothing else:
+//     clipboard types: web application/owa-item-drag-data
+//     text/plain: none    text/html: none
+// It is a reference to the message on the server, not the message. There is
+// nothing to rescue, so the job is to SAY so and give the routes that work --
+// telling somebody their clipboard has no email on it reads as though they did
+// it wrong, and they did not.
+t('3.8.8 the new Outlook reference is recognised, not blamed on the user', function () {
+    _b2bFakeClipboard([_b2bClipItem({ 'web application/owa-item-drag-data': '{"itemIds":["AAM"]}' })]);
+    _b2bFailHost('zowa');
+    return b2bPasteFromClipboard('clip-owa', 'deal', 'zowa', null).then(function () {
+        var el = document.getElementById('b2bDropFail-zowa');
+        var html = el.innerHTML;
+        if (_b2bAttachedFor('clip-owa').length) return 'a server reference was filed as evidence';
+        if (html.indexOf('does not have an email on it') > -1) {
+            return 'still the generic message, which blames the user for a limit of Outlook';
+        }
+        if (html.indexOf('Download') === -1) return 'does not name the route that actually works';
+        return html.indexOf('link to the message on its server') > -1
+            || 'does not explain what the new Outlook actually handed over';
+    });
+});
+t('3.8.8 the OWA detector needs the reference AND no usable content', function () {
+    if (!_b2bOwaRefOnly(['web application/owa-item-drag-data'])) return 'missed a bare OWA reference';
+    // Classic Outlook via OWA-in-a-tab can offer both; if there is real text to
+    // rebuild from, this is not the dead end and must not claim to be.
+    if (_b2bOwaRefOnly(['web application/owa-item-drag-data', 'text/html'])) {
+        return 'called it a dead end when there was HTML to rebuild from';
+    }
+    return !_b2bOwaRefOnly(['text/plain', 'text/html']) || 'fired on an ordinary text copy';
+});
+t('3.8.8 a drag out of the new Outlook says the same thing as a copy', function () {
+    // The drag carries the same server reference, so nobody should have to try
+    // the button to find out why the drag did nothing.
+    var src = b2bProofDrop.toString();
+    return src.indexOf('_b2bOwaRefOnly') > -1
+        || 'the drop path still reports the generic failure for a new-Outlook drag';
+});
+t('3.8.8 the other clipboard formats are opened, not just listed', function () {
+    // The first version named the type in the report and never fetched it,
+    // which is how a clipboard holding only an OWA reference came back as a
+    // blank mystery and cost a round trip.
+    _b2bFakeClipboard([_b2bClipItem({ 'web application/owa-item-drag-data': 'ITEMID-PAYLOAD-XYZ' })]);
+    _b2bFailHost('zpay');
+    return b2bPasteFromClipboard('clip-pay', 'deal', 'zpay', null).then(function () {
+        var el = document.getElementById('b2bDropFail-zpay');
+        var btn = el.querySelector('[onclick*="b2bViewDropReport"]');
+        if (!btn) return 'no report rendered';
+        b2bViewDropReport(btn);
+        return el.querySelector('.b2b-dropreport-t').value.indexOf('ITEMID-PAYLOAD-XYZ') > -1
+            || 'the contents of the unknown format are not in the report';
+    });
+});
+t('3.8.8 two failed zones keep their own reports', function () {
+    // The report used to live in one module-level variable, so the second
+    // failure overwrote the first and clicking View on the older panel showed
+    // somebody else's diagnostic.
+    _b2bFailHost('zA');
+    _b2bFailHost('zB');
+    _b2bDropFail('zA', 'first headline', 'formats: AAA');
+    _b2bDropFail('zB', 'second headline', 'formats: BBB');
+    var a = document.getElementById('b2bDropFail-zA');
+    b2bViewDropReport(a.querySelector('[onclick*="b2bViewDropReport"]'));
+    var v = a.querySelector('.b2b-dropreport-t').value;
+    if (v.indexOf('BBB') > -1) return 'zone A is showing zone B’s report';
+    return v.indexOf('AAA') > -1 || 'zone A lost its own report';
+});
+t('3.8.8 an empty clipboard reports what was on it instead of failing silently', function () {
+    var realClip = navigator.clipboard;
+    _b2bFakeClipboard([_b2bClipItem({ 'image/png': 'not-an-email' })]);
+    _b2bFailHost('z7');
+    return b2bPasteFromClipboard('d1', 'deal', 'z7', null).then(function () {
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClip });
+        var el = document.getElementById('b2bDropFail-z7');
+        var btn = el.querySelector('[onclick*="b2bViewDropReport"]');
+        if (!btn) return 'no report was rendered';
+        b2bViewDropReport(btn);
+        var v = el.querySelector('.b2b-dropreport-t').value;
+        return v.indexOf('image/png') > -1
+            || 'the report does not say what was actually on the clipboard';
+    });
+});
+t('3.8.8 a blocked clipboard read points at Ctrl+V rather than dead-ending', function () {
+    var realClip = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { read: function () { return Promise.reject(new DOMException('denied', 'NotAllowedError')); } },
+    });
+    _b2bFailHost('z8');
+    return b2bPasteFromClipboard('d1', 'deal', 'z8', null).then(function () {
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClip });
+        var el = document.getElementById('b2bDropFail-z8');
+        if (el.innerHTML.indexOf('Ctrl+V') === -1) return 'does not offer the route that needs no permission';
+        var btn = el.querySelector('[onclick*="b2bViewDropReport"]');
+        if (!btn) return 'no report to look at';
+        b2bViewDropReport(btn);
+        return el.querySelector('.b2b-dropreport-t').value.indexOf('NotAllowedError') > -1
+            || 'the report does not name why the browser refused';
+    });
+});
+t('3.8.8 a browser with no clipboard read falls back rather than throwing', function () {
+    var realClip = navigator.clipboard;
+    _b2bFakeClipboard(null);
+    _b2bFailHost('z9');
+    return b2bPasteFromClipboard('d1', 'deal', 'z9', null).then(function () {
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClip });
+        return document.getElementById('b2bDropFail-z9').innerHTML.indexOf('Ctrl+V') > -1
+            || 'no fallback offered where the API is missing';
+    }, function (e) {
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClip });
+        return 'threw instead of falling back: ' + e.message;
     });
 });
 // Restore the fixture for anything appended after this point.
