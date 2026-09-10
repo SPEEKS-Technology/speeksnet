@@ -24,6 +24,26 @@
 // harness instead of the app.
 var B2B_REAL_SEND = _b2bSend;
 
+// SOURCE WITH THE COMMENTS TAKEN OUT. Use this, not fn.toString(), whenever a
+// check searches source for a word rather than for syntax.
+//
+// Three checks in this file have now failed against working code because the
+// thing they searched for was sitting in the comment that explained it: an
+// 'accept=' grep matched "No accept= filter", a 'Not mine' grep matched the note
+// saying the button had been removed, and a /secret/i grep matched "a missing
+// secret". speeks.js is heavily commented on purpose -- the comments carry the
+// reasoning -- so a bare substring search over a function's text is searching
+// prose as much as code.
+//
+// Deliberately crude: strips /* */ and // runs, and does not try to spare a
+// comment marker inside a string literal. A check that needs that precision
+// should be asserting about behaviour instead.
+function _srcOf(fn) {
+    return String(fn)
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+}
+
 var B2B_SENT = [];
 _b2bSend = function (payload) {
     B2B_SENT.push(payload);
@@ -1899,6 +1919,106 @@ t('3.8.8 a browser with no clipboard read falls back rather than throwing', func
         Object.defineProperty(navigator, 'clipboard', { configurable: true, value: realClip });
         return 'threw instead of falling back: ' + e.message;
     });
+});
+
+// --- v3.9.0: read the Drive folder instead of being the drop target --------
+//
+// Nick, 2026-09-10: "They currently just drag and drop it into google drive.
+// Can I implement a single google drive folder into the website so that it just
+// drags and drops it into there"
+//
+// A Drive-backed drop ZONE would have changed nothing: the limit is what Outlook
+// hands the browser, not where the bytes go, so it would have received the same
+// owa-item-drag-data pointer and the same nothing. His Drive drag works because
+// Drive-for-desktop is a real Windows folder and Explorer supports the
+// virtual-file format -- it works precisely because it is not a browser.
+//
+// So the direction is inverted: read the folder he already drops into.
+t('3.9.0 the proof panel offers the Drive folder', function () {
+    var html = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    if (html.indexOf('b2bDriveRefresh') === -1) return 'no way to list the folder';
+    return html.indexOf('b2bDriveList-d1') > -1 || 'nowhere to render the list';
+});
+t('3.9.0 it is collapsed until asked for', function () {
+    // Dragging straight on is still the one-step route; this is the way through
+    // when the mail client will not cooperate, not a competing option.
+    var html = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    if (html.indexOf('<details class="b2b-drivewrap"') === -1) return 'not a collapsed section';
+    return html.indexOf(' open') === -1 || 'the folder list is expanded by default';
+});
+t('3.9.0 opening it fetches, rather than needing a second click', function () {
+    var html = _b2bProofPanel({ id: 'd1', approval_waived_by: null });
+    return /ontoggle="if\(this\.open\)b2bDriveRefresh/.test(html)
+        || 'expanding it does not load anything';
+});
+t('3.9.0 a Drive attach goes through the same path as a drop', function () {
+    // One pipeline on purpose. This feature's whole history is bugs from having
+    // several routes that were supposed to agree with each other.
+    var src = b2bDriveAttach.toString();
+    if (src.indexOf('_b2bAttachMailFile') === -1) return 'it inserts by its own route';
+    return src.indexOf('drive_file') > -1 || 'it does not ask the server for the bytes';
+});
+t('3.9.0 the browser never holds the Drive secret', function () {
+    // speeks.js is static and readable by anyone who can load the page, so a
+    // shared secret in it is not a secret. Everything goes through the edge
+    // function, which holds it in its own environment.
+    // _srcOf, not toString: the comment right next to this code explains why
+    // the secret is not here, and searching the raw text matches that comment.
+    var src = _srcOf(b2bDriveRefresh) + _srcOf(b2bDriveAttach);
+    if (/secret/i.test(src)) return 'a secret is being handled in the browser';
+    if (/script\.google\.com|googleusercontent/i.test(src)) return 'the browser calls Apps Script directly';
+    return src.indexOf('_b2bSend') > -1 || 'not going through the edge function';
+});
+t('3.9.0 a setup failure says what to fix, in the server words', function () {
+    var src = b2bDriveRefresh.toString();
+    // When this fails it is nearly always a deployment set to the wrong access
+    // or a missing secret, and the message naming which is the useful one.
+    if (src.indexOf('_b2bDriveErr') === -1) return 'the error is not surfaced';
+    return /e\.message/.test(src) || 'it replaces the server message with its own';
+});
+t('3.9.0 an empty folder reads as empty, not as broken', function () {
+    _b2bDriveFiles = [];
+    _b2bDriveErr = '';
+    _b2bDriveBusy = false;
+    var html = _b2bDriveListHtml({ id: 'd1' });
+    if (html.indexOf('warn') > -1) return 'an empty folder is shown as an error';
+    return html.indexOf('Nothing in the folder yet') > -1 || 'says nothing useful when empty';
+});
+t('3.9.0 files list newest-first with a readable age', function () {
+    _b2bDriveErr = '';
+    _b2bDriveBusy = false;
+    _b2bDriveFiles = [
+        { id: 'f1', name: 'Adding Approval Request.msg', bytes: 41000,
+          modified: new Date(Date.now() - 120000).toISOString() },
+        { id: 'f2', name: 'older.eml', bytes: 9000,
+          modified: new Date(Date.now() - 7200000).toISOString() },
+    ];
+    var html = _b2bDriveListHtml({ id: 'd1' });
+    if (html.indexOf('Adding Approval Request.msg') === -1) return 'the file is not listed';
+    if (html.indexOf('2 min ago') === -1) return 'no relative age, which is how the row is picked';
+    if (html.indexOf('40 KB') === -1) return 'no size on the row';
+    return html.indexOf('b2bDriveAttach(&#39;f1&#39;') > -1 || html.indexOf("b2bDriveAttach('f1'") > -1
+        || 'no attach button wired to the file id';
+});
+t('3.9.0 the folder list does not filter on the filename', function () {
+    // Same lesson as the drop zone: Explorer names a dropped message after its
+    // subject, so refusing rows for how they are named would hide real emails.
+    // The person picking can see which is which.
+    _b2bDriveErr = '';
+    _b2bDriveBusy = false;
+    _b2bDriveFiles = [{ id: 'f3', name: 'Re pricing v2.1', bytes: 3000,
+                        modified: new Date().toISOString() }];
+    return _b2bDriveListHtml({ id: 'd1' }).indexOf('Re pricing v2.1') > -1
+        || 'an extension-less message was hidden from the list';
+});
+// The comment-stripping helper itself, because three checks have now been
+// broken by searching prose instead of code.
+t('3.9.0 _srcOf strips comments before a source search', function () {
+    function sample() { /* secret */ var a = 1; // secret
+        return a; }
+    var s = _srcOf(sample);
+    if (/secret/.test(s)) return 'comments survived, so a search still matches prose';
+    return s.indexOf('var a = 1') > -1 || 'the code was stripped along with the comments';
 });
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
