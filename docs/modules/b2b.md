@@ -117,10 +117,15 @@ CORP-priced deals land at `listing_location` with `listing_store = null`, have n
 owner at any store, and the only screen anyone gets is the bare store picker
 `_b2bStageListingLocation` `speeks.js:22041`.
 
-Note the item fetch (`GET ?deal_id=`, `b2b-deals/index.ts:2110-2145`) has **no
-store check at all** — any authorized caller with a deal id gets full
-value/offer/cost rollups. The only field-level scoping is contact details
-(`CONTACT_COLS` / `SCOPED_DEAL_COLS`, `index.ts:182-184`, applied at `:2161`).
+The item fetch **used to have no store check at all** — any authorized caller
+with a deal id got every line and the full value/offer/cost rollups. Since 0081
+it takes `&store=CODE` and filters (see above), which is what makes "each store
+only sees the part brought to their store" true rather than aspirational.
+It is still the caller that says which store it is, like `role` — this app has
+always trusted the browser on that (see the header in `b2b-deals`), so it is not
+a security boundary, it is the client telling the server which rule to apply.
+Field-level scoping of contact details is separate and unchanged
+(`CONTACT_COLS` / `SCOPED_DEAL_COLS`, applied on the board query).
 
 ## Screens
 
