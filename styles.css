@@ -8860,12 +8860,6 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-done-btn:hover { color: #fff; background: var(--sage-professional); border-color: var(--sage-professional); }
 .speeks-action-menu .sam-ann .sam-done-btn + .sam-done-btn,
 .speeks-action-menu .sam-snooze-btn + .sam-done-btn { margin-left: 6px; }
-/* "Not mine" sits beside Snooze and must read as the quieter of the two — it is
-   the more final action, so it should not be the more eye-catching button. */
-.speeks-action-menu .sam-snooze-btn + .sam-notmine-btn { margin-left: 6px; }
-.speeks-action-menu .sam-notmine-btn { color: var(--cb-muted); opacity: .78; }
-.speeks-action-menu .sam-notmine-btn:hover { opacity: 1; color: var(--red-alert); border-color: var(--red-alert); }
-.speeks-action-menu .sam-notmine-btn svg { width: 12px; height: 12px; stroke-width: 2.4; }
 .speeks-action-menu .sam-ann.rem { cursor: default; }
 .speeks-action-menu .sam-adot.urgent { background: var(--red-alert); box-shadow: 0 0 0 4px var(--sam-red-tint); }
 .speeks-action-menu .sam-adot.warn { background: var(--idea-gold); box-shadow: 0 0 0 4px var(--sam-gold-tint); }
