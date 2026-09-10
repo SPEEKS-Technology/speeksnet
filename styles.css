@@ -12642,6 +12642,22 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     white-space: nowrap; line-height: 1;
 }
 /* Header-row size: matches the segmented control it sits beside. */
+/* FEEDBACK, and it has to be noticed without shouting over "New Deal". The gold
+   the idea/lightbulb flow already uses reads as "tell us something" rather than
+   "do something", so it stands out in a row of grey secondaries while the green
+   primary keeps its place as the action. */
+.b2b-btn-feedback {
+    color: #7a4f05;
+    background: var(--sam-gold-tint, #fdf6e3);
+    border-color: var(--idea-gold, #f0b429);
+    font-weight: 700;
+}
+.b2b-btn-feedback:hover {
+    color: #fff;
+    background: var(--idea-gold, #f0b429);
+    border-color: var(--idea-gold, #f0b429);
+}
+.b2b-btn-feedback svg { width: 14px; height: 14px; }
 .b2b-btn-head { height: var(--b2b-h-md); padding: 0 15px; font-size: 12.5px !important; }
 /* --sage-deep, not --sage-professional. White on the brand green (#1f9d57)
    measures 3.49 : 1, which fails WCAG AA for the 13px/750 label it carries --
