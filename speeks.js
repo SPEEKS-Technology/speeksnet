@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.4';
+const APP_VERSION = '3.8.5';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -18344,6 +18344,97 @@ async function crmLoadSettings() {
             wipe_fee: Number(j.settings.wipe_fee ?? 8),
         };
     } catch (_) { /* keep what we have */ }
+}
+
+
+// ---------------------------------------------------------------------------
+// B2B FEEDBACK -- straight to Nick, no category
+// ---------------------------------------------------------------------------
+//
+// Nick, 2026-09-10: "a button at the top next to the header thats pretty
+// prominent that allows users to submit feedback, no category just a subject
+// line and free form text".
+//
+// No category is the point. The lightbulb form asks people to classify what
+// they are reporting first, and choosing between "Bug Fix" and "Process
+// Improvement" is a decision that stops some of them writing anything. A
+// subject line does the same job and costs no thought.
+//
+// Every round of B2B changes so far arrived as Ethan forwarding somebody's
+// email, so the button carries NO role classes -- _passesRoleClasses() shows an
+// element with none to everybody, and the people hitting the rough edges are
+// the ones in here all day.
+//
+// It posts to b2b-outreach rather than b2b-deals because that function owns the
+// mail path: sendEmail() falls back from the Gmail relay to Resend and holds the
+// keys for both.
+
+function b2bFeedbackOpen() {
+    const subj = document.getElementById('b2bFbSubject');
+    const body = document.getElementById('b2bFbBody');
+    // Deliberately NOT cleared. If a send fails, or somebody closes the dialog
+    // to go and check which deal it was, throwing away what they typed is the
+    // fastest way to make sure they never bother again.
+    const who = document.getElementById('b2bFbWho');
+    if (who) {
+        who.textContent = `Sent as ${_b2bUser()}`
+            + (_b2bRole() ? ` (${_b2bRole()})` : '')
+            + ` · goes to Nick's inbox, not into a queue.`;
+    }
+    const msg = document.getElementById('b2bFbMsg');
+    if (msg) { msg.textContent = ''; msg.classList.remove('bad'); }
+    toggleModal('b2bFeedbackModal');
+    setTimeout(() => { if (subj && !subj.value.trim()) subj.focus(); else body?.focus(); }, 60);
+}
+
+async function b2bFeedbackSend(btn) {
+    const subj = (document.getElementById('b2bFbSubject')?.value || '').trim();
+    const body = (document.getElementById('b2bFbBody')?.value || '').trim();
+    const msg = document.getElementById('b2bFbMsg');
+    const say = (text, bad) => {
+        if (!msg) return alert(text);
+        msg.textContent = text;
+        msg.classList.toggle('bad', !!bad);
+    };
+    if (!subj) return say('Give it a subject line, even a rough one.', true);
+    if (!body) return say('Write what is on your mind first.', true);
+
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+        const res = await fetch(B2B_OUTREACH_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'send_feedback',
+                subject: subj,
+                message: body,
+                user: _b2bUser(),
+                role: _b2bRole(),
+                // Which view they were looking at. Not a category -- it is the
+                // one piece of context that costs the sender nothing and saves
+                // a round trip asking "where were you when this happened".
+                view: _b2bView,
+            }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || out.success === false) throw new Error(out.error || `HTTP ${res.status}`);
+        // Cleared only now that it is actually gone.
+        const s = document.getElementById('b2bFbSubject');
+        const b = document.getElementById('b2bFbBody');
+        if (s) s.value = '';
+        if (b) b.value = '';
+        closeAllModals();
+        _b2bSay('Sent to Nick. Thanks — that is genuinely how this gets better.');
+    } catch (e) {
+        // Kept in the dialog rather than an alert, so what they wrote is still
+        // on screen behind the message and can be sent again.
+        say(`That didn't send: ${e.message}`, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = label;
+    }
 }
 
 async function crmOpen() {
