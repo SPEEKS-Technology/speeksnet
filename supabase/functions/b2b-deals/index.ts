@@ -269,6 +269,11 @@ const ITEM_COLS = [
   // folded into staff_notes: whoever is listing should not have to pan through
   // pricing chatter to find the one line addressed to them.
   "listing_info", "label_printed_at", "label_printed_by", "label_printed_qty",
+  // Which store lists THIS line. The listing location moved from the deal to
+  // the item in 0081 so a deal can be split across stores;
+  // b2b_deals.listing_store is now the single-store convenience and
+  // b2b_deals.listing_stores the trigger-maintained roll-up.
+  "listing_store",
 ].join(",");
 
 // `computer` folds the old laptop/desktop split into one type; the legacy two
@@ -1417,24 +1422,204 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, next_stage: toCorp ? "listing_location" : "listing" });
       }
 
+      // assign_listing { id, listing_store }                    all of it, one store
+      // assign_listing { id, assignments: [{item_id, store}] }  split it up
+      //
+      // Nick, 2026-09-10: "1 you select if you want to split up the deal, and 2
+      // you select which items you want to go where."
+      //
+      // BOTH SHAPES WRITE THE SAME THING. Even the single-store case stamps
+      // every item, because 0081 made the assignment live on the item and a
+      // uniform model is worth more than a clever one -- per-store totals,
+      // per-store progress and the store-scoped item fetch then work identically
+      // whether a deal went to one store or five, with no "if split" branch in
+      // any read path.
+      //
+      // b2b_deals.listing_store keeps its old meaning: the single store, or NULL
+      // when there is more than one. Everything that reads it for an unsplit
+      // deal carries on working untouched.
       if (action === "assign_listing") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "listing_location") return jsonResponse({ success: false, error: "This deal isn't waiting for a listing location." }, 409);
-        const store = oneOf(String(body.listing_store ?? "").toUpperCase(), STORES, "Listing store")!;
+        if (deal.stage !== "listing_location") {
+          return jsonResponse({ success: false, error: "This deal isn't waiting for a listing location." }, 409);
+        }
+        // Corp only, explicitly: "The transferring and the assigning pricing
+        // locations should be just available by corp."
+        if (!mayApprove(body)) {
+          return jsonResponse({ success: false, error: "Only corp can assign listing locations." }, 403);
+        }
+
+        const raw = Array.isArray(body.assignments) ? body.assignments : null;
+        const single = raw ? null : oneOf(String(body.listing_store ?? "").toUpperCase(), STORES, "Listing store")!;
+
+        const { data: items } = await supabase.from("b2b_deal_items")
+          .select("id").eq("deal_id", deal.id).limit(5000);
+        const ids = new Set((items || []).map((i: any) => String(i.id)));
+        if (!ids.size) return jsonResponse({ success: false, error: "This deal has no lines to assign." }, 409);
+
+        // itemId -> store, validated before a single write. A half-assigned deal
+        // is worse than a rejected one: some lines would be visible to a store
+        // and the rest to nobody, and the stage would already have moved.
+        const plan = new Map<string, string>();
+        if (single) {
+          for (const id of ids) plan.set(id, single);
+        } else {
+          for (const a of raw!) {
+            const itemId = String(a?.item_id || "");
+            if (!ids.has(itemId)) {
+              return jsonResponse({ success: false, error: "One of those lines isn't on this deal." }, 400);
+            }
+            plan.set(itemId, oneOf(String(a?.store ?? "").toUpperCase(), STORES, "Listing store")!);
+          }
+          const missing = [...ids].filter((id) => !plan.has(id));
+          if (missing.length) {
+            return jsonResponse({
+              success: false,
+              error: `${missing.length} line${missing.length === 1 ? "" : "s"} ${
+                missing.length === 1 ? "has" : "have"} no store yet. Every line has to go somewhere.`,
+            }, 400);
+          }
+        }
+
+        // Grouped so this is one UPDATE per store rather than one per line: a
+        // 60-line pallet split two ways is two statements, not sixty.
+        const byStore = new Map<string, string[]>();
+        for (const [itemId, st] of plan) {
+          if (!byStore.has(st)) byStore.set(st, []);
+          byStore.get(st)!.push(itemId);
+        }
+        for (const [st, itemIds] of byStore) {
+          const { error } = await supabase.from("b2b_deal_items")
+            .update({ listing_store: st }).in("id", itemIds);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        }
+
+        const stores = [...byStore.keys()].sort();
+        // The trigger has already filled listing_stores from the items above, so
+        // this update only has to set the stage and the single-store column --
+        // and clearing it is what makes the deal read as split.
         const { error } = await supabase.from("b2b_deals").update({
-          stage: "listing", listing_store: store,
+          stage: "listing",
+          listing_store: stores.length === 1 ? stores[0] : null,
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", store);
+
+        for (const st of stores) await broadcastChange("b2b", st);
+        // One notification per store, each naming only that store's share --
+        // a store being told about the other store's units is the same leak the
+        // scoped item fetch exists to prevent.
+        for (const st of stores) {
+          const n = byStore.get(st)!.length;
+          await notifyStage({
+            deal, kind: "b2b_listing", by: str(body.user, 120, "User"),
+            stores: [st],
+            title: `Ready to list at ${st} — ${dealRef(deal)}`,
+            body: stores.length === 1
+              ? `${dealRef(deal)}${dealWho(deal)} has been accepted and routed to ${st} for listing.`
+              : `${dealRef(deal)}${dealWho(deal)} has been accepted and split across ${
+                  stores.length} stores. ${n} line${n === 1 ? "" : "s"} ${
+                  n === 1 ? "is" : "are"} yours to list at ${st}.`,
+          });
+        }
+        return jsonResponse({ success: true, stores, split: stores.length > 1 });
+      }
+
+      // transfer_items { id, item_ids: [...], to_store, note? }
+      //
+      // "I will also need the ability to make changes and transfer items between
+      // listing locations in the listing stage (mostly in the event an item was
+      // assigned wrong)."
+      //
+      // Corp only, same as assigning. Logged into b2b_deal_transfers with
+      // kind 'item' rather than a new table: 0021 exists to answer "why is this
+      // pallet at MPL when the paperwork says LEE", and one line moving is that
+      // same question at finer grain.
+      if (action === "transfer_items") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (!mayApprove(body)) {
+          return jsonResponse({ success: false, error: "Only corp can move items between stores." }, 403);
+        }
+        if (deal.stage !== "listing") {
+          return jsonResponse({
+            success: false,
+            error: "Items can only be moved while the deal is being listed.",
+          }, 409);
+        }
+        const to = oneOf(String(body.to_store ?? "").toUpperCase(), STORES, "Store")!;
+        const wanted = (Array.isArray(body.item_ids) ? body.item_ids : []).map((x: any) => String(x || ""));
+        if (!wanted.length) return jsonResponse({ success: false, error: "No lines picked to move." }, 400);
+
+        const { data: items } = await supabase.from("b2b_deal_items")
+          .select("id, line_no, sku, listing_store, listed_qty").eq("deal_id", deal.id).in("id", wanted);
+        if (!items || items.length !== wanted.length) {
+          return jsonResponse({ success: false, error: "One of those lines isn't on this deal." }, 400);
+        }
+
+        const moving = items.filter((i: any) => i.listing_store !== to);
+        if (!moving.length) {
+          return jsonResponse({ success: false, error: `Those lines are already at ${to}.` }, 409);
+        }
+        // Units already live on Shopify are the one thing a move cannot quietly
+        // carry: the listing belongs to the store that made it, and moving the
+        // line would put another store's listings under their name. Refused with
+        // the line named rather than half-moved.
+        const listed = moving.filter((i: any) => (Number(i.listed_qty) || 0) > 0);
+        if (listed.length) {
+          const names = listed.map((i: any) => i.sku || `line ${i.line_no}`).join(", ");
+          return jsonResponse({
+            success: false,
+            error: `${names} already ${listed.length === 1 ? "has" : "have"} units listed on Shopify, `
+              + "so they can't be moved. Unlist those units first.",
+          }, 409);
+        }
+
+        const from = [...new Set(moving.map((i: any) => i.listing_store).filter(Boolean))];
+        const { error } = await supabase.from("b2b_deal_items")
+          .update({ listing_store: to }).in("id", moving.map((i: any) => i.id));
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+
+        await supabase.from("b2b_deal_transfers").insert(moving.map((i: any) => ({
+          deal_id: deal.id, kind: "item", item_id: i.id,
+          from_store: i.listing_store, to_store: to,
+          moved_by: str(body.user, 120, "User"),
+          note: str(body.note, 1000, "Note"),
+        })));
+
+        // The trigger has refreshed listing_stores, so re-read it and keep
+        // b2b_deals.listing_store honest: a deal that has collapsed back onto
+        // one store must stop reading as split, and one that has just spread
+        // must start.
+        const { data: fresh } = await supabase.from("b2b_deals")
+          .select("listing_stores").eq("id", deal.id).maybeSingle();
+        const nowStores: string[] = fresh?.listing_stores || [];
+        await supabase.from("b2b_deals").update({
+          listing_store: nowStores.length === 1 ? nowStores[0] : null,
+        }).eq("id", deal.id);
+
+        // A store that had finished, and has just been handed more work, is no
+        // longer finished. Dropping its part row is what reopens it -- and if
+        // the deal had already completed on the back of that row, it has to come
+        // back to listing too.
+        await supabase.from("b2b_deal_listing_parts")
+          .delete().eq("deal_id", deal.id).eq("store", to);
+        if (deal.stage !== "listing") {
+          await supabase.from("b2b_deals").update({ stage: "listing" }).eq("id", deal.id);
+        }
+
+        for (const st of [...new Set([...from, to])]) await broadcastChange("b2b", st as string);
+        const n = moving.length;
         await notifyStage({
           deal, kind: "b2b_listing", by: str(body.user, 120, "User"),
-          stores: [store],
-          title: `Ready to list at ${store} — ${dealRef(deal)}`,
-          body: `${dealRef(deal)}${dealWho(deal)} has been accepted and routed to ${store} for listing.`,
+          stores: [to],
+          title: `${n} line${n === 1 ? "" : "s"} moved to ${to} — ${dealRef(deal)}`,
+          body: `${dealRef(deal)}${dealWho(deal)}: ${n} line${n === 1 ? "" : "s"} ${
+            n === 1 ? "is" : "are"} now yours to list at ${to}.`,
         });
-        return jsonResponse({ success: true });
+        return jsonResponse({ success: true, moved: n, stores: nowStores });
       }
+
 
       // ============================================================== listing
 
@@ -1618,20 +1803,108 @@ Deno.serve(async (req: Request) => {
         });
       }
 
+      // complete { id, store? }
+      //
+      // Nick, 2026-09-10, on how a split deal should behave: "Treat it as 2
+      // seperate deals from that point to each store. Once they complete their
+      // part then it marks as completed."
+      //
+      // So completion is PER STORE. A store finishes its own lines and says so;
+      // the deal reaching `completed` is then a consequence of the last part
+      // landing rather than a click somebody has to be chased for.
+      //
+      // For a deal that went to ONE store this is the old behaviour exactly:
+      // one part, completed, deal completed, same press of the same button. The
+      // per-store path is not a special case bolted on -- it is the general one,
+      // and the single-store deal is the degenerate version of it. That is why
+      // 0081 backfilled every existing deal's items with a store.
       if (action === "complete") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
         if (deal.stage !== "listing") return jsonResponse({ success: false, error: "Only a deal in listing can be completed." }, 409);
+
         const { data: roll } = await supabase.from("b2b_deal_list")
-          .select("outstanding_units").eq("id", deal.id).maybeSingle();
-        const outstanding = roll?.outstanding_units ?? 0;
-        if (outstanding > 0) {
-          return jsonResponse({ success: false, error: `${outstanding} unit${outstanding === 1 ? "" : "s"} still need listing or recycling.` }, 409);
+          .select("outstanding_units, listing_stores").eq("id", deal.id).maybeSingle();
+        const stores: string[] = roll?.listing_stores || [];
+
+        // WHOSE part. A store user completes their own and may not complete
+        // anybody else's; corp names the store it means. Falling back to the
+        // whole deal when there is only one store keeps every existing caller
+        // working without passing anything new.
+        const asked = String(body.store || "").toUpperCase();
+        const callerStore = String(body.caller_store || "").toUpperCase();
+        let part = "";
+        if (asked && STORES.includes(asked)) part = asked;
+        else if (callerStore && STORES.includes(callerStore)) part = callerStore;
+        else if (stores.length === 1) part = stores[0];
+
+        if (!part) {
+          return jsonResponse({
+            success: false,
+            error: "This deal is split across stores, so say which store's part is finished.",
+          }, 400);
         }
-        const { error } = await supabase.from("b2b_deals").update({ stage: "completed" }).eq("id", deal.id);
-        if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", dealStore(deal));
-        return jsonResponse({ success: true });
+        if (stores.length && !stores.includes(part)) {
+          return jsonResponse({ success: false, error: `${part} has no lines on this deal.` }, 409);
+        }
+        // A store may only ever finish its own half. Corp is exempt because
+        // corp is the one unpicking a mess when a store has gone home.
+        if (callerStore && callerStore !== part && !mayApprove(body)) {
+          return jsonResponse({ success: false, error: "You can only complete your own store's part." }, 403);
+        }
+
+        // Outstanding for THAT store, not the deal. A store whose own lines are
+        // done must not be blocked by another store's, which is the whole point
+        // of treating the halves as separate deals.
+        const { data: mine } = await supabase.from("b2b_deal_items")
+          .select("quantity, listed_qty, recycled_qty")
+          .eq("deal_id", deal.id).eq("listing_store", part).limit(5000);
+        const outstanding = (mine || []).reduce(
+          (n: number, i: any) => n + Math.max(0, (i.quantity || 0) - (i.listed_qty || 0) - (i.recycled_qty || 0)),
+          0,
+        );
+        if (outstanding > 0) {
+          return jsonResponse({
+            success: false,
+            error: `${outstanding} unit${outstanding === 1 ? "" : "s"} still need listing or recycling`
+              + `${stores.length > 1 ? ` at ${part}` : ""}.`,
+          }, 409);
+        }
+
+        const { error: pErr } = await supabase.from("b2b_deal_listing_parts")
+          .upsert({
+            deal_id: deal.id, store: part,
+            completed_at: new Date().toISOString(),
+            completed_by: str(body.user, 120, "User") || "Unknown",
+          }, { onConflict: "deal_id,store" });
+        if (pErr) return jsonResponse({ success: false, error: pErr.message }, 500);
+
+        // The deal is finished when every store on it has finished. Read back
+        // rather than reasoned about: the part row above and any others were
+        // written by different people at different times.
+        const { data: done } = await supabase.from("b2b_deal_listing_parts")
+          .select("store").eq("deal_id", deal.id);
+        const doneSet = new Set((done || []).map((r: any) => r.store));
+        const allIn = stores.length > 0 && stores.every((s) => doneSet.has(s));
+        // No listing_stores at all means a deal from before 0081 whose items
+        // were never assigned; the deal-wide count is the only answer available
+        // and it is the one the old code used.
+        const legacyDone = stores.length === 0 && (roll?.outstanding_units ?? 0) === 0;
+
+        if (allIn || legacyDone) {
+          const { error } = await supabase.from("b2b_deals").update({ stage: "completed" }).eq("id", deal.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        }
+
+        for (const st of (stores.length ? stores : [dealStore(deal)].filter(Boolean))) {
+          await broadcastChange("b2b", st as string);
+        }
+        return jsonResponse({
+          success: true,
+          part,
+          deal_completed: allIn || legacyDone,
+          waiting_on: stores.filter((s) => !doneSet.has(s)),
+        });
       }
 
       // Bounce a quote back to whoever priced it, with a note saying why.
@@ -2503,14 +2776,37 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ?deal_id=<uuid> → that deal's line items, each with the Shopify listings
-    // its units became. Two queries indexed on deal_id rather than a per-item
-    // fan-out, then grouped here.
+    // ?deal_id=<uuid>[&store=<CODE>] → that deal's line items, each with the
+    // Shopify listings its units became. Two queries indexed on deal_id rather
+    // than a per-item fan-out, then grouped here.
+    //
+    // &store SCOPES THE LINES, AND IT IS THE SERVER THAT HAS TO DO IT.
+    // Nick, 2026-09-10: "each store can only see the part of the B2b DEAL that
+    // was actually brought to their store." Filtering in the browser would mean
+    // shipping every store's lines -- and the deal's whole commercial picture --
+    // to every store on it, and calling that privacy. So the rows never leave
+    // here.
+    //
+    // The rule is `listing_store = store OR listing_store IS NULL`, one
+    // predicate covering both ends of the pipeline:
+    //   * before acceptance nothing is assigned, so a pricing store still sees
+    //     every line, which is exactly what it needs;
+    //   * from acceptance on every line carries a store, so a listing store sees
+    //     only its own.
+    // Unassigned lines staying visible is the safe direction of the two -- an
+    // unassigned line has not been brought to anybody else's store yet.
+    //
+    // Corp passes no store, or ALL, and sees the deal whole.
     const dealId = url.searchParams.get("deal_id");
     if (dealId) {
+      const itemStore = String(url.searchParams.get("store") || "").toUpperCase();
+      const scopeItems = itemStore && itemStore !== "ALL" && itemStore !== "CORP"
+        && STORES.includes(itemStore) ? itemStore : null;
+      let itemQ = supabase.from("b2b_deal_items")
+        .select(ITEM_COLS).eq("deal_id", dealId);
+      if (scopeItems) itemQ = itemQ.or(`listing_store.eq.${scopeItems},listing_store.is.null`);
       const [{ data, error }, { data: listings, error: lErr }] = await Promise.all([
-        supabase.from("b2b_deal_items")
-          .select(ITEM_COLS).eq("deal_id", dealId)
+        itemQ
           .order("sort_order", { ascending: true })
           .order("line_no", { ascending: true }).limit(5000),
         supabase.from("b2b_item_listings")
@@ -2550,8 +2846,13 @@ Deno.serve(async (req: Request) => {
     const store = String(url.searchParams.get("store") || "ALL").toUpperCase();
     const oneStore = !!store && store !== "ALL";
     const archiveWanted = Math.min(ARCHIVE_MAX, Math.max(0, intOr(url.searchParams.get("archive"), ARCHIVE_DEFAULT)));
+    // listing_stores is in here because a SPLIT deal names its stores only on
+    // the items -- b2b_deals.listing_store is null when a deal is split, so the
+    // two original predicates would hide the deal from every store working it.
+    // The roll-up column exists precisely so this stays one indexed predicate
+    // (GIN, `cs` = contains) rather than a join against the items.
     const scoped = (q: any) => oneStore
-      ? q.or(`pricing_store.eq.${store},listing_store.eq.${store}`)
+      ? q.or(`pricing_store.eq.${store},listing_store.eq.${store},listing_stores.cs.{${store}}`)
       : q;
     // A board scoped to one store is a store user's board, and they have no
     // business with the client's contact details -- see CONTACT_COLS. Corp asks
