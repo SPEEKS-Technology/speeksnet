@@ -2302,6 +2302,35 @@ t('3.9.0 the button says whose part it finishes', function () {
         return src.indexOf('My Part Is Done') > -1
         || 'the split label is missing';
 });
+
+// Nick, 2026-09-10: "Remove the open in email button. Instead just have the copy
+// quote button and the mark accepted button."
+t('3.9.0 the mail-draft route is gone entirely, not just hidden', function () {
+    // Removed rather than left unreachable: the mailto never carried the quote
+    // (the draft opened blank and you pasted into it), so it was always Copy
+    // Quote plus a dialog -- and Copy Quote records the send on its own.
+    if (typeof b2bSendQuote !== 'undefined') return 'b2bSendQuote still exists';
+    if (typeof b2bOpenDraft !== 'undefined') return 'b2bOpenDraft still exists';
+    return typeof _b2bShowSendStep === 'undefined' || 'the send-step dialog still exists';
+});
+t('3.9.0 the quote screens keep Copy Quote and Mark Accepted', function () {
+    // Source rather than rendered DOM: _b2bStageQuote paints into the deal modal
+    // shell, which only exists in operations.html -- so in this suite the
+    // innerHTML would read back empty and the check would pass for the wrong
+    // reason. The strings live in the renderer either way.
+    var src = _srcOf(_b2bStageQuote);
+    if (/Open In Email/.test(src)) return 'Open In Email is still rendered';
+    if (/b2bSendQuote/.test(src)) return 'the mail-draft handler is still wired up';
+    if (src.indexOf('b2bCopyQuote') === -1) return 'Copy Quote is not on the quote screens';
+    return src.indexOf('b2bAcceptQuote') > -1 || 'Mark Accepted is not on the quote screens';
+});
+t('3.9.0 nothing left points the user at a button that is gone', function () {
+    // The clipboard-blocked message used to say "use Open In Email instead",
+    // which would now be advice to press something that does not exist.
+    var src = _srcOf(b2bCopyQuote);
+    if (/Open In Email/.test(src)) return 'the copy fallback still names the removed button';
+    return /Sent By Hand|by hand/.test(src) || 'the fallback offers no way through';
+});
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();

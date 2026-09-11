@@ -23264,9 +23264,6 @@ function _b2bAwaitingApproval(deal) {
     return deal.stage === 'review';
 }
 
-// Deals whose send step has already been offered this session, so re-opening one
-// to re-read it doesn't trap you in the same dialog every time.
-const _b2bSendPrompted = new Set();
 
 // Where the goods physically are, and where they are going.
 //
@@ -23477,7 +23474,7 @@ function b2bSaveNotes(id) {
 
 // 1.2 -- record that the quote went to the client by hand.
 //
-// Paul asked for this twice. The tool's own Open In Email already stamps the
+// Paul asked for this twice. Copy Quote already stamps the
 // date, so this is for the case he actually hit: sending it himself, outside the
 // tool, which left nothing on the record at all.
 async function b2bMarkQuoteSent(id) {
@@ -23486,7 +23483,7 @@ async function b2bMarkQuoteSent(id) {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
     const raw = prompt(
         `What date did the quote go to ${deal.client?.company || 'the client'}?\n\n`
-        + `Use this when you sent it yourself rather than through Open In Email. `
+        + `Use this when you sent it yourself rather than through Copy Quote. `
         + `It moves the deal to "Out For Quote" and starts the clock on their answer.`,
         deal.quote_sent_at ? String(deal.quote_sent_at).slice(0, 10) : today);
     if (raw === null) return;
@@ -23617,12 +23614,11 @@ function _b2bStageReview(deal) {
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
                     data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
                 <!-- For a quote sent by hand, outside the tool. Paul asked for
-                     this twice; Open In Email stays the normal route. Same label
+                     this twice; Copy Quote stays the normal route. Same label
                      as the one on the quote screen's send bar -- one action
                      should not have two names. -->
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')"
-                    data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
-                <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>`
+                    data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>`
                 : `<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">${escapeHtml(sent)}</span>`}`,
         after: () => { _b2bPaintTotals(); _b2bPaintQuoteDoc(); },
     });
@@ -23662,9 +23658,8 @@ function _b2bStageQuote(deal) {
                      without anyone having to open a mail draft first. -->
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
                     data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')" data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
-                <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
+                <span class="b2b-sendbar-hint">Copy Quote puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
             </div>
             ${_b2bProofPanel(deal)}
             ${_b2bNotesPanel(deal)}
@@ -23720,9 +23715,8 @@ function _b2bStageQuote(deal) {
                      without anyone having to open a mail draft first. -->
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
                     data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')" data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
-                <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
+                <span class="b2b-sendbar-hint">Copy Quote puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
             </div>
             ${_b2bProofPanel(deal)}
             ${_b2bTotalsBar(true, _b2bModalItems.length > 1
@@ -23751,13 +23745,11 @@ function _b2bStageQuote(deal) {
         after: () => {
             _b2bPaintTotals();
             _b2bPaintQuoteDoc();
-            // The whole point of the approval step is that the quote goes out, so
-            // an approver opening an unsent one gets the send step put in front
-            // of them -- once, with a way straight back to reviewing it.
-            if (unsent && canAccept && !_b2bSendPrompted.has(deal.id)) {
-                _b2bSendPrompted.add(deal.id);
-                setTimeout(() => b2bSendQuote(deal.id, null, true), 260);
-            }
+            // There WAS an auto-prompt here: opening an unsent quote as an
+            // approver put the send step in front of you once. It went with the
+            // mail draft it existed to launch (Nick, 2026-09-10) -- a popup
+            // whose only action was "Open Email Draft" has nothing to offer once
+            // that route is gone, and Copy Quote records the send on its own.
         },
     });
 }
@@ -24172,7 +24164,14 @@ async function b2bCopyQuote() {
     } catch (_) {
         try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
     }
-    if (!copied) return _b2bSay("Your browser blocked the clipboard — use Open In Email instead.", true);
+    // There is no mail-draft route to point at any more, so this has to be
+    // actionable on its own. The quote document is rendered on the screen behind
+    // this message, so selecting it by hand is the way through -- and Sent By
+    // Hand records the send once it has actually gone.
+    if (!copied) {
+        return _b2bSay('Your browser blocked the clipboard. Select the quote below and copy it '
+            + 'by hand, then use Sent By Hand once you have sent it.', true);
+    }
 
     // Nothing to record: already sent, or this person may not approve. Copying
     // still works, it just doesn't move the deal.
@@ -24216,101 +24215,25 @@ function _b2bQuoteSubject(deal) {
     return picked ? `Your PayMore Quote — Equipment Collected ${picked}` : 'Your PayMore Quote';
 }
 
-// Step one: put the quote on the clipboard and explain the paste, so nobody
-// lands in an empty draft wondering where the quote went.
-// `auto` marks the copy that opens by itself when an approver lands on an unsent
-// quote. It stays quiet about a missing address and offers a way back to the
-// quote, because the user didn't ask for it.
-async function b2bSendQuote(id, btn, auto) {
-    const to = document.getElementById('b2bQuoteTo')?.value.trim();
-    if (!to) {
-        if (auto) return;
-        return _b2bSay('Enter an email address to open the quote against.', true);
-    }
-    const deal = _b2bModalDeal;
-    if (!deal) return;
+// THE MAIL-DRAFT ROUTE IS GONE (Nick, 2026-09-10: "Remove the open in email
+// button. Instead just have the copy quote button and the mark accepted
+// button.").
+//
+// What stood here: b2bSendQuote put the quote on the clipboard and opened a
+// two-step dialog, whose primary action b2bOpenDraft fired a `mailto:` with the
+// subject pre-filled and the body empty, then recorded the send. Plus an
+// auto-prompt that pushed that dialog at an approver opening an unsent quote,
+// and _b2bShowSendStep / _b2bIsMac, which existed only to explain the paste.
+//
+// All of it removed rather than left unreachable. The mailto never carried the
+// quote -- a draft opened blank and you pasted into it -- so it was always
+// Copy Quote plus a dialog, and Copy Quote already records the send on its own
+// (3.8.1, "Copy Quote is a complete way to send one"). Keeping dead code around
+// for a route nobody can reach is how the next person ends up reading it to
+// work out which of two paths is live.
+//
+// _b2bQuoteSubject survives: the quote document still titles itself with it.
 
-    await _b2bBusy(btn, 'Preparing…', async () => {
-        const html = _b2bQuoteInlineHtml(deal, _b2bModalItems);
-        const text = _b2bQuoteText(deal, _b2bModalItems);
-        let copied = false;
-        try {
-            await navigator.clipboard.write([new ClipboardItem({
-                'text/html':  new Blob([html], { type: 'text/html' }),
-                'text/plain': new Blob([text], { type: 'text/plain' }),
-            })]);
-            copied = true;
-        } catch (_) {
-            try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
-        }
-        _b2bShowSendStep(deal, to, copied, auto);
-    });
-}
-
-const _b2bIsMac = () => /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent || '');
-
-function _b2bShowSendStep(deal, to, copied, auto) {
-    const paste = _b2bIsMac() ? 'Cmd + V' : 'Ctrl + V';
-    const steps = copied ? [
-        `Your email app opens a new draft to <b>${escapeHtml(to)}</b> with the subject already filled in.`,
-        `Click into the message body and press <kbd>${paste}</kbd> — the full quote is already on your clipboard.`,
-        'Check it over, add anything you want to say, and send.',
-    ] : [
-        `Your email app opens a new draft to <b>${escapeHtml(to)}</b>.`,
-        'The quote is in the body as plain text — your browser blocked the clipboard, so the formatted version could not be copied.',
-        'Check it over and send.',
-    ];
-
-    _b2bShowDeal({
-        // The deal's own stage, so the header icon matches and the print
-        // whitelist sees review as well as quote.
-        stage: deal.stage,
-        eyebrow: deal.ref,
-        title: auto ? 'This Quote Is Ready To Send' : 'Send This Quote',
-        sub: auto ? 'It has been priced and approved for sending. Review it first if you would rather.'
-             : copied ? 'The quote is copied and ready to paste.' : 'The quote will be in the draft as plain text.',
-        body: `
-            <div class="b2b-sendstep">
-                <div class="b2b-sendstep-ico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</div>
-                <div class="b2b-sendstep-t">What happens next</div>
-                <ol class="b2b-sendsteps">${steps.map(s => `<li>${s}</li>`).join('')}</ol>
-                ${copied ? '<div class="b2b-sendstep-note">Nothing has been emailed yet — you send it yourself from your own mailbox, so the client\'s reply comes back to you.</div>' : ''}
-            </div>`,
-        footer: `
-            <span class="b2b-msg" id="b2bDealMsg"></span>
-            <button class="kpi-cancel-btn" onclick="b2bBackToQuote('${deal.id}')">${auto ? 'Review The Quote First' : 'Back'}</button>
-            <button class="b2b-btn b2b-btn-primary" onclick="b2bOpenDraft('${deal.id}','${escapeHtml(to).replace(/'/g, "\\'")}',${copied})">Open Email Draft</button>`,
-    });
-}
-
-function b2bBackToQuote(id) {
-    const deal = _b2bDealById(id) || _b2bModalDeal;
-    if (deal) { _b2bModalDeal = deal; _b2bStageQuote(deal); }
-}
-
-// Step two. The mailto fires first and synchronously, straight off this click:
-// an external protocol handler needs user activation, and awaiting anything
-// first would spend it.
-async function b2bOpenDraft(id, to, copied) {
-    const deal = _b2bDealById(id) || _b2bModalDeal;
-    if (!deal) return;
-
-    let href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(_b2bAscii(_b2bQuoteSubject(deal)))}`;
-    if (!copied) {
-        const ascii = _b2bAscii(_b2bQuoteText(deal, _b2bModalItems));
-        const withBody = `${href}&body=${encodeURIComponent(ascii)}`;
-        href = withBody.length > 1900
-            ? `${href}&body=${encodeURIComponent(ascii.slice(0, 1200) + '\n\n[quote truncated - use Copy instead]')}`
-            : withBody;
-    }
-    window.location.href = href;
-
-    await _b2bPost({ action: 'send_quote', id, to }, "Couldn't record the send");
-    await b2bRefresh();
-    const next = _b2bDealById(id);
-    if (next) { _b2bModalDeal = next; _b2bStageQuote(next); }
-    _b2bSay(`Draft opened for ${to}.`);
-}
 
 async function b2bAcceptQuote(id, btn) {
     if (!_b2bApprovalGate(_b2bDealById(id) || _b2bModalDeal, id, 'deal')) return;
