@@ -2015,46 +2015,6 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, pickup_date: when });
       }
 
-      // set_quote_sent { id, quote_sent_at, user }
-      //
-      // Paul, 2026-08-22 and again 2026-08-27: "Need a way to manually indicate
-      // that I've sent the quote to the customer and when... are you going to
-      // still add a button that shows I sent the quote to the customer and
-      // awaiting their approval?"
-      //
-      // send_quote already records this when the mailto draft is opened, and the
-      // `quote` stage already means "sent, waiting on the client". What was
-      // missing is the case Paul actually hit: he sent Loch Lloyd by hand,
-      // outside the tool, so nothing recorded it and the date was wrong when it
-      // finally was. This sets the date without pretending to have sent an email
-      // and without touching quote_send_count, which counts OUR sends.
-      if (action === "set_quote_sent") {
-        const deal = await getDeal(supabase, String(body.id || ""));
-        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (!["review", "quote"].includes(deal.stage)) {
-          return jsonResponse({ success: false, error: "Only a priced deal can be marked as sent." }, 409);
-        }
-        // Leaving `review` is the approval, exactly as it is for send_quote --
-        // marking a quote sent by hand must not be a way around that gate.
-        if (deal.stage === "review") {
-          if (!mayApprove(body)) {
-            return jsonResponse({ success: false, error: "Only corp can mark a quote as sent." }, 403);
-          }
-        }
-        const when = isoDate(body.quote_sent_at, "Sent date", true);
-        if (when && when > todayCentral()) {
-          return jsonResponse({ success: false, error: "A quote can't have been sent in the future." }, 400);
-        }
-        const { error } = await supabase.from("b2b_deals").update({
-          stage: "quote",
-          // Dated, not timestamped-now: the point is to record the day it
-          // actually went out, which may be a week ago.
-          quote_sent_at: `${when}T12:00:00Z`,
-        }).eq("id", deal.id);
-        if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", dealStore(deal));
-        return jsonResponse({ success: true, quote_sent_at: when });
-      }
 
       // set_notes { id, quote_note, internal_note }
       //
@@ -2077,47 +2037,24 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
-      // mark_paid { id, paid_amount, paid_at, user } / unmark with paid_at null
+      // REMOVED 2026-09-10 — set_quote_sent and mark_paid.
       //
-      // Paul, 2026-08-22: he wanted to see "a section payment has been made to
-      // customer" and there was no payment concept in B2B at all.
+      // Nick: "You can actually remove the whole overview tab and the 'mark paid'
+      // feature. Niether of which are used nor necessary." And, of the quote:
+      // "The quote will never be sent by hand. You can remove that as well."
       //
-      // Corp-only, and only after acceptance -- the DB constraint says the same
-      // thing, but a 403 explains itself and a constraint violation does not.
-      // Defaults to the accepted net offer, which is what we actually owe.
-      if (action === "mark_paid") {
-        const deal = await getDeal(supabase, String(body.id || ""));
-        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        const role = String(body.role || "").toLowerCase().trim();
-        if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can record a payment." }, 403);
-        }
-        if (!deal.accepted_at) {
-          return jsonResponse({ success: false, error: "This deal hasn't been accepted, so there is nothing owed yet." }, 409);
-        }
-        // Explicitly clearing it: somebody recorded a payment on the wrong deal.
-        if (body.paid_at === null) {
-          const { error } = await supabase.from("b2b_deals")
-            .update({ paid_at: null, paid_by: null, paid_amount: null }).eq("id", deal.id);
-          if (error) return jsonResponse({ success: false, error: error.message }, 500);
-          await broadcastChange("b2b", dealStore(deal));
-          return jsonResponse({ success: true, paid_at: null });
-        }
-        const when = isoDate(body.paid_at, "Payment date", true);
-        if (when && when > todayCentral()) {
-          return jsonResponse({ success: false, error: "A payment can't be dated in the future." }, 400);
-        }
-        const who = str(body.user, 120, "User", true);
-        const amt = money(body.paid_amount, "Amount paid");
-        const { error } = await supabase.from("b2b_deals").update({
-          paid_at: `${when}T12:00:00Z`,
-          paid_by: who,
-          paid_amount: amt,
-        }).eq("id", deal.id);
-        if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", dealStore(deal));
-        return jsonResponse({ success: true, paid_at: when, paid_amount: amt });
-      }
+      // set_quote_sent recorded a quote sent outside the tool (Paul, 2026-08-22
+      // and 2026-08-27). mark_paid recorded a payment to the client and fed the
+      // Overview's "Owed To Clients" figure. Both existed for the Overview and
+      // the by-hand send, and both went with them.
+      //
+      // The COLUMNS are deliberately still there. quote_sent_at is written by
+      // send_quote and read all over the quote screens, so it stays regardless.
+      // paid_at / paid_by / paid_amount are now written by nothing, but dropping
+      // them would destroy any payment somebody did record while the feature was
+      // live -- that is a call for Nick with the data in front of him, not a
+      // side effect of deleting a button.
+
 
       // start_pricing { id, user }
       //

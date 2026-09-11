@@ -16289,7 +16289,7 @@ function _b2bPrevalStore() {
 
 // CRM notification setup (cadences + who gets the reach-out emails) is CEO-only.
 function _b2bCanCrm() { return _b2bRole() === 'ceo'; }
-function _b2bCanOverview(){ return ['ceo', 'district manager'].includes(_b2bRole()); }
+
 // Employees / trainees help PRICE items but never escalate: no submit, no quote,
 // no listing/complete, no accept. Pricing-edit only.
 function _b2bIsEmployee(){ return ['employee', 'training'].includes(_b2bRole()); }
@@ -17564,7 +17564,6 @@ async function _b2bSyncOpenDeal(ping) {
 
 function b2bSetView(view) {
     if (view === 'clients'  && !_b2bCanClientDirectory())  view = 'queue';
-    if (view === 'overview' && !_b2bCanOverview()) view = 'queue';
     if (view === 'prevals'  && !_b2bCanPreval())   view = 'queue';
     const changed = _b2bView !== view;
     _b2bView = view;
@@ -17587,7 +17586,6 @@ function b2bRender() {
     const body = document.getElementById('b2bBody');
     if (!body) return;
     if (_b2bView === 'clients'  && !_b2bCanClientDirectory())  _b2bView = 'queue';
-    if (_b2bView === 'overview' && !_b2bCanOverview()) _b2bView = 'queue';
     if (_b2bView === 'prevals'  && !_b2bCanPreval())   _b2bView = 'queue';
 
     const scoped = _b2bDeals.filter(_b2bInScope);
@@ -17602,7 +17600,7 @@ function b2bRender() {
         b.setAttribute('aria-selected', 'false');
     });
     const btn = { queue: 'b2bViewQueueBtn', pipeline: 'b2bViewPipelineBtn', finished: 'b2bViewFinishedBtn',
-                  clients: 'b2bViewClientsBtn', overview: 'b2bViewOverviewBtn',
+                  clients: 'b2bViewClientsBtn',
                   prevals: 'b2bViewPrevalsBtn' }[_b2bView];
     const activeBtn = document.getElementById(btn);
     activeBtn?.classList.add('active');
@@ -17669,7 +17667,6 @@ function b2bRender() {
     else if (_b2bView === 'prevals')  body.innerHTML = _b2bRenderPrevals();
     else if (_b2bView === 'finished') body.innerHTML = _b2bRenderFinished(scoped);
     else if (_b2bView === 'clients')  body.innerHTML = _b2bRenderClients();
-    else if (_b2bView === 'overview') body.innerHTML = _b2bRenderOverview(scoped);
     else                              body.innerHTML = _b2bRenderQueue(scoped, queue);
 }
 
@@ -18735,194 +18732,6 @@ async function b2bDeleteClient(id) {
     await b2bRefresh();
 }
 
-// --- view: Overview (DM/CEO) -----------------------------------------------
-
-// The day paid_at existed. Deals accepted before it cannot have a payment
-// recorded against them, so the Overview must not count them as owed -- see
-// the payment block below.
-const B2B_PAY_TRACKED_FROM = '2026-09-08';
-
-function _b2bRenderOverview(scoped) {
-    const live = scoped.filter(d => d.stage !== 'completed' && d.stage !== 'declined');
-
-    // The table scrolls inside its own wrapper rather than stretching the card.
-    // These are five-column tables with nowrap chips and a button in them, and
-    // on a phone they were rendering ~640px wide inside a 390px frame, which
-    // pushed the whole page sideways -- the one thing styles.css's own layout
-    // note (see its header) says must never happen. Every card goes through
-    // here, so the wrapper belongs here and not on the two new ones.
-    const card = (title, sub, head, body, empty) => `
-        <div class="b2b-ov">
-            <div class="b2b-ov-h"><div><span class="b2b-ov-t">${title}</span><span class="b2b-ov-s">${sub}</span></div></div>
-            ${body ? `<div class="b2b-ov-scroll"><table class="cb-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`
-                   : `<div class="b2b-doc-empty">${empty}</div>`}
-        </div>`;
-
-    // Stalled: nothing has moved in a week.
-    const stalled = live.filter(d => _b2bDaysIn(d) >= 7).sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
-    const stalledRows = stalled.map(d => `
-        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
-            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
-            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td>${_b2bStageChip(d.stage, d)}</td>
-            <td>${_b2bStoreTag(d.listing_store || d.pricing_store)}</td>
-            <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
-        </tr>`).join('');
-
-    // Two stages, oldest first. The tile used to add both together and call the
-    // total "awaiting a decision", which claimed the client was sitting on money
-    // nobody had sent them -- while the table below said "not sent" about those
-    // same deals. They are separate stages now, so the split is just a filter.
-    const byAge = (a, b) => _b2bDaysIn(b) - _b2bDaysIn(a);
-    const toApprove  = live.filter(d => d.stage === 'review').sort(byAge);
-    const withClient = live.filter(d => d.stage === 'quote').sort(byAge);
-    const quotes = [...toApprove, ...withClient];
-    const quoteRows = quotes.map(d => `
-        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
-            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
-            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td>${escapeHtml(d.client?.contact_email || '—')}</td>
-            <td class="c">${d.stage === 'review'
-                ? '<span class="b2b-age b2b-age-warn">to approve</span>'
-                : `sent ${d.quote_send_count || 1}×`}</td>
-            <td class="r b">${_b2bMoney(_b2bNetOffer(d))}</td>
-        </tr>`).join('');
-
-    // Inventory bought and paid for that is not yet earning.
-    const unlisted = live.filter(d => d.stage === 'listing' && _b2bOutstanding(d) > 0)
-        .sort((a, b) => _b2bOutstanding(b) - _b2bOutstanding(a));
-    const unlistedTotal = unlisted.reduce((s, d) => s + _b2bNetCost(d), 0);
-    const unlistedRows = unlisted.map(d => `
-        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
-            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
-            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td>${_b2bStoreTag(d.listing_store)}</td>
-            <td class="c">${_b2bOutstanding(d)} of ${d.total_units}</td>
-            <td class="r b">${_b2bMoney(_b2bNetCost(d))}</td>
-        </tr>`).join('');
-
-    // Certified wipes across everything in flight. A wipe promised at pricing is
-    // a debt from that moment: we have discounted the client for it, and the
-    // units cannot be listed until someone certifies it.
-    const wipesSold = live.reduce((n, d) => n + (Number(d.wipe_units) || 0), 0);
-    const wipesDone = live.reduce((n, d) => n + (Number(d.wiped_units) || 0), 0);
-    const wipesOwed = Math.max(0, wipesSold - wipesDone);
-    const wipeFees  = live.reduce((s, d) => s + (Number(d.total_wipe_fee) || 0), 0);
-
-    // Picked up and not yet priced. Paul, 2026-08-22, asked for exactly this
-    // section and it was the one of his four the Overview never had. Split on
-    // pricing_started_at rather than on stage, so "nobody has touched it" reads
-    // differently from "someone is part-way through it" -- which is the
-    // distinction Nick asked for on 2026-09-03 without a second stage.
-    const notPriced = live
-        .filter(d => ['pickup', 'pricing_location', 'pricing'].includes(d.stage))
-        .sort(byAge);
-    const notPricedRows = notPriced.map(d => `
-        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
-            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
-            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td>${_b2bStoreTag(d.pricing_store)}</td>
-            <td class="c">${d.stage === 'pricing'
-                ? (d.pricing_started_at
-                    ? '<span class="b2b-age b2b-age-ok">being priced</span>'
-                    : '<span class="b2b-age b2b-age-warn">not started</span>')
-                : _b2bStageChip(d.stage, d)}</td>
-            <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
-        </tr>`).join('');
-
-    // Accepted deals and whether the client has actually been paid.
-    //
-    // THE CUTOFF MATTERS. Payment tracking landed on this date; every deal
-    // accepted before it has paid_at null because nobody could record one, not
-    // because the client is owed money. Counting those as unpaid would have put
-    // a four-figure liability in front of Paul on day one that was pure
-    // artefact. So older deals are listed as "not recorded" and are left out of
-    // the total, and the tile only ever counts deals that could have been
-    // recorded. Once these have aged out this constant can go.
-    const accepted = scoped.filter(d => d.accepted_at && d.stage !== 'declined');
-    const trackable = d => String(d.accepted_at || '').slice(0, 10) >= B2B_PAY_TRACKED_FROM;
-    // Sorted on accepted_at, NOT byAge. byAge reads stage_changed_at, which on
-    // this table has nothing to do with the question being asked -- it put the
-    // rows in an order that looked random (LOCHCC-001, GD-001, LOCHCC-002,
-    // ASCEN-001: not by date, amount or ref). Longest-accepted first is the
-    // useful order for money owed, and most-recently-paid first for the rest.
-    const byAccepted = (a, b) => String(a.accepted_at || '').localeCompare(String(b.accepted_at || ''));
-    const owed = accepted.filter(d => !d.paid_at && trackable(d)).sort(byAccepted);
-    const untracked = accepted.filter(d => !d.paid_at && !trackable(d))
-        .sort((a, b) => -byAccepted(a, b));
-    const paidDeals = accepted.filter(d => d.paid_at)
-        .sort((a, b) => String(b.paid_at).localeCompare(String(a.paid_at)));
-    const owedTotal = owed.reduce((s, d) => s + _b2bNetOffer(d), 0);
-    const payRows = [...owed, ...paidDeals, ...untracked].slice(0, 40).map(d => `
-        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
-            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
-            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td class="c">${d.paid_at
-                ? `<span class="b2b-age b2b-age-ok">paid ${_b2bDate(d.paid_at)}</span>`
-                : trackable(d)
-                ? '<span class="b2b-age b2b-age-crit">unpaid</span>'
-                : '<span class="b2b-age" title="Accepted before payments were tracked here">not recorded</span>'}</td>
-            <td class="r b">${_b2bMoney(d.paid_at && d.paid_amount != null ? d.paid_amount : _b2bNetOffer(d))}</td>
-            <td class="r b2b-rowacts">${_b2bCanAccept()
-                ? `<button class="b2b-mini" onclick="event.stopPropagation();b2bMarkPaid('${d.id}')">${
-                    d.paid_at ? 'Clear' : 'Mark Paid'}</button>`
-                : ''}</td>
-        </tr>`).join('');
-
-    const tiles = `
-        <div class="b2b-tiles">
-            <div class="b2b-tile"><span class="b2b-tile-k">In Flight</span><span class="b2b-tile-v">${live.length}</span><span class="b2b-tile-c">deals moving</span></div>
-            <!-- The headline is the value ACTUALLY out with clients, and the
-                 caption used to reference deals still awaiting approval, whose
-                 value is not in it. With nothing sent yet that read "$0 · 2
-                 still to approve" directly above a table listing $3,981 and
-                 $455 -- the tile contradicting the rows under it. The caption
-                 now only describes what the number covers, and the
-                 to-approve value is stated as its own figure. -->
-            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(withClient.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${
-                withClient.length
-                    ? `${withClient.length} awaiting a client decision`
-                    : 'nothing with a client yet'}${
-                toApprove.length
-                    ? ` · ${_b2bMoney(toApprove.reduce((s, d) => s + _b2bNetOffer(d), 0))} still to approve`
-                    : ''}</span></div>
-            <div class="b2b-tile"><span class="b2b-tile-k">Unlisted Stock</span><span class="b2b-tile-v">${_b2bMoney(unlistedTotal)}</span><span class="b2b-tile-c">${unlisted.reduce((n, d) => n + _b2bOutstanding(d), 0)} units to list</span></div>
-            <div class="b2b-tile ${stalled.length ? 'warn' : ''}"><span class="b2b-tile-k">Stalled</span><span class="b2b-tile-v">${stalled.length}</span><span class="b2b-tile-c">no movement in 7+ days</span></div>
-            <!-- Certified wipes, which we charge for and therefore owe. Counted
-                 across everything in flight, since a wipe promised at pricing is
-                 outstanding until someone certifies it during listing. -->
-            <div class="b2b-tile ${wipesOwed ? 'warn' : ''}"><span class="b2b-tile-k">Certified Wipes</span><span class="b2b-tile-v">${wipesDone}<span class="b2b-tile-of"> / ${wipesSold}</span></span><span class="b2b-tile-c">${wipesOwed ? `${wipesOwed} still to certify` : 'all certified'} · ${_b2bMoney(wipeFees)} discounted</span></div>
-            <!-- What we owe clients on quotes they have already accepted. -->
-            <div class="b2b-tile ${owed.length ? 'warn' : ''}"><span class="b2b-tile-k">Owed To Clients</span><span class="b2b-tile-v">${_b2bMoney(owedTotal)}</span><span class="b2b-tile-c">${
-                owed.length ? `${owed.length} accepted deal${owed.length === 1 ? '' : 's'} not yet paid`
-                : untracked.length ? `nothing outstanding · ${untracked.length} older deal${untracked.length === 1 ? '' : 's'} predate tracking`
-                : 'everyone accepted has been paid'}</span></div>
-        </div>`;
-
-    // Ordered the way Paul asked for them (2026-08-22): what has been picked up
-    // but not priced, what is priced and waiting on him, what is out with the
-    // client, and what has been paid. Stalled leads because it is the only one
-    // that says something is wrong rather than merely where things are.
-    return tiles
-        + card('Stalled Deals', 'No movement in a week or more',
-               '<th>Ref</th><th>Client</th><th>Stage</th><th>Store</th><th class="r">In stage</th>',
-               stalledRows, 'Everything is moving')
-        + card('Picked Up, Not Yet Priced', 'Collected and waiting on someone to price it',
-               '<th>Ref</th><th>Client</th><th>Store</th><th class="c">Progress</th><th class="r">Waiting</th>',
-               notPricedRows, 'Everything collected has been priced')
-        + card('Open Quotes', 'Waiting on approval, or out with the client',
-               '<th>Ref</th><th>Client</th><th>Email</th><th class="c">Sent</th><th class="r">Offer</th>',
-               quoteRows, 'No quotes are open right now')
-        + card('Bought But Not Listed', 'Inventory paid for and not yet earning',
-               '<th>Ref</th><th>Client</th><th>Store</th><th class="c">Outstanding</th><th class="r">Cost</th>',
-               unlistedRows, 'Everything accepted has been listed')
-        + card('Paying The Client',
-               untracked.length
-                   ? 'Accepted deals, and whether the money has gone out. Deals accepted before payments were tracked here show as not recorded.'
-                   : 'Accepted deals, and whether the money has gone out',
-               '<th>Ref</th><th>Client</th><th class="c">Status</th><th class="r">Amount</th><th></th>',
-               payRows, 'Nothing has been accepted yet');
-}
 
 // ---------------------------------------------------------------------------
 // NEW DEAL
@@ -20632,14 +20441,10 @@ function _b2bSummary(deal) {
                     : ''}`],
         ['Pricing',   _b2bStoreTag(deal.pricing_store)],
     );
-    // Only once there is something to say: a quote that has gone out, and a
-    // payment that has been made. Both were facts the system held and never
-    // showed anywhere a person looks.
+    // Only once there is something to say. The Paid row went with the mark-paid
+    // feature on 2026-09-10; the columns are still on the deal, so if payment
+    // tracking ever comes back this is where it showed.
     if (deal.quote_sent_at) rows.push(['Quote sent', _b2bDate(deal.quote_sent_at)]);
-    if (deal.paid_at) {
-        rows.push(['Paid', `${_b2bDate(deal.paid_at)}${
-            deal.paid_amount != null ? ` · ${_b2bMoney(deal.paid_amount, 2)}` : ''}`]);
-    }
     if (deal.listing_store) rows.push(['Listing', _b2bStoreTag(deal.listing_store)]);
     if (deal.signed_by)     rows.push(['Signed by', escapeHtml(deal.signed_by)]);
     if (deal.delivered_by || deal.received_by) {
@@ -23472,31 +23277,6 @@ function b2bSaveNotes(id) {
     })).catch(e => _b2bSay(`Couldn't save that note: ${e.message}`, true));
 }
 
-// 1.2 -- record that the quote went to the client by hand.
-//
-// Paul asked for this twice. Copy Quote already stamps the
-// date, so this is for the case he actually hit: sending it himself, outside the
-// tool, which left nothing on the record at all.
-async function b2bMarkQuoteSent(id) {
-    const deal = _b2bDealById(id) || _b2bModalDeal;
-    if (!deal) return;
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-    const raw = prompt(
-        `What date did the quote go to ${deal.client?.company || 'the client'}?\n\n`
-        + `Use this when you sent it yourself rather than through Copy Quote. `
-        + `It moves the deal to "Out For Quote" and starts the clock on their answer.`,
-        deal.quote_sent_at ? String(deal.quote_sent_at).slice(0, 10) : today);
-    if (raw === null) return;
-    const when = raw.trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(when)) return _b2bSay('Give the date as YYYY-MM-DD.', true);
-    try {
-        await _b2bSend({ action: 'set_quote_sent', id, quote_sent_at: when, role: _b2bRole() });
-        closeAllModals();
-        await b2bRefresh();
-    } catch (e) {
-        _b2bSay(`Couldn't record that: ${e.message}`, true);
-    }
-}
 
 // 1.4 -- correct the collection date.
 //
@@ -23522,56 +23302,6 @@ async function b2bEditPickupDate(id) {
     }
 }
 
-// 1.3 -- record that the client has been paid.
-//
-// Defaults to what we owe them (the accepted net offer), because that is the
-// figure in all but the exceptional case, and typing it again is how a wrong
-// number gets recorded.
-async function b2bMarkPaid(id) {
-    const deal = _b2bDealById(id) || _b2bModalDeal;
-    if (!deal) return;
-    if (deal.paid_at) {
-        if (!confirm(`${deal.ref} is already recorded as paid ${_b2bDate(deal.paid_at)}`
-            + `${deal.paid_amount != null ? ` (${_b2bMoney(deal.paid_amount, 2)})` : ''}`
-            + `${deal.paid_by ? ` by ${deal.paid_by}` : ''}.\n\nClear that record?`)) return;
-        try {
-            await _b2bSend({ action: 'mark_paid', id, paid_at: null, role: _b2bRole() });
-            await b2bRefresh();
-        } catch (e) { _b2bSay(`Couldn't clear it: ${e.message}`, true); }
-        return;
-    }
-    // One prompt, not two. Both answers are pre-filled with the ones that are
-    // almost always right -- what we owe, paid today -- so the common case is
-    // Enter, and a backdated or part payment is an edit rather than a second
-    // dialog. Two sequential prompts read like an interrogation for something
-    // that is usually a single confirmation.
-    const owed = _b2bNetOffer(deal);
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-    const raw = prompt(
-        `Record a payment to ${deal.client?.company || 'the client'}.\n\n`
-        + `We owe ${_b2bMoney(owed, 2)} on the accepted quote.\n`
-        + `Enter as "amount on date" — edit either part if it differs.`,
-        `${Number(owed || 0).toFixed(2)} on ${today}`);
-    if (raw === null) return;
-
-    const text = String(raw).trim();
-    const when = (text.match(/(\d{4}-\d{2}-\d{2})/) || [])[1] || today;
-    // The amount is whatever is left once the date is out of the way, so a
-    // typed "$1,250.00 on 2026-09-05" reads the same as "1250".
-    const amt = parseFloat(text.replace(when, '').replace(/[^0-9.]/g, ''));
-    if (!Number.isFinite(amt) || amt < 0) {
-        return _b2bSay("Couldn't read an amount out of that — try \"1250 on 2026-09-05\".", true);
-    }
-    if (when > today) return _b2bSay("A payment can't be dated in the future.", true);
-    try {
-        await _b2bSend({ action: 'mark_paid', id, paid_at: when, paid_amount: amt,
-                         role: _b2bRole(), user: _b2bUser() });
-        _b2bSay(`Recorded ${_b2bMoney(amt, 2)} paid ${_b2bDate(when)}.`);
-        await b2bRefresh();
-    } catch (e) {
-        _b2bSay(`Couldn't record the payment: ${e.message}`, true);
-    }
-}
 
 function _b2bStageReview(deal) {
     const canAccept = _b2bCanAccept();
@@ -23606,19 +23336,17 @@ function _b2bStageReview(deal) {
             ${_b2bIsCorp() ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
             ${canAccept ? `
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>
-                <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
-                    value="${escapeHtml(deal.client?.contact_email || '')}">
-                <!-- A complete route, not a fallback: on an unsent quote this
-                     also records the send, so Mark Accepted becomes available
-                     without anyone having to open a mail draft first. -->
+                <!-- Copy Quote is the whole send route now. It puts the quote on
+                     the clipboard AND records the send, so Mark Accepted becomes
+                     available without a mail draft or a second button.
+                     Open In Email and Sent By Hand both went on 2026-09-10 -- the
+                     first opened a BLANK draft you had to paste into anyway, and
+                     the second recorded a send made outside the tool, which Nick
+                     says does not happen. The address field went with them: it
+                     was only ever read by the mailto, so leaving it would ask for
+                     a client's email and then do nothing with it. -->
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
-                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <!-- For a quote sent by hand, outside the tool. Paul asked for
-                     this twice; Copy Quote stays the normal route. Same label
-                     as the one on the quote screen's send bar -- one action
-                     should not have two names. -->
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')"
-                    data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>`
+                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>`
                 : `<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">${escapeHtml(sent)}</span>`}`,
         after: () => { _b2bPaintTotals(); _b2bPaintQuoteDoc(); },
     });
@@ -23651,15 +23379,12 @@ function _b2bStageQuote(deal) {
             ${_b2bWhereLine(deal)}
             <div class="b2b-sendbar">
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
-                <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
-                    value="${escapeHtml(deal.client?.contact_email || '')}">
-                <!-- A complete route, not a fallback: on an unsent quote this
-                     also records the send, so Mark Accepted becomes available
-                     without anyone having to open a mail draft first. -->
+                <!-- One button, because Copy Quote is the whole route: it copies
+                     the quote AND records the send. The address field, Open In
+                     Email and Sent By Hand all went on 2026-09-10. -->
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
                     data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')" data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
-                <span class="b2b-sendbar-hint">Copy Quote puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
+                <span class="b2b-sendbar-hint">Puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
             </div>
             ${_b2bProofPanel(deal)}
             ${_b2bNotesPanel(deal)}
@@ -23708,15 +23433,12 @@ function _b2bStageQuote(deal) {
             ${banner}
             <div class="b2b-sendbar${unsent ? ' urgent' : ''}">
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
-                <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
-                    value="${escapeHtml(deal.client?.contact_email || '')}">
-                <!-- A complete route, not a fallback: on an unsent quote this
-                     also records the send, so Mark Accepted becomes available
-                     without anyone having to open a mail draft first. -->
+                <!-- One button, because Copy Quote is the whole route: it copies
+                     the quote AND records the send. The address field, Open In
+                     Email and Sent By Hand all went on 2026-09-10. -->
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
                     data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')" data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
-                <span class="b2b-sendbar-hint">Copy Quote puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
+                <span class="b2b-sendbar-hint">Puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
             </div>
             ${_b2bProofPanel(deal)}
             ${_b2bTotalsBar(true, _b2bModalItems.length > 1
@@ -24164,13 +23886,14 @@ async function b2bCopyQuote() {
     } catch (_) {
         try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
     }
-    // There is no mail-draft route to point at any more, so this has to be
-    // actionable on its own. The quote document is rendered on the screen behind
-    // this message, so selecting it by hand is the way through -- and Sent By
-    // Hand records the send once it has actually gone.
+    // Neither of the routes this used to point at still exists -- the mail draft
+    // and Sent By Hand both went on 2026-09-10 -- so it has to be actionable on
+    // its own. The quote document is rendered on the screen behind this message,
+    // so selecting it by hand is the way through, and pressing Copy Quote again
+    // is what records the send once the clipboard behaves.
     if (!copied) {
         return _b2bSay('Your browser blocked the clipboard. Select the quote below and copy it '
-            + 'by hand, then use Sent By Hand once you have sent it.', true);
+            + 'by hand, then press Copy Quote again to record the send.', true);
     }
 
     // Nothing to record: already sent, or this person may not approve. Copying

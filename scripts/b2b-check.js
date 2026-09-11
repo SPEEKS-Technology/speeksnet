@@ -663,13 +663,6 @@ t('1.2 the summary shows a sent quote once there is one', function () {
     return _b2bSummary(Object.assign({}, noteDeal, { quote_sent_at: '2026-09-03T14:30:00Z' }))
         .indexOf('Quote sent') > -1 || 'not shown after sending';
 });
-t('1.3 the summary shows a payment once there is one', function () {
-    var html = _b2bSummary(Object.assign({}, noteDeal, {
-        accepted_at: '2026-09-04T00:00:00Z', paid_at: '2026-09-05T12:00:00Z', paid_amount: 1250,
-    }));
-    if (html.indexOf('Paid') === -1) return 'payment not shown';
-    return html.indexOf('$1,250.00') > -1 || 'amount not shown';
-});
 
 t('3.8 the chip tells awaiting pricing from actively pricing', function () {
     var waiting = _b2bStageChip('pricing', { });
@@ -684,31 +677,6 @@ t('3.8 opening the pricing sheet stamps it once', function () {
     return src.indexOf('pricing_started_at') > -1 || 'fires it even when already stamped';
 });
 
-t('1.3 the Overview has both sections Paul asked for', function () {
-    var role = sessionStorage.getItem('speeksUserRole');
-    sessionStorage.setItem('speeksUserRole', 'ceo');
-    var deals = [
-        { id: 'a', ref: 'A-001', stage: 'pricing', pricing_store: 'LEE', total_units: 2,
-          client: { company: 'Alpha' }, stage_changed_at: '2026-09-01T00:00:00Z' },
-        // Accepted AFTER B2B_PAY_TRACKED_FROM, so it can legitimately read as
-        // unpaid. A deal accepted before that shows "not recorded" instead --
-        // covered by its own check further down.
-        { id: 'b', ref: 'B-001', stage: 'listing', pricing_store: 'OVL', listing_store: 'OVL',
-          total_units: 2, listed_units: 0, accepted_at: '2026-09-20T00:00:00Z',
-          total_offer: 500, client: { company: 'Beta' }, stage_changed_at: '2026-09-20T00:00:00Z' },
-    ];
-    var html;
-    try { html = _b2bRenderOverview(deals); }
-    finally { sessionStorage.setItem('speeksUserRole', role); }
-    if (html.indexOf('Picked Up, Not Yet Priced') === -1) return 'no not-priced section';
-    if (html.indexOf('Paying The Client') === -1) return 'no payment section';
-    if (html.indexOf('Owed To Clients') === -1) return 'no owed tile';
-    if (html.indexOf('Alpha') === -1) return 'unpriced deal not listed';
-    if (html.indexOf('not started') === -1) return 'does not distinguish not-started';
-    // The accepted, unpaid deal must read as unpaid and offer the action.
-    if (html.indexOf('unpaid') === -1) return 'accepted deal not shown as unpaid';
-    return html.indexOf('b2bMarkPaid') > -1 || 'no way to record a payment';
-});
 
 // --- polish pass: bugs found reviewing the above ---------------------------
 
@@ -808,49 +776,6 @@ t('polish: one name for the send-by-hand action', function () {
     var src = _b2bStageReview.toString() + _b2bStageQuote.toString();
     if (src.indexOf('I Sent It Myself') > -1) return 'two labels for one action';
     return (src.match(/Sent By Hand/g) || []).length >= 2 || 'not offered on both screens';
-});
-t('polish: historical deals are not counted as money owed', function () {
-    // paid_at only exists from B2B_PAY_TRACKED_FROM. Counting deals accepted
-    // before it as unpaid would put a false liability on the Overview.
-    var role = sessionStorage.getItem('speeksUserRole');
-    sessionStorage.setItem('speeksUserRole', 'ceo');
-    var old = { id: 'o', ref: 'O-1', stage: 'completed', accepted_at: '2026-08-11T00:00:00Z',
-                total_offer: 900, total_units: 1, client: { company: 'Older' },
-                stage_changed_at: '2026-08-11T00:00:00Z' };
-    var html;
-    try { html = _b2bRenderOverview([old]); }
-    finally { sessionStorage.setItem('speeksUserRole', role); }
-    if (html.indexOf('not recorded') === -1) return 'old deal not marked as pre-tracking';
-    if (html.indexOf('>unpaid<') > -1) return 'old deal counted as unpaid';
-    // The tile must read zero, not the deal's value.
-    if (/Owed To Clients<\/span><span class="b2b-tile-v">\$900/.test(html)) {
-        return 'old deal added to the owed total';
-    }
-    return html.indexOf('predate tracking') > -1 || 'no explanation of why it is not counted';
-});
-t('polish: a deal accepted after tracking IS counted as owed', function () {
-    var role = sessionStorage.getItem('speeksUserRole');
-    sessionStorage.setItem('speeksUserRole', 'ceo');
-    var fresh = { id: 'f', ref: 'F-1', stage: 'listing', accepted_at: '2026-09-30T00:00:00Z',
-                  total_offer: 400, total_units: 1, client: { company: 'Newer' },
-                  stage_changed_at: '2026-09-30T00:00:00Z' };
-    var html;
-    try { html = _b2bRenderOverview([fresh]); }
-    finally { sessionStorage.setItem('speeksUserRole', role); }
-    return html.indexOf('>unpaid<') > -1 || 'a trackable unpaid deal is not flagged';
-});
-t('polish: recording a payment takes one dialog, not two', function () {
-    var src = b2bMarkPaid.toString();
-    var prompts = (src.match(/prompt\(/g) || []).length;
-    return prompts === 1 || prompts + ' prompts in the payment flow';
-});
-t('polish: the payment dialog parses "amount on date"', function () {
-    // Guard the parse, since it is doing double duty on one input.
-    var text = '$1,250.00 on 2026-09-05';
-    var when = (text.match(/(\d{4}-\d{2}-\d{2})/) || [])[1];
-    var amt = parseFloat(text.replace(when, '').replace(/[^0-9.]/g, ''));
-    if (when !== '2026-09-05') return 'date: ' + when;
-    return amt === 1250 || 'amount: ' + amt;
 });
 
 // --- v3.8.1: approvals open to all corp, and Copy is a complete send --------
@@ -2329,7 +2254,38 @@ t('3.9.0 nothing left points the user at a button that is gone', function () {
     // which would now be advice to press something that does not exist.
     var src = _srcOf(b2bCopyQuote);
     if (/Open In Email/.test(src)) return 'the copy fallback still names the removed button';
-    return /Sent By Hand|by hand/.test(src) || 'the fallback offers no way through';
+    return /Copy Quote again|by hand/.test(src) || 'the fallback offers no way through';
+});
+// Nick, 2026-09-10: "You can actually remove the whole overview tab and the
+// 'mark paid' feature. Niether of which are used nor necessary." And, of the
+// quote: "The quote will never be sent by hand. You can remove that as well."
+//
+// Replaces the checks that guarded those features. A removal needs pinning as
+// much as an addition does -- these all had real behaviour worth protecting
+// while they existed, and nothing stops them being reintroduced by halves.
+t('3.9.0 the Overview tab is gone, tab and renderer alike', function () {
+    if (typeof _b2bRenderOverview !== 'undefined') return 'the renderer still exists';
+    if (typeof _b2bCanOverview !== 'undefined') return 'the role gate still exists';
+    var src = _srcOf(b2bRender) + _srcOf(b2bSetView);
+    return src.indexOf("'overview'") === -1 || 'the view router still knows about it';
+});
+t('3.9.0 mark-paid is gone, and nothing still reads a payment', function () {
+    if (typeof b2bMarkPaid !== 'undefined') return 'the handler still exists';
+    if (typeof B2B_PAY_TRACKED_FROM !== 'undefined') return 'the tracking cutoff is still here';
+    // The deal summary used to print a Paid row.
+    return _srcOf(_b2bSummary).indexOf('paid_at') === -1 || 'the summary still prints a payment';
+});
+t('3.9.0 sent-by-hand is gone from every quote screen', function () {
+    if (typeof b2bMarkQuoteSent !== 'undefined') return 'the handler still exists';
+    var src = _srcOf(_b2bStageReview) + _srcOf(_b2bStageQuote);
+    return src.indexOf('b2bMarkQuoteSent') === -1 || 'a screen still offers it';
+});
+t('3.9.0 the dead address field went with the mail route', function () {
+    // b2bQuoteTo was only ever READ by the removed mailto. Left behind it would
+    // ask for a client's email address and then do nothing with it, which is
+    // worse than not asking.
+    var src = _srcOf(_b2bStageReview) + _srcOf(_b2bStageQuote);
+    return src.indexOf('b2bQuoteTo') === -1 || 'the send bar still asks for an address';
 });
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
