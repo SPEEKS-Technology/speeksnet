@@ -21716,3 +21716,36 @@ select.dd-native {
 .b2b-pace-bar.sm { height: 5px; }
 .b2b-prog-part.done .b2b-pace-bar i { background: var(--sage-professional, #4a7c59); }
 .b2b-prog-wait { margin-top: 8px; font-size: 11px; font-weight: 650; color: var(--b2b-muted); }
+/* Two store tags side by side on a split deal. Kept tight so a board row does
+   not grow a line just because the goods went to two places. */
+.b2b-store-split { display: inline-flex; gap: 4px; flex-wrap: wrap; vertical-align: middle; }
+
+/* Per-store listing progress on a pipeline card (0081). Corp sees one labelled
+   row per store; a store sees a single bar for its own part. A finished store is
+   REPLACED by "Complete" rather than shown as a full bar -- at a glance those
+   two look identical, and the difference between "all listed" and "signed off"
+   is exactly what corp is scanning the board for. */
+.b2b-card-parts { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+.b2b-card-part { display: flex; align-items: center; gap: 6px; }
+.b2b-card-part-s {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .03em;
+    color: var(--b2b-muted); min-width: 26px; flex: 0 0 auto;
+}
+.b2b-card-part-bar {
+    position: relative; flex: 1 1 auto; height: 4px; border-radius: 999px;
+    background: var(--b2b-line-2, #e6ebe7); overflow: hidden;
+}
+.b2b-card-part-bar i {
+    position: absolute; inset: 0 auto 0 0; display: block; height: 100%;
+    border-radius: 999px; background: var(--sage-professional, #4a7c59);
+}
+.b2b-card-part-n {
+    font-size: 9.5px; font-weight: 700; color: var(--b2b-faint);
+    font-variant-numeric: tabular-nums; flex: 0 0 auto;
+}
+.b2b-card-part-done, .b2b-card-done {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .03em;
+    color: var(--sage-professional, #4a7c59);
+}
+.b2b-card-part-done { flex: 1 1 auto; }
+.b2b-card-done { margin-top: 6px; display: block; }

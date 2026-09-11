@@ -2287,6 +2287,131 @@ t('3.9.0 the dead address field went with the mail route', function () {
     var src = _srcOf(_b2bStageReview) + _srcOf(_b2bStageQuote);
     return src.indexOf('b2bQuoteTo') === -1 || 'the send bar still asks for an address';
 });
+
+// Two bugs Nick hit on the first real split, both silent -- nothing threw, the
+// screens just said the wrong thing.
+t('3.9.0 a split deal never reads as being at CORP', function () {
+    // listing_store is NULL on a split (one column cannot hold two stores), so
+    // `listing_store || pricing_store` fell through to the pricing store -- and
+    // a deal split at the listing step is one CORP priced. Every board row then
+    // claimed the goods were at head office.
+    var d = { listing_store: null, listing_stores: ['MPL', 'OVL'], pricing_store: 'CORP' };
+    var tag = _b2bDealStoreTag(d);
+    if (/CORP/.test(tag)) return 'a split deal still shows CORP';
+    if (tag.indexOf('MPL') === -1 || tag.indexOf('OVL') === -1) return 'not both stores: ' + tag;
+    // And the unsplit paths still work.
+    if (/OVL/.test(_b2bDealStoreTag({ listing_store: 'OVL', listing_stores: ['OVL'], pricing_store: 'CORP' })) === false) {
+        return 'a single-store deal lost its store';
+    }
+    return /CORP/.test(_b2bDealStoreTag({ listing_store: null, listing_stores: [], pricing_store: 'CORP' }))
+        || 'a deal with no listing store yet should still show where it is priced';
+});
+t('3.9.0 no board row falls back to the pricing store any more', function () {
+    var src = _srcOf(_b2bRenderQueue) + _srcOf(_b2bRenderPipeline)
+            + _srcOf(_b2bRenderFinished) + _srcOf(_b2bRenderClients);
+    return src.indexOf('listing_store || d.pricing_store') === -1
+        || 'a list still writes the fallback inline';
+});
+t('3.9.0 corp can open the listing screen and see both halves', function () {
+    // Corp has no store, so _b2bListsHere is false for every deal and a CEO fell
+    // through to null -- _b2bClickKind then returned 'view' and opened the
+    // read-only sheet instead of the listing screen.
+    return _asRole('ceo', 'CORP', function () {
+        var d = { stage: 'listing', listing_store: null, listing_stores: ['MPL', 'OVL'] };
+        var act = _b2bActionFor(d);
+        if (!act || act.kind !== 'listing') return 'corp gets no listing screen on a split deal';
+        // And corp's fetch stays unscoped, which is what makes "both halves" true.
+        return _b2bScopeQs() === '' || 'corp is scoping itself to one store';
+    });
+});
+t('3.9.0 a store still sees only its own half', function () {
+    return _asRole('manager', 'MPL', function () {
+        var d = { stage: 'listing', listing_store: null, listing_stores: ['MPL', 'OVL'] };
+        if (!_b2bActionFor(d)) return 'MPL cannot list its own half';
+        if (_b2bScopeQs() !== '&store=MPL') return 'a store is not scoping its fetch';
+        // A store with nothing on the deal gets nothing.
+        return _asRole('manager', 'BAL', function () {
+            return !_b2bActionFor(d) || 'BAL can list a deal it has no lines on';
+        });
+    });
+});
+t('3.9.0 the where-line says split instead of "not chosen yet"', function () {
+    var html = _b2bWhereLine({ pricing_store: 'CORP', listing_store: null,
+                               listing_stores: ['MPL', 'OVL'] });
+    if (html.indexOf('chosen once the client accepts') > -1) {
+        return 'a deal already split still says its listing store is to come';
+    }
+    return html.indexOf('split across') > -1 || 'the where-line does not mention the split';
+});
+
+// Nick, 2026-09-10, on the pipeline at a glance: "from a stores PoV: it looks
+// like any other B2B deal, just with only the items that were assigned... From
+// CORP POV: its broken into several progress bars labled by each store that it
+// got split into, and when one of them completes their section it just is
+// replaced with 'complete' instead of the progress bar on that segment."
+function _b2bCardDeal(over) {
+    var d = {
+        id: 'c1', ref: 'SPL-002', stage: 'listing',
+        listing_store: null, listing_stores: ['LEE', 'OVL'],
+        total_units: 10, listed_units: 3, recycled_units: 0,
+        listing_parts: [
+            { store: 'LEE', total_units: 4, listed_units: 1, recycled_units: 0, completed_at: null },
+            { store: 'OVL', total_units: 6, listed_units: 6, recycled_units: 0,
+              completed_at: '2026-09-10T10:00:00Z', completed_by: 'Ethan' },
+        ],
+    };
+    Object.keys(over || {}).forEach(function (k) { d[k] = over[k]; });
+    return d;
+}
+t('3.9.0 corp gets a labelled bar per store on the pipeline card', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var html = _b2bCardBar(_b2bCardDeal(), 'listing');
+        if (html.indexOf('b2b-card-parts') === -1) return 'no per-store rows';
+        if (html.indexOf('LEE') === -1 || html.indexOf('OVL') === -1) return 'a store is not labelled';
+        // LEE is 1 of 4 and unfinished, so it keeps a bar and a count.
+        return html.indexOf('1/4') > -1 || 'the unfinished store shows no progress';
+    });
+});
+t('3.9.0 a finished store is replaced by Complete, not a full bar', function () {
+    // A 100% bar and a finished one look identical at a glance, and the
+    // difference is exactly what corp is scanning for.
+    return _asRole('ceo', 'CORP', function () {
+        var html = _b2bCardBar(_b2bCardDeal(), 'listing');
+        var ovl = html.slice(html.indexOf('OVL'));
+        if (ovl.indexOf('b2b-card-part-done') === -1) return 'the finished store still shows a bar';
+        return ovl.indexOf('6/6') === -1 || 'the finished store still shows a count';
+    });
+});
+t('3.9.0 a store sees one bar, and it is its own', function () {
+    return _asRole('manager', 'LEE', function () {
+        var html = _b2bCardBar(_b2bCardDeal(), 'listing');
+        if (html.indexOf('b2b-card-parts') > -1) return 'a store is shown the other store rows';
+        if (html.indexOf('OVL') > -1) return 'another store leaked onto the card';
+        // LEE is 1 of 4 = 25%, NOT the deal's 3 of 10 = 30%.
+        if (html.indexOf('width:25%') === -1) return 'showing the deal total, not their part: ' + html;
+        return true;
+    });
+});
+t('3.9.0 a store that has finished sees Complete', function () {
+    return _asRole('manager', 'OVL', function () {
+        return _b2bCardBar(_b2bCardDeal(), 'listing').indexOf('Complete') > -1
+            || 'a finished store still sees a progress bar';
+    });
+});
+t('3.9.0 an unsplit deal keeps the plain bar it always had', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var d = _b2bCardDeal({ listing_store: 'OVL', listing_stores: ['OVL'],
+            listing_parts: [{ store: 'OVL', total_units: 10, listed_units: 3,
+                              recycled_units: 0, completed_at: null }] });
+        var html = _b2bCardBar(d, 'listing');
+        if (html.indexOf('b2b-card-parts') > -1) return 'one store should not get a breakdown';
+        return html.indexOf('b2b-pace-bar') > -1 || 'the plain bar is gone';
+    });
+});
+t('3.9.0 no bar outside the listing column', function () {
+    return _b2bCardBar(_b2bCardDeal({ stage: 'pricing' }), 'pricing') === ''
+        || 'a progress bar is drawn on a stage that has no listing progress';
+});
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();

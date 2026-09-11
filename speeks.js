@@ -16406,7 +16406,17 @@ function _b2bActionFor(deal) {
     }
     if (st === 'listing') {
         if (_b2bListsHere(deal, mine)) return B2B_ACTIONS.listing;
-        return _b2bIsDM() ? B2B_ACTIONS.listing : null;
+        // CORP AND DM GET IT TOO, and corp is the new half. Nick, 2026-09-10:
+        // "when corp is clicked on the deal while listing they can see both just
+        // from their point of view." Corp has no store of its own, so
+        // _b2bListsHere is false for every deal and a CEO fell through to null --
+        // which made _b2bClickKind return 'view' and opened the read-only sheet
+        // instead of the listing screen. On a split deal that is precisely the
+        // person who needs to see both halves at once.
+        //
+        // Their item fetch is unscoped (_b2bItemScope returns '' for corp), so
+        // corp sees every line while each store still sees only its own.
+        return (_b2bIsCorp() || _b2bIsDM()) ? B2B_ACTIONS.listing : null;
     }
     if (!_b2bIsCorp()) return null;
     // `review` and `quote` used to be one stage with an ad-hoc action literal
@@ -16551,6 +16561,29 @@ function _b2bStoreTag(code) {
     if (code === 'CORP') return '<span class="b2b-store b2b-store-corp">CORP</span>';
     return `<span class="b2b-store"><i class="b2b-dot" style="background:${STORE_TINTS[code] || '#94a3b8'}"></i>${escapeHtml(code)}</span>`;
 }
+
+// WHERE A DEAL IS, for a board row. Every list used to write
+// `_b2bStoreTag(d.listing_store || d.pricing_store)` inline, and that fallback
+// broke the moment a deal could be split (Nick, 2026-09-10: "The listing
+// location for example for the b2b deal named test ... is under store CORP for
+// listing?? This should not only not be possible, but I chose 2 of the actual
+// stores").
+//
+// It was CORP for a precise reason: a split deal has listing_store NULL -- the
+// single-store column cannot hold two -- so `||` fell through to pricing_store,
+// and a deal split at the listing step is one CORP priced, so pricing_store is
+// literally 'CORP'. The row then claimed the goods were at head office.
+//
+// listing_stores is the authority once anything has been assigned. Both stores
+// are shown rather than a count: "where is it" is the question the column
+// exists to answer, and "2 stores" answers it with another question.
+function _b2bDealStoreTag(deal) {
+    const stores = (deal && deal.listing_stores) || [];
+    if (stores.length > 1) {
+        return `<span class="b2b-store-split">${stores.map(_b2bStoreTag).join('')}</span>`;
+    }
+    return _b2bStoreTag(deal.listing_store || stores[0] || deal.pricing_store);
+}
 // Stroke attributes go inline rather than relying on an ancestor rule: the
 // deal modals sit outside .b2b-panel / .cb-panel, so a bare <svg> there renders
 // as a filled blob (paths) or nothing at all (lines).
@@ -16579,6 +16612,64 @@ function _b2bListedPct(deal) {
     const total = Number(deal.total_units) || 0;
     if (!total) return 0;
     return Math.round(((Number(deal.listed_units) + Number(deal.recycled_units)) / total) * 100);
+}
+
+// The listing progress on a PIPELINE CARD, which is two different pictures.
+//
+// Nick, 2026-09-10: "from a stores PoV: it looks like any other B2B deal, just
+// with only the items that were assigned. When its all completed it gets marked
+// as completed. From CORP POV: its broken into several progress bars labled by
+// each store that it got split into, and when one of them completes their
+// section it just is replaced with 'complete' instead of the progress bar on
+// that segment."
+//
+// So a store gets ONE bar and it is its own -- its part is the whole job as far
+// as it is concerned, and a card showing the other store's units would be
+// describing work it cannot do. Corp gets one labelled bar per store, and a
+// finished store's bar is replaced outright rather than shown full: a 100% bar
+// and a done bar look the same at a glance, and the difference between "all
+// listed" and "signed off as finished" is exactly what corp is scanning for.
+//
+// Falls back to the deal-wide bar whenever there are no parts -- a deal from
+// before 0081, or one still being assigned.
+function _b2bCardBar(deal, stageKey) {
+    if (stageKey !== 'listing') return '';
+    const parts = Array.isArray(deal.listing_parts) ? deal.listing_parts : [];
+
+    if (!_b2bIsCorp()) {
+        // A store's own slice, or the deal's if it somehow has no part.
+        const mine = _b2bMyPart(deal);
+        const pct = mine
+            ? (Number(mine.total_units)
+                ? Math.round(((Number(mine.listed_units) + Number(mine.recycled_units))
+                    / Number(mine.total_units)) * 100)
+                : 0)
+            : _b2bListedPct(deal);
+        if (mine && mine.completed_at) {
+            return '<div class="b2b-card-done">Complete</div>';
+        }
+        return `<div class="b2b-pace-bar sm"><i style="width:${pct}%"></i></div>`;
+    }
+
+    if (parts.length < 2) {
+        const one = parts[0];
+        if (one && one.completed_at) return '<div class="b2b-card-done">Complete</div>';
+        return `<div class="b2b-pace-bar sm"><i style="width:${_b2bListedPct(deal)}%"></i></div>`;
+    }
+
+    return `<div class="b2b-card-parts">${parts.map(p => {
+        const t = Number(p.total_units) || 0;
+        const d = (Number(p.listed_units) || 0) + (Number(p.recycled_units) || 0);
+        const pct = t ? Math.round((d / t) * 100) : 0;
+        return `
+            <div class="b2b-card-part">
+                <span class="b2b-card-part-s">${escapeHtml(p.store)}</span>
+                ${p.completed_at
+                    ? '<span class="b2b-card-part-done">Complete</span>'
+                    : `<span class="b2b-card-part-bar"><i style="width:${pct}%"></i></span>
+                       <span class="b2b-card-part-n">${d}/${t}</span>`}
+            </div>`;
+    }).join('')}</div>`;
 }
 
 // --- data -----------------------------------------------------------------
@@ -17694,7 +17785,7 @@ function _b2bRenderQueue(scoped, queue) {
                     <span class="b2b-q-ref">${escapeHtml(d.ref)}</span>
                     <span class="b2b-q-co">${escapeHtml(d.client?.company || 'Unknown client')}</span>
                     ${_b2bStageChip(d.stage, d)}
-                    ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+                    ${_b2bDealStoreTag(d)}
                 </div>
                 <div class="b2b-q-meta">${meta}<span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d in stage</span></div>
                 ${bar}
@@ -17723,7 +17814,7 @@ function _b2bRenderQueue(scoped, queue) {
                     <span class="b2b-f-ref">${escapeHtml(d.ref)}</span>
                     <span class="b2b-f-co">${escapeHtml(d.client?.company || '')}</span>
                     ${_b2bStageChip(d.stage, d)}
-                    ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+                    ${_b2bDealStoreTag(d)}
                     <span class="b2b-f-val">${d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : ''}</span>
                 </div>`).join('')}
             </div>
@@ -17774,13 +17865,12 @@ function _b2bRenderPipeline(scoped) {
         const cards = inCol.length ? inCol.map(d => {
             const days = _b2bDaysIn(d);
             const act  = _b2bActionFor(d);
-            const bar  = (key === 'listing')
-                ? `<div class="b2b-pace-bar sm"><i style="width:${_b2bListedPct(d)}%"></i></div>` : '';
+            const bar  = _b2bCardBar(d, key);
             return `
             <div class="b2b-card ${act ? 'act' : ''}" onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')">
                 <div class="b2b-card-top">
                     <span class="b2b-card-ref">${escapeHtml(d.ref)}</span>
-                    ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+                    ${_b2bDealStoreTag(d)}
                 </div>
                 <div class="b2b-card-co">${escapeHtml(d.client?.company || '')}</div>
                 ${bar}
@@ -17848,7 +17938,7 @@ function _b2bFinishedRows(rows) {
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
             <td><b>${escapeHtml(d.client?.company || '')}</b>${sub}</td>
             <td>${_b2bStageChip(d.stage, d)}</td>
-            <td>${_b2bStoreTag(d.listing_store || d.pricing_store)}</td>
+            <td>${_b2bDealStoreTag(d)}</td>
             <td class="c">${d.stage === 'completed' ? `${done} of ${d.total_units || 0}` : '—'}</td>
             <td class="r b">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d)) : '—'}</td>
             <td class="r">${_b2bDate(_b2bClosedAt(d))}</td>
@@ -18325,7 +18415,7 @@ function _b2bClientDrawer(id) {
         <div class="b2b-cd-row" onclick="event.stopPropagation();b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')">
             <span class="b2b-mono b2b-cd-ref">${escapeHtml(d.ref)}</span>
             ${_b2bStageChip(d.stage, d)}
-            ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+            ${_b2bDealStoreTag(d)}
             <span class="b2b-cd-units">${d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : _b2bLineCount(d)}</span>
             <span class="b2b-cd-val">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d))
                 : d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : ''}</span>
@@ -23083,10 +23173,17 @@ function _b2bAwaitingApproval(deal) {
 function _b2bWhereLine(deal) {
     if (!deal.pricing_store) return '';
     const at = deal.pricing_store;
+    // A SPLIT DEAL IS THE FIRST CASE WITH MORE THAN ONE ANSWER. Checking
+    // listing_store alone read a split as "not chosen yet" -- the single-store
+    // column is null precisely because two stores were chosen -- so the line
+    // said the listing store was still to come on a deal already being listed.
+    const split = (deal.listing_stores || []).length > 1;
     const to = deal.listing_store || (at === 'CORP' ? null : at);
-    const going = to
-        ? (to === at ? 'lists where it already is' : `lists at ${_b2bStoreTag(to)}`)
-        : 'listing store is chosen once the client accepts';
+    const going = split
+        ? `split across ${deal.listing_stores.map(_b2bStoreTag).join(' ')}`
+        : to
+            ? (to === at ? 'lists where it already is' : `lists at ${_b2bStoreTag(to)}`)
+            : 'listing store is chosen once the client accepts';
     return `
         <div class="b2b-note b2b-where">
             <span class="b2b-note-k">Where it is</span>

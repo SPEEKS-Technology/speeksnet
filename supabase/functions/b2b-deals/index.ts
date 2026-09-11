@@ -211,8 +211,21 @@ const DEAL_COLS = [
   // which is the point: it is where "Paul needs to know X before he sends this"
   // gets written by whoever priced it.
   "quote_note", "internal_note",
-  "paid_at", "paid_by", "paid_amount",
   "pricing_started_at", "pricing_started_by",
+  // THE SPLIT (0081). listing_stores is the roll-up of the per-item assignments
+  // and listing_parts each store's own counts and completion.
+  //
+  // Both belong here and the omission was the whole of the first split bug:
+  // this list is what the board actually ships, so without them the client saw
+  // `listing_stores` as undefined on every row. _b2bListsHere then failed for
+  // every store (hiding split deals from the people working them), the store
+  // column fell back to `listing_store || pricing_store` -- null, then CORP --
+  // and there were no per-store numbers to draw a progress bar from. One
+  // missing column, three symptoms, and nothing threw.
+  //
+  // paid_at / paid_by / paid_amount left with the mark-paid feature on
+  // 2026-09-10; the columns still exist on the deal but nothing reads them.
+  "listing_stores", "listing_parts",
 ].join(",");
 
 // Who to ring at the client. Corp business: a store prices and lists the goods,
