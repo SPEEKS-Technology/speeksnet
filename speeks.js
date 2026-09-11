@@ -16381,7 +16381,7 @@ function _b2bActionFor(deal) {
     // row already says "Corp records the certification" rather than hiding it.
     if (_b2bIsEmployee()) {
         if (st === 'pricing' && mine.includes(deal.pricing_store)) return B2B_ACTIONS.pricing;
-        if (st === 'listing' && _b2bListsHere(deal, mine)) return B2B_ACTIONS.listing;
+        if (st === 'listing' && !_b2bMyPartDone(deal) && _b2bListsHere(deal, mine)) return B2B_ACTIONS.listing;
         return null;
     }
 
@@ -16405,6 +16405,9 @@ function _b2bActionFor(deal) {
         return _b2bIsDM() ? B2B_ACTIONS.pricing : null;   // DM can always step in
     }
     if (st === 'listing') {
+        // A store whose own half is signed off has nothing left to do on this
+        // deal, so it leaves their queue even though the deal is still open.
+        if (_b2bMyPartDone(deal)) return null;
         if (_b2bListsHere(deal, mine)) return B2B_ACTIONS.listing;
         // CORP AND DM GET IT TOO, and corp is the new half. Nick, 2026-09-10:
         // "when corp is clicked on the deal while listing they can see both just
@@ -17918,7 +17921,26 @@ let _b2bArchiveDepth = B2B_ARCHIVE_STEPS[0];
 let _b2bFinOutcome   = 'all';   // all | completed | declined
 let _b2bFinQuery     = '';
 
-function _b2bIsTerminal(d) { return d.stage === 'completed' || d.stage === 'declined'; }
+// Finished — and for a store on a split deal, finished means THEIR half.
+//
+// Nick, 2026-09-11: "after I complete all of the listings for 1 store in the
+// split, that store should, in their view, have that b2b deal in completed."
+//
+// One function, because the pipeline (which excludes terminal deals), the
+// Completed list and its count all already run through it. A store's part being
+// signed off therefore moves the deal out of their board and into their
+// Completed in one change, while corp keeps following the deal itself and still
+// sees it in flight until the last store is done. Which is the whole premise:
+// "Treat it as 2 seperate deals from that point to each store."
+function _b2bMyPartDone(d) {
+    if (!d || _b2bIsCorp()) return false;     // corp follows the deal, not a part
+    if (d.stage !== 'listing') return false;
+    const mine = _b2bMyPart(d);
+    return !!(mine && mine.completed_at);
+}
+function _b2bIsTerminal(d) {
+    return d.stage === 'completed' || d.stage === 'declined' || _b2bMyPartDone(d);
+}
 
 // Closed-out date. stage_changed_at is when it reached its terminal stage.
 function _b2bClosedAt(d) { return d.stage_changed_at || d.updated_at || d.created_at; }
@@ -17967,7 +17989,10 @@ function _b2bFinishedSet(scoped) {
 function _b2bRenderFinished(scoped) {
     const all  = scoped.filter(_b2bIsTerminal);
     const rows = _b2bFinishedSet(scoped);
-    const won  = all.filter(d => d.stage === 'completed');
+    // Anything terminal that was not declined is done from THIS viewer's point of
+    // view -- which for a store includes a split deal whose own half is signed
+    // off, even though the deal itself is still in flight elsewhere.
+    const won  = all.filter(d => d.stage !== 'declined');
     const lost = all.filter(d => d.stage === 'declined');
 
     const tiles = `
@@ -24429,6 +24454,54 @@ function b2bCancelPending() {
     _b2bRepaintScanBar();
 }
 
+// Per-store counts derived from THE LOADED ITEMS, not from listing_parts.
+//
+// listing_parts is a server snapshot: it only changes when the board is
+// re-fetched, so every bar drawn from it sat frozen until the page was reloaded
+// (Nick, 2026-09-11: "ITs making me have to refresh my page to be able to see
+// the updated progress bars after I finish listing something"). The items in
+// _b2bModalItems are updated the moment a unit is listed, which is exactly the
+// thing being counted -- so they are the live truth and the snapshot is not.
+//
+// This works for both audiences from one code path, because every item carries
+// its own listing_store: corp has all the lines and groups into several stores,
+// a store has only its own and groups into one. Completion still comes from
+// listing_parts, and rightly -- a part is only finished when somebody says so,
+// which is an explicit action that already refreshes.
+function _b2bLiveParts(deal) {
+    const parts = Array.isArray(deal && deal.listing_parts) ? deal.listing_parts : [];
+    const byStore = new Map();
+    (_b2bModalItems || []).forEach((it) => {
+        // Only lines that actually carry a store. An unassigned line belongs to
+        // no part yet, and bucketing it under '' would invent a nameless store
+        // in the breakdown -- or, worse, collapse a split deal to one bar.
+        const s = it.listing_store;
+        if (!s) return;
+        if (!byStore.has(s)) byStore.set(s, { store: s, total_units: 0, done_units: 0 });
+        const row = byStore.get(s);
+        row.total_units += Number(it.quantity) || 1;
+        row.done_units += _b2bDone(it);
+    });
+    // Nothing assigned yet, or nothing loaded: fall back to the snapshot rather
+    // than drawing an empty bar.
+    if (!byStore.size) {
+        return parts.map(p => ({
+            store: p.store,
+            total_units: Number(p.total_units) || 0,
+            done_units: (Number(p.listed_units) || 0) + (Number(p.recycled_units) || 0),
+            completed_at: p.completed_at, completed_by: p.completed_by,
+        }));
+    }
+    return [...byStore.values()].sort((a, b) => String(a.store).localeCompare(String(b.store)))
+        .map((row) => {
+            const snap = parts.find(p => p.store === row.store);
+            return Object.assign(row, {
+                completed_at: snap ? snap.completed_at : null,
+                completed_by: snap ? snap.completed_by : null,
+            });
+        });
+}
+
 // Listing progress, with a per-store breakdown underneath when the deal is
 // split.
 //
@@ -24436,37 +24509,26 @@ function b2bCancelPending() {
 // two progress bars, 1 for each store, both dropped down from the main deal
 // progress bar."
 //
-// The main bar is the DEAL's -- every unit on it, wherever the unit is -- and
-// the per-store bars drop out of it. Corp is the only reader of the breakdown,
-// and not because a store is not allowed to know: a store's items are the only
-// ones it was sent, so its main bar IS its own bar and a breakdown of one row
-// would be noise.
-//
-// Numbers come from listing_parts on the view, not from _b2bModalItems, and
-// that distinction is the point: a store's fetch returns only its own lines, so
-// counting the loaded items would give corp the deal and a store its share --
-// which is right for a store and wrong for corp, who needs both.
+// The main bar is the DEAL's for corp -- every unit on it, wherever the unit is
+// -- and each store's own for a store, because "treat it as 2 seperate deals
+// from that point" means a store's part IS the whole job as far as it is
+// concerned. Corp is the only reader of the breakdown, and not because a store
+// is not allowed to see it: a store's items are the only ones it was sent, so a
+// breakdown of one row is noise.
 function _b2bListProgress() {
     const deal = _b2bModalDeal;
-    const parts = Array.isArray(deal && deal.listing_parts) ? deal.listing_parts : [];
-    const split = parts.length > 1;
+    const live = _b2bLiveParts(deal);
+    // Split is a property of the DEAL, not of what this user can see -- a store
+    // is sent one part of a split deal and would otherwise never know it was one.
+    const split = ((deal && deal.listing_stores) || []).length > 1 || live.length > 1;
 
-    // Corp sees the deal's own totals. A store sees its slice, which for it is
-    // the whole job -- "treat it as 2 seperate deals from that point".
-    const mine = split && !_b2bIsCorp() ? _b2bMyPart(deal) : null;
-    const total = mine ? Number(mine.total_units) || 0
-        : (_b2bIsCorp() && deal ? Number(deal.total_units) || 0
-            : _b2bModalItems.reduce((n, it) => n + (Number(it.quantity) || 1), 0));
-    const done = mine ? (Number(mine.listed_units) || 0) + (Number(mine.recycled_units) || 0)
-        : (_b2bIsCorp() && deal
-            ? (Number(deal.listed_units) || 0) + (Number(deal.recycled_units) || 0)
-            : _b2bModalItems.reduce((n, it) => n + _b2bDone(it), 0));
+    const mine = (split && !_b2bIsCorp()) ? live[0] : null;
+    const total = mine ? mine.total_units : live.reduce((n, p) => n + p.total_units, 0);
+    const done = mine ? mine.done_units : live.reduce((n, p) => n + p.done_units, 0);
     const pct = total ? Math.round((done / total) * 100) : 0;
 
-    const bars = (!split || !_b2bIsCorp()) ? '' : parts.map(p => {
-        const t = Number(p.total_units) || 0;
-        const d = (Number(p.listed_units) || 0) + (Number(p.recycled_units) || 0);
-        const q = t ? Math.round((d / t) * 100) : 0;
+    const bars = (!split || !_b2bIsCorp()) ? '' : live.map(p => {
+        const q = p.total_units ? Math.round((p.done_units / p.total_units) * 100) : 0;
         const finished = !!p.completed_at;
         return `
             <div class="b2b-prog-part ${finished ? 'done' : ''}">
@@ -24475,26 +24537,26 @@ function _b2bListProgress() {
                         ${escapeHtml(p.store)}${finished
                             ? ` · finished by ${escapeHtml(p.completed_by || 'someone')}`
                             : ''}</span>
-                    <span><b>${d}</b> of ${t} units · ${q}%</span>
+                    <span>${finished
+                        ? '<b>Complete</b>'
+                        : `<b>${p.done_units}</b> of ${p.total_units} units · ${q}%`}</span>
                 </div>
-                <div class="b2b-pace-bar sm"><i style="width:${q}%"></i></div>
+                ${finished ? '' : `<div class="b2b-pace-bar sm"><i style="width:${q}%"></i></div>`}
             </div>`;
     }).join('');
 
-    const waiting = split
-        ? parts.filter(p => !p.completed_at).map(p => p.store)
-        : [];
+    const waiting = split && _b2bIsCorp() ? live.filter(p => !p.completed_at).map(p => p.store) : [];
 
     return `
         <div class="b2b-prog">
             <div class="b2b-prog-h">
                 <span>${mine ? `Your part${mine.store ? ` · ${escapeHtml(mine.store)}` : ''}` : 'Listing progress'}${
-                    split && _b2bIsCorp() ? ` · split across ${parts.length} stores` : ''}</span>
+                    split && _b2bIsCorp() ? ` · split across ${live.length} stores` : ''}</span>
                 <span><b>${done}</b> of ${total} units · ${pct}%</span>
             </div>
             <div class="b2b-pace-bar"><i style="width:${pct}%"></i></div>
             ${bars ? `<div class="b2b-prog-parts">${bars}</div>` : ''}
-            ${split && _b2bIsCorp() && waiting.length
+            ${waiting.length
                 ? `<div class="b2b-prog-wait">Waiting on ${escapeHtml(waiting.join(', '))}.</div>` : ''}
         </div>`;
 }

@@ -2412,6 +2412,87 @@ t('3.9.0 no bar outside the listing column', function () {
     return _b2bCardBar(_b2bCardDeal({ stage: 'pricing' }), 'pricing') === ''
         || 'a progress bar is drawn on a stage that has no listing progress';
 });
+
+// Nick, 2026-09-11: "ITs making me have to refresh my page to be able to see the
+// updated progress bars after I finish listing something."
+//
+// listing_parts is a SERVER SNAPSHOT -- it only changes when the board is
+// re-fetched, so a bar drawn from it sat frozen until reload. The loaded items
+// change the instant a unit is listed, which is the thing being counted.
+t('3.9.0 the progress bar counts the loaded items, not the snapshot', function () {
+    return _asRole('manager', 'MPL', function () {
+        var keepD = _b2bModalDeal, keepI = _b2bModalItems;
+        try {
+            // The snapshot says 0 of 3 done. The items say 2 of 3 -- a unit was
+            // just listed and the board has not been re-fetched.
+            _b2bModalDeal = _b2bSplitDeal();
+            _b2bModalItems = [{ id: 'i2', line_no: 2, sku: 'A-2', quantity: 3,
+                                listed_qty: 2, recycled_qty: 0, listing_store: 'MPL' }];
+            var html = _b2bListProgress();
+            if (html.indexOf('<b>0</b>') > -1) return 'still drawing the stale snapshot';
+            return html.indexOf('<b>2</b> of 3') > -1 || 'the live count is wrong: ' + html.slice(0, 200);
+        } finally { _b2bModalDeal = keepD; _b2bModalItems = keepI; }
+    });
+});
+t('3.9.0 corp per-store bars are live too', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var keepD = _b2bModalDeal, keepI = _b2bModalItems;
+        try {
+            _b2bModalDeal = _b2bSplitDeal();
+            _b2bModalItems = [
+                { id: 'i1', quantity: 2, listed_qty: 2, recycled_qty: 0, listing_store: 'OVL' },
+                { id: 'i2', quantity: 3, listed_qty: 1, recycled_qty: 0, listing_store: 'MPL' },
+            ];
+            var html = _b2bListProgress();
+            if (html.indexOf('b2b-prog-parts') === -1) return 'no breakdown';
+            // MPL 1 of 3 live, against a snapshot that says 0 of 3.
+            if (html.indexOf('<b>1</b> of 3') === -1) return 'MPL is not live';
+            // Deal total is 3 of 5 from the items, not the snapshot's 1 of 5.
+            return html.indexOf('<b>3</b> of 5') > -1 || 'the deal bar is not live';
+        } finally { _b2bModalDeal = keepD; _b2bModalItems = keepI; }
+    });
+});
+t('3.9.0 a finished store shows Complete instead of a full bar', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var keepD = _b2bModalDeal, keepI = _b2bModalItems;
+        try {
+            _b2bModalDeal = _b2bSplitDeal();          // OVL is completed in the fixture
+            _b2bModalItems = [
+                { id: 'i1', quantity: 2, listed_qty: 1, recycled_qty: 1, listing_store: 'OVL' },
+                { id: 'i2', quantity: 3, listed_qty: 0, recycled_qty: 0, listing_store: 'MPL' },
+            ];
+            var html = _b2bListProgress();
+            var ovl = html.slice(html.indexOf('OVL'));
+            return ovl.indexOf('<b>Complete</b>') > -1 || 'a signed-off store still shows a count';
+        } finally { _b2bModalDeal = keepD; _b2bModalItems = keepI; }
+    });
+});
+
+// "after I complete all of the listings for 1 store in the split, that store
+// should, in their view, have that b2b deal in completed"
+t('3.9.0 a store whose half is signed off sees the deal as finished', function () {
+    // OVL is completed in the fixture; MPL is not.
+    var d = _b2bSplitDeal();
+    var asOvl = _asRole('manager', 'OVL', function () {
+        return { term: _b2bIsTerminal(d), act: _b2bActionFor(d) };
+    });
+    if (!asOvl.term) return 'the finished store still has it in flight';
+    if (asOvl.act) return 'it is still in the finished store queue';
+    var asMpl = _asRole('manager', 'MPL', function () {
+        return { term: _b2bIsTerminal(d), act: _b2bActionFor(d) };
+    });
+    if (asMpl.term) return 'the unfinished store has it as completed';
+    return !!asMpl.act || 'the unfinished store lost its listing action';
+});
+t('3.9.0 corp keeps a part-finished deal in flight', function () {
+    // Corp follows the DEAL. Half of it being done is not the deal being done,
+    // and a corp board that hid it would lose the half still outstanding.
+    return _asRole('ceo', 'CORP', function () {
+        var d = _b2bSplitDeal();
+        if (_b2bIsTerminal(d)) return 'corp lost a live deal off the board';
+        return !!_b2bActionFor(d) || 'corp cannot open a part-finished deal';
+    });
+});
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();
