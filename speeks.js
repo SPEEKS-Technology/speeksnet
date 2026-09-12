@@ -8144,6 +8144,10 @@ function _pgCondNote(s) {
 }
 
 function _pgCardHtml(s) {
+    // Gating on s.cond alone is safe, not an oversight: pg_shots_repeat_needs_cond
+    // enforces repeatable => cond_label IS NOT NULL, so there is no such thing as
+    // a shot that repeats but is always taken. Widening this to (s.cond || s.rep)
+    // guards a row the database will not accept.
     const note = s.cond ? _pgCondNote(s) : '';
     // The OPTIONAL tag sits in the frame's top-left — the corner the printout
     // marks and, until this design, where the shot number used to sit. One small
