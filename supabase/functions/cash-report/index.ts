@@ -218,15 +218,6 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    // Already sent for this day? The 8am retry runs the same chain, and a merely
-    // late first pass must not cost a duplicate email.
-    if (!dryRun && !force) {
-      const { data: prev } = await sb.from('cash_report_sends').select('day, sent_at').eq('day', day).maybeSingle();
-      if (prev) {
-        return new Response(JSON.stringify({ ok: true, skipped: 'already sent', day, sentAt: prev.sent_at }, null, 2), { headers: cors });
-      }
-    }
-
     const { data: cash, error } = await sb.from('store_cash')
       .select('store, drawer, safe, total').eq('day', day);
     if (error) throw new Error(error.message);
@@ -237,6 +228,32 @@ Deno.serve(async (req: Request) => {
       if (STORES.includes(s)) rows[s] = r;
     });
     const missing = STORES.filter(s => !rows[s]);
+    const have = STORES.length - missing.length;
+
+    // Already sent for this day? The 9am retry runs the same chain, and a merely
+    // late first pass must not cost a duplicate email.
+    //
+    // ⚠️ "ALREADY SENT" MEANS "ALREADY SENT WITH AT LEAST THIS MUCH". It used to
+    // mean any send at all, and on 2026-09-12 that locked the day shut: the 8am
+    // pass mailed 0 of 5 stores because the buying import had been refused the
+    // script lock, and the retry that later had all five would have been told
+    // "already sent" and stayed silent — the empty email would have stood as the
+    // day's answer. A send that covered fewer stores than we now hold is a gap
+    // being filled, so it goes out again, marked as an update. Same or fewer is
+    // a true duplicate and still skips.
+    let updating = false;
+    if (!dryRun && !force) {
+      const { data: prev } = await sb.from('cash_report_sends').select('day, sent_at, stores').eq('day', day).maybeSingle();
+      if (prev) {
+        // A row with no count predates the column being read here; treat it as
+        // complete rather than risk re-mailing a day that was fine.
+        const prevStores = prev.stores ?? STORES.length;
+        if (prevStores >= have) {
+          return new Response(JSON.stringify({ ok: true, skipped: 'already sent', day, sentAt: prev.sent_at, stores: prevStores }, null, 2), { headers: cors });
+        }
+        updating = true;
+      }
+    }
 
     const html = buildEmail(day, rows, missing, carried);
     if (dryRun) return new Response(html, { headers: { ...cors, 'Content-Type': 'text/html' } });
@@ -254,9 +271,11 @@ Deno.serve(async (req: Request) => {
     const sendTo = override.length ? override : (to.length ? to : FALLBACK_TO);
 
     const total = STORES.reduce((a, s) => (rows[s] && rows[s].total != null) ? a + Number(rows[s].total) : a, 0);
-    const subject = missing.length === STORES.length
+    // "Updated" so the second email reads as the correction to the first rather
+    // than as a duplicate, and sorts beside it in the inbox.
+    const subject = (updating ? 'Updated: ' : '') + (missing.length === STORES.length
       ? `Cash on hand — ${prettyDay(day)} — no figures received`
-      : `Cash on hand — ${prettyDay(day)} — ${usd(total)}`;
+      : `Cash on hand — ${prettyDay(day)} — ${usd(total)}`);
 
     const relay = await sendEmail(sendTo, subject, html);
     // A ?to= test must NOT be recorded as the day's send. Recording it would
@@ -269,8 +288,8 @@ Deno.serve(async (req: Request) => {
     }
 
     return new Response(JSON.stringify({
-      ok: true, day, carried, to: sendTo, test: override.length > 0,
-      stores: STORES.length - missing.length, missing, relay,
+      ok: true, day, carried, to: sendTo, test: override.length > 0, updating,
+      stores: have, missing, relay,
     }, null, 2), { headers: cors });
   } catch (e) {
     return new Response(JSON.stringify({ ok: false, day, error: String((e as Error)?.message || e) }, null, 2),

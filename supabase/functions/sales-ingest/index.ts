@@ -37,6 +37,14 @@
 //   jobid  8  0 * * * *   main,  guard = 8   (8:00am Central)
 //   jobid 10  0 * * * *   retry, guard = 9   (9:00am Central)
 //
+// ⚠️ NET PROFIT RUNS AT :05, NOT :00, AND MUST STAY THERE (migration 0088).
+// netprofit-8am/-2pm call the SAME Apps Script project, which has ONE script
+// lock, and npsDailyRefresh holds it for its whole ~5-minute pass. On
+// 2026-09-12 both fired at 8:00:00: sales got the lock, Net Profit took it
+// next, and the buying half was refused — no buying stats, the Day End emails
+// left in the inbox, and a 0-of-5 cash email. Nothing else goes on that
+// project at :00 of hours 8 or 9.
+//
 // ⚠️ THE HOUR MUST ONLY EVER BE CHANGED IN THE GUARD, and that is the whole
 // point of this shape. It is the lesson of 2026-09-10. The run time used to
 // live in FOUR places — a -cdt schedule, a -cst schedule (a hand-maintained
@@ -258,9 +266,11 @@ async function ingest(sb: any, p: Record<string, string>) {
       cash = { stored, error: storeError };
 
       // Mail it — chained off the import rather than given a cron of its own,
-      // because a second job at 7:00 would race the run that produces the data.
-      // cash-report is idempotent per day, so the 8am retry re-enters here and
-      // correctly does nothing.
+      // because a second job at the same minute would race the run that produces
+      // the data. cash-report sends once per day UNLESS a later pass holds more
+      // stores than the earlier send covered, so the 9am retry re-enters here and
+      // does nothing on a normal morning, and sends an "Updated:" email on one
+      // where the first send was short.
       //
       // CALLED UNCONDITIONALLY, and that is the point. This used to be gated on
       // having stored something, which quietly undid cash-report's own rule that
@@ -270,10 +280,25 @@ async function ingest(sb: any, p: Record<string, string>) {
       // failed write is the same case — the email then reports what IS in the
       // table and says how many stores it covers, which is the visible signal.
       // cash-report decides the day and skips Sundays on its own.
-      const u = new URL(CASH_REPORT_URL);
-      u.searchParams.set("secret", SECRET);
-      const res = await fetch(u.toString());
-      cash.mailed = res.ok ? await res.json().catch(() => ({ ok: true })) : `HTTP ${res.status}`;
+      //
+      // ⚠️ EXCEPT WHEN THE BUYING IMPORT ITSELF DID NOT RUN ON THE 8AM PASS.
+      // Cash rides on buying — no buying run, no cash rows — so "nothing stored"
+      // then means "we never looked", not "no figures arrived", and mailing it
+      // sends the CEO a morning of dashes that says the opposite of the truth.
+      // That is exactly what 2026-09-12 did: buying was refused the script lock
+      // ("another import is already running"), and 0 of 5 stores went out.
+      // The 9am retry re-runs buying and mails UNCONDITIONALLY, so deferring here
+      // costs an hour on a bad morning and keeps the no-silence rule above: if
+      // buying is still broken at 9, that pass sends the empty email, which is
+      // then true.
+      if (trigger === "cron" && buyBroke) {
+        cash.mailed = { deferred: "buying import did not run — the 9am retry sends the cash email", why: buy?.error ?? null };
+      } else {
+        const u = new URL(CASH_REPORT_URL);
+        u.searchParams.set("secret", SECRET);
+        const res = await fetch(u.toString());
+        cash.mailed = res.ok ? await res.json().catch(() => ({ ok: true })) : `HTTP ${res.status}`;
+      }
     }
   } catch (e) {
     cash = { error: String((e as Error)?.message || e) };
