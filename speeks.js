@@ -7878,7 +7878,7 @@ function pgRender() {
 
     _pgSyncHead();
 
-    body.innerHTML = `
+    _pgPaint(body, `
       <div class="pg-shell">
         ${_pgRailHtml(false)}
         <div class="pg-main">
@@ -7888,7 +7888,31 @@ function pgRender() {
           </div>
           <div class="pg-board">${_pgShots().map(_pgCardHtml).join('')}</div>
         </div>
-      </div>`;
+      </div>`);
+}
+
+// Picking a sheet redraws the whole panel, rail included, and a freshly built
+// #pg-catlist starts scrolled to the top. On a list long enough to scroll, that
+// threw the rail back up the moment anything near the bottom was clicked: the
+// sheet just picked landed below the fold with only the top edge of its dark
+// highlight showing, and whatever row was now under the pointer lit up as if it
+// were the selection (Ethan, 2026-09-11, picking Mini PC's from Computers).
+//
+// So the list keeps the scroll it had, and is then nudged only as far as it takes
+// to show the active sheet whole. scrollTop rather than scrollIntoView, for the
+// same reason as the Margin Guide's picker: the page behind must never move.
+function _pgPaint(body, html) {
+    const was = document.getElementById('pg-catlist');
+    const top = was ? was.scrollTop : 0;
+    body.innerHTML = html;
+    const list = document.getElementById('pg-catlist');
+    if (!list) return;
+    list.scrollTop = top;
+    const on = list.querySelector('.pg-cat.on');
+    if (!on || !on.offsetParent) return;   // inside a shut group: nothing to show
+    const box = list.getBoundingClientRect(), r = on.getBoundingClientRect();
+    if (r.top < box.top) list.scrollTop -= box.top - r.top + 4;
+    else if (r.bottom > box.bottom) list.scrollTop += r.bottom - box.bottom + 4;
 }
 
 // The frame shape used to be measured here, off the first photograph each sheet
@@ -8164,7 +8188,7 @@ const _pgAdminCat = () => _pgCats().find(c => c.id === _pgAdmin.catId) || null;
 function _pgRenderAdmin(body) {
     _pgSyncHead();
     const cat = _pgAdminCat();
-    body.innerHTML = `
+    _pgPaint(body, `
       <div class="pg-shell">
         ${_pgRailHtml(true)}
         <div class="pg-main">
@@ -8184,7 +8208,7 @@ function _pgRenderAdmin(body) {
             <button type="button" class="pg-eadd" onclick="pgAddShot()">&#43;&nbsp; Add a Photo</button>
           `}
         </div>
-      </div>`;
+      </div>`);
 }
 
 function _pgAdminRowHtml(s, i, n) {
