@@ -1,10 +1,37 @@
 // ============================================================================
 // netprofit-schedule.gs — run the NET PROFIT tab on a schedule.
 //
-// THREE TRIGGERS on two functions, from the CFO's rules (2026-08-27, split into
-// a morning and an afternoon pass 2026-09-02):
+// TWO pg_cron JOBS and ONE TRIGGER, on two functions, from the CFO's rules
+// (2026-08-27, split into a morning and an afternoon pass 2026-09-02, moved off
+// Apps Script triggers onto pg_cron 2026-09-11):
 //
-//   npsDailyRefresh   8:00am AND 2:00pm Central, every day
+//   npsDailyRefresh   8:05am AND 2:05pm Central, every day — started by pg_cron,
+//                     which calls the web app (action=netprofit), which creates
+//                     a ONE-OFF trigger that runs this a second later. No
+//                     recurring trigger owns it any more.
+//                     ⚠️ :05, NOT :00 (migration 0088). The sales/buying import
+//                     owns :00 of this same project, and one project is one
+//                     script lock: at 8:00 on 2026-09-12 this pass took the lock
+//                     between the import's sales and buying halves and the
+//                     buying half was refused.
+//                     .atHour(8) only promises "somewhere in the 8 o'clock
+//                     hour" and Google had settled on :46, three quarters of an
+//                     hour behind the Sales Summary.
+//                     ⚠️ THE ONE-OFF HOP IS NOT CEREMONY. Running this straight
+//                     from the web app was tried and died at 6m04s. Every Apps
+//                     Script execution gets 360 seconds, web app or trigger, so
+//                     the hop does not buy a bigger budget — it buys a FRESH
+//                     one, and it lets the caller be answered in a second
+//                     instead of held open for the length of the run.
+//                     The pass fits comfortably again since the collectors
+//                     moved to fetchAll (see _npFetchAllStores) — ~110s rather
+//                     than the ~360s that was timing out on 2026-09-11 — but
+//                     the hop stays: pg_cron gives up waiting after 30s, and a
+//                     job whose caller has already hung up should not be
+//                     holding the only copy of the run.
+//                     Which pass it is comes off the CLOCK inside the function,
+//                     so the caller needs to pass nothing and cannot get it
+//                     wrong.
 //                     Rewrites the WHOLE current month to date, not just
 //                     yesterday. A day is not final the next morning: 81% of
 //                     shipping labels post +1 day and 13% post +2-3 days, so
@@ -78,8 +105,14 @@ var NPS_TZ = 'America/Chicago';
 // ⚠️ THE MORNING NUMBER IS ROUGH BY DESIGN AND ONLY FOR THE MOST RECENT DAY.
 // Every earlier day already has final shipping, so only yesterday's row moves
 // at 2pm — and it moves DOWN, because shipping only ever gets added.
-var NPS_MORNING_HOUR = 8;  // 8am — everything except shipping
-var NPS_DAILY_HOUR = 14;   // 2pm — Apps Script fires within the hour, never before
+// ⚠️ NPS_DAILY_HOUR IS THE SHIPPING CUTOFF, NOT A SCHEDULE, and has not been
+// one since the passes moved to pg_cron. npsDailyRefresh compares the Central
+// hour against it to decide whether to write shipping, so changing it changes
+// what the morning pass writes. The TIMES now live in the cron jobs
+// (netprofit-8am / netprofit-2pm, migration 0087) and both places have to agree:
+// move a cron job across 14:00 Central and that pass silently changes meaning.
+var NPS_MORNING_HOUR = 8;  // 8am — everything except shipping. Cron owns the time.
+var NPS_DAILY_HOUR = 14;   // 2pm — and the hour at or after which shipping is written
 var NPS_CLOSE_HOUR = 19;   // 7pm
 var NPS_LAST_CLOSED_KEY = 'NPS_LAST_CLOSED_MONTH';
 
@@ -143,7 +176,20 @@ function _npsLastDayOf(ym) {
 // The two scheduled entry points
 // ---------------------------------------------------------------------------
 
-function npsDailyRefresh() {
+// `e` is the trigger event, and it is here for ONE reason: the cron path runs
+// this through a one-off trigger created by the web app (action=netprofit), and
+// a one-off trigger is not cleaned up by Apps Script. The project is capped at
+// 20 triggers; two a day would wall it off inside a fortnight.
+//
+// ⚠️ DELETED FIRST, BEFORE ANY OF THE WORK. A run that throws or is killed for
+// exceeding its six minutes still leaves nothing behind. Deleting at the end
+// would orphan a trigger on precisely the failure most likely to happen.
+//
+// Called by hand from the editor, or by the old-style recurring trigger, `e` is
+// absent and nothing is deleted — which is right, because a recurring trigger
+// must survive its own run.
+function npsDailyRefresh(e) {
+  if (e && e.triggerUid) _npsDeleteOneShot(e.triggerUid);
   var npsT0 = new Date().getTime();
   var today = _npsToday();
   var ym = today.slice(0, 7);
@@ -375,21 +421,47 @@ function _npsAskCollectorCloseDay(ym) {
 
 function npsInstallTriggers() {
   npsRemoveTriggers();
-  // Two triggers on ONE function. The morning and afternoon passes do exactly
-  // the same work — the only thing that differs is how much of yesterday's
-  // shipping exists by then — so making them two functions would be two things
-  // to keep in step for no gain.
-  ScriptApp.newTrigger('npsDailyRefresh').timeBased()
-    .atHour(NPS_MORNING_HOUR).everyDays(1).inTimezone(NPS_TZ).create();
-  ScriptApp.newTrigger('npsDailyRefresh').timeBased()
-    .atHour(NPS_DAILY_HOUR).everyDays(1).inTimezone(NPS_TZ).create();
+  // ⚠️ THE TWO DAILY REFRESHES ARE NO LONGER TRIGGERS (2026-09-11). They are
+  // pg_cron jobs calling the web app with action=netprofit, because .atHour(8)
+  // means "somewhere in the 8 o'clock hour" and Google had settled on :46 —
+  // three quarters of an hour after the Sales Summary, which is on pg_cron and
+  // lands at 8:00:00. Two mornings running, the drift was two seconds, so it
+  // was stable; it just was not eight o'clock.
+  //
+  // The month close STAYS a trigger. It has no deadline to hit — the comment
+  // below is the whole reason — so it gains nothing from the move and each
+  // thing moved is a thing that can break.
+  //
+  // Re-running this function is how you get back: put the two
+  // ScriptApp.newTrigger('npsDailyRefresh') lines back and deactivate the cron
+  // jobs. Do not leave both armed — that is four passes a day, two of them
+  // writing shipping at 8am.
   ScriptApp.newTrigger('npsMonthClose').timeBased()
     .atHour(NPS_CLOSE_HOUR).everyDays(1).inTimezone(NPS_TZ).create();
-  Logger.log('Installed: npsDailyRefresh at %s:00 AND %s:00 %s, npsMonthClose at %s:00 %s.',
-    NPS_MORNING_HOUR, NPS_DAILY_HOUR, NPS_TZ, NPS_CLOSE_HOUR, NPS_TZ);
+  Logger.log('Installed: npsMonthClose at %s:00 %s.', NPS_CLOSE_HOUR, NPS_TZ);
+  Logger.log('Daily refreshes are pg_cron jobs (netprofit-8am / netprofit-2pm), '
+    + 'not triggers — see migration 0087.');
   Logger.log('⚠️ Apps Script fires within the hour, never before it — so the close '
     + 'runs between 7pm and 8pm Central, which is the safe direction.');
   npsStatus();
+}
+
+// Delete the one-off trigger whose firing we are currently inside. Never throws:
+// a refresh that ran is worth more than a tidy trigger list, and the next run
+// creates its own anyway. The worst case is one orphan, which npsInstallTriggers
+// sweeps.
+function _npsDeleteOneShot(uid) {
+  try {
+    var all = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].getUniqueId() === String(uid)) {
+        ScriptApp.deleteTrigger(all[i]);
+        return;
+      }
+    }
+  } catch (err) {
+    Logger.log('!! could not delete the one-off trigger %s: %s', uid, err);
+  }
 }
 
 function npsRemoveTriggers() {
@@ -411,17 +483,23 @@ function npsStatus() {
   }
   Logger.log('Today (Central): %s', today);
   Logger.log('Triggers armed: %s', armed.length ? armed.join(', ') : 'NONE — run npsInstallTriggers');
-  // ⚠️ TWO npsDailyRefresh ENTRIES IS CORRECT, and a status line that did not
-  // say so would read as a duplicate somebody should go and delete. Apps Script
-  // does not report a trigger's hour, so the count is the only evidence the
-  // morning pass is armed at all.
+  // ⚠️ ZERO npsDailyRefresh TRIGGERS IS NOW CORRECT. This used to expect two,
+  // and said so loudly, because Apps Script does not report a trigger's hour
+  // and the count was the only evidence the morning pass was armed. Since
+  // 2026-09-11 the two passes are pg_cron jobs hitting the web app, so a
+  // RECURRING trigger found here is a LEFTOVER: it would run the refresh a
+  // second time at Google's chosen minute, and an 8:46 pass writing on top of
+  // an 8:00 one is invisible unless you are watching the clock.
+  //
+  // A count of 1 seen in the seconds after a cron call is the one-off trigger
+  // waiting to fire, not a leftover. It deletes itself at the top of the run,
+  // so if the count is still 1 a minute later, it is real.
   var refreshes = 0;
   for (var j = 0; j < armed.length; j++) if (armed[j] === 'npsDailyRefresh') refreshes++;
-  Logger.log('Daily refreshes armed: %s — expected 2 (%s:00 and %s:00 %s). %s',
-    refreshes, NPS_MORNING_HOUR, NPS_DAILY_HOUR, NPS_TZ,
-    refreshes === 2 ? 'OK'
-      : refreshes < 2 ? '!! re-run npsInstallTriggers — the morning pass is missing'
-                      : '!! more than two — run npsInstallTriggers to reset them');
+  Logger.log('Daily refresh TRIGGERS armed: %s — expected 0, the passes are pg_cron. %s',
+    refreshes,
+    refreshes === 0 ? 'OK'
+                    : '!! leftover trigger(s) — run npsInstallTriggers to clear them');
   Logger.log('Last closed month: %s',
     PropertiesService.getScriptProperties().getProperty(NPS_LAST_CLOSED_KEY) || '(none yet)');
   Logger.log('--- next twelve closes ---');

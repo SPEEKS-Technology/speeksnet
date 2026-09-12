@@ -173,11 +173,16 @@ function _npColLetter(i0) {
   return s;
 }
 
-function _npFetchStore(store) {
-  var url = NP_ENDPOINT + '?secret=' + encodeURIComponent(NP_SECRET)
-          + '&store=' + encodeURIComponent(store)
-          + '&from=' + encodeURIComponent(NP_FROM) + '&to=' + encodeURIComponent(NP_TO);
-  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+function _npStoreUrl(store) {
+  return NP_ENDPOINT + '?secret=' + encodeURIComponent(NP_SECRET)
+       + '&store=' + encodeURIComponent(store)
+       + '&from=' + encodeURIComponent(NP_FROM) + '&to=' + encodeURIComponent(NP_TO);
+}
+
+// The checks a collector response has to pass before it is allowed near the
+// grid. Shared by the one-store and the all-stores fetch so the two can never
+// drift into accepting different things.
+function _npParseStore(store, res) {
   if (res.getResponseCode() !== 200) {
     throw new Error(store + ': collector returned HTTP ' + res.getResponseCode()
       + ' — ' + res.getContentText().slice(0, 300));
@@ -190,6 +195,48 @@ function _npFetchStore(store) {
     Logger.log('  !! %s collector warnings: %s', store, body.warnings.join('; '));
   }
   return body;
+}
+
+function _npFetchStore(store) {
+  return _npParseStore(store,
+    UrlFetchApp.fetch(_npStoreUrl(store), { muteHttpExceptions: true }));
+}
+
+// ⚠️ ALL FIVE STORES AT ONCE, AND THIS IS WHAT KEEPS THE JOB UNDER THE LIMIT.
+// An Apps Script execution is capped at 360 seconds and the collectors are slow
+// — 40s to 93s each, because each one is waiting on eBay and Shopify rather
+// than doing work. Fetched one after another that is the SUM: 346.8s of the 360
+// on 2026-09-11, with eleven days in the month. The 2:01pm run that day died at
+// 360.616s having spent almost all of it blocked on five sequential fetches.
+//
+// fetchAll issues them together, so the cost becomes the SLOWEST rather than
+// the sum — 93s instead of 347s on that same data. The run goes from ~360s to
+// ~110s, which is a third of the budget and leaves room for a month three times
+// the size. Nothing else in the pass is slow: the sheet writes are ~15s.
+//
+// ⚠️ ONE STORE FAILING MUST NOT TAKE THE OTHERS DOWN. fetchAll throws for the
+// whole batch on a transport error, so the batch call is wrapped and a batch
+// failure is recorded against every store rather than thrown — the caller's
+// refusals list then names them and the run continues, which is the behaviour
+// the sequential version had per store. Each response is still parsed
+// individually, so a single store's HTTP 500 or short month is still just that
+// store's refusal.
+function _npFetchAllStores(stores) {
+  var reqs = stores.map(function (s) {
+    return { url: _npStoreUrl(s), muteHttpExceptions: true };
+  });
+  var out = {}, responses;
+  try {
+    responses = UrlFetchApp.fetchAll(reqs);
+  } catch (batchErr) {
+    stores.forEach(function (s) { out[s] = { err: 'collector batch failed — ' + batchErr.message }; });
+    return out;
+  }
+  stores.forEach(function (s, i) {
+    try { out[s] = { body: _npParseStore(s, responses[i]) }; }
+    catch (e) { out[s] = { err: e.message }; }
+  });
+  return out;
 }
 
 // Match the day number in the block's OWN day column — never arithmetic from a
@@ -305,16 +352,25 @@ function _npWriteUnlocked(preview) {
   var todayYmd = Utilities.formatDate(new Date(), NP_TZ, 'yyyy-MM-dd');
   var gridYm = String(NP_FROM).slice(0, 7);
 
+  // Every collector call goes out here, together, BEFORE the write loop — see
+  // _npFetchAllStores for why the loop can no longer afford to fetch its own.
+  // The loop below is unchanged in what it writes; it just reads what already
+  // arrived instead of waiting for it.
+  var fetchT0 = new Date().getTime();
+  var fetched = _npFetchAllStores(NP_ORDER);
+  Logger.log('\n=== collected %s stores in %ss (in parallel) ===',
+    NP_ORDER.length, ((new Date().getTime() - fetchT0) / 1000).toFixed(1));
+
   for (var si = 0; si < NP_ORDER.length; si++) {
     var store = NP_ORDER[si];
     var base  = NP_BASES[store];
-    var data;
-    try { data = _npFetchStore(store); }
-    catch (e) {
-      Logger.log('\n%s: SKIPPED — %s', store, e.message);
-      refusals.push(store + ': ' + e.message);
+    var got   = fetched[store];
+    if (got.err) {
+      Logger.log('\n%s: SKIPPED — %s', store, got.err);
+      refusals.push(store + ': ' + got.err);
       continue;
     }
+    var data = got.body;
 
     Logger.log('\n=== %s (day col %s) — %s days ===', store, _npColLetter(base), data.days.length);
 

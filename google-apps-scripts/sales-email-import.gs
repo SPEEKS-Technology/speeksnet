@@ -487,7 +487,8 @@ function _handle(e) {
   // makes a deploy-drift miss say so.
   if (['ingest', 'diagnose', 'diagnoseBuying', 'diagnoseReviews', 'buying',
        'diagnoseWeekly', 'diagnoseSummary', 'weekly', 'rehearseShift',
-       'backfillConversions', 'verifyConversions', 'dayEndFacts'].indexOf(action) < 0) {
+       'backfillConversions', 'verifyConversions', 'dayEndFacts',
+       'netprofit'].indexOf(action) < 0) {
     return _json({ ok: false, error: 'unknown action "' + action + '"' });
   }
 
@@ -531,6 +532,49 @@ function _handle(e) {
       return _json(dayEndFacts({ days: p.days ? parseInt(p.days, 10) : 30 }));
     }
     if (action === 'buying') return _json(ingestBuyingEmails({ dryRun: dryRun }));
+
+    // Net Profit's two daily passes, driven from pg_cron instead of from an
+    // Apps Script time-based trigger.
+    //
+    // WHY IT MOVED. .atHour(8) does not mean 8:00 — it means "somewhere in the
+    // 8 o'clock hour", and Google picked :46. The Sales Summary, on pg_cron,
+    // lands at 8:00:00, so the two reports were three quarters of an hour
+    // apart. pg_cron fires on the second, so this closes the gap; next month,
+    // when Net Profit stands alone, it is the only one of the two that has to
+    // be on time.
+    //
+    // ⚠️ NO ARGUMENT IS PASSED, AND THAT IS THE POINT. npsDailyRefresh reads
+    // the Central hour off the clock and sets NP_SKIP_SHIP from it — morning
+    // writes everything but shipping, 2pm writes shipping final. So the split
+    // survives the move for free: an 8:00 call is hour 8, a 14:00 call is hour
+    // 14, and the function cannot tell or care who invoked it. Do not add a
+    // `pass` parameter here; it would be a second place for the same fact to
+    // live and the two could disagree.
+    //
+    // ⚠️ IT SCHEDULES THE REFRESH, IT DOES NOT RUN IT — and that is not tidiness,
+    // it is the only way this works. Calling npsDailyRefresh() from here was
+    // tried first and died: "Exceeded maximum execution time" at 6m04s
+    // (2026-09-11, 10:01am). A web app execution gets six minutes, and the pass
+    // no longer fits in them — the five collector calls alone took 5m24s that
+    // morning against 4m30s at 8:46, because the sweep gets slower as the day
+    // fills and as the month grows.
+    //
+    // A one-off trigger gets its OWN fresh execution, which is exactly the
+    // budget the 8am trigger has always run in. So this restores today's proven
+    // behaviour and changes only WHO decides the start time: cron, on the
+    // second, instead of Google picking a minute somewhere in the hour.
+    // .after() is not instant either, but it lands inside a minute rather than
+    // inside an hour, which is the whole point of the exercise.
+    //
+    // ⚠️ THE TRIGGER DELETES ITSELF AT THE TOP OF THE RUN, not at the end. One-
+    // off triggers are not cleaned up by Apps Script and the project is capped
+    // at 20; two a day would wall it off inside a fortnight. Deleting first
+    // means even a run that times out leaves nothing behind — deleting last
+    // would orphan one on exactly the failure that is most likely.
+    if (action === 'netprofit') {
+      var npTrig = ScriptApp.newTrigger('npsDailyRefresh').timeBased().after(1000).create();
+      return _json({ ok: true, scheduled: 'npsDailyRefresh', triggerUid: npTrig.getUniqueId() });
+    }
 
     var sales = ingestSalesEmails({
       reverify: p.reverify ? parseInt(p.reverify, 10) : REVERIFY,
