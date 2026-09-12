@@ -7856,6 +7856,8 @@ function pgRender() {
     const body = document.getElementById('pg-body');
     if (!body) return;
 
+    _pgWireRailTips();
+
     const can = pgCanEdit();
     document.querySelector('.pg-panel')?.classList.toggle('pg-can', can);
     document.querySelector('.pg-panel')?.classList.toggle('pg-editing', can && _pgAdmin.open);
@@ -8022,6 +8024,35 @@ function _pgRailHtml(admin) {
                  button and we'll add it.</p>`}
         </div>
       </aside>`;
+}
+
+// A category name too long for the rail is cut off with an ellipsis, so hovering
+// it offers the whole thing. "E-Ink Tablets (Kindles and ..." describes two of
+// the four tablet sheets equally well (user, 2026-09-10).
+//
+// Measured on hover rather than written at render time, for two reasons. Whether
+// a name fits is a measurement, and the same rule the dropdown options follow
+// applies here: a title on every button would hang a browser tooltip off names
+// that are perfectly readable. And a collapsed group's buttons have no width to
+// measure, so titles set during a render would be wrong for every sheet inside a
+// shut group until something happened to redraw the rail.
+//
+// One delegated listener on the document, so it survives every re-render of the
+// rail without being re-wired -- and it covers the admin rail too, which is the
+// same markup. The title goes on the BUTTON, not the span, so the tooltip is
+// there anywhere on the row rather than only over the letters themselves.
+let _pgRailTipsWired = false;
+function _pgWireRailTips() {
+    if (_pgRailTipsWired) return;
+    _pgRailTipsWired = true;
+    document.addEventListener('pointerover', (e) => {
+        const btn = e.target?.closest?.('#pg-catlist .pg-cat, #pg-catlist .pg-grp-hd');
+        if (!btn) return;
+        const name = btn.querySelector('.pg-cat-name, .pg-grp-name');
+        if (!name) return;
+        if (name.scrollWidth > name.clientWidth + 1) btn.title = name.textContent;
+        else btn.removeAttribute('title');
+    });
 }
 
 // Toggled by class rather than by re-render, for the same reason the search
