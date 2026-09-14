@@ -6575,6 +6575,23 @@ input.vr-up-input[type="file"] {
     border-left: 1px solid #e2e6ea;
 }
 
+/* The Weekly and Monthly views stack several periods in ONE table, each opened
+   by a divider row whose 16px top padding is the white gap between cards. A
+   border on the table itself therefore ran the full height of the page — down
+   every card's edge AND straight through every gap between them, as a thin
+   stray line to the left of the headers (user, 2026-09-14). The right edge
+   never did this, because it belongs to the cells.
+   So on these views the left edge belongs to the cells too: the first cell of
+   every row that sits against the left side. The header's second row is left
+   out on purpose — its first cell is "Buy Value", which sits beside the
+   rowspan'd "Employee", not at the edge. The divider rows are left out because
+   the gap is exactly where the line must not be. */
+.kpi-full-table { border-left: none; }
+.kpi-full-table .kpi-grid-name-col,
+.kpi-full-table tr:not(.kpi-section-divider-row) > td[colspan]:first-child {
+    border-left: 1px solid #e2e6ea;
+}
+
 /* Fixed column widths via colgroup */
 .kpi-entry-grid col.col-name          { width: 105px; }
 .kpi-entry-grid col.col-buying-input  { width: 4.0%; }
@@ -6650,7 +6667,8 @@ input.vr-up-input[type="file"] {
     border-bottom: 1px solid #c8cdd4 !important;
 }
 
-/* All body cells: right+bottom only (table provides top+left edges) */
+/* All body cells: right+bottom only (table provides top+left edges — except on
+   .kpi-full-table, where the row's first cell carries the left edge; see above) */
 .kpi-entry-grid tbody tr td {
     padding: 2px 2px;
     border-right: 1px solid #ebebeb;
