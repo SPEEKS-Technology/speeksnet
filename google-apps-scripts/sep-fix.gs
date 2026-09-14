@@ -45,6 +45,9 @@
 //   − drafts    −166.98        −25.01
 //   − duplicate −899.99       −375.00
 //   = true        949.33        168.00      (GP 781.33)
+//   − re-listing −249.99       −95.00      #KS01-14534, added 2026-09-14 —
+//   = true        699.34         73.00      (GP 626.34)   see "REPAYMENT
+//                                                          RE-LISTINGS" below
 //
 //   Both tabs report the same two wrong figures, from two independent queries —
 //   netprofit-collect returns net_sales 2016.3 / cost 568.01 for OVL Sep 1, cell
@@ -84,6 +87,8 @@
 //
 //   OVL  reported 6,453.72 / 3,129.07 cost
 //        − drafts  −459.97 /  −245.00   = 5,993.75 / 2,884.07
+//        − re-listing −19.99 / −10.00   = 5,973.76 / 2,874.07   #KS01-14555,
+//                                         added 2026-09-14 — see below
 //
 // Three of OVL's four match a refund we made (#KS01-14564 229.99, #KS01-14575
 // 199.99, #KS01-14581 29.99); the fourth, #KS01-14562, is worth 0.00 and moves
@@ -313,6 +318,40 @@
 // Sep 6 and should not be read as one.
 //
 // ---------------------------------------------------------------------------
+// SEP 1 AND SEP 2 — TWO REPAYMENT RE-LISTINGS THE DRAFT SWEEP COULD NOT SEE.
+// Found 2026-09-14, from the glitch sheet's "PAID LISTING X" rows.
+//
+// Not every customer repaid through a draft invoice. Some bought the item
+// AGAIN from a "(Copy)" eBay Local Pickup re-listing — the pattern mirror-fix.gs
+// first met at WSP on Aug 27 and then at OVL and LEE on Aug 28-31. Those arrive
+// with sourceName `ebay`, so nothing in sales-true-daily's draft test can catch
+// them; the only way in is the SKU. Traced with resale-check (&skus=), which
+// lists every Shopify sale of a SKU:
+//
+//   KS01-7357B-E5  Planet COSMO  sold #KS01-14047 (Aug 22) and #KS01-14124
+//                  (Aug 25), both refunded in the glitch. Repaid as
+//                  #KS01-14534, Sep 1, 249.99 / 95.00 cost.
+//   KS01-7396C-E6  Razer Kishi   sold #KS01-14084 (Aug 23) and #KS01-14148
+//                  (Aug 25), both refunded. Repaid as #KS01-14555, 1:04am
+//                  Central on Sep 2, 19.99 / 10.00 cost.
+//
+// Costs are ShopifyQL's per-order COGS for the day (orders-peek &cost=1), not
+// the SKU's current unit cost. Both legs come out, as for every repayment.
+//
+// ⚠️ THE COSMO HAD AN EARLIER ATTEMPT, AND IT IS NOT IN EITHER PIN. #KS01-14494
+// (Aug 31, 249.99) is the same re-listing, sold and refunded on Aug 31 itself,
+// so it nets to zero on that day. The second attempt is the one that stuck.
+//
+// The other eight "PAID LISTING X" rows were already out, each matched by SKU
+// to a pinned re-listing in mirror-fix.gs: LEE #MO01-9207 and #MO01-9234; OVL
+// #KS01-14401, #KS01-14406, #KS01-14426, #KS01-14474 and #KS01-14476; WSP
+// #MO02-6860.
+//
+// ⚠️ OVL SEP 1 NOW READS ~90% MARGIN, AND THAT IS WHAT IS LEFT, NOT AN ERROR.
+// $495.01 of the day's $568.01 of cost left with the removals; $699.34 of real
+// selling carrying $73.00 of cost is what remains.
+//
+// ---------------------------------------------------------------------------
 // ⚠️ WHAT PROTECTS A REAL DRAFT SALE — asked 2026-09-08, and worth writing down
 // because the honest answer is not "we only strip the ones we created".
 //
@@ -371,12 +410,16 @@ var SEPF_NOTE_0901_OVL =
   'Sep 1 restated — $166.98 of repayment draft orders removed (cost 25.01), AND the '
   + 'Marketplace Connect duplicate #KS01-14551 removed ($899.99 / $375.00 cost): eBay '
   + '11-15038-98055 already sold on Aug 16 as #KS01-13840. Deleting the copy did not take '
-  + 'it out of the day. Real figure. Locked from the daily sync.';
+  + 'it out of the day. AND #KS01-14534 removed ($249.99 / $95.00 cost): a repayment '
+  + 're-listing of KS01-7357B-E5 (Planet COSMO), which sold on Aug 22 and again on Aug 25 '
+  + 'and was refunded both times. Real figure. Locked from the daily sync.';
 
 var SEPF_NOTE_0902_OVL =
   'Sep 2 restated — $459.97 of draft-order invoices removed (cost 245.00): #KS01-14564 '
-  + '(229.99), #KS01-14575 (199.99), #KS01-14581 (29.99) and #KS01-14562 (0.00). Repayment '
-  + 'of the August glitch, not selling. Real figure. Locked from the daily sync.';
+  + '(229.99), #KS01-14575 (199.99), #KS01-14581 (29.99) and #KS01-14562 (0.00). AND '
+  + '#KS01-14555 removed ($19.99 / $10.00 cost): a repayment re-listing of KS01-7396C-E6 '
+  + '(Razer Kishi), which sold on Aug 23 and again on Aug 25 and was refunded both times. '
+  + 'Repayment of the August glitch, not selling. Real figure. Locked from the daily sync.';
 
 var SEPF_NOTE_0904_OVL =
   'Sep 4 restated — $334.97 of draft-order invoices removed (cost 170.00): #KS01-14625 '
@@ -392,8 +435,11 @@ var SEPF_NOTE_0907_OVL =
   + 'unclassified refunds all stay in. Real figure. Locked from the daily sync.';
 
 var SEPF_FIX = [
-  { store: 'OVL', day: 1, sales:  949.33, cost:  168.00, note: SEPF_NOTE_0901_OVL },
-  { store: 'OVL', day: 2, sales: 5993.75, cost: 2884.07, note: SEPF_NOTE_0902_OVL },
+  // Sep 1 and 2 were 949.33 / 168.00 and 5993.75 / 2884.07 until 2026-09-14,
+  // when the two re-listings came out. sepFixApply overwrites its own earlier
+  // pin, so those cells need no unpin — the new figure simply replaces it.
+  { store: 'OVL', day: 1, sales:  699.34, cost:   73.00, note: SEPF_NOTE_0901_OVL },
+  { store: 'OVL', day: 2, sales: 5973.76, cost: 2874.07, note: SEPF_NOTE_0902_OVL },
   { store: 'OVL', day: 4, sales: 9323.30, cost: 4544.75, note: SEPF_NOTE_0904_OVL },
   { store: 'OVL', day: 7, sales: 4222.22, cost: 2642.44, note: SEPF_NOTE_0907_OVL }
   // MPL Sep 2: pin REMOVED — an ordinary sale, not a repayment. It is in
