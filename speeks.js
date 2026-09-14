@@ -7780,7 +7780,7 @@ async function pgLoad(opts) {
             throw new Error((json && (json.error || json.message))
                 || `the server answered ${res.status} with nothing this tool understands.`);
         }
-        _pgSheets = json.categories || [];
+        _pgSheets = _pgAlphabetical(json.categories || []);
         pgRender();
     } catch (e) {
         body.innerHTML = `<div class="pg-error">Couldn't load the picture guide. ${_pgEsc(e.message)}
@@ -7948,12 +7948,25 @@ function _pgSyncHead() {
     }
 }
 
-// The rail in reading order: a run of GROUPS, with any ungrouped category
-// standing on its own between them.
+// The rail is ALPHABETICAL: groups A-Z, the sheets inside each group A-Z, and an
+// ungrouped sheet filed by its own name among the group names (user,
+// 2026-09-14). It used to follow sort_order, which is creation order — every
+// new sheet lands at the end — so the groups read in the order the sheets
+// happened to be backfilled: Smart Tablets, Smart Watches, Computer Parts...
+// Nothing in the editor reorders categories any more, so sort_order had stopped
+// meaning anything anyone chose; it still orders the PHOTOS on a sheet.
 //
-// A section's position is the sort_order of its first category, so the DM keeps
-// dragging categories and the groups fall out of that — there is no separate
-// group order to maintain and no way for the two to disagree. See migration 0081.
+// Sorted once, where the sheets arrive, rather than inside the rail. That keeps
+// "the first sheet" meaning the same thing everywhere: the one the guide lands
+// on is the one at the top of the rail.
+const _pgCollate = new Intl.Collator('en', { sensitivity: 'base', numeric: true }).compare;
+function _pgAlphabetical(cats) {
+    const key = c => (c.group_name || '').trim() || c.name;
+    return cats.slice().sort((a, b) => _pgCollate(key(a), key(b)) || _pgCollate(a.name, b.name));
+}
+
+// The rail in reading order: a run of GROUPS, with any ungrouped category
+// standing on its own between them. The order itself is _pgAlphabetical's.
 function _pgSections() {
     const out = [];
     const byName = {};
