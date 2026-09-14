@@ -589,11 +589,19 @@ function toggleModal(modalId, badgeId = null) {
 
 let _annDocsCache = [];
 
-async function loadCMS() {
+// The last board fetched, so sign-in can re-derive read state from it without
+// waiting on the network. See loadCMS(fromData).
+let _cmsLastData = null;
+
+// fromData re-runs the whole build on a board already in hand instead of
+// fetching one. With it there is no await anywhere in the body, so the call
+// completes synchronously — which is the point: sign-in uses it to recompute
+// read state for the person who just signed in BEFORE the login overlay lifts.
+async function loadCMS(fromData) {
     try {
-        const response = await fetch(`${CMS_URL}?v=${Date.now()}`);
-        const data = await response.json();
-        
+        const data = fromData || await (await fetch(`${CMS_URL}?v=${Date.now()}`)).json();
+        if (!fromData) _cmsLastData = data;
+
         // ---- Announcements: compute read state, build calm hub cards ----
         let showBadge = false;
         const hubAnn = [];
@@ -2903,6 +2911,20 @@ async function checkPIN() {
             // after: there is no point building a QuickPortal nobody will see, and a
             // half-built one is what would flash on the TV on the way past.
             if (_tvGate()) return;
+
+            // The board this page fetched at load was built with nobody signed in,
+            // so every announcement counted as unread — the priority banner and
+            // the feed's pip were sitting behind the overlay for an announcement
+            // this person had already read. Lifting the overlay showed that until
+            // the refetch below landed (Ethan, 2026-09-14: "briefly shows me
+            // things I have already seen"). Rebuild from the same board under the
+            // real user first, synchronously, so the first frame is already right.
+            // Now rather than deferred: renderActionFeed debounces during its
+            // settle window, which would put the correct render after the reveal.
+            if (_cmsLastData) {
+                loadCMS(_cmsLastData);
+                if (typeof renderActionFeedNow === 'function') renderActionFeedNow();
+            }
 
             const authOverlay = document.getElementById('authOverlay');
             if (authOverlay) authOverlay.style.display = 'none';
