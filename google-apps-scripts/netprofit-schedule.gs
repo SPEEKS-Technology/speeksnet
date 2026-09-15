@@ -1,9 +1,10 @@
 // ============================================================================
 // netprofit-schedule.gs — run the NET PROFIT tab on a schedule.
 //
-// TWO pg_cron JOBS and ONE TRIGGER, on two functions, from the CFO's rules
+// TWO pg_cron JOBS and THREE TRIGGERS, on three functions, from the CFO's rules
 // (2026-08-27, split into a morning and an afternoon pass 2026-09-02, moved off
-// Apps Script triggers onto pg_cron 2026-09-11):
+// Apps Script triggers onto pg_cron 2026-09-11, watchdog added 2026-09-15 —
+// see NPS_OK_KEY):
 //
 //   npsDailyRefresh   8:05am AND 2:05pm Central, every day — started by pg_cron,
 //                     which calls the web app (action=netprofit), which creates
@@ -115,6 +116,21 @@ var NPS_MORNING_HOUR = 8;  // 8am — everything except shipping. Cron owns the 
 var NPS_DAILY_HOUR = 14;   // 2pm — and the hour at or after which shipping is written
 var NPS_CLOSE_HOUR = 19;   // 7pm
 var NPS_LAST_CLOSED_KEY = 'NPS_LAST_CLOSED_MONTH';
+
+// ⚠️ THE WATCHDOG — FOR THE FAILURES THAT CANNOT SEND THEIR OWN EMAIL.
+// npsDailyRefresh mails when it throws. It cannot mail when it never starts
+// (pg_cron did not fire, the web app refused the call, the one-off trigger was
+// not created) or when Google kills it at the six-minute limit, because a
+// killed execution runs no catch block. All of those look like silence, and
+// silence reads as "the sheet is fine".
+//
+// So every pass that FINISHES stamps today's date under its own key, and a
+// recurring Apps Script trigger — deliberately not pg_cron, so one broken
+// scheduler cannot hide the other — checks the stamp an hour later. Apps Script
+// fires "somewhere in the hour", so 9 means 9:00-10:00 for an 8:05 pass that
+// takes two or three minutes, and 15 means 3:00-4:00 for the 2:05 one.
+var NPS_OK_KEY = { morning: 'NPS_LAST_OK_MORNING', afternoon: 'NPS_LAST_OK_2PM' };
+var NPS_WATCH_HOURS = [9, 15];
 
 // ---------------------------------------------------------------------------
 // The close calendar. Mirrors monthCloseDay() in netprofit-collect/index.ts.
@@ -233,6 +249,9 @@ function npsDailyRefresh(e) {
     var before = _npaSnapshot(ym);
 
     _npWrite(false);
+    // Straight after the write, before anything else can throw: what the write
+    // found wrong goes out even if the summary pass below fails.
+    _npaSendHealth(NP_HEALTH, ym, pass.split(' ')[0].toLowerCase() + ' daily refresh');
     // The summary strip second, always: Days Thru is DERIVED from the last day
     // carrying Sales, so running it before the grid is written would measure
     // yesterday's sheet and leave every Tracking figure a day behind.
@@ -267,6 +286,11 @@ function npsDailyRefresh(e) {
           + 'salesYoyPreview() to see what it found, and salesYoyAudit() to check the other '
           + 'months while you are there.');
     }
+
+    // The watchdog's evidence that this pass finished. LAST, so a pass that dies
+    // anywhere above — including at the six-minute wall — never stamps it.
+    PropertiesService.getScriptProperties()
+      .setProperty(morning ? NPS_OK_KEY.morning : NPS_OK_KEY.afternoon, today);
 
     Logger.log('Daily refresh done. The current month stays open; it closes at 7pm on %s.',
       _npsMonthCloseDay(ym).date);
@@ -335,6 +359,9 @@ function npsMonthClose() {
       today, target, NP_FROM, NP_TO);
     if (close.why.length) Logger.log('  close slipped: %s', close.why.join('; '));
     _npWrite(false);
+    // Close night is the worst night to write an #N/A quietly: it is the figure
+    // the bonus is paid on, and nothing rewrites it afterwards.
+    _npaSendHealth(NP_HEALTH, target, 'month close');
     // On a close the grid holds the month being closed, so Days Thru lands on
     // its final day and Tracking stops projecting — the closed month reads as
     // fact, not as a forecast. That is the figure the bonus is paid on.
@@ -356,6 +383,42 @@ function npsMonthClose() {
         + 'a bonus on this month until it has closed cleanly.');
     throw e;
   }
+}
+
+// ---------------------------------------------------------------------------
+// The watchdog. See NPS_OK_KEY for why it exists and why it is not on pg_cron.
+// ---------------------------------------------------------------------------
+// PURE, for tests/np-health-check.js: given the Central hour and the two stamps,
+// which pass (if any) should have finished and has not.
+function _npsOverdue(today, hour, stamps) {
+  if (hour < NPS_WATCH_HOURS[0]) return null;               // nothing is due yet
+  var pm = hour >= NPS_WATCH_HOURS[1];
+  var key = pm ? 'afternoon' : 'morning';
+  if (stamps[key] === today) return null;
+  return { pass: pm ? 'The 2pm Net Profit refresh' : 'The 8am Net Profit refresh',
+           dueAt: pm ? '2:05pm' : '8:05am', last: stamps[key] || null };
+}
+
+function npsWatchdog() {
+  var props = PropertiesService.getScriptProperties();
+  var today = _npsToday();
+  var hour = Number(Utilities.formatDate(new Date(), NPS_TZ, 'H'));
+  var late = _npsOverdue(today, hour, {
+    morning: props.getProperty(NPS_OK_KEY.morning),
+    afternoon: props.getProperty(NPS_OK_KEY.afternoon)
+  });
+  if (!late) { Logger.log('Watchdog %s %s:00 — the pass that was due has finished.', today, hour); return; }
+  var now = Utilities.formatDate(new Date(), NPS_TZ, 'h:mma');
+  Logger.log('Watchdog: %s has not finished today (last finished %s).', late.pass, late.last || 'never');
+  _npaSendFailure(late.pass,
+    'Due at ' + late.dueAt + ' Central and not finished by ' + now + '. The last one that '
+      + 'finished was on ' + (late.last || '(never recorded)') + '. A pg_cron job that did '
+      + 'not fire, a web app that refused the call, and a run Google killed at the '
+      + 'six-minute limit all look exactly like this — none of them can send their own email. '
+      + 'If a separate "did not complete" email arrived for this pass, that is the cause.',
+    'Claude — check cron.job_run_details for netprofit-' + (late.dueAt === '8:05am' ? '8am' : '2pm')
+      + ' and the Apps Script executions list. To refill the tab now, run npsDailyRefresh '
+      + 'from the editor: it rewrites the whole month to date.');
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +502,14 @@ function npsInstallTriggers() {
   ScriptApp.newTrigger('npsMonthClose').timeBased()
     .atHour(NPS_CLOSE_HOUR).everyDays(1).inTimezone(NPS_TZ).create();
   Logger.log('Installed: npsMonthClose at %s:00 %s.', NPS_CLOSE_HOUR, NPS_TZ);
+  // The watchdog is a trigger ON PURPOSE, not a cron job: it is what notices
+  // when the cron side has stopped.
+  NPS_WATCH_HOURS.forEach(function (h) {
+    ScriptApp.newTrigger('npsWatchdog').timeBased()
+      .atHour(h).everyDays(1).inTimezone(NPS_TZ).create();
+  });
+  Logger.log('Installed: npsWatchdog at %s Central (each fires within that hour).',
+    NPS_WATCH_HOURS.map(function (h) { return h + ':00'; }).join(' and '));
   Logger.log('Daily refreshes are pg_cron jobs (netprofit-8am / netprofit-2pm), '
     + 'not triggers — see migration 0087.');
   Logger.log('⚠️ Apps Script fires within the hour, never before it — so the close '
@@ -468,7 +539,9 @@ function npsRemoveTriggers() {
   var all = ScriptApp.getProjectTriggers(), n = 0;
   for (var i = 0; i < all.length; i++) {
     var f = all[i].getHandlerFunction();
-    if (f === 'npsDailyRefresh' || f === 'npsMonthClose') { ScriptApp.deleteTrigger(all[i]); n++; }
+    if (f === 'npsDailyRefresh' || f === 'npsMonthClose' || f === 'npsWatchdog') {
+      ScriptApp.deleteTrigger(all[i]); n++;
+    }
   }
   if (n) Logger.log('Removed %s Net Profit trigger(s).', n);
 }
@@ -479,9 +552,16 @@ function npsStatus() {
   var all = ScriptApp.getProjectTriggers();
   for (var i = 0; i < all.length; i++) {
     var f = all[i].getHandlerFunction();
-    if (f === 'npsDailyRefresh' || f === 'npsMonthClose') armed.push(f);
+    if (f === 'npsDailyRefresh' || f === 'npsMonthClose' || f === 'npsWatchdog') armed.push(f);
   }
   Logger.log('Today (Central): %s', today);
+  var watch = armed.filter(function (f) { return f === 'npsWatchdog'; }).length;
+  var pp = PropertiesService.getScriptProperties();
+  Logger.log('Watchdog triggers armed: %s — expected %s. %s  Last finished: morning %s, 2pm %s.',
+    watch, NPS_WATCH_HOURS.length,
+    watch === NPS_WATCH_HOURS.length ? 'OK' : '!! run npsInstallTriggers',
+    pp.getProperty(NPS_OK_KEY.morning) || '(none yet)',
+    pp.getProperty(NPS_OK_KEY.afternoon) || '(none yet)');
   Logger.log('Triggers armed: %s', armed.length ? armed.join(', ') : 'NONE — run npsInstallTriggers');
   // ⚠️ ZERO npsDailyRefresh TRIGGERS IS NOW CORRECT. This used to expect two,
   // and said so loudly, because Apps Script does not report a trigger's hour

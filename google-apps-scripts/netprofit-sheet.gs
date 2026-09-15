@@ -117,6 +117,156 @@ var NP_TZ = 'America/Chicago';
 var NP_OFF_NPTRACK_MAX = 14;   // NP Tracking, the rightmost column this file writes
 var NP_CLEAR_FUTURE = true;   // clear any row dated today or later that holds data
 
+// ============================================================================
+// HEALTH — what this pass found that could make the tab wrong.
+//
+// ⚠️ WHY THIS EXISTS (2026-09-15). Two things broke the tab in one morning and
+// neither sent a word:
+//   * MPL's eBay login was revoked. The collector answered 200 with eBay Fee and
+//     Shipping null, the writer dutifully put =NA() down the whole month, and
+//     the only record was a Logger line.
+//   * Marketplace Connect stalled over Sep 11-13 and 46 eBay orders reached
+//     Shopify a day or two late. The CEO found the resulting $0 eBay-fee days by
+//     reading the sheet, which is the one way nobody wants to find them.
+// Every failure in these files was already DETECTED — in a warning, a null, a
+// refusal — and then written to a log nobody opens. This collects them.
+//
+// TWO LEVELS, and the difference is what happens next time:
+//   'broken' — a figure on the tab is wrong or #N/A right now. Emailed on EVERY
+//              pass until it clears, because it stays wrong until somebody acts.
+//   'check'  — a figure that is probably wrong but could be real (a card-fee-
+//              free day that ran cards). Emailed ONCE per store, day and kind, so
+//              a real one is not repeated twice a day for the rest of the month.
+//
+// Each entry says who fixes it. House rule — see netprofit-alerts.gs.
+// ============================================================================
+var NP_HEALTH = [];   // reset at the top of every _npWriteUnlocked run
+
+// The consent link a person with the store's eBay seller login opens to put the
+// connection back. Starting it needs the ops secret, like every other ebay-oauth
+// entry point.
+var NP_EBAY_CONSENT = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/ebay-oauth';
+
+// A label is bought up to three days after the sale (13% land +2 to +3), so a
+// day younger than this can be short of shipping and be completely right.
+var NP_SHIP_SETTLE_DAYS = 3;
+// A day with only one or two eBay sales can genuinely ship nothing: local
+// pickups, cancellations. Below this the check would mostly flag real days.
+var NP_SHIP_MIN_EBAY = 3;
+
+function _npDaysBetween(a, b) {
+  return Math.round((Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10))
+    - Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10))) / 86400000);
+}
+
+// One store's collector response, and the day records this pass is about to
+// write, turned into health entries. PURE — no sheet, no clock — so the offline
+// check can drive it with real collector responses (tests/np-health-check.js).
+//
+// ⚠️ IT ONLY JUDGES DAYS BEING WRITTEN. `recs` excludes today and anything the
+// tab has no row for; judging those would alert on days nobody can see.
+//
+// ⚠️ OLDER COLLECTORS HAVE NO `health`, card_orders or ebay_sale_fees. Every
+// check that needs one skips when it is absent rather than reading undefined as
+// zero — the #N/A check below still works off the null alone.
+function _npHealthCheck(store, data, recs, todayYmd) {
+  var out = [];
+  var h = data.health || {};
+  function add(level, kind, what, detail, fix, day) {
+    out.push({ level: level, store: store, day: day || null, kind: kind,
+               key: store + ':' + (day || '-') + ':' + kind,
+               what: what, detail: detail, fix: fix });
+  }
+  var warnText = (data.warnings || []).join(' | ');
+
+  // 1. eBay pass failed: eBay Fee AND Shipping are #N/A on every day written.
+  var na = recs.filter(function (r) { return r.ebay_fee === null || r.ebay_fee === undefined; }).length;
+  if (na) {
+    var why = h.ebay_error || (warnText.match(/eBay fee unavailable:[^|]*/) || [warnText])[0];
+    var revoked = /invalid_grant|token refresh failed/i.test(why);
+    add('broken', 'ebay-na',
+      'eBay Fee and Shipping show #N/A on ' + na + ' day(s), and so does Net Profit',
+      why,
+      revoked
+        ? 'Someone with ' + store + '\'s eBay seller login — eBay has rejected the saved '
+          + 'connection. Open ' + NP_EBAY_CONSENT + '?store=' + store + '&secret=' + NP_SECRET
+          + ' in a browser, sign in as ' + store + '\'s eBay account and approve. The next '
+          + 'pass fills the whole month back in; nothing on the sheet needs touching.'
+        : 'Claude — the eBay Finances read failed for a reason other than the login. '
+          + 'Send this email on.');
+  }
+
+  // 2. The importer has stalled: finished days are missing eBay sales AND fees.
+  var ni = h.not_yet_imported;
+  if (ni && ni.n) {
+    var byDay = {};
+    (ni.orders || []).forEach(function (o) { byDay[o.day] = (byDay[o.day] || 0) + 1; });
+    add('broken', 'not-imported',
+      ni.n + ' eBay sale(s) on finished days are not in Shopify yet — those days are '
+        + 'missing the sales as well as the eBay fee',
+      'By day sold: ' + Object.keys(byDay).sort().map(function (d) {
+        return d + ' (' + byDay[d] + ')'; }).join(', ')
+        + '. eBay orders: ' + (ni.orders || []).map(function (o) { return o.ebay_order_id; })
+          .slice(0, 12).join(', ') + '. Fee not yet booked: $' + ni.fee + '.',
+      'The store, or you — Marketplace Connect in ' + store + '\'s Shopify admin has '
+        + 'stopped bringing eBay orders across. Check its sync status there. Nothing to do '
+        + 'on this sheet: once the orders arrive, the next pass puts their sales and fees '
+        + 'on the day they sold.');
+  }
+
+  // 3. Anything the collector could not read and therefore did not count.
+  if (h.unknown_label_messages) {
+    add('broken', 'label-shape', 'Shipping is short — ' + h.unknown_label_messages
+      + ' shipping-label message(s) in a wording the collector does not recognise',
+      warnText, 'Claude — parseLabelCost in netprofit-collect needs to learn the new '
+        + 'wording. Send this email on.');
+  }
+  if (h.orders_with_truncated_events) {
+    add('broken', 'events-cut', h.orders_with_truncated_events + ' order(s) had more than '
+      + '50 timeline events, so a shipping label could have been missed', warnText,
+      'Claude — raise the events page size in netprofit-collect. Send this email on.');
+  }
+  if (h.page_cap_hit) {
+    add('broken', 'page-cap', 'The order scan hit its 200-page cap — the month is incomplete',
+      warnText, 'Claude — send this email on.');
+  }
+  if (h.unhandled_ebay_types && Object.keys(h.unhandled_ebay_types).length) {
+    add('broken', 'ebay-type', 'eBay sent a transaction type the collector does not know — '
+      + 'it is in no column', JSON.stringify(h.unhandled_ebay_types),
+      'Claude — decide which column it belongs in. Send this email on.');
+  }
+  if (h.shopifyql_errors && h.shopifyql_errors.length) {
+    add('broken', 'shopifyql', 'Shopify refused the sales query', h.shopifyql_errors.join('; '),
+      'Claude — send this email on.');
+  }
+
+  // 4. Figures that are empty where the day says they should not be.
+  recs.forEach(function (r) {
+    var day = String(r.day), n = parseInt(day.slice(8, 10), 10);
+    if (typeof r.ebay_sale_fees === 'number' && r.ebay_orders > 0 && r.ebay_sale_fees === 0) {
+      add('check', 'ebay-zero', 'eBay Fee — ' + r.ebay_orders + ' eBay sale(s) on day ' + n
+        + ' and no eBay fee charged on any of them',
+        'Sales ' + r.net_sales + ', eBay fee written ' + r.ebay_fee + '.',
+        'Claude — a sale\'s fee is not joining to its order. Send this email on.', day);
+    }
+    if (typeof r.shipping_cost === 'number' && r.shipping_cost === 0
+        && r.ebay_orders >= NP_SHIP_MIN_EBAY
+        && _npDaysBetween(day, todayYmd) > NP_SHIP_SETTLE_DAYS) {
+      add('check', 'ship-zero', 'Shipping — ' + r.ebay_orders + ' eBay sale(s) on day ' + n
+        + ' and no label cost, ' + _npDaysBetween(day, todayYmd) + ' days on',
+        'Labels are bought within three days of the sale, so this one should have posted.',
+        'You — check whether ' + store + ' bought those labels outside Shopify. If they did '
+          + 'not, Claude — send this email on.', day);
+    }
+    if (typeof r.card_orders === 'number' && r.card_orders > 0 && r.cc_fee === 0) {
+      add('check', 'cc-zero', 'Credit Card Fee — ' + r.card_orders + ' card sale(s) on day '
+        + n + ' and no processing fee', 'A Shopify Payments card sale always carries a fee.',
+        'Claude — send this email on.', day);
+    }
+  });
+  return out;
+}
+
 function npProbe()        { _npProbe(); }
 function npTtlRowProbe()  { _npTtlRowProbe(); }
 function npFixTrackingPreview() { _npFixTracking(true); }
@@ -321,6 +471,7 @@ function _npWrite(preview) {
 }
 
 function _npWriteUnlocked(preview) {
+  NP_HEALTH = [];
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
   var sh = _npTab(ss);
   if (!sh) return;
@@ -368,6 +519,12 @@ function _npWriteUnlocked(preview) {
     if (got.err) {
       Logger.log('\n%s: SKIPPED — %s', store, got.err);
       refusals.push(store + ': ' + got.err);
+      NP_HEALTH.push({ level: 'broken', store: store, day: null, kind: 'collector',
+        key: store + ':-:collector',
+        what: 'Nothing was written for ' + store + ' this pass — every column still holds '
+          + 'the previous pass\'s figures',
+        detail: got.err,
+        fix: 'Claude — the collector failed for this store, not the sheet. Send this email on.' });
       continue;
     }
     var data = got.body;
@@ -421,7 +578,17 @@ function _npWriteUnlocked(preview) {
       }
       rows.push({ r: r, day: dayNum, rec: rec, locked: locked });
     }
-    if (missing.length) Logger.log('  !! no row found for day(s): %s', missing.join(', '));
+    // After the row loop so it judges exactly the days this pass writes.
+    NP_HEALTH = NP_HEALTH.concat(_npHealthCheck(store, data,
+      rows.map(function (x) { return x.rec; }), todayYmd));
+    if (missing.length) {
+      Logger.log('  !! no row found for day(s): %s', missing.join(', '));
+      NP_HEALTH.push({ level: 'broken', store: store, day: null, kind: 'no-row',
+        key: store + ':-:no-row',
+        what: 'The tab has no row for day(s) ' + missing.join(', ') + ' — those days were not written',
+        detail: 'Looked for the day number in ' + store + '\'s day column on "' + NP_TAB + '".',
+        fix: 'Claude — the tab\'s layout has moved. Run npProbe and send this email on.' });
+    }
     if (future.length) {
       Logger.log('  %s day(s) not written — not complete yet (%s onward; today is %s, '
         + 'and today is never written)', future.length, future[0], todayYmd);
@@ -525,6 +692,15 @@ function _npWriteUnlocked(preview) {
     refusals.forEach(function (m) { Logger.log('  %s', m); });
   } else {
     Logger.log('refused: none');
+  }
+  // What the schedule will email about. Logged here too so a preview shows it.
+  if (NP_HEALTH.length) {
+    Logger.log('\n=== HEALTH (%s) ===', NP_HEALTH.length);
+    NP_HEALTH.forEach(function (i) {
+      Logger.log('  [%s] %s — %s', i.level, i.store, i.what);
+    });
+  } else {
+    Logger.log('health: nothing found');
   }
   if (preview) Logger.log('\nPREVIEW ONLY — nothing was written. Run npWriteApply to commit.');
 }
