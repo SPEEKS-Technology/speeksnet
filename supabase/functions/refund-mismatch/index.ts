@@ -8,6 +8,7 @@
 //     &to=addr                       send every mail to one address instead
 //     &days=N                        override the discovery window
 //     &sample=1                      render the mail from invented rows
+//     &oversight=1                   with sample or dryRun+html, the leadership version
 //
 // WHY THIS EXISTS. Every month the CFO mails a list of order numbers refunded or
 // cancelled on eBay but not Shopify, or the reverse. Each is a hole in the books:
@@ -86,8 +87,17 @@
 // month is closed and the books are already wrong. So the threshold drops to 24
 // hours on the last two days of the month, measured in Chicago time.
 //
-// Re-nag every 72h while it stays open, so nothing rots quietly. Past 10 days a
-// copy goes to leadership: three ignored mails is not a reminder problem.
+// Re-nag every 72h while it stays open, so nothing rots quietly.
+//
+// ----------------------------------------------------------------------------
+// THE LEADERSHIP DIGEST IS ABOUT PEOPLE, NOT AGE.
+//
+// The DM and CEO get a separate mail on the mornings the managers are emailed.
+// It lists every open order a manager has been told about and, on each row, HOW
+// MANY TIMES. That count is the whole instrument: a 1st notice is work in
+// flight, a 2nd or 3rd is an order that was raised, ignored, and raised again.
+// It replaced an age-based escalation, which could not tell those two apart --
+// an order can be old because nobody looked, or old because it arrived old.
 // ============================================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -103,7 +113,7 @@ const BASE_HOURS      = 72;  // normal age before a mismatch is mailed
 const MONTH_END_HOURS = 24;  // ...and during the last MONTH_END_DAYS of a month
 const MONTH_END_DAYS  = 2;
 const RENAG_HOURS     = 72;  // an unresolved mismatch is raised again after this
-const ESCALATE_DAYS   = 10;  // leadership is copied past this age
+const ESCALATE_DAYS   = 10;  // an item older than this is coloured red in the mail
 const WINDOW_DAYS     = 60;  // how far back NEW mismatches are discovered
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
@@ -607,12 +617,33 @@ function ageText(hours: number) {
   return `${Math.floor(hours / 24)} days`;
 }
 
-function build(rows: Array<Mismatch & { hours: number }>, opts: { escalation?: boolean } = {}) {
+// 1st, 2nd, 3rd, 4th... The leadership digest is built around this number, so it
+// is spelled out rather than printed as "x3" — "3rd notice" reads as a fact
+// about a person's follow-through, which is what it is.
+const ordinal = (n: number) => {
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+
+function build(
+  rows: Array<Mismatch & { hours: number; notice?: number }>,
+  opts: { oversight?: boolean } = {},
+) {
   const money = (n: number) => n > 0 ? `$${n.toFixed(2)}` : "—";
   const body = rows.map((r) => {
     const done = r.direction === "ebay_only" ? "eBay" : "Shopify";
     const todo = r.direction === "ebay_only" ? "Shopify" : "eBay";
     const old = r.hours >= ESCALATE_DAYS * 24;
+    // THE NUMBER THE DM AND CEO ACTUALLY READ. A first notice is just work in
+    // flight. A second or third on the SAME order means the manager was told,
+    // had three days, and it is still not done — which is the whole reason this
+    // digest exists, so it is the loudest thing on the row.
+    const repeat = opts.oversight && (r.notice || 0) >= 2;
+    const badge = opts.oversight && r.notice
+      ? `<span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:9px;`
+        + `background:${repeat ? C.bad : C.chip};color:${repeat ? "#fff" : C.faint};`
+        + `font-weight:700;font-size:10px;">${esc(ordinal(r.notice))} notice</span>`
+      : "";
     const shopUrl = r.shopifyOrderId
       ? `https://${SHOP_BY_STORE[r.store]}/admin/orders/${r.shopifyOrderId}` : null;
     const ebayUrl = `https://www.ebay.com/sh/ord/details?orderid=${encodeURIComponent(r.ebayOrderId)}`;
@@ -620,7 +651,7 @@ function build(rows: Array<Mismatch & { hours: number }>, opts: { escalation?: b
     <tr><td style="padding:14px;border-top:1px solid ${C.line};">
       <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">
         ${esc(STORE_NAME[r.store] || r.store)}
-        <span style="color:${old ? C.bad : C.warn};font-weight:700;"> · ${esc(ageText(r.hours))} old</span>
+        <span style="color:${old ? C.bad : C.warn};font-weight:700;"> · ${esc(ageText(r.hours))} old</span>${badge}
       </div>
       <div style="font-size:15px;font-weight:700;color:${C.ink};margin:4px 0 6px;">
         ${esc(r.reversalKind === "cancel" ? "Cancelled" : "Refunded")} on ${done}, but not on ${todo}
@@ -641,12 +672,33 @@ function build(rows: Array<Mismatch & { hours: number }>, opts: { escalation?: b
     </td></tr>`;
   }).join("");
 
-  const title = opts.escalation
-    ? `Refund mismatches older than ${ESCALATE_DAYS} days`
+  const title = opts.oversight
+    ? `Refund mismatches — what the managers have been told`
     : `Refunded on one site, not the other`;
-  const lead = opts.escalation
-    ? `These have been open more than ${ESCALATE_DAYS} days and have already been mailed to the store manager more than once.`
+  const lead = opts.oversight
+    ? `Every order the store managers have been emailed about and have not yet cleared. `
+      + `The notice count is the thing to read: a 1st notice is work in flight, a 2nd or `
+      + `3rd is an order the manager was already asked to fix and has not.`
     : `Each of these was refunded or cancelled on one marketplace and is still a live sale on the other. Push the same reversal on the other site and this stops appearing.`;
+
+  // The counts the digest is FOR, on the line above the detail, so the question
+  // "is anyone actually doing these?" is answered without reading every row.
+  const repeats = rows.filter((r) => (r.notice || 0) >= 2);
+  const summary = opts.oversight
+    ? `<tr><td style="padding:12px 14px;border-top:1px solid ${C.line};background:#fff;">
+        <table width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td style="font-size:12px;color:${C.faint};">
+            <b style="color:${C.ink};font-size:19px;">${rows.length}</b><br>open
+          </td>
+          <td style="font-size:12px;color:${C.faint};">
+            <b style="color:${repeats.length ? C.bad : C.ink};font-size:19px;">${repeats.length}</b><br>told more than once
+          </td>
+          <td style="font-size:12px;color:${C.faint};text-align:right;">
+            <b style="color:${C.ink};font-size:19px;">${money(rows.reduce((a, r) => a + r.amount, 0))}</b><br>at stake
+          </td>
+        </tr></table>
+      </td></tr>`
+    : "";
 
   return `<!doctype html><html><body style="margin:0;padding:18px;background:#f4f7f5;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
@@ -655,10 +707,14 @@ function build(rows: Array<Mismatch & { hours: number }>, opts: { escalation?: b
     <div style="font-size:17px;font-weight:800;color:${C.ink};">${esc(title)}</div>
     <div style="font-size:12.5px;color:${C.faint};margin-top:5px;line-height:1.6;">${esc(lead)}</div>
   </td></tr>
+  ${summary}
   ${body}
   <tr><td style="padding:12px 14px;text-align:center;color:${C.faint};font-size:10.5px;line-height:1.6;border-top:1px solid ${C.line};background:#f7faf8;">
-    Checked every morning. You only get this mail when something needs doing, and each
-    order is raised again every ${RENAG_HOURS / 24} days until both sites agree.<br>
+    ${opts.oversight
+      ? `Sent on the mornings the managers are emailed, so this is what went out to them today. `
+        + `The notice count rises by one each time an order is raised again, every ${RENAG_HOURS / 24} days.`
+      : `Checked every morning. You only get this mail when something needs doing, and each
+         order is raised again every ${RENAG_HOURS / 24} days until both sites agree.`}<br>
     Normally flagged after ${BASE_HOURS / 24} days; in the last ${MONTH_END_DAYS} days of the month, after ${MONTH_END_HOURS} hours, so it lands before the books close.
   </td></tr>
 </table></td></tr></table></body></html>`;
@@ -687,11 +743,11 @@ Deno.serve(async (req: Request) => {
     const html = build([
       { key: "s1", store: "OVL", ebayOrderId: "08-15066-00533", direction: "ebay_only",
         shopifyOrderName: "#KS01-14010", shopifyOrderId: "1", reversedAt: "", reversalKind: "refund",
-        amount: 249.99, hours: 74 },
+        amount: 249.99, hours: 74, notice: 1 },
       { key: "s2", store: "BAL", ebayOrderId: "13-15066-46687", direction: "shopify_only",
         shopifyOrderName: "#MO04-2836", shopifyOrderId: "2", reversedAt: "", reversalKind: "cancel",
-        amount: 89.5, hours: 268 },
-    ]);
+        amount: 89.5, hours: 268, notice: 3 },
+    ], { oversight: q("oversight") === "1" });
     if (q("html") === "1") return new Response(html, { headers: { "Content-Type": "text/html" } });
     const to = q("to");
     if (!to) return json({ error: "sample needs &to=addr, or &html=1 to just render it" }, 400);
@@ -731,7 +787,26 @@ Deno.serve(async (req: Request) => {
       const p = priorBy[m.key];
       return !p || !p.last_alerted || p.last_alerted < renagBefore;
     });
-    const escalating = aged.filter((m) => m.hours >= ESCALATE_DAYS * 24);
+    // LEADERSHIP OVERSIGHT, NOT AGE-BASED ESCALATION.
+    //
+    // Asked for on 2026-09-16 and it is a better instrument than the age rule it
+    // replaces. The DM and CEO do not need "this is old" — they need "the manager
+    // was told and did nothing", and the notice count says exactly that. An order
+    // on its 1st notice is work in flight; the same order on its 3rd has been
+    // raised, ignored, raised, ignored.
+    //
+    // It covers everything still open that has EVER been mailed, not just what
+    // went out this morning, so a quiet day does not hide an order the manager
+    // was told about on Monday and still has not cleared.
+    const notified = aged
+      .map((m) => ({
+        ...m,
+        notice: (priorBy[m.key]?.times_alerted || 0) + (due.some((d) => d.key === m.key) ? 1 : 0),
+      }))
+      .filter((m) => m.notice > 0)
+      // Worst follow-through first: most notices, then oldest.
+      .sort((a, b) => (b.notice - a.notice) || (b.hours - a.hours));
+    const repeats = notified.filter((m) => m.notice >= 2);
 
     // --- who gets what ------------------------------------------------------
     // Grouped by RECIPIENT, not by store: BAL and MPL share a manager, and two
@@ -755,12 +830,17 @@ Deno.serve(async (req: Request) => {
     }));
 
     if (q("dryRun") === "1") {
-      if (q("html") === "1" && plan.length) {
-        return new Response(build(plan[0].rows), { headers: { "Content-Type": "text/html" } });
+      if (q("html") === "1") {
+        // Either mail can be previewed against real data without sending it.
+        const preview = q("oversight") === "1"
+          ? (notified.length ? build(notified, { oversight: true }) : "")
+          : (plan.length ? build(plan[0].rows) : "");
+        if (preview) return new Response(preview, { headers: { "Content-Type": "text/html" } });
       }
       return json({
         ok: true, dryRun: true, monthEnd: isMonthEnd(), thresholdHours,
-        open: aged.length, wouldMail: due.length, escalating: escalating.length,
+        open: aged.length, wouldMail: due.length,
+        leadershipWouldSee: notified.length, onRepeatNotice: repeats.length,
         // Blind spots, stated rather than implied. All-zero findings with a
         // store listed here is "we could not look", which reads identically to
         // "nothing is wrong" if only the counts are printed.
@@ -787,22 +867,26 @@ Deno.serve(async (req: Request) => {
       sent.push({ to, count: n, ok: res.ok, status: res.status });
     }
 
-    // Leadership copy. Only for items that have aged past ESCALATE_DAYS and are
-    // being mailed on this pass — an escalation that arrives on a morning the
-    // manager was not also reminded reads as a reprimand rather than a backstop.
-    const escDue = escalating.filter((m) => due.some((d) => d.key === m.key));
-    if (escDue.length) {
+    // Sent only on the mornings the managers were actually emailed, so the digest
+    // always answers "here is what just went out, and here is who has been told
+    // before". On a silent morning leadership gets nothing, which is the point:
+    // a mail from this means something needs chasing.
+    if (due.length && notified.length) {
       const to = q("to") || (await listFor(sb, "refund_mismatch_escalation", "weekly_leadership")).join(",");
       if (to) {
         const res = await fetch(GMAIL_RELAY, {
           method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
           body: JSON.stringify({
             secret: OPS_SECRET, to,
-            subject: `Refund mismatches past ${ESCALATE_DAYS} days — ${escDue.length}`,
-            html: build(escDue.sort((a, b) => b.hours - a.hours), { escalation: true }),
+            // The repeat count goes in the SUBJECT, because that is the number
+            // worth opening the mail for.
+            subject: `Refund mismatches — ${notified.length} open`
+              + (repeats.length ? `, ${repeats.length} told more than once` : ``),
+            html: build(notified, { oversight: true }),
           }),
         });
-        sent.push({ to, count: escDue.length, escalation: true, ok: res.ok, status: res.status });
+        sent.push({ to, count: notified.length, repeats: repeats.length,
+                    oversight: true, ok: res.ok, status: res.status });
       }
     }
 
@@ -810,7 +894,9 @@ Deno.serve(async (req: Request) => {
     for (const m of aged) {
       const p = priorBy[m.key];
       const alerted = due.some((d) => d.key === m.key);
-      const escalated = escDue.some((d) => d.key === m.key);
+      // escalated_at now records the first time an order reached a SECOND notice
+      // — the moment follow-through failed, rather than the moment it got old.
+      const repeated = repeats.some((d) => d.key === m.key);
       await sb.from("refund_mismatch_state").upsert({
         issue_key: m.key, store_code: m.store, ebay_order_id: m.ebayOrderId,
         direction: m.direction,
@@ -820,7 +906,7 @@ Deno.serve(async (req: Request) => {
         last_seen: nowIso,
         last_alerted: alerted ? nowIso : (p?.last_alerted ?? null),
         times_alerted: (p?.times_alerted || 0) + (alerted ? 1 : 0),
-        escalated_at: p?.escalated_at || (escalated ? nowIso : null),
+        escalated_at: p?.escalated_at || (repeated ? nowIso : null),
         resolved_at: null,
       }, { onConflict: "issue_key" });
     }
@@ -851,7 +937,7 @@ Deno.serve(async (req: Request) => {
 
     return json({
       ok: true, monthEnd: isMonthEnd(), thresholdHours,
-      open: aged.length, mailed: due.length, escalated: escDue.length,
+      open: aged.length, mailed: due.length, onRepeatNotice: repeats.length,
       resolved: settled.length, sent,
       blindStores: [...brokeStores], unjudgedOrders: [...unjudged],
       stats, problems,

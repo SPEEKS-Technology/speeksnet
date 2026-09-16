@@ -57,8 +57,10 @@ create table if not exists public.refund_mismatch_state (
   last_seen           timestamptz not null default now(),
   last_alerted        timestamptz,
   times_alerted       integer     not null default 0,
-  -- Set once, when the item passes the escalation age and leadership is copied.
-  -- Nullable rather than a boolean so the date itself is the evidence.
+  -- Set once, the first time this order reached a SECOND notice -- the moment a
+  -- manager was shown to have been told and not acted, rather than the moment the
+  -- order merely got old. Nullable rather than a boolean so the date is the
+  -- evidence, and so "how long until follow-through failed" stays answerable.
   escalated_at        timestamptz,
   resolved_at         timestamptz
 );
@@ -100,8 +102,13 @@ from public.email_recipients r
 where r.list_key like 'weekly_store_%'
 on conflict do nothing;
 
--- Leadership copy, used only once an item passes the escalation age. Separate
--- list so raising the escalation threshold never silently changes who is on it.
+-- The DM/CEO oversight list. Named ..._escalation because that is what it was on
+-- the morning this shipped; by the afternoon the business had asked for something
+-- better, so the KEY is a fossil and the behaviour is not. It now receives a
+-- digest of every open order the managers have been emailed about, carrying the
+-- number of TIMES each was raised -- a 2nd or 3rd notice on one order being the
+-- evidence that a manager was told and did not act. Kept separate from the
+-- per-store lists so leadership can be changed without touching the managers.
 insert into public.email_recipients (list_key, email)
 select 'refund_mismatch_escalation', r.email
 from public.email_recipients r
@@ -125,6 +132,8 @@ on conflict do nothing;
 -- Daily, not every 15 minutes like ebay-alert: the thing being watched is three
 -- days old by the time it qualifies, so a faster cadence would buy nothing and
 -- spend eBay API calls hourly for it.
+--
+-- APPLIED 2026-09-16. Both jobs are live (jobid 59 and 60).
 --
 --   select cron.schedule('refund-mismatch-daily-cdt', '20 13 * * *', $job$
 --     select net.http_post(
