@@ -1487,11 +1487,37 @@ const COMP_STOPWORDS = new Set([
 // System" (Wave), and an AsRock B650M titled Intel when B650M is AMD.
 
 const NAME_MODEL = "claude-opus-5";
+// ⚠️ THIS IS THE COST DIAL. Thinking tokens bill as OUTPUT, at $25 per million,
+// and on Opus 5 thinking is on by default at effort "high" — which is what this
+// call used to run at, by saying nothing. Ethan, 2026-09-08: three $10 recharges
+// in the first eight days, and ~90% of that was the model deliberating over
+// 25 titles at a time.
+//
+// "low" because of what the task actually is. The system prompt below is a list
+// of rules with an explicit abstention default, and it says the test outright:
+// whether a word is MISSPELLED, not whether the model recognises the product.
+// That is a shallow judgement made 25 times, not one deep one.
+//
+// HOW TO TELL IF THIS IS TOO LOW. The baseline at effort "high" was 52 findings
+// from 3,534 titles asked — 1.47 per 100 (12 garbled, 31 wrong, 9 disputed, on
+// 2026-09-08). Compare against that:
+//   * near zero  -> it has stopped looking. Raise to "medium".
+//   * far above  -> it has started guessing, and the findings are junk a
+//                   reviewer has to wade through. Raise to "medium".
+// Either way ai_usage_log says what the change cost, so the trade is visible in
+// both directions. Query: findings per 100 asked, before and after this date.
+const NAME_EFFORT = "low";
 // Per store per run. Mirrors MARKET_MAX and exists for the same reason: the
 // 150s edge wall cuts the RESPONSE while the function keeps executing, so an
 // over-long run reports IDLE_TIMEOUT and nobody can tell how much was saved.
 const NAME_MAX = 100;
-const NAME_BATCH = 25;          // products per request
+// 50, not 25: the 840-token system prompt is re-sent with every request and
+// nothing caches it (it is under Opus 5's minimum cacheable prefix), so halving
+// the request count halves that overhead. Input is only about a tenth of the
+// bill, so this is the small saving — but it costs nothing to take, and a failed
+// batch of 50 is not lost work: those rows keep no stamp and the next run picks
+// them up again.
+const NAME_BATCH = 50;          // products per request
 const NAME_CONCURRENCY = 4;     // batches in flight — 100 items in one round trip
 
 // ⚠️ BUMP THIS WHEN WHAT WE SEND CHANGES. It is stored next to every answer, so
@@ -1515,8 +1541,41 @@ const NAME_CODES = new Set<string>(["name-garbled", "name-wrong", "name-disputed
 // ⚠️ NOT ALL SPECS. Matching on every field would let an incidental value veto a
 // real fix — "Extreme" appearing in a Model field should not protect the word
 // "Extreme" everywhere in the title.
+//
+// ⚠️ FOR SOME THINGS THE SPEC IS THE NAME, AND A LENS IS THE CLEAREST CASE.
+// MPL's Rokinon (MO03-2519C-E10, denied 2026-09-04) is the same bug as the
+// T43WD-40 and Xbox One denials, on a field this list had not reached:
+//
+//   Maximum Aperture = f/2.2, title says f/2.2  →  we proposed f/2.0
+//   note: "This is a 2.2 lens. Shown in the pictures"
+//
+// Our knowledge was not even unreasonable — the 16mm ED AS UMC CS everyone
+// knows IS f/2.0. But Samyang/Rokinon also sell the CINE version of that same
+// optic marked T2.2, so "2.2" on the barrel is a real marking on a real
+// variant, not a mangling of 2.0. Nothing available from here settles which one
+// is in the box; the person holding it settled it in a second.
+//
+// A lens is NAMED by its focal length and maximum aperture — "16mm f/2.0" is
+// the product name, not a description of it — so both belong here for the same
+// reason Model does. Focal Length is included by symmetry rather than from a
+// denial: the identical failure is available on "16mm should be 14mm", and
+// waiting for someone to be told their lens is the wrong length first is not a
+// good reason to leave it out.
+//
+// Both values are specific measurements ("f/2.2", "16mm"), so neither can veto
+// a fix by coincidence the way a Color of "Red" would.
+//
+// ⚠️ FORM FACTOR, FOR THE SAME REASON — LEE's WD Blue SN570 (MO01-5532A2-E15,
+// denied 2026-09-15): Form Factor = 2280mm, title says 2280mm, and name-garbled
+// proposed "2280" as a typo fix. "2280mm" is not strictly millimetres (it is
+// 22 x 80), but it is how this shop writes the size in the field AND the title,
+// and it is a size, not a mangled name. Approving would have rewritten the Form
+// Factor field too (name-garbled is a CORRECTING_CODE). An M.2 drive, a
+// motherboard (ATX / Micro-ATX) and a desktop (SFF) are all named by their form
+// factor, and its values are specific enough not to veto by coincidence.
 const IDENTITY_FIELDS = [
   "MPN", "Model", "Platform", "Type", "Brand", "Release Year",
+  "Maximum Aperture", "Focal Length", "Form Factor",
 ];
 
 function identityFields(specs: Record<string, string> | undefined) {
@@ -1621,7 +1680,9 @@ async function checkNamesBatch(
           shelf: i.shelf || undefined,
         })), null, 1),
     }],
-    output_config: { format: zodOutputFormat(NameReportSchema) },
+    // effort sits beside format in output_config, not at the top level. See
+    // NAME_EFFORT — leaving it unset meant "high", which is where the bill was.
+    output_config: { effort: NAME_EFFORT, format: zodOutputFormat(NameReportSchema) },
   });
 
   const parsed = res?.parsed_output;
@@ -3125,6 +3186,35 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     }
   }
 
+  // ⚠️ WRITE THE BILL DOWN. This block already knew what the run cost and threw
+  // it away with the response, which is why "is this tool using too much?"
+  // could only be answered by estimating from the source. One row per run, and
+  // never on a dry run — a dry run asked the model nothing.
+  //
+  // Fire-and-forget: a logging table must never be able to fail a sweep that
+  // has already paid for its answers and saved them.
+  if (wantLlm && save && nameUsage.batches) {
+    try {
+      await sb("ai_usage_log", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          tool: "listing-titles:names",
+          store_code: store,
+          model: NAME_MODEL,
+          effort: NAME_EFFORT,
+          batches: nameUsage.batches,
+          items: nameUsage.asked,
+          input_tokens: nameUsage.input,
+          output_tokens: nameUsage.output,
+          cost_usd: nameUsage.input / 1e6 * 5 + nameUsage.output / 1e6 * 25,
+        }),
+      });
+    } catch (e) {
+      console.error("ai_usage_log write failed (the sweep itself is fine):", String(e));
+    }
+  }
+
   return {
     store, examined: cands.length, queued: out.length,
     ...(mismatched.length ? { differentItemOnEbay: mismatched } : {}),
@@ -3302,6 +3392,19 @@ type FbRow = {
   saysItself: { field: string; value: string } | null;
 };
 
+// The run a denied row changed, for the ask.
+// ⚠️ NO SUGGESTION IS NOT AN EMPTY TITLE. A report-only finding (name-disputed)
+// stores no suggested_title, and diffing against "" made the WHOLE title the
+// removed run — the ask printed `"TeamGroup Trident Z …" -> "(removed)"` for
+// LEE's two G.Skill kits (2026-09-16), then matched "8GB (2x4GB) RAM" out of
+// that run against Memory Size and offered it as evidence the rule overruled
+// the listing. Nothing was proposed, so nothing was changed.
+function feedbackRun(current: string | null, suggested: string | null) {
+  return suggested
+    ? titleRun(String(current || ""), String(suggested))
+    : { was: "", now: "" };
+}
+
 // Does the listing itself already state the words the suggestion took out?
 //
 // ⚠️ NOT A WHOLE-RUN TEST. The changed run is whatever sits between the matching
@@ -3391,7 +3494,7 @@ async function feedbackFor(stores: string[], days: number) {
     } catch (_e) { /* the notes are still worth reading without them */ }
     for (const r of d) {
       const specs = extras[r.product_id]?.specs || {};
-      const run = titleRun(String(r.current_title || ""), String(r.suggested_title || ""));
+      const run = feedbackRun(r.current_title, r.suggested_title);
       const keep: Record<string, string> = {};
       for (const k of IDENTITY_SPECS) if (specs[k]) keep[k] = specs[k];
       // Plus whatever field holds the words in dispute, wherever it lives.
@@ -3725,8 +3828,14 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // — "f/3.5-5.6", "(2x8GB)", "24.2MP" — and \b in front of "(" is a boundary in
 // the wrong place. The rule actually wanted is: not glued to a letter or a
 // digit, so "SATA" never matches inside "eSATA" and "8GB" never inside "128GB".
+//
+// ⚠️ NOR HALF OF A DECIMAL. "." and "," are not letters or digits, so a run of
+// "4" matched the front of "4.00GHz" — LEE's i7-6700K (MO01-5210A-E15, denied
+// 2026-09-07) fixed "4 Thread" to "8 Thread" and the preview told the reviewer
+// Processor Speed would become 8.00GHz. A number followed by ".00" or preceded
+// by "1," is part of a bigger number, not a value of its own.
 const runRe = (was: string) =>
-  new RegExp(`(?<![A-Za-z0-9])${escapeRe(was)}(?![A-Za-z0-9])`, "gi");
+  new RegExp(`(?<![A-Za-z0-9])(?<!\\d[.,])${escapeRe(was)}(?![A-Za-z0-9])(?![.,]\\d)`, "gi");
 
 // ============ WHICH WORDS THE TITLE IS *NOT* THE ONLY PLACE FOR ==============
 // Ethan, on a CPU/motherboard combo with no room for the words that name it:
@@ -4050,6 +4159,34 @@ function titleRun(from: string, to: string): { was: string; now: string } {
            now: b.slice(head, b.length - tail).join(" ") };
 }
 
+// The run to carry into the rest of the listing. titleRun, widened by one
+// unchanged neighbour when the change is a BARE NUMBER on both sides.
+//
+// ⚠️ "4" -> "8" IS NOT A FACT, "4 Thread" -> "8 Thread" IS. The i7-6700K's fix
+// was a single digit, and a single digit is in every field that counts anything:
+// Thread Count "4 Thread" was right to change, but a Core Count of "4" would have
+// become 8 as well. Taking the next word from the title ("Thread") makes the run
+// say which count it is, and only a field saying the same thing matches.
+// A replacement only: a deletion is subtracted from fields solely when it
+// corrects something (CORRECTING_CODES), and widening it would turn it into a
+// replacement that skips that rule.
+function echoRun(from: string, to: string): { was: string; now: string } {
+  const a = String(from || "").trim().split(/\s+/);
+  const b = String(to || "").trim().split(/\s+/);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head
+         && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const run = () => ({ was: a.slice(head, a.length - tail).join(" "),
+                       now: b.slice(head, b.length - tail).join(" ") });
+  const bare = () => { const r = run();
+    return !!r.was && !!r.now && !/[A-Za-z]/.test(r.was + r.now); };
+  if (bare() && tail > 0) tail--;
+  if (bare() && head > 0) head--;
+  return run();
+}
+
 type EchoPlan = {
   html: string;
   cellHits: number;
@@ -4237,7 +4374,7 @@ async function echoSweep(store: string, limit: number) {
   const rows = q.map(r => {
     const x = raw[String(r.product_id)];
     if (!x) return { sku: r.sku, error: "product not readable in Shopify" };
-    const run = titleRun(r.current_title || "", r.suggested_title || "");
+    const run = echoRun(r.current_title || "", r.suggested_title || "");
     const plan = planEchoes(x.html, x.mfs, run.was, run.now, r.suggested_title || "",
                             isCorrecting(r.findings));
     return {
@@ -4476,7 +4613,7 @@ async function handlePost(req: Request, scope: Scope) {
   // field twice, and reported either way: what it changed, and what it could not
   // place and has left saying the old thing.
   {
-    const run = titleRun(item.current_title || "", next);
+    const run = echoRun(item.current_title || "", next);
     const plan = planEchoes(html, mfList, run.was, run.now, next,
                             isCorrecting(item.findings));
     if (plan.cellHits) { html = plan.html; specRows = plan.cellHits; }
@@ -5000,7 +5137,7 @@ Deno.serve(async (req: Request) => {
         if (url.searchParams.get("raw")) rawDesc = html;
         if (wantEcho) {
           const cur = String(cat[0].title || "");
-          const run = titleRun(cur, wantEcho);
+          const run = echoRun(cur, wantEcho);
           const plan = planEchoes(html, mfs, run.was, run.now, wantEcho,
             url.searchParams.get("correcting") === "1"
               || isCorrecting(analyse({

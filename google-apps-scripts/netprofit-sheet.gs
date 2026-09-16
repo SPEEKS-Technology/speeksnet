@@ -117,6 +117,156 @@ var NP_TZ = 'America/Chicago';
 var NP_OFF_NPTRACK_MAX = 14;   // NP Tracking, the rightmost column this file writes
 var NP_CLEAR_FUTURE = true;   // clear any row dated today or later that holds data
 
+// ============================================================================
+// HEALTH — what this pass found that could make the tab wrong.
+//
+// ⚠️ WHY THIS EXISTS (2026-09-15). Two things broke the tab in one morning and
+// neither sent a word:
+//   * MPL's eBay login was revoked. The collector answered 200 with eBay Fee and
+//     Shipping null, the writer dutifully put =NA() down the whole month, and
+//     the only record was a Logger line.
+//   * Marketplace Connect stalled over Sep 11-13 and 46 eBay orders reached
+//     Shopify a day or two late. The CEO found the resulting $0 eBay-fee days by
+//     reading the sheet, which is the one way nobody wants to find them.
+// Every failure in these files was already DETECTED — in a warning, a null, a
+// refusal — and then written to a log nobody opens. This collects them.
+//
+// TWO LEVELS, and the difference is what happens next time:
+//   'broken' — a figure on the tab is wrong or #N/A right now. Emailed on EVERY
+//              pass until it clears, because it stays wrong until somebody acts.
+//   'check'  — a figure that is probably wrong but could be real (a card-fee-
+//              free day that ran cards). Emailed ONCE per store, day and kind, so
+//              a real one is not repeated twice a day for the rest of the month.
+//
+// Each entry says who fixes it. House rule — see netprofit-alerts.gs.
+// ============================================================================
+var NP_HEALTH = [];   // reset at the top of every _npWriteUnlocked run
+
+// The consent link a person with the store's eBay seller login opens to put the
+// connection back. Starting it needs the ops secret, like every other ebay-oauth
+// entry point.
+var NP_EBAY_CONSENT = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/ebay-oauth';
+
+// A label is bought up to three days after the sale (13% land +2 to +3), so a
+// day younger than this can be short of shipping and be completely right.
+var NP_SHIP_SETTLE_DAYS = 3;
+// A day with only one or two eBay sales can genuinely ship nothing: local
+// pickups, cancellations. Below this the check would mostly flag real days.
+var NP_SHIP_MIN_EBAY = 3;
+
+function _npDaysBetween(a, b) {
+  return Math.round((Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10))
+    - Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10))) / 86400000);
+}
+
+// One store's collector response, and the day records this pass is about to
+// write, turned into health entries. PURE — no sheet, no clock — so the offline
+// check can drive it with real collector responses (tests/np-health-check.js).
+//
+// ⚠️ IT ONLY JUDGES DAYS BEING WRITTEN. `recs` excludes today and anything the
+// tab has no row for; judging those would alert on days nobody can see.
+//
+// ⚠️ OLDER COLLECTORS HAVE NO `health`, card_orders or ebay_sale_fees. Every
+// check that needs one skips when it is absent rather than reading undefined as
+// zero — the #N/A check below still works off the null alone.
+function _npHealthCheck(store, data, recs, todayYmd) {
+  var out = [];
+  var h = data.health || {};
+  function add(level, kind, what, detail, fix, day) {
+    out.push({ level: level, store: store, day: day || null, kind: kind,
+               key: store + ':' + (day || '-') + ':' + kind,
+               what: what, detail: detail, fix: fix });
+  }
+  var warnText = (data.warnings || []).join(' | ');
+
+  // 1. eBay pass failed: eBay Fee AND Shipping are #N/A on every day written.
+  var na = recs.filter(function (r) { return r.ebay_fee === null || r.ebay_fee === undefined; }).length;
+  if (na) {
+    var why = h.ebay_error || (warnText.match(/eBay fee unavailable:[^|]*/) || [warnText])[0];
+    var revoked = /invalid_grant|token refresh failed/i.test(why);
+    add('broken', 'ebay-na',
+      'eBay Fee and Shipping show #N/A on ' + na + ' day(s), and so does Net Profit',
+      why,
+      revoked
+        ? 'Someone with ' + store + '\'s eBay seller login — eBay has rejected the saved '
+          + 'connection. Open ' + NP_EBAY_CONSENT + '?store=' + store + '&secret=' + NP_SECRET
+          + ' in a browser, sign in as ' + store + '\'s eBay account and approve. The next '
+          + 'pass fills the whole month back in; nothing on the sheet needs touching.'
+        : 'Claude — the eBay Finances read failed for a reason other than the login. '
+          + 'Send this email on.');
+  }
+
+  // 2. The importer has stalled: finished days are missing eBay sales AND fees.
+  var ni = h.not_yet_imported;
+  if (ni && ni.n) {
+    var byDay = {};
+    (ni.orders || []).forEach(function (o) { byDay[o.day] = (byDay[o.day] || 0) + 1; });
+    add('broken', 'not-imported',
+      ni.n + ' eBay sale(s) on finished days are not in Shopify yet — those days are '
+        + 'missing the sales as well as the eBay fee',
+      'By day sold: ' + Object.keys(byDay).sort().map(function (d) {
+        return d + ' (' + byDay[d] + ')'; }).join(', ')
+        + '. eBay orders: ' + (ni.orders || []).map(function (o) { return o.ebay_order_id; })
+          .slice(0, 12).join(', ') + '. Fee not yet booked: $' + ni.fee + '.',
+      'The store, or you — Marketplace Connect in ' + store + '\'s Shopify admin has '
+        + 'stopped bringing eBay orders across. Check its sync status there. Nothing to do '
+        + 'on this sheet: once the orders arrive, the next pass puts their sales and fees '
+        + 'on the day they sold.');
+  }
+
+  // 3. Anything the collector could not read and therefore did not count.
+  if (h.unknown_label_messages) {
+    add('broken', 'label-shape', 'Shipping is short — ' + h.unknown_label_messages
+      + ' shipping-label message(s) in a wording the collector does not recognise',
+      warnText, 'Claude — parseLabelCost in netprofit-collect needs to learn the new '
+        + 'wording. Send this email on.');
+  }
+  if (h.orders_with_truncated_events) {
+    add('broken', 'events-cut', h.orders_with_truncated_events + ' order(s) had more than '
+      + '50 timeline events, so a shipping label could have been missed', warnText,
+      'Claude — raise the events page size in netprofit-collect. Send this email on.');
+  }
+  if (h.page_cap_hit) {
+    add('broken', 'page-cap', 'The order scan hit its 200-page cap — the month is incomplete',
+      warnText, 'Claude — send this email on.');
+  }
+  if (h.unhandled_ebay_types && Object.keys(h.unhandled_ebay_types).length) {
+    add('broken', 'ebay-type', 'eBay sent a transaction type the collector does not know — '
+      + 'it is in no column', JSON.stringify(h.unhandled_ebay_types),
+      'Claude — decide which column it belongs in. Send this email on.');
+  }
+  if (h.shopifyql_errors && h.shopifyql_errors.length) {
+    add('broken', 'shopifyql', 'Shopify refused the sales query', h.shopifyql_errors.join('; '),
+      'Claude — send this email on.');
+  }
+
+  // 4. Figures that are empty where the day says they should not be.
+  recs.forEach(function (r) {
+    var day = String(r.day), n = parseInt(day.slice(8, 10), 10);
+    if (typeof r.ebay_sale_fees === 'number' && r.ebay_orders > 0 && r.ebay_sale_fees === 0) {
+      add('check', 'ebay-zero', 'eBay Fee — ' + r.ebay_orders + ' eBay sale(s) on day ' + n
+        + ' and no eBay fee charged on any of them',
+        'Sales ' + r.net_sales + ', eBay fee written ' + r.ebay_fee + '.',
+        'Claude — a sale\'s fee is not joining to its order. Send this email on.', day);
+    }
+    if (typeof r.shipping_cost === 'number' && r.shipping_cost === 0
+        && r.ebay_orders >= NP_SHIP_MIN_EBAY
+        && _npDaysBetween(day, todayYmd) > NP_SHIP_SETTLE_DAYS) {
+      add('check', 'ship-zero', 'Shipping — ' + r.ebay_orders + ' eBay sale(s) on day ' + n
+        + ' and no label cost, ' + _npDaysBetween(day, todayYmd) + ' days on',
+        'Labels are bought within three days of the sale, so this one should have posted.',
+        'You — check whether ' + store + ' bought those labels outside Shopify. If they did '
+          + 'not, Claude — send this email on.', day);
+    }
+    if (typeof r.card_orders === 'number' && r.card_orders > 0 && r.cc_fee === 0) {
+      add('check', 'cc-zero', 'Credit Card Fee — ' + r.card_orders + ' card sale(s) on day '
+        + n + ' and no processing fee', 'A Shopify Payments card sale always carries a fee.',
+        'Claude — send this email on.', day);
+    }
+  });
+  return out;
+}
+
 function npProbe()        { _npProbe(); }
 function npTtlRowProbe()  { _npTtlRowProbe(); }
 function npFixTrackingPreview() { _npFixTracking(true); }
@@ -173,11 +323,16 @@ function _npColLetter(i0) {
   return s;
 }
 
-function _npFetchStore(store) {
-  var url = NP_ENDPOINT + '?secret=' + encodeURIComponent(NP_SECRET)
-          + '&store=' + encodeURIComponent(store)
-          + '&from=' + encodeURIComponent(NP_FROM) + '&to=' + encodeURIComponent(NP_TO);
-  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+function _npStoreUrl(store) {
+  return NP_ENDPOINT + '?secret=' + encodeURIComponent(NP_SECRET)
+       + '&store=' + encodeURIComponent(store)
+       + '&from=' + encodeURIComponent(NP_FROM) + '&to=' + encodeURIComponent(NP_TO);
+}
+
+// The checks a collector response has to pass before it is allowed near the
+// grid. Shared by the one-store and the all-stores fetch so the two can never
+// drift into accepting different things.
+function _npParseStore(store, res) {
   if (res.getResponseCode() !== 200) {
     throw new Error(store + ': collector returned HTTP ' + res.getResponseCode()
       + ' — ' + res.getContentText().slice(0, 300));
@@ -190,6 +345,48 @@ function _npFetchStore(store) {
     Logger.log('  !! %s collector warnings: %s', store, body.warnings.join('; '));
   }
   return body;
+}
+
+function _npFetchStore(store) {
+  return _npParseStore(store,
+    UrlFetchApp.fetch(_npStoreUrl(store), { muteHttpExceptions: true }));
+}
+
+// ⚠️ ALL FIVE STORES AT ONCE, AND THIS IS WHAT KEEPS THE JOB UNDER THE LIMIT.
+// An Apps Script execution is capped at 360 seconds and the collectors are slow
+// — 40s to 93s each, because each one is waiting on eBay and Shopify rather
+// than doing work. Fetched one after another that is the SUM: 346.8s of the 360
+// on 2026-09-11, with eleven days in the month. The 2:01pm run that day died at
+// 360.616s having spent almost all of it blocked on five sequential fetches.
+//
+// fetchAll issues them together, so the cost becomes the SLOWEST rather than
+// the sum — 93s instead of 347s on that same data. The run goes from ~360s to
+// ~110s, which is a third of the budget and leaves room for a month three times
+// the size. Nothing else in the pass is slow: the sheet writes are ~15s.
+//
+// ⚠️ ONE STORE FAILING MUST NOT TAKE THE OTHERS DOWN. fetchAll throws for the
+// whole batch on a transport error, so the batch call is wrapped and a batch
+// failure is recorded against every store rather than thrown — the caller's
+// refusals list then names them and the run continues, which is the behaviour
+// the sequential version had per store. Each response is still parsed
+// individually, so a single store's HTTP 500 or short month is still just that
+// store's refusal.
+function _npFetchAllStores(stores) {
+  var reqs = stores.map(function (s) {
+    return { url: _npStoreUrl(s), muteHttpExceptions: true };
+  });
+  var out = {}, responses;
+  try {
+    responses = UrlFetchApp.fetchAll(reqs);
+  } catch (batchErr) {
+    stores.forEach(function (s) { out[s] = { err: 'collector batch failed — ' + batchErr.message }; });
+    return out;
+  }
+  stores.forEach(function (s, i) {
+    try { out[s] = { body: _npParseStore(s, responses[i]) }; }
+    catch (e) { out[s] = { err: e.message }; }
+  });
+  return out;
 }
 
 // Match the day number in the block's OWN day column — never arithmetic from a
@@ -211,7 +408,70 @@ function _npIsOurPlaceholder(f) {
   return /^=\s*NA\s*\(\s*\)$/i.test(String(f).trim());
 }
 
+// How long a writer waits for the other one to finish before giving up. A
+// restatement takes seconds, so this is almost never spent; a full refresh can
+// run for minutes, which is why a HAND run (see sep-fix.gs) waits longer than a
+// scheduled one. npsDailyRefresh's NPX_BUDGET_MS is computed after _npWrite
+// returns and floors at 30s, so a wait spent here shortens the summary pass
+// rather than breaking it.
+var NP_LOCK_WAIT_MS = 60000;
+
+// ============================================================================
+// _npWrite — take the lock, then do the work.
+//
+// ⚠️ THIS EXISTS BECAUSE OF A REAL NEAR-MISS ON 2026-09-08. The morning refresh
+// fired at 8:44:48 and the workbook's last write landed at 8:56:27 — eleven
+// minutes with a write in flight. _npWriteUnlocked snapshots every formula on
+// the tab ONCE at the top and derives its per-column locks from that snapshot,
+// so a pin applied by sep-fix.gs anywhere inside those eleven minutes was
+// invisible to it: the refresh would have written the unrestated figure straight
+// over a cell somebody had just corrected, and left nothing behind to say so.
+//
+// Two defences went in together and they are not redundant:
+//   * this lock, so a restatement and a refresh cannot overlap at all;
+//   * _npWriteRuns re-reading the column immediately before writing it, so the
+//     writer is correct even when something skips the lock.
+// The lock prevents the interleave; the re-read means the interleave is harmless
+// if it ever happens anyway. Keep both.
+//
+// ⚠️ IT IS THE PROJECT'S SCRIPT LOCK, WHICH IS WHY IT WORKS. sep-fix.gs is a
+// different FILE in the same Apps Script project — one project is one lock — so
+// both callers reach the same lock by calling LockService.getScriptLock()
+// directly. Neither file depends on the other to do it, deliberately: either can
+// be pasted in alone and still take the lock.
+//
+// ⚠️ NOT EVERY WRITER TAKES IT YET. _npxSync (the summary strip) and the
+// rollover write different cells and are not part of this race. The Sales tabs
+// are not exposed to it either — sales-email-import.gs reads each cell's formula
+// immediately before writing that cell, which is the pattern _npWriteRuns has
+// now adopted.
+//
+// A PREVIEW TAKES NO LOCK. It writes nothing, and a preview that could be
+// blocked by a running refresh would be a diagnostic you cannot use at exactly
+// the moment you want it.
+// ============================================================================
 function _npWrite(preview) {
+  if (preview) return _npWriteUnlocked(true);
+  var npLock = LockService.getScriptLock();
+  if (!npLock.tryLock(NP_LOCK_WAIT_MS)) {
+    // ⚠️ THROW, DO NOT RETURN. npsDailyRefresh turns a throw into an email and
+    // a missed refresh repairs itself on the next pass, so the loud version
+    // costs one message. Returning quietly would make "another writer held the
+    // lock" indistinguishable from "the month is up to date", which is the one
+    // confusion this file's header spends its length warning about.
+    throw new Error('another writer holds the script lock — Net Profit not written. '
+      + 'A restatement (sep-fix.gs) or another refresh is mid-write; the next pass '
+      + 'rewrites the whole month to date, so one skipped run is not a data problem.');
+  }
+  try {
+    return _npWriteUnlocked(false);
+  } finally {
+    npLock.releaseLock();
+  }
+}
+
+function _npWriteUnlocked(preview) {
+  NP_HEALTH = [];
   var ss = SpreadsheetApp.openById(NP_SHEET_ID);
   var sh = _npTab(ss);
   if (!sh) return;
@@ -243,16 +503,31 @@ function _npWrite(preview) {
   var todayYmd = Utilities.formatDate(new Date(), NP_TZ, 'yyyy-MM-dd');
   var gridYm = String(NP_FROM).slice(0, 7);
 
+  // Every collector call goes out here, together, BEFORE the write loop — see
+  // _npFetchAllStores for why the loop can no longer afford to fetch its own.
+  // The loop below is unchanged in what it writes; it just reads what already
+  // arrived instead of waiting for it.
+  var fetchT0 = new Date().getTime();
+  var fetched = _npFetchAllStores(NP_ORDER);
+  Logger.log('\n=== collected %s stores in %ss (in parallel) ===',
+    NP_ORDER.length, ((new Date().getTime() - fetchT0) / 1000).toFixed(1));
+
   for (var si = 0; si < NP_ORDER.length; si++) {
     var store = NP_ORDER[si];
     var base  = NP_BASES[store];
-    var data;
-    try { data = _npFetchStore(store); }
-    catch (e) {
-      Logger.log('\n%s: SKIPPED — %s', store, e.message);
-      refusals.push(store + ': ' + e.message);
+    var got   = fetched[store];
+    if (got.err) {
+      Logger.log('\n%s: SKIPPED — %s', store, got.err);
+      refusals.push(store + ': ' + got.err);
+      NP_HEALTH.push({ level: 'broken', store: store, day: null, kind: 'collector',
+        key: store + ':-:collector',
+        what: 'Nothing was written for ' + store + ' this pass — every column still holds '
+          + 'the previous pass\'s figures',
+        detail: got.err,
+        fix: 'Claude — the collector failed for this store, not the sheet. Send this email on.' });
       continue;
     }
+    var data = got.body;
 
     Logger.log('\n=== %s (day col %s) — %s days ===', store, _npColLetter(base), data.days.length);
 
@@ -303,7 +578,17 @@ function _npWrite(preview) {
       }
       rows.push({ r: r, day: dayNum, rec: rec, locked: locked });
     }
-    if (missing.length) Logger.log('  !! no row found for day(s): %s', missing.join(', '));
+    // After the row loop so it judges exactly the days this pass writes.
+    NP_HEALTH = NP_HEALTH.concat(_npHealthCheck(store, data,
+      rows.map(function (x) { return x.rec; }), todayYmd));
+    if (missing.length) {
+      Logger.log('  !! no row found for day(s): %s', missing.join(', '));
+      NP_HEALTH.push({ level: 'broken', store: store, day: null, kind: 'no-row',
+        key: store + ':-:no-row',
+        what: 'The tab has no row for day(s) ' + missing.join(', ') + ' — those days were not written',
+        detail: 'Looked for the day number in ' + store + '\'s day column on "' + NP_TAB + '".',
+        fix: 'Claude — the tab\'s layout has moved. Run npProbe and send this email on.' });
+    }
     if (future.length) {
       Logger.log('  %s day(s) not written — not complete yet (%s onward; today is %s, '
         + 'and today is never written)', future.length, future[0], todayYmd);
@@ -408,6 +693,15 @@ function _npWrite(preview) {
   } else {
     Logger.log('refused: none');
   }
+  // What the schedule will email about. Logged here too so a preview shows it.
+  if (NP_HEALTH.length) {
+    Logger.log('\n=== HEALTH (%s) ===', NP_HEALTH.length);
+    NP_HEALTH.forEach(function (i) {
+      Logger.log('  [%s] %s — %s', i.level, i.store, i.what);
+    });
+  } else {
+    Logger.log('health: nothing found');
+  }
   if (preview) Logger.log('\nPREVIEW ONLY — nothing was written. Run npWriteApply to commit.');
 }
 
@@ -455,21 +749,63 @@ function _npClearIncomplete(sh, values, formulas, base, gridYm, todayYmd, previe
 // after it. A month with one pin costs one extra setValues call.
 //
 // Returns how many cells it actually wrote, so the caller can say what it left.
+// ⚠️ THE LOCK IS RE-READ HERE AND NOT TAKEN FROM _npWrite's SNAPSHOT.
+// rows[].locked came from a read of the whole tab taken at the top of the run,
+// which on a five-store month is minutes old by the time this writes. That is
+// long enough for somebody to pin a cell in between, and a stale lock check
+// would then overwrite the pin — see the header on _npWrite for the 2026-09-08
+// near-miss that put this in.
+//
+// One extra read per column per store, of one column over the day span. That is
+// 25 single-column reads on a full run, against the alternative of silently
+// discarding a hand correction.
+//
+// rows[].locked is still what the REFUSALS LIST reports, and deliberately so:
+// that list answers "what did this run leave alone and why", which is a question
+// about the run, not about this millisecond. The two disagreeing is the race
+// being caught, and it says so out loud when it happens.
 function _npWriteRuns(sh, rows, col1, vals, off) {
-  var i = 0, wrote = 0;
+  if (!rows.length) return 0;
+
+  // Indexed by row offset, not by position in `rows` — days are located by day
+  // number and a missing day leaves a real gap in the row numbers.
+  var firstR = rows[0].r, lastR = rows[rows.length - 1].r;
+  var fresh = sh.getRange(firstR + 1, col1, lastR - firstR + 1, 1).getFormulas();
+
+  // Same rule as the snapshot guard in _npWriteUnlocked: any formula is a lock,
+  // except an =NA() placeholder this script wrote, which is ours to replace.
+  function lockedNow(k) {
+    var f = String(fresh[rows[k].r - firstR][0]).trim();
+    if (f === '') return false;
+    return !_npIsOurPlaceholder(f);
+  }
+
+  var i = 0, wrote = 0, raced = [];
   while (i < rows.length) {
-    if (rows[i].locked[off]) { i++; continue; }
+    if (lockedNow(i)) {
+      if (!rows[i].locked[off]) raced.push(rows[i].day);
+      i++;
+      continue;
+    }
     var j = i;
     // A run ends at a locked cell OR at a break in the row numbers — the rows
     // are located by day number, so a missing day leaves a genuine gap and
     // writing through it would put every later day one row too high.
-    while (j + 1 < rows.length && !rows[j + 1].locked[off]
+    while (j + 1 < rows.length && !lockedNow(j + 1)
            && rows[j + 1].r === rows[j].r + 1) j++;
     var chunk = [];
     for (var k = i; k <= j; k++) chunk.push([vals[k]]);
     sh.getRange(rows[i].r + 1, col1, chunk.length, 1).setValues(chunk);
     wrote += chunk.length;
     i = j + 1;
+  }
+
+  // The whole reason the re-read exists, so it must not be silent.
+  if (raced.length) {
+    Logger.log('  !! day(s) %s were locked in column %s AFTER this run read the sheet — '
+      + 'left alone. Something pinned them while the write was in flight, and the '
+      + 'snapshot could not see it. The figure on the sheet is the newer one.',
+      raced.join(', '), _npColLetter(col1 - 1));
   }
   return wrote;
 }

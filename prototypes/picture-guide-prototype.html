@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Picture Guide — Operations Prototype</title>
+<!--
+  RENDERING ONLY. Nothing is wired to anything. The data is the three printouts
+  Ethan sent, typed by hand; every photo is a placeholder.
+
+  REVISION 2, built on the answers:
+    1. Numbering is DERIVED, not stored. A conditional shot takes its number when
+       it applies; when it does not, the next shot takes that number. So the board
+       renumbers itself live from the "Applies to this item" bar. That is the one
+       thing the printout cannot do, so it is now the centre of the design.
+    2. Desktop only for now. Tablet port is a later project.
+    3. DM-maintained: the Edit view shows what that tool looks like.
+    4. 10-15 categories, so the picker is a fixed left rail, not a pill wrap.
+    5. Replaces the print-out. A small iPad at each station -> the Station view.
+    6. No tie to listings.
+-->
+<style>
+  :root{
+    /* Lifted from styles.css so this reads as the same product. */
+    --charcoal:#1a1c1e; --text:#2d2d2d; --slate:#64748b; --muted:#94a3b8;
+    --line:#e2e8f0; --line-soft:#eef2f7; --bg:#f4f7f9; --panel:#fff;
+    --sage:#5a8d3b; --sage-deep:#1f9d57;
+    --red:#ef4444; --red-bg:#fef2f2; --red-line:#fecaca; --red-tx:#7f1d1d;
+    --green-bg:#f0fdf4; --green-line:#bbf7d0; --green-tx:#14532d;
+    --indigo:#4f46e5; --indigo-deep:#3730a3; --indigo-bg:#eef2ff; --indigo-line:#c7d2fe;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--text); padding:22px; line-height:1.45;
+  }
+  .wrap{max-width:1480px;margin:0 auto}
+
+  .proto{
+    display:flex;gap:12px;align-items:flex-start;
+    background:var(--indigo-bg);border:1px solid var(--indigo-line);
+    border-radius:12px;padding:12px 16px;margin:0 0 18px;font-size:12.5px;color:var(--indigo-deep);
+  }
+  .proto b{font-weight:900}
+  .proto .t{display:block;font-size:13px;margin-bottom:2px}
+
+  /* ---- the operations tab strip, mocked ---- */
+  .subtabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px;border-bottom:2px solid var(--line)}
+  .tab{
+    display:inline-flex;align-items:center;gap:7px;padding:10px 15px;border:none;background:none;
+    font:inherit;font-size:12.5px;font-weight:800;color:var(--slate);cursor:pointer;
+    border-bottom:3px solid transparent;margin-bottom:-2px;white-space:nowrap;border-radius:8px 8px 0 0;
+  }
+  .tab:hover{color:var(--charcoal);background:#fff}
+  .tab.active{color:var(--sage-deep);border-bottom-color:var(--sage-deep)}
+  .tab svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .tab.isnew::after{
+    content:'NEW';font-size:8.5px;font-weight:900;letter-spacing:.06em;
+    background:var(--sage-deep);color:#fff;padding:2px 5px;border-radius:4px;
+  }
+
+  /* ---- shell: category rail + working panel ---- */
+  .shell{display:grid;grid-template-columns:236px minmax(0,1fr);gap:16px;align-items:start}
+  .rail{
+    background:var(--panel);border-radius:16px;box-shadow:0 4px 18px rgba(15,23,42,.06);
+    padding:14px;position:sticky;top:22px;
+  }
+  .rail h5{font-size:10.5px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 9px;padding:0 4px}
+  .search{
+    display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;
+    padding:8px 11px;background:#f8fafc;margin:0 0 10px;
+  }
+  .search svg{width:14px;height:14px;fill:none;stroke:var(--muted);stroke-width:2.2;stroke-linecap:round;flex-shrink:0}
+  .search input{border:none;background:none;font:inherit;font-size:12.5px;width:100%;outline:none;color:var(--text)}
+  .catlist{display:flex;flex-direction:column;gap:2px;max-height:58vh;overflow:auto}
+  .cat{
+    display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:none;background:none;
+    font:inherit;font-size:12.5px;font-weight:700;color:var(--slate);cursor:pointer;
+    padding:8px 10px;border-radius:9px;
+  }
+  .cat:hover{background:#f1f5f9;color:var(--charcoal)}
+  .cat.on{background:var(--charcoal);color:#fff}
+  .cat .n{margin-left:auto;font-size:10.5px;font-weight:800;opacity:.55;flex-shrink:0}
+  .cat.empty{color:var(--muted);font-weight:600}
+  .railfoot{border-top:1px solid var(--line-soft);margin:10px 0 0;padding:10px 4px 0}
+  .addcat{
+    display:flex;align-items:center;justify-content:center;gap:7px;width:100%;border:1px dashed var(--line);
+    background:none;font:inherit;font-size:12px;font-weight:800;color:var(--slate);cursor:pointer;
+    padding:8px 10px;border-radius:9px;
+  }
+  .addcat:hover{border-color:var(--sage-deep);color:var(--sage-deep)}
+  .dmonly{font-size:10px;font-weight:800;color:var(--muted);letter-spacing:.04em;margin:7px 0 0;text-align:center}
+
+  /* ---- panel ---- */
+  .panel{background:var(--panel);border-radius:16px;box-shadow:0 4px 18px rgba(15,23,42,.06);padding:20px 22px}
+  .phead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+  .eyebrow{font-size:10.5px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:var(--sage-deep)}
+  .phead h3{font-size:20px;font-weight:900;color:var(--charcoal);margin:2px 0 0}
+  .psub{font-size:12.5px;color:var(--slate);margin:4px 0 0;max-width:66ch}
+  .seg{display:inline-flex;background:#f1f5f9;border-radius:9px;padding:3px;flex-shrink:0}
+  .seg button{border:none;background:transparent;padding:7px 15px;font:inherit;font-size:12px;font-weight:800;border-radius:7px;cursor:pointer;color:var(--slate)}
+  .seg button.on{background:#fff;color:var(--charcoal);box-shadow:0 1px 4px rgba(0,0,0,.09)}
+
+  /* ---- the applies-to bar: the whole point of the tool ---- */
+  .applies{
+    margin:16px 0 0;border:1px solid var(--line);border-radius:13px;padding:12px 14px;background:#fbfcfe;
+  }
+  .applies-hd{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:0 0 10px}
+  .applies-hd b{font-size:12.5px;font-weight:900;color:var(--charcoal)}
+  .applies-hd span{font-size:11.5px;color:var(--slate)}
+  .applies-hd .reset{
+    margin-left:auto;border:none;background:none;font:inherit;font-size:11.5px;font-weight:800;
+    color:var(--slate);cursor:pointer;text-decoration:underline;text-underline-offset:2px;
+  }
+  .applies-hd .reset:hover{color:var(--charcoal)}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{
+    display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;
+    border-radius:999px;padding:5px 6px 5px 11px;font-size:12px;font-weight:700;color:var(--muted);
+  }
+  .chip .lbl{cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:7px}
+  .chip.on{border-color:var(--red-line);background:var(--red-bg);color:var(--red-tx)}
+  .chip .dot{width:9px;height:9px;border-radius:99px;background:var(--line);flex-shrink:0}
+  .chip.on .dot{background:var(--red)}
+  .chip .off{font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding-right:5px}
+  .stepper{display:inline-flex;align-items:center;background:#fff;border:1px solid var(--red-line);border-radius:999px;overflow:hidden}
+  .stepper button{
+    border:none;background:none;width:22px;height:22px;font:inherit;font-size:13px;font-weight:900;
+    color:var(--red-tx);cursor:pointer;line-height:1;
+  }
+  .stepper button:hover{background:var(--red-bg)}
+  .stepper i{font-style:normal;font-size:11.5px;font-weight:900;color:var(--red-tx);min-width:14px;text-align:center}
+  .chip.pad{padding-right:11px}
+
+  .legend{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:15px 0 0;font-size:11.5px;color:var(--slate)}
+  .lg{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:13px;height:13px;border-radius:4px;flex-shrink:0}
+  .sw.req{background:#fff;border:1.5px solid var(--charcoal)}
+  .sw.cond{background:var(--red-bg);border:1.5px solid var(--red)}
+  .sw.na{background:#f1f5f9;border:1.5px dashed var(--muted)}
+  .count{margin-left:auto;font-size:12px;font-weight:900;color:var(--charcoal)}
+  .count em{font-style:normal;color:var(--slate);font-weight:700}
+
+  /* =========================================================
+     BOARD — the binder page, renumbering itself.
+     ========================================================= */
+  .board{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px 14px;margin:14px 0 0}
+  .shot{display:flex;flex-direction:column}
+  .shot-cap{
+    font-size:11.5px;font-weight:800;text-align:center;color:var(--charcoal);
+    margin:0 0 5px;min-height:30px;display:flex;align-items:flex-end;justify-content:center;line-height:1.3;
+  }
+  .shot.cond .shot-cap{color:var(--red)}
+  .frame{
+    position:relative;aspect-ratio:1/1;border:1.5px solid var(--charcoal);border-radius:8px;
+    overflow:hidden;background:#f8fafc;
+  }
+  .shot.cond .frame{border-color:var(--red);border-width:2px}
+  .badge{
+    position:absolute;top:0;left:0;z-index:2;min-width:26px;padding:3px 8px;
+    background:#fff;border-right:1.5px solid var(--charcoal);border-bottom:1.5px solid var(--charcoal);
+    border-radius:6px 0 8px 0;font-size:11.5px;font-weight:900;color:var(--charcoal);text-align:center;
+  }
+  .shot.cond .badge{border-color:var(--red);color:var(--red)}
+  /* A conditional the lister has switched off: still on the page, out of the count. */
+  .shot.na{opacity:.42}
+  .shot.na .frame{border-color:var(--muted);border-width:1.5px;border-style:dashed;filter:grayscale(1)}
+  .shot.na .shot-cap{color:var(--muted)}
+  .shot.na .badge{border-color:var(--muted);color:var(--muted);border-style:dashed;font-size:9.5px;letter-spacing:.04em}
+  .ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#e8edf2}
+  .ph i{font-style:normal;font-size:10.5px;font-weight:700;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+  .instr{width:100%;height:100%;background:#e8e8e8;display:flex;align-items:center;justify-content:center;padding:14px}
+  .instr span{
+    background:#fff;border:1.5px solid var(--red);color:var(--red);
+    font-size:12px;font-weight:800;text-align:center;padding:12px 10px;line-height:1.4;
+  }
+
+  /* =========================================================
+     STATION — one shot at a time, for the iPad by the lightbox.
+     ========================================================= */
+  .station{margin:14px 0 0;display:grid;grid-template-columns:minmax(0,1fr) 262px;gap:18px;align-items:start}
+  .stage{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff}
+  .stage .top{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line-soft)}
+  .bignum{
+    min-width:44px;height:44px;padding:0 9px;border-radius:11px;background:var(--charcoal);color:#fff;flex-shrink:0;
+    display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;
+  }
+  .stage.cond .bignum{background:var(--red)}
+  .stage .top b{display:block;font-size:18px;font-weight:900;color:var(--charcoal);line-height:1.25}
+  .stage.cond .top b{color:var(--red-tx)}
+  .stage .top small{display:block;font-size:11px;font-weight:900;color:var(--slate);margin:2px 0 0;letter-spacing:.05em}
+  .stage .art{aspect-ratio:4/3;background:#f8fafc}
+  .stage .art .instr span{font-size:19px;padding:22px 20px;border-width:2px}
+  .stage .art .ph i{font-size:13px}
+  .navrow{display:flex;gap:9px;padding:13px 16px;border-top:1px solid var(--line-soft);align-items:center}
+  .nav{
+    border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px 16px;
+    font:inherit;font-size:13px;font-weight:800;color:var(--charcoal);cursor:pointer;
+  }
+  .nav:hover{border-color:var(--muted)}
+  .nav[disabled]{opacity:.4;cursor:default}
+  .nav.go{background:var(--sage-deep);border-color:var(--sage-deep);color:#fff;margin-left:auto}
+  .striphd{font-size:10.5px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+  .strip{display:flex;flex-direction:column;gap:5px;max-height:520px;overflow:auto;padding-right:4px}
+  .sr{
+    display:flex;align-items:center;gap:10px;border:1px solid transparent;background:none;width:100%;text-align:left;
+    font:inherit;padding:7px 9px;border-radius:9px;cursor:pointer;
+  }
+  .sr:hover{background:#f8fafc}
+  .sr.on{background:#f1f5f9;border-color:var(--line)}
+  .sr .k{
+    min-width:24px;height:24px;padding:0 5px;border-radius:7px;background:#eef2f7;color:var(--slate);flex-shrink:0;
+    display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:900;
+  }
+  .sr.cond .k{background:var(--red-bg);color:var(--red-tx)}
+  .sr.on .k{background:var(--charcoal);color:#fff}
+  .sr span{font-size:12px;font-weight:700;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* =========================================================
+     EDIT — what the DM tool looks like.
+     ========================================================= */
+  .edit{margin:14px 0 0}
+  .ebar{
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--indigo-bg);
+    border:1px solid var(--indigo-line);border-radius:11px;padding:10px 13px;font-size:12px;
+    color:var(--indigo-deep);font-weight:700;margin:0 0 12px;
+  }
+  .ebar b{font-weight:900}
+  .erow{
+    display:flex;align-items:center;gap:11px;border:1px solid var(--line);border-radius:11px;
+    padding:9px 11px;background:#fff;margin:0 0 7px;
+  }
+  .erow.cond{background:var(--red-bg);border-color:var(--red-line)}
+  .grip{color:var(--muted);font-size:15px;cursor:grab;flex-shrink:0;letter-spacing:-3px;padding-right:3px}
+  .ethumb{width:46px;height:46px;border-radius:8px;overflow:hidden;border:1px solid var(--line);flex-shrink:0}
+  .ethumb .instr{padding:3px}
+  .ethumb .instr span{font-size:6px;padding:2px 1px;border-width:1px;line-height:1.2}
+  .ethumb .ph i{font-size:7px}
+  .ename{flex:1;min-width:0}
+  .ename b{display:block;font-size:13px;font-weight:800;color:var(--charcoal)}
+  .ename small{font-size:11px;color:var(--slate)}
+  .etools{display:flex;gap:5px;flex-shrink:0}
+  .etools button{
+    border:1px solid var(--line);background:#fff;border-radius:8px;min-width:30px;height:30px;
+    font:inherit;font-size:12px;font-weight:900;color:var(--slate);cursor:pointer;padding:0;
+  }
+  .etools button:hover{border-color:var(--muted);color:var(--charcoal)}
+  .etools button.del:hover{border-color:var(--red-line);color:var(--red);background:var(--red-bg)}
+  .etools .pill{padding:0 11px;font-size:11px;font-weight:800;letter-spacing:.03em;text-transform:uppercase}
+  .etools .pill.isc{border-color:var(--red-line);color:var(--red-tx);background:#fff}
+  .eadd{
+    display:flex;align-items:center;justify-content:center;gap:8px;width:100%;border:1px dashed var(--line);
+    background:none;font:inherit;font-size:12.5px;font-weight:800;color:var(--slate);cursor:pointer;
+    padding:13px;border-radius:11px;margin:5px 0 0;
+  }
+  .eadd:hover{border-color:var(--sage-deep);color:var(--sage-deep)}
+
+  /* ---- open questions ---- */
+  .qs{background:#fff;border-radius:16px;box-shadow:0 4px 18px rgba(15,23,42,.06);padding:20px 22px;margin:16px 0 0}
+  .qs h4{font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:.05em;color:var(--charcoal);margin:0 0 4px}
+  .qs > p{font-size:12.5px;color:var(--slate);margin:0 0 14px}
+  .q{border-top:1px solid var(--line-soft);padding:13px 0 0;margin:13px 0 0}
+  .q:first-of-type{border-top:none;padding-top:0;margin-top:0}
+  .q b{display:block;font-size:13px;color:var(--charcoal);margin:0 0 3px}
+  .q p{font-size:12.5px;color:var(--slate)}
+  .q .rec{
+    display:inline-block;margin:7px 0 0;font-size:11.5px;font-weight:700;color:var(--green-tx);
+    background:var(--green-bg);border:1px solid var(--green-line);border-radius:7px;padding:5px 10px;
+  }
+  .hide{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="proto">
+    <div>
+      <span class="t"><b>Rendering only &mdash; nothing is wired up.</b></span>
+      Three real printouts typed in by hand; every photo is a placeholder. The new part is the
+      <b>Applies to this item</b> bar &mdash; switch a red shot off and watch the board renumber
+      behind it. Board / Station / Edit toggle is top right.
+    </div>
+  </div>
+
+  <div class="subtabs">
+    <button class="tab"><svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg> SPEEKS Connect</button>
+    <button class="tab"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg> Margin Guide</button>
+    <button class="tab active isnew"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/><path d="M8 5l1.5-2h5L16 5"/></svg> Picture Guide</button>
+    <button class="tab"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.81.36 1.6.7 2.34a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.74-1.74a2 2 0 0 1 2.11-.45c.74.34 1.53.57 2.34.7A2 2 0 0 1 22 16.92z"/></svg> Customer Call Backs</button>
+    <button class="tab"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Business-to-Business</button>
+  </div>
+
+  <div class="shell">
+
+    <aside class="rail">
+      <h5>Categories</h5>
+      <label class="search">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input placeholder="Search&hellip;" oninput="drawCats(this.value)" />
+      </label>
+      <div class="catlist" id="cats"></div>
+      <div class="railfoot">
+        <button class="addcat">&#43;&nbsp; New category</button>
+        <p class="dmonly">Visible to DMs only</p>
+      </div>
+    </aside>
+
+    <div class="panel">
+      <div class="phead">
+        <div>
+          <div class="eyebrow">Listing Reference</div>
+          <h3 id="title">Picture Guide</h3>
+          <p class="psub">Every photo for this category, in the order it goes on the listing.
+            Red shots are only taken when they apply &mdash; switch off the ones that don&rsquo;t,
+            and the numbers close up behind them.</p>
+        </div>
+        <div class="seg">
+          <button class="on" onclick="setView('board',this)">Board</button>
+          <button onclick="setView('station',this)">Station</button>
+          <button onclick="setView('edit',this)">Edit</button>
+        </div>
+      </div>
+
+      <div class="applies" id="appliesBox">
+        <div class="applies-hd">
+          <b>Applies to this item</b>
+          <span>Tick what you can actually see on the unit in your hand.</span>
+          <button class="reset" onclick="resetApplies()">Reset</button>
+        </div>
+        <div class="chips" id="chips"></div>
+      </div>
+
+      <div class="legend" id="legend">
+        <span class="lg"><span class="sw req"></span> Always take this</span>
+        <span class="lg"><span class="sw cond"></span> Applies to this item</span>
+        <span class="lg"><span class="sw na"></span> Not needed &mdash; skipped</span>
+        <span class="count" id="count"></span>
+      </div>
+
+      <div id="boardView"><div class="board" id="board"></div></div>
+
+      <div id="stationView" class="hide">
+        <div class="station">
+          <div class="stage" id="stage"></div>
+          <div>
+            <p class="striphd">This item&rsquo;s run</p>
+            <div class="strip" id="strip"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="editView" class="hide">
+        <div class="edit">
+          <div class="ebar">
+            <span><b>DM tools.</b> Drag to reorder, swap a photo, flip a shot between always and
+            conditional, add or delete. What you save here is what every store sees.</span>
+          </div>
+          <div id="editRows"></div>
+          <button class="eadd">&#43;&nbsp; Add a shot</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="qs">
+    <h4>Settled, and what is still open</h4>
+    <p>Your six answers are baked into the rendering above. Three things are left.</p>
+
+    <div class="q">
+      <b>A. Do the example photos exist as image files?</b>
+      <p>If they only live inside the printed sheets, pulling roughly 150 usable images back out
+        of them is its own job and worth scoping before the build starts. If they came from a
+        folder of photographs originally, this part is nothing.</p>
+    </div>
+
+    <div class="q">
+      <b>B. Repeatable shots &mdash; is a counter right?</b>
+      <p>The printout writes <b>4&#43;</b> and <b>12&#43;</b> where a lister may need several:
+        three LCD flaws, two accessories. I gave those chips a &minus;/&#43; counter so the
+        numbering stays exact all the way down the board. If nobody would bother setting it in
+        practice, I will print the <b>&#43;</b> instead and leave the rest nominal, like the paper does.</p>
+      <span class="rec">Try it &mdash; turn LCD Flaws up to 3 and watch everything after it shift.</span>
+    </div>
+
+    <div class="q">
+      <b>C. Should the Station view remember where it got to?</b>
+      <p>It walks the run one shot at a time, but nothing is stored. If two listers share a station,
+        or someone walks away mid-item, a remembered position is a stale position.</p>
+      <span class="rec">My recommendation: no memory. A half-ticked list from someone else&rsquo;s item is worse than none.</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* The three sheets, typed from the printouts.
+   cond = the red heading; absent means always required.
+   rep  = the printed "+", i.e. take as many as you need.
+   note = red instruction text on a grey slot, where no example photo exists. */
+var CATS = [
+  { key:'tablet', name:'Android Smart Tablets', shots:[
+    {label:'Home/Lock Screen'},
+    {label:'Everything Included', cond:'Everything Included', note:'Everything Included'},
+    {label:'About Phone'},
+    {label:'Storage Information'},
+    {label:'Setting Unlock Screen', cond:'Unlock screen set', note:'Setting Unlock Screen'},
+    {label:'LCD Flaws', cond:'LCD flaws', rep:true, note:'LCD Flaws (Bright Spots, Dark Spots, etc.)'},
+    {label:'Screen Off'},
+    {label:'Back of Tablet'},
+    {label:'Bottom Side of Tablet'},
+    {label:'Top Side of Tablet'},
+    {label:'Top Corner of Tablet'},
+    {label:'Opposite Top Corner of Tablet'},
+    {label:'Bottom Corner of Tablet'},
+    {label:'Opposite Bottom Corner of Tablet'},
+    {label:'Cosmetic Flaws', cond:'Cosmetic flaws', rep:true},
+    {label:'Extra Accessories', cond:'Extra accessories', rep:true, note:'Extra Accessories'}
+  ]},
+  { key:'watch', name:'Apple Watches', shots:[
+    {label:'Lock/Home Screen'},
+    {label:'Everything Included', cond:'Everything Included', note:'Everything Included'},
+    {label:'Settings Page'},
+    {label:'Battery Health'},
+    {label:'LCD Flaws', cond:'LCD flaws', rep:true, note:'LCD Flaws (Bright Spots, Dark Spots, etc.)'},
+    {label:'Screen Off'},
+    {label:'Side of Watch'},
+    {label:'Opposite Side of Watch'},
+    {label:'Back of Watch'},
+    {label:'Bottom of Watch'},
+    {label:'Top Side of Watch'},
+    {label:'Bottom Side of Watch'},
+    {label:'Apple Warranty', cond:'Warranty still active'},
+    {label:'Cosmetic Flaws', cond:'Cosmetic flaws', rep:true},
+    {label:'Extra Accessories', cond:'Extra accessories', rep:true, note:'Extra Accessories'}
+  ]},
+  { key:'cpu', name:"Processors (CPU's)", shots:[
+    {label:'Front of CPU'},
+    {label:'Everything Included', cond:'Everything Included'},
+    {label:'Back of CPU'},
+    {label:'Top Side of CPU'},
+    {label:'Bottom Side of CPU'},
+    {label:'Side of CPU'},
+    {label:'Opposite Side of CPU'},
+    {label:'Cosmetic Flaws', cond:'Cosmetic flaws', rep:true, note:'Cosmetic Flaws (Cracks, Heavy Scratching, etc.)'},
+    {label:'Extra Accessories', cond:'Extra accessories', rep:true}
+  ]},
+  /* Padding, so the rail shows what 10-15 categories actually feels like. */
+  { key:'iphone',  name:'iPhones', shots:[] },
+  { key:'laptop',  name:'Laptops', shots:[] },
+  { key:'console', name:'Game Consoles', shots:[] },
+  { key:'gpu',     name:'Graphics Cards', shots:[] },
+  { key:'camera',  name:'Cameras', shots:[] },
+  { key:'lens',    name:'Camera Lenses', shots:[] },
+  { key:'headph',  name:'Headphones', shots:[] },
+  { key:'drone',   name:'Drones', shots:[] },
+  { key:'monitor', name:'Monitors', shots:[] }
+];
+
+var cur = 'tablet', applies = {}, reps = {}, at = 0;
+
+function esc(s){ return String(s).replace(/[&<>"]/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function cat(){ for (var i=0;i<CATS.length;i++) if (CATS[i].key===cur) return CATS[i]; }
+
+/* THE RULE, in code. Walk the sheet in order; a conditional that does not apply is
+   stepped over, and the next shot takes the number it would have had. */
+function sequence(){
+  var n = 1;
+  return cat().shots.map(function(s, i){
+    if (s.cond && !applies[i]) return { s:s, i:i, off:true };
+    var c = s.rep ? (reps[i] || 1) : 1;
+    var row = { s:s, i:i, from:n, to:n + c - 1, count:c };
+    n += c;
+    return row;
+  });
+}
+function numOf(r){ return r.off ? 'N/A' : (r.from === r.to ? String(r.from) : r.from + '–' + r.to); }
+function live(){ return sequence().filter(function(r){ return !r.off; }); }
+function total(){ return live().reduce(function(a,r){ return a + r.count; }, 0); }
+
+/* The picture: a real example, or the grey slot with red words on it. */
+function art(s){
+  if (s.note) return '<div class="instr"><span>' + esc(s.note) + '</span></div>';
+  return '<div class="ph"><i>example photo</i></div>';
+}
+
+function drawCats(filter){
+  var f = (filter || '').toLowerCase();
+  document.getElementById('cats').innerHTML = CATS.filter(function(c){
+    return !f || c.name.toLowerCase().indexOf(f) >= 0;
+  }).map(function(c){
+    return '<button class="cat ' + (c.key===cur?'on':'') + ' ' + (c.shots.length?'':'empty') +
+      '" onclick="pick(\'' + c.key + '\')">' + esc(c.name) +
+      '<span class="n">' + (c.shots.length || '&mdash;') + '</span></button>';
+  }).join('');
+}
+
+function pick(k){
+  var c = null;
+  for (var i=0;i<CATS.length;i++) if (CATS[i].key===k) c = CATS[i];
+  if (!c || !c.shots.length) return;   /* the padding categories are inert */
+  cur = k; at = 0; resetApplies();
+}
+
+/* Default: every conditional ON, so the first thing you see is the printed page. */
+function resetApplies(){
+  applies = {}; reps = {};
+  cat().shots.forEach(function(s,i){
+    if (s.cond){ applies[i] = true; if (s.rep) reps[i] = 1; }
+  });
+  drawAll();
+}
+function toggleApply(i){ applies[i] = !applies[i]; at = 0; drawAll(); }
+function bump(i, d, ev){
+  ev.stopPropagation();
+  reps[i] = Math.max(1, Math.min(6, (reps[i]||1) + d));
+  drawAll();
+}
+
+function drawAll(){
+  var c = cat(), seq = sequence();
+  document.getElementById('title').textContent = c.name;
+  drawCats(document.querySelector('.rail .search input').value);
+
+  document.getElementById('chips').innerHTML = seq.filter(function(r){ return r.s.cond; })
+    .map(function(r){
+      var on = !r.off;
+      var tail = on
+        ? (r.s.rep
+            ? '<span class="stepper"><button onclick="bump(' + r.i + ',-1,event)">&minus;</button>' +
+              '<i>' + r.count + '</i><button onclick="bump(' + r.i + ',1,event)">&#43;</button></span>'
+            : '')
+        : '<span class="off">no</span>';
+      return '<span class="chip ' + (on?'on':'') + ' ' + ((on && r.s.rep) ? '' : 'pad') + '">' +
+        '<span class="lbl" onclick="toggleApply(' + r.i + ')">' +
+          '<span class="dot"></span>' + esc(r.s.cond) + '</span>' + tail + '</span>';
+    }).join('');
+
+  var skipped = seq.filter(function(r){ return r.off; }).length;
+  document.getElementById('count').innerHTML =
+    total() + ' photos for this item' + (skipped ? ' <em>&middot; ' + skipped + ' skipped</em>' : '');
+
+  document.getElementById('board').innerHTML = seq.map(function(r){
+    var s = r.s;
+    return '<div class="shot ' + (s.cond ? (r.off ? 'na' : 'cond') : '') + '">' +
+      '<div class="shot-cap">' + esc(s.cond ? s.cond.toUpperCase() : s.label) + '</div>' +
+      '<div class="frame"><span class="badge">' + numOf(r) + '</span>' + art(s) + '</div></div>';
+  }).join('');
+
+  drawStation();
+  drawEdit();
+}
+
+function drawStation(){
+  var rows = live();
+  if (at >= rows.length) at = Math.max(0, rows.length - 1);
+  var r = rows[at], s = r.s;
+
+  var stage = document.getElementById('stage');
+  stage.className = 'stage ' + (s.cond ? 'cond' : '');
+  stage.innerHTML =
+    '<div class="top"><span class="bignum">' + numOf(r) + '</span><div>' +
+      '<b>' + esc(s.label) + '</b><small>' +
+      (s.cond ? esc(s.cond.toUpperCase()) : 'ALWAYS') +
+      (r.count > 1 ? ' &middot; ' + r.count + ' SHOTS' : '') + '</small></div></div>' +
+    '<div class="art">' + art(s) + '</div>' +
+    '<div class="navrow">' +
+      '<button class="nav" onclick="go(-1)"' + (at === 0 ? ' disabled' : '') + '>&larr; Back</button>' +
+      '<button class="nav go" onclick="go(1)"' + (at >= rows.length-1 ? ' disabled' : '') + '>' +
+        (at >= rows.length-1 ? 'Last shot' : 'Next shot &rarr;') + '</button></div>';
+
+  document.getElementById('strip').innerHTML = rows.map(function(row, k){
+    return '<button class="sr ' + (k===at?'on':'') + ' ' + (row.s.cond?'cond':'') +
+      '" onclick="jump(' + k + ')"><span class="k">' + numOf(row) + '</span>' +
+      '<span>' + esc(row.s.label) + '</span></button>';
+  }).join('');
+}
+function go(d){ at = Math.max(0, at + d); drawStation(); }
+function jump(k){ at = k; drawStation(); }
+
+function drawEdit(){
+  document.getElementById('editRows').innerHTML = cat().shots.map(function(s,i){
+    return '<div class="erow ' + (s.cond?'cond':'') + '">' +
+      '<span class="grip">&#8942;&#8942;</span>' +
+      '<div class="ethumb">' + art(s) + '</div>' +
+      '<div class="ename"><b>' + esc(s.label) + '</b><small>' +
+        (s.cond ? esc(s.cond) + (s.rep ? ' &middot; repeatable' : '') : 'Always taken') +
+      '</small></div>' +
+      '<div class="etools">' +
+        '<button title="Move up" onclick="move(' + i + ',-1)">&uarr;</button>' +
+        '<button title="Move down" onclick="move(' + i + ',1)">&darr;</button>' +
+        '<button class="pill ' + (s.cond?'isc':'') + '" onclick="flip(' + i + ')">' +
+          (s.cond ? 'Conditional' : 'Always') + '</button>' +
+        '<button title="Replace photo">&#8635;</button>' +
+        '<button class="del" title="Delete" onclick="drop(' + i + ')">&times;</button>' +
+      '</div></div>';
+  }).join('');
+}
+function move(i, d){
+  var a = cat().shots, j = i + d;
+  if (j < 0 || j >= a.length) return;
+  var t = a[i]; a[i] = a[j]; a[j] = t;
+  resetApplies();
+}
+function flip(i){
+  var s = cat().shots[i];
+  if (s.cond){ delete s.cond; delete s.rep; } else { s.cond = 'Only if needed'; }
+  resetApplies();
+}
+function drop(i){ cat().shots.splice(i,1); resetApplies(); }
+
+function setView(v, btn){
+  var b = document.querySelectorAll('.seg button');
+  for (var i=0;i<b.length;i++) b[i].classList.remove('on');
+  btn.classList.add('on');
+  document.getElementById('boardView').classList.toggle('hide', v !== 'board');
+  document.getElementById('stationView').classList.toggle('hide', v !== 'station');
+  document.getElementById('editView').classList.toggle('hide', v !== 'edit');
+  /* The applies bar is a lister control; it has no place in the DM editor. */
+  document.getElementById('appliesBox').classList.toggle('hide', v === 'edit');
+  document.getElementById('legend').classList.toggle('hide', v === 'edit');
+}
+
+resetApplies();
+</script>
+</body>
+</html>

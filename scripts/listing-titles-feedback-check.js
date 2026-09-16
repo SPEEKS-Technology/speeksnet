@@ -57,6 +57,7 @@ const block = [
     // with it and the strip choked on its `const d: any[]`.
     between('function listingSaysItself', '\n\n// How many notes nobody has carried'),
     between('function titleRun', '\n\n'),
+    between('function feedbackRun', '\n\n'),
     // buildAsk is the last thing in the block; the comment that opens
     // ebayScope's conditional-scope warning is what follows it.
     between('function buildAsk', "\n// ⚠️ THE QUEUE'S THIRD SCOPE RULE"),
@@ -78,13 +79,14 @@ const js = block
     .replace(/\(\s*(\w+)\s*:\s*string\s*,/g, '($1,')
     .replace(/,\s*(\w+)\s*:\s*string\s*\)/g, ', $1)');
 
-let listingSaysItself, buildAsk, titleRun;
+let listingSaysItself, buildAsk, titleRun, feedbackRun;
 try {
     const made = new Function(js
-        + '\nreturn { listingSaysItself: listingSaysItself, buildAsk: buildAsk, titleRun: titleRun };')();
+        + '\nreturn { listingSaysItself: listingSaysItself, buildAsk: buildAsk, titleRun: titleRun, feedbackRun: feedbackRun };')();
     listingSaysItself = made.listingSaysItself;
     buildAsk = made.buildAsk;
     titleRun = made.titleRun;
+    feedbackRun = made.feedbackRun;
 } catch (e) {
     console.error('could not lift the shipped code:\n' + e.message);
     console.error('\n--- what was lifted ---\n' + js);
@@ -127,7 +129,7 @@ const SANDISK = {
 
 // What feedbackFor computes per row, done here so the fixtures stay readable.
 const prep = r => {
-    const run = titleRun(r.current, r.suggested);
+    const run = feedbackRun(r.current, r.suggested);
     return Object.assign({}, r, { was: run.was, now: run.now,
                                   saysItself: listingSaysItself(run.was, r.specs) });
 };
@@ -204,6 +206,29 @@ console.log('\n== 4. a run too short to mean anything never matches ==');
     // the listing saying the phrase.
     ok(listingSaysItself('Xbox 2018', { Platform: 'Microsoft Xbox One 2018 Edition' })
         .matched !== 'xbox 2018', 'a non-contiguous pair is not matched as a phrase');
+}
+
+console.log('\n== 4b. a row with NO suggestion changed nothing (LEE G.Skill, 2026-09-16) ==');
+{
+    // name-disputed is report-only, so suggested_title is null. The ask used to
+    // diff against "" - the whole title became "(removed)", and "8GB (2x4GB) RAM"
+    // out of that run matched Memory Size and was printed as evidence.
+    const GSKILL = {
+        store: 'LEE', sku: 'MO01-5515G-E15', productId: 'gid://p/9',
+        current: 'TeamGroup Trident Z 8GB (2x4GB) RAM DDR4 3000MHz F4-3000C15D-8GTZ',
+        suggested: null, note: 'its g skill', by: 'Jurell Guild', at: '2026-09-16T15:00:00Z',
+        codes: ['name-disputed'], said: ['The title and our product knowledge disagree about "TeamGroup".'],
+        specs: { Brand: 'TeamGroup', Model: 'Trident Z', MPN: 'F4-3000C15D-8GTZ', 'Memory Size': '8GB (2x4GB) RAM' },
+    };
+    const g = prep(GSKILL);
+    ok(g.was === '' && g.now === '', 'no run', JSON.stringify([g.was, g.now]));
+    ok(g.saysItself === null, 'so no "the listing already says this" hint');
+    const text = buildAsk({ days: 30, stores: ['LEE'], total: 1, settled: 0, done: [],
+        groups: [{ code: 'name-disputed', n: 1, rows: [g] }] });
+    ok(!/\(removed\)/.test(text) && !/CHANGED:/.test(text), 'the ask prints no CHANGED line');
+    ok(!/⚠ THE LISTING ITSELF ALREADY SAYS THIS —/.test(text), 'and no false hint');
+    ok(/Brand\s+= TeamGroup/.test(text) && /MPN\s+= F4-3000C15D-8GTZ/.test(text),
+        'but still shows the fields that disagree');
 }
 
 console.log('\n== 5. the ask carries every row and every piece of evidence ==');

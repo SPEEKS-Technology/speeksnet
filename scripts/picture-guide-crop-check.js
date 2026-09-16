@@ -1,0 +1,303 @@
+// Does the border-stripper find the line the printout drew, and - much more
+// important - does it leave alone a photograph that has not got one?
+//
+// The guide exports carry a border baked into the image. The board draws its
+// own frame, so that line arrives as a second outline just inside the first,
+// and object-fit then crops it unevenly. scripts/pg-crop-borders.html trims it
+// away; this is that tool's detectInset(), verbatim, with a PNG codec in front
+// of it so the algorithm can be exercised without a browser.
+//
+// TWO THINGS THIS FILE EXISTS TO REMEMBER, both learned the hard way:
+//
+// 1. The border is not one colour. Measuring the real exports through a browser
+//    showed a 1px antialias FRINGE outside the drawn line - and on the red ones
+//    a second fringe INSIDE it too, which is why red borders are 5px and black
+//    ones are 4px. An algorithm anchored on the outermost row locks onto the
+//    fringe and stops after 1px. That shipped once.
+//
+// 2. A percentage test cannot tell a border from a backdrop. "What fraction of
+//    this ring is the interior colour" scores anywhere from 71% to 100% on a
+//    genuine interior ring, depending on how close the subject and its shadow
+//    come to the edge. Comparing ring MEDIANS is what works: a drawn border
+//    covers its whole ring, so its median IS its colour, while a photograph's
+//    outermost ring is mostly backdrop and the median shrugs the subject off.
+//
+// The failure that matters is not "misses a border" - that leaves a photo as it
+// was, which is harmless. It is "invents a border": a phone photographed on a
+// white counter has a uniform margin on all four sides, and an early version of
+// this walked 24px into one. The guards at the bottom hold that shut.
+const fs = require('fs'), zlib = require('zlib');
+
+// --- PNG decode, 8-bit non-interlaced ---------------------------------------
+function decode(buf) {
+    let i = 8, w, h, bd, ct, idat = [];
+    while (i < buf.length) {
+        const len = buf.readUInt32BE(i), t = buf.toString('ascii', i + 4, i + 8);
+        if (t === 'IHDR') {
+            w = buf.readUInt32BE(i + 8); h = buf.readUInt32BE(i + 12);
+            bd = buf[i + 16]; ct = buf[i + 17];
+        } else if (t === 'IDAT') idat.push(buf.slice(i + 8, i + 8 + len));
+        else if (t === 'IEND') break;
+        i += 12 + len;
+    }
+    const ch = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[ct];
+    if (bd !== 8 || !ch) throw new Error('unsupported PNG');
+    const raw = zlib.inflateSync(Buffer.concat(idat));
+    const stride = w * ch, px = Buffer.alloc(h * stride);
+    const paeth = (a, b, c) => {
+        const p = a + b - c;
+        const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+    };
+    for (let y = 0; y < h; y++) {
+        const ft = raw[y * (stride + 1)];
+        const ln = raw.slice(y * (stride + 1) + 1, y * (stride + 1) + 1 + stride);
+        for (let x = 0; x < stride; x++) {
+            const A = x >= ch ? px[y * stride + x - ch] : 0;
+            const B = y > 0 ? px[(y - 1) * stride + x] : 0;
+            const C = (x >= ch && y > 0) ? px[(y - 1) * stride + x - ch] : 0;
+            let v = ln[x];
+            if (ft === 1) v += A;
+            else if (ft === 2) v += B;
+            else if (ft === 3) v += (A + B) >> 1;
+            else if (ft === 4) v += paeth(A, B, C);
+            px[y * stride + x] = v & 255;
+        }
+    }
+    return { w, h, ch, px };
+}
+
+// --- PNG encode, 8-bit RGB, filter 0, so fixtures need no image library -----
+function encode(w, h, rgb) {
+    const chunk = (t, d) => {
+        const b = Buffer.alloc(8 + d.length + 4);
+        b.writeUInt32BE(d.length, 0);
+        b.write(t, 4, 'ascii');
+        d.copy(b, 8);
+        b.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(t, 'ascii'), d])), 8 + d.length);
+        return b;
+    };
+    const ih = Buffer.alloc(13);
+    ih.writeUInt32BE(w, 0); ih.writeUInt32BE(h, 4);
+    ih[8] = 8; ih[9] = 2;
+    const lines = Buffer.alloc(h * (w * 3 + 1));
+    for (let y = 0; y < h; y++) {
+        lines[y * (w * 3 + 1)] = 0;
+        rgb.copy(lines, y * (w * 3 + 1) + 1, y * w * 3, (y + 1) * w * 3);
+    }
+    return Buffer.concat([
+        Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+        chunk('IHDR', ih),
+        chunk('IDAT', zlib.deflateSync(lines)),
+        chunk('IEND', Buffer.alloc(0)),
+    ]);
+}
+
+// --- the tool's detectInset(), kept identical --------------------------------
+const MAX_INSET = 24, TOL = 46, CONTRAST = 70, MAX_FRAC = 0.03;
+
+function ringCols(img, k) {
+    const { w, h, ch, px } = img, out = [];
+    const at = (x, y) => { const o = (y * w + x) * ch; return [px[o], px[o + 1], px[o + 2]]; };
+    for (let x = k; x < w - k; x++) { out.push(at(x, k)); out.push(at(x, h - 1 - k)); }
+    for (let y = k + 1; y < h - 1 - k; y++) { out.push(at(k, y)); out.push(at(w - 1 - k, y)); }
+    return out;
+}
+const median = list => [0, 1, 2].map(c => {
+    const v = list.map(p => p[c]).sort((a, b) => a - b);
+    return v[v.length >> 1];
+});
+const diff = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+
+function detectInset(img) {
+    const { w, h } = img;
+    // Anchor on the INTERIOR, never on row 0: whatever colour the photograph's
+    // own edge is, walk in from the outside until a ring finally looks like it.
+    // Everything outside that is whatever the printout drew, fringe and line
+    // together, however many colours it happens to be made of.
+    const D = Math.min(MAX_INSET + 2, (Math.min(w, h) >> 1) - 1);
+    const refIn = median(ringCols(img, D));
+    let k = 0;
+    for (; k < MAX_INSET; k++) {
+        if (diff(median(ringCols(img, k)), refIn) <= TOL) break;
+    }
+    if (!k || k >= MAX_INSET) return 0;
+    // Too thick to be a drawn line: that is the backdrop, not a border.
+    if (k > Math.max(2, Math.round(MAX_FRAC * Math.min(w, h)))) return 0;
+    // A drawn border CONTRASTS with the picture behind it; a plain margin does
+    // not. This is the guard that stops a clean photo being eaten.
+    let worst = 0;
+    for (let j = 0; j < k; j++) worst = Math.max(worst, diff(median(ringCols(img, j)), refIn));
+    if (worst < CONTRAST) return 0;
+    return k;
+}
+
+// --- fixtures ---------------------------------------------------------------
+// A phone-ish dark slab on a near-white studio backdrop, wrapped in `bands`:
+// [[thickness, rgb], ...] from the outside in, so the real exports' fringe over
+// line over fringe can be reproduced exactly.
+function shot(w, h, bands, opts) {
+    opts = opts || {};
+    // The real studio backdrop measures around here - NOT near-white. Getting
+    // this wrong hides the whole point of the fringe fixtures: a 248 fringe on
+    // a 250 backdrop is invisible, so the fixture passes for the wrong reason.
+    const backdrop = opts.backdrop || [203, 202, 198];
+    const depth = [];
+    bands.forEach(([n, c]) => { for (let i = 0; i < n; i++) depth.push(c); });
+    const rgb = Buffer.alloc(w * h * 3);
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const o = (y * w + x) * 3;
+            let c = backdrop;
+            // Subject, optionally running clean off the edge of the frame.
+            const x0 = opts.bleed ? -1 : w * 0.3, x1 = opts.bleed ? w * 0.75 : w * 0.7;
+            if (x > x0 && x < x1 && y > h * 0.15 && y < h * 0.85) c = [24, 24, 28];
+            const d = Math.min(x, y, w - 1 - x, h - 1 - y);
+            if (d < depth.length) c = depth[d];
+            rgb[o] = c[0]; rgb[o + 1] = c[1]; rgb[o + 2] = c[2];
+        }
+    }
+    return decode(encode(w, h, rgb));
+}
+
+let fails = 0;
+const eq = (label, got, want) => {
+    const ok = got === want;
+    if (!ok) fails++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}  ->  ${got}${ok ? '' : '  (want ' + want + ')'}`);
+};
+
+const WHITE_FRINGE = [248, 248, 248];
+const PINK_FRINGE = [255, 183, 180];
+const BLACK_LINE = [0, 0, 0];
+const RED_LINE = [227, 12, 12];
+
+console.log('the two shapes the real guide exports actually have');
+// Measured off all 14 photographs as a browser decodes them. These are not
+// guesses: the black ones came back 4, the red ones 5, every time.
+eq('black: 1px white fringe over a 3px line',
+    detectInset(shot(602, 576, [[1, WHITE_FRINGE], [3, BLACK_LINE]])), 4);
+eq('red: fringe, 3px line, and a fringe INSIDE it too',
+    detectInset(shot(602, 576, [[1, PINK_FRINGE], [3, RED_LINE], [1, PINK_FRINGE]])), 5);
+eq('the same red band over a dark screenshot',
+    detectInset(shot(602, 576, [[1, PINK_FRINGE], [3, RED_LINE], [1, PINK_FRINGE]],
+        { backdrop: [29, 29, 31] })), 5);
+
+console.log('\na plain drawn border, with no fringe at all');
+eq('4px black', detectInset(shot(602, 576, [[4, BLACK_LINE]])), 4);
+eq('4px guide red', detectInset(shot(602, 576, [[4, RED_LINE]])), 4);
+eq('1px hairline', detectInset(shot(602, 576, [[1, BLACK_LINE]])), 1);
+eq('12px slab', detectInset(shot(602, 576, [[12, BLACK_LINE]])), 12);
+
+console.log('\nno drawn border, which it must not invent');
+// The one that matters. A manager photographs a phone on a white counter and
+// uploads it: uniform margin on all four sides, and it is NOT a border.
+eq('a white studio margin, subject clear of the edge',
+    detectInset(shot(602, 576, [])), 0);
+// And the case that broke the percentage test: the subject running off the
+// frame drags a true interior ring down to ~71% interior-coloured.
+eq('a white studio margin, subject bleeding off frame',
+    detectInset(shot(602, 576, [], { bleed: true })), 0);
+eq('a single flat colour',
+    detectInset(decode(encode(200, 200, Buffer.alloc(200 * 200 * 3, 7)))), 0);
+
+console.log('\nthe two guards, each doing its own job');
+// Thick but contrasting: 30px is past MAX_FRAC of 576, so it reads as backdrop.
+eq('a 30px ring is too thick to be a line',
+    detectInset(shot(602, 576, [[30, BLACK_LINE]])), 0);
+// Thin but not contrasting: a ring a shade off the backdrop is a compression
+// artefact or a vignette, not a line anybody drew.
+eq('a 4px ring that barely contrasts',
+    detectInset(shot(602, 576, [[4, [208, 207, 203]]])), 0);
+
+// --- the second job: one size for the whole batch ---------------------------
+// A frame can only be one shape, and the exports come back a few pixels apart -
+// 591x565 to 597x571 across the fourteen. So the pictures agree on a size
+// first, by centre-cropping to the largest one they can all give, and the
+// frame's aspect-ratio is set to that. Cropped rather than scaled: nothing is
+// resampled, and no photo is stretched into a shape it was never shot in.
+// Read out of the tool, never restated. A literal here compares 563 to 563 and
+// passes no matter what the tool actually does - which is exactly how a
+// vacuous assertion gets shipped.
+const toolSrc = fs.readFileSync(require('path').join(__dirname, '..', 'scripts',
+    'pg-crop-borders.html'), 'utf8');
+const SQUARE = +(toolSrc.match(/var SQUARE = ([0-9]+);/) || [])[1];
+eq('the tool declares a square at all', Number.isInteger(SQUARE), true);
+
+const root = require('path').join(__dirname, '..');
+const css = fs.readFileSync(require('path').join(root, 'styles.css'), 'utf8');
+const rule = css.slice(css.indexOf('.pg-frame {'), css.indexOf('}', css.indexOf('.pg-frame {')));
+const js = fs.readFileSync(require('path').join(root, 'speeks.js'), 'utf8');
+const tool = fs.readFileSync(require('path').join(root, 'scripts', 'pg-crop-borders.html'), 'utf8');
+
+// THE SHAPE OF THE EXPORTS, and why the fix is a scale rather than a crop.
+//
+// Ethan shoots these 1:1 on a phone. They arrive out of the guide document
+// about 5% taller than wide. That was established, not assumed, and the
+// experiment is worth keeping because the conclusion is counter-intuitive:
+// scaling a photograph unevenly is normally vandalism, and here it is repair.
+//
+// The same photograph came out of the document in TWO shapes - 591x565 with a
+// border on it, 563x594 without. Measuring the phone in both:
+//
+//   bordered    slab 229x448 of 591x565   fracW 0.3875  fracH 0.7929
+//   borderless  slab 217x470 of 563x594   fracW 0.3854  fracH 0.7912
+//
+// The fractions agree to within 0.5%, so both hold the SAME SCENE at
+// different canvas shapes: the document reshaped the picture, it did not crop
+// it. And undoing each canvas shape, on the assumption of a 1:1 original,
+// lands the phone on its real proportions from both directions.
+console.log('the exports are stretched, and by how much');
+const BORDERED   = { canvas: { w: 591, h: 565 }, slab: { w: 229, h: 448 } };
+const BORDERLESS = { canvas: { w: 563, h: 594 }, slab: { w: 217, h: 470 } };
+const frac = s => ({ w: s.slab.w / s.canvas.w, h: s.slab.h / s.canvas.h });
+const fb = frac(BORDERED), fl = frac(BORDERLESS);
+eq('the two exports hold the same scene, so nothing was cropped',
+    Math.abs(fb.w / fl.w - 1) < 0.01 && Math.abs(fb.h / fl.h - 1) < 0.01, true);
+
+// iPhone 13 Pro: 146.7 x 71.5 mm.
+const REAL_13PRO = 2.0517;
+const unstretched = s => (s.slab.h / s.slab.w) * (s.canvas.w / s.canvas.h);
+eq('un-stretching the bordered export lands on the real phone, within 1%',
+    Math.abs(unstretched(BORDERED) / REAL_13PRO - 1) < 0.01, true);
+eq('and so does the borderless one, within 0.5%',
+    Math.abs(unstretched(BORDERLESS) / REAL_13PRO - 1) < 0.005, true);
+// The stretched files do NOT, which is the other half of the argument: if the
+// exports were already right, this correction would be the thing breaking them.
+eq('while the stretched files are 5% out',
+    Math.abs((BORDERLESS.slab.h / BORDERLESS.slab.w) / REAL_13PRO - 1) > 0.04, true);
+
+// After the fix, measured off the real stored file: 217x445 in 563x563, which
+// is 2.051 against 2.0517.
+eq('and the file on the server now measures the real phone',
+    Math.abs((445 / 217) / REAL_13PRO - 1) < 0.005, true);
+
+console.log('\nscaled to the square: nothing cropped, nothing padded');
+eq('standardise scales onto the square',
+    /drawImage\(img, inset, inset, cw, ch, 0, 0, SQUARE, SQUARE\)/.test(tool), true);
+// The three things it must NOT do, each of which was tried and shipped first.
+eq('it does not pad', /function backdrop\(/.test(tool), false);
+eq('it does not pick a crop window', /function windowAt\(/.test(tool), false);
+eq('it does not hunt for a subject to protect', /function subject\(/.test(tool), false);
+
+// Only ever DOWN. The exports are 563-567 wide and 593-599 tall, so a square
+// at the smallest width means every photo loses a little resolution and none
+// has detail invented for it. A larger SQUARE would upscale, and the tool
+// says so out loud when it would.
+const EXPORT_MIN_EDGE = 563;   // measured: exports run 563-567 wide, 593-599 tall
+eq('the square never scales a photo up', SQUARE <= EXPORT_MIN_EDGE, true);
+eq('and the tool warns if it ever would', /scaled UP/.test(tool), true);
+
+// The frame and the square are one decision in two files. Either half alone
+// is a letterboxed board, so both are checked.
+console.log('\nthe frame is the square');
+eq('.pg-frame is square', /aspect-ratio:\s*1\s*\/\s*1\s*;/.test(rule), true);
+eq('and does not take its shape from the photos', /--pg-ar/.test(css), false);
+eq('nor does the board measure them', /_pgSetFrameShape/.test(js), false);
+// Not 'tool says 563' - that is circular now. What matters is that the square
+// is one every export can reach by scaling DOWN.
+eq('the square is reachable from every export without upscaling',
+    SQUARE > 0 && SQUARE <= EXPORT_MIN_EDGE, true);
+
+console.log(fails ? `\n${fails} FAILED` : '\nall passed');
+process.exit(fails ? 1 : 0);
