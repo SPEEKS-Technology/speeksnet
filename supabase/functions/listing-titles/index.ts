@@ -1564,9 +1564,18 @@ const NAME_CODES = new Set<string>(["name-garbled", "name-wrong", "name-disputed
 //
 // Both values are specific measurements ("f/2.2", "16mm"), so neither can veto
 // a fix by coincidence the way a Color of "Red" would.
+//
+// ⚠️ FORM FACTOR, FOR THE SAME REASON — LEE's WD Blue SN570 (MO01-5532A2-E15,
+// denied 2026-09-15): Form Factor = 2280mm, title says 2280mm, and name-garbled
+// proposed "2280" as a typo fix. "2280mm" is not strictly millimetres (it is
+// 22 x 80), but it is how this shop writes the size in the field AND the title,
+// and it is a size, not a mangled name. Approving would have rewritten the Form
+// Factor field too (name-garbled is a CORRECTING_CODE). An M.2 drive, a
+// motherboard (ATX / Micro-ATX) and a desktop (SFF) are all named by their form
+// factor, and its values are specific enough not to veto by coincidence.
 const IDENTITY_FIELDS = [
   "MPN", "Model", "Platform", "Type", "Brand", "Release Year",
-  "Maximum Aperture", "Focal Length",
+  "Maximum Aperture", "Focal Length", "Form Factor",
 ];
 
 function identityFields(specs: Record<string, string> | undefined) {
@@ -3383,6 +3392,19 @@ type FbRow = {
   saysItself: { field: string; value: string } | null;
 };
 
+// The run a denied row changed, for the ask.
+// ⚠️ NO SUGGESTION IS NOT AN EMPTY TITLE. A report-only finding (name-disputed)
+// stores no suggested_title, and diffing against "" made the WHOLE title the
+// removed run — the ask printed `"TeamGroup Trident Z …" -> "(removed)"` for
+// LEE's two G.Skill kits (2026-09-16), then matched "8GB (2x4GB) RAM" out of
+// that run against Memory Size and offered it as evidence the rule overruled
+// the listing. Nothing was proposed, so nothing was changed.
+function feedbackRun(current: string | null, suggested: string | null) {
+  return suggested
+    ? titleRun(String(current || ""), String(suggested))
+    : { was: "", now: "" };
+}
+
 // Does the listing itself already state the words the suggestion took out?
 //
 // ⚠️ NOT A WHOLE-RUN TEST. The changed run is whatever sits between the matching
@@ -3472,7 +3494,7 @@ async function feedbackFor(stores: string[], days: number) {
     } catch (_e) { /* the notes are still worth reading without them */ }
     for (const r of d) {
       const specs = extras[r.product_id]?.specs || {};
-      const run = titleRun(String(r.current_title || ""), String(r.suggested_title || ""));
+      const run = feedbackRun(r.current_title, r.suggested_title);
       const keep: Record<string, string> = {};
       for (const k of IDENTITY_SPECS) if (specs[k]) keep[k] = specs[k];
       // Plus whatever field holds the words in dispute, wherever it lives.
@@ -3806,8 +3828,14 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // — "f/3.5-5.6", "(2x8GB)", "24.2MP" — and \b in front of "(" is a boundary in
 // the wrong place. The rule actually wanted is: not glued to a letter or a
 // digit, so "SATA" never matches inside "eSATA" and "8GB" never inside "128GB".
+//
+// ⚠️ NOR HALF OF A DECIMAL. "." and "," are not letters or digits, so a run of
+// "4" matched the front of "4.00GHz" — LEE's i7-6700K (MO01-5210A-E15, denied
+// 2026-09-07) fixed "4 Thread" to "8 Thread" and the preview told the reviewer
+// Processor Speed would become 8.00GHz. A number followed by ".00" or preceded
+// by "1," is part of a bigger number, not a value of its own.
 const runRe = (was: string) =>
-  new RegExp(`(?<![A-Za-z0-9])${escapeRe(was)}(?![A-Za-z0-9])`, "gi");
+  new RegExp(`(?<![A-Za-z0-9])(?<!\\d[.,])${escapeRe(was)}(?![A-Za-z0-9])(?![.,]\\d)`, "gi");
 
 // ============ WHICH WORDS THE TITLE IS *NOT* THE ONLY PLACE FOR ==============
 // Ethan, on a CPU/motherboard combo with no room for the words that name it:
@@ -4131,6 +4159,34 @@ function titleRun(from: string, to: string): { was: string; now: string } {
            now: b.slice(head, b.length - tail).join(" ") };
 }
 
+// The run to carry into the rest of the listing. titleRun, widened by one
+// unchanged neighbour when the change is a BARE NUMBER on both sides.
+//
+// ⚠️ "4" -> "8" IS NOT A FACT, "4 Thread" -> "8 Thread" IS. The i7-6700K's fix
+// was a single digit, and a single digit is in every field that counts anything:
+// Thread Count "4 Thread" was right to change, but a Core Count of "4" would have
+// become 8 as well. Taking the next word from the title ("Thread") makes the run
+// say which count it is, and only a field saying the same thing matches.
+// A replacement only: a deletion is subtracted from fields solely when it
+// corrects something (CORRECTING_CODES), and widening it would turn it into a
+// replacement that skips that rule.
+function echoRun(from: string, to: string): { was: string; now: string } {
+  const a = String(from || "").trim().split(/\s+/);
+  const b = String(to || "").trim().split(/\s+/);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head
+         && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const run = () => ({ was: a.slice(head, a.length - tail).join(" "),
+                       now: b.slice(head, b.length - tail).join(" ") });
+  const bare = () => { const r = run();
+    return !!r.was && !!r.now && !/[A-Za-z]/.test(r.was + r.now); };
+  if (bare() && tail > 0) tail--;
+  if (bare() && head > 0) head--;
+  return run();
+}
+
 type EchoPlan = {
   html: string;
   cellHits: number;
@@ -4318,7 +4374,7 @@ async function echoSweep(store: string, limit: number) {
   const rows = q.map(r => {
     const x = raw[String(r.product_id)];
     if (!x) return { sku: r.sku, error: "product not readable in Shopify" };
-    const run = titleRun(r.current_title || "", r.suggested_title || "");
+    const run = echoRun(r.current_title || "", r.suggested_title || "");
     const plan = planEchoes(x.html, x.mfs, run.was, run.now, r.suggested_title || "",
                             isCorrecting(r.findings));
     return {
@@ -4557,7 +4613,7 @@ async function handlePost(req: Request, scope: Scope) {
   // field twice, and reported either way: what it changed, and what it could not
   // place and has left saying the old thing.
   {
-    const run = titleRun(item.current_title || "", next);
+    const run = echoRun(item.current_title || "", next);
     const plan = planEchoes(html, mfList, run.was, run.now, next,
                             isCorrecting(item.findings));
     if (plan.cellHits) { html = plan.html; specRows = plan.cellHits; }
@@ -5081,7 +5137,7 @@ Deno.serve(async (req: Request) => {
         if (url.searchParams.get("raw")) rawDesc = html;
         if (wantEcho) {
           const cur = String(cat[0].title || "");
-          const run = titleRun(cur, wantEcho);
+          const run = echoRun(cur, wantEcho);
           const plan = planEchoes(html, mfs, run.was, run.now, wantEcho,
             url.searchParams.get("correcting") === "1"
               || isCorrecting(analyse({

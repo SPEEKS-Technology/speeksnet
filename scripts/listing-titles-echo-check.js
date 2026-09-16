@@ -102,11 +102,11 @@ const js = stripReturnTypes(block)
     .replace(/:\s*\[RegExp,\s*number\]\[\]/g, '')
     .replace(/\s+as\s+(number|string|boolean)\b/g, '');
 
-let planEchoes, specCells, collectSpecFields, titleRun, replaceRun;
+let planEchoes, specCells, collectSpecFields, titleRun, replaceRun, echoRun;
 try {
-    ({ planEchoes, specCells, collectSpecFields, titleRun, replaceRun } =
+    ({ planEchoes, specCells, collectSpecFields, titleRun, replaceRun, echoRun } =
         new Function(js + `
-        return { planEchoes, specCells, collectSpecFields, titleRun, replaceRun };`)());
+        return { planEchoes, specCells, collectSpecFields, titleRun, replaceRun, echoRun };`)());
 } catch (e) {
     console.log('  FAIL  could not lift the code out of index.ts   ' + e.message);
     process.exit(1);
@@ -224,6 +224,39 @@ console.log('\nThe run is bounded by letters and digits');
     const p = plan('Micron 8GB DDR4', 'Micron 16GB DDR4');
     const e = p.echoes.find(x => x.field === 'Memory Size');
     ok(!e, 'a run of "8GB" does not match inside "128GB"', e ? e.now : 'not matched');
+}
+
+console.log('\nA bare number is not a fact (LEE i7-6700K, denied 2026-09-07)');
+{
+    // "Change from 4 thread to 8 thread is correct but system is trying to change
+    // processor speed to an incorrect speed". The fix was one digit, and the
+    // preview said Processor Speed 4.00GHz would become 8.00GHz.
+    const from = 'Intel Core i7-6700K 4.00GHz Quad Core SR2L0 4 Thread LGA 1151';
+    const to   = 'Intel Core i7-6700K 4.00GHz Quad Core SR2L0 8 Thread LGA 1151';
+    const html = '<table><tr><td>Processor Speed</td><td>4.00GHz</td></tr>'
+               + '<tr><td>Thread Count</td><td>4 Thread</td></tr>'
+               + '<tr><td>Core Count</td><td>4</td></tr>'
+               + '<tr><td>MPN</td><td>SR2L0</td></tr></table>';
+    const run = echoRun(from, to);
+    ok(run.was === '4 Thread' && run.now === '8 Thread', 'the run takes the word that says which count',
+       run.was + ' -> ' + run.now);
+    const p = planEchoes(html, [], run.was, run.now, to, true);
+    const by = Object.fromEntries(p.echoes.map(e => [e.field, e.now]));
+    ok(by['Thread Count'] === '8 Thread', 'Thread Count 4 Thread becomes 8 Thread', by['Thread Count']);
+    ok(!('Processor Speed' in by) && p.html.includes('<td>4.00GHz</td>'), 'Processor Speed is left at 4.00GHz');
+    ok(!('Core Count' in by) && p.html.includes('<td>4</td>'), 'and a Core Count of 4 is not a thread count');
+    // Even handed the bare digit (?respec= passes was/now exactly as given), the
+    // front of a decimal is never a match.
+    const bare = planEchoes(html, [], '4', '8', to, true);
+    ok(!bare.echoes.some(e => e.field === 'Processor Speed'), 'a bare "4" never matches inside "4.00GHz"',
+       JSON.stringify(bare.echoes.map(e => e.field + '=' + e.now)));
+    ok(replaceRun('1,000 Hours', '1', '2') === null, 'nor inside "1,000"');
+    ok(replaceRun('f/3.5-5.6', '3.5', '4') === 'f/4-5.6', 'a whole decimal still matches');
+    // Only a bare number on BOTH sides widens: a worded change is left exactly as it was.
+    const w = echoRun('Sony Alpha ZV-E10 24.2MP L-Mount Camera', 'Sony Alpha ZV-E10 24.2MP E-Mount Camera');
+    ok(w.was === 'L-Mount' && w.now === 'E-Mount', 'a worded run is not widened', w.was + ' -> ' + w.now);
+    const d = echoRun('Micron 8GB 4 DDR4 RAM', 'Micron 8GB DDR4 RAM');
+    ok(d.was === '4' && d.now === '', 'and a deletion is not turned into a replacement', d.was + ' -> ' + d.now);
 }
 
 console.log('\nEntities: matched decoded, written back escaped, literal in metafields');

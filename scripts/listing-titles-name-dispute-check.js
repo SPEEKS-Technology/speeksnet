@@ -202,6 +202,23 @@ console.log('\n== 4. Only IDENTITY fields can veto a correction ==');
        'and Focal Length vetoes too', (r4.findings[0] || {}).code);
 }
 
+console.log('\n== 4b. Form Factor is identity (LEE WD SN570, denied 2026-09-15) ==');
+{
+    // "2280mm is the correct way to describe this piece for an SSD". Form Factor
+    // says it, the title says it, and name-garbled offered "2280" as a typo fix -
+    // which would have rewritten the Form Factor field as well.
+    const title = 'Western Digital WD 2280mm Blue SN570 1TB M.2 NVMe Gen 3.0 x 4 SSD';
+    const r = run(title,
+        { verdict: 'garbled', wrong_text: '2280mm', correct_text: '2280',
+          why: 'M.2 form factor is 2280, not "2280mm"' },
+        { Brand: 'Western Digital WD', Model: 'Blue SN570', MPN: 'WDS100T3B0C-00BNN0',
+          'Sub-Collection': 'Hard Drive (HDD, SSD)', 'Form Factor': '2280mm' });
+    const f = r.findings[0] || {};
+    ok(f.code === 'name-disputed', 'it is name-disputed, not name-garbled', f.code);
+    ok(r.title === title && r.fixable === false, 'and nothing is offered to approve');
+    ok(/Form Factor/.test(f.says || ''), 'it names Form Factor as the field that says so');
+}
+
 console.log('\n== 5. The existing guards still hold ==');
 {
     // A placeholder correction must still be dropped entirely — the guard that
