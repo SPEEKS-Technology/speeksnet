@@ -219,6 +219,32 @@ function _npaSendFailure(where, detail, whoFixes) {
     _npaShell('Net Profit', where + ' did not complete', '#9b2c1f', body));
 }
 
+// The watchdog found a pass unfinished and started it again (npsWatchdog).
+// Amber, not red: the tab is being refilled and nothing is needed yet. It still
+// goes out, because a cron call that keeps failing is only visible this way.
+function _npaSendRestarted(where, detail, whoFixes) {
+  if (!NPA_ENABLED) return;
+  var body = '<p style="margin:0 0 14px;color:#64707c;font-size:14px;line-height:1.5;">'
+    + '<b>' + _npaEsc(where) + '</b> did not run on time and has been <b>restarted '
+    + 'automatically</b>.</p>'
+    + '<div style="background:#fdf8ec;border:1px solid #f1e3bf;border-radius:12px;'
+    + 'padding:14px 16px;margin:0 0 14px;">'
+    + '<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;'
+    + 'color:#8a6100;font-weight:700;margin-bottom:6px;">What happened</div>'
+    + '<div style="font-size:14px;color:#1a1f24;line-height:1.5;">' + _npaEsc(detail) + '</div></div>'
+    + '<div style="background:#f4f8f5;border:1px solid #dfeae3;border-radius:12px;'
+    + 'padding:14px 16px;">'
+    + '<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;'
+    + 'color:#1f9d57;font-weight:700;margin-bottom:6px;">Who fixes it</div>'
+    + '<div style="font-size:14px;color:#1a1f24;line-height:1.5;">'
+    + _npaEsc(whoFixes) + '</div></div>';
+
+  _npaSend('Net Profit — ' + where + ' was late, restarted automatically',
+    where + ' was late and has been restarted automatically.\n\n' + detail
+      + '\n\nWho fixes it: ' + whoFixes,
+    _npaShell('Net Profit', where + ' restarted automatically', '#8a6100', body));
+}
+
 // ---------------------------------------------------------------------------
 // 2b. the run finished, but something in it is wrong
 // ---------------------------------------------------------------------------

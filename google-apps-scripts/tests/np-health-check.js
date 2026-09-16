@@ -32,7 +32,7 @@ eval([
     grabVar(sheet, 'NP_SHIP_SETTLE_DAYS'), grabVar(sheet, 'NP_SHIP_MIN_EBAY'),
     grab(sheet, '_npDaysBetween'), grab(sheet, '_npHealthCheck'),
     grab(alerts, '_npaHealthToSend'),
-    grabVar(sched, 'NPS_WATCH_HOURS'), grab(sched, '_npsOverdue')
+    grabVar(sched, 'NPS_WATCH_HOURS'), grab(sched, '_npsOverdue'), grab(sched, '_npsWatchAction')
 ].join('\n'));
 
 let fails = 0;
@@ -164,6 +164,20 @@ console.log('\n9. The watchdog');
     ok(/2pm/.test(_npsOverdue(TODAY, 15, { morning: TODAY }).pass), 'and it names the 2pm pass');
     ok(_npsOverdue(TODAY, 15, { morning: '2026-09-14', afternoon: TODAY }) === null,
         '3pm checks the 2pm pass only — the morning was the 9am check\'s business');
+}
+
+console.log('\n10. The watchdog restarts a missed pass once, then gives up to email (2026-09-16)');
+{
+    const stale = { morning: '2026-09-14', afternoon: '2026-09-14' };
+    ok(_npsWatchAction(TODAY, 9, { morning: TODAY }, {}) === null, 'finished: nothing to do');
+    const a = _npsWatchAction(TODAY, 9, stale, {});
+    ok(a && a.action === 'restart' && a.late.key === 'morning', 'first miss at 9: restart the morning pass');
+    ok(_npsWatchAction(TODAY, 10, stale, { morning: TODAY }).action === 'give-up',
+        'follow-up at 10, already restarted today and still unfinished: email');
+    ok(_npsWatchAction(TODAY, 9, stale, { morning: '2026-09-14' }).action === 'restart',
+        'a restart yesterday does not use up today\'s');
+    ok(_npsWatchAction(TODAY, 15, { morning: TODAY }, { morning: TODAY }).action === 'restart',
+        'the morning restart does not use up the 2pm one');
 }
 
 console.log(fails ? '\n' + fails + ' FAILED' : '\nall passed');

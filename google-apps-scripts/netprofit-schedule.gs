@@ -129,8 +129,26 @@ var NPS_LAST_CLOSED_KEY = 'NPS_LAST_CLOSED_MONTH';
 // scheduler cannot hide the other — checks the stamp an hour later. Apps Script
 // fires "somewhere in the hour", so 9 means 9:00-10:00 for an 8:05 pass that
 // takes two or three minutes, and 15 means 3:00-4:00 for the 2:05 one.
+//
+// ⚠️ IT RESTARTS THE PASS, ONCE, AND THEN CHECKS AGAIN (2026-09-16). That
+// morning the 8:05 cron call to the web app hung past pg_cron's 30 seconds, no
+// one-off trigger was made, and the watchdog could only email — somebody still
+// had to start the refresh by hand an hour and a half late. Now a missed pass is
+// restarted on the spot (the same one-off hop the cron path uses), a follow-up
+// check runs NPS_FOLLOWUP_MIN later, and only if THAT finds it still unfinished
+// does the "did not complete" email go out. A restart is never tried twice in a
+// day for the same pass: a pass that fails when started by hand is a real fault,
+// and restarting it on a loop would only hide that.
+//
+// ⚠️ .nearMinute(30), NOT THE TOP OF THE HOUR. The 9:00 sales import retry runs
+// in this project and shares its one script lock; a restart landing on it would
+// be refused, or refuse the import. nearMinute gives ±15, so 9:15-9:45.
 var NPS_OK_KEY = { morning: 'NPS_LAST_OK_MORNING', afternoon: 'NPS_LAST_OK_2PM' };
+var NPS_RESTART_KEY = { morning: 'NPS_RESTARTED_MORNING', afternoon: 'NPS_RESTARTED_2PM' };
+var NPS_FOLLOWUP_UID_KEY = 'NPS_WATCH_FOLLOWUP_UID';
 var NPS_WATCH_HOURS = [9, 15];
+var NPS_WATCH_MINUTE = 30;
+var NPS_FOLLOWUP_MIN = 20;
 
 // ---------------------------------------------------------------------------
 // The close calendar. Mirrors monthCloseDay() in netprofit-collect/index.ts.
@@ -396,29 +414,80 @@ function _npsOverdue(today, hour, stamps) {
   var key = pm ? 'afternoon' : 'morning';
   if (stamps[key] === today) return null;
   return { pass: pm ? 'The 2pm Net Profit refresh' : 'The 8am Net Profit refresh',
-           dueAt: pm ? '2:05pm' : '8:05am', last: stamps[key] || null };
+           key: key, dueAt: pm ? '2:05pm' : '8:05am', last: stamps[key] || null };
 }
 
-function npsWatchdog() {
+// PURE, for tests/np-health-check.js: what the watchdog does about it.
+// 'restart' the first time a pass is found unfinished today, 'give-up' (email
+// only) if it has already been restarted today and still has not finished.
+function _npsWatchAction(today, hour, stamps, restarted) {
+  var late = _npsOverdue(today, hour, stamps);
+  if (!late) return null;
+  return { late: late, action: restarted[late.key] === today ? 'give-up' : 'restart' };
+}
+
+function npsWatchdog(e) {
   var props = PropertiesService.getScriptProperties();
+  // The follow-up check is a one-off trigger; delete it so they do not pile up.
+  // Only THAT one — the two recurring watchdog triggers carry a triggerUid too.
+  if (e && e.triggerUid && String(e.triggerUid) === props.getProperty(NPS_FOLLOWUP_UID_KEY)) {
+    _npsDeleteOneShot(e.triggerUid);
+    props.deleteProperty(NPS_FOLLOWUP_UID_KEY);
+  }
   var today = _npsToday();
   var hour = Number(Utilities.formatDate(new Date(), NPS_TZ, 'H'));
-  var late = _npsOverdue(today, hour, {
+  var got = _npsWatchAction(today, hour, {
     morning: props.getProperty(NPS_OK_KEY.morning),
     afternoon: props.getProperty(NPS_OK_KEY.afternoon)
+  }, {
+    morning: props.getProperty(NPS_RESTART_KEY.morning),
+    afternoon: props.getProperty(NPS_RESTART_KEY.afternoon)
   });
-  if (!late) { Logger.log('Watchdog %s %s:00 — the pass that was due has finished.', today, hour); return; }
+  if (!got) { Logger.log('Watchdog %s %s:00 — the pass that was due has finished.', today, hour); return; }
+  var late = got.late;
   var now = Utilities.formatDate(new Date(), NPS_TZ, 'h:mma');
-  Logger.log('Watchdog: %s has not finished today (last finished %s).', late.pass, late.last || 'never');
+  var cronJob = 'netprofit-' + (late.key === 'morning' ? '8am' : '2pm');
+  Logger.log('Watchdog: %s has not finished today (last finished %s) — %s.',
+    late.pass, late.last || 'never', got.action);
+
+  if (got.action === 'restart') {
+    // Marked BEFORE the triggers are made, so a throw below cannot turn into a
+    // second restart on the follow-up.
+    props.setProperty(NPS_RESTART_KEY[late.key], today);
+    try {
+      ScriptApp.newTrigger('npsDailyRefresh').timeBased().after(1000).create();
+      var follow = ScriptApp.newTrigger('npsWatchdog').timeBased()
+        .after(NPS_FOLLOWUP_MIN * 60 * 1000).create();
+      props.setProperty(NPS_FOLLOWUP_UID_KEY, follow.getUniqueId());
+    } catch (err) {
+      _npaSendFailure(late.pass,
+        'Due at ' + late.dueAt + ' Central and not finished by ' + now + '. The watchdog '
+          + 'tried to restart it and could not create the trigger: ' + err,
+        'Claude — run npsDailyRefresh from the editor now (it rewrites the whole month to '
+          + 'date), then check cron.job_run_details for ' + cronJob + ' and the trigger count '
+          + '(npsStatus; the project is capped at 20).');
+      return;
+    }
+    _npaSendRestarted(late.pass,
+      'Due at ' + late.dueAt + ' Central and not finished by ' + now + ' (last finished '
+        + (late.last || 'never') + '). The watchdog has started it again; it rewrites the '
+        + 'whole month to date and takes two or three minutes. It checks again in '
+        + NPS_FOLLOWUP_MIN + ' minutes and emails only if the restart did not finish either.',
+      'Nobody, if no second email follows. If this arrives often, Claude — check '
+        + 'cron.job_run_details and net._http_response for ' + cronJob + ': the cron call '
+        + 'itself is failing.');
+    return;
+  }
+
   _npaSendFailure(late.pass,
     'Due at ' + late.dueAt + ' Central and not finished by ' + now + '. The last one that '
-      + 'finished was on ' + (late.last || '(never recorded)') + '. A pg_cron job that did '
-      + 'not fire, a web app that refused the call, and a run Google killed at the '
-      + 'six-minute limit all look exactly like this — none of them can send their own email. '
+      + 'finished was on ' + (late.last || '(never recorded)') + '. The watchdog already '
+      + 'restarted it once today and the restart did not finish either — so this is not a '
+      + 'missed cron call, the run itself is failing or being killed at the six-minute limit. '
       + 'If a separate "did not complete" email arrived for this pass, that is the cause.',
-    'Claude — check cron.job_run_details for netprofit-' + (late.dueAt === '8:05am' ? '8am' : '2pm')
-      + ' and the Apps Script executions list. To refill the tab now, run npsDailyRefresh '
-      + 'from the editor: it rewrites the whole month to date.');
+    'Claude — read the Apps Script executions list for npsDailyRefresh today, and '
+      + 'cron.job_run_details for ' + cronJob + '. Once fixed, run npsDailyRefresh from the '
+      + 'editor: it rewrites the whole month to date.');
 }
 
 // ---------------------------------------------------------------------------
@@ -506,10 +575,10 @@ function npsInstallTriggers() {
   // when the cron side has stopped.
   NPS_WATCH_HOURS.forEach(function (h) {
     ScriptApp.newTrigger('npsWatchdog').timeBased()
-      .atHour(h).everyDays(1).inTimezone(NPS_TZ).create();
+      .atHour(h).nearMinute(NPS_WATCH_MINUTE).everyDays(1).inTimezone(NPS_TZ).create();
   });
-  Logger.log('Installed: npsWatchdog at %s Central (each fires within that hour).',
-    NPS_WATCH_HOURS.map(function (h) { return h + ':00'; }).join(' and '));
+  Logger.log('Installed: npsWatchdog near %s Central (±15 min; restarts a missed pass once).',
+    NPS_WATCH_HOURS.map(function (h) { return h + ':' + NPS_WATCH_MINUTE; }).join(' and '));
   Logger.log('Daily refreshes are pg_cron jobs (netprofit-8am / netprofit-2pm), '
     + 'not triggers — see migration 0087.');
   Logger.log('⚠️ Apps Script fires within the hour, never before it — so the close '
@@ -559,7 +628,8 @@ function npsStatus() {
   var pp = PropertiesService.getScriptProperties();
   Logger.log('Watchdog triggers armed: %s — expected %s. %s  Last finished: morning %s, 2pm %s.',
     watch, NPS_WATCH_HOURS.length,
-    watch === NPS_WATCH_HOURS.length ? 'OK' : '!! run npsInstallTriggers',
+    // One over is a follow-up check waiting to fire after a restart; it deletes itself.
+    watch >= NPS_WATCH_HOURS.length ? 'OK' : '!! run npsInstallTriggers',
     pp.getProperty(NPS_OK_KEY.morning) || '(none yet)',
     pp.getProperty(NPS_OK_KEY.afternoon) || '(none yet)');
   Logger.log('Triggers armed: %s', armed.length ? armed.join(', ') : 'NONE — run npsInstallTriggers');
