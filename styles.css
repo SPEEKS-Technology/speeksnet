@@ -73,6 +73,27 @@ html {
     overflow-x: hidden;
 }
 
+/* THE LOCK, FINISHED FOR iOS. body.no-scroll pins the body, and on a desktop that
+   is the whole job. iOS Safari still moved the page behind a phone sheet two ways
+   (user, 2026-09-16): a scroll inside a sheet that hit its top or bottom was
+   handed on to the page, and a drag on the strip of page still showing above the
+   sheet scrolled the root. The html rule takes the root's own scrolling away while
+   the lock is held, so a scroll that runs off the end of a sheet has nowhere to go.
+   contain goes on the SHEETS ONLY, never on what is inside them. It was on every
+   descendant for an hour, and a swipe up or down that started on a sideways
+   scroller — the expense table, a tab strip — then scrolled nothing at all,
+   because a container that cannot scroll vertically still stops the chain; and a
+   list inside a tool stopped dead at its end instead of carrying on into the sheet.
+   Measured with wheel scrolling at 390px in Chrome, before and after.
+   Phone-only, because a desktop modal never had either problem and html's
+   overflow-y:scroll is what keeps its scrollbar from jumping. */
+@media (max-width: 900px) {
+    html:has(> body.no-scroll) { overflow: hidden; overscroll-behavior: none; }
+    .modal-menu, .tools-side-panel, .checklist-side-panel, .goals-side-panel {
+        overscroll-behavior: contain;
+    }
+}
+
 /* =========================================================
    BRANDING & NAVIGATION
    ========================================================= */
@@ -7708,19 +7729,26 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     white-space: nowrap;
 }
 .ann-doc-card-meta { font-size: 12px; color: #94a3b8; margin-top: 3px; font-weight: 500; }
+/* The soft sage chip every other in-card action on the site wears (Add a document
+   right above it, the Picture Guide's Edit) — not a solid block of green. It was
+   the one saturated button in the list, and its "⬇" was an emoji, which iOS
+   draws as a blue tile (user, 2026-09-16). */
 .ann-doc-dl-btn {
     flex-shrink: 0;
-    background: var(--sage-professional);
-    color: white;
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--sage-deep, #178048);
+    background: #e8f7ee;
+    border: 1px solid #c6ecd6;
     text-decoration: none;
-    border-radius: 8px;
-    padding: 7px 14px;
+    border-radius: 9px;
+    padding: 7px 13px;
     font-size: 12px;
     font-weight: 700;
-    transition: opacity 0.15s;
+    transition: background 0.15s;
     white-space: nowrap;
 }
-.ann-doc-dl-btn:hover { opacity: 0.85; color: white; }
+.ann-doc-dl-btn svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.ann-doc-dl-btn:hover { background: #d9f0e3; color: var(--sage-deep, #178048); }
 .ann-docs-icon-btn {
     background: none;
     border: none;
@@ -20058,6 +20086,25 @@ select.dd-native {
        rest of the mobile site" was asking about (user, 20 Aug). */
     #expensesModal .exp-input { font-size: 12.5px; padding: 6px 9px; min-height: 34px; }
     #expensesModal input[type="date"].exp-input { height: 34px; }
+    /* iOS SAFARI DRAWS A DATE INPUT ITS OWN WAY, and three things followed from
+       it on both the Mileage and Expenses tabs (user, 2026-09-16):
+         - it has an intrinsic minimum width, so width:100% was ignored and the
+           box ran past the right edge of the card;
+         - it centres its value in bold capitals, so "SEP 16, 2026" sat in the
+           middle of a box whose neighbours are left-aligned;
+         - and it grows to fit that value rather than to the height above.
+       appearance:none hands the box back to this stylesheet (border, height,
+       width); min-width:0 is what actually lets it shrink. The value is a
+       separate part of the control, so it has to be left-aligned on its own.
+       The picker still opens on tap — appearance only changes the drawing. */
+    #expensesModal input[type="date"].exp-input {
+        -webkit-appearance: none; appearance: none;
+        display: block; min-width: 0; max-width: 100%;
+        text-align: left; line-height: 32px;
+    }
+    #expensesModal input[type="date"].exp-input::-webkit-date-and-time-value {
+        text-align: left; margin: 0; line-height: 32px;
+    }
     /* 32px, and the padding written as 0 + line-height so the height is the height
        asked for. Six of these stack down the categories panel (Save + Delete on
        every row) and three sit in the control row beside the rate field. */
@@ -20599,7 +20646,8 @@ select.dd-native {
     .ann-doc-badge { width: 30px; height: 30px; border-radius: 7px; font-size: 8.5px; }
     .ann-doc-card-name { font-size: 12.5px; }
     .ann-doc-card-meta { font-size: 10.5px; margin-top: 2px; }
-    .ann-doc-dl-btn { padding: 6px 10px; font-size: 11px; border-radius: 7px; }
+    .ann-doc-dl-btn { padding: 6px 10px; font-size: 11px; border-radius: 8px; gap: 5px; }
+    .ann-doc-dl-btn svg { width: 12px; height: 12px; }
     .ann-doc-found { padding: 0 10px 8px; font-size: 10.5px; }
     .ann-doc-none { padding: 26px 16px; font-size: 12.5px; }
 
@@ -22505,4 +22553,42 @@ select.dd-native {
 @media (max-width: 520px) {
     .lgpw-sum { grid-template-columns: 1fr auto; }
     .lgpw-sum .lgpw-track { grid-column: 1 / -1; order: 3; }
+}
+
+/* ==========================================================================
+   DROPDOWNS ON THE PHONE — THE ONE FACE, EVERYWHERE
+   The emerald redesign (854ab7c) already reaches the phone: it is colour, set
+   at :root and on .dd-*, and no phone rule overrides a single colour of it —
+   measured face by face at 390px against 1440px. What did NOT match was SIZE.
+   Inside a tool the face is 34px and 12.5px (the .modal-menu.manage-menu rule);
+   everywhere else two blanket phone rules got to it first:
+     - `button { min-height: 44px }`, the tap-target floor, which a .dd-btn is;
+     - `.form-input, .form-input-lg, .kpi-select, .metric-dropdown
+        { font-size: 16px !important }`, the iOS zoom floor — and the face COPIES
+        its select's classes (_ddEnhance), so it inherited a floor meant for
+        typing into. A button is never typed into and never zooms.
+   So the KPI widget's metric picker, the store selector and every page-level
+   picker were 44px slabs of 16px type beside the 34px ones in the tools
+   (user, 2026-09-16: "ensure the mobile dropdowns everywhere also share this new
+   design"). One size for all of them now, the tool size.
+   `body .dd-btn` for one step of specificity over the select classes that set
+   their own padding (.form-input-lg, .idea-input), which are otherwise later in
+   the file or equal. The Feed's filter keeps its narrower id-scoped padding.
+   Have an Idea is the one id-scoped floor that had to be named: #ideaModal
+   .idea-input holds its fields at 16px !important for the same iOS zoom reason,
+   and its category dropdown's face carries .idea-input too. */
+@media (max-width: 900px) {
+    body .dd-btn {
+        min-height: 34px;
+        height: 34px;
+        padding: 0 11px;
+    }
+    #ideaModal .dd-btn.idea-input { padding: 0 11px !important; font-size: 12.5px !important; }
+    body .dd-btn,
+    body .dd-btn.form-input,
+    body .dd-btn.form-input-lg,
+    body .dd-btn.kpi-select,
+    body .dd-btn.metric-dropdown,
+    body .dd-btn.idea-input { font-size: 12.5px !important; }
+    body .dd-chev { width: 13px; height: 13px; }
 }

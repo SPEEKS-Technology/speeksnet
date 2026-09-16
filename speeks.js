@@ -585,6 +585,68 @@ function _closeSidePanels(exceptId) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// SIDE PANELS FREEZE THE PAGE ON A PHONE
+// ---------------------------------------------------------------------------
+// Every modal locks the page behind it (lockAndBlurScreen). The side panels —
+// Tools, Checklist, Goals, Cleaning — never did, which was right on a desktop,
+// where they are a drawer beside a page you may still want to scroll. On a phone
+// they fill the screen, and scrolling a checklist dragged the dashboard along
+// behind it (user, 2026-09-16: "we should freeze the site behind it like desktop
+// freezes when opening a tool").
+//
+// Watched, not called: a panel opens and closes from its toggle, a tap outside,
+// Escape, _closeSidePanels and closeAllModals, and a lock added to each of those
+// is a lock that the next new path forgets to release. A MutationObserver on the
+// panels' class sees every one of them.
+//
+// It uses the SAME lock and the SAME saved offset as the modals (body.no-scroll,
+// _lockedScrollY), so the hand-off works in both directions: opening a tool from
+// the Tools panel closes the panel inside closeAllModals, which already restores
+// _lockedScrollY before the modal re-takes the lock. _panelScrollLock is only
+// "this lock was taken for a panel" — released when the last panel closes, and
+// only if no modal has taken it over in the meantime.
+const _PANEL_LOCK_IDS = ['toolsSidePanel', 'checklistSidePanel', 'goalsSidePanel', 'auditSidePanel'];
+let _panelScrollLock = false;
+
+function _syncPanelScrollLock() {
+    const body = document.body;
+    const anyOpen = _isMobileLayout() && _PANEL_LOCK_IDS.some(id =>
+        document.getElementById(id)?.classList.contains('open'));
+    if (anyOpen) {
+        if (!body.classList.contains('no-scroll')) {
+            _lockedScrollY = window.scrollY || window.pageYOffset || 0;
+            body.style.top = `-${_lockedScrollY}px`;
+            body.classList.add('no-scroll');
+            _panelScrollLock = true;
+        }
+        return;
+    }
+    if (!_panelScrollLock) return;
+    _panelScrollLock = false;
+    // A modal opened over (or instead of) the panel now owns the lock.
+    if (document.querySelector('.modal-menu.show')) return;
+    if (!body.classList.contains('no-scroll')) return;   // closeAllModals already let go
+    body.classList.remove('no-scroll');
+    body.style.top = '';
+    window.scrollTo(0, _lockedScrollY);
+}
+
+(function _watchPanelsForScrollLock() {
+    const start = () => {
+        const obs = new MutationObserver(_syncPanelScrollLock);
+        _PANEL_LOCK_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) obs.observe(el, { attributes: true, attributeFilter: ['class'] });
+        });
+        // Dragging across the breakpoint with a panel open: the drawer on the
+        // desktop side must not leave the page frozen.
+        try { window.matchMedia('(max-width: 900px)').addEventListener('change', _syncPanelScrollLock); } catch (_) {}
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+})();
+
 function toggleModal(modalId, badgeId = null) {
     const dropdown = document.getElementById(modalId);
     if (!dropdown) return;
@@ -1023,7 +1085,7 @@ function _annDocCard(item) {
                 <div class="ann-doc-card-name">${escapeHtml(name)}</div>
                 <div class="ann-doc-card-meta">${title && title !== name ? escapeHtml(title) + ' · ' : ''}${escapeHtml(item.author || '')}${date ? ` · ${date}` : ''}</div>
             </div>
-            <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-dl-btn">⬇ Download</a>
+            <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-dl-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download</a>
             ${removable ? `<button type="button" class="ann-doc-del" title="Remove from Documents"
                 onclick="annRemoveDoc('${item.rowId}', this)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
