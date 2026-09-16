@@ -497,6 +497,75 @@ Deno.serve(async (req: Request) => {
       return json(await floatersFor(store, dateStr));
     }
 
+    // ---- Past weeks: who sat where, and what they listed --------------------
+    // Feeds the Listing Goals "Past weeks" view, where a manager or ASM reads the
+    // seats each person was given day by day against what they actually listed.
+    //
+    // The last FOUR FINISHED weeks, newest first. The current week is left out on
+    // purpose: its KPI is not filed until Sunday, so a half-week would score
+    // every person as far behind.
+    //
+    // MARKET-wide, not store-only, because of floaters. A floater's KPI is filed
+    // under one store for the whole week, however many stores he worked at, so
+    // scoring him on one store's days would compare a week of listings to half a
+    // week of goals. The client sums a person across the market and paints the
+    // days he spent elsewhere as that store's code.
+    //
+    // Listings are the weekly KPI, the same number breakdown() uses; the daily
+    // result column is always 0 and is not read.
+    if (action === "roleweeks") {
+      if (!store || !STORES.includes(store)) return json({ error: "Unknown store" }, 400);
+      const market = marketOf(store);
+
+      const weeks: { weekStart: string; weekEnd: string }[] = [];
+      for (let i = 1; i <= 4; i++) {
+        const s = new Date(thisMonday + "T00:00:00Z");
+        s.setUTCDate(s.getUTCDate() - 7 * i);
+        const e = new Date(s);
+        e.setUTCDate(e.getUTCDate() + 6);
+        weeks.push({ weekStart: s.toISOString().split("T")[0], weekEnd: e.toISOString().split("T")[0] });
+      }
+      const from = weeks[weeks.length - 1].weekStart;
+      const to = weeks[0].weekEnd;
+
+      const [{ data: goalRows }, { data: kpiRows }] = await Promise.all([
+        supabase
+          .from("listing_goals")
+          .select("date, store, employee, role, goal, created_at")
+          .in("store", market)
+          .gte("date", from)
+          .lte("date", to)
+          .order("created_at", { ascending: true }),
+        supabase
+          .from("kpi_entries")
+          .select("period_end_date, store, employee_name, listed_count")
+          .in("store", market)
+          .eq("period_type", "weekly")
+          .in("period_end_date", weeks.map((w) => w.weekEnd)),
+      ]);
+
+      // The goal POST deletes a day and re-inserts it, so two saves racing each
+      // other can leave the same person twice on one day. Latest insert wins.
+      const byKey: Record<string, any> = {};
+      (goalRows || []).forEach((r: any) => {
+        byKey[`${r.date}|${r.store}|${r.employee}`] = {
+          date: r.date, store: r.store, employee: r.employee,
+          role: String(r.role || "").toUpperCase(), goal: Number(r.goal) || 0,
+        };
+      });
+
+      return json({
+        store,
+        market,
+        weeks,
+        goals: Object.values(byKey),
+        listed: (kpiRows || []).map((r: any) => ({
+          weekEnd: r.period_end_date, store: r.store,
+          employee: r.employee_name, listed: Number(r.listed_count) || 0,
+        })),
+      });
+    }
+
     if (action === "capacity") {
       const week = url.searchParams.get("week")
         ? mondayOf(String(url.searchParams.get("week")))

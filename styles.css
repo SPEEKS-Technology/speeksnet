@@ -22362,3 +22362,147 @@ select.dd-native {
 .b2b-rowmenu-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .b2b-rowmenu-txt b { font-size: 12.5px; font-weight: 700; color: #1a1c1e; }
 .b2b-rowmenu-txt span { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }
+
+/* ==========================================================================
+   LISTING GOALS — PAST WEEKS (managers + ASMs)
+   A read-only look back over the last four finished weeks: the seat each person
+   was given each day, and what they listed against the goal those seats added up
+   to. It is there so a manager can judge a week fairly — a person who spent it on
+   the buy counter is not marked down for a low count, and a lister who fell short
+   stands out.
+
+   Built from an approved mockup (Ethan, 2026-09-16). Deliberate choices from that
+   review, not oversights:
+   - No legend. Green lister / grey-blue buyer / dashed Off reads on its own.
+   - The daily goal is always shown under its chip; there is no toggle.
+   - Every percent bubble is ONE width, so the numbers beside them line up down
+     the column whether it says 72% or 114%.
+   - The week label has a fixed width and the "Last week" tag keeps its space on
+     older weeks (visibility, not display), so the arrows never move.
+
+   The [hidden] rules are here because these panes set display themselves, and an
+   author display rule silently beats the hidden attribute.
+   ========================================================================== */
+#listingGoalsModal {
+    --lgpw-ink: #1a1c1e;
+    --lgpw-muted: #647082;
+    --lgpw-faint: #94a3b8;
+    --lgpw-line: #e6ebf0;
+    --lgpw-soft: #f1f4f7;
+    --lgpw-sage: #5a8d3b;
+    --lgpw-sage-ink: #3f6a26;
+    --lgpw-sage-tint: #e9f2e2;
+    --lgpw-sage-ring: #cfe3c0;
+    --lgpw-buy-ink: #334155;
+    --lgpw-buy-tint: #e8edf3;
+    --lgpw-buy-ring: #cdd6e1;
+}
+#goals-pane-today[hidden], #goals-pane-past[hidden] { display: none !important; }
+/* The modal body scrolls, so a full week grows a scrollbar and a thin week does
+   not, and the arrows jumped ~14px sideways stepping between them. Reserve the
+   gutter while Past weeks is showing; Today keeps its full width. */
+#listingGoalsModal .employee-kpi-body:has(#goals-pane-past:not([hidden])) { scrollbar-gutter: stable; }
+/* This week's goal and today's date belong to Today. Past weeks is about weeks
+   that are over, so the banner goes while it is showing (user, 2026-09-16). */
+#listingGoalsModal .lg-modal-card:has(#goals-pane-past:not([hidden])) .district-kpi-header { display: none !important; }
+
+.lgpw-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; }
+.lgpw-seg { display: inline-flex; padding: 3px; background: var(--lgpw-soft); border-radius: 10px; border: 1px solid var(--lgpw-line); }
+.lgpw-seg button {
+    font: inherit; font-size: 12.5px; font-weight: 700; color: var(--lgpw-muted);
+    border: none; background: none; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+}
+.lgpw-seg button[aria-pressed="true"] { background: #fff; color: var(--lgpw-ink); box-shadow: 0 1px 2px rgba(16, 24, 40, .1); }
+.lgpw-seg button:focus-visible, .lgpw-wk button:focus-visible { outline: 2px solid var(--lgpw-sage); outline-offset: 2px; }
+
+.lgpw-wk { display: inline-flex; align-items: center; gap: 4px; }
+.lgpw-wk.away { visibility: hidden; }
+.lgpw-wk button {
+    width: 28px; height: 28px; padding: 0; border-radius: 8px; border: 1px solid var(--lgpw-line);
+    background: #fff; color: var(--lgpw-ink); display: grid; place-items: center; cursor: pointer;
+}
+.lgpw-wk button:disabled { color: #cbd5e1; cursor: default; }
+.lgpw-wk svg { width: 14px; height: 14px; }
+.lgpw-wk-label {
+    display: inline-flex; flex-direction: column; align-items: center; gap: 4px; width: 128px;
+    font-size: 13px; font-weight: 700; color: var(--lgpw-ink); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.lgpw-tag {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; line-height: 1;
+    color: var(--lgpw-sage-ink); background: var(--lgpw-sage-tint); border: 1px solid var(--lgpw-sage-ring);
+    border-radius: 99px; padding: 2px 7px;
+}
+.lgpw-tag.away { visibility: hidden; }
+.lgpw-pips { display: inline-flex; gap: 4px; }
+.lgpw-pips i { width: 5px; height: 5px; border-radius: 50%; background: #d5dde5; }
+.lgpw-pips i.on { background: var(--lgpw-ink); }
+
+.lgpw-store { display: flex; flex-direction: column; gap: 14px; }
+.lgpw-store + .lgpw-store { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--lgpw-line); }
+.lgpw-store-name { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--lgpw-muted); }
+
+.lgpw-sum { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 12px; background: var(--lgpw-soft); }
+.lgpw-sum-k { font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--lgpw-muted); }
+.lgpw-sum-v { font-size: 20px; font-weight: 900; letter-spacing: -.02em; color: var(--lgpw-ink); font-variant-numeric: tabular-nums; }
+.lgpw-sum-v small { font-size: 13px; font-weight: 700; color: var(--lgpw-muted); letter-spacing: 0; }
+.lgpw-track { height: 8px; border-radius: 99px; background: #dde3e9; overflow: hidden; }
+.lgpw-track i { display: block; height: 100%; border-radius: 99px; background: var(--lgpw-sage); }
+.lgpw-track i.warn { background: #d99a2b; }
+.lgpw-track i.bad { background: #d9534f; }
+
+.lgpw-pct {
+    display: inline-block; box-sizing: border-box; width: 58px; text-align: center;
+    font-size: 13px; font-weight: 800; padding: 3px 0; border-radius: 99px; font-variant-numeric: tabular-nums;
+}
+.lgpw-pct.good { color: #15803d; background: var(--lgpw-sage-tint); }
+.lgpw-pct.warn { color: #b45309; background: #fdf3e2; }
+.lgpw-pct.bad { color: #b91c1c; background: #fcecec; }
+.lgpw-pct.none { color: var(--lgpw-faint); background: var(--lgpw-soft); }
+
+.lgpw-scroll { overflow-x: auto; }
+.lgpw-grid { min-width: 480px; }
+.lgpw-row {
+    display: grid; grid-template-columns: minmax(96px, 1.6fr) repeat(6, minmax(40px, 56px)) minmax(120px, 1fr);
+    align-items: center; column-gap: 6px; padding: 9px 0; border-bottom: 1px solid var(--lgpw-soft);
+}
+.lgpw-row:last-child { border-bottom: none; }
+.lgpw-hdr { padding: 0 0 7px; border-bottom: 1px dashed var(--lgpw-line); }
+.lgpw-hdr span { font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--lgpw-muted); text-align: center; }
+.lgpw-hdr span:first-child { text-align: left; }
+.lgpw-hdr span:last-child { text-align: right; }
+.lgpw-hdr b { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0; color: var(--lgpw-faint); margin-top: 1px; }
+
+.lgpw-name { min-width: 0; font-size: 13.5px; font-weight: 700; color: var(--lgpw-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lgpw-float {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--lgpw-muted);
+    border: 1px solid var(--lgpw-line); border-radius: 99px; padding: 0 5px; margin-left: 5px; vertical-align: 1px;
+}
+.lgpw-day { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.lgpw-chip {
+    width: 34px; height: 26px; border-radius: 8px; display: grid; place-items: center;
+    font-size: 11px; font-weight: 800; letter-spacing: .02em; border: 1px solid transparent;
+}
+.lgpw-chip.l { background: var(--lgpw-sage-tint); color: var(--lgpw-sage-ink); border-color: var(--lgpw-sage-ring); }
+.lgpw-chip.b { background: var(--lgpw-buy-tint); color: var(--lgpw-buy-ink); border-color: var(--lgpw-buy-ring); }
+.lgpw-chip.off { color: #b4bfcb; border: 1px dashed #d5dde5; font-size: 9.5px; font-weight: 700; }
+/* A floater's day at ANOTHER store: the store code, quiet, so it reads as
+   "not here" rather than as a seat. Its goal still counts toward their week. */
+.lgpw-chip.away { color: var(--lgpw-muted); background: var(--lgpw-soft); border-color: var(--lgpw-line); font-size: 9.5px; }
+/* No role saved that day at all. */
+.lgpw-chip.unset { color: #cbd5e1; font-size: 12px; }
+.lgpw-g { font-size: 10px; font-weight: 700; color: var(--lgpw-faint); font-variant-numeric: tabular-nums; line-height: 1; min-height: 10px; }
+
+.lgpw-tot { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+.lgpw-tot-top { display: flex; align-items: baseline; gap: 7px; }
+.lgpw-tot-n { font-size: 15px; font-weight: 900; color: var(--lgpw-ink); font-variant-numeric: tabular-nums; }
+.lgpw-tot-n small { font-size: 12px; font-weight: 700; color: var(--lgpw-muted); }
+.lgpw-tot .lgpw-pct { width: 46px; font-size: 11px; padding: 2px 0; }
+.lgpw-tot .lgpw-track { width: 100%; max-width: 118px; height: 5px; }
+
+.lgpw-msg { padding: 36px 0; text-align: center; font-size: 13px; color: var(--lgpw-muted); }
+.lgpw-msg.err { color: #b91c1c; }
+
+@media (max-width: 520px) {
+    .lgpw-sum { grid-template-columns: 1fr auto; }
+    .lgpw-sum .lgpw-track { grid-column: 1 / -1; order: 3; }
+}

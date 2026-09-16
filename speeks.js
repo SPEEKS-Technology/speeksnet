@@ -16628,6 +16628,242 @@ async function saveGoalsDataMS(silent = false) {
     }
 }
 
+// ============================================================================
+// LISTING GOALS — PAST WEEKS
+// The "Past weeks" side of the Listing Goals modal (managers + ASMs; the modal
+// is already gated by _canAssignGoalRoles). Read-only: for each of the last four
+// FINISHED weeks, the seat each person was given each day and what they listed
+// against the goal those seats added up to — so a manager can judge a week
+// fairly. Someone who spent it on the buy counter is not marked down for a low
+// count; a lister who fell short stands out.
+//
+// Data is store-targets ?action=roleweeks (see the note there). Listings are the
+// weekly KPI, because the daily result column is never filled in — which is
+// also why there is no per-day listed figure to show, only per-week.
+//
+// PEOPLE ARE SCORED ACROSS THE MARKET. A floater's KPI is filed under one store
+// for the whole week, so his row sums goals and listings from every store in the
+// market, and a day he spent elsewhere shows as that store's code. The store
+// summary above the grid is this store's own rows and KPI only, so for a store
+// that lent or borrowed a floater the rows need not add up to it.
+//
+// Names match EXACTLY (trimmed, case-insensitive), not with _goalsSameName: that
+// helper's first-name rule would merge Ethan Kushnir and Ethan Frye, who are both
+// in KC. Both tables are written with full names from the same user list.
+//
+// Approved look (Ethan, 2026-09-16): no legend, daily goals always visible, one
+// width for every percent bubble, fixed-width week label with a "Last week" tag.
+// Styles are the lgpw- block at the end of styles.css.
+// ============================================================================
+const LGPW_WEEKS = 4;
+const LGPW_TTL_MS = 5 * 60 * 1000;
+let _lgpw = { past: false, week: 0, data: {}, failed: {} };   // data: store -> { at, payload }
+
+function _lgpwStores() {
+    return isMultiStoreManager() ? MULTISTORE_MANAGER_STORES.slice() : [goalsTargetStore];
+}
+function _lgpwKey(name) { return String(name || '').trim().toLowerCase(); }
+function _lgpwAddDays(ds, n) {
+    const d = new Date(ds + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().split('T')[0];
+}
+// "Sep 7". Month on BOTH ends of the range, always, so every week's label is the
+// same shape and they line up (user, 2026-09-16).
+function _lgpwFmt(ds) {
+    return new Date(ds + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+function _lgpwKind(role) {
+    if (!role || role === '-') return 'unset';
+    if (role === GOALS_OFF) return 'off';
+    return role[0] === 'B' ? 'b' : 'l';
+}
+function _lgpwTone(pct) { return pct >= 100 ? 'good' : pct >= 80 ? 'warn' : 'bad'; }
+
+// Switch between the role editor and the look back. Always lands on Today when
+// the modal opens (openListingGoals), so nobody goes to set roles and finds a
+// read-only grid.
+function lgpwSetView(past) {
+    _lgpw.past = !!past;
+    const t = document.getElementById('lgpw-v-today'), p = document.getElementById('lgpw-v-past');
+    if (t) t.setAttribute('aria-pressed', String(!past));
+    if (p) p.setAttribute('aria-pressed', String(!!past));
+    const today = document.getElementById('goals-pane-today'), pane = document.getElementById('goals-pane-past');
+    if (today) today.hidden = !!past;
+    if (pane) pane.hidden = !past;
+    const wk = document.getElementById('lgpw-wk');
+    if (wk) wk.classList.toggle('away', !past);
+    if (past) { _lgpw.week = 0; lgpwLoad(); }
+}
+
+function lgpwStep(dir) {
+    _lgpw.week = Math.max(0, Math.min(LGPW_WEEKS - 1, _lgpw.week + dir));
+    lgpwRender();
+}
+
+async function lgpwLoad() {
+    const stores = _lgpwStores();
+    const stale = stores.filter(s => !_lgpw.data[s] || Date.now() - _lgpw.data[s].at > LGPW_TTL_MS);
+    lgpwRender();
+    if (!stale.length) return;
+    await Promise.all(stale.map(async s => {
+        try {
+            const r = await fetch(`${STORE_TARGETS_URL}?action=roleweeks&store=${s}&v=${Date.now()}`).then(x => x.json());
+            // goals, not weeks: a store-targets deploy that predates roleweeks
+            // ignores the action and answers with evaluate(), which ALSO has a
+            // weeks array — and that rendered as a convincing "No roles were set
+            // this week" instead of an error (2026-09-16).
+            if (!r || !Array.isArray(r.goals) || !Array.isArray(r.listed)) throw new Error('bad payload');
+            _lgpw.data[s] = { at: Date.now(), payload: r };
+            delete _lgpw.failed[s];
+        } catch (e) {
+            _lgpw.failed[s] = true;
+        }
+    }));
+    if (_lgpw.past) lgpwRender();
+}
+
+function lgpwRender() {
+    const pane = document.getElementById('goals-pane-past');
+    if (!pane) return;
+    const stores = _lgpwStores();
+
+    // Week header. The label comes from the date maths alone, so it is right even
+    // before the fetch lands and the arrows never wait on the network.
+    const monday = new Date(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }) + 'T12:00:00Z');
+    monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7) - 7 * (_lgpw.week + 1));
+    const weekStart = monday.toISOString().split('T')[0];
+    const txt = document.getElementById('lgpw-wk-text');
+    if (txt) txt.textContent = `${_lgpwFmt(weekStart)} – ${_lgpwFmt(_lgpwAddDays(weekStart, 5))}`;
+    const tag = document.getElementById('lgpw-tag');
+    if (tag) tag.classList.toggle('away', _lgpw.week !== 0);
+    const pips = document.getElementById('lgpw-pips');
+    if (pips) pips.innerHTML = [3, 2, 1, 0].map(i => `<i class="${i === _lgpw.week ? 'on' : ''}"></i>`).join('');
+    const prev = document.getElementById('lgpw-prev'), next = document.getElementById('lgpw-next');
+    if (prev) prev.disabled = _lgpw.week >= LGPW_WEEKS - 1;
+    if (next) next.disabled = _lgpw.week <= 0;
+
+    pane.innerHTML = stores.map(s => {
+        const head = stores.length > 1 ? `<div class="lgpw-store-name">${escapeHtml(s)}</div>` : '';
+        const d = _lgpw.data[s];
+        let body;
+        if (d) body = _lgpwStoreHtml(s, d.payload, weekStart);
+        else if (_lgpw.failed[s]) body = '<div class="lgpw-msg err">Couldn\'t load past weeks. Close and reopen to try again.</div>';
+        else body = '<div class="lgpw-msg">Loading past weeks…</div>';
+        return `<section class="lgpw-store">${head}${body}</section>`;
+    }).join('');
+}
+
+function _lgpwStoreHtml(store, payload, weekStart) {
+    const weekEnd = _lgpwAddDays(weekStart, 6);
+    const days = [0, 1, 2, 3, 4, 5].map(i => _lgpwAddDays(weekStart, i));
+    const goals = (payload.goals || []).filter(r => r.date >= weekStart && r.date <= weekEnd);
+    const listed = (payload.listed || []).filter(r => r.weekEnd === weekEnd);
+
+    // Who belongs on this store's grid: someone given at least one WORKING seat
+    // that week, and whose week belongs to this store — a seat here, or their KPI
+    // filed here (a floater who spent the whole week at LEE but is filed under
+    // OVL shows on OVL as a row of LEE chips).
+    //
+    // Nobody without a seat, even with listings on their KPI line (user,
+    // 2026-09-16): this view judges a week against the seats it was given, and a
+    // row reading "20 / 0" has nothing to judge. Off and blank rows are not
+    // seats either — every store in the market saves an Off for a floater it did
+    // not use, and without that rule Zach showed on LEE's grid as a line of Offs.
+    const seated = new Set(goals.filter(r => _isWorkingRole(r.role)).map(r => _lgpwKey(r.employee)));
+    const people = new Map();   // key -> display name
+    const add = name => {
+        const k = _lgpwKey(name);
+        if (seated.has(k) && !people.has(k)) people.set(k, name);
+    };
+    goals.filter(r => r.store === store && _isWorkingRole(r.role)).forEach(r => add(r.employee));
+    listed.filter(r => r.store === store).forEach(r => add(r.employee));
+    if (!people.size) {
+        return '<div class="lgpw-msg">No roles were set this week.</div>';
+    }
+
+    // Today's roster order first, so the grid reads in the same order as the
+    // editor; anyone no longer on it (left, moved) follows alphabetically.
+    const order = _goalsWithFloaters(store, goalsRosterFor(store)).map(_lgpwKey);
+    const keys = [...people.keys()].sort((a, b) => {
+        const ia = order.indexOf(a), ib = order.indexOf(b);
+        if (ia !== -1 || ib !== -1) return (ia === -1 ? 1e9 : ia) - (ib === -1 ? 1e9 : ib);
+        return a.localeCompare(b);
+    });
+
+    let storeGoal = 0, storeListed = 0, storeHasKpi = false;
+    goals.filter(r => r.store === store && _isWorkingRole(r.role)).forEach(r => { storeGoal += r.goal; });
+    // Only the people on the grid, so the summary is the grid's own total and an
+    // unseated person's KPI can't lift the store's percentage.
+    listed.filter(r => r.store === store && people.has(_lgpwKey(r.employee)))
+        .forEach(r => { storeListed += r.listed; storeHasKpi = true; });
+
+    const hdr = '<div class="lgpw-row lgpw-hdr"><span>Employee</span>'
+        + days.map((ds, i) => `<span>${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i]}<b>${Number(ds.slice(8))}</b></span>`).join('')
+        + '<span>Listed / goal</span></div>';
+
+    const rows = keys.map(k => {
+        const mine = goals.filter(r => _lgpwKey(r.employee) === k);
+        let goal = 0;
+        const cells = days.map(ds => {
+            const today = mine.filter(r => r.date === ds);
+            // A working seat here, then a working seat elsewhere, then Off here,
+            // then Off elsewhere. A floater is often marked Off at home on a day
+            // he was working somewhere else, and the seat is what matters.
+            const here = today.find(r => r.store === store && _isWorkingRole(r.role));
+            const away = today.find(r => r.store !== store && _isWorkingRole(r.role));
+            const off = today.find(r => r.store === store && _isOffRole(r.role)) || today.find(r => _isOffRole(r.role));
+            if (here) {
+                goal += here.goal;
+                return `<div class="lgpw-day"><span class="lgpw-chip ${_lgpwKind(here.role)}">${escapeHtml(here.role)}</span><span class="lgpw-g">${here.goal}</span></div>`;
+            }
+            if (away) {
+                goal += away.goal;
+                return `<div class="lgpw-day"><span class="lgpw-chip away" title="${escapeHtml(away.role)} at ${escapeHtml(away.store)}">${escapeHtml(away.store)}</span><span class="lgpw-g">${away.goal}</span></div>`;
+            }
+            if (off) return '<div class="lgpw-day"><span class="lgpw-chip off">Off</span><span class="lgpw-g"></span></div>';
+            return '<div class="lgpw-day"><span class="lgpw-chip unset">–</span><span class="lgpw-g"></span></div>';
+        }).join('');
+
+        const theirs = listed.filter(r => _lgpwKey(r.employee) === k);
+        const got = theirs.length ? theirs.reduce((sum, r) => sum + r.listed, 0) : null;
+        return `<div class="lgpw-row">
+            <div class="lgpw-name">${escapeHtml(people.get(k))}${_goalsIsFloater(store, people.get(k)) ? '<span class="lgpw-float">Floater</span>' : ''}</div>
+            ${cells}
+            ${_lgpwTotHtml(got, goal)}
+        </div>`;
+    }).join('');
+
+    return `${_lgpwSumHtml(storeHasKpi ? storeListed : null, storeGoal)}
+        <div class="lgpw-scroll"><div class="lgpw-grid">${hdr}${rows}</div></div>`;
+}
+
+// No KPI filed, or no goal to measure against: a dash in a bubble of the same
+// width, so the column still lines up.
+function _lgpwPct(got, goal) {
+    if (got == null || !goal) return { txt: '—', tone: 'none', width: 0 };
+    const pct = Math.round(got / goal * 100);
+    return { txt: pct + '%', tone: _lgpwTone(pct), width: Math.min(pct, 100) };
+}
+
+function _lgpwTotHtml(got, goal) {
+    const p = _lgpwPct(got, goal);
+    return `<div class="lgpw-tot">
+        <div class="lgpw-tot-top"><span class="lgpw-tot-n">${got == null ? '—' : got} <small>/ ${goal}</small></span><span class="lgpw-pct ${p.tone}">${p.txt}</span></div>
+        <div class="lgpw-track"><i class="${p.tone}" style="width:${p.width}%"></i></div>
+    </div>`;
+}
+
+function _lgpwSumHtml(got, goal) {
+    const p = _lgpwPct(got, goal);
+    return `<div class="lgpw-sum">
+        <div><div class="lgpw-sum-k">Store · listed vs. goal</div>
+        <div class="lgpw-sum-v">${got == null ? '—' : got} <small>/ ${goal}</small></div></div>
+        <div class="lgpw-track"><i class="${p.tone}" style="width:${p.width}%"></i></div>
+        <span class="lgpw-pct ${p.tone}">${p.txt}</span>
+    </div>`;
+}
+
 // Roster size for a store (from auth cache). Only feeds the placeholder weekly
 // figure shown before the server's capacity number arrives.
 //
@@ -43903,7 +44139,7 @@ function _canAssignGoalRoles() {
 // "Listing Goals" bar in the action menu: roster editor for anyone who can assign,
 // personal popup for everyone else.
 function openListingGoals() {
-    if (_canAssignGoalRoles()) toggleModal('listingGoalsModal');
+    if (_canAssignGoalRoles()) { lgpwSetView(false); toggleModal('listingGoalsModal'); }
     else toggleModal('empGoalsModal');
 }
 
