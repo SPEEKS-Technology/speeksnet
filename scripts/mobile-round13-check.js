@@ -14,7 +14,7 @@
 // NODE_PATH must point at a node_modules with puppeteer-core.
 const puppeteer = require('puppeteer-core');
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
+const REPO = require('path').resolve(__dirname, '..').replace(/\\/g, '/');
 const OUT = process.env.LV_SHOT_DIR || null;
 
 let fails = 0;

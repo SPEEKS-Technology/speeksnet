@@ -3,7 +3,7 @@
 // times out long before a full grid finishes.
 const puppeteer = require('puppeteer-core');
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
+const REPO = require('path').resolve(__dirname, '..').replace(/\\/g, '/');
 
 const PAGES = ['index.html', 'operations.html', 'workspace.html', 'docs.html', 'stats.html'];
 const WIDTHS = [320, 360, 375, 390, 414, 430];

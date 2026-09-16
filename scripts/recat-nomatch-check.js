@@ -24,7 +24,7 @@
 // The server-side refusal is checked in collection-recat-check.js.
 const puppeteer = require('puppeteer-core');
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
+const REPO = require('path').resolve(__dirname, '..').replace(/\\/g, '/');
 const SHOT = process.env.SHOT_DIR || REPO + '/scripts';
 
 let fails = 0;

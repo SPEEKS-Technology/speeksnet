@@ -29,7 +29,7 @@
 const puppeteer = require('puppeteer-core');
 
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
+const REPO = require('path').resolve(__dirname, '..').replace(/\\/g, '/');
 const PIN = process.env.SPEEKS_TEST_PIN || '';
 const MGR_PIN = process.env.SPEEKS_TEST_PIN_MGR || '';
 

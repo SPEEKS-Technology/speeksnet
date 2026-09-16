@@ -104,12 +104,25 @@ const PREVAL_SETTABLE = ["draft", "sent", "accepted", "declined"];
 // What a piece of approval evidence can be. A plain note is the odd one out and is
 // deliberately allowed: a typed account of a phone call is weak evidence, but it
 // is evidence, and forcing it to masquerade as an email would be worse.
-const PROOF_KINDS = ["email", "screenshot", "document", "note"];
+// One creatable kind as of 2026-09-08. Nick: "You can actually get rid of all of
+// the other ways to save proof of acceptance, this is the only way we want for
+// him going forward" -- the client's actual email, dragged out of Outlook.
+//
+// The CHECK constraint on b2b_approval_proofs still permits all four, and
+// deliberately so: rows already on the record say `screenshot` or `note`, and an
+// evidence log that fails to load its own history is worse than one with mixed
+// kinds in it. This list governs what can be CREATED.
+const PROOF_KINDS = ["email"];
 // Mirrors the b2b-proofs bucket's allowlist. Refused here as well as there so a
 // bad upload gets a sentence instead of a storage error.
+//
+// Narrowed to mail files with the same change. A dropped .msg frequently arrives
+// with an empty or octet-stream type depending on whether Outlook is registered
+// for the extension, so the client sends file_mime derived from the filename and
+// that is what is checked -- see _b2bMailMime in speeks.js.
 const PROOF_MIMES: Record<string, string> = {
-  "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
-  "application/pdf": "pdf", "message/rfc822": "eml", "text/plain": "txt",
+  "message/rfc822": "eml",
+  "application/vnd.ms-outlook": "msg",
 };
 // The bucket caps at 10MB. This is the decoded ceiling, lower because the base64
 // has to survive a JSON request body on the way in.
@@ -117,6 +130,25 @@ const PROOF_MAX_BYTES = 6_000_000;
 const PROOF_COLS = "id,deal_id,preval_id,kind,label,from_addr,sent_on,body_text," +
   "file_path,mime,bytes,added_by,added_at,removed_at,removed_by,removed_reason";
 const ACCEPT_ROLES = ["ceo", "mocd", "tom", "district manager"];
+
+// May this caller send, accept or send back a quote?
+//
+// Widened on 2026-09-08 to include a lent corp hat. Every B2B approval in the
+// company was effectively queueing behind one person, and a pipeline that stops
+// when one named individual is unavailable is a worse problem than a delegation
+// being used to accept. Nick: "The B2B Approvals are limited to just paul...
+// (FOR ALL CORP NOW)".
+//
+// The guard that matters is untouched: acceptance still requires the client's
+// approval on record (b2b_approval_proofs, or a recorded waiver reason). This
+// only decides WHO may click, not whether the evidence rule applies.
+//
+// corp_delegated comes from the browser, like `role` has since this function
+// was written -- see the authorization note in the header. Read through one
+// helper so the three gates that use it cannot drift apart.
+const mayApprove = (body: any) =>
+  ACCEPT_ROLES.includes(String(body?.role || "").toLowerCase().trim()) ||
+  body?.corp_delegated === true;
 // 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
 // spelling stays recognised here: existing rows were migrated, but a row saved
 // between this deploying and that running would otherwise stop being asked for
@@ -172,6 +204,15 @@ const DEAL_COLS = [
   // from one board draw. Not a contact field, so it survives into
   // SCOPED_DEAL_COLS and a store sees the flag on its own deals too.
   "delete_requested_at", "delete_requested_by",
+  // The quote's custom line and the approver's private note; when the client was
+  // paid; and whether anyone has actually started pricing (which tells "actively
+  // pricing" from "awaiting pricing" without a second stage). internal_note is
+  // NOT a contact field -- it is ours about our own deal -- so a store sees it,
+  // which is the point: it is where "Paul needs to know X before he sends this"
+  // gets written by whoever priced it.
+  "quote_note", "internal_note",
+  "paid_at", "paid_by", "paid_amount",
+  "pricing_started_at", "pricing_started_by",
 ].join(",");
 
 // Who to ring at the client. Corp business: a store prices and lists the goods,
@@ -460,6 +501,52 @@ async function queueNotification(n: {
     });
   } catch (_) { /* best-effort */ }
 }
+
+// A deal has moved and is now somebody else's to act on -- tell them.
+//
+// WHY THIS EXISTS. Until now the whole module produced exactly one queue row
+// (the delete request below) and one email (notifyQuoteReady). Paul, twice:
+// "I'm not getting any notifications that something in B2B is waiting on me"
+// (2026-08-29, 2026-09-03), and he was right -- there was nothing to get. The
+// email covers one transition and depends on a mail relay nobody can see the
+// far side of; this puts the same fact in the bell, where it is visible whether
+// or not the mail lands.
+//
+// Category is `requests` -- "Requests Waiting On Me" -- which is where the
+// comment in the notify function said to put B2B when the module landed. No new
+// category, so no notify_queue CHECK constraint change and no new preference
+// column: anyone already subscribed to requests gets these.
+//
+// AUDIENCE IS THE POINT. A notification that goes to everyone is noise, and
+// noise is what gets muted. Each transition names only the people who can
+// actually do the next thing: a store gets its own deals, corp gets the routing
+// and approval steps. excludeUser keeps it out of the inbox of whoever caused
+// it -- they already know.
+async function notifyStage(n: {
+  deal: any; kind: string; title: string; body: string;
+  stores?: string[] | null; roles?: string[] | null; by?: string | null;
+  priority?: "normal" | "high";
+}) {
+  await queueNotification({
+    category: "requests",
+    kind: n.kind,
+    title: n.title,
+    body: n.body,
+    link: "operations.html",
+    store: n.stores && n.stores.length === 1 ? n.stores[0] : null,
+    audienceStores: n.stores && n.stores.length ? n.stores : null,
+    audienceRoles: n.roles && n.roles.length ? n.roles : null,
+    // Corp-facing steps ride the same delegation flag the delete request uses,
+    // so a manager lent the corp hat is told as well.
+    audienceFeature: n.roles && n.roles.length ? "cap-b2b-corp" : null,
+    excludeUser: n.by || null,
+    priority: n.priority ?? "normal",
+  });
+}
+
+// The client's name as the board shows it, for notification copy.
+const dealRef = (deal: any) => `${deal.client?.acronym || "B2B"}-${pad(deal.deal_no, 3)}`;
+const dealWho = (deal: any) => deal.client?.company ? ` (${deal.client.company})` : "";
 
 // updated_at and stage_changed_at are maintained by the b2b_touch_row trigger,
 // so no write here has to remember them.
@@ -790,6 +877,23 @@ Deno.serve(async (req: Request) => {
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", holding);
+        // Signed off. A deal already holding at a store drops straight into
+        // pricing there; one corp collected still needs a location choosing.
+        if (holding) {
+          await notifyStage({
+            deal, kind: "b2b_pricing", by: str(body.user, 120, "User"),
+            stores: [holding],
+            title: `Ready to price — ${dealRef(deal)}`,
+            body: `${dealRef(deal)}${dealWho(deal)} has been signed off and is holding at ${holding}. It needs pricing before a quote can go out.`,
+          });
+        } else {
+          await notifyStage({
+            deal, kind: "b2b_pricing_location", by: str(body.user, 120, "User"),
+            roles: ACCEPT_ROLES,
+            title: `Needs a pricing location — ${dealRef(deal)}`,
+            body: `${dealRef(deal)}${dealWho(deal)} has been collected and signed off. Choose which store prices it.`,
+          });
+        }
         return jsonResponse({ success: true, next_stage: holding ? "pricing" : "pricing_location" });
       }
 
@@ -883,6 +987,12 @@ Deno.serve(async (req: Request) => {
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", store);
+        await notifyStage({
+          deal, kind: "b2b_pricing", by: str(body.user, 120, "User"),
+          stores: [store],
+          title: `Ready to price — ${dealRef(deal)}`,
+          body: `${dealRef(deal)}${dealWho(deal)} has been routed to ${store} for pricing.`,
+        });
         return jsonResponse({ success: true });
       }
 
@@ -1181,9 +1291,26 @@ Deno.serve(async (req: Request) => {
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", dealStore(deal));
         // This is the moment the quote becomes someone else's problem, so it is
-        // where the approver gets told. Fire and forget: the submit has already
-        // succeeded and a mail failure must not undo it.
+        // where the approver gets told. Both channels, deliberately:
+        //
+        //  - the email, which is what Paul asked for originally and which goes
+        //    through a relay this function cannot see the far side of;
+        //  - a bell entry, which does not depend on mail being deliverable.
+        //
+        // Paul reported getting neither on 2026-08-29 and again on 2026-09-03.
+        // The email path was configured correctly the whole time, so whatever
+        // failed was downstream and invisible; the queue row is the half that
+        // can be checked afterwards by looking at the row.
+        //
+        // High priority: this is the only stage where the whole deal stops until
+        // one specific person acts, and it is the one they chased twice.
         await notifyQuoteReady(deal.id);
+        await notifyStage({
+          deal, kind: "b2b_quote_ready", by: str(body.priced_by, 120, "Priced by"),
+          roles: ACCEPT_ROLES, priority: "high",
+          title: `Quote ready to approve — ${dealRef(deal)}`,
+          body: `${str(body.priced_by, 120, "Priced by") || "Someone"} has finished pricing ${dealRef(deal)}${dealWho(deal)}. It needs approving and sending to the client.`,
+        });
         return jsonResponse({ success: true });
       }
 
@@ -1203,9 +1330,8 @@ Deno.serve(async (req: Request) => {
           return jsonResponse({ success: false, error: "Only a deal awaiting approval or already quoted can be sent." }, 409);
         }
         if (deal.stage === "review") {
-          const role = String(body.role || "").toLowerCase().trim();
-          if (!ACCEPT_ROLES.includes(role)) {
-            return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can send a quote to the client." }, 403);
+          if (!mayApprove(body)) {
+            return jsonResponse({ success: false, error: "Only corp can send a quote to the client." }, 403);
           }
         }
         const { error } = await supabase.from("b2b_deals").update({
@@ -1228,9 +1354,8 @@ Deno.serve(async (req: Request) => {
         if (deal.stage !== "quote") {
           return jsonResponse({ success: false, error: "This quote hasn't been sent to the client yet." }, 409);
         }
-        const role = String(body.role || "").toLowerCase().trim();
-        if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can accept a quote." }, 403);
+        if (!mayApprove(body)) {
+          return jsonResponse({ success: false, error: "Only corp can accept a quote." }, 403);
         }
         // Either the client's approval is on file, or somebody has said in
         // writing why it is not. Never silently neither -- this is the moment
@@ -1271,6 +1396,24 @@ Deno.serve(async (req: Request) => {
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", toCorp ? null : deal.pricing_store);
+        // The client said yes, so there are goods to get listed. A CORP-priced
+        // deal has no store yet, so corp is told to choose one -- which is the
+        // step that stranded Ascentist with nobody owning it.
+        if (toCorp) {
+          await notifyStage({
+            deal, kind: "b2b_listing_location", by: str(body.accepted_by, 120, "Accepted by"),
+            roles: ACCEPT_ROLES,
+            title: `Needs a listing store — ${dealRef(deal)}`,
+            body: `${dealRef(deal)}${dealWho(deal)} has been accepted. CORP priced it, so choose which store lists the items.`,
+          });
+        } else {
+          await notifyStage({
+            deal, kind: "b2b_listing", by: str(body.accepted_by, 120, "Accepted by"),
+            stores: [deal.pricing_store],
+            title: `Accepted — ready to list at ${deal.pricing_store}`,
+            body: `${dealRef(deal)}${dealWho(deal)} has been accepted and is ready to list.`,
+          });
+        }
         return jsonResponse({ success: true, next_stage: toCorp ? "listing_location" : "listing" });
       }
 
@@ -1284,6 +1427,12 @@ Deno.serve(async (req: Request) => {
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", store);
+        await notifyStage({
+          deal, kind: "b2b_listing", by: str(body.user, 120, "User"),
+          stores: [store],
+          title: `Ready to list at ${store} — ${dealRef(deal)}`,
+          body: `${dealRef(deal)}${dealWho(deal)} has been accepted and routed to ${store} for listing.`,
+        });
         return jsonResponse({ success: true });
       }
 
@@ -1292,6 +1441,7 @@ Deno.serve(async (req: Request) => {
       // list_unit    { id | (deal_id, sku), shopify_barcode }  one unit goes live
       // unlist_unit  { id, listing_id? }                       undo the last one
       // recycle_units{ id, units }                             pull bad units out
+      // un_recycle   { id, units }                             put them back
       // mark_wiped   { id, units }                             certify N wiped
       //
       // There is deliberately NO path that marks a unit listed without a Shopify
@@ -1299,7 +1449,7 @@ Deno.serve(async (req: Request) => {
       // what makes the claim checkable; a bare counter was only ever an
       // assertion. listed_qty is now derived by trigger from these rows.
       if (action === "list_unit" || action === "unlist_unit" ||
-          action === "recycle_units" || action === "mark_wiped") {
+          action === "recycle_units" || action === "un_recycle" || action === "mark_wiped") {
         let item: any;
         if (action === "list_unit" && !body.id) {
           const sku = String(body.sku || "").trim().toUpperCase();
@@ -1328,6 +1478,22 @@ Deno.serve(async (req: Request) => {
           if (room <= 0) return jsonResponse({ success: false, error: "Every unit on this line is already accounted for." }, 409);
           const { error } = await supabase.from("b2b_deal_items")
             .update({ recycled_qty: item.recycled_qty + Math.min(units, room) }).eq("id", item.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+
+        } else if (action === "un_recycle") {
+          // The undo recycling never had. It mattered less when recycling was a
+          // typed count behind two prompts; the listing grid has a one-click
+          // recycle stepper now, and a one-click irreversible action that moves
+          // money (a recycled unit is written off -- see _b2bDealStatRaw) is a
+          // trap. Only ever walks the counter back, never past zero, and only
+          // while the deal is still in listing -- same gate as every other
+          // progress action above.
+          const units = count(body.units, 1, 100000, "Units", 1);
+          if (item.recycled_qty <= 0) {
+            return jsonResponse({ success: false, error: "Nothing on this line has been recycled out." }, 409);
+          }
+          const { error } = await supabase.from("b2b_deal_items")
+            .update({ recycled_qty: Math.max(0, item.recycled_qty - units) }).eq("id", item.id);
           if (error) return jsonResponse({ success: false, error: error.message }, 500);
 
         } else if (action === "mark_wiped") {
@@ -1486,9 +1652,8 @@ Deno.serve(async (req: Request) => {
         if (deal.stage !== "review" && deal.stage !== "quote") {
           return jsonResponse({ success: false, error: "Only a quote awaiting approval or out with the client can be sent back." }, 409);
         }
-        const role = String(body.role || "").toLowerCase().trim();
-        if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can send a quote back." }, 403);
+        if (!mayApprove(body)) {
+          return jsonResponse({ success: false, error: "Only corp can send a quote back." }, 403);
         }
         const { error } = await supabase.from("b2b_deals").update({
           stage: "pricing",
@@ -1504,6 +1669,199 @@ Deno.serve(async (req: Request) => {
           sendback_note: str(body.note, 2000, "A note saying what needs changing", true),
           sendback_by: str(body.sent_back_by, 120, "Sent back by"),
           sendback_at: new Date().toISOString(),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        // Back to whoever prices it, with the reason. This is the transition
+        // most worth telling someone about: nothing on the board changes except
+        // a stage going backwards, so without a nudge a sent-back quote just
+        // sits there until somebody happens to look.
+        await notifyStage({
+          deal, kind: "b2b_sendback", by: str(body.sent_back_by, 120, "Sent back by"),
+          stores: deal.pricing_store && deal.pricing_store !== "CORP" ? [deal.pricing_store] : null,
+          roles: !deal.pricing_store || deal.pricing_store === "CORP" ? ACCEPT_ROLES : null,
+          priority: "high",
+          title: `Sent back for re-pricing — ${dealRef(deal)}`,
+          body: `${str(body.sent_back_by, 120, "Sent back by") || "The approver"} sent ${dealRef(deal)}${dealWho(deal)} back: ${str(body.note, 2000, "Note", true)}`,
+        });
+        return jsonResponse({ success: true });
+      }
+
+      // ===================================================== deal-level edits
+      //
+      // Everything above moves a deal along. These five correct or annotate one
+      // in place, and they exist because until now there was NO path to change
+      // a deal row after the stage that wrote it -- a mistake meant direct
+      // database access or raising the deal again.
+
+      // update_pickup_date { id, pickup_date, user }
+      //
+      // Paul, 2026-08-27: "the Loch Lloyd quote shows that it was collected on
+      // the 19th. That is incorrect... I don't know how to change it in
+      // SPEEKSNET. That date should always reflect the correct pickup date."
+      // He was right that he could not: sign_pickup was the only writer and it
+      // refuses any deal past `pickup`.
+      //
+      // Corp-only. The pickup date is what the whole deal is dated by -- it is
+      // on the client's quote, it is how they identify it, and it drives the
+      // stage clock -- so it is not a field a store corrects quietly.
+      if (action === "update_pickup_date") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can change a collection date." }, 403);
+        }
+        // Not while the deal is still at `pickup`: the sign-off form is asking
+        // for this date right now and would overwrite whatever this set. The UI
+        // hides the pencil there for the same reason.
+        if (deal.stage === "pickup") {
+          return jsonResponse({ success: false, error: "This pickup hasn't been signed off yet — set the date on the sign-off screen." }, 409);
+        }
+        const when = isoDate(body.pickup_date, "Pickup date", true);
+        // No future collections, matching the max= on the pickup form. A date
+        // ahead of today is always a typo, and it would sort the deal to the
+        // top of every list it appears in.
+        if (when && when > todayCentral()) {
+          return jsonResponse({ success: false, error: "A collection date can't be in the future." }, 400);
+        }
+        const who = str(body.user, 120, "User");
+        const { error } = await supabase.from("b2b_deals").update({
+          pickup_date: when,
+          // Recorded in the internal note rather than in a new audit column:
+          // this should be rare, and the note is already the place the next
+          // person reads before sending the quote the date prints on.
+          internal_note: [
+            deal.internal_note || "",
+            `[${todayCentral()}] Collection date corrected to ${when}${
+              deal.pickup_date ? ` (was ${deal.pickup_date})` : ""}${who ? ` by ${who}` : ""}.`,
+          ].filter(Boolean).join("\n").slice(0, 4000),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true, pickup_date: when });
+      }
+
+      // set_quote_sent { id, quote_sent_at, user }
+      //
+      // Paul, 2026-08-22 and again 2026-08-27: "Need a way to manually indicate
+      // that I've sent the quote to the customer and when... are you going to
+      // still add a button that shows I sent the quote to the customer and
+      // awaiting their approval?"
+      //
+      // send_quote already records this when the mailto draft is opened, and the
+      // `quote` stage already means "sent, waiting on the client". What was
+      // missing is the case Paul actually hit: he sent Loch Lloyd by hand,
+      // outside the tool, so nothing recorded it and the date was wrong when it
+      // finally was. This sets the date without pretending to have sent an email
+      // and without touching quote_send_count, which counts OUR sends.
+      if (action === "set_quote_sent") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (!["review", "quote"].includes(deal.stage)) {
+          return jsonResponse({ success: false, error: "Only a priced deal can be marked as sent." }, 409);
+        }
+        // Leaving `review` is the approval, exactly as it is for send_quote --
+        // marking a quote sent by hand must not be a way around that gate.
+        if (deal.stage === "review") {
+          if (!mayApprove(body)) {
+            return jsonResponse({ success: false, error: "Only corp can mark a quote as sent." }, 403);
+          }
+        }
+        const when = isoDate(body.quote_sent_at, "Sent date", true);
+        if (when && when > todayCentral()) {
+          return jsonResponse({ success: false, error: "A quote can't have been sent in the future." }, 400);
+        }
+        const { error } = await supabase.from("b2b_deals").update({
+          stage: "quote",
+          // Dated, not timestamped-now: the point is to record the day it
+          // actually went out, which may be a week ago.
+          quote_sent_at: `${when}T12:00:00Z`,
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true, quote_sent_at: when });
+      }
+
+      // set_notes { id, quote_note, internal_note }
+      //
+      // Haydn, 2026-09-02. Editable through pricing, review and quote -- the
+      // same window the line items are open for (OPEN_STAGES), because both are
+      // "things about the quote that is still being settled". Not gated to corp:
+      // whoever prices the deal is exactly who knows what Paul needs told.
+      if (action === "set_notes") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (!OPEN_STAGES.includes(deal.stage)) {
+          return jsonResponse({ success: false, error: "This deal's quote is already settled." }, 409);
+        }
+        const { error } = await supabase.from("b2b_deals").update({
+          quote_note: str(body.quote_note, 2000, "Quote note"),
+          internal_note: str(body.internal_note, 4000, "Internal note"),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true });
+      }
+
+      // mark_paid { id, paid_amount, paid_at, user } / unmark with paid_at null
+      //
+      // Paul, 2026-08-22: he wanted to see "a section payment has been made to
+      // customer" and there was no payment concept in B2B at all.
+      //
+      // Corp-only, and only after acceptance -- the DB constraint says the same
+      // thing, but a 403 explains itself and a constraint violation does not.
+      // Defaults to the accepted net offer, which is what we actually owe.
+      if (action === "mark_paid") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can record a payment." }, 403);
+        }
+        if (!deal.accepted_at) {
+          return jsonResponse({ success: false, error: "This deal hasn't been accepted, so there is nothing owed yet." }, 409);
+        }
+        // Explicitly clearing it: somebody recorded a payment on the wrong deal.
+        if (body.paid_at === null) {
+          const { error } = await supabase.from("b2b_deals")
+            .update({ paid_at: null, paid_by: null, paid_amount: null }).eq("id", deal.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          await broadcastChange("b2b", dealStore(deal));
+          return jsonResponse({ success: true, paid_at: null });
+        }
+        const when = isoDate(body.paid_at, "Payment date", true);
+        if (when && when > todayCentral()) {
+          return jsonResponse({ success: false, error: "A payment can't be dated in the future." }, 400);
+        }
+        const who = str(body.user, 120, "User", true);
+        const amt = money(body.paid_amount, "Amount paid");
+        const { error } = await supabase.from("b2b_deals").update({
+          paid_at: `${when}T12:00:00Z`,
+          paid_by: who,
+          paid_amount: amt,
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true, paid_at: when, paid_amount: amt });
+      }
+
+      // start_pricing { id, user }
+      //
+      // Nick, 2026-09-03: tell "actively pricing" from "awaiting pricing".
+      // Stamped the first time somebody opens the pricing sheet on a deal, and
+      // never overwritten -- the question is when work STARTED, so the first
+      // answer is the true one and a second visit must not reset the clock.
+      // Idempotent by design: the client fires it on every open.
+      if (action === "start_pricing") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pricing" || deal.pricing_started_at) {
+          return jsonResponse({ success: true, pricing_started_at: deal.pricing_started_at || null });
+        }
+        const { error } = await supabase.from("b2b_deals").update({
+          pricing_started_at: new Date().toISOString(),
+          pricing_started_by: str(body.user, 120, "User"),
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", dealStore(deal));
@@ -1809,16 +2167,32 @@ Deno.serve(async (req: Request) => {
         // A data URI, same shape the signature pad posts. Refused rather than
         // coerced if the type is not on the allowlist: the bucket would reject
         // it anyway, later and far less helpfully.
+        // The file is now mandatory. Pasted body text was the other half of the
+        // old "one or the other" rule and is no longer a route on its own: the
+        // point of the change is that the MESSAGE is what gets kept, headers and
+        // all, rather than a transcription of it.
         const raw = String(body.file || "");
-        if (raw) {
-          const m = raw.match(/^data:([a-z0-9.+\/-]+);base64,([A-Za-z0-9+\/=]+)$/i);
+        if (!raw) {
+          return jsonResponse({
+            success: false,
+            error: "Attach the client's email itself — drop the .msg or .eml onto the deal.",
+          }, 400);
+        }
+        {
+          // The data URI's own type is unreliable for this: a .msg dragged out of
+          // Outlook reports an empty or octet-stream type unless Windows has the
+          // extension registered, so the browser writes that into the URI. The
+          // client derives the real type from the filename and sends it as
+          // file_mime; prefer it, and fall back to the URI for a saved .eml.
+          const m = raw.match(/^data:([a-z0-9.+\/-]*);base64,([A-Za-z0-9+\/=]+)$/i);
           if (!m) return jsonResponse({ success: false, error: "That file didn't arrive in a readable form." }, 400);
-          mime = m[1].toLowerCase();
+          const claimed = String(body.file_mime || "").toLowerCase().trim();
+          mime = PROOF_MIMES[claimed] ? claimed : m[1].toLowerCase();
           const ext = PROOF_MIMES[mime];
           if (!ext) {
             return jsonResponse({
               success: false,
-              error: `${mime} isn't a file type we can store — use a PNG, JPEG, PDF or saved email.`,
+              error: "Only the client's email can be attached — a .msg from Outlook or a saved .eml.",
             }, 400);
           }
           let bytes: Uint8Array;
@@ -1841,10 +2215,6 @@ Deno.serve(async (req: Request) => {
           const up = await supabase.storage.from("b2b-proofs")
             .upload(filePath, bytes, { contentType: mime, upsert: false });
           if (up.error) return jsonResponse({ success: false, error: up.error.message }, 500);
-        }
-
-        if (!filePath && !bodyText) {
-          throw new Invalid("Paste the email or attach a file — one or the other.");
         }
 
         const { data, error } = await supabase.from("b2b_approval_proofs").insert({
@@ -1885,29 +2255,26 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
-      // Accepting without evidence, on the record. Same authority that accepts
-      // the quote, because it is the same decision: this is the sentence that
-      // stands in for the client's email if it is ever questioned.
+      // RETIRED 2026-09-08. Accepting without the client's email on record is no
+      // longer a route: Nick asked for the dropped message to be the only way
+      // proof of acceptance is kept, and was told plainly that this closes the
+      // phone-approval path. He chose it knowing that.
+      //
+      // The action is kept, refusing, rather than deleted -- a tab left open
+      // since before this shipped would otherwise get "Unknown action", which
+      // explains nothing. The reply says what to do instead, because there IS a
+      // way through: send the client a note confirming what they agreed to, and
+      // drop that message on the deal. Then the record holds an email either way.
+      //
+      // approval_waived_by / _reason stay on the tables and still read out in the
+      // panel: deals waived before this are a real part of the history.
       if (action === "waive_approval") {
-        const dealId = str(body.deal_id, 64, "Deal");
-        const prevalId = str(body.preval_id, 64, "Evaluation");
-        if (!!dealId === !!prevalId) {
-          throw new Invalid("A waiver applies to exactly one deal or one evaluation.");
-        }
-        const role = String(body.role || "").toLowerCase().trim();
-        if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can accept without the client's approval on record." }, 403);
-        }
-        const patch = {
-          approval_waived_by: str(body.user, 120, "User") || "Unknown",
-          approval_waived_reason: str(body.reason, 1000, "A reason for going without written approval", true),
-        };
-        const { error } = dealId
-          ? await supabase.from("b2b_deals").update(patch).eq("id", dealId)
-          : await supabase.from("b2b_prevals").update(patch).eq("id", prevalId!);
-        if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", null, { deal: dealId, by: str(body.user, 80, "User") });
-        return jsonResponse({ success: true });
+        return jsonResponse({
+          success: false,
+          error: "Accepting without the client's approval on file isn't possible any more. "
+            + "If they agreed by phone, email them confirming what they agreed to, then drag "
+            + "that message onto the deal — that is the record.",
+        }, 409);
       }
 
       // ================================================= deletion requests
@@ -2045,17 +2412,48 @@ Deno.serve(async (req: Request) => {
     // Streamed through here rather than handed out as a signed URL, for the same
     // reason the signature is: a signed URL keeps working after it leaves the
     // page, and this is evidence about a named client.
+    //
+    // IT COMES BACK WITH A FILENAME, and that is not cosmetic. Without a
+    // Content-Disposition the browser names the download after the URL path --
+    // so a .msg saved as "b2b-deals", with no extension, which Windows cannot
+    // open with anything. Nick, 2026-09-10: "It saves it as just a file. What
+    // would I open it with". Named properly it lands as "<subject>.msg" and
+    // double-clicks straight into Outlook, which is the entire point of keeping
+    // the original message rather than a transcription of it.
     const proofFile = url.searchParams.get("proof_file");
     if (proofFile) {
       const { data: pr } = await supabase.from("b2b_approval_proofs")
-        .select("file_path, mime").eq("id", proofFile).maybeSingle();
+        .select("file_path, mime, label, from_addr, sent_on").eq("id", proofFile).maybeSingle();
       if (!pr?.file_path) return jsonResponse({ success: false, error: "That entry has no attachment." }, 404);
       const dl = await supabase.storage.from("b2b-proofs").download(pr.file_path);
       if (dl.error || !dl.data) return jsonResponse({ success: false, error: "Couldn't read that attachment." }, 500);
+
+      // The extension has to come from the stored MIME, not from the label: the
+      // label is the subject line and routinely ends in something that looks
+      // like an extension ("Re: pricing v2.1", "invoice.pdf?").
+      const ext = PROOF_MIMES[String(pr.mime || "")]
+        || String(pr.file_path).split(".").pop()
+        || "bin";
+      // Windows refuses \ / : * ? " < > | in a filename, and a Content-Disposition
+      // header cannot carry a raw newline or quote at all.
+      const base = String(pr.label || "client email")
+        .replace(/[\\/:*?"<>|\r\n]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 80) || "client email";
+      const name = `${base}.${ext}`;
+      // Two spellings on purpose. filename= must be ASCII, so it carries a
+      // stripped version for anything old or fussy; filename*= carries the real
+      // one, percent-encoded, and every current browser prefers it. A subject
+      // with an accent or an em dash in it would otherwise arrive mangled or
+      // truncated at the first byte the header cannot hold.
+      const ascii = name.replace(/[^\x20-\x7E]/g, "_");
       return new Response(await dl.data.arrayBuffer(), {
         headers: {
           ...corsHeaders,
           "Content-Type": pr.mime || "application/octet-stream",
+          "Content-Disposition":
+            `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
           "Cache-Control": "private, max-age=60",
         },
       });

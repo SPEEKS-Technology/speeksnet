@@ -401,6 +401,62 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, settings: data });
       }
 
+      // Feedback from the B2B tab, straight to Nick. Nick, 2026-09-10: "a button
+      // at the top next to the header thats pretty prominent that allows users to
+      // submit feedback, no category just a subject line and free form text".
+      //
+      // NO CATEGORY, on purpose. The idea form already asks people to classify
+      // what they are reporting, and picking a category is a decision that stops
+      // some of them writing anything at all. A subject line does the same job
+      // and takes no thought.
+      //
+      // It lives HERE rather than in b2b-deals because this function owns the
+      // mail path -- sendEmail() falls back from the Gmail relay to Resend, and
+      // the keys for both are on this function. Duplicating that into b2b-deals
+      // would be two send paths to keep in step.
+      if (action === "send_feedback") {
+        const subject = str(body.subject, 200, "Subject", true)!;
+        const message = str(body.message, 20000, "Feedback", true)!;
+        const who = str(body.user, 120, "User") || "Unknown";
+        const role = str(body.role, 60, "Role") || "";
+        const view = str(body.view, 60, "View") || "";
+
+        // WHO SENT IT is carried in the body, not as a reply-to: this app has no
+        // real identity, only a display name out of sessionStorage, so a
+        // reply-to would be inventing an address. Nick replies through whatever
+        // channel he already has for that person.
+        const html = `<div style="font:14px/1.55 -apple-system,'Segoe UI',Roboto,sans-serif;color:#1a1c1e">`
+          + `<p style="margin:0 0 4px;font-size:12px;font-weight:700;letter-spacing:.06em;`
+          + `text-transform:uppercase;color:#6b7280">B2B feedback</p>`
+          + `<h2 style="margin:0 0 14px;font-size:18px;font-weight:750">${esc(subject)}</h2>`
+          // pre-wrap, because this is free-form text somebody typed into a
+          // textarea and their paragraphs and line breaks are part of what they
+          // said. Collapsing them the way HTML does by default turns a list of
+          // three problems into one run-on sentence.
+          + `<div style="white-space:pre-wrap;padding:14px 16px;border:1px solid #d8dee4;`
+          + `border-radius:10px;background:#f8f9f8">${esc(message)}</div>`
+          + `<p style="margin:16px 0 0;font-size:12px;color:#6b7280">`
+          + `From <b>${esc(who)}</b>${role ? ` · ${esc(role)}` : ""}`
+          + `${view ? ` · on the ${esc(view)} view` : ""}<br>`
+          + `Sent ${esc(new Date().toISOString().slice(0, 16).replace("T", " "))} UTC`
+          + `</p></div>`;
+
+        const out = await sendEmail(
+          ["nickhett707@gmail.com"],
+          `SPEEKS B2B feedback — ${subject}`,
+          html,
+        );
+        if (!out.ok) {
+          // The relay's own words. When this fails it is a missing key or a
+          // rejected sender, and the message that says which is the useful one.
+          return jsonResponse({
+            success: false,
+            error: `That didn't send: ${out.body || out.status}`,
+          }, 502);
+        }
+        return jsonResponse({ success: true });
+      }
+
       // Called by b2b-deals when a deal reaches the quote stage, not by a
       // browser -- hence the shared secret rather than a role check.
       if (action === "notify_quote_ready") {

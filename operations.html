@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260908a">
+  <link rel="stylesheet" href="styles.css?v=20260916a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260908a" defer></script>
+  <script src="speeks.js?v=20260916a" defer></script>
 </head>
 <body class="preload">
 
@@ -768,16 +768,16 @@
                   </div>
               </div>
               <div class="cb-head-controls">
-                  <div class="mb-view-toggle b2b-view-toggle">
-                      <button id="b2bViewQueueBtn" class="mb-view-btn active" onclick="b2bSetView('queue')"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Needs You<span class="b2b-pip" id="b2bQueuePip" style="display:none;">0</span></button>
-                      <button id="b2bViewPipelineBtn" class="mb-view-btn" onclick="b2bSetView('pipeline')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="12" rx="1"/></svg>Pipeline</button>
-                      <button id="b2bViewFinishedBtn" class="mb-view-btn" onclick="b2bSetView('finished')"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Completed</button>
+                  <div class="mb-view-toggle b2b-view-toggle" role="tablist" aria-label="B2B views">
+                      <button id="b2bViewQueueBtn" class="mb-view-btn active" role="tab" aria-selected="false" onclick="b2bSetView('queue')"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Needs You<span class="b2b-pip" id="b2bQueuePip" style="display:none;">0</span></button>
+                      <button id="b2bViewPipelineBtn" class="mb-view-btn" role="tab" aria-selected="false" onclick="b2bSetView('pipeline')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="12" rx="1"/></svg>Pipeline</button>
+                      <button id="b2bViewFinishedBtn" class="mb-view-btn" role="tab" aria-selected="false" onclick="b2bSetView('finished')"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Completed</button>
                       <!-- Evaluations: pricing a client's list before we collect it.
                            Same audience as raising a deal, since the enquiry lands on
                            whoever picks up the phone -- _b2bCanPreval() is the real gate. -->
-                      <button id="b2bViewPrevalsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" onclick="b2bSetView('prevals')"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Evaluations<span class="b2b-pip" id="b2bPrevalPip" style="display:none;">0</span></button>
-                      <button id="b2bViewClientsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd" onclick="b2bSetView('clients')"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clients</button>
-                      <button id="b2bViewOverviewBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo" onclick="b2bSetView('overview')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Overview</button>
+                      <button id="b2bViewPrevalsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" role="tab" aria-selected="false" onclick="b2bSetView('prevals')"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Evaluations<span class="b2b-pip" id="b2bPrevalPip" style="display:none;">0</span></button>
+                      <button id="b2bViewClientsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-multistore-manager role-assistant-manager" role="tab" aria-selected="false" onclick="b2bSetView('clients')"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clients</button>
+                      <button id="b2bViewOverviewBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo" role="tab" aria-selected="false" onclick="b2bSetView('overview')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Overview</button>
                   </div>
                   <span id="b2bScopeChip" class="b2b-scope-chip" style="display:none;"></span>
                   <!-- Deals a store has asked to delete. CORP-only; the red-dot
@@ -818,6 +818,17 @@
                      title="The bench capture tool — download the current version, upload a new one, or roll back to an earlier one">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                       SPEEKS Capture
+                  </button>
+                  <!-- FEEDBACK, and deliberately visible to everyone: no role
+                       classes at all, which _passesRoleClasses() treats as
+                       "show to all". The people who hit the rough edges in B2B
+                       are the ones using it all day, and every round of changes
+                       so far has come through Ethan forwarding an email. -->
+                  <button id="b2bFeedbackBtn" class="b2b-btn b2b-btn-head b2b-btn-feedback"
+                     onclick="b2bFeedbackOpen()"
+                     title="Tell Nick what is wrong, missing or annoying about B2B — goes straight to him">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      Feedback
                   </button>
                   <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-mocd role-manager role-owner-manager role-assistant-manager" onclick="b2bOpenCreate()">＋ New Deal</button>
               </div>
@@ -951,6 +962,38 @@
      client's email is a deliberate, one-at-a-time act, and the deal screen is
      already the densest thing in the app. Body and footer are painted by
      _b2bPaintProofModal(). -->
+<!-- ===== B2B FEEDBACK ===== -->
+<!-- Subject + free text, nothing else. Sends through b2b-outreach, which owns
+     the mail path, straight to Nick. No category on purpose: picking one is a
+     decision that stops some people writing anything at all. -->
+<div class="modal-menu manage-menu" id="b2bFeedbackModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">Send Feedback</span>
+                <span class="tool-head-sub">Goes straight to Nick. Say whatever is wrong, missing or annoying.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content">
+        <label class="form-label-caps" for="b2bFbSubject">Subject</label>
+        <input id="b2bFbSubject" class="form-input-lg" maxlength="200"
+            placeholder="e.g. The serials box is fiddly on a phone">
+        <label class="form-label-caps" for="b2bFbBody" style="margin-top:12px;">What's on your mind</label>
+        <textarea id="b2bFbBody" class="form-input-lg" rows="9" maxlength="20000"
+            placeholder="What happened, what you expected instead, and which deal if it matters. Rough notes are fine — it is more useful sent than polished."></textarea>
+        <p class="b2b-hint" id="b2bFbWho"></p>
+    </div>
+    <div class="manage-footer flex-end">
+        <span class="b2b-msg" id="b2bFbMsg"></span>
+        <button class="kpi-cancel-btn" onclick="closeAllModals()">Cancel</button>
+        <button class="b2b-btn b2b-btn-primary" onclick="b2bFeedbackSend(this)">Send it</button>
+    </div>
+</div>
+
 <div class="modal-menu manage-menu" id="b2bProofModal">
     <div class="modal-header tool-head">
         <div class="tool-head-main">

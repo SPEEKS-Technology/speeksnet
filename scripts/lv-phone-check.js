@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const REPO = 'c:/Users/User/Documents/GitHub/speeksnet';
+const REPO = require('path').resolve(__dirname, '..').replace(/\\/g, '/');
 const OUT = process.env.LV_SHOT_DIR || __dirname;
 const F = JSON.parse(fs.readFileSync(path.join(REPO, 'scripts/lv-month-fixture.json'), 'utf8'));
 const ORDER = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];

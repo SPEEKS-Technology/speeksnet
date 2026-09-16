@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.7.0';
+const APP_VERSION = '3.8.6';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -519,6 +519,20 @@ function closeAllModals() {
     modals.forEach(modal => {
         modal.classList.remove('show');
     });
+
+    // The B2B serials popup lives on document.body, above everything, and holds
+    // typed-but-unposted text -- so it has to come down through the route that
+    // SAVES, and before the deal below it goes. Closing it here rather than
+    // removing it is the whole point: an orphaned popup left typed serials on
+    // screen that were never written.
+    if (typeof _b2bSerialPopOpen === 'function' && _b2bSerialPopOpen()) {
+        b2bSerialsClose();
+    }
+
+    // Same story one layer down: a pricing cell still holding focus has not
+    // fired its `change` yet, so Escape or an overlay click used to discard
+    // whatever was typed in it. Flush before anything is torn down.
+    if (typeof _b2bFlushEdits === 'function') _b2bFlushEdits();
 
     // The B2B pricing detail sheet floats above the deal modal on its own layer,
     // so closing the deal (Escape / overlay) has to take it down too.
@@ -6242,6 +6256,7 @@ function switchWorkspaceTab(name) {
     document.querySelectorAll('.ws-pane').forEach(p => p.classList.remove('active'));
     document.getElementById('ws-tab-' + name)?.classList.add('active');
     document.getElementById('ws-pane-' + name)?.classList.add('active');
+    _wsFitPanels();                        // see the .ws-panel rule
     try { history.replaceState(null, '', 'workspace.html#' + name); } catch (e) {}
 
     if (name === 'brief') {
@@ -6320,11 +6335,49 @@ function initWorkspace() {
 // Mirrors the workspace tab system but keys off .ops-wrap / ops-tab-* / ops-pane-*
 // so initWorkspace() never misfires on this page (and vice versa).
 // ============================================================================
+// Size every visible .ws-panel to the space actually left below it, and write it
+// into --ws-top for the CSS to use. See the .ws-panel rule for why a hardcoded
+// 250px was not good enough: the real offset moves with the page, the role and
+// whether the controls row has wrapped.
+//
+// Measured rather than computed from a list of ancestor heights, because the
+// thing that matters is where the panel actually IS, and getBoundingClientRect
+// already knows. GAP keeps the card off the bottom edge.
+function _wsFitPanels() {
+    const GAP = 16;
+    document.querySelectorAll('.ws-panel').forEach(panel => {
+        // Panes that deliberately flow with the page set height:auto !important
+        // and must not be pinned (Store KPIs, Aging, Variance Replies, …).
+        if (getComputedStyle(panel).height === 'auto') return;
+        if (!panel.offsetParent) return;                    // hidden pane
+        const top = panel.getBoundingClientRect().top + window.scrollY;
+        const docTop = top - window.scrollY;                // viewport-relative
+        panel.style.setProperty('--ws-top', `${Math.max(0, Math.round(docTop)) + GAP}px`);
+    });
+}
+
+// One listener for the page, debounced -- a resize fires continuously while a
+// window is dragged, and re-measuring every frame would thrash layout.
+let _wsFitTimer = null;
+function _wsFitPanelsSoon() {
+    clearTimeout(_wsFitTimer);
+    _wsFitTimer = setTimeout(_wsFitPanels, 80);
+}
+if (typeof window !== 'undefined' && !window.__wsFitBound) {
+    window.__wsFitBound = true;
+    window.addEventListener('resize', _wsFitPanelsSoon);
+    // The controls row wraps as fonts settle, which moves the panel down after
+    // first paint; one late pass catches that without a permanent observer.
+    window.addEventListener('load', () => setTimeout(_wsFitPanels, 60));
+}
+
 function switchOperationsTab(name) {
     document.querySelectorAll('.ws-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.ws-pane').forEach(p => p.classList.remove('active'));
     document.getElementById('ops-tab-' + name)?.classList.add('active');
     document.getElementById('ops-pane-' + name)?.classList.add('active');
+    // The pane only has a measurable position once it is the visible one.
+    _wsFitPanels();
     try { history.replaceState(null, '', 'operations.html#' + name); } catch (e) {}
     // Margin Guide and Customer Call Backs are read-only tools — this tab hook
     // is the ONLY record that anyone ever used them.
@@ -17566,9 +17619,33 @@ function _b2bHasCorpDelegation() {
 }
 function _b2bIsCorp()    { return B2B_CORP_ROLES.includes(_b2bRole()) || _b2bHasCorpDelegation(); }
 function _b2bIsDM()      { return _b2bRole() === 'district manager' || _b2bHasCorpDelegation(); }
-// Accepting a quote is deliberately NOT delegable -- it locks the money.
-function _b2bCanAccept()  { return B2B_ACCEPT_ROLES.includes(_b2bRole()); }
+// Accepting a quote IS delegable, as of 2026-09-08.
+//
+// It used to be role-only, on the reasoning that locking the money in should
+// not travel with a delegation. In practice that made the whole company's B2B
+// approvals wait on one person -- Nick: "The B2B Approvals are limited to just
+// paul... (FOR ALL CORP NOW)". A pipeline where every accepted quote needs one
+// named individual stalls whenever he is unavailable, which is a worse failure
+// than a lent corp hat being used.
+//
+// The safeguard that actually matters is unchanged and is enforced on both
+// sides: _b2bApprovalGate still requires the client's approval on record (an
+// email, a screenshot, or a recorded reason it was given by phone) before
+// anything can be accepted. Who clicks it is now the same question as who can
+// see the deal at all.
+function _b2bCanAccept()  { return _b2bIsCorp(); }
+// The full CRM: contact details, the add/edit form, the outreach cadence.
+// Corp business -- a store prices and lists goods, it never rings the client.
 function _b2bCanClients() { return ['ceo', 'district manager', 'mocd'].includes(_b2bRole()); }
+// Seeing WHICH businesses exist is a different question, and a store needs the
+// answer: it cannot raise an in-store deal against an existing client it cannot
+// find. Ethan, 2026-09-07: "Store managers are not able to see the clients.
+// Please just let them see the clients." So the tab opens to anyone who can
+// raise a deal, and _b2bRenderClients gives a store a read-only directory --
+// acronym, company, deal counts -- rather than the CRM. The server already
+// draws exactly this line: ?clients=1&scope=store returns CLIENT_PICK_COLS and
+// nothing else, so the contact details are not merely hidden, they never arrive.
+function _b2bCanClientDirectory() { return _b2bCanClients() || _b2bIsCorp() || _b2bCanCreate(); }
 // Raising a deal. Corp has always been able to; a store manager can too, and
 // theirs holds at their own store from the moment it exists (see b2bCreateDeal).
 // A store role with no store attached is excluded rather than left to fail at
@@ -17623,9 +17700,32 @@ function _b2bActionFor(deal) {
     if (st === 'completed' || st === 'declined') return null;
     const mine = _b2bMyStores();
 
-    // Employees/trainees may only help price their own store's pickups — no escalation.
+    // Employees/trainees do the bench work at their own store -- pricing AND
+    // listing -- but never the escalations between and after them: no submit for
+    // quoting, no quoting, no accepting, no moving a deal to another store.
+    //
+    // Listing was missing here, and the effect was worse than a hidden button.
+    // With no action for a listing-stage deal, three things followed from this
+    // one line: the deal never appeared in Needs Your Action (it fell through to
+    // Also In Flight), _b2bClickKind returned 'view' so opening it showed the
+    // read-only item table -- a sheet of figures with no scan bar, which is the
+    // "weird sheet" that got reported -- and checkB2BReminders never nudged them
+    // about it. So a deal whose own chip said Listing could not be listed by the
+    // person whose job it is.
+    //
+    // Nothing on the server ever refused them: list_unit, unlist_unit,
+    // recycle_units, un_recycle and complete carry no role gate at all. This was
+    // a client-side gate with no server counterpart, which is why it read as a
+    // Feature Access bug -- granting the B2B tab genuinely did grant everything
+    // except the one screen that mattered.
+    //
+    // mark_wiped stays corp-only, and that one IS enforced server-side: certifying
+    // a data wipe is a claim we make to the client, not bench work. The listing
+    // row already says "Corp records the certification" rather than hiding it.
     if (_b2bIsEmployee()) {
-        return (st === 'pricing' && mine.includes(deal.pricing_store)) ? B2B_ACTIONS.pricing : null;
+        if (st === 'pricing' && mine.includes(deal.pricing_store)) return B2B_ACTIONS.pricing;
+        if (st === 'listing' && mine.includes(deal.listing_store)) return B2B_ACTIONS.listing;
+        return null;
     }
 
     if (st === 'pickup') {
@@ -17669,7 +17769,12 @@ function _b2bClickKind(deal) {
 // screen -- each still confirms first, because both are one-way doors.
 // Anything needing input (a store, a name, prices) is deliberately absent.
 function _b2bQuickAction(d) {
-    if (_b2bIsEmployee()) return null;   // employees never escalate from a card
+    // Employees may finish their own listing work from the card -- completing a
+    // fully-listed deal is the last step of the job, not an escalation past it,
+    // and the server allows it (complete has no role gate, and refuses anyway
+    // while any unit is unaccounted for). Mark Accepted is unaffected: it is
+    // gated on _b2bCanAccept below, which an employee never satisfies.
+    if (_b2bIsEmployee() && d.stage !== 'listing') return null;
     // `quote` means sent. "Mark Accepted" on a deal still at `review` would be
     // recording a decision from a client who has never seen it -- and it would
     // skip the send, leaving no quote on record at all. The server refuses it
@@ -17693,7 +17798,7 @@ async function b2bQuickAccept(id, btn) {
     // not know about evidence yet, which is not the same as a deal having none.
     // Undefined lets it through; zero does not.
     if (d.proof_count !== undefined && !d.approval_waived_by && !Number(d.proof_count)) {
-        return _b2bApprovalGate({ approval_waived_by: null });
+        return _b2bApprovalGate({ approval_waived_by: null }, id, 'deal');
     }
     const msg = `Accept ${d.client?.company || 'this'} quote at ${_b2bMoney(_b2bNetOffer(d), 2)}?\n\n`
         + 'The offers lock in as our cost and the items become inventory to list. This cannot be undone.';
@@ -17741,6 +17846,22 @@ function _b2bLongDate(v) {
     const d = new Date(String(v).length <= 10 ? v + 'T00:00:00' : v);
     return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 }
+// Escape first, THEN linkify -- the pattern only ever matches inside text that
+// has already been made inert, so nothing a client or the bench tool typed can
+// reach the DOM as markup. Used for listing_info, which the capture tool fills
+// with "Screen: ... | Battery: ... | Pricing: <eBay research URL>": the whole
+// point of that field for the lister is that the link is clickable.
+function _b2bNoteHtml(s) {
+    return escapeHtml(String(s || '')).replace(
+        /https?:\/\/[^\s<]+/g,
+        u => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
+}
+// "1 line", not "1 lines". Two card renderers were spelling this out inline and
+// both got it wrong, which is the usual argument for a helper.
+function _b2bLineCount(deal) {
+    const n = Number(deal?.line_count) || 0;
+    return `${n} line${n === 1 ? '' : 's'}`;
+}
 function _b2bDaysIn(deal) {
     const t = deal.stage_changed_at || deal.updated_at || deal.created_at;
     if (!t) return 0;
@@ -17756,8 +17877,17 @@ function _b2bAgeTone(days) { return days >= 7 ? 'crit' : days >= 4 ? 'warn' : 'o
 // change one noun. The chip says which one it is; everything else stays shared.
 function _b2bStageChip(stage, deal) {
     const s = B2B_STAGE[stage] || { label: stage, tone: 'neu' };
-    const label = stage === 'pickup' ? _b2bIntake(deal).stage : s.label;
-    return `<span class="b2b-chip b2b-chip-${s.tone}">${escapeHtml(label)}</span>`;
+    // `pricing` covers two situations worth telling apart on the board: nobody
+    // has opened it yet, and somebody is part-way through. Nick asked for a
+    // stage for this (2026-09-03); it is a timestamp inside the existing stage
+    // instead, because the stage list is a rank-ordered state machine whose
+    // CHECK constraints all key off the rank -- see the 0067 migration. The
+    // chip is where the distinction actually needed to show up.
+    const label = stage === 'pickup' ? _b2bIntake(deal).stage
+        : stage === 'pricing' ? (deal?.pricing_started_at ? 'Pricing' : 'Awaiting Pricing')
+        : s.label;
+    const tone = stage === 'pricing' && !deal?.pricing_started_at ? 'neu' : s.tone;
+    return `<span class="b2b-chip b2b-chip-${tone}">${escapeHtml(label)}</span>`;
 }
 function _b2bStoreTag(code) {
     if (!code) return '<span class="b2b-store b2b-store-none">Unassigned</span>';
@@ -17826,7 +17956,15 @@ async function _b2bSend(payload) {
     const res = await fetch(B2B_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ ...payload, role: _b2bRole(), user: _b2bUser() })
+        // corp_delegated rides on every call so the server's ACCEPT_ROLES gate
+        // can honour a lent corp hat without each caller remembering to send
+        // it. Same trust model as `role` itself, which this app has always taken
+        // from the browser (see the header in b2b-deals) -- it is not a security
+        // boundary, it is the client telling the server which rule to apply.
+        body: JSON.stringify({
+            ...payload, role: _b2bRole(), user: _b2bUser(),
+            corp_delegated: _b2bHasCorpDelegation(),
+        })
     });
     const out = await res.json().catch(() => ({}));
     if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
@@ -18621,6 +18759,13 @@ async function _b2bSyncOpenDeal(ping) {
     // the signature appears without anybody refreshing.
     if (deal.stage === 'pickup' && document.getElementById('b2bSignQR')) {
         if (ping && ping.deal && ping.deal !== deal.id) return;
+        // Capture BEFORE the reopen. This path re-renders the pickup screen from
+        // a poll or a realtime ping, and nothing on that screen is saved yet --
+        // without this the description, client name and date the operator has
+        // been typing are simply gone, which is half of the "print label wiped
+        // the fields" report (the poll skips while the tab is hidden, so it
+        // lands the moment you come back from the print window).
+        _b2bCapturePickupDraft(deal.id);
         await b2bRefresh();
         const fresh = _b2bDealById(deal.id);
         if (fresh && (fresh.signature_path || fresh.signature_skipped_by)) b2bOpenDeal('pickup', deal.id);
@@ -18703,6 +18848,16 @@ async function _b2bSyncOpenDeal(ping) {
         // someone typed in the panel used to overwrite it silently.
         const rowEl = document.getElementById(`b2bPline-${local.id}`);
         if (rowEl && active && rowEl.contains(active)) return;
+        // ...and while its serials popup is open. That popup is appended to
+        // document.body, NOT to the row, so rowEl.contains(active) is false the
+        // whole time someone is typing serials into it -- and `serials` is in the
+        // blind-overwrite list below. That is the "serial modal is not saving
+        // correctly sometimes" report: a poll lands mid-entry, replaces
+        // local.serials with the stale server value, the popup's textarea is not
+        // repainted so nobody sees it, and the save on close then posts the old
+        // value back over the new one. Intermittent because it needs the 60s
+        // poll (or someone else's write) to land inside that window.
+        if (_b2bSerialPopId && _b2bSerialPopId === local.id) return;
         _B2B_SYNC_FIELDS.forEach(f => {
             if (String(remote[f] ?? '') === String(local[f] ?? '')) return;
             const cell = _b2bCellFor(local.id, f);
@@ -18725,7 +18880,9 @@ async function _b2bSyncOpenDeal(ping) {
         //
         // The panel fields (serials, staff_notes, gpu, battery_health) stay here
         // because they have no .b2b-pcell to patch, and they are safe now only
-        // because the whole row is skipped while the cursor is inside it.
+        // because the whole row is skipped while the cursor is inside it -- or,
+        // for serials specifically, while their body-level popup is open for it.
+        // Both guards are above; neither is optional.
         ['serials', 'staff_notes', 'gpu', 'battery_health',
          'wipe_required', 'wipe_fee', 'label_printed_qty',
          'listed_qty', 'recycled_qty', 'wiped_qty'].forEach(f => {
@@ -18747,11 +18904,22 @@ async function _b2bSyncOpenDeal(ping) {
 // --- render controller ----------------------------------------------------
 
 function b2bSetView(view) {
-    if (view === 'clients'  && !_b2bCanClients())  view = 'queue';
+    if (view === 'clients'  && !_b2bCanClientDirectory())  view = 'queue';
     if (view === 'overview' && !_b2bCanOverview()) view = 'queue';
     if (view === 'prevals'  && !_b2bCanPreval())   view = 'queue';
+    const changed = _b2bView !== view;
     _b2bView = view;
     b2bRender();
+    // A new view starts at the top. The scroller kept its offset across a tab
+    // change, so going from a scrolled Completed to Evaluations landed you
+    // mid-pane with that view's own header and "+ New Evaluation" button
+    // scrolled out of sight -- the pane looked like it had no toolbar at all.
+    // Only on an actual change, so a repaint of the current view (a search
+    // keystroke, a poll) does not yank the page back up under the reader.
+    if (changed) {
+        const body = document.getElementById('b2bBody');
+        if (body) body.scrollTop = 0;
+    }
 }
 
 function b2bSetStoreFilter(code) { _b2bStoreFilter = code; b2bRender(); }
@@ -18759,7 +18927,7 @@ function b2bSetStoreFilter(code) { _b2bStoreFilter = code; b2bRender(); }
 function b2bRender() {
     const body = document.getElementById('b2bBody');
     if (!body) return;
-    if (_b2bView === 'clients'  && !_b2bCanClients())  _b2bView = 'queue';
+    if (_b2bView === 'clients'  && !_b2bCanClientDirectory())  _b2bView = 'queue';
     if (_b2bView === 'overview' && !_b2bCanOverview()) _b2bView = 'queue';
     if (_b2bView === 'prevals'  && !_b2bCanPreval())   _b2bView = 'queue';
 
@@ -18767,11 +18935,21 @@ function b2bRender() {
     const queue  = scoped.filter(d => _b2bActionFor(d));
 
     // Header chrome
-    document.querySelectorAll('.b2b-view-toggle .mb-view-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.b2b-view-toggle .mb-view-btn').forEach(b => {
+        b.classList.remove('active');
+        // The active tab was conveyed by colour and a border only, so a screen
+        // reader had no way to know which view it was on. role="tab" is in the
+        // markup; the state has to be maintained here where it changes.
+        b.setAttribute('aria-selected', 'false');
+    });
     const btn = { queue: 'b2bViewQueueBtn', pipeline: 'b2bViewPipelineBtn', finished: 'b2bViewFinishedBtn',
                   clients: 'b2bViewClientsBtn', overview: 'b2bViewOverviewBtn',
                   prevals: 'b2bViewPrevalsBtn' }[_b2bView];
-    document.getElementById(btn)?.classList.add('active');
+    const activeBtn = document.getElementById(btn);
+    activeBtn?.classList.add('active');
+    activeBtn?.setAttribute('aria-selected', 'true');
+    // Keeps the chosen tab in view once the strip scrolls (see .b2b-view-toggle).
+    try { activeBtn?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
 
     // Evaluations waiting on somebody. Not folded into the Needs You queue: that
     // queue derives ownership from a deal's stage, and an evaluation has no
@@ -18791,14 +18969,23 @@ function b2bRender() {
     }
     const chip = document.getElementById('b2bScopeChip');
     if (chip) {
+        // Reports the scope the role already has -- it is not a switch, and it
+        // used to look exactly like one (see .b2b-scope-chip). Marked up as a
+        // status message so a screen reader announces it as one too, and given
+        // a title that says outright that there is nothing to click.
+        chip.setAttribute('role', 'status');
         if (_b2bIsCorp()) {
             chip.textContent = 'District-wide';
             chip.className = 'b2b-scope-chip b2b-scope-corp';
+            chip.title = 'You see every store’s deals. Set by your role, not a filter.';
             chip.style.display = 'inline-flex';
         } else {
             const mine = _b2bMyStores();
             chip.textContent = mine.join(' · ') || 'No store';
             chip.className = 'b2b-scope-chip';
+            chip.title = mine.length
+                ? `You see deals held at ${mine.join(' and ')}. Set by your role, not a filter.`
+                : 'No store is set on your profile, so there are no deals in scope.';
             chip.style.display = mine.length ? 'inline-flex' : 'none';
         }
     }
@@ -18942,7 +19129,7 @@ function _b2bRenderPipeline(scoped) {
                 <div class="b2b-card-co">${escapeHtml(d.client?.company || '')}</div>
                 ${bar}
                 <div class="b2b-card-foot">
-                    <span>${d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : `${d.line_count || 0} lines`}</span>
+                    <span>${d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : _b2bLineCount(d)}</span>
                     <span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d</span>
                 </div>
                 ${act ? '<span class="b2b-card-pill">Needs you</span>' : ''}
@@ -19039,10 +19226,10 @@ function _b2bRenderFinished(scoped) {
 
     const tiles = `
         <div class="b2b-tiles">
-            <div class="b2b-tile"><span class="b2b-tile-k">Completed</span><span class="b2b-tile-v">${won.length}</span><span class="b2b-tile-c">deals closed out</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Completed</span><span class="b2b-tile-v">${won.length}</span><span class="b2b-tile-c">deal${won.length === 1 ? "" : "s"} closed out</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Cost Locked In</span><span class="b2b-tile-v">${_b2bMoney(won.reduce((s, d) => s + _b2bNetCost(d), 0))}</span><span class="b2b-tile-c">across completed deals</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Units Handled</span><span class="b2b-tile-v">${won.reduce((n, d) => n + (Number(d.listed_units) || 0) + (Number(d.recycled_units) || 0), 0)}</span><span class="b2b-tile-c">listed or recycled</span></div>
-            <div class="b2b-tile ${lost.length ? 'warn' : ''}"><span class="b2b-tile-k">Declined</span><span class="b2b-tile-v">${lost.length}</span><span class="b2b-tile-c">deals that fell through</span></div>
+            <div class="b2b-tile ${lost.length ? 'warn' : ''}"><span class="b2b-tile-k">Declined</span><span class="b2b-tile-v">${lost.length}</span><span class="b2b-tile-c">deal${lost.length === 1 ? "" : "s"} that fell through</span></div>
         </div>`;
 
     // The search box is written once and only the rows below it repaint, so
@@ -19055,7 +19242,7 @@ function _b2bRenderFinished(scoped) {
                 <option value="completed" ${_b2bFinOutcome === 'completed' ? 'selected' : ''}>Completed${won.length ? ` (${won.length})` : ''}</option>
                 <option value="declined"  ${_b2bFinOutcome === 'declined'  ? 'selected' : ''}>Declined${lost.length ? ` (${lost.length})` : ''}</option>
             </select>
-            <input id="b2bFinSearch" class="b2b-filter-search" autocomplete="off" placeholder="Search ref or client…"
+            <input id="b2bFinSearch" class="b2b-filter-search" autocomplete="off" aria-label="Search finished deals by reference or client" placeholder="Search ref or client…"
                 value="${escapeHtml(_b2bFinQuery)}" oninput="_b2bPaintFinished()">
         </div>`;
 
@@ -19064,11 +19251,21 @@ function _b2bRenderFinished(scoped) {
     // numbers at them would count stores they can't see. They get the offer
     // without the arithmetic.
     const exact  = _b2bIsCorp() || _b2bMyStores().length === 1;
-    const more   = B2B_ARCHIVE_STEPS.some(s => s > _b2bArchiveDepth)
+    // Counted from what is actually on screen, not from meta.archive_shown.
+    // That figure comes off the server and rendered as "Showing the 0 most
+    // recently finished of 3." with three rows plainly visible -- which reads
+    // to a user like the data is broken. What is on the page is a fact this
+    // side of the wire, so it is the honest number under any server version.
+    const shown = all.length;
+    const total = Math.max(shown, Number(_b2bMeta?.archive_total) || shown);
+    // Nothing left to fetch = no note and no link. "Load more" offering to load
+    // a fourth deal out of three is the same class of error.
+    const holdingBack = total > shown && B2B_ARCHIVE_STEPS.some(s => s > _b2bArchiveDepth);
+    const more   = holdingBack
         ? ' <button class="b2b-linkbtn" onclick="b2bLoadDeeperArchive(this)">Load more</button>' : '';
-    const deeper = _b2bMeta?.archive_truncated
+    const deeper = (total > shown)
         ? `<div class="b2b-archive-note">${exact
-            ? `Showing the ${_b2bMeta.archive_shown} most recently finished of ${_b2bMeta.archive_total}.`
+            ? `Showing the ${shown} most recently finished of ${total}.`
             : 'Older finished deals are not loaded yet.'}${more}</div>`
         : '';
 
@@ -19109,6 +19306,14 @@ async function b2bLoadDeeperArchive(btn) {
 const _b2bClientOpen = new Set();
 
 function _b2bRenderClients() {
+    // A store gets the directory, not the CRM. Rendered separately rather than
+    // by hiding columns in the corp table: the store payload is CLIENT_PICK_COLS
+    // (id, company, acronym, deal_count, open_count) and nothing else, so every
+    // contact cell would be an em dash and every Edit button a request the
+    // server would refuse. Showing a short, honest table is better than showing
+    // the full one with the middle knocked out.
+    if (!_b2bCanClients() && !_b2bIsCorp()) return _b2bRenderClientDirectory();
+
     const editing = _b2bEditingClient ? _b2bClients.find(c => c.id === _b2bEditingClient) : null;
     const rows = _b2bClients.length ? _b2bClients.map(c => {
         const open = _b2bClientOpen.has(c.id);
@@ -19120,7 +19325,7 @@ function _b2bRenderClients() {
             <td><b>${escapeHtml(c.company)}</b>${c.notes ? `<div class="b2b-doc-sub">${escapeHtml(c.notes)}</div>` : ''}</td>
             <td>${escapeHtml(c.contact || '—')}</td>
             <td>${escapeHtml(c.contact_email || '—')}</td>
-            <td>${escapeHtml(c.contact_phone || '—')}</td>
+            <td>${_b2bPhoneHtml(c.contact_phone)}</td>
             <td class="c">${c.open_count ? `<span class="b2b-chip b2b-chip-info">${c.open_count} open</span> ` : ''}${c.deal_count || 0}</td>
             <td class="r b2b-rowacts">
                 <button class="b2b-mini" onclick="event.stopPropagation();b2bEditClient('${c.id}')">Edit</button>
@@ -19141,20 +19346,27 @@ function _b2bRenderClients() {
         <div class="b2b-sec">
             <div class="b2b-sec-h"><span>${editing ? 'Edit Client' : 'Add A Client'}</span></div>
             <div class="b2b-cform">
+                <!-- label for= on every field. The caps labels were rendered
+                     but never associated, so a screen reader announced six
+                     unlabelled text boxes, and clicking a label did not focus
+                     its input. Contact and Email were also the only two fields
+                     with no placeholder, which made them look like a different
+                     kind of field from their neighbours. -->
                 <div class="b2b-grid2">
-                    <div><label class="form-label-caps">Company *</label>
+                    <div><label class="form-label-caps" for="b2bCfCompany">Company *</label>
                         <input id="b2bCfCompany" class="form-input-lg" value="${escapeHtml(editing?.company || '')}" placeholder="Acme Corp"></div>
-                    <div><label class="form-label-caps">Acronym *</label>
+                    <div><label class="form-label-caps" for="b2bCfAcronym">Acronym *</label>
                         <input id="b2bCfAcronym" class="form-input-lg b2b-mono" maxlength="6" value="${escapeHtml(editing?.acronym || '')}" placeholder="ACM" oninput="this.value=this.value.toUpperCase()"></div>
-                    <div><label class="form-label-caps">Contact</label>
-                        <input id="b2bCfContact" class="form-input-lg" value="${escapeHtml(editing?.contact || '')}"></div>
-                    <div><label class="form-label-caps">Email</label>
-                        <input id="b2bCfEmail" class="form-input-lg" value="${escapeHtml(editing?.contact_email || '')}"></div>
-                    <div><label class="form-label-caps">Phone</label>
+                    <div><label class="form-label-caps" for="b2bCfContact">Contact</label>
+                        <input id="b2bCfContact" class="form-input-lg" value="${escapeHtml(editing?.contact || '')}" placeholder="Dana Reyes"></div>
+                    <div><label class="form-label-caps" for="b2bCfEmail">Email</label>
+                        <input id="b2bCfEmail" class="form-input-lg" type="email" inputmode="email" autocomplete="off"
+                            value="${escapeHtml(editing?.contact_email || '')}" placeholder="dana@acme.com"></div>
+                    <div><label class="form-label-caps" for="b2bCfPhone">Phone</label>
                         <input id="b2bCfPhone" class="form-input-lg" type="tel" inputmode="tel" maxlength="20"
                             value="${escapeHtml(editing?.contact_phone || '')}" placeholder="(816) 555-0142"
                             oninput="_b2bPhoneMask(this)"></div>
-                    <div><label class="form-label-caps">Notes</label>
+                    <div><label class="form-label-caps" for="b2bCfNotes">Notes</label>
                         <input id="b2bCfNotes" class="form-input-lg" value="${escapeHtml(editing?.notes || '')}" placeholder="Anything worth remembering"></div>
                 </div>
                 <p class="b2b-hint">The acronym leads every SKU printed for this client, so it locks once they have a quoted deal.</p>
@@ -19163,6 +19375,37 @@ function _b2bRenderClients() {
                     <button class="b2b-btn b2b-btn-primary" onclick="b2bSaveClient()">${editing ? 'Save Changes' : 'Add Client'}</button>
                 </div>
             </div>
+        </div>`;
+}
+
+// The store's view of the client list: which businesses exist, their acronym
+// (which leads every SKU printed for them, so it is the thing a store actually
+// recognises on a pallet), and how much work is open. Read-only by construction
+// -- no drawer, no edit, no delete, and no contact details to leak.
+function _b2bRenderClientDirectory() {
+    const mine = _b2bMyStores();
+    const rows = _b2bClients.length ? _b2bClients.map(c => `
+        <tr>
+            <td><span class="b2b-mono b2b-acr">${escapeHtml(c.acronym || '')}</span></td>
+            <td><b>${escapeHtml(c.company || '')}</b></td>
+            <td class="c">${c.open_count ? `<span class="b2b-chip b2b-chip-info">${c.open_count} open</span>` : '<span class="b2b-f-off">—</span>'}</td>
+            <td class="c">${c.deal_count || 0}</td>
+        </tr>`).join('')
+        : '<tr><td colspan="4" class="b2b-doc-empty">No clients on record yet.</td></tr>';
+
+    return `
+        <div class="b2b-sec">
+            <div class="b2b-sec-h"><span>Clients</span><span class="b2b-sec-n">${_b2bClients.length}</span></div>
+            <table class="cb-table b2b-ctable">
+                <thead><tr><th>Acronym</th><th>Company</th><th class="c">Open</th><th class="c">Deals</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+            <p class="b2b-hint" style="padding:0 14px 12px;">
+                Every business on record, so you can raise a walk-in against one that already
+                exists${mine.length ? ` at ${escapeHtml(mine.join(' / '))}` : ''} instead of creating a duplicate.
+                Counts are district-wide. Contact details and the outreach history are corp's —
+                ask a DM or the CEO if you need to reach someone.
+            </p>
         </div>`;
 }
 
@@ -19320,20 +19563,34 @@ function _b2bStatDerive(o) {
 function _b2bDealStatRaw(items, deal) {
     const toList = !!(deal && deal.accepted_at) && deal.stage !== 'completed';
     const o = { items_purchased: 0, value_purchased: 0, cost_purchased: 0,
-                listed_value: 0, todo_value: 0, total_shipping: 0, est_value: 0 };
+                listed_value: 0, todo_value: 0, total_shipping: 0, est_value: 0,
+                recycled_units: 0, recycled_cost: 0 };
     (items || []).forEach(it => {
         const q  = Number(it.quantity) || 0;
         const v  = Number(it.value) || 0;
         const lq = Number(it.listed_qty) || 0;
         const rq = Number(it.recycled_qty) || 0;
+        const unitCost = Number(it.cost != null ? it.cost : it.offer) || 0;
         o.total_shipping += (Number(it.shipping_cost) || 0) * q;
         o.listed_value   += v * lq;
         if (toList) o.todo_value += v * Math.max(0, q - lq - rq);
-        if (!_b2bIsScrap(it)) o.est_value += v * q;            // resale value of listable goods
+        // A unit recycled out of a purchase line will never be listed, so it
+        // carries no resale value -- est_value counts what we can actually sell.
+        // Ethan, 2026-08-21: he recycled 1 of 5 laptops and had to split the cost
+        // across the surviving 4 by hand, because nothing here moved.
+        if (!_b2bIsScrap(it)) o.est_value += v * Math.max(0, q - rq);
         if (_b2bIsBuy(it)) {
             o.items_purchased += q;
             o.value_purchased += v * q;
-            o.cost_purchased  += (Number(it.cost != null ? it.cost : it.offer) || 0) * q;  // what we pay
+            // Still the full quantity: this is what we PAY THE CLIENT, and
+            // scrapping a unit afterwards does not get that money back.
+            o.cost_purchased  += unitCost * q;
+            // What that decision cost, booked separately so it is visible rather
+            // than buried. Margin absorbs it automatically -- est_value drops
+            // while cost does not -- which is the "write it off as a loss"
+            // treatment rather than reallocating it onto the surviving units.
+            o.recycled_units += rq;
+            o.recycled_cost  += unitCost * rq;
         }
     });
     return o;
@@ -19356,6 +19613,8 @@ function _b2bDealStatsInner(items, deal) {
             ${_b2bStatTile('Total Margin', _b2bMoney(margin), 'value − cost − shipping')}
             ${_b2bStatTile('Avg Value / Item', _b2bMoney(avg), 'per purchased item')}
             ${_b2bStatTile('Total Shipping', _b2bMoney(o.total_shipping), 'to move the goods')}
+            ${o.recycled_units ? _b2bStatTile('Recycled-Out Cost', _b2bMoney(o.recycled_cost),
+                `${o.recycled_units} unit${o.recycled_units === 1 ? '' : 's'} paid for, not listable`) : ''}
         </div>`;
 }
 
@@ -19411,7 +19670,7 @@ function _b2bClientDrawer(id) {
             <span class="b2b-mono b2b-cd-ref">${escapeHtml(d.ref)}</span>
             ${_b2bStageChip(d.stage, d)}
             ${_b2bStoreTag(d.listing_store || d.pricing_store)}
-            <span class="b2b-cd-units">${d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : `${d.line_count || 0} lines`}</span>
+            <span class="b2b-cd-units">${d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : _b2bLineCount(d)}</span>
             <span class="b2b-cd-val">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d))
                 : d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : ''}</span>
             <span class="b2b-cd-date">${_b2bDate(d.created_at)}</span>
@@ -19468,6 +19727,99 @@ async function crmLoadSettings() {
             wipe_fee: Number(j.settings.wipe_fee ?? 8),
         };
     } catch (_) { /* keep what we have */ }
+}
+
+
+
+
+// ---------------------------------------------------------------------------
+// B2B FEEDBACK -- straight to Nick, no category
+// ---------------------------------------------------------------------------
+//
+// Nick, 2026-09-10: "a button at the top next to the header thats pretty
+// prominent that allows users to submit feedback, no category just a subject
+// line and free form text".
+//
+// No category is the point. The lightbulb form asks people to classify what
+// they are reporting first, and choosing between "Bug Fix" and "Process
+// Improvement" is a decision that stops some of them writing anything. A
+// subject line does the same job and costs no thought.
+//
+// Every round of B2B changes so far arrived as Ethan forwarding somebody's
+// email, so the button carries NO role classes -- _passesRoleClasses() shows an
+// element with none to everybody, and the people hitting the rough edges are
+// the ones in here all day.
+//
+// It posts to b2b-outreach rather than b2b-deals because that function owns the
+// mail path: sendEmail() falls back from the Gmail relay to Resend and holds the
+// keys for both.
+
+function b2bFeedbackOpen() {
+    const subj = document.getElementById('b2bFbSubject');
+    const body = document.getElementById('b2bFbBody');
+    // Deliberately NOT cleared. If a send fails, or somebody closes the dialog
+    // to go and check which deal it was, throwing away what they typed is the
+    // fastest way to make sure they never bother again.
+    const who = document.getElementById('b2bFbWho');
+    if (who) {
+        who.textContent = `Sent as ${_b2bUser()}`
+            + (_b2bRole() ? ` (${_b2bRole()})` : '')
+            + ` · goes to Nick's inbox, not into a queue.`;
+    }
+    const msg = document.getElementById('b2bFbMsg');
+    if (msg) { msg.textContent = ''; msg.classList.remove('bad'); }
+    toggleModal('b2bFeedbackModal');
+    setTimeout(() => { if (subj && !subj.value.trim()) subj.focus(); else body?.focus(); }, 60);
+}
+
+async function b2bFeedbackSend(btn) {
+    const subj = (document.getElementById('b2bFbSubject')?.value || '').trim();
+    const body = (document.getElementById('b2bFbBody')?.value || '').trim();
+    const msg = document.getElementById('b2bFbMsg');
+    const say = (text, bad) => {
+        if (!msg) return alert(text);
+        msg.textContent = text;
+        msg.classList.toggle('bad', !!bad);
+    };
+    if (!subj) return say('Give it a subject line, even a rough one.', true);
+    if (!body) return say('Write what is on your mind first.', true);
+
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+        const res = await fetch(B2B_OUTREACH_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'send_feedback',
+                subject: subj,
+                message: body,
+                user: _b2bUser(),
+                role: _b2bRole(),
+                // Which view they were looking at. Not a category -- it is the
+                // one piece of context that costs the sender nothing and saves
+                // a round trip asking "where were you when this happened".
+                view: _b2bView,
+            }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || out.success === false) throw new Error(out.error || `HTTP ${res.status}`);
+        // Cleared only now that it is actually gone.
+        const s = document.getElementById('b2bFbSubject');
+        const b = document.getElementById('b2bFbBody');
+        if (s) s.value = '';
+        if (b) b.value = '';
+        closeAllModals();
+        _b2bSay('Sent to Nick. Thanks — that is genuinely how this gets better.');
+    } catch (e) {
+        // Kept in the dialog rather than an alert, so what they wrote is still
+        // on screen behind the message and can be sent again.
+        say(`That didn't send: ${e.message}`, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = label;
+    }
 }
 
 async function crmOpen() {
@@ -19660,6 +20012,36 @@ function b2bEditClient(id) { _b2bEditingClient = id; b2bRender(); }
 
 // Digits only, formatted as a US number and capped at 10 digits. A phone field
 // that accepts prose is a phone field nobody can dial from.
+// One shape on screen, whatever shape it was typed in.
+//
+// The stored values had drifted to five formats across ten clients --
+// "913-957-6300", "9137213387", "913.402.5635", "816.474.8100",
+// "(913) 529-7381" -- and one carried NON-BREAKING hyphens (U+2011), which
+// looks identical on screen but breaks click-to-dial, copy-paste and search.
+// The data is normalised now; formatting here is what stops it drifting again,
+// since the mask only applies to what someone types into the form.
+//
+// Anything that isn't a 10-digit US number is shown as typed rather than
+// mangled -- an extension or an international number is not a formatting error.
+function _b2bPhoneText(v) {
+    const d = String(v || '').replace(/\D/g, '');
+    if (d.length === 11 && d[0] === '1') return _b2bPhoneText(d.slice(1));
+    if (d.length !== 10) return String(v || '');
+    return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
+
+// Formatted, and dialable on a phone. The href keeps the bare digits because
+// that is what a dialer wants.
+function _b2bPhoneHtml(v) {
+    const s = String(v || '').trim();
+    if (!s) return '—';
+    const d = s.replace(/\D/g, '');
+    const shown = escapeHtml(_b2bPhoneText(s));
+    return d.length >= 10
+        ? `<a href="tel:${escapeHtml(d)}" onclick="event.stopPropagation()">${shown}</a>`
+        : shown;
+}
+
 function _b2bPhoneMask(el) {
     const d = el.value.replace(/\D/g, '').slice(0, 10);
     el.value = d.length > 6 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`
@@ -19696,13 +20078,24 @@ async function b2bDeleteClient(id) {
 
 // --- view: Overview (DM/CEO) -----------------------------------------------
 
+// The day paid_at existed. Deals accepted before it cannot have a payment
+// recorded against them, so the Overview must not count them as owed -- see
+// the payment block below.
+const B2B_PAY_TRACKED_FROM = '2026-09-08';
+
 function _b2bRenderOverview(scoped) {
     const live = scoped.filter(d => d.stage !== 'completed' && d.stage !== 'declined');
 
+    // The table scrolls inside its own wrapper rather than stretching the card.
+    // These are five-column tables with nowrap chips and a button in them, and
+    // on a phone they were rendering ~640px wide inside a 390px frame, which
+    // pushed the whole page sideways -- the one thing styles.css's own layout
+    // note (see its header) says must never happen. Every card goes through
+    // here, so the wrapper belongs here and not on the two new ones.
     const card = (title, sub, head, body, empty) => `
         <div class="b2b-ov">
             <div class="b2b-ov-h"><div><span class="b2b-ov-t">${title}</span><span class="b2b-ov-s">${sub}</span></div></div>
-            ${body ? `<table class="cb-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+            ${body ? `<div class="b2b-ov-scroll"><table class="cb-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`
                    : `<div class="b2b-doc-empty">${empty}</div>`}
         </div>`;
 
@@ -19757,28 +20150,119 @@ function _b2bRenderOverview(scoped) {
     const wipesOwed = Math.max(0, wipesSold - wipesDone);
     const wipeFees  = live.reduce((s, d) => s + (Number(d.total_wipe_fee) || 0), 0);
 
+    // Picked up and not yet priced. Paul, 2026-08-22, asked for exactly this
+    // section and it was the one of his four the Overview never had. Split on
+    // pricing_started_at rather than on stage, so "nobody has touched it" reads
+    // differently from "someone is part-way through it" -- which is the
+    // distinction Nick asked for on 2026-09-03 without a second stage.
+    const notPriced = live
+        .filter(d => ['pickup', 'pricing_location', 'pricing'].includes(d.stage))
+        .sort(byAge);
+    const notPricedRows = notPriced.map(d => `
+        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
+            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
+            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
+            <td>${_b2bStoreTag(d.pricing_store)}</td>
+            <td class="c">${d.stage === 'pricing'
+                ? (d.pricing_started_at
+                    ? '<span class="b2b-age b2b-age-ok">being priced</span>'
+                    : '<span class="b2b-age b2b-age-warn">not started</span>')
+                : _b2bStageChip(d.stage, d)}</td>
+            <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
+        </tr>`).join('');
+
+    // Accepted deals and whether the client has actually been paid.
+    //
+    // THE CUTOFF MATTERS. Payment tracking landed on this date; every deal
+    // accepted before it has paid_at null because nobody could record one, not
+    // because the client is owed money. Counting those as unpaid would have put
+    // a four-figure liability in front of Paul on day one that was pure
+    // artefact. So older deals are listed as "not recorded" and are left out of
+    // the total, and the tile only ever counts deals that could have been
+    // recorded. Once these have aged out this constant can go.
+    const accepted = scoped.filter(d => d.accepted_at && d.stage !== 'declined');
+    const trackable = d => String(d.accepted_at || '').slice(0, 10) >= B2B_PAY_TRACKED_FROM;
+    // Sorted on accepted_at, NOT byAge. byAge reads stage_changed_at, which on
+    // this table has nothing to do with the question being asked -- it put the
+    // rows in an order that looked random (LOCHCC-001, GD-001, LOCHCC-002,
+    // ASCEN-001: not by date, amount or ref). Longest-accepted first is the
+    // useful order for money owed, and most-recently-paid first for the rest.
+    const byAccepted = (a, b) => String(a.accepted_at || '').localeCompare(String(b.accepted_at || ''));
+    const owed = accepted.filter(d => !d.paid_at && trackable(d)).sort(byAccepted);
+    const untracked = accepted.filter(d => !d.paid_at && !trackable(d))
+        .sort((a, b) => -byAccepted(a, b));
+    const paidDeals = accepted.filter(d => d.paid_at)
+        .sort((a, b) => String(b.paid_at).localeCompare(String(a.paid_at)));
+    const owedTotal = owed.reduce((s, d) => s + _b2bNetOffer(d), 0);
+    const payRows = [...owed, ...paidDeals, ...untracked].slice(0, 40).map(d => `
+        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
+            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
+            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
+            <td class="c">${d.paid_at
+                ? `<span class="b2b-age b2b-age-ok">paid ${_b2bDate(d.paid_at)}</span>`
+                : trackable(d)
+                ? '<span class="b2b-age b2b-age-crit">unpaid</span>'
+                : '<span class="b2b-age" title="Accepted before payments were tracked here">not recorded</span>'}</td>
+            <td class="r b">${_b2bMoney(d.paid_at && d.paid_amount != null ? d.paid_amount : _b2bNetOffer(d))}</td>
+            <td class="r b2b-rowacts">${_b2bCanAccept()
+                ? `<button class="b2b-mini" onclick="event.stopPropagation();b2bMarkPaid('${d.id}')">${
+                    d.paid_at ? 'Clear' : 'Mark Paid'}</button>`
+                : ''}</td>
+        </tr>`).join('');
+
     const tiles = `
         <div class="b2b-tiles">
             <div class="b2b-tile"><span class="b2b-tile-k">In Flight</span><span class="b2b-tile-v">${live.length}</span><span class="b2b-tile-c">deals moving</span></div>
-            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(withClient.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${withClient.length} awaiting a client decision${toApprove.length ? ` · ${toApprove.length} still to approve` : ''}</span></div>
+            <!-- The headline is the value ACTUALLY out with clients, and the
+                 caption used to reference deals still awaiting approval, whose
+                 value is not in it. With nothing sent yet that read "$0 · 2
+                 still to approve" directly above a table listing $3,981 and
+                 $455 -- the tile contradicting the rows under it. The caption
+                 now only describes what the number covers, and the
+                 to-approve value is stated as its own figure. -->
+            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(withClient.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${
+                withClient.length
+                    ? `${withClient.length} awaiting a client decision`
+                    : 'nothing with a client yet'}${
+                toApprove.length
+                    ? ` · ${_b2bMoney(toApprove.reduce((s, d) => s + _b2bNetOffer(d), 0))} still to approve`
+                    : ''}</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Unlisted Stock</span><span class="b2b-tile-v">${_b2bMoney(unlistedTotal)}</span><span class="b2b-tile-c">${unlisted.reduce((n, d) => n + _b2bOutstanding(d), 0)} units to list</span></div>
             <div class="b2b-tile ${stalled.length ? 'warn' : ''}"><span class="b2b-tile-k">Stalled</span><span class="b2b-tile-v">${stalled.length}</span><span class="b2b-tile-c">no movement in 7+ days</span></div>
             <!-- Certified wipes, which we charge for and therefore owe. Counted
                  across everything in flight, since a wipe promised at pricing is
                  outstanding until someone certifies it during listing. -->
             <div class="b2b-tile ${wipesOwed ? 'warn' : ''}"><span class="b2b-tile-k">Certified Wipes</span><span class="b2b-tile-v">${wipesDone}<span class="b2b-tile-of"> / ${wipesSold}</span></span><span class="b2b-tile-c">${wipesOwed ? `${wipesOwed} still to certify` : 'all certified'} · ${_b2bMoney(wipeFees)} discounted</span></div>
+            <!-- What we owe clients on quotes they have already accepted. -->
+            <div class="b2b-tile ${owed.length ? 'warn' : ''}"><span class="b2b-tile-k">Owed To Clients</span><span class="b2b-tile-v">${_b2bMoney(owedTotal)}</span><span class="b2b-tile-c">${
+                owed.length ? `${owed.length} accepted deal${owed.length === 1 ? '' : 's'} not yet paid`
+                : untracked.length ? `nothing outstanding · ${untracked.length} older deal${untracked.length === 1 ? '' : 's'} predate tracking`
+                : 'everyone accepted has been paid'}</span></div>
         </div>`;
 
+    // Ordered the way Paul asked for them (2026-08-22): what has been picked up
+    // but not priced, what is priced and waiting on him, what is out with the
+    // client, and what has been paid. Stalled leads because it is the only one
+    // that says something is wrong rather than merely where things are.
     return tiles
         + card('Stalled Deals', 'No movement in a week or more',
                '<th>Ref</th><th>Client</th><th>Stage</th><th>Store</th><th class="r">In stage</th>',
                stalledRows, 'Everything is moving')
+        + card('Picked Up, Not Yet Priced', 'Collected and waiting on someone to price it',
+               '<th>Ref</th><th>Client</th><th>Store</th><th class="c">Progress</th><th class="r">Waiting</th>',
+               notPricedRows, 'Everything collected has been priced')
         + card('Open Quotes', 'Waiting on approval, or out with the client',
                '<th>Ref</th><th>Client</th><th>Email</th><th class="c">Sent</th><th class="r">Offer</th>',
                quoteRows, 'No quotes are open right now')
         + card('Bought But Not Listed', 'Inventory paid for and not yet earning',
                '<th>Ref</th><th>Client</th><th>Store</th><th class="c">Outstanding</th><th class="r">Cost</th>',
-               unlistedRows, 'Everything accepted has been listed');
+               unlistedRows, 'Everything accepted has been listed')
+        + card('Paying The Client',
+               untracked.length
+                   ? 'Accepted deals, and whether the money has gone out. Deals accepted before payments were tracked here show as not recorded.'
+                   : 'Accepted deals, and whether the money has gone out',
+               '<th>Ref</th><th>Client</th><th class="c">Status</th><th class="r">Amount</th><th></th>',
+               payRows, 'Nothing has been accepted yet');
 }
 
 // ---------------------------------------------------------------------------
@@ -20460,13 +20944,30 @@ async function b2bDoPrevalConvert(id, btn) {
 // deal at exactly its prices, so it carries the same argument.
 // ===========================================================================
 
+// ONE KIND, as of 2026-09-08. Nick: "You can actually get rid of all of the
+// other ways to save proof of acceptance, this is the only way we want for him
+// going forward" -- the way being the client's actual email, dragged out of
+// Outlook and dropped on the deal, instead of into a Google Drive folder.
+//
+// The four kinds are kept in this list as HISTORICAL labels only: rows already
+// on the record say `screenshot` or `note`, and the panel still has to render
+// them with the right word. Nothing can be created as one any more -- the
+// server's PROOF_KINDS is down to `email` alone.
 const B2B_PROOF_KINDS = [
-    { key: 'email',      label: 'Their email',   hint: 'Paste it whole, headers and all — that is the strongest version of it' },
-    { key: 'screenshot', label: 'Screenshot',    hint: 'A picture of the email, or of a text message' },
-    { key: 'document',   label: 'Document',      hint: 'A signed PDF, a purchase order' },
-    { key: 'note',       label: 'Written note',  hint: 'Approved over the phone or across the counter — say who, when and what they said' },
+    { key: 'email',      label: 'Their email',   hint: 'Drop the message straight out of Outlook — headers, sender and date all come with it' },
+    { key: 'screenshot', label: 'Screenshot',    hint: 'Historical — attached before dropped emails became the only route' },
+    { key: 'document',   label: 'Document',      hint: 'Historical — attached before dropped emails became the only route' },
+    { key: 'note',       label: 'Written note',  hint: 'Historical — attached before dropped emails became the only route' },
 ];
 const _b2bProofKind = (k) => B2B_PROOF_KINDS.find(x => x.key === k) || B2B_PROOF_KINDS[0];
+
+// Which format a stored proof actually is, for the download label. Read from
+// the stored MIME rather than the label -- the label is the subject line and
+// routinely ends in something that looks like an extension ("Re: pricing v2.1").
+// Historical rows from the screenshot/document era have other MIMEs, so this
+// returns '' rather than guessing, and the label just reads "Download".
+const B2B_PROOF_EXT = { 'application/vnd.ms-outlook': 'msg', 'message/rfc822': 'eml' };
+const _b2bProofExt = (p) => B2B_PROOF_EXT[String(p && p.mime || '').toLowerCase()] || '';
 
 // Live evidence only. A withdrawn entry stays on the record so the removal is
 // visible, but it stops counting toward "is this approved".
@@ -20528,8 +21029,16 @@ function _b2bProofPanel(owner) {
                 </div>
             </div>
             <div class="b2b-proof-acts">
+                <!-- Says which format, because that answers "what do I open it
+                     with" on the row rather than after the download. A .msg
+                     double-clicks into Outlook; an .eml opens in Outlook or any
+                     mail client. The server sends it with a real filename and
+                     extension, so it lands ready to open -- see the
+                     Content-Disposition in b2b-deals. -->
                 ${p.file_path ? `<a class="b2b-mini" target="_blank" rel="noopener"
-                    href="${B2B_URL}?proof_file=${encodeURIComponent(p.id)}">Open file</a>` : ''}
+                    title="Downloads the message itself. Double-click it to open it in Outlook."
+                    href="${B2B_URL}?proof_file=${encodeURIComponent(p.id)}">Download${
+                        _b2bProofExt(p) ? ` .${_b2bProofExt(p)}` : ''}</a>` : ''}
                 ${!p.removed_at && _b2bCanAccept()
                     ? `<button class="b2b-mini" onclick="b2bRemoveProof('${p.id}')">Withdraw</button>` : ''}
             </div>
@@ -20544,151 +21053,721 @@ function _b2bProofPanel(owner) {
             <span class="b2b-note-k">${ok ? "The client's approval is on record" : "No approval on record yet"}</span>
             ${waived ? `<div class="b2b-proof-waived">Accepted without written approval by
                 ${escapeHtml(waived)} — ${escapeHtml(owner.approval_waived_reason || '')}</div>` : ''}
-            ${!ok ? `<div>Attach the client's email or a screenshot of it before this is accepted.
-                It is what answers them later if they say they never agreed to the price.</div>` : ''}
+            ${!ok ? `<div>Upload the client's email before this is accepted. It is what answers
+                them later if they say they never agreed to the price.</div>` : ''}
             ${live.map(row).join('')}
             ${gone.length ? `<details class="b2b-proof-gone"><summary>${gone.length} withdrawn</summary>${gone.map(row).join('')}</details>` : ''}
-            <div class="b2b-proof-add">
-                <button class="b2b-btn b2b-btn-secondary b2b-mini" onclick="b2bOpenProofAdd(${ownerAttr})">＋ Attach approval</button>
-                ${!ok && _b2bCanAccept()
-                    ? `<button class="b2b-mini" onclick="b2bWaiveApproval(${ownerAttr})">No written approval — record why</button>` : ''}
+            <!-- UPLOAD IS THE ROUTE. Nick, 2026-09-10: "Go back to just the file
+                 upload of that msg file and I will teach everyone how to
+                 download the email and upload it to speeksnet".
+                 That is the right call and it is worth recording why, because
+                 four releases were spent trying to avoid it. Outlook can only
+                 hand a message to a browser as a "virtual file"; classic
+                 desktop Outlook plus Chrome or Edge manages it, and the new
+                 Outlook cannot -- it offers a pointer to the message on
+                 Microsoft's server and nothing else. Downloading the message
+                 first turns it into an ordinary file, and an ordinary file
+                 upload works everywhere, forever, with nothing to go wrong.
+                 The drop zone stays because it IS the file input's own drop
+                 target -- no extra UI, and it still works when the drag does. -->
+            <div class="b2b-proof-drop" id="b2bProofDrop-${owner.id}"
+                ondragover="b2bProofDragOver(event,'${owner.id}')"
+                ondragleave="b2bProofDragOut(event,'${owner.id}')"
+                ondrop="b2bProofDrop(event,${ownerAttr})">
+                <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
+                <span class="b2b-proof-droptxt"><b>Upload the client's email</b>
+                    <span>In Outlook, open it and use Download or Save As — then upload that
+                        file here. Or drag it straight on, if your Outlook lets you.</span></span>
+                <!-- The label IS the button. A styled label wired to a hidden
+                     input avoids the unstyleable native "Choose file" control
+                     while staying a real file input, so it keeps the OS picker,
+                     the keyboard behaviour and the drop target for free. -->
+                <label class="b2b-btn b2b-btn-primary b2b-proof-pickbtn">
+                    Choose the email file
+                    <input type="file" hidden onchange="b2bProofFilePicked(this,${ownerAttr})">
+                </label>
             </div>
+            <div id="b2bDropFail-${owner.id}"></div>
         </div>`;
 }
 
 // --- attaching -------------------------------------------------------------
 
-let _b2bProofOwner = null;      // { id, kind: 'deal' | 'preval' }
-let _b2bProofKindPick = 'email';
-let _b2bProofFile = null;       // { name, mime, dataUri, bytes }
+// Two drop zones can be on screen at once -- the one on the deal's proof panel
+// and the one in the accept popup -- so the zone is addressed separately from
+// the deal it attaches to. Element ids have to be unique or the hover state and
+// the busy spinner land on whichever the browser found first.
+const B2B_PROOF_POP = 'pop';
 
-function b2bOpenProofAdd(ownerId, ownerKind) {
-    _b2bProofOwner = { id: ownerId, kind: ownerKind };
-    _b2bProofKindPick = 'email';
-    _b2bProofFile = null;
-    _b2bPaintProofModal();
-    toggleModal('b2bProofModal');
+function b2bProofDragOver(ev, zone) {
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'copy';
+    document.getElementById(`b2bProofDrop-${zone}`)?.classList.add('over');
+}
+function b2bProofDragOut(ev, zone) {
+    document.getElementById(`b2bProofDrop-${zone}`)?.classList.remove('over');
 }
 
-function b2bPickProofKind(k) {
-    _b2bProofKindPick = k;
+// A dropped .msg often arrives with an EMPTY type, and sometimes as
+// application/octet-stream -- whether Outlook is registered for the extension
+// decides it, so the extension is the reliable signal and the MIME is the hint.
+const B2B_MSG_MIME = 'application/vnd.ms-outlook';
+
+// ACCEPT BY EXCLUSION, NOT BY ALLOWLIST.
+//
+// The first version required the name to end .msg or .eml. That is the wrong way
+// round, and it is the likeliest reason this kept failing: a message saved out
+// of a mail app arrives named all sorts of ways. Windows hides known extensions,
+// so a drag can carry a name with none at all; Outlook's virtual file is named
+// after the SUBJECT; and "Save As" produces .eml, .msg or .htm depending on the
+// dialog. Refusing a genuine email for how it happened to be named is a far
+// worse failure than accepting a file somebody meant to attach.
+//
+// So only things that are definitely NOT a message are turned away, and the
+// server's MIME allowlist stays the real gate.
+//
+// .txt and .rtf are turned away on purpose, and are the one place this errs
+// towards refusing. No mail app hands a browser either one; the only way to
+// produce them is Outlook's "Save as Text Only", which deliberately discards the
+// structure that makes the file evidence, so accepting one would put something on
+// the record that cannot prove what it claims to. .htm is deliberately NOT in the
+// list -- "Save as HTML" is a real route and that file still carries the message.
+const B2B_NOT_MAIL_RX =
+    /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|pdf|docx?|xlsx?|pptx?|zip|rar|7z|gz|csv|txt|rtf|mp3|mp4|mov|avi|exe|dll)$/i;
+
+function _b2bMailMime(file) {
+    const n = String(file.name || '').trim().toLowerCase();
+    if (n.endsWith('.msg')) return B2B_MSG_MIME;
+    if (n.endsWith('.eml')) return 'message/rfc822';
+    const t = String(file.type || '').toLowerCase();
+    if (t === B2B_MSG_MIME || t === 'message/rfc822') return t;
+    // No usable extension and no useful type -- which is exactly how a dragged
+    // message routinely arrives. Treat it as a saved email rather than refusing
+    // it; the bytes are the evidence either way, and the alternative is telling
+    // somebody their own email is not an email.
+    return 'message/rfc822';
+}
+function _b2bIsMailFile(file) {
+    return !B2B_NOT_MAIL_RX.test(String(file.name || '').trim());
+}
+
+// What the browser actually handed over. Built for the failure message, because
+// an Outlook drag can fail for several unrelated reasons and they are
+// indistinguishable from the outside -- "nothing arrived" was hiding whether the
+// mail app offered no file, offered one it would not release, or offered
+// something that was not a file at all. Must be read synchronously: a
+// DataTransfer is emptied the moment the handler yields.
+function _b2bDropDiag(dt) {
+    const list = (v) => (v && v.length ? v.join(' | ') : 'none');
+    let types = [], items = [], files = [];
+    try { types = Array.from(dt?.types || []); } catch (_) {}
+    try {
+        items = Array.from(dt?.items || []).map(i => `${i.kind}${i.type ? ':' + i.type : ''}`);
+    } catch (_) {}
+    try {
+        files = Array.from(dt?.files || [])
+            .map(f => `${f.name || '(no name)'} · ${f.size}b · ${f.type || 'no type'}`);
+    } catch (_) {}
+    // How much text came with it decides whether the reconstruction fallback can
+    // run, so it belongs in the report -- otherwise "no file AND no fallback"
+    // and "no file but the text was too thin" look identical from the outside.
+    const t = _b2bDragText(dt);
+    const chars = (s) => (s ? s.length + ' chars' : 'none');
+    return `formats: ${list(types)}\nitems: ${list(items)}\nfiles: ${list(files)}\n`
+        + `text/plain: ${chars(t.plain)} · text/html: ${chars(t.html)}`;
+}
+
+// OUTLOOK DOES NOT PUT A FILE IN dataTransfer.files, AND THAT IS THE WHOLE BUG.
+//
+// Dragging a message out of the Outlook message list hands it over as a VIRTUAL
+// file: Windows offers it as the FileGroupDescriptorW + FileContents clipboard
+// pair, and the bytes live in the PST/OST or on Exchange, never on disk. So
+// `dataTransfer.files` is empty and `item.getAsFile()` returns null. The first
+// version concluded nothing had been dropped, then told the user they had
+// dragged from the wrong place -- which they had not. Dragging from the message
+// list is exactly right.
+//
+// Chromium has handled this natively since Chrome 76: it streams FileContents
+// out of Outlook (IStream or IStorage), writes a temp file, and exposes it to
+// the page. So on classic Outlook + Chrome/Edge the bytes ARE available. Getting
+// them, though, means asking the right way:
+//
+//   1. DO NOT FILTER ON item.kind. This is what version two got wrong. The
+//      virtual-file item does not reliably report kind "file" -- it has been
+//      seen reporting "string" -- so `if (kind !== 'file') continue` skipped the
+//      only item that had the message in it. getAsFile/webkitGetAsEntry/
+//      getAsFileSystemHandle all return null harmlessly on a genuine string
+//      item, so there is nothing to gain by pre-filtering and a whole feature to
+//      lose.
+//   2. TRY EVERY ROUTE ON EVERY ITEM, and do not stop at the first item that
+//      offers something. Version two returned as soon as one item produced an
+//      entry, so a dud entry on item[0] hid a good one on item[1].
+//   3. getAsFileSystemHandle() is tried as well as webkitGetAsEntry(). It is the
+//      standard replacement and is wired to a different code path inside the
+//      browser, so it can succeed where the older one comes back empty.
+//   4. A directory entry is followed. Some clients offer the message inside a
+//      one-entry folder rather than on its own.
+//
+// EVERYTHING IS STARTED SYNCHRONOUSLY. A DataTransfer is neutered the moment
+// this handler yields, so `items` cannot be touched after an await -- reading it
+// later returns an empty list and looks identical to an empty drop. Every route
+// is therefore KICKED OFF here and the promises are settled afterwards.
+//
+// Resolves to { file, virtual, route }. `virtual` marks the mail-client path,
+// which is treated more leniently on naming below; `route` is kept for the
+// diagnostic, because which route won is the single most useful fact when this
+// misbehaves on someone else's machine.
+
+// A route that never calls back must not hang the drop. Outlook can stall
+// mid-stream on a large message or a disconnected mailbox, and entry.file()
+// simply never fires its callback -- no error, no rejection. Losing one slow
+// route is better than a dead modal.
+function _b2bDropTimeout(p, ms, label) {
+    return Promise.race([
+        p,
+        new Promise((res) => setTimeout(() => res({ file: null, timedOut: label }), ms)),
+    ]);
+}
+
+function _b2bEntryToFile(entry) {
+    if (!entry) return Promise.resolve(null);
+    if (entry.isFile) {
+        return new Promise((res) => {
+            try { entry.file((f) => res(f || null), () => res(null)); }
+            catch (_) { res(null); }
+        });
+    }
+    if (entry.isDirectory) {
+        // One level only. A mail client offering a folder is offering one
+        // message in it, not a tree, and recursing invites a stall.
+        return new Promise((res) => {
+            let reader;
+            try { reader = entry.createReader(); } catch (_) { return res(null); }
+            try {
+                reader.readEntries(
+                    (kids) => {
+                        const f = (kids || []).find((k) => k && k.isFile);
+                        f ? _b2bEntryToFile(f).then(res) : res(null);
+                    },
+                    () => res(null),
+                );
+            } catch (_) { res(null); }
+        });
+    }
+    return Promise.resolve(null);
+}
+
+function _b2bDropFilePromise(dt) {
+    const tries = [];
+    const push = (route, virtual, p) => tries.push({ route, virtual, p });
+
+    const direct = dt?.files?.[0];
+    if (direct) push('files[0]', false, Promise.resolve(direct));
+
+    const items = dt?.items ? Array.from(dt.items) : [];
+    items.forEach((item, i) => {
+        // Deliberately no `item.kind` check -- see (1) above.
+        try {
+            const f = item.getAsFile?.();
+            if (f) push(`items[${i}].getAsFile`, false, Promise.resolve(f));
+        } catch (_) {}
+        try {
+            const handle = item.getAsFileSystemHandle?.();
+            if (handle && typeof handle.then === 'function') {
+                push(`items[${i}].getAsFileSystemHandle`, true, handle
+                    .then((h) => (h && h.kind === 'file' && h.getFile ? h.getFile() : null))
+                    .catch(() => null));
+            }
+        } catch (_) {}
+        try {
+            const entry = item.webkitGetAsEntry?.();
+            if (entry) push(`items[${i}].webkitGetAsEntry`, true, _b2bEntryToFile(entry));
+        } catch (_) {}
+    });
+
+    if (!tries.length) return Promise.resolve({ file: null, virtual: false, route: 'none offered' });
+
+    // Settle them all, then take the first that produced bytes, in the order
+    // they were queued -- files[0] beats getAsFile beats the async handles.
+    const guarded = tries.map((tr) =>
+        _b2bDropTimeout(Promise.resolve(tr.p).catch(() => null), 20000, tr.route)
+            .then((r) => ({ ...tr, file: r && r.file === null ? null : r, timedOut: r && r.timedOut })));
+    return Promise.all(guarded).then((settled) => {
+        const won = settled.find((s) => s.file && s.file.size !== undefined);
+        if (won) return { file: won.file, virtual: won.virtual, route: won.route };
+        const stalled = settled.filter((s) => s.timedOut).map((s) => s.route);
+        return {
+            file: null,
+            virtual: settled.some((s) => s.virtual),
+            route: (stalled.length ? 'timed out: ' + stalled.join(', ') + ' | ' : '')
+                + 'tried: ' + settled.map((s) => s.route).join(', '),
+        };
+    });
+}
+
+// Outlook names its virtual file after the SUBJECT, so the extension is at the
+// mercy of whatever the client wrote in it -- a subject ending in a version
+// number or an ellipsis can arrive without a usable ".msg" on the end. Anything
+// that came down the virtual path came out of a mail client (a file dragged from
+// Explorer lands in dataTransfer.files instead), so give it the extension it
+// should have had rather than refusing a message for how it was titled.
+function _b2bAsMailFile(file, virtual) {
+    // Gated on the EXTENSION, not on _b2bIsMailFile. Once that check became
+    // permissive it started returning true for a subject-named file, which
+    // short-circuited this and left an Outlook .msg stored as message/rfc822 --
+    // a file whose bytes are MSG but whose name says .eml, which Outlook then
+    // refuses to open. The question here is only "does it already carry a mail
+    // extension", so ask that directly.
+    const named = /\.(msg|eml)$/i.test(String(file.name || '').trim());
+    if (!virtual || named) return file;
+    const base = String(file.name || 'message').replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'message';
+    try {
+        return new File([file], `${base}.msg`, { type: B2B_MSG_MIME, lastModified: file.lastModified });
+    } catch (_) {
+        return file;   // very old browser: fall through to the normal check
+    }
+}
+
+// What came with the drag, for the DIAGNOSTIC and for spotting a new-Outlook
+// pointer. Not for building a message out of.
+//
+// There was a reconstruction path here -- if no route produced the file, it made
+// an .eml out of the drag's text and filed that as "message text only". Removed
+// 2026-09-10. Nick: "Go back to just the file upload of that msg file and I will
+// teach everyone how to download the email and upload it to speeksnet." That
+// leaves ONE kind of evidence on the record: the message as Outlook stored it.
+// Two kinds, one of them a partial reconstruction, is a worse evidence log than
+// one kind and a clear instruction.
+function _b2bDragText(dt) {
+    // Synchronous: getData is dead the moment the handler yields, so the mail
+    // client's own format is read HERE even though it is only wanted much later
+    // in the failure path. Reading it after the await gets an empty string.
+    const get = (t) => { try { return String(dt?.getData?.(t) || ''); } catch (_) { return ''; } };
+    let owa = '';
+    try {
+        const t = Array.from(dt?.types || []).find((x) => B2B_OWA_REF_RX.test(String(x)));
+        if (t) owa = get(t);
+    } catch (_) {}
+    // `owa` is deliberately NOT part of the body -- _b2bDragBody reads plain and
+    // html by name, so a pointer payload can never be mistaken for a message.
+    return { html: get('text/html'), plain: get('text/plain'), owa };
+}
+
+// Which of the several ways this can fail is it, and what should the person
+// actually do about it. Worth telling apart: on Firefox no amount of retrying
+// will help, and saying "try again" there wastes their afternoon.
+function _b2bDropAdvice() {
+    const ua = String(navigator.userAgent || '');
+    if (/Firefox\//.test(ua)) {
+        return 'Firefox cannot take a message straight out of Outlook — it has never supported '
+            + 'the format Outlook offers. Open this page in Chrome or Edge and the drag will '
+            + 'work, or drag the email onto your desktop first and drop that file here.';
+    }
+    const m = ua.match(/Chrome\/(\d+)/);
+    if (m && Number(m[1]) < 76) {
+        return `This browser is Chrome ${m[1]}, and dragging straight out of Outlook needs 76 or `
+            + 'newer. Update it, or drag the email onto your desktop first and drop that here.';
+    }
+    return 'Outlook can only hand a message to a browser as a "virtual file", and the classic '
+        + 'desktop Outlook plus Chrome or Edge is the combination that manages it. Outlook in a '
+        + 'browser tab and the new Outlook app cannot do it at all. The route that always works: '
+        + 'drag the email onto your desktop first, then drop that file here.';
+}
+
+// THE REPORT GOES IN THE PAGE, NOT IN AN ALERT, AND IT IS VIEWABLE BEFORE IT IS
+// COPYABLE.
+//
+// History, because this has been wrong three times running. First it was inside
+// alert(): Chrome caps a native dialog's height and scrolls the overflow, so the
+// diagnostic -- the entire reason the message exists -- sat below the fold
+// behind a scrollbar nobody thinks to drag. Then it was in the page but
+// reachable only through a Copy button, and that button did not work either:
+// execCommand returns FALSE on failure rather than throwing, and only a throw
+// was being caught, so a failed copy reported success and put nothing on the
+// clipboard. Then the text lived in one module-level variable, which is wrong
+// as soon as two zones exist -- the deal panel and the accept popup can both be
+// on screen, and the second failure overwrote the first one's report, so
+// clicking View on the older panel showed someone else's diagnostic.
+//
+// So: View Report is the primary and copying is the extra; the report opens
+// into a readonly textarea with its contents already selected, which means
+// Ctrl+C works natively with no permission and nothing to go wrong; and each
+// panel HOLDS ITS OWN report rather than reading a shared one. A diagnostic
+// nobody can get at, or that belongs to a different failure, is not a
+// diagnostic.
+function _b2bDropFail(zone, headline, diag) {
+    const report = `${headline}\n\n${diag}\n\nbrowser: ${navigator.userAgent}`
+        + `\nsecure context: ${window.isSecureContext}\npage: ${location.origin}`;
+    try { console.warn('[b2b] proof drop failed\n' + report); } catch (_) {}
+    const el = document.getElementById(`b2bDropFail-${zone}`);
+    // No panel to render into (an older screen, or a zone replaced mid-drop) --
+    // say it the old way rather than swallowing it.
+    if (!el) return alert(`${headline}\n\nWhat the drop contained:\n${diag}`);
+    el.innerHTML = `
+        <div class="b2b-note warn">
+            <span class="b2b-note-k">That did not come through</span>
+            <div>${escapeHtml(headline)}</div>
+            <div class="b2b-dropacts">
+                <button class="b2b-mini" onclick="b2bViewDropReport(this)">View report</button>
+            </div>
+            <div class="b2b-dropreport" hidden>
+                <label class="form-label-caps">Report — already selected, press Ctrl+C</label>
+                <textarea class="b2b-dropreport-t" readonly rows="12"></textarea>
+                <button class="b2b-mini" onclick="b2bCopyDropDiag(this)">Copy it for me</button>
+            </div>
+        </div>`;
+    // On the element, not in a global. Set as a property rather than an
+    // attribute so a report containing markup or quotes cannot break the panel.
+    const note = el.querySelector('.b2b-note');
+    if (note) note._b2bReport = report;
+}
+
+function _b2bDropFailClear(zone) {
+    const el = document.getElementById(`b2bDropFail-${zone}`);
+    if (el) el.innerHTML = '';
+}
+
+const _b2bReportOf = (btn) => String(btn?.closest('.b2b-note')?._b2bReport || '');
+
+// Reveal it and select it. Filled here rather than in the markup so the text
+// never passes through an HTML string.
+function b2bViewDropReport(btn) {
+    const note = btn.closest('.b2b-note');
+    const wrap = note?.querySelector('.b2b-dropreport');
+    if (!wrap) return;
+    const ta = wrap.querySelector('.b2b-dropreport-t');
+    if (ta) ta.value = _b2bReportOf(btn);
+    wrap.hidden = false;
+    note.querySelector('.b2b-dropacts')?.remove();
+    if (ta) { ta.focus(); ta.select(); }
+}
+
+function b2bCopyDropDiag(btn) {
+    const text = _b2bReportOf(btn);
+    const done = (ok) => {
+        btn.textContent = ok ? 'Copied' : 'Select it above and press Ctrl+C';
+        setTimeout(() => { btn.textContent = 'Copy it for me'; }, 2400);
+    };
+    const manual = () => {
+        // The textarea is already on screen with the text in it, so the honest
+        // fallback is to re-select it and say so, rather than pretending.
+        const ta = btn.closest('.b2b-note')?.querySelector('.b2b-dropreport-t');
+        if (ta) { ta.focus(); ta.select(); }
+        let ok = false;
+        // execCommand returns FALSE on failure instead of throwing. Checking
+        // only for a throw is what made the old Copy button claim success while
+        // doing nothing at all.
+        try { ok = document.execCommand('copy') === true; } catch (_) { ok = false; }
+        done(ok);
+    };
+    if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).then(() => done(true), manual);
+    } else { manual(); }
+}
+
+// WHAT THE NEW OUTLOOK ACTUALLY PUTS ON THE CLIPBOARD, MEASURED, AND WHAT IS
+// INSIDE IT.
+//
+// Nick ran the button on the new Outlook (2026-09-10) and the report came back
+// with one clipboard type, no text and no HTML. Opening that one type settled
+// what it is:
+//
+//   web application/owa-item-drag-data (1138b):
+//   {"itemType":"multimaillistconversationrows",
+//    "tableViewId":"folderId:AQMkAGM4...;lVT:0;vF:All;...",
+//    "rowKeys":["AQAAAEsemUoBAAACHSuxQQAAAAA="],
+//    "subjects":["Adding Approval Request - Please"],
+//    "latestItemIds":["AAkALgAAAAAAHYQDEapmEc2byACqAC/EWg0A..."]}
+//
+// So it is a pointer: a folder id, a row key, an Exchange item id -- and, useful
+// for once, the SUBJECT. No body, no headers, no sender, no file. The message
+// itself never leaves the server, and resolving those ids means an authenticated
+// Microsoft Graph call, which is an OAuth integration and a different project.
+//
+// The subject is worth using though. Naming the email back to the person proves
+// the app understood exactly what they dragged, which is the difference between
+// "that didn't work" and "that didn't work, and here is why, and here is what
+// does" -- the first invites a retry of the same failing gesture.
+const B2B_OWA_REF_RX = /owa-item|owa-drag|x-owa|outlook-item/i;
+
+function _b2bOwaRefOnly(types) {
+    const t = (types || []).map(String);
+    return t.some((x) => B2B_OWA_REF_RX.test(x))
+        && !t.some((x) => /^(text\/plain|text\/html|Files)$/i.test(x));
+}
+
+// Best effort: it is somebody else's private format and may change shape
+// without notice, so a parse failure just means a less specific message.
+function _b2bOwaSubjects(raw) {
+    try {
+        const o = JSON.parse(String(raw || ''));
+        return [].concat(o.subjects || o.subject || [])
+            .filter(Boolean).map((s) => String(s).trim()).filter(Boolean);
+    } catch (_) { return []; }
+}
+
+function _b2bOwaAdvice(subjects) {
+    const s = subjects || [];
+    const extra = s.length > 2 ? ` and ${s.length - 1} others`
+        : s.length === 2 ? ' and one other' : '';
+    const lead = s.length
+        ? `That was “${s[0]}”${extra} — but what the new Outlook handed over is a link to `
+          + 'the message on its server, not the message. '
+        : 'That is the new Outlook handing over a link to the message on its server rather than '
+          + 'the message itself. ';
+    return lead
+        + 'There is nothing in it to keep, and no website can open it — this is a limit of the '
+        + 'new Outlook, not something you did wrong. Two ways through:\n\n'
+        + '1. BEST — open the email, open its "..." menu and choose Download (or Save as). You '
+        + 'get a file: drop it here, or use the picker. It keeps the sender, the date and the '
+        + 'headers, which is the whole point of holding on to it.\n\n'
+        + '2. Or open the email, click into the message text, press Ctrl+A then Ctrl+C, and '
+        + 'press the Paste button again. That keeps the client’s wording but not the headers, '
+        + 'so it gets filed as "message text only".';
+}
+
+async function b2bProofDrop(ev, ownerId, ownerKind, zone) {
+    ev.preventDefault();
+    const z = zone || ownerId;
+    b2bProofDragOut(ev, z);
+    _b2bDropFailClear(z);
+    // All started synchronously, before anything can yield.
+    const pending = _b2bDropFilePromise(ev.dataTransfer);
+    const dragText = _b2bDragText(ev.dataTransfer);
+    const sawFileItem = !!(ev.dataTransfer?.files?.length)
+        || Array.from(ev.dataTransfer?.items || []).length > 0;
+    const diag = _b2bDropDiag(ev.dataTransfer);
+
+    const got = await pending;
+    const file = got.file ? _b2bAsMailFile(got.file, got.virtual) : null;
+    const full = `${diag}\nroutes: ${got.route || 'n/a'}`;
+    try {
+        console.warn(`[b2b] proof drop ${file ? 'ok via ' + got.route : 'produced no file'}\n${full}`);
+    } catch (_) {}
+
+    if (!file) {
+        // A drag out of the new Outlook carries a pointer to the message on
+        // Microsoft's server and nothing else, so it is named specifically --
+        // "that didn't work" would just invite trying the same gesture again.
+        let types = [];
+        try { types = Array.from(ev.dataTransfer?.types || []); } catch (_) {}
+        if (_b2bOwaRefOnly(types)) {
+            return _b2bDropFail(z, _b2bOwaAdvice(_b2bOwaSubjects(dragText.owa)), full);
+        }
+        return _b2bDropFail(z, sawFileItem
+            ? 'Your mail app offered the message but would not release the file. '
+              + _b2bDropAdvice()
+            : 'That drop did not contain a message. ' + _b2bDropAdvice(), full);
+    }
+    if (!_b2bIsMailFile(file)) {
+        return _b2bDropFail(z, `"${file.name}" looks like a document rather than an email. Drop `
+            + "the client's message itself — dragged out of your mail app, or saved out of it. "
+            + 'That is what carries the sender, the date and the headers.', full);
+    }
+    if (file.size > 6_000_000) {
+        return alert(`That message is ${Math.round(file.size / 1e6)}MB — the limit is 6MB.\n\n`
+            + 'Forward it to yourself without the attachments and drop that instead.');
+    }
+    await _b2bAttachMailFile(file, ownerId, ownerKind, 'file', z);
+}
+
+// Read it, pull what headers we can, and save. No dialog: the whole request was
+// to make this one gesture, and everything the form used to ask for is either in
+// the file or not worth asking twice.
+//
+// `source` is 'file' (the message as the mail client stored it) or 'text' (built
+// from the drag text because the client would not release the file). The label
+// says which, on the record and in the confirmation, because someone reading
+// this list a year from now has to be able to tell how good the evidence is
+// without knowing that a fallback exists.
+async function _b2bAttachMailFile(file, ownerId, ownerKind, source, zone) {
+    const drop = document.getElementById(`b2bProofDrop-${zone || ownerId}`);
+    if (drop) drop.classList.add('busy');
+    try {
+        const dataUri = await new Promise((res, rej) => {
+            const r = new FileReader();
+            r.onload = () => res(String(r.result || ''));
+            r.onerror = () => rej(new Error("couldn't be read"));
+            r.readAsDataURL(file);
+        });
+        const meta = await _b2bMailHeaders(file);
+        const subject = meta.subject || file.name;
+        const rebuilt = source === 'text';
+        const payload = {
+            action: 'add_proof',
+            kind: 'email',
+            label: rebuilt ? `${subject} (message text only)` : subject,
+            from_addr: meta.from || undefined,
+            sent_on: meta.date || undefined,
+            file: dataUri,
+            file_name: file.name,
+            file_mime: _b2bMailMime(file),
+        };
+        payload[ownerKind === 'preval' ? 'preval_id' : 'deal_id'] = ownerId;
+        await _b2bSend(payload);
+        // Attached from the accept popup: that modal has to go before the deal
+        // is reopened, or two modals are up at once and the deal renders behind
+        // the popup that is now stale.
+        _b2bDropFailClear(zone || ownerId);
+        if (zone === B2B_PROOF_POP) closeAllModals();
+        await _b2bLoadProofs(ownerId);
+        await b2bRefresh();
+        if (ownerKind === 'preval') b2bOpenPreval(ownerId);
+        else { const d = _b2bDealById(ownerId); if (d) b2bOpenDeal(_b2bClickKind(d), d.id); }
+        _b2bSay(rebuilt
+            ? `${subject} is on the record — the message text only, because Outlook would not `
+              + 'release the file itself. Drop the saved email over it if you want the original.'
+            : zone === B2B_PROOF_POP
+                ? `${subject} is on the record. Mark Accepted will go through now.`
+                : `${subject} is on the record.`);
+    } catch (e) {
+        alert(`Couldn't attach that message: ${e.message}`);
+    } finally {
+        if (drop) drop.classList.remove('busy');
+    }
+}
+
+// Best-effort sender / subject / date.
+//
+// A .eml is RFC822 text, so its headers parse properly. A .msg is a Compound
+// File Binary container and a full parser is not worth writing for three
+// fields -- but the transport headers are usually present verbatim inside it,
+// often UTF-16LE, so decoding both ways and scanning for the header lines finds
+// them in practice. When it does not, the filename is used as the label and the
+// file itself is still the evidence: these fields are a convenience for reading
+// the list, not the record.
+async function _b2bMailHeaders(file) {
+    let text = '';
+    try {
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        const ascii = new TextDecoder('latin1').decode(bytes);
+        // UTF-16LE strings in a .msg read as "S.u.b.j.e.c.t" in latin1, so decode
+        // that way too and search whichever actually contains headers.
+        const wide = new TextDecoder('utf-16le').decode(bytes);
+        text = /^(from|subject|date)\s*:/im.test(ascii) ? ascii
+             : /^(from|subject|date)\s*:/im.test(wide) ? wide
+             : ascii + '\n' + wide;
+    } catch (_) { return {}; }
+
+    const grab = (name) => {
+        const m = text.match(new RegExp('^' + name + '\\s*:[ \\t]*(.+)$', 'im'));
+        // The NUL is written as the escape \u0000 and must NEVER be typed as the
+        // byte. It originally WAS the raw byte in this character class, which
+        // made the whole 2.7MB file read as BINARY to ripgrep and to git --
+        // content searches over speeks.js silently returned nothing at all,
+        // which is its own kind of nasty to debug.
+        //
+        // The NUL itself has to stay. When a UTF-16LE .msg is decoded as latin1
+        // every character comes back with a NUL after it, and stripping those is
+        // what turns "p\u0000a\u0000u\u0000l\u0000@\u0000x" back into an address.
+        // Do not "tidy" it into a space either -- that strips the spaces out of
+        // every subject line instead.
+        return m ? m[1].replace(/[\r\u0000]/g, '').trim().slice(0, 200) : '';
+    };
+    const fromRaw = grab('From');
+    // "Dana Reyes <dana@acme.com>" -> the address, which is the useful half.
+    const addr = (fromRaw.match(/[^\s<>,;]+@[^\s<>,;]+/) || [])[0] || '';
+    const sent = grab('Date');
+    let iso = '';
+    if (sent) {
+        const d = new Date(sent);
+        if (!isNaN(d)) iso = d.toISOString().slice(0, 10);
+    }
+    return { from: addr || fromRaw, subject: grab('Subject'), date: iso };
+}
+
+let _b2bProofOwner = null;      // { id, kind: 'deal' | 'preval' }
+
+// ATTACH-THE-ACCEPTANCE POPUP.
+//
+// This replaced the old dialog outright (Nick, 2026-09-09). That one offered a
+// kind picker for screenshot / document / note, From and Dated inputs, a Label,
+// a paste-the-body textarea and a file picker. Every one of those fields was
+// asking for something a dropped message already carries -- the sender, the
+// date, the subject and the headers are in the file -- so all of it was the
+// pre-drag way of doing this and none of it is wanted. Rows attached the old
+// way still render on the panel; this is only about how new ones arrive.
+//
+// It exists because "Mark Accepted" with nothing on file used to be a dead end:
+// an alert telling you to go and drag an email onto the deal, which meant
+// dismissing the dialog you were in and finding the drop zone yourself. The
+// drop zone now comes to you at the moment you are stopped.
+function b2bOpenAcceptProof(ownerId, ownerKind) {
+    _b2bProofOwner = { id: ownerId, kind: ownerKind || 'deal' };
     _b2bPaintProofModal();
+    toggleModal('b2bProofModal');
 }
 
 function _b2bPaintProofModal() {
     const body = document.getElementById('b2bProofBody');
     if (!body) return;
-    const k = _b2bProofKind(_b2bProofKindPick);
-    // Kept: whatever has been typed already, so switching kind mid-entry does
-    // not throw the work away.
-    const keepLabel = document.getElementById('b2bPfLabel')?.value || '';
-    const keepFrom  = document.getElementById('b2bPfFrom')?.value || '';
-    const keepDate  = document.getElementById('b2bPfDate')?.value || '';
-    const keepBody  = document.getElementById('b2bPfBody')?.value || '';
+    const o = _b2bProofOwner || {};
+    const attr = `'${o.id}','${o.kind === 'preval' ? 'preval' : 'deal'}','${B2B_PROOF_POP}'`;
 
     body.innerHTML = `
-        <label class="form-label-caps">What is it</label>
-        <div class="b2b-intake-pick" id="b2bPfKinds">
-            ${B2B_PROOF_KINDS.map(x => `
-                <button class="b2b-intake ${x.key === _b2bProofKindPick ? 'on' : ''}" data-kind="${x.key}"
-                    onclick="b2bPickProofKind('${x.key}')">
-                    <span class="b2b-intake-t">${escapeHtml(x.label)}</span>
-                    <span class="b2b-intake-s">${escapeHtml(x.hint)}</span>
-                </button>`).join('')}
+        <div class="b2b-note warn">
+            <span class="b2b-note-k">This one still needs the client's approval</span>
+            <div>Drop their email on and the acceptance goes straight through. It is what
+                answers them later if they say they never agreed to the price.</div>
         </div>
-        <div class="b2b-grid2" style="margin-top:14px;">
-            <div><label class="form-label-caps">From</label>
-                <input id="b2bPfFrom" class="form-input-lg" placeholder="dana@acme.com" value="${escapeHtml(keepFrom)}"></div>
-            <div><label class="form-label-caps">Dated</label>
-                <input id="b2bPfDate" type="date" class="form-input-lg" value="${escapeHtml(keepDate)}"></div>
+        <!-- UPLOAD LEADS HERE TOO. Nick, 2026-09-10: download the email out of
+             Outlook and upload the file. The drop zone stays because it is the
+             file input's own drop target and still works where the drag does --
+             but the button is the instruction, because it is the one that works
+             on every Outlook and every browser. -->
+        <div class="b2b-proof-drop lg" id="b2bProofDrop-${B2B_PROOF_POP}"
+            ondragover="b2bProofDragOver(event,'${B2B_PROOF_POP}')"
+            ondragleave="b2bProofDragOut(event,'${B2B_PROOF_POP}')"
+            ondrop="b2bProofDrop(event,${attr})">
+            <span class="b2b-proof-dropico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</span>
+            <span class="b2b-proof-droptxt"><b>Upload the client's email</b>
+                <span>In Outlook, open the email and use Download or Save As — then upload that
+                    file here. Or drag it straight on, if your Outlook lets you.</span></span>
+            <label class="b2b-btn b2b-btn-primary b2b-proof-pickbtn">
+                Choose the email file
+                <input id="b2bPfFile" type="file" hidden onchange="b2bProofFilePicked(this)">
+            </label>
         </div>
-        <label class="form-label-caps" style="margin-top:12px;">Label</label>
-        <input id="b2bPfLabel" class="form-input-lg" maxlength="200" value="${escapeHtml(keepLabel)}"
-            placeholder="e.g. Dana confirming the revised numbers">
-        <label class="form-label-caps" style="margin-top:12px;">${
-            _b2bProofKindPick === 'note' ? 'What was said' : 'Paste the email'}</label>
-        <textarea id="b2bPfBody" class="form-input-lg" rows="7" placeholder="${
-            _b2bProofKindPick === 'note'
-                ? 'Who approved it, when, and what they actually said.'
-                : 'Paste the whole thing including the From / Sent / Subject lines — the headers are the part that proves it came from them.'
-        }">${escapeHtml(keepBody)}</textarea>
-        <p class="b2b-hint">${escapeHtml(k.hint)}</p>
-        <label class="form-label-caps" style="margin-top:12px;">Or attach a file</label>
-        <input id="b2bPfFile" type="file" class="form-input-lg"
-            accept="image/png,image/jpeg,image/webp,application/pdf,message/rfc822,.eml,text/plain"
-            onchange="b2bProofFilePicked(this)">
-        <p class="b2b-hint">PNG, JPEG, PDF or a saved .eml, up to 6MB. You can paste the text, attach
-            a file, or both — one of the two is enough.</p>
-        <div id="b2bPfFileState"></div>`;
+        <div id="b2bDropFail-${B2B_PROOF_POP}"></div>
+        <p class="b2b-hint">A .msg or .eml, up to 6MB. No filter on the dialog: Windows hides
+            extensions and Outlook names a saved message after its subject, so filtering only ever
+            hides real emails.</p>`;
 
     const foot = document.getElementById('b2bProofFooter');
     if (foot) {
         foot.innerHTML = `
             <span class="b2b-msg" id="b2bPfMsg"></span>
-            <button class="kpi-cancel-btn" onclick="closeAllModals()">Cancel</button>
-            <button class="b2b-btn b2b-btn-primary" onclick="b2bSaveProof(this)">Attach</button>`;
+            <button class="kpi-cancel-btn" onclick="closeAllModals()">Close</button>`;
     }
-    if (_b2bProofFile) _b2bPaintProofFile();
 }
 
-function _b2bPaintProofFile() {
-    const el = document.getElementById('b2bPfFileState');
-    if (!el) return;
-    el.innerHTML = _b2bProofFile
-        ? `<div class="b2b-note ok"><span class="b2b-note-k">Attached</span>
-             ${escapeHtml(_b2bProofFile.name)} · ${Math.max(1, Math.round(_b2bProofFile.bytes / 1024))} KB</div>`
-        : '';
-}
-
-// Read once, here, rather than at save time: a file input's contents can be
-// gone by the time an async save runs if the dialog has been touched since.
-function b2bProofFilePicked(input) {
+// Both the panel and the accept popup feed this. The panel passes its owner
+// explicitly because it can render for a deal that is not the one the popup
+// last had; the popup passes nothing and the module-level owner it just set is
+// correct. One function either way, so there is one set of rules about what an
+// email is and one place that attaches it.
+function b2bProofFilePicked(input, ownerId, ownerKind) {
     const f = input.files && input.files[0];
-    if (!f) { _b2bProofFile = null; _b2bPaintProofFile(); return; }
+    if (!f) return;
+    const id = ownerId || (_b2bProofOwner && _b2bProofOwner.id);
+    const kind = ownerKind || (_b2bProofOwner && _b2bProofOwner.kind) || 'deal';
+    const zone = ownerId ? ownerId : B2B_PROOF_POP;
+    if (!id) return;
+    if (!_b2bIsMailFile(f)) {
+        input.value = '';
+        return alert(`"${f.name}" looks like a document rather than an email.\n\nUpload the `
+            + "client's message itself — downloaded out of Outlook as a .msg or .eml.");
+    }
     if (f.size > 6_000_000) {
-        _b2bProofFile = null;
-        _b2bPaintProofFile();
+        input.value = '';
         return alert(`That file is ${Math.round(f.size / 1e6)}MB — the limit is 6MB.\n\n`
-            + 'A screenshot of the relevant part is usually enough.');
+            + 'Forward it to yourself without the attachments and upload that instead.');
     }
-    const r = new FileReader();
-    r.onload = () => {
-        _b2bProofFile = { name: f.name, mime: f.type || 'application/octet-stream',
-                          dataUri: String(r.result || ''), bytes: f.size };
-        _b2bPaintProofFile();
-    };
-    r.onerror = () => { _b2bProofFile = null; alert("Couldn't read that file."); };
-    r.readAsDataURL(f);
-}
-
-async function b2bSaveProof(btn) {
-    if (!_b2bProofOwner) return;
-    const text = document.getElementById('b2bPfBody')?.value.trim() || '';
-    if (!text && !_b2bProofFile) {
-        return _b2bSay('Paste the email or attach a file — one or the other.', true);
-    }
-    const payload = {
-        action: 'add_proof',
-        kind: _b2bProofKindPick,
-        label: document.getElementById('b2bPfLabel')?.value.trim(),
-        from_addr: document.getElementById('b2bPfFrom')?.value.trim(),
-        sent_on: document.getElementById('b2bPfDate')?.value || undefined,
-        body_text: text || undefined,
-        file: _b2bProofFile?.dataUri,
-    };
-    payload[_b2bProofOwner.kind === 'preval' ? 'preval_id' : 'deal_id'] = _b2bProofOwner.id;
-    try {
-        await _b2bBusy(btn, 'Attaching…', () => _b2bSend(payload));
-        const owner = _b2bProofOwner;
-        closeAllModals();
-        await _b2bLoadProofs(owner.id);
-        await b2bRefresh();
-        // Straight back to whatever it was attached to, so the panel shows it.
-        if (owner.kind === 'preval') b2bOpenPreval(owner.id);
-        else { const d = _b2bDealById(owner.id); if (d) b2bOpenDeal(_b2bClickKind(d), d.id); }
-    } catch (e) {
-        alert(`Couldn't attach that: ${e.message}`);
-    }
+    // Cleared so picking the SAME file twice still fires a change event -- after
+    // a failed upload the obvious next move is to try the same file again.
+    input.value = '';
+    _b2bAttachMailFile(f, id, kind, 'file', zone);
 }
 
 async function b2bRemoveProof(id) {
@@ -20709,28 +21788,24 @@ async function b2bRemoveProof(id) {
     }
 }
 
-async function b2bWaiveApproval(ownerId, ownerKind) {
-    const reason = prompt('Accept WITHOUT the client\'s written approval.\n\n'
-        + 'Say how they approved — who said it, when, and by what means. This is recorded '
-        + 'against your name and it is what stands in for their email if they ever say '
-        + 'they never agreed.');
-    if (reason === null) return;
-    if (!reason.trim()) return alert('A reason is required.');
-    const payload = { action: 'waive_approval', reason: reason.trim() };
-    payload[ownerKind === 'preval' ? 'preval_id' : 'deal_id'] = ownerId;
-    try {
-        await _b2bSend(payload);
-        await b2bRefresh();
-        if (ownerKind === 'preval') b2bOpenPreval(ownerId);
-        else { const d = _b2bDealById(ownerId); if (d) b2bOpenDeal(_b2bClickKind(d), d.id); }
-    } catch (e) {
-        alert(`Couldn't record that: ${e.message}`);
-    }
+// RETIRED 2026-09-08 along with the server action. Kept as a function because
+// nothing good comes of a stale tab calling a name that no longer exists, and
+// because the replacement is worth saying rather than just refusing.
+async function b2bWaiveApproval() {
+    alert("Accepting without the client's approval on file isn't possible any more.\n\n"
+        + 'If they agreed by phone or across the counter, email them confirming what they '
+        + 'agreed to and drag that message onto the deal. That way the record holds an '
+        + 'email either way, which is the whole point of keeping it.');
 }
 
 // The one gate, shared by every path that accepts. Returns true when it is safe
 // to go ahead; otherwise it has already told the user what is missing.
-function _b2bApprovalGate(owner) {
+// Blocked on missing evidence, and the popup is the answer rather than the
+// message (Nick, 2026-09-09). This used to alert "open the deal and drag their
+// email onto it", which told somebody standing in the accept dialog to dismiss
+// it, go and find a drop zone, and start again. The drop zone comes to them
+// instead: attach the email, and Mark Accepted goes through on the next click.
+function _b2bApprovalGate(owner, ownerId, ownerKind) {
     // Fail OPEN when we could not read the evidence. The server enforces this
     // too, and it is the authority; this copy exists to explain the rule before
     // somebody hits it, not to be the thing that stops them. Blocking on a
@@ -20738,10 +21813,17 @@ function _b2bApprovalGate(owner) {
     // acceptance in the company.
     if (!_b2bProofsOk) return true;
     if (_b2bApprovalOnRecord(owner)) return true;
+    const id = ownerId || owner?.id;
+    if (id) {
+        b2bOpenAcceptProof(id, ownerKind || (owner && owner.eval_no !== undefined ? 'preval' : 'deal'));
+        return false;
+    }
+    // No deal to attach it to -- nothing to open, so say it instead.
     alert("The client's approval isn't on record yet.\n\n"
-        + 'Open the deal and attach their email or a screenshot of it — or, if they approved '
-        + 'by phone or in person, record that instead. This is what answers them later if '
-        + 'they say they never agreed to the price.');
+        + "Open the deal and drag their email onto it — straight out of Outlook. That is what "
+        + 'answers them later if they say they never agreed to the price.\n\n'
+        + 'If they agreed by phone, email them confirming what they agreed to and drop that '
+        + 'message on instead.');
     return false;
 }
 
@@ -20809,15 +21891,25 @@ async function b2bOpenDeal(kind, id) {
     _b2bModalPreval = null;
     _b2bModalDeal = deal;
     _b2bModalItems = [];
+    // A new screen starts clean -- anything outstanding was flushed on the way
+    // out of the last one, and carrying ids across would have the indicator
+    // counting lines that are no longer on screen.
+    _b2bPendingEdits.clear();
     // Default every screen to the card grid; only pricing opts into the sheet.
     _b2bGridMode = 'cards';
     // The approval evidence rides along with the deal from the quote stage on:
     // that is where it is captured, and it stays visible forever afterwards
     // because the argument it exists for happens months later.
     _b2bProofs = [];
-    if (['quote', 'listing', 'view'].includes(kind)) await _b2bLoadProofs(deal.id);
+    if (['quote', 'listloc', 'listing', 'view'].includes(kind)) await _b2bLoadProofs(deal.id);
     // Every stage past pricing needs the line items; fetch once up front.
-    if (['pricing', 'quote', 'listing', 'view'].includes(kind)) {
+    // 'listloc' was missing from both lists, which is why the assign-listing-store
+    // screen showed no value information at all: the deal is accepted by then, so
+    // the person picking the store is deciding with the figures in front of them
+    // or not at all. Paul hit this on Ascentist -- with nothing to go on he
+    // assigned it to OVL just to see the detail, and the check followed the
+    // assignment. See docs/modules/b2b.md, "Scope and ownership".
+    if (['pricing', 'quote', 'listloc', 'listing', 'view'].includes(kind)) {
         try {
             _b2bModalItems = await _b2bGet(`deal_id=${encodeURIComponent(id)}`);
         } catch (e) {
@@ -20826,7 +21918,18 @@ async function b2bOpenDeal(kind, id) {
     }
     if (kind === 'pickup')       return _b2bStagePickup(deal);
     if (kind === 'assign')       return _b2bStageAssign(deal);
-    if (kind === 'pricing')      return _b2bStagePricing(deal);
+    if (kind === 'pricing') {
+        // Opening the sheet is what "actively pricing" means (Nick, 2026-09-03:
+        // a stage that tells that from "awaiting pricing"). Fired un-awaited and
+        // only once per deal -- the server ignores a repeat, so the first open
+        // is the one that counts and the screen never waits on it.
+        if (!deal.pricing_started_at) {
+            _b2bSend({ action: 'start_pricing', id: deal.id, user: _b2bUser() })
+                .then(() => { deal.pricing_started_at = new Date().toISOString(); })
+                .catch(() => {});
+        }
+        return _b2bStagePricing(deal);
+    }
     if (kind === 'quote')        return _b2bStageQuote(deal);
     if (kind === 'listloc')      return _b2bStageListingLocation(deal);
     if (kind === 'listing')      return _b2bStageListing(deal);
@@ -20849,12 +21952,35 @@ function _b2bSummary(deal) {
         // a separator dangling at the end of the line.
         rows.push(['Contact', escapeHtml(deal.client?.contact || '—')]);
         if (deal.client?.contact_email) rows.push(['Email', escapeHtml(deal.client.contact_email)]);
-        if (deal.client?.contact_phone) rows.push(['Phone', escapeHtml(deal.client.contact_phone)]);
+        if (deal.client?.contact_phone) rows.push(['Phone', _b2bPhoneHtml(deal.client.contact_phone)]);
     }
     rows.push(
-        [_b2bIntake(deal).was, deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'],
+        // Corp gets a pencil on the collection date. Paul, 2026-08-27: the Loch
+        // Lloyd quote was dated wrong and "I don't know how to change it in
+        // SPEEKSNET" -- because there was no way to. This date heads the client's
+        // quote and is how they identify it, so it is corp's to correct.
+        // The pencil is for CORRECTING a date that is already on the record, so
+        // it needs one to correct: on the pickup screen the date is still being
+        // entered in the form below, and offering an edit button beside "Not
+        // yet" there would be two ways to answer the same question, one of them
+        // about to be overwritten by the other. Past pickup, this is the only way.
+        [_b2bIntake(deal).was,
+            `${deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'}${
+                _b2bIsCorp() && deal.pickup_date && !['pickup', 'declined'].includes(deal.stage)
+                    ? ` <button class="b2b-sum-edit" title="Correct the collection date"
+                          onclick="event.stopPropagation();b2bEditPickupDate('${deal.id}')">${
+                          _b2bIco('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>')}</button>`
+                    : ''}`],
         ['Pricing',   _b2bStoreTag(deal.pricing_store)],
     );
+    // Only once there is something to say: a quote that has gone out, and a
+    // payment that has been made. Both were facts the system held and never
+    // showed anywhere a person looks.
+    if (deal.quote_sent_at) rows.push(['Quote sent', _b2bDate(deal.quote_sent_at)]);
+    if (deal.paid_at) {
+        rows.push(['Paid', `${_b2bDate(deal.paid_at)}${
+            deal.paid_amount != null ? ` · ${_b2bMoney(deal.paid_amount, 2)}` : ''}`]);
+    }
     if (deal.listing_store) rows.push(['Listing', _b2bStoreTag(deal.listing_store)]);
     if (deal.signed_by)     rows.push(['Signed by', escapeHtml(deal.signed_by)]);
     if (deal.delivered_by || deal.received_by) {
@@ -20880,6 +22006,10 @@ function _b2bStagePickup(deal) {
     const puDesc = draft ? (draft.desc || '') : (deal.pickup_desc || '');
     const puName = draft ? (draft.name || '') : (deal.signed_by || '');
     const recv   = draft ? (draft.recv || '') : (deal.received_by || '');
+    // Only ever from the draft: the field is deliberately blank on a fresh open
+    // (see the comment on the input below), so there is no deal value to fall
+    // back to here -- restoring it is purely about not losing a typed answer.
+    const puDate = draft ? (draft.date || '') : '';
     // A pickup that already knows where it is holding was raised by that store,
     // and signing it off drops it straight into pricing there -- there is no
     // routing stage in between, so this screen is the only place its custody
@@ -20914,7 +22044,7 @@ function _b2bStagePickup(deal) {
                          answer that looks like a considered one. Blank forces the
                          choice; the required check below catches it. max stops a
                          collection being dated into the future. -->
-                    <input id="b2bPuDate" type="date" class="form-input-lg" max="${today}">
+                    <input id="b2bPuDate" type="date" class="form-input-lg" max="${today}" value="${escapeHtml(puDate)}">
                 </div>`}
             </div>
             ${walkIn ? `
@@ -21050,6 +22180,166 @@ function _b2bItemName(it) { return [it.make, it.model].filter(Boolean).join(' ')
 const B2B_ICO_BARCODE = '<path d="M3 5v14"/><path d="M7 5v14"/><path d="M11 5v14"/>'
                       + '<path d="M14 5v14"/><path d="M18 5v14"/><path d="M21 5v14"/>';
 
+// ---------------------------------------------------------------------------
+// PER-ROW ACTIONS MENU on the listing sheet (trial)
+// ---------------------------------------------------------------------------
+//
+// Feedback, 2026-09-10: the listing row's action cell was "kind of cluttered and
+// hard to follow". It carried, per row: a listed stepper (- 0/1 +), a recycle
+// stepper (- 0 rec +), a "Recycle..." button and a barcode button. Four
+// controls, two of them near-identical steppers next to each other, on every
+// row of a fifty-line sheet.
+//
+// WHAT STAYS ON THE ROW is the loop a lister actually runs: - listed/qty +.
+// That green + is pressed once per unit all day and burying it behind a click
+// would be a straight tax on the main job.
+//
+// WHAT MOVES INTO THE MENU is everything occasional: recycle one out, put one
+// back, recycle several at once, print labels.
+//
+// TWO SIGNALS THAT MUST SURVIVE BEING COLLAPSED. This is the same trap as
+// hiding a notification badge in a menu -- the control was carrying information
+// as well as an action:
+//
+//   - The barcode button is COLOUR-CODED: amber while any unit still needs a
+//     label, green once they are all printed. That colour is the entire
+//     reminder, and no print is ever forced. So the trigger inherits it.
+//   - "N rec" told you at a glance that units had been recycled off this line.
+//     A chip beside the trigger shows it, and only when it is not zero.
+//
+// ONE MENU ELEMENT, POSITIONED FIXED. Not a menu per row: fifty rows would mean
+// fifty hidden menus in the DOM, and an absolutely-positioned one would be
+// clipped anyway -- the sheet scrolls horizontally inside .b2b-ss and has a
+// sticky header. Fixed coordinates read off the trigger at open time escape
+// both. The trade is that a fixed menu does not follow a scroll, so scrolling
+// closes it.
+
+let _b2bRowMenuFor = null;      // item id the open menu belongs to
+
+function _b2bRowMenuEl() {
+    let el = document.getElementById('b2bRowMenu');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'b2bRowMenu';
+    el.className = 'b2b-rowmenu';
+    el.setAttribute('role', 'menu');
+    // On the body, so no ancestor's overflow can clip it.
+    document.body.appendChild(el);
+    return el;
+}
+
+function b2bRowMenuClose() {
+    _b2bRowMenuFor = null;
+    const el = document.getElementById('b2bRowMenu');
+    if (el) el.classList.remove('open');
+    document.querySelectorAll('.b2b-rowacts.on').forEach(b => b.classList.remove('on'));
+}
+
+// The trigger on each row. Carries the label state and the recycled count,
+// because collapsing the controls must not collapse what they were telling you.
+function _b2bRowActsBtn(it, ok) {
+    const recycled = Number(it.recycled_qty) || 0;
+    const short = it.sku ? _b2bLabelsShort(it) : 0;
+    const printed = Number(it.label_printed_qty) || 0;
+    const labelState = short > 0 ? 'b2b-rowacts-todo' : (printed > 0 ? 'b2b-rowacts-done' : '');
+    const bits = [];
+    if (short > 0) bits.push(`${short} label${short === 1 ? '' : 's'} to print`);
+    if (recycled) bits.push(`${recycled} recycled out`);
+    const tip = bits.length ? bits.join(' · ') : 'Recycle units, print labels';
+    return `${recycled ? `<span class="b2b-rec-chip" title="Recycled out of this line">${recycled} rec</span>` : ''}
+        <button class="b2b-rowacts ${labelState}" data-tip="${escapeHtml(tip)}"
+            aria-haspopup="true" aria-label="More actions for this line"
+            onclick="b2bRowActions(event,'${it.id}')">${_b2bIco('<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>')}</button>`;
+}
+
+function b2bRowActions(ev, itemId) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    // Second click on the same row closes, like every other menu.
+    if (_b2bRowMenuFor === itemId) return b2bRowMenuClose();
+    b2bRowMenuClose();
+
+    const it = _b2bLocalItem(itemId);
+    if (!it) return;
+    const qty = Number(it.quantity) || 1;
+    const recycled = Number(it.recycled_qty) || 0;
+    const scrap = _b2bIsScrap(it);
+    const ok = _b2bSatisfied(it);
+    const short = it.sku ? _b2bLabelsShort(it) : 0;
+    const printed = Number(it.label_printed_qty) || 0;
+
+    // The same disabled rules the buttons carried, in one place rather than
+    // spread across four onclicks.
+    const row = (label, sub, onclick, opts) => {
+        const o = opts || {};
+        if (o.hide) return '';
+        const dis = o.disabled ? 'disabled' : '';
+        return `<button class="b2b-rowmenu-item ${o.cls || ''}" ${dis}
+            title="${escapeHtml(o.title || '')}"
+            onclick="b2bRowMenuClose();${o.disabled ? '' : onclick}">
+            <span class="b2b-rowmenu-ico">${_b2bIco(o.ico || '')}</span>
+            <span class="b2b-rowmenu-txt"><b>${escapeHtml(label)}</b>${
+                sub ? `<span>${escapeHtml(sub)}</span>` : ''}</span>
+        </button>`;
+    };
+
+    const el = _b2bRowMenuEl();
+    el.innerHTML = [
+        `<div class="b2b-rowmenu-head">${escapeHtml(_b2bItemName(it))}
+            <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}</span></div>`,
+        row('Print labels', short > 0
+                ? `${short} of ${qty} still to print`
+                : (printed > 0 ? 'All printed — reprint' : `${qty === 1 ? 'One label' : 'It asks how many'}`),
+            `b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')`,
+            { hide: !it.sku, ico: B2B_ICO_BARCODE,
+              cls: short > 0 ? 'todo' : (printed > 0 ? 'done' : '') }),
+        row('Recycle one out', ok ? 'Every unit is accounted for' : `${qty - recycled} left on this line`,
+            `b2bRecycleUnit('${it.id}')`,
+            { disabled: ok, ico: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' }),
+        row('Recycle several…', 'Choose how many at once',
+            `b2bRecycleUnits('${it.id}')`,
+            { disabled: ok, ico: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>' }),
+        row('Put one back', recycled ? `${recycled} recycled out` : 'Nothing recycled out',
+            `b2bUnRecycleUnit('${it.id}')`,
+            { disabled: recycled <= 0, ico: '<path d="M3 12a9 9 0 1 0 9-9"/><polyline points="3 3 3 9 9 9"/>' }),
+    ].filter(Boolean).join('');
+
+    // Fixed coordinates off the trigger, clamped to the viewport. Right-aligned
+    // to the button because the cell sits at the end of the row, and flipped
+    // above when there is no room below -- the last rows of a long sheet are
+    // exactly where this gets used.
+    const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+    el.classList.add('open');
+    if (btn) {
+        btn.classList.add('on');
+        const r = btn.getBoundingClientRect();
+        const h = el.offsetHeight;
+        const w = el.offsetWidth;
+        const below = window.innerHeight - r.bottom;
+        const top = (below < h + 12 && r.top > h + 12) ? r.top - h - 6 : r.bottom + 6;
+        el.style.top = `${Math.max(8, Math.min(top, window.innerHeight - h - 8))}px`;
+        el.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`;
+    }
+    _b2bRowMenuFor = itemId;
+}
+
+// Bound once. A fixed-position menu does not travel with the row it belongs to,
+// so a scroll has to close it rather than leave it pointing at nothing.
+document.addEventListener('click', (ev) => {
+    if (!_b2bRowMenuFor) return;
+    if (ev.target.closest('#b2bRowMenu') || ev.target.closest('.b2b-rowacts')) return;
+    b2bRowMenuClose();
+});
+document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape' || !_b2bRowMenuFor) return;
+    // Swallowed so one Escape closes one thing -- not the menu AND the deal
+    // modal behind it.
+    ev.stopPropagation();
+    b2bRowMenuClose();
+});
+window.addEventListener('scroll', () => { if (_b2bRowMenuFor) b2bRowMenuClose(); }, true);
+window.addEventListener('resize', () => { if (_b2bRowMenuFor) b2bRowMenuClose(); });
+
+
 function _b2bLabelBtn(it, cls) {
     if (!it.sku) return '';
     const n = Number(it.quantity) || 1;
@@ -21065,6 +22355,25 @@ function _b2bLabelBtn(it, cls) {
             : (n === 1 ? `Print the label for ${escapeHtml(it.sku)}` : `Print labels for ${escapeHtml(it.sku)} — it asks how many`));
     return `<button class="b2b-linelabel ${state} ${cls || ''}" onclick="event.stopPropagation();b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
         aria-label="Print labels for ${escapeHtml(it.sku)}" data-tip="${tip}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
+}
+
+// The whole pallet at once, from the pricing and listing footers. Says the
+// outstanding count on its face so nobody has to open every line to find out
+// whether there is anything left to tag -- and goes quiet when there isn't,
+// since a "print all" that prints nothing reads as broken.
+function _b2bPrintAllBtn(deal) {
+    if (_b2bIsPreval()) return '';                 // an evaluation has no labels
+    const lines = _b2bModalItems.filter(it => it.sku);
+    if (!lines.length) return '';
+    const short = _b2bUnlabelled().reduce((t, it) => t + _b2bLabelsShort(it), 0);
+    // A plain secondary button, with the outstanding count carried in a small
+    // pill rather than by tinting the whole control amber. The full amber fill
+    // made this a fourth button treatment in a five-item footer (plain-text
+    // Move and Close, green primary Submit) and read as a warning about the
+    // button itself. The pill says the same thing without shouting.
+    return `<button class="b2b-btn b2b-btn-secondary" onclick="b2bPrintAllLabels('${deal.id}')"
+        data-tip="${short ? `${short} label${short === 1 ? '' : 's'} on this deal still untagged` : 'Reprint every label on this deal'}"
+        >Print All SKUs${short ? `<span class="b2b-btn-count">${short}</span>` : ''}</button>`;
 }
 // WHAT THE ITEM EDITOR IS EDITING
 // -------------------------------
@@ -21249,6 +22558,8 @@ function b2bRetakeSign(id) {
     if (!confirm('Take the signature again?\n\nYou can re-sign on this device or with the phone. '
         + 'The signature already on file stays until a new one replaces it.')) return;
     const deal = _b2bDealById(id);
+    // Same unsaved-form problem as skipping: this reopens the screen.
+    _b2bCapturePickupDraft(id);
     if (deal) { deal.signature_path = null; b2bOpenDeal('pickup', id); }
 }
 
@@ -21265,12 +22576,7 @@ async function b2bSkipSign(id) {
         // description, the client's name and the received-by all vanished --
         // typed, unsaved, and gone the moment you explained why there was no
         // signature. b2bSignHere has always done this for the same reason.
-        _b2bPickupDraft = {
-            id,
-            desc: document.getElementById('b2bPuDesc')?.value,
-            name: document.getElementById('b2bPuSigned')?.value,
-            recv: document.getElementById('b2bPuRecv')?.value,
-        };
+        _b2bCapturePickupDraft(id);
         await _b2bSend({ action: 'skip_signature', id, reason: reason.trim() });
         await b2bRefresh();
         b2bOpenDeal('pickup', id);
@@ -21351,16 +22657,32 @@ let _b2bSigCtx = null, _b2bSigDrawn = false;
 // "hand it back" dead-end.
 let _b2bSignOnDevice = false;
 
-// Whatever's typed on the pickup screen, kept across the sign-pad round-trip so
-// signing on this device doesn't wipe an already-entered name/description.
+// Whatever's typed on the pickup screen, kept across anything that re-renders it
+// so a round-trip doesn't wipe an already-entered name/description/date.
+//
+// NOTHING on this screen is persisted until b2bSignPickup runs, so every path
+// that re-renders it has to capture first or the operator loses what they typed.
+// That used to be open-coded in the two paths anyone had noticed; it is a helper
+// now because there were three more (see the callers) and each new one was
+// rediscovering the same bug.
 let _b2bPickupDraft = null;
-function b2bSignHere(id) {
+function _b2bCapturePickupDraft(id) {
+    const desc = document.getElementById('b2bPuDesc');
+    if (!desc) return;                      // not on the pickup screen
     _b2bPickupDraft = {
         id,
-        desc: document.getElementById('b2bPuDesc')?.value,
+        desc: desc.value,
         name: document.getElementById('b2bPuSigned')?.value,
         recv: document.getElementById('b2bPuRecv')?.value,
+        // The date was NOT being kept, so a signing round-trip silently emptied
+        // a required field the operator had already answered. Re-entering it
+        // from memory is exactly how a collection ends up dated the day it was
+        // typed rather than the day it happened.
+        date: document.getElementById('b2bPuDate')?.value,
     };
+}
+function b2bSignHere(id) {
+    _b2bCapturePickupDraft(id);
     b2bOpenSign(id, true);
 }
 
@@ -21581,36 +22903,79 @@ async function b2bDoTransfer(id, btn) {
 // same _b2bModalItems array, arranging the sheet arranges the client's quote --
 // grouping the laptops together reads better to them too.
 let _b2bDragId = null;
+// Which row the line would land on, and on which side of it. Kept so the drop
+// uses exactly what the gap on screen promised -- they used to disagree.
+let _b2bDropId = null;
+let _b2bDropBelow = false;
 
 function b2bDragStart(ev, id) {
     _b2bDragId = id;
     try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', id); } catch (_) {}
-    document.getElementById(`b2bPline-${id}`)?.classList.add('b2b-dragging');
+    const row = document.getElementById(`b2bPline-${id}`);
+    row?.classList.add('b2b-dragging');
+    // Drag the whole row as the ghost rather than the grip alone, so what you
+    // are moving is what you see moving.
+    try { if (row) ev.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2); } catch (_) {}
+    document.getElementById('b2bItemGrid')?.classList.add('b2b-reordering');
 }
 function b2bDragEnd() {
-    document.querySelectorAll('.b2b-pline.b2b-dragging, .b2b-pline.b2b-dropto')
-        .forEach(r => r.classList.remove('b2b-dragging', 'b2b-dropto'));
+    document.querySelectorAll('.b2b-pline.b2b-dragging, .b2b-pline.b2b-dropto, .b2b-pline.b2b-dropto-below')
+        .forEach(r => r.classList.remove('b2b-dragging', 'b2b-dropto', 'b2b-dropto-below'));
+    document.getElementById('b2bItemGrid')?.classList.remove('b2b-reordering');
     _b2bDragId = null;
+    _b2bDropId = null;
+    _b2bDropBelow = false;
+}
+// Leaving a row only clears its own marker, and only when the pointer has
+// actually left it -- dragleave also fires crossing between the row's own
+// children, which made the gap flicker.
+function b2bDragLeave(ev, id) {
+    if (!_b2bDragId) return;
+    const row = document.getElementById(`b2bPline-${id}`);
+    if (!row || row.contains(ev.relatedTarget)) return;
+    if (_b2bDropId === id) { _b2bDropId = null; }
+    row.classList.remove('b2b-dropto', 'b2b-dropto-below');
 }
 function b2bDragOver(ev, id) {
     if (!_b2bDragId || _b2bDragId === id) return;
     ev.preventDefault();                       // without this the drop never fires
     try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
     const row = document.getElementById(`b2bPline-${id}`);
-    document.querySelectorAll('.b2b-pline.b2b-dropto').forEach(r => {
-        if (r !== row) r.classList.remove('b2b-dropto');
+    if (!row) return;
+    // Above or below, by which half of the row the pointer is in. Without this
+    // the drop always inserted at the hovered line's index, so landing a line
+    // *after* another one meant aiming at the one past it -- the "hard to be
+    // precise" part of the report. The gap that opens is the promise; the drop
+    // below keeps it.
+    const box = row.getBoundingClientRect();
+    const below = (ev.clientY - box.top) > (box.height / 2);
+    if (_b2bDropId === id && _b2bDropBelow === below) return;   // nothing moved
+    _b2bDropId = id;
+    _b2bDropBelow = below;
+    document.querySelectorAll('.b2b-pline.b2b-dropto, .b2b-pline.b2b-dropto-below').forEach(r => {
+        if (r !== row) r.classList.remove('b2b-dropto', 'b2b-dropto-below');
     });
-    row?.classList.add('b2b-dropto');
+    row.classList.add('b2b-dropto');
+    row.classList.toggle('b2b-dropto-below', below);
 }
 async function b2bDrop(ev, id) {
     ev.preventDefault();
     const from = _b2bDragId;
+    // Read the side BEFORE b2bDragEnd clears it.
+    const below = (_b2bDropId === id) ? _b2bDropBelow : false;
     b2bDragEnd();
     if (!from || from === id) return;
     const items = _b2bModalItems;
     const a = items.findIndex(i => i.id === from);
-    const b = items.findIndex(i => i.id === id);
+    let b = items.findIndex(i => i.id === id);
     if (a < 0 || b < 0) return;
+    // Dropping below the target lands after it. Removing the dragged line first
+    // shifts every later index down by one, so only adjust when it came from
+    // above the target -- otherwise the line ends up one place further than the
+    // gap showed.
+    if (below) b += 1;
+    if (a < b) b -= 1;
+    if (a === b) return;
 
     const before = items.slice();
     items.splice(b, 0, items.splice(a, 1)[0]);
@@ -21879,11 +23244,98 @@ function _b2bPaintTotals() {
     _b2bPaintQuoteDoc();
 }
 
+// Lines edited locally but not yet posted. Text/number cells only save on
+// `change`, which never fires if the modal is dismissed while the cell still has
+// focus -- Escape or an overlay click threw the edit away silently. Paul,
+// 2026-08-22, asking for a Save button, was describing the same unease from the
+// other side ("if you accidently made a change while simply viewing you would
+// want to make sure that didn't take"): nothing on this sheet told him whether
+// what he saw had been written.
+const _b2bPendingEdits = new Set();
+
+function _b2bPendingCount() { return _b2bPendingEdits.size; }
+
+// Post everything still outstanding. Blurs first so the focused cell fires its
+// own `change` through the normal path -- that covers the common case and keeps
+// one save route -- then sweeps anything left.
+// Two kinds of key live in the set, and they save through different endpoints:
+// a bare item id, and `notes:<deal id>` for the quote/internal notes. Told apart
+// by the prefix rather than by looking the id up -- the first version of this
+// routed on whether _b2bLocalItem() found something, which silently DELETED
+// every notes key without saving it, because a deal id is not an item id. That
+// is precisely the lose-it-on-Escape bug this function exists to prevent.
+const _B2B_NOTES_KEY = 'notes:';
+
+function _b2bFlushEdits() {
+    const active = document.activeElement;
+    // Blur first so a focused field fires its own `change` through the normal
+    // path. The notes panel is on the modal, not inside .b2b-items, so it has to
+    // be named here or its textarea never fires on the way out.
+    if (active && typeof active.blur === 'function' && active.closest
+        && active.closest('.b2b-items, #b2bItemSheet, #b2bSerialPop, .b2b-notespanel')) {
+        active.blur();
+    }
+    if (!_b2bPendingEdits.size) return;
+    Array.from(_b2bPendingEdits).forEach(key => {
+        if (String(key).startsWith(_B2B_NOTES_KEY)) {
+            const dealId = String(key).slice(_B2B_NOTES_KEY.length);
+            if (_b2bModalDeal && _b2bModalDeal.id === dealId) {
+                try { b2bSaveNotes(dealId); } catch (_) {}
+            } else {
+                // The deal it belonged to is no longer open, so there is nothing
+                // left to read the text off. Drop it rather than posting stale.
+                _b2bPendingEdits.delete(key);
+            }
+            return;
+        }
+        if (_b2bLocalItem(key)) { try { b2bItemSave(key); } catch (_) {} }
+        else _b2bPendingEdits.delete(key);
+    });
+}
+
+// The footer's saved/unsaved readout. Autosave stays -- the live-sync merge
+// assumes the server is current, and an explicit-save-only sheet would break
+// collaborative pricing -- but "saved" is now something the screen says out
+// loud rather than something you have to trust.
+function _b2bPaintSaveState() {
+    const el = document.getElementById('b2bSaveState');
+    if (!el) return;
+    const n = _b2bPendingCount();
+    el.className = 'b2b-savestate ' + (n ? 'pending' : 'ok');
+    // Counted by what is outstanding, and named for what it actually is: the
+    // set holds line edits AND note edits, so "3 lines not saved" was wrong the
+    // moment somebody typed in the notes panel on a screen with no lines open.
+    const lines = Array.from(_b2bPendingEdits)
+        .filter(k => !String(k).startsWith(_B2B_NOTES_KEY)).length;
+    const notes = n - lines;
+    el.textContent = !n ? 'All changes saved'
+        : lines && notes ? `${lines} line${lines === 1 ? '' : 's'} and a note not saved yet`
+        : notes ? 'Note not saved yet'
+        : `${lines} line${lines === 1 ? '' : 's'} not saved yet`;
+    // Hidden, not merely disabled. "All changes saved" beside a greyed-out
+    // Save is two controls contradicting each other: one says there is nothing
+    // to do, the other implies there is something you are not allowed to do.
+    // The button is the exception, so it appears only when it has a job.
+    const btn = document.getElementById('b2bSaveNow');
+    if (btn) {
+        btn.disabled = !n;
+        btn.style.display = n ? '' : 'none';
+    }
+}
+
+function b2bSaveNow() {
+    _b2bFlushEdits();
+    _b2bPaintSaveState();
+    _b2bSay(_b2bPendingCount() ? 'Saving…' : 'Everything on this sheet is saved.');
+}
+
 // Local edit -> repaint. Text/number fields post on change (blur), so typing
 // stays smooth and we don't fire a request per keystroke.
 function b2bItemInput(id, field, value) {
     const it = _b2bLocalItem(id);
     if (!it) return;
+    _b2bPendingEdits.add(id);
+    _b2bPaintSaveState();
     it[field] = (field === 'quantity') ? Math.max(1, parseInt(value, 10) || 1)
               : (field === 'value' || field === 'offer' || field === 'shipping_cost') ? (parseFloat(value) || 0)
               : value;
@@ -21901,6 +23353,8 @@ function b2bItemSave(id) {
     const it = _b2bLocalItem(id);
     if (!it) return Promise.resolve();
     _b2bDirty = true;
+    _b2bPendingEdits.delete(id);
+    _b2bPaintSaveState();
     return _b2bEnqueue(id, () => _b2bSend({
         action: _b2bCtx().update, id,
         make: it.make, model: it.model, condition: it.condition,
@@ -22224,6 +23678,15 @@ function _b2bRepaintItems() {
         if (_b2bLocalItem(_b2bSheetId)) _b2bPaintItemSheet();
         else b2bCloseItemSheet();
     }
+    // Same for the serials popup, for the same reason: it hangs off the grid but
+    // lives on document.body, so a repaint left it showing a stale count (and a
+    // stale textarea) until it was closed and reopened. Only repaint while nobody
+    // is typing in it -- rewriting the textarea under a live cursor would lose
+    // the caret position and any half-typed serial.
+    if (_b2bSerialPopId != null) {
+        if (!_b2bLocalItem(_b2bSerialPopId)) b2bSerialsClose();
+        else if (document.activeElement?.id !== 'b2bSerialPopInput') _b2bSerialPopPaint();
+    }
 }
 
 // Which spreadsheet rows have their inline ⋯ panel expanded.
@@ -22339,6 +23802,17 @@ function b2bSerialsOpen(id) {
         pop.id = 'b2bSerialPop';
         pop.className = 'b2b-serialpop';
         pop.addEventListener('mousedown', (e) => { if (e.target === pop) b2bSerialsClose(); });
+        // Escape has to close THIS, and close it by the route that saves. Without
+        // it the keypress fell through to the deal modal's handler: the deal shut,
+        // b2bSerialsClose never ran, and the serials just typed were never posted.
+        // Capture phase and stopPropagation so the deal underneath stays open --
+        // one Escape should close one thing.
+        pop.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            e.stopPropagation();
+            b2bSerialsClose();
+        }, true);
         document.body.appendChild(pop);
     }
     _b2bSerialPopPaint();
@@ -22363,7 +23837,8 @@ function _b2bSerialPopPaint() {
             </div>
             <div class="b2b-serialpop-sub">${escapeHtml(name)} · one serial per unit, comma separated</div>
             <textarea id="b2bSerialPopInput" rows="5" placeholder="C02X1234, C02X5678, …"
-                oninput="b2bItemSerials('${it.id}',this.value)">${escapeHtml(it.serials || '')}</textarea>
+                oninput="b2bItemSerials('${it.id}',this.value)"
+                onchange="b2bItemSave('${it.id}')">${escapeHtml(it.serials || '')}</textarea>
             <div class="b2b-serialpop-acts">
                 ${left > 0 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',false); _b2bSerialPopPaint()" title="This unit has no serial you can read">No Visible Serial</button>` : ''}
                 ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true); _b2bSerialPopPaint()" title="Fill every remaining slot">Fill All ${left}</button>` : ''}
@@ -22373,11 +23848,20 @@ function _b2bSerialPopPaint() {
 }
 function b2bSerialsClose() {
     const pop = document.getElementById('b2bSerialPop');
-    if (pop) pop.classList.remove('show');
+    if (!pop || !pop.classList.contains('show')) { _b2bSerialPopId = null; return; }
+    pop.classList.remove('show');
     const id = _b2bSerialPopId;
     _b2bSerialPopId = null;
-    // Persist whatever was typed and refresh the row's count badge.
+    // Persist whatever was typed and refresh the row's count badge. The textarea
+    // also saves on `change`, so this is belt-and-braces for the paths that close
+    // the popup without the field ever blurring (the ✖, Done, Escape, overlay).
     if (id) { try { b2bItemSave(id); } catch (_) {} }
+}
+
+// Whether the serials popup is currently up. Read by closeAllModals, which has
+// to save it before tearing the deal down.
+function _b2bSerialPopOpen() {
+    return !!(_b2bSerialPopId && document.getElementById('b2bSerialPop')?.classList.contains('show'));
 }
 let _b2bSerialPopId = null;
 
@@ -22451,6 +23935,12 @@ function _b2bSelInit() {
     if (_b2bSel.bound) return;
     _b2bSel.bound = true;
     document.addEventListener('mousedown', (e) => {
+        // The reorder grip lives inside the line-number cell, so without this a
+        // press on it starts a cell-selection drag AND an HTML5 row drag at the
+        // same time -- the two fighting each other is what made reordering feel
+        // imprecise (Haydn, 2026-09-02: "conflicts with the drag to select tool
+        // a lot and is hard to be precise"). The grip owns its own gesture.
+        if (e.target.closest && e.target.closest('.b2b-grip')) return;
         const cell = e.target.closest && e.target.closest('.b2b-items.b2b-ss .b2b-pcell');
         if (!cell) { if (!(e.target.closest && e.target.closest('.b2b-items.b2b-ss'))) _b2bSelClear(); return; }
         const rc = _b2bSheetCellRC(cell);
@@ -22579,12 +24069,15 @@ function _b2bItemSheet() {
         }).join('');
 
         return `
-        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}"
+            ${_b2bIsPreval() ? '' : `ondragover="b2bDragOver(event,'${it.id}')" ondrop="b2bDrop(event,'${it.id}')" ondragleave="b2bDragLeave(event,'${it.id}')"`}>
             <div class="b2b-prow">
-                <span class="b2b-pcell b2b-pc-sku ${_b2bIsPreval() ? '' : 'b2b-pc-grab'}" ${_b2bIsPreval() ? '' : 'draggable="true"'}
-                    title="${_b2bIsPreval() ? 'Line ' + escapeHtml(String(it.line_no)) : escapeHtml(it.sku || '') + ' — drag to reorder'}"
-                    ${_b2bIsPreval() ? '' : `ondragstart="b2bDragStart(event,'${it.id}')" ondragend="b2bDragEnd()"
-                    ondragover="b2bDragOver(event,'${it.id}')" ondrop="b2bDrop(event,'${it.id}')"`}>
+                <span class="b2b-pcell b2b-pc-sku"
+                    title="${_b2bIsPreval() ? 'Line ' + escapeHtml(String(it.line_no)) : escapeHtml(it.sku || '')}">
+                    ${_b2bIsPreval() ? '' : `<span class="b2b-grip" draggable="true"
+                        title="Drag to reorder this line"
+                        ondragstart="b2bDragStart(event,'${it.id}')" ondragend="b2bDragEnd()"
+                        aria-label="Reorder line ${escapeHtml(_b2bLineNo(it))}"></span>`}
                     <span class="b2b-mono">${escapeHtml(_b2bIsPreval() ? String(it.line_no) : _b2bLineNo(it))}</span>
                     ${blocked.length ? `<i class="b2b-ss-flag" title="${escapeHtml(blocked.join(', '))}"></i>` : ''}
                 </span>
@@ -22717,6 +24210,9 @@ function b2bItemDetail(id) {
 
 function b2bCloseItemSheet() {
     const wasOpen = _b2bSheetId != null;
+    // The detail sheet carries its own inputs, so the same unfired-`change`
+    // problem applies to closing it as to closing the deal behind it.
+    _b2bFlushEdits();
     document.getElementById('b2bItemSheet')?.remove();
     _b2bSheetId = null;
     // Repaint the grid so the row reflects anything changed in the sheet -- the
@@ -22884,10 +24380,21 @@ function _b2bStagePricing(deal) {
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
+            <!-- Above the quote preview, because this is where they are written:
+                 whoever prices the deal is who knows what the client should be
+                 told and what the approver needs warning about. Haydn asked for
+                 them and Haydn prices -- putting them only on the approval
+                 screen would have left the person who wanted them unable to
+                 reach them. -->
+            ${_b2bNotesPanel(deal)}
             ${_b2bQuoteClientBlock(deal)}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
+            <span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>
+            <button class="b2b-btn b2b-btn-secondary" id="b2bSaveNow" disabled style="display:none;"
+                title="Post anything typed but not yet saved" onclick="b2bSaveNow()">Save</button>
             ${_b2bMoveBtn(deal)}
+            ${_b2bPrintAllBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             ${_b2bIsEmployee()
                 ? '<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">Prices save automatically — a manager or DM submits this for quoting.</span>'
@@ -22922,11 +24429,15 @@ async function b2bSubmitPricing(id, btn) {
                 // The client note is a column now, so the reason is right there.
                 line?.querySelector('.b2b-pc-note input')?.focus();
             } else {
-                // Serials, which live in the row panel.
+                // Serials. They moved out of the row panel into their own popup,
+                // and this went on hunting for the old .b2b-rp-serialrow input --
+                // a selector that has not existed since, so "not ready: serials"
+                // scrolled to the line and then focused nothing. Open the popup
+                // that actually edits them; b2bSerialsOpen focuses its textarea.
                 _b2bRowOpen.add(g.id);
                 _b2bRowShut.delete(g.id);
                 _b2bRepaintItems();
-                document.querySelector(`#b2bPline-${g.id} .b2b-rp-serialrow input`)?.focus();
+                b2bSerialsOpen(g.id);
             }
         }
         return _b2bSay(gaps.map(it => `${_b2bItemName(it)} (${_b2bItemBlocked(it).join(', ')})`).join(' · '), true);
@@ -23104,6 +24615,178 @@ function _b2bRepaintReview(focusId) {
     if (focusId) el.querySelector(`[data-rvw="${focusId}"] input`)?.focus();
 }
 
+// The two notes that ride with a quote (Haydn, 2026-09-02: "add a custom line at
+// the bottom of the b2b quote... and also a large field i can put stuff for paul
+// to know for when hes sending it").
+//
+// Kept side by side precisely BECAUSE they are easy to confuse: one prints in
+// front of the client and one never leaves the building, so the safest place to
+// show them is together, each labelled, where the difference is unmissable. The
+// client-facing one previews live on the quote document below.
+//
+// Saves on blur like the pricing sheet, and through the same pending-edit
+// tracker, so the footer's saved/unsaved readout covers these too.
+function _b2bNotesPanel(deal) {
+    if (!['pricing', 'review', 'quote'].includes(deal.stage)) return '';
+    return `
+        <div class="b2b-sec b2b-notespanel">
+            <div class="b2b-sec-h"><span>Notes On This Quote</span></div>
+            <div class="b2b-grid2" style="padding:12px 14px;">
+                <div>
+                    <label class="form-label-caps">Extra Line On The Quote
+                        <span class="b2b-tag-cli">the client sees this</span></label>
+                    <textarea id="b2bQuoteNote" class="form-input-lg" rows="3" maxlength="2000"
+                        placeholder="e.g. Collection can be arranged for the week of the 15th."
+                        oninput="b2bNoteInput('quote_note',this.value)"
+                        onchange="b2bSaveNotes('${deal.id}')">${escapeHtml(deal.quote_note || '')}</textarea>
+                    <p class="b2b-hint">Prints at the bottom of the quote, under the standard notes.</p>
+                </div>
+                <div>
+                    <label class="form-label-caps">For Whoever Sends It
+                        <span class="b2b-tag-int">never leaves the building</span></label>
+                    <textarea id="b2bInternalNote" class="form-input-lg" rows="3" maxlength="4000"
+                        placeholder="e.g. They asked about the two dead laptops — we took them at no charge."
+                        oninput="b2bNoteInput('internal_note',this.value)"
+                        onchange="b2bSaveNotes('${deal.id}')">${escapeHtml(deal.internal_note || '')}</textarea>
+                    <p class="b2b-hint">Context for the approver. Never printed on the quote.</p>
+                </div>
+            </div>
+        </div>`;
+}
+
+// Local first, so the quote preview updates as it is typed; the save is on blur.
+//
+// The preview repaint is debounced. _b2bPaintQuoteDoc re-renders the entire
+// client document, and doing that on every keystroke of a note is a whole
+// quote's worth of layout per character -- fine on a three-line deal, visibly
+// sticky on a fifty-line one. A tenth of a second reads as instant and coalesces
+// a burst of typing into one repaint. The caret is unaffected either way: the
+// textarea is outside the document being redrawn.
+let _b2bNotePaintTimer = null;
+function b2bNoteInput(field, value) {
+    if (!_b2bModalDeal) return;
+    _b2bModalDeal[field] = value;
+    _b2bPendingEdits.add(_B2B_NOTES_KEY + _b2bModalDeal.id);
+    _b2bPaintSaveState();
+    if (field !== 'quote_note') return;
+    clearTimeout(_b2bNotePaintTimer);
+    _b2bNotePaintTimer = setTimeout(() => { try { _b2bPaintQuoteDoc(); } catch (_) {} }, 120);
+}
+
+function b2bSaveNotes(id) {
+    const deal = _b2bModalDeal;
+    if (!deal || deal.id !== id) return Promise.resolve();
+    _b2bDirty = true;
+    _b2bPendingEdits.delete(_B2B_NOTES_KEY + id);
+    _b2bPaintSaveState();
+    return _b2bEnqueue(_B2B_NOTES_KEY + id, () => _b2bSend({
+        action: 'set_notes', id,
+        quote_note: deal.quote_note || '',
+        internal_note: deal.internal_note || '',
+    })).catch(e => _b2bSay(`Couldn't save that note: ${e.message}`, true));
+}
+
+// 1.2 -- record that the quote went to the client by hand.
+//
+// Paul asked for this twice. The tool's own Open In Email already stamps the
+// date, so this is for the case he actually hit: sending it himself, outside the
+// tool, which left nothing on the record at all.
+async function b2bMarkQuoteSent(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal) return;
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    const raw = prompt(
+        `What date did the quote go to ${deal.client?.company || 'the client'}?\n\n`
+        + `Use this when you sent it yourself rather than through Open In Email. `
+        + `It moves the deal to "Out For Quote" and starts the clock on their answer.`,
+        deal.quote_sent_at ? String(deal.quote_sent_at).slice(0, 10) : today);
+    if (raw === null) return;
+    const when = raw.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(when)) return _b2bSay('Give the date as YYYY-MM-DD.', true);
+    try {
+        await _b2bSend({ action: 'set_quote_sent', id, quote_sent_at: when, role: _b2bRole() });
+        closeAllModals();
+        await b2bRefresh();
+    } catch (e) {
+        _b2bSay(`Couldn't record that: ${e.message}`, true);
+    }
+}
+
+// 1.4 -- correct the collection date.
+//
+// Corp only, and it says why it matters: this date is on the client's quote and
+// is how they identify it, so it is not a quiet edit.
+async function b2bEditPickupDate(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal) return;
+    const raw = prompt(
+        `What date were these goods actually collected?\n\n`
+        + `This is the date the client's quote is headed with and how they identify it, `
+        + `so it should match reality rather than when it was typed in.`,
+        deal.pickup_date || '');
+    if (raw === null) return;
+    const when = raw.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(when)) return _b2bSay('Give the date as YYYY-MM-DD.', true);
+    try {
+        await _b2bSend({ action: 'update_pickup_date', id, pickup_date: when, role: _b2bRole(), user: _b2bUser() });
+        closeAllModals();
+        await b2bRefresh();
+    } catch (e) {
+        _b2bSay(`Couldn't change the date: ${e.message}`, true);
+    }
+}
+
+// 1.3 -- record that the client has been paid.
+//
+// Defaults to what we owe them (the accepted net offer), because that is the
+// figure in all but the exceptional case, and typing it again is how a wrong
+// number gets recorded.
+async function b2bMarkPaid(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal) return;
+    if (deal.paid_at) {
+        if (!confirm(`${deal.ref} is already recorded as paid ${_b2bDate(deal.paid_at)}`
+            + `${deal.paid_amount != null ? ` (${_b2bMoney(deal.paid_amount, 2)})` : ''}`
+            + `${deal.paid_by ? ` by ${deal.paid_by}` : ''}.\n\nClear that record?`)) return;
+        try {
+            await _b2bSend({ action: 'mark_paid', id, paid_at: null, role: _b2bRole() });
+            await b2bRefresh();
+        } catch (e) { _b2bSay(`Couldn't clear it: ${e.message}`, true); }
+        return;
+    }
+    // One prompt, not two. Both answers are pre-filled with the ones that are
+    // almost always right -- what we owe, paid today -- so the common case is
+    // Enter, and a backdated or part payment is an edit rather than a second
+    // dialog. Two sequential prompts read like an interrogation for something
+    // that is usually a single confirmation.
+    const owed = _b2bNetOffer(deal);
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    const raw = prompt(
+        `Record a payment to ${deal.client?.company || 'the client'}.\n\n`
+        + `We owe ${_b2bMoney(owed, 2)} on the accepted quote.\n`
+        + `Enter as "amount on date" — edit either part if it differs.`,
+        `${Number(owed || 0).toFixed(2)} on ${today}`);
+    if (raw === null) return;
+
+    const text = String(raw).trim();
+    const when = (text.match(/(\d{4}-\d{2}-\d{2})/) || [])[1] || today;
+    // The amount is whatever is left once the date is out of the way, so a
+    // typed "$1,250.00 on 2026-09-05" reads the same as "1250".
+    const amt = parseFloat(text.replace(when, '').replace(/[^0-9.]/g, ''));
+    if (!Number.isFinite(amt) || amt < 0) {
+        return _b2bSay("Couldn't read an amount out of that — try \"1250 on 2026-09-05\".", true);
+    }
+    if (when > today) return _b2bSay("A payment can't be dated in the future.", true);
+    try {
+        await _b2bSend({ action: 'mark_paid', id, paid_at: when, paid_amount: amt,
+                         role: _b2bRole(), user: _b2bUser() });
+        _b2bSay(`Recorded ${_b2bMoney(amt, 2)} paid ${_b2bDate(when)}.`);
+        await b2bRefresh();
+    } catch (e) {
+        _b2bSay(`Couldn't record the payment: ${e.message}`, true);
+    }
+}
+
 function _b2bStageReview(deal) {
     const canAccept = _b2bCanAccept();
     const sent = deal.quote_send_count
@@ -23127,9 +24810,11 @@ function _b2bStageReview(deal) {
                     : 'A CEO, MOCD or District Manager sends it out.'}
             </div>
             ${_b2bProofPanel(deal)}
+            ${_b2bNotesPanel(deal)}
             ${_b2bReviewSplit(deal, "What you're approving")}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
+            <span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>
             ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             ${_b2bIsCorp() ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
@@ -23137,7 +24822,17 @@ function _b2bStageReview(deal) {
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>
                 <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
                     value="${escapeHtml(deal.client?.contact_email || '')}">
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
+                <!-- A complete route, not a fallback: on an unsent quote this
+                     also records the send, so Mark Accepted becomes available
+                     without anyone having to open a mail draft first. -->
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
+                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
+                <!-- For a quote sent by hand, outside the tool. Paul asked for
+                     this twice; Open In Email stays the normal route. Same label
+                     as the one on the quote screen's send bar -- one action
+                     should not have two names. -->
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')"
+                    data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
                 <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>`
                 : `<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">${escapeHtml(sent)}</span>`}`,
         after: () => { _b2bPaintTotals(); _b2bPaintQuoteDoc(); },
@@ -23173,14 +24868,21 @@ function _b2bStageQuote(deal) {
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
                 <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
                     value="${escapeHtml(deal.client?.contact_email || '')}">
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
+                <!-- A complete route, not a fallback: on an unsent quote this
+                     also records the send, so Mark Accepted becomes available
+                     without anyone having to open a mail draft first. -->
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
+                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
                 <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')" data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
                 <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
             </div>
             ${_b2bProofPanel(deal)}
+            ${_b2bNotesPanel(deal)}
             ${_b2bReviewSplit(deal, 'Quote lines')}`,
             footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
+            <span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>
             ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             ${_b2bIsCorp() ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
@@ -23224,8 +24926,13 @@ function _b2bStageQuote(deal) {
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
                 <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
                     value="${escapeHtml(deal.client?.contact_email || '')}">
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
+                <!-- A complete route, not a fallback: on an unsent quote this
+                     also records the send, so Mark Accepted becomes available
+                     without anyone having to open a mail draft first. -->
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
+                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
                 <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')" data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
                 <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
             </div>
             ${_b2bProofPanel(deal)}
@@ -23238,9 +24945,13 @@ function _b2bStageQuote(deal) {
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
             ${_b2bDealStatsHtml(_b2bModalItems, deal)}
+            ${_b2bNotesPanel(deal)}
             ${_b2bQuoteClientBlock(deal)}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
+            <span class="b2b-savestate ok" id="b2bSaveState">All changes saved</span>
+            <button class="b2b-btn b2b-btn-secondary" id="b2bSaveNow" disabled style="display:none;"
+                title="Post anything typed but not yet saved" onclick="b2bSaveNow()">Save</button>
             ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             ${_b2bIsCorp() ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
@@ -23408,7 +25119,7 @@ function _b2bQuoteDesc(it) {
 
 // Only mention the outcomes actually present, so a straightforward purchase
 // quote doesn't carry two paragraphs of explanation it doesn't need.
-function _b2bQuoteFootNotes(items) {
+function _b2bQuoteFootNotes(items, subject) {
     const notes = ['Reply to this email to accept the quote or ask about any line.'];
     if (items.some(it => _b2bDispOf(it) === 'no_residual')) {
         notes.push('Items marked no residual value carry no offer — we take them away at no cost to you '
@@ -23421,6 +25132,11 @@ function _b2bQuoteFootNotes(items) {
         notes.push('Certified data wipes are performed in-house to NIST 800-88 standards, with the charge '
             + 'deducted from your payment — never billed separately.');
     }
+    // The deal's own extra line, LAST -- after the standard notes, which is where
+    // Haydn asked for it ("a custom line at the bottom of the b2b quote"). Only
+    // this one is per-deal; everything above is derived from the lines.
+    const extra = String(subject?.quote_note || '').trim();
+    if (extra) notes.push(extra);
     return notes;
 }
 
@@ -23499,7 +25215,7 @@ function _b2bQuoteDoc(deal, items) {
             <b>${_b2bMoney(t.net, 2)}</b>
         </div>
         <div class="b2b-doc-foot">
-            ${_b2bQuoteFootNotes(items).map(escapeHtml).join(' ')}
+            ${_b2bQuoteFootNotes(items, deal).map(escapeHtml).join(' ')}
         </div>
     </div>`;
 }
@@ -23593,7 +25309,7 @@ function _b2bQuoteInlineHtml(deal, items) {
     </tr></table></td></tr>
   <tr><td style="padding:16px 24px;background:#f6f8fa;border-top:1px solid #eef2f6;font-size:11.5px;color:#647082;line-height:1.6;border-bottom-left-radius:13px;border-bottom-right-radius:13px;">
     <b style="color:#178048;">Reply to this email to accept the quote</b> or ask about any line.
-    ${_b2bQuoteFootNotes(items).slice(1).map(escapeHtml).join(' ')}
+    ${_b2bQuoteFootNotes(items, deal).slice(1).map(escapeHtml).join(' ')}
   </td></tr>
 </table>`;
 }
@@ -23625,31 +25341,66 @@ function _b2bQuoteText(deal, items) {
         t.wipe ? `Certified data wipe (${t.wipeUnits} device${t.wipeUnits === 1 ? '' : 's'}): -${_b2bMoney(t.wipe, 2)}` : null,
         `${t.wipe ? 'Total payable to you' : 'Total offer'}: ${_b2bMoney(t.net, 2)}`,
         '',
-        ..._b2bQuoteFootNotes(items),
+        ..._b2bQuoteFootNotes(items, deal),
         '',
         'Issued by SPEEKS Technology — authorized PayMore franchisee.',
     ].filter(l => l !== null).join('\n');
 }
 
+// Copy is a COMPLETE way to send a quote, not a fallback for the mailto.
+//
+// Nick, 2026-09-08: "I do not like the current work flow of it forcing you to
+// open your email. Need to make it so that way you just select copy, and in
+// that state you automatically have the ability to mark it as accepted."
+//
+// He is right that it was forced. Accepting requires stage `quote`, and the
+// ONLY route from `review` to `quote` was b2bOpenDraft -- which fires a mailto:
+// first. So anyone who preferred to paste into a webmail tab, or whose machine
+// has no mail client registered, had to trigger a draft they did not want
+// before the deal would let them accept.
+//
+// So a copy off the review screen records the send itself. The stage moves, the
+// Accept button appears, and the person pastes wherever they like.
+//
+// Recording is deliberately limited to leaving `review`. On a deal already at
+// `quote` there is nothing to unlock -- accept is available and the client has
+// had it -- and bumping quote_send_count for somebody copying the quote to
+// re-read it would corrupt the one honest record of how many times it actually
+// went out.
 async function b2bCopyQuote() {
     const deal = _b2bModalDeal;
     if (!deal) return;
     const html = _b2bQuoteInlineHtml(deal, _b2bModalItems);
     const text = _b2bQuoteText(deal, _b2bModalItems);
+
+    let copied = false;
     try {
         await navigator.clipboard.write([new ClipboardItem({
             'text/html':  new Blob([html], { type: 'text/html' }),
             'text/plain': new Blob([text], { type: 'text/plain' }),
         })]);
-        alert('Quote copied — paste it into Gmail or Outlook.');
+        copied = true;
     } catch (_) {
-        try {
-            await navigator.clipboard.writeText(text);
-            alert('Quote copied as plain text.');
-        } catch (e) {
-            alert(`Couldn't copy the quote: ${e.message}`);
-        }
+        try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
     }
+    if (!copied) return _b2bSay("Your browser blocked the clipboard — use Open In Email instead.", true);
+
+    // Nothing to record: already sent, or this person may not approve. Copying
+    // still works, it just doesn't move the deal.
+    if (!_b2bAwaitingApproval(deal) || !_b2bCanAccept()) {
+        return _b2bSay('Quote copied — paste it into Gmail or Outlook.');
+    }
+
+    try {
+        await _b2bSend({ action: 'send_quote', id: deal.id, to: '' });
+    } catch (e) {
+        // The copy succeeded, so say so rather than implying it failed.
+        return _b2bSay(`Quote copied, but it couldn't be recorded as sent: ${e.message}`, true);
+    }
+    await b2bRefresh();
+    const next = _b2bDealById(deal.id);
+    if (next) { _b2bModalDeal = next; _b2bStageQuote(next); }
+    _b2bSay('Quote copied and recorded as sent — paste it, then Mark Accepted once they agree.');
 }
 
 // Smart punctuation survives a clipboard paste but mangles in a mailto body,
@@ -23773,7 +25524,7 @@ async function b2bOpenDraft(id, to, copied) {
 }
 
 async function b2bAcceptQuote(id, btn) {
-    if (!_b2bApprovalGate(_b2bDealById(id) || _b2bModalDeal)) return;
+    if (!_b2bApprovalGate(_b2bDealById(id) || _b2bModalDeal, id, 'deal')) return;
     // The same readiness gate as submitting, because the server runs the same
     // one here -- checking only the reasons would let a line with two of five
     // serials get all the way to a 400 from the accept call.
@@ -23820,10 +25571,12 @@ function _b2bStageListingLocation(deal) {
         eyebrow: deal.ref,
         title: 'Assign Listing Store',
         sub: 'CORP priced this one, so pick the store that will list the items.',
+        full: true,
         body: `
             ${_b2bSummary(deal)}
             <div class="b2b-note ok"><span class="b2b-note-k">Accepted</span>
                 ${escapeHtml(deal.client?.company || '')} accepted ${_b2bMoney(_b2bNetOffer(deal), 2)} across ${deal.total_units} unit${deal.total_units === 1 ? '' : 's'}.</div>
+            ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
             <label class="form-label-caps" style="margin-top:14px;">List At</label>
             <div class="b2b-loc-pick">
                 ${STORE_CODES.map(c => `
@@ -23831,7 +25584,9 @@ function _b2bStageListingLocation(deal) {
                         <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
                         <span class="b2b-loc-c">${c}</span>
                     </button>`).join('')}
-            </div>`,
+            </div>
+            <label class="form-label-caps" style="margin-top:16px;">What's In It</label>
+            ${_b2bItemTableHtml(_b2bModalItems)}`,
         footer: `
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bAsGo" disabled onclick="b2bAssignListing('${deal.id}',this)">Send To Listing</button>`,
@@ -23895,6 +25650,7 @@ function _b2bStageListing(deal) {
             <div id="b2bListRows" class="b2b-items b2b-ss b2b-lgrid">${_b2bListRows()}</div>`,
         footer: `
             ${_b2bMoveBtn(deal)}
+            ${_b2bPrintAllBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bListDone" ${_b2bAllSatisfied() ? '' : 'disabled'}
                 onclick="b2bCompleteDeal('${deal.id}',this)">Complete Deal</button>`,
@@ -23990,7 +25746,7 @@ function _b2bListRows() {
             <span>Line</span><span>Item</span>
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Serials</span>
-            <span class="r">Value</span><span class="r">Cost</span>
+            <span class="r">Value ea</span><span class="r">Cost ea</span><span class="r">Line total</span>
             <span class="c">Listed</span><span></span>
         </div>`;
 
@@ -24006,8 +25762,37 @@ function _b2bListRows() {
         const carries = _b2bSpecsFor(it);
         const serials = _b2bSerials(it);
         const extra = _b2bSpecsFor(it).filter(f => !f.req).map(f => it[f.key]).filter(Boolean);
-        const lineValue = scrap ? 0 : (Number(it.value) || 0) * qty;
-        const lineCost  = _b2bIsBuy(it) ? (Number(it.cost != null ? it.cost : it.offer) || 0) * qty : 0;
+        // PER UNIT, NOT PER LINE (Nick, 2026-09-10).
+        //
+        // These two columns used to read value x quantity and cost x quantity.
+        // That is not the number the lister needs: a line of five identical
+        // laptops is priced ONCE, as one laptop, and PayMore's POS autolister
+        // takes the quantity from there. So a listing screen showing $1,750 for
+        // five $350 machines is inviting somebody to type 1750 into a listing
+        // that is for one of them.
+        //
+        // The quantity is still right there in the Listed column, so nothing is
+        // lost -- and the deal totals above (_b2bDealStatsHtml) are unchanged,
+        // because THOSE are meant to be totals.
+        const lineValue = scrap ? 0 : (Number(it.value) || 0);
+        // The whole line's resale, quantity included. Nick, 2026-09-10: "so
+        // people can know if its worth their time to list all of them together
+        // or now" -- the per-unit figures answer "what do I price this at", and
+        // this answers "is the pile worth the afternoon".
+        //
+        // Deliberately Value ea x FULL quantity, so it is arithmetic anybody can
+        // check in their head against the two columns beside it. Netting the
+        // recycled units out would be a more precise answer to a question nobody
+        // asked, at the cost of a column that does not add up.
+        const lineTotal = scrap ? 0 : lineValue * qty;
+        const unitCost  = Number(it.cost != null ? it.cost : it.offer) || 0;
+        const lineCost  = _b2bIsBuy(it) ? unitCost : 0;
+        // What the recycled units on this line cost us. Deliberately still a
+        // TOTAL, and labelled "rec", because it answers a different question --
+        // how much did we pay for units that got scrapped -- and one recycled
+        // unit at the per-unit cost would be indistinguishable from the cost
+        // column beside it.
+        const recCost   = _b2bIsBuy(it) ? unitCost * recycled : 0;
 
         // You may list exactly as many units as have been certified wiped. The
         // server enforces the same rule; this is so the button says why.
@@ -24026,6 +25811,23 @@ function _b2bListRows() {
                   : _b2bIsCorp() ? `<button class="b2b-mini" onclick="b2bMarkWiped('${it.id}')">Mark Wiped</button>`
                   : '<span class="b2b-lwipe-note">Corp records the certification</span>'}
             </div>` : '';
+
+        // What the pricer knew, carried through to whoever lists it. All three
+        // were being dropped here: they are loaded on this screen (b2bOpenDeal
+        // fetches items for 'listing') and shown on the read-only view, so the
+        // lister was the ONE person who could not see them -- reported by Ethan,
+        // "can't see notes left during pricing when listing".
+        //
+        // listing_info leads because it exists for this screen specifically
+        // (0047_b2b_listing_info_and_label_printed) and had no reader at all: the
+        // bench capture tool writes the eBay research link into it and nothing
+        // displayed it. staff_notes stays last and marked -- internal, never
+        // client-facing.
+        const notes = [
+            it.listing_info ? `<span class="b2b-lc-note lead">${_b2bNoteHtml(it.listing_info)}</span>` : '',
+            it.client_notes ? `<span class="b2b-lc-note">${escapeHtml(it.client_notes)}</span>` : '',
+            it.staff_notes  ? `<span class="b2b-lc-note int">Internal: ${escapeHtml(it.staff_notes)}</span>` : '',
+        ].join('');
 
         // The barcodes are the evidence the units went live -- each individually
         // removable, because a wrong one recorded is worse than one missing.
@@ -24051,20 +25853,28 @@ function _b2bListRows() {
                         ${it.condition ? `<span class="b2b-lcond">${escapeHtml(it.condition)}</span>` : ''}
                         ${!_b2bIsBuy(it) ? `<span class="b2b-doc-rec ${scrap ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}</span>
                     ${extra.length ? `<span class="b2b-lc-sub">${escapeHtml(extra.join(' · '))}</span>` : ''}
+                    ${notes}
                 </span>
                 ${reqSpecs.map(f => `<span class="b2b-pcell b2b-lc-spec">${carries.some(s => s.key === f.key) && String(it[f.key] || '').trim() ? escapeHtml(it[f.key]) : '<span class="b2b-f-off">—</span>'}</span>`).join('')}
                 <span class="b2b-pcell b2b-lc-serials">${serials.length ? escapeHtml(serials.join(', ')) : '<span class="b2b-f-off">—</span>'}</span>
                 <span class="b2b-pcell n">${scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(lineValue)}</span>
-                <span class="b2b-pcell n">${_b2bIsBuy(it) ? _b2bMoney(lineCost) : '<span class="b2b-f-off">—</span>'}</span>
+                <span class="b2b-pcell n">${_b2bIsBuy(it) ? _b2bMoney(lineCost) : '<span class="b2b-f-off">—</span>'}
+                    ${recCost ? `<span class="b2b-lc-reccost" title="Paid for, then recycled out — written off">−${_b2bMoney(recCost)} rec</span>` : ''}</span>
+                <span class="b2b-pcell n b2b-lc-tot"
+                    title="${scrap ? '' : `Every unit on this line: ${qty} x ${_b2bMoney(lineValue)}`}">${
+                    scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(lineTotal)}</span>
                 <span class="b2b-pcell b2b-lc-prog">
                     <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo the last one" onclick="b2bUnlistUnit('${it.id}')">−</button>
-                    <span class="b2b-lc-count"><b>${listed}</b>/${qty}${recycled ? `<i>+${recycled} rec</i>` : ''}</span>
+                    <span class="b2b-lc-count"><b>${listed}</b>/${qty}</span>
                     <button class="b2b-step up" ${ok || scrap || needsWipe ? 'disabled' : ''} title="${escapeHtml(blockTitle)}" onclick="b2bAskShopify('${it.id}')">+</button>
                 </span>
-                <span class="b2b-pcell b2b-pc-acts">
-                    <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle units out" onclick="b2bRecycleUnits('${it.id}')">Recycle</button>
-                    ${_b2bLabelBtn(it)}
-                </span>
+                <!-- Four controls became one. The listed stepper next door is
+                     the loop a lister runs all day and stays on the row; the
+                     recycle stepper, "Recycle..." and the barcode button move
+                     into the menu, which inherits the barcode's colour and the
+                     recycled count so neither signal is lost. See
+                     _b2bRowActsBtn. -->
+                <span class="b2b-pcell b2b-pc-acts">${_b2bRowActsBtn(it, ok)}</span>
             </div>
             ${(wipeStrip || codes) ? `<div class="b2b-lextra">${wipeStrip}${codes}</div>` : ''}
         </div>`;
@@ -24156,9 +25966,12 @@ function b2bScan(dealId) {
                 ? "That's one of our labels — scan the Shopify listing's barcode instead."
                 : `A Shopify barcode is 8 digits; that was ${raw.length}.`, true, it.id);
         }
-        if (it.listings?.some(l => l.shopify_barcode === raw)) {
-            return _b2bScanFlash(`${raw} is already recorded on this line.`, true, it.id);
-        }
+        // A repeat of a barcode already on this line is NOT an error: one listing
+        // can legitimately cover several units (a barcode entered as a quantity of
+        // two, then a third unit added later). _b2bListUnit bumps that listing's
+        // units and the server does the same -- uniqueness is (item_id, barcode)
+        // per 0054_b2b_listing_barcode_per_line. This used to be rejected here,
+        // which made the split control at #b2bScanUnits a one-way door.
         return _b2bListUnit(it, raw, Number(document.getElementById('b2bScanUnits')?.value) || undefined);
     }
 
@@ -24273,24 +26086,18 @@ function b2bUnlistUnit(itemId, listingId) {
         });
 }
 
-function b2bRecycleUnits(itemId) {
-    const it = _b2bLocalItem(itemId);
-    if (!it) return;
-    const room = (Number(it.quantity) || 1) - _b2bDone(it);
-    if (room <= 0) return;
-    const raw = prompt(`How many "${_b2bItemName(it)}" units are being recycled out?\n\n${room} unit${room === 1 ? '' : 's'} still outstanding.`, String(room));
-    if (raw === null) return;
-    const units = Math.min(room, Math.max(1, parseInt(raw, 10) || 0));
-    if (!units) return;
-    if (!confirm(`Recycle ${units} unit${units === 1 ? '' : 's'} of "${_b2bItemName(it)}"?\n\nThey come off the listing checklist for good and won't be listed for resale. This can't be undone.`)) return;
-
+// Apply a recycle delta optimistically, then reconcile -- the same shape as
+// listing a unit, and on the same per-item queue so a stepper clicked twice in
+// quick succession lands in order. `delta` is +N to recycle out, −N to put back.
+function _b2bRecycleApply(it, delta) {
     const before = Number(it.recycled_qty) || 0;
-    it.recycled_qty = before + units;
+    it.recycled_qty = Math.max(0, before + delta);
     _b2bDirty = true;
     _b2bRepaintListing();
     const done = _b2bAllSatisfied();
 
-    _b2bEnqueue(it.id, () => _b2bSend({ action: 'recycle_units', id: it.id, units }))
+    const action = delta > 0 ? 'recycle_units' : 'un_recycle';
+    _b2bEnqueue(it.id, () => _b2bSend({ action, id: it.id, units: Math.abs(delta) }))
         .then(out => {
             if (!out) return;
             it.listed_qty = out.listed_qty;
@@ -24303,7 +26110,45 @@ function b2bRecycleUnits(itemId) {
             _b2bScanFlash(e.message, true, it.id);
         });
 
-    if (done) _b2bCelebrate(_b2bModalDeal?.id);
+    if (delta > 0 && done) _b2bCelebrate(_b2bModalDeal?.id);
+}
+
+// The "+" on the recycle stepper (Ethan, 2026-08-21: "would be nice to have the
+// + counter for recycle products as well"). One unit, no prompt -- that is what
+// a stepper is for. No confirm either: it is one click to undo now, which is a
+// better answer to a misclick than a dialog on every legitimate one.
+function b2bRecycleUnit(itemId) {
+    const it = _b2bLocalItem(itemId);
+    if (!it) return;
+    if ((Number(it.quantity) || 1) - _b2bDone(it) <= 0) return;
+    _b2bRecycleApply(it, +1);
+}
+
+// The "−". Recycling used to be one-way, which was survivable while it took a
+// typed count and two dialogs; with a one-click stepper -- and with a recycled
+// unit now written off against the deal's margin -- an undo is the thing that
+// makes the stepper safe.
+function b2bUnRecycleUnit(itemId) {
+    const it = _b2bLocalItem(itemId);
+    if (!it || (Number(it.recycled_qty) || 0) <= 0) return;
+    _b2bRecycleApply(it, -1);
+}
+
+// Several at once, for a pallet where most of a line is scrap.
+function b2bRecycleUnits(itemId) {
+    const it = _b2bLocalItem(itemId);
+    if (!it) return;
+    const room = (Number(it.quantity) || 1) - _b2bDone(it);
+    if (room <= 0) return;
+    const raw = prompt(`How many "${_b2bItemName(it)}" units are being recycled out?\n\n${room} unit${room === 1 ? '' : 's'} still outstanding.`, String(room));
+    if (raw === null) return;
+    const units = Math.min(room, Math.max(1, parseInt(raw, 10) || 0));
+    if (!units) return;
+    if (!confirm(`Recycle ${units} unit${units === 1 ? '' : 's'} of "${_b2bItemName(it)}"?\n\n`
+        + `They come off the listing checklist and are written off against this deal `
+        + `(${_b2bMoney((Number(it.cost != null ? it.cost : it.offer) || 0) * units, 2)} at cost). `
+        + `Use the − on the recycle counter if you need to put units back.`)) return;
+    _b2bRecycleApply(it, +units);
 }
 
 // Every unit is accounted for -- say so properly before closing the deal out.
@@ -24336,9 +26181,15 @@ async function b2bCompleteDeal(id) {
 
 // --- read-only view --------------------------------------------------------
 
-function _b2bStageView(deal) {
+// The per-line money table, read-only. Shared by the read-only view and the
+// listing-location screen: both are "look at this deal and decide", neither
+// edits a line, and Paul needed the same figures on both (see the callers).
+function _b2bItemTableHtml(items) {
+    if (!items.length) {
+        return '<div class="b2b-empty sm"><div class="b2b-empty-t">No line items yet</div></div>';
+    }
     const t = _b2bItemTotals();
-    const rows = _b2bModalItems.map(it => {
+    const rows = items.map(it => {
         const qty = Number(it.quantity) || 1;
         const buy = _b2bIsBuy(it);
         const disp = _b2bDispOf(it);
@@ -24349,6 +26200,7 @@ function _b2bStageView(deal) {
                 ${!buy ? `<span class="b2b-doc-rec ${_b2bIsScrap(it) ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
                 ${it.wipe_required ? `<span class="b2b-doc-rec wipe">Wipe ${Number(it.wiped_qty) || 0}/${qty}</span>` : ''}
                 ${spec ? `<div class="b2b-doc-sub">${escapeHtml(spec)}</div>` : ''}
+                ${it.listing_info ? `<div class="b2b-doc-sub">${_b2bNoteHtml(it.listing_info)}</div>` : ''}
                 ${it.client_notes ? `<div class="b2b-doc-sub">${escapeHtml(it.client_notes)}</div>` : ''}
                 ${it.staff_notes ? `<div class="b2b-doc-sub int">Internal: ${escapeHtml(it.staff_notes)}</div>` : ''}
                 ${ser.length ? `<div class="b2b-doc-sku b2b-mono">${escapeHtml(ser.join(', '))}</div>` : ''}
@@ -24361,7 +26213,15 @@ function _b2bStageView(deal) {
             <td class="r">${_b2bLabelBtn(it)}</td>
         </tr>`;
     }).join('');
+    return `
+        <table class="cb-table b2b-vtable">
+            <thead><tr><th>Item</th><th class="c">Condition</th><th class="c">Qty</th><th class="c">Done</th><th class="r">Unit</th><th class="r">Line</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+            <tfoot><tr><td colspan="5" class="r">Total</td><td class="r accent">${_b2bMoney(t.offer, 2)}</td><td></td></tr></tfoot>
+        </table>`;
+}
 
+function _b2bStageView(deal) {
     const canDecline = _b2bIsCorp() && !['listing', 'completed', 'declined'].includes(deal.stage);
     // Reopen is gone -- a declined deal is final (see the edge fn). Deletion is
     // the only way a deal leaves the record now; the trashcan in the modal header
@@ -24386,12 +26246,7 @@ function _b2bStageView(deal) {
                         deal.declined_at ? _b2bDate(deal.declined_at) : '',
                     ].filter(Boolean).join(' · '))}</div></span>
             </div>` : ''}
-            ${_b2bModalItems.length ? `
-            <table class="cb-table b2b-vtable">
-                <thead><tr><th>Item</th><th class="c">Condition</th><th class="c">Qty</th><th class="c">Done</th><th class="r">Unit</th><th class="r">Line</th><th></th></tr></thead>
-                <tbody>${rows}</tbody>
-                <tfoot><tr><td colspan="5" class="r">Total</td><td class="r accent">${_b2bMoney(t.offer, 2)}</td><td></td></tr></tfoot>
-            </table>` : '<div class="b2b-empty sm"><div class="b2b-empty-t">No line items yet</div></div>'}`,
+            ${_b2bItemTableHtml(_b2bModalItems)}`,
         footer: `
             ${canDecline ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
@@ -24781,23 +26636,55 @@ function _b2bTagCompany(deal) {
 // SKUs are not minted until a line exists, so a pickup waiting to be routed has
 // nothing printable at all -- it sits in a back room identified by nothing.
 // deal.ref exists from creation, which is what this prints.
+// Printed from the pickup screen, BEFORE anything on it has been saved -- so it
+// has to read the form, not the row. It used to read only the persisted deal,
+// which meant the tag came out saying "Released By —" and "No description
+// recorded" for a pickup whose details were sitting right there on screen: the
+// reported "print label deleted the signing client name and all of the item
+// pickup fields" (Haydn, 2026-08-19). Capturing the draft first covers the other
+// half of that report -- opening the print window lets a poll land, and any
+// re-render of this screen without a draft genuinely does empty the inputs.
 function b2bPrintHoldingLabel(dealId) {
     const deal = _b2bDealById(dealId) || _b2bModalDeal;
     if (!deal) return;
+    _b2bCapturePickupDraft(dealId);
+    const live = (_b2bPickupDraft && _b2bPickupDraft.id === dealId) ? _b2bPickupDraft : null;
+    const relBy = (live && (live.name || '').trim()) || deal.signed_by || '—';
+    const desc  = (live && (live.desc || '').trim()) || deal.pickup_desc || 'No description recorded';
+    const picked = (live && live.date) || deal.pickup_date;
     _b2bOpenSheet(_b2bTagSheet({
         docTitle: `Holding ${deal.ref}`,
         band: 'Holding — Awaiting Pricing',
         ref: deal.ref,
         company: _b2bTagCompany(deal),
         meta: [
-            [_b2bIntake(deal).was, deal.pickup_date ? _b2bDate(deal.pickup_date) : '—'],
+            [_b2bIntake(deal).was, picked ? _b2bDate(picked) : '—'],
             ['Price It At', deal.pricing_store || 'Not yet assigned'],
-            ['Released By', deal.signed_by || '—'],
+            ['Released By', relBy],
         ],
-        contents: deal.pickup_desc || 'No description recorded',
+        contents: desc,
         note: 'Do not process or list these items until this deal has been priced and the client '
             + 'has accepted the quote. Look the reference up in Operations → Business-to-Business.',
     }), 'holding label');
+}
+
+// Print the whole pallet's labels in one sheet. Confirms the count first,
+// because this is the one print in the module that can run to hundreds of tags
+// and there is no way to stop a thermal printer politely once it starts.
+function b2bPrintAllLabels(dealId) {
+    const short = _b2bUnlabelled();
+    const lines = (short.length ? short : _b2bModalItems).filter(it => it.sku);
+    if (!lines.length) {
+        return alert('No SKUs to print yet — a line gets one as soon as it is added.');
+    }
+    const n = lines.reduce((t, it) => t + (short.length
+        ? _b2bLabelsShort(it)
+        : Math.max(1, Number(it.quantity) || 1)), 0);
+    const what = short.length
+        ? `${n} label${n === 1 ? '' : 's'} across ${lines.length} line${lines.length === 1 ? '' : 's'} still untagged`
+        : `every label on this deal again — ${n} across ${lines.length} line${lines.length === 1 ? '' : 's'}`;
+    if (!confirm(`Print ${what}?`)) return;
+    b2bPrintLabels(dealId);
 }
 
 function b2bPrintLabels(dealId, itemId, count) {
@@ -24845,9 +26732,19 @@ function b2bPrintLabels(dealId, itemId, count) {
             for (let i = 0; i < n; i++) labels.push(it);
         }
     } else {
-        source.forEach(it => {
+        // Whole pallet in one go (Haydn: "is there a way to mass print skus rn?").
+        // Default to the units that have no tag yet, for the same reason the
+        // single-line path does: on a deal of any size, reprinting everything to
+        // get the few that are missing wastes most of a roll. Falls back to the
+        // full quantity only when nothing is outstanding, which is the reprint
+        // case -- and the caller has already confirmed the count either way.
+        const short = _b2bUnlabelled();
+        const bulk = short.length ? short : source;
+        bulk.forEach(it => {
             if (!it.sku) return;
-            const n = Math.max(1, Number(it.quantity) || 1);
+            const n = short.length
+                ? _b2bLabelsShort(it)
+                : Math.max(1, Number(it.quantity) || 1);
             for (let i = 0; i < n; i++) labels.push(it);
         });
     }
@@ -31677,7 +33574,20 @@ window._dbgClaims = async function () {
     const el = document.getElementById('claimAlertBubble');
     out.bubbleDisplay = el ? getComputedStyle(el).display : 'MISSING';
     out.feedSummary = (document.getElementById('claimAlertBubbleText') || {}).dataset?.summary || '(none)';
-    out.dismissedToday = Object.keys(_samGetDismissedRem()).join(', ') || '(none)';
+    // Snoozed cards, and any leftover Not-mine records. The second kind can no
+    // longer be created (the control was removed 2026-09-10) and no longer
+    // hides anything, but they are still listed: "why is this card not showing"
+    // must not have an answer the diagnostic keeps to itself, and a stale record
+    // sitting in someone's browser is worth being able to see.
+    {
+        const h = _samGetHidden();
+        const snoozed = Object.keys(h).filter(k => h[k] && h[k].until);
+        const stale = Object.keys(h).filter(k => h[k] && !h[k].until);
+        out.dismissedToday = [
+            snoozed.length ? 'snoozed: ' + snoozed.join(', ') : '',
+            stale.length ? 'stale not-mine records, no longer hiding: ' + stale.join(', ') : '',
+        ].filter(Boolean).join(' | ') || '(none)';
+    }
     out.claimsInFeed = _samGatherReminders().some(r => r.key === 'claims');
     out.reminderOwnsBubble = _reminderBubbleActive;
 
@@ -41536,9 +43446,14 @@ function _samRenderFeedNow() {
     // Each item gets an explicit "Mark read" button (no bulk skip) — a checkmark
     // + label so reading is a deliberate action, not a reflex ✕.
     const readBtn = onclick => `<button class="sam-markread-btn" onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Mark read</button>`;
-    // Reminders are live task-nags, so theirs is a "Snooze" (quiets today, returns
-    // tomorrow if still outstanding, auto-clears for good once the work is done).
-    const snoozeBtn = onclick => `<button class="sam-markread-btn sam-snooze-btn" data-tip="Snoozes for today — comes back tomorrow if it's still outstanding, and disappears for good once the work is done." onclick="${onclick}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Snooze</button>`;
+    // Snooze is the only hide on a reminder card. There WAS a second one, "Not
+    // mine", which hid a card until its content changed -- removed 2026-09-10
+    // at Nick's word: "That is not how i intended that to be". Two controls that
+    // both make a card go away, differing only in how long, is a choice nobody
+    // wants to have to make on a feed they are trying to clear. Anything a
+    // person genuinely should not be seeing is a feature-access or role
+    // question, not something to be swept off one card at a time.
+    const snoozeBtn = onclick => `<button class="sam-markread-btn sam-snooze-btn" data-tip="Hides it until tomorrow morning. Comes back if it's still outstanding, and disappears for good once the work is done." onclick="${onclick}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Snooze</button>`;
     // Completion the app can't observe for itself — the only way this card ever
     // goes away for good. Distinguished from Snooze so the two aren't confused.
     const doneBtn = (onclick, label) => `<button class="sam-markread-btn sam-done-btn" data-tip="Clears this for good. Snooze only quiets it until tomorrow." onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>${_samEsc(label || 'Mark done')}</button>`;
@@ -41567,7 +43482,10 @@ function _samRenderFeedNow() {
             // expense report leaves via the person's own mail client), so it gets
             // BOTH — Snooze to quiet it today, and an explicit completion that is
             // the only thing that clears it for good.
-            const snoozeHtml = it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`);
+            // One hide control, not two. "Not mine" sat next to Snooze here
+            // until 2026-09-10 and is gone -- see the note above snoozeBtn.
+            const snoozeHtml = it.noSnooze ? ''
+                : snoozeBtn(`samSnoozeItem(event,'${_samEsc(it.key)}',20)`);
             const ctrl = it.doneAction ? (snoozeHtml + doneBtn(it.doneAction, it.doneLabel))
                 : (it.readAction ? readBtn(it.readAction) : snoozeHtml);
             desired.push({ key: 'rem:' + it.key, html: `<div class="sam-ann rem"${remClick}>
@@ -41823,15 +43741,43 @@ function _samMarkAnnRead(rowId) {
     if (typeof updateMainBadge === 'function') updateMainBadge();
 }
 
+// Snooze a reminder for `hours`, recorded against WHAT was on the card so new
+// information on the same subject comes back regardless -- see _samIsHidden.
+//
+// `hours` used to be allowed to be 0, which meant "hide until the content
+// changes" and was the Not-mine control. That control is gone (2026-09-10), and
+// so is the 0: a falsy duration now falls back to the ordinary overnight snooze
+// rather than writing a record with no expiry. Otherwise one stray call site
+// passing nothing silently reintroduces the permanent kind of hide.
+function _samHideRem(key, hours) {
+    const cur = _samGatherReminders().find(r => r.key === key);
+    const map = _samGetHidden();
+    map[key] = {
+        sig: cur ? cur.sig : '',
+        until: Date.now() + (Number(hours) || 20) * 3600000,
+    };
+    _samSetHidden(map);
+}
+
+// Snooze: back later, same as the old single control but with a real duration
+// rather than "until midnight". Tomorrow morning is the common case, so it is
+// the default and one click.
+function samSnoozeItem(ev, key, hours) {
+    if (ev) ev.stopPropagation();
+    _samHideRem(key, Number(hours) || 20);
+    const row = ev && ev.target ? ev.target.closest('.sam-ann') : null;
+    if (row) row.remove();
+    renderActionFeed();
+    if (typeof updateMainBadge === 'function') updateMainBadge();
+}
+
 function samDismissItem(ev, kind, key) {
     if (ev) ev.stopPropagation();
     const row = ev && ev.target ? ev.target.closest('.sam-ann') : null;
     if (kind === 'rem') {
-        // Record WHAT was snoozed, not just that it was — see _samGetDismissedRem.
-        const cur = _samGatherReminders().find(r => r.key === key);
-        const map = _samGetDismissedRem();
-        map[key] = cur ? cur.sig : '';
-        _samSetDismissedRem(map);
+        // Kept as the snooze path so the 20-odd existing callers (Mark-all-read,
+        // the alert bubbles) keep their old behaviour of quieting until tomorrow.
+        _samHideRem(key, 20);
     } else if (kind === 'note') {
         // Record locally FIRST, so the read survives the next re-fetch even if the
         // POST below is slow, fails, or races a poll.
@@ -41875,9 +43821,14 @@ function samMarkAllRead() {
     // yet: clearing the feed in the morning meant a claim that aged out at noon never
     // showed for the rest of the day. You can't "read" something that doesn't exist,
     // so use the same liveness test the feed itself uses (_samGatherReminders).
-    const map = _samGetDismissedRem();
-    _samGatherReminders().forEach(r => { map[r.key] = r.sig; });
-    _samSetDismissedRem(map);
+    // Mark-all-read SNOOZES rather than dismisses. Clearing a full feed is a
+    // "caught up for now" gesture, not a statement that none of it is yours --
+    // treating it as the permanent kind would quietly bin work nobody decided
+    // about, which is exactly the failure the two separate controls avoid.
+    const map = _samGetHidden();
+    const until = Date.now() + 20 * 3600000;
+    _samGatherReminders().forEach(r => { map[r.key] = { sig: r.sig, until }; });
+    _samSetHidden(map);
     if (typeof updateMainBadge === 'function') updateMainBadge();
     renderActionFeed();
 }
@@ -42282,6 +44233,73 @@ function _samDismKey() {
     const day = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
     return 'samRemDismissed_' + u + '_' + day;
 }
+
+// THE SNOOZE STORE, AND THE DISMISS THAT USED TO SHARE IT.
+//
+// Ethan asked for two controls (2026-09-02): "Can you make a way for me to
+// dismiss this or snooze this. Since this doesn't apply to [me] I'd like to have
+// this removed from my feed unless something new pops up, but I like the snooze
+// option in case it does apply to me, but I plan on looking at it another day."
+//
+// Both were built. The dismiss half, labelled "Not mine", was REMOVED on
+// 2026-09-10 -- Nick: "please also remove the Not mine feature on the your feed
+// completely. That is not how i intended that to be". Two controls that both
+// make a card disappear, differing only in for how long, is a decision nobody
+// wants on a feed they are trying to clear; and a card someone genuinely should
+// not be seeing is a feature-access or role question, not something to sweep off
+// one card at a time.
+//
+// What that leaves, and why the store still looks like this:
+//
+//   until > now   snoozed: hidden until then, or until the content changes
+//   until === 0   a leftover Not-mine record. Treated as EXPIRED, so anything
+//                 hidden that way is visible again -- see _samIsHidden.
+//
+// Still not day-scoped, which was the original bug worth keeping fixed: the key
+// used to carry the date (_samDismKey above), so a snooze could not outlive the
+// day and everything came back at midnight whether you wanted it to or not.
+//
+// The sig check is what "unless something new pops up" means, and it predates
+// all of this -- a card whose wording or counts move is new information and
+// breaks through a snooze. So a snooze hides THIS news, never the subject.
+//
+// The old day-scoped key is still read as a fallback so a snooze taken before
+// the split shipped is honoured for the rest of that day, then ages out.
+function _samHideKey() {
+    const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
+    return 'samRemHidden_' + u;
+}
+function _samGetHidden() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(_samHideKey()) || '{}');
+        return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    } catch (_) { return {}; }
+}
+function _samSetHidden(map) {
+    try { localStorage.setItem(_samHideKey(), JSON.stringify(map || {})); } catch (_) {}
+}
+// One place decides whether a card is currently hidden, so the feed and the
+// badge can never disagree about it.
+function _samIsHidden(key, sig) {
+    const rec = _samGetHidden()[key];
+    if (rec && typeof rec === 'object') {
+        // Content moved on: new information, so it comes back regardless.
+        if (rec.sig !== sig) return false;
+        // until === 0 was a Not-mine record: hidden with no expiry until the
+        // card's wording changed. That control is gone (2026-09-10), so its
+        // records are treated as expired and everything hidden that way comes
+        // BACK. Deliberate: removing a feature has to remove what it did, or
+        // people are left with cards they can no longer see and no control that
+        // put them there. Nothing needs migrating -- the records age out as
+        // their keys stop being written.
+        if (!rec.until) return false;
+        return Date.now() < Number(rec.until);             // still snoozed
+    }
+    // Fallback: today's legacy map, written before the store stopped being
+    // day-scoped.
+    const old = _samGetDismissedRem();
+    return Object.prototype.hasOwnProperty.call(old, key) && old[key] === sig;
+}
 // Dismissals are stored as { key: snippetAtSnoozeTime }, NOT a bare list of keys.
 // A snooze must quiet the reminder AS IT READ WHEN SNOOZED — with a plain key list
 // it also swallowed every later update that same day, so a DM could send a fresh
@@ -42359,7 +44377,7 @@ function _samGatherReminders() {
         // a new sender — counts as new information and breaks through the snooze
         // rather than staying buried until tomorrow.
         const sig = (t && t.dataset && t.dataset.sig) ? t.dataset.sig : sub;
-        if (Object.prototype.hasOwnProperty.call(dismissed, c.key) && dismissed[c.key] === sig) return;
+        if (_samIsHidden(c.key, sig)) return;
         // For an MSM: if this alert covers exactly ONE store (the bubble stamps the
         // covered stores on data-stores), clicking it opens that store's tool even
         // while he's on the other store's dashboard — without switching dashboards.
@@ -50809,7 +52827,16 @@ function _ddFit(host) {
 function _ddSync(host) {
     const sel = host._ddSel;
     if (!sel) return;
-    host._ddBtnLabel.textContent = _ddLabel(sel) || '—';
+    const text = _ddLabel(sel) || '—';
+    host._ddBtnLabel.textContent = text;
+    // The face ellipsises when the column is narrower than the value, and with
+    // no tooltip the value became simply unreadable -- the pricing sheet's
+    // 75px CONDITION column rendered "Broken" as "Br…", on one of the most
+    // important fields on that screen. The full value is always one hover away
+    // now, and always announced, wherever a dropdown is squeezed.
+    host._ddBtnLabel.title = text === '—' ? '' : text;
+    const face = host.querySelector('.dd-btn');
+    if (face) face.setAttribute('aria-label', text === '—' ? 'Nothing selected' : text);
     host.classList.toggle('dd-empty', !sel.options.length);
     // The face is a separate <button>, so a disabled <select> does not disable it
     // on its own — `.dd-btn:disabled` never matched, and a locked control kept a
