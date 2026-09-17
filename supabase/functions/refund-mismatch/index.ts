@@ -76,28 +76,32 @@
 // name before the question is asked, the same way refund-plan excludes them.
 //
 // ----------------------------------------------------------------------------
-// TIMING, AND WHY MONTH END IS DIFFERENT.
+// TIMING, AND WHY MONTH END IS DIFFERENT. (Revised 2026-09-17, as asked.)
 //
-// 72 hours normally. That clears automated sync lag, and it clears ordinary
-// human lag — a buyer returns an item, eBay refunds on delivery, the manager
-// mirrors it next morning. Alerting at 48h would mostly buy noise.
+// EVERY MORNING, EVERYTHING THAT QUALIFIES. The mail is a daily to-do list: each
+// open mismatch at least 3 days old is on it every morning until both sites
+// agree. The first version mailed an order once and then only every 72 hours,
+// which with a once-a-day run meant a manager saw an order on day 3 and then not
+// again until day 6 or 7 -- a list that was never the whole list.
 //
-// But a flat 72h rule CANNOT catch the cases that created the CFO's list. A
-// mismatch appearing on the 29th is first mailed on the 2nd, by which time the
-// month is closed and the books are already wrong. So the threshold drops to 24
-// hours on the last two days of the month, measured in Chicago time.
+// AGE IS COUNTED IN CHICAGO CALENDAR DAYS, NOT HOURS. Reversed on the 14th ->
+// on the list the morning of the 17th, whatever time of day it happened. Hours
+// against a fixed 8:20 run made "3 days" really mean 3 or 4, depending on
+// whether the refund landed before or after 8:20.
 //
-// Re-nag every 72h while it stays open, so nothing rots quietly.
+// THE LAST 4 DAYS OF THE MONTH, THE BAR DROPS TO 1 DAY. A flat 3-day rule cannot
+// catch what the CFO's list is made of: a refund on the 29th would first be
+// mailed on the 2nd, after the books close. With calendar days, the last
+// morning's mail carries everything reversed up to the day before.
 //
 // ----------------------------------------------------------------------------
 // THE LEADERSHIP DIGEST IS ABOUT PEOPLE, NOT AGE.
 //
 // The DM and CEO get a separate mail on the mornings the managers are emailed.
 // It lists every open order a manager has been told about and, on each row, HOW
-// MANY TIMES. That count is the whole instrument: a 1st notice is work in
-// flight, a 2nd or 3rd is an order that was raised, ignored, and raised again.
-// It replaced an age-based escalation, which could not tell those two apart --
-// an order can be old because nobody looked, or old because it arrived old.
+// MANY TIMES -- which, now that the list goes out daily, is how many mornings
+// that order has sat on a manager's list. A 1st notice is new today; a 5th is an
+// order that has been in front of someone all week.
 // ============================================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -109,10 +113,11 @@ const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL") ||
   "https://script.google.com/macros/s/AKfycby4Y2l3DJ6fQCrpFuwTTXKeaD3QV5DbLhf7jmberZCUFx86VaaE6vb9Bs_CweNh3K9VtQ/exec";
 
 // --- thresholds -------------------------------------------------------------
-const BASE_HOURS      = 72;  // normal age before a mismatch is mailed
-const MONTH_END_HOURS = 24;  // ...and during the last MONTH_END_DAYS of a month
-const MONTH_END_DAYS  = 2;
-const RENAG_HOURS     = 72;  // an unresolved mismatch is raised again after this
+// Ages are whole Chicago calendar days (see daysOpen). There is no re-nag
+// interval any more: everything at or past the bar is on every morning's mail.
+const BASE_DAYS       = 3;   // normal age, in days, before a mismatch is mailed
+const MONTH_END_MIN_DAYS = 1; // ...and during the last MONTH_END_DAYS of a month
+const MONTH_END_DAYS  = 4;
 const ESCALATE_DAYS   = 10;  // an item older than this is coloured red in the mail
 const WINDOW_DAYS     = 60;  // how far back NEW mismatches are discovered
 
@@ -196,6 +201,17 @@ function isMonthEnd(now = new Date()): boolean {
   const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
   return (lastDay - d) <= (MONTH_END_DAYS - 1);
 }
+
+// WHOLE CALENDAR DAYS BETWEEN TWO MOMENTS, BOTH READ IN CHICAGO. A refund at
+// 11pm on the 14th and one at 1am on the 14th are both "3 days" on the 17th --
+// which is how a manager counts, and it keeps the answer independent of what
+// time the cron happens to fire. Date.UTC on the Chicago y/m/d is only used as a
+// day counter here, so DST cannot shift it.
+function daysOpen(reversedAt: string | Date, now = new Date()): number {
+  const a = chicagoParts(new Date(reversedAt)), b = chicagoParts(now);
+  return Math.round((Date.UTC(b.y, b.m - 1, b.d) - Date.UTC(a.y, a.m - 1, a.d)) / 86_400_000);
+}
+function chicagoDay(d: string | Date): string { return CHI_DAY.format(new Date(d)); }
 
 async function sbGet(path: string) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -612,9 +628,8 @@ const C = {
   bad: "#b3261e", warn: "#8a5a00", chip: "#eef5f1",
 };
 
-function ageText(hours: number) {
-  if (hours < 48) return `${Math.floor(hours)} hours`;
-  return `${Math.floor(hours / 24)} days`;
+function ageText(days: number) {
+  return days === 1 ? `1 day` : `${days} days`;
 }
 
 // 1st, 2nd, 3rd, 4th... The leadership digest is built around this number, so it
@@ -626,18 +641,17 @@ const ordinal = (n: number) => {
 };
 
 function build(
-  rows: Array<Mismatch & { hours: number; notice?: number }>,
+  rows: Array<Mismatch & { hours: number; days: number; notice?: number }>,
   opts: { oversight?: boolean } = {},
 ) {
   const money = (n: number) => n > 0 ? `$${n.toFixed(2)}` : "—";
   const body = rows.map((r) => {
     const done = r.direction === "ebay_only" ? "eBay" : "Shopify";
     const todo = r.direction === "ebay_only" ? "Shopify" : "eBay";
-    const old = r.hours >= ESCALATE_DAYS * 24;
-    // THE NUMBER THE DM AND CEO ACTUALLY READ. A first notice is just work in
-    // flight. A second or third on the SAME order means the manager was told,
-    // had three days, and it is still not done — which is the whole reason this
-    // digest exists, so it is the loudest thing on the row.
+    const old = r.days >= ESCALATE_DAYS;
+    // THE NUMBER THE DM AND CEO ACTUALLY READ: how many mornings this order has
+    // been on a manager's list and is still not done. It is the whole reason
+    // this digest exists, so it is the loudest thing on the row.
     const repeat = opts.oversight && (r.notice || 0) >= 2;
     const badge = opts.oversight && r.notice
       ? `<span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:9px;`
@@ -651,7 +665,7 @@ function build(
     <tr><td style="padding:14px;border-top:1px solid ${C.line};">
       <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">
         ${esc(STORE_NAME[r.store] || r.store)}
-        <span style="color:${old ? C.bad : C.warn};font-weight:700;"> · ${esc(ageText(r.hours))} old</span>${badge}
+        <span style="color:${old ? C.bad : C.warn};font-weight:700;"> · ${esc(ageText(r.days))} old</span>${badge}
       </div>
       <div style="font-size:15px;font-weight:700;color:${C.ink};margin:4px 0 6px;">
         ${esc(r.reversalKind === "cancel" ? "Cancelled" : "Refunded")} on ${done}, but not on ${todo}
@@ -677,8 +691,8 @@ function build(
     : `Refunded on one site, not the other`;
   const lead = opts.oversight
     ? `Every order the store managers have been emailed about and have not yet cleared. `
-      + `The notice count is the thing to read: a 1st notice is work in flight, a 2nd or `
-      + `3rd is an order the manager was already asked to fix and has not.`
+      + `The notice count is the thing to read: it is how many mornings the order has been `
+      + `on a manager's list. A 1st notice is new today; anything higher is still waiting.`
     : `Each of these was refunded or cancelled on one marketplace and is still a live sale on the other. Push the same reversal on the other site and this stops appearing.`;
 
   // The counts the digest is FOR, on the line above the detail, so the question
@@ -712,12 +726,44 @@ function build(
   <tr><td style="padding:12px 14px;text-align:center;color:${C.faint};font-size:10.5px;line-height:1.6;border-top:1px solid ${C.line};background:#f7faf8;">
     ${opts.oversight
       ? `Sent on the mornings the managers are emailed, so this is what went out to them today. `
-        + `The notice count rises by one each time an order is raised again, every ${RENAG_HOURS / 24} days.`
+        + `The notice count is how many mornings an order has been on a manager's list.`
       : `Checked every morning. You only get this mail when something needs doing, and each
-         order is raised again every ${RENAG_HOURS / 24} days until both sites agree.`}<br>
-    Normally flagged after ${BASE_HOURS / 24} days; in the last ${MONTH_END_DAYS} days of the month, after ${MONTH_END_HOURS} hours, so it lands before the books close.
+         order stays on it every morning until both sites agree.`}<br>
+    Normally listed once ${BASE_DAYS} days old; in the last ${MONTH_END_DAYS} days of the month, once ${MONTH_END_MIN_DAYS} day old, so it lands before the books close.
   </td></tr>
 </table></td></tr></table></body></html>`;
+}
+
+// ⚠️ A 404 FROM THE RELAY DOES NOT MEAN THE MAIL WAS NOT SENT.
+// Apps Script runs doPost on the POST to /exec, THEN answers with a 302 to a
+// one-time script.googleusercontent.com "echo" URL that carries the reply.
+// fetch follows that redirect by default, and it is the echo fetch that can
+// 404. On 2026-09-17 three of five sends "failed" with 404 -- and the leadership
+// one was in Ethan's and Paul's inboxes. Retrying on that status would have
+// mailed everyone twice.
+//
+// So the redirect is NOT followed. The 302 is itself the proof doPost ran to
+// completion, and is treated as sent. Only a failure before the script ran (a
+// non-2xx/3xx answer from /exec itself) is retried. A thrown network error is
+// ambiguous -- the script may have run -- so it is reported, not retried.
+async function relay(to: string, subject: string, html: string) {
+  let status = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, attempt * 4000));
+    try {
+      const res = await fetch(GMAIL_RELAY, {
+        method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ secret: OPS_SECRET, to, subject, html }),
+        redirect: "manual",
+      });
+      status = res.status;
+      await res.body?.cancel().catch(() => {});
+      if (res.ok || (status >= 300 && status < 400)) return { ok: true, status, attempts: attempt + 1 };
+    } catch (e) {
+      return { ok: false, status: 0, attempts: attempt + 1, error: String(e).slice(0, 120) };
+    }
+  }
+  return { ok: false, status, attempts: 3 };
 }
 
 async function listFor(sb: any, key: string, fallbackKey: string): Promise<string[]> {
@@ -743,10 +789,10 @@ Deno.serve(async (req: Request) => {
     const html = build([
       { key: "s1", store: "OVL", ebayOrderId: "08-15066-00533", direction: "ebay_only",
         shopifyOrderName: "#KS01-14010", shopifyOrderId: "1", reversedAt: "", reversalKind: "refund",
-        amount: 249.99, hours: 74, notice: 1 },
+        amount: 249.99, hours: 74, days: 3, notice: 1 },
       { key: "s2", store: "BAL", ebayOrderId: "13-15066-46687", direction: "shopify_only",
         shopifyOrderName: "#MO04-2836", shopifyOrderId: "2", reversedAt: "", reversalKind: "cancel",
-        amount: 89.5, hours: 268, notice: 3 },
+        amount: 89.5, hours: 268, days: 11, notice: 3 },
     ], { oversight: q("oversight") === "1" });
     if (q("html") === "1") return new Response(html, { headers: { "Content-Type": "text/html" } });
     const to = q("to");
@@ -775,25 +821,29 @@ Deno.serve(async (req: Request) => {
     for (const r of (prior || [])) priorBy[r.issue_key] = r;
 
     // THE THRESHOLD, AND THE MONTH-END TIGHTENING.
-    const thresholdHours = isMonthEnd() ? MONTH_END_HOURS : BASE_HOURS;
+    const thresholdDays = isMonthEnd(now) ? MONTH_END_MIN_DAYS : BASE_DAYS;
     const aged = found.map((m) => ({
       ...m,
       hours: (now.getTime() - new Date(m.reversedAt).getTime()) / 3600_000,
+      days: daysOpen(m.reversedAt, now),
     }));
 
-    const renagBefore = new Date(now.getTime() - RENAG_HOURS * 3600_000).toISOString();
+    // Everything old enough, every morning. The one exclusion is an order
+    // already mailed TODAY (Chicago), so a manual re-run of the function cannot
+    // send the list twice or count a second "notice" for the same morning.
+    const today = chicagoDay(now);
     const due = aged.filter((m) => {
-      if (m.hours < thresholdHours) return false;         // too young to chase
+      if (m.days < thresholdDays) return false;           // too young to chase
       const p = priorBy[m.key];
-      return !p || !p.last_alerted || p.last_alerted < renagBefore;
+      return !p?.last_alerted || chicagoDay(p.last_alerted) !== today;
     });
     // LEADERSHIP OVERSIGHT, NOT AGE-BASED ESCALATION.
     //
     // Asked for on 2026-09-16 and it is a better instrument than the age rule it
     // replaces. The DM and CEO do not need "this is old" — they need "the manager
-    // was told and did nothing", and the notice count says exactly that. An order
-    // on its 1st notice is work in flight; the same order on its 3rd has been
-    // raised, ignored, raised, ignored.
+    // was told and did nothing", and the notice count says exactly that. Since
+    // 2026-09-17 the managers' list goes out daily, so the count is mornings on
+    // the list: a 1st notice is new today, a 5th has been ignored all week.
     //
     // It covers everything still open that has EVER been mailed, not just what
     // went out this morning, so a quiet day does not hide an order the manager
@@ -838,7 +888,7 @@ Deno.serve(async (req: Request) => {
         if (preview) return new Response(preview, { headers: { "Content-Type": "text/html" } });
       }
       return json({
-        ok: true, dryRun: true, monthEnd: isMonthEnd(), thresholdHours,
+        ok: true, dryRun: true, monthEnd: isMonthEnd(now), thresholdDays,
         open: aged.length, wouldMail: due.length,
         leadershipWouldSee: notified.length, onRepeatNotice: repeats.length,
         // Blind spots, stated rather than implied. All-zero findings with a
@@ -849,54 +899,56 @@ Deno.serve(async (req: Request) => {
         mismatches: aged.map((m) => ({
           store: m.store, ebay: m.ebayOrderId, shopify: m.shopifyOrderName,
           direction: m.direction, kind: m.reversalKind,
-          amount: m.amount, age_hours: Math.round(m.hours),
+          amount: m.amount, age_days: m.days, age_hours: Math.round(m.hours),
         })),
         plan: plan.map((p) => ({ to: p.to, count: p.count })),
       });
     }
 
     const sent: any[] = [];
+    // Only orders whose mail actually reached at least one recipient count as
+    // told. A failed send leaves the order un-mailed for today, so a re-run
+    // picks it up and nobody already mailed gets a second copy.
+    const mailedKeys = new Set<string>();
     for (const p of plan) {
       const to = q("to") || p.to;
       const n = p.rows.length;
       const subject = `Refund not matched on both sites — ${n} order${n === 1 ? "" : "s"}`;
-      const res = await fetch(GMAIL_RELAY, {
-        method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify({ secret: OPS_SECRET, to, subject, html: build(p.rows) }),
-      });
-      sent.push({ to, count: n, ok: res.ok, status: res.status });
+      const r = await relay(to, subject, build(p.rows));
+      if (r.ok) for (const row of p.rows) mailedKeys.add(row.key);
+      sent.push({ to, count: n, ...r });
     }
+    // The digest's counts follow what was really sent, not what was planned.
+    const told = aged
+      .map((m) => ({ ...m, notice: (priorBy[m.key]?.times_alerted || 0) + (mailedKeys.has(m.key) ? 1 : 0) }))
+      .filter((m) => m.notice > 0)
+      .sort((a, b) => (b.notice - a.notice) || (b.hours - a.hours));
+    const toldTwice = told.filter((m) => m.notice >= 2);
 
     // Sent only on the mornings the managers were actually emailed, so the digest
     // always answers "here is what just went out, and here is who has been told
     // before". On a silent morning leadership gets nothing, which is the point:
     // a mail from this means something needs chasing.
-    if (due.length && notified.length) {
+    if (mailedKeys.size && told.length) {
       const to = q("to") || (await listFor(sb, "refund_mismatch_escalation", "weekly_leadership")).join(",");
       if (to) {
-        const res = await fetch(GMAIL_RELAY, {
-          method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
-          body: JSON.stringify({
-            secret: OPS_SECRET, to,
-            // The repeat count goes in the SUBJECT, because that is the number
-            // worth opening the mail for.
-            subject: `Refund mismatches — ${notified.length} open`
-              + (repeats.length ? `, ${repeats.length} told more than once` : ``),
-            html: build(notified, { oversight: true }),
-          }),
-        });
-        sent.push({ to, count: notified.length, repeats: repeats.length,
-                    oversight: true, ok: res.ok, status: res.status });
+        // The repeat count goes in the SUBJECT, because that is the number
+        // worth opening the mail for.
+        const r = await relay(to,
+          `Refund mismatches — ${told.length} open`
+            + (toldTwice.length ? `, ${toldTwice.length} told more than once` : ``),
+          build(told, { oversight: true }));
+        sent.push({ to, count: told.length, repeats: toldTwice.length, oversight: true, ...r });
       }
     }
 
     // --- record what is open now -------------------------------------------
     for (const m of aged) {
       const p = priorBy[m.key];
-      const alerted = due.some((d) => d.key === m.key);
+      const alerted = mailedKeys.has(m.key);
       // escalated_at now records the first time an order reached a SECOND notice
       // — the moment follow-through failed, rather than the moment it got old.
-      const repeated = repeats.some((d) => d.key === m.key);
+      const repeated = toldTwice.some((d) => d.key === m.key);
       await sb.from("refund_mismatch_state").upsert({
         issue_key: m.key, store_code: m.store, ebay_order_id: m.ebayOrderId,
         direction: m.direction,
@@ -936,8 +988,8 @@ Deno.serve(async (req: Request) => {
     }
 
     return json({
-      ok: true, monthEnd: isMonthEnd(), thresholdHours,
-      open: aged.length, mailed: due.length, onRepeatNotice: repeats.length,
+      ok: true, monthEnd: isMonthEnd(now), thresholdDays,
+      open: aged.length, due: due.length, mailed: mailedKeys.size, onRepeatNotice: toldTwice.length,
       resolved: settled.length, sent,
       blindStores: [...brokeStores], unjudgedOrders: [...unjudged],
       stats, problems,

@@ -37872,6 +37872,16 @@ const EMAIL_LIST_GROUPS = [
             { key: 'b2b_quote_ready', label: 'B2B Quote Ready',
               desc: 'A pickup has been priced and a quote is waiting on approval. '
                   + 'Leave this empty and it falls back to the single address in CRM Settings.' },
+            // Refund mismatch: a per-store list because the fix belongs to that
+            // store's manager, plus the leadership digest. The digest's key says
+            // "escalation" -- a fossil of the first design (see 0089); the label
+            // says what it is now.
+            { key: 'refund_mismatch_escalation', label: 'Refund Mismatch — Leadership',
+              desc: '8:20am, only on mornings a manager was mailed: every open order, and how many '
+                  + 'times its manager has been told.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `refund_mismatch_${s}`, label: `Refund Mismatch — ${s}`,
+              desc: '8:20am. Refunded on eBay but not Shopify, or the reverse, for 3 days '
+                  + '(1 day at month end). Raised again every 3 days until fixed.' })),
         ],
     },
     {

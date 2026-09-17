@@ -54,9 +54,9 @@ const LIST_KEYS = new Set([
   // the refund-mismatch fn groups by recipient before sending, so the manager
   // who covers both BAL and MPL gets one mail rather than two.
   ...STORES.map((s) => `refund_mismatch_${s}`),
-  // refund_mismatch_escalation: leadership copy, sent only for items open past
-  // the escalation age. Its own list so changing that age never silently
-  // changes who is on it.
+  // refund_mismatch_escalation: leadership digest (DM/CEO), sent on the mornings
+  // managers are mailed, listing every open order and how many times each was
+  // raised. The key is a fossil of an earlier age-based design (see 0089).
   "refund_mismatch_escalation",
 ]);
 

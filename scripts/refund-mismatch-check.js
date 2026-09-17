@@ -27,8 +27,8 @@ const SRC = join(__dirname, "..", "supabase", "functions", "refund-mismatch", "i
 
 // The pure rules this file exists to check.
 const EXPORTED = [
-  "isMonthEnd", "ebayIdOf", "carriesEbayId", "shopifyReversal", "ebayReversal",
-  "BASE_HOURS", "MONTH_END_HOURS", "MONTH_END_DAYS", "RENAG_HOURS", "ESCALATE_DAYS",
+  "isMonthEnd", "daysOpen", "ebayIdOf", "carriesEbayId", "shopifyReversal", "ebayReversal",
+  "BASE_DAYS", "MONTH_END_MIN_DAYS", "MONTH_END_DAYS", "ESCALATE_DAYS",
 ];
 
 async function load() {
@@ -63,31 +63,31 @@ function t(name, fn) {
   // fires, so these are the real inputs and not convenient ones.
   t("mid-month is not month end", () =>
     m.isMonthEnd(at("2026-09-16T13:20:00Z")) === false || "16 Sep flagged as month end");
-  // 30-day month: the last two days are the 29th and 30th.
-  t("28 Sep, third from last, is not month end", () =>
-    m.isMonthEnd(at("2026-09-28T13:20:00Z")) === false || "28 Sep flagged");
-  t("29 Sep, second from last, is month end", () =>
-    m.isMonthEnd(at("2026-09-29T13:20:00Z")) === true || "29 Sep missed");
+  // 30-day month: the last four days are the 27th to the 30th.
+  t("26 Sep, fifth from last, is not month end", () =>
+    m.isMonthEnd(at("2026-09-26T13:20:00Z")) === false || "26 Sep flagged");
+  t("27 Sep, fourth from last, is month end", () =>
+    m.isMonthEnd(at("2026-09-27T13:20:00Z")) === true || "27 Sep missed");
   t("30 Sep, the last day, is month end", () =>
     m.isMonthEnd(at("2026-09-30T13:20:00Z")) === true || "30 Sep missed");
   // 31-day month: the boundary moves with the month's length, which is the
   // whole reason this is computed rather than hard-coded.
   t("31 Oct, the last day, is month end", () =>
     m.isMonthEnd(at("2026-10-31T14:20:00Z")) === true || "31 Oct missed");
-  t("30 Oct, second from last, is month end", () =>
-    m.isMonthEnd(at("2026-10-30T14:20:00Z")) === true || "30 Oct missed");
-  t("29 Oct is not", () =>
-    m.isMonthEnd(at("2026-10-29T14:20:00Z")) === false || "29 Oct flagged");
+  t("28 Oct, fourth from last, is month end", () =>
+    m.isMonthEnd(at("2026-10-28T14:20:00Z")) === true || "28 Oct missed");
+  t("27 Oct is not", () =>
+    m.isMonthEnd(at("2026-10-27T14:20:00Z")) === false || "27 Oct flagged");
   // February, where a hard-coded boundary would be wrong every fourth year.
-  // 2027 has 28 days, so the last two are the 27th and 28th; 2028 has 29, so
-  // the same 27 February is NOT month end.
-  t("27 Feb IS month end in non-leap 2027", () =>
-    m.isMonthEnd(at("2027-02-27T14:20:00Z")) === true || "27 Feb 2027 missed");
-  t("27 Feb is NOT month end in leap 2028", () =>
-    m.isMonthEnd(at("2028-02-27T14:20:00Z")) === false
-      || "27 Feb 2028 flagged — leap year has 29 days, so this is third from last");
-  t("28 Feb is month end in leap 2028 too", () =>
-    m.isMonthEnd(at("2028-02-28T14:20:00Z")) === true || "28 Feb 2028 missed");
+  // 2027 has 28 days, so the last four are the 25th-28th; 2028 has 29, so the
+  // same 25 February is NOT month end.
+  t("25 Feb IS month end in non-leap 2027", () =>
+    m.isMonthEnd(at("2027-02-25T14:20:00Z")) === true || "25 Feb 2027 missed");
+  t("25 Feb is NOT month end in leap 2028", () =>
+    m.isMonthEnd(at("2028-02-25T14:20:00Z")) === false
+      || "25 Feb 2028 flagged — leap year has 29 days, so this is fifth from last");
+  t("26 Feb is month end in leap 2028", () =>
+    m.isMonthEnd(at("2028-02-26T14:20:00Z")) === true || "26 Feb 2028 missed");
   t("29 Feb leap year is month end", () =>
     m.isMonthEnd(at("2028-02-29T14:20:00Z")) === true || "29 Feb 2028 missed");
   // THE TIMEZONE TRAP. 01:00Z on the 1st is still 8pm on the LAST day of the
@@ -98,6 +98,25 @@ function t(name, fn) {
       || "UTC date used instead of Chicago — month end missed on the last evening");
   t("14:00Z on 1 Oct is genuinely 1 Oct in Chicago, not month end", () =>
     m.isMonthEnd(at("2026-10-01T14:00:00Z")) === false || "1 Oct flagged as month end");
+
+  console.log("\nage in Chicago calendar days");
+  // Cron fires at 8:20am Chicago. A refund's time of day must not change which
+  // morning it first qualifies on.
+  t("reversed early on the 14th is 3 days old on the 17th", () =>
+    m.daysOpen("2026-09-14T06:00:00Z", at("2026-09-17T13:20:00Z")) === 3 || "wrong count");
+  t("reversed late on the 14th (Chicago) is ALSO 3 days old on the 17th", () =>
+    m.daysOpen("2026-09-15T04:30:00Z", at("2026-09-17T13:20:00Z")) === 3
+      || "11:30pm Chicago on the 14th read as the 15th — UTC date used");
+  t("reversed yesterday afternoon is 1 day old", () =>
+    m.daysOpen("2026-09-29T20:00:00Z", at("2026-09-30T13:20:00Z")) === 1 || "wrong count");
+  t("reversed this morning is 0 days old", () =>
+    m.daysOpen("2026-09-30T12:00:00Z", at("2026-09-30T13:20:00Z")) === 0 || "wrong count");
+  t("the DST change does not shift a day count", () =>
+    m.daysOpen("2026-10-31T15:00:00Z", at("2026-11-03T14:20:00Z")) === 3 || "DST shifted the count");
+  t("the last morning of Sep lists a refund from 11:59pm on the 29th", () =>
+    (m.isMonthEnd(at("2026-09-30T13:20:00Z"))
+      && m.daysOpen("2026-09-30T04:59:00Z", at("2026-09-30T13:20:00Z")) >= m.MONTH_END_MIN_DAYS)
+      || "a late refund on the 29th would miss the last mail of the month");
 
   console.log("\neBay id read off a Shopify order (the three forms)");
   t("Marketplace Connect: sourceIdentifier", () =>
@@ -234,13 +253,12 @@ function t(name, fn) {
     mism(LIVE, LIVE) === null || "mailed about an ordinary live sale");
 
   console.log("\nthresholds as configured");
-  t("base threshold is 3 days", () => m.BASE_HOURS === 72 || `BASE_HOURS=${m.BASE_HOURS}`);
-  t("month end tightens to 24h", () => m.MONTH_END_HOURS === 24 || `=${m.MONTH_END_HOURS}`);
-  t("month-end window is the last 2 days", () => m.MONTH_END_DAYS === 2 || `=${m.MONTH_END_DAYS}`);
-  t("re-nag every 3 days", () => m.RENAG_HOURS === 72 || `=${m.RENAG_HOURS}`);
-  t("escalate at 10 days", () => m.ESCALATE_DAYS === 10 || `=${m.ESCALATE_DAYS}`);
+  t("base threshold is 3 days", () => m.BASE_DAYS === 3 || `BASE_DAYS=${m.BASE_DAYS}`);
+  t("month end drops to 1 day", () => m.MONTH_END_MIN_DAYS === 1 || `=${m.MONTH_END_MIN_DAYS}`);
+  t("month-end window is the last 4 days", () => m.MONTH_END_DAYS === 4 || `=${m.MONTH_END_DAYS}`);
+  t("red at 10 days", () => m.ESCALATE_DAYS === 10 || `=${m.ESCALATE_DAYS}`);
   t("month-end threshold is tighter than the base one", () =>
-    m.MONTH_END_HOURS < m.BASE_HOURS || "month end would LOOSEN the rule");
+    m.MONTH_END_MIN_DAYS < m.BASE_DAYS || "month end would LOOSEN the rule");
 
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail ? 1 : 0);
