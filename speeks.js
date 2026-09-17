@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.6';
+const APP_VERSION = '3.8.7';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -2167,6 +2167,59 @@ function filterManageUsers() {
     });
 }
 
+// The shift length a row's hours and days come to, shown beside them.
+//
+// It is printed rather than left to be worked out because it is the number the
+// daily listing goal is actually built from, and the whole point of storing the
+// week and the days instead of the shift is that the shift is derived. Someone
+// typing 10 and 2 should be able to see 5h appear, not discover it a week later
+// in the efficiency table.
+function _upShiftLabel(hours, days) {
+    const h = Number(hours), d = Number(days);
+    if (!(h > 0) || !(d > 0)) return '—';
+    const cap = ListingGoalsEngine.cfg.max_shift_hours || 12;
+    const shift = Math.min(h / d, cap);
+    const txt = (Math.round(shift * 10) / 10) + 'h/day';
+    // Say when the cap has bitten, rather than showing a number that isn't the
+    // quotient and letting it look like a rounding error.
+    return (h / d > cap) ? txt + '*' : txt;
+}
+
+// Repaint one row's shift as its hours or days are typed. Reads the placeholders
+// when a box is blank, so the label tracks what the person is actually being
+// counted as rather than going to "—" the moment a box is cleared.
+window._upShiftSync = function (el) {
+    const row = el && el.closest ? el.closest('.user-manage-row') : null;
+    if (!row) return;
+    const val = (sel) => {
+        const box = row.querySelector(sel);
+        if (!box) return 0;
+        return box.value !== '' ? box.value : parseFloat(box.placeholder);
+    };
+    const out = row.querySelector('.u-shift');
+    if (out) out.textContent = _upShiftLabel(val('.u-hours'), val('.u-days'));
+};
+
+// Switching Full-time / Part-time / Floater moves the DEFAULTS the blank boxes
+// stand for. Only the placeholders change — a number someone typed is theirs and
+// survives, because the override is the exception they went out of their way to
+// record and silently dropping it on a schedule change is how that exception
+// would get lost.
+window._upScheduleSync = function (sel) {
+    const row = sel && sel.closest ? sel.closest('.user-manage-row') : null;
+    if (!row) return;
+    const c = ListingGoalsEngine.cfg;
+    const v = sel.value;
+    const h = v === 'floater' ? (c.hours_floater || 25)
+        : v === 'part_time' ? (c.hours_part_time || 20) : (c.hours_full_time || 40);
+    const d = v === 'floater' ? (c.days_floater || 5)
+        : v === 'part_time' ? (c.days_part_time || 4) : (c.days_full_time || 5);
+    const hb = row.querySelector('.u-hours'), db = row.querySelector('.u-days');
+    if (hb) hb.placeholder = h + 'h';
+    if (db) db.placeholder = d + 'd';
+    if (hb) _upShiftSync(hb);
+};
+
 function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Employee' }, target) {
     const row = document.createElement('div');
     row.className = 'user-manage-row';
@@ -2192,11 +2245,32 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     const _lc = ListingGoalsEngine.cfg;
     const scheduleValue = user.can_float ? 'floater'
         : (user.employment_type === 'part_time' ? 'part_time' : 'full_time');
+    // The label spells out the DAY the type implies, not just the week, because
+    // the day is what a goal is built from and "Part-time · 20h" on its own left
+    // a manager no way to see why a part-timer's number was what it was.
     const scheduleOptions = [
-        ['full_time', `Full-time · ${_lc.hours_full_time || 40}h`],
-        ['part_time', `Part-time · ${_lc.hours_part_time || 20}h`],
-        ['floater',   `Floater · ${_lc.hours_floater || 25}h`],
+        ['full_time', `Full-time · ${_lc.hours_full_time || 40}h / ${_lc.days_full_time || 5}d`],
+        ['part_time', `Part-time · ${_lc.hours_part_time || 20}h / ${_lc.days_part_time || 4}d`],
+        ['floater',   `Floater · ${_lc.hours_floater || 25}h / ${_lc.days_floater || 5}d`],
     ].map(([v, label]) => `<option value="${v}" ${scheduleValue === v ? 'selected' : ''}>${label}</option>`).join('');
+
+    // Hours and days, when the type's default isn't the truth for this person.
+    //
+    // Two boxes rather than one "hours per day", because a shift length typed
+    // beside a weekly figure can contradict it, and the contradiction is
+    // invisible until it shows up in Staffed For weeks later. These two are the
+    // numbers a manager reads straight off the schedule, and the shift is
+    // DERIVED from them (migration 0091) — so there is nothing to keep in step.
+    //
+    // Blank is the normal state and means "use the default for the type above".
+    // Placeholders show what that default currently is, so an empty box still
+    // says what the person is being counted as.
+    const dflHours = scheduleValue === 'floater' ? (_lc.hours_floater || 25)
+        : scheduleValue === 'part_time' ? (_lc.hours_part_time || 20) : (_lc.hours_full_time || 40);
+    const dflDays = scheduleValue === 'floater' ? (_lc.days_floater || 5)
+        : scheduleValue === 'part_time' ? (_lc.days_part_time || 4) : (_lc.days_full_time || 5);
+    const hoursVal = (user.weekly_hours != null && user.weekly_hours !== '') ? user.weekly_hours : '';
+    const daysVal = (user.days_per_week != null && user.days_per_week !== '') ? user.days_per_week : '';
 
     // hire_date is deliberately NOT edited here (user, 2026-08-10). It is stamped
     // server-side the moment a new PIN is saved, which starts the two-week
@@ -2209,7 +2283,10 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
         <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 78px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
         <select class="u-store" style="flex: 1;">${storeOptions}</select>
         <select class="u-role" style="flex: 1.5;">${roleOptions}</select>
-        <select class="u-schedule" style="flex: 1.3;" title="Weekly hours — what this person's store listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
+        <select class="u-schedule" onchange="_upScheduleSync(this)" style="flex: 1.3;" title="Weekly hours — what this person's store listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
+        <input type="number" class="u-hours" min="1" max="80" placeholder="${dflHours}h" value="${hoursVal}" oninput="_upShiftSync(this)" style="flex: 0 0 62px; max-width: 62px;" title="Hours a week, if this person isn't on the default for their schedule type. Leave blank to use it.">
+        <input type="number" class="u-days" min="1" max="${_lc.open_days || 6}" placeholder="${dflDays}d" value="${daysVal}" oninput="_upShiftSync(this)" style="flex: 0 0 56px; max-width: 56px;" title="Days a week they're in. Hours ÷ days is the shift their daily listing goal is built from. Leave blank to use the default.">
+        <span class="u-shift" style="flex: 0 0 auto; min-width: 58px; font-size: 11px; font-weight: 700; color: #64748b; text-align: center; white-space: nowrap;" title="The shift their daily listing goal is built from — hours ÷ days.">${_upShiftLabel(hoursVal || dflHours, daysVal || dflDays)}</span>
         <span class="u-notify" data-name="${escapeHtml((user.name || '').trim().toLowerCase())}" title="Email alerts — each person sets their own from the cog in the top bar."></span>
         <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
@@ -2241,6 +2318,15 @@ async function saveManageUsers() {
         // here is destroyed. Send the schedule fields explicitly; the server
         // falls back to the stored value only when a key is absent entirely.
         const schedule = row.querySelector('.u-schedule')?.value || 'full_time';
+        // Blank means "use the default for the schedule type", which the server
+        // stores as NULL — so an empty box has to travel as null, not as 0 or ''.
+        // A 0 would be a real answer meaning no hours at all, and would zero that
+        // person out of their store's capacity.
+        const numOrNull = (sel) => {
+            const v = row.querySelector(sel)?.value ?? '';
+            const n = parseInt(v, 10);
+            return (v !== '' && Number.isFinite(n) && n > 0) ? n : null;
+        };
 
         if (name || pin) {
             if (pin.length !== 4) {
@@ -2254,6 +2340,8 @@ async function saveManageUsers() {
                 name, pin, store, role,
                 employment_type: schedule === 'part_time' ? 'part_time' : 'full_time',
                 can_float: schedule === 'floater',
+                weekly_hours: numOrNull('.u-hours'),
+                days_per_week: numOrNull('.u-days'),
             });
         }
     });
@@ -15804,8 +15892,17 @@ const ListingGoalsEngine = {
         saturday_factor: 0.5, goal_factor: 0.75, open_days: 6,
         // Shown as labels in the User Permissions schedule dropdown.
         hours_full_time: 40, hours_part_time: 20, hours_floater: 25, new_hire_weeks: 2,
+        // Days present per week, per schedule type. weekly hours ÷ this is the
+        // SHIFT a daily goal is built from — see shiftFor.
+        days_full_time: 5, days_part_time: 4, days_floater: 5, max_shift_hours: 12,
     },
     _newHires: {},   // store → Set of names inside the new-hire ramp this week
+    // store → { employee name → their shift length in hours }, straight from the
+    // server. NOT derived here from hours ÷ days: that division lives in
+    // shiftHoursFor() in the store-targets function and nowhere else, because a
+    // constant duplicated across the two is exactly how the old baseForSize
+    // ladder drifted out of step with its server twin.
+    _shifts: {},
     // store → that store's own stretch factor. Kept HERE and not in cfg above,
     // because applyConfig runs once per store against one shared cfg object: a
     // per-store number in there would leave whichever store's fetch landed last
@@ -15821,6 +15918,21 @@ const ListingGoalsEngine = {
         if (row.cfg) Object.assign(this.cfg, row.cfg);
         if (row.store) this._newHires[row.store] = new Set(row.newHires || []);
         if (row.store && Number.isFinite(row.goalFactor)) this._factors[row.store] = row.goalFactor;
+        if (row.store && row.shifts) this._shifts[row.store] = row.shifts;
+    },
+
+    // Has this store's real payload landed yet? Until it has, every number this
+    // engine produces is a placeholder built on district defaults — the wrong
+    // stretch factor and, worse, the wrong shift for anyone who isn't full-time.
+    //
+    // This exists because those placeholders were being SAVED. renderManagerGoals
+    // kicks off recomputeGoalDisplays on a 30ms timer and a role tap autosaves,
+    // so a manager opening the modal on a cold cache could write a day's goals at
+    // the district factor before their own store's arrived. It is visible in the
+    // data as OVL rows reading 19 (8 × 3.0 × 0.78) beside rows reading 18
+    // (× 0.75) in the same week.
+    isReady(store) {
+        return !!(store && this._shifts[store]);
     },
 
     // This store's share of capacity, falling back to the district default for a
@@ -15870,8 +15982,36 @@ const ListingGoalsEngine = {
         const rate = this.rateFor(role, this.isNewHire(o.store, o.employee));
         if (!rate) return 0;
         return Math.round(
-            this.cfg.hours_per_day * rate * this.dayFactorFromDate(dateStr) * this.factorFor(o.store)
+            this.shiftFor(o.store, o.employee) * rate * this.dayFactorFromDate(dateStr) * this.factorFor(o.store)
         );
+    },
+
+    // How long THIS person's day is.
+    //
+    // Was cfg.hours_per_day — a flat 8 for everybody — which is the bug the whole
+    // of migration 0091 is about: the weekly goal was built from each person's
+    // real hours (40 / 20 / 25) while the daily goal pretended they all worked
+    // the same day. A floater on 25 hours a week and a part-timer on 10 both
+    // scored 18 on a lister day, exactly like someone on 40.
+    //
+    // It is not only the person's own number that was wrong. `Staffed For` on the
+    // DM's efficiency table is the SUM of these daily goals, so the inflation
+    // landed in the denominator of the ratio every store is judged on — which is
+    // why the two stores with no part-timer and no floater were the two reading
+    // sensibly while OVL, which has both, read 42%.
+    //
+    // The lookup is by name because listing_goals has no user_id to key on (see
+    // the identity note in CLAUDE.md), so a roster name and a saved name can
+    // differ — hence the loose match, the same rule the weekly rollups use.
+    // Falling back to hours_per_day keeps a person the server has never heard of
+    // scoring a full day rather than zero, which fails in the direction a manager
+    // will notice.
+    shiftFor(store, employee) {
+        const map = this._shifts[store];
+        if (!map || !employee) return this.cfg.hours_per_day;
+        if (Number.isFinite(map[employee])) return map[employee];
+        const hit = Object.keys(map).find(n => _goalsSameName(n, employee));
+        return hit ? map[hit] : this.cfg.hours_per_day;
     },
 
     // Rough weekly capacity goal for a store of `size` full-timers. ONLY a
@@ -16240,12 +16380,33 @@ function buildGoalsEditForm() {
 }
 
 // Debounced auto-save — managers just pick roles, no Save button.
+//
+// Held back until the store's own payload has landed. Before it does, every goal
+// on screen is a placeholder computed from district defaults: the district
+// stretch factor instead of the store's, and — since 0091 — a flat 8-hour day
+// for a part-timer or floater who does not work one. Writing those is how OVL
+// ended up with rows reading 19 (× 0.78) next to rows reading 18 (× 0.75) inside
+// one week. Re-armed on the same timer, so nothing is lost: the tap still saves,
+// a beat later, with the right numbers.
 window.scheduleGoalsAutosave = function() {
     const status = document.getElementById('goals-save-status');
     if (status) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
     clearTimeout(_goalsAutosaveTimer);
-    _goalsAutosaveTimer = setTimeout(() => saveGoalsData(true), 900);
+    _goalsAutosaveTimer = setTimeout(() => {
+        // Bounded, and it saves anyway at the end of it. A manager's roles are
+        // the thing that must not be lost; a goal computed on defaults is wrong
+        // but self-heals on the next render (_goalsResaveIfStale), whereas a
+        // roster nobody wrote is gone. The MSM widget keeps its own per-store
+        // state and saves through saveGoalsDataMS, so this single-store readiness
+        // check does not apply to it.
+        const waiting = !_msGoalsActive() && !ListingGoalsEngine.isReady(goalsTargetStore);
+        if (waiting && ++_goalsSaveWaits <= GOALS_SAVE_MAX_WAITS) return scheduleGoalsAutosave();
+        _goalsSaveWaits = 0;
+        saveGoalsData(true);
+    }, 900);
 };
+let _goalsSaveWaits = 0;
+const GOALS_SAVE_MAX_WAITS = 10;   // ~9s, then write what we have rather than lose it
 
 async function saveGoalsData(silent = false) {
     if (_msGoalsActive()) return saveGoalsDataMS(silent);
@@ -16980,9 +17141,13 @@ function effectiveTeamSize(store) {
 }
 // Last-4 completed weeks for the bars, each carrying the goal that was in force
 // THAT week — so re-setting this Monday's number can't re-colour history.
+// Each week also carries what it was STAFFED for and where its goal came from,
+// so the bars can show the same two readings the DM's efficiency table does and
+// can mark a week whose goal nobody actually set. Passed straight through rather
+// than picked apart — a field added on the server should not need a second edit
+// here to reach the renderer.
 function weeksFor(store) {
-    return ((_storeTargets[store] && _storeTargets[store].weeks) || [])
-        .map(w => ({ total: w.total, target: w.target }));
+    return ((_storeTargets[store] && _storeTargets[store].weeks) || []).map(w => ({ ...w }));
 }
 // Has the DM set THIS week's goal for the store by hand yet? `carried` means it is
 // running on a previous week's number, which still counts as "not set this week".
@@ -17241,22 +17406,57 @@ async function fetchStoreWeeklyHistory(store) {
 // shared target would repaint all four bars every time this week's goal changed.
 function _luWeeks(history, fallbackTarget) {
     return (history || []).map(w => (w && typeof w === 'object')
-        ? { total: w.total, target: w.target > 0 ? w.target : fallbackTarget }
+        ? { ...w, target: w.target > 0 ? w.target : fallbackTarget }
         : { total: w, target: fallbackTarget });
 }
 
 // Running 4-week listing view (manager + employee/ASM + DM widgets).
+//
+// Each bar now carries BOTH readings of its week, because showing one of them
+// was what let a store and the DM look at the same week and disagree out loud.
+// The colour is still listed vs the goal the DM set — that is the number a store
+// is held to — and under it sits listed vs what the store was actually staffed
+// for, which is the DM's efficiency column and the fairer reading of a week that
+// lost someone to a callout. A week can legitimately be red on top and over 100%
+// underneath; that combination is information, not a contradiction, and it is
+// the one the Aug 31 week at OVL was hiding.
+//
+// A goal nobody set for that week is marked. OVL ran three weeks — 17, 24 and 31
+// August — carrying the 151 typed on 10 August for a roster it no longer had,
+// and cleared it every time. Three unearned greens looked exactly like three
+// earned ones, and then the first real goal turned the run red.
 function levelUpHtml(history, target) {
     const last4 = _luWeeks(history, target).slice(-4);
     const padded = [...Array(Math.max(0, 4 - last4.length)).fill(null), ...last4];
-    const bars = padded.map(w => w == null
-        ? '<div class="lu-week empty"><span class="lu-week-num">–</span></div>'
-        : `<div class="lu-week ${w.total >= w.target ? 'green' : 'red'}"><span class="lu-week-num">${w.total}</span></div>`
-    ).join('');
+    const bars = padded.map(w => {
+        if (w == null) return '<div class="lu-week empty"><span class="lu-week-num">–</span></div>';
+        const carried = w.targetSource && w.targetSource !== 'set';
+        const eff = Number.isFinite(w.efficiency) ? w.efficiency : null;
+        // No efficiency means no roles were set that week, so there is nothing to
+        // measure against — a blank, not a 0%, which would read as a verdict.
+        const sub = eff == null
+            ? `<span class="lu-week-eff none" title="No roles were set that week, so there is nothing to measure what the store was staffed for.">–</span>`
+            : `<span class="lu-week-eff ${eff >= 100 ? 'over' : 'under'}" title="${w.total} listed against the ${w.adjusted} this store was actually staffed for that week — the figure the district sees.">${eff}%</span>`;
+        const goalNote = carried
+            ? `<span class="lu-week-carried" title="No goal was set for this week, so it was measured against the ${w.target} from ${w.targetSetFor ? _luWeekLabel(w.targetSetFor) : 'an earlier week'}.">goal not set</span>`
+            : `<span class="lu-week-goal">of ${w.target}</span>`;
+        return `<div class="lu-week ${w.total >= w.target ? 'green' : 'red'}${carried ? ' lu-week-stale' : ''}">`
+            + `<span class="lu-week-num">${w.total}</span>${goalNote}${sub}</div>`;
+    }).join('');
 
     return `
-        <div class="lu-head"><span class="lu-title">Last 4 Weeks</span></div>
+        <div class="lu-head"><span class="lu-title">Last 4 Weeks</span>
+        <span class="lu-sub">listed of goal &middot; % of what you were staffed for</span></div>
         <div class="lu-weeks">${bars}</div>`;
+}
+
+// "10 Aug" for a YYYY-MM-DD Monday. Only used inside the carried-goal tooltip,
+// where naming the week the number came from is the whole point — "an earlier
+// week" would leave a manager no way to tell a one-week carry from a month one.
+function _luWeekLabel(weekStart) {
+    const d = new Date(String(weekStart) + 'T12:00:00');
+    return isNaN(d.getTime()) ? String(weekStart)
+        : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function renderGoalsLevelUp() {
@@ -45931,8 +46131,22 @@ function _dmxLevelUp(history, target) {
         const k = w == null ? 'none' : (w.target && v >= w.target ? 'hit' : 'miss');
         // 3px floor so a zero week is still a visible mark, not a gap.
         const h = v == null ? 0 : Math.max(3, Math.round((v / top) * TRACK));
-        bars += '<div class="dmx-lu-w">'
-            + '<span class="dmx-lu-v dmx-lu-' + k + '">' + (v == null ? '&ndash;' : v) + '</span>'
+        // A week whose goal nobody set is graded against one carried in from an
+        // earlier week, which can turn a miss into a pass without anyone
+        // deciding it should. Marked here as well as on the store's own bars, so
+        // the DM sees the same caveat the manager does rather than the two
+        // reading the same week differently — which is what this whole change is
+        // about.
+        const stale = w != null && w.targetSource && w.targetSource !== 'set';
+        const tip = w == null ? ''
+            : ' title="' + escapeHtml(v + ' listed against a goal of ' + w.target
+                + (stale ? ' carried from ' + (w.targetSetFor ? _luWeekLabel(w.targetSetFor) : 'an earlier week')
+                           + ' — no goal was set for this one'
+                         : '')
+                + (Number.isFinite(w.efficiency) ? '. Staffed for ' + w.adjusted + ' (' + w.efficiency + '%).' : '.')) + '"';
+        bars += '<div class="dmx-lu-w"' + tip + '>'
+            + '<span class="dmx-lu-v dmx-lu-' + k + (stale ? ' dmx-lu-stale' : '') + '">'
+            + (v == null ? '&ndash;' : v) + (stale ? '<i class="dmx-lu-astk">*</i>' : '') + '</span>'
             + '<span class="dmx-lu-track"><i class="dmx-lu-' + k + '" style="height:' + h + 'px"></i></span>'
             + '<span class="dmx-lu-lab">' + labels[i] + '</span>'
             + '</div>';
@@ -46402,7 +46616,14 @@ function _dmxEfficiencyPane() {
         // at all, so the denominator is short and the ratio flatters. Flag it
         // rather than printing a number that reads as a verdict.
         const thin = r.assignedDays > 0 && r.assignedDays < (r.people.length * 4);
-        t += '<tr><td class="dmx-cl"><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
+        // Hours, Ceiling and Goal for this week were reconstructed from TODAY'S
+        // roster, because the week finished before capacity snapshots existed
+        // (migration 0093). They are the best available figures but they are not
+        // what the store was shown at the time, and they will move again if
+        // anyone is hired — so say so rather than let them pass as history.
+        const est = !!r.estimated;
+        t += '<tr' + (est ? ' class="dmx-tr-est"' : '') + '><td class="dmx-cl"><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
+            + (est ? '<span class="dmx-role dmx-role-est" title="This week ended before the app started saving each week’s roster, so Hours, Ceiling and Goal here are rebuilt from the roster as it stands TODAY — not the one the store actually had. Listed and Staffed For are real.">rebuilt</span>' : '')
             // Short form: "15 of 24 roles set" rendered wider than the column it
             // sits in and bled over both edges. The tooltip carries the sentence.
             + (thin ? '<span class="dmx-role" title="Roles were only set on '

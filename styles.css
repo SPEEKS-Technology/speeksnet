@@ -3634,6 +3634,32 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
 .goals-levelup .lu-week.empty { background: #eef2f6; }
 .goals-levelup .lu-week.empty .lu-week-num { color: #cbd5e1; }
 
+/* A bar now stacks THREE facts, not one: what was listed, the goal it is
+   coloured against, and the percentage of what the store was actually staffed
+   for. The last of those is the district's efficiency figure — carried here so
+   a store and the DM stop reading the same week and reaching opposite verdicts.
+   A week can be red on top and over 100% underneath; that is information, not a
+   contradiction.
+
+   The fixed 28px height goes with it — three lines need room — and the flow
+   turns to a column. */
+.goals-levelup .lu-week { flex-direction: column; height: auto; min-height: 28px; padding: 6px 2px; gap: 1px; line-height: 1.15; }
+.goals-levelup .lu-week-goal,
+.goals-levelup .lu-week-carried { font-size: 9px; font-weight: 700; color: rgba(255,255,255,.82); }
+.goals-levelup .lu-week-eff { font-size: 9.5px; font-weight: 800; color: rgba(255,255,255,.95); }
+.goals-levelup .lu-week-eff.none { color: rgba(255,255,255,.55); }
+.goals-levelup .lu-week.empty .lu-week-goal,
+.goals-levelup .lu-week.empty .lu-week-carried,
+.goals-levelup .lu-week.empty .lu-week-eff { color: #cbd5e1; }
+/* A goal nobody set for that week. Hatched rather than simply recoloured: the
+   green/red still has to read as the verdict it is, and the point here is that
+   the verdict was reached against a number carried in from an earlier week. */
+.goals-levelup .lu-week.lu-week-stale {
+    background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.16) 0 5px, transparent 5px 10px);
+}
+.goals-levelup .lu-week-carried { font-style: italic; letter-spacing: .01em; }
+.goals-levelup .lu-sub { font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: none; letter-spacing: 0; }
+
 /* Auto-save status pill */
 .goals-save-status { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; }
 .goals-save-status.saving { color: #a0aab2; }
@@ -9195,6 +9221,38 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 #listingGoalsModal .lu-week.green .lu-week-num { color: #3d6822 !important; }
 #listingGoalsModal .lu-week.red .lu-week-num { color: #b02a2f !important; }
 #listingGoalsModal .lu-week.empty .lu-week-num { color: #8a94a3 !important; }
+
+/* The tinted modal fills are light, so the two sub-lines take dark ink here
+   rather than the translucent white the solid compact bars use. */
+#listingGoalsModal .lu-week { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 13px 4px !important; }
+#listingGoalsModal .lu-week-goal,
+#listingGoalsModal .lu-week-carried { font-size: 10px; font-weight: 700; opacity: .75; }
+#listingGoalsModal .lu-week-eff { font-size: 11px; font-weight: 800; opacity: .95; }
+#listingGoalsModal .lu-week.green .lu-week-goal,
+#listingGoalsModal .lu-week.green .lu-week-carried,
+#listingGoalsModal .lu-week.green .lu-week-eff { color: #3d6822; }
+#listingGoalsModal .lu-week.red .lu-week-goal,
+#listingGoalsModal .lu-week.red .lu-week-carried,
+#listingGoalsModal .lu-week.red .lu-week-eff { color: #b02a2f; }
+#listingGoalsModal .lu-week.empty .lu-week-goal,
+#listingGoalsModal .lu-week.empty .lu-week-carried,
+#listingGoalsModal .lu-week.empty .lu-week-eff { color: #8a94a3; }
+#listingGoalsModal .lu-week.lu-week-stale {
+    background-image: repeating-linear-gradient(135deg, rgba(16,24,40,.055) 0 6px, transparent 6px 12px) !important;
+}
+/* The legend wraps under the title rather than sitting beside it on a narrow
+   screen. It was `white-space: nowrap` for one revision, which held the whole
+   header open at 712px inside a 390px phone — and because the header is a
+   sibling of the bar grid, it dragged the grid out with it. No scrollbar said
+   so; the right-hand weeks were simply unreachable. Same class of bug as the
+   Overview cards clipping their tables, which is what the layout suite exists
+   for. */
+#listingGoalsModal .lu-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 10px; }
+#listingGoalsModal .lu-sub { font-size: 10px; font-weight: 700; color: #8a94a3; }
+/* Grid and flex items default to min-width:auto, so a bar refuses to shrink
+   below its widest word and pushes the track out instead. The four bars must
+   share whatever width there is. */
+#listingGoalsModal .lu-week, .goals-levelup .lu-week { min-width: 0; }
 
 /* When the Action Menu is live for this user, it re-homes the ticker's toggles
    -- so hide the ticker. Everyone else (other pages) keeps it.
@@ -15396,6 +15454,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .dmx-lu-hit { color: #15803d; }
 .dmx-lu-miss { color: #b91c1c; }
 .dmx-lu-none { color: #cbd5e1; }
+/* A week whose goal nobody set, so it was graded against one carried in from an
+   earlier week. The asterisk rather than a colour change: the hit/miss colour is
+   the verdict and has to stay readable as one — this marks what the verdict was
+   reached against. The tooltip on the column carries the sentence. */
+.dmx-lu-astk { font-style: normal; font-size: 10px; vertical-align: 3px; opacity: .65; margin-left: 1px; }
 .dmx-lu-track > i.dmx-lu-hit { background: #15803d; }
 .dmx-lu-track > i.dmx-lu-miss { background: #c94f4f; }
 .dmx-lu-track > i.dmx-lu-none { background: #eef2f6; }
@@ -17033,6 +17096,12 @@ body.tv-body { display: block; background: #eef1f5; }
     display: block; margin: 3px auto 0; width: fit-content;
     color: #b45309; background: #fdf3e1;
 }
+/* "rebuilt" is a different KIND of caveat from the amber roles warning: that one
+   says the store's own data is thin, this one says our figures for the week are
+   a reconstruction. Slate, not amber, so a manager doesn't read it as a second
+   thing the store did wrong. */
+.dmx-tbl-c td.dmx-cl .dmx-role-est { color: #647082; background: #eef1f5; }
+.dmx-tr-est .dmx-num { opacity: .88; }
 
 /* Ruled to match the Live Dashboard table (.lv-tbl), which is the house style
    for a figures table on this site — SAME token everywhere, 1px #e6ebf1, used for
