@@ -179,6 +179,23 @@ const EBAY_FEE_NEW = new Set([
   "FINAL_VALUE_FEE_FIXED_PER_ORDER",
 ]);
 
+// ⚠️ THE FINANCES READ IS A RACE UNLESS THE WINDOW IS CLOSED (2026-09-17).
+// eBay pages transactions by OFFSET, and the window runs to today, so eBay is
+// still writing into the range as we page it: a row inserted ahead of the
+// cursor shifts every later row down one and the row on a page boundary is
+// never returned. Ending the window a few minutes in the PAST makes the set
+// immutable for the second or two the read takes, which removes the race
+// rather than detecting it. Nothing is lost — every pass re-reads the whole
+// month, so a fee posted inside the lag lands on the next pass, and the 8am
+// and 2pm passes are hours away from this edge either way.
+const FIN_SETTLE_LAG_MS = 5 * 60 * 1000;
+// And when a read comes back short anyway, read it again before giving up: the
+// drift is a race, not a fault, so the same read a moment later is almost
+// always whole. MPL on 2026-09-17 read 265 of 266 and put #N/A across sixteen
+// days; the very next read was complete.
+const FIN_PAGE_ATTEMPTS = 3;
+const FIN_RETRY_PAUSE_MS = 1500;
+
 const EBAY_FIN_HOST: Record<string, string> = {
   production: "https://apiz.ebay.com",
   sandbox: "https://apiz.sandbox.ebay.com",
@@ -921,6 +938,7 @@ Deno.serve(async (req: Request) => {
     // Paging integrity. `transactions` short of `transactions_expected` is the
     // dropped-row failure; it throws rather than reporting a short fee.
     transactions: 0, transactions_expected: 0, duplicate_page_rows: 0,
+    short_reads_retried: 0,
   };
   try {
     const er = await fetch(
@@ -936,6 +954,11 @@ Deno.serve(async (req: Request) => {
     const upper = new Date(Math.max(
       new Date(`${to}T00:00:00.000Z`).getTime(), today.getTime()));
     upper.setUTCDate(upper.getUTCDate() + 1);
+    // Close the window short of now — see FIN_SETTLE_LAG_MS. A closed month is
+    // already immutable and clamping it changes nothing; a range that runs to
+    // today is the only one that can drift, and this is what stops it.
+    const settledTo = Date.now() - FIN_SETTLE_LAG_MS;
+    if (upper.getTime() > settledTo) upper.setTime(settledTo);
     const filter = `transactionDate:[${from}T00:00:00.000Z..${upper.toISOString().slice(0, 23)}Z]`;
 
     // The day last month stopped accepting charges. A fee credit dated AFTER it
@@ -965,55 +988,70 @@ Deno.serve(async (req: Request) => {
     // count to reach eBay's own `total` (catches the drop). A short read throws,
     // which the catch below turns into ebay_fee = null and a warning — the same
     // honest #N/A an HTTP failure produces, instead of a plausible wrong number.
-    const seen = new Set<string>();
-    const txs: any[] = [];
+    // ⚠️ RETRIED, NOT ABANDONED. A read that comes back short is tried again
+    // (FIN_PAGE_ATTEMPTS) before it becomes an #N/A, because drift is a race and
+    // the next read is almost always whole. The guarantee is unchanged: a total
+    // KNOWN to be short is still never reported.
+    let txs: any[] = [];
     let expected = 0;
     let dupePageRows = 0;
-    for (let off = 0; off < 20000; off += 200) {
-      const r2 = await ebayGet(
-        `${host}/sell/finances/v1/transaction?limit=200&offset=${off}`
-        + `&filter=${encodeURIComponent(filter)}`, token);
-      // 204 = No Content, which is how the Finances API says "that offset is past
-      // the end". It is a normal terminator, not a failure: WSP July holds exactly
-      // 1000 transactions, so offset 1000 answers 204. Treating it as an error
-      // threw away the whole store's fee (and, worse, its eBay shipping — see the
-      // catch below).
-      if (r2.status === 204) break;
-      if (r2.status !== 200) {
-        throw new Error(`finances HTTP ${r2.status}: ${(await r2.text()).slice(0, 200)}`);
+    let shortReads = 0;
+    for (let attempt = 1; attempt <= FIN_PAGE_ATTEMPTS; attempt++) {
+      const seen = new Set<string>();
+      txs = [];
+      expected = 0;
+      dupePageRows = 0;
+      for (let off = 0; off < 20000; off += 200) {
+        const r2 = await ebayGet(
+          `${host}/sell/finances/v1/transaction?limit=200&offset=${off}`
+          + `&filter=${encodeURIComponent(filter)}`, token);
+        // 204 = No Content, which is how the Finances API says "that offset is past
+        // the end". It is a normal terminator, not a failure: WSP July holds exactly
+        // 1000 transactions, so offset 1000 answers 204. Treating it as an error
+        // threw away the whole store's fee (and, worse, its eBay shipping — see the
+        // catch below).
+        if (r2.status === 204) break;
+        if (r2.status !== 200) {
+          throw new Error(`finances HTTP ${r2.status}: ${(await r2.text()).slice(0, 200)}`);
+        }
+        const b2 = await r2.json();
+        const page = b2?.transactions || [];
+        // `total` is re-read every page on purpose: it is the live count, and the
+        // largest one seen is the bar the final tally has to clear.
+        expected = Math.max(expected, Number(b2?.total) || 0);
+        for (const x of page) {
+          // No id means it cannot be de-duplicated; keep it rather than drop it,
+          // and let the count check be the safety net.
+          const id = String(x?.transactionId || "");
+          if (id && seen.has(id)) { dupePageRows++; continue; }
+          if (id) seen.add(id);
+          txs.push(x);
+        }
+        // ⚠️ STOP ON A SHORT PAGE, NOT ON `total`. WSP July came back with total
+        // exactly 1000 — a round number that is far more likely to be a reporting
+        // cap than a true count, and trusting it would have stopped paging with
+        // real transactions still unread. A full page always means "ask again";
+        // only a page that comes back short proves the end. `total` is kept as the
+        // floor the final count must clear, never as the thing that ends the loop.
+        if (page.length < 200) break;
       }
-      const b2 = await r2.json();
-      const page = b2?.transactions || [];
-      // `total` is re-read every page on purpose: it is the live count, and the
-      // largest one seen is the bar the final tally has to clear.
-      expected = Math.max(expected, Number(b2?.total) || 0);
-      for (const x of page) {
-        // No id means it cannot be de-duplicated; keep it rather than drop it,
-        // and let the count check be the safety net.
-        const id = String(x?.transactionId || "");
-        if (id && seen.has(id)) { dupePageRows++; continue; }
-        if (id) seen.add(id);
-        txs.push(x);
-      }
-      // ⚠️ STOP ON A SHORT PAGE, NOT ON `total`. WSP July came back with total
-      // exactly 1000 — a round number that is far more likely to be a reporting
-      // cap than a true count, and trusting it would have stopped paging with
-      // real transactions still unread. A full page always means "ask again";
-      // only a page that comes back short proves the end. `total` is kept as the
-      // floor the final count must clear, never as the thing that ends the loop.
-      if (page.length < 200) break;
+      if (txs.length >= expected) break;
+      shortReads++;
+      if (attempt < FIN_PAGE_ATTEMPTS) await sleep(FIN_RETRY_PAUSE_MS);
     }
     ebay.transactions = txs.length;
     ebay.transactions_expected = expected;
     ebay.duplicate_page_rows = dupePageRows;
+    ebay.short_reads_retried = shortReads;
     // Equal is the normal case. MORE than expected is fine and is why the dedupe
     // runs first — eBay wrote new rows while we paged, and they are real. FEWER
     // is the failure: rows the paging lost.
     if (txs.length < expected) {
       throw new Error(
-        `finances paging incomplete: read ${txs.length} of ${expected} transactions `
-        + `(${expected - txs.length} lost to offset drift). Refusing to report a `
-        + "fee total that is short — a low fee overstates Net Profit.");
+        `finances paging incomplete after ${FIN_PAGE_ATTEMPTS} attempts: read `
+        + `${txs.length} of ${expected} transactions (${expected - txs.length} lost to `
+        + "offset drift). Refusing to report a fee total that is short — a low fee "
+        + "overstates Net Profit.");
     }
 
     // Only now that the WHOLE range came back 200 do the nulls become zeros: a
