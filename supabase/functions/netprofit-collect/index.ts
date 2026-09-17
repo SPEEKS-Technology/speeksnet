@@ -355,10 +355,26 @@ Deno.serve(async (req: Request) => {
     shopifyql_errors: [] as string[],
   };
 
+  // Where the time went, returned with the response as timings_ms. The sheet
+  // ignores it; it exists so the next "why was this slow" is a number, not a
+  // theory. 2026-09-17 took most of a morning to reconstruct from outside.
+  const timing = { total: 0, shopifyql: 0, scan: 0, scan_pages: 0, scan_chunks: 0,
+                   scan_orders: 0, throttle_waits: 0, throttle_wait: 0, transient_retries: 0 };
+  const tAll0 = Date.now();
+  const sleep = (ms: number) => new Promise((s) => setTimeout(s, ms));
+
   async function gql(query: string, variables: unknown = {}) {
     // Shopify's throttle is a leaky bucket and a cost-heavy page can be refused
     // outright. Back off and retry rather than returning a short month, which
     // would read as a quiet business day rather than a failed fetch.
+    //
+    // ⚠️ WAIT FOR WHAT THE BUCKET SAYS IT NEEDS (2026-09-17). The old back-off was
+    // a blind 2s/4s/6s/8s that gave up after four tries — fine for one request
+    // at a time. The order scan now runs SCAN_CHUNKS pages at once, and the same
+    // bucket is shared with shopify-live-refresh every minute and with the
+    // catalog jobs, so a refusal is routine rather than exceptional. Shopify
+    // returns how short the bucket is and how fast it refills; waiting exactly
+    // that long is faster than guessing and much less likely to run out of tries.
     for (let attempt = 0; ; attempt++) {
       const r = await fetch(`https://${t.shop}/admin/api/${API_VERSION}/graphql.json`, {
         method: "POST",
@@ -366,13 +382,30 @@ Deno.serve(async (req: Request) => {
         body: JSON.stringify({ query, variables }),
       });
       const body = await r.json().catch(() => null);
-      const throttled = body?.errors?.some((e: any) =>
-        e?.extensions?.code === "THROTTLED" || /throttl/i.test(e?.message || ""));
-      if (throttled && attempt < 4) {
-        await new Promise((s) => setTimeout(s, 2000 * (attempt + 1)));
+      // A 429 or 5xx with no JSON behind it is Shopify having a moment, not an
+      // answer. It used to throw immediately and fail the whole store's pass.
+      if (!body && (r.status === 429 || r.status >= 500) && attempt < 4) {
+        timing.transient_retries++;
+        await sleep(1500 * (attempt + 1));
         continue;
       }
       if (!body) throw new Error(`Shopify returned non-JSON (HTTP ${r.status})`);
+      const throttled = body?.errors?.some((e: any) =>
+        e?.extensions?.code === "THROTTLED" || /throttl/i.test(e?.message || ""));
+      if (throttled && attempt < 10) {
+        const cost = body?.extensions?.cost;
+        const ts = cost?.throttleStatus;
+        let ms = 2000 * (attempt + 1);
+        if (ts && Number(ts.restoreRate) > 0) {
+          const short = (Number(cost.requestedQueryCost) || 0) - (Number(ts.currentlyAvailable) || 0);
+          ms = Math.ceil(Math.max(short, 0) / Number(ts.restoreRate) * 1000) + 300;
+        }
+        ms = Math.min(Math.max(ms, 300), 10000);
+        timing.throttle_waits++;
+        timing.throttle_wait += ms;
+        await sleep(ms);
+        continue;
+      }
       return body;
     }
   }
@@ -402,9 +435,11 @@ Deno.serve(async (req: Request) => {
   //   * a row's SALE half never travels, only its RETURN half. An exchange
   //     books the returned item and its replacement under one order name, and
   //     dragging the replacement back would invent revenue on the wrong day.
+  const tQl0 = Date.now();
   const qlBody = await gql(
     `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, returns GROUP BY day, order_name SINCE ${from} UNTIL ${to}") {
          parseErrors tableData { rows } } }`);
+  timing.shopifyql = Date.now() - tQl0;
   const ql = qlBody?.data?.shopifyqlQuery;
   if (ql?.parseErrors?.length) {
     warnings.push(`shopifyql: ${ql.parseErrors.join("; ")}`);
@@ -543,155 +578,225 @@ Deno.serve(async (req: Request) => {
     if (/^\d{2}-\d{5}-\d{5}$/.test(srcId)) ids.push(srcId);
     return ids;
   };
-  do {
-    // ONE pass for both the card fee and the shipping label. Page size is 25,
-    // not 100: the events connection makes each order node far more expensive
-    // (measured ~38 cost points per 25 orders), and a 100-order page with events
-    // trips Shopify's throttle on every request rather than occasionally.
-    const body: any = await gql(
-      `query($q: String!, $after: String) {
-         orders(first: 25, after: $after, sortKey: CREATED_AT, query: $q) {
-           pageInfo { hasNextPage endCursor }
-           edges { node {
-             name createdAt processedAt sourceName sourceIdentifier
-             customAttributes { key value }
-             transactions { kind status gateway
-               fees { type amount { amount } } }
-             refunds(first: 10) {
-               refundLineItems(first: 1) { edges { node { quantity } } }
-             }
-             events(first: 50) {
-               pageInfo { hasNextPage }
-               edges { node { message createdAt } }
-             }
-           } }
+  // ONE pass for both the card fee and the shipping label. Page size is 25,
+  // not 100: the events connection makes each order node far more expensive
+  // (measured ~38 cost points per 25 orders), and a 100-order page with events
+  // trips Shopify's throttle on every request rather than occasionally.
+  const ORDERS_Q = `query($q: String!, $after: String) {
+     orders(first: 25, after: $after, sortKey: CREATED_AT, query: $q) {
+       pageInfo { hasNextPage endCursor }
+       edges { node {
+         name createdAt processedAt sourceName sourceIdentifier
+         customAttributes { key value }
+         transactions { kind status gateway
+           fees { type amount { amount } } }
+         refunds(first: 10) {
+           refundLineItems(first: 1) { edges { node { quantity } } }
          }
-       }`,
-      { q: `created_at:>=${scanFrom} AND created_at:<=${scanTo}`, after: cursor });
-    if (body.errors?.length) {
-      return json({ error: "shopify orders query failed", detail: body.errors, store }, 502);
+         events(first: 50) {
+           pageInfo { hasNextPage }
+           edges { node { message createdAt } }
+         }
+       } }
+     }
+   }`;
+
+  // ⚠️ THE SCAN RUNS IN SLICES AT ONCE, AND IS RE-JOINED IN THE ORIGINAL ORDER.
+  //
+  // WHY (2026-09-17). One cursor over the whole window meant pages one after
+  // another: OVL took 67-97s through Sep 16 against a hard 150-second limit on
+  // an edge request, and the window grows every day of the month (it starts 40
+  // days back and runs to today). At 9:35 that morning the restarted pass shared
+  // OVL's Shopify bucket with the catalog refresh and the request died at
+  // 150.075s — OVL's column went unwritten. Splitting the creation-date range
+  // into SCAN_CHUNKS slices and paging them together cuts the wall time to
+  // roughly that of the slowest slice.
+  //
+  // ⚠️ WHY THE OUTPUT IS UNCHANGED, AND WHAT WOULD CHANGE IT. The loop below is
+  // ORDER-SENSITIVE even though it looks like plain summing: every accumulator
+  // rounds as it goes, so the same amounts added in a different order can land
+  // a cent apart; ebayOrderDay is last-write-wins for the attribute and
+  // first-write-wins for sourceIdentifier. So orders are NOT processed as each
+  // slice returns. Each slice is a contiguous stretch of created_at, its pages
+  // come back CREATED_AT-sorted exactly as before, and the slices are joined
+  // oldest first — which is the original single-cursor order. The boundaries
+  // are explicit UTC instants used as <X on one side and >=X on the other, so
+  // every order falls in exactly one slice; the outer bounds keep their original
+  // date form so the window itself does not move. A name seen twice is dropped
+  // as belt and braces, and counted.
+  //
+  // Verified before release by running this beside the single-cursor version
+  // for all five stores and comparing the responses field by field.
+  const SCAN_CHUNKS = 4;
+  const SCAN_PAGE_CAP = 200;   // per slice; the old cap was 200 for the whole scan
+  const scanQueries = (() => {
+    const outerFrom = `created_at:>=${scanFrom}`;
+    const outerTo = `created_at:<=${scanTo}`;
+    const lo = Date.parse(scanFrom + "T00:00:00Z");
+    // Nothing is created in the future, so the part of the window after
+    // tomorrow is always empty and not worth a slice of its own.
+    const hi = Math.min(Date.parse(scanTo + "T00:00:00Z"), Date.now() + 86400000);
+    if (!(hi - lo > 86400000 * SCAN_CHUNKS)) return [`${outerFrom} AND ${outerTo}`];
+    const cuts: string[] = [];
+    for (let i = 1; i < SCAN_CHUNKS; i++) {
+      cuts.push(new Date(lo + Math.round((hi - lo) * i / SCAN_CHUNKS)).toISOString().slice(0, 19) + "Z");
     }
-    const conn = body.data.orders;
-    for (const e of conn.edges) {
-      const o = e.node;
+    return Array.from({ length: SCAN_CHUNKS }, (_, i) => [
+      i === 0 ? outerFrom : `created_at:>='${cuts[i - 1]}'`,
+      i === SCAN_CHUNKS - 1 ? outerTo : `created_at:<'${cuts[i]}'`,
+    ].join(" AND "));
+  })();
+  const tScan0 = Date.now();
+  const slices = await Promise.all(scanQueries.map(async (q) => {
+    const nodes: any[] = [];
+    let after: string | null = null;
+    let n = 0;
+    do {
+      const page: any = await gql(ORDERS_Q, { q, after });
+      if (page.errors?.length) return { error: page.errors, nodes, pages: n, capHit: false };
+      const conn = page.data.orders;
+      for (const e of conn.edges) nodes.push(e.node);
+      after = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+      n++;
+    } while (after && n < SCAN_PAGE_CAP);
+    return { error: null, nodes, pages: n, capHit: !!after };
+  }));
+  const failedSlice = slices.find((x) => x.error);
+  if (failedSlice) {
+    return json({ error: "shopify orders query failed", detail: failedSlice.error, store }, 502);
+  }
+  const scannedOrders: any[] = [];
+  const scannedNames = new Set<string>();
+  let scanDuplicates = 0;
+  for (const sl of slices) {
+    for (const node of sl.nodes) {
+      if (scannedNames.has(node.name)) { scanDuplicates++; continue; }
+      scannedNames.add(node.name);
+      scannedOrders.push(node);
+    }
+    pages += sl.pages;
+  }
+  if (slices.some((x) => x.capHit)) cursor = "page cap";
+  if (scanDuplicates) warnings.push(`${scanDuplicates} order(s) came back in two scan slices and were counted once`);
+  timing.scan = Date.now() - tScan0;
+  timing.scan_pages = pages;
+  timing.scan_chunks = scanQueries.length;
+  timing.scan_orders = scannedOrders.length;
 
-      // Collected BEFORE the window guard, because an order's sale day and its
-      // creation day are not always the same one and the sale day is the one
-      // the re-dating below needs.
-      const soldOn = chicagoDay(o.processedAt || o.createdAt);
-      const returnedLineItems = (o.refunds || []).some((rf: any) =>
-        (rf.refundLineItems?.edges || []).length > 0);
-      if (returnedLineItems && soldOn >= from && soldOn <= to) saleDay[o.name] = soldOn;
+  for (const o of scannedOrders) {
 
-      // ⚠️ THE SALE DAY, NOT THE DAY THE ORDER WAS CREATED. Every cost below —
-      // card fee, our label, and (through ebayOrderDay) the eBay fee — books to
-      // `d`, and Sales and Cost come from ShopifyQL, which files an order under
-      // its processedAt. For a till sale the two are the same day. For an eBay
-      // sale they are not: Marketplace Connect creates the Shopify order when it
-      // IMPORTS it, and when the import runs late the costs used to go with it.
-      //
-      // Measured 2026-09-15: the importer stalled over Sep 11-13 and 46 eBay
-      // orders at all five stores were created one to two days after they sold.
-      // OVL's Sep 12 and 13 kept their $9,228 of sales and showed $0.00 of eBay
-      // fee, with the fees and labels of 15 orders piled onto Sep 14; LEE and
-      // WSP lost Sep 11's the same way. Nothing guarded it, because every
-      // month total was still right — only the days were wrong.
-      const d = soldOn;
-      for (const id of ebayIdsOf(o)) seenEbayIds.add(id);
-      if (!days[d]) continue; // sold outside the window; never invent a row
-      days[d].orders++;
-      const isEbay = o.sourceName === "ebay"
-        || (o.transactions || []).some((x: any) => x.gateway === "ebay");
-      if (isEbay) days[d].ebay_orders++;
-      if ((o.transactions || []).some((x: any) => x.status === "SUCCESS"
-          && x.gateway === "shopify_payments" && (x.kind === "SALE" || x.kind === "CAPTURE"))) {
-        days[d].card_orders++;
-      }
-      for (const tx of o.transactions || []) {
-        if (tx.status !== "SUCCESS") continue;
-        for (const f of tx.fees || []) {
-          const amt = Number(f.amount?.amount) || 0;
-          // Tracked by transaction kind so we can SEE whether Shopify hands the
-          // processing fee back on a refund, rather than assuming either way.
-          const k = `${tx.kind}:${f.type}`;
-          feeByKind[k] = round2((feeByKind[k] || 0) + amt);
-          if (f.type === "processing_fee") days[d].cc_fee = round2(days[d].cc_fee + amt);
-        }
-      }
+    // Collected BEFORE the window guard, because an order's sale day and its
+    // creation day are not always the same one and the sale day is the one
+    // the re-dating below needs.
+    const soldOn = chicagoDay(o.processedAt || o.createdAt);
+    const returnedLineItems = (o.refunds || []).some((rf: any) =>
+      (rf.refundLineItems?.edges || []).length > 0);
+    if (returnedLineItems && soldOn >= from && soldOn <= to) saleDay[o.name] = soldOn;
 
-      // Shipping labels. The label is bought the day AFTER the sale, but it is
-      // charged to the SALE day because the event hangs off this order — which
-      // is exactly the attribution asked for, and exactly why the sheet writer
-      // needs a 1-day lag and an MTD restatement pass.
-      if (o.events?.pageInfo?.hasNextPage) ordersWithTruncatedEvents++;
-      for (const ee of o.events?.edges || []) {
-        const msg = String(ee.node?.message || "");
-        if (!/shipping label/i.test(msg)) continue;
-        labelEvents++;
-        const v = parseLabelCost(msg);
-        if (v === null) {
-          if (unknownLabelMessages.length < 20) unknownLabelMessages.push(msg);
-          continue;
-        }
-        const shape = labelShape(msg);
-        const bucket = labelShapes[shape] || { n: 0, amount: 0 };
-        bucket.n++;
-        bucket.amount = round2(bucket.amount + v);
-        labelShapes[shape] = bucket;
-        // chargedOn is when the money moved; day is the order it is booked to.
-        // A carrier reweigh can land weeks after the sale, which is the whole
-        // reason the sheet needs an MTD restatement pass and not just a 1-day
-        // lag — see the lagDays tally below.
-        const chargedOn = ee.node?.createdAt ? chicagoDay(String(ee.node.createdAt)) : "";
-        if (chargedOn && chargedOn !== d) {
-          const lag = Math.round(
-            (Date.parse(chargedOn + "T12:00:00Z") - Date.parse(d + "T12:00:00Z")) / 86400000);
-          const lb = labelLag[shape] || { n: 0, maxLag: 0, over7: 0, amountOver7: 0 };
-          lb.n++;
-          lb.maxLag = Math.max(lb.maxLag, lag);
-          if (lag > 7) { lb.over7++; lb.amountOver7 = round2(lb.amountOver7 + v); }
-          labelLag[shape] = lb;
-        }
-        const bookTo = shippingBookingDay(d, chargedOn, shape);
-        if (wantLabels) {
-          labelDetail.push({ order: o.name, day: d, chargedOn, book_to: bookTo,
-                             shape, amount: v, msg });
-        }
-        // A charge can now land outside the window. That is the rule working,
-        // not a leak — but it is counted, because a silent one would be.
-        if (!days[bookTo]) {
-          if (bookTo > to) { outOfWindow.after = round2(outOfWindow.after + v); outOfWindow.after_n++; }
-          else { outOfWindow.before = round2(outOfWindow.before + v); outOfWindow.before_n++; }
-          continue;
-        }
-        if (bookTo !== d) { rebooked.n++; rebooked.amount = round2(rebooked.amount + v); }
-        days[bookTo].shipping_cost = round2((days[bookTo].shipping_cost || 0) + v);
-        ordersWithShopifyLabel.add(o.name);
-      }
-
-      // Marketplace Connect writes the eBay Order Id as a custom attribute — it
-      // is the ONLY join between a Shopify order and eBay's Finances API, since
-      // MC writes no metafields. Verified format matches exactly: "17-14959-57173".
-      for (const ca of o.customAttributes || []) {
-        if (String(ca.key).trim().toLowerCase() !== "ebay order id") continue;
-        const id = String(ca.value || "").trim();
-        if (id) ebayOrderDay[id] = { day: d, name: o.name };
-      }
-      // The same id also sits in sourceIdentifier on the copies Marketplace
-      // Connect makes (see sales-true-daily's header). Every September order
-      // carries both, but an order with only this one would otherwise leave its
-      // fee unmatched and report the sale as never imported.
-      const srcId = String(o.sourceIdentifier || "").trim();
-      if (/^\d{2}-\d{5}-\d{5}$/.test(srcId) && !ebayOrderDay[srcId]) {
-        ebayOrderDay[srcId] = { day: d, name: o.name };
+    // ⚠️ THE SALE DAY, NOT THE DAY THE ORDER WAS CREATED. Every cost below —
+    // card fee, our label, and (through ebayOrderDay) the eBay fee — books to
+    // `d`, and Sales and Cost come from ShopifyQL, which files an order under
+    // its processedAt. For a till sale the two are the same day. For an eBay
+    // sale they are not: Marketplace Connect creates the Shopify order when it
+    // IMPORTS it, and when the import runs late the costs used to go with it.
+    //
+    // Measured 2026-09-15: the importer stalled over Sep 11-13 and 46 eBay
+    // orders at all five stores were created one to two days after they sold.
+    // OVL's Sep 12 and 13 kept their $9,228 of sales and showed $0.00 of eBay
+    // fee, with the fees and labels of 15 orders piled onto Sep 14; LEE and
+    // WSP lost Sep 11's the same way. Nothing guarded it, because every
+    // month total was still right — only the days were wrong.
+    const d = soldOn;
+    for (const id of ebayIdsOf(o)) seenEbayIds.add(id);
+    if (!days[d]) continue; // sold outside the window; never invent a row
+    days[d].orders++;
+    const isEbay = o.sourceName === "ebay"
+      || (o.transactions || []).some((x: any) => x.gateway === "ebay");
+    if (isEbay) days[d].ebay_orders++;
+    if ((o.transactions || []).some((x: any) => x.status === "SUCCESS"
+        && x.gateway === "shopify_payments" && (x.kind === "SALE" || x.kind === "CAPTURE"))) {
+      days[d].card_orders++;
+    }
+    for (const tx of o.transactions || []) {
+      if (tx.status !== "SUCCESS") continue;
+      for (const f of tx.fees || []) {
+        const amt = Number(f.amount?.amount) || 0;
+        // Tracked by transaction kind so we can SEE whether Shopify hands the
+        // processing fee back on a refund, rather than assuming either way.
+        const k = `${tx.kind}:${f.type}`;
+        feeByKind[k] = round2((feeByKind[k] || 0) + amt);
+        if (f.type === "processing_fee") days[d].cc_fee = round2(days[d].cc_fee + amt);
       }
     }
-    cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
-    pages++;
-    // 25 per page means a busy store's month needs ~30 pages. The old cap of 60
-    // was sized for 100-order pages and would now truncate a month silently.
-  } while (cursor && pages < 200);
-  if (cursor) warnings.push("stopped at 200 pages — range too wide, split it");
+
+    // Shipping labels. The label is bought the day AFTER the sale, but it is
+    // charged to the SALE day because the event hangs off this order — which
+    // is exactly the attribution asked for, and exactly why the sheet writer
+    // needs a 1-day lag and an MTD restatement pass.
+    if (o.events?.pageInfo?.hasNextPage) ordersWithTruncatedEvents++;
+    for (const ee of o.events?.edges || []) {
+      const msg = String(ee.node?.message || "");
+      if (!/shipping label/i.test(msg)) continue;
+      labelEvents++;
+      const v = parseLabelCost(msg);
+      if (v === null) {
+        if (unknownLabelMessages.length < 20) unknownLabelMessages.push(msg);
+        continue;
+      }
+      const shape = labelShape(msg);
+      const bucket = labelShapes[shape] || { n: 0, amount: 0 };
+      bucket.n++;
+      bucket.amount = round2(bucket.amount + v);
+      labelShapes[shape] = bucket;
+      // chargedOn is when the money moved; day is the order it is booked to.
+      // A carrier reweigh can land weeks after the sale, which is the whole
+      // reason the sheet needs an MTD restatement pass and not just a 1-day
+      // lag — see the lagDays tally below.
+      const chargedOn = ee.node?.createdAt ? chicagoDay(String(ee.node.createdAt)) : "";
+      if (chargedOn && chargedOn !== d) {
+        const lag = Math.round(
+          (Date.parse(chargedOn + "T12:00:00Z") - Date.parse(d + "T12:00:00Z")) / 86400000);
+        const lb = labelLag[shape] || { n: 0, maxLag: 0, over7: 0, amountOver7: 0 };
+        lb.n++;
+        lb.maxLag = Math.max(lb.maxLag, lag);
+        if (lag > 7) { lb.over7++; lb.amountOver7 = round2(lb.amountOver7 + v); }
+        labelLag[shape] = lb;
+      }
+      const bookTo = shippingBookingDay(d, chargedOn, shape);
+      if (wantLabels) {
+        labelDetail.push({ order: o.name, day: d, chargedOn, book_to: bookTo,
+                           shape, amount: v, msg });
+      }
+      // A charge can now land outside the window. That is the rule working,
+      // not a leak — but it is counted, because a silent one would be.
+      if (!days[bookTo]) {
+        if (bookTo > to) { outOfWindow.after = round2(outOfWindow.after + v); outOfWindow.after_n++; }
+        else { outOfWindow.before = round2(outOfWindow.before + v); outOfWindow.before_n++; }
+        continue;
+      }
+      if (bookTo !== d) { rebooked.n++; rebooked.amount = round2(rebooked.amount + v); }
+      days[bookTo].shipping_cost = round2((days[bookTo].shipping_cost || 0) + v);
+      ordersWithShopifyLabel.add(o.name);
+    }
+
+    // Marketplace Connect writes the eBay Order Id as a custom attribute — it
+    // is the ONLY join between a Shopify order and eBay's Finances API, since
+    // MC writes no metafields. Verified format matches exactly: "17-14959-57173".
+    for (const ca of o.customAttributes || []) {
+      if (String(ca.key).trim().toLowerCase() !== "ebay order id") continue;
+      const id = String(ca.value || "").trim();
+      if (id) ebayOrderDay[id] = { day: d, name: o.name };
+    }
+    // The same id also sits in sourceIdentifier on the copies Marketplace
+    // Connect makes (see sales-true-daily's header). Every September order
+    // carries both, but an order with only this one would otherwise leave its
+    // fee unmatched and report the sale as never imported.
+    const srcId = String(o.sourceIdentifier || "").trim();
+    if (/^\d{2}-\d{5}-\d{5}$/.test(srcId) && !ebayOrderDay[srcId]) {
+      ebayOrderDay[srcId] = { day: d, name: o.name };
+    }
+  }
+  if (cursor) warnings.push(`stopped at ${SCAN_PAGE_CAP} pages in a scan slice — range too wide, split it`);
   health.page_cap_hit = !!cursor;
   health.orders_with_truncated_events = ordersWithTruncatedEvents;
   health.unknown_label_messages = unknownLabelMessages.length;
@@ -1429,6 +1534,7 @@ Deno.serve(async (req: Request) => {
     blocked,
     warnings,
     health,
+    timings_ms: { ...timing, total: Date.now() - tAll0 },
     days: list,
   });
 });

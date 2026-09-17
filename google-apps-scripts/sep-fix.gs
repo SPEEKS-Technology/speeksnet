@@ -388,6 +388,68 @@
 // evidential instead of circumstantial. Until then, any draft that arrives as
 // shopify_draft_order AND matches a refunded amount should be eyeballed against
 // the store's Drafts list before it is pinned.
+//
+// ---------------------------------------------------------------------------
+// ✅ THE CHECK THAT SETTLES IT WITHOUT read_customers: THE SKU (2026-09-17).
+//
+// A repayment invoice re-bills the buyer for the ITEM THEY KEPT, so it carries
+// that item's SKU. refund_reprobe.body holds each refunded eBay order's line
+// items. Matching the draft's SKU stem (PayMore SKUs carry a location suffix
+// that changes when an item moves — match KS01-7359C, not KS01-7359C-E3) against
+// the refunded orders is EVIDENCE, where the amount test is a coincidence test.
+//
+// Measured over every September draft pinned so far:
+//   #KS01-14526 Sep 1  129.99  Samsung 32GB RAM      = refunded 13-15059-99081
+//   #KS01-14545 Sep 1   36.99  Zelda: Echoes         = refunded 19-15038-48912
+//   #KS01-14564 Sep 2  229.99  AUDEZE Maxwell        = refunded 18-15050-09238
+//   #KS01-14575 Sep 2  199.99  iPad 10th Gen         = refunded 24-15027-65126
+//   #KS01-14625 Sep 4   64.99  ThinkPad X1 Carbon    = refunded 24-15050-91325
+//   #KS01-14628 Sep 4   44.99  Kingston 16GB RAM     = refunded 23-15049-18244
+//   #KS01-14631 Sep 4  224.99  RTX 3060 Ti           = refunded 17-15050-29951
+//   #KS01-14695 Sep 7  219.99  iPhone 13             = refunded 07-15043-22932
+//   #KS01-14581 Sep 2   29.99  Xbox controller       = NO refunded order, stem or exact
+//
+// Eight of nine: same item, same total. The ninth is the reason to run it.
+//
+// ⚠️ #KS01-14581 IS PROBABLY A REAL SALE INSIDE THE SEP 2 PIN — $29.99, NOT
+// CHANGED HERE. Its amount matched a refund, which is all the rule asked at the
+// time, but no refunded eBay order carried an Xbox controller. $29.99 is one of
+// the commonest price points in the store. If OVL confirms it invoiced a real
+// customer for it, the Sep 2 pin should come back up by 29.99 in sales and that
+// order's cost. Left for the business to call: it is a locked, reviewed cell and
+// the figure is small, and a list is not a state (see SEPF_UNPIN).
+//
+// ---------------------------------------------------------------------------
+// SEP 8-15 — NOTHING TO DO. Checked 2026-09-16 under both the old and new rule:
+// zero draft orders at any store on any of those days.
+//
+// SEP 16 — OVL, TWO DRAFTS, BOTH REAL SALES. NO ROW, ON PURPOSE.
+//
+//   #KS01-14917  349.99  2018 MacBook Pro 13" i5   KS01-7653A-R5R2
+//   #KS01-14919 2749.99  Sony VPL-FHZ85 projector  KS01-7722A-R5R1
+//
+// Neither SKU stem appears on any refunded OVL eBay order. The MacBook's $349.99
+// DOES equal three refunded order totals — G.Skill RAM, a Fluance record player
+// and a Nintendo Virtual Boy — which is the coincidence case above, exactly. The
+// projector matches no amount at all. OVL Sep 16 stays live on the daily sync at
+// its reported 9,786.71 / 5,380.00 (both tabs agree on that base, checked).
+//
+// ⚠️ THIS DAY WAS NEARLY PINNED WRONG, TWICE, AND BOTH FOR REASONS WORTH KEEPING.
+//
+//   1. THE DEPLOYED sales-true-daily WAS THREE WEEKS STALE. It still ran the
+//      Aug 27 date-only rule — every draft since Aug 26 is a repayment — while
+//      the repo had carried the Sep 6 amount rule (b771f6a) that was never
+//      deployed. So it reported $3,099.98 of repayments on Sep 16. Deployed from
+//      the repo 2026-09-17 and diffed against the old build over Sep 15-17: only
+//      the Sep 16 classification changed. The earlier pins were not affected —
+//      each was checked by hand against `matches_a_refund_amount`, which both
+//      builds report identically. BEFORE TRUSTING A PROBE, COMPARE THE DEPLOYED
+//      SOURCE TO THE REPO (get_edge_function).
+//   2. THE `created 2026-08-31T14:01:38Z` TAG was proposed as a discriminator
+//      (both Sep 16 drafts carry it, the LEE and MPL real sales do not) before
+//      the Sep 7 note above was re-read: one bulk edit stamped every OVL draft.
+//      The LEE and MPL sales lacked it for being at other stores, not for being
+//      sales. The note was right; the SKU is the test.
 // ============================================================================
 
 var SEPF_SHEET_ID = '1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8';  // Sales Summary 2026
@@ -450,6 +512,8 @@ var SEPF_FIX = [
   //   deleted — verified, not assumed. No row unless it comes back; the
   //   figure to use if it does is in the Sep 7 block above.
   // Sep 7: WSP, MPL and BAL had no drafts and no duplicate pairs. No rows.
+  // Sep 8-15: no drafts anywhere. No rows.
+  // OVL Sep 16: both drafts are real sales by SKU (see the Sep 16 block). No row.
 ];
 
 // ---------------------------------------------------------------------------
