@@ -51,6 +51,35 @@ const SHOP_BY_STORE: Record<string, string> = {
   BAL: "paymore-ballwin.myshopify.com",
 };
 
+// ============================================================================
+// SALES THE STORE RECOVERED BY HAND — the manual list (2026-09-18)
+//
+// Marketplace Connect only imports orders for listings MC ITSELF created. A
+// sale on a SPEEKS Connect listing — ours, published through eBay's Inventory
+// API — never crosses into Shopify at all. It is not late; it is never coming.
+// The stores' answer is to invoice the buyer through a Shopify DRAFT ORDER, so
+// the money is real and on the tab, just under a Shopify order that carries no
+// eBay order id to join on. OVL 18-15155-99419 (sold Sep 15, invoiced Sep 16
+// as #KS01-14917) is the case that found this.
+//
+// findHandKeyed() below finds those unaided. This list is for the ones it
+// cannot: a draft keyed at a different figure, a sale recovered as a POS order,
+// anything where the amounts no longer line up. An entry here is taken on trust
+// and OVERRIDES the matcher — so the note is not decoration, it is the evidence
+// the next person gets.
+//
+// ⚠️ A DEPLOY PER ENTRY. Deliberate at this size: these are rare and each one is
+// a judgement about real money. If it ever needs more than a handful it belongs
+// in a table with the reason recorded per row, not in the source.
+// ============================================================================
+const EBAY_ACCOUNTED: Record<string, Record<string,
+  { shopify_order: string; booked_day: string; note: string }>> = {
+  // OVL: {
+  //   "18-15155-99419": { shopify_order: "#KS01-14917", booked_day: "2026-09-16",
+  //     note: "the shape, for reference — the matcher finds this one unaided" },
+  // },
+};
+
 const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b, null, 2), { status: s, headers: { "Content-Type": "application/json" } });
 
@@ -365,6 +394,14 @@ Deno.serve(async (req: Request) => {
     // before Marketplace Connect imported them, so there is no sale to miss.
     // Reported for visibility only; nothing alerts on it. See the ORPHAN note.
     cancelled_before_import: { n: 0, orders: [] as { ebay_order_id: string; day: string }[] },
+    // eBay sales with no Shopify order that the STORE booked by hand, as a
+    // draft-order invoice, because Marketplace Connect was never going to bring
+    // them across. Nothing is missing: the money is on the tab and the fee has
+    // been moved to sit with it. Reported so a hand-keyed sale is visible and
+    // can be checked, NOT because anything is wrong. See findHandKeyed.
+    recovered_by_draft: { n: 0, fee: 0, orders: [] as {
+      ebay_order_id: string; sold_day: string; shopify_order: string;
+      booked_day: string; fee: number; matched_by: string }[] },
     unknown_label_messages: 0,
     orders_with_truncated_events: 0,
     page_cap_hit: false,
@@ -1101,6 +1138,10 @@ Deno.serve(async (req: Request) => {
     for (const x of txs) {
       if (String(x.transactionType) === "REFUND") refundedIds.add(String(x.orderId || "").trim());
     }
+    // Gathered here and resolved below, not booked as we go: deciding whether an
+    // orphan was recovered by hand takes a Shopify read, and ONE read for the
+    // whole set is the difference between a free check and one call per orphan.
+    const orphans: { oid: string; soldDay: string; fee: number; gross: number[] }[] = [];
     for (const x of txs) {
       if (String(x.transactionType) !== "SALE") continue;
       const oid = String(x.orderId || "").trim();
@@ -1115,12 +1156,149 @@ Deno.serve(async (req: Request) => {
         }
       } else if (soldDay < todayChicago) {
         // Today's are routinely not imported YET, and today is never written.
-        health.not_yet_imported.n++;
-        health.not_yet_imported.fee = round2(health.not_yet_imported.fee
-          + (Number(x?.totalFeeAmount?.value) || 0));
-        if (health.not_yet_imported.orders.length < 25) {
-          health.not_yet_imported.orders.push({ ebay_order_id: oid, day: soldDay });
+        const fee = Number(x?.totalFeeAmount?.value) || 0;
+        // What the BUYER paid, which is what a hand-keyed invoice is written
+        // for. Two readings of it, because eBay states the basis one way and
+        // the net another, and which of the two equals the Shopify figure is
+        // not worth a guess: totalFeeBasisAmount is the gross eBay charged the
+        // fee on, and amount is that gross less the fee. Both are offered to
+        // the matcher and a UNIQUE hit is still required, so offering two can
+        // never turn one confident match into a wrong one — only into no match.
+        const gross = [
+          round2(Number(x?.totalFeeBasisAmount?.value) || 0),
+          round2((Number(x?.amount?.value) || 0) + fee),
+        ].filter((v) => v > 0);
+        orphans.push({ oid, soldDay, fee, gross });
+      }
+    }
+
+    // ── A SALE THE STORE RECOVERED BY HAND IS NOT A GAP (2026-09-18) ────────
+    // The alert above assumed one cause for "eBay sold it, Shopify has never
+    // heard of it": Marketplace Connect is behind. There is a second, and it
+    // never clears on its own — MC imports orders only for listings IT created,
+    // so a sale on one of OUR SPEEKS Connect listings is never coming across at
+    // all. The store invoices the buyer through a draft order instead, and the
+    // money lands in Shopify under an order with no eBay id on it.
+    //
+    // Left alone that fires not_imported on every pass, twice a day, forever,
+    // telling somebody to go and check a connector that is working fine. OVL
+    // 18-15155-99419 did exactly that from Sep 17 to Sep 18.
+    //
+    // ⚠️ THE FEE FOLLOWS THE MONEY, NOT THE CALENDAR. Everywhere else in this
+    // file a fee books to the day the item SOLD, and that rule is right because
+    // Shopify and eBay agree on that day. Here they do not: eBay sold it on the
+    // 15th, the invoice was paid on the 16th, and the REVENUE is on the 16th
+    // because that is the only day Shopify knows about. Leaving the fee on the
+    // 15th puts a cost on a day with no sale behind it and a sale on the 16th
+    // with no cost — both days wrong by the fee, in opposite directions. Moving
+    // it makes each day's Net Profit internally true. The 15th is still light by
+    // the sale itself, and nothing here can fix that: the revenue figure comes
+    // from ShopifyQL, which has never heard of this sale either.
+    //
+    // ⚠️ A UNIQUE MATCH OR NO MATCH. sep-fix.gs records the trap directly — this
+    // same $349.99 equals the total of three unrelated refunded OVL orders. So a
+    // candidate must be a draft-sourced Shopify order that carries NO eBay id,
+    // for the same money, created on or within HAND_KEYED_DAYS after the eBay
+    // sale — and it must be the ONLY one. Two candidates is not a coin toss, it
+    // is an unanswered question, and it stays in not_yet_imported where somebody
+    // will see it. One draft is never claimed by two orphans.
+    const HAND_KEYED_DAYS = 4;
+    async function findHandKeyed(list: typeof orphans) {
+      const found: Record<string, { day: string; name: string; how: string }> = {};
+      // The manual list first, and it WINS. It exists for what the matcher
+      // cannot see, so a matcher that disagrees with it is not a tiebreak.
+      const manual = EBAY_ACCOUNTED[store] || {};
+      const unresolved = list.filter((o) => {
+        const m = manual[o.oid];
+        if (!m) return true;
+        found[o.oid] = { day: m.booked_day, name: m.shopify_order,
+                         how: "named in EBAY_ACCOUNTED: " + m.note };
+        return false;
+      });
+      if (!unresolved.length) return found;
+
+      // Only reached when there IS an orphan, so the ordinary pass — every eBay
+      // sale accounted for — pays nothing for this. source_name is a supported
+      // order-search field, so Shopify does the filtering and a store with 400
+      // orders in the window returns only the dozen drafts among them.
+      let earliest = unresolved[0].soldDay;
+      for (const o of unresolved) if (o.soldDay < earliest) earliest = o.soldDay;
+      const DRAFTS_Q = `query($q: String!, $after: String) {
+         orders(first: 50, after: $after, sortKey: CREATED_AT, query: $q) {
+           pageInfo { hasNextPage endCursor }
+           edges { node {
+             name createdAt processedAt sourceIdentifier
+             customAttributes { key value }
+             currentSubtotalPriceSet { shopMoney { amount } }
+             totalPriceSet { shopMoney { amount } }
+           } }
+         }
+       }`;
+      const q = `created_at:>=${earliest}T00:00:00Z AND created_at:<=${scanTo}T23:59:59Z`
+        + " AND source_name:shopify_draft_order";
+      const drafts: any[] = [];
+      let after: string | null = null;
+      for (let page = 0; page < 10; page++) {
+        const b: any = await gql(DRAFTS_Q, { q, after });
+        const conn = b?.data?.orders;
+        if (!conn) break;
+        for (const e of conn.edges || []) drafts.push(e.node);
+        if (!conn.pageInfo?.hasNextPage) break;
+        after = conn.pageInfo.endCursor;
+      }
+
+      const claimed = new Set<string>();
+      for (const o of unresolved) {
+        const hits = drafts.filter((dr) => {
+          if (claimed.has(dr.name)) return false;
+          // A draft that already carries an eBay id joined through the normal
+          // path and is another order, not a recovery of this one.
+          if (ebayIdsOf(dr).length) return false;
+          const dday = chicagoDay(dr.processedAt || dr.createdAt);
+          const gap = Math.round((Date.parse(dday + "T12:00:00Z")
+            - Date.parse(o.soldDay + "T12:00:00Z")) / 86400000);
+          if (gap < 0 || gap > HAND_KEYED_DAYS) return false;
+          const sub = round2(Number(dr.currentSubtotalPriceSet?.shopMoney?.amount) || 0);
+          const tot = round2(Number(dr.totalPriceSet?.shopMoney?.amount) || 0);
+          return o.gross.some((g) => Math.abs(g - sub) < 0.005 || Math.abs(g - tot) < 0.005);
+        });
+        if (hits.length !== 1) continue;
+        claimed.add(hits[0].name);
+        found[o.oid] = {
+          day: chicagoDay(hits[0].processedAt || hits[0].createdAt),
+          name: hits[0].name,
+          how: "the only draft-order invoice at this store for this money, within "
+            + HAND_KEYED_DAYS + " days of the sale",
+        };
+      }
+      return found;
+    }
+
+    const handKeyed = orphans.length ? await findHandKeyed(orphans) : {};
+    for (const o of orphans) {
+      const rec = handKeyed[o.oid];
+      if (rec) {
+        // Outside the window there is no day row to book against, so the fee
+        // stays where the orphan pass put it. Still recovered — the point of
+        // saying so is that nobody is waiting on an import that is not coming.
+        const bookTo = days[rec.day] ? rec.day : o.soldDay;
+        ebayOrderDay[o.oid] = { day: bookTo, name: rec.name };
+        health.recovered_by_draft.n++;
+        health.recovered_by_draft.fee = round2(health.recovered_by_draft.fee + o.fee);
+        if (health.recovered_by_draft.orders.length < 25) {
+          health.recovered_by_draft.orders.push({
+            ebay_order_id: o.oid, sold_day: o.soldDay, shopify_order: rec.name,
+            booked_day: bookTo, fee: round2(o.fee),
+            matched_by: bookTo === rec.day ? rec.how
+              : rec.how + " (its day is outside this window, so the fee stays on the sale day)",
+          });
         }
+        continue;
+      }
+      health.not_yet_imported.n++;
+      health.not_yet_imported.fee = round2(health.not_yet_imported.fee + o.fee);
+      if (health.not_yet_imported.orders.length < 25) {
+        health.not_yet_imported.orders.push({ ebay_order_id: o.oid, day: o.soldDay });
       }
     }
 
@@ -1386,9 +1564,25 @@ Deno.serve(async (req: Request) => {
       health.unhandled_ebay_types = ebay.unhandled_types;
     }
     if (health.not_yet_imported.n) {
+      // ⚠️ THE FEE IS NOT MISSING, AND THIS LINE USED TO SAY IT WAS (2026-09-18).
+      // The ORPHAN pass above dates an unimported sale by eBay's own sale date, so
+      // its fee is already on that day and stays there when the order arrives. What
+      // the day is genuinely short of is the SALE. netprofit-sheet.gs emailed the
+      // old wording twice a day, and "the eBay fee is missing" sent people looking
+      // for a figure that was sitting right where it belonged.
       warnings.push(`${health.not_yet_imported.n} eBay sale(s) on a finished day have no `
-        + `Shopify order — $${health.not_yet_imported.fee} of fee, and their sales, are `
-        + "missing from those days until Marketplace Connect imports them");
+        + "Shopify order, so those days are short the SALES. Their "
+        + `${health.not_yet_imported.fee} of eBay fee is already booked on the day each `
+        + "one sold and needs nothing doing to it");
+    }
+    if (health.recovered_by_draft.n) {
+      warnings.push(`${health.recovered_by_draft.n} eBay sale(s) never came into Shopify `
+        + "and were invoiced by hand instead: "
+        + health.recovered_by_draft.orders.map((o) =>
+            `${o.ebay_order_id} sold ${o.sold_day} -> ${o.shopify_order} on ${o.booked_day}`)
+          .slice(0, 5).join("; ")
+        + `. ${health.recovered_by_draft.fee} of eBay fee moved onto the day the invoice `
+        + "was paid, so each day's cost sits with its own revenue");
     }
     if (ebay.account_fees_unattributed) {
       warnings.push(`$${ebay.account_fees_unattributed} of account-level eBay charges `
