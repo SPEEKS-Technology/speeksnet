@@ -191,10 +191,13 @@ function _usageSessionId() {
 // where headless Chrome at 390px wide behaved nothing like a phone.) It also keys
 // off the SHORT edge, so a phone held sideways is still a phone.
 //
-// mob answers the separate, project-specific question: was the mobile LAYER
-// actually engaged — i.e. <=900px, the compact breakpoint in styles.css? Someone
-// on a half-width desktop window sees the mobile layout without being on a mobile
-// device, and that is worth knowing on its own.
+// mob answers the separate, project-specific question: was the compact LAYER
+// actually engaged? Someone on a half-width desktop window sees the mobile
+// layout without being on a mobile device, and that is worth knowing on its own.
+// It asks _isMobileLayout() rather than re-deriving a width, because since the
+// tablet port (2026-09-17) the answer is not a width at all — a landscape iPad
+// at 1180px is inside the band and a 1366x768 laptop is not. A second copy of
+// that rule here would have quietly under-reported every tablet on the estate.
 function _usageDevice() {
     try {
         const w = Math.round(window.innerWidth || 0);
@@ -206,7 +209,7 @@ function _usageDevice() {
             dpr: Math.round((window.devicePixelRatio || 1) * 100) / 100,
             touch: coarse,
             kind: !coarse ? 'desktop' : (short < 500 ? 'phone' : 'tablet'),
-            mob: w > 0 && w <= 900,
+            mob: _isMobileLayout(),
         };
     } catch (_) {
         return null;   // telemetry must never break a flush
@@ -611,7 +614,13 @@ let _panelScrollLock = false;
 
 function _syncPanelScrollLock() {
     const body = document.body;
-    const anyOpen = _isMobileLayout() && _PANEL_LOCK_IDS.some(id =>
+    // _panelIsFullBleed, not _isMobileLayout. The lock exists because the sheet
+    // COVERS the page on a phone; on a tablet the same panel is a third-width
+    // drawer, so two thirds of the page is in view and freezing it is just a page
+    // that has stopped working. The sheets carry overscroll-behavior: contain
+    // across the whole band, so the scroll-chaining half of the problem is
+    // already handled in CSS on both.
+    const anyOpen = _panelIsFullBleed() && _PANEL_LOCK_IDS.some(id =>
         document.getElementById(id)?.classList.contains('open'));
     if (anyOpen) {
         if (!body.classList.contains('no-scroll')) {
@@ -640,8 +649,13 @@ function _syncPanelScrollLock() {
             if (el) obs.observe(el, { attributes: true, attributeFilter: ['class'] });
         });
         // Dragging across the breakpoint with a panel open: the drawer on the
-        // desktop side must not leave the page frozen.
-        try { window.matchMedia('(max-width: 900px)').addEventListener('change', _syncPanelScrollLock); } catch (_) {}
+        // desktop side must not leave the page frozen. BOTH queries, because the
+        // lock now turns on the sheet/drawer line at 901px and not on the band's
+        // own edge — an iPad rotating 820 -> 1180 with the Checklist open crosses
+        // that line and no other, and without this listener the page behind the
+        // new third-width drawer would stay pinned with nothing to explain it.
+        try { window.matchMedia(_compactMediaQuery()).addEventListener('change', _syncPanelScrollLock); } catch (_) {}
+        try { window.matchMedia(_tabletMediaQuery()).addEventListener('change', _syncPanelScrollLock); } catch (_) {}
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
     else start();
@@ -10868,18 +10882,7 @@ function renderQMTab(tab) {
 function copyQMToClipboard(button) {
     const textToCopy = button.getAttribute('data-message');
     navigator.clipboard.writeText(textToCopy).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!'; 
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        
-        setTimeout(() => { 
-            button.innerText = originalText; 
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 1500);
+        _copyFlash(button);
     }).catch(err => console.error('Failed to copy text: ', err));
 }
 
@@ -16903,6 +16906,46 @@ function _lgpwKind(role) {
 }
 function _lgpwTone(pct) { return pct >= 100 ? 'good' : pct >= 80 ? 'warn' : 'bad'; }
 
+// PAST WEEKS IS NOT A PHONE VIEW. The grid is a name column plus seven day
+// columns; at 390px four of them are off the right-hand edge, and the card it
+// sits in clips rather than scrolls, so there is no affordance to say the rest
+// exists (Ethan, screenshot, 2026-09-17). Cut the tab rather than try to make a
+// seven-column table work at that width — Today, the roster editor, is the thing
+// somebody actually opens this on a phone to do.
+//
+// SCOPED TO THE STORE-FLOOR MANAGERS, who are the ones doing it from a phone:
+// Manager, Assistant Manager and Multi-Store Manager. District Manager, CEO,
+// MOCD and Owner (Manager) keep the tab everywhere, on the reading that a
+// leadership role looking back over four weeks is at a desk. One list, one line
+// to change if that reading is wrong.
+//
+// Phone only, not the whole compact band: a tablet has the width for all seven
+// columns, which is the entire reason the band and the tablet exception are
+// separate questions.
+const LGPW_PAST_CUT_ROLES = ['role-manager', 'role-assistant-manager', 'role-multistore-manager'];
+
+function _lgpwPastAllowed() {
+    if (!_panelIsFullBleed()) return true;          // desktop or tablet: room for it
+    return !LGPW_PAST_CUT_ROLES.includes(_speeksRoleClass());
+}
+
+// Called when the modal opens AND on a breakpoint crossing, because the answer
+// changes under an open modal: rotate an iPad into portrait, or drag a window
+// narrow, and a manager is looking at a grid whose tab is about to be taken away.
+function _lgpwSyncTabs() {
+    const p = document.getElementById('lgpw-v-past');
+    if (!p) return;
+    const ok = _lgpwPastAllowed();
+    // removeProperty, not display:'' via a value — the button has no inline
+    // display of its own to restore, and the stylesheet's .lgpw-seg button rule
+    // is what should be deciding it.
+    if (ok) p.style.removeProperty('display');
+    else p.style.setProperty('display', 'none', 'important');
+    // Cut while it is the OPEN view: fall back to Today rather than strand
+    // somebody on a clipped grid with no visible control to leave it by.
+    if (!ok && _lgpw.past) lgpwSetView(false);
+}
+
 // Switch between the role editor and the look back. Always lands on Today when
 // the modal opens (openListingGoals), so nobody goes to set roles and finds a
 // read-only grid.
@@ -21942,8 +21985,16 @@ function b2bViewDropReport(btn) {
 
 function b2bCopyDropDiag(btn) {
     const text = _b2bReportOf(btn);
+    // Success goes through the shared flash; FAILURE deliberately does not. A copy
+    // that did not happen must never wear the confirmation colour — this button's
+    // whole history is that it used to claim success while doing nothing (see the
+    // execCommand note below), so the one thing it must not do is look right when
+    // it is wrong. The failure branch keeps its own label and its own plain
+    // restore, because 'Copy it for me' is not the label it was wearing a moment
+    // ago and _copyFlash restores what it captured.
     const done = (ok) => {
-        btn.textContent = ok ? 'Copied' : 'Select it above and press Ctrl+C';
+        if (ok) return _copyFlash(btn, 'Copied');
+        btn.textContent = 'Select it above and press Ctrl+C';
         setTimeout(() => { btn.textContent = 'Copy it for me'; }, 2400);
     };
     const manual = () => {
@@ -28754,25 +28805,153 @@ function _setUserGreeting() {
     if (el) el.innerText = `Welcome ${sessionStorage.getItem('speeksUserName') || 'User'}!`;
 }
 
+// ============================================================================
+// THE "COPIED" FLASH — the one writer for every copy button on the site
+// ============================================================================
+// Six buttons copy to the clipboard. Three went green by setting four inline
+// styles each, three only swapped their label, and the label text differed
+// ("Copied" vs "Copied!") between tools that sit two clicks apart. Ethan,
+// 2026-09-17: all of them the Box Order green, on all three layouts. The colours
+// now live in .is-copied at the end of styles.css — see the note there for why a
+// class and not inline styles (short version: inline loses to !important, and
+// the compact build is full of !important).
+//
+// SUCCESS ONLY. A copy that failed must not wear the confirmation colour, so the
+// fallback branches keep setting their own text and do not come through here.
+//
+// The re-entrancy guard is not hypothetical: every one of the six captured the
+// button's current label as "the original" on the way in, so a second click
+// during the flash captured "Copied!" and put THAT back permanently. Clicking a
+// copy button twice is the most natural thing in the world when you are not sure
+// the first one took. Capture only on the way in from rest, and cancel the
+// pending restore so the timer cannot fire against the new one.
+const _COPY_FLASH_MS = 2000;
+
+function _copyFlash(button, label) {
+    if (!button) return;
+    if (button._cfTimer) clearTimeout(button._cfTimer);
+    else button._cfWas = button.textContent;          // only when not already flashing
+    button.textContent = label || 'Copied!';
+    button.classList.add('is-copied');
+    button._cfTimer = setTimeout(function () {
+        button.textContent = button._cfWas;
+        button.classList.remove('is-copied');
+        button._cfTimer = null;
+    }, _COPY_FLASH_MS);
+}
+window._copyFlash = _copyFlash;
+
 // The one breakpoint the JS has to agree with the stylesheet about. Must stay in
-// step with the MOBILE LAYER in styles.css, where <=900px is the compact build.
-function _isMobileLayout() {
-    try { return window.matchMedia("(max-width: 900px)").matches; } catch (_) { return false; }
+// step with the MOBILE LAYER in styles.css, whose banner explains the shape.
+//
+// A FUNCTION, not a const, and that is deliberate: _syncPanelScrollLock up at
+// the top of this file reads the same query, and a `const` down here would be in
+// its temporal dead zone if that IIFE ever runs before this line executes. A
+// function declaration hoists over the whole script, so every caller gets it
+// whatever the order. One writer, so the JS and the CSS cannot drift apart
+// device by device.
+//
+// The comma is an OR of two queries, which is what matchMedia takes and what
+// `.matches` folds: narrow-anything, or touch-up-to-a-big-tablet. Do not try to
+// collapse it into one query — a range cannot express "the ceiling depends on
+// the pointer", which is the entire point (see the banner for why a bare
+// max-width: 1366px would hand every 1366x768 store laptop the phone build).
+function _compactMediaQuery() {
+    return "(max-width: 900px), (max-width: 1366px) and (pointer: coarse)";
 }
 
-// Rotating a tablet or dragging a window across 900px changes which surfaces
-// belong on screen, and the inline display written by applyRoleBasedUI does not
-// re-evaluate on its own. Re-run it on the crossing, not on every resize tick.
+function _isMobileLayout() {
+    try { return window.matchMedia(_compactMediaQuery()).matches; } catch (_) { return false; }
+}
+
+// The tablet half of the compact band, on its own. Pair to _compactMediaQuery()
+// and the same contract: change it here and in styles.css together, and nowhere
+// else. 901 and not 900 so this and the compact ceiling cannot both claim a
+// screen exactly 900px wide.
+function _tabletMediaQuery() {
+    return "(min-width: 901px) and (max-width: 1366px) and (pointer: coarse)";
+}
+
+function _isTabletLayout() {
+    try { return window.matchMedia(_tabletMediaQuery()).matches; } catch (_) { return false; }
+}
+
+// Expressed as "compact but not tablet" rather than as its own width, so there is
+// still exactly one number in play. A side panel is a full-screen sheet on the
+// phone and a third-width drawer on a tablet, and only the sheet needs the page
+// behind it frozen — see _syncPanelScrollLock, which is the one caller.
+function _panelIsFullBleed() {
+    return _isMobileLayout() && !_isTabletLayout();
+}
+
+// Rotating a tablet or dragging a window across the compact band changes which
+// surfaces belong on screen, and the inline display applyRoleBasedUI writes does
+// not re-evaluate on its own. Re-run it on the crossing, not every resize tick.
+// Rotation is the live case now that landscape tablets are in the band: an iPad
+// turned from 1180 to 820 stays compact throughout and fires nothing, but one
+// turned out of the band at all fires once, here.
 try {
-    window.matchMedia("(max-width: 900px)").addEventListener("change", function () {
+    window.matchMedia(_compactMediaQuery()).addEventListener("change", function () {
         if (!document.body.classList.contains("is-authenticated")) return;
         applyRoleBasedUI();
         // The feed cap is a measured pixel height, so it is wrong the moment the
         // breakpoint moves in either direction: stale-tight going wide, unset
         // going narrow. Re-measured here rather than left until the next payload.
         if (typeof _samCapFeed === "function") _samCapFeed();
+        // Surfaces cut from one side of the band and not the other have to be
+        // re-decided here too, for the same reason the sweep above runs: the modal
+        // may be open right now. Listing Goals' Past weeks tab is the first of
+        // them — see _lgpwSyncTabs, which also leaves the view if it is the one
+        // being taken away.
+        if (typeof _lgpwSyncTabs === "function") _lgpwSyncTabs();
     });
 } catch (_) { /* older browsers: the initial pass still applies */ }
+
+// The TABLET line, at 901px, is a second crossing with its own consequences, and
+// an iPad rotating 820 <-> 1180 crosses THIS one and not the band's own edge — so
+// the listener above never hears about the one rotation people actually perform.
+// What changes across it: the feed shows four rows instead of two, and Listing
+// Goals' Past weeks tab comes back. applyRoleBasedUI is deliberately NOT re-run
+// here — data-mobile curation is a band-level rule and identical on both sides,
+// so calling it would be work with no possible effect.
+try {
+    window.matchMedia(_tabletMediaQuery()).addEventListener("change", function () {
+        if (!document.body.classList.contains("is-authenticated")) return;
+        if (typeof _samCapFeed === "function") _samCapFeed();
+        if (typeof _lgpwSyncTabs === "function") _lgpwSyncTabs();
+    });
+} catch (_) { /* older browsers: the initial pass still applies */ }
+
+// ROTATION INSIDE THE BAND — a gap the tablet port opened, not one it found.
+//
+// An iPad turning 820 <-> 1180 used to CROSS 900px, so the listener above fired
+// and _samCapFeed() re-measured. Both orientations are now inside the band, so
+// it fires nothing, and _samCapFeed writes a measured pixel max-height: the
+// two-row cap for a feed whose rows wrap differently at the other orientation.
+// A card that is one line across 1180px is two across 820px, so the cap carried
+// over from landscape shows a row and a half of portrait and clips the rest.
+// Nothing above catches this, because by every test it makes, nothing changed.
+//
+// Orientation only, not resize. A resize listener would fire on every pixel of
+// an iPad's rotation animation and on the iOS URL bar sliding away, and each one
+// costs a forced layout in _samCapFeed's getBoundingClientRect. The orientation
+// query changes once per turn.
+//
+// Guarded on the band, so a desktop user dragging a window into portrait shape
+// does no work. _samCapFeed already returns early off the band, but the check is
+// cheap and says what this listener is for.
+try {
+    window.matchMedia("(orientation: portrait)").addEventListener("change", function () {
+        if (!document.body.classList.contains("is-authenticated")) return;
+        if (!_isMobileLayout()) return;
+        // After the turn, not during it: the new viewport is not laid out yet
+        // when the query flips, and measuring here caps the feed to the shape it
+        // is leaving. rAF lands on the first frame that has the new geometry.
+        requestAnimationFrame(function () {
+            if (typeof _samCapFeed === "function") _samCapFeed();
+        });
+    });
+} catch (_) { /* older browsers: the cap is re-measured on the next render */ }
 
 // ⚠️ HIDING A SELECT DOES NOT HIDE A SELECT. The custom dropdown (_ddEnhance)
 // moves the native control into a `.dd-host` and covers it with a `.dd-btn`
@@ -36885,22 +37064,15 @@ function sendBoxOrder() {
 
 // Failsafe for machines with no default mail client: copy the full order
 // (recipient, subject, body) to the clipboard to paste into any email.
+// THE reference implementation for the flash (Ethan pointed at this button,
+// 2026-09-17: "green like the box order tool"). It now shares _copyFlash with the
+// other five rather than owning the colours itself.
 function copyBoxOrder(button) {
     if (!_boxOrderEnsureStore()) return;
     const { email, subject, body } = _boxOrderCompose();
     const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
     navigator.clipboard.writeText(text).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!';
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        setTimeout(() => {
-            button.innerText = originalText;
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 2000);
+        _copyFlash(button);
     }).catch(() => alert('Could not copy automatically. Please select and copy the order manually.'));
 }
 
@@ -38321,17 +38493,7 @@ function sendRecycleReport() {
 function copyRecycleReport(button) {
     const { body } = _recycleReportCompose();
     navigator.clipboard.writeText(body).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!';
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        setTimeout(() => {
-            button.innerText = originalText;
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 2000);
+        _copyFlash(button);
     }).catch(() => alert('Could not copy automatically. Please select and copy the report manually.'));
 }
 
@@ -43773,8 +43935,9 @@ function _samIsMSM() {
 // One "everything" feed. Announcements + store notes get a permanent read;
 // reminders get a per-day dismiss (they re-surface tomorrow if still due). The
 // header's Mark-all-read clears whatever is currently active.
-// Two rows and then a scroll, on a phone only (user's call, 19 Aug). The deck is
-// a glance; twenty notifications turn the home page into a page of notifications.
+// Two rows and then a scroll on a phone, four on a tablet (user, 19 Aug and 17 Sep).
+// The deck is a glance; twenty notifications turn the home page into a page of
+// notifications.
 //
 // MEASURED rather than a fixed max-height in the stylesheet, because a feed row
 // is one line or five depending on the card — a snoozeable reminder with a
@@ -43786,10 +43949,19 @@ function _samCapFeed() {
     // Desktop puts the feed in a fixed-height card beside the rail and has its own
     // scroll; releasing the cap here is what makes this safe to call unconditionally.
     if (!_isMobileLayout()) { feed.style.maxHeight = ''; return; }
+    // Two rows on a phone, FOUR on a tablet (Ethan, 2026-09-17). Same reasoning
+    // on both — the deck is a glance, not a page of notifications — but the two
+    // was measured against a 390px phone, and a tablet has the vertical room to
+    // spare: at 1180x820 the card was showing two of five and stopping well short
+    // of the Command Center below it. Written as a count rather than a taller
+    // pixel cap so it stays honest to why this function measures at all: a row is
+    // one line or five depending on the card, so "four rows" is the only form of
+    // the rule that means the same thing on every feed.
+    const showRows = _isTabletLayout() ? 4 : 2;
     const rows = feed.querySelectorAll('.sam-ann');
-    if (rows.length <= 2) { feed.style.maxHeight = ''; return; }
+    if (rows.length <= showRows) { feed.style.maxHeight = ''; return; }
     const top = feed.getBoundingClientRect().top;
-    const cut = rows[1].getBoundingClientRect().bottom;
+    const cut = rows[showRows - 1].getBoundingClientRect().bottom;
     const pad = parseFloat(getComputedStyle(feed).paddingBottom) || 0;
     // + scrollTop, and this is the whole bug: getBoundingClientRect is measured
     // against the VIEWPORT, so once somebody has scrolled the feed to the bottom
@@ -44411,7 +44583,10 @@ function _canAssignGoalRoles() {
 // "Listing Goals" bar in the action menu: roster editor for anyone who can assign,
 // personal popup for everyone else.
 function openListingGoals() {
-    if (_canAssignGoalRoles()) { lgpwSetView(false); toggleModal('listingGoalsModal'); }
+    // _lgpwSyncTabs before lgpwSetView: the sync can itself call lgpwSetView(false)
+    // to leave a view that is being cut, and doing it in this order means that only
+    // ever happens on a breakpoint crossing, never redundantly on every open.
+    if (_canAssignGoalRoles()) { _lgpwSyncTabs(); lgpwSetView(false); toggleModal('listingGoalsModal'); }
     else toggleModal('empGoalsModal');
 }
 
@@ -48740,9 +48915,7 @@ function expCopyReport(button) {
     const { email, subject, body } = _expCompose();
     const text = 'To: ' + email + '\nSubject: ' + subject + '\n\n' + body;
     navigator.clipboard.writeText(text).then(() => {
-        const was = button.textContent;
-        button.textContent = 'Copied';
-        setTimeout(() => { button.textContent = was; }, 1600);
+        _copyFlash(button);
     }).catch(() => alert('Could not copy. Select the preview text and copy it manually.'));
 }
 window.expCopyReport = expCopyReport;
@@ -50804,10 +50977,7 @@ function lhToolCopy(button) {
     const fb = _lhToolFb;
     if (!fb || !fb.ask) return;
     navigator.clipboard.writeText(fb.ask).then(() => {
-        if (!button) return;
-        const was = button.textContent;
-        button.textContent = 'Copied';
-        setTimeout(() => { button.textContent = was; }, 1600);
+        _copyFlash(button);
     }).catch(() => _ltTell('Could Not Reach The Clipboard',
         'Your browser refused the copy. Select the notes above and copy them by hand.'));
 }
@@ -53348,7 +53518,24 @@ function _ddFit(host) {
     // control instead of clamping it. The feed filter is the reason the parent
     // clamp was removed in the first place; it does not get to be the reason it
     // breaks again.
-    host.style.minWidth = host.closest('.b2b-pcell')
+    // A LIST, not one selector, and this is the second entry on it. The Expense
+    // Report's Category control reproduced the B2B bug exactly (Ethan, 2026-09-17):
+    // "Shipping & Packaging Supplies" measures 224px, the field it sits in is
+    // 130px, and the face painted 86px across the Description input so its
+    // placeholder read "vas it for?" instead of "What was it for?". Same shape as
+    // "Apple" reading "pple" above, same cause, and the fix that was already
+    // written for it simply had not been pointed at this tool.
+    //
+    // WHEN TO ADD A SELECTOR HERE: the parent must have a DEFINITE width, so the
+    // percentage has a real number to resolve against. .b2b-pcell is a grid item
+    // with a fixed track; .exp-add-grid label is a flex item with a 130px
+    // flex-basis. Both qualify. A content-sized parent does NOT — see the
+    // .hub-select-wrap note above, where a percentage is the cyclic case and can
+    // collapse the control instead of clamping it. If you are unsure which kind
+    // you have, measure it; getting this wrong is a vanishing control, not a
+    // cosmetic slip.
+    const _DD_CLAMPED_SLOTS = '.b2b-pcell, .exp-add-grid label';
+    host.style.minWidth = host.closest(_DD_CLAMPED_SLOTS)
         ? 'min(' + want + 'px, 100%)'
         : want + 'px';
 }
