@@ -15,6 +15,7 @@ const corsHeaders = {
 // - weekly_store_<STORE>: Monday weekly report, per-store manager copy
 // - usage_report:      nightly 8pm site-usage report (DM/CEO)
 // - cash_report:       7am cash-on-hand table off the Day End Report
+// - processed_report:  8:10am Processed Stats table off the Day End Report
 // - unlisted_report:   Monday 9am Unlisted Inventory Weekly Update
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const LIST_KEYS = new Set([
@@ -35,6 +36,9 @@ const LIST_KEYS = new Set([
   "usage_report",
   // cash_report: the 7am cash-on-hand table (Paul).
   "cash_report",
+  // processed_report: the 8:10am Processed Stats table — what each store listed
+  // yesterday, what it was worth, and the queue left behind. Leadership only.
+  "processed_report",
   // unlisted_report: the Monday 9am Unlisted Inventory Weekly Update, sent by
   // the unlisted-backlog fn (slug kept from its old name).
   "unlisted_report",

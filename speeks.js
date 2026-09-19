@@ -38220,6 +38220,9 @@ const EMAIL_LIST_GROUPS = [
               desc: 'Monday 9am — the pile per store, and what it would take to clear it.' },
             { key: 'cash_report', label: 'Cash On Hand',
               desc: '7am closing-cash table, read off each store\'s Day End Report.' },
+            { key: 'processed_report', label: 'Processed Stats',
+              desc: '8:10am — how many items each store listed yesterday and what '
+                  + 'they were worth, off the Day End Report.' },
             { key: 'usage_report', label: 'Site Usage',
               desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
             { key: 'recycle_report', label: 'Recycle Month-End Report',
