@@ -73,6 +73,27 @@ html {
     overflow-x: hidden;
 }
 
+/* THE LOCK, FINISHED FOR iOS. body.no-scroll pins the body, and on a desktop that
+   is the whole job. iOS Safari still moved the page behind a phone sheet two ways
+   (user, 2026-09-16): a scroll inside a sheet that hit its top or bottom was
+   handed on to the page, and a drag on the strip of page still showing above the
+   sheet scrolled the root. The html rule takes the root's own scrolling away while
+   the lock is held, so a scroll that runs off the end of a sheet has nowhere to go.
+   contain goes on the SHEETS ONLY, never on what is inside them. It was on every
+   descendant for an hour, and a swipe up or down that started on a sideways
+   scroller — the expense table, a tab strip — then scrolled nothing at all,
+   because a container that cannot scroll vertically still stops the chain; and a
+   list inside a tool stopped dead at its end instead of carrying on into the sheet.
+   Measured with wheel scrolling at 390px in Chrome, before and after.
+   Phone-only, because a desktop modal never had either problem and html's
+   overflow-y:scroll is what keeps its scrollbar from jumping. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    html:has(> body.no-scroll) { overflow: hidden; overscroll-behavior: none; }
+    .modal-menu, .tools-side-panel, .checklist-side-panel, .goals-side-panel {
+        overscroll-behavior: contain;
+    }
+}
+
 /* =========================================================
    BRANDING & NAVIGATION
    ========================================================= */
@@ -717,7 +738,7 @@ input, textarea, select,
 /* Sections clear the fixed nav when a rail link jumps to them. */
 .category-section { scroll-margin-top: 96px; }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .dp-layout { grid-template-columns: 1fr; gap: 6px; }
     .dp-rail { position: static; flex-direction: row; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
     .dp-rail-btn { width: auto; }
@@ -2097,7 +2118,7 @@ select.bs-hidden-select:focus {
 .rec-more { margin: 4px 10px 12px; text-align: center; font-size: 11.5px; font-weight: 800; color: #178048; padding: 8px; border-radius: 9px; background: #f4faf6; border: 1px solid #eef2f6; cursor: pointer; transition: background .15s; }
 .rec-more:hover { background: #e8f7ee; }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .champions-row { grid-template-columns: 1fr; }
     .awards-grid, .records-grid { grid-template-columns: 1fr 1fr; }
 }
@@ -3612,6 +3633,32 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
 .goals-levelup .lu-week.red { background: #ef4444; }
 .goals-levelup .lu-week.empty { background: #eef2f6; }
 .goals-levelup .lu-week.empty .lu-week-num { color: #cbd5e1; }
+
+/* A bar now stacks THREE facts, not one: what was listed, the goal it is
+   coloured against, and the percentage of what the store was actually staffed
+   for. The last of those is the district's efficiency figure — carried here so
+   a store and the DM stop reading the same week and reaching opposite verdicts.
+   A week can be red on top and over 100% underneath; that is information, not a
+   contradiction.
+
+   The fixed 28px height goes with it — three lines need room — and the flow
+   turns to a column. */
+.goals-levelup .lu-week { flex-direction: column; height: auto; min-height: 28px; padding: 6px 2px; gap: 1px; line-height: 1.15; }
+.goals-levelup .lu-week-goal,
+.goals-levelup .lu-week-carried { font-size: 9px; font-weight: 700; color: rgba(255,255,255,.82); }
+.goals-levelup .lu-week-eff { font-size: 9.5px; font-weight: 800; color: rgba(255,255,255,.95); }
+.goals-levelup .lu-week-eff.none { color: rgba(255,255,255,.55); }
+.goals-levelup .lu-week.empty .lu-week-goal,
+.goals-levelup .lu-week.empty .lu-week-carried,
+.goals-levelup .lu-week.empty .lu-week-eff { color: #cbd5e1; }
+/* A goal nobody set for that week. Hatched rather than simply recoloured: the
+   green/red still has to read as the verdict it is, and the point here is that
+   the verdict was reached against a number carried in from an earlier week. */
+.goals-levelup .lu-week.lu-week-stale {
+    background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.16) 0 5px, transparent 5px 10px);
+}
+.goals-levelup .lu-week-carried { font-style: italic; letter-spacing: .01em; }
+.goals-levelup .lu-sub { font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: none; letter-spacing: 0; }
 
 /* Auto-save status pill */
 .goals-save-status { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; }
@@ -6283,7 +6330,7 @@ button.dc-audit:hover { background: #fff; }
     padding: 8px 0;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .district-goals-grid { grid-template-columns: repeat(3, 1fr); }
     .dg-store-card:nth-child(3) { border-right: none; }
     .dg-store-card:nth-child(4) { border-top: 1px solid var(--gen-border); }
@@ -7708,19 +7755,26 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     white-space: nowrap;
 }
 .ann-doc-card-meta { font-size: 12px; color: #94a3b8; margin-top: 3px; font-weight: 500; }
+/* The soft sage chip every other in-card action on the site wears (Add a document
+   right above it, the Picture Guide's Edit) — not a solid block of green. It was
+   the one saturated button in the list, and its "⬇" was an emoji, which iOS
+   draws as a blue tile (user, 2026-09-16). */
 .ann-doc-dl-btn {
     flex-shrink: 0;
-    background: var(--sage-professional);
-    color: white;
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--sage-deep, #178048);
+    background: #e8f7ee;
+    border: 1px solid #c6ecd6;
     text-decoration: none;
-    border-radius: 8px;
-    padding: 7px 14px;
+    border-radius: 9px;
+    padding: 7px 13px;
     font-size: 12px;
     font-weight: 700;
-    transition: opacity 0.15s;
+    transition: background 0.15s;
     white-space: nowrap;
 }
-.ann-doc-dl-btn:hover { opacity: 0.85; color: white; }
+.ann-doc-dl-btn svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.ann-doc-dl-btn:hover { background: #d9f0e3; color: var(--sage-deep, #178048); }
 .ann-docs-icon-btn {
     background: none;
     border: none;
@@ -9168,6 +9222,38 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 #listingGoalsModal .lu-week.red .lu-week-num { color: #b02a2f !important; }
 #listingGoalsModal .lu-week.empty .lu-week-num { color: #8a94a3 !important; }
 
+/* The tinted modal fills are light, so the two sub-lines take dark ink here
+   rather than the translucent white the solid compact bars use. */
+#listingGoalsModal .lu-week { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 13px 4px !important; }
+#listingGoalsModal .lu-week-goal,
+#listingGoalsModal .lu-week-carried { font-size: 10px; font-weight: 700; opacity: .75; }
+#listingGoalsModal .lu-week-eff { font-size: 11px; font-weight: 800; opacity: .95; }
+#listingGoalsModal .lu-week.green .lu-week-goal,
+#listingGoalsModal .lu-week.green .lu-week-carried,
+#listingGoalsModal .lu-week.green .lu-week-eff { color: #3d6822; }
+#listingGoalsModal .lu-week.red .lu-week-goal,
+#listingGoalsModal .lu-week.red .lu-week-carried,
+#listingGoalsModal .lu-week.red .lu-week-eff { color: #b02a2f; }
+#listingGoalsModal .lu-week.empty .lu-week-goal,
+#listingGoalsModal .lu-week.empty .lu-week-carried,
+#listingGoalsModal .lu-week.empty .lu-week-eff { color: #8a94a3; }
+#listingGoalsModal .lu-week.lu-week-stale {
+    background-image: repeating-linear-gradient(135deg, rgba(16,24,40,.055) 0 6px, transparent 6px 12px) !important;
+}
+/* The legend wraps under the title rather than sitting beside it on a narrow
+   screen. It was `white-space: nowrap` for one revision, which held the whole
+   header open at 712px inside a 390px phone — and because the header is a
+   sibling of the bar grid, it dragged the grid out with it. No scrollbar said
+   so; the right-hand weeks were simply unreachable. Same class of bug as the
+   Overview cards clipping their tables, which is what the layout suite exists
+   for. */
+#listingGoalsModal .lu-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 10px; }
+#listingGoalsModal .lu-sub { font-size: 10px; font-weight: 700; color: #8a94a3; }
+/* Grid and flex items default to min-width:auto, so a bar refuses to shrink
+   below its widest word and pushes the track out instead. The four bars must
+   share whatever width there is. */
+#listingGoalsModal .lu-week, .goals-levelup .lu-week { min-width: 0; }
+
 /* When the Action Menu is live for this user, it re-homes the ticker's toggles
    -- so hide the ticker. Everyone else (other pages) keeps it.
 
@@ -9209,7 +9295,7 @@ body.sam-active .hotbar-btn:hover {
     background: #e8f7ee; transform: none;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .speeks-action-menu .sam-board { grid-template-columns: 1fr; }
 }
 
@@ -9422,7 +9508,7 @@ body.sam-active .hotbar-btn:hover {
    a 320px phone it was two thirds of the filter row on its own. Cleared here so
    the face falls back to fitting its longest option, ~140px. The floor is re-read
    on resize, so this is live rather than whatever width the page loaded at. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #notifDropdown .hub-select-wrap select { min-width: 0; }
 }
 #notifDropdown .hub-select-wrap select:focus { outline: none; border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(90,141,59,.16); }
@@ -10782,7 +10868,7 @@ body.sam-active .hotbar-btn:hover {
 .lbs-nm { font-size: 12.5px; font-weight: 800; color: var(--slate-charcoal); flex: 1; min-width: 0; }
 .lbs-you { color: #178048; font-size: 9px; font-weight: 800; }
 .lbs-val { font-size: 12.5px; font-weight: 850; color: var(--slate-charcoal); text-align: right; font-variant-numeric: tabular-nums; flex: none; }
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .ew-perf-body { grid-template-columns: 1fr; }
     .ew-standings { border-left: none; border-top: 1px solid #eef2f6; }
 }
@@ -11499,7 +11585,7 @@ body.sam-active .hotbar-btn:hover {
    them was the alternative and the wrong one: the comparison is the thing that was
    asked for, and it is the projection that already has a second home in the table
    below. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .lv-fc-strip .bd-tile-row { display: block; }
     .lv-fc-strip .bd-tile-cmp { margin: 6px 0 0; gap: 1px; }
     .lv-fc-strip .bd-cmp { justify-content: start; }
@@ -12411,7 +12497,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     .lv-sound.blocked::after { animation: none; }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* The store name is the first thing to go: the code identifies the row and the
        numbers are the point. */
     .lv-store-nm, .lv-of { display: none; }
@@ -15368,6 +15454,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .dmx-lu-hit { color: #15803d; }
 .dmx-lu-miss { color: #b91c1c; }
 .dmx-lu-none { color: #cbd5e1; }
+/* A week whose goal nobody set, so it was graded against one carried in from an
+   earlier week. The asterisk rather than a colour change: the hit/miss colour is
+   the verdict and has to stay readable as one — this marks what the verdict was
+   reached against. The tooltip on the column carries the sentence. */
+.dmx-lu-astk { font-style: normal; font-size: 10px; vertical-align: 3px; opacity: .65; margin-left: 1px; }
 .dmx-lu-track > i.dmx-lu-hit { background: #15803d; }
 .dmx-lu-track > i.dmx-lu-miss { background: #c94f4f; }
 .dmx-lu-track > i.dmx-lu-none { background: #eef2f6; }
@@ -15600,7 +15691,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .dcc-clear svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .dcc-empty { padding: 50px 20px; text-align: center; font-size: 13px; font-weight: 650; color: #8a94a3; }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .dcc-grid { grid-template-columns: 1fr; }
     .dcc-g4 { grid-template-columns: 1fr 1fr; }
     .dcc-cat { grid-template-columns: 1fr; gap: 2px; }
@@ -15881,7 +15972,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 }
 
 /* Phones and tablets: the box takes the screen. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .jump-scrim { padding: 8px; align-items: stretch; }
     .jump-box { max-height: none; height: 100%; max-width: none; }
 }
@@ -17005,6 +17096,12 @@ body.tv-body { display: block; background: #eef1f5; }
     display: block; margin: 3px auto 0; width: fit-content;
     color: #b45309; background: #fdf3e1;
 }
+/* "rebuilt" is a different KIND of caveat from the amber roles warning: that one
+   says the store's own data is thin, this one says our figures for the week are
+   a reconstruction. Slate, not amber, so a manager doesn't read it as a second
+   thing the store did wrong. */
+.dmx-tbl-c td.dmx-cl .dmx-role-est { color: #647082; background: #eef1f5; }
+.dmx-tr-est .dmx-num { opacity: .88; }
 
 /* Ruled to match the Live Dashboard table (.lv-tbl), which is the house style
    for a figures table on this site — SAME token everywhere, 1px #e6ebf1, used for
@@ -18472,7 +18569,7 @@ body.tv-body { display: block; background: #eef1f5; }
 .lt-trim-v { color: #a3352c; font-weight: 600; }
 .lt-trim-v s { text-decoration-thickness: 2px; margin-right: 6px; }
 .lt-trim-why { color: #64748b; font-size: 12px; }
-@media (max-width: 900px) { .lt-trim-why { font-size: 11px; } }
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) { .lt-trim-why { font-size: 11px; } }
 .lt-nosug { font-size: 12px; font-weight: 700; color: #b7791f; }
 /* The words the suggestion ADDS or CHANGES. A word-level mark, so the reviewer
    can see at a glance whether the new words are true of the item in their hand. */
@@ -19007,7 +19104,7 @@ body.tv-body { display: block; background: #eef1f5; }
    the close-button standard was written for. Higher specificity than a bare
    `button`, so source order does not matter. The two ACTION buttons are left
    alone: 44px is exactly what they want on a phone. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .lt-ask-close { min-height: 30px; }
 }
 
@@ -19381,10 +19478,39 @@ select.dd-native {
    !important arms race with the older per-component media queries.
 
    Two breakpoints only. Do not invent a third:
-     <= 900px  "compact"  — nav becomes a bottom tab bar, side panels become
+     "compact"           — nav becomes a bottom tab bar, side panels become
                             full-height sheets, multi-column grids drop to one.
      <= 640px  "phone"    — modals become bottom sheets, wide tables stack or
                             scroll with an affordance, curation hides.
+
+   TABLETS (2026-09-17). "Compact" is no longer a width alone. It is:
+
+       @media (max-width: 900px), (max-width: 1366px) and (pointer: coarse)
+
+   written out in full on all 38 compact blocks in this file, the older
+   per-component ones above included. Copy that line verbatim onto a new one --
+   a bare `max-width: 900px` is now a bug, not a shorthand.
+
+   Why a pointer test and not just a wider number. A portrait iPad is 768-834px
+   and was always inside the band; the gap was LANDSCAPE, 1133-1366px, which got
+   the full desktop build on a touch screen. Covering that by width alone means
+   `max-width: 1366px`, and 1366x768 is one of the commonest cheap laptop panels
+   there is -- every store machine at that size would have been handed the phone
+   build with its hotbar links and tools cut out of it. `pointer: coarse` matches
+   the PRIMARY input, so an iPad reads coarse even with a Magic Keyboard
+   attached, while a Windows touchscreen laptop with a trackpad reads fine and is
+   left alone. That is the discriminator we want, and it is the one the JS
+   already uses in two other places.
+
+   The two halves are an OR, not a range: below 900px the pointer is irrelevant,
+   so a narrow desktop window still gets compact exactly as it did before. This
+   change adds devices to the band and takes none away.
+
+   Tablets currently run the phone's curation verbatim -- every data-mobile="hide"
+   surface is cut from them too. That was the deliberate first step (Ethan,
+   2026-09-17): port what the phone keeps, then decide what a tablet earns back.
+   The lever for earning one back is a tablet-only exception HERE, not deleting
+   the data-mobile attribute -- that would put the surface back on the phone too.
 
    !important is used deliberately in three places only: rules that must beat
    .top-nav base padding, rules that must beat per-modal ID selectors, and the
@@ -19395,17 +19521,18 @@ select.dd-native {
    The site already tags 200+ elements with data-feature for the Feature Access
    tool. Mobile curation rides the same markup rather than inventing a parallel
    system: tag anything desktop-only with data-mobile="hide" and it disappears
-   below 900px. .m-only / .m-hide are the ad-hoc escape hatches. */
+   on every compact device -- phone AND tablet, see the band above. .m-only /
+   .m-hide are the ad-hoc escape hatches. */
 .m-only { display: none; }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     [data-mobile="hide"], .m-hide { display: none !important; }
     .m-only { display: revert; }
     .m-only.m-flex { display: flex; }
 }
 
 /* --- Base hardening --------------------------------------------------------- */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     html {
         -webkit-text-size-adjust: 100%;   /* iOS Safari otherwise inflates text in landscape */
         overflow-x: hidden;
@@ -19422,7 +19549,7 @@ select.dd-native {
 }
 
 /* --- Nav: top bar slims down, links move to a bottom tab bar ----------------- */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .top-nav {
         padding: 8px 12px !important;
         min-height: 52px;
@@ -19618,7 +19745,7 @@ select.dd-native {
    to --panel-top, the measured nav height, which is what the desktop panels
    already hang from; the ~64px that leaves is the same strip the bottom-sheet
    modals leave at 92dvh, so the two read as the same kind of thing. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .tools-side-panel,
     .goals-side-panel,
     .checklist-side-panel {
@@ -19630,14 +19757,35 @@ select.dd-native {
            would drift away from it as the screen got taller (user's call, 19 Aug:
            "the same spacing ... like the submit an idea tool"). */
         top: calc(var(--panel-top, 64px) + 10px);
-        height: calc(100dvh - var(--panel-top, 64px) - 10px);
+        /* BETWEEN THE TWO BARS, not over the bottom one (Ethan, 2026-09-17).
+           This used to run to the foot of the viewport at z-index 320, which put
+           it over the bottom tab bar — so while any panel was open, Quick Portal
+           and Processes were painted over and untappable, on a bar that is the
+           only navigation the compact build has. The panel is a panel; it should
+           not take the nav away any more than it takes the top bar away, which is
+           the whole reason for the 10px hang above.
+
+           71px = the bar's own 61px (6px padding + a 48px tap target + 6px + its
+           1px top border, measured in the harness, not guessed) plus the SAME
+           10px the panel hangs below the top nav by. It deliberately does NOT
+           reuse .main-content's 78px: that is a scrolling region's breathing room
+           at the end of a page, and borrowing it here left a 17px gap under the
+           panel against a 10px one above it, which is exactly the lopsidedness
+           Ethan reported ("looks good on top just not the bottom", 2026-09-17).
+           Same gap top and bottom is the whole point. */
+        height: calc(100dvh - var(--panel-top, 64px) - 20px
+                     - 61px - env(safe-area-inset-bottom, 0px));
         /* Rounded across the TOP, like the sheet modals — the desktop panels round
            their bottom-left corner because they hang under a nav they are narrower
            than, and at full width that corner is off-screen. */
         border-radius: 18px 18px 0 0;
         border-left: none;
-        z-index: 320;                 /* above the tab bar */
-        padding-bottom: env(safe-area-inset-bottom, 0px);
+        /* Still above page content and the FAB; no longer needs to beat the tab
+           bar, because it no longer reaches it. */
+        z-index: 320;
+        /* No safe-area padding any more. It was here because the panel ended at
+           the foot of the screen; the tab bar below it now owns that strip, and
+           leaving it would only add dead space inside the panel. */
     }
     .tools-panel-header { padding: 13px 14px; }
     .tools-panel-body { padding: 10px 12px 28px; }
@@ -19771,6 +19919,52 @@ select.dd-native {
     }
 }
 
+/* --- TABLET EXCEPTION: the panels go back to being drawers -------------------
+   THE FIRST TABLET-ONLY BLOCK IN THIS FILE, and the shape every later one should
+   copy: the tablet half of the band on its own,
+
+       (min-width: 901px) and (max-width: 1366px) and (pointer: coarse)
+
+   placed AFTER the compact block it overrides, so it wins on source order with
+   no !important. 901 and not 900 because the two must not both match at exactly
+   900px; the compact band's own ceiling is inclusive.
+
+   Full-bleed is a PHONE answer. At 390px a drawer would leave nothing behind it
+   worth seeing, so the sheet takes the screen. A landscape iPad is 1180px, and
+   there the same rule painted a checklist of seven short lines across the whole
+   display with 700px of white beside it (Ethan, screenshot, 2026-09-17) while
+   hiding the page you opened it from. A third is roughly what the desktop drawer
+   already is as a fraction of a desktop window, which is why it reads right.
+
+   34% rather than a flat width so it tracks the screen, bounded at both ends:
+   under 330px the checklist's longer rows ("Check For Everything Else Category
+   Items") wrap to three lines, and over 460 it stops looking like a drawer.
+   At 1180px that lands on ~400px, a hair under the 420px the checklist and Goals
+   panels use on desktop — so the panel a tablet gets is the panel that was
+   designed, not a stretched phone sheet.
+
+   Rounded on the LEFT here, not the top. The compact block rounds 18px across
+   the top because at full width the left corners are off-screen; at a third they
+   are the only two corners anyone can see, and the right-hand pair are against
+   the screen edge. The border-left comes back for the same reason — the desktop
+   rule drops it (border-right: none, border-left present) and the compact block
+   takes it away because a full-bleed sheet has no left edge to draw.
+
+   The 10px gap under the nav and the height, z-index and safe-area padding are
+   all inherited from the compact block above and deliberately not repeated. This
+   block changes the panel's WIDTH and the edges that width creates, nothing else. */
+@media (min-width: 901px) and (max-width: 1366px) and (pointer: coarse) {
+    .tools-side-panel,
+    .goals-side-panel,
+    .checklist-side-panel {
+        width: 34%;
+        min-width: 330px;
+        max-width: 460px;
+        border-radius: 18px 0 0 18px;
+        border-left: 1px solid #e2e8f0;
+    }
+}
+
 /* --- Stats & Awards header on a phone -----------------------------------------
    The blurb under the title is curated away below 900px, and what it left behind
    was its spacing: the h2 keeps an 8px bottom margin meant to separate it from a
@@ -19781,7 +19975,7 @@ select.dd-native {
    Scoped by the .stats-header class rather than to .page-header at large: the
    other three pages still show their blurb on a phone, and the 8px is doing its
    job there. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .page-header.stats-header { margin-bottom: 16px; }
     .page-header.stats-header h2 { margin-bottom: 0; }
 }
@@ -19800,7 +19994,7 @@ select.dd-native {
    ..., which is (0,3,x)) rather than reaching for !important — a plain
    .modal-menu .tool-head loses to it however late in the file it sits, which is
    the first version of this block and why it half-worked. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .modal-menu.manage-menu > .modal-header.tool-head { padding: 12px 14px; }
     .tool-head .tool-head-main { gap: 10px; }
     .tool-head-ico { width: 34px; height: 34px; border-radius: 10px; }
@@ -20003,7 +20197,7 @@ select.dd-native {
    The DM and the manager open the SAME modal (the edge function decides the
    powers from the caller's PIN, see the Tools panel's two rows), so there is no
    per-role block here: sizing the tool sizes both. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #expensesModal .exp-controls { gap: 10px; padding-bottom: 11px; margin-bottom: 11px; }
     #expensesModal .exp-ctl { font-size: 10px; gap: 6px; }
     /* MONTH and PERSON share a line. Their pickers are sized to their longest
@@ -20058,6 +20252,25 @@ select.dd-native {
        rest of the mobile site" was asking about (user, 20 Aug). */
     #expensesModal .exp-input { font-size: 12.5px; padding: 6px 9px; min-height: 34px; }
     #expensesModal input[type="date"].exp-input { height: 34px; }
+    /* iOS SAFARI DRAWS A DATE INPUT ITS OWN WAY, and three things followed from
+       it on both the Mileage and Expenses tabs (user, 2026-09-16):
+         - it has an intrinsic minimum width, so width:100% was ignored and the
+           box ran past the right edge of the card;
+         - it centres its value in bold capitals, so "SEP 16, 2026" sat in the
+           middle of a box whose neighbours are left-aligned;
+         - and it grows to fit that value rather than to the height above.
+       appearance:none hands the box back to this stylesheet (border, height,
+       width); min-width:0 is what actually lets it shrink. The value is a
+       separate part of the control, so it has to be left-aligned on its own.
+       The picker still opens on tap — appearance only changes the drawing. */
+    #expensesModal input[type="date"].exp-input {
+        -webkit-appearance: none; appearance: none;
+        display: block; min-width: 0; max-width: 100%;
+        text-align: left; line-height: 32px;
+    }
+    #expensesModal input[type="date"].exp-input::-webkit-date-and-time-value {
+        text-align: left; margin: 0; line-height: 32px;
+    }
     /* 32px, and the padding written as 0 + line-height so the height is the height
        asked for. Six of these stack down the categories panel (Save + Delete on
        every row) and three sit in the control row beside the rate field. */
@@ -20123,7 +20336,7 @@ select.dd-native {
    and the eight chips share the width beneath it, with the CEO…MOCD head row
    kept in register above them. Nothing is hidden and no role is dropped —
    flex:1 1 0 divides whatever width there is, so it fits any phone. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* Five tabs at 11.5px need 437px and the strip has 352, so the fifth was
        clipped by the sheet edge. Three per row, wrapping — a tab you cannot see
        is a tab nobody presses.
@@ -20219,7 +20432,7 @@ select.dd-native {
 /* --- Manager Checklist admin on a phone ----------------------------------------
    The DM half of the checklist: add a required task, say which stores it lands
    on, then the list of what is already set (user's call, 20 Aug). */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* Required Task and Time Period are one control each side of a row, and they
        were two heights — the field at .form-input-lg's 38 and the dropdown face
        at the tools' 34. The field comes down to the dropdown rather than the
@@ -20253,7 +20466,7 @@ select.dd-native {
    The order flow came down with the rest of the tools; these are the two parts
    only a DM or the CEO ever sees — the Order / Manage Items switch at the top,
    and the catalog editor behind it (user's call, 20 Aug). */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* The switch sits OUTSIDE .manage-content, so it has never had the sheet's
        side padding — on a desktop modal that reads as a full-width segmented
        control, on a 390px sheet as two slabs jammed against the edges. Both
@@ -20290,7 +20503,7 @@ select.dd-native {
    tile, 150px money fields on rows with 12px of padding, and a closures form
    whose date box alone was 165px. Everything comes down to the sizes the other
    tools now sit at; nothing is restructured or hidden (user's call, 20 Aug). */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* The intro paragraph is inline-styled at 12.5px. */
     #gpGoalsModal .manage-content > p { font-size: 11px !important; margin-bottom: 11px !important; }
 
@@ -20363,7 +20576,7 @@ select.dd-native {
    The header loses its eyebrow and its blurb to data-mobile="hide", and the
    margins that were holding their places come off here, the same way the Stats
    header above does it. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .page-header.docs-header { margin-bottom: 14px; }
     .page-header.docs-header h2 { margin-bottom: 10px; }
 
@@ -20418,7 +20631,7 @@ select.dd-native {
    field-group spacing is set with inline style="margin-bottom:15px" in the
    template injectIdeaModal() writes, so those need !important; so does the
    content padding, which the airy block already sets that way. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #ideaModal > .modal-content { padding: 14px 16px 16px !important; }
     #ideaModal form > div { margin-bottom: 10px !important; }
     #ideaModal .idea-label { font-size: 10px; margin-bottom: 5px; }
@@ -20453,7 +20666,7 @@ select.dd-native {
 
    !important throughout, because the airy #listingGoalsModal block sets every one
    of these with !important; coming later in the file does not beat that. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #listingGoalsModal .district-kpi-header {
         padding: 10px 12px !important;
         margin-bottom: 12px !important;
@@ -20518,7 +20731,7 @@ select.dd-native {
    button. Sized against the surfaces already done in earlier rounds — the
    Checklist tab strip and the Tools search are the reference for the controls,
    the hub card for the copy. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* header */
     #notifDropdown .hub-head { padding: 12px 14px 0; }
     #notifDropdown .hub-title-wrap { gap: 9px; }
@@ -20599,7 +20812,8 @@ select.dd-native {
     .ann-doc-badge { width: 30px; height: 30px; border-radius: 7px; font-size: 8.5px; }
     .ann-doc-card-name { font-size: 12.5px; }
     .ann-doc-card-meta { font-size: 10.5px; margin-top: 2px; }
-    .ann-doc-dl-btn { padding: 6px 10px; font-size: 11px; border-radius: 7px; }
+    .ann-doc-dl-btn { padding: 6px 10px; font-size: 11px; border-radius: 8px; gap: 5px; }
+    .ann-doc-dl-btn svg { width: 12px; height: 12px; }
     .ann-doc-found { padding: 0 10px 8px; font-size: 10.5px; }
     .ann-doc-none { padding: 26px 16px; font-size: 12.5px; }
 
@@ -20745,7 +20959,7 @@ select.dd-native {
 /* Shown ONLY below 900px. There is no data-mobile="show" counterpart to the
    hide attribute, and one class used once did not warrant inventing one. */
 .mobile-only-note { display: none; }
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .mobile-only-note {
         display: block;
         margin: 0;
@@ -20851,7 +21065,7 @@ select.dd-native {
    such table needs a min-width floor AND a scrolling host, or it turns to soup
    on a phone. Phase 2 replaces these with .tbl-stack where a card list reads
    better; this is the floor that keeps them usable until then. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #mbBody, .ws-scroll, .weekly-kpi-scroll-area {
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
@@ -20860,7 +21074,7 @@ select.dd-native {
     .kb-table, .cb-table, .kpi-full-table { min-width: 640px; }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .tbl-scroll,
     .kb-table-container, .kpi-scroll-area, .vw-scroll-area, .bd-scroll,
     .ws-scroll, .weekly-kpi-scroll-area {
@@ -20921,7 +21135,7 @@ select.dd-native {
 }
 
 /* --- Grids collapse ---------------------------------------------------------- */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .sam-board { grid-template-columns: 1fr; }
     /* .sam-board > .sam-card is height:300px so the feed column height-matches
        the rail beside it. Stacked in one column there is nothing to match, and
@@ -20977,7 +21191,7 @@ select.dd-native {
    table above it. Desktop is untouched by design — this is additive. */
 .lv-cards, .lv-cards-none, .lv-picks { display: none; }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* The one line the card list can still print: no payload for this store. */
     .lv-cards-none {
         display: block;
@@ -21076,7 +21290,7 @@ select.dd-native {
    somebody sizes the window down. Same reason `.lv-tbl-scroll` is scoped to the
    live surfaces — it is also the Daily Breakdown modal's table wrapper, and that
    popout stays. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #cc-strip-live,
     .lv-dist-strip,
     .lv-fc-strip,
@@ -21384,7 +21598,7 @@ select.dd-native {
    The Command Center, Store Health and Workspace tab strips size their tabs off
    a min-width tuned for a full-width desktop panel (.cc-seg is 140px each, so
    four tabs demand 560px). They wrap instead of overflowing. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .cc-seg, .sh-seg, .timeframe-toggle, .goal-tab-container {
         flex-wrap: wrap;
         width: 100%;
@@ -21432,7 +21646,7 @@ select.dd-native {
 }
 
 /* --- Forms and tap targets ---------------------------------------------------- */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* iOS Safari zooms the viewport on focus for any input under 16px and never
        zooms back out. This one rule prevents the single most common "the site
        feels broken on my phone" complaint. */
@@ -21567,7 +21781,7 @@ select.dd-native {
 /* Narrow: the verdict stops being a column and becomes a line under the name,
    because at this width a 210px reservation squeezes the model down to nothing
    -- and the model is what tells you which machine on the bench this is. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .b2b-bench-row { flex-wrap: wrap; }
     .b2b-bench-what { flex: 1 1 100%; }
     .b2b-bench-verdict { width: auto; flex: 1 1 auto; }
@@ -22362,3 +22576,230 @@ select.dd-native {
 .b2b-rowmenu-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .b2b-rowmenu-txt b { font-size: 12.5px; font-weight: 700; color: #1a1c1e; }
 .b2b-rowmenu-txt span { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }
+
+/* ==========================================================================
+   LISTING GOALS — PAST WEEKS (managers + ASMs)
+   A read-only look back over the last four finished weeks: the seat each person
+   was given each day, and what they listed against the goal those seats added up
+   to. It is there so a manager can judge a week fairly — a person who spent it on
+   the buy counter is not marked down for a low count, and a lister who fell short
+   stands out.
+
+   Built from an approved mockup (Ethan, 2026-09-16). Deliberate choices from that
+   review, not oversights:
+   - No legend. Green lister / grey-blue buyer / dashed Off reads on its own.
+   - The daily goal is always shown under its chip; there is no toggle.
+   - Every percent bubble is ONE width, so the numbers beside them line up down
+     the column whether it says 72% or 114%.
+   - The week label has a fixed width and the "Last week" tag keeps its space on
+     older weeks (visibility, not display), so the arrows never move.
+
+   The [hidden] rules are here because these panes set display themselves, and an
+   author display rule silently beats the hidden attribute.
+   ========================================================================== */
+#listingGoalsModal {
+    --lgpw-ink: #1a1c1e;
+    --lgpw-muted: #647082;
+    --lgpw-faint: #94a3b8;
+    --lgpw-line: #e6ebf0;
+    --lgpw-soft: #f1f4f7;
+    --lgpw-sage: #5a8d3b;
+    --lgpw-sage-ink: #3f6a26;
+    --lgpw-sage-tint: #e9f2e2;
+    --lgpw-sage-ring: #cfe3c0;
+    --lgpw-buy-ink: #334155;
+    --lgpw-buy-tint: #e8edf3;
+    --lgpw-buy-ring: #cdd6e1;
+}
+#goals-pane-today[hidden], #goals-pane-past[hidden] { display: none !important; }
+/* The modal body scrolls, so a full week grows a scrollbar and a thin week does
+   not, and the arrows jumped ~14px sideways stepping between them. Reserve the
+   gutter while Past weeks is showing; Today keeps its full width. */
+#listingGoalsModal .employee-kpi-body:has(#goals-pane-past:not([hidden])) { scrollbar-gutter: stable; }
+/* This week's goal and today's date belong to Today. Past weeks is about weeks
+   that are over, so the banner goes while it is showing (user, 2026-09-16). */
+#listingGoalsModal .lg-modal-card:has(#goals-pane-past:not([hidden])) .district-kpi-header { display: none !important; }
+
+.lgpw-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; }
+.lgpw-seg { display: inline-flex; padding: 3px; background: var(--lgpw-soft); border-radius: 10px; border: 1px solid var(--lgpw-line); }
+.lgpw-seg button {
+    font: inherit; font-size: 12.5px; font-weight: 700; color: var(--lgpw-muted);
+    border: none; background: none; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+}
+.lgpw-seg button[aria-pressed="true"] { background: #fff; color: var(--lgpw-ink); box-shadow: 0 1px 2px rgba(16, 24, 40, .1); }
+.lgpw-seg button:focus-visible, .lgpw-wk button:focus-visible { outline: 2px solid var(--lgpw-sage); outline-offset: 2px; }
+
+.lgpw-wk { display: inline-flex; align-items: center; gap: 4px; }
+.lgpw-wk.away { visibility: hidden; }
+.lgpw-wk button {
+    width: 28px; height: 28px; padding: 0; border-radius: 8px; border: 1px solid var(--lgpw-line);
+    background: #fff; color: var(--lgpw-ink); display: grid; place-items: center; cursor: pointer;
+}
+.lgpw-wk button:disabled { color: #cbd5e1; cursor: default; }
+.lgpw-wk svg { width: 14px; height: 14px; }
+.lgpw-wk-label {
+    display: inline-flex; flex-direction: column; align-items: center; gap: 4px; width: 128px;
+    font-size: 13px; font-weight: 700; color: var(--lgpw-ink); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.lgpw-tag {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; line-height: 1;
+    color: var(--lgpw-sage-ink); background: var(--lgpw-sage-tint); border: 1px solid var(--lgpw-sage-ring);
+    border-radius: 99px; padding: 2px 7px;
+}
+.lgpw-tag.away { visibility: hidden; }
+.lgpw-pips { display: inline-flex; gap: 4px; }
+.lgpw-pips i { width: 5px; height: 5px; border-radius: 50%; background: #d5dde5; }
+.lgpw-pips i.on { background: var(--lgpw-ink); }
+
+.lgpw-store { display: flex; flex-direction: column; gap: 14px; }
+.lgpw-store + .lgpw-store { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--lgpw-line); }
+.lgpw-store-name { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--lgpw-muted); }
+
+.lgpw-sum { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 12px; background: var(--lgpw-soft); }
+.lgpw-sum-k { font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--lgpw-muted); }
+.lgpw-sum-v { font-size: 20px; font-weight: 900; letter-spacing: -.02em; color: var(--lgpw-ink); font-variant-numeric: tabular-nums; }
+.lgpw-sum-v small { font-size: 13px; font-weight: 700; color: var(--lgpw-muted); letter-spacing: 0; }
+.lgpw-track { height: 8px; border-radius: 99px; background: #dde3e9; overflow: hidden; }
+.lgpw-track i { display: block; height: 100%; border-radius: 99px; background: var(--lgpw-sage); }
+.lgpw-track i.warn { background: #d99a2b; }
+.lgpw-track i.bad { background: #d9534f; }
+
+.lgpw-pct {
+    display: inline-block; box-sizing: border-box; width: 58px; text-align: center;
+    font-size: 13px; font-weight: 800; padding: 3px 0; border-radius: 99px; font-variant-numeric: tabular-nums;
+}
+.lgpw-pct.good { color: #15803d; background: var(--lgpw-sage-tint); }
+.lgpw-pct.warn { color: #b45309; background: #fdf3e2; }
+.lgpw-pct.bad { color: #b91c1c; background: #fcecec; }
+.lgpw-pct.none { color: var(--lgpw-faint); background: var(--lgpw-soft); }
+
+.lgpw-scroll { overflow-x: auto; }
+.lgpw-grid { min-width: 480px; }
+.lgpw-row {
+    display: grid; grid-template-columns: minmax(96px, 1.6fr) repeat(6, minmax(40px, 56px)) minmax(120px, 1fr);
+    align-items: center; column-gap: 6px; padding: 9px 0; border-bottom: 1px solid var(--lgpw-soft);
+}
+.lgpw-row:last-child { border-bottom: none; }
+.lgpw-hdr { padding: 0 0 7px; border-bottom: 1px dashed var(--lgpw-line); }
+.lgpw-hdr span { font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--lgpw-muted); text-align: center; }
+.lgpw-hdr span:first-child { text-align: left; }
+.lgpw-hdr span:last-child { text-align: right; }
+.lgpw-hdr b { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0; color: var(--lgpw-faint); margin-top: 1px; }
+
+.lgpw-name { min-width: 0; font-size: 13.5px; font-weight: 700; color: var(--lgpw-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lgpw-float {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--lgpw-muted);
+    border: 1px solid var(--lgpw-line); border-radius: 99px; padding: 0 5px; margin-left: 5px; vertical-align: 1px;
+}
+.lgpw-day { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.lgpw-chip {
+    width: 34px; height: 26px; border-radius: 8px; display: grid; place-items: center;
+    font-size: 11px; font-weight: 800; letter-spacing: .02em; border: 1px solid transparent;
+}
+.lgpw-chip.l { background: var(--lgpw-sage-tint); color: var(--lgpw-sage-ink); border-color: var(--lgpw-sage-ring); }
+.lgpw-chip.b { background: var(--lgpw-buy-tint); color: var(--lgpw-buy-ink); border-color: var(--lgpw-buy-ring); }
+.lgpw-chip.off { color: #b4bfcb; border: 1px dashed #d5dde5; font-size: 9.5px; font-weight: 700; }
+/* A floater's day at ANOTHER store: the store code, quiet, so it reads as
+   "not here" rather than as a seat. Its goal still counts toward their week. */
+.lgpw-chip.away { color: var(--lgpw-muted); background: var(--lgpw-soft); border-color: var(--lgpw-line); font-size: 9.5px; }
+/* No role saved that day at all. */
+.lgpw-chip.unset { color: #cbd5e1; font-size: 12px; }
+.lgpw-g { font-size: 10px; font-weight: 700; color: var(--lgpw-faint); font-variant-numeric: tabular-nums; line-height: 1; min-height: 10px; }
+
+.lgpw-tot { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+.lgpw-tot-top { display: flex; align-items: baseline; gap: 7px; }
+.lgpw-tot-n { font-size: 15px; font-weight: 900; color: var(--lgpw-ink); font-variant-numeric: tabular-nums; }
+.lgpw-tot-n small { font-size: 12px; font-weight: 700; color: var(--lgpw-muted); }
+.lgpw-tot .lgpw-pct { width: 46px; font-size: 11px; padding: 2px 0; }
+.lgpw-tot .lgpw-track { width: 100%; max-width: 118px; height: 5px; }
+
+.lgpw-msg { padding: 36px 0; text-align: center; font-size: 13px; color: var(--lgpw-muted); }
+.lgpw-msg.err { color: #b91c1c; }
+
+@media (max-width: 520px) {
+    .lgpw-sum { grid-template-columns: 1fr auto; }
+    .lgpw-sum .lgpw-track { grid-column: 1 / -1; order: 3; }
+}
+
+/* ==========================================================================
+   DROPDOWNS ON THE PHONE — THE ONE FACE, EVERYWHERE
+   The emerald redesign (854ab7c) already reaches the phone: it is colour, set
+   at :root and on .dd-*, and no phone rule overrides a single colour of it —
+   measured face by face at 390px against 1440px. What did NOT match was SIZE.
+   Inside a tool the face is 34px and 12.5px (the .modal-menu.manage-menu rule);
+   everywhere else two blanket phone rules got to it first:
+     - `button { min-height: 44px }`, the tap-target floor, which a .dd-btn is;
+     - `.form-input, .form-input-lg, .kpi-select, .metric-dropdown
+        { font-size: 16px !important }`, the iOS zoom floor — and the face COPIES
+        its select's classes (_ddEnhance), so it inherited a floor meant for
+        typing into. A button is never typed into and never zooms.
+   So the KPI widget's metric picker, the store selector and every page-level
+   picker were 44px slabs of 16px type beside the 34px ones in the tools
+   (user, 2026-09-16: "ensure the mobile dropdowns everywhere also share this new
+   design"). One size for all of them now, the tool size.
+   `body .dd-btn` for one step of specificity over the select classes that set
+   their own padding (.form-input-lg, .idea-input), which are otherwise later in
+   the file or equal. The Feed's filter keeps its narrower id-scoped padding.
+   Have an Idea is the one id-scoped floor that had to be named: #ideaModal
+   .idea-input holds its fields at 16px !important for the same iOS zoom reason,
+   and its category dropdown's face carries .idea-input too. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    body .dd-btn {
+        min-height: 34px;
+        height: 34px;
+        padding: 0 11px;
+    }
+    #ideaModal .dd-btn.idea-input { padding: 0 11px !important; font-size: 12.5px !important; }
+    body .dd-btn,
+    body .dd-btn.form-input,
+    body .dd-btn.form-input-lg,
+    body .dd-btn.kpi-select,
+    body .dd-btn.metric-dropdown,
+    body .dd-btn.idea-input { font-size: 12.5px !important; }
+    body .dd-chev { width: 13px; height: 13px; }
+}
+
+/* ============================================================================
+   THE "COPIED" FLASH — one answer for every copy button on the site
+   ============================================================================
+   Six buttons copy something to the clipboard and say so. Three of them
+   (Box Order, Recycle Report, Quick Messages) went green; three (Expense Report,
+   Listing Health, the B2B drop diagnostic) only swapped their label and sat
+   there in whatever grey they already were, so the same gesture read as
+   "something happened" in one tool and "nothing happened" in the next. Ethan,
+   2026-09-17: make them all the Box Order green, on desktop, mobile and tablet.
+
+   A CLASS, and not the inline styles the three green ones used to set, for two
+   reasons. The obvious one is that six copies of four colour values is five too
+   many. The one that actually matters is the "and tablet" part: inline styles
+   lose to any `!important` rule, and the compact build is full of them — so an
+   inline flash was one `background: ... !important` away from silently not
+   working on exactly the two layouts that were asked for.
+
+   Declared LAST in the file and !important throughout, because these buttons are
+   styled from every direction: .qm-copy-btn is (0,1,0), #quickMsgDropdown
+   .qm-copy-btn is (1,1,0), and each has a :hover that is live at the moment of
+   the click — the pointer is still on the button that was just pressed. The
+   flash has to beat all of it for the ~2s it is up, and then get out of the way
+   completely, which a class removal does and a cleared inline style only mostly
+   does.
+
+   The colours are Box Order's, verbatim: #d1fae5 / #065f46 / #34d399. */
+.is-copied,
+.is-copied:hover,
+.is-copied:focus,
+.is-copied:focus-visible {
+    background: #d1fae5 !important;
+    color: #065f46 !important;
+    border-color: #34d399 !important;
+    /* The three green ones only ever set borderColor, which does nothing on a
+       button whose border-style is none — .qm-copy-btn has a border, the
+       .btn-secondary ones may not. Naming the style makes the ring appear on all
+       of them rather than only where one happened to already exist. */
+    border-style: solid !important;
+    border-width: 1px !important;
+    /* Kills the lift/shadow the hovers add, so the button does not appear to be
+       hovering and confirming at the same time. */
+    box-shadow: none !important;
+    transform: none !important;
+}

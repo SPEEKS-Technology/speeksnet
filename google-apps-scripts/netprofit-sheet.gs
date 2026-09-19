@@ -172,9 +172,12 @@ function _npDaysBetween(a, b) {
 function _npHealthCheck(store, data, recs, todayYmd) {
   var out = [];
   var h = data.health || {};
-  function add(level, kind, what, detail, fix, day) {
+  // `keyId` matters only for a 'check', which netprofit-alerts remembers by key
+  // and sends once a month: two hand-keyed sales sold on the same day would
+  // otherwise share a key and the second would never be mentioned at all.
+  function add(level, kind, what, detail, fix, day, keyId) {
     out.push({ level: level, store: store, day: day || null, kind: kind,
-               key: store + ':' + (day || '-') + ':' + kind,
+               key: store + ':' + (day || '-') + ':' + kind + (keyId ? ':' + keyId : ''),
                what: what, detail: detail, fix: fix });
   }
   var warnText = (data.warnings || []).join(' | ');
@@ -197,21 +200,90 @@ function _npHealthCheck(store, data, recs, todayYmd) {
   }
 
   // 2. The importer has stalled: finished days are missing eBay sales AND fees.
+  //
+  // ⚠️ YESTERDAY'S SALES ARE LATE, NOT MISSING (2026-09-17). Marketplace Connect
+  // brings the previous day's eBay orders across in a morning batch. That day it
+  // imported WSP's five Sep 16 sales at 9:45am — after the 8:05 pass and ten
+  // minutes after the watchdog's restart had read Shopify — so the email told
+  // somebody to go and check MC's sync when nothing was broken. It is a "broken"
+  // level check, which re-sends on EVERY pass, so a routinely late import mailed
+  // twice a day. The collector's own header measures this lag as "a day or two
+  // routinely".
+  //
+  // So only a sale from BEFORE yesterday counts. A real stall (Sep 11-13 ran for
+  // three days) still alerts, one day later than it used to. The figures never
+  // waited on this email: the next pass books a sale the moment MC imports it.
+  // Only what mails changes here, never what is written.
+  //
+  // The collector lists at most 25 orders while `n` is the true count. If it had
+  // more than it could list, a backlog that size is not routine lateness, so it
+  // alerts even when every listed order is from yesterday.
   var ni = h.not_yet_imported;
   if (ni && ni.n) {
-    var byDay = {};
-    (ni.orders || []).forEach(function (o) { byDay[o.day] = (byDay[o.day] || 0) + 1; });
-    add('broken', 'not-imported',
-      ni.n + ' eBay sale(s) on finished days are not in Shopify yet — those days are '
-        + 'missing the sales as well as the eBay fee',
-      'By day sold: ' + Object.keys(byDay).sort().map(function (d) {
-        return d + ' (' + byDay[d] + ')'; }).join(', ')
-        + '. eBay orders: ' + (ni.orders || []).map(function (o) { return o.ebay_order_id; })
-          .slice(0, 12).join(', ') + '. Fee not yet booked: $' + ni.fee + '.',
-      'The store, or you — Marketplace Connect in ' + store + '\'s Shopify admin has '
-        + 'stopped bringing eBay orders across. Check its sync status there. Nothing to do '
-        + 'on this sheet: once the orders arrive, the next pass puts their sales and fees '
-        + 'on the day they sold.');
+    var listed = ni.orders || [];
+    var stale = listed.filter(function (o) { return _npDaysBetween(o.day, todayYmd) >= 2; });
+    var truncated = ni.n > listed.length;
+    if (stale.length || truncated) {
+      var shown = stale.length ? stale : listed;
+      var allStale = !truncated && stale.length === listed.length;
+      var byDay = {};
+      shown.forEach(function (o) { byDay[o.day] = (byDay[o.day] || 0) + 1; });
+      add('broken', 'not-imported',
+        (allStale ? ni.n : truncated ? 'At least ' + shown.length : stale.length)
+          + ' eBay sale(s) on finished days are not in Shopify yet — those days are '
+          + 'missing those sales',
+        'By day sold: ' + Object.keys(byDay).sort().map(function (d) {
+          return d + ' (' + byDay[d] + ')'; }).join(', ')
+          + '. eBay orders: ' + shown.map(function (o) { return o.ebay_order_id; })
+            .slice(0, 12).join(', ')
+          // The collector reports one fee total for every unimported sale, so it
+          // is only quoted when every one of them is in this list.
+          // ⚠️ THE FEE IS NOT MISSING (2026-09-18). This said "Fee not yet booked"
+          // for three days while the figure sat exactly where it belonged: the
+          // collector's ORPHAN pass dates an unimported sale by eBay's own sale
+          // date, so the fee is on the day it sold and stays there when the order
+          // arrives. Only the SALE is absent. An alert that misnames what is wrong
+          // sends people to look for something that is not lost.
+          + (allStale ? '. Their eBay fee, $' + ni.fee + ', is already booked on the '
+              + 'day each one sold.' : '.'),
+        'The store, or you — Marketplace Connect in ' + store + '\'s Shopify admin has not '
+          + 'brought these across for more than a day, which is longer than its normal '
+          + 'overnight lag. Check its sync status there. Nothing to do on this sheet: once '
+          + 'the orders arrive, the next pass puts their sales and fees on the day they sold.');
+    }
+  }
+
+  // 2b. RECOVERED BY HAND, AND THEREFORE NOT A FAULT (2026-09-18).
+  //
+  // Marketplace Connect imports orders only for listings IT created, so a sale
+  // on one of our own SPEEKS Connect listings never crosses into Shopify at all.
+  // The store invoices the buyer through a draft order instead. Check 2 above
+  // could not tell that from a stalled importer, so OVL 18-15155-99419 mailed
+  // "go and check Marketplace Connect" on four consecutive passes about a
+  // connector that was working and a sale that was already paid for.
+  //
+  // netprofit-collect now recognises the pairing and moves the fee onto the day
+  // the invoice was paid, so both days are internally right. Nothing is broken,
+  // so this is a CHECK: once per store, per sale, per month — not every pass.
+  // It is still worth one email, because a hand-keyed invoice is somebody typing
+  // a price, and the pairing is the only place that would show up.
+  var rb = h.recovered_by_draft;
+  if (rb && rb.n) {
+    (rb.orders || []).forEach(function (o) {
+      add('check', 'hand-keyed',
+        'eBay sale ' + o.ebay_order_id + ' never came into Shopify — ' + store
+          + ' invoiced it by hand as ' + o.shopify_order,
+        'Sold on eBay ' + o.sold_day + ', invoice paid ' + o.booked_day + '. The sale '
+          + 'and its $' + o.fee + ' eBay fee are BOTH on ' + o.booked_day + ', so that '
+          + 'day is right; ' + o.sold_day + ' is light by the sale itself. Paired on: '
+          + o.matched_by + '.',
+        'You, once — check ' + o.shopify_order + ' was invoiced for what the item '
+          + 'actually sold for on eBay. Nothing to chase otherwise: Marketplace '
+          + 'Connect is not behind, it never imports our own SPEEKS Connect listings, '
+          + 'so this sale was never going to arrive. If the pairing is WRONG, Claude — '
+          + 'the order belongs in EBAY_ACCOUNTED in netprofit-collect.',
+        o.sold_day, o.ebay_order_id);
+    });
   }
 
   // 3. Anything the collector could not read and therefore did not count.
@@ -389,6 +461,76 @@ function _npFetchAllStores(stores) {
   return out;
 }
 
+// ⚠️ ONE STORE'S BAD MINUTE MUST NOT COST IT THE WHOLE PASS (2026-09-17).
+// At 9:35 that morning OVL's collector hit the edge runtime's 150-second limit
+// (HTTP 504) while the other four answered in about a minute. The writer skipped
+// OVL, its column kept the previous pass's figures, and the only way back was a
+// person noticing the email and re-running. The cause was transient — OVL's
+// Shopify bucket was shared with the catalog refresh at that moment — so the
+// same call a little later would have worked.
+//
+// So a store whose collector failed TRANSIENTLY is asked once more, on its own,
+// after a short pause. Only transient failures qualify: a 5xx, a timeout, a
+// dropped batch. A 4xx, "no days", or a short month is a real answer and is left
+// alone, because asking again would just repeat it.
+//
+// ⚠️ THE RETRY SPENDS THE SIX MINUTES, SO IT IS BUDGETED. It happens only while
+// the pass has used less than NP_RETRY_UNDER_MS; later than that, a retry that
+// ran long could push the summary strip past the wall, and one store a pass
+// behind is better than a killed execution that writes no summary at all.
+// NP_PASS_T0 is stamped by npsDailyRefresh; a hand run falls back to "now".
+var NP_PASS_T0 = 0;
+var NP_RETRY_UNDER_MS = 170000;
+var NP_RETRY_PAUSE_MS = 15000;
+// What the last fetch did, per store, for the pass to report to the run log.
+var NP_LAST_FETCH = {};
+
+function _npIsTransient(err) {
+  return /HTTP 5\d\d|batch failed|timed? ?out|Timeout|Address unavailable|DNS|Exception: Request failed/i
+    .test(String(err || ''));
+}
+
+function _npFetchWithRetry(stores) {
+  var t0 = NP_PASS_T0 || new Date().getTime();
+  var fetched = _npFetchAllStores(stores);
+  NP_LAST_FETCH = {};
+  stores.forEach(function (s) {
+    var got = fetched[s];
+    NP_LAST_FETCH[s] = got.err
+      ? { ok: false, err: String(got.err).slice(0, 200) }
+      : { ok: true, collector_ms: got.body && got.body.timings_ms ? got.body.timings_ms.total : null };
+  });
+  var again = stores.filter(function (s) { return fetched[s].err && _npIsTransient(fetched[s].err); });
+  if (!again.length) return fetched;
+  var used = new Date().getTime() - t0;
+  if (used > NP_RETRY_UNDER_MS) {
+    Logger.log('  %s failed transiently but the pass has used %ss — not retrying this pass.',
+      again.join(', '), Math.round(used / 1000));
+    return fetched;
+  }
+  Logger.log('  %s failed transiently (%s) — asking again in %ss.',
+    again.join(', '), again.map(function (s) { return fetched[s].err; }).join(' | ').slice(0, 300),
+    NP_RETRY_PAUSE_MS / 1000);
+  Utilities.sleep(NP_RETRY_PAUSE_MS);
+  var second = _npFetchAllStores(again);
+  again.forEach(function (s) {
+    NP_LAST_FETCH[s].retried = true;
+    if (!second[s].err) {
+      Logger.log('  %s: the retry worked.', s);
+      fetched[s] = second[s];
+      NP_LAST_FETCH[s].ok = true;
+      NP_LAST_FETCH[s].collector_ms = second[s].body && second[s].body.timings_ms
+        ? second[s].body.timings_ms.total : null;
+    } else {
+      // Keep the SECOND error: it is the current state of that store, and if it
+      // differs from the first that difference is worth reading.
+      fetched[s] = { err: second[s].err + ' (and on retry after ' + (NP_RETRY_PAUSE_MS / 1000)
+        + 's: first attempt was ' + String(NP_LAST_FETCH[s].err).slice(0, 120) + ')' };
+    }
+  });
+  return fetched;
+}
+
 // Match the day number in the block's OWN day column — never arithmetic from a
 // start row. Somebody inserting a row above the grid would otherwise shift every
 // write and silently corrupt a month. (Same rule as newmc-dupe-fix.gs.)
@@ -508,7 +650,7 @@ function _npWriteUnlocked(preview) {
   // The loop below is unchanged in what it writes; it just reads what already
   // arrived instead of waiting for it.
   var fetchT0 = new Date().getTime();
-  var fetched = _npFetchAllStores(NP_ORDER);
+  var fetched = _npFetchWithRetry(NP_ORDER);
   Logger.log('\n=== collected %s stores in %ss (in parallel) ===',
     NP_ORDER.length, ((new Date().getTime() - fetchT0) / 1000).toFixed(1));
 

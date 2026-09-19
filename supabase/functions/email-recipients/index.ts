@@ -15,6 +15,7 @@ const corsHeaders = {
 // - weekly_store_<STORE>: Monday weekly report, per-store manager copy
 // - usage_report:      nightly 8pm site-usage report (DM/CEO)
 // - cash_report:       7am cash-on-hand table off the Day End Report
+// - processed_report:  8:10am Processed Stats table off the Day End Report
 // - unlisted_report:   Monday 9am Unlisted Inventory Weekly Update
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const LIST_KEYS = new Set([
@@ -35,6 +36,9 @@ const LIST_KEYS = new Set([
   "usage_report",
   // cash_report: the 7am cash-on-hand table (Paul).
   "cash_report",
+  // processed_report: the 8:10am Processed Stats table — what each store listed
+  // yesterday, what it was worth, and the queue left behind. Leadership only.
+  "processed_report",
   // unlisted_report: the Monday 9am Unlisted Inventory Weekly Update, sent by
   // the unlisted-backlog fn (slug kept from its old name).
   "unlisted_report",
@@ -48,6 +52,16 @@ const LIST_KEYS = new Set([
   "idea_submissions",
   ...STORES.map((s) => `box_order_${s}`),
   ...STORES.map((s) => `weekly_store_${s}`),
+  // refund_mismatch_<STORE>: who hears that an order was refunded or cancelled
+  // on eBay but not Shopify (or the reverse) and has sat that way for three
+  // days. One list per store because the fix belongs to that store's manager;
+  // the refund-mismatch fn groups by recipient before sending, so the manager
+  // who covers both BAL and MPL gets one mail rather than two.
+  ...STORES.map((s) => `refund_mismatch_${s}`),
+  // refund_mismatch_escalation: leadership digest (DM/CEO), sent on the mornings
+  // managers are mailed, listing every open order and how many times each was
+  // raised. The key is a fossil of an earlier age-based design (see 0089).
+  "refund_mismatch_escalation",
 ]);
 
 // Only these roles may add/remove recipients (frontend hides the tool for

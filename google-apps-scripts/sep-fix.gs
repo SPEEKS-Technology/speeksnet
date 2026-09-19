@@ -388,6 +388,89 @@
 // evidential instead of circumstantial. Until then, any draft that arrives as
 // shopify_draft_order AND matches a refunded amount should be eyeballed against
 // the store's Drafts list before it is pinned.
+//
+// ---------------------------------------------------------------------------
+// ✅ THE CHECK THAT SETTLES IT WITHOUT read_customers: THE SKU (2026-09-17).
+//
+// A repayment invoice re-bills the buyer for the ITEM THEY KEPT, so it carries
+// that item's SKU. refund_reprobe.body holds each refunded eBay order's line
+// items. Matching the draft's SKU stem (PayMore SKUs carry a location suffix
+// that changes when an item moves — match KS01-7359C, not KS01-7359C-E3) against
+// the refunded orders is EVIDENCE, where the amount test is a coincidence test.
+//
+// Measured over every September draft pinned so far:
+//   #KS01-14526 Sep 1  129.99  Samsung 32GB RAM      = refunded 13-15059-99081
+//   #KS01-14545 Sep 1   36.99  Zelda: Echoes         = refunded 19-15038-48912
+//   #KS01-14564 Sep 2  229.99  AUDEZE Maxwell        = refunded 18-15050-09238
+//   #KS01-14575 Sep 2  199.99  iPad 10th Gen         = refunded 24-15027-65126
+//   #KS01-14625 Sep 4   64.99  ThinkPad X1 Carbon    = refunded 24-15050-91325
+//   #KS01-14628 Sep 4   44.99  Kingston 16GB RAM     = refunded 23-15049-18244
+//   #KS01-14631 Sep 4  224.99  RTX 3060 Ti           = refunded 17-15050-29951
+//   #KS01-14695 Sep 7  219.99  iPhone 13             = refunded 07-15043-22932
+//   #KS01-14581 Sep 2   29.99  Xbox controller       = NO refunded order, stem or exact
+//
+// Eight of nine: same item, same total. The ninth is the reason to run it.
+//
+// ✅ #KS01-14581 WAS A REAL SALE, AND IS BACK IN SEP 2 (user, 2026-09-17).
+// Its amount matched a refund, which is all the rule asked at the time, but no
+// refunded eBay order carried an Xbox controller — $29.99 is simply one of the
+// commonest price points in the store. The SKU test is what caught it, and the
+// business confirmed it: an Xbox Series X|S controller (KS01-7501B-E3) that OVL
+// really sold, for $29.99 against a $25.00 cost.
+//
+// So the Sep 2 pin came UP by 29.99 / 25.00 — from 5,973.76 / 2,874.07 to
+// 6,003.75 / 2,899.07. It is still a pin, because the other three exclusions on
+// that day stand; only this one order came back. sepFixApply overwrites its own
+// earlier pin, so the row below simply changes and no unpin is needed.
+//
+// ⚠️ THIS IS THE AMOUNT RULE'S ONLY KNOWN FALSE POSITIVE, and it is the reason
+// the SKU test exists. An amount match alone says a number coincided; a SKU
+// match says the same physical item came back. Do not restate on an amount
+// alone again — the nine-row table above is the standard.
+//
+// ---------------------------------------------------------------------------
+// SEP 8-15 — NOTHING TO DO. Checked 2026-09-16 under both the old and new rule:
+// zero draft orders at any store on any of those days.
+//
+// SEP 16 — OVL, TWO DRAFTS, BOTH REAL SALES. NO ROW, ON PURPOSE.
+//
+//   #KS01-14917  349.99  2018 MacBook Pro 13" i5   KS01-7653A-R5R2
+//   #KS01-14919 2749.99  Sony VPL-FHZ85 projector  KS01-7722A-R5R1
+//
+// Neither SKU stem appears on any refunded OVL eBay order. The MacBook's $349.99
+// DOES equal three refunded order totals — G.Skill RAM, a Fluance record player
+// and a Nintendo Virtual Boy — which is the coincidence case above, exactly. The
+// projector matches no amount at all. OVL Sep 16 stays live on the daily sync at
+// its reported 9,786.71 / 5,380.00 (both tabs agree on that base, checked).
+//
+// ✅ AND THE MACBOOK HAS A POSITIVE EXPLANATION, not just an absence of evidence
+// (user, 2026-09-17). #KS01-14917 IS the recovery of eBay order 18-15155-99419,
+// an OVL sale from Sep 15 that Marketplace Connect never imported. Rather than
+// wait for the connector, OVL invoiced the buyer through a draft order — so the
+// money is real, it is simply booked on the day the invoice was paid instead of
+// the day eBay sold it.
+//
+// ⚠️ THAT eBAY ORDER WILL NEVER ARRIVE IN SHOPIFY, so the collector's
+// `not_yet_imported` health check would have alerted on it every pass, forever.
+// It is listed in netprofit-collect's accounted-for table instead; see the
+// EBAY_ACCOUNTED note there. A sale recovered by hand is still a sale.
+//
+// ⚠️ THIS DAY WAS NEARLY PINNED WRONG, TWICE, AND BOTH FOR REASONS WORTH KEEPING.
+//
+//   1. THE DEPLOYED sales-true-daily WAS THREE WEEKS STALE. It still ran the
+//      Aug 27 date-only rule — every draft since Aug 26 is a repayment — while
+//      the repo had carried the Sep 6 amount rule (b771f6a) that was never
+//      deployed. So it reported $3,099.98 of repayments on Sep 16. Deployed from
+//      the repo 2026-09-17 and diffed against the old build over Sep 15-17: only
+//      the Sep 16 classification changed. The earlier pins were not affected —
+//      each was checked by hand against `matches_a_refund_amount`, which both
+//      builds report identically. BEFORE TRUSTING A PROBE, COMPARE THE DEPLOYED
+//      SOURCE TO THE REPO (get_edge_function).
+//   2. THE `created 2026-08-31T14:01:38Z` TAG was proposed as a discriminator
+//      (both Sep 16 drafts carry it, the LEE and MPL real sales do not) before
+//      the Sep 7 note above was re-read: one bulk edit stamped every OVL draft.
+//      The LEE and MPL sales lacked it for being at other stores, not for being
+//      sales. The note was right; the SKU is the test.
 // ============================================================================
 
 var SEPF_SHEET_ID = '1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8';  // Sales Summary 2026
@@ -415,8 +498,10 @@ var SEPF_NOTE_0901_OVL =
   + 'and was refunded both times. Real figure. Locked from the daily sync.';
 
 var SEPF_NOTE_0902_OVL =
-  'Sep 2 restated — $459.97 of draft-order invoices removed (cost 245.00): #KS01-14564 '
-  + '(229.99), #KS01-14575 (199.99), #KS01-14581 (29.99) and #KS01-14562 (0.00). AND '
+  'Sep 2 restated — $429.98 of draft-order invoices removed (cost 220.00): #KS01-14564 '
+  + '(229.99), #KS01-14575 (199.99) and #KS01-14562 (0.00). #KS01-14581 (29.99 / 25.00) was '
+  + 'PUT BACK on 2026-09-17: a real Xbox controller sale that matched a refund amount by '
+  + 'coincidence and carried no matching SKU. AND '
   + '#KS01-14555 removed ($19.99 / $10.00 cost): a repayment re-listing of KS01-7396C-E6 '
   + '(Razer Kishi), which sold on Aug 23 and again on Aug 25 and was refunded both times. '
   + 'Repayment of the August glitch, not selling. Real figure. Locked from the daily sync.';
@@ -439,7 +524,9 @@ var SEPF_FIX = [
   // when the two re-listings came out. sepFixApply overwrites its own earlier
   // pin, so those cells need no unpin — the new figure simply replaces it.
   { store: 'OVL', day: 1, sales:  699.34, cost:   73.00, note: SEPF_NOTE_0901_OVL },
-  { store: 'OVL', day: 2, sales: 5973.76, cost: 2874.07, note: SEPF_NOTE_0902_OVL },
+  // Sep 2 moved again on 2026-09-17, up 29.99 / 25.00, when #KS01-14581 was
+  // confirmed a real sale. It was 5,973.76 / 2,874.07 between 09-14 and 09-17.
+  { store: 'OVL', day: 2, sales: 6003.75, cost: 2899.07, note: SEPF_NOTE_0902_OVL },
   { store: 'OVL', day: 4, sales: 9323.30, cost: 4544.75, note: SEPF_NOTE_0904_OVL },
   { store: 'OVL', day: 7, sales: 4222.22, cost: 2642.44, note: SEPF_NOTE_0907_OVL }
   // MPL Sep 2: pin REMOVED — an ordinary sale, not a repayment. It is in
@@ -450,6 +537,8 @@ var SEPF_FIX = [
   //   deleted — verified, not assumed. No row unless it comes back; the
   //   figure to use if it does is in the Sep 7 block above.
   // Sep 7: WSP, MPL and BAL had no drafts and no duplicate pairs. No rows.
+  // Sep 8-15: no drafts anywhere. No rows.
+  // OVL Sep 16: both drafts are real sales by SKU (see the Sep 16 block). No row.
 ];
 
 // ---------------------------------------------------------------------------
@@ -899,4 +988,159 @@ function _sepfA1(c) {
   var s = '', n = c + 1;
   while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - m) / 26); }
   return s;
+}
+
+// ============================================================================
+// sepCatchupPreview() / sepCatchupApply() — make the SALES tab agree with what
+// Shopify says NOW, without pinning the day.
+//
+// WHY THIS IS NOT A PIN, AND MUST NEVER BECOME ONE. Everything else in this file
+// removes a figure the business decided does not belong, and locks the cell so
+// the daily sync stops arguing. This does the opposite: it fills in a figure the
+// sync AGREES with and simply has not heard about yet, so the cell has to stay
+// plain — the sync must keep owning that day. A bare-number formula here would
+// freeze a perfectly ordinary day forever, and nobody would ever know why.
+//
+// THE GAP IT CLOSES. The Net Profit tab reads Shopify directly. The Sales tab
+// reads Shopify's daily month-to-date EMAIL. When an order lands in Shopify after
+// that email was generated, the two tabs disagree until the next morning's email
+// arrives and the importer's 32-day re-verify sweeps it up.
+//
+// 2026-09-17 is the case it was written for: WSP's eBay connection dropped, and
+// Marketplace Connect imported five Sep 16 sales at 9:45am — after the 8:05 pass
+// and after Shopify had already sent the day's email. The Net Profit tab picked
+// them up on the next refresh (2,213.77 -> 3,568.72); the Sales tab could not,
+// because the email it reads still said 2,213.77. The importer was dry-run to
+// confirm it: 152 days unchanged, nothing to correct.
+//
+// ⚠️ IT WOULD HAVE FIXED ITSELF. Tomorrow's email carries the restated day and
+// the re-verify window is 32 days wide. This exists to close the gap TODAY, and
+// writing the same figure the importer will write tomorrow is the reason it is
+// safe: tomorrow's pass confirms it rather than fighting it. If a catch-up row
+// and the next email ever disagree, THE EMAIL IS RIGHT — delete the row.
+//
+// FOUR GUARDS, and the second is the one that matters most:
+//   * tab or row not found      — reported, never guessed at
+//   * the cell holds ANY formula — refused. A formula is a pin (or somebody's
+//     work), and a catch-up must never overwrite a restatement. This is the
+//     opposite of sepFixApply, which may replace a bare number it wrote itself.
+//   * the cell does not hold `was` — refused. The figure moved after it was
+//     measured, so writing would discard a change nobody has looked at.
+//   * already correct           — reported as such, nothing written.
+// ============================================================================
+
+// { store, day, sales, cost, was: [sales, cost], why }
+// `was` is what the cell is expected to hold BEFORE the catch-up. Measured, not
+// assumed — read off the live sheet at the time the row was added.
+var SEPF_CATCHUP = [
+  { store: 'WSP', day: 16, sales: 3568.72, cost: 1655.00, was: [2213.77, 1035.00],
+    why: 'five eBay sales Marketplace Connect imported at 9:45am on 09-17, after Shopify '
+       + 'had sent the day\'s email. Shopify now reports 3,568.72 / 1,655.00 for the day, '
+       + 'and the Net Profit tab already holds it.' }
+];
+
+function sepCatchupPreview() { _sepfCatchup(true); }
+function sepCatchupApply()   { _sepfCatchup(false); }
+
+function _sepfCatchup(dryRun) {
+  Logger.log(dryRun ? '=== CATCH-UP PREVIEW — nothing will be written ==='
+                    : '=== CATCH-UP ===');
+  if (!SEPF_CATCHUP.length) { Logger.log('SEPF_CATCHUP is empty — nothing to do.'); return; }
+
+  // The same script lock sepFixApply and the Net Profit refresh take, for the
+  // same reason: _npWrite decides what is pinned from ONE read at the top of its
+  // run, so a cell changed mid-refresh is a cell that refresh cannot see.
+  var lock = null;
+  if (!dryRun) {
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(SEPF_LOCK_WAIT_MS)) {
+      Logger.log('!! another writer holds the script lock — NOTHING WAS WRITTEN.');
+      Logger.log('   A Net Profit refresh is mid-write (8-9am and 2-3pm Central). Wait for '
+               + 'it to finish and run this again.');
+      return;
+    }
+  }
+  try {
+    _sepfCatchupLocked(dryRun);
+  } finally {
+    if (lock) lock.releaseLock();
+  }
+}
+
+function _sepfCatchupLocked(dryRun) {
+  var ss = SpreadsheetApp.openById(SEPF_SHEET_ID);
+  var wrote = 0, already = 0, refused = 0, missing = 0;
+
+  for (var t = 0; t < SEPF_TARGETS.length; t++) {
+    var target = SEPF_TARGETS[t];
+    var sh = ss.getSheetByName(target.tab);
+    Logger.log('');
+    if (!sh) { Logger.log('tab: %s — NOT FOUND, nothing done here', target.tab); missing++; continue; }
+    Logger.log('tab: %s', target.tab);
+
+    var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+    var values   = sh.getRange(1, 1, lastRow, lastCol).getValues();
+    var formulas = sh.getRange(1, 1, lastRow, lastCol).getFormulas();
+
+    for (var i = 0; i < SEPF_CATCHUP.length; i++) {
+      var f = SEPF_CATCHUP[i];
+      var base = target.bases[f.store];
+      var r = _sepfFindDayRow(values, base, f.day);
+      if (r < 0) { Logger.log('  %s day %s: ROW NOT FOUND, skipped', f.store, f.day); refused++; continue; }
+
+      var pairs = [
+        { col: base + SEPF_COL_SALES, want: f.sales, was: f.was[0], what: 'sales' },
+        { col: base + SEPF_COL_COST,  want: f.cost,  was: f.was[1], what: 'cost'  }
+      ];
+      for (var p = 0; p < pairs.length; p++) {
+        var c = pairs[p].col, want = pairs[p].want, was = pairs[p].was;
+        var cur = Number(values[r][c]), curF = formulas[r][c];
+        var a1 = _sepfA1(c) + (r + 1);
+
+        // Already right — the commonest case on the Net Profit tab, which reads
+        // Shopify directly and therefore got there first. Not an error.
+        if (Math.abs(cur - want) < 0.005) {
+          Logger.log('  %s day %s %s @%s: already %s — nothing to do',
+                     f.store, f.day, pairs[p].what, a1, want);
+          already++;
+          continue;
+        }
+        // ⚠️ ANY formula is refused, bare number or not. On these tabs a bare
+        // number IS a pin, and a pin is a decision that outranks a catch-up.
+        if (curF) {
+          Logger.log('  !! %s day %s %s @%s: holds the formula "%s" — REFUSED. That cell is '
+                   + 'pinned, or is somebody\'s work; a catch-up never overwrites a restatement.',
+                     f.store, f.day, pairs[p].what, a1, curF);
+          refused++;
+          continue;
+        }
+        if (Math.abs(cur - was) >= 0.005) {
+          Logger.log('  !! %s day %s %s @%s: holds %s, expected %s — REFUSED. The figure moved '
+                   + 'after this row was measured; re-measure before writing.',
+                     f.store, f.day, pairs[p].what, a1, cur, was);
+          refused++;
+          continue;
+        }
+        Logger.log('  %s day %s %s @%s: %s -> %s', f.store, f.day, pairs[p].what, a1, cur, want);
+        // setValue, NOT setFormula. See the header: a plain number leaves the day
+        // with the daily sync, which is the entire point.
+        if (!dryRun) sh.getRange(r + 1, c + 1).setValue(want);
+        wrote++;
+      }
+    }
+  }
+
+  Logger.log('');
+  Logger.log('%s: %s cell(s), %s already correct, %s refused',
+             dryRun ? 'WOULD WRITE' : 'WROTE', wrote, already, refused);
+  if (missing) {
+    Logger.log('!! %s tab(s) were not found — the catch-up is INCOMPLETE and the two sheets '
+             + 'may still disagree. Fix the tab name and run it again.', missing);
+  }
+  if (refused) {
+    Logger.log('!! %s cell(s) were REFUSED. Nothing was forced. Read the lines above: a pinned '
+             + 'cell needs a SEPF_FIX decision, and a moved figure needs re-measuring.', refused);
+  }
+  if (dryRun) Logger.log('Nothing was written. Run sepCatchupApply() to write it.');
+  else Logger.log('The days written stay with the daily sync — tomorrow\'s email confirms them.');
 }

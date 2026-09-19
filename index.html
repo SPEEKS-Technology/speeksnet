@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260916a">
+  <link rel="stylesheet" href="styles.css?v=20260918a">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260916a" defer></script>
+  <script src="speeks.js?v=20260918a" defer></script>
 </head>
 
 <body class="preload">
@@ -619,23 +619,45 @@
             </div>
 
             <div class="employee-kpi-body">
-                <div class="goals-header-row goals-mgr-header">
-                    <span class="goals-header-lbl">Employee &amp; Role</span>
-                    <span class="goals-header-lbl center">Today</span>
-                    <span class="goals-header-lbl center">Week</span>
+                <!-- Today = the role editor. Past weeks = read-only look back at the
+                     seats each person was given and what they listed (lgpw* in speeks.js). -->
+                <div class="lgpw-bar">
+                    <div class="lgpw-seg" role="group" aria-label="View">
+                        <button type="button" id="lgpw-v-today" aria-pressed="true" onclick="lgpwSetView(false)">Today</button>
+                        <button type="button" id="lgpw-v-past" aria-pressed="false" onclick="lgpwSetView(true)">Past weeks</button>
+                    </div>
+                    <div class="lgpw-wk away" id="lgpw-wk">
+                        <button type="button" id="lgpw-prev" aria-label="Earlier week" onclick="lgpwStep(1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+                        <span class="lgpw-wk-label">
+                            <span class="lgpw-tag" id="lgpw-tag">Last week</span>
+                            <span id="lgpw-wk-text">&nbsp;</span>
+                            <span class="lgpw-pips" id="lgpw-pips" aria-hidden="true"></span>
+                        </span>
+                        <button type="button" id="lgpw-next" aria-label="Later week" onclick="lgpwStep(-1)" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+                    </div>
                 </div>
 
-                <div id="goals-manager-body" class="goals-roster-container">
-                    <div class="status-message goals-loading-msg">Loading Roster...</div>
+                <div id="goals-pane-today">
+                    <div class="goals-header-row goals-mgr-header">
+                        <span class="goals-header-lbl">Employee &amp; Role</span>
+                        <span class="goals-header-lbl center">Today</span>
+                        <span class="goals-header-lbl center">Week</span>
+                    </div>
+
+                    <div id="goals-manager-body" class="goals-roster-container">
+                        <div class="status-message goals-loading-msg">Loading Roster...</div>
+                    </div>
+
+                    <div class="goals-total-row">
+                        <span class="goals-total-lbl">Total</span>
+                        <span id="goals-total-target" class="goals-total-val target">0</span>
+                        <span id="goals-total-actual" class="goals-total-val actual">0</span>
+                    </div>
+
+                    <div id="goals-levelup" class="goals-levelup"></div>
                 </div>
 
-                <div class="goals-total-row">
-                    <span class="goals-total-lbl">Total</span>
-                    <span id="goals-total-target" class="goals-total-val target">0</span>
-                    <span id="goals-total-actual" class="goals-total-val actual">0</span>
-                </div>
-
-                <div id="goals-levelup" class="goals-levelup"></div>
+                <div id="goals-pane-past" hidden></div>
             </div>
         </div>
     </div>
@@ -2110,7 +2132,7 @@
       <div class="tools-group-label">Admin</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" data-mobile="hide" data-feature="tool-user-permissions" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></span>User Permissions</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-feature-access" onclick="_closeToolsPanel(); openFeatureAccess();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></span>Feature Access</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-listing-health" onclick="_closeToolsPanel(); openListingHealthTool();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></span>Listing Health</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-feature="tool-listing-health" onclick="_closeToolsPanel(); openListingHealthTool();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></span>Listing Health</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-email-recipients" onclick="_closeToolsPanel(); openEmailRecipients();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></span>Email Recipients</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-store-goals" onclick="_closeToolsPanel(); openGpGoals();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/></svg></span>Month Setup</a>
       <!-- Two rows for ONE tool, sharing the tool-expenses stem the way the claims

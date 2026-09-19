@@ -32,7 +32,8 @@ eval([
     grabVar(sheet, 'NP_SHIP_SETTLE_DAYS'), grabVar(sheet, 'NP_SHIP_MIN_EBAY'),
     grab(sheet, '_npDaysBetween'), grab(sheet, '_npHealthCheck'),
     grab(alerts, '_npaHealthToSend'),
-    grabVar(sched, 'NPS_WATCH_HOURS'), grab(sched, '_npsOverdue'), grab(sched, '_npsWatchAction')
+    grabVar(sched, 'NPS_WATCH_HOURS'), grab(sched, '_npsOverdue'), grab(sched, '_npsWatchAction'),
+    grab(sched, '_npsTailAction'), grab(sheet, '_npIsTransient')
 ].join('\n'));
 
 let fails = 0;
@@ -85,7 +86,7 @@ console.log('\n3. OVL — Marketplace Connect stalled (Sep 12-13 sales with no S
     const out = _npHealthCheck('OVL', { health: { not_yet_imported: { n: 15, fee: 348.1, orders } } },
         [day('2026-09-12'), day('2026-09-13')], TODAY);
     const ni = out.find(i => i.kind === 'not-imported');
-    ok(ni && ni.level === 'broken', 'BROKEN — the days are missing sales as well as fees');
+    ok(ni && ni.level === 'broken', 'BROKEN — those days are missing the sales themselves');
     ok(ni && /2026-09-12 \(6\), 2026-09-13 \(9\)/.test(ni.detail), 'counted by the day they sold', ni && ni.detail.slice(0, 50));
     ok(ni && /Marketplace Connect/.test(ni.fix), 'and names what to go and look at');
 }
@@ -178,6 +179,126 @@ console.log('\n10. The watchdog restarts a missed pass once, then gives up to em
         'a restart yesterday does not use up today\'s');
     ok(_npsWatchAction(TODAY, 15, { morning: TODAY }, { morning: TODAY }).action === 'restart',
         'the morning restart does not use up the 2pm one');
+}
+
+console.log('\n11. Yesterday\'s unimported eBay sales are late, not missing (2026-09-17)');
+{
+    // WSP, the morning of Sep 17: five Sep 16 sales not in Shopify at 9:35, all
+    // imported by Marketplace Connect at 9:45. The alert fired twice for nothing.
+    const TODAY17 = '2026-09-17';
+    const wsp16 = ['08-15181-10732', '02-15192-35908', '09-15178-04506', '27-15144-63321', '01-15193-02451']
+        .map(id => ({ ebay_order_id: id, day: '2026-09-16' }));
+    let out = _npHealthCheck('WSP', { health: { not_yet_imported: { n: 5, fee: 104.66, orders: wsp16 } } },
+        [day('2026-09-16')], TODAY17);
+    ok(!out.some(i => i.kind === 'not-imported'), 'the real Sep 17 case: yesterday only, no email', kinds(out) || '(none)');
+
+    const mixed = wsp16.slice(0, 2).concat([{ ebay_order_id: '11-15100-00001', day: '2026-09-15' }]);
+    out = _npHealthCheck('WSP', { health: { not_yet_imported: { n: 3, fee: 60, orders: mixed } } },
+        [day('2026-09-15'), day('2026-09-16')], TODAY17);
+    let ni = out.find(i => i.kind === 'not-imported');
+    ok(ni && /^1 eBay sale/.test(ni.what), 'mixed: only the day-before-yesterday sale counts', ni && ni.what.slice(0, 40));
+    ok(ni && /2026-09-15 \(1\)/.test(ni.detail) && !/2026-09-16/.test(ni.detail),
+        'and only its day is listed', ni && ni.detail.slice(0, 60));
+    ok(ni && !/Fee not yet booked/.test(ni.detail),
+        'the fee total covers all three, so it is not quoted against one', ni && ni.detail);
+
+    const many = [];
+    for (let i = 0; i < 25; i++) many.push({ ebay_order_id: '16-15200-' + String(10000 + i), day: '2026-09-16' });
+    out = _npHealthCheck('OVL', { health: { not_yet_imported: { n: 40, fee: 900, orders: many } } },
+        [day('2026-09-16')], TODAY17);
+    ni = out.find(i => i.kind === 'not-imported');
+    ok(ni && /^At least 25/.test(ni.what), 'a backlog too big to list is not routine lateness', ni && ni.what.slice(0, 30));
+}
+
+console.log('\n12. A store\'s collector failure is retried only when it is transient (2026-09-17)');
+{
+    ok(_npIsTransient('OVL: collector returned HTTP 504 — {"code":"IDLE_TIMEOUT"}'), 'the Sep 17 504');
+    ok(_npIsTransient('OVL: collector returned HTTP 502 — {"error":"shopify orders query failed"}'), 'a 502');
+    ok(_npIsTransient('collector batch failed — Exception: Address unavailable'), 'a dropped batch');
+    ok(!_npIsTransient('OVL: collector returned HTTP 401 — {"error":"unauthorised"}'), 'a 401 is an answer, not a blip');
+    ok(!_npIsTransient('OVL: collector returned no days'), '"no days" is an answer, not a blip');
+}
+
+console.log('\n13. The tail of a pass is repaired on its own, without re-running the refresh (2026-09-17)');
+{
+    const T = '2026-09-17';
+    const gridDone = { morning: T };
+    ok(_npsTailAction(T, 9, {}, {}, {}) === null, 'grid not written: not the tail\'s business (the restart path owns it)');
+    ok(_npsTailAction(T, 9, gridDone, { morning: T }, {}) === null, 'grid and tail both done: quiet');
+    const a = _npsTailAction(T, 9, gridDone, {}, {});
+    ok(a && a.action === 'tail' && a.key === 'morning', 'grid done, tail missing: run the tail only', a && a.action);
+    ok(_npsTailAction(T, 9, gridDone, {}, { morning: T }).action === 'give-up',
+        'tail already retried today and still missing: email');
+    ok(_npsTailAction(T, 8, gridDone, {}, {}) === null, 'before the watch hour: nothing is due');
+    ok(_npsTailAction(T, 15, { morning: T, afternoon: T }, { morning: T }, {}).key === 'afternoon',
+        'at 3pm it is the 2pm pass\'s tail that is checked');
+    // The Sep 17 failure mode, end to end: grid written, tail killed. The old
+    // watchdog restarted the whole refresh; the new one must not.
+    ok(_npsWatchAction(T, 9, gridDone, {}) === null,
+        'grid written means NO restart, even though the tail died');
+}
+
+
+console.log('\n14. A sale the store recovered by hand is not a stalled importer (2026-09-18)');
+{
+    // OVL 18-15155-99419, the case that found this: sold on eBay Sep 15 on one of
+    // OUR SPEEKS Connect listings, so Marketplace Connect was never going to
+    // import it. The store invoiced the buyer as #KS01-14917 on Sep 16. The old
+    // check called that a stalled connector and re-sent it on every pass.
+    const T = '2026-09-18';
+    const rec = { n: 1, fee: 23.55, orders: [{
+        ebay_order_id: '18-15155-99419', sold_day: '2026-09-15',
+        shopify_order: '#KS01-14917', booked_day: '2026-09-16', fee: 23.55,
+        matched_by: 'the only draft-order invoice at this store for this money, '
+            + 'within 4 days of the sale' }] };
+    const out = _npHealthCheck('OVL', { health: {
+        not_yet_imported: { n: 0, fee: 0, orders: [] }, recovered_by_draft: rec } },
+        [day('2026-09-15'), day('2026-09-16')], T);
+    const hk = out.find(i => i.kind === 'hand-keyed');
+    ok(hk && hk.level === 'check', 'a CHECK, so it goes out once a month and not twice a day',
+        kinds(out));
+    ok(!out.some(i => i.kind === 'not-imported'), 'and NOT as a stalled importer');
+    ok(hk && /#KS01-14917/.test(hk.what), 'names the order that recovered it', hk && hk.what);
+    ok(hk && /BOTH on 2026-09-16/.test(hk.detail),
+        'says the sale and its fee are on the same day', hk && hk.detail.slice(0, 80));
+    ok(hk && !/Marketplace Connect in OVL/.test(hk.fix) && /never imports our own/.test(hk.fix),
+        'and does not send anyone to check a connector that is working', hk && hk.fix.slice(0, 60));
+    ok(hk && hk.key === 'OVL:2026-09-15:hand-keyed:18-15155-99419',
+        'keyed by the eBay order, not just the day', hk && hk.key);
+}
+
+console.log('\n15. Two hand-keyed sales sold on the SAME day are both reported');
+{
+    // Without the key suffix these share a key, netprofit-alerts remembers the
+    // first and the second is never mentioned — the quiet direction.
+    const T = '2026-09-18';
+    const mk = (id, order) => ({ ebay_order_id: id, sold_day: '2026-09-15',
+        shopify_order: order, booked_day: '2026-09-16', fee: 10, matched_by: 'x' });
+    const out = _npHealthCheck('OVL', { health: { recovered_by_draft: { n: 2, fee: 20,
+        orders: [mk('18-15155-99419', '#KS01-14917'), mk('19-15155-11111', '#KS01-14918')] } } },
+        [day('2026-09-15'), day('2026-09-16')], T);
+    const keys = out.filter(i => i.kind === 'hand-keyed').map(i => i.key);
+    ok(keys.length === 2 && keys[0] !== keys[1], 'two entries, two keys', keys.join(' '));
+    const pick = _npaHealthToSend(out, []);
+    ok(pick.fresh.length === 2, 'and both go out on the first pass');
+    ok(_npaHealthToSend(out, pick.seen).fresh.length === 0, 'neither goes out again');
+}
+
+console.log('\n16. The unimported alert no longer claims the eBay fee is missing (2026-09-18)');
+{
+    // It said "Fee not yet booked" for three days while the figure sat exactly
+    // where it belonged: the collector's ORPHAN pass dates an unimported sale by
+    // eBay's own sale date, so the fee is already on the day it sold.
+    const T = '2026-09-18';
+    const out = _npHealthCheck('OVL', { health: { not_yet_imported: {
+        n: 1, fee: 23.55, orders: [{ ebay_order_id: '18-15155-99419', day: '2026-09-15' }] } } },
+        [day('2026-09-15')], T);
+    const ni = out.find(i => i.kind === 'not-imported');
+    ok(ni && ni.level === 'broken', 'a genuine stall is still BROKEN and still repeats');
+    ok(ni && !/as well as the eBay fee/.test(ni.what), 'the fee is not called missing', ni && ni.what);
+    ok(ni && /already booked on the day each one sold/.test(ni.detail),
+        'it says where the fee actually is', ni && ni.detail);
+    ok(ni && /\$23\.55/.test(ni.detail), 'and still quotes it', ni && ni.detail.slice(-60));
 }
 
 console.log(fails ? '\n' + fails + ' FAILED' : '\nall passed');

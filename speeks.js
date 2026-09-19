@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.6';
+const APP_VERSION = '3.8.7';
 
 // Every .version-tag on the page, not the first: tv.html has one in the top nav
 // and the app pages have one in the sidebar greeting stack, and a page is free
@@ -191,10 +191,13 @@ function _usageSessionId() {
 // where headless Chrome at 390px wide behaved nothing like a phone.) It also keys
 // off the SHORT edge, so a phone held sideways is still a phone.
 //
-// mob answers the separate, project-specific question: was the mobile LAYER
-// actually engaged — i.e. <=900px, the compact breakpoint in styles.css? Someone
-// on a half-width desktop window sees the mobile layout without being on a mobile
-// device, and that is worth knowing on its own.
+// mob answers the separate, project-specific question: was the compact LAYER
+// actually engaged? Someone on a half-width desktop window sees the mobile
+// layout without being on a mobile device, and that is worth knowing on its own.
+// It asks _isMobileLayout() rather than re-deriving a width, because since the
+// tablet port (2026-09-17) the answer is not a width at all — a landscape iPad
+// at 1180px is inside the band and a 1366x768 laptop is not. A second copy of
+// that rule here would have quietly under-reported every tablet on the estate.
 function _usageDevice() {
     try {
         const w = Math.round(window.innerWidth || 0);
@@ -206,7 +209,7 @@ function _usageDevice() {
             dpr: Math.round((window.devicePixelRatio || 1) * 100) / 100,
             touch: coarse,
             kind: !coarse ? 'desktop' : (short < 500 ? 'phone' : 'tablet'),
-            mob: w > 0 && w <= 900,
+            mob: _isMobileLayout(),
         };
     } catch (_) {
         return null;   // telemetry must never break a flush
@@ -584,6 +587,79 @@ function _closeSidePanels(exceptId) {
         }
     });
 }
+
+// ---------------------------------------------------------------------------
+// SIDE PANELS FREEZE THE PAGE ON A PHONE
+// ---------------------------------------------------------------------------
+// Every modal locks the page behind it (lockAndBlurScreen). The side panels —
+// Tools, Checklist, Goals, Cleaning — never did, which was right on a desktop,
+// where they are a drawer beside a page you may still want to scroll. On a phone
+// they fill the screen, and scrolling a checklist dragged the dashboard along
+// behind it (user, 2026-09-16: "we should freeze the site behind it like desktop
+// freezes when opening a tool").
+//
+// Watched, not called: a panel opens and closes from its toggle, a tap outside,
+// Escape, _closeSidePanels and closeAllModals, and a lock added to each of those
+// is a lock that the next new path forgets to release. A MutationObserver on the
+// panels' class sees every one of them.
+//
+// It uses the SAME lock and the SAME saved offset as the modals (body.no-scroll,
+// _lockedScrollY), so the hand-off works in both directions: opening a tool from
+// the Tools panel closes the panel inside closeAllModals, which already restores
+// _lockedScrollY before the modal re-takes the lock. _panelScrollLock is only
+// "this lock was taken for a panel" — released when the last panel closes, and
+// only if no modal has taken it over in the meantime.
+const _PANEL_LOCK_IDS = ['toolsSidePanel', 'checklistSidePanel', 'goalsSidePanel', 'auditSidePanel'];
+let _panelScrollLock = false;
+
+function _syncPanelScrollLock() {
+    const body = document.body;
+    // _panelIsFullBleed, not _isMobileLayout. The lock exists because the sheet
+    // COVERS the page on a phone; on a tablet the same panel is a third-width
+    // drawer, so two thirds of the page is in view and freezing it is just a page
+    // that has stopped working. The sheets carry overscroll-behavior: contain
+    // across the whole band, so the scroll-chaining half of the problem is
+    // already handled in CSS on both.
+    const anyOpen = _panelIsFullBleed() && _PANEL_LOCK_IDS.some(id =>
+        document.getElementById(id)?.classList.contains('open'));
+    if (anyOpen) {
+        if (!body.classList.contains('no-scroll')) {
+            _lockedScrollY = window.scrollY || window.pageYOffset || 0;
+            body.style.top = `-${_lockedScrollY}px`;
+            body.classList.add('no-scroll');
+            _panelScrollLock = true;
+        }
+        return;
+    }
+    if (!_panelScrollLock) return;
+    _panelScrollLock = false;
+    // A modal opened over (or instead of) the panel now owns the lock.
+    if (document.querySelector('.modal-menu.show')) return;
+    if (!body.classList.contains('no-scroll')) return;   // closeAllModals already let go
+    body.classList.remove('no-scroll');
+    body.style.top = '';
+    window.scrollTo(0, _lockedScrollY);
+}
+
+(function _watchPanelsForScrollLock() {
+    const start = () => {
+        const obs = new MutationObserver(_syncPanelScrollLock);
+        _PANEL_LOCK_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) obs.observe(el, { attributes: true, attributeFilter: ['class'] });
+        });
+        // Dragging across the breakpoint with a panel open: the drawer on the
+        // desktop side must not leave the page frozen. BOTH queries, because the
+        // lock now turns on the sheet/drawer line at 901px and not on the band's
+        // own edge — an iPad rotating 820 -> 1180 with the Checklist open crosses
+        // that line and no other, and without this listener the page behind the
+        // new third-width drawer would stay pinned with nothing to explain it.
+        try { window.matchMedia(_compactMediaQuery()).addEventListener('change', _syncPanelScrollLock); } catch (_) {}
+        try { window.matchMedia(_tabletMediaQuery()).addEventListener('change', _syncPanelScrollLock); } catch (_) {}
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+})();
 
 function toggleModal(modalId, badgeId = null) {
     const dropdown = document.getElementById(modalId);
@@ -1023,7 +1099,7 @@ function _annDocCard(item) {
                 <div class="ann-doc-card-name">${escapeHtml(name)}</div>
                 <div class="ann-doc-card-meta">${title && title !== name ? escapeHtml(title) + ' · ' : ''}${escapeHtml(item.author || '')}${date ? ` · ${date}` : ''}</div>
             </div>
-            <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-dl-btn">⬇ Download</a>
+            <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-dl-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download</a>
             ${removable ? `<button type="button" class="ann-doc-del" title="Remove from Documents"
                 onclick="annRemoveDoc('${item.rowId}', this)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -2105,6 +2181,59 @@ function filterManageUsers() {
     });
 }
 
+// The shift length a row's hours and days come to, shown beside them.
+//
+// It is printed rather than left to be worked out because it is the number the
+// daily listing goal is actually built from, and the whole point of storing the
+// week and the days instead of the shift is that the shift is derived. Someone
+// typing 10 and 2 should be able to see 5h appear, not discover it a week later
+// in the efficiency table.
+function _upShiftLabel(hours, days) {
+    const h = Number(hours), d = Number(days);
+    if (!(h > 0) || !(d > 0)) return '—';
+    const cap = ListingGoalsEngine.cfg.max_shift_hours || 12;
+    const shift = Math.min(h / d, cap);
+    const txt = (Math.round(shift * 10) / 10) + 'h/day';
+    // Say when the cap has bitten, rather than showing a number that isn't the
+    // quotient and letting it look like a rounding error.
+    return (h / d > cap) ? txt + '*' : txt;
+}
+
+// Repaint one row's shift as its hours or days are typed. Reads the placeholders
+// when a box is blank, so the label tracks what the person is actually being
+// counted as rather than going to "—" the moment a box is cleared.
+window._upShiftSync = function (el) {
+    const row = el && el.closest ? el.closest('.user-manage-row') : null;
+    if (!row) return;
+    const val = (sel) => {
+        const box = row.querySelector(sel);
+        if (!box) return 0;
+        return box.value !== '' ? box.value : parseFloat(box.placeholder);
+    };
+    const out = row.querySelector('.u-shift');
+    if (out) out.textContent = _upShiftLabel(val('.u-hours'), val('.u-days'));
+};
+
+// Switching Full-time / Part-time / Floater moves the DEFAULTS the blank boxes
+// stand for. Only the placeholders change — a number someone typed is theirs and
+// survives, because the override is the exception they went out of their way to
+// record and silently dropping it on a schedule change is how that exception
+// would get lost.
+window._upScheduleSync = function (sel) {
+    const row = sel && sel.closest ? sel.closest('.user-manage-row') : null;
+    if (!row) return;
+    const c = ListingGoalsEngine.cfg;
+    const v = sel.value;
+    const h = v === 'floater' ? (c.hours_floater || 25)
+        : v === 'part_time' ? (c.hours_part_time || 20) : (c.hours_full_time || 40);
+    const d = v === 'floater' ? (c.days_floater || 5)
+        : v === 'part_time' ? (c.days_part_time || 4) : (c.days_full_time || 5);
+    const hb = row.querySelector('.u-hours'), db = row.querySelector('.u-days');
+    if (hb) hb.placeholder = h + 'h';
+    if (db) db.placeholder = d + 'd';
+    if (hb) _upShiftSync(hb);
+};
+
 function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Employee' }, target) {
     const row = document.createElement('div');
     row.className = 'user-manage-row';
@@ -2130,11 +2259,32 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     const _lc = ListingGoalsEngine.cfg;
     const scheduleValue = user.can_float ? 'floater'
         : (user.employment_type === 'part_time' ? 'part_time' : 'full_time');
+    // The label spells out the DAY the type implies, not just the week, because
+    // the day is what a goal is built from and "Part-time · 20h" on its own left
+    // a manager no way to see why a part-timer's number was what it was.
     const scheduleOptions = [
-        ['full_time', `Full-time · ${_lc.hours_full_time || 40}h`],
-        ['part_time', `Part-time · ${_lc.hours_part_time || 20}h`],
-        ['floater',   `Floater · ${_lc.hours_floater || 25}h`],
+        ['full_time', `Full-time · ${_lc.hours_full_time || 40}h / ${_lc.days_full_time || 5}d`],
+        ['part_time', `Part-time · ${_lc.hours_part_time || 20}h / ${_lc.days_part_time || 4}d`],
+        ['floater',   `Floater · ${_lc.hours_floater || 25}h / ${_lc.days_floater || 5}d`],
     ].map(([v, label]) => `<option value="${v}" ${scheduleValue === v ? 'selected' : ''}>${label}</option>`).join('');
+
+    // Hours and days, when the type's default isn't the truth for this person.
+    //
+    // Two boxes rather than one "hours per day", because a shift length typed
+    // beside a weekly figure can contradict it, and the contradiction is
+    // invisible until it shows up in Staffed For weeks later. These two are the
+    // numbers a manager reads straight off the schedule, and the shift is
+    // DERIVED from them (migration 0091) — so there is nothing to keep in step.
+    //
+    // Blank is the normal state and means "use the default for the type above".
+    // Placeholders show what that default currently is, so an empty box still
+    // says what the person is being counted as.
+    const dflHours = scheduleValue === 'floater' ? (_lc.hours_floater || 25)
+        : scheduleValue === 'part_time' ? (_lc.hours_part_time || 20) : (_lc.hours_full_time || 40);
+    const dflDays = scheduleValue === 'floater' ? (_lc.days_floater || 5)
+        : scheduleValue === 'part_time' ? (_lc.days_part_time || 4) : (_lc.days_full_time || 5);
+    const hoursVal = (user.weekly_hours != null && user.weekly_hours !== '') ? user.weekly_hours : '';
+    const daysVal = (user.days_per_week != null && user.days_per_week !== '') ? user.days_per_week : '';
 
     // hire_date is deliberately NOT edited here (user, 2026-08-10). It is stamped
     // server-side the moment a new PIN is saved, which starts the two-week
@@ -2147,7 +2297,10 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
         <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 78px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
         <select class="u-store" style="flex: 1;">${storeOptions}</select>
         <select class="u-role" style="flex: 1.5;">${roleOptions}</select>
-        <select class="u-schedule" style="flex: 1.3;" title="Weekly hours — what this person's store listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
+        <select class="u-schedule" onchange="_upScheduleSync(this)" style="flex: 1.3;" title="Weekly hours — what this person's store listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
+        <input type="number" class="u-hours" min="1" max="80" placeholder="${dflHours}h" value="${hoursVal}" oninput="_upShiftSync(this)" style="flex: 0 0 62px; max-width: 62px;" title="Hours a week, if this person isn't on the default for their schedule type. Leave blank to use it.">
+        <input type="number" class="u-days" min="1" max="${_lc.open_days || 6}" placeholder="${dflDays}d" value="${daysVal}" oninput="_upShiftSync(this)" style="flex: 0 0 56px; max-width: 56px;" title="Days a week they're in. Hours ÷ days is the shift their daily listing goal is built from. Leave blank to use the default.">
+        <span class="u-shift" style="flex: 0 0 auto; min-width: 58px; font-size: 11px; font-weight: 700; color: #64748b; text-align: center; white-space: nowrap;" title="The shift their daily listing goal is built from — hours ÷ days.">${_upShiftLabel(hoursVal || dflHours, daysVal || dflDays)}</span>
         <span class="u-notify" data-name="${escapeHtml((user.name || '').trim().toLowerCase())}" title="Email alerts — each person sets their own from the cog in the top bar."></span>
         <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
@@ -2179,6 +2332,15 @@ async function saveManageUsers() {
         // here is destroyed. Send the schedule fields explicitly; the server
         // falls back to the stored value only when a key is absent entirely.
         const schedule = row.querySelector('.u-schedule')?.value || 'full_time';
+        // Blank means "use the default for the schedule type", which the server
+        // stores as NULL — so an empty box has to travel as null, not as 0 or ''.
+        // A 0 would be a real answer meaning no hours at all, and would zero that
+        // person out of their store's capacity.
+        const numOrNull = (sel) => {
+            const v = row.querySelector(sel)?.value ?? '';
+            const n = parseInt(v, 10);
+            return (v !== '' && Number.isFinite(n) && n > 0) ? n : null;
+        };
 
         if (name || pin) {
             if (pin.length !== 4) {
@@ -2192,6 +2354,8 @@ async function saveManageUsers() {
                 name, pin, store, role,
                 employment_type: schedule === 'part_time' ? 'part_time' : 'full_time',
                 can_float: schedule === 'floater',
+                weekly_hours: numOrNull('.u-hours'),
+                days_per_week: numOrNull('.u-days'),
             });
         }
     });
@@ -10718,18 +10882,7 @@ function renderQMTab(tab) {
 function copyQMToClipboard(button) {
     const textToCopy = button.getAttribute('data-message');
     navigator.clipboard.writeText(textToCopy).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!'; 
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        
-        setTimeout(() => { 
-            button.innerText = originalText; 
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 1500);
+        _copyFlash(button);
     }).catch(err => console.error('Failed to copy text: ', err));
 }
 
@@ -15742,8 +15895,17 @@ const ListingGoalsEngine = {
         saturday_factor: 0.5, goal_factor: 0.75, open_days: 6,
         // Shown as labels in the User Permissions schedule dropdown.
         hours_full_time: 40, hours_part_time: 20, hours_floater: 25, new_hire_weeks: 2,
+        // Days present per week, per schedule type. weekly hours ÷ this is the
+        // SHIFT a daily goal is built from — see shiftFor.
+        days_full_time: 5, days_part_time: 4, days_floater: 5, max_shift_hours: 12,
     },
     _newHires: {},   // store → Set of names inside the new-hire ramp this week
+    // store → { employee name → their shift length in hours }, straight from the
+    // server. NOT derived here from hours ÷ days: that division lives in
+    // shiftHoursFor() in the store-targets function and nowhere else, because a
+    // constant duplicated across the two is exactly how the old baseForSize
+    // ladder drifted out of step with its server twin.
+    _shifts: {},
     // store → that store's own stretch factor. Kept HERE and not in cfg above,
     // because applyConfig runs once per store against one shared cfg object: a
     // per-store number in there would leave whichever store's fetch landed last
@@ -15759,6 +15921,21 @@ const ListingGoalsEngine = {
         if (row.cfg) Object.assign(this.cfg, row.cfg);
         if (row.store) this._newHires[row.store] = new Set(row.newHires || []);
         if (row.store && Number.isFinite(row.goalFactor)) this._factors[row.store] = row.goalFactor;
+        if (row.store && row.shifts) this._shifts[row.store] = row.shifts;
+    },
+
+    // Has this store's real payload landed yet? Until it has, every number this
+    // engine produces is a placeholder built on district defaults — the wrong
+    // stretch factor and, worse, the wrong shift for anyone who isn't full-time.
+    //
+    // This exists because those placeholders were being SAVED. renderManagerGoals
+    // kicks off recomputeGoalDisplays on a 30ms timer and a role tap autosaves,
+    // so a manager opening the modal on a cold cache could write a day's goals at
+    // the district factor before their own store's arrived. It is visible in the
+    // data as OVL rows reading 19 (8 × 3.0 × 0.78) beside rows reading 18
+    // (× 0.75) in the same week.
+    isReady(store) {
+        return !!(store && this._shifts[store]);
     },
 
     // This store's share of capacity, falling back to the district default for a
@@ -15808,8 +15985,36 @@ const ListingGoalsEngine = {
         const rate = this.rateFor(role, this.isNewHire(o.store, o.employee));
         if (!rate) return 0;
         return Math.round(
-            this.cfg.hours_per_day * rate * this.dayFactorFromDate(dateStr) * this.factorFor(o.store)
+            this.shiftFor(o.store, o.employee) * rate * this.dayFactorFromDate(dateStr) * this.factorFor(o.store)
         );
+    },
+
+    // How long THIS person's day is.
+    //
+    // Was cfg.hours_per_day — a flat 8 for everybody — which is the bug the whole
+    // of migration 0091 is about: the weekly goal was built from each person's
+    // real hours (40 / 20 / 25) while the daily goal pretended they all worked
+    // the same day. A floater on 25 hours a week and a part-timer on 10 both
+    // scored 18 on a lister day, exactly like someone on 40.
+    //
+    // It is not only the person's own number that was wrong. `Staffed For` on the
+    // DM's efficiency table is the SUM of these daily goals, so the inflation
+    // landed in the denominator of the ratio every store is judged on — which is
+    // why the two stores with no part-timer and no floater were the two reading
+    // sensibly while OVL, which has both, read 42%.
+    //
+    // The lookup is by name because listing_goals has no user_id to key on (see
+    // the identity note in CLAUDE.md), so a roster name and a saved name can
+    // differ — hence the loose match, the same rule the weekly rollups use.
+    // Falling back to hours_per_day keeps a person the server has never heard of
+    // scoring a full day rather than zero, which fails in the direction a manager
+    // will notice.
+    shiftFor(store, employee) {
+        const map = this._shifts[store];
+        if (!map || !employee) return this.cfg.hours_per_day;
+        if (Number.isFinite(map[employee])) return map[employee];
+        const hit = Object.keys(map).find(n => _goalsSameName(n, employee));
+        return hit ? map[hit] : this.cfg.hours_per_day;
     },
 
     // Rough weekly capacity goal for a store of `size` full-timers. ONLY a
@@ -16178,12 +16383,33 @@ function buildGoalsEditForm() {
 }
 
 // Debounced auto-save — managers just pick roles, no Save button.
+//
+// Held back until the store's own payload has landed. Before it does, every goal
+// on screen is a placeholder computed from district defaults: the district
+// stretch factor instead of the store's, and — since 0091 — a flat 8-hour day
+// for a part-timer or floater who does not work one. Writing those is how OVL
+// ended up with rows reading 19 (× 0.78) next to rows reading 18 (× 0.75) inside
+// one week. Re-armed on the same timer, so nothing is lost: the tap still saves,
+// a beat later, with the right numbers.
 window.scheduleGoalsAutosave = function() {
     const status = document.getElementById('goals-save-status');
     if (status) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
     clearTimeout(_goalsAutosaveTimer);
-    _goalsAutosaveTimer = setTimeout(() => saveGoalsData(true), 900);
+    _goalsAutosaveTimer = setTimeout(() => {
+        // Bounded, and it saves anyway at the end of it. A manager's roles are
+        // the thing that must not be lost; a goal computed on defaults is wrong
+        // but self-heals on the next render (_goalsResaveIfStale), whereas a
+        // roster nobody wrote is gone. The MSM widget keeps its own per-store
+        // state and saves through saveGoalsDataMS, so this single-store readiness
+        // check does not apply to it.
+        const waiting = !_msGoalsActive() && !ListingGoalsEngine.isReady(goalsTargetStore);
+        if (waiting && ++_goalsSaveWaits <= GOALS_SAVE_MAX_WAITS) return scheduleGoalsAutosave();
+        _goalsSaveWaits = 0;
+        saveGoalsData(true);
+    }, 900);
 };
+let _goalsSaveWaits = 0;
+const GOALS_SAVE_MAX_WAITS = 10;   // ~9s, then write what we have rather than lose it
 
 async function saveGoalsData(silent = false) {
     if (_msGoalsActive()) return saveGoalsDataMS(silent);
@@ -16628,6 +16854,282 @@ async function saveGoalsDataMS(silent = false) {
     }
 }
 
+// ============================================================================
+// LISTING GOALS — PAST WEEKS
+// The "Past weeks" side of the Listing Goals modal (managers + ASMs; the modal
+// is already gated by _canAssignGoalRoles). Read-only: for each of the last four
+// FINISHED weeks, the seat each person was given each day and what they listed
+// against the goal those seats added up to — so a manager can judge a week
+// fairly. Someone who spent it on the buy counter is not marked down for a low
+// count; a lister who fell short stands out.
+//
+// Data is store-targets ?action=roleweeks (see the note there). Listings are the
+// weekly KPI, because the daily result column is never filled in — which is
+// also why there is no per-day listed figure to show, only per-week.
+//
+// PEOPLE ARE SCORED ACROSS THE MARKET. A floater's KPI is filed under one store
+// for the whole week, so his row sums goals and listings from every store in the
+// market, and a day he spent elsewhere shows as that store's code. The store
+// summary above the grid is this store's own rows and KPI only, so for a store
+// that lent or borrowed a floater the rows need not add up to it.
+//
+// Names match EXACTLY (trimmed, case-insensitive), not with _goalsSameName: that
+// helper's first-name rule would merge Ethan Kushnir and Ethan Frye, who are both
+// in KC. Both tables are written with full names from the same user list.
+//
+// Approved look (Ethan, 2026-09-16): no legend, daily goals always visible, one
+// width for every percent bubble, fixed-width week label with a "Last week" tag.
+// Styles are the lgpw- block at the end of styles.css.
+// ============================================================================
+const LGPW_WEEKS = 4;
+const LGPW_TTL_MS = 5 * 60 * 1000;
+let _lgpw = { past: false, week: 0, data: {}, failed: {} };   // data: store -> { at, payload }
+
+function _lgpwStores() {
+    return isMultiStoreManager() ? MULTISTORE_MANAGER_STORES.slice() : [goalsTargetStore];
+}
+function _lgpwKey(name) { return String(name || '').trim().toLowerCase(); }
+function _lgpwAddDays(ds, n) {
+    const d = new Date(ds + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().split('T')[0];
+}
+// "Sep 7". Month on BOTH ends of the range, always, so every week's label is the
+// same shape and they line up (user, 2026-09-16).
+function _lgpwFmt(ds) {
+    return new Date(ds + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+function _lgpwKind(role) {
+    if (!role || role === '-') return 'unset';
+    if (role === GOALS_OFF) return 'off';
+    return role[0] === 'B' ? 'b' : 'l';
+}
+function _lgpwTone(pct) { return pct >= 100 ? 'good' : pct >= 80 ? 'warn' : 'bad'; }
+
+// PAST WEEKS IS NOT A PHONE VIEW. The grid is a name column plus seven day
+// columns; at 390px four of them are off the right-hand edge, and the card it
+// sits in clips rather than scrolls, so there is no affordance to say the rest
+// exists (Ethan, screenshot, 2026-09-17). Cut the tab rather than try to make a
+// seven-column table work at that width — Today, the roster editor, is the thing
+// somebody actually opens this on a phone to do.
+//
+// SCOPED TO THE STORE-FLOOR MANAGERS, who are the ones doing it from a phone:
+// Manager, Assistant Manager and Multi-Store Manager. District Manager, CEO,
+// MOCD and Owner (Manager) keep the tab everywhere, on the reading that a
+// leadership role looking back over four weeks is at a desk. One list, one line
+// to change if that reading is wrong.
+//
+// Phone only, not the whole compact band: a tablet has the width for all seven
+// columns, which is the entire reason the band and the tablet exception are
+// separate questions.
+const LGPW_PAST_CUT_ROLES = ['role-manager', 'role-assistant-manager', 'role-multistore-manager'];
+
+function _lgpwPastAllowed() {
+    if (!_panelIsFullBleed()) return true;          // desktop or tablet: room for it
+    return !LGPW_PAST_CUT_ROLES.includes(_speeksRoleClass());
+}
+
+// Called when the modal opens AND on a breakpoint crossing, because the answer
+// changes under an open modal: rotate an iPad into portrait, or drag a window
+// narrow, and a manager is looking at a grid whose tab is about to be taken away.
+function _lgpwSyncTabs() {
+    const p = document.getElementById('lgpw-v-past');
+    if (!p) return;
+    const ok = _lgpwPastAllowed();
+    // removeProperty, not display:'' via a value — the button has no inline
+    // display of its own to restore, and the stylesheet's .lgpw-seg button rule
+    // is what should be deciding it.
+    if (ok) p.style.removeProperty('display');
+    else p.style.setProperty('display', 'none', 'important');
+    // Cut while it is the OPEN view: fall back to Today rather than strand
+    // somebody on a clipped grid with no visible control to leave it by.
+    if (!ok && _lgpw.past) lgpwSetView(false);
+}
+
+// Switch between the role editor and the look back. Always lands on Today when
+// the modal opens (openListingGoals), so nobody goes to set roles and finds a
+// read-only grid.
+function lgpwSetView(past) {
+    _lgpw.past = !!past;
+    const t = document.getElementById('lgpw-v-today'), p = document.getElementById('lgpw-v-past');
+    if (t) t.setAttribute('aria-pressed', String(!past));
+    if (p) p.setAttribute('aria-pressed', String(!!past));
+    const today = document.getElementById('goals-pane-today'), pane = document.getElementById('goals-pane-past');
+    if (today) today.hidden = !!past;
+    if (pane) pane.hidden = !past;
+    const wk = document.getElementById('lgpw-wk');
+    if (wk) wk.classList.toggle('away', !past);
+    if (past) { _lgpw.week = 0; lgpwLoad(); }
+}
+
+function lgpwStep(dir) {
+    _lgpw.week = Math.max(0, Math.min(LGPW_WEEKS - 1, _lgpw.week + dir));
+    lgpwRender();
+}
+
+async function lgpwLoad() {
+    const stores = _lgpwStores();
+    const stale = stores.filter(s => !_lgpw.data[s] || Date.now() - _lgpw.data[s].at > LGPW_TTL_MS);
+    lgpwRender();
+    if (!stale.length) return;
+    await Promise.all(stale.map(async s => {
+        try {
+            const r = await fetch(`${STORE_TARGETS_URL}?action=roleweeks&store=${s}&v=${Date.now()}`).then(x => x.json());
+            // goals, not weeks: a store-targets deploy that predates roleweeks
+            // ignores the action and answers with evaluate(), which ALSO has a
+            // weeks array — and that rendered as a convincing "No roles were set
+            // this week" instead of an error (2026-09-16).
+            if (!r || !Array.isArray(r.goals) || !Array.isArray(r.listed)) throw new Error('bad payload');
+            _lgpw.data[s] = { at: Date.now(), payload: r };
+            delete _lgpw.failed[s];
+        } catch (e) {
+            _lgpw.failed[s] = true;
+        }
+    }));
+    if (_lgpw.past) lgpwRender();
+}
+
+function lgpwRender() {
+    const pane = document.getElementById('goals-pane-past');
+    if (!pane) return;
+    const stores = _lgpwStores();
+
+    // Week header. The label comes from the date maths alone, so it is right even
+    // before the fetch lands and the arrows never wait on the network.
+    const monday = new Date(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }) + 'T12:00:00Z');
+    monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7) - 7 * (_lgpw.week + 1));
+    const weekStart = monday.toISOString().split('T')[0];
+    const txt = document.getElementById('lgpw-wk-text');
+    if (txt) txt.textContent = `${_lgpwFmt(weekStart)} – ${_lgpwFmt(_lgpwAddDays(weekStart, 5))}`;
+    const tag = document.getElementById('lgpw-tag');
+    if (tag) tag.classList.toggle('away', _lgpw.week !== 0);
+    const pips = document.getElementById('lgpw-pips');
+    if (pips) pips.innerHTML = [3, 2, 1, 0].map(i => `<i class="${i === _lgpw.week ? 'on' : ''}"></i>`).join('');
+    const prev = document.getElementById('lgpw-prev'), next = document.getElementById('lgpw-next');
+    if (prev) prev.disabled = _lgpw.week >= LGPW_WEEKS - 1;
+    if (next) next.disabled = _lgpw.week <= 0;
+
+    pane.innerHTML = stores.map(s => {
+        const head = stores.length > 1 ? `<div class="lgpw-store-name">${escapeHtml(s)}</div>` : '';
+        const d = _lgpw.data[s];
+        let body;
+        if (d) body = _lgpwStoreHtml(s, d.payload, weekStart);
+        else if (_lgpw.failed[s]) body = '<div class="lgpw-msg err">Couldn\'t load past weeks. Close and reopen to try again.</div>';
+        else body = '<div class="lgpw-msg">Loading past weeks…</div>';
+        return `<section class="lgpw-store">${head}${body}</section>`;
+    }).join('');
+}
+
+function _lgpwStoreHtml(store, payload, weekStart) {
+    const weekEnd = _lgpwAddDays(weekStart, 6);
+    const days = [0, 1, 2, 3, 4, 5].map(i => _lgpwAddDays(weekStart, i));
+    const goals = (payload.goals || []).filter(r => r.date >= weekStart && r.date <= weekEnd);
+    const listed = (payload.listed || []).filter(r => r.weekEnd === weekEnd);
+
+    // Who belongs on this store's grid: someone given at least one WORKING seat
+    // that week, and whose week belongs to this store — a seat here, or their KPI
+    // filed here (a floater who spent the whole week at LEE but is filed under
+    // OVL shows on OVL as a row of LEE chips).
+    //
+    // Nobody without a seat, even with listings on their KPI line (user,
+    // 2026-09-16): this view judges a week against the seats it was given, and a
+    // row reading "20 / 0" has nothing to judge. Off and blank rows are not
+    // seats either — every store in the market saves an Off for a floater it did
+    // not use, and without that rule Zach showed on LEE's grid as a line of Offs.
+    const seated = new Set(goals.filter(r => _isWorkingRole(r.role)).map(r => _lgpwKey(r.employee)));
+    const people = new Map();   // key -> display name
+    const add = name => {
+        const k = _lgpwKey(name);
+        if (seated.has(k) && !people.has(k)) people.set(k, name);
+    };
+    goals.filter(r => r.store === store && _isWorkingRole(r.role)).forEach(r => add(r.employee));
+    listed.filter(r => r.store === store).forEach(r => add(r.employee));
+    if (!people.size) {
+        return '<div class="lgpw-msg">No roles were set this week.</div>';
+    }
+
+    // Today's roster order first, so the grid reads in the same order as the
+    // editor; anyone no longer on it (left, moved) follows alphabetically.
+    const order = _goalsWithFloaters(store, goalsRosterFor(store)).map(_lgpwKey);
+    const keys = [...people.keys()].sort((a, b) => {
+        const ia = order.indexOf(a), ib = order.indexOf(b);
+        if (ia !== -1 || ib !== -1) return (ia === -1 ? 1e9 : ia) - (ib === -1 ? 1e9 : ib);
+        return a.localeCompare(b);
+    });
+
+    let storeGoal = 0, storeListed = 0, storeHasKpi = false;
+    goals.filter(r => r.store === store && _isWorkingRole(r.role)).forEach(r => { storeGoal += r.goal; });
+    // Only the people on the grid, so the summary is the grid's own total and an
+    // unseated person's KPI can't lift the store's percentage.
+    listed.filter(r => r.store === store && people.has(_lgpwKey(r.employee)))
+        .forEach(r => { storeListed += r.listed; storeHasKpi = true; });
+
+    const hdr = '<div class="lgpw-row lgpw-hdr"><span>Employee</span>'
+        + days.map((ds, i) => `<span>${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i]}<b>${Number(ds.slice(8))}</b></span>`).join('')
+        + '<span>Listed / goal</span></div>';
+
+    const rows = keys.map(k => {
+        const mine = goals.filter(r => _lgpwKey(r.employee) === k);
+        let goal = 0;
+        const cells = days.map(ds => {
+            const today = mine.filter(r => r.date === ds);
+            // A working seat here, then a working seat elsewhere, then Off here,
+            // then Off elsewhere. A floater is often marked Off at home on a day
+            // he was working somewhere else, and the seat is what matters.
+            const here = today.find(r => r.store === store && _isWorkingRole(r.role));
+            const away = today.find(r => r.store !== store && _isWorkingRole(r.role));
+            const off = today.find(r => r.store === store && _isOffRole(r.role)) || today.find(r => _isOffRole(r.role));
+            if (here) {
+                goal += here.goal;
+                return `<div class="lgpw-day"><span class="lgpw-chip ${_lgpwKind(here.role)}">${escapeHtml(here.role)}</span><span class="lgpw-g">${here.goal}</span></div>`;
+            }
+            if (away) {
+                goal += away.goal;
+                return `<div class="lgpw-day"><span class="lgpw-chip away" title="${escapeHtml(away.role)} at ${escapeHtml(away.store)}">${escapeHtml(away.store)}</span><span class="lgpw-g">${away.goal}</span></div>`;
+            }
+            if (off) return '<div class="lgpw-day"><span class="lgpw-chip off">Off</span><span class="lgpw-g"></span></div>';
+            return '<div class="lgpw-day"><span class="lgpw-chip unset">–</span><span class="lgpw-g"></span></div>';
+        }).join('');
+
+        const theirs = listed.filter(r => _lgpwKey(r.employee) === k);
+        const got = theirs.length ? theirs.reduce((sum, r) => sum + r.listed, 0) : null;
+        return `<div class="lgpw-row">
+            <div class="lgpw-name">${escapeHtml(people.get(k))}${_goalsIsFloater(store, people.get(k)) ? '<span class="lgpw-float">Floater</span>' : ''}</div>
+            ${cells}
+            ${_lgpwTotHtml(got, goal)}
+        </div>`;
+    }).join('');
+
+    return `${_lgpwSumHtml(storeHasKpi ? storeListed : null, storeGoal)}
+        <div class="lgpw-scroll"><div class="lgpw-grid">${hdr}${rows}</div></div>`;
+}
+
+// No KPI filed, or no goal to measure against: a dash in a bubble of the same
+// width, so the column still lines up.
+function _lgpwPct(got, goal) {
+    if (got == null || !goal) return { txt: '—', tone: 'none', width: 0 };
+    const pct = Math.round(got / goal * 100);
+    return { txt: pct + '%', tone: _lgpwTone(pct), width: Math.min(pct, 100) };
+}
+
+function _lgpwTotHtml(got, goal) {
+    const p = _lgpwPct(got, goal);
+    return `<div class="lgpw-tot">
+        <div class="lgpw-tot-top"><span class="lgpw-tot-n">${got == null ? '—' : got} <small>/ ${goal}</small></span><span class="lgpw-pct ${p.tone}">${p.txt}</span></div>
+        <div class="lgpw-track"><i class="${p.tone}" style="width:${p.width}%"></i></div>
+    </div>`;
+}
+
+function _lgpwSumHtml(got, goal) {
+    const p = _lgpwPct(got, goal);
+    return `<div class="lgpw-sum">
+        <div><div class="lgpw-sum-k">Store · listed vs. goal</div>
+        <div class="lgpw-sum-v">${got == null ? '—' : got} <small>/ ${goal}</small></div></div>
+        <div class="lgpw-track"><i class="${p.tone}" style="width:${p.width}%"></i></div>
+        <span class="lgpw-pct ${p.tone}">${p.txt}</span>
+    </div>`;
+}
+
 // Roster size for a store (from auth cache). Only feeds the placeholder weekly
 // figure shown before the server's capacity number arrives.
 //
@@ -16682,9 +17184,13 @@ function effectiveTeamSize(store) {
 }
 // Last-4 completed weeks for the bars, each carrying the goal that was in force
 // THAT week — so re-setting this Monday's number can't re-colour history.
+// Each week also carries what it was STAFFED for and where its goal came from,
+// so the bars can show the same two readings the DM's efficiency table does and
+// can mark a week whose goal nobody actually set. Passed straight through rather
+// than picked apart — a field added on the server should not need a second edit
+// here to reach the renderer.
 function weeksFor(store) {
-    return ((_storeTargets[store] && _storeTargets[store].weeks) || [])
-        .map(w => ({ total: w.total, target: w.target }));
+    return ((_storeTargets[store] && _storeTargets[store].weeks) || []).map(w => ({ ...w }));
 }
 // Has the DM set THIS week's goal for the store by hand yet? `carried` means it is
 // running on a previous week's number, which still counts as "not set this week".
@@ -16943,22 +17449,57 @@ async function fetchStoreWeeklyHistory(store) {
 // shared target would repaint all four bars every time this week's goal changed.
 function _luWeeks(history, fallbackTarget) {
     return (history || []).map(w => (w && typeof w === 'object')
-        ? { total: w.total, target: w.target > 0 ? w.target : fallbackTarget }
+        ? { ...w, target: w.target > 0 ? w.target : fallbackTarget }
         : { total: w, target: fallbackTarget });
 }
 
 // Running 4-week listing view (manager + employee/ASM + DM widgets).
+//
+// Each bar now carries BOTH readings of its week, because showing one of them
+// was what let a store and the DM look at the same week and disagree out loud.
+// The colour is still listed vs the goal the DM set — that is the number a store
+// is held to — and under it sits listed vs what the store was actually staffed
+// for, which is the DM's efficiency column and the fairer reading of a week that
+// lost someone to a callout. A week can legitimately be red on top and over 100%
+// underneath; that combination is information, not a contradiction, and it is
+// the one the Aug 31 week at OVL was hiding.
+//
+// A goal nobody set for that week is marked. OVL ran three weeks — 17, 24 and 31
+// August — carrying the 151 typed on 10 August for a roster it no longer had,
+// and cleared it every time. Three unearned greens looked exactly like three
+// earned ones, and then the first real goal turned the run red.
 function levelUpHtml(history, target) {
     const last4 = _luWeeks(history, target).slice(-4);
     const padded = [...Array(Math.max(0, 4 - last4.length)).fill(null), ...last4];
-    const bars = padded.map(w => w == null
-        ? '<div class="lu-week empty"><span class="lu-week-num">–</span></div>'
-        : `<div class="lu-week ${w.total >= w.target ? 'green' : 'red'}"><span class="lu-week-num">${w.total}</span></div>`
-    ).join('');
+    const bars = padded.map(w => {
+        if (w == null) return '<div class="lu-week empty"><span class="lu-week-num">–</span></div>';
+        const carried = w.targetSource && w.targetSource !== 'set';
+        const eff = Number.isFinite(w.efficiency) ? w.efficiency : null;
+        // No efficiency means no roles were set that week, so there is nothing to
+        // measure against — a blank, not a 0%, which would read as a verdict.
+        const sub = eff == null
+            ? `<span class="lu-week-eff none" title="No roles were set that week, so there is nothing to measure what the store was staffed for.">–</span>`
+            : `<span class="lu-week-eff ${eff >= 100 ? 'over' : 'under'}" title="${w.total} listed against the ${w.adjusted} this store was actually staffed for that week — the figure the district sees.">${eff}%</span>`;
+        const goalNote = carried
+            ? `<span class="lu-week-carried" title="No goal was set for this week, so it was measured against the ${w.target} from ${w.targetSetFor ? _luWeekLabel(w.targetSetFor) : 'an earlier week'}.">goal not set</span>`
+            : `<span class="lu-week-goal">of ${w.target}</span>`;
+        return `<div class="lu-week ${w.total >= w.target ? 'green' : 'red'}${carried ? ' lu-week-stale' : ''}">`
+            + `<span class="lu-week-num">${w.total}</span>${goalNote}${sub}</div>`;
+    }).join('');
 
     return `
-        <div class="lu-head"><span class="lu-title">Last 4 Weeks</span></div>
+        <div class="lu-head"><span class="lu-title">Last 4 Weeks</span>
+        <span class="lu-sub">listed of goal &middot; % of what you were staffed for</span></div>
         <div class="lu-weeks">${bars}</div>`;
+}
+
+// "10 Aug" for a YYYY-MM-DD Monday. Only used inside the carried-goal tooltip,
+// where naming the week the number came from is the whole point — "an earlier
+// week" would leave a manager no way to tell a one-week carry from a month one.
+function _luWeekLabel(weekStart) {
+    const d = new Date(String(weekStart) + 'T12:00:00');
+    return isNaN(d.getTime()) ? String(weekStart)
+        : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function renderGoalsLevelUp() {
@@ -21444,8 +21985,16 @@ function b2bViewDropReport(btn) {
 
 function b2bCopyDropDiag(btn) {
     const text = _b2bReportOf(btn);
+    // Success goes through the shared flash; FAILURE deliberately does not. A copy
+    // that did not happen must never wear the confirmation colour — this button's
+    // whole history is that it used to claim success while doing nothing (see the
+    // execCommand note below), so the one thing it must not do is look right when
+    // it is wrong. The failure branch keeps its own label and its own plain
+    // restore, because 'Copy it for me' is not the label it was wearing a moment
+    // ago and _copyFlash restores what it captured.
     const done = (ok) => {
-        btn.textContent = ok ? 'Copied' : 'Select it above and press Ctrl+C';
+        if (ok) return _copyFlash(btn, 'Copied');
+        btn.textContent = 'Select it above and press Ctrl+C';
         setTimeout(() => { btn.textContent = 'Copy it for me'; }, 2400);
     };
     const manual = () => {
@@ -28256,25 +28805,153 @@ function _setUserGreeting() {
     if (el) el.innerText = `Welcome ${sessionStorage.getItem('speeksUserName') || 'User'}!`;
 }
 
+// ============================================================================
+// THE "COPIED" FLASH — the one writer for every copy button on the site
+// ============================================================================
+// Six buttons copy to the clipboard. Three went green by setting four inline
+// styles each, three only swapped their label, and the label text differed
+// ("Copied" vs "Copied!") between tools that sit two clicks apart. Ethan,
+// 2026-09-17: all of them the Box Order green, on all three layouts. The colours
+// now live in .is-copied at the end of styles.css — see the note there for why a
+// class and not inline styles (short version: inline loses to !important, and
+// the compact build is full of !important).
+//
+// SUCCESS ONLY. A copy that failed must not wear the confirmation colour, so the
+// fallback branches keep setting their own text and do not come through here.
+//
+// The re-entrancy guard is not hypothetical: every one of the six captured the
+// button's current label as "the original" on the way in, so a second click
+// during the flash captured "Copied!" and put THAT back permanently. Clicking a
+// copy button twice is the most natural thing in the world when you are not sure
+// the first one took. Capture only on the way in from rest, and cancel the
+// pending restore so the timer cannot fire against the new one.
+const _COPY_FLASH_MS = 2000;
+
+function _copyFlash(button, label) {
+    if (!button) return;
+    if (button._cfTimer) clearTimeout(button._cfTimer);
+    else button._cfWas = button.textContent;          // only when not already flashing
+    button.textContent = label || 'Copied!';
+    button.classList.add('is-copied');
+    button._cfTimer = setTimeout(function () {
+        button.textContent = button._cfWas;
+        button.classList.remove('is-copied');
+        button._cfTimer = null;
+    }, _COPY_FLASH_MS);
+}
+window._copyFlash = _copyFlash;
+
 // The one breakpoint the JS has to agree with the stylesheet about. Must stay in
-// step with the MOBILE LAYER in styles.css, where <=900px is the compact build.
-function _isMobileLayout() {
-    try { return window.matchMedia("(max-width: 900px)").matches; } catch (_) { return false; }
+// step with the MOBILE LAYER in styles.css, whose banner explains the shape.
+//
+// A FUNCTION, not a const, and that is deliberate: _syncPanelScrollLock up at
+// the top of this file reads the same query, and a `const` down here would be in
+// its temporal dead zone if that IIFE ever runs before this line executes. A
+// function declaration hoists over the whole script, so every caller gets it
+// whatever the order. One writer, so the JS and the CSS cannot drift apart
+// device by device.
+//
+// The comma is an OR of two queries, which is what matchMedia takes and what
+// `.matches` folds: narrow-anything, or touch-up-to-a-big-tablet. Do not try to
+// collapse it into one query — a range cannot express "the ceiling depends on
+// the pointer", which is the entire point (see the banner for why a bare
+// max-width: 1366px would hand every 1366x768 store laptop the phone build).
+function _compactMediaQuery() {
+    return "(max-width: 900px), (max-width: 1366px) and (pointer: coarse)";
 }
 
-// Rotating a tablet or dragging a window across 900px changes which surfaces
-// belong on screen, and the inline display written by applyRoleBasedUI does not
-// re-evaluate on its own. Re-run it on the crossing, not on every resize tick.
+function _isMobileLayout() {
+    try { return window.matchMedia(_compactMediaQuery()).matches; } catch (_) { return false; }
+}
+
+// The tablet half of the compact band, on its own. Pair to _compactMediaQuery()
+// and the same contract: change it here and in styles.css together, and nowhere
+// else. 901 and not 900 so this and the compact ceiling cannot both claim a
+// screen exactly 900px wide.
+function _tabletMediaQuery() {
+    return "(min-width: 901px) and (max-width: 1366px) and (pointer: coarse)";
+}
+
+function _isTabletLayout() {
+    try { return window.matchMedia(_tabletMediaQuery()).matches; } catch (_) { return false; }
+}
+
+// Expressed as "compact but not tablet" rather than as its own width, so there is
+// still exactly one number in play. A side panel is a full-screen sheet on the
+// phone and a third-width drawer on a tablet, and only the sheet needs the page
+// behind it frozen — see _syncPanelScrollLock, which is the one caller.
+function _panelIsFullBleed() {
+    return _isMobileLayout() && !_isTabletLayout();
+}
+
+// Rotating a tablet or dragging a window across the compact band changes which
+// surfaces belong on screen, and the inline display applyRoleBasedUI writes does
+// not re-evaluate on its own. Re-run it on the crossing, not every resize tick.
+// Rotation is the live case now that landscape tablets are in the band: an iPad
+// turned from 1180 to 820 stays compact throughout and fires nothing, but one
+// turned out of the band at all fires once, here.
 try {
-    window.matchMedia("(max-width: 900px)").addEventListener("change", function () {
+    window.matchMedia(_compactMediaQuery()).addEventListener("change", function () {
         if (!document.body.classList.contains("is-authenticated")) return;
         applyRoleBasedUI();
         // The feed cap is a measured pixel height, so it is wrong the moment the
         // breakpoint moves in either direction: stale-tight going wide, unset
         // going narrow. Re-measured here rather than left until the next payload.
         if (typeof _samCapFeed === "function") _samCapFeed();
+        // Surfaces cut from one side of the band and not the other have to be
+        // re-decided here too, for the same reason the sweep above runs: the modal
+        // may be open right now. Listing Goals' Past weeks tab is the first of
+        // them — see _lgpwSyncTabs, which also leaves the view if it is the one
+        // being taken away.
+        if (typeof _lgpwSyncTabs === "function") _lgpwSyncTabs();
     });
 } catch (_) { /* older browsers: the initial pass still applies */ }
+
+// The TABLET line, at 901px, is a second crossing with its own consequences, and
+// an iPad rotating 820 <-> 1180 crosses THIS one and not the band's own edge — so
+// the listener above never hears about the one rotation people actually perform.
+// What changes across it: the feed shows four rows instead of two, and Listing
+// Goals' Past weeks tab comes back. applyRoleBasedUI is deliberately NOT re-run
+// here — data-mobile curation is a band-level rule and identical on both sides,
+// so calling it would be work with no possible effect.
+try {
+    window.matchMedia(_tabletMediaQuery()).addEventListener("change", function () {
+        if (!document.body.classList.contains("is-authenticated")) return;
+        if (typeof _samCapFeed === "function") _samCapFeed();
+        if (typeof _lgpwSyncTabs === "function") _lgpwSyncTabs();
+    });
+} catch (_) { /* older browsers: the initial pass still applies */ }
+
+// ROTATION INSIDE THE BAND — a gap the tablet port opened, not one it found.
+//
+// An iPad turning 820 <-> 1180 used to CROSS 900px, so the listener above fired
+// and _samCapFeed() re-measured. Both orientations are now inside the band, so
+// it fires nothing, and _samCapFeed writes a measured pixel max-height: the
+// two-row cap for a feed whose rows wrap differently at the other orientation.
+// A card that is one line across 1180px is two across 820px, so the cap carried
+// over from landscape shows a row and a half of portrait and clips the rest.
+// Nothing above catches this, because by every test it makes, nothing changed.
+//
+// Orientation only, not resize. A resize listener would fire on every pixel of
+// an iPad's rotation animation and on the iOS URL bar sliding away, and each one
+// costs a forced layout in _samCapFeed's getBoundingClientRect. The orientation
+// query changes once per turn.
+//
+// Guarded on the band, so a desktop user dragging a window into portrait shape
+// does no work. _samCapFeed already returns early off the band, but the check is
+// cheap and says what this listener is for.
+try {
+    window.matchMedia("(orientation: portrait)").addEventListener("change", function () {
+        if (!document.body.classList.contains("is-authenticated")) return;
+        if (!_isMobileLayout()) return;
+        // After the turn, not during it: the new viewport is not laid out yet
+        // when the query flips, and measuring here caps the feed to the shape it
+        // is leaving. rAF lands on the first frame that has the new geometry.
+        requestAnimationFrame(function () {
+            if (typeof _samCapFeed === "function") _samCapFeed();
+        });
+    });
+} catch (_) { /* older browsers: the cap is re-measured on the next render */ }
 
 // ⚠️ HIDING A SELECT DOES NOT HIDE A SELECT. The custom dropdown (_ddEnhance)
 // moves the native control into a `.dd-host` and covers it with a `.dd-btn`
@@ -36387,22 +37064,15 @@ function sendBoxOrder() {
 
 // Failsafe for machines with no default mail client: copy the full order
 // (recipient, subject, body) to the clipboard to paste into any email.
+// THE reference implementation for the flash (Ethan pointed at this button,
+// 2026-09-17: "green like the box order tool"). It now shares _copyFlash with the
+// other five rather than owning the colours itself.
 function copyBoxOrder(button) {
     if (!_boxOrderEnsureStore()) return;
     const { email, subject, body } = _boxOrderCompose();
     const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
     navigator.clipboard.writeText(text).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!';
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        setTimeout(() => {
-            button.innerText = originalText;
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 2000);
+        _copyFlash(button);
     }).catch(() => alert('Could not copy automatically. Please select and copy the order manually.'));
 }
 
@@ -37550,6 +38220,9 @@ const EMAIL_LIST_GROUPS = [
               desc: 'Monday 9am — the pile per store, and what it would take to clear it.' },
             { key: 'cash_report', label: 'Cash On Hand',
               desc: '7am closing-cash table, read off each store\'s Day End Report.' },
+            { key: 'processed_report', label: 'Processed Stats',
+              desc: '8:10am — how many items each store listed yesterday and what '
+                  + 'they were worth, off the Day End Report.' },
             { key: 'usage_report', label: 'Site Usage',
               desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
             { key: 'recycle_report', label: 'Recycle Month-End Report',
@@ -37574,6 +38247,16 @@ const EMAIL_LIST_GROUPS = [
             { key: 'b2b_quote_ready', label: 'B2B Quote Ready',
               desc: 'A pickup has been priced and a quote is waiting on approval. '
                   + 'Leave this empty and it falls back to the single address in CRM Settings.' },
+            // Refund mismatch: a per-store list because the fix belongs to that
+            // store's manager, plus the leadership digest. The digest's key says
+            // "escalation" -- a fossil of the first design (see 0089); the label
+            // says what it is now.
+            { key: 'refund_mismatch_escalation', label: 'Refund Mismatch — Leadership',
+              desc: '8:20am, only on mornings a manager was mailed: every open order, and how many '
+                  + 'times its manager has been told.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `refund_mismatch_${s}`, label: `Refund Mismatch — ${s}`,
+              desc: '8:20am. Refunded on eBay but not Shopify, or the reverse, for 3 days '
+                  + '(1 day at month end). Raised again every 3 days until fixed.' })),
         ],
     },
     {
@@ -37813,17 +38496,7 @@ function sendRecycleReport() {
 function copyRecycleReport(button) {
     const { body } = _recycleReportCompose();
     navigator.clipboard.writeText(body).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!';
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        setTimeout(() => {
-            button.innerText = originalText;
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 2000);
+        _copyFlash(button);
     }).catch(() => alert('Could not copy automatically. Please select and copy the report manually.'));
 }
 
@@ -43265,8 +43938,9 @@ function _samIsMSM() {
 // One "everything" feed. Announcements + store notes get a permanent read;
 // reminders get a per-day dismiss (they re-surface tomorrow if still due). The
 // header's Mark-all-read clears whatever is currently active.
-// Two rows and then a scroll, on a phone only (user's call, 19 Aug). The deck is
-// a glance; twenty notifications turn the home page into a page of notifications.
+// Two rows and then a scroll on a phone, four on a tablet (user, 19 Aug and 17 Sep).
+// The deck is a glance; twenty notifications turn the home page into a page of
+// notifications.
 //
 // MEASURED rather than a fixed max-height in the stylesheet, because a feed row
 // is one line or five depending on the card — a snoozeable reminder with a
@@ -43278,10 +43952,19 @@ function _samCapFeed() {
     // Desktop puts the feed in a fixed-height card beside the rail and has its own
     // scroll; releasing the cap here is what makes this safe to call unconditionally.
     if (!_isMobileLayout()) { feed.style.maxHeight = ''; return; }
+    // Two rows on a phone, FOUR on a tablet (Ethan, 2026-09-17). Same reasoning
+    // on both — the deck is a glance, not a page of notifications — but the two
+    // was measured against a 390px phone, and a tablet has the vertical room to
+    // spare: at 1180x820 the card was showing two of five and stopping well short
+    // of the Command Center below it. Written as a count rather than a taller
+    // pixel cap so it stays honest to why this function measures at all: a row is
+    // one line or five depending on the card, so "four rows" is the only form of
+    // the rule that means the same thing on every feed.
+    const showRows = _isTabletLayout() ? 4 : 2;
     const rows = feed.querySelectorAll('.sam-ann');
-    if (rows.length <= 2) { feed.style.maxHeight = ''; return; }
+    if (rows.length <= showRows) { feed.style.maxHeight = ''; return; }
     const top = feed.getBoundingClientRect().top;
-    const cut = rows[1].getBoundingClientRect().bottom;
+    const cut = rows[showRows - 1].getBoundingClientRect().bottom;
     const pad = parseFloat(getComputedStyle(feed).paddingBottom) || 0;
     // + scrollTop, and this is the whole bug: getBoundingClientRect is measured
     // against the VIEWPORT, so once somebody has scrolled the feed to the bottom
@@ -43903,7 +44586,10 @@ function _canAssignGoalRoles() {
 // "Listing Goals" bar in the action menu: roster editor for anyone who can assign,
 // personal popup for everyone else.
 function openListingGoals() {
-    if (_canAssignGoalRoles()) toggleModal('listingGoalsModal');
+    // _lgpwSyncTabs before lgpwSetView: the sync can itself call lgpwSetView(false)
+    // to leave a view that is being cut, and doing it in this order means that only
+    // ever happens on a breakpoint crossing, never redundantly on every open.
+    if (_canAssignGoalRoles()) { _lgpwSyncTabs(); lgpwSetView(false); toggleModal('listingGoalsModal'); }
     else toggleModal('empGoalsModal');
 }
 
@@ -45623,8 +46309,22 @@ function _dmxLevelUp(history, target) {
         const k = w == null ? 'none' : (w.target && v >= w.target ? 'hit' : 'miss');
         // 3px floor so a zero week is still a visible mark, not a gap.
         const h = v == null ? 0 : Math.max(3, Math.round((v / top) * TRACK));
-        bars += '<div class="dmx-lu-w">'
-            + '<span class="dmx-lu-v dmx-lu-' + k + '">' + (v == null ? '&ndash;' : v) + '</span>'
+        // A week whose goal nobody set is graded against one carried in from an
+        // earlier week, which can turn a miss into a pass without anyone
+        // deciding it should. Marked here as well as on the store's own bars, so
+        // the DM sees the same caveat the manager does rather than the two
+        // reading the same week differently — which is what this whole change is
+        // about.
+        const stale = w != null && w.targetSource && w.targetSource !== 'set';
+        const tip = w == null ? ''
+            : ' title="' + escapeHtml(v + ' listed against a goal of ' + w.target
+                + (stale ? ' carried from ' + (w.targetSetFor ? _luWeekLabel(w.targetSetFor) : 'an earlier week')
+                           + ' — no goal was set for this one'
+                         : '')
+                + (Number.isFinite(w.efficiency) ? '. Staffed for ' + w.adjusted + ' (' + w.efficiency + '%).' : '.')) + '"';
+        bars += '<div class="dmx-lu-w"' + tip + '>'
+            + '<span class="dmx-lu-v dmx-lu-' + k + (stale ? ' dmx-lu-stale' : '') + '">'
+            + (v == null ? '&ndash;' : v) + (stale ? '<i class="dmx-lu-astk">*</i>' : '') + '</span>'
             + '<span class="dmx-lu-track"><i class="dmx-lu-' + k + '" style="height:' + h + 'px"></i></span>'
             + '<span class="dmx-lu-lab">' + labels[i] + '</span>'
             + '</div>';
@@ -46094,7 +46794,14 @@ function _dmxEfficiencyPane() {
         // at all, so the denominator is short and the ratio flatters. Flag it
         // rather than printing a number that reads as a verdict.
         const thin = r.assignedDays > 0 && r.assignedDays < (r.people.length * 4);
-        t += '<tr><td class="dmx-cl"><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
+        // Hours, Ceiling and Goal for this week were reconstructed from TODAY'S
+        // roster, because the week finished before capacity snapshots existed
+        // (migration 0093). They are the best available figures but they are not
+        // what the store was shown at the time, and they will move again if
+        // anyone is hired — so say so rather than let them pass as history.
+        const est = !!r.estimated;
+        t += '<tr' + (est ? ' class="dmx-tr-est"' : '') + '><td class="dmx-cl"><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
+            + (est ? '<span class="dmx-role dmx-role-est" title="This week ended before the app started saving each week’s roster, so Hours, Ceiling and Goal here are rebuilt from the roster as it stands TODAY — not the one the store actually had. Listed and Staffed For are real.">rebuilt</span>' : '')
             // Short form: "15 of 24 roles set" rendered wider than the column it
             // sits in and bled over both edges. The tooltip carries the sentence.
             + (thin ? '<span class="dmx-role" title="Roles were only set on '
@@ -48211,9 +48918,7 @@ function expCopyReport(button) {
     const { email, subject, body } = _expCompose();
     const text = 'To: ' + email + '\nSubject: ' + subject + '\n\n' + body;
     navigator.clipboard.writeText(text).then(() => {
-        const was = button.textContent;
-        button.textContent = 'Copied';
-        setTimeout(() => { button.textContent = was; }, 1600);
+        _copyFlash(button);
     }).catch(() => alert('Could not copy. Select the preview text and copy it manually.'));
 }
 window.expCopyReport = expCopyReport;
@@ -50275,10 +50980,7 @@ function lhToolCopy(button) {
     const fb = _lhToolFb;
     if (!fb || !fb.ask) return;
     navigator.clipboard.writeText(fb.ask).then(() => {
-        if (!button) return;
-        const was = button.textContent;
-        button.textContent = 'Copied';
-        setTimeout(() => { button.textContent = was; }, 1600);
+        _copyFlash(button);
     }).catch(() => _ltTell('Could Not Reach The Clipboard',
         'Your browser refused the copy. Select the notes above and copy them by hand.'));
 }
@@ -52819,7 +53521,24 @@ function _ddFit(host) {
     // control instead of clamping it. The feed filter is the reason the parent
     // clamp was removed in the first place; it does not get to be the reason it
     // breaks again.
-    host.style.minWidth = host.closest('.b2b-pcell')
+    // A LIST, not one selector, and this is the second entry on it. The Expense
+    // Report's Category control reproduced the B2B bug exactly (Ethan, 2026-09-17):
+    // "Shipping & Packaging Supplies" measures 224px, the field it sits in is
+    // 130px, and the face painted 86px across the Description input so its
+    // placeholder read "vas it for?" instead of "What was it for?". Same shape as
+    // "Apple" reading "pple" above, same cause, and the fix that was already
+    // written for it simply had not been pointed at this tool.
+    //
+    // WHEN TO ADD A SELECTOR HERE: the parent must have a DEFINITE width, so the
+    // percentage has a real number to resolve against. .b2b-pcell is a grid item
+    // with a fixed track; .exp-add-grid label is a flex item with a 130px
+    // flex-basis. Both qualify. A content-sized parent does NOT — see the
+    // .hub-select-wrap note above, where a percentage is the cyclic case and can
+    // collapse the control instead of clamping it. If you are unsure which kind
+    // you have, measure it; getting this wrong is a vanishing control, not a
+    // cosmetic slip.
+    const _DD_CLAMPED_SLOTS = '.b2b-pcell, .exp-add-grid label';
+    host.style.minWidth = host.closest(_DD_CLAMPED_SLOTS)
         ? 'min(' + want + 'px, 100%)'
         : want + 'px';
 }

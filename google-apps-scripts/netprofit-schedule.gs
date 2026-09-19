@@ -150,6 +150,72 @@ var NPS_WATCH_HOURS = [9, 15];
 var NPS_WATCH_MINUTE = 30;
 var NPS_FOLLOWUP_MIN = 20;
 
+// ⚠️ TWO STAMPS, BECAUSE A PASS HAS TWO HALVES (2026-09-17).
+//
+// NPS_OK_KEY used to be written as the LAST line of the pass, after the grid, the
+// health email, the summary strip, the "figures changed" report and the Sales
+// tab's YoY. From the day it was added until 2026-09-17 it was never written
+// once: the watchdog reported "last finished never" on every pass and restarted
+// every one. The 2pm pass on Sep 16 provably reached the report — its "figures
+// changed" email arrived — and still left no stamp, so something in the tail was
+// being killed at the six-minute wall, where no catch block runs and nothing
+// mails. Each restart then re-ran every collector at whatever hour the watchdog
+// fired, and on Sep 17 that landed on OVL's catalog refresh and timed OVL out.
+//
+// The watchdog exists to catch a tab that did not get REFRESHED, and the grid is
+// the refresh. So NPS_OK_KEY is now stamped the moment the grid is written and
+// the health email has gone, and a restart happens only if THAT did not happen.
+// The tail gets its own stamp, NPS_TAIL_KEY. If the grid is written and only the
+// tail is missing, the watchdog runs npsTailRecovery — the summary strip and YoY
+// again, no collectors, no restart of the refresh — and emails only if that
+// fails too.
+var NPS_TAIL_KEY = { morning: 'NPS_LAST_TAIL_MORNING', afternoon: 'NPS_LAST_TAIL_2PM' };
+var NPS_TAIL_RETRY_KEY = { morning: 'NPS_TAIL_RETRIED_MORNING', afternoon: 'NPS_TAIL_RETRIED_2PM' };
+
+// ⚠️ WHERE THE PASS GOT TO, WRITTEN AS IT GOES (2026-09-17). Apps Script's
+// execution log is readable only inside the editor, so a pass killed at the wall
+// used to leave nothing anybody else could see. Every phase now posts one row to
+// netprofit_runs (migration 0090) through the netprofit-runlog edge function, and
+// also records itself in NPS_PHASE_KEY so the watchdog's email can name the step
+// a pass stopped at without a network call. The last row of a run IS where it
+// stopped. A telemetry failure is logged and ignored — it must never be the thing
+// that fails the pass it is describing.
+var NPS_RUNLOG_URL = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/netprofit-runlog';
+var NPS_PHASE_KEY = { morning: 'NPS_LAST_PHASE_MORNING', afternoon: 'NPS_LAST_PHASE_2PM' };
+
+function _npsRun(key, trigger, today) {
+  var t0 = new Date().getTime();
+  return { id: today + ' ' + key + ' ' + t0, key: key, trigger: trigger, today: today, t0: t0 };
+}
+
+function _npsMark(run, phase, ok, detail) {
+  var ms = new Date().getTime() - run.t0;
+  try {
+    PropertiesService.getScriptProperties().setProperty(NPS_PHASE_KEY[run.key] || 'NPS_LAST_PHASE_OTHER',
+      run.today + ' ' + phase + ' at ' + Math.round(ms / 1000) + 's (' + run.trigger + ')');
+  } catch (e) { /* the run log below is the copy that matters */ }
+  try {
+    UrlFetchApp.fetch(NPS_RUNLOG_URL + '?secret=' + encodeURIComponent(NP_SECRET), {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ run_id: run.id, pass: run.key, trigger: run.trigger,
+        phase: phase, ok: ok !== false, elapsed_ms: ms, detail: detail || null })
+    });
+  } catch (e) {
+    Logger.log('  (run log unreachable at %s: %s)', phase, e);
+  }
+}
+
+// Which pass the watchdog is looking at, and whether it was restarted, from the
+// properties it already keeps. The one place a run's trigger label is decided.
+function _npsTriggerLabel(key, today) {
+  try {
+    var p = PropertiesService.getScriptProperties();
+    if (p.getProperty(NPS_RESTART_KEY[key]) === today
+        && p.getProperty(NPS_OK_KEY[key]) !== today) return 'restart';
+  } catch (e) { /* fall through */ }
+  return 'cron';
+}
+
 // ---------------------------------------------------------------------------
 // The close calendar. Mirrors monthCloseDay() in netprofit-collect/index.ts.
 // ---------------------------------------------------------------------------
@@ -242,6 +308,11 @@ function npsDailyRefresh(e) {
   // the column would never be written again, by anything, and Net Profit would
   // read high for the rest of the month with nothing to show why.
   NP_SKIP_SHIP = morning;
+  var passKey = morning ? 'morning' : 'afternoon';
+  var run = _npsRun(passKey, e && e.triggerUid ? _npsTriggerLabel(passKey, today) : 'manual', today);
+  // The writer's retry budget is measured from HERE, the start of the pass.
+  NP_PASS_T0 = run.t0;
+  _npsMark(run, 'start');
   Logger.log('=== DAILY REFRESH %s [%s] — month to date %s .. %s ===',
     today, pass, NP_FROM, NP_TO);
 
@@ -255,6 +326,7 @@ function npsDailyRefresh(e) {
     // nothing — and keep doing that, quietly, until somebody noticed the month
     // was empty. Rolling here happens when it is needed and cannot fire early.
     if (!_npsEnsureTab(ym)) {
+      _npsMark(run, 'no-tab', false, { month: ym });
       _npaSendFailure('The ' + pass.split(' ')[0].toLowerCase() + ' Net Profit refresh',
         'No tab "' + _npTabName(ym) + '", and no previous month to roll forward from.',
         'You — run npRollStatus to see what tabs exist, then npRollApply, or create '
@@ -265,11 +337,21 @@ function npsDailyRefresh(e) {
     // Snapshot BEFORE the write, so the alert can tell a figure that MOVED from
     // one being filled for the first time. Filling a day is not a change.
     var before = _npaSnapshot(ym);
+    _npsMark(run, 'snapshot');
 
     _npWrite(false);
+    _npsMark(run, 'grid-written', true, {
+      fetch: NP_LAST_FETCH,
+      health: NP_HEALTH.map(function (i) { return i.level + ':' + i.store + ':' + i.kind; })
+    });
     // Straight after the write, before anything else can throw: what the write
     // found wrong goes out even if the summary pass below fails.
     _npaSendHealth(NP_HEALTH, ym, pass.split(' ')[0].toLowerCase() + ' daily refresh');
+
+    // THE REFRESH IS DONE. Stamped here, not at the end — see NPS_TAIL_KEY for
+    // the two weeks of "last finished never" that came from stamping it last.
+    PropertiesService.getScriptProperties().setProperty(NPS_OK_KEY[passKey], today);
+    _npsMark(run, 'health-sent');
     // The summary strip second, always: Days Thru is DERIVED from the last day
     // carrying Sales, so running it before the grid is written would measure
     // yesterday's sheet and leave every Tracking figure a day behind.
@@ -281,7 +363,9 @@ function npsDailyRefresh(e) {
     // which are fast but not free — hence 5 minutes rather than 6.
     NPX_BUDGET_MS = Math.max(30000, 300000 - (new Date().getTime() - npsT0));
     _npxSync(false);
+    _npsMark(run, 'summary-done');
     _npaReport(before, ym, pass.split(' ')[0].toLowerCase() + ' daily refresh');
+    _npsMark(run, 'report-done');
 
     // The SALES tab's YoY block — the one thing in this workbook that no job
     // owned, and which therefore compared September 2026 against August 2025 for
@@ -295,7 +379,9 @@ function npsDailyRefresh(e) {
     // differ, so on every day but the 1st this is a read and nothing else.
     try {
       _syoySync(false, ym);
+      _npsMark(run, 'yoy-done');
     } catch (yoyErr) {
+      _npsMark(run, 'yoy-failed', false, { error: String(yoyErr).slice(0, 500) });
       Logger.log('!! the Sales tab YoY pass failed: %s', yoyErr);
       _npaSendFailure('The Sales tab year-over-year figures',
         String(yoyErr && yoyErr.stack ? yoyErr.stack : yoyErr),
@@ -305,14 +391,16 @@ function npsDailyRefresh(e) {
           + 'months while you are there.');
     }
 
-    // The watchdog's evidence that this pass finished. LAST, so a pass that dies
-    // anywhere above — including at the six-minute wall — never stamps it.
-    PropertiesService.getScriptProperties()
-      .setProperty(morning ? NPS_OK_KEY.morning : NPS_OK_KEY.afternoon, today);
+    // The tail's evidence that it finished. LAST, so a pass whose summary, report
+    // or YoY dies — including at the six-minute wall — never stamps it, and the
+    // watchdog runs npsTailRecovery instead of restarting the whole refresh.
+    PropertiesService.getScriptProperties().setProperty(NPS_TAIL_KEY[passKey], today);
+    _npsMark(run, 'done');
 
     Logger.log('Daily refresh done. The current month stays open; it closes at 7pm on %s.',
       _npsMonthCloseDay(ym).date);
   } catch (e) {
+    _npsMark(run, 'failed', false, { error: String(e && e.stack ? e.stack : e).slice(0, 800) });
     _npaSendFailure('The ' + pass.split(' ')[0].toLowerCase() + ' Net Profit refresh', String(e && e.stack ? e.stack : e),
       'Claude — send this email on. The next run rewrites the whole month to '
         + 'date, so one missed run usually repairs itself; two in a row does not.');
@@ -426,6 +514,62 @@ function _npsWatchAction(today, hour, stamps, restarted) {
   return { late: late, action: restarted[late.key] === today ? 'give-up' : 'restart' };
 }
 
+// PURE, for tests/np-health-check.js: the refresh for the pass that is due DID
+// write the grid, but did its tail finish? 'tail' the first time it is found
+// unfinished today, 'give-up' (email) once npsTailRecovery has already been tried.
+// Returns null when the grid is not written — that is _npsWatchAction's case.
+function _npsTailAction(today, hour, stamps, tails, retried) {
+  if (hour < NPS_WATCH_HOURS[0]) return null;
+  var pm = hour >= NPS_WATCH_HOURS[1];
+  var key = pm ? 'afternoon' : 'morning';
+  if (stamps[key] !== today) return null;
+  if (tails[key] === today) return null;
+  return { key: key, pass: pm ? 'The 2pm Net Profit refresh' : 'The 8am Net Profit refresh',
+           action: retried[key] === today ? 'give-up' : 'tail' };
+}
+
+// The tail of a daily pass on its own: the summary strip and the Sales tab YoY,
+// with no collectors and no grid write. Started by the watchdog when a pass wrote
+// the grid but did not finish after it — see NPS_TAIL_KEY.
+//
+// ⚠️ NO "FIGURES CHANGED" REPORT. That email compares the sheet before and after
+// the grid write, and the "before" snapshot belonged to the pass that died. Taking
+// a new one here would compare the sheet with itself and always report nothing,
+// which is worse than not sending it — a quiet report reads as "nothing moved".
+function npsTailRecovery(e) {
+  if (e && e.triggerUid) _npsDeleteOneShot(e.triggerUid);
+  var today = _npsToday();
+  var ym = today.slice(0, 7);
+  NP_FROM = ym + '-01';
+  NP_TO = today;
+  var hour = Number(Utilities.formatDate(new Date(), NPS_TZ, 'H'));
+  var passKey = hour < NPS_DAILY_HOUR ? 'morning' : 'afternoon';
+  NP_SKIP_SHIP = passKey === 'morning';   // not written here, but never left stale
+  var run = _npsRun(passKey, 'tail-recovery', today);
+  _npsMark(run, 'start');
+  try {
+    NPX_BUDGET_MS = 300000;
+    _npxSync(false);
+    _npsMark(run, 'summary-done');
+    try {
+      _syoySync(false, ym);
+      _npsMark(run, 'yoy-done');
+    } catch (yoyErr) {
+      _npsMark(run, 'yoy-failed', false, { error: String(yoyErr).slice(0, 500) });
+      Logger.log('!! the Sales tab YoY pass failed again: %s', yoyErr);
+    }
+    PropertiesService.getScriptProperties().setProperty(NPS_TAIL_KEY[passKey], today);
+    _npsMark(run, 'done');
+    Logger.log('Tail recovery done: summary strip and YoY are current.');
+  } catch (err) {
+    _npsMark(run, 'failed', false, { error: String(err && err.stack ? err.stack : err).slice(0, 800) });
+    _npaSendFailure('The Net Profit summary strip (tail recovery)', String(err && err.stack ? err.stack : err),
+      'Claude — the grid is written and correct; the summary strip at the top is a pass behind. '
+        + 'The run log (netprofit_runs) shows the step; send this email on.');
+    throw err;
+  }
+}
+
 function npsWatchdog(e) {
   var props = PropertiesService.getScriptProperties();
   // The follow-up check is a one-off trigger; delete it so they do not pile up.
@@ -436,16 +580,54 @@ function npsWatchdog(e) {
   }
   var today = _npsToday();
   var hour = Number(Utilities.formatDate(new Date(), NPS_TZ, 'H'));
-  var got = _npsWatchAction(today, hour, {
-    morning: props.getProperty(NPS_OK_KEY.morning),
-    afternoon: props.getProperty(NPS_OK_KEY.afternoon)
-  }, {
-    morning: props.getProperty(NPS_RESTART_KEY.morning),
-    afternoon: props.getProperty(NPS_RESTART_KEY.afternoon)
-  });
-  if (!got) { Logger.log('Watchdog %s %s:00 — the pass that was due has finished.', today, hour); return; }
+  var pair = function (k) { return { morning: props.getProperty(k.morning), afternoon: props.getProperty(k.afternoon) }; };
+  var stamps = pair(NPS_OK_KEY);
+  var got = _npsWatchAction(today, hour, stamps, pair(NPS_RESTART_KEY));
+  if (!got) {
+    // The refresh itself is done. Did its tail — summary strip, report, YoY —
+    // finish too? See NPS_TAIL_KEY for why this is a separate question.
+    var tail = _npsTailAction(today, hour, stamps, pair(NPS_TAIL_KEY), pair(NPS_TAIL_RETRY_KEY));
+    if (!tail) { Logger.log('Watchdog %s %s:00 — the pass that was due has finished.', today, hour); return; }
+    var lastPhase = props.getProperty(NPS_PHASE_KEY[tail.key]) || '';
+    lastPhase = lastPhase.indexOf(today) === 0 ? lastPhase.slice(today.length + 1) : '(no step recorded today)';
+    if (tail.action === 'tail') {
+      // Silent on purpose. The grid — the figures — IS written; only the strip at
+      // the top and the Sales tab's YoY are a pass behind. Re-running those needs
+      // no collectors and nobody's attention, so it earns no email unless it fails.
+      props.setProperty(NPS_TAIL_RETRY_KEY[tail.key], today);
+      try {
+        ScriptApp.newTrigger('npsTailRecovery').timeBased().after(1000).create();
+        var tailFollow = ScriptApp.newTrigger('npsWatchdog').timeBased()
+          .after(NPS_FOLLOWUP_MIN * 60 * 1000).create();
+        props.setProperty(NPS_FOLLOWUP_UID_KEY, tailFollow.getUniqueId());
+        Logger.log('Watchdog: %s wrote the grid but its tail did not finish (last: %s) — '
+          + 'running npsTailRecovery.', tail.pass, lastPhase);
+      } catch (err) {
+        _npaSendFailure(tail.pass + ' (summary strip and YoY)',
+          'The figures on the grid were written, but the summary strip / YoY step did not '
+            + 'finish (last step recorded: ' + lastPhase + '), and the watchdog could not '
+            + 'create the trigger to finish it: ' + err,
+          'Claude — run npsTailRecovery from the editor. The grid itself does not need re-running.');
+      }
+      return;
+    }
+    _npaSendFailure(tail.pass + ' (summary strip and YoY)',
+      'The figures on the grid WERE written this pass and are correct. The step after it — '
+        + 'the summary strip, the "figures changed" report and the Sales tab YoY — did not '
+        + 'finish, and neither did the automatic retry. Last step recorded: ' + lastPhase + '.',
+      'Claude — the run log says exactly where it stopped: netprofit-runlog?hours=24, or '
+        + 'select * from netprofit_runs order by at desc. The strip and YoY stay a pass behind '
+        + 'until this is fixed; the grid does not.');
+    return;
+  }
   var late = got.late;
   var now = Utilities.formatDate(new Date(), NPS_TZ, 'h:mma');
+  // How far today's attempt got, so the email says WHERE it stopped instead of
+  // only that it did. Empty means the pass never started at all.
+  var reached = props.getProperty(NPS_PHASE_KEY[late.key]) || '';
+  reached = reached.indexOf(today) === 0
+    ? ' It got as far as: ' + reached.slice(today.length + 1) + '.'
+    : ' It never started today — the cron call or its one-off trigger did not run.';
   var cronJob = 'netprofit-' + (late.key === 'morning' ? '8am' : '2pm');
   Logger.log('Watchdog: %s has not finished today (last finished %s) — %s.',
     late.pass, late.last || 'never', got.action);
@@ -470,7 +652,7 @@ function npsWatchdog(e) {
     }
     _npaSendRestarted(late.pass,
       'Due at ' + late.dueAt + ' Central and not finished by ' + now + ' (last finished '
-        + (late.last || 'never') + '). The watchdog has started it again; it rewrites the '
+        + (late.last || 'never') + ').' + reached + ' The watchdog has started it again; it rewrites the '
         + 'whole month to date and takes two or three minutes. It checks again in '
         + NPS_FOLLOWUP_MIN + ' minutes and emails only if the restart did not finish either.',
       'Nobody, if no second email follows. If this arrives often, Claude — check '
@@ -481,7 +663,7 @@ function npsWatchdog(e) {
 
   _npaSendFailure(late.pass,
     'Due at ' + late.dueAt + ' Central and not finished by ' + now + '. The last one that '
-      + 'finished was on ' + (late.last || '(never recorded)') + '. The watchdog already '
+      + 'finished was on ' + (late.last || '(never recorded)') + '.' + reached + ' The watchdog already '
       + 'restarted it once today and the restart did not finish either — so this is not a '
       + 'missed cron call, the run itself is failing or being killed at the six-minute limit. '
       + 'If a separate "did not complete" email arrived for this pass, that is the cause.',
@@ -608,7 +790,8 @@ function npsRemoveTriggers() {
   var all = ScriptApp.getProjectTriggers(), n = 0;
   for (var i = 0; i < all.length; i++) {
     var f = all[i].getHandlerFunction();
-    if (f === 'npsDailyRefresh' || f === 'npsMonthClose' || f === 'npsWatchdog') {
+    if (f === 'npsDailyRefresh' || f === 'npsMonthClose' || f === 'npsWatchdog'
+        || f === 'npsTailRecovery') {
       ScriptApp.deleteTrigger(all[i]); n++;
     }
   }
