@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260918a">
+  <link rel="stylesheet" href="styles.css?v=20260920q">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260918a" defer></script>
+  <script src="speeks.js?v=20260920q" defer></script>
 </head>
 
 <body class="preload">
@@ -40,7 +40,7 @@
   
   <nav class="nav-bar">
     <a href="index.html" data-m="Quick Portal" class="nav-link active"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></i><span>QuickPortal</span></a>
-    <a data-mobile="hide" href="operations.html" data-m="Ops" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></i><span>Operations</span></a>
+    <a data-mobile="hide" data-tablet="show" href="operations.html" data-m="Ops" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></i><span>Operations</span></a>
     <a data-mobile="hide" href="workspace.html" data-m="Work" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></i><span>Workspace</span></a>
     <a href="docs.html" data-m="Processes" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></i><span>Processes & Policies</span></a>
     <a href="stats.html" data-m="Stats" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg></i><span>Stats & Awards</span></a>
@@ -76,9 +76,9 @@
         <a href="#" onclick="toggleIdeaModal(); return false;" class="idea-btn action-btn" data-tip="Have an Idea?"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z"/></svg></a>
       <div class="action-btn" onclick="toggleModal('quickMsgDropdown'); loadQuickMessages();" data-tip="Quick Messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
       <div class="action-btn" onclick="toggleModal('hotkeysDropdown')" data-mobile="hide" data-tip="Hotkeys &amp; Commands"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 3-3z"/></svg></div>
-      <div class="action-btn" onclick="toggleCalendar()" data-mobile="hide" data-tip="Strategic Calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
+      <div class="action-btn" onclick="toggleCalendar()" data-mobile="hide" data-tablet="show" data-tip="Strategic Calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
       <!-- The Announcements bell stood here. Removed 2026-09-07: the Feed Hub it opened is now reached from the QuickPortal deck, which every role sees, so a second door in the nav was one too many. #notifDropdown itself is still on this page — openHubTo() and the realtime ping both use it. -->
-      <div class="action-btn" id="notifySettingsBtn" data-feature="nav-settings" data-mobile="hide" onclick="openSettings()" data-tip="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+      <div class="action-btn" id="notifySettingsBtn" data-feature="nav-settings" data-mobile="hide" data-tablet="show" onclick="openSettings()" data-tip="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
     </div>
     <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
@@ -729,7 +729,7 @@
             <span class="sam-m-body"><span class="sam-m-t">Manager Checklist</span><span class="sam-m-s" id="samClSub">Open your daily tasks</span><span class="sam-m-bar"><i id="samClFill" style="width:0%"></i></span></span>
             <span class="sam-m-val" id="samClVal"></span>
           </button>
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-mobile="hide" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();">
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-mobile="hide" data-tablet="show" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();">
             <span class="sam-mico violet"><svg viewBox="0 0 24 24"><path d="M3 21v-4a4 4 0 0 1 4-4h5M14 4l6 6M17 7l-9 9-4 1 1-4 9-9a2.8 2.8 0 0 1 4 0 2.8 2.8 0 0 1 0 4z"/></svg></span>
             <span class="sam-m-body"><span class="sam-m-t">Cleaning Checklist</span><span class="sam-m-s" id="samAuditSub">Open today's cleaning list</span><span class="sam-m-bar"><i id="samAuditFill" style="width:0%"></i></span></span>
             <span class="sam-m-val" id="samAuditVal"></span>
@@ -737,7 +737,7 @@
           <!-- Order matters: the three side panels (Checklist, Cleaning, Goals &
                Initiatives) sit together as 1-2-3, then Listing Goals — which opens
                a modal, not a panel — comes last. -->
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-training" data-mobile="hide" data-feature="widget-goals-panel" onclick="toggleGoalsPanel(event)">
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-training" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" onclick="toggleGoalsPanel(event)">
             <span class="sam-mico amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></span>
             <span class="sam-m-body"><span class="sam-m-t">Goals &amp; Initiatives</span><span class="sam-m-s">Team goals &amp; initiatives</span></span>
             <span class="sam-m-chev"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></span>
@@ -757,12 +757,12 @@
                rendered order comes out the same either way.
                Roles mirror exactly what the dashboard panels these replace had:
                Cleaning and Listing were DM+CEO, Monthly Goals was DM-only. -->
-          <button class="sam-mini dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-feature="widget-dm-audit" onclick="openDmCleaning()">
+          <button class="sam-mini dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-tablet="show" data-feature="widget-dm-audit" onclick="openDmCleaning()">
             <span class="sam-mico violet"><svg viewBox="0 0 24 24"><path d="M3 21v-4a4 4 0 0 1 4-4h5M14 4l6 6M17 7l-9 9-4 1 1-4 9-9a2.8 2.8 0 0 1 4 0 2.8 2.8 0 0 1 0 4z"/></svg></span>
             <span class="sam-m-body"><span class="sam-m-t">Cleaning Checklist</span><span class="sam-m-s" id="samDmAuditSub">All five stores today</span><span class="sam-m-bar"><i id="samDmAuditFill" style="width:0%"></i></span></span>
             <span class="sam-m-val" id="samDmAuditVal"></span>
           </button>
-          <button class="sam-mini dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="widget-dm-goals" onclick="openDmMonthlyGoals()">
+          <button class="sam-mini dynamic-module-flex role-district-manager" data-mobile="hide" data-tablet="show" data-feature="widget-dm-goals" onclick="openDmMonthlyGoals()">
             <span class="sam-mico amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></span>
             <span class="sam-m-body"><span class="sam-m-t">Monthly Team Goals</span><span class="sam-m-s" id="samDmGoalsSub">Team goals &amp; initiatives</span></span>
             <span class="sam-m-val" id="samDmGoalsVal"></span>
@@ -981,8 +981,8 @@
                      became its "Tracking to month-end" strip. One fewer tab, one fewer
                      Feature Access switch, and no figure lost. -->
                 <button id="cc-tab-live" class="toggle-btn role-manager role-owner-manager role-employee" type="button" onclick="switchCommandTab('live')" data-feature="cc-live">Live Dashboard</button>
-                <button id="cc-tab-ebay" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('ebay')" data-mobile="hide" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
-                <button id="cc-tab-scorecard" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('scorecard')" data-mobile="hide" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
+                <button id="cc-tab-ebay" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('ebay')" data-mobile="hide" data-tablet="show" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
+                <button id="cc-tab-scorecard" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('scorecard')" data-mobile="hide" data-tablet="show" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
                 <button id="cc-tab-kpis" class="toggle-btn role-employee" type="button" onclick="switchCommandTab('kpis')" data-mobile="hide" data-feature="cc-kpis">Weekly KPIs<span class="cc-updot" id="cc-updot-kpis"></span></button>
             </div>
             <div class="cc-tabbar-right">
@@ -1017,12 +1017,12 @@
                  the three health readouts. Hidden until the sheet carries the numbers
                  (see _ccSum callers) so it is not an eighth "—" during the rollout. -->
             <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-reviews" data-feature="cc-live" hidden><div class="cc-sum-k">Google Reviews &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-ebay" data-mobile="hide" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-score" data-mobile="hide" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-ebay" data-mobile="hide" data-tablet="show" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-score" data-mobile="hide" data-tablet="show" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
             <!-- The collapsed line shows the REAL PayMore audit, not the practice
                  one: on a shut card there is room for one audit figure, and it
                  should be the one the store is actually held to (Ethan). -->
-            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-audit" data-mobile="hide" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-audit" data-mobile="hide" data-tablet="show" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
         </div>
 
         <div class="cc-strips">
@@ -1032,7 +1032,7 @@
                  widget sat below this one; it still holds, and it is why the district
                  card can reuse these renderers unchanged. -->
             <div class="cc-strip s4 lv-strip role-manager role-owner-manager role-employee" id="cc-strip-live" data-feature="cc-live"></div>
-            <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-scorecard" data-mobile="hide" data-feature="cc-scorecard">
+            <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-scorecard" data-mobile="hide" data-tablet="show" data-feature="cc-scorecard">
                 <!-- The two audits sit together, then the scorecard. "Audit
                      Standing" used to be the third cell, saying On Target /
                      Passing / Below Pass about the SPEEKS audit alone — with two
@@ -1043,7 +1043,7 @@
                 <div class="cc-cell" id="sh-score-paudit"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="sh-score-mktg"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
             </div>
-            <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-ebay" data-mobile="hide" data-feature="cc-ebay">
+            <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-ebay" data-mobile="hide" data-tablet="show" data-feature="cc-ebay">
                 <div class="cc-cell" id="sh-score-ebay"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="cc-ebay-perf"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="cc-ebay-top"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
@@ -1055,11 +1055,11 @@
             <div class="cc-panel lv-panel role-manager role-owner-manager role-employee" id="cc-panel-live" data-feature="cc-live">
                 <div class="lv-detail"><div class="status-message">Syncing live sales…</div></div>
             </div>
-            <div class="cc-panel role-manager role-owner-manager" id="cc-panel-scorecard" data-mobile="hide" data-feature="cc-scorecard">
+            <div class="cc-panel role-manager role-owner-manager" id="cc-panel-scorecard" data-mobile="hide" data-tablet="show" data-feature="cc-scorecard">
                 <div id="sh-panel-audit"><div class="status-message">Syncing Data...</div></div>
                 <div id="sh-panel-mktg" class="sh-mktg-block"></div>
             </div>
-            <div class="cc-panel role-manager role-owner-manager" id="cc-panel-ebay" data-mobile="hide" data-feature="cc-ebay">
+            <div class="cc-panel role-manager role-owner-manager" id="cc-panel-ebay" data-mobile="hide" data-tablet="show" data-feature="cc-ebay">
                 <div id="sh-panel-ebay"><div class="status-message">Syncing Data...</div></div>
             </div>
 
@@ -1111,9 +1111,9 @@
       <div class="cc-tabbar">
           <div class="ew-seg cc-seg">
               <button id="dc-tab-live" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('live')" data-feature="widget-district-live">Live Dashboard</button>
-              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" type="button" onclick="switchDistrictTab('stores')">Store Breakdown</button>
-              <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
-              <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" type="button" onclick="switchDistrictTab('scorecard')">Scorecard</button>
+              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('stores')">Store Breakdown</button>
+              <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
+              <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('scorecard')">Scorecard</button>
           </div>
           <div class="cc-tabbar-right">
               <button id="dc-collapse" class="cc-collapse" type="button" onclick="collapseDistrict()" style="display:none;">&#9650; Summary</button>
@@ -1132,9 +1132,9 @@
           <div class="cc-sum" id="dc-sum-refunds"><div class="cc-sum-k">Refunds &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-goal"><div class="cc-sum-k">Company Tracking to Goal <span class="cc-sum-thru">Through Yesterday</span></div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-reviews" hidden><div class="cc-sum-k">Google Reviews &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-ebay" data-mobile="hide"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-score" data-mobile="hide"><div class="cc-sum-k">Scorecard &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-audit" data-mobile="hide"><div class="cc-sum-k">PayMore Audit &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-ebay" data-mobile="hide" data-tablet="show"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-score" data-mobile="hide" data-tablet="show"><div class="cc-sum-k">Scorecard &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-audit" data-mobile="hide" data-tablet="show"><div class="cc-sum-k">PayMore Audit &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
       </div>
 
       <div class="cc-body">
@@ -1160,11 +1160,11 @@
               </div>
           </div>
 
-          <div class="cc-panel" id="dc-panel-ebay" data-mobile="hide">
+          <div class="cc-panel" id="dc-panel-ebay" data-mobile="hide" data-tablet="show">
               <div id="dc-ebay-body"><div class="status-message">Syncing the district&hellip;</div></div>
           </div>
 
-          <div class="cc-panel" id="dc-panel-scorecard" data-mobile="hide">
+          <div class="cc-panel" id="dc-panel-scorecard" data-mobile="hide" data-tablet="show">
               <div id="dc-score-body"><div class="status-message">Syncing the district&hellip;</div></div>
           </div>
 
@@ -1173,7 +1173,7 @@
                now (#dmGoalsModal, #dmListingModal, #dmCleaningModal).
                Sits second, right after Live: it is the tab a DM opens most, and the
                one the eBay and Scorecard rows drill into. -->
-          <div class="cc-panel" id="dc-panel-stores" data-mobile="hide">
+          <div class="cc-panel" id="dc-panel-stores" data-mobile="hide" data-tablet="show">
               <div id="district-master-body">
                   <div class="dcc-empty">Syncing the district&hellip;</div>
               </div>
@@ -1459,7 +1459,7 @@
     <div class="manage-content" id="audit-breakdown-body"></div>
 </div>
 
-<div id="goalsSidePanel" data-mobile="hide" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
+<div id="goalsSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
     <div class="gi-panel-header">
         <div class="gi-panel-header-row">
             <div style="display: flex; align-items: center; gap: 10px;">
@@ -1533,7 +1533,7 @@
     </div>
 </div>
 
-<div id="auditSidePanel" data-mobile="hide" data-feature="widget-audit-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
+<div id="auditSidePanel" data-mobile="hide" data-tablet="show" data-feature="widget-audit-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0;">Cleaning Checklist</h3>
@@ -2108,24 +2108,24 @@
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-mocd role-owner-manager">
       <div class="tools-group-label">Content</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-mocd role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></span>Announcements</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-patch-notes" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></span>Patch Notes</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-tablet="show" data-feature="tool-patch-notes" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></span>Patch Notes</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo">
       <div class="tools-group-label">Store Ops</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-feature="tool-submit-scores" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></span>Submit Scores</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-tablet="show" data-feature="tool-submit-scores" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></span>Submit Scores</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manager-checklist" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></span>Manager Checklist</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-variance-report" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></span>Submit Variance Report</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-mobile="hide" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></span>Send Store Comment</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-feature="tool-store-comment-drafts" onclick="_closeToolsPanel(); openDailyBriefReview();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>Daily Store Messages</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></span>Send Store Comment</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-mobile="hide" data-tablet="show" data-feature="tool-store-comment-drafts" onclick="_closeToolsPanel(); openDailyBriefReview();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>Daily Store Messages</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
       <div class="tools-group-label">Orders</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-box-order" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></span>Box Order</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></span>Recycle Inventory</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-manager role-assistant-manager" data-mobile="hide" data-feature="tool-preferred-request" onclick="_closeToolsPanel(); togglePreferredPurchases();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
-      <a class="tools-item dynamic-module-flex role-owner-manager" data-mobile="hide" data-feature="tool-preferred-approve" onclick="_closeToolsPanel(); openPreferredOwner();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/><polyline points="9 15 11 17 15 13"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-manager role-assistant-manager" data-mobile="hide" data-tablet="show" data-feature="tool-preferred-request" onclick="_closeToolsPanel(); togglePreferredPurchases();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
+      <a class="tools-item dynamic-module-flex role-owner-manager" data-mobile="hide" data-tablet="show" data-feature="tool-preferred-approve" onclick="_closeToolsPanel(); openPreferredOwner();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/><polyline points="9 15 11 17 15 13"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager role-multistore-manager">

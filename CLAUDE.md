@@ -58,7 +58,7 @@ makes a stale map wrong in a new way; it needs regenerating from the banners.
 | `workspace.html` | Analytics workspace — Monthly Brief, Store KPIs, Variance. |
 | `stats.html` | Stats/reporting page. |
 | `docs.html` | *Not* developer docs — the in-app Processes & Policies library (CMS-driven). |
-| `tv.html` | Lobby/TV display. |
+| `tv.html` | Retired. A redirect stub to `index.html`, kept only for the five wall TVs still bookmarked to it. The shop-floor board is now the Command Center card on the QuickPortal — see `STORE_BOARD_FEATURES`. |
 | `speeks.js` | The entire front end. See `docs/modules/README.md`. |
 | `styles.css` | ~970 KB, same monolithic story. |
 | `xlsx.full.min.js` | Vendored SheetJS. Third-party — don't edit. |

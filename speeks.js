@@ -41,9 +41,9 @@
 // at the point of display.
 const APP_VERSION = '3.8.7';
 
-// Every .version-tag on the page, not the first: tv.html has one in the top nav
-// and the app pages have one in the sidebar greeting stack, and a page is free
-// to grow a second without needing to touch this.
+// Every .version-tag on the page, not the first: a page is free to grow a second
+// without needing to touch this, and one did — the shop-floor board had one in
+// its top nav while the app pages have one in the sidebar greeting stack.
 function _stampVersion() {
     document.querySelectorAll('.version-tag').forEach(function (el) {
         el.textContent = `v${APP_VERSION}`;
@@ -1798,6 +1798,39 @@ function _syncLayout() {
     const totalTop = navH + tickerH;
     if (ticker) ticker.style.top = navH + 'px';
     document.documentElement.style.setProperty('--panel-top', totalTop + 'px');
+
+    // --tabbar-h: the BOTTOM bar, measured the same way the top one is.
+    //
+    // The side panels hang 10px below the nav and stop 10px above the tab bar,
+    // and until now only the top half of that was honest: --panel-top was
+    // measured, while the bottom cleared a hard-coded 61px I had counted off the
+    // bar's own rules (6 + a 48px tap target + 6 + a 1px border). That is the
+    // right number today and only today. It is wrong the moment the bar is a
+    // different height than I assumed — a larger Dynamic Type setting on iPadOS,
+    // a label wrapping to two lines at some width, a fourth link added to the
+    // bar, or any device whose home-indicator inset is not what the emulator
+    // reported. Measuring it means the panel fits between the two bars on any
+    // iPad, at any text size, without anyone having to come back and re-count
+    // (Ethan, 2026-09-19: "no matter the size of the iPad").
+    //
+    // ⚠️ THE MEASURED HEIGHT ALREADY CONTAINS THE SAFE-AREA INSET. The bar pads
+    // its own foot with `calc(6px + env(safe-area-inset-bottom))`, and a border
+    // box includes padding — so the CSS must NOT subtract env() again on top of
+    // this, or every notched device loses that strip twice. The fallback in the
+    // stylesheet is the one place env() still appears, because that branch has
+    // no measurement to have included it.
+    //
+    // position:fixed is the test for "this is the bottom bar", not a width query.
+    // The same .nav-bar element is the inline row of links inside the header on
+    // desktop, where its height means nothing to a panel; only the compact build
+    // lifts it out and pins it to the floor. Writing 0 there keeps the variable
+    // meaningful everywhere instead of publishing a number that is true in one
+    // layout and misleading in the other.
+    const bar = nav.querySelector('.nav-bar');
+    const barFixed = !!bar && window.getComputedStyle(bar).position === 'fixed';
+    const barH = barFixed ? Math.round(bar.getBoundingClientRect().height) : 0;
+    if (barH > 0) document.documentElement.style.setProperty('--tabbar-h', barH + 'px');
+    else document.documentElement.style.removeProperty('--tabbar-h');
 }
 
 // Every right-hand side panel (Tools, Checklist, Goals) hangs off --panel-top,
@@ -1824,7 +1857,18 @@ function initLayoutSync() {
     // so measure once more after layout rather than trusting the first read.
     requestAnimationFrame(_syncLayout);
     const nav = document.querySelector('.top-nav');
-    if (nav && window.ResizeObserver) new ResizeObserver(_syncLayout).observe(nav);
+    // BOTH bars, one observer. Watching .top-nav alone cannot see the tab bar
+    // change size: in the compact build the bar is position:fixed, so it is out
+    // of its parent's flow and the header's border box never moves when the bar
+    // grows. That is precisely the case this is here for — a label wrapping, a
+    // larger Dynamic Type setting — so it has to be observed in its own right or
+    // --tabbar-h would be measured once at load and then quietly go stale.
+    if (window.ResizeObserver) {
+        const ro = new ResizeObserver(_syncLayout);
+        if (nav) ro.observe(nav);
+        const bar = nav && nav.querySelector('.nav-bar');
+        if (bar) ro.observe(bar);
+    }
     window.addEventListener('resize', _syncLayout);
 }
 
@@ -2959,32 +3003,31 @@ function handlePINAutoTrigger() {
     }
 }
 
-// ── The Store role: a shop-floor display, not a person ──────────────────────
+// ── The Store role: a shared screen, on the ordinary pages ──────────────────
 //
-// One account per store, signed in on a TV on the sales floor. It is not someone
-// with a narrow set of permissions — it is a screen, so it gets exactly one page
-// and is kept on it. That is a redirect rather than a pile of role classes for
-// the same reason tv.html is its own file: a board that can only ever render one
-// card cannot accidentally show payroll to a customer.
+// One account per store, signed in on the TV on the sales floor and on the iPad
+// at the picture station. It is not a person, so it is not given a person's site
+// — but it is no longer given a site of its own either.
 //
-// Deliberately NOT a security boundary. The role sees what any signed-in pin
-// sees (see scopeFor in shopify-live); this only decides where it lands.
-const TV_PAGE = 'tv.html';
+// IT USED TO HAVE ONE. tv.html was a separate page and every other URL redirected
+// this role onto it, on the reasoning that a board which can only render one card
+// cannot accidentally show payroll to a customer. Then the picture station needed
+// Operations too, and keeping the redirect meant punching a hole in it, marking
+// one page as an exception, and giving the board a link back to itself. Ethan,
+// 2026-09-20: "What's currently on the store accounts should just be a version of
+// Quick Portal and have the tab there and then we just add operations tab with
+// just picture guide. I think we over engineered this from the start."
+//
+// He was right, and the thing that made the redirect unnecessary is the thing
+// that was built alongside it: STORE_BOARD_FEATURES. Once visibility for this
+// role is a list rather than a default, the board is safe on any page in the
+// site, because every page shows it the same three surfaces. The redirect was
+// guarding a door in a wall that no longer had a room behind it.
+//
+// Still deliberately NOT a security boundary. The role sees what any signed-in
+// pin sees (see scopeFor in shopify-live); this decides what is on the screen.
 function _tvIsBoardRole() {
     return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'store';
-}
-function _tvOnBoardPage() {
-    return /(^|\/)tv\.html$/i.test(String(window.location.pathname || ''));
-}
-// Returns true when it has started navigating — callers must stop what they were
-// doing, because the rest of a page init is pointless mid-redirect.
-function _tvGate() {
-    if (!_tvIsBoardRole() || _tvOnBoardPage()) return false;
-    // replace(), not href: nobody is standing at the TV pressing Back, and a
-    // history entry per load would let a stray remote-control press wander off
-    // the board with no way back.
-    window.location.replace(TV_PAGE);
-    return true;
 }
 
 // The board's whole init. A screen is not a session: it has one card, nobody to
@@ -3078,17 +3121,11 @@ async function checkPIN() {
             sessionStorage.setItem('speeksUserOnboardedAt', matched.onboarded_at || '');
 
             // The foundation of the nightly usage report: without this there is no
-            // record anywhere that a person opened the site at all. Recorded above
-            // the TV gate on purpose — board sessions are logged and filtered out
-            // when the report runs, rather than being dropped at source where we
-            // could never tell a quiet store from a broken beacon.
+            // record anywhere that a person opened the site at all. Board sign-ins
+            // are logged and filtered out when the report runs, rather than being
+            // dropped at source where we could never tell a quiet store from a
+            // broken beacon.
             trackUsage('signin', 'session', _usageLabel('session'));
-
-            // A shop-floor board signs in on the login page like everyone else and
-            // is sent straight to its own page. Before the dashboard init below, not
-            // after: there is no point building a QuickPortal nobody will see, and a
-            // half-built one is what would flash on the TV on the way past.
-            if (_tvGate()) return;
 
             // The board this page fetched at load was built with nobody signed in,
             // so every announcement counted as unread — the priority banner and
@@ -3117,6 +3154,16 @@ async function checkPIN() {
 
             closeAllModals();
             applyRoleBasedUI();
+
+            // A board takes the same small init here as it does on a reload, for
+            // the same reason — see the board branch in the page-load handler.
+            // Without this the ONE path that starts a board's day would be the
+            // one path that starts every poller on it.
+            if (_tvIsBoardRole()) {
+                if (document.getElementById('ccWidget')) initBoardPage();
+                if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
+                return;
+            }
 
             if (typeof initDashboardData === 'function') initDashboardData();
             initTicker();
@@ -7978,6 +8025,20 @@ const _pgEsc = s => String(s == null ? '' : s)
 const PG_EDIT_ROLES = new Set(['district manager', 'ceo']);
 
 function pgCanEdit() {
+    // THE EDITOR IS A DESKTOP TOOL. Ethan, 2026-09-20, bringing the guide back on
+    // a tablet: "we don't need the edit part for DM, just the view only version
+    // like every other role sees." It is a two-pane admin — a category rail, a
+    // shot list, per-shot photo swaps — and a lister holding an iPad is reading
+    // the board, not rebuilding it.
+    //
+    // HERE rather than on the button, because the button is not the only door.
+    // The rail's "New category" is drawn by pgRender() long after any sweep has
+    // run, the empty-state copy invites you to "Open Edit", and pgOpenAdmin() is
+    // reachable from both. One answer, and everything downstream follows it —
+    // which is the same reason PG_EDIT_ROLES exists instead of three role lists.
+    // A device is not a "who", so this does not muddy that question, and the
+    // edge function still enforces the role on every write regardless.
+    if (typeof _isMobileLayout === 'function' && _isMobileLayout()) return false;
     if (!PG_EDIT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim())) return false;
     // Feature Access as well as the role. The Edit BUTTON carries
     // data-feature="tool-picture-manage" and applyRoleBasedUI hides it, but the
@@ -9269,14 +9330,45 @@ function initOperations() {
     let initial = sign ? 'b2b'
         : hash === 'categories' ? 'ebay'
         : ['marginguide', 'pictureguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
-    const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
+    // COMPUTED display, not the inline one. The fallback below was written for
+    // Feature Access, which writes `display: none !important` onto the element —
+    // but the mobile curation cuts a plain [data-feature] tab from a STYLESHEET
+    // and leaves style.display empty, so an inline test reads every cut tab as
+    // visible. On a tablet that landed the page on SPEEKS Connect, which is cut,
+    // and drew an empty Operations page with a tab strip above it.
+    //
+    // getComputedStyle reports the element's OWN computed display even while an
+    // ancestor is hidden (.main-content is, behind the auth gate, when this
+    // runs), so it is safe this early. Same shape as _ccOpenDefaultTab.
+    const tabVisible = id => {
+        const b = document.getElementById(id);
+        return !!b && !b.hidden && getComputedStyle(b).display !== 'none';
+    };
     if (!tabVisible('ops-tab-' + initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ops-tab-"]'))
-            .find(b => b.style.display !== 'none' && !b.hidden);
+            .find(b => tabVisible(b.id));
         if (firstVisible) initial = firstVisible.id.replace('ops-tab-', '');
     }
     switchOperationsTab(initial);
     if (hash === 'categories') _ecMarkView('cats');
+
+    // A TAB STRIP WITH ONE TAB IS A LABEL THAT LOOKS CLICKABLE. Ethan saw it on
+    // the picture-station iPad, which reaches exactly one Operations tab: a green
+    // underlined "Picture Guide" sitting above a panel whose heading also says
+    // Picture Guide, with nothing to switch to. Every other role that ends up
+    // with one visible tab — an employee on a tablet, anyone whose access has
+    // been narrowed in Feature Access — had the same thing and nobody had
+    // noticed, so this is not a board rule and is not written as one.
+    //
+    // Counted from the computed display, the same as the fallback above, because
+    // the stylesheet is what cuts a tab on a tablet and it leaves style.display
+    // empty while doing it.
+    const strip = document.querySelector('.ws-subtabs');
+    if (strip) {
+        const shown = Array.from(strip.querySelectorAll('.ws-tab'))
+            .filter(b => getComputedStyle(b).display !== 'none');
+        strip.style.display = shown.length > 1 ? '' : 'none';
+    }
 }
 
 function _kpiStartEdit(periodDate) {
@@ -11574,7 +11666,13 @@ function _tabSwitch(cfg, tab) {
     const p = cfg.prefix;
     const widget = document.getElementById(cfg.widget);
     const btn = document.getElementById(p + '-tab-' + tab);
-    const collapse = btn && btn.classList.contains('active'); // clicking the open tab closes it
+    // Clicking the open tab closes it — ON A DESKTOP, where closing lands you on
+    // the summary. Every compact screen cuts that summary, so the same tap would
+    // leave a card with nothing in it at all: no panel, no strip, no summary, and
+    // (since the "▴ Summary" control is cut too) nothing to press to get back.
+    // A tab there is a selector, not a toggle, and the open one is simply inert.
+    const compact = typeof _isMobileLayout === 'function' && _isMobileLayout();
+    const collapse = !compact && !!btn && btn.classList.contains('active');
 
     cfg.tabs().forEach(t => {
         const on = !collapse && t === tab;
@@ -11713,38 +11811,130 @@ function _reconcileCommandWidgets() {
     // Nothing is lost by not opening: every panel's data is fetched on page load,
     // not on tab open (see the setTimeout block in the post-login sequence), and
     // switchCommandTab is purely presentational. The summary fills either way.
+    //
+    // ...ON A DESKTOP. EVERY COMPACT SCREEN OPENS ONE, because the summary that
+    // argument rests on is not drawn there: the compact layer cuts .cc-summary
+    // as "seven cells restating the card below it". A phone also loses the tab
+    // bar, so with nothing open the card was its own title and 68px of it —
+    // measured — with no control to reach anything. A tablet keeps the bar but
+    // made the same trade for the same reason, on Ethan's call (2026-09-19: "I
+    // would get rid of the summary option for tablet. Just have it default to
+    // live dashboard"), so both land on the first tab a role can see.
+    _ccSyncCompactOpen();
+    _ccSyncLoneTab();
 }
 
-// Kept as the one-line way back to opening on a tab, for either board, if that is
-// ever wanted again — see _reconcileCommandWidgets for why neither calls it.
+// A SEGMENTED CONTROL WITH ONE SEGMENT IS A LABEL THAT LOOKS CLICKABLE. The same
+// rule the Operations tab strip gets in initOperations, and it arrived for the
+// same reason: a store account sees exactly one Command Center tab, so the wall
+// showed a lone "Live Dashboard" pill above a panel already headed Live Dashboard.
+// It is not a board rule — anyone Feature Access has narrowed to one tab had it
+// too, and nobody had looked.
+//
+// Only when that one tab is OPEN. A lone tab that is still shut is the only way
+// into the panel behind it, so hiding it there would be how a card becomes
+// unopenable — which is the failure this is supposed to prevent, not cause.
+function _ccSyncLoneTab() {
+    [document.getElementById('ccWidget'), document.getElementById('dcWidget')].forEach(w => {
+        const seg = w && w.querySelector('.cc-seg');
+        if (!seg) return;
+        const shown = Array.from(seg.querySelectorAll('.toggle-btn'))
+            .filter(b => getComputedStyle(b).display !== 'none');
+        const lone = shown.length === 1 && shown[0].classList.contains('active');
+        seg.style.display = (shown.length && !lone) ? '' : 'none';
+    });
+}
+
+// "Does this screen need a tab open for the board to show anything?" Yes
+// wherever the summary is cut, which is the whole compact band — phone and
+// tablet alike — and no on a desktop, where the summary IS the opening view.
+// Called on load (above) and again on each band crossing, because a window
+// dragged narrow arrives in the collapsed state after load and nothing else
+// would notice.
+function _ccSyncCompactOpen() {
+    const compact = typeof _isMobileLayout === 'function' && _isMobileLayout();
+    // ...and a board, at any width. The summary's case rests on "anything more
+    // specific is one click away", and a screen on a wall has nobody to click it.
+    // The old shop-floor page opened straight onto the live card; this is that
+    // behaviour kept, now that the board is this card on the ordinary page.
+    if (!compact && !_tvIsBoardRole()) return;
+    _ccOpenDefaultTab();
+    _dcOpenDefaultTab();
+}
+
+// Opening on a tab, for either board. A phone goes through here on every load
+// (via _ccSyncCompactOpen); a desktop and a tablet deliberately do not — see
+// _reconcileCommandWidgets for why they land on the summary instead.
 //
 // Picks the first VISIBLE tab rather than assuming Live is there: Feature Access
 // can switch cc-live off per role or per person, and a role without it would
 // otherwise land on a transparent panel and read as a broken widget.
 //
-// One-shot. _reconcileCommandWidgets runs again whenever feature overrides are
-// re-applied, and re-opening a widget the manager deliberately collapsed would be
-// the panel arguing with them.
-var _ccDefaultOpened = false;
-var _dcDefaultOpened = false;
+// ONCE PER CARD, ASKED OF THE CARD. _reconcileCommandWidgets runs again whenever
+// feature overrides are re-applied, and re-opening a widget somebody deliberately
+// collapsed would be the panel arguing with them — so this has to be able to tell
+// "already opened" from "not opened yet".
+//
+// It used to be a pair of module-level flags, and that was wrong in a way nothing
+// noticed until a card had no tab bar to recover with. THE SPA ROUTER REPLACES
+// .main-content's innerHTML: coming back to the QuickPortal from Operations
+// builds a brand-new #ccWidget, collapsed, with no tab active — while the flag,
+// which lives in the module and not in the DOM, still said the card had been
+// opened. So it was skipped, and the card stayed shut. A manager could click the
+// tab and never think about it; a store account has no tab bar (see
+// _ccSyncLoneTab) and no Summary control, so it was stranded on a summary line
+// until the page was reloaded. The same hop on a phone was already worse — the
+// compact layer cuts the summary too, leaving a card with nothing in it at all.
+//
+// The state is in the DOM, so it is read from the DOM. A flag can go stale
+// against markup that was swapped underneath it; an active class cannot.
 function _openDefaultTab(cfg, open) {
     const widget = document.getElementById(cfg.widget);
     if (!widget || getComputedStyle(widget).display === 'none') return false;
+    const btns = cfg.tabs().map(t => document.getElementById(cfg.prefix + '-tab-' + t));
+    const active = btns.filter(b => b && b.classList.contains('active'));
+    // Genuinely open: leave it. Calling open() here would CLOSE it, because
+    // switchCommandTab treats the active tab as a toggle on a desktop.
+    if (active.length && widget.classList.contains('cc-expanded')) return true;
+    // A TORN STATE — a tab still flagged active on a card that is not expanded.
+    // _tabSwitch always writes the two together, so this only happens when
+    // something has reset one half without the other. Left alone, open() would
+    // read the stale flag as "you clicked the tab that was open" and collapse
+    // instead of opening, which is the one outcome this function exists to
+    // prevent. Clear the flag and open for real.
+    active.forEach(b => b.classList.remove('active'));
     const first = cfg.tabs().find(t => {
         const b = document.getElementById(cfg.prefix + '-tab-' + t);
         return b && getComputedStyle(b).display !== 'none';
     });
     if (!first) return false;
-    open(first);      // nothing is active yet, so this opens rather than toggles
+    open(first);      // nothing is active, so this opens rather than toggles
     return true;
 }
-function _ccOpenDefaultTab() {
-    if (_ccDefaultOpened) return;
-    if (_openDefaultTab(_CC_BOARD, switchCommandTab)) _ccDefaultOpened = true;
-}
-function _dcOpenDefaultTab() {
-    if (_dcDefaultOpened) return;
-    if (_openDefaultTab(_DC_BOARD, switchDistrictTab)) _dcDefaultOpened = true;
+function _ccOpenDefaultTab() { _openDefaultTab(_CC_BOARD, switchCommandTab); }
+function _dcOpenDefaultTab() { _openDefaultTab(_DC_BOARD, switchDistrictTab); }
+
+// THE CARD'S OWN NAME. "— · This Month / Store Command Center" is what the markup
+// ships with, and fetchScorecardData replaces both the moment it lands, stamping
+// the store it actually fetched for. That covered everybody, because until the
+// store accounts arrived every role that could see this card also fetched a
+// scorecard.
+//
+// A board does not: it has no Scorecard tab and initBoardPage deliberately
+// fetches only the two things on the card. So it sat under the placeholders —
+// an em dash and the literal word "Store" — on a screen whose whole job is to
+// say which store it belongs to.
+//
+// A BASELINE, not an override. It runs from applyRoleBasedUI, well before any
+// fetch, so fetchScorecardData still has the last word wherever it runs and a DM
+// switching stores is not pinned to their own. Skipped for 'ALL' — a card that
+// names no single store is a district card, and the placeholder is correct there
+// until the fetch says otherwise.
+function _ccStampStore(store) {
+    const code = String(store || '').trim().toUpperCase();
+    if (!code || code === 'ALL') return;
+    document.querySelectorAll('#cc-store-name').forEach(el => el.textContent = code);
+    document.querySelectorAll('#cc-store-eyebrow').forEach(el => el.textContent = code);
 }
 
 // ============================================================================
@@ -15284,16 +15474,19 @@ function renderLiveDashboard() {
         ? 'Last change ' + _lvClock(d.asOfCentral) + ' Central'
         : escapeHtml(_lvHeadStamp(d));
     details.forEach(el => {
-        // Two mounts don't offer the full-screen button: the one already inside
-        // the full-screen view, and the shop-floor board (.tv-card), which is a
-        // full screen with nothing to return to. Asked of the DOM rather than of
-        // the page — the board is identified by the card it renders into, which
-        // keeps this module from reaching into the auth section for _tvOnBoardPage.
-        const bare = !!el.closest('#lvFullscreen, .tv-card');
-        // The daily breakdown has its own exclusion, narrower than `bare`: it is
-        // fine — useful, even — on top of the full-screen board, but the
-        // shop-floor board is unattended and has nobody to click it.
-        const board = !!el.closest('.tv-card');
+        // One mount doesn't offer the full-screen button: the one already inside
+        // the full-screen view, which has nothing to return to.
+        //
+        // The shop-floor board used to be the second, back when it was its own
+        // page that was already a full screen. It isn't any more — it is this card
+        // on the ordinary QuickPortal — so full-screen is how the TV on the wall
+        // gets that clean view back, and it is the one control there that a board
+        // genuinely wants.
+        const bare = !!el.closest('#lvFullscreen');
+        // The daily breakdown keeps its exclusion, and it is a role question
+        // rather than a mount one: fine on top of the full-screen board, but a
+        // shop-floor screen is unattended and has nobody to click it.
+        const board = _tvIsBoardRole();
         el.innerHTML = '<div class="lv-head">'
             + '<span class="lv-head-l">' + _lvFreshness(d)
             + '<span class="lv-asof">' + stamp + '</span></span>'
@@ -28864,12 +29057,23 @@ function _isMobileLayout() {
     try { return window.matchMedia(_compactMediaQuery()).matches; } catch (_) { return false; }
 }
 
-// The tablet half of the compact band, on its own. Pair to _compactMediaQuery()
-// and the same contract: change it here and in styles.css together, and nowhere
-// else. 901 and not 900 so this and the compact ceiling cannot both claim a
-// screen exactly 900px wide.
+// The tablet tier. Pair to _compactMediaQuery() and the same contract: change it
+// here and in styles.css together, and nowhere else.
+//
+// BOTH DIMENSIONS. A tablet is large in two directions; a phone never is. Width
+// alone cannot tell them apart, because an iPhone 15 Pro Max on its side (932px)
+// is wider than an iPad Mini is tall. The short edge is the discriminator, and
+// 540px sits in a wide empty gap between the two populations — phones in
+// landscape top out near 430, tablets in landscape bottom out near 640. The
+// stylesheet's TABLET EXCEPTION banner has the full reasoning.
+//
+// This tier decides three things besides the panel width, so getting it wrong is
+// not cosmetic: _samCapFeed shows four feed rows instead of two,
+// _lgpwPastAllowed puts Listing Goals' Past weeks tab back, and _panelIsFullBleed
+// stops freezing the page behind a panel that no longer covers it.
 function _tabletMediaQuery() {
-    return "(min-width: 901px) and (max-width: 1366px) and (pointer: coarse)";
+    return "(min-width: 701px) and (min-height: 540px)"
+         + " and (max-width: 1366px) and (pointer: coarse)";
 }
 
 function _isTabletLayout() {
@@ -28904,21 +29108,33 @@ try {
         // them — see _lgpwSyncTabs, which also leaves the view if it is the one
         // being taken away.
         if (typeof _lgpwSyncTabs === "function") _lgpwSyncTabs();
+        // A Command Center that is collapsed on a desktop has nothing to show on a
+        // phone — the summary it collapses TO is cut there, and so is the tab bar
+        // that would reopen it. Dragging a window across the band is the one way
+        // to arrive in that state after load, so the same rule runs again here.
+        if (typeof _ccSyncCompactOpen === "function") _ccSyncCompactOpen();
     });
 } catch (_) { /* older browsers: the initial pass still applies */ }
 
 // The TABLET line, at 901px, is a second crossing with its own consequences, and
 // an iPad rotating 820 <-> 1180 crosses THIS one and not the band's own edge — so
 // the listener above never hears about the one rotation people actually perform.
-// What changes across it: the feed shows four rows instead of two, and Listing
-// Goals' Past weeks tab comes back. applyRoleBasedUI is deliberately NOT re-run
-// here — data-mobile curation is a band-level rule and identical on both sides,
-// so calling it would be work with no possible effect.
+// What changes across it: the feed shows four rows instead of two, Listing Goals'
+// Past weeks tab comes back, and — since the opt-in landed — data-mobile curation
+// is NO LONGER identical on both sides of this line. It used to be, and this
+// listener used to say so and skip the sweep; data-tablet="show" is exactly the
+// case that makes the tablet answer differ, and applyRoleBasedUI writes an inline
+// display that nothing else re-evaluates. So it runs here too.
 try {
     window.matchMedia(_tabletMediaQuery()).addEventListener("change", function () {
         if (!document.body.classList.contains("is-authenticated")) return;
+        applyRoleBasedUI();
         if (typeof _samCapFeed === "function") _samCapFeed();
         if (typeof _lgpwSyncTabs === "function") _lgpwSyncTabs();
+        // Crossing INTO the tablet tier hands the board back its tab bar; crossing
+        // out of it takes the bar away again and leaves whatever was open. Same
+        // question as above, asked from the other edge.
+        if (typeof _ccSyncCompactOpen === "function") _ccSyncCompactOpen();
     });
 } catch (_) { /* older browsers: the initial pass still applies */ }
 
@@ -28991,6 +29207,9 @@ function applyRoleBasedUI() {
     const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
 
+    // Before any fetch, so whichever fetch names the card later still wins.
+    if (typeof _ccStampStore === 'function') _ccStampStore(userStore);
+
     document.querySelectorAll('.dynamic-module-flex, .dynamic-module-block, .dynamic-module').forEach(module => {
         const classes = Array.from(module.classList);
         const requiredStores = classes.filter(c => c.startsWith('store-'));
@@ -29002,8 +29221,9 @@ function applyRoleBasedUI() {
         // Feature Access override (DM/CEO-managed, feature_overrides table):
         // a user-level override beats a role-level override beats the default above.
         const featureKey = module.getAttribute('data-feature');
+        let ov = null;
         if (featureKey) {
-            const ov = _featureOverrideFor(featureKey, userRoleClass, userName);
+            ov = _featureOverrideFor(featureKey, userRoleClass, userName);
             // mark cards an override removed (vs. hidden by design) so the
             // dashboard rows know when to rebalance the remaining cards
             if (ov === false && visible) module.setAttribute('data-fa-hidden', '1');
@@ -29011,12 +29231,27 @@ function applyRoleBasedUI() {
             if (ov !== null) visible = ov;
         }
 
+        // A BOARD IS OPT-IN. Every line above answers "is there a reason to hide
+        // this?" and for a shop-floor board there is almost never one — see
+        // STORE_BOARD_FEATURES. An explicit override still wins, so Feature
+        // Access keeps the last word if the role is ever given a column there.
+        if (ov === null && _isStoreBoardRole(userRoleClass)) visible = _boardSeesFeature(featureKey);
+
         // A surface cut from the phone build stays cut even when the role check
         // passes. This CANNOT be done in CSS: the branch below writes an inline
         // display with !important, which outranks every stylesheet rule — so
         // [data-mobile="hide"] silently lost to it on all 11 role-gated elements
         // that were supposed to be hidden (found with scripts/mobile-check.js).
-        if (visible && module.getAttribute('data-mobile') === 'hide' && _isMobileLayout()) {
+        //
+        // ...UNLESS the surface has earned itself back on a tablet.
+        // data-tablet="show" is the opt-in, and it is deliberately narrow: it
+        // says "cut from the phone, kept on a tablet", which is the only shape of
+        // exception this build needs. The same reasoning as the cut itself
+        // applies in reverse — the inline display wins, so the CSS rule in the
+        // TABLET EXCEPTION block cannot bring a role-gated module back on its
+        // own. Both halves exist; each covers what the other cannot reach.
+        if (visible && module.getAttribute('data-mobile') === 'hide' && _isMobileLayout()
+            && !(module.getAttribute('data-tablet') === 'show' && _isTabletLayout())) {
             visible = false;
         }
         if (visible) {
@@ -29083,6 +29318,39 @@ function applyRoleBasedUI() {
     }
 
     initMultiStoreSwitcher();
+
+    // The nav and the action buttons carry no data-feature, so the allow-list
+    // cannot see them. This is the other half.
+    _applyBoardChrome();
+}
+
+// ── THE PICTURE-STATION iPAD'S CHROME ───────────────────────────────────────
+//
+// operations.html is written for a person: five tabs, a tools panel, four nav
+// links and a row of action buttons. A board is not a person. STORE_BOARD_FEATURES
+// covers everything that carries a data-feature, which is the tab strip and the
+// tools — but the nav links, the Idea button, Quick Messages, Hotkeys and the
+// Calendar carry none, because until now no role existed that shouldn't see them.
+// Hiding them is not a feature decision with a switch behind it; it is what this
+// one page looks like when it is a photo bench. So it stays here rather than
+// being pushed into the catalog as five switches nobody will ever flip.
+//
+// ONE BIT, AND THE STYLESHEET DOES THE REST. The obvious version of this walks
+// the nav writing `display: none !important` onto each link, the way the role
+// sweep does — and that is exactly why it doesn't. An inline !important cannot
+// be taken back by a rule; it can only be taken back by the same writer
+// remembering every element it touched, which is a list that goes stale the
+// first time somebody adds a button to the nav. A class is one bit: set it and
+// the rules apply, clear it and they stop, with nothing to remember.
+//
+// See the board block in styles.css for which surfaces go and which two stay.
+// It works only because nothing the sweep writes inline contradicts it, which
+// is checked rather than assumed (scripts/store-board-check.js).
+//
+// Called from the end of applyRoleBasedUI so it tracks every re-apply —
+// _kickFeatureOverridesRefresh runs that a second time once the overrides land.
+function _applyBoardChrome() {
+    document.body.classList.toggle('is-store-board', _tvIsBoardRole());
 }
 
 // ===== MULTI-STORE MANAGER: global store switcher =====
@@ -29386,11 +29654,15 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelector('.sidebar-toggle')?.classList.add('collapsed'); 
     }
     
-    // Site-wide, except on the shop-floor board. A screen has no announcements to
-    // read, no PIN pad to pre-load the user list for, and no idea box — and cms is
-    // the very function whose polling had to be walked back once for egress.
-    // Running these on five TVs around the clock is that bill again, for nothing.
-    if (!_tvOnBoardPage()) {
+    // Site-wide, except for a board. A screen has no announcements to read, no
+    // idea box, and no PIN pad to pre-load the user list for — and cms is the very
+    // function whose polling had to be walked back once for egress. Running these
+    // on five TVs and five iPads around the clock is that bill again, for nothing.
+    //
+    // Asked of the ROLE, not the page, now that a board is on the ordinary pages.
+    // The PIN pad still arrives when it is needed: a session that has expired has
+    // no role either, so this reads false and injectGlobalAuth() runs.
+    if (!_tvIsBoardRole()) {
         loadCMS();
         injectGlobalAuth();
         injectIdeaModal();
@@ -29404,32 +29676,44 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (sessionStorage.getItem('speeksUnlocked') === 'true') {
-        // A TV is left on for weeks and reloads on its own — power cut, browser
-        // restart, someone's overnight update. Every one of those has to land back
-        // on the board, not on a QuickPortal, so the gate runs on load and not
-        // only at login. First thing inside the branch: everything below it is
-        // page setup that a redirect makes pointless.
-        if (_tvGate()) return;
         // Two pages are whole destinations rather than a tool inside one, so the
-        // visit IS the usage signal. Recorded here — past the TV gate, inside the
-        // signed-in branch — so a board and the login screen never count.
-        _trackPageVisit();
-        // …and the fact that they were here at all. The PIN path can't carry this
-        // on its own: a tab that stays open never returns to it. See _usagePresence.
-        _usagePresence();
+        // visit IS the usage signal. Recorded inside the signed-in branch, and
+        // never for a board: a TV left on for weeks reloads on its own — power
+        // cut, browser restart, an overnight update — and an iPad at the photo
+        // bench is reloaded by whoever picks it up. Counting either would file
+        // phantom visits all day, in five stores, into the nightly usage report.
+        if (!_tvIsBoardRole()) {
+            _trackPageVisit();
+            // …and the fact that they were here at all. The PIN path can't carry
+            // this on its own: a tab that stays open never returns to it. See
+            // _usagePresence.
+            _usagePresence();
+        }
         document.body.classList.add('is-authenticated');
         const authOverlay = document.getElementById('authOverlay');
         if (authOverlay) authOverlay.style.display = 'none';
         document.body.style.overflow = '';
-
-        // Already on the board: it gets its own small init and nothing else.
-        if (_tvOnBoardPage()) { initBoardPage(); return; }
 
         closeAllModals();
         applyRoleBasedUI();
         // Before anything can open a side panel: sets --panel-top so they hang
         // flush from the nav on every page, not just the dashboard.
         initLayoutSync();
+
+        // A BOARD STOPS HERE. Everything below is the dashboard — ~30 fetches and
+        // five pollers — and a board has three surfaces, two of which fetch
+        // nothing. That arithmetic is why initBoardPage was carved out in the
+        // first place: five TVs plus five iPads running the full init around the
+        // clock is the egress overage that had to be walked back once already.
+        //
+        // It is the same small init as before; only where it runs has changed.
+        // The live card it fills is the Command Center's, so it runs on the page
+        // that has one and is skipped on the page that does not.
+        if (_tvIsBoardRole()) {
+            if (document.getElementById('ccWidget')) initBoardPage();
+            initOperations();
+            return;
+        }
         initDashboardData();
         initTicker();
         initWorkspace();
@@ -29443,15 +29727,10 @@ document.addEventListener("DOMContentLoaded", () => {
         if (document.getElementById('mainKpiChart')) syncAllData();
     } else {
         // sessionStorage dies with the browser process, so a TV that power-cycles
-        // overnight wakes with no session, on the one page in the site with no PIN
-        // pad of its own. It has to go find one.
-        //
-        // It always did — but only because injectGlobalAuth() put a hidden
-        // #authOverlay on every page, which is the condition the line below tests.
-        // The board no longer injects it (see the guard at the top of this
-        // handler), so the board now has to say where it goes. _tvGate() bounces it
-        // straight back here the moment the PIN is accepted.
-        if (_tvOnBoardPage()) { window.location.replace('index.html'); return; }
+        // overnight wakes with no session at all. It needs a PIN pad, and it gets
+        // the same one as everybody else now: with no session _tvIsBoardRole() is
+        // false, so the guard at the top of this handler lets injectGlobalAuth()
+        // run and the overlay the line below tests for is there.
         if (!window.location.href.includes('index.html') && document.getElementById('authOverlay')) {
             window.location.href = "index.html"; 
             return;
@@ -29492,6 +29771,10 @@ document.body.appendChild(customTooltip);
 // When true the tooltip is pinned under a top-nav button (with a caret) rather
 // than trailing the cursor — see _anchorTipBelow + the mousemove guard.
 let _tipAnchored = false;
+// The award "i" that is currently held open BY A TAP (see the click handler at
+// the end of this section). Null on every hover-driven tooltip, so the two
+// mechanisms never read each other's state.
+let _tipTapped = null;
 function _anchorTipBelow(el) {
     // Viewport coordinates throughout — the tooltip is position:fixed, so
     // getBoundingClientRect values are used as-is with no scroll offset.
@@ -29501,6 +29784,20 @@ function _anchorTipBelow(el) {
     x = Math.max(10, Math.min(x, window.innerWidth - tw - 10));
     customTooltip.style.left = x + 'px';
     customTooltip.style.top = (r.bottom + 10) + 'px';
+}
+
+// The award "i" content, in one place because it now has TWO callers — the
+// mouseover branch below and the tap handler at the end of this section. They
+// must not be allowed to drift: the whole point of the tap path is that a
+// tablet sees the same card a mouse does.
+function _awardTipFill(btn) {
+    const wrap = btn.closest('.aw') || btn.closest('.award-card-trophy-wrap');
+    const nameEl = wrap ? wrap.querySelector('.aw-name, .award-card-name') : null;
+    const title = nameEl ? nameEl.innerText.replace(/\s+/g, ' ').trim() : 'Award';
+    customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
+    customTooltip.innerHTML = `
+        <strong style="display:block; margin-bottom: 6px; color: var(--sage-professional); font-size: 13px;">${title}</strong>
+        ${btn.dataset.desc ? `<span style="font-size: 12px; color: var(--slate-charcoal); line-height: 1.5;">${btn.dataset.desc}</span>` : ''}`;
 }
 
 // Place a trailing (non-anchored) tooltip at the cursor straight away, so it
@@ -29525,6 +29822,16 @@ document.addEventListener('mouseover', function(e) {
     // because there is no matching mouseout coming. Checked live rather than
     // cached, so Chrome's device-toolbar toggle behaves like a real device.
     if (window.matchMedia && window.matchMedia('(hover: none), (pointer: coarse)').matches) {
+        // ...EXCEPT one an award "i" is holding open by tap. A tap on anything
+        // fires this synthetic mouseover FIRST, so tearing down here would close
+        // the card a quarter of a millisecond before the click handler below is
+        // asked whether to toggle it — and every tap would then read as "open",
+        // making the dot impossible to close. While a tap owns the tooltip this
+        // handler keeps its hands off and the click handler owns the lifecycle.
+        // Self-healing: an ownership that is no longer backed by a visible card
+        // (a re-render, an SPA navigation) is dropped rather than trusted.
+        if (_tipTapped && customTooltip.classList.contains('show')) return;
+        _tipTapped = null;
         customTooltip.classList.remove('show', 'anchored');
         _tipAnchored = false;
         return;
@@ -29593,13 +29900,7 @@ document.addEventListener('mouseover', function(e) {
 
     const awardI = e.target.closest('.award-info-btn');
     if (awardI) {
-        const wrap = awardI.closest('.aw') || awardI.closest('.award-card-trophy-wrap');
-        const nameEl = wrap ? wrap.querySelector('.aw-name, .award-card-name') : null;
-        const title = nameEl ? nameEl.innerText.replace(/\s+/g, ' ').trim() : 'Award';
-        customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
-        customTooltip.innerHTML = `
-            <strong style="display:block; margin-bottom: 6px; color: var(--sage-professional); font-size: 13px;">${title}</strong>
-            ${awardI.dataset.desc ? `<span style="font-size: 12px; color: var(--slate-charcoal); line-height: 1.5;">${awardI.dataset.desc}</span>` : ''}`;
+        _awardTipFill(awardI);
         customTooltip.classList.add('show');
         return;
     }
@@ -29619,13 +29920,22 @@ document.addEventListener('mouseover', function(e) {
     }
 
     // Goal / initiative hover text — rendered in the redesigned clean tooltip.
+    // Only where the card is actually CUTTING something. This tooltip exists to
+    // recover a 2-line clamp and a nowrap title, which is still what the
+    // dashboard banner does; the Goals & Initiatives panel now shows goals in
+    // full (see .goals-side-panel .mgb-goal-desc), and repeating text that is
+    // already on screen is noise — worse, it covers the card it came from.
     const panelItem = e.target.closest('.cpb-project-item, .mgb-goal-item');
     if (panelItem) {
         const titleEl = panelItem.querySelector('.mgb-goal-title');
         const descEl  = panelItem.querySelector('.mgb-goal-desc');
         const titleText = titleEl ? titleEl.innerText.trim() : '';
         const descText  = descEl  ? descEl.innerText.trim()  : '';
-        if (titleText || descText) {
+        // +1px of slack: a clamped box reports a fractional overflow of its own
+        // from line-height rounding, which would make every card look cut.
+        const cut = (titleEl && titleEl.scrollWidth  > titleEl.clientWidth  + 1) ||
+                    (descEl  && descEl.scrollHeight > descEl.clientHeight + 1);
+        if (cut && (titleText || descText)) {
             customTooltip.innerHTML = `
                 <strong style="display:block; font-size: 12.5px; color: var(--slate-charcoal);">${titleText}</strong>
                 ${descText ? `<span style="display:block; margin-top: 4px; font-size: 12px; color: #647082; line-height: 1.45;">${descText}</span>` : ''}`;
@@ -29660,6 +29970,48 @@ document.addEventListener('mouseover', function(e) {
     customTooltip.classList.remove('show');
 });
 
+// THE ONE TOOLTIP A TOUCH DEVICE GETS.
+//
+// The mouseover handler above turns the whole tooltip system off on anything
+// with a coarse pointer, and that is right: a tap fires a synthetic mouseover
+// with no mouseout behind it, so every data-tip on the site used to pop a white
+// card over the thing you had just tapped and stay there. The cure for a tooltip
+// nobody asked for, though, is not much use to a control whose ONLY content is
+// its tooltip — the award "i" is a button that did nothing at all on an iPad
+// (Ethan, 2026-09-20: "the i buttons ... don't show anything when clicked").
+//
+// So this is the exception, and it is deliberately narrow: one selector, opened
+// by an explicit tap rather than by proximity, and closed by the next tap
+// anywhere — which is the missing mouseout, supplied by hand. Anchored under the
+// button instead of trailing the cursor, because a tap has no cursor to trail;
+// _anchorTipBelow already exists for the nav icons and wants nothing but a rect.
+//
+// Mouse users never reach this: the hover path has already shown the same card
+// (built by the same _awardTipFill), and running both would fight over it.
+document.addEventListener('click', function (e) {
+    const coarse = window.matchMedia &&
+                   window.matchMedia('(hover: none), (pointer: coarse)').matches;
+    if (!coarse) return;
+
+    // Tapping the open one closes it; tapping a different one moves to it;
+    // tapping anything else closes. Decided on _tipTapped alone and never on
+    // whether the card is visible — the mouseover above fires first on every
+    // tap, so "is it showing?" is not a question with a usable answer here.
+    const btn = e.target.closest('.award-info-btn');
+    if (btn && _tipTapped !== btn) {
+        _awardTipFill(btn);
+        customTooltip.classList.add('show', 'anchored');
+        _tipAnchored = true;
+        _anchorTipBelow(btn);   // needs the card measured, so it goes after .show
+        _tipTapped = btn;
+        return;
+    }
+
+    customTooltip.classList.remove('show', 'anchored');
+    _tipAnchored = false;
+    _tipTapped = null;
+}, true);   // capture: the SPA router below calls preventDefault on nav clicks
+
 document.addEventListener('mousemove', function(e) {
     if (_tipAnchored) return;   // pinned under a nav button — don't trail the cursor
     if (customTooltip.classList.contains('show')) {
@@ -29685,6 +30037,12 @@ document.addEventListener('mouseout', function(e) {
 
 window.addEventListener('scroll', function() {
     customTooltip.classList.remove('show');
+    // A tapped-open award card is anchored to a button that has just moved out
+    // from under it, so it goes too — and the ownership with it, or the next tap
+    // on that same dot would read as "close" and do nothing visible.
+    customTooltip.classList.remove('anchored');
+    _tipAnchored = false;
+    _tipTapped = null;
 }, { passive: true });
 
 // ============================================================================
@@ -29771,6 +30129,15 @@ document.addEventListener('click', async (e) => {
                 if (docSearch) docSearch.addEventListener('keyup', filterDocs);
             } else {
                 setTimeout(() => {
+                    // A board takes its own small init on an SPA hop as well. Without
+                    // this, walking QuickPortal -> Operations -> QuickPortal would
+                    // start every poller the two page-load paths are careful not to,
+                    // and each hop would start them again.
+                    if (_tvIsBoardRole()) {
+                        if (document.getElementById('ccWidget')) initBoardPage();
+                        if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
+                        return;
+                    }
                     if (typeof initDashboardData === 'function') initDashboardData();
                     if (typeof applyKpiReminder === 'function') applyKpiReminder();
                     if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
@@ -32175,9 +32542,23 @@ function openAuditPhotoLightbox(src) {
         // click, the ✕, or Escape (handled by the global keydown) all work.
         lb.onclick = () => { lb.style.display = 'none'; };
         lb.style.cssText = 'display:none; position:fixed; inset:0; z-index:4000; background:rgba(2,6,23,.85); align-items:center; justify-content:center; padding:30px; cursor:zoom-out;';
+        // The ✕ wears .au-lb-close and draws the SAME inline SVG as the other 220
+        // close controls on the site. It used to be a 38px circle of inline style
+        // around a text ✕ glyph, which is the exact shape scripts/close-btn-audit
+        // exists to catch: no CSS can make a text glyph match a 15px stroked SVG,
+        // so identical boxes still read as different buttons (Ethan, 2026-09-19:
+        // "fix the way the x in the top right looks to match other x buttons").
+        // Geometry and ink live in the stylesheet beside .award-video-close-btn,
+        // the other X that floats over a dark surface and therefore keeps its own
+        // colour while taking everybody else's box.
         lb.innerHTML = '<img alt="" onclick="event.stopPropagation();" style="max-width:92vw; max-height:88vh; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.5); cursor:default;">' +
-            '<button type="button" title="Close photo" onclick="event.stopPropagation(); document.getElementById(\'auditPhotoLightbox\').style.display=\'none\';" ' +
-            'style="position:absolute; top:16px; right:20px; width:38px; height:38px; border:none; border-radius:50%; background:rgba(255,255,255,0.14); color:#fff; font-size:17px; font-weight:800; line-height:1; cursor:pointer;">✕</button>';
+            '<button type="button" class="au-lb-close" title="Close photo"' +
+            ' aria-label="Close photo"' +
+            ' onclick="event.stopPropagation(); document.getElementById(\'auditPhotoLightbox\').style.display=\'none\';">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"' +
+            ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>' +
+            '</svg></button>';
         document.body.appendChild(lb);
     }
     lb.querySelector('img').src = src;
@@ -38562,8 +38943,10 @@ const FEATURE_CATALOG = [
     // it is their OWN email preferences, so there is no role that shouldn't reach
     // it. Listed here anyway (rather than left as a bare data-feature) so it has a
     // readable label in the Feature Access tool and can be switched off per person
-    // if somebody must not be emailed. 'store' is absent because the shop-floor TV
-    // boards have no inbox and no nav to click — see tv.html.
+    // if somebody must not be emailed. 'store' is absent because a shop-floor
+    // board has no inbox; it is on the ordinary nav now and would otherwise be
+    // offered a preferences panel for a mailbox nobody reads. Belt and braces
+    // either way — STORE_BOARD_FEATURES does not list it.
     { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multi-store-manager', 'assistant-manager', 'employee', 'training'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-claims-store',        label: 'Insurance Claims (Store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
@@ -38895,12 +39278,48 @@ function _featureOverrideFor(featureKey, userRoleClass, userName) {
     return null;
 }
 
+// ── WHAT A SHOP-FLOOR BOARD MAY SEE, and why it is a list and not a gate ────
+//
+// Everything else on this site is opt-OUT. No role classes means everyone
+// (_passesRoleClasses); def: 'all' means everyone (_featureEffectiveVisible).
+// Neither default has ever had to mean anything for the Store role, because
+// until the picture-station iPad the role could not load a page at all.
+//
+// The moment it could, those two defaults would have handed a shared sales-floor
+// PIN the Margin Guide, Customer Call Backs and SPEEKS Connect as well — not by
+// a decision anybody made, but by the absence of one. So for this role alone the
+// question is turned round, from "is there a reason to hide it?" to "is there a
+// reason to show it?", and only this list can answer yes. Adding a surface to
+// the iPad is one line here; forgetting to keep one off it is not possible.
+//
+// It is NOT a security boundary (see _tvIsBoardRole): the role sees what any
+// signed-in pin sees at the edge. This decides what is on the screen.
+//
+// Three keys, which are two screens. The Command Center card carrying its Live
+// Dashboard tab IS the board — the same renderers, on the QuickPortal page
+// instead of a page of its own — and the Picture Guide is the photo bench. Every
+// other surface on every page resolves to false for this role.
+const STORE_BOARD_FEATURES = new Set([
+    'widget-command-center',    // the dashboard row the card sits in
+    'widget-scorecard-alerts',  // ...and the card itself
+    'cc-live',                  // its Live Dashboard tab: the board
+    'widget-ops-pictureguide'   // the picture station
+]);
+function _isStoreBoardRole(userRoleClass) { return userRoleClass === 'role-store'; }
+function _boardSeesFeature(featureKey) {
+    return !!featureKey && STORE_BOARD_FEATURES.has(featureKey);
+}
+
 // Effective visibility of a feature key for this user: an override wins, else
 // the catalog default for their role (mirroring enforcement, incl. the
 // ASM-inherits-employee rule). Used to derive section nav visibility.
 function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
     const ov = _featureOverrideFor(featureKey, userRoleClass, userName);
     if (ov !== null) return ov;
+    // The same inversion applyRoleBasedUI makes on the DOM, made here too —
+    // these two resolutions are not allowed to disagree, and this is the one the
+    // Operations nav link, _SECTION_TABS and Ctrl+K ask.
+    if (_isStoreBoardRole(userRoleClass)) return _boardSeesFeature(featureKey);
     const feat = FEATURE_CATALOG.find(f => f.key === featureKey);
     if (!feat) return false;
     if (feat.def === 'all') return true;
@@ -38926,7 +39345,28 @@ const _SECTION_TABS = {
                         'ec-view-titles'],
 };
 
+// Sub-tabs that a TABLET still gets, keyed the same way as _SECTION_TABS above.
+//
+// A section's nav link is derived from what is inside the section — so on a
+// device where most of the section has been cut, it has to be derived from what
+// is LEFT. Without this, a role holding Store KPIs but not Monthly Breakdown
+// (which feature overrides can produce, even though the role classes make
+// Monthly Breakdown a superset) would get a Workspace link on an iPad and an
+// empty page behind it.
+//
+// THIS SET AND THE data-tablet="show" ATTRIBUTES ARE TWO HALVES OF ONE FACT.
+// A key here with no opted-in tab in the markup promises a section that is not
+// there; an opted-in tab missing from here hides the link that reaches it.
+// scripts/operations-tablet-check.js checks the two against each other.
+//
+// 'tool-picture-manage' is deliberately absent, and not just because it is a
+// button rather than a tab: the Picture Guide comes back on a tablet in its
+// READ-ONLY form for everyone, DM included (Ethan, 2026-09-20). See pgCanEdit().
+const _TABLET_SECTION_TABS = new Set(['widget-ops-pictureguide']);
+
 function _applySectionNavVisibility(userRoleClass, userName) {
+    const compact = _isMobileLayout();
+    const tablet = compact && typeof _isTabletLayout === 'function' && _isTabletLayout();
     Object.keys(_SECTION_TABS).forEach(href => {
         const link = document.querySelector(`.nav-bar a.nav-link[href="${href}"]`);
         if (!link) return;
@@ -38935,9 +39375,20 @@ function _applySectionNavVisibility(userRoleClass, userName) {
         // that data-mobile="hide" had already removed. _featureEffectiveVisible
         // resolves roles and overrides off the catalog, not the DOM, so it cannot
         // see the tag on its own.
-        const cutOnMobile = link.getAttribute('data-mobile') === 'hide' && _isMobileLayout();
+        //
+        // ...and for the same reason it has to honour the tablet EXCEPTION too.
+        // This is the THIRD writer enforcing the cut — the CSS utility, the
+        // applyRoleBasedUI sweep, and this — and the only one a data-tablet
+        // opt-in could not reach on its own. A Workspace link opted back in
+        // without this line is set to display:none a few microseconds later by a
+        // function that never heard of the attribute.
+        const earnedBack = link.getAttribute('data-tablet') === 'show' && tablet;
+        const cutOnMobile = link.getAttribute('data-mobile') === 'hide' && compact && !earnedBack;
+        const keys = earnedBack
+            ? _SECTION_TABS[href].filter(k => _TABLET_SECTION_TABS.has(k))
+            : _SECTION_TABS[href];
         const vis = !cutOnMobile
-            && _SECTION_TABS[href].some(k => _featureEffectiveVisible(k, userRoleClass, userName));
+            && keys.some(k => _featureEffectiveVisible(k, userRoleClass, userName));
         link.style.setProperty('display', vis ? 'flex' : 'none', 'important');
     });
 }
@@ -38980,8 +39431,15 @@ function _passesRoleClasses(classes, userRoleClass) {
 function _applyFeatureOverridesToPlainEls(userRoleClass, userName) {
     document.querySelectorAll('[data-feature]').forEach(el => {
         if (el.classList.contains('dynamic-module') || el.classList.contains('dynamic-module-flex') || el.classList.contains('dynamic-module-block')) return;
-        const ov = _featureOverrideFor(el.getAttribute('data-feature'), userRoleClass, userName);
-        const allowed = ov === null ? _passesRoleClasses(el.classList, userRoleClass) : ov;
+        const key = el.getAttribute('data-feature');
+        const ov = _featureOverrideFor(key, userRoleClass, userName);
+        // The board's inversion reaches here too, and this is the pass that
+        // matters most for it: the Operations tab strip is plain [data-feature]
+        // buttons with no role classes, so "no classes means everyone" would
+        // have put all five tabs on the picture-station iPad.
+        const allowed = ov !== null ? ov
+            : _isStoreBoardRole(userRoleClass) ? _boardSeesFeature(key)
+            : _passesRoleClasses(el.classList, userRoleClass);
         if (allowed) el.style.removeProperty('display');
         else el.style.setProperty('display', 'none', 'important');
     });
@@ -45179,7 +45637,7 @@ async function _rtRunCheck(tool) {
         // landing (`live`) and the buying sheet moving (`buying`). It has no feed,
         // no bubbles and no tool panels for the other pings to refresh, so
         // answering them would spend a fetch per write, per TV, for nothing.
-        if (_tvOnBoardPage() && tool !== 'live' && tool !== 'buying') return;
+        if (_tvIsBoardRole() && tool !== 'live' && tool !== 'buying') return;
         const fns = _RT_TOOL_CHECKS[tool] || [];
         for (const name of fns) {
             try { if (typeof window[name] === 'function') await window[name](); }
@@ -50804,7 +51262,8 @@ const _LT_CODE_SAYS = {
 // [[tools-panel-role-sync]] is the record of what that costs — the copies drift
 // and the tool half-exists on two pages. Its body is rendered by JS anyway, so
 // static markup would buy nothing. The PANEL LINK still has to be in all five
-// (it is markup the panel reads), and tv.html has no tools panel at all.
+// (it is markup the panel reads). There is no sixth shell: tv.html is a redirect
+// stub now and a board has no tools panel on the five that remain.
 function _lhToolEl() {
     let el = document.getElementById('listingHealthToolModal');
     if (el) return el;
@@ -53537,7 +53996,7 @@ function _ddFit(host) {
     // collapse the control instead of clamping it. If you are unsure which kind
     // you have, measure it; getting this wrong is a vanishing control, not a
     // cosmetic slip.
-    const _DD_CLAMPED_SLOTS = '.b2b-pcell, .exp-add-grid label';
+    const _DD_CLAMPED_SLOTS = '.b2b-pcell, .exp-add-grid label, .tbl-stack td';
     host.style.minWidth = host.closest(_DD_CLAMPED_SLOTS)
         ? 'min(' + want + 'px, 100%)'
         : want + 'px';
@@ -53837,6 +54296,18 @@ function _ddEnhance(sel) {
 
     const host = document.createElement('div');
     host.className = 'dd-host';
+    // The face copies the select's layout classes (see below), but a class on
+    // the face cannot make the HOST a flex container, and the host is what has
+    // to become one for the face to stretch to a row it shares with a text
+    // input. One marker, set here, read by .dd-host-lg in the dropdown block.
+    if (sel.classList.contains('form-input-lg')) host.classList.add('dd-host-lg');
+    // ...and an inline margin-top comes with it. The host stands where the
+    // select stood, so it owns the spacing; the five controls that say
+    // margin-top: 0 inline (the scorecard's store picker among them) are
+    // overriding .form-input-lg and have to keep overriding it. Only margin-top,
+    // and only when it is set: the other three are dead on the hidden select
+    // today, and reviving them would move controls nobody asked to move.
+    if (sel.style.marginTop) host.style.marginTop = sel.style.marginTop;
     // The select keeps every class it had: the site sizes these controls with
     // .form-input / .idea-input / .kpi-select and the face has to inherit that
     // width, so the HOST copies the layout classes and the native one keeps them
