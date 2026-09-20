@@ -156,15 +156,24 @@ console.log('\n8. What goes out: BROKEN every pass, a check once a month');
 
 console.log('\n9. The watchdog');
 {
+    // The watch hours moved 9 -> 7 with migration 0096, when the morning pass
+    // went 8:05 -> 6:10. These assert the BOUNDARY, so they are written off
+    // NPS_WATCH_HOURS rather than off literal hours — the point is "one hour
+    // before the first watch is too early, the watch hour itself is not", and
+    // that survives the next move.
+    const [WATCH_AM, WATCH_PM] = NPS_WATCH_HOURS;
     const both = { morning: TODAY, afternoon: TODAY };
-    ok(_npsOverdue(TODAY, 8, {}) === null, '8am: nothing is due yet');
-    ok(_npsOverdue(TODAY, 9, both) === null, '9am, morning pass finished: quiet');
-    const m = _npsOverdue(TODAY, 9, { morning: '2026-09-14', afternoon: '2026-09-14' });
-    ok(m && /8am/.test(m.pass) && m.last === '2026-09-14', '9am, morning stamp is yesterday: overdue', m && m.pass);
-    ok(_npsOverdue(TODAY, 15, { morning: TODAY }) !== null, '3pm, no 2pm stamp: overdue');
-    ok(/2pm/.test(_npsOverdue(TODAY, 15, { morning: TODAY }).pass), 'and it names the 2pm pass');
-    ok(_npsOverdue(TODAY, 15, { morning: '2026-09-14', afternoon: TODAY }) === null,
-        '3pm checks the 2pm pass only — the morning was the 9am check\'s business');
+    ok(_npsOverdue(TODAY, WATCH_AM - 1, {}) === null,
+        `${WATCH_AM - 1}:00, an hour before the watch: nothing is due yet`);
+    ok(_npsOverdue(TODAY, WATCH_AM, both) === null, 'at the watch hour, morning pass finished: quiet');
+    const m = _npsOverdue(TODAY, WATCH_AM, { morning: '2026-09-14', afternoon: '2026-09-14' });
+    ok(m && /morning/.test(m.pass) && m.last === '2026-09-14',
+        'at the watch hour, morning stamp is yesterday: overdue', m && m.pass);
+    ok(m && m.dueAt === '6:10am', 'and it names the time the pass was actually due', m && m.dueAt);
+    ok(_npsOverdue(TODAY, WATCH_PM, { morning: TODAY }) !== null, '3pm, no 2pm stamp: overdue');
+    ok(/2pm/.test(_npsOverdue(TODAY, WATCH_PM, { morning: TODAY }).pass), 'and it names the 2pm pass');
+    ok(_npsOverdue(TODAY, WATCH_PM, { morning: '2026-09-14', afternoon: TODAY }) === null,
+        '3pm checks the 2pm pass only — the morning was the earlier check\'s business');
 }
 
 console.log('\n10. The watchdog restarts a missed pass once, then gives up to email (2026-09-16)');
@@ -229,7 +238,10 @@ console.log('\n13. The tail of a pass is repaired on its own, without re-running
     ok(a && a.action === 'tail' && a.key === 'morning', 'grid done, tail missing: run the tail only', a && a.action);
     ok(_npsTailAction(T, 9, gridDone, {}, { morning: T }).action === 'give-up',
         'tail already retried today and still missing: email');
-    ok(_npsTailAction(T, 8, gridDone, {}, {}) === null, 'before the watch hour: nothing is due');
+    // Off NPS_WATCH_HOURS, not a literal: this asserts the boundary, and the
+    // watch hour moved 9 -> 7 with migration 0096.
+    ok(_npsTailAction(T, NPS_WATCH_HOURS[0] - 1, gridDone, {}, {}) === null,
+        'before the watch hour: nothing is due');
     ok(_npsTailAction(T, 15, { morning: T, afternoon: T }, { morning: T }, {}).key === 'afternoon',
         'at 3pm it is the 2pm pass\'s tail that is checked');
     // The Sep 17 failure mode, end to end: grid written, tail killed. The old

@@ -21,11 +21,23 @@
 // Auth: verify_jwt=false, with two paths — ?secret= for pg_cron, and an
 // x-user-pin header re-checked against the users table for the DM/CEO button.
 //
-// WHEN IT RUNS: 8:00am Central, with a retry at 9:00 (user, 2026-09-09). It was
-// 7:00am until then; it moved so the Sales Summary and the NET PROFIT tab land
-// together — netprofit-schedule.gs has always fired its morning pass at 8:00
-// Central (NPS_MORNING_HOUR), so the hour between them was this side being
-// early, not that side being late.
+// WHEN IT RUNS: 6:05am Central, with a retry at 7:00 (user, 2026-09-20,
+// migration 0096). It was 8:00/9:00 from 2026-09-09, and 7:00 before that.
+// The 8:00 move was to land with the NET PROFIT tab, and that pairing still
+// holds — Net Profit moved down with it and is still five minutes behind.
+//
+// ⚠️ 6:05 IS THE FLOOR, AND IT IS SET BY THE MAILBOX, NOT BY PREFERENCE. This
+// run reads the Daily Sales Report email, and all five stores' copies arrive at
+// 06:00 SHARP (ks01/mo01-mo04@paymore.com; verified 09-19 and 09-20 through the
+// Apps Script's own action=diagnose, which reports each message's received
+// time). Anything earlier reads YESTERDAY morning's email — which carries the
+// month only through the day before yesterday — writes nothing for yesterday,
+// counts five stores missing, and fires the DM/CEO missing-data alert. Every
+// morning. 5:00am was asked for and is not available to this half of the chain.
+//
+// The Day End Report feed is the opposite case and has all the room in the
+// world: it lands at 19:00-19:01 the same evening, which is why day-end-ingest
+// and the buying/cash/Processed Stats side could move to 5:05 and 6:15.
 //
 // The schedule lives in pg_cron, NOT in this repo. It is TWO jobs, and each
 // fires HOURLY: pg_cron only speaks UTC, so the Central-hour guard inside the
@@ -34,16 +46,20 @@
 // the next 398 days, across both DST transitions, always exactly once, never
 // twice. The other 23 firings cost one `extract` each and do nothing.
 //
-//   jobid  8  0 * * * *   main,  guard = 8   (8:00am Central)
-//   jobid 10  0 * * * *   retry, guard = 9   (9:00am Central)
+//   jobid  8  5 * * * *   main,  guard = 6   (6:05am Central)
+//   jobid 10  0 * * * *   retry, guard = 7   (7:00am Central)
 //
-// ⚠️ NET PROFIT RUNS AT :05, NOT :00, AND MUST STAY THERE (migration 0088).
-// netprofit-8am/-2pm call the SAME Apps Script project, which has ONE script
-// lock, and npsDailyRefresh holds it for its whole ~5-minute pass. On
-// 2026-09-12 both fired at 8:00:00: sales got the lock, Net Profit took it
-// next, and the buying half was refused — no buying stats, the Day End emails
-// left in the inbox, and a 0-of-5 cash email. Nothing else goes on that
-// project at :00 of hours 8 or 9.
+// ⚠️ NET PROFIT RUNS FIVE MINUTES BEHIND THIS, NEVER ALONGSIDE IT (migration
+// 0088, carried down in 0096 — it is now :10 of hour 6). netprofit-8am/-2pm
+// call the SAME Apps Script project, which has ONE script lock, and
+// npsDailyRefresh holds it for its whole ~5-minute pass. On 2026-09-12 both
+// fired at 8:00:00: sales got the lock, Net Profit took it next, and the buying
+// half was refused — no buying stats, the Day End emails left in the inbox, and
+// a 0-of-5 cash email.
+//
+// The minutes that project now owns, and on which nothing else may be put:
+// :05 of hour 5 (day-end-ingest), :05 and :10 of hour 6 (this and Net Profit),
+// :00 of hour 7 (the retry), and :05 of hour 14 (the afternoon Net Profit).
 //
 // ⚠️ THE HOUR MUST ONLY EVER BE CHANGED IN THE GUARD, and that is the whole
 // point of this shape. It is the lesson of 2026-09-10. The run time used to
@@ -61,8 +77,10 @@
 // the schedule, never the name.
 //
 // ⚠️ THE CASH EMAIL MOVED WITH IT, because cash-report is called from the end of
-// this run rather than from a cron of its own. If it ever needs to be back at
-// 7am it needs its own job; it cannot be pulled earlier from here.
+// this run rather than from a cron of its own. It cannot be pulled earlier from
+// here — and note that it COULD legitimately run earlier, since it only needs
+// the 7pm Day End mail, so 6:05 is this run's constraint being imposed on it.
+// Giving it its own job is the way to get the cash email before 6:05.
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";

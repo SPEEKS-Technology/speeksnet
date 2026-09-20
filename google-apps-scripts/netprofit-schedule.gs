@@ -140,13 +140,22 @@ var NPS_LAST_CLOSED_KEY = 'NPS_LAST_CLOSED_MONTH';
 // day for the same pass: a pass that fails when started by hand is a real fault,
 // and restarting it on a loop would only hide that.
 //
-// ⚠️ .nearMinute(30), NOT THE TOP OF THE HOUR. The 9:00 sales import retry runs
-// in this project and shares its one script lock; a restart landing on it would
-// be refused, or refuse the import. nearMinute gives ±15, so 9:15-9:45.
+// ⚠️ .nearMinute(30), NOT THE TOP OF THE HOUR. The sales import RETRY runs in
+// this project and shares its one script lock; a restart landing on it would be
+// refused, or refuse the import. nearMinute gives ±15, so the watchdog sits in
+// the second quarter of its hour and the retry has the top of it to itself.
+//
+// ⚠️ THE WATCH HOUR IS THE PASS HOUR PLUS ABOUT AN HOUR AND A HALF, and it moved
+// with the chain on 2026-09-20 (migration 0096): the morning pass went 8:05 ->
+// 6:10 and the retry 9:00 -> 7:00, so the watchdog went 9:30 -> 7:30. The shape
+// is identical — 7:15-7:45 clears a 7:00 retry exactly as 9:15-9:45 cleared a
+// 9:00 one. Left at 9 it would still have WORKED, just three and a half hours
+// after the pass it watches, which is most of the morning Ethan reads spent
+// looking at a stale tab with nothing trying to fix it.
 var NPS_OK_KEY = { morning: 'NPS_LAST_OK_MORNING', afternoon: 'NPS_LAST_OK_2PM' };
 var NPS_RESTART_KEY = { morning: 'NPS_RESTARTED_MORNING', afternoon: 'NPS_RESTARTED_2PM' };
 var NPS_FOLLOWUP_UID_KEY = 'NPS_WATCH_FOLLOWUP_UID';
-var NPS_WATCH_HOURS = [9, 15];
+var NPS_WATCH_HOURS = [7, 15];
 var NPS_WATCH_MINUTE = 30;
 var NPS_FOLLOWUP_MIN = 20;
 
@@ -501,8 +510,8 @@ function _npsOverdue(today, hour, stamps) {
   var pm = hour >= NPS_WATCH_HOURS[1];
   var key = pm ? 'afternoon' : 'morning';
   if (stamps[key] === today) return null;
-  return { pass: pm ? 'The 2pm Net Profit refresh' : 'The 8am Net Profit refresh',
-           key: key, dueAt: pm ? '2:05pm' : '8:05am', last: stamps[key] || null };
+  return { pass: pm ? 'The 2pm Net Profit refresh' : 'The morning Net Profit refresh',
+           key: key, dueAt: pm ? '2:05pm' : '6:10am', last: stamps[key] || null };
 }
 
 // PURE, for tests/np-health-check.js: what the watchdog does about it.
@@ -524,7 +533,7 @@ function _npsTailAction(today, hour, stamps, tails, retried) {
   var key = pm ? 'afternoon' : 'morning';
   if (stamps[key] !== today) return null;
   if (tails[key] === today) return null;
-  return { key: key, pass: pm ? 'The 2pm Net Profit refresh' : 'The 8am Net Profit refresh',
+  return { key: key, pass: pm ? 'The 2pm Net Profit refresh' : 'The morning Net Profit refresh',
            action: retried[key] === today ? 'give-up' : 'tail' };
 }
 

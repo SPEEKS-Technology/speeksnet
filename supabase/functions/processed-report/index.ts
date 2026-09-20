@@ -2,16 +2,23 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 // ============================================================================
-// PROCESSED REPORT — one table, every morning at 8:10am Central.
+// PROCESSED REPORT — one table, every morning at 6:15am Central.
 // ----------------------------------------------------------------------------
 // The Processed Stats section of each store's Day End Report, all five stores
 // side by side: who listed what yesterday, and what it was worth.
 //
 // WHERE THE FIGURES COME FROM
-// `day_end_facts`, written by `day-end-ingest` at 7:05am off the same Day End
+// `day_end_facts`, written by `day-end-ingest` at 5:05am off the same Day End
 // Report email that already feeds buying, cash and Google reviews. Nothing here
 // is recomputed or re-fetched — this function only reads that table and mails
 // it, exactly like `cash-report` does for `store_cash`.
+//
+// ⚠️ THAT ORDERING IS LOAD-BEARING AND HAS NO ALARM ON IT. Because this reads
+// and never fetches, a run before day-end-ingest does not fail — it mails the
+// PREVIOUS day's rows, which look entirely plausible. day-end-ingest was at
+// 7:05am until 0096; moving this report to 6:15 without moving that first would
+// have sent a wrong table every morning, quietly. If this send ever moves
+// earlier again, move day-end-ingest first and keep an hour between them.
 //
 //   listed     day_end_facts.devices_processed  ("Devices Processed")
 //   value      day_end_facts.processed_value    ("Total Value")
@@ -46,11 +53,18 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // retargeting Sunday's send at Saturday would make Monday's run hit the
 // already-sent guard and go silent, and a missing Monday is the worse failure.
 //
-// TIMING — 8:10, NOT 8:00. Ethan asked for 8:00 with the rest of the morning
-// mail. The morning sales import runs at :00 and Net Profit at :05, and both
-// share an Apps Script lock with the Gmail relay this mails through (see 0089,
-// which moved refund-mismatch to :20 for exactly that reason). :10 is clear of
-// both, ahead of refund-mismatch, and still inside the 8 o'clock read.
+// TIMING — LAST IN THE CHAIN, NEVER ALONGSIDE IT. Ethan asked for this to land
+// with the rest of the morning mail. The sales import and Net Profit share an
+// Apps Script lock with the Gmail relay this mails through (see 0089, which
+// moved refund-mismatch to :20 for exactly that reason), so this sits five
+// minutes behind both. Originally 8:10 against 8:00/8:05; since 0096 it is 6:15
+// against 6:05/6:10 — the same three-step shape, one hour and 55 minutes
+// earlier, with day-end-ingest pulled to 5:05 to stay ahead of it.
+//
+// It is the one job here still UTC-pinned as a cdt/cst pair rather than hourly,
+// because it has no other reason to wake up 23 extra times: 6:15 CDT = 11:15
+// UTC, 6:15 CST = 12:15 UTC, and the Central-hour guard = 6 picks whichever
+// twin is allowed to act. Checked across both offsets: exactly one send a day.
 //
 // Auth: verify_jwt=false, ?secret= only. There is no browser path — nothing in
 // speeks.js calls this, and the secret must stay out of the frontend.
