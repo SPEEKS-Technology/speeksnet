@@ -6051,16 +6051,46 @@ function _kpiRenderMonthly(periods) {
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiColgroupHtml() + '<tbody>' + tbody + '</tbody></table></div>';
 }
 
+// May this user save NUMBERS for the store currently on screen? Mirrors the
+// store-scoping in kpi-manage's POST, and exists because the store picker is
+// delegable now (cap-kpi-dm): a manager lent the DM's view can put another
+// store's grid on screen, and the old role-only check would have offered them an
+// Edit button the edge function answers with "Cannot submit for another store".
+// Global roles (DM / CEO / owner-manager) may submit anywhere — that is the
+// backend's rule, not a guess.
+//
+// An MSM signs in as 'manager' with speeksMultiStore set (see the login block),
+// so the multi-store case is asked with isMultiStoreManager(), NOT a role string
+// — sessionStorage never holds 'multi-store manager'. The backend sees their real
+// users.role and scopes them to MULTISTORE_MANAGER_STORES, which is the same
+// answer.
+//
+// ⚠️ Paired with `canEnterKPIs` and the roleLower block in
+// supabase/functions/kpi-manage/index.ts. Change one, change the other — a
+// frontend that says yes while the backend says no is a button that 403s, which
+// is the bug this function exists to prevent.
+const _KPI_GLOBAL_EDIT_ROLES = new Set(['district manager', 'ceo', 'owner (manager)', 'owner manager']);
+function _kpiCanEditNumbers() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (_KPI_GLOBAL_EDIT_ROLES.has(role)) return true;
+    if (role !== 'manager' && role !== 'assistant manager') return false;
+    const onScreen = (_kpiResolveStore() || '').toUpperCase();
+    if (!onScreen) return false;
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return MULTISTORE_MANAGER_STORES.indexOf(onScreen) !== -1;
+    }
+    return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase() === onScreen;
+}
+
 function _kpiSyncHeaderBtns() {
     const editBtn   = document.getElementById('kpiEditBtn');
     const saveBtn   = document.getElementById('kpiSaveBtn');
     const cancelBtn = document.getElementById('kpiCancelBtn');
     const isEditing   = !!_kpiEditingPeriod;
     const hasEditable = (_kpiPeriodsData || []).some(function(p) { return p.is_editable; });
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const canEditRole = role === 'district manager' || role === 'ceo' || role === 'owner (manager)' || role === 'owner manager' || role === 'manager' || role === 'assistant manager';
+    const canEditHere = _kpiCanEditNumbers();
     const hasPeriods  = (_kpiPeriodsData || []).length > 0;
-    if (editBtn)   editBtn.style.display   = (!isEditing && canEditRole && (hasEditable || hasPeriods)) ? '' : 'none';
+    if (editBtn)   editBtn.style.display   = (!isEditing && canEditHere && (hasEditable || hasPeriods)) ? '' : 'none';
     if (saveBtn)   saveBtn.style.display   = isEditing ? '' : 'none';
     if (cancelBtn) cancelBtn.style.display = isEditing ? '' : 'none';
     _kpiDecorateEditBtn();
@@ -6408,13 +6438,32 @@ async function openKpiEntryPanelForStore(store, tab) {
     await openKpiEntryPanel(tab);
 }
 
+// Which store the picker should OPEN on. Only ever the initial selection —
+// changing it is the whole point of the control.
+//
+// This used to be `if the picker is hidden, set it to my store`, which was the
+// same statement as "I am a manager" back when only the DM, CEO and MOCD could
+// see it. cap-kpi-dm broke that equivalence: a manager lent the picker has both
+// a visible picker AND a home store, and would have landed on OVL — the first
+// option — leaving their own store the one place they had to go looking for.
+//
+// So it asks the honest question instead: do I have a store that is actually in
+// this list? A DM or CEO is 'ALL', which matches no option, so they keep
+// whatever was selected exactly as before. An MSM routed here by a store-specific
+// feed card opens on THAT store (_kpiViewStore), same as when the picker is
+// hidden from them.
+function _kpiSeedStorePicker() {
+    const sel = document.getElementById('kpiModalStoreSelect');
+    if (!sel) return;
+    const want = (_kpiViewStore || sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    if (!want) return;
+    if (Array.from(sel.options).some(o => o.value === want)) sel.value = want;
+}
+
 async function openKpiEntryPanel(tab) {
     _kpiCurrentTab = tab || 'weekly';
     _kpiEditingPeriod = null;
-    // Seed the modal store selector with the user's own store (managers); DMs keep whatever is selected
-    const sel = document.getElementById('kpiModalStoreSelect');
-    const userStore = sessionStorage.getItem('speeksUserStore');
-    if (sel && userStore && sel.offsetParent === null) sel.value = userStore;
+    _kpiSeedStorePicker();
     document.getElementById('kpi-tab-weekly') && document.getElementById('kpi-tab-weekly').classList.toggle('active', _kpiCurrentTab === 'weekly');
     document.getElementById('kpi-tab-monthly') && document.getElementById('kpi-tab-monthly').classList.toggle('active', _kpiCurrentTab === 'monthly');
     toggleModal('kpiEntryModal');
@@ -6453,10 +6502,7 @@ async function loadWorkspaceKpis() {
     _wsKpiLoaded = true;
     _kpiCurrentTab = wantTab;
     _kpiEditingPeriod = null;
-    // Managers (picker hidden) default to their own store; DMs keep selection
-    const sel = document.getElementById('kpiModalStoreSelect');
-    const userStore = sessionStorage.getItem('speeksUserStore');
-    if (sel && userStore && sel.offsetParent === null) sel.value = userStore;
+    _kpiSeedStorePicker();
     document.getElementById('kpi-tab-weekly')?.classList.toggle('active', wantTab === 'weekly');
     document.getElementById('kpi-tab-monthly')?.classList.toggle('active', wantTab === 'monthly');
     await _kpiLoadAll(wantTab);
@@ -39047,6 +39093,17 @@ const FEATURE_CATALOG = [
     { key: 'listing-goals-assign',     label: 'Listing Goals · Assign Roles (ASM)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Store KPIs — Workspace tab',    tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    // The store picker in the Store KPIs header — i.e. the DM's version of that
+    // tab: every store's weekly and monthly grid instead of only your own. Same
+    // shape as cap-variance-dm / cap-aging-dm, and delegable for the same reason:
+    // it is what you need to run a KPI meeting, and until 2026-09-21 the only way
+    // to hand it over was to lend somebody your login (Ethan, after doing exactly
+    // that to get through a meeting). Safe to grant — kpi-manage's GET takes a
+    // ?store= and gates nothing, so this reveals a report, not a new power. The
+    // WRITE side stays store-scoped in the edge function, and _kpiCanEditNumbers
+    // mirrors that check so a borrowed picker never offers an Edit button that
+    // would come back 403.
+    { key: 'cap-kpi-dm',               label: 'Store KPIs · All Stores (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'mocd'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     // Margin Replies — PARKED (2026-07-29), UNFINISHED. Deliberately absent from

@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260920q">
+  <link rel="stylesheet" href="styles.css?v=20260921a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260920q" defer></script>
+  <script src="speeks.js?v=20260921a" defer></script>
 </head>
 <body class="preload">
 
@@ -673,7 +673,7 @@
                       <button id="kpi-tab-weekly"  class="tab-btn active" onclick="switchKpiTab('weekly')">📅 Weekly</button>
                       <button id="kpi-tab-monthly" class="tab-btn"        onclick="switchKpiTab('monthly')">📆 Monthly</button>
                   </div>
-                  <select id="kpiModalStoreSelect" class="kpi-select dynamic-module-block role-district-manager role-ceo role-mocd" onchange="_kpiLoadAll(_kpiCurrentTab)" style="display:none;">
+                  <select id="kpiModalStoreSelect" class="kpi-select dynamic-module-block role-district-manager role-ceo role-mocd" data-feature="cap-kpi-dm" onchange="_kpiLoadAll(_kpiCurrentTab)" style="display:none;">
                       <option value="OVL">OVL</option>
                       <option value="LEE">LEE</option>
                       <option value="WSP">WSP</option>
