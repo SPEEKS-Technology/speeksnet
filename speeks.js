@@ -83,6 +83,7 @@ const STORE_COMMENT_URL = `${_BASE}/store-comments`;
 const CHECKLIST_URL     = `${_BASE}/checklist`;
 const STORE_AUDIT_URL   = `${_BASE}/store-audit`;
 const CLAIMS_URL        = `${_BASE}/shopify-claims`;
+const CLAIMS_DISPUTES_URL = `${_BASE}/claims-disputes`;
 const BOX_ADMIN_URL     = `${_BASE}/box-order-admin`;
 const PATCH_NOTES_URL   = `${_BASE}/patch-notes`;
 const TICKER_URL        = `${_BASE}/ticker`;
@@ -33378,8 +33379,23 @@ function _claimStores() {
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
 
-function openClaimsModal() {
-    toggleModal('claimsModal');
+// WHICH OF THE TWO TOOLS a person gets. A DM, the CEO and the MOCD have no
+// store of their own (_claimStores is empty), so the store tool would open on a
+// New Claim form they cannot file — they belong in the oversight one (Ethan,
+// 2026-09-22). Everyone else gets their own store's tool, or both of theirs
+// with a store picker if they run two.
+const _CLAIMS_OVERSIGHT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
+const _claimsIsOversight = () =>
+    _CLAIMS_OVERSIGHT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+// tab: 'view' (the claims list) | 'mismatch' | 'returns' | 'cases'
+function openClaimsTool(tab) {
+    if (_claimsIsOversight()) { openClaimsOversight(); switchOversightTab(tab === 'view' ? 'claims' : tab); }
+    else { openClaimsModal(); switchClaimsTab(tab); }
+}
+
+// A blank form. Called both when the tool opens and every time New Claim is
+// pressed, so a cancelled one never leaves half-typed values for the next claim.
+function _resetClaimForm() {
     _buildClaimStorePicker();
     ['claim-case-number', 'claim-sku', 'claim-price', 'claim-cost', 'claim-detail'].forEach(id => {
         const el = document.getElementById(id); if (el) el.value = '';
@@ -33387,7 +33403,21 @@ function openClaimsModal() {
     const r = document.getElementById('claim-reason'); if (r) r.selectedIndex = 0;
     const ct = document.getElementById('claim-type'); if (ct) ct.selectedIndex = 0;
     _onClaimReasonChange();
+}
+
+// The button on the claims list that replaced the New Claim tab.
+function startNewClaim() {
+    _resetClaimForm();
     switchClaimsTab('new');
+}
+
+function openClaimsModal() {
+    toggleModal('claimsModal');
+    _resetClaimForm();
+    switchClaimsTab('view'); // the list first; New Claim is a button on it
+    // In the background, so the Mismatches / eBay Cases badges show how many
+    // need a check-in before anyone clicks into them.
+    loadHoldItems('mgr');
 }
 
 // "Claim Type" (Damage / Loss) only applies to a Claim, not an Item-Not-Received case.
@@ -33397,18 +33427,30 @@ function _onClaimReasonChange() {
     if (wrap) wrap.style.display = reason !== 'Item Not Received' ? 'block' : 'none';
 }
 
+// 'view' is the claims list; 'mismatch', 'returns' and 'cases' are the Claims &
+// Disputes additions (CLAIMS & DISPUTES section, below the claims tool). 'new' is
+// a panel with NO TAB of its own: filing a claim is a button on the claims list
+// rather than a fifth tab (Ethan, 2026-09-22 — four tabs is already a lot). While
+// the form is up, Claims stays the lit tab, because that is where Cancel and Save
+// both land.
 function switchClaimsTab(tab) {
-    const nb = document.getElementById('claims-tab-new');
-    const vb = document.getElementById('claims-tab-view');
-    if (nb) nb.classList.toggle('active', tab === 'new');
-    if (vb) vb.classList.toggle('active', tab === 'view');
-    const np = document.getElementById('claims-panel-new');
-    const vp = document.getElementById('claims-panel-view');
-    if (np) np.style.display = tab === 'new' ? 'block' : 'none';
-    if (vp) vp.style.display = tab === 'view' ? 'block' : 'none';
-    const sb = document.getElementById('submitClaimBtn');
-    if (sb) sb.style.display = tab === 'new' ? '' : 'none';
+    ['new', 'view', 'mismatch', 'returns', 'cases'].forEach(t => {
+        const b = document.getElementById(`claims-tab-${t}`);
+        const p = document.getElementById(`claims-panel-${t}`);
+        if (b) b.classList.toggle('active', t === tab || (tab === 'new' && t === 'view'));
+        if (p) p.style.display = t === tab ? 'block' : 'none';
+    });
+    ['submitClaimBtn', 'cancelClaimBtn'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.style.display = tab === 'new' ? '' : 'none';
+    });
     if (tab === 'view') fetchMyClaims();
+    // openClaimsModal already started a load (for the tab badges); only fetch
+    // again if that one has finished, and without re-asking eBay.
+    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases') {
+        if (_holdLoading.mgr) renderHoldItems('mgr');
+        else loadHoldItems('mgr', { sync: !_holdData.mgr });
+    }
 }
 
 // MSM gets a store chooser; a single-store manager is locked to their store.
@@ -33804,12 +33846,738 @@ async function saveEscalation(id) {
 }
 
 // =========================================================
+//  CLAIMS & DISPUTES — MISMATCHES + EBAY CASES
+//  The manager side of "our money is held or not lining up". Two tabs in the
+//  claims tool (and in the DM oversight view), backed by the claims-disputes
+//  edge function and migrations 0102 / 0103.
+//
+//  WHY A MANAGER HAS TO BE ABLE TO SAY "RESOLVED". refund-mismatch emails an
+//  order every morning while eBay and Shopify disagree, and some of those
+//  disagreements are correct: OVL refunded an eBay buyer, recovered the money
+//  through a Shopify insurance claim instead of refunding Shopify, and the
+//  order is fine. The detector can never learn that. So a manager marks it
+//  Resolved — and must say why. The database refuses a resolution without one.
+//
+//  WHEN AN ITEM SHOWS UP IS DECIDED BY THE SERVER, NOT HERE. Ethan, 2026-09-22:
+//  every type follows one rule — checked daily, invisible until it has been
+//  open its timeframe (mismatch 3 days, eBay case 2), then due every day until
+//  settled or resolved; "Still open" hides it for that timeframe again. The
+//  rule lives in claims-disputes `stateOf` so the morning email can use the
+//  same one later. This file only DRAWS `item.state`; it never re-derives it —
+//  a second copy of the rule is how the tool and the email would drift apart.
+//
+//  A REFUNDED ITEM-NOT-RECEIVED NEEDS A CLAIM. INRs sit with the returns and
+//  cases; when eBay shows the buyer was refunded, the item reads "Refunded —
+//  needs a claim" and the only way off the list is opening one or linking the
+//  one already filed. A likely match (same store, same amount, filed near the
+//  refund) is offered first, but never linked without a click: the 2026-09-22
+//  OVL check found two refunded INRs already claimed by hand and one that was
+//  never claimed, and only a person can tell those apart for certain.
+//
+//  ROLLED OUT ONE STORE AT A TIME. The tabs stay hidden (display:none in the
+//  markup) until the server says one of this user's stores is rolled out.
+//
+//  Read-only against the marketplaces: nothing here refunds, responds to or
+//  closes anything on eBay or Shopify. That is done on the sites, by hand.
+// =========================================================
+const HOLD_MIN_REASON = 10;
+
+let _holdData = { mgr: null, ov: null };        // last list response per view
+let _holdIndex = { mgr: [], ov: [] };           // items by render position, for onclick
+let _holdView = { mgr: { store: '', show: 'due' }, ov: { store: '', show: 'due' } };
+let _holdOpenForm = { mgr: null, ov: null };    // { id, mode: 'status' | 'claim' }
+let _holdLoading = { mgr: false, ov: false };
+
+function _holdStores(ctx) {
+    return ctx === 'ov' ? [..._CLAIMS_OVERSIGHT_STORES] : _claimStores();
+}
+function _holdWrap(ctx, tab) {
+    return document.getElementById(`hold-${ctx}-${tab}`);
+}
+
+// The server's state, drawn. See the banner: no rule lives here.
+function _holdState(type, it) { return it.state || 'due'; }
+// The site's own colours rather than this tool's own reds and greens (Ethan,
+// 2026-09-22). The red and green are styles.css --red-alert and the sage brand
+// green; the tints and deep tones are the ones the Margins tool already uses
+// (--mg-red-*, --mg-amber-*), with --win-* for informational blue.
+const _HOLD_C = {
+    red:   { bg: '#fcecec', fg: '#b23636', line: '#edc9c9', solid: 'var(--red-alert)' },
+    amber: { bg: '#fdf3e1', fg: '#b45309', line: '#f0d9a8' },
+    green: { bg: '#eef5e8', fg: '#4a7530', line: '#cfe0c0' },
+    blue:  { bg: '#e1f0fe', fg: '#0078d4', line: '#cce5ff' },
+    grey:  { bg: '#f1f5f9', fg: '#475569', line: '#e2e8f0' },
+};
+const _HOLD_STATE = {
+    // 0107: eBay is waiting on an answer from us. Nothing else about the item can
+    // move until someone says they answered it, so it leads the list.
+    needs_reply: { label: 'eBay is waiting on us',   bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
+    needs_claim: { label: 'Refunded — needs a claim', bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
+    due:         { label: 'Check-in due',             bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 1 },
+    checked:     { label: 'Checked in',               bg: _HOLD_C.amber.bg, fg: _HOLD_C.amber.fg, rank: 2 },
+    covered:     { label: 'Claim open',               bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
+    resolved:    { label: 'Resolved',                 bg: _HOLD_C.green.bg, fg: _HOLD_C.green.fg, rank: 4 },
+    settled:     { label: 'Settled',                  bg: _HOLD_C.grey.bg,  fg: _HOLD_C.grey.fg,  rank: 5 },
+};
+// TWO views, not three (Ethan, 2026-09-22: "we probably don't need the resolved
+// section"). "Needs Attention" is what a morning email would list. Resolved
+// items ride along in the second view so a wrong Resolved can still be reopened;
+// one the marketplace settled by itself simply drops off the tool.
+const _HOLD_VIEWS = {
+    due:     { label: 'Needs Attention',           states: ['needs_reply', 'needs_claim', 'due'] },
+    // 'settled' rides along too (Ethan, 2026-09-22): he linked a claim that was
+    // already Recovered to a mismatch, which settles it at once — and with
+    // settled in neither view the card simply vanished, with nothing to show
+    // the link had worked. Settled and resolved are both FINISHED, so they sit
+    // in the collapsed group at the bottom of this view rather than in the list.
+    waiting: { label: 'Status Changed/Claim Open', states: ['checked', 'covered', 'resolved', 'settled'] },
+};
+// Which of that view's states are done with, and fold away.
+const _HOLD_DONE = ['resolved', 'settled'];
+
+const _holdIsInr = it => it.kind === 'inquiry' || (it.kind === 'case' && it.case_type === 'ITEM_NOT_RECEIVED');
+// A plain return only. An escalated one arrives folded into the case eBay opened
+// (0104), which is no longer a routine return, so it belongs with the cases.
+const _holdIsReturn = it => it.kind === 'return';
+const _holdItemKey = entry => entry.type === 'mismatch' ? entry.it.issue_key : entry.it.case_key;
+const _holdDelivered = it => /DELIVERED/i.test(String(it.tracking_status || ''));
+// Returns run delivered → on its way back → not shipped yet → needs a label
+// (Ethan, 2026-09-22): the ones closest to a refund first, the ones we have not
+// answered yet last, so nothing sits unnoticed at the bottom.
+// Cases & Disputes runs: whatever eBay is still holding open first — an
+// escalated case or a dispute — then an INR still open, then a refunded INR
+// that needs a carrier claim, and last the refunded ones the carrier says were
+// delivered (Ethan, 2026-09-22). That last band is the easy money: eBay hands it
+// back for the asking, so it does not need to sit at the top.
+// eBay waiting on US comes before all of it (0107): a case nobody answered is
+// the one that gets decided against us by default.
+function _holdCaseRank(it) {
+    if (it.awaiting_reply) return 0;
+    if (it.is_open && it.kind === 'case') return 1;   // escalated to an eBay case
+    if (it.is_open) return 2;                         // an INR eBay still has open
+    if (_holdDelivered(it)) return 4;
+    return 3;
+}
+function _holdReturnRank(it) {
+    const st = String(it.ebay_status || '');
+    if (/ITEM_DELIVERED/.test(st)) return 0;
+    if (/ITEM_SHIPPED/.test(st)) return 1;
+    if (/READY_FOR_SHIPPING|ITEM_READY_TO_SHIP/.test(st)) return 2;
+    if (/WAITING_FOR_RETURN_LABEL|RETURN_LABEL_PENDING/.test(st)) return 3;
+    return 4;
+}
+const _holdKeyOf = e => `${e.type}|${e.type === 'mismatch' ? e.it.issue_key : e.it.case_key}`;
+
+async function loadHoldItems(ctx, opts = {}) {
+    const stores = _holdStores(ctx);
+    const wraps = ['mismatch', 'returns', 'cases'].map(t => _holdWrap(ctx, t)).filter(Boolean);
+    if (!stores.length) { _holdNotLive(ctx); return; }
+    if (!_holdData[ctx]) wraps.forEach(w => { w.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading…</div>'; });
+    _holdLoading[ctx] = true;
+    try {
+        await _holdFetch(ctx, stores);
+        renderHoldItems(ctx);
+        // Then ask for a fresh eBay read. The function throttles this per store,
+        // so opening the tool twice in a row costs eBay nothing the second time.
+        if (opts.sync !== false && (_holdData[ctx].stores || []).length) {
+            const res = await fetch(CLAIMS_DISPUTES_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'sync', stores }),
+            });
+            const j = await res.json().catch(() => ({}));
+            if (j && j.swept && Object.keys(j.swept).length) {
+                await _holdFetch(ctx, stores);
+                renderHoldItems(ctx);
+            }
+        }
+    } catch (e) {
+        if (!_holdData[ctx]) wraps.forEach(w => { w.innerHTML = '<div style="color:var(--red-alert); padding:24px; text-align:center; font-weight:700;">Could not load. Try again in a minute.</div>'; });
+    } finally {
+        _holdLoading[ctx] = false;
+    }
+}
+
+async function _holdFetch(ctx, stores) {
+    const res = await fetch(`${CLAIMS_DISPUTES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'load failed');
+    _holdData[ctx] = json;
+}
+
+// The tabs are part of the design and are ALWAYS there; what arrives store by
+// store is the data behind them (Ethan, 2026-09-22: put the front end in place,
+// "then we'd fill it in with the returns and stuff 1 store at a time"). They used
+// to be hidden until the server said the store was rolled out, which is what the
+// first-sign-in glitch was: the bar was built twice, once before the answer and
+// once after. Until a store is in the function's ROLLOUT_STORES its manager gets
+// the tab and a line saying what is coming, instead of a tab that appears one day
+// out of nowhere.
+const _HOLD_TAB_NOUN = {
+    mismatch: 'Refund mismatches',
+    returns: 'eBay returns',
+    cases: 'eBay cases and disputes',
+};
+function _holdNotLive(ctx) {
+    const mine = _holdStores(ctx);
+    const who = mine.length ? mine.join(' and ') : 'your store';
+    ['mismatch', 'returns', 'cases'].forEach(t => {
+        const w = _holdWrap(ctx, t);
+        if (!w) return;
+        w.innerHTML = `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600; line-height:1.7;">
+            ${escapeHtml(_HOLD_TAB_NOUN[t])} aren't switched on for ${escapeHtml(who)} yet.
+            <div style="margin-top:6px; font-weight:600; color:#cbd5e1;">Stores are added one at a time, so every number is checked against eBay and Shopify before anyone works off it.</div>
+        </div>`;
+    });
+}
+
+// Items needing someone today, for the tab badges.
+function _holdDueCounts(ctx) {
+    const d = _holdData[ctx];
+    const need = x => _HOLD_VIEWS.due.states.includes(x.state);
+    if (!d) return { mismatch: 0, returns: 0, cases: 0 };
+    const due = (d.cases || []).filter(need);
+    return {
+        mismatch: (d.mismatches || []).filter(need).length,
+        returns: due.filter(_holdIsReturn).length,
+        cases: due.filter(c => !_holdIsReturn(c)).length,
+    };
+}
+function _holdPaintBadges(ctx) {
+    const n = _holdDueCounts(ctx);
+    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases]].forEach(([t, v]) => {
+        const b = document.getElementById(`hold-${ctx}-badge-${t}`);
+        if (!b) return;
+        b.textContent = v ? String(v) : '';
+        b.style.display = v ? 'inline-block' : 'none';
+    });
+}
+
+function renderHoldItems(ctx) {
+    _holdIndex[ctx] = [];
+    const d = _holdData[ctx];
+    if (!d) return;
+    _holdPaintBadges(ctx);
+    // Rolled out store by store: the tab is here, the data is not yet.
+    if (!(d.stores || []).length) { _holdNotLive(ctx); return; }
+    const mw = _holdWrap(ctx, 'mismatch');
+    const rw = _holdWrap(ctx, 'returns');
+    const cw = _holdWrap(ctx, 'cases');
+    // Cases indexed by eBay order, so a mismatch can say "there's an open return
+    // on this order" — the most common reason one side refunded and the other
+    // hasn't yet.
+    const casesByOrder = {};
+    // An escalated case carries the legacy order id; the mismatch has the Seller
+    // Hub one, which only its folded-in return knows. Index it under both.
+    (d.cases || []).forEach(c => [c.order_id, c.return && c.return.order_id].filter(Boolean)
+        .forEach(o => (casesByOrder[o] = casesByOrder[o] || []).push(c)));
+    if (mw) mw.innerHTML = _holdToolbar(ctx, 'mismatch') + _holdList(ctx, 'mismatch', d.mismatches || [], casesByOrder);
+    // Returns stand on their own (Ethan, 2026-09-22): a return is the routine
+    // one — the buyer wants to send it back — while an INR, an escalated case
+    // and (later) a payment dispute are money in question. Same item type and
+    // the same rule underneath; only the list is split.
+    const all = d.cases || [];
+    if (rw) rw.innerHTML = _holdToolbar(ctx, 'ebay_case', { returns: true }) + _holdSyncLine(d)
+        + _holdList(ctx, 'ebay_case', all.filter(_holdIsReturn), null, { returns: true });
+    if (cw) cw.innerHTML = _holdToolbar(ctx, 'ebay_case') + _holdSyncLine(d) + _holdList(ctx, 'ebay_case', all.filter(c => !_holdIsReturn(c)), null);
+}
+
+function _holdToolbar(ctx, type, opts) {
+    const d = _holdData[ctx] || {};
+    const v = _holdView[ctx];
+    const stores = d.stores || [];
+    const sel = 'padding:7px 10px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:12.5px; font-weight:600; background:#fff;';
+    const storeSel = stores.length > 1
+        ? `<select onchange="_holdView.${ctx}.store=this.value; renderHoldItems('${ctx}');" style="${sel}">`
+          + ['', ...stores].map(s => `<option value="${s}" ${s === v.store ? 'selected' : ''}>${s || 'All stores'}</option>`).join('')
+          + `</select>` : '';
+    // Returns are a list to read, not a list to work (Ethan, 2026-09-22), so
+    // they have no Needs Attention / Status Changed split to choose between.
+    const showSel = (opts && opts.returns) ? '' : `<select onchange="_holdView.${ctx}.show=this.value; renderHoldItems('${ctx}');" style="${sel}">`
+        + Object.entries(_HOLD_VIEWS).map(([k, x]) => `<option value="${k}" ${k === v.show ? 'selected' : ''}>${x.label}</option>`).join('')
+        + `</select>`;
+    return `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">${showSel}${storeSel}
+        <button onclick="loadHoldItems('${ctx}')" class="btn-secondary" style="font-size:12px; padding:7px 12px; margin-left:auto;">Refresh</button></div>`;
+}
+
+// How fresh the eBay list is, and which stores could not be read. A store that
+// failed keeps its last good list, so the manager has to be told it is stale.
+function _holdSyncLine(d) {
+    const rows = d.sync || [];
+    if (!rows.length) return '<div style="font-size:11.5px; color:#94a3b8; margin-bottom:10px;">eBay has not been read yet for this store.</div>';
+    const bad = rows.filter(r => !r.ok);
+    let html = '';
+    if (bad.length) html += `<div style="font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ Couldn't fully read eBay for ${bad.map(r => escapeHtml(r.store_code)).join(', ')} — showing the last list that loaded. It will retry next time this opens.</div>`;
+    return html;
+}
+
+function _holdList(ctx, type, items, casesByOrder, opts) {
+    const v = _holdView[ctx];
+    const multi = ((_holdData[ctx] || {}).stores || []).length > 1;
+    const returns = !!(opts && opts.returns);
+    // A return shows while eBay still has it open; the daily read moves it off
+    // this list by itself when it is refunded, closed or escalated.
+    const want = (_HOLD_VIEWS[v.show] || _HOLD_VIEWS.due).states;
+    let rows = returns ? items.filter(it => it.is_open) : items.filter(it => want.includes(it.state));
+    if (v.store) rows = rows.filter(it => it.store_code === v.store);
+    // Most urgent state first, then oldest — the oldest open item is the one
+    // closest to becoming a month-end adjusting entry.
+    const at = it => new Date((type === 'mismatch' ? it.reversed_at : it.opened_at) || 0).getTime();
+    if (returns) rows.sort((a, b) => _holdReturnRank(a) - _holdReturnRank(b) || at(a) - at(b));
+    else if (type === 'ebay_case') rows.sort((a, b) => _holdCaseRank(a) - _holdCaseRank(b) || at(a) - at(b));
+    else rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank || at(a) - at(b));
+    if (!rows.length) {
+        const empty = returns ? 'No open returns right now.'
+            : v.show === 'due'
+            ? (type === 'mismatch' ? 'Nothing needs attention — eBay and Shopify agree, or every open one is checked in.' : 'Nothing needs attention on eBay right now.')
+            // Status Changed/Claim Open: say what would be here, not "this view"
+            : (type === 'mismatch' ? 'Nothing is checked in or waiting on an insurance claim.'
+                                   : 'Nothing is checked in or waiting on a claim.');
+        return `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">${empty}</div>`;
+    }
+    const cards = list => `<div style="display:flex; flex-direction:column; gap:10px;">`
+        + list.map(it => _holdCard(ctx, type, it, multi, casesByOrder, opts)).join('') + `</div>`;
+    // Status Changed/Claim Open holds two different things: items still moving
+    // (checked in, claim open) and items that are done with. Ethan asked for the
+    // finished ones to fold away — they are there to be found, not read daily.
+    if (!returns && v.show === 'waiting') {
+        const done = rows.filter(it => _HOLD_DONE.includes(it.state));
+        const live = rows.filter(it => !_HOLD_DONE.includes(it.state));
+        if (!done.length) return cards(live);
+        const head = live.length ? cards(live)
+            : `<div style="padding:18px 20px; text-align:center; color:#94a3b8; font-weight:600;">Nothing is checked in or waiting on a claim.</div>`;
+        return head + `<details style="margin-top:14px;">
+            <summary style="cursor:pointer; font-size:12.5px; font-weight:800; color:#64748b; background:#f1f5f9; border-radius:8px; padding:9px 12px;">Resolved (${done.length})</summary>
+            <div style="margin-top:10px;">${cards(done)}</div></details>`;
+    }
+    return cards(rows);
+}
+
+const _holdPretty = s => String(s || '').replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase());
+const _holdMoney = v => (v == null || v === '') ? '' : '$' + Number(v).toFixed(2);
+const _holdDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+// due_on is a Chicago calendar date (YYYY-MM-DD); read it as that date, not as
+// UTC midnight, or it prints as the day before.
+const _holdDay = s => { if (!s) return ''; const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+// eBay deadlines are END OF DAY PACIFIC, stored as 06:59:59Z (or 07:00:00Z) the
+// next morning. Printed in the viewer's zone they read a day late — the
+// 2026-09-22 OVL check had "Issue refund by: Sep 23" in Seller Hub against
+// "Sep 24" here. So a deadline is shown as the Pacific date one second before it.
+const _holdEbayDay = iso => {
+    const t = new Date(iso).getTime();
+    return isNaN(t) ? '' : new Date(t - 1000).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric' });
+};
+// What Seller Hub says a return needs, keyed off the return's STATUS. eBay's own
+// activityDue field was checked and is not reliable for this: it said "provide
+// label" for a return Seller Hub showed as "Waiting for buyer to ship". A date
+// appears only when the next move is ours, as it does in Seller Hub.
+function _holdReturnAction(it) {
+    const st = String(it.ebay_status || '');
+    // Always red, not only inside the two-day window: the item is back in our
+    // hands and the buyer is owed their money, so it is the one stage where the
+    // clock is already running against us (Ethan, 2026-09-22).
+    if (/ITEM_DELIVERED/.test(st)) return { text: 'Return delivered — issue refund by', ours: true, urgent: true };
+    if (/WAITING_FOR_RETURN_LABEL|RETURN_LABEL_PENDING/.test(st)) return { text: 'Provide return shipping label by', ours: true };
+    if (/READY_FOR_SHIPPING|ITEM_READY_TO_SHIP/.test(st)) return { text: 'Waiting for buyer to ship', ours: false };
+    if (/ITEM_SHIPPED/.test(st)) return { text: 'Return shipped', ours: false };
+    return { text: _holdPretty(st.split(' / ').pop()), ours: true };
+}
+// The legacy "<itemId>-<transactionId>" id an inquiry carries is not what
+// Seller Hub shows as the order number, so it is not shown as one.
+const _holdIsLegacyOrder = o => /^\d{9,}-\d{9,}$/.test(String(o || ''));
+// eBay sends listing titles HTML-encoded (13&#34; for 13"). Decoded before the
+// usual escaping, or the manager reads the entity.
+const _holdUnentity = t => String(t || '')
+    .replace(/&#(\d+);/g, (m, n) => String.fromCharCode(Number(n)))
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const _holdAge = iso => { const n = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)); return `${n} day${n === 1 ? '' : 's'} ago`; };
+
+function _holdCaseTitle(it) {
+    if (it.kind === 'inquiry') return 'Item not received';
+    if (it.kind === 'case') {
+        if (it.case_type === 'ITEM_NOT_RECEIVED') return 'Item not received — escalated to eBay';
+        if (it.case_type === 'RETURN') return 'Return — escalated to eBay';
+        return 'eBay case';
+    }
+    if (it.kind === 'dispute') return 'Payment dispute';
+    return 'Return' + (it.reason ? ' — ' + escapeHtml(_holdPretty(it.reason)) : '');
+}
+
+// A claim that is probably the one already filed for this refunded INR: same
+// store, same amount, filed within 30 days after the INR opened. Offered first
+// in the picker; the manager still has to confirm it.
+function _holdClaimGuess(ctx, it) {
+    const claims = ((_holdData[ctx] || {}).claims || []).filter(c => c.store === it.store_code);
+    const opened = new Date(it.opened_at || 0).getTime();
+    return claims.find(c => Number(c.price) === Number(it.amount)
+        && new Date(c.created_at).getTime() >= opened - 86400000
+        && new Date(c.created_at).getTime() <= opened + 30 * 86400000) || null;
+}
+
+function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
+    const idx = _holdIndex[ctx].push({ type, it }) - 1;
+    const readOnly = !!(opts && opts.returns);
+    const st = it.state;
+    const s = _HOLD_STATE[st] || _HOLD_STATE.due;
+    const key = type === 'mismatch' ? it.issue_key : it.case_key;
+    let form = _holdOpenForm[ctx] && _holdOpenForm[ctx].id === `${type}|${key}` ? _holdOpenForm[ctx].mode : null;
+    if (readOnly) form = null;
+    const inr = type === 'ebay_case' && _holdIsInr(it);
+    const chip = t => `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:#f1f5f9; color:#475569;">${t}</span>`;
+    const kv = (k, val) => val ? `<span style="white-space:nowrap;"><span style="color:#94a3b8;">${k}</span> ${val}</span>` : '';
+
+    let title, subtitle = '', facts = [], extra = '';
+    if (type === 'mismatch') {
+        const verb = it.reversal_kind === 'cancel' ? 'Cancelled' : 'Refunded';
+        title = it.direction === 'ebay_only'
+            ? `${verb} on eBay — still a sale in Shopify`
+            : `${verb} in Shopify — still a sale on eBay`;
+        facts = [
+            kv('eBay order', `<b>${escapeHtml(it.ebay_order_id)}</b>${siteCopyBtn(it.ebay_order_id, 'eBay order number')}`),
+            it.shopify_order_name ? kv('Shopify', `<b>${escapeHtml(it.shopify_order_name)}</b>${siteCopyBtn(it.shopify_order_name, 'Shopify order')}`) : '',
+            kv(verb, `${_holdDate(it.reversed_at)} · ${_holdAge(it.reversed_at)}`),
+        ];
+        const related = (casesByOrder && casesByOrder[it.ebay_order_id]) || [];
+        if (related.length) {
+            extra = `<div style="font-size:11.5px; color:#1d4ed8; margin-top:6px;">🔗 ${related.map(c => `eBay ${c.kind === 'inquiry' ? 'item-not-received inquiry' : c.kind} ${escapeHtml(c.ebay_id)} — ${escapeHtml(_holdPretty(c.ebay_status))}`).join('; ')}</div>`;
+        }
+    } else {
+        // Seller Hub leads with the item, so the card does too; the kind of case
+        // moves under it.
+        title = it.item_title ? escapeHtml(_holdUnentity(it.item_title)) : _holdCaseTitle(it);
+        subtitle = it.item_title ? _holdCaseTitle(it) : '';
+        const soon = iso => iso && (new Date(iso).getTime() - Date.now()) < 2 * 86400000;
+        const deadline = (label, iso, urgent) => iso
+            ? `<span style="white-space:nowrap; ${urgent || soon(iso) ? `color:${_HOLD_C.red.fg}; font-weight:800;` : 'font-weight:700;'}">${label} ${_holdEbayDay(iso)}</span>` : '';
+        // Where it stands, in Seller Hub's words, with our deadline when the next
+        // move is ours.
+        let where = '';
+        if (it.is_open && it.kind === 'return') {
+            const a = _holdReturnAction(it);
+            where = a.ours
+                ? deadline(escapeHtml(a.text), it.respond_by, a.urgent)
+                  // no date from eBay: "…issue refund by" would dangle
+                  || `<span style="${a.urgent ? `color:${_HOLD_C.red.fg}; font-weight:800;` : 'font-weight:700;'}">${escapeHtml(a.text.replace(/ by$/, ''))}</span>`
+                : `<span style="font-weight:700; color:#475569;">${escapeHtml(a.text)}</span>`;
+        } else if (it.is_open) {
+            where = deadline(it.kind === 'inquiry' ? 'Resolve by' : 'Respond by', it.respond_by)
+                || `<span style="font-weight:700; color:#475569;">${escapeHtml(_holdPretty(it.ebay_status))}</span>`;
+        } else {
+            where = `<span style="color:#475569;">${escapeHtml(_holdPretty(it.ebay_status))}</span>`;
+        }
+        // An escalated return arrives as ONE card — the case, with the return it
+        // came from folded in by the server (0104) — so it carries both ids, and
+        // the order number Seller Hub shows comes from the return.
+        const ret = it.return || null;
+        const returnId = it.kind === 'return' ? it.ebay_id : ret ? ret.ebay_id : '';
+        // 0106 reads the real order number for an inquiry or a case; a return
+        // already carries it, and an escalated one borrows its return's.
+        const orderNo = (ret && ret.order_id) || it.order_no || it.order_id;
+        const link = returnId ? `https://www.ebay.com/rt/ReturnDetails?returnId=${encodeURIComponent(returnId)}` : '';
+        const idLabel = it.kind === 'return' ? 'Return ID' : it.kind === 'inquiry' ? 'Request ID' : 'Case ID';
+        facts = [
+            where,
+            kv(idLabel, `<b>${escapeHtml(it.ebay_id)}</b>${siteCopyBtn(it.ebay_id, 'eBay ' + idLabel)}`),
+            ret ? kv('Return ID', `<b>${escapeHtml(ret.ebay_id)}</b>${siteCopyBtn(ret.ebay_id, 'eBay Return ID')}`) : '',
+            orderNo && !_holdIsLegacyOrder(orderNo) ? kv('Order', `${escapeHtml(orderNo)}${siteCopyBtn(orderNo, 'eBay order number')}`) : '',
+            it.buyer ? kv('Buyer', escapeHtml(it.buyer)) : '',
+            ret && ret.opened_at ? kv('Return opened', `${_holdDate(ret.opened_at)} · ${_holdAge(ret.opened_at)}`) : '',
+            kv(ret ? 'Escalated' : 'Opened', `${_holdDate(it.opened_at)} · ${_holdAge(it.opened_at)}`),
+            link ? `<a href="${link}" target="_blank" rel="noopener" style="font-weight:800; color:#1d4ed8; white-space:nowrap;">Open on eBay ↗</a>` : '',
+
+        ];
+        // What the carrier says. A refunded INR that turns up delivered is the
+        // one to look at first: eBay refunds us for it, no claim needed (0106).
+        if (it.tracking_status) {
+            const del = /DELIVERED/i.test(it.tracking_status);
+            const tn = it.tracking_number ? `${escapeHtml(it.tracking_carrier || '')} ${escapeHtml(it.tracking_number)}${siteCopyBtn(it.tracking_number, 'tracking number')}` : '';
+            facts.push(`<span style="white-space:nowrap; ${del ? `color:${_HOLD_C.green.fg}; font-weight:800;` : 'color:#475569;'}">${del ? 'Delivered' : escapeHtml(_holdPretty(it.tracking_status))}${tn ? ' · ' + tn : ''}</span>`);
+        }
+        if (st === 'needs_claim' && _holdDelivered(it)) {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>The carrier says this was delivered</b> — Even though the buyer was refunded. eBay covers a delivered item-not-received, so ask eBay for it rather than filing a claim, then mark this resolved and say what eBay did.</div>`;
+        } else if (st === 'needs_claim') {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''}. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.</div>`;
+        }
+        if (it.state_note === 'outcome unread') {
+            extra += `<div style="font-size:11.5px; color:#b45309; margin-top:6px;">Closed on eBay, but we couldn't read whether the buyer was refunded yet. It clears itself on the next read, or check it on eBay.</div>`;
+        }
+    }
+    if (it.claim) {
+        const cs = CLAIM_STATUS[it.claim.status] || CLAIM_STATUS.in_progress;
+        extra += `<div style="font-size:12px; margin-top:8px;">Claim <b>${escapeHtml(it.claim.case_number || '')}</b>${siteCopyBtn(it.claim.case_number, 'claim number')} <span style="font-size:10.5px; font-weight:800; padding:2px 7px; border-radius:999px; background:${cs.bg}; color:${cs.fg};">${cs.label}</span>${it.claim.status === 'in_progress' ? ' <span style="color:#64748b;">— Check-ins happen on the claim, in the Claims tab.</span>' : ''}</div>`;
+    }
+
+    // What the last person said, if anyone has.
+    const rv = it.review;
+    let said = '';
+    if (rv && st !== 'settled' && st !== 'covered') {
+        const who = escapeHtml(rv.by_name || 'Someone');
+        if (rv.status === 'resolved') {
+            said = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>Resolved by ${who}</b> · ${_holdDate(rv.updated_at)}<div style="margin-top:2px;">${escapeHtml(rv.note || '')}</div></div>`;
+        } else {
+            said = `<div style="font-size:12px; background:${_HOLD_C.amber.bg}; border:1px solid ${_HOLD_C.amber.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.amber.fg};"><b>Still open</b> — ${who}, ${_holdDate(rv.updated_at)}${st === 'checked' && it.due_on ? ` · back on the list ${_holdDay(it.due_on)}` : ''}${rv.note ? `<div style="margin-top:2px;">${escapeHtml(rv.note)}</div>` : ''}</div>`;
+        }
+    }
+    // 0107/0108. Said plainly, because the move is on eBay and nothing pressed
+    // here can stand in for it: eBay's own history is what clears this.
+    if (st === 'needs_reply') {
+        said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
+            <b>eBay is waiting on a reply from us${it.buyer_acted_at ? ` since ${_holdDate(it.buyer_acted_at)}` : ''}</b>
+            — answer it on eBay and this clears itself on the next read. It can't be checked in until then.</div>`;
+    } else if (it.is_open && it.seller_replied_at) {
+        said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We answered eBay ${_holdDate(it.seller_replied_at)} — waiting on the buyer.</div>`;
+    }
+    if (st === 'settled' && !it.claim) {
+        said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${type === 'mismatch'
+            ? `Both sites agree now${it.resolved_at ? ' (' + _holdDate(it.resolved_at) + ')' : ''} — nothing to do.`
+            : `Closed on eBay${it.closed_at ? ' (' + _holdDate(it.closed_at) + ')' : ''}${inr && it.outcome === 'no_refund' ? ' — no refund to the buyer.' : '.'}`}</div>`;
+    }
+
+    const history = (it.history || []);
+    const histHtml = history.length > 1
+        ? `<details style="margin-top:6px;"><summary style="font-size:11px; color:#64748b; cursor:pointer; font-weight:700;">History (${history.length})</summary>`
+          + history.map(h => `<div style="font-size:11.5px; color:#475569; padding:4px 0; border-top:1px solid #f1f5f9;"><b>${escapeHtml(_holdPretty(h.action))}</b> · ${escapeHtml(h.by_name || 'Someone')} · ${_holdDate(h.at)}${h.note ? ` — ${escapeHtml(h.note)}` : ''}</div>`).join('')
+          + `</details>` : '';
+
+    const sBtn = 'font-size:11.5px; font-weight:800; border-radius:8px; padding:7px 11px; cursor:pointer; line-height:1; white-space:nowrap;';
+    const acts = [];
+    if (readOnly) { /* nothing to press: the daily read moves a return along */ }
+    else if (st === 'resolved') {
+        acts.push(`<button onclick="_holdReopen('${ctx}', ${idx})" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">Reopen</button>`);
+    } else if (st === 'needs_claim') {
+        // Delivered after all: eBay pays that one back, so the first move is a
+        // note saying what eBay did, not a carrier claim (0106).
+        if (_holdDelivered(it)) {
+            acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">${form === 'status' ? 'Close' : 'Delivered — Resolve it'}</button>`);
+        }
+        acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">${form === 'claim' ? 'Close' : 'Open or link a claim'}</button>`);
+    } else if (st === 'needs_reply' || st === 'due' || st === 'checked') {
+        acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.blue.bg}; border:1.5px solid ${_HOLD_C.blue.line}; color:${_HOLD_C.blue.fg};">${form === 'status' ? 'Close' : 'Update status'}</button>`);
+    }
+
+    let formHtml = '';
+    if (form === 'status' && (st === 'due' || st === 'checked' || st === 'needs_claim' || st === 'needs_reply')) {
+        const days = ((_holdData[ctx] || {}).timers || {})[type] || 0;
+        formHtml = `
+        <div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
+            <label class="form-label-caps" for="hold-note-${ctx}-${idx}">Note</label>
+            <textarea id="hold-note-${ctx}-${idx}" rows="2" class="form-input-lg" style="width:100%; box-sizing:border-box; resize:vertical;"
+                placeholder="${type === 'mismatch' ? 'e.g. Won the Shopify insurance claim SHPJG-0709… — money recovered, no Shopify refund needed' : 'e.g. Buyer shipped the return, tracking 1Z…; refund once it arrives'}"></textarea>
+            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${st === 'needs_reply'
+                ? `<b>Still open</b> is off the table until eBay shows our reply — that is the point of this one. <b>Resolved</b> is still here for a case that ended some other way, and needs a reason.`
+                : type === 'mismatch'
+                ? `<b>Insurance Claim</b> opens the claim form and takes this off the list for ${days} day${days === 1 ? '' : 's'}. <b>Resolved</b> needs a reason — why it is fine that the two sites don’t match, or what you fixed.`
+                : `<b>Still open</b> takes it off the list for ${days} day${days === 1 ? '' : 's'} (note optional). <b>Resolved</b> needs a reason.`}</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                ${st === 'needs_reply' ? ''
+                    : type === 'mismatch'
+                    ? `<button onclick="_holdInsuranceClaim('${ctx}', ${idx})" style="${sBtn} background:${_HOLD_C.amber.bg}; border:1.5px solid ${_HOLD_C.amber.line}; color:${_HOLD_C.amber.fg};">Insurance Claim</button>`
+                    : `<button onclick="_holdSave('${ctx}', ${idx}, 'still_open')" style="${sBtn} background:${_HOLD_C.amber.bg}; border:1.5px solid ${_HOLD_C.amber.line}; color:${_HOLD_C.amber.fg};">Still open</button>`}
+                <button onclick="_holdSave('${ctx}', ${idx}, 'resolved')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">Mark resolved</button>
+                ${inr && st !== 'needs_claim' ? `<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:#fff; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Refunding the buyer? Open a claim</button>` : ''}
+            </div>
+        </div>`;
+    } else if (form === 'claim' && (inr || type === 'mismatch')) {
+        formHtml = _holdClaimForm(ctx, idx, it);
+    }
+
+    const edge = (st === 'due' || st === 'needs_claim' || st === 'needs_reply') ? `box-shadow:inset 3px 0 0 ${_HOLD_C.red.solid};` : '';
+    return `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px; ${edge}">
+        <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap;">
+            <div style="min-width:0; flex:1 1 240px;">
+                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:4px;">
+                    ${multi ? chip(escapeHtml(it.store_code)) : ''}
+                    ${readOnly ? '' : `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:${s.bg}; color:${s.fg};">${s.label}</span>`}
+                </div>
+                <div style="font-weight:800; font-size:13.5px; color:var(--slate-charcoal);">${title}</div>
+                ${subtitle ? `<div style="font-size:11.5px; font-weight:700; color:#64748b; margin-top:1px;">${subtitle}</div>` : ''}
+            </div>
+            <div style="display:flex; gap:10px; align-items:center;">
+                ${it.amount != null ? `<span style="font-weight:900; font-size:15px; color:var(--slate-charcoal);">${_holdMoney(it.amount)}</span>` : ''}
+                ${acts.join('')}
+            </div>
+        </div>
+        <div style="display:flex; gap:6px 14px; flex-wrap:wrap; font-size:12px; color:#334155; margin-top:6px;">${facts.filter(Boolean).join('')}</div>
+        ${extra}${said}${histHtml}${formHtml}
+    </div>`;
+}
+
+// Open a claim for an INR (same fields as New Claim, prefilled with the amount),
+// or link one already filed. A likely match goes first in the picker.
+function _holdClaimForm(ctx, idx, it) {
+    const inp = 'width:100%; padding:7px 9px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:600; box-sizing:border-box; background:#fff;';
+    const lbl = t => `<label style="display:block; font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-bottom:3px;">${t}</label>`;
+    const sBtn = 'font-size:11.5px; font-weight:800; border-radius:8px; padding:7px 11px; cursor:pointer; line-height:1; white-space:nowrap;';
+    const guess = _holdClaimGuess(ctx, it);
+    const claims = ((_holdData[ctx] || {}).claims || []).filter(c => c.store === it.store_code);
+    const ordered = guess ? [guess, ...claims.filter(c => c.id !== guess.id)] : claims;
+    const opt = c => {
+        const cs = CLAIM_STATUS[c.status] || CLAIM_STATUS.in_progress;
+        return `<option value="${escapeHtml(c.id)}">${c === guess ? '★ Likely match — ' : ''}${escapeHtml(c.case_number || '')} · ${_holdMoney(c.price)} · ${escapeHtml(c.reason_type || '')} · ${_holdDate(c.created_at)} · ${cs.label}</option>`;
+    };
+    const linkPart = claims.length ? `
+        <div style="margin-bottom:12px;">
+            <div style="font-weight:800; font-size:12px; color:var(--slate-charcoal); margin-bottom:4px;">Already filed a claim for this?</div>
+            ${guess ? `<div style="font-size:11px; color:#1d4ed8; margin-bottom:6px;">★ ${escapeHtml(guess.case_number)} is the same amount and was filed ${_holdDate(guess.created_at)} — check it's the same sale before linking.</div>` : ''}
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <select id="hold-link-${ctx}-${idx}" style="${inp} flex:1 1 220px; width:auto;">${ordered.map(opt).join('')}</select>
+                <button onclick="_holdLinkClaim('${ctx}', ${idx})" style="${sBtn} background:${_HOLD_C.blue.bg}; border:1.5px solid ${_HOLD_C.blue.line}; color:${_HOLD_C.blue.fg};">Link claim</button>
+            </div>
+        </div>` : '';
+    return `
+    <div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
+        ${linkPart}
+        <div style="font-weight:800; font-size:12px; color:var(--slate-charcoal); margin-bottom:6px;">${claims.length ? 'Or open a new one' : 'Open a claim'}</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px;">
+            <div>${lbl('Claim')}<select id="hold-cl-${ctx}-${idx}-reason" style="${inp}"><option value="Shopify Claim">Shopify Claim</option><option value="USPS Claim">USPS Claim</option><option value="UPS Claim">UPS Claim</option></select></div>
+            <div>${lbl('Type')}<select id="hold-cl-${ctx}-${idx}-type" style="${inp}"><option value="Loss">Loss</option><option value="Damage">Damage</option></select></div>
+            <div>${lbl('Claim #')}<input id="hold-cl-${ctx}-${idx}-num" style="${inp}" placeholder="e.g. SHP9D-0826…"></div>
+            <div>${lbl('Value')}<input id="hold-cl-${ctx}-${idx}-value" type="number" step="0.01" min="0" value="${it.amount != null ? Number(it.amount) : ''}" style="${inp}"></div>
+            <div>${lbl('Cost')}<input id="hold-cl-${ctx}-${idx}-cost" type="number" step="0.01" min="0" style="${inp}"></div>
+            <div>${lbl('SKU')}<input id="hold-cl-${ctx}-${idx}-sku" style="${inp}"></div>
+        </div>
+        <div style="margin-top:10px;">${lbl('Detail (optional)')}<input id="hold-cl-${ctx}-${idx}-detail" style="${inp}"></div>
+        <div style="font-size:11px; color:#64748b; margin:6px 0 8px;">Saved to the Claims tab like any other claim, and linked to this ${it.issue_key ? 'mismatch — which then follows the claim' : `eBay ${it.kind === 'case' ? 'case' : 'inquiry'}`}.</div>
+        <button onclick="_holdOpenClaim('${ctx}', ${idx})" class="btn-primary" style="font-size:12px; padding:7px 16px;">Save claim</button>
+    </div>`;
+}
+
+// Takes the render position rather than the key: keys are free text from the
+// DB, and a position can't break out of an onclick attribute.
+function _holdToggleForm(ctx, idx, mode) {
+    const cur = _holdIndex[ctx][idx];
+    if (!cur) return;
+    const id = _holdKeyOf(cur);
+    const open = _holdOpenForm[ctx];
+    _holdOpenForm[ctx] = open && open.id === id && open.mode === mode ? null : { id, mode };
+    renderHoldItems(ctx);
+    // Put the cursor where the next keystroke goes.
+    const entry = _holdIndex[ctx].findIndex(e => _holdKeyOf(e) === id);
+    const el = entry < 0 ? null : document.getElementById(mode === 'claim' ? `hold-cl-${ctx}-${entry}-num` : `hold-note-${ctx}-${entry}`);
+    if (el && !document.getElementById(`hold-link-${ctx}-${entry}`)) el.focus();
+}
+
+async function _holdPost(body) {
+    const res = await fetch(CLAIMS_DISPUTES_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, by_name: sessionStorage.getItem('speeksUserName') || null }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+    return json;
+}
+async function _holdAfterWrite(ctx) {
+    _holdOpenForm[ctx] = null;
+    await _holdFetch(ctx, _holdStores(ctx));
+    renderHoldItems(ctx);
+}
+
+async function _holdSave(ctx, idx, status) {
+    const entry = _holdIndex[ctx][idx];
+    if (!entry) return;
+    const ta = document.getElementById(`hold-note-${ctx}-${idx}`);
+    const note = ta ? ta.value.trim() : '';
+    if (status === 'resolved' && note.length < HOLD_MIN_REASON) {
+        alert('Please say why this is resolved — for example the claim that recovered the money, or what you fixed on which site.');
+        if (ta) ta.focus();
+        return;
+    }
+    try {
+        await _holdPost({ action: 'review', item_type: entry.type,
+            item_key: entry.type === 'mismatch' ? entry.it.issue_key : entry.it.case_key, status, note });
+        await _holdAfterWrite(ctx);
+    } catch (e) { alert('Could not save: ' + e.message); }
+}
+
+// THE ONLY REASON A MISMATCH STAYS OPEN is that an insurance claim is being
+// filed for it (Ethan, 2026-09-22) — the OVL case that started this feature:
+// refunded on eBay, claimed on Shopify insurance instead of refunding Shopify,
+// and won. So a mismatch has no bare "Still open". The button opens New Claim,
+// prefilled, and once that claim is SAVED the two are linked: from then on the
+// claim's own 7-day check-in does the reminding and the mismatch goes quiet,
+// settling when the claim is Recovered or Denied (0105, and stateOf).
+//
+// NOTHING IS WRITTEN UNTIL THE CLAIM IS SAVED. The first cut checked the
+// mismatch in the moment the button was pressed, so closing the form left the
+// mismatch looking claimed when no claim existed — which is exactly what Ethan
+// hit on 2026-09-22. Cancel, or closing the modal, now leaves no trace.
+// THE ONLY REASON A MISMATCH STAYS OPEN is that an insurance claim is being
+// filed for it (Ethan, 2026-09-22) — the OVL case that started this feature:
+// refunded on eBay, claimed on Shopify insurance instead of refunding Shopify,
+// and won. So a mismatch has no bare "Still open": the button opens the same
+// claim form an INR uses, on the card itself. Saving it writes the claim and
+// the link in one call (0105), and from then on the claim's own 7-day check-in
+// does the reminding. Nothing is written until that save, so clicking this by
+// mistake and closing the form leaves no trace.
+function _holdInsuranceClaim(ctx, idx) {
+    const entry = _holdIndex[ctx][idx];
+    if (!entry || entry.type !== 'mismatch') return;
+    _holdToggleForm(ctx, idx, 'claim');
+}
+
+async function _holdReopen(ctx, idx) {
+    const entry = _holdIndex[ctx][idx];
+    if (!entry) return;
+    try {
+        await _holdPost({ action: 'reopen', item_type: entry.type,
+            item_key: entry.type === 'mismatch' ? entry.it.issue_key : entry.it.case_key });
+        await _holdAfterWrite(ctx);
+    } catch (e) { alert('Could not reopen: ' + e.message); }
+}
+
+async function _holdLinkClaim(ctx, idx) {
+    const entry = _holdIndex[ctx][idx];
+    const sel = document.getElementById(`hold-link-${ctx}-${idx}`);
+    if (!entry || !sel || !sel.value) return;
+    try {
+        await _holdPost({ action: 'link_claim', item_type: entry.type, item_key: _holdItemKey(entry), claim_id: sel.value });
+        await _holdAfterWrite(ctx);
+    } catch (e) { alert('Could not link: ' + e.message); }
+}
+
+async function _holdOpenClaim(ctx, idx) {
+    const entry = _holdIndex[ctx][idx];
+    if (!entry) return;
+    const g = s => { const el = document.getElementById(`hold-cl-${ctx}-${idx}-${s}`); return el ? String(el.value).trim() : ''; };
+    if (!g('num')) { alert('Please enter the claim number.'); return; }
+    const n = v => (v === '' ? null : Number(v));
+    try {
+        await _holdPost({
+            action: 'open_claim', item_type: entry.type, item_key: _holdItemKey(entry),
+            reason_type: `${g('reason')} — ${g('type')}`, case_number: g('num'),
+            price: n(g('value')), cost: n(g('cost')), item_sku: g('sku') || null, reason_detail: g('detail') || null,
+        });
+        await _holdAfterWrite(ctx);
+        // The Claims tab keeps its own list; drop it so it refetches.
+        if (typeof fetchMyClaims === 'function' && ctx === 'mgr') _claimsAll = [];
+    } catch (e) { alert('Could not save the claim: ' + e.message); }
+}
+
+// DM/CEO oversight view: the claims summary plus the same two tabs across
+// every rolled-out store.
+function switchOversightTab(tab) {
+    ['claims', 'mismatch', 'returns', 'cases'].forEach(t => {
+        const b = document.getElementById(`ov-tab-${t}`);
+        const p = document.getElementById(`ov-panel-${t}`);
+        if (b) b.classList.toggle('active', t === tab);
+        if (p) p.style.display = t === tab ? 'block' : 'none';
+    });
+    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases') {
+        if (_holdLoading.ov) renderHoldItems('ov');
+        else loadHoldItems('ov', { sync: !_holdData.ov });
+    }
+}
+
+// =========================================================
 //  DM / CEO CLAIMS OVERSIGHT — checks & balances across all stores
 // =========================================================
 const _CLAIMS_OVERSIGHT_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 let _oversightAll = [];
 let _oversightReminders = [];
 let _ovStore = '', _ovStatus = ''; // oversight "All claims" filters
+// The DM list is every claim across every store and only grows, so it shows a
+// page at a time with the needs-attention ones first (Ethan, 2026-09-22).
+const OV_PAGE = 10;
+let _ovShown = OV_PAGE;
 
 // A reminder is a nudge, not a nag: once sent, that store's button locks until the
 // manager acknowledges it or the cooldown lapses. Without this a DM could stack up
@@ -33830,7 +34598,9 @@ function _claimReminderLock(store) {
 
 function openClaimsOversight() {
     toggleModal('claimsOversightModal');
+    switchOversightTab('claims');
     fetchAllClaims();
+    loadHoldItems('ov'); // badges for the Mismatches / eBay Cases tabs
 }
 
 async function fetchAllClaims() {
@@ -33965,8 +34735,8 @@ function renderClaimsOversight() {
     html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:6px 0 10px;">
         <div style="font-weight:800; font-size:13px; color:var(--slate-charcoal);">All claims</div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <select onchange="_ovStore=this.value; renderClaimsOversight();" style="${selStyle}">${storeOpts}</select>
-            <select onchange="_ovStatus=this.value; renderClaimsOversight();" style="${selStyle}">${statusOpts}</select>
+            <select onchange="_ovStore=this.value; _ovShown=OV_PAGE; renderClaimsOversight();" style="${selStyle}">${storeOpts}</select>
+            <select onchange="_ovStatus=this.value; _ovShown=OV_PAGE; renderClaimsOversight();" style="${selStyle}">${statusOpts}</select>
         </div>
     </div>`;
 
@@ -33988,15 +34758,27 @@ function renderClaimsOversight() {
     if (!tops.length) {
         html += `<div style="padding:18px; text-align:center; color:#94a3b8; font-weight:600; background:#f8fafc; border-radius:10px;">No claims match this view.</div>`;
     } else {
+        const page = tops.slice(0, _ovShown);
         html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12px;">
-            <thead><tr>${th('#')}${th('Store')}${th('Case #')}${th('SKU')}${th('Value')}${th('Cost')}${th('Reason')}${th('Status')}${th('Created')}${th('Reviewed')}</tr></thead><tbody>`;
+            <thead><tr>${th('#')}${th('Store')}${th('Case #')}${th('SKU')}${th('Value')}${th('Cost')}${th('Reason')}${th('Status')}${th('Created')}${th('Reviewed')}${th('', 'right')}</tr></thead><tbody>`;
         let n = 0;
-        tops.forEach(r => {
+        page.forEach(r => {
             n++;
             html += _ovRowHtml(r, byId, hasKids.has(r.id), `${n}`);
             (kidsOf[r.id] || []).forEach((k, ci) => { html += _ovRowHtml(k, byId, false, `${n}.${ci + 1}`); });
         });
         html += `</tbody></table></div>`;
+        if (tops.length > page.length) {
+            html += `<div style="display:flex; align-items:center; justify-content:center; gap:10px; padding:12px;">
+                <span style="font-size:12px; color:#94a3b8; font-weight:600;">Showing ${page.length} of ${tops.length}</span>
+                <button onclick="_ovShown += OV_PAGE; renderClaimsOversight();" class="btn-secondary" style="font-size:12px; padding:7px 14px;">Show ${Math.min(OV_PAGE, tops.length - page.length)} more</button>
+                <button onclick="_ovShown = 9999; renderClaimsOversight();" style="font-size:12px; font-weight:700; color:#1d4ed8; background:none; border:none; cursor:pointer;">Show all ${tops.length}</button>
+            </div>`;
+        } else if (tops.length > OV_PAGE) {
+            html += `<div style="text-align:center; padding:12px;">
+                <button onclick="_ovShown = OV_PAGE; renderClaimsOversight();" class="btn-secondary" style="font-size:12px; padding:7px 14px;">Show fewer</button>
+            </div>`;
+        }
     }
     body.innerHTML = html;
 }
@@ -34038,7 +34820,26 @@ function _ovRowHtml(r, byId, hasChild, num) {
         ${td(statusCell, 'white-space:nowrap;')}
         ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
         ${td(reviewed)}
+        ${td(`<button onclick="ovDeleteClaim('${r.id}')" title="Delete this claim" style="background:#fff5f5; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg}; border-radius:8px; width:30px; height:30px; cursor:pointer; font-size:14px; line-height:1;">🗑</button>`, 'text-align:right; white-space:nowrap;')}
     </tr>`;
+}
+
+// A DM or the CEO deletes a claim outright — managers only get to ask (the 🗑 on
+// their own claim rows raises a request that lands in Delete Requests above).
+async function ovDeleteClaim(id) {
+    const r = (_oversightAll || []).find(x => x.id === id);
+    const kids = (_oversightAll || []).filter(x => x.parent_id === id).length;
+    const what = r ? `${r.store || ''} ${r.case_number || ''}`.trim() : 'this claim';
+    if (!confirm(`Delete ${what}?${kids ? ` This also removes the ${kids} loss claim${kids === 1 ? '' : 's'} opened on it.` : ''} This cannot be undone.`)) return;
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_claim', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
+        await fetchAllClaims();
+    } catch (e) { alert('Could not delete: ' + e.message); }
 }
 
 // Nudge a store's manager to review their open claims. Delivers as a dedicated RED
@@ -34593,7 +35394,7 @@ function _renderClaimBubble(icon, titleHtml, bodyHtml, summary, sig, stores) {
     textEl.innerHTML = `
         <div style="line-height:1.4;"><strong>${titleHtml}</strong></div>
         <div style="line-height:1.4; opacity:0.96;">${bodyHtml}</div>
-        <button onclick="closeClaimAlertBubble(); openClaimsModal(); switchClaimsTab('view');"
+        <button onclick="closeClaimAlertBubble(); openClaimsTool('view');"
             style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
             onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Review claims</button>`;
     bubble.style.display = 'flex';
@@ -38997,8 +39798,8 @@ const FEATURE_CATALOG = [
     // either way — STORE_BOARD_FEATURES does not list it.
     { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multi-store-manager', 'assistant-manager', 'employee', 'training'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
-    { key: 'tool-claims-store',        label: 'Insurance Claims (Store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
-    { key: 'tool-claims-oversight',    label: 'Insurance Claims (Oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
+    { key: 'tool-claims-store',        label: 'Claims & Disputes (Store)',     tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Claims & Disputes (Oversight)', tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
@@ -40297,8 +41098,14 @@ const JUMP_PLACES = [
     // --- tabs inside a tool (open the modal, then land on the tab) -----------
     { id: 'sub-audit',   label: 'SPEEKS Audit', sub: 'Inside Submit Scores',    kind: 'sub', feature: 'tool-submit-scores', keys: 'audit 165 points practice',
       run: () => { openScorecardModal(); switchScoreTab('audit'); } },
-    { id: 'sub-mycases', label: 'My Cases',     sub: 'Inside Insurance Claims', kind: 'sub', feature: 'tool-claims-store',  keys: 'my claims open cases status',
-      run: () => { openClaimsModal(); switchClaimsTab('view'); } },
+    { id: 'sub-mycases', label: 'Claims',       sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'],  keys: 'my claims open cases status insurance',
+      run: () => openClaimsTool('view') },
+    { id: 'sub-mismatch', label: 'Refund Mismatches', sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'refund mismatch ebay shopify refunded',
+      run: () => openClaimsTool('mismatch') },
+    { id: 'sub-returns', label: 'Returns', sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'ebay returns label refund shipped delivered',
+      run: () => openClaimsTool('returns') },
+    { id: 'sub-ebaycases', label: 'Cases & Disputes',  sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'ebay cases inquiry item not received dispute escalated',
+      run: () => openClaimsTool('cases') },
     // --- pages (visibility mirrors the nav link) ----------------------------
     { id: 'page-index',  label: 'QuickPortal',           sub: 'Main navigation', kind: 'page', page: 'index.html',      keys: 'home dashboard main portal' },
     { id: 'page-ops',    label: 'Operations',            sub: 'Main navigation', kind: 'page', page: 'operations.html', keys: 'operations ops' },
@@ -45240,11 +46047,9 @@ function _samReminderCfg() {
         // it is answered. The title only changes when that is ALL there is, so a
         // card carrying both still reads as the claims card it has always been.
         { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText',
-          title: _clDel === 'only' ? 'Claim Delete Requests' : 'Insurance Claims',
+          title: _clDel === 'only' ? 'Claim Delete Requests' : 'Claims & Disputes',
           urgency: 2, due: _clDel ? 'Approve' : 'Open', cls: 'sam-due-red',
-          action: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager'
-              ? "openClaimsOversight()"
-              : "openClaimsModal(); switchClaimsTab('view')" },
+          action: "openClaimsTool('view')" },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
         // month across, so a card about a July request doesn't open on August.
         // data-replyonly: no line is actually awaiting a verdict, a manager just

@@ -990,6 +990,25 @@ input, textarea, select,
 .calendar-content iframe { width: 100%; height: 100%; border: 0; border-radius: 12px; }
 
 .notif-tabs { display: flex; gap: 10px; background: #f1f5f9; padding: 4px; border-radius: 8px; }
+/* Claims & Disputes tab row: every tab the same width, so New Claim is not a
+   third the size of Cases & Disputes (Ethan, 2026-09-22). Hidden tabs (a store
+   not rolled out yet) take no space, so the live ones still share the row evenly.
+   width:max-content, not 100%: before the server says which stores are live only
+   "Claims" is visible, and a full-width row drew it as one enormous button.
+   Grid rather than flex:1 for the same reason as .fa-tabs below, and because
+   under max-content the two together misbehave: flex:1 1 0 splits the row's
+   natural width evenly, giving every tab the AVERAGE label width, so the longest
+   one ("Cases & Disputes") spilled out of the grey bar. Grid sizes every 1fr
+   track to the widest label instead, so the row is exactly n × widest. */
+.claims-tabs {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto; /* phone: scroll the row rather than squeeze the labels */
+}
+.claims-tabs .tab-btn { min-width: 0; padding-left: 8px; padding-right: 8px; text-align: center; white-space: nowrap; }
 .tab-btn { background: transparent; border: none; padding: 6px 16px; font-size: 12px; font-weight: 700; color: #64748b; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
 .tab-btn.active { background: white; color: var(--slate-charcoal); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
 

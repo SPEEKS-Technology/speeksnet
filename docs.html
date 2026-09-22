@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260921p">
+  <link rel="stylesheet" href="styles.css?v=20260922u">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260921p" defer></script>
+  <script src="speeks.js?v=20260922u" defer></script>
 </head>
 <body class="preload">
 
@@ -433,22 +433,24 @@
         <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="9.17" y1="14.83" x2="4.93" y2="19.07"/></svg></span>
         <div class="tool-head-titles">
           <span class="tool-head-eyebrow">SPEEKS Tools</span>
-          <span class="tool-head-title">Insurance Claims</span>
-          <span class="tool-head-sub">File and track Shopify, USPS &amp; UPS claims.</span>
+          <span class="tool-head-title">Claims &amp; Disputes</span>
+          <span class="tool-head-sub">Claims, refund mismatches and eBay cases — anywhere our money is held or not lining up.</span>
         </div>
       </div>
       <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
 
-    <div style="padding: 14px 18px 14px;">
-        <div class="notif-tabs" style="display: inline-flex;">
-            <button id="claims-tab-new" class="tab-btn active" onclick="switchClaimsTab('new')">New Case</button>
-            <button id="claims-tab-view" class="tab-btn" onclick="switchClaimsTab('view')">My Cases</button>
+    <div style="padding: 14px 18px 20px;">
+        <div class="notif-tabs claims-tabs">
+            <button id="claims-tab-view" class="tab-btn active" onclick="switchClaimsTab('view')">Claims</button>
+            <button id="claims-tab-mismatch" class="tab-btn" onclick="switchClaimsTab('mismatch')">Mismatches<span id="hold-mgr-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="claims-tab-returns" class="tab-btn" onclick="switchClaimsTab('returns')">Returns<span id="hold-mgr-badge-returns" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="claims-tab-cases" class="tab-btn" onclick="switchClaimsTab('cases')">Cases &amp; Disputes<span id="hold-mgr-badge-cases" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
         </div>
     </div>
 
     <div class="manage-content">
-        <div id="claims-panel-new">
+        <div id="claims-panel-new" style="display:none;">
             <div id="claims-store-row" style="margin-bottom: 14px;">
                 <label class="form-label-caps">Store</label>
                 <select id="claim-store" class="form-input-lg"></select>
@@ -476,7 +478,6 @@
                         <option value="Shopify Claim">Shopify Claim</option>
                         <option value="USPS Claim">USPS Claim</option>
                         <option value="UPS Claim">UPS Claim</option>
-                        <option value="Item Not Received">Item Not Received</option>
                     </select>
                 </div>
                 <div id="claim-type-wrap">
@@ -493,7 +494,7 @@
             </div>
         </div>
 
-        <div id="claims-panel-view" style="display:none;">
+        <div id="claims-panel-view">
             <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
                 <div style="flex:1; min-width:150px;">
                     <label class="form-label-caps">Status</label>
@@ -508,13 +509,30 @@
                     <label class="form-label-caps">Store</label>
                     <select id="claims-view-filter" class="form-input-lg" onchange="renderClaimsTable()"></select>
                 </div>
+                <div style="margin-left:auto; display:flex; align-items:flex-end;">
+                    <button class="btn-primary" onclick="startNewClaim()" style="padding:11px 16px; font-size:13px; white-space:nowrap;">+ New Claim</button>
+                </div>
             </div>
             <div id="claims-table-wrap"></div>
+        </div>
+
+        <div id="claims-panel-mismatch" style="display:none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:10px;">Orders refunded or cancelled on one site but not the other. Fix it on the site, or mark it resolved and say why it's fine.</div>
+            <div id="hold-mgr-mismatch"></div>
+        </div>
+        <div id="claims-panel-returns" style="display:none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:10px;">eBay returns: the buyer wants to send something back. Do it on eBay — a label, or the refund once it lands — then check in here.</div>
+            <div id="hold-mgr-returns"></div>
+        </div>
+        <div id="claims-panel-cases" style="display:none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:10px;">Item-not-received requests, escalated cases and (soon) payment disputes. Respond on eBay; check in here. A refunded item-not-received needs a claim.</div>
+            <div id="hold-mgr-cases"></div>
         </div>
     </div>
 
     <div class="manage-footer flex-end">
-        <button onclick="submitClaim()" class="btn-primary" id="submitClaimBtn">Save Case</button>
+        <button onclick="switchClaimsTab('view')" class="btn-secondary" id="cancelClaimBtn" style="margin-right:10px;">Cancel</button>
+        <button onclick="submitClaim()" class="btn-primary" id="submitClaimBtn">Save Claim</button>
     </div>
 </div>
 
@@ -524,14 +542,25 @@
         <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
         <div class="tool-head-titles">
           <span class="tool-head-eyebrow">SPEEKS Tools</span>
-          <span class="tool-head-title">Insurance Claims</span>
-          <span class="tool-head-sub">Review open claims across every store.</span>
+          <span class="tool-head-title">Claims &amp; Disputes</span>
+          <span class="tool-head-sub">Claims, refund mismatches and eBay cases across every store.</span>
         </div>
       </div>
       <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
+    <div style="padding: 14px 18px 20px;">
+        <div class="notif-tabs claims-tabs">
+            <button id="ov-tab-claims" class="tab-btn active" onclick="switchOversightTab('claims')">Claims</button>
+            <button id="ov-tab-mismatch" class="tab-btn" onclick="switchOversightTab('mismatch')">Mismatches<span id="hold-ov-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="ov-tab-returns" class="tab-btn" onclick="switchOversightTab('returns')">Returns<span id="hold-ov-badge-returns" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="ov-tab-cases" class="tab-btn" onclick="switchOversightTab('cases')">Cases &amp; Disputes<span id="hold-ov-badge-cases" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+        </div>
+    </div>
     <div class="manage-content">
-        <div id="claims-oversight-body"><div class="status-message">Loading…</div></div>
+        <div id="ov-panel-claims"><div id="claims-oversight-body"><div class="status-message">Loading…</div></div></div>
+        <div id="ov-panel-mismatch" style="display:none;"><div id="hold-ov-mismatch"></div></div>
+        <div id="ov-panel-returns" style="display:none;"><div id="hold-ov-returns"></div></div>
+        <div id="ov-panel-cases" style="display:none;"><div id="hold-ov-cases"></div></div>
     </div>
 </div>
 
@@ -1352,8 +1381,8 @@
 
     <div class="tools-group dynamic-module-block role-manager role-owner-manager role-district-manager role-ceo">
       <div class="tools-group-label">Claims &amp; Refunds</div>
-      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" data-mobile="hide" data-feature="tool-claims-store" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="9.17" y1="14.83" x2="4.93" y2="19.07"/></span>Insurance Claims</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-feature="tool-claims-oversight" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></span>Insurance Claims (DM)</a>
+      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" data-mobile="hide" data-feature="tool-claims-store" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="9.17" y1="14.83" x2="4.93" y2="19.07"/></span>Claims &amp; Disputes</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-mobile="hide" data-feature="tool-claims-oversight" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></span>Claims &amp; Disputes (DM)</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-mocd role-owner-manager">
