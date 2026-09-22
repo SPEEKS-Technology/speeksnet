@@ -4285,6 +4285,218 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
    scores stop lining up down the table, which is the whole point of the grid. */
 .dc-tbl-score .dc-catwrap { flex-wrap: nowrap; }
 .dc-tbl-score .dc-catlab { flex: none; }
+/* ---------------------------------------------------------------------------
+   DISTRICT MATRIX tab (called `watch` everywhere in the code — see speeks.js).
+   Five columns: store, status, and the three metrics, each carrying its figure
+   and, for the two that have one, a trend chart. The store and status columns
+   stay narrow; the three metric columns take the width.
+   Five columns since 0099 added listing, so the table needs more room before
+   .lv-tbl-scroll starts scrolling it. ------------------------------------- */
+.dc-tbl-watch { min-width: 920px; }
+.dc-tbl-watch th:nth-child(2), .dc-tbl-watch td:nth-child(2) { width: 11%; }
+.dc-tbl-watch th:nth-child(3), .dc-tbl-watch td:nth-child(3) { width: 28%; }
+.dc-tbl-watch th:nth-child(4), .dc-tbl-watch td:nth-child(4),
+.dc-tbl-watch th:nth-child(5), .dc-tbl-watch td:nth-child(5) { width: 23%; }
+
+/* Figure, trend and sub-line on one baseline. Wraps rather than clips: this
+   table lives inside a card with a radius, and a row that overflows its grid
+   here would be unreachable with no scrollbar to say so.
+
+   CENTRED, because .lv-tbl centres every th and the flex box was defaulting to
+   flex-start — so the headers sat mid-column while the figures under them hugged
+   the left edge, which put 83.3% and its chart hard against the sentences in
+   the row below (Ethan, 2026-09-21). The cell is a flex row, so text-align on
+   the td cannot reach it; justify-content is what centres flex children. */
+.dcw-metric { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 10px; min-width: 0; }
+.dcw-val    { font-size: 15px; font-weight: 850; letter-spacing: -.01em; }
+.dcw-sub    { font-size: 10.5px; font-weight: 700; color: #7a8698; white-space: nowrap; }
+.dcw-spark  { flex: none; display: block; }
+
+/* MTD over the last 14 days, each with its label. A two-column grid so the
+   labels line up under each other and the figures right-align on the decimal.
+   MTD is neutral (a fact); the 14-day figure carries the severity colour
+   (the verdict) — see _dcwPair. */
+/* FIXED TRACKS, so every block is the same width: figure 60px (right-aligned,
+   so the % signs stack), arrow 10px (rendered empty when there is none, so it
+   can never push a figure sideways), label 76px ("LAST 14 DAYS" is the
+   widest). Every block in a column is then identical in width, and the cell
+   centring it lands every row's block at the same x down the table. */
+.dcw-pair {
+    display: grid; grid-template-columns: 60px 10px 76px; align-items: baseline;
+    column-gap: 3px; row-gap: 1px;
+}
+.dcw-pair .dcw-val, .dcw-pair .dcw-recent { justify-self: end; white-space: nowrap; }
+.dcw-slot { justify-self: start; }
+.dcw-pair .dcw-tag { justify-self: start; white-space: nowrap; font-size: 9px; font-weight: 800;
+    letter-spacing: .06em; text-transform: uppercase; color: #a8b3c0; }
+.dcw-dev    { color: #647082; }
+.dcw-mtd    { color: var(--slate-charcoal); }
+.dcw-recent { font-size: 12px; font-weight: 800; }
+.dcw-arrow  { font-weight: 900; }
+.dcw-up     { color: #178048; }
+.dcw-down   { color: #dc2626; }
+.dcw-muted  { color: #94a3b8; font-weight: 650; }
+
+/* The caption line above the table: the count on the left, what it was measured
+   against on the right, so the targets are never a thing you have to remember. */
+.dcw-cap {
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+    gap: 4px 14px; padding: 2px 2px 10px;
+}
+.dcw-cap-l { font-size: 12.5px; font-weight: 700; color: var(--slate-charcoal); }
+.dcw-cap-l b { font-weight: 850; }
+.dcw-cap-r { font-size: 10.5px; font-weight: 700; color: #94a3b8; }
+
+/* One GLANCE LINE per metric, full width under its store's row. These were
+   full sentences until 2026-09-21; three of them a store turned the board into
+   something you read rather than something you scan, so the sentence moved to
+   the hover and what is left is: label, the number, why, how long.
+
+   Laid out as a grid, not as inline text, so the four parts line up down the
+   column across all five stores. Auto columns would let each store set its own
+   x for "why", which is exactly what makes a list unscannable. */
+/* EACH LINE IS A TABLE ROW (see _dcWatchHtml). Label and figure sit in the
+   Store column, the phrase in the Status column — so the phrase is centred
+   under the store's Warning / On target tag by the table itself, at every
+   width, with no widths to keep in step. The metric columns to the right are
+   left empty, which is also what keeps the lines clear of the figures.
+
+   Tight rows so the three lines read as one block under the store, and the
+   group's breathing room goes on the LAST line only. */
+.dc-tbl tbody.dc-grp > tr.dcw-note { cursor: pointer; }
+.dc-tbl tbody.dc-grp > tr.dcw-note > td { padding-top: 2px; padding-bottom: 2px; border-bottom: 0; }
+.dc-tbl tbody.dc-grp > tr.dcw-note:last-child > td { padding-bottom: 17px; border-bottom: 1px solid #f3f6f9; }
+.dc-tbl tbody.dc-grp:last-child > tr.dcw-note:last-child > td { border-bottom: 0; }
+/* The label is a fixed-width block so every figure starts at the same x down
+   the whole table. 84px is the widest label (CONVERSION at 9px/.07em). */
+.dcw-lc b { display: inline-block; width: 84px; }
+/* Store column is 15% — at the 920px minimum that is ~138px, less than label
+   plus figure. Wrapping the figure under its label beats spilling it into
+   the Status column. */
+/* Scoped to .dc-tbl td so it outranks .lv-tbl td, which sets nowrap on every cell. */
+.dc-tbl td.dcw-lc { white-space: normal; }
+.dcw-lead { font-weight: 800; }
+.dcw-why  { font-weight: 600; color: #8792a4; }
+.dcw-age  { font-weight: 700; color: #a8b3c0; }
+/* LEFT-ALIGNED under the Status column, starting at its left edge (Ethan,
+   2026-09-21: "left align the text to the column"). Centring them under the
+   tag made every line start at a different x, which is harder to read down
+   than a ragged right edge. One line each, never wrapped — the cell spans two
+   columns so the longest phrase has room. Scoped to .dc-tbl td so it
+   outranks both .lv-tbl td's centring and .dcw-note td's white-space. */
+.dc-tbl td.dcw-wc { text-align: left; white-space: nowrap; }
+/* The lead takes the severity colour; the label already carries it too, and
+   two coloured words either side of grey prose is the whole visual grammar of
+   the line. */
+.dcw-note.dc-good .dcw-lead { color: #178048; }
+.dcw-note.dc-warn .dcw-lead { color: #b3760a; }
+.dcw-note.dc-bad  .dcw-lead { color: #dc2626; }
+/* DRIFTING IS NOT A FOURTH STATE. The row stays green and the store stays off
+   the triage list — this only stops "on target" and "on target, but sliding"
+   looking identical at a glance, which was the whole ask. Amber on the WHY
+   only, never on the label or the lead, so it cannot be mistaken for a flag. */
+.dcw-note.dcw-drift .dcw-why { color: #b3760a; font-weight: 700; }
+
+/* NO PHONE BREAKPOINT HERE, deliberately, and it is not an oversight: the
+   Matrix tab carries data-mobile and is not rendered on a phone at all (see
+   index.html, and the assertion in district-watch-dom-check.js). A media query
+   for a width this panel is never shown at is dead CSS that still has to be
+   read by whoever comes next.
+
+   It was also actively wrong. A viewport query cannot describe this panel,
+   because the panel's width is the card's, not the window's — and the layout
+   harness stages width on a host div, so a max-width:900px rule fired at every
+   staged width and quietly turned the grid into two stacked columns in every
+   measurement. The four parts line up at whatever width the card gives them,
+   and below that the table scrolls inside .lv-tbl-scroll like everything else
+   in it. */
+
+/* Superseded by the grid above, kept because .dcw-note still inherits it:
+   these were sentences, and a pill that wraps to three lines is just a
+   paragraph with a border round it. */
+.dcw-note td {
+    font-size: 11.5px; font-weight: 650; line-height: 1.45; color: #4a5565;
+    white-space: normal;
+}
+.dcw-note b {
+    font-size: 9px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase;
+    opacity: .85;   /* spacing is column-gap now, not a margin */
+}
+/* The severity colour belongs to the LABEL, not the sentence — colouring a whole
+   line of prose red makes it harder to read, not more urgent. */
+.dcw-note.dc-good b { color: #178048; }
+.dcw-note.dc-warn b { color: #b3760a; }
+.dcw-note.dc-bad  b { color: #dc2626; }
+.dcw-note.dc-good, .dcw-note.dc-warn, .dcw-note.dc-bad { color: #4a5565; font-weight: 650; }
+
+.dcw-foot {
+    margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--dp-line-2);
+    font-size: 10.5px; font-weight: 650; line-height: 1.5; color: #94a3b8;
+}
+
+/* ---------------------------------------------------------------------------
+   DISTRICT WATCH · the store popup. Three tabs, each a summary row over a
+   seven-row day table. The bar column is the point of the layout: seven
+   percentages in a column are a list, seven bars against a fixed target line
+   are a shape you can read without doing arithmetic. ---------------------- */
+.dcw-mwrap { padding: 4px 18px 18px; }
+
+.dcw-msum { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.dcw-tile {
+    flex: 1 1 150px; min-width: 0;
+    padding: 11px 14px; border: 1px solid var(--dp-line); border-radius: 11px; background: #fff;
+}
+.dcw-tile-k {
+    font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+    color: #b0bac6;
+}
+.dcw-tile-v { font-size: 21px; font-weight: 850; letter-spacing: -.02em; color: var(--slate-charcoal); margin-top: 2px; }
+.dcw-tile-s { font-size: 10.5px; font-weight: 650; color: #7a8698; margin-top: 1px; }
+
+.dcw-mtbl { min-width: 520px; }
+.dcw-mtbl th, .dcw-mtbl td { text-align: right; }
+.dcw-mtbl th:first-child, .dcw-mtbl td:first-child { text-align: left; }
+.dcw-td-day { font-weight: 750; color: var(--slate-charcoal); white-space: nowrap; }
+.dcw-th-bar, .dcw-td-bar { width: 32%; }
+
+/* The track is the full scale; the fill is the value and the tick is target.
+   Absolute inside a relative span rather than a flex row, so the tick lands at
+   a true percentage of the scale instead of wherever the fill happens to end. */
+.dcw-bar {
+    position: relative; display: block; width: 100%; height: 8px;
+    border-radius: 999px; background: #eef1f5; overflow: hidden;
+}
+.dcw-bar-fill { position: absolute; left: 0; top: 0; height: 100%; border-radius: 999px; background: #94a3b8; }
+.dcw-bar-fill.dc-good { background: #178048; }
+.dcw-bar-fill.dc-warn { background: #d99400; }
+.dcw-bar-fill.dc-bad  { background: #dc2626; }
+/* Sits ON the fill, so it reads as a line the bar has or has not reached. */
+.dcw-bar-tick {
+    position: absolute; top: -1px; width: 2px; height: 10px;
+    background: #64748b; opacity: .55; border-radius: 1px;
+}
+
+.dcw-mtot {
+    margin-top: 11px; padding: 9px 13px; border-radius: 9px; background: var(--dp-line-2);
+    font-size: 12px; font-weight: 650; color: #4a5565;
+}
+.dcw-mtot b { font-weight: 850; color: var(--slate-charcoal); }
+.dcw-mwrap .dcw-foot { margin-top: 12px; }
+
+/* The popup's tab strip wraps on a narrow window rather than scrolling off the
+   edge — three tab labels here are words, not icons, and a hidden third tab is
+   a feature nobody finds. */
+/* Three EQUAL columns (Ethan, 2026-09-21: "make the 3 tab name buttons the
+   same size"), each as wide as the longest label needs. On a window too narrow
+   for that the labels wrap inside their buttons rather than a tab dropping
+   off the edge — three tab labels here are words, not icons, and a hidden
+   third tab is a feature nobody finds. */
+#dcwModalTabs {
+    display: inline-grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    max-width: 100%;
+}
+#dcwModalTabs .tab-btn { text-align: center; }
+
 .dc-cat.dc-fix {
     display: flex; align-items: baseline; justify-content: space-between;
     gap: 8px; min-width: 0; width: auto;

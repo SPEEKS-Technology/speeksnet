@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260921a">
+  <link rel="stylesheet" href="styles.css?v=20260921p">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260921a" defer></script>
+  <script src="speeks.js?v=20260921p" defer></script>
 </head>
 
 <body class="preload">
@@ -1111,6 +1111,20 @@
       <div class="cc-tabbar">
           <div class="ew-seg cc-seg">
               <button id="dc-tab-live" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('live')" data-feature="widget-district-live">Live Dashboard</button>
+              <!-- Matrix sits right after Live because it answers the question the
+                   card gets opened with: who needs me today. Hidden on a phone like
+                   the other three data tabs — the row carries three metrics, two
+                   trends and a sentence, and a phone gets Live only. Making it
+                   mobile is removing one attribute here and one on its panel.
+
+                   ⚠️ NAMED "Matrix" IN THE UI, "watch" IN THE CODE. Renamed on
+                   2026-09-21, after the backend was already live as the
+                   district-watch edge function writing watch_flags / watch_config.
+                   Renaming those too would cost a migration, a redeploy and a
+                   re-backfill to change a word nobody but us reads, so the seam
+                   was left deliberately: every id, key and function stays `watch`,
+                   every label a person sees says Matrix. -->
+              <button id="dc-tab-watch" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('watch')" data-feature="widget-district-watch">Matrix</button>
               <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('stores')">Store Breakdown</button>
               <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
               <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" data-mobile="hide" data-tablet="show" type="button" onclick="switchDistrictTab('scorecard')">Scorecard</button>
@@ -1158,6 +1172,14 @@
                   <div class="lv-dist-strip"></div>
                   <div class="lv-dist-detail"><div class="status-message">Syncing live sales&hellip;</div></div>
               </div>
+          </div>
+
+          <!-- District Watch. The judgement is made nightly by the district-watch
+               edge function and banked in watch_flags; renderDistrictWatch only
+               draws it. Gated by its own feature key so it can be parked without
+               touching the card. -->
+          <div class="cc-panel role-district-manager role-ceo" id="dc-panel-watch" data-mobile="hide" data-tablet="show" data-feature="widget-district-watch">
+              <div id="dc-watch-body"><div class="dcc-empty">Syncing the district&hellip;</div></div>
           </div>
 
           <div class="cc-panel" id="dc-panel-ebay" data-mobile="hide" data-tablet="show">
@@ -1753,6 +1775,34 @@
       <div id="dmGoalsBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
     </div>
 
+</div>
+
+<!-- District Watch · one store, day by day. Opened by clicking a row on the
+     Watch tab. A popup rather than a jump to Store Breakdown because the board
+     is a triage list: you look at a store, decide, and come back to the list.
+     Sending the DM to another tab loses their place in it (Ethan 2026-09-21). -->
+<div class="modal-menu manage-menu" id="dcWatchModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><polyline points="19 9 13 15 9 11 5 15"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">District Matrix</span>
+          <span class="tool-head-title" id="dcwModalTitle">Store</span>
+          <span class="tool-head-sub" id="dcwModalSub">Last 7 open days</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <div style="padding: 14px 18px 16px;">
+        <div class="notif-tabs" id="dcwModalTabs">
+            <button id="dcw-mtab-conversion" class="tab-btn active" onclick="dcwModalTab('conversion')">Customer Conversion</button>
+            <button id="dcw-mtab-margin" class="tab-btn" onclick="dcwModalTab('margin')">Buying Margin</button>
+            <button id="dcw-mtab-listing" class="tab-btn" onclick="dcwModalTab('listing')">Listing Productivity</button>
+        </div>
+    </div>
+
+    <div class="manage-content" id="dcwModalBody"></div>
 </div>
 
 <div class="modal-menu manage-menu" id="preferredModal">
