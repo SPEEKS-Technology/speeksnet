@@ -112,8 +112,38 @@
 // left them, and says so in ebay_case_sync. A closed INR whose outcome could not
 // be read is shown as due, not as settled — it may be a refund nobody claimed.
 //
-// NOT HERE YET: eBay payment disputes (need sell.payment.dispute) and Shopify
-// chargebacks (need read_shopify_payments_disputes). Checked 2026-09-22.
+// ----------------------------------------------------------------------------
+// PAYMENT DISPUTES AND CHARGEBACKS (0112, 2026-09-23). A buyer went past us to
+// their bank or to eBay. Same card for both sites, because to a manager they are
+// the same object: our money is held, there is a HARD deadline, and either we
+// answered it or we did not.
+//
+// They are the strongest case for this whole tool. The first read found SEVEN
+// open disputes worth $2,168.36 across four stores and NOT ONE had evidence
+// submitted; two were due that afternoon. OVL #KS01-13765 ($102) had been lost
+// outright the day before without a response — the only one of twelve losses
+// with no evidence sent, against ten of ten wins WITH it.
+//
+// A DISPUTE IS NEVER "TOO NEW TO SHOW". Every other type waits its timeframe
+// because acting on day one is pointless. A dispute arrives with a deadline
+// attached, so that rule is off for it — see `stateOf`.
+//
+// THE SITE'S WORD, NEVER OURS (the 0108 principle again). Shopify stamps
+// `evidenceSentOn` and moves the status off NEEDS_RESPONSE; eBay moves a dispute
+// off ACTION_NEEDED. Both are read. There is no "I answered it" button, for the
+// same reason there is no longer one on eBay cases.
+//
+// Two traps that cost an afternoon on 2026-09-23, both worth knowing before
+// touching this:
+//   - eBay's payment-dispute endpoints answer on apiz.ebay.com, NOT api.ebay.com,
+//     although they are part of the same Fulfillment API whose order/ resource is
+//     on api. The wrong gateway returns 404 with a ZERO-LENGTH body and no
+//     content-type, which reads exactly like a missing scope and is not.
+//   - Shopify needed no new scope at all. read_shopify_payments_accounts, which
+//     the app already had, reaches shopifyPaymentsAccount.disputes with full
+//     detail. The re-install everyone expected was never necessary.
+// eBay's sell.payment.dispute IS needed, and is per-store consent — until Ethan
+// signs in, that half reports itself as not connected rather than as broken.
 // ============================================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -147,8 +177,12 @@ const INR_FROM = "2026-08-01";
 // One number per type on purpose: Ethan asked for the two to be the same.
 //   mismatch    3  the detector's own bar (1 in the last 4 days of a month)
 //   ebay_case   2  eBay gives a seller ~3 business days before it steps in
-//   chargeback  3  hard response deadlines (phase 2)
-const THRESHOLD_DAYS: Record<string, number> = { mismatch: 3, ebay_case: 2, chargeback: 3 };
+//   dispute     3  only ever used by a "Still open" check-in, which a dispute
+//                  can barely reach: while the site waits on evidence it cannot
+//                  be checked in at all, and once we have answered there is
+//                  nothing due from us. It is NOT a "hide it for 3 days" bar —
+//                  a dispute shows the moment it exists (see stateOf).
+const THRESHOLD_DAYS: Record<string, number> = { mismatch: 3, ebay_case: 2, dispute: 3 };
 const MISMATCH_MONTH_END_DAYS = 1;
 const MONTH_END_WINDOW = 4;
 const ITEM_TYPES = Object.keys(THRESHOLD_DAYS);
@@ -163,6 +197,20 @@ const EBAY_HOSTS: Record<string, string> = {
   production: "https://api.ebay.com",
   sandbox: "https://api.sandbox.ebay.com",
 };
+// eBay's payment-dispute resources live on a DIFFERENT host to the rest of the
+// Fulfillment API. See the header — the wrong one 404s with an empty body.
+const ebayZ = (host: string) => host.replace("//api.", "//apiz.");
+
+// shopify_stores.store_code is NULL on all five rows, so the shop domain is the
+// only thing identifying a store there. Same map the other functions carry.
+const SHOP_BY_STORE: Record<string, string> = {
+  OVL: "paymore-overland-park.myshopify.com",
+  LEE: "paymore-lees-summit.myshopify.com",
+  WSP: "paymore-westport.myshopify.com",
+  MPL: "paymore-maplewood.myshopify.com",
+  BAL: "paymore-ballwin.myshopify.com",
+};
+const SHOPIFY_API_VERSION = Deno.env.get("SHOPIFY_API_VERSION") || "2026-07";
 
 // Parsed defensively — see refund-mismatch for why.
 let EBAY_APPS: Record<string, any> = {};
@@ -232,15 +280,31 @@ const EBAY_DETAIL_RE =
 // rejects, and ebayGet hard-codes GET anyway.
 const EBAY_ORDER_RE =
   /^https:\/\/api(?:\.sandbox)?\.ebay\.com\/sell\/fulfillment\/v1\/order\/[\w-]+$/;
+// Payment disputes, on the apiz gateway (0112). The summary search, or one
+// dispute by numeric id with NOTHING after it — so /contest, /accept,
+// /upload_evidence_file and /update_evidence, which are how a seller actually
+// answers a dispute and are all POSTs to .../{id}/<verb>, fail the anchor.
+// Answering is a person's job on eBay, exactly as with cases.
+const EBAY_DISPUTE_RE =
+  /^https:\/\/apiz(?:\.sandbox)?\.ebay\.com\/sell\/fulfillment\/v1\/payment_dispute(?:_summary\?[^#/]*|\/\d+)$/;
 
 async function ebayGet(url: string, token: string): Promise<any> {
-  if (!EBAY_SEARCH_RE.test(url) && !EBAY_DETAIL_RE.test(url) && !EBAY_ORDER_RE.test(url)) {
+  if (!EBAY_SEARCH_RE.test(url) && !EBAY_DETAIL_RE.test(url)
+      && !EBAY_ORDER_RE.test(url) && !EBAY_DISPUTE_RE.test(url)) {
     throw new Error(`refused: not a read-only eBay URL -> ${url.slice(0, 120)}`);
   }
   // Post-Order documents the OAuth user token under the "IAF" scheme. It is
   // what worked on 2026-09-22; Bearer is tried only on a 401.
+  //
+  // The apiz gateway is the exception and takes Bearer ONLY: it answers IAF with
+  // a 400 errorId 1003 "Token type in the Authorization header is invalid:IAF",
+  // and because that is not a 401 the fallback below would never fire. Worth
+  // knowing that api.ebay.com's own Fulfillment order/ resource DOES accept IAF
+  // — all 152 order numbers were read that way — so this is a property of the
+  // gateway, not of the API. (2026-09-23)
+  const schemes = /^https:\/\/apiz\./.test(url) ? ["Bearer"] : ["IAF", "Bearer"];
   let last = "";
-  for (const scheme of ["IAF", "Bearer"]) {
+  for (const scheme of schemes) {
     const res = await fetch(url, {
       method: "GET",
       headers: {
@@ -436,6 +500,211 @@ function readOutcome(kind: string, d: any) {
     : { case_type: caseType, outcome: "no_refund", outcome_detail: `eBay outcome: ${d.sellerOutcome || "unknown"}` };
 }
 
+// ===========================================================================
+// DISPUTES — the other door, and the Shopify one. See the header.
+//
+// Shopify's Admin API reads through POST /graphql.json, so "hard-code GET" is
+// not available as a guard here the way it is for eBay. The guard instead is
+// that the query is a CONSTANT in this file, never assembled from anything a
+// caller sent, and `shopifyRead` refuses any text containing `mutation`. A
+// chargeback is answered in the Shopify admin by a person, not from here.
+// ===========================================================================
+const SHOPIFY_DISPUTES_QL = `{
+  shopifyPaymentsAccount {
+    disputes(first: 100, reverse: true) {
+      edges { node {
+        id legacyResourceId status type
+        amount { amount currencyCode }
+        reasonDetails { reason networkReasonCode }
+        evidenceDueBy evidenceSentOn finalizedOn initiatedAt
+        order { id name }
+      } }
+    }
+  }
+}`;
+
+async function shopifyRead(shop: string, token: string, query: string): Promise<any> {
+  if (/\bmutation\b/i.test(query)) throw new Error("refused: not a read-only Shopify query");
+  const res = await fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+    body: JSON.stringify({ query }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(`Shopify ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+  if (body?.errors?.length) throw new Error(`Shopify: ${JSON.stringify(body.errors).slice(0, 200)}`);
+  return body?.data;
+}
+
+// Shopify's DisputeStatus is the whole state machine, checked against all 29
+// disputes the five stores have ever had (2026-09-23):
+//   NEEDS_RESPONSE  open, waiting on US   — 0 of 7 had evidenceSentOn
+//   UNDER_REVIEW    open, waiting on THEM — we have answered
+//   WON / LOST / ACCEPTED / PREVENTED     — finished, finalizedOn set
+// evidenceSentOn was set on 10 of 10 wins and absent on every NEEDS_RESPONSE,
+// so it is trustworthy as "when we answered".
+const SHOPIFY_OPEN = new Set(["NEEDS_RESPONSE", "UNDER_REVIEW"]);
+function mapShopifyDispute(n: any, store: string) {
+  const st = String(n.status ?? "").toUpperCase();
+  const open = SHOPIFY_OPEN.has(st);
+  return {
+    dispute_key: `shopify:${n.legacyResourceId}`, source: "shopify",
+    external_id: String(n.legacyResourceId ?? ""), store_code: store,
+    order_no: n.order?.name ?? null, order_id: n.order?.id ?? null,
+    item_title: null, buyer: null,
+    amount: num(n.amount?.amount), currency: n.amount?.currencyCode ?? null,
+    dispute_type: n.type ?? null,
+    reason: n.reasonDetails?.reason ?? null,
+    reason_code: n.reasonDetails?.networkReasonCode ?? null,
+    status_raw: st, is_open: open,
+    needs_response: st === "NEEDS_RESPONSE",
+    responded_at: n.evidenceSentOn ?? null,
+    opened_at: n.initiatedAt ?? null,
+    respond_by: n.evidenceDueBy ?? null,
+    closed_at: n.finalizedOn ?? null,
+    outcome: open ? null : st.toLowerCase(),
+    raw: n,
+  };
+}
+
+// eBay's payment_dispute_summary is nearly content-free: every live dispute on
+// 2026-09-23 read paymentDisputeStatus "OPEN" with no deadline and no sign of
+// whether we had answered. The documented ACTION_NEEDED never appeared. So the
+// summary only establishes that a dispute EXISTS and what it is worth; whether
+// it needs us is settled by the detail pass below.
+const mapEbayDispute = (m: any, store: string) => {
+  const st = String(m.paymentDisputeStatus ?? m.disputeStatus ?? "").toUpperCase();
+  const open = !/CLOSED|RESOLVED/.test(st);
+  const money = moneyOf(m.amount);
+  return {
+    dispute_key: `ebay:${m.paymentDisputeId}`, source: "ebay",
+    external_id: String(m.paymentDisputeId ?? ""), store_code: store,
+    order_no: m.orderId ?? null, order_id: m.orderId ?? null,
+    buyer: m.buyerUsername ?? null,
+    amount: money.amount, currency: money.currency,
+    dispute_type: "CHARGEBACK",
+    reason: m.reason ?? null, reason_code: null,
+    status_raw: st, is_open: open,
+    // Assume it needs us until the detail says otherwise — an unread dispute
+    // shown in red is an afternoon wasted; an unread dispute shown as answered
+    // is the money.
+    needs_response: open,
+    opened_at: dateOf(m.openDate),
+    closed_at: open ? null : dateOf(m.closedDate) ?? null,
+    raw: m,
+  };
+};
+
+// WHOSE MOVE IS IT, from one dispute's detail — eBay's answer to the `actor`
+// question that 0107 settled for cases. Checked against all six open disputes
+// on 2026-09-23:
+//   sellerResponse absent           still ours, and we can still act
+//   SELLER_CONTEST / SELLER_ACCEPT  answered; evidence[].providedDate says when
+//   SELLER_RESPONSE_OVERDUE         never answered and the window has SHUT
+// availableChoices lists what eBay will still accept from us; it is empty both
+// when we have answered and when we are too late, so it cannot be read alone.
+// The deadline lives on the evidence entry, not at the top level.
+function readEbayDisputeDetail(d: any) {
+  const resp = String(d.sellerResponse ?? "").toUpperCase();
+  const ev = (d.evidence || [])[0] || {};
+  const overdue = resp === "SELLER_RESPONSE_OVERDUE";
+  const answered = !!resp && !overdue;
+  return {
+    seller_response: resp || null,
+    response_overdue: overdue,
+    // Overdue still counts as unanswered: the money is at risk and nobody dealt
+    // with it. What changes is that it can no longer be fixed by responding, so
+    // the card and the refusal say something different (see stateOf and the POST
+    // gate).
+    needs_response: !answered,
+    responded_at: answered ? dateOf(ev.providedDate) : null,
+    respond_by: dateOf(ev.respondByDate) ?? dateOf(d.respondByDate),
+    detail_checked_at: new Date().toISOString(),
+  };
+}
+
+// One store, both sites. Each source is recorded separately in dispute_sync, so
+// "eBay is not connected yet" never reads as "chargebacks are broken".
+async function sweepDisputes(sb: any, store: string, ebayRow: any, shopRow: any) {
+  const nowIso = new Date().toISOString();
+  const out: Record<string, any> = {};
+
+  const save = async (source: string, rows: any[], ok: boolean, detail: string) => {
+    if (rows.length) {
+      const keys = rows.map((r) => r.dispute_key);
+      const { data: prior } = await sb.from("payment_disputes").select("dispute_key,first_seen").in("dispute_key", keys);
+      const seenBy: Record<string, string> = Object.fromEntries((prior || []).map((p: any) => [p.dispute_key, p.first_seen]));
+      const up = rows.map((r) => ({ ...r, first_seen: seenBy[r.dispute_key] || nowIso, last_synced: nowIso }));
+      const { error } = await sb.from("payment_disputes").upsert(up, { onConflict: "dispute_key" });
+      if (error) { ok = false; detail = `save: ${error.message}`; }
+    }
+    await sb.from("dispute_sync").upsert(
+      { store_code: store, source, synced_at: nowIso, ok, detail }, { onConflict: "store_code,source" });
+    out[source] = { ok, count: rows.length, detail };
+  };
+
+  // --- Shopify chargebacks ---
+  try {
+    if (!shopRow?.access_token) throw new Error("no Shopify credentials");
+    const d = await shopifyRead(shopRow.shop, shopRow.access_token, SHOPIFY_DISPUTES_QL);
+    const edges = d?.shopifyPaymentsAccount?.disputes?.edges || [];
+    const rows = edges.map((e: any) => mapShopifyDispute(e.node, store)).filter((r: any) => r.external_id);
+    await save("shopify", rows, true, `${rows.length} read`);
+  } catch (e) {
+    await save("shopify", [], false, String((e as any)?.message ?? e).slice(0, 200));
+  }
+
+  // --- eBay payment disputes ---
+  try {
+    if (!ebayRow?.refresh_token) throw new Error("no eBay credentials");
+    const host = ebayZ(EBAY_HOSTS[ebayRow.environment as string] || EBAY_HOSTS.production);
+    const token = await mintToken(ebayRow);
+    const rows: any[] = [];
+    // open_disputes=true is the short list that matters; a second pass with no
+    // filter brings in the ones that closed, for the recently-settled view.
+    for (const qs of ["open_disputes=true&limit=200", "limit=200"]) {
+      const b = await ebayGet(`${host}/sell/fulfillment/v1/payment_dispute_summary?${qs}`, token);
+      for (const m of b?.paymentDisputeSummaries || []) {
+        const r = mapEbayDispute(m, store);
+        if (r.external_id && !rows.some((x) => x.dispute_key === r.dispute_key)) rows.push(r);
+      }
+    }
+    await save("ebay", rows, true, `${rows.length} read`);
+
+    // Detail pass — this is where "have we answered" actually comes from. Open
+    // disputes are re-read every sweep (the answer changes); closed ones once,
+    // so the settled list can say how each ended.
+    const { data: want } = await sb.from("payment_disputes")
+      .select("dispute_key,external_id,is_open")
+      .eq("store_code", store).eq("source", "ebay")
+      .or("is_open.eq.true,detail_checked_at.is.null")
+      .order("opened_at", { ascending: false }).limit(DETAIL_PER_SWEEP);
+    let bad = 0;
+    for (const p of want || []) {
+      try {
+        const d = await ebayGet(`${host}/sell/fulfillment/v1/payment_dispute/${encodeURIComponent(p.external_id)}`, token);
+        await sb.from("payment_disputes").update(readEbayDisputeDetail(d)).eq("dispute_key", p.dispute_key);
+      } catch { bad++; }
+    }
+    if (bad) {
+      out.ebay.ok = false;
+      out.ebay.detail = `${rows.length} read, ${bad} of ${(want || []).length} details unread`;
+      await sb.from("dispute_sync").upsert(
+        { store_code: store, source: "ebay", synced_at: nowIso, ok: false, detail: out.ebay.detail },
+        { onConflict: "store_code,source" });
+    }
+  } catch (e) {
+    const msg = String((e as any)?.message ?? e);
+    // 1100 is eBay's "insufficient permissions": the store has not consented to
+    // sell.payment.dispute yet. That is a setup step, not a failure, and it is
+    // worth saying so in the words the fix needs.
+    const notConnected = /\b1100\b|Insufficient permissions|Access denied/i.test(msg);
+    await save("ebay", [], false,
+      notConnected ? "eBay payment disputes need a one-time sign-in for this store (sell.payment.dispute)" : msg.slice(0, 200));
+  }
+  return out;
+}
+
 async function sweepStore(sb: any, ebayRow: any) {
   const store = ebayRow.store_code;
   const host = EBAY_HOSTS[ebayRow.environment as string] || EBAY_HOSTS.production;
@@ -581,28 +850,56 @@ async function sweepStore(sb: any, ebayRow: any) {
 }
 
 async function sync(sb: any, stores: string[], force: boolean) {
+  const cutoff = Date.now() - SYNC_MIN_MINUTES * 60_000;
+  const isDue = (r: any) => force || !r || !r.ok || new Date(r.synced_at).getTime() < cutoff;
+
   const { data: last } = await sb.from("ebay_case_sync").select("*").in("store_code", stores);
   const lastBy: Record<string, any> = Object.fromEntries((last || []).map((r: any) => [r.store_code, r]));
-  const cutoff = Date.now() - SYNC_MIN_MINUTES * 60_000;
-  const due = stores.filter((s) => force || !lastBy[s] || !lastBy[s].ok ||
-    new Date(lastBy[s].synced_at).getTime() < cutoff);
+  const due = stores.filter((s) => isDue(lastBy[s]));
+
+  // Disputes keep their OWN throttle, per store and per source, so an eBay half
+  // that is not consented yet (and so never reads ok) cannot drag the Shopify
+  // half into re-reading on every single page load.
+  const { data: lastD } = await sb.from("dispute_sync").select("*").in("store_code", stores);
+  const dBy: Record<string, any> = {};
+  for (const r of lastD || []) (dBy[r.store_code] ||= {})[r.source] = r;
+  const dueD = stores.filter((s) => isDue(dBy[s]?.shopify) || isDue(dBy[s]?.ebay));
+
   const out: Record<string, any> = {};
-  if (!due.length) return { swept: out, skipped: stores };
+  const touched = [...new Set([...due, ...dueD])];
+  if (!touched.length) return { swept: out, skipped: stores };
+
   const { data: ebayRows } = await sb.from("ebay_stores")
-    .select("store_code,refresh_token,scopes,environment").in("store_code", due);
-  await Promise.all(due.map(async (s) => {
+    .select("store_code,refresh_token,scopes,environment").in("store_code", touched);
+  // shopify_stores.store_code is null, so match on the shop domain (see the map).
+  const { data: shopRows } = await sb.from("shopify_stores").select("shop,store_code,access_token");
+  const shopFor = (s: string) => (shopRows || []).find((r: any) =>
+    r.store_code === s || r.shop === SHOP_BY_STORE[s]) || null;
+
+  await Promise.all(touched.map(async (s) => {
     const row = (ebayRows || []).find((r: any) => r.store_code === s);
-    try {
-      if (!row?.refresh_token) throw new Error("no eBay credentials");
-      out[s] = await sweepStore(sb, row);
-    } catch (e) {
-      const detail = String((e as any)?.message ?? e).slice(0, 200);
-      await sb.from("ebay_case_sync").upsert(
-        { store_code: s, synced_at: new Date().toISOString(), ok: false, detail }, { onConflict: "store_code" });
-      out[s] = { ok: false, count: 0, detail };
+    if (due.includes(s)) {
+      try {
+        if (!row?.refresh_token) throw new Error("no eBay credentials");
+        out[s] = await sweepStore(sb, row);
+      } catch (e) {
+        const detail = String((e as any)?.message ?? e).slice(0, 200);
+        await sb.from("ebay_case_sync").upsert(
+          { store_code: s, synced_at: new Date().toISOString(), ok: false, detail }, { onConflict: "store_code" });
+        out[s] = { ok: false, count: 0, detail };
+      }
+    }
+    // A dispute sweep never fails the store's sweep: it records its own state
+    // per source and each side reports itself.
+    if (dueD.includes(s)) {
+      try {
+        out[s] = { ...(out[s] || {}), disputes: await sweepDisputes(sb, s, row, shopFor(s)) };
+      } catch (e) {
+        out[s] = { ...(out[s] || {}), disputes: { error: String((e as any)?.message ?? e).slice(0, 200) } };
+      }
     }
   }));
-  return { swept: out, skipped: stores.filter((s) => !due.includes(s)) };
+  return { swept: out, skipped: stores.filter((s) => !touched.includes(s)) };
 }
 
 // ===========================================================================
@@ -615,6 +912,8 @@ async function sync(sb: any, stores: string[], force: boolean) {
 //                cannot be checked in until eBay's history shows our reply
 //                (0107/0108). Resolving it with a reason still works.
 //   needs_claim  a refunded INR with no claim — due at once, resolved only by a claim
+//   answered     a dispute we have answered — the card network decides now, and
+//                nothing is due from us until it does (0112)
 //   covered      its claim is In Progress — the claim does the reminding now
 //   resolved     a manager said it is settled, and why
 //   settled      the marketplaces settled it (sites agree / eBay closed it /
@@ -624,6 +923,22 @@ const isInr = (it: any) => it.kind === "inquiry" || (it.kind === "case" && it.ca
 
 function stateOf(type: string, it: any, review: any, ctx: any): { state: string; due_on: string | null; note?: string } {
   const today = ctx.today;
+  // A DISPUTE RUNS ON THE SITE'S CLOCK, NOT OURS (0112). It has a real deadline
+  // from the moment it exists, so it never waits a timeframe and it never has a
+  // claim — the whole question is whether we answered before the date. Ordering
+  // matches the eBay-case gate: a written resolution still counts, but nothing
+  // else gets past `needs_response`.
+  if (type === "dispute") {
+    if (review?.status === "resolved") return { state: "resolved", due_on: null };
+    if (!it.is_open) return { state: "settled", due_on: null, note: it.outcome || undefined };
+    // Overdue is still needs_reply — unanswered money nobody dealt with — but
+    // it is flagged, because "respond on eBay and this clears" is no longer
+    // true and telling a manager otherwise wastes their time.
+    if (it.needs_response) {
+      return { state: "needs_reply", due_on: today, note: it.response_overdue ? "overdue" : undefined };
+    }
+    return { state: "answered", due_on: null };
+  }
   const claim = ctx.claimFor(type, it);
   if (type === "ebay_case" && isInr(it)) {
     if (claim) {
@@ -680,7 +995,7 @@ function stateOf(type: string, it: any, review: any, ctx: any): { state: string;
 
 async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean } = {}) {
   const recent = daysAgoIso(RECENT_DAYS);
-  const [mm, cs, rv, ev, sy, ln, cl] = await Promise.all([
+  const [mm, cs, rv, ev, sy, ln, cl, dp, ds] = await Promise.all([
     sb.from("refund_mismatch_state").select("*").in("store_code", stores)
       .or(`resolved_at.is.null,resolved_at.gte.${recent}`),
     // A refunded INR stays in the read however old it is: until it has a claim
@@ -695,8 +1010,15 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     sb.from("hold_claim_links").select("*").in("store_code", stores),
     sb.from("shopify_claims").select("id,store,case_number,item_sku,price,reason_type,status,created_at,resolved_at,parent_id")
       .in("store", stores).order("created_at", { ascending: false }).limit(500),
+    // Open disputes however old — an unanswered chargeback does not stop
+    // mattering because it has been ignored for a month — plus recently closed
+    // ones, which are where "we lost this without replying" shows up.
+    sb.from("payment_disputes")
+      .select("dispute_key,source,external_id,store_code,order_no,order_id,item_title,buyer,amount,currency,dispute_type,reason,reason_code,status_raw,is_open,needs_response,response_overdue,seller_response,responded_at,opened_at,respond_by,closed_at,outcome,first_seen,last_synced")
+      .in("store_code", stores).or(`is_open.eq.true,closed_at.gte.${recent}`),
+    sb.from("dispute_sync").select("*").in("store_code", stores),
   ]);
-  for (const r of [mm, cs, rv, ev, sy, ln, cl]) if (r.error) throw new Error(r.error.message);
+  for (const r of [mm, cs, rv, ev, sy, ln, cl, dp, ds]) if (r.error) throw new Error(r.error.message);
 
   const claimsById: Record<string, any> = Object.fromEntries((cl.data || []).map((c: any) => [c.id, c]));
   const caseByKey: Record<string, any> = Object.fromEntries((cs.data || []).map((c: any) => [c.case_key, c]));
@@ -760,7 +1082,7 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
   }
   const caseRows = (cs.data || []).filter((c: any) => !folded.has(c.case_key));
 
-  const waiting: Record<string, number> = { mismatch: 0, ebay_case: 0 };
+  const waiting: Record<string, number> = { mismatch: 0, ebay_case: 0, dispute: 0 };
   const build = (type: string, it: any, key: string) => {
     // A check-in made on the return before it escalated carries onto the case
     // until someone acts on the case itself.
@@ -796,6 +1118,16 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
   };
 
   const mismatches = (mm.data || []).map((m: any) => build("mismatch", m, m.issue_key)).filter(keep("mismatch"));
+  // Soonest deadline first among the ones waiting on us, because that is the
+  // only ordering a manager with two of these can act on. Answered and finished
+  // ones fall in behind, newest first.
+  const disputes = (dp.data || [])
+    .map((d: any) => build("dispute", d, d.dispute_key)).filter(keep("dispute"))
+    .sort((a: any, b: any) =>
+      (b.needs_response ? 1 : 0) - (a.needs_response ? 1 : 0)
+      || (a.needs_response
+        ? String(a.respond_by || "9999").localeCompare(String(b.respond_by || "9999"))
+        : String(b.opened_at || "").localeCompare(String(a.opened_at || ""))));
   const cases = caseRows
     .filter((c: any) => !(isInr(c) && String(c.opened_at || "") < INR_FROM))   // see INR_FROM
     .map((c: any) => build("ebay_case", c, c.case_key)).filter(keep("ebay_case"));
@@ -810,14 +1142,16 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
 
   return {
     rollout: ROLLOUT_STORES, stores, today: ctx.today, monthEnd: ctx.monthEnd,
-    mismatches, cases, claims, waiting,
-    sync: sy.data || [], timers: THRESHOLD_DAYS, minReason: MIN_REASON,
+    mismatches, cases, claims, disputes, waiting,
+    sync: sy.data || [], disputeSync: ds.data || [],
+    timers: THRESHOLD_DAYS, minReason: MIN_REASON,
   };
 }
 
 async function itemStore(sb: any, type: string, key: string): Promise<string | null> {
   const [table, col] = type === "mismatch" ? ["refund_mismatch_state", "issue_key"]
-    : type === "ebay_case" ? ["ebay_cases", "case_key"] : ["", ""];
+    : type === "ebay_case" ? ["ebay_cases", "case_key"]
+    : type === "dispute" ? ["payment_disputes", "dispute_key"] : ["", ""];
   if (!table) return null;
   const { data } = await sb.from(table).select("store_code").eq(col, key).maybeSingle();
   return data?.store_code ?? null;
@@ -907,6 +1241,19 @@ Deno.serve(async (req) => {
           .select("is_open,kind,seller_replied_at,buyer_acted_at,respond_by").eq("case_key", key).maybeSingle();
         if (c && awaitingReply(c) && String(body.status || "") === "still_open") {
           return json({ success: false, error: "eBay is still waiting on a reply from us, so this one cannot be checked in. Answer it on eBay — the next read clears it by itself — or mark it resolved and say what happened." }, 400);
+        }
+      }
+      // The same gate for disputes (0112). needs_response is the site's own
+      // word, re-read every sweep, so answering it really is the only way out —
+      // and a deadline nobody can snooze is the entire point of this one.
+      if (action === "review" && type === "dispute" && String(body.status || "") === "still_open") {
+        const { data: d } = await sb.from("payment_disputes")
+          .select("needs_response,response_overdue,source,respond_by").eq("dispute_key", key).maybeSingle();
+        if (d?.needs_response) {
+          const where = d.source === "ebay" ? "eBay" : "Shopify";
+          return json({ success: false, error: d.response_overdue
+            ? `The window to respond to this one on ${where} has already closed, so it cannot be checked in. Mark it resolved and say what happened, so there is a record of it.`
+            : `${where} is still waiting on our response to this dispute, so it cannot be checked in. Respond on ${where} — the next read clears it by itself — or mark it resolved and say what happened.` }, 400);
         }
       }
       // Reopen DELETES the review rather than writing "still open" over it.

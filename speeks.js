@@ -33915,10 +33915,24 @@ const _HOLD_STATE = {
     needs_claim: { label: 'Refunded — needs a claim', bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
     due:         { label: 'Check-in due',             bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 1 },
     checked:     { label: 'Checked in',               bg: _HOLD_C.amber.bg, fg: _HOLD_C.amber.fg, rank: 2 },
+    // 0112: we answered a dispute and the card network decides now. Nothing is
+    // due from us, so it sits with the other "moving, not waiting on you" states.
+    answered:    { label: 'Answered — with them',     bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
     covered:     { label: 'Claim open',               bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
     resolved:    { label: 'Resolved',                 bg: _HOLD_C.green.bg, fg: _HOLD_C.green.fg, rank: 4 },
     settled:     { label: 'Settled',                  bg: _HOLD_C.grey.bg,  fg: _HOLD_C.grey.fg,  rank: 5 },
 };
+// needs_reply covers an eBay case AND a dispute on either site, so the chip has
+// to name the right site — "eBay is waiting on us" on a Shopify chargeback would
+// send someone to the wrong admin. A dispute whose window has already shut says
+// so instead: it is still unanswered, but responding is no longer the fix.
+function _holdStateLabel(type, it, s) {
+    if (type !== 'dispute') return s.label;
+    const site = it.source === 'ebay' ? 'eBay' : 'Shopify';
+    if (it.state === 'needs_reply') return it.response_overdue ? 'Response overdue' : `${site} is waiting on us`;
+    if (it.state === 'answered') return 'Answered — waiting on them';
+    return s.label;
+}
 // TWO views, not three (Ethan, 2026-09-22: "we probably don't need the resolved
 // section"). "Needs Attention" is what a morning email would list. Resolved
 // items ride along in the second view so a wrong Resolved can still be reopened;
@@ -33930,7 +33944,7 @@ const _HOLD_VIEWS = {
     // settled in neither view the card simply vanished, with nothing to show
     // the link had worked. Settled and resolved are both FINISHED, so they sit
     // in the collapsed group at the bottom of this view rather than in the list.
-    waiting: { label: 'Status Changed/Claim Open', states: ['checked', 'covered', 'resolved', 'settled'] },
+    waiting: { label: 'Status Changed/Claim Open', states: ['checked', 'covered', 'answered', 'resolved', 'settled'] },
 };
 // Which of that view's states are done with, and fold away.
 const _HOLD_DONE = ['resolved', 'settled'];
@@ -33939,7 +33953,11 @@ const _holdIsInr = it => it.kind === 'inquiry' || (it.kind === 'case' && it.case
 // A plain return only. An escalated one arrives folded into the case eBay opened
 // (0104), which is no longer a routine return, so it belongs with the cases.
 const _holdIsReturn = it => it.kind === 'return';
-const _holdItemKey = entry => entry.type === 'mismatch' ? entry.it.issue_key : entry.it.case_key;
+const _holdItemKey = entry => _holdKeyFor(entry.type, entry.it);
+// One place that knows which column is an item's key, because three types now
+// use three different ones and getting it wrong silently posts against nothing.
+const _holdKeyFor = (type, it) =>
+    type === 'mismatch' ? it.issue_key : type === 'dispute' ? it.dispute_key : it.case_key;
 const _holdDelivered = it => /DELIVERED/i.test(String(it.tracking_status || ''));
 // Returns run delivered → on its way back → not shipped yet → needs a label
 // (Ethan, 2026-09-22): the ones closest to a refund first, the ones we have not
@@ -33966,7 +33984,7 @@ function _holdReturnRank(it) {
     if (/WAITING_FOR_RETURN_LABEL|RETURN_LABEL_PENDING/.test(st)) return 3;
     return 4;
 }
-const _holdKeyOf = e => `${e.type}|${e.type === 'mismatch' ? e.it.issue_key : e.it.case_key}`;
+const _holdKeyOf = e => `${e.type}|${_holdKeyFor(e.type, e.it)}`;
 
 async function loadHoldItems(ctx, opts = {}) {
     const stores = _holdStores(ctx);
@@ -34039,7 +34057,9 @@ function _holdDueCounts(ctx) {
     return {
         mismatch: (d.mismatches || []).filter(need).length,
         returns: due.filter(_holdIsReturn).length,
-        cases: due.filter(c => !_holdIsReturn(c)).length,
+        // Disputes live on this tab too, and an unanswered one is the most
+        // expensive thing the badge can be counting.
+        cases: due.filter(c => !_holdIsReturn(c)).length + (d.disputes || []).filter(need).length,
     };
 }
 function _holdPaintBadges(ctx) {
@@ -34078,7 +34098,22 @@ function renderHoldItems(ctx) {
     const all = d.cases || [];
     if (rw) rw.innerHTML = _holdToolbar(ctx, 'ebay_case', { returns: true }) + _holdSyncLine(d)
         + _holdList(ctx, 'ebay_case', all.filter(_holdIsReturn), null, { returns: true });
-    if (cw) cw.innerHTML = _holdToolbar(ctx, 'ebay_case') + _holdSyncLine(d) + _holdList(ctx, 'ebay_case', all.filter(c => !_holdIsReturn(c)), null);
+    // Disputes lead this tab. They are the only items in the tool with a hard
+    // outside deadline and the only kind that is LOST BY DEFAULT if nobody
+    // looks — on the first read, 8 of 13 open ones had no response at all.
+    const disputes = d.disputes || [];
+    if (cw) cw.innerHTML = _holdToolbar(ctx, 'ebay_case') + _holdSyncLine(d)
+        + (disputes.length
+            ? _holdSectionHead('Payment disputes & chargebacks') + _holdList(ctx, 'dispute', disputes, null, { section: true })
+              + _holdSectionHead('eBay cases')
+            : '')
+        + _holdList(ctx, 'ebay_case', all.filter(c => !_holdIsReturn(c)), null, disputes.length ? { section: true } : null);
+}
+
+// A heading only appears when there is more than one kind of thing on the tab;
+// otherwise it is furniture over a single list.
+function _holdSectionHead(t) {
+    return `<div style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 0 8px;">${escapeHtml(t)}</div>`;
 }
 
 function _holdToolbar(ctx, type, opts) {
@@ -34107,6 +34142,17 @@ function _holdSyncLine(d) {
     const bad = rows.filter(r => !r.ok);
     let html = '';
     if (bad.length) html += `<div style="font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ Couldn't fully read eBay for ${bad.map(r => escapeHtml(r.store_code)).join(', ')} — showing the last list that loaded. It will retry next time this opens.</div>`;
+    // Disputes are read from eBay AND Shopify, so a failure has to name which
+    // site went quiet — "couldn't read eBay" on a missing Shopify token would
+    // send someone to re-authorise the wrong thing (0112).
+    const badD = (d.disputeSync || []).filter(r => !r.ok);
+    if (badD.length) {
+        const by = {};
+        badD.forEach(r => (by[r.source === 'ebay' ? 'eBay' : 'Shopify'] ||= []).push(r.store_code));
+        html += `<div style="font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ Couldn't read disputes: ${
+            Object.entries(by).map(([site, ss]) => `${escapeHtml(site)} for ${ss.map(escapeHtml).join(', ')}`).join('; ')
+        }. ${escapeHtml(badD[0].detail || '')}</div>`;
+    }
     return html;
 }
 
@@ -34124,15 +34170,29 @@ function _holdList(ctx, type, items, casesByOrder, opts) {
     const at = it => new Date((type === 'mismatch' ? it.reversed_at : it.opened_at) || 0).getTime();
     if (returns) rows.sort((a, b) => _holdReturnRank(a) - _holdReturnRank(b) || at(a) - at(b));
     else if (type === 'ebay_case') rows.sort((a, b) => _holdCaseRank(a) - _holdCaseRank(b) || at(a) - at(b));
+    // Soonest deadline first among the ones waiting on us — with two of these
+    // open, the date is the only thing that decides which to do first.
+    else if (type === 'dispute') {
+        const due = it => new Date(it.respond_by || it.opened_at || 0).getTime();
+        rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank
+            || (a.needs_response ? due(a) - due(b) : at(b) - at(a)));
+    }
     else rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank || at(a) - at(b));
     if (!rows.length) {
         const empty = returns ? 'No open returns right now.'
             : v.show === 'due'
-            ? (type === 'mismatch' ? 'Nothing needs attention — eBay and Shopify agree, or every open one is checked in.' : 'Nothing needs attention on eBay right now.')
+            ? (type === 'mismatch' ? 'Nothing needs attention — eBay and Shopify agree, or every open one is checked in.'
+               : type === 'dispute' ? 'No dispute is waiting on us.'
+               : 'Nothing needs attention on eBay right now.')
             // Status Changed/Claim Open: say what would be here, not "this view"
             : (type === 'mismatch' ? 'Nothing is checked in or waiting on an insurance claim.'
-                                   : 'Nothing is checked in or waiting on a claim.');
-        return `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">${empty}</div>`;
+               : type === 'dispute' ? 'No dispute is answered and waiting on a decision.'
+               : 'Nothing is checked in or waiting on a claim.');
+        // Inside a section the big empty panel reads as if the whole tab is
+        // empty, which it is not — the other section is right below it.
+        return (opts && opts.section)
+            ? `<div style="padding:10px 2px; color:#94a3b8; font-weight:600; font-size:12px;">${empty}</div>`
+            : `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">${empty}</div>`;
     }
     const cards = list => `<div style="display:flex; flex-direction:column; gap:10px;">`
         + list.map(it => _holdCard(ctx, type, it, multi, casesByOrder, opts)).join('') + `</div>`;
@@ -34218,7 +34278,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     const readOnly = !!(opts && opts.returns);
     const st = it.state;
     const s = _HOLD_STATE[st] || _HOLD_STATE.due;
-    const key = type === 'mismatch' ? it.issue_key : it.case_key;
+    const key = _holdKeyFor(type, it);
     let form = _holdOpenForm[ctx] && _holdOpenForm[ctx].id === `${type}|${key}` ? _holdOpenForm[ctx].mode : null;
     if (readOnly) form = null;
     const inr = type === 'ebay_case' && _holdIsInr(it);
@@ -34239,6 +34299,48 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         const related = (casesByOrder && casesByOrder[it.ebay_order_id]) || [];
         if (related.length) {
             extra = `<div style="font-size:11.5px; color:#1d4ed8; margin-top:6px;">🔗 ${related.map(c => `eBay ${c.kind === 'inquiry' ? 'item-not-received inquiry' : c.kind} ${escapeHtml(c.ebay_id)} — ${escapeHtml(_holdPretty(c.ebay_status))}`).join('; ')}</div>`;
+        }
+    } else if (type === 'dispute') {
+        // 0112. The buyer went to their bank (or to eBay) instead of to us, so
+        // the reason the network gave IS the headline — it is what any evidence
+        // has to answer.
+        const ebay = it.source === 'ebay';
+        title = escapeHtml(_holdPretty(it.reason)) || 'Payment dispute';
+        subtitle = `${ebay ? 'eBay payment dispute' : it.dispute_type === 'INQUIRY' ? 'Shopify inquiry — before the money is pulled' : 'Shopify chargeback'}`;
+        // The deadline is the whole point of this card, so it is never quiet.
+        const due = it.respond_by;
+        const late = due && new Date(due).getTime() < Date.now();
+        const soon = due && !late && (new Date(due).getTime() - Date.now()) < 3 * 86400000;
+        const dueTxt = due
+            ? (it.needs_response
+                ? `<span style="white-space:nowrap; ${late || soon ? `color:${_HOLD_C.red.fg}; font-weight:800;` : 'font-weight:700;'}">${late ? 'Was due' : 'Respond by'} ${_holdEbayDay(due)}</span>`
+                : `<span style="white-space:nowrap; color:#475569;">Responded by ${_holdEbayDay(due)}</span>`)
+            : '';
+        // Straight to the page the response is typed on. The Shopify admin is
+        // keyed by the SHOP HANDLE, not the store code — CB_SHOP_DOMAINS is the
+        // map the rest of the file already uses for exactly this, and a link
+        // that 404s is worse than no link (see cbMatchListingUrl).
+        const shop = CB_SHOP_DOMAINS[it.store_code];
+        const link = ebay
+            ? 'https://www.ebay.com/sh/return/disputes'
+            : shop ? `https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/payments/disputes` : '';
+        facts = [
+            dueTxt,
+            it.order_no ? kv('Order', `<b>${escapeHtml(it.order_no)}</b>${siteCopyBtn(it.order_no, 'order number')}`) : '',
+            it.reason_code ? kv('Network code', escapeHtml(it.reason_code)) : '',
+            it.buyer ? kv('Buyer', escapeHtml(it.buyer)) : '',
+            kv('Opened', `${_holdDate(it.opened_at)} · ${_holdAge(it.opened_at)}`),
+            it.responded_at ? kv('We answered', _holdDate(it.responded_at)) : '',
+            link ? `<a href="${link}" target="_blank" rel="noopener" style="font-weight:800; color:#1d4ed8; white-space:nowrap;">Open on ${ebay ? 'eBay' : 'Shopify'} ↗</a>` : '',
+        ];
+        if (st === 'needs_reply' && it.response_overdue) {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The window to respond has already closed</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us, so this one is very likely lost. Nothing here can reopen it; mark it resolved and say what happened so there is a record.</div>`;
+        } else if (st === 'needs_reply') {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} is waiting on our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Unanswered disputes are lost by default.</div>`;
+        } else if (st === 'answered') {
+            extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We responded${it.responded_at ? ` ${_holdDate(it.responded_at)}` : ''} — the ${ebay ? 'eBay' : 'card'} decision can take weeks. Nothing to do until it lands.</div>`;
+        } else if (st === 'settled') {
+            extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${escapeHtml(_holdPretty(it.status_raw))}${it.closed_at ? ` · ${_holdDate(it.closed_at)}` : ''}.</div>`;
         }
     } else {
         // Seller Hub leads with the item, so the card does too; the kind of case
@@ -34319,14 +34421,16 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     }
     // 0107/0108. Said plainly, because the move is on eBay and nothing pressed
     // here can stand in for it: eBay's own history is what clears this.
-    if (st === 'needs_reply') {
+    // Cases only: a dispute says its own version of this above, naming the right
+    // site and its deadline.
+    if (st === 'needs_reply' && type === 'ebay_case') {
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
             <b>eBay is waiting on a reply from us${it.buyer_acted_at ? ` since ${_holdDate(it.buyer_acted_at)}` : ''}</b>
             — answer it on eBay and this clears itself on the next read. It can't be checked in until then.</div>`;
-    } else if (it.is_open && it.seller_replied_at) {
+    } else if (type === 'ebay_case' && it.is_open && it.seller_replied_at) {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We answered eBay ${_holdDate(it.seller_replied_at)} — waiting on the buyer.</div>`;
     }
-    if (st === 'settled' && !it.claim) {
+    if (st === 'settled' && !it.claim && type !== 'dispute') {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${type === 'mismatch'
             ? `Both sites agree now${it.resolved_at ? ' (' + _holdDate(it.resolved_at) + ')' : ''} — nothing to do.`
             : `Closed on eBay${it.closed_at ? ' (' + _holdDate(it.closed_at) + ')' : ''}${inr && it.outcome === 'no_refund' ? ' — no refund to the buyer.' : '.'}`}</div>`;
@@ -34361,9 +34465,15 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         <div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
             <label class="form-label-caps" for="hold-note-${ctx}-${idx}">Note</label>
             <textarea id="hold-note-${ctx}-${idx}" rows="2" class="form-input-lg" style="width:100%; box-sizing:border-box; resize:vertical;"
-                placeholder="${type === 'mismatch' ? 'e.g. Won the Shopify insurance claim SHPJG-0709… — money recovered, no Shopify refund needed' : 'e.g. Buyer shipped the return, tracking 1Z…; refund once it arrives'}"></textarea>
+                placeholder="${type === 'mismatch' ? 'e.g. Won the Shopify insurance claim SHPJG-0709… — money recovered, no Shopify refund needed'
+                    : type === 'dispute' ? 'e.g. Refunded the buyer and accepted it — cheaper than losing the chargeback fee too'
+                    : 'e.g. Buyer shipped the return, tracking 1Z…; refund once it arrives'}"></textarea>
             <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${st === 'needs_reply'
-                ? `<b>Still open</b> is off the table until eBay shows our reply — that is the point of this one. <b>Resolved</b> is still here for a case that ended some other way, and needs a reason.`
+                ? (type === 'dispute'
+                    ? (it.response_overdue
+                        ? `The response window has closed, so there is nothing to check in. <b>Resolved</b> records what happened and needs a reason.`
+                        : `<b>Still open</b> is off the table until ${escapeHtml(it.source === 'ebay' ? 'eBay' : 'Shopify')} shows our response — that is the point of this one. <b>Resolved</b> is here for a dispute we settled another way (refunded the buyer, accepted it), and needs a reason.`)
+                    : `<b>Still open</b> is off the table until eBay shows our reply — that is the point of this one. <b>Resolved</b> is still here for a case that ended some other way, and needs a reason.`)
                 : type === 'mismatch'
                 ? `<b>Insurance Claim</b> opens the claim form and takes this off the list for ${days} day${days === 1 ? '' : 's'}. <b>Resolved</b> needs a reason — why it is fine that the two sites don’t match, or what you fixed.`
                 : `<b>Still open</b> takes it off the list for ${days} day${days === 1 ? '' : 's'} (note optional). <b>Resolved</b> needs a reason.`}</div>
@@ -34386,7 +34496,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             <div style="min-width:0; flex:1 1 240px;">
                 <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:4px;">
                     ${multi ? chip(escapeHtml(it.store_code)) : ''}
-                    ${readOnly ? '' : `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:${s.bg}; color:${s.fg};">${s.label}</span>`}
+                    ${readOnly ? '' : `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:${s.bg}; color:${s.fg};">${escapeHtml(_holdStateLabel(type, it, s))}</span>`}
                 </div>
                 <div style="font-weight:800; font-size:13.5px; color:var(--slate-charcoal);">${title}</div>
                 ${subtitle ? `<div style="font-size:11.5px; font-weight:700; color:#64748b; margin-top:1px;">${subtitle}</div>` : ''}
@@ -34483,23 +34593,11 @@ async function _holdSave(ctx, idx, status) {
     }
     try {
         await _holdPost({ action: 'review', item_type: entry.type,
-            item_key: entry.type === 'mismatch' ? entry.it.issue_key : entry.it.case_key, status, note });
+            item_key: _holdItemKey(entry), status, note });
         await _holdAfterWrite(ctx);
     } catch (e) { alert('Could not save: ' + e.message); }
 }
 
-// THE ONLY REASON A MISMATCH STAYS OPEN is that an insurance claim is being
-// filed for it (Ethan, 2026-09-22) — the OVL case that started this feature:
-// refunded on eBay, claimed on Shopify insurance instead of refunding Shopify,
-// and won. So a mismatch has no bare "Still open". The button opens New Claim,
-// prefilled, and once that claim is SAVED the two are linked: from then on the
-// claim's own 7-day check-in does the reminding and the mismatch goes quiet,
-// settling when the claim is Recovered or Denied (0105, and stateOf).
-//
-// NOTHING IS WRITTEN UNTIL THE CLAIM IS SAVED. The first cut checked the
-// mismatch in the moment the button was pressed, so closing the form left the
-// mismatch looking claimed when no claim existed — which is exactly what Ethan
-// hit on 2026-09-22. Cancel, or closing the modal, now leaves no trace.
 // THE ONLY REASON A MISMATCH STAYS OPEN is that an insurance claim is being
 // filed for it (Ethan, 2026-09-22) — the OVL case that started this feature:
 // refunded on eBay, claimed on Shopify insurance instead of refunding Shopify,
@@ -34519,7 +34617,7 @@ async function _holdReopen(ctx, idx) {
     if (!entry) return;
     try {
         await _holdPost({ action: 'reopen', item_type: entry.type,
-            item_key: entry.type === 'mismatch' ? entry.it.issue_key : entry.it.case_key });
+            item_key: _holdItemKey(entry) });
         await _holdAfterWrite(ctx);
     } catch (e) { alert('Could not reopen: ' + e.message); }
 }

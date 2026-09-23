@@ -29,9 +29,44 @@ var ahead = function (d) { return new Date(Date.now() + d * DAY).toISOString(); 
 function fixture() {
     return {
         success: true, rollout: ['OVL'], stores: ['OVL'], today: '2026-09-22', monthEnd: false,
-        timers: { mismatch: 3, ebay_case: 2, chargeback: 3 },
-        waiting: { mismatch: 0, ebay_case: 4 },
+        timers: { mismatch: 3, ebay_case: 2, dispute: 3 },
+        waiting: { mismatch: 0, ebay_case: 4, dispute: 0 },
         sync: [{ store_code: 'OVL', synced_at: ago(0.01), ok: true, detail: 'return ok; inquiry ok; casemanagement ok; detail ok (34)' }],
+        disputeSync: [
+            { store_code: 'OVL', source: 'shopify', synced_at: ago(0.01), ok: true, detail: '11 read' },
+            { store_code: 'OVL', source: 'ebay', synced_at: ago(0.01), ok: true, detail: '4 read' },
+        ],
+        // Shaped like the live 2026-09-23 read: Shopify chargebacks nobody had
+        // answered, one eBay dispute whose response window had already shut, and
+        // one contested in time.
+        disputes: [
+            { dispute_key: 'shopify:15012200614', source: 'shopify', external_id: '15012200614', store_code: 'OVL',
+              order_no: '#MO02-6573', amount: 199.99, currency: 'USD', dispute_type: 'CHARGEBACK',
+              reason: 'PRODUCT_UNACCEPTABLE', reason_code: '13.3', status_raw: 'NEEDS_RESPONSE',
+              is_open: true, needs_response: true, response_overdue: false, responded_at: null,
+              opened_at: ago(15), respond_by: ahead(4), review: null, history: [], state: 'needs_reply', due_on: '2026-09-23' },
+            { dispute_key: 'shopify:10902732957', source: 'shopify', external_id: '10902732957', store_code: 'OVL',
+              order_no: '#MO04-2728', amount: 109.99, currency: 'USD', dispute_type: 'CHARGEBACK',
+              reason: 'PRODUCT_UNACCEPTABLE', status_raw: 'NEEDS_RESPONSE',
+              is_open: true, needs_response: true, response_overdue: false, responded_at: null,
+              opened_at: ago(8), respond_by: ahead(1), review: null, history: [], state: 'needs_reply', due_on: '2026-09-23' },
+            // nobody answered and the window shut: still unanswered, but responding is no longer the fix
+            { dispute_key: 'ebay:5010444789', source: 'ebay', external_id: '5010444789', store_code: 'OVL',
+              order_no: '01-15084-49541', amount: 459.99, currency: 'USD', dispute_type: 'CHARGEBACK',
+              reason: 'FRAUD', status_raw: 'OPEN', seller_response: 'SELLER_RESPONSE_OVERDUE',
+              is_open: true, needs_response: true, response_overdue: true, responded_at: null,
+              opened_at: ago(20), respond_by: null, review: null, history: [], state: 'needs_reply', due_on: '2026-09-23' },
+            { dispute_key: 'ebay:5010537350', source: 'ebay', external_id: '5010537350', store_code: 'OVL',
+              order_no: '22-14693-60794', amount: 114.99, currency: 'USD', dispute_type: 'CHARGEBACK',
+              reason: 'SIGNIFICANTLY_NOT_AS_DESCRIBED', status_raw: 'OPEN', seller_response: 'SELLER_CONTEST',
+              is_open: true, needs_response: false, response_overdue: false, responded_at: ago(1),
+              opened_at: ago(1), respond_by: ahead(5), review: null, history: [], state: 'answered', due_on: null },
+            { dispute_key: 'shopify:9887580262', source: 'shopify', external_id: '9887580262', store_code: 'OVL',
+              order_no: '#KS01-5180', amount: 349.99, currency: 'USD', dispute_type: 'CHARGEBACK',
+              reason: 'FRAUDULENT', status_raw: 'WON', is_open: false, needs_response: false, response_overdue: false,
+              responded_at: ago(40), opened_at: ago(60), closed_at: ago(3), outcome: 'won',
+              review: null, history: [], state: 'settled', due_on: null },
+        ],
         claims: [
             { id: 'c-279', store: 'OVL', case_number: 'SHP9D-082626130855', price: 279.99, reason_type: 'Shopify Claim — Loss', status: 'recovered', created_at: '2026-08-26T12:00:00Z' },
             { id: 'c-1000', store: 'OVL', case_number: 'SHPJG-070926200022', price: 1000, reason_type: 'Shopify Claim — Damage', status: 'recovered', created_at: '2026-07-10T12:00:00Z' },
@@ -446,7 +481,10 @@ t('each tab counts only its own badge', function () {
     var m = document.getElementById('hold-mgr-badge-mismatch').textContent;
     var r = document.getElementById('hold-mgr-badge-returns').textContent;
     var c = document.getElementById('hold-mgr-badge-cases').textContent;
-    return (m === '1' && r === '1' && c === '2') || 'badges ' + m + '/' + r + '/' + c + ', want 1/1/2';
+    // Cases counts its own 2 PLUS the 3 unanswered disputes, because disputes
+    // are worked on that tab (0112) — a badge that ignored them would be quiet
+    // about the most expensive thing on it.
+    return (m === '1' && r === '1' && c === '5') || 'badges ' + m + '/' + r + '/' + c + ', want 1/1/5';
 });
 t('switchClaimsTab still shows exactly one panel, Returns included', function () {
     switchClaimsTab('returns');
@@ -783,4 +821,133 @@ t('an unanswered case outranks everything else on the tab', function () {
     var first = h.indexOf('5384957079'), inr = h.indexOf('5385009994');
     if (first < 0) return 'the unanswered case is not listed';
     return (inr < 0 || first < inr) || 'the unanswered case is not first';
+});
+
+// --- payment disputes and chargebacks (0112) ---------------------------------
+// The point of this layer is that a dispute nobody answers is lost by default,
+// so most of these are about the tool refusing to let one look handled.
+
+// The rendered card around a marker. Math.max is not decoration: slice() with a
+// negative start counts from the END of the string, so a card near the top of
+// the tab silently returned the wrong text and the test "failed" against
+// perfectly good markup.
+function cardAround(h, needle) {
+    var i = h.indexOf(needle);
+    return i < 0 ? '' : h.slice(Math.max(0, i - 3000), i + 2500);
+}
+
+t('disputes show on the Cases & Disputes tab, above the cases', function () {
+    load('mgr');
+    var h = html('hold-mgr-cases');
+    if (h.indexOf('Payment disputes &amp; chargebacks') < 0 && h.indexOf('Payment disputes & chargebacks') < 0) {
+        return 'no disputes section heading';
+    }
+    var d = h.indexOf('#MO02-6573'), c = h.indexOf('eBay cases');
+    if (d < 0) return 'the unanswered chargeback is not listed';
+    return (c < 0 || d < c) || 'disputes are below the cases';
+});
+
+t('a Shopify chargeback names Shopify, not eBay', function () {
+    load('mgr');
+    var h = html('hold-mgr-cases');
+    var card = cardAround(h, '#MO02-6573');
+    if (!card) return 'the chargeback is not listed';
+    if (!/Shopify is waiting on us/.test(card)) return 'it does not say Shopify is waiting on us';
+    return !/eBay is waiting on us/.test(card) || 'a Shopify chargeback is blaming eBay';
+});
+
+t('an overdue dispute says the window shut, and does not promise responding fixes it', function () {
+    load('mgr');
+    var h = html('hold-mgr-cases');
+    var card = cardAround(h, '01-15084-49541');
+    if (!card) return 'the overdue dispute is not listed';
+    if (!/Response overdue/.test(card)) return 'it is not labelled overdue';
+    if (!/window to respond has already closed/.test(card)) return 'it does not explain that the window closed';
+    return !/clears itself on the next read/.test(card) || 'it still claims responding will clear it';
+});
+
+t('an unanswered dispute cannot be checked in — no Still open button', function () {
+    load('mgr');
+    var idx = _holdIndex.mgr.findIndex(function (e) { return e.type === 'dispute' && e.it.needs_response; });
+    if (idx < 0) return 'no unanswered dispute was rendered';
+    _holdToggleForm('mgr', idx, 'status');
+    var h = html('hold-mgr-cases');
+    var form = h.slice(h.indexOf('hold-note-mgr-'));
+    if (/>Still open</.test(form)) return 'Still open is offered on a dispute nobody answered';
+    return />Mark resolved</.test(form) || 'Mark resolved is missing — a dispute settled another way has nowhere to go';
+});
+
+t('the server, not the button, is what refuses a check-in', function () {
+    load('mgr');
+    var idx = _holdIndex.mgr.findIndex(function (e) { return e.type === 'dispute' && e.it.needs_response; });
+    var entry = _holdIndex.mgr[idx];
+    _posts.length = 0;
+    return _holdSave('mgr', idx, 'still_open').then(function () {
+        var p = _posts.filter(function (x) { return x.body && x.body.action === 'review'; })[0];
+        if (!p) return 'nothing was posted';
+        if (p.body.item_type !== 'dispute') return 'posted item_type ' + p.body.item_type;
+        return p.body.item_key === entry.it.dispute_key || 'posted the wrong key: ' + p.body.item_key;
+    });
+});
+
+t('an answered dispute is out of Needs Attention and into Status Changed', function () {
+    load('mgr', 'due');
+    if (html('hold-mgr-cases').indexOf('22-14693-60794') >= 0) return 'an answered dispute is still in Needs Attention';
+    load('mgr', 'waiting');
+    var h = html('hold-mgr-cases');
+    if (h.indexOf('22-14693-60794') < 0) return 'the answered dispute is in neither view';
+    return /Answered — waiting on them/.test(h) || 'it does not say we are waiting on them';
+});
+
+t('a finished dispute folds into the Resolved dropdown', function () {
+    load('mgr', 'waiting');
+    var h = html('hold-mgr-cases');
+    var i = h.indexOf('#KS01-5180');
+    if (i < 0) return 'the won dispute is not listed';
+    return h.lastIndexOf('<details', i) > h.lastIndexOf('</details>', i) || 'a settled dispute is not inside the fold';
+});
+
+t('the soonest deadline leads among the ones waiting on us', function () {
+    load('mgr');
+    var h = html('hold-mgr-cases');
+    // #MO04-2728 is due tomorrow, #MO02-6573 in four days
+    var soon = h.indexOf('#MO04-2728'), later = h.indexOf('#MO02-6573');
+    if (soon < 0 || later < 0) return 'both chargebacks should be listed';
+    return soon < later || 'the later deadline is listed first';
+});
+
+t('the tab badge counts unanswered disputes', function () {
+    load('mgr');
+    var n = _holdDueCounts('mgr');
+    // three need a response in the fixture
+    return n.cases >= 3 || 'cases badge is ' + n.cases + ', which cannot include the three unanswered disputes';
+});
+
+t('a dispute read failure names which site went quiet', function () {
+    var f = fixture();
+    f.disputeSync = [{ store_code: 'OVL', source: 'shopify', synced_at: ago(0.01), ok: false, detail: 'no Shopify credentials' }];
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    if (h.indexOf("Couldn't read disputes") < 0) return 'no dispute failure banner';
+    return /Shopify for OVL/.test(h) || 'the banner does not name Shopify and the store';
+});
+
+t('no disputes at all means no headings, not an empty section', function () {
+    var f = fixture();
+    f.disputes = [];
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    return h.indexOf('Payment disputes') < 0 || 'an empty disputes heading is drawn anyway';
+});
+
+t('the Shopify link uses the shop handle, not the store code', function () {
+    load('mgr');
+    var h = html('hold-mgr-cases');
+    var card = cardAround(h, '#MO02-6573');
+    if (!/admin\.shopify\.com/.test(card)) return 'no Shopify admin link';
+    if (/store\/ovl\//.test(card)) return 'it built the URL from the store code — that admin page does not exist';
+    return /store\/paymore-overland-park\/payments\/disputes/.test(card)
+        || 'link is not the shop handle disputes page';
 });
