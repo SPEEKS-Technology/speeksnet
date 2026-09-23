@@ -34146,25 +34146,74 @@ function _holdCaseSections(ctx, d, all) {
     const disputes = d.disputes || [];
     const notReturns = all.filter(c => !_holdIsReturn(c));
     const groups = [
-        ['eBay payment disputes', 'dispute', disputes.filter(x => x.source === 'ebay')],
-        ['Shopify chargebacks', 'dispute', disputes.filter(x => x.source !== 'ebay')],
-        ['eBay cases', 'ebay_case', notReturns.filter(c => !_holdIsInr(c))],
-        ['Item not received', 'ebay_case', notReturns.filter(_holdIsInr)],
+        { label: 'eBay payment disputes', one: 'eBay payment dispute', many: 'eBay payment disputes', type: 'dispute',
+          items: disputes.filter(x => x.source === 'ebay') },
+        { label: 'Shopify chargebacks', one: 'Shopify chargeback', many: 'Shopify chargebacks', type: 'dispute',
+          items: disputes.filter(x => x.source !== 'ebay') },
+        { label: 'eBay cases', one: 'eBay case', many: 'eBay cases', type: 'ebay_case',
+          items: notReturns.filter(c => !_holdIsInr(c)) },
+        { label: 'Item not received', one: 'item-not-received request', many: 'item-not-received requests', type: 'ebay_case',
+          items: notReturns.filter(_holdIsInr) },
     ];
+    const hidden = [];
+    let shown = 0;
     const blocks = groups.map(function (g) {
-        if (!g[2].length) return '';
-        const body = _holdList(ctx, g[1], g[2], null, { section: true, quiet: true });
-        return body ? _holdSectionHead(g[0]) + body : '';
+        if (!g.items.length) return '';                    // this store has none at all
+        const here = _holdInView(ctx, g.items);
+        if (!here.length) {
+            // The group EXISTS but nothing in it belongs in this view. Dropping
+            // it silently is what made Ethan ask "where are the eBay payment
+            // disputes?" when WSP's single dispute was simply already answered —
+            // an absent heading cannot tell you "none" from "all handled".
+            const n = g.items.length;
+            hidden.push(n + ' ' + (n === 1 ? g.one : g.many));
+            return '';
+        }
+        shown++;
+        const body = _holdList(ctx, g.type, g.items, null, { section: true, quiet: true });
+        return body ? _holdSectionHead(g.label, here) + body : '';
     }).filter(Boolean);
+    const tail = hidden.length
+        ? `<div style="margin-top:18px; padding:9px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:11.5px; color:#64748b; font-weight:600;">
+             Also on this tab, with nothing needed right now: ${escapeHtml(hidden.join(' · '))} —
+             under <b>${escapeHtml((_HOLD_VIEWS[_holdView[ctx].show === 'due' ? 'waiting' : 'due'] || {}).label || '')}</b>.
+           </div>`
+        : '';
     // Nothing in any group: one plain message for the tab, rather than a blank
     // panel that just looks broken.
-    return blocks.length ? blocks.join('') : _holdList(ctx, 'ebay_case', [], null);
+    return shown ? blocks.join('') + tail : _holdList(ctx, 'ebay_case', [], null) + tail;
+}
+
+// One definition of "is this item in the view the manager is looking at",
+// because the section headings count it and _holdList draws it — two copies
+// would drift and the count would start lying about the list under it.
+function _holdInView(ctx, items) {
+    const v = _holdView[ctx];
+    const want = (_HOLD_VIEWS[v.show] || _HOLD_VIEWS.due).states;
+    return items.filter(it => want.includes(it.state) && (!v.store || it.store_code === v.store));
 }
 
 // A heading only appears when there is more than one kind of thing on the tab;
 // otherwise it is furniture over a single list.
-function _holdSectionHead(t) {
-    return `<div style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 0 8px;">${escapeHtml(t)}</div>`;
+//
+// It has to be LOUD. The first cut was 11px #94a3b8 uppercase and Ethan's
+// reaction was "it took me a second to even realize they were there" — a
+// divider nobody sees is not dividing anything. So: near-black text, a rule
+// under it, a colour bar beside it, and a count. The bar goes red when
+// something in that group needs a reply, which is the one thing worth spotting
+// from the top of a long tab.
+function _holdSectionHead(t, rows) {
+    const list = rows || [];
+    const hot = list.some(x => _HOLD_VIEWS.due.states.includes(x.state));
+    const bar = hot ? _HOLD_C.red.solid : '#94a3b8';
+    const count = list.length
+        ? `<span style="font-size:10.5px; font-weight:900; padding:2px 8px; border-radius:999px; background:${hot ? _HOLD_C.red.bg : '#e2e8f0'}; color:${hot ? _HOLD_C.red.fg : '#475569'};">${list.length}</span>`
+        : '';
+    return `<div style="display:flex; align-items:center; gap:9px; margin:26px 0 11px; padding-bottom:8px; border-bottom:2px solid #e2e8f0;">
+        <span style="width:4px; height:16px; border-radius:2px; background:${bar}; flex:0 0 auto;"></span>
+        <span style="font-size:13px; font-weight:900; text-transform:uppercase; letter-spacing:.7px; color:var(--slate-charcoal);">${escapeHtml(t)}</span>
+        ${count}
+    </div>`;
 }
 
 function _holdToolbar(ctx, type, opts) {
@@ -34213,9 +34262,11 @@ function _holdList(ctx, type, items, casesByOrder, opts) {
     const returns = !!(opts && opts.returns);
     // A return shows while eBay still has it open; the daily read moves it off
     // this list by itself when it is refunded, closed or escalated.
-    const want = (_HOLD_VIEWS[v.show] || _HOLD_VIEWS.due).states;
-    let rows = returns ? items.filter(it => it.is_open) : items.filter(it => want.includes(it.state));
-    if (v.store) rows = rows.filter(it => it.store_code === v.store);
+    // Same filter the section headings count with, so a heading that says 3 can
+    // never sit above a list of 2.
+    let rows = returns
+        ? items.filter(it => it.is_open && (!v.store || it.store_code === v.store))
+        : _holdInView(ctx, items);
     // Most urgent state first, then oldest — the oldest open item is the one
     // closest to becoming a month-end adjusting entry.
     const at = it => new Date((type === 'mismatch' ? it.reversed_at : it.opened_at) || 0).getTime();

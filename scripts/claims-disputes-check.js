@@ -839,6 +839,12 @@ function cardAround(h, needle) {
     var i = h.indexOf(needle);
     return i < 0 ? '' : h.slice(Math.max(0, i - 3000), i + 2500);
 }
+// Is there a real SECTION HEADING for this label — not merely the words, which
+// now also appear in the "Also on this tab" note at the bottom. Matching on the
+// heading's own markup is the only way to tell the two apart.
+function hasHeading(h, label) {
+    return new RegExp('letter-spacing:\\.7px;[^>]*>' + label + '</span>').test(h);
+}
 
 t('disputes show on the Cases & Disputes tab, above the cases', function () {
     load('mgr');
@@ -991,6 +997,70 @@ t('a group with nothing in this view draws no heading', function () {
     _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
     renderHoldItems('mgr');
     var h = html('hold-mgr-cases');
-    if (h.indexOf('eBay payment disputes') >= 0) return 'an empty dispute heading is still drawn';
-    return h.indexOf('Item not received') >= 0 || 'the INR heading vanished too — only empty groups should drop';
+    if (hasHeading(h, 'eBay payment disputes')) return 'an empty dispute heading is still drawn';
+    return hasHeading(h, 'Item not received') || 'the INR heading vanished too — only empty groups should drop';
+});
+
+// Ethan, 2026-09-23: "Can you make the headers pop more, It took me a second to
+// even realize they were there." A divider nobody sees is not dividing anything.
+t('a section heading is loud enough to see: dark, ruled, and counted', function () {
+    load('mgr');
+    var h = html('hold-mgr-cases');
+    var i = h.indexOf('SHOPIFY CHARGEBACKS') >= 0 ? h.indexOf('SHOPIFY CHARGEBACKS') : h.indexOf('Shopify chargebacks');
+    if (i < 0) return 'no Shopify chargebacks heading';
+    var head = h.slice(Math.max(0, i - 700), i + 300);
+    if (/color:#94a3b8/.test(head) && !/slate-charcoal/.test(head)) return 'the heading is still the faint grey';
+    if (!/border-bottom:2px solid/.test(head)) return 'no rule under the heading';
+    return /slate-charcoal/.test(head) || 'the heading text is not the dark colour';
+});
+
+t('a section with something needing a reply gets the red bar and a count', function () {
+    load('mgr');
+    var h = html('hold-mgr-cases');
+    var i = h.indexOf('Shopify chargebacks');
+    var head = h.slice(Math.max(0, i - 700), i + 400);
+    // two of the three fixture chargebacks are unanswered and in this view
+    if (head.indexOf('var(--red-alert)') < 0) return 'the bar is not red for a group that needs a reply';
+    return />2</.test(head) || 'no count on the heading';
+});
+
+// "Also where are the eBay payment disputes?" — WSP's one dispute was answered,
+// so its group was dropped and nothing said so.
+t('a group that exists but is all handled says where it went', function () {
+    var f = fixture();
+    // every eBay dispute answered; the Shopify ones still need us
+    f.disputes.forEach(function (x) {
+        if (x.source === 'ebay') { x.needs_response = false; x.response_overdue = false; x.state = 'answered'; x.is_open = true; }
+    });
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    if (hasHeading(h, 'eBay payment disputes')) return 'an empty heading is drawn instead of the note';
+    if (h.indexOf('Also on this tab') < 0) return 'nothing tells you the eBay disputes exist';
+    if (!/2 eBay payment disputes/.test(h)) return 'the note does not count them: ' + h.slice(h.indexOf('Also on this tab'), h.indexOf('Also on this tab') + 200);
+    return /Status Changed/.test(h) || 'the note does not say which view to look in';
+});
+
+t('the note is singular for one, plural for many', function () {
+    var f = fixture();
+    f.disputes = f.disputes.filter(function (x) { return x.source === 'ebay' && x.state === 'answered'; });
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    if (!/1 eBay payment dispute\b/.test(h)) return 'not singular for one';
+    return !/1 eBay payment disputes/.test(h) || 'it says "1 eBay payment disputes"';
+});
+
+t('the heading count matches the list under it', function () {
+    load('mgr');
+    var h = html('hold-mgr-cases');
+    var i = h.indexOf('Shopify chargebacks');
+    var head = h.slice(i, i + 400);
+    var m = head.match(/>(\d+)<\/span>/);
+    if (!m) return 'no count found on the heading';
+    // the fixture has two unanswered Shopify chargebacks in Needs Attention
+    var listed = _holdIndex.mgr.filter(function (e) {
+        return e.type === 'dispute' && e.it.source !== 'ebay' && _HOLD_VIEWS.due.states.indexOf(e.it.state) >= 0;
+    }).length;
+    return Number(m[1]) === listed || 'heading says ' + m[1] + ', list has ' + listed;
 });
