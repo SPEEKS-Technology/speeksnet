@@ -183,6 +183,25 @@ const INR_FROM = "2026-08-01";
 //                  nothing due from us. It is NOT a "hide it for 3 days" bar —
 //                  a dispute shows the moment it exists (see stateOf).
 const THRESHOLD_DAYS: Record<string, number> = { mismatch: 3, ebay_case: 2, dispute: 3 };
+// How long a manager has to put right a "resolved" the site disagrees with
+// before it goes to the DM (Ethan, 2026-09-23: "if someone falsely resolves it
+// and doesn't un-resolve it after 2 days, it escalates to me"). The item is
+// never hidden during those two days — it stays due and says who called it
+// resolved; the grace is only on who gets told.
+const RESOLUTION_GRACE_DAYS = 2;
+
+// CLAIMS KEEP THE RULE THEY ALREADY HAVE (Ethan, 2026-09-23: "I believe we have
+// timing set already for open claims, reminders, etc. I think we keep those?").
+// The Claims tab calls a claim aging when it is in_progress and its last
+// check-in — or its creation, if it has never been checked — is over 7 days old
+// (_isClaimAging / _claimEffectiveDate in speeks.js). Mirrored here rather than
+// re-invented so the email cannot chase a claim the tab thinks is fine, and
+// deliberately NOT routed through stateOf: a claim is not on the one-visibility
+// rule, it has its own, and Ethan asked for that one to stay.
+const CLAIM_AGE_DAYS = 7;
+const claimAging = (c: any) =>
+  c?.status === "in_progress" &&
+  Date.parse(c.last_checked_at || c.created_at) < Date.now() - CLAIM_AGE_DAYS * 86_400_000;
 const MISMATCH_MONTH_END_DAYS = 1;
 const MONTH_END_WINDOW = 4;
 const ITEM_TYPES = Object.keys(THRESHOLD_DAYS);
@@ -481,6 +500,31 @@ function readParties(kind: string, d: any) {
 const awaitingReply = (it: any) =>
   !!it.is_open && it.kind !== "return" &&
   (!it.seller_replied_at || (!!it.buyer_acted_at && it.seller_replied_at < it.buyer_acted_at));
+
+// THE REPLY WINDOW HAS SHUT (Ethan, 2026-09-23: "I believe eBay doesn't do late
+// replies. so when this happens, maybe move the pull to say Missed Reply
+// Window?"). Once it has, "answer it on eBay and this clears itself" is false,
+// and sending someone to argue a case eBay has stopped listening to wastes an
+// afternoon. The money is already gone; what is left is recording why.
+//
+// SHOPIFY IS DELIBERATELY NOT INCLUDED. Shopify has been seen to take evidence
+// after evidenceDueBy, and telling a manager not to bother on a chargeback that
+// would still have been accepted is the expensive half of this mistake. A
+// Shopify deadline that has passed stays actionable and simply reads as overdue.
+// eBay says SELLER_RESPONSE_OVERDUE itself on a dispute; for a case there is no
+// such flag, so a respond-by date in the past is the signal.
+//
+// AN INR IS NOT INCLUDED EITHER, and that is not an oversight. Ethan's "eBay
+// doesn't do late replies" was answering a question about two escalated CASES.
+// An item-not-received REQUEST past its date is a different animal: eBay steps
+// in and usually finds for the buyer, but we can still refund, and refunding
+// late is far better than eBay doing it for us. Telling a manager the window is
+// shut on one they could still act on is the expensive direction to be wrong in,
+// so an overdue INR stays due and simply reads as late.
+const missedWindow = (type: string, it: any) =>
+  type === "dispute"
+    ? it.source === "ebay" && !!it.response_overdue
+    : it.kind === "case" && !!it.respond_by && Date.parse(it.respond_by) < Date.now();
 
 function readOutcome(kind: string, d: any) {
   // A return's money is the refund-mismatch detector's business, not this read's.
@@ -929,13 +973,27 @@ function stateOf(type: string, it: any, review: any, ctx: any): { state: string;
   // matches the eBay-case gate: a written resolution still counts, but nothing
   // else gets past `needs_response`.
   if (type === "dispute") {
+    const missed = missedWindow(type, it);
+    // A RESOLUTION NEVER OUTRANKS THE SITE. Until this, a manager could take an
+    // unanswered $899 chargeback, type ten characters, and it went quiet for
+    // good — the exact thing Ethan said must not be possible ("I don't want them
+    // to be able to resolve something that isn't actually resolved and then that
+    // money could just get lost in the wind"). Now the site wins: while it still
+    // wants evidence AND we could still give it, the item stays due and says who
+    // called it resolved. The honest uses are unharmed and self-correct within a
+    // day — refunding the buyer or accepting the dispute moves it off
+    // NEEDS_RESPONSE on its own. Once the window has shut there is nothing left
+    // to do but record what happened, so a resolution stands (below).
+    if (it.is_open && it.needs_response && !missed && review?.status === "resolved") {
+      return { state: "needs_reply", due_on: today, note: "resolution_disputed" };
+    }
     if (review?.status === "resolved") return { state: "resolved", due_on: null };
     if (!it.is_open) return { state: "settled", due_on: null, note: it.outcome || undefined };
     // Overdue is still needs_reply — unanswered money nobody dealt with — but
     // it is flagged, because "respond on eBay and this clears" is no longer
     // true and telling a manager otherwise wastes their time.
     if (it.needs_response) {
-      return { state: "needs_reply", due_on: today, note: it.response_overdue ? "overdue" : undefined };
+      return { state: "needs_reply", due_on: today, note: missed ? "missed_window" : undefined };
     }
     return { state: "answered", due_on: null };
   }
@@ -967,6 +1025,15 @@ function stateOf(type: string, it: any, review: any, ctx: any): { state: string;
     if (claim.status === "in_progress") return { state: "covered", due_on: null };
     return { state: "settled", due_on: null, note: `claim ${claim.status}` };
   }
+  // Same honesty rule as a dispute: while eBay is still waiting on us AND can
+  // still be answered, a manager's "resolved" does not silence it. It is
+  // recorded, it is shown, and it escalates — see the dispute branch above for
+  // the reasoning. Once the reply window has shut, a resolution stands, because
+  // recording the outcome is the only move left.
+  if (type === "ebay_case" && ctx.awaiting(it) && !missedWindow(type, it)
+      && review?.status === "resolved") {
+    return { state: "needs_reply", due_on: today, note: "resolution_disputed" };
+  }
   // A manager saying it is settled, and why, still counts — including while eBay
   // waits on us (0108). That is a written, attributed claim about the outcome,
   // not a claim about having pressed send.
@@ -977,7 +1044,9 @@ function stateOf(type: string, it: any, review: any, ctx: any): { state: string;
   // either: the only thing that clears it is a SELLER entry in eBay's own
   // history, which the sweep reads. Resolving it (above) and eBay closing it
   // both still work.
-  if (type === "ebay_case" && ctx.awaiting(it)) return { state: "needs_reply", due_on: today };
+  if (type === "ebay_case" && ctx.awaiting(it)) {
+    return { state: "needs_reply", due_on: today, note: missedWindow(type, it) ? "missed_window" : undefined };
+  }
 
   const days = type === "mismatch" && ctx.monthEnd ? MISMATCH_MONTH_END_DAYS : THRESHOLD_DAYS[type];
   const from = review?.status === "still_open"
@@ -1008,7 +1077,10 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
       .order("at", { ascending: false }).limit(1000),
     sb.from("ebay_case_sync").select("*").in("store_code", stores),
     sb.from("hold_claim_links").select("*").in("store_code", stores),
-    sb.from("shopify_claims").select("id,store,case_number,item_sku,price,reason_type,status,created_at,resolved_at,parent_id")
+    // last_checked_at is what a claim ages FROM once someone has checked in on
+    // it; without it every claim would age from creation and the email would
+    // chase claims the Claims tab considers fine.
+    sb.from("shopify_claims").select("id,store,case_number,item_sku,price,reason_type,status,created_at,resolved_at,parent_id,last_checked_at")
       .in("store", stores).order("created_at", { ascending: false }).limit(500),
     // Open disputes however old — an unanswered chargeback does not stop
     // mattering because it has been ignored for a month — plus recently closed
@@ -1092,7 +1164,14 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     return { ...it, review, history: (eventsBy[`${type}|${key}`] || []).slice(0, 20),
              state: s.state, due_on: s.due_on, state_note: s.note || null, claim,
              // 0107: whose move eBay thinks it is
-             awaiting_reply: type === "ebay_case" && ctx.awaiting(it) };
+             awaiting_reply: type === "ebay_case" && ctx.awaiting(it),
+             // The reply window has shut — nothing anyone presses brings it back.
+             missed_window: s.note === "missed_window",
+             // Someone called this resolved and the site still disagrees. The
+             // date is when they said so, which is what the escalation counts
+             // from — exposed rather than re-derived, so the email and the DM
+             // digest cannot disagree with the card about who is late.
+             resolution_disputed_since: s.note === "resolution_disputed" ? (review?.updated_at || null) : null };
   };
   // Resolved / settled stay listed RECENT_DAYS after they closed, then drop.
   const closedRecently = (x: any) => {
@@ -1138,13 +1217,17 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
   // denied, and those need linking as much as an open one does.
   const since = daysAgoIso(SWEEP_DAYS);
   const linked = new Set((ln.data || []).map((l: any) => l.claim_id));
-  const claims = (cl.data || []).filter((c: any) => (c.created_at || "") >= since || linked.has(c.id));
+  const claims = (cl.data || []).filter((c: any) => (c.created_at || "") >= since || linked.has(c.id))
+    // `aging` is the Claims tab's own rule, carried here so the daily email can
+    // chase an open claim without a second definition of "behind".
+    .map((c: any) => ({ ...c, aging: claimAging(c) }));
 
   return {
     rollout: ROLLOUT_STORES, stores, today: ctx.today, monthEnd: ctx.monthEnd,
     mismatches, cases, claims, disputes, waiting,
     sync: sy.data || [], disputeSync: ds.data || [],
     timers: THRESHOLD_DAYS, minReason: MIN_REASON,
+    resolutionGraceDays: RESOLUTION_GRACE_DAYS, claimAgeDays: CLAIM_AGE_DAYS,
   };
 }
 

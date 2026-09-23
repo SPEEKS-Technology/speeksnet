@@ -33934,7 +33934,11 @@ const _HOLD_STATE = {
 // move. The reply is OURS, and the chip should say so.
 function _holdStateLabel(type, it, s) {
     if (it.state === 'needs_reply') {
-        if (type === 'dispute' && it.response_overdue) return 'Response overdue';
+        // eBay takes no late reply, so once the window has shut the honest label
+        // is not "needs a reply" — nothing anyone presses brings it back.
+        if (it.missed_window) return 'Missed reply window';
+        // Someone called this resolved and the site still disagrees.
+        if (it.state_note === 'resolution_disputed') return 'Marked resolved — site disagrees';
         const site = type === 'dispute' && it.source !== 'ebay' ? 'Shopify' : 'eBay';
         return `${site} needs a reply from us`;
     }
@@ -34443,8 +34447,8 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             it.responded_at ? kv('We answered', _holdDate(it.responded_at)) : '',
             link ? `<a href="${link}" target="_blank" rel="noopener" style="font-weight:800; color:#1d4ed8; white-space:nowrap;">Open on ${ebay ? 'eBay' : 'Shopify'} ↗</a>` : '',
         ];
-        if (st === 'needs_reply' && it.response_overdue) {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The window to respond has already closed</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us, so this one is very likely lost. Nothing here can reopen it; mark it resolved and say what happened so there is a record.</div>`;
+        if (st === 'needs_reply' && it.missed_window) {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>We missed the window to respond</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us and no longer takes one, so this is very likely lost. Nothing here can reopen it; mark it resolved and say what happened so there is a record.</div>`;
         } else if (st === 'needs_reply') {
             extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} needs our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Unanswered disputes are lost by default.</div>`;
         } else if (st === 'answered') {
@@ -34521,7 +34525,10 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     // What the last person said, if anyone has.
     const rv = it.review;
     let said = '';
-    if (rv && st !== 'settled' && st !== 'covered') {
+    // A contested resolution gets the red block below INSTEAD of the green
+    // "Resolved by…" one — showing both would have the same card saying it is
+    // settled and not settled at once.
+    if (rv && st !== 'settled' && st !== 'covered' && it.state_note !== 'resolution_disputed') {
         const who = escapeHtml(rv.by_name || 'Someone');
         if (rv.status === 'resolved') {
             said = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>Resolved by ${who}</b> · ${_holdDate(rv.updated_at)}<div style="margin-top:2px;">${escapeHtml(rv.note || '')}</div></div>`;
@@ -34531,12 +34538,34 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     }
     // 0107/0108. Said plainly, because the move is on eBay and nothing pressed
     // here can stand in for it: eBay's own history is what clears this.
+    // A RESOLUTION THE SITE DISAGREES WITH. This is the one Ethan asked for by
+    // name — someone marking a live dispute resolved is how money gets "lost in
+    // the wind". It is not blocked (there are honest reasons to record an
+    // outcome) but it does not silence anything, and after the grace period it
+    // is his problem, not just the store's.
+    if (it.state_note === 'resolution_disputed') {
+        const days = ((_holdData[ctx] || {}).resolutionGraceDays) || 2;
+        const since = it.resolution_disputed_since;
+        const age = since ? Math.floor((Date.now() - new Date(since).getTime()) / 86400000) : 0;
+        const site = type === 'dispute' ? (it.source === 'ebay' ? 'eBay' : 'Shopify') : 'eBay';
+        said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
+            <b>${escapeHtml(rv && rv.by_name || 'Someone')} marked this resolved${since ? ` on ${_holdDate(since)}` : ''}, but ${escapeHtml(site)} still shows no response from us.</b>
+            ${rv && rv.note ? `<div style="margin-top:2px; font-weight:600;">“${escapeHtml(rv.note)}”</div>` : ''}
+            <div style="margin-top:4px;">If it really is handled, ${escapeHtml(site)} will say so on the next read and this clears itself. If it isn't, answer it now${age >= days ? ' — this has already gone to the DM.' : ` — after ${days} day${days === 1 ? '' : 's'} it goes to the DM.`}</div>
+        </div>`;
+    }
     // Cases only: a dispute says its own version of this above, naming the right
     // site and its deadline.
-    if (st === 'needs_reply' && type === 'ebay_case') {
+    if (st === 'needs_reply' && type === 'ebay_case' && it.state_note !== 'resolution_disputed' && !it.missed_window) {
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
             <b>eBay needs a reply from us${it.buyer_acted_at ? ` — the buyer last wrote ${_holdDate(it.buyer_acted_at)}` : ''}</b>
             — answer it on eBay and this clears itself on the next read. It can't be checked in until then.</div>`;
+    } else if (st === 'needs_reply' && type === 'ebay_case' && it.missed_window) {
+        // eBay takes no late reply (Ethan, 2026-09-23), so the deadline having
+        // gone changes what this card should ask for: a record, not an argument.
+        said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
+            <b>We missed the window to reply${it.respond_by ? ` — eBay wanted an answer by ${_holdEbayDay(it.respond_by)}` : ''}.</b>
+            eBay does not take a late reply, so this is very likely decided against us. Mark it resolved and say what happened, so there is a record of it.</div>`;
     } else if (type === 'ebay_case' && it.is_open && it.seller_replied_at) {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We answered eBay ${_holdDate(it.seller_replied_at)} — waiting on the buyer.</div>`;
     }

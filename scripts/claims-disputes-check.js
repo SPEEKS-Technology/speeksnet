@@ -55,6 +55,8 @@ function fixture() {
               order_no: '01-15084-49541', amount: 459.99, currency: 'USD', dispute_type: 'CHARGEBACK',
               reason: 'FRAUD', status_raw: 'OPEN', seller_response: 'SELLER_RESPONSE_OVERDUE',
               is_open: true, needs_response: true, response_overdue: true, responded_at: null,
+              // what the server sends once the window has shut (0113)
+              missed_window: true, state_note: 'missed_window',
               opened_at: ago(20), respond_by: null, review: null, history: [], state: 'needs_reply', due_on: '2026-09-23' },
             { dispute_key: 'ebay:5010537350', source: 'ebay', external_id: '5010537350', store_code: 'OVL',
               order_no: '22-14693-60794', amount: 114.99, currency: 'USD', dispute_type: 'CHARGEBACK',
@@ -873,8 +875,10 @@ t('an overdue dispute says the window shut, and does not promise responding fixe
     var h = html('hold-mgr-cases');
     var card = cardAround(h, '01-15084-49541');
     if (!card) return 'the overdue dispute is not listed';
-    if (!/Response overdue/.test(card)) return 'it is not labelled overdue';
-    if (!/window to respond has already closed/.test(card)) return 'it does not explain that the window closed';
+    // Renamed in 0113: "Missed reply window", Ethan's words, because eBay takes
+    // no late reply and "overdue" sounds like something you can still catch up on.
+    if (!/Missed reply window/.test(card)) return 'it is not labelled as a missed window';
+    if (!/We missed the window to respond/.test(card)) return 'it does not explain that the window closed';
     return !/clears itself on the next read/.test(card) || 'it still claims responding will clear it';
 });
 
@@ -1063,4 +1067,84 @@ t('the heading count matches the list under it', function () {
         return e.type === 'dispute' && e.it.source !== 'ebay' && _HOLD_VIEWS.due.states.indexOf(e.it.state) >= 0;
     }).length;
     return Number(m[1]) === listed || 'heading says ' + m[1] + ', list has ' + listed;
+});
+
+// --- the honesty rule and the shut window (0113) ------------------------------
+// Ethan: "I don't want them to be able to resolve something that isn't actually
+// resolved and then that money could just get lost in the wind." The server
+// decides this (stateOf); these check the card says the right thing about it.
+
+t('a resolution the site disagrees with stays red and names who said it', function () {
+    var f = fixture();
+    var d = f.disputes[0];                       // unanswered Shopify chargeback
+    d.state = 'needs_reply';
+    d.state_note = 'resolution_disputed';
+    d.resolution_disputed_since = ago(3);
+    d.review = { status: 'resolved', note: 'Refunded the buyer already', by_name: 'Dana', updated_at: ago(3) };
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    var card = cardAround(h, '#MO02-6573');
+    if (!card) return 'the contested item dropped off the list entirely';
+    if (!/Marked resolved — site disagrees/.test(card)) return 'the chip does not flag the disagreement';
+    if (card.indexOf('Dana') < 0) return 'it does not name who resolved it';
+    if (card.indexOf('Refunded the buyer already') < 0) return 'it does not quote what they said';
+    return /still shows no response from us/.test(card) || 'it does not say the site disagrees';
+});
+
+t('a contested resolution does not also show the green Resolved box', function () {
+    var f = fixture();
+    var d = f.disputes[0];
+    d.state = 'needs_reply';
+    d.state_note = 'resolution_disputed';
+    d.resolution_disputed_since = ago(1);
+    d.review = { status: 'resolved', note: 'Refunded the buyer already', by_name: 'Dana', updated_at: ago(1) };
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var card = cardAround(html('hold-mgr-cases'), '#MO02-6573');
+    return card.indexOf('Resolved by Dana') < 0
+        || 'the card says both resolved and not resolved at once';
+});
+
+t('inside the grace period it warns; past it, it says the DM already has it', function () {
+    function render(daysAgo) {
+        var f = fixture();
+        var d = f.disputes[0];
+        d.state = 'needs_reply'; d.state_note = 'resolution_disputed';
+        d.resolution_disputed_since = ago(daysAgo);
+        d.review = { status: 'resolved', note: 'Handled it on the phone', by_name: 'Dana', updated_at: ago(daysAgo) };
+        _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+        renderHoldItems('mgr');
+        return cardAround(html('hold-mgr-cases'), '#MO02-6573');
+    }
+    var fresh = render(0), stale = render(4);
+    if (!/it goes to the DM/.test(fresh)) return 'a fresh one does not warn about escalation';
+    if (/already gone to the DM/.test(fresh)) return 'a fresh one claims it has already escalated';
+    return /already gone to the DM/.test(stale) || 'an old one does not say it escalated';
+});
+
+t('a shut reply window reads as missed, not as something to go and answer', function () {
+    var f = fixture();
+    var d = f.disputes[2];                       // the eBay SELLER_RESPONSE_OVERDUE one
+    d.missed_window = true; d.state_note = 'missed_window';
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var card = cardAround(html('hold-mgr-cases'), '01-15084-49541');
+    if (!/Missed reply window/.test(card)) return 'the chip does not say the window was missed';
+    if (!/no longer takes one/.test(card)) return 'it does not say a late response is not accepted';
+    return !/clears itself on the next read/.test(card) || 'it still promises that responding clears it';
+});
+
+t('an eBay case past its deadline says so in the words of a case', function () {
+    var f = awaitingFixture();
+    f.cases[0].missed_window = true;
+    f.cases[0].state_note = 'missed_window';
+    f.cases[0].respond_by = ago(6);
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var card = cardAround(html('hold-mgr-cases'), f.cases[0].ebay_id);
+    if (!/Missed reply window/.test(card)) return 'the chip does not say the window was missed';
+    if (!/does not take a late reply/.test(card)) return 'it does not explain why answering will not help';
+    return !/answer it on eBay and this clears itself/.test(card)
+        || 'it still tells them to go and answer it';
 });
