@@ -5,8 +5,14 @@ Louis). Static front end on GitHub Pages + Supabase (Postgres, Deno edge
 functions). Live at speeksnet.com (see `CNAME`).
 
 **Read `docs/modules/README.md` for the line-range map of `speeks.js`, and load
-only the area you're working in.** That file exists because `speeks.js` is 47k
+only the area you're working in.** That file exists because `speeks.js` is 54k
 lines in one file — reading it whole wastes most of a context window.
+
+⚠️ **Its line numbers are stale by roughly 1,900 lines** (checked 2026-09-17: it
+puts `20. LISTING GOALS ENGINE` at 13667, the banner is at 15628). Use it to find
+*which* section you want, then `grep -n` for that section's banner text to get
+the real line. Don't shift the numbers by a diff's delta to "fix" it — that just
+makes a stale map wrong in a new way; it needs regenerating from the banners.
 
 ---
 
@@ -32,7 +38,9 @@ lines in one file — reading it whole wastes most of a context window.
 
 4. **Migration numbers are already duplicated.** Two parallel work streams both
    numbered from the same base, so there are two each of `0004`–`0009` and
-   `0044`–`0054`. **The current max is `0066`** — new migrations start at `0067`.
+   `0044`–`0054`. **The current max is `0112`** — new migrations start at `0113`.
+   (This line goes stale fast; `ls supabase/migrations | sort | tail -1` is the
+   authority. It said `0093` on 2026-09-20 when the real max was `0095`.)
    Never derive the next number by incrementing what you happen to be looking at.
 
 5. **Migrations are applied through the Supabase MCP `apply_migration`,** not a
@@ -50,7 +58,7 @@ lines in one file — reading it whole wastes most of a context window.
 | `workspace.html` | Analytics workspace — Monthly Brief, Store KPIs, Variance. |
 | `stats.html` | Stats/reporting page. |
 | `docs.html` | *Not* developer docs — the in-app Processes & Policies library (CMS-driven). |
-| `tv.html` | Lobby/TV display. |
+| `tv.html` | Retired. A redirect stub to `index.html`, kept only for the five wall TVs still bookmarked to it. The shop-floor board is now the Command Center card on the QuickPortal — see `STORE_BOARD_FEATURES`. |
 | `speeks.js` | The entire front end. See `docs/modules/README.md`. |
 | `styles.css` | ~970 KB, same monolithic story. |
 | `xlsx.full.min.js` | Vendored SheetJS. Third-party — don't edit. |
@@ -154,9 +162,10 @@ you must clean up Chrome, filter on `--headless` in the command line
 - **`node scripts/<name>-check.js`** — the older Puppeteer harnesses. They need
   `npm i puppeteer-core` once, anywhere on the path (no repo `package.json`), and
   Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe`.
-  ⚠️ **Node is not currently installed on this machine**, so none of these run as
-  things stand. They resolve the repo root from `__dirname`, so they work from
-  any checkout location once Node exists.
+  Node **is** installed now (v24, as of 2026-09-17 — this note previously said it
+  wasn't), so these can run again, but `puppeteer-core` still needs installing
+  once before any of them will. They resolve the repo root from `__dirname`, so
+  they work from any checkout location.
 - Two traps `scripts/mobile-check.js` documents and exists to avoid: a narrow
   desktop window is not a phone (needs real mobile emulation), and every non-index
   page redirects to `index.html` without a seeded session — so measuring

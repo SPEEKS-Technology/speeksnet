@@ -51,6 +51,11 @@ const between = (from, to) => {
 // be testing a paraphrase of the rule rather than the rule.
 const strip = s => s
     .replace(/:\s*Record<[^>]*>(\s*\|\s*undefined)?/g, '')
+    // changedSpan / typoDistance / isMisspelling / listingSaysItself's cover
+    .replace(/\)\s*:\s*(number|boolean|\[number,\s*number\])\s*\{/g, ') {')
+    .replace(/(\w)\??\s*:\s*\[number,\s*number\]/g, '$1')
+    .replace(/:\s*number\[\]\[\]/g, '')
+    .replace(/(\w+)\s*:\s*number\b(?=\s*[,)])/g, '$1')
     .replace(/([(,]\s*)(\w+)\s*:\s*string\[\]/g, '$1$2')
     .replace(/\(\s*(\w+)\s*:\s*string\s*\)/g, '($1)')
     .replace(/\(\s*(\w+)\s*:\s*string\s*,/g, '($1,')
@@ -237,6 +242,71 @@ console.log('\n== 5. The existing guards still hold ==');
     // verdict ok raises nothing, spec table or not.
     ok(run('Anything', { verdict: 'ok' }, { MPN: 'x' }).findings.length === 0,
        'an ok verdict raises nothing');
+}
+
+console.log('\n== 6. A field vouches only if it states the part being changed (LEE Anne Pro, 2026-09-19) ==');
+{
+    // "Anne Pro 01" -> "Anne Pro 2". Brand = "Anne Pro" held the longest window,
+    // so the row went name-disputed and named Brand as the field to doubt. The
+    // only thing in question was "01", and Model = II agrees with the fix.
+    const title = 'Anne Pro 01 Wireless Keyboard Black';
+    const v = { verdict: 'wrong', wrong_text: 'Anne Pro 01', correct_text: 'Anne Pro 2',
+                why: 'Model is the Anne Pro 2, not "01"' };
+    const specs = { Brand: 'Anne Pro', Model: 'II', MPN: 'N/A', Type: 'Wireless Keyboard',
+                    'Sub-Collection': 'Keyboard/Mouse', Collection: 'PC/USB Peripherals',
+                    Color: 'Black' };
+    const r = run(title, v, specs);
+    const f = r.findings[0] || {};
+    ok(f.code === 'name-wrong', 'it is name-wrong, not name-disputed', f.code);
+    ok(r.title === 'Anne Pro 2 Wireless Keyboard Black', 'and the correction is applied', r.title);
+    ok(r.fixable === true, 'and offered to approve');
+    // The rule still bites when a field really does state the changed part.
+    const r2 = run(title, v, Object.assign({}, specs, { Model: 'Anne Pro 01' }));
+    ok((r2.findings[0] || {}).code === 'name-disputed',
+       'but a Model of "Anne Pro 01" still vetoes it', (r2.findings[0] || {}).code);
+}
+
+console.log('\n== 7. A respelling is a fix, even when a field has the same typo (OVL, 2026-09-22) ==');
+{
+    const TYPOS = [
+        { what: 'Sansui receiver', field: 'Type',
+          title: 'Sansui Stereo System 3300 Stereo Reviever 3300',
+          fixed: 'Sansui Stereo System 3300 Stereo Receiver 3300',
+          v: { wrong_text: 'Reviever', correct_text: 'Receiver', why: '"Receiver" is misspelled' },
+          specs: { Brand: 'Sansui', Model: 'Stereo System 3300', MPN: '3300',
+                   Type: 'Stereo Reviever', Collection: 'General/Other' } },
+        { what: 'Analogue Super NT', field: 'Model',
+          title: 'Analogue Super NT Super Famicon Console System',
+          fixed: 'Analogue Super NT Super Famicom Console System',
+          v: { wrong_text: 'Super Famicon', correct_text: 'Super Famicom',
+               why: "Nintendo's console is the Super Famicom, misspelled here" },
+          specs: { Brand: 'Analogue', Model: 'Super NT Super Famicon', MPN: 'N/A',
+                   Type: 'Console System', Collection: 'Other Gaming' } },
+    ];
+    for (const c of TYPOS) {
+        // Whichever verdict the model hands back, a respelling is a typo.
+        for (const verdict of ['garbled', 'wrong']) {
+            const r = run(c.title, Object.assign({ verdict }, c.v), c.specs);
+            const f = r.findings[0] || {};
+            ok(f.code === 'name-garbled', `${c.what} (${verdict}): name-garbled`, f.code);
+            ok(r.title === c.fixed && r.fixable === true,
+               `${c.what} (${verdict}): the fix is offered`, r.title);
+        }
+        const f = run(c.title, Object.assign({ verdict: 'garbled' }, c.v), c.specs).findings[0] || {};
+        ok(new RegExp(`own ${c.field} has the same misspelling`).test(f.says || ''),
+           `${c.what}: it says the ${c.field} field has the same typo`, f.says);
+    }
+    // ⚠️ THE LINE HOLDS. A digit is a fact, and a different word is a different
+    // product — these stay disputed however close the letters are.
+    const near = run('Acme Widget Portable SSD',
+        { verdict: 'garbled', wrong_text: 'Widget', correct_text: 'Gadget' },
+        { Model: 'Widget' });
+    ok((near.findings[0] || {}).code === 'name-disputed',
+       'a word 3 edits away is not a respelling', (near.findings[0] || {}).code);
+    const short = run('Sony Arc Soundbar', { verdict: 'garbled', wrong_text: 'Arc', correct_text: 'Arch' },
+        { Model: 'Arc' });
+    ok((short.findings[0] || {}).code === 'name-disputed',
+       'nor is a word under 4 letters', (short.findings[0] || {}).code);
 }
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all passed') + '\n');

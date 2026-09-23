@@ -2,6 +2,7 @@
 #
 #   powershell -File scripts/browser-check.ps1 b2b-check.js
 #   powershell -File scripts/browser-check.ps1 b2b-check.js -Keep
+#   powershell -File scripts/browser-check.ps1 lg-check.js -Html index.html -WindowSize 1280,1044
 #
 # WHY THIS EXISTS ALONGSIDE scripts/*-check.js
 # The Puppeteer harnesses need `npm i puppeteer-core`, and Node is not installed
@@ -33,6 +34,17 @@ param(
     # navigate the harness away or fire against half-built globals, and the
     # markup is the only part being asserted about.
     [string]$Html = "",
+    # -WindowSize <W,H>: the viewport to render at. Chrome's headless default is
+    # 800x600, which lands at roughly 758x482 of usable viewport -- smaller than
+    # any real screen, and small enough that a vh-sized layout cannot show its
+    # bug here. #listingGoalsModal is the case that forced this: the modal is
+    # 84vh and its scroller 62vh, so the dead band between them is ~22vh minus
+    # the banner -- invisible at 482px tall and 130px at 1044. Anything measured
+    # in vh, and anything gated on a tablet's dimensions, needs a viewport it
+    # can be wrong at.
+    #
+    # Opt-in, same as -Html: without it every existing run is unchanged.
+    [string]$WindowSize = "",
     [switch]$Keep,
     [int]$TimeoutMs = 20000
 )
@@ -211,9 +223,11 @@ try {
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
+        $sizeArgs = @()
+        if ($WindowSize) { $sizeArgs = @("--window-size=$WindowSize") }
         $raw = (& $chrome --headless --disable-gpu --no-sandbox `
             --allow-file-access-from-files --virtual-time-budget=$TimeoutMs `
-            --dump-dom $url 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+            @sizeArgs --dump-dom $url 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
     } finally { $ErrorActionPreference = $prevEAP }
 
     $m = [regex]::Match($raw, '<div id="speeks-check-out">(.*?)</div>', 'Singleline')

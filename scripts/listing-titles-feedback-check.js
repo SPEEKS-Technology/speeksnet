@@ -68,6 +68,12 @@ const js = block
     // lifted (that half does the network). The body never uses the type.
     .replace(/fb\s*:\s*Awaited<ReturnType<typeof \w+>>/g, 'fb')
     .replace(/:\s*Record<[^>]*>(\s*\|\s*undefined)?/g, '')
+    // listingSaysItself's `cover?: [number, number]`, and the changedSpan /
+    // typoDistance / isMisspelling helpers that now sit in the same slice.
+    .replace(/\)\s*:\s*(number|boolean|\[number,\s*number\])\s*\{/g, ') {')
+    .replace(/(\w)\??\s*:\s*\[number,\s*number\]/g, '$1')
+    .replace(/:\s*number\[\]\[\]/g, '')
+    .replace(/(\w+)\s*:\s*number\b(?=\s*[,)])/g, '$1')
     .replace(/:\s*string\s*\|\s*null/g, '')
     .replace(/:\s*string\[\]\s*=/g, ' =')
     // `(hay: string[], needle: string[])` — an array-typed parameter, in any

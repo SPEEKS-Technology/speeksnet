@@ -95,8 +95,9 @@ console.log('\n== The card opens the tool, not a page ==');
 
 console.log('\n== It is in the Tools panel of every shell that has one ==');
 {
-    // tv.html is deliberately excluded: the store TV board has no tools panel
-    // at all, and giving it one would put a DM tool on a screen in the lobby.
+    // tv.html is excluded because it is no longer a shell at all — a redirect
+    // stub kept for the five wall TVs still bookmarked to it. The assertion
+    // below stays: it is what would catch the stub quietly growing a body again.
     for (const f of ['index.html', 'operations.html', 'workspace.html', 'stats.html', 'docs.html']) {
         const h = fs.readFileSync(REPO + '/' + f, 'utf8');
         const m = h.match(/<a[^>]*data-feature="tool-listing-health"[^>]*>/);
@@ -110,7 +111,7 @@ console.log('\n== It is in the Tools panel of every shell that has one ==');
         }
     }
     const tv = fs.readFileSync(REPO + '/tv.html', 'utf8');
-    ok(!/tool-listing-health/.test(tv), 'and is NOT on the store TV board');
+    ok(!/tool-listing-health/.test(tv), 'and is NOT on the retired TV board stub');
     const js = fs.readFileSync(REPO + '/speeks.js', 'utf8');
     ok(/key: 'tool-listing-health'[\s\S]{0,200}def: \['district-manager', 'ceo'\]/.test(js),
        'the feature switch matches those roles');

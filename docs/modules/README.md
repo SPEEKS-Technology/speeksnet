@@ -58,6 +58,7 @@ Deep-dive docs live beside this file. Right now: [`b2b.md`](b2b.md).
 | 13426 | `19. DISTRICT COMMAND CENTER` (master dashboards) |
 | 13667 | `20. LISTING GOALS ENGINE` · 14904 Monday goals reminder · 14973 daily store reminder · 15143 DM data · 15179 DM audit-readiness widget |
 | 14565 | Multi-store manager — dual-store listing goals |
+| 16632 | Listing Goals **Past weeks** view (`lgpw*`) — last 4 finished weeks of seats vs. listed; data from `store-targets?action=roleweeks` |
 | 15215 | `21. EMPLOYEE DASHBOARD WIDGETS` |
 
 ## B2B DEALS (15,524 – 23,230) → see [`b2b.md`](b2b.md)

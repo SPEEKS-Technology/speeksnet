@@ -73,6 +73,27 @@ html {
     overflow-x: hidden;
 }
 
+/* THE LOCK, FINISHED FOR iOS. body.no-scroll pins the body, and on a desktop that
+   is the whole job. iOS Safari still moved the page behind a phone sheet two ways
+   (user, 2026-09-16): a scroll inside a sheet that hit its top or bottom was
+   handed on to the page, and a drag on the strip of page still showing above the
+   sheet scrolled the root. The html rule takes the root's own scrolling away while
+   the lock is held, so a scroll that runs off the end of a sheet has nowhere to go.
+   contain goes on the SHEETS ONLY, never on what is inside them. It was on every
+   descendant for an hour, and a swipe up or down that started on a sideways
+   scroller — the expense table, a tab strip — then scrolled nothing at all,
+   because a container that cannot scroll vertically still stops the chain; and a
+   list inside a tool stopped dead at its end instead of carrying on into the sheet.
+   Measured with wheel scrolling at 390px in Chrome, before and after.
+   Phone-only, because a desktop modal never had either problem and html's
+   overflow-y:scroll is what keeps its scrollbar from jumping. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    html:has(> body.no-scroll) { overflow: hidden; overscroll-behavior: none; }
+    .modal-menu, .tools-side-panel, .checklist-side-panel, .goals-side-panel {
+        overscroll-behavior: contain;
+    }
+}
+
 /* =========================================================
    BRANDING & NAVIGATION
    ========================================================= */
@@ -717,7 +738,7 @@ input, textarea, select,
 /* Sections clear the fixed nav when a rail link jumps to them. */
 .category-section { scroll-margin-top: 96px; }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .dp-layout { grid-template-columns: 1fr; gap: 6px; }
     .dp-rail { position: static; flex-direction: row; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
     .dp-rail-btn { width: auto; }
@@ -969,6 +990,25 @@ input, textarea, select,
 .calendar-content iframe { width: 100%; height: 100%; border: 0; border-radius: 12px; }
 
 .notif-tabs { display: flex; gap: 10px; background: #f1f5f9; padding: 4px; border-radius: 8px; }
+/* Claims & Disputes tab row: every tab the same width, so New Claim is not a
+   third the size of Cases & Disputes (Ethan, 2026-09-22). Hidden tabs (a store
+   not rolled out yet) take no space, so the live ones still share the row evenly.
+   width:max-content, not 100%: before the server says which stores are live only
+   "Claims" is visible, and a full-width row drew it as one enormous button.
+   Grid rather than flex:1 for the same reason as .fa-tabs below, and because
+   under max-content the two together misbehave: flex:1 1 0 splits the row's
+   natural width evenly, giving every tab the AVERAGE label width, so the longest
+   one ("Cases & Disputes") spilled out of the grey bar. Grid sizes every 1fr
+   track to the widest label instead, so the row is exactly n × widest. */
+.claims-tabs {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto; /* phone: scroll the row rather than squeeze the labels */
+}
+.claims-tabs .tab-btn { min-width: 0; padding-left: 8px; padding-right: 8px; text-align: center; white-space: nowrap; }
 .tab-btn { background: transparent; border: none; padding: 6px 16px; font-size: 12px; font-weight: 700; color: #64748b; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
 .tab-btn.active { background: white; color: var(--slate-charcoal); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
 
@@ -1500,6 +1540,51 @@ input, textarea, select,
     .pin-cell { height: 60px; }
     .auth-body h2 { font-size: 24px; }
     .auth-rail { gap: 26px; }
+}
+
+
+/* --- TABLET EXCEPTION: the wordmark stops floating away from the card --------
+   Ethan, 2026-09-20, looking at the login on an iPad: "make the top part above
+   the pin code move down closer to the top of the pin code area like it looks on
+   desktop, so there isn't such a high amount of space between them."
+
+   .auth-brand and .auth-tail split the leftover height evenly, and the brand
+   CENTRES the wordmark inside its share — that is what puts the logo in the
+   middle of the gap above the card, and on a 900px-tall desktop it is right,
+   because the share is small. The gap under the wordmark measures 84px at
+   1440x900 and 84px at 1920x1080: two very different windows, one constant, so
+   the group reads as one unit either way.
+
+   A portrait iPad hands the same split 330-440px and the wordmark drifts to the
+   middle of it — 149px at 744x1133, 161px at 820x1180, 204px at 1024x1366
+   (measured; scripts/auth-layout-check.js asserts all three).
+
+   So stop centring and anchor the wordmark to the BOTTOM of its share, at the
+   desktop's own gap. The region keeps its height, which means THE CARD DOES NOT
+   MOVE — only the wordmark comes down to meet it. That is the ask exactly, and
+   the height the gap gives up reappears above the logo, which is the trade being
+   asked for: the card is where a thumb expects it, and the dark ground above is
+   the cheapest thing on the screen to spend.
+
+   A flat 84px rather than a vh clamp, because the number it is matching is a
+   constant and not a ratio — see the two desktop measurements above.
+
+   AND THE GAP IS A MARGIN, NOT PADDING, WHICH IS THE ONLY SUBTLE PART OF THIS.
+   .auth-brand is `flex: 1 1 0`, so its PADDING is added on top of a zero basis
+   and lands in the flex base size — the brand and the tail then split what is
+   left of the container, and the brand comes out half the padding ahead. Adding
+   84px of padding-bottom therefore pushed the card 34px DOWN at all three tablet
+   sizes (measured: exactly (84-16)/2 every time), which is the one thing this fix
+   is not allowed to do. A margin on the child sits inside a content box that is
+   already 0 in the base calculation, so it moves the wordmark and nothing else.
+
+   68 rather than 84 because .auth-brand keeps its own 16px bottom padding under
+   the wordmark — untouched, deliberately, since changing it moves the card by
+   half of whatever it changed by. The two together are the desktop's 84. */
+@media (min-width: 701px) and (min-height: 540px)
+   and (max-width: 1366px) and (pointer: coarse) {
+    .auth-brand  { justify-content: flex-end; }
+    .auth-portal { margin-bottom: 68px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2097,9 +2182,44 @@ select.bs-hidden-select:focus {
 .rec-more { margin: 4px 10px 12px; text-align: center; font-size: 11.5px; font-weight: 800; color: #178048; padding: 8px; border-radius: 9px; background: #f4faf6; border: 1px solid #eef2f6; cursor: pointer; transition: background .15s; }
 .rec-more:hover { background: #e8f7ee; }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .champions-row { grid-template-columns: 1fr; }
     .awards-grid, .records-grid { grid-template-columns: 1fr 1fr; }
+
+    /* THE INFO DOT WAS AN EGG. .aw-i asks for 19x19 and got 19x44, because the
+       tap-target block at the end of this layer sets `button { min-height: 44px }`
+       and MIN-HEIGHT BEATS HEIGHT — not on specificity (a class already out-ranks
+       an element selector) but because that is what min-height is for. Same floor,
+       fifth victim: .lv-mode, .modal-close-btn, the two dark-surface X-es and the
+       audit pills all paid for it, and all but this one paid on specificity. A
+       border-radius: 50% on a 19x44 box is an egg, which is what Ethan saw.
+
+       Named away rather than argued with, exactly as input[type=checkbox] does in
+       that same block. And then made BIGGER on purpose: on a tablet this stopped
+       being a hover target and became something you tap (see the click handler in
+       section 23 of speeks.js), and 19px is not a thing anyone can hit. 28px is
+       the close controls' 30px trade again — under the 44px guideline, but a
+       round 28 in a card corner is reachable and a 44 would dominate a card whose
+       title is 13.5px. .aw-name's right padding tracks it or the two collide.
+
+       .award-info-btn.aw-i, both classes, because the element wears both and the
+       two base rules are BOTH (0,1,0) — .aw-i at the top of this file and
+       .award-info-btn 230 lines below it, which therefore wins every property the
+       pair disagree on. (That is also why the desktop dot is .award-info-btn's
+       18px at 6px/6px and none of .aw-i's geometry has ever applied; untouched
+       here, since nobody has complained about the desktop one.) A single class in
+       this block loses to it on source order alone, which is exactly what this
+       rule did on its first attempt: min-height: 0 landed, because nothing
+       competed for it, while width and height did not — leaving an 18px circle
+       that passed a roundness check and failed a size one. */
+    .award-info-btn.aw-i {
+        min-height: 0;
+        width: 28px; height: 28px;
+        top: 12px; right: 12px;
+        font-size: 12.5px;
+        cursor: pointer;
+    }
+    .aw-name { padding-right: 34px; }
 }
 @media (max-width: 600px) {
     .awards-grid, .records-grid { grid-template-columns: 1fr; }
@@ -2347,6 +2467,26 @@ select.bs-hidden-select:focus {
 }
 .award-video-close-btn:hover { background: rgba(0, 0, 0, 0.85); }
 .award-video-close-btn svg { width: 16px; height: 16px; display: block; }
+
+/* The audit photo lightbox's ✕. Third member of the "floats over a dark
+   surface" family, with .award-video-close-btn and .daily-bubble-close: it keeps
+   its own light-on-dark ink, because a pale grey chip over an arbitrary
+   photograph would either clash with it or vanish into it, and it takes
+   everybody else's BOX. The compact block near the close-control standard sizes
+   all three together at 30px / 9px radius.
+   Written here rather than inline on the element (where it was a 38px circle) so
+   that scripts/close-btn-audit can see it at all — an inline style is invisible
+   to a rule audit, which is how this one drifted for as long as it did. */
+.au-lb-close {
+    position: absolute; top: 16px; right: 20px; z-index: 10;
+    width: 34px; height: 34px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(255, 255, 255, .14); color: #fff;
+    border: none; border-radius: 9px; cursor: pointer;
+    transition: background .2s;
+}
+.au-lb-close:hover { background: rgba(255, 255, 255, .26); }
+.au-lb-close svg { width: 16px; height: 16px; display: block; }
 
 /* Manage awards modal */
 .awards-form-month-row {
@@ -3613,6 +3753,32 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
 .goals-levelup .lu-week.empty { background: #eef2f6; }
 .goals-levelup .lu-week.empty .lu-week-num { color: #cbd5e1; }
 
+/* A bar now stacks THREE facts, not one: what was listed, the goal it is
+   coloured against, and the percentage of what the store was actually staffed
+   for. The last of those is the district's efficiency figure — carried here so
+   a store and the DM stop reading the same week and reaching opposite verdicts.
+   A week can be red on top and over 100% underneath; that is information, not a
+   contradiction.
+
+   The fixed 28px height goes with it — three lines need room — and the flow
+   turns to a column. */
+.goals-levelup .lu-week { flex-direction: column; height: auto; min-height: 28px; padding: 6px 2px; gap: 1px; line-height: 1.15; }
+.goals-levelup .lu-week-goal,
+.goals-levelup .lu-week-carried { font-size: 9px; font-weight: 700; color: rgba(255,255,255,.82); }
+.goals-levelup .lu-week-eff { font-size: 9.5px; font-weight: 800; color: rgba(255,255,255,.95); }
+.goals-levelup .lu-week-eff.none { color: rgba(255,255,255,.55); }
+.goals-levelup .lu-week.empty .lu-week-goal,
+.goals-levelup .lu-week.empty .lu-week-carried,
+.goals-levelup .lu-week.empty .lu-week-eff { color: #cbd5e1; }
+/* A goal nobody set for that week. Hatched rather than simply recoloured: the
+   green/red still has to read as the verdict it is, and the point here is that
+   the verdict was reached against a number carried in from an earlier week. */
+.goals-levelup .lu-week.lu-week-stale {
+    background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.16) 0 5px, transparent 5px 10px);
+}
+.goals-levelup .lu-week-carried { font-style: italic; letter-spacing: .01em; }
+.goals-levelup .lu-sub { font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: none; letter-spacing: 0; }
+
 /* Auto-save status pill */
 .goals-save-status { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; }
 .goals-save-status.saving { color: #a0aab2; }
@@ -4075,6 +4241,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .dc-tbl td.dc-good, .dc-good { color: #178048; font-weight: 800; }
 .dc-tbl td.dc-warn, .dc-warn { color: #b3760a; font-weight: 800; }
 .dc-tbl td.dc-bad,  .dc-bad  { color: #dc2626; font-weight: 850; }
+.dc-tbl td.dc-watch, .dc-watch { color: #1d4ed8; font-weight: 800; }
 .dc-tbl td.dc-muted, .dc-muted { color: #94a3b8; font-weight: 650; }
 /* The chips sit inside a td, so they lose to it for the same reason. */
 .dc-tbl td .dc-cat, .dc-tbl td .dc-audit, .dc-tbl td .dc-muted { font-weight: 750; }
@@ -4138,6 +4305,233 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
    scores stop lining up down the table, which is the whole point of the grid. */
 .dc-tbl-score .dc-catwrap { flex-wrap: nowrap; }
 .dc-tbl-score .dc-catlab { flex: none; }
+/* ---------------------------------------------------------------------------
+   DISTRICT MATRIX tab (called `watch` everywhere in the code — see speeks.js).
+   Five columns: store, status, and the three metrics, each carrying its figure
+   and, for the two that have one, a trend chart. The store and status columns
+   stay narrow; the three metric columns take the width.
+   Five columns since 0099 added listing, so the table needs more room before
+   .lv-tbl-scroll starts scrolling it. ------------------------------------- */
+.dc-tbl-watch { min-width: 920px; }
+.dc-tbl-watch th:nth-child(2), .dc-tbl-watch td:nth-child(2) { width: 11%; }
+.dc-tbl-watch th:nth-child(3), .dc-tbl-watch td:nth-child(3) { width: 28%; }
+.dc-tbl-watch th:nth-child(4), .dc-tbl-watch td:nth-child(4),
+.dc-tbl-watch th:nth-child(5), .dc-tbl-watch td:nth-child(5) { width: 23%; }
+
+/* Figure, trend and sub-line on one baseline. Wraps rather than clips: this
+   table lives inside a card with a radius, and a row that overflows its grid
+   here would be unreachable with no scrollbar to say so.
+
+   CENTRED, because .lv-tbl centres every th and the flex box was defaulting to
+   flex-start — so the headers sat mid-column while the figures under them hugged
+   the left edge, which put 83.3% and its chart hard against the sentences in
+   the row below (Ethan, 2026-09-21). The cell is a flex row, so text-align on
+   the td cannot reach it; justify-content is what centres flex children. */
+.dcw-metric { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 10px; min-width: 0; }
+.dcw-val    { font-size: 15px; font-weight: 850; letter-spacing: -.01em; }
+.dcw-sub    { font-size: 10.5px; font-weight: 700; color: #7a8698; white-space: nowrap; }
+.dcw-spark  { flex: none; display: block; }
+
+/* MTD over the last 14 days, each with its label. A two-column grid so the
+   labels line up under each other and the figures right-align on the decimal.
+   MTD is neutral (a fact); the 14-day figure carries the severity colour
+   (the verdict) — see _dcwPair. */
+/* FIXED TRACKS, so every block is the same width: figure 60px (right-aligned,
+   so the % signs stack), arrow 10px (rendered empty when there is none, so it
+   can never push a figure sideways), label 76px ("LAST 14 DAYS" is the
+   widest). Every block in a column is then identical in width, and the cell
+   centring it lands every row's block at the same x down the table. */
+.dcw-pair {
+    display: grid; grid-template-columns: 60px 10px 76px; align-items: baseline;
+    column-gap: 3px; row-gap: 1px;
+}
+.dcw-pair .dcw-val, .dcw-pair .dcw-recent { justify-self: end; white-space: nowrap; }
+.dcw-slot { justify-self: start; }
+.dcw-pair .dcw-tag { justify-self: start; white-space: nowrap; font-size: 9px; font-weight: 800;
+    letter-spacing: .06em; text-transform: uppercase; color: #a8b3c0; }
+.dcw-dev    { color: #647082; }
+.dcw-mtd    { color: var(--slate-charcoal); }
+/* MTD carries the verdict colour since 0110 (the month is what is judged).
+   Spelled out because .dcw-mtd above is later than the bare .dc-* rules and
+   would otherwise win. */
+.dcw-mtd.dc-good  { color: #178048; }
+.dcw-mtd.dc-watch { color: #1d4ed8; }
+.dcw-mtd.dc-warn  { color: #b3760a; }
+.dcw-mtd.dc-bad   { color: #dc2626; }
+.dcw-recent { font-size: 12px; font-weight: 800; }
+/* The 7-day figure decides nothing since 0110 — neutral, like MTD used to be. */
+.dcw-r7     { color: #647082; }
+.dcw-arrow  { font-weight: 900; }
+.dcw-up     { color: #178048; }
+.dcw-down   { color: #dc2626; }
+.dcw-muted  { color: #94a3b8; font-weight: 650; }
+
+/* The caption line above the table: the count on the left, what it was measured
+   against on the right, so the targets are never a thing you have to remember. */
+.dcw-cap {
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+    gap: 4px 14px; padding: 2px 2px 10px;
+}
+.dcw-cap-l { font-size: 12.5px; font-weight: 700; color: var(--slate-charcoal); }
+.dcw-cap-l b { font-weight: 850; }
+.dcw-cap-r { font-size: 10.5px; font-weight: 700; color: #94a3b8; }
+
+/* One GLANCE LINE per metric, full width under its store's row. These were
+   full sentences until 2026-09-21; three of them a store turned the board into
+   something you read rather than something you scan, so the sentence moved to
+   the hover and what is left is: label, the number, why, how long.
+
+   Laid out as a grid, not as inline text, so the four parts line up down the
+   column across all five stores. Auto columns would let each store set its own
+   x for "why", which is exactly what makes a list unscannable. */
+/* EACH LINE IS A TABLE ROW (see _dcWatchHtml). Label and figure sit in the
+   Store column, the phrase in the Status column — so the phrase is centred
+   under the store's Warning / On target tag by the table itself, at every
+   width, with no widths to keep in step. The metric columns to the right are
+   left empty, which is also what keeps the lines clear of the figures.
+
+   Tight rows so the three lines read as one block under the store, and the
+   group's breathing room goes on the LAST line only. */
+.dc-tbl tbody.dc-grp > tr.dcw-note { cursor: pointer; }
+.dc-tbl tbody.dc-grp > tr.dcw-note > td { padding-top: 2px; padding-bottom: 2px; border-bottom: 0; }
+.dc-tbl tbody.dc-grp > tr.dcw-note:last-child > td { padding-bottom: 17px; border-bottom: 1px solid #f3f6f9; }
+.dc-tbl tbody.dc-grp:last-child > tr.dcw-note:last-child > td { border-bottom: 0; }
+/* The label is a fixed-width block so every figure starts at the same x down
+   the whole table. 84px is the widest label (CONVERSION at 9px/.07em). */
+.dcw-lc b { display: inline-block; width: 84px; }
+/* Store column is 15% — at the 920px minimum that is ~138px, less than label
+   plus figure. Wrapping the figure under its label beats spilling it into
+   the Status column. */
+/* Scoped to .dc-tbl td so it outranks .lv-tbl td, which sets nowrap on every cell. */
+.dc-tbl td.dcw-lc { white-space: normal; }
+.dcw-lead { font-weight: 800; }
+.dcw-why  { font-weight: 600; color: #8792a4; }
+.dcw-age  { font-weight: 700; color: #a8b3c0; }
+/* LEFT-ALIGNED under the Status column, starting at its left edge (Ethan,
+   2026-09-21: "left align the text to the column"). Centring them under the
+   tag made every line start at a different x, which is harder to read down
+   than a ragged right edge. One line each, never wrapped — the cell spans two
+   columns so the longest phrase has room. Scoped to .dc-tbl td so it
+   outranks both .lv-tbl td's centring and .dcw-note td's white-space. */
+.dc-tbl td.dcw-wc { text-align: left; white-space: nowrap; }
+/* The lead takes the severity colour; the label already carries it too, and
+   two coloured words either side of grey prose is the whole visual grammar of
+   the line. */
+.dcw-note.dc-good .dcw-lead { color: #178048; }
+.dcw-note.dc-warn .dcw-lead { color: #b3760a; }
+.dcw-note.dc-bad  .dcw-lead { color: #dc2626; }
+/* SINCE 0110 THE LEAD IS YESTERDAY'S FIGURE, and it is coloured by that day
+   alone — made target or missed it — not by the metric's state. A store fine
+   for the month that had a bad day must read green on the label and red on
+   the number; that is the whole point of putting yesterday there. Scoped under
+   .dc-tbl so it outranks the state colours above. */
+.dc-tbl .dcw-note .dcw-lead.dcw-y-hit  { color: #178048; }
+.dc-tbl .dcw-note .dcw-lead.dcw-y-miss { color: #dc2626; }
+/* WATCH (0110): fine for the month, missing day after day. Blue, not a paler
+   amber, so it cannot be read as a softer Warning. The old "drifting" amber on
+   the why phrase went with the state that replaced it. */
+.dcw-note.dc-watch b, .dcw-note.dc-watch .dcw-why { color: #1d4ed8; }
+
+/* NO PHONE BREAKPOINT HERE, deliberately, and it is not an oversight: the
+   Matrix tab carries data-mobile and is not rendered on a phone at all (see
+   index.html, and the assertion in district-watch-dom-check.js). A media query
+   for a width this panel is never shown at is dead CSS that still has to be
+   read by whoever comes next.
+
+   It was also actively wrong. A viewport query cannot describe this panel,
+   because the panel's width is the card's, not the window's — and the layout
+   harness stages width on a host div, so a max-width:900px rule fired at every
+   staged width and quietly turned the grid into two stacked columns in every
+   measurement. The four parts line up at whatever width the card gives them,
+   and below that the table scrolls inside .lv-tbl-scroll like everything else
+   in it. */
+
+/* Superseded by the grid above, kept because .dcw-note still inherits it:
+   these were sentences, and a pill that wraps to three lines is just a
+   paragraph with a border round it. */
+.dcw-note td {
+    font-size: 11.5px; font-weight: 650; line-height: 1.45; color: #4a5565;
+    white-space: normal;
+}
+.dcw-note b {
+    font-size: 9px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase;
+    opacity: .85;   /* spacing is column-gap now, not a margin */
+}
+/* The severity colour belongs to the LABEL, not the sentence — colouring a whole
+   line of prose red makes it harder to read, not more urgent. */
+.dcw-note.dc-good b { color: #178048; }
+.dcw-note.dc-warn b { color: #b3760a; }
+.dcw-note.dc-bad  b { color: #dc2626; }
+.dcw-note.dc-good, .dcw-note.dc-watch, .dcw-note.dc-warn, .dcw-note.dc-bad { color: #4a5565; font-weight: 650; }
+
+.dcw-foot {
+    margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--dp-line-2);
+    font-size: 10.5px; font-weight: 650; line-height: 1.5; color: #94a3b8;
+}
+
+/* ---------------------------------------------------------------------------
+   DISTRICT WATCH · the store popup. Three tabs, each a summary row over a
+   seven-row day table. The bar column is the point of the layout: seven
+   percentages in a column are a list, seven bars against a fixed target line
+   are a shape you can read without doing arithmetic. ---------------------- */
+.dcw-mwrap { padding: 4px 18px 18px; }
+
+.dcw-msum { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.dcw-tile {
+    flex: 1 1 150px; min-width: 0;
+    padding: 11px 14px; border: 1px solid var(--dp-line); border-radius: 11px; background: #fff;
+}
+.dcw-tile-k {
+    font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+    color: #b0bac6;
+}
+.dcw-tile-v { font-size: 21px; font-weight: 850; letter-spacing: -.02em; color: var(--slate-charcoal); margin-top: 2px; }
+.dcw-tile-s { font-size: 10.5px; font-weight: 650; color: #7a8698; margin-top: 1px; }
+
+.dcw-mtbl { min-width: 520px; }
+.dcw-mtbl th, .dcw-mtbl td { text-align: right; }
+.dcw-mtbl th:first-child, .dcw-mtbl td:first-child { text-align: left; }
+.dcw-td-day { font-weight: 750; color: var(--slate-charcoal); white-space: nowrap; }
+.dcw-th-bar, .dcw-td-bar { width: 32%; }
+
+/* The track is the full scale; the fill is the value and the tick is target.
+   Absolute inside a relative span rather than a flex row, so the tick lands at
+   a true percentage of the scale instead of wherever the fill happens to end. */
+.dcw-bar {
+    position: relative; display: block; width: 100%; height: 8px;
+    border-radius: 999px; background: #eef1f5; overflow: hidden;
+}
+.dcw-bar-fill { position: absolute; left: 0; top: 0; height: 100%; border-radius: 999px; background: #94a3b8; }
+.dcw-bar-fill.dc-good { background: #178048; }
+.dcw-bar-fill.dc-warn { background: #d99400; }
+.dcw-bar-fill.dc-bad  { background: #dc2626; }
+/* Sits ON the fill, so it reads as a line the bar has or has not reached. */
+.dcw-bar-tick {
+    position: absolute; top: -1px; width: 2px; height: 10px;
+    background: #64748b; opacity: .55; border-radius: 1px;
+}
+
+.dcw-mtot {
+    margin-top: 11px; padding: 9px 13px; border-radius: 9px; background: var(--dp-line-2);
+    font-size: 12px; font-weight: 650; color: #4a5565;
+}
+.dcw-mtot b { font-weight: 850; color: var(--slate-charcoal); }
+.dcw-mwrap .dcw-foot { margin-top: 12px; }
+
+/* The popup's tab strip wraps on a narrow window rather than scrolling off the
+   edge — three tab labels here are words, not icons, and a hidden third tab is
+   a feature nobody finds. */
+/* Three EQUAL columns (Ethan, 2026-09-21: "make the 3 tab name buttons the
+   same size"), each as wide as the longest label needs. On a window too narrow
+   for that the labels wrap inside their buttons rather than a tab dropping
+   off the edge — three tab labels here are words, not icons, and a hidden
+   third tab is a feature nobody finds. */
+#dcwModalTabs {
+    display: inline-grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    max-width: 100%;
+}
+#dcwModalTabs .tab-btn { text-align: center; }
+
 .dc-cat.dc-fix {
     display: flex; align-items: baseline; justify-content: space-between;
     gap: 8px; min-width: 0; width: auto;
@@ -4167,6 +4561,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .dc-cat.dc-bad  { background: #fbeae7; color: #7f2418; font-weight: 800; }
 .dc-cat.dc-warn { background: #fdf3e2; color: #8a5a06; font-weight: 800; }
 .dc-cat.dc-good { background: #e6f4ec; color: #14532d; font-weight: 750; }
+.dc-cat.dc-watch { background: #e8effd; color: #1e3a8a; font-weight: 800; }
 
 /* The audit score opens its own breakdown modal, so it is a button inside a
    clickable row and has to read as the more specific target of the two. */
@@ -4175,6 +4570,40 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     border: 1px solid #e6ebf1; border-radius: 999px; padding: 4px 11px; cursor: pointer;
     transition: border-color .12s, background .12s;
 }
+/* ONE WIDTH FOR EVERY SCORE (Ethan, 2026-09-19: "make the % bubbles the same
+   size"). The digits are already tabular, so 97.6% and 88.2% match each other —
+   but 100% is one character shorter and came out 55px against their 58px, and a
+   column of pills stepping in and out by 3px reads as five different controls
+   rather than five readings of the same thing. A floor, not a fixed width: 66px
+   is what "100.0%" measures at 12px/850 with this padding, so every value the
+   two audits can produce fits and nothing is ever clipped.
+   Not media-scoped — the raggedness is identical on the desktop, and the ask was
+   about the figure rather than about a screen.
+   `.dc-tbl td` and not the bare class, because the compact layer sets
+   `.main-content * { min-width: 0 }` — a (0,1,0) rule thousands of lines later
+   that flattens every floor in the page. It is what lets the wide tables squeeze
+   down on a tablet, and it silently ate this one first time round. (0,3,0)
+   clears it, and matches the tint rules just below. */
+.dc-tbl td .dc-audit { min-width: 66px; text-align: center; }
+/* ...AND ONE HEIGHT, which the width fix did not buy on its own (Ethan,
+   2026-09-20: "one is fatter and one is skinnier. I want them both to be
+   skinny"). The two pills wear the same class and are NOT the same element: the
+   SPEEKS score is a <button>, because it opens the breakdown, and PayMore's is
+   an inert <span>. Identical padding, line-height and border — and on a compact
+   screen they measured 66x44 against 66x29.2, because `button { min-height:
+   44px }` in the tap-target block at the foot of this file caught one of them
+   and not the other. It is only (0,0,1), but it is later, so against a bare
+   class it wins.
+   The same bug as .lv-mode in round 7, .modal-close-btn in round 9 and the two
+   dark-surface X-es, and the same fix: name the floor away at a specificity
+   that clears it, rather than trimming padding to fight it. min-height: 0 and
+   not an explicit 29px — both pills then compute their height from the same
+   padding and line-height, so they are equal BY CONSTRUCTION and stay equal if
+   the type ever moves.
+   Under the 44px tap floor on purpose, and it costs nothing: the pill is 66px
+   wide, so 66x29 is the same touch AREA as a 44x44 target, in a shape that fits
+   a table row. Same trade the close controls took at 30px. */
+.dc-tbl td .dc-audit { min-height: 0; }
 /* Only the BUTTON hovers. The PayMore score wears the same pill as a <span>,
    and a hover state on something that does not respond to a click is a lie. */
 button.dc-audit:hover { background: #fff; }
@@ -6283,7 +6712,7 @@ button.dc-audit:hover { background: #fff; }
     padding: 8px 0;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .district-goals-grid { grid-template-columns: repeat(3, 1fr); }
     .dg-store-card:nth-child(3) { border-right: none; }
     .dg-store-card:nth-child(4) { border-top: 1px solid var(--gen-border); }
@@ -7708,19 +8137,26 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     white-space: nowrap;
 }
 .ann-doc-card-meta { font-size: 12px; color: #94a3b8; margin-top: 3px; font-weight: 500; }
+/* The soft sage chip every other in-card action on the site wears (Add a document
+   right above it, the Picture Guide's Edit) — not a solid block of green. It was
+   the one saturated button in the list, and its "⬇" was an emoji, which iOS
+   draws as a blue tile (user, 2026-09-16). */
 .ann-doc-dl-btn {
     flex-shrink: 0;
-    background: var(--sage-professional);
-    color: white;
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--sage-deep, #178048);
+    background: #e8f7ee;
+    border: 1px solid #c6ecd6;
     text-decoration: none;
-    border-radius: 8px;
-    padding: 7px 14px;
+    border-radius: 9px;
+    padding: 7px 13px;
     font-size: 12px;
     font-weight: 700;
-    transition: opacity 0.15s;
+    transition: background 0.15s;
     white-space: nowrap;
 }
-.ann-doc-dl-btn:hover { opacity: 0.85; color: white; }
+.ann-doc-dl-btn svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.ann-doc-dl-btn:hover { background: #d9f0e3; color: var(--sage-deep, #178048); }
 .ann-docs-icon-btn {
     background: none;
     border: none;
@@ -8819,8 +9255,21 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    item stays content-sized otherwise. The items then share the slack. Applied
    only when a full set is visible — with two or three, sharing it would leave
    each row distended. */
-.speeks-action-menu .sam-rail.sam-rail-fill > .sam-card { flex: 1 1 auto; }
-.speeks-action-menu .sam-rail.sam-rail-fill > .sam-card .sam-mini { flex: 1 1 0; }
+/* min-height so the card cannot be taken below its rows. .sam-card carries
+   overflow:hidden for its radius, which sets a flex item's automatic minimum
+   size to ZERO — so any arrangement that leaves the rail short of its content
+   would silently clip the bottom row off rather than let the rail overflow. */
+.speeks-action-menu .sam-rail.sam-rail-fill > .sam-card { flex: 1 1 auto; min-height: min-content; }
+/* `1 0 auto`, not `1 1 0`. A zero basis makes every row the SAME height whatever
+   it holds, so with the full set of four the rows carrying a progress bar were
+   squeezed to match the ones that carry none — the bar ended up against the
+   divider and the whole card read as compressed (Ethan, 2026-09-19: "when the
+   max of 4 lines are in the action area, they get scrunched up"). An `auto`
+   basis keeps each row's own height and shares only the SLACK, which is all
+   this was ever for; shrink 0 stops a row being taken below what it needs, so
+   if the rail is the taller column the grid row grows instead of the rows
+   collapsing. */
+.speeks-action-menu .sam-rail.sam-rail-fill > .sam-card .sam-mini { flex: 1 0 auto; }
 .speeks-action-menu .sam-card { display: flex; flex-direction: column; }
 
 /* --- feed --- */
@@ -8960,7 +9409,11 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    header. All scoped to #listingGoalsModal so the render markup
    (renderManagerGoals) stays untouched; we only restyle it.
    ========================================================= */
-#listingGoalsModal { width: 1200px; max-width: 95vw; }
+/* height:auto against the shell's flat 84vh (.modal-menu), max-height inherited.
+   A three-person roster was drawing the same 84vh slab as a two-store MSM one
+   and padding the difference with white; now the modal is as tall as it needs
+   and stops growing at 84vh, where the body above takes over and scrolls. */
+#listingGoalsModal { width: 1200px; max-width: 95vw; height: auto; }
 /* Employee personal Listing Goals popup (compact — one person's goals) */
 #empGoalsModal { width: 560px; max-width: 94vw; }
 /* Personal Listing Goals popup — matches the manager modal's look (green goal banner,
@@ -8992,8 +9445,17 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     border: 0 !important; box-shadow: none !important; background: transparent !important;
     padding: 0 !important; margin: 0 !important; width: 100%;
 }
+/* The roster scroller takes whatever the card has left — it used to stop at a
+   flat 62vh inside a modal that is 84vh, and the difference was dead white at
+   the foot of the widget. ~40px under Today and ~110px under Past weeks, which
+   hides its own banner, and both grow with the screen: a third of a tall
+   display was empty (Ethan, 2026-09-19, MSM: "a huge amount of white space at
+   the bottom ... on both today and past weeks").
+   min-height: 0 so it can still SHRINK below its content — a flex item's
+   automatic minimum is its content size, and without this a long roster would
+   push the card past the modal instead of scrolling inside it. */
 #listingGoalsModal .employee-kpi-body {
-    height: auto !important; max-height: 62vh; padding: 0; background: transparent;
+    height: auto !important; max-height: none; min-height: 0; padding: 0; background: transparent;
 }
 #listingGoalsModal .goals-roster-container { min-height: 200px; }
 #listingGoalsModal #goals-pulse-dot { display: none !important; }
@@ -9168,6 +9630,38 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 #listingGoalsModal .lu-week.red .lu-week-num { color: #b02a2f !important; }
 #listingGoalsModal .lu-week.empty .lu-week-num { color: #8a94a3 !important; }
 
+/* The tinted modal fills are light, so the two sub-lines take dark ink here
+   rather than the translucent white the solid compact bars use. */
+#listingGoalsModal .lu-week { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 13px 4px !important; }
+#listingGoalsModal .lu-week-goal,
+#listingGoalsModal .lu-week-carried { font-size: 10px; font-weight: 700; opacity: .75; }
+#listingGoalsModal .lu-week-eff { font-size: 11px; font-weight: 800; opacity: .95; }
+#listingGoalsModal .lu-week.green .lu-week-goal,
+#listingGoalsModal .lu-week.green .lu-week-carried,
+#listingGoalsModal .lu-week.green .lu-week-eff { color: #3d6822; }
+#listingGoalsModal .lu-week.red .lu-week-goal,
+#listingGoalsModal .lu-week.red .lu-week-carried,
+#listingGoalsModal .lu-week.red .lu-week-eff { color: #b02a2f; }
+#listingGoalsModal .lu-week.empty .lu-week-goal,
+#listingGoalsModal .lu-week.empty .lu-week-carried,
+#listingGoalsModal .lu-week.empty .lu-week-eff { color: #8a94a3; }
+#listingGoalsModal .lu-week.lu-week-stale {
+    background-image: repeating-linear-gradient(135deg, rgba(16,24,40,.055) 0 6px, transparent 6px 12px) !important;
+}
+/* The legend wraps under the title rather than sitting beside it on a narrow
+   screen. It was `white-space: nowrap` for one revision, which held the whole
+   header open at 712px inside a 390px phone — and because the header is a
+   sibling of the bar grid, it dragged the grid out with it. No scrollbar said
+   so; the right-hand weeks were simply unreachable. Same class of bug as the
+   Overview cards clipping their tables, which is what the layout suite exists
+   for. */
+#listingGoalsModal .lu-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 10px; }
+#listingGoalsModal .lu-sub { font-size: 10px; font-weight: 700; color: #8a94a3; }
+/* Grid and flex items default to min-width:auto, so a bar refuses to shrink
+   below its widest word and pushes the track out instead. The four bars must
+   share whatever width there is. */
+#listingGoalsModal .lu-week, .goals-levelup .lu-week { min-width: 0; }
+
 /* When the Action Menu is live for this user, it re-homes the ticker's toggles
    -- so hide the ticker. Everyone else (other pages) keeps it.
 
@@ -9209,7 +9703,7 @@ body.sam-active .hotbar-btn:hover {
     background: #e8f7ee; transform: none;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .speeks-action-menu .sam-board { grid-template-columns: 1fr; }
 }
 
@@ -9343,14 +9837,39 @@ body.sam-active .hotbar-btn:hover {
 }
 .goals-side-panel .mini-action-btn:hover { border-color: #1f9d57 !important; }
 .goals-side-panel .gi-items-list { display: flex; flex-direction: column; gap: 8px; }
+/* The left accent is what makes three cards read as a LIST of goals rather than
+   three identical grey slabs — the same 3px sage edge .mgb-goal-item carries on
+   the dashboard banner, which the flat panel restyle had dropped. Initiatives
+   keep a plain edge: their Current/Upcoming badge is already the colour that
+   tells them apart, and a sage bar beside an amber "Upcoming" says two things.
+   (Ethan, 2026-09-19: "for manager version of goals and initiatives, can you
+   make this look better".) */
 .goals-side-panel .mgb-goal-item,
 .goals-side-panel .cpb-project-item {
     background: #f6f8fa !important; border: 1px solid #eef1f5 !important; border-radius: 10px !important;
-    padding: 12px 13px !important; display: flex; flex-direction: column; gap: 4px;
+    padding: 12px 14px !important; display: flex; flex-direction: column; gap: 5px;
 }
-.goals-side-panel .cpb-item-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.goals-side-panel .mgb-goal-title { font-size: 13px !important; font-weight: 700 !important; color: #1c1f23 !important; }
-.goals-side-panel .mgb-goal-desc { font-size: 12px !important; color: #647082 !important; line-height: 1.5; }
+.goals-side-panel .gi-items-list > .mgb-goal-item {
+    border-left: 3px solid var(--sage-professional, #1f9d57) !important;
+    padding-left: 13px !important;
+}
+.goals-side-panel .cpb-item-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+/* A goal called "House Keeping! (MANAGERS)" is a whole line on its own in a
+   380px drawer, and the shared .mgb-goal-title is nowrap + ellipsis, sized for
+   a fixed-height widget. The panel scrolls, so a title wraps here instead of
+   being cut mid-word. */
+.goals-side-panel .mgb-goal-title {
+    font-size: 13px !important; font-weight: 700 !important; color: #1c1f23 !important;
+    white-space: normal; overflow: visible; text-overflow: clip; min-width: 0;
+}
+/* ...and the description is not clamped here either. Two lines and an ellipsis
+   is right in the dashboard banner, which has a height to protect; in a
+   scrolling drawer it just stopped every goal mid-sentence and left the rest of
+   it behind a hover tooltip that a tablet has no way to ask for. */
+.goals-side-panel .mgb-goal-desc {
+    font-size: 12px !important; color: #647082 !important; line-height: 1.5;
+    display: block; -webkit-line-clamp: none; line-clamp: none; overflow: visible;
+}
 .goals-side-panel .cpb-section-label {
     font-size: 11px !important; font-weight: 800 !important; letter-spacing: .06em; text-transform: uppercase;
     color: #8a94a3 !important; margin: 2px 0 7px !important;
@@ -9422,7 +9941,7 @@ body.sam-active .hotbar-btn:hover {
    a 320px phone it was two thirds of the filter row on its own. Cleared here so
    the face falls back to fitting its longest option, ~140px. The floor is re-read
    on resize, so this is live rather than whatever width the page loaded at. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #notifDropdown .hub-select-wrap select { min-width: 0; }
 }
 #notifDropdown .hub-select-wrap select:focus { outline: none; border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(90,141,59,.16); }
@@ -10782,7 +11301,7 @@ body.sam-active .hotbar-btn:hover {
 .lbs-nm { font-size: 12.5px; font-weight: 800; color: var(--slate-charcoal); flex: 1; min-width: 0; }
 .lbs-you { color: #178048; font-size: 9px; font-weight: 800; }
 .lbs-val { font-size: 12.5px; font-weight: 850; color: var(--slate-charcoal); text-align: right; font-variant-numeric: tabular-nums; flex: none; }
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .ew-perf-body { grid-template-columns: 1fr; }
     .ew-standings { border-left: none; border-top: 1px solid #eef2f6; }
 }
@@ -11499,7 +12018,7 @@ body.sam-active .hotbar-btn:hover {
    them was the alternative and the wrong one: the comparison is the thing that was
    asked for, and it is the projection that already has a second home in the table
    below. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .lv-fc-strip .bd-tile-row { display: block; }
     .lv-fc-strip .bd-tile-cmp { margin: 6px 0 0; gap: 1px; }
     .lv-fc-strip .bd-cmp { justify-content: start; }
@@ -12411,7 +12930,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     .lv-sound.blocked::after { animation: none; }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* The store name is the first thing to go: the code identifies the row and the
        numbers are the point. */
     .lv-store-nm, .lv-of { display: none; }
@@ -15368,6 +15887,11 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .dmx-lu-hit { color: #15803d; }
 .dmx-lu-miss { color: #b91c1c; }
 .dmx-lu-none { color: #cbd5e1; }
+/* A week whose goal nobody set, so it was graded against one carried in from an
+   earlier week. The asterisk rather than a colour change: the hit/miss colour is
+   the verdict and has to stay readable as one — this marks what the verdict was
+   reached against. The tooltip on the column carries the sentence. */
+.dmx-lu-astk { font-style: normal; font-size: 10px; vertical-align: 3px; opacity: .65; margin-left: 1px; }
 .dmx-lu-track > i.dmx-lu-hit { background: #15803d; }
 .dmx-lu-track > i.dmx-lu-miss { background: #c94f4f; }
 .dmx-lu-track > i.dmx-lu-none { background: #eef2f6; }
@@ -15600,7 +16124,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .dcc-clear svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .dcc-empty { padding: 50px 20px; text-align: center; font-size: 13px; font-weight: 650; color: #8a94a3; }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .dcc-grid { grid-template-columns: 1fr; }
     .dcc-g4 { grid-template-columns: 1fr 1fr; }
     .dcc-cat { grid-template-columns: 1fr; gap: 2px; }
@@ -15881,7 +16405,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 }
 
 /* Phones and tablets: the box takes the screen. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .jump-scrim { padding: 8px; align-items: stretch; }
     .jump-box { max-height: none; height: 100%; max-width: none; }
 }
@@ -16828,6 +17352,28 @@ input[type="date"].exp-input { height: 36px; padding-top: 0; padding-bottom: 0; 
 }
 .exp-btn-sm.ghost:hover { background: #e2e8f0; box-shadow: none; }
 
+/* Email Report, Add Trip and Add Expense are .btn-primary for their COLOUR, and
+   were taking its size with it: 12px/24px against a 13px uppercase font, which
+   is a full-page primary action. Neither of them is one. Email Report sits in the
+   control row beside Save and Manage — .exp-btn-sm, 32px — and Add Trip / Add
+   Expense sit at the end of the add-row beside .exp-input fields. Both ended up
+   the tallest thing in their row by 6-8px, which is what reads as "that button is
+   too big" (Ethan, 2026-09-19: "make email report and add trip button the same
+   size as the other green buttons on there").
+
+   Sized here rather than by swapping the class in the markup, because both carry
+   an arrow icon and need .btn-primary's inline-flex + gap to lay it out. This
+   takes the geometry and leaves the colour, the icon and the hover alone.
+
+   Declared after .exp-btn-sm so it lands after .btn-primary in source order —
+   both are (0,1,0), so position is the only thing separating them. */
+.exp-btn-mail, .exp-add-btn {
+    font-size: 12px;
+    padding: 7px 16px;
+    line-height: 18px;
+    min-height: 32px;
+}
+
 .exp-msg { font-size: 11px; font-weight: 700; }
 .exp-msg.ok  { color: var(--sage-deep); }
 .exp-msg.bad { color: #b91c1c; }
@@ -16925,51 +17471,77 @@ input[type="date"].exp-input { height: 36px; padding-top: 0; padding-bottom: 0; 
 }
 
 /* =========================================================
-   THE SHOP-FLOOR BOARD  (tv.html, Store role)
-   One card on a wall-mounted TV. Everything here is chrome —
-   the dashboard itself is the manager's, unmodified, so that
-   the board cannot drift away from what the team is looking
-   at on their own screens.
+   THE SHOP-FLOOR BOARD used to be a page, and had a stylesheet
+   here: .tv-body, .tv-main, .tv-card and a zoom knob for reading
+   it across the room. All of it is gone with the page. The board
+   is the Command Center's Live Dashboard on the QuickPortal now,
+   styled as that card is styled, which is what the original
+   comment said it wanted anyway — "the dashboard itself is the
+   manager's, unmodified, so that the board cannot drift away
+   from what the team is looking at on their own screens." The
+   far-wall knob it lost is the full-screen button, which every
+   copy of that card already has.
    ========================================================= */
-/* body is display:flex site-wide for the sidebar shell; there is no sidebar
-   here, so the nav and the card stack instead of sitting side by side. */
-body.tv-body { display: block; background: #eef1f5; }
-/* The nav is position:fixed at 64px. Nothing else on the page reserves that
-   space — on the other shells the sidebar layout does it. */
-.tv-main { padding: 84px 20px 20px; }
 
-/* No rules for the bar itself, deliberately. It uses the site's own .nav-left /
-   .nav-right structure, so the wordmark sits where it sits on every other page
-   and the greeting stack is pushed right by the standard margin-left:auto. The
-   board differs from the other shells by what its header OMITS, not by how the
-   header is laid out — an override here would be a second nav to keep in step. */
+/* =========================================================
+   THE PICTURE-STATION iPAD'S CHROME — 2026-09-20
+   =========================================================
+   operations.html is written for a person: four nav links, a tools button and a
+   row of action buttons. A board is not a person, and STORE_BOARD_FEATURES (in
+   speeks.js) only reaches surfaces that carry a data-feature. The nav links, the
+   Idea button, Quick Messages, Hotkeys and the Calendar carry none — not by
+   oversight, but because until this round there was no role that could load the
+   page and shouldn't see them.
 
-/* Same white card the widgets use, sized to the screen rather than to a column.
-   No title, no tabs, no collapse control: there is one thing on this page and
-   naming it would only take room from it. */
-.tv-card {
-    background: #fff;
-    border: 1px solid #e6ebf1;
-    border-radius: 16px;
-    padding: 18px 22px 22px;
-    box-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 8px 24px rgba(16, 24, 40, .05);
-    max-width: 1600px;
-    margin: 0 auto;
-}
-/* The strip is a plain grid in the widgets, bordered by the card around it.
-   Standing alone at the top of this card it needs its own edge, the same one the
-   district card's strip has. */
-.tv-card .lv-strip {
-    border: 1px solid #e6ebf1; border-radius: 13px; overflow: hidden;
-}
+   A STYLESHEET, not inline styles, which is the opposite of how the role sweep
+   works and is the point: the sweep writes an important display onto the element
+   itself and cannot take it back, so a second writer in the same shape would have
+   to remember every element it had ever touched. Here one body class is set or
+   cleared and every rule below simply stops applying.
 
-/* A TV is read from across the room, not from a desk. This is the ONE knob for
-   that: everything on the page scales with it, because the card's contents are
-   the manager's dashboard and must not be restyled piecemeal.
-   Left at 1 deliberately — "exactly what the manager one looks like" was the
-   ask, and a board that disagrees with the screen in the office is worse than a
-   small one. Raise it here if the far wall needs it. */
-.tv-card { zoom: 1; }
+   That only holds because nothing the sweep writes inline contradicts this
+   block: the tools button, the settings cog and the Workspace link are already
+   hidden from this role by their own role classes, and the Operations link is
+   set inline to the same flex asked for below. Checked, not assumed —
+   scripts/store-board-check.js measures the computed value of every one.
+   ========================================================= */
+body.is-store-board .nav-bar a.nav-link,
+body.is-store-board .nav-right .action-btn,
+body.is-store-board #toolsNavBtn,
+body.is-store-board .msm-store-switch,
+body.is-store-board #dailyMessageBubble,
+body.is-store-board #claimAlertBubble,
+/* ...and the two blocks on the QuickPortal that carry no data-feature either.
+   .ew-perf is "The Company / Performance" — five stores' conversion figures
+   side by side, which is a league table and not something to leave on a screen
+   a customer is standing in front of. It has no switch because it has never
+   needed one: every role that could reach the page was meant to see it.
+   .hotbars-stack is only a container, but an empty flex box still takes its gap.
+
+   This list is the part of the board that a stylesheet has to carry, so it is
+   the part that can go stale. store-board-check walks .main-content's children
+   and fails on any visible block it was not told about, which is what turns
+   "we remembered these two" into "there are only two". */
+body.is-store-board .ew-perf,
+body.is-store-board .hotbars-stack,
+/* ...and the board card's whole tab bar. Ethan, 2026-09-20, on a screenshot of
+   the card: "This should be what the quick portal looks like for store accounts,
+   but without the summary part." The part labelled Summary is #cc-collapse, and
+   on a board it is worse than clutter — it is a trap. A store account has one
+   Command Center tab, so _ccSyncLoneTab has already hidden the segment it would
+   switch back with; pressing Summary would collapse the board to a line that
+   .cc-expanded hides anyway, leaving a card with nothing in it and no control to
+   bring it back. The bar holds only that button and an audit action belonging to
+   a tab this role cannot see, so the bar goes rather than the button. */
+body.is-store-board .cc-tabbar { display: none !important; }
+
+/* Two tabs stay, and they are the two ordinary ones: QuickPortal, which is where
+   the board card lives, and Operations, which is the picture station. There is
+   no bespoke third link and nothing is renamed — this role gets a smaller copy
+   of the site rather than a different one. (0,4,1) against the (0,3,1) above,
+   so this is specificity and not source order doing the work. */
+body.is-store-board .nav-bar a.nav-link[href="index.html"],
+body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex !important; }
 
 /* ── Floater away chip (2026-08-10) ────────────────────────────────────────
    Shown in place of a floater's role dots when another store in their market
@@ -17005,6 +17577,12 @@ body.tv-body { display: block; background: #eef1f5; }
     display: block; margin: 3px auto 0; width: fit-content;
     color: #b45309; background: #fdf3e1;
 }
+/* "rebuilt" is a different KIND of caveat from the amber roles warning: that one
+   says the store's own data is thin, this one says our figures for the week are
+   a reconstruction. Slate, not amber, so a manager doesn't read it as a second
+   thing the store did wrong. */
+.dmx-tbl-c td.dmx-cl .dmx-role-est { color: #647082; background: #eef1f5; }
+.dmx-tr-est .dmx-num { opacity: .88; }
 
 /* Ruled to match the Live Dashboard table (.lv-tbl), which is the house style
    for a figures table on this site — SAME token everywhere, 1px #e6ebf1, used for
@@ -18472,7 +19050,7 @@ body.tv-body { display: block; background: #eef1f5; }
 .lt-trim-v { color: #a3352c; font-weight: 600; }
 .lt-trim-v s { text-decoration-thickness: 2px; margin-right: 6px; }
 .lt-trim-why { color: #64748b; font-size: 12px; }
-@media (max-width: 900px) { .lt-trim-why { font-size: 11px; } }
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) { .lt-trim-why { font-size: 11px; } }
 .lt-nosug { font-size: 12px; font-weight: 700; color: #b7791f; }
 /* The words the suggestion ADDS or CHANGES. A word-level mark, so the reviewer
    can see at a glance whether the new words are true of the item in their hand. */
@@ -19007,7 +19585,7 @@ body.tv-body { display: block; background: #eef1f5; }
    the close-button standard was written for. Higher specificity than a bare
    `button`, so source order does not matter. The two ACTION buttons are left
    alone: 44px is exactly what they want on a phone. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .lt-ask-close { min-height: 30px; }
 }
 
@@ -19275,6 +19853,66 @@ select.dd-native {
 /* A dropdown is a control, not prose: click-dragging across the face or an
    option used to paint a text selection over it, which is the desktop half of
    "why does this highlight when I click it" (user's report, 20 Aug). */
+/* A FACE STANDING IN A ROW MATCHES THE ROW. Ethan, 2026-09-20, on the Submit
+   Scores tool: "can you make the dropdown bubbles the same size as the text boxes
+   next to it ... I mean height".
+
+   The face is a fixed 34px -- the house dropdown height, set at zero specificity
+   in the :where() above and restated for tool modals in the compact layer, where
+   it was deliberately standardised so every picker in every tool came out the
+   same (20 Aug: "standardize this with the recycle tool"). That standardises
+   faces against OTHER FACES, which is right, and says nothing about the text
+   input sitting beside one. In the scorecard they share a flex row: measured, the
+   date field is 38.0px on a tablet and 42.8px on a desktop against the face's
+   32.3px both times -- so this was never a tablet bug, it was just easier to see
+   on one.
+
+   NO NUMBER HERE, because there are two of them and they are not ours: the
+   neighbour sizes itself from its own padding and type, and both change with the
+   breakpoint (40px compact, 45px desktop). The .dd-host is ALREADY the right
+   height -- it is a block-level flex item, so the row stretches it -- and only
+   the face inside it was short. Making the host a flex container lets the face
+   stretch to it, so the face tracks its neighbour at every width with nothing to
+   keep in step by hand.
+
+   NOT height: 100%, which was the first attempt and does nothing: a percentage
+   height needs a definite containing block, and a host stretched by its flex
+   parent does not give one here -- it resolves to auto and the 34px min-height
+   carries it, which is indistinguishable from the rule never applying. Measured,
+   not assumed. align-items defaults to stretch, so the flex host needs no second
+   declaration to do it.
+
+   SCOPED BY .dd-host-lg, which _ddEnhance adds when the <select> it replaced
+   carried .form-input-lg -- the site saying "this is a full-size form field",
+   which is the only case where matching a neighbour is wanted; a bare picker
+   keeps its 34px. On the HOST rather than read off the face, because the host is
+   the element that has to become a flex container, and CSS cannot select a
+   parent by its child's class without :has(), which these iPads may predate.
+
+   Where such a host is NOT stretched by a row, its height is still its content,
+   so the face keeps 34px and nothing moves that was not already sharing a row.
+   .dd-list is display:none closed and position:fixed open, so it is out of flow
+   either way and the host becoming a flex container cannot disturb it. */
+/* THE MARGIN MOVES TO THE HOST. The face COPIES the select's classes, and
+   .form-input-lg carries margin-top: 6px -- spacing meant to separate a field
+   from its label, which ended up INSIDE a wrapper that is itself the thing in
+   flow. Stretch subtracts margins, so that 6px was the entire remaining gap:
+   a 40px host gave a 34px face on compact -- exactly the number it looked stuck
+   at -- and 47 gave 41 on a desktop.
+
+   Zeroing it on the face alone would have been wrong everywhere else. There are
+   100 .form-input-lg selects on this site and only 5 override that margin, so
+   95 of them are using it to sit under a label, and it is the FACE that has been
+   carrying it (the host declares none). Taking it away would have tightened all
+   95 by 6px to fix one row in one tool.
+
+   So the host takes it, which is where it belonged: the host replaces the select
+   in the flow, the face only fills the host. _ddEnhance carries across an inline
+   margin-top from the select so the handful that say margin-top: 0 -- the
+   scorecard row among them -- still mean it. */
+.dd-host-lg { display: flex; margin-top: 6px; }
+.dd-host-lg > .dd-btn { flex: 1 1 auto; height: auto; margin: 0; }
+
 .dd-btn, .dd-opt, .dd-cur { -webkit-user-select: none; user-select: none; }
 /* The label reads the button's own type, whichever of the two above won. */
 .dd-cur { font: inherit; }
@@ -19381,10 +20019,39 @@ select.dd-native {
    !important arms race with the older per-component media queries.
 
    Two breakpoints only. Do not invent a third:
-     <= 900px  "compact"  — nav becomes a bottom tab bar, side panels become
+     "compact"           — nav becomes a bottom tab bar, side panels become
                             full-height sheets, multi-column grids drop to one.
      <= 640px  "phone"    — modals become bottom sheets, wide tables stack or
                             scroll with an affordance, curation hides.
+
+   TABLETS (2026-09-17). "Compact" is no longer a width alone. It is:
+
+       @media (max-width: 900px), (max-width: 1366px) and (pointer: coarse)
+
+   written out in full on all 41 compact blocks in this file, the older
+   per-component ones above included. Copy that line verbatim onto a new one --
+   a bare `max-width: 900px` is now a bug, not a shorthand.
+
+   Why a pointer test and not just a wider number. A portrait iPad is 768-834px
+   and was always inside the band; the gap was LANDSCAPE, 1133-1366px, which got
+   the full desktop build on a touch screen. Covering that by width alone means
+   `max-width: 1366px`, and 1366x768 is one of the commonest cheap laptop panels
+   there is -- every store machine at that size would have been handed the phone
+   build with its hotbar links and tools cut out of it. `pointer: coarse` matches
+   the PRIMARY input, so an iPad reads coarse even with a Magic Keyboard
+   attached, while a Windows touchscreen laptop with a trackpad reads fine and is
+   left alone. That is the discriminator we want, and it is the one the JS
+   already uses in two other places.
+
+   The two halves are an OR, not a range: below 900px the pointer is irrelevant,
+   so a narrow desktop window still gets compact exactly as it did before. This
+   change adds devices to the band and takes none away.
+
+   Tablets currently run the phone's curation verbatim -- every data-mobile="hide"
+   surface is cut from them too. That was the deliberate first step (Ethan,
+   2026-09-17): port what the phone keeps, then decide what a tablet earns back.
+   The lever for earning one back is a tablet-only exception HERE, not deleting
+   the data-mobile attribute -- that would put the surface back on the phone too.
 
    !important is used deliberately in three places only: rules that must beat
    .top-nav base padding, rules that must beat per-modal ID selectors, and the
@@ -19395,17 +20062,75 @@ select.dd-native {
    The site already tags 200+ elements with data-feature for the Feature Access
    tool. Mobile curation rides the same markup rather than inventing a parallel
    system: tag anything desktop-only with data-mobile="hide" and it disappears
-   below 900px. .m-only / .m-hide are the ad-hoc escape hatches. */
+   on every compact device -- phone AND tablet, see the band above. .m-only /
+   .m-hide are the ad-hoc escape hatches. */
 .m-only { display: none; }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     [data-mobile="hide"], .m-hide { display: none !important; }
     .m-only { display: revert; }
     .m-only.m-flex { display: flex; }
 }
 
+/* --- TABLET EXCEPTION: surfaces a tablet earns back -------------------------
+   THE LEVER the curation note at the top of this layer promised. A surface cut
+   from the phone with data-mobile="hide" comes back on a tablet by ALSO carrying
+   data-tablet="show" — and comes back on the tablet ONLY. Deleting the
+   data-mobile attribute would put it back on a 390px phone too, which is the one
+   thing the first pass was careful not to do.
+
+   display: flex, not revert. `revert` goes to the UA stylesheet — `block` for a
+   div — not to whatever the author's own rules said, which is how .m-only ended
+   up needing an .m-flex escape hatch a few hundred lines up. Every surface that
+   carries data-mobile="hide" on this site is a flex box: .action-btn is
+   `display: flex`, .sam-mini is `display: flex`, and .dynamic-module-flex is
+   written as flex by applyRoleBasedUI. One honest value beats a keyword that is
+   right by accident. If a block-level surface ever needs the opt-in, give it its
+   own value here rather than making this rule guess.
+
+   (0,2,0) against the cut's (0,1,0), so it wins on specificity and does not
+   depend on sitting later in the file — but it sits later anyway.
+
+   The JS half is in applyRoleBasedUI: a role-gated module gets an inline
+   `display: <type> !important`, which outranks every stylesheet rule including
+   this one, so the sweep has to know about the opt-in too. Neither half works
+   alone: this rule covers the plain elements (the two nav buttons), the sweep
+   covers the role-gated ones (the panels and their action-menu rows). */
+@media (min-width: 701px) and (min-height: 540px)
+   and (max-width: 1366px) and (pointer: coarse) {
+    [data-mobile="hide"][data-tablet="show"] { display: flex !important; }
+
+    /* ...and the surfaces for which flex is the wrong answer. The Command Center
+       boards (eBay, Scorecard, Store Breakdown — Ethan, 2026-09-19) brought back
+       four shapes at once, and only the tab button is a flex box:
+
+         .cc-sum    block  — a key over a value. As a flex row the two would sit
+                             side by side, which is a different cell entirely.
+         .cc-strip  grid   — .s3 / .s4 declare the column counts; flex throws
+                             them away and the three tiles run together.
+         .cc-panel  block  — its contents are ordinary flow.
+
+       Each value is the one the element computes to on the desktop, measured
+       rather than read off a rule, and goals-layout-check re-measures both sides
+       so this cannot drift away from what the board actually uses.
+       (0,3,0) over the blanket rule's (0,2,0). */
+    .cc-sum[data-mobile="hide"][data-tablet="show"]   { display: block !important; }
+    .cc-strip[data-mobile="hide"][data-tablet="show"] { display: grid  !important; }
+    .cc-panel[data-mobile="hide"][data-tablet="show"] { display: block !important; }
+
+    /* The district board is the exception to the exception: its panels are NOT
+       stacked in one grid cell like the store board's, because its tabs are
+       wildly different heights (see #dcWidget .cc-panel:not(.cc-active)). There,
+       display IS the switch — so a flat restore would pin all four panels open
+       on top of each other. The gate is repeated here because the cut it has to
+       clear is !important and that rule is not. */
+    #dcWidget .cc-panel[data-mobile="hide"][data-tablet="show"]:not(.cc-active) {
+        display: none !important;
+    }
+}
+
 /* --- Base hardening --------------------------------------------------------- */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     html {
         -webkit-text-size-adjust: 100%;   /* iOS Safari otherwise inflates text in landscape */
         overflow-x: hidden;
@@ -19422,7 +20147,7 @@ select.dd-native {
 }
 
 /* --- Nav: top bar slims down, links move to a bottom tab bar ----------------- */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .top-nav {
         padding: 8px 12px !important;
         min-height: 52px;
@@ -19618,26 +20343,72 @@ select.dd-native {
    to --panel-top, the measured nav height, which is what the desktop panels
    already hang from; the ~64px that leaves is the same strip the bottom-sheet
    modals leave at 92dvh, so the two read as the same kind of thing. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .tools-side-panel,
     .goals-side-panel,
     .checklist-side-panel {
         width: 100%;
         max-width: 100%;
-        /* The 10px is the strip the sheet modals leave: they are 92dvh off the
-           bottom, which on a 780px phone puts their top ~10px below a 52px nav.
-           Matching it by hand keeps the panels glued to the nav — a percentage
-           would drift away from it as the screen got taller (user's call, 19 Aug:
-           "the same spacing ... like the submit an idea tool"). */
-        top: calc(var(--panel-top, 64px) + 10px);
-        height: calc(100dvh - var(--panel-top, 64px) - 10px);
+        /* FLUSH TO THE NAV, no gap (Ethan, 2026-09-19: "it still has gaps in
+           between the top and bottom black nav bar").
+
+           This USED to be `+ 10px`, to leave the same strip the sheet modals
+           leave at 92dvh — the 19 Aug call, "the same spacing ... like the submit
+           an idea tool". That reading was right while a panel was a sheet
+           floating over the page. It stopped being right once the panel's job
+           became filling the space between two fixed bars: a strip of page
+           showing through above and below does not read as breathing room, it
+           reads as the panel having failed to reach. Both gaps are gone; the
+           panel now starts where the header ends and stops where the tab bar
+           begins.
+
+           The corner radii stay. Tucked under the nav with rounded shoulders is
+           still the house look, and the slivers of page in the curves are what
+           every sheet on this site already shows. */
+        top: var(--panel-top, 64px);
+        /* BETWEEN THE TWO BARS, and touching both (Ethan, 2026-09-17, then
+           2026-09-19). This used to run to the foot of the viewport at z-index
+           320, which put it over the bottom tab bar — so while any panel was
+           open, Quick Portal and Processes were painted over and untappable, on
+           a bar that is the only navigation the compact build has. A panel
+           should not take the nav away any more than it takes the header away.
+
+           BOTH EDGES ARE MEASURED, which is what makes this right on any iPad
+           rather than on the one I counted pixels against. --panel-top is the
+           header's real height and --tabbar-h is the tab bar's, both written by
+           _syncLayout() and both re-read by a ResizeObserver, so the panel still
+           meets both bars exactly when the bar is a different size than I
+           assumed: a larger Dynamic Type setting, a label wrapping to two lines,
+           a fourth link in the bar, a home-indicator inset the emulator did not
+           report (Ethan, 2026-09-19: "no matter the size of the iPad").
+
+           Nothing is subtracted beyond the two bars. The 10px that used to sit
+           at each end is gone — see the note on `top` above for why breathing
+           room stopped being the right reading once the panel's job was to fill
+           the space between two fixed bars.
+
+           ⚠️ NO env(safe-area-inset-bottom) HERE, and that is not an oversight.
+           The bar pads its own foot with calc(6px + env(safe-area-inset-bottom)),
+           a border box includes padding, so --tabbar-h ALREADY contains the
+           inset. Subtracting it again would take that strip off the panel twice
+           on every notched device. env() survives only inside the fallback,
+           which is the one branch with no measurement to have included it —
+           61px being the bar at rest (6 + a 48px tap target + 6 + a 1px border).
+           That fallback is what a browser with no JS run yet gets, and what
+           .main-content's own 78px clearance was derived from. */
+        height: calc(100dvh - var(--panel-top, 64px)
+                     - var(--tabbar-h, calc(61px + env(safe-area-inset-bottom, 0px))));
         /* Rounded across the TOP, like the sheet modals — the desktop panels round
            their bottom-left corner because they hang under a nav they are narrower
            than, and at full width that corner is off-screen. */
         border-radius: 18px 18px 0 0;
         border-left: none;
-        z-index: 320;                 /* above the tab bar */
-        padding-bottom: env(safe-area-inset-bottom, 0px);
+        /* Still above page content and the FAB; no longer needs to beat the tab
+           bar, because it no longer reaches it. */
+        z-index: 320;
+        /* No safe-area padding any more. It was here because the panel ended at
+           the foot of the screen; the tab bar below it now owns that strip, and
+           leaving it would only add dead space inside the panel. */
     }
     .tools-panel-header { padding: 13px 14px; }
     .tools-panel-body { padding: 10px 12px 28px; }
@@ -19703,7 +20474,13 @@ select.dd-native {
        explicit height is the fix, not trimming the padding around it -- the same
        lesson as .lv-mode in round 7 and .modal-close-btn in round 9. */
     .daily-bubble-close,
-    .award-video-close-btn {
+    .award-video-close-btn,
+    /* ...and the audit photo lightbox, which drew a 38px circle around a TEXT ✕
+       from inline styles — the one shape this whole standard exists to stop
+       (Ethan, 2026-09-19, on a tablet: "fix the way the x in the top right looks
+       to match other x buttons"). It emits the same SVG as the other 220 now;
+       this gives it the same box. */
+    .au-lb-close {
         width: 30px !important; height: 30px !important;
         min-width: 30px !important; min-height: 30px !important;
         padding: 0;
@@ -19713,7 +20490,7 @@ select.dd-native {
         align-items: center;
         justify-content: center;
     }
-    .daily-bubble-close svg, .award-video-close-btn svg { width: 15px; height: 15px; display: block; }
+    .daily-bubble-close svg, .award-video-close-btn svg, .au-lb-close svg { width: 15px; height: 15px; display: block; }
 
     /* The Tools search box. The input keeps 16px text — anything smaller and iOS
        Safari zooms the viewport on focus and never zooms back — so the box is
@@ -19771,6 +20548,87 @@ select.dd-native {
     }
 }
 
+/* --- TABLET EXCEPTION: the panels go back to being drawers -------------------
+   THE TABLET TIER, and the shape every later tablet-only block should copy:
+
+       (min-width: 701px) and (min-height: 540px)
+       and (max-width: 1366px) and (pointer: coarse)
+
+   placed AFTER the compact block it overrides, so it wins on source order with
+   no !important.
+
+   BOTH DIMENSIONS, not width alone, and that is the whole trick. This tier used
+   to open at 901px, which sounded reasonable and was wrong on almost every iPad
+   there is: portrait is 744 (mini), 768 (the DevTools preset), 820 (10.9) and
+   834 (Air/Pro 11). Only the 12.9" clears 901 standing up. So the drawer existed
+   only in landscape — missing on every iPad held the way people hold an iPad
+   (Ethan, three times, 2026-09-17 to -19: "why on an iPad mini does it take up
+   the whole screen?").
+
+   A width floor alone cannot fix that, because dropping it to 701 would also
+   catch a PHONE in landscape: an iPhone 15 Pro Max is 932x430 on its side, wider
+   than an iPad Mini is tall. The short edge is what separates the two — a tablet
+   is large in BOTH directions, a phone never is. 540px sits in a wide empty gap:
+   phones in landscape top out around 430, tablets in landscape bottom out around
+   640 (an iPad mini's 744 less Safari's chrome). Neither is close to the line.
+
+   701 for the width, so a genuinely small slate still reads as a phone, and 1366
+   at the top because that is an iPad Pro 12.9 on its side — the largest tablet
+   that exists — while 1366x768 is one of the commonest cheap laptop panels
+   there is. pointer:coarse is what keeps those laptops out; see the band's own
+   banner near the top of this layer.
+
+   ── THE WIDTH IS A CLAMP, NOT A PERCENTAGE ──────────────────────────────────
+   Full-bleed is a PHONE answer. At 390px a drawer would leave nothing behind it
+   worth seeing, so the sheet takes the screen. On a tablet the same rule painted
+   a checklist of seven short lines across the whole display with 700px of white
+   beside it while hiding the page you opened it from.
+
+   But "a third" is not one answer either, because this tier now spans 744px to
+   1366px — nearly double. A third of an iPad Mini is 256px, which wraps
+   "Check For Everything Else Category Items" onto three lines; half of an iPad
+   Pro 12.9 is 683px, which is not a drawer, it is a second page.
+
+   clamp(380px, 36%, 450px) says the useful thing instead: the panel is about as
+   wide as it needs to be, and the FRACTION falls out of the screen.
+
+       768  ->  380px   (49% — half a Mini, which is what was asked for)
+       820  ->  380px   (46%)
+       1024 ->  380px   (37%)
+       1133 ->  408px   (36%)
+       1180 ->  425px   (36%)
+       1366 ->  450px   (33% — a third of a Pro)
+
+   380 is the floor because below ~330 the long checklist rows wrap to three
+   lines and 380 keeps a margin on that; 450 is the ceiling because past it the
+   thing stops reading as a drawer. Both ends sit either side of the 420px the
+   Checklist and Goals panels use on the desktop — so a tablet gets the panel
+   that was designed, at every size, rather than a stretched phone sheet at one
+   size and a squeezed one at another.
+
+   Rounded on the LEFT here, not the top. The compact block rounds 18px across
+   the top because at full width the left corners are off-screen; at a third they
+   are the only two corners anyone can see, and the right-hand pair are against
+   the screen edge. The border-left comes back for the same reason — the desktop
+   rule drops it (border-right: none, border-left present) and the compact block
+   takes it away because a full-bleed sheet has no left edge to draw.
+
+   The flush top and bottom, the height, z-index and overscroll are all inherited
+   from the compact block above and deliberately not repeated. This block changes
+   the panel's WIDTH and the edges that width creates, nothing else. */
+@media (min-width: 701px) and (min-height: 540px)
+   and (max-width: 1366px) and (pointer: coarse) {
+    .tools-side-panel,
+    .goals-side-panel,
+    .checklist-side-panel {
+        width: clamp(380px, 36%, 450px);
+        min-width: 0;                 /* the clamp is the floor now */
+        max-width: none;              /* ...and the ceiling */
+        border-radius: 18px 0 0 18px;
+        border-left: 1px solid #e2e8f0;
+    }
+}
+
 /* --- Stats & Awards header on a phone -----------------------------------------
    The blurb under the title is curated away below 900px, and what it left behind
    was its spacing: the h2 keeps an 8px bottom margin meant to separate it from a
@@ -19781,7 +20639,7 @@ select.dd-native {
    Scoped by the .stats-header class rather than to .page-header at large: the
    other three pages still show their blurb on a phone, and the 8px is doing its
    job there. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .page-header.stats-header { margin-bottom: 16px; }
     .page-header.stats-header h2 { margin-bottom: 0; }
 }
@@ -19800,7 +20658,7 @@ select.dd-native {
    ..., which is (0,3,x)) rather than reaching for !important — a plain
    .modal-menu .tool-head loses to it however late in the file it sits, which is
    the first version of this block and why it half-worked. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .modal-menu.manage-menu > .modal-header.tool-head { padding: 12px 14px; }
     .tool-head .tool-head-main { gap: 10px; }
     .tool-head-ico { width: 34px; height: 34px; border-radius: 10px; }
@@ -19864,7 +20722,11 @@ select.dd-native {
        full width of a sheet, so 38 is still an easy target. */
     .modal-menu.manage-menu > .manage-footer { padding: 10px 14px; }
     .modal-menu.manage-menu .btn-primary,
-    .modal-menu.manage-menu .btn-secondary {
+    .modal-menu.manage-menu .btn-secondary,
+    /* .btn-ghost was simply left out of this list — same family, same footers,
+       same job, and it sat at the blanket 44px while the two buttons beside it
+       came down to 38 (measured across index.html's real markup, 2026-09-19). */
+    .modal-menu.manage-menu .btn-ghost {
         min-height: 38px; font-size: 12.5px; padding: 8px 14px;
     }
     .manage-footer > button, .modal-footer > button {
@@ -19964,7 +20826,7 @@ select.dd-native {
     #emailRecipientsBody .er-count { font-size: 10px; }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* Recycle Inventory's My Requests list. One record per row with a paragraph
        and a note thread in it, so it stacks into cards rather than scrolling
        sideways — see .tbl-stack above; the data-labels come from renderMyRecycleTable.
@@ -19978,6 +20840,9 @@ select.dd-native {
         display: block;
         margin-bottom: 5px;
     }
+    /* ...and on a tablet, where the card is a grid, it takes the whole row of it.
+       A sentence has no business in a 150px column beside QTY. */
+    .recycle-tbl td[data-label="Description"] { grid-column: 1 / -1; }
     .recycle-tbl .site-note, .recycle-tbl .site-note-reply { text-align: left; }
     /* The reply/delete cell has no label, so space-between had nothing to push
        against and threw the two icon buttons to opposite edges of the card. They
@@ -20003,7 +20868,7 @@ select.dd-native {
    The DM and the manager open the SAME modal (the edge function decides the
    powers from the caller's PIN, see the Tools panel's two rows), so there is no
    per-role block here: sizing the tool sizes both. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #expensesModal .exp-controls { gap: 10px; padding-bottom: 11px; margin-bottom: 11px; }
     #expensesModal .exp-ctl { font-size: 10px; gap: 6px; }
     /* MONTH and PERSON share a line. Their pickers are sized to their longest
@@ -20022,9 +20887,6 @@ select.dd-native {
        phone the button is full width and the spacer only forces a line break. */
     #expensesModal .exp-controls-sp { display: none; }
     #expensesModal .exp-ctl-ro b { font-size: 12px; }
-    /* It goes full width at 700px already (see the block by .exp-view-foot); this
-       only takes the slab height off it. */
-    #expensesModal .exp-btn-mail { font-size: 12px; padding: 8px 14px; min-height: 38px; }
 
     #expensesModal .exp-strip { gap: 8px; margin-bottom: 12px; }
     #expensesModal .exp-cell { padding: 9px 11px; flex: 1 1 130px; }
@@ -20058,10 +20920,38 @@ select.dd-native {
        rest of the mobile site" was asking about (user, 20 Aug). */
     #expensesModal .exp-input { font-size: 12.5px; padding: 6px 9px; min-height: 34px; }
     #expensesModal input[type="date"].exp-input { height: 34px; }
+    /* iOS SAFARI DRAWS A DATE INPUT ITS OWN WAY, and three things followed from
+       it on both the Mileage and Expenses tabs (user, 2026-09-16):
+         - it has an intrinsic minimum width, so width:100% was ignored and the
+           box ran past the right edge of the card;
+         - it centres its value in bold capitals, so "SEP 16, 2026" sat in the
+           middle of a box whose neighbours are left-aligned;
+         - and it grows to fit that value rather than to the height above.
+       appearance:none hands the box back to this stylesheet (border, height,
+       width); min-width:0 is what actually lets it shrink. The value is a
+       separate part of the control, so it has to be left-aligned on its own.
+       The picker still opens on tap — appearance only changes the drawing. */
+    #expensesModal input[type="date"].exp-input {
+        -webkit-appearance: none; appearance: none;
+        display: block; min-width: 0; max-width: 100%;
+        text-align: left; line-height: 32px;
+    }
+    #expensesModal input[type="date"].exp-input::-webkit-date-and-time-value {
+        text-align: left; margin: 0; line-height: 32px;
+    }
     /* 32px, and the padding written as 0 + line-height so the height is the height
        asked for. Six of these stack down the categories panel (Save + Delete on
-       every row) and three sit in the control row beside the rate field. */
-    #expensesModal .exp-btn-sm {
+       every row) and three sit in the control row beside the rate field.
+
+       Email Report and Add Trip / Add Expense join them here, not at the 38px the
+       footer actions use. 38 is the right size for a button that runs the full
+       width of a sheet and is the only thing you can press; these three sit IN a
+       row next to 32px controls and 34px fields, and at 38 each was the tallest
+       thing in its row (Ethan, 2026-09-19). Same rule, so they cannot drift apart
+       again. */
+    #expensesModal .exp-btn-sm,
+    #expensesModal .exp-btn-mail,
+    #expensesModal .exp-add-btn {
         font-size: 11.5px; padding: 0 12px; min-height: 32px; line-height: 1;
         border-radius: 9px;
     }
@@ -20123,7 +21013,7 @@ select.dd-native {
    and the eight chips share the width beneath it, with the CEO…MOCD head row
    kept in register above them. Nothing is hidden and no role is dropped —
    flex:1 1 0 divides whatever width there is, so it fits any phone. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* Five tabs at 11.5px need 437px and the strip has 352, so the fifth was
        clipped by the sheet edge. Three per row, wrapping — a tab you cannot see
        is a tab nobody presses.
@@ -20219,7 +21109,7 @@ select.dd-native {
 /* --- Manager Checklist admin on a phone ----------------------------------------
    The DM half of the checklist: add a required task, say which stores it lands
    on, then the list of what is already set (user's call, 20 Aug). */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* Required Task and Time Period are one control each side of a row, and they
        were two heights — the field at .form-input-lg's 38 and the dropdown face
        at the tools' 34. The field comes down to the dropdown rather than the
@@ -20253,7 +21143,7 @@ select.dd-native {
    The order flow came down with the rest of the tools; these are the two parts
    only a DM or the CEO ever sees — the Order / Manage Items switch at the top,
    and the catalog editor behind it (user's call, 20 Aug). */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* The switch sits OUTSIDE .manage-content, so it has never had the sheet's
        side padding — on a desktop modal that reads as a full-width segmented
        control, on a 390px sheet as two slabs jammed against the edges. Both
@@ -20290,7 +21180,7 @@ select.dd-native {
    tile, 150px money fields on rows with 12px of padding, and a closures form
    whose date box alone was 165px. Everything comes down to the sizes the other
    tools now sit at; nothing is restructured or hidden (user's call, 20 Aug). */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* The intro paragraph is inline-styled at 12.5px. */
     #gpGoalsModal .manage-content > p { font-size: 11px !important; margin-bottom: 11px !important; }
 
@@ -20363,7 +21253,7 @@ select.dd-native {
    The header loses its eyebrow and its blurb to data-mobile="hide", and the
    margins that were holding their places come off here, the same way the Stats
    header above does it. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .page-header.docs-header { margin-bottom: 14px; }
     .page-header.docs-header h2 { margin-bottom: 10px; }
 
@@ -20418,7 +21308,7 @@ select.dd-native {
    field-group spacing is set with inline style="margin-bottom:15px" in the
    template injectIdeaModal() writes, so those need !important; so does the
    content padding, which the airy block already sets that way. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #ideaModal > .modal-content { padding: 14px 16px 16px !important; }
     #ideaModal form > div { margin-bottom: 10px !important; }
     #ideaModal .idea-label { font-size: 10px; margin-bottom: 5px; }
@@ -20453,7 +21343,7 @@ select.dd-native {
 
    !important throughout, because the airy #listingGoalsModal block sets every one
    of these with !important; coming later in the file does not beat that. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #listingGoalsModal .district-kpi-header {
         padding: 10px 12px !important;
         margin-bottom: 12px !important;
@@ -20518,7 +21408,7 @@ select.dd-native {
    button. Sized against the surfaces already done in earlier rounds — the
    Checklist tab strip and the Tools search are the reference for the controls,
    the hub card for the copy. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* header */
     #notifDropdown .hub-head { padding: 12px 14px 0; }
     #notifDropdown .hub-title-wrap { gap: 9px; }
@@ -20599,7 +21489,8 @@ select.dd-native {
     .ann-doc-badge { width: 30px; height: 30px; border-radius: 7px; font-size: 8.5px; }
     .ann-doc-card-name { font-size: 12.5px; }
     .ann-doc-card-meta { font-size: 10.5px; margin-top: 2px; }
-    .ann-doc-dl-btn { padding: 6px 10px; font-size: 11px; border-radius: 7px; }
+    .ann-doc-dl-btn { padding: 6px 10px; font-size: 11px; border-radius: 8px; gap: 5px; }
+    .ann-doc-dl-btn svg { width: 12px; height: 12px; }
     .ann-doc-found { padding: 0 10px 8px; font-size: 10.5px; }
     .ann-doc-none { padding: 26px 16px; font-size: 12.5px; }
 
@@ -20742,20 +21633,6 @@ select.dd-native {
     .ann-docs-search input { min-height: 30px; }
 }
 
-/* Shown ONLY below 900px. There is no data-mobile="show" counterpart to the
-   hide attribute, and one class used once did not warrant inventing one. */
-.mobile-only-note { display: none; }
-@media (max-width: 900px) {
-    .mobile-only-note {
-        display: block;
-        margin: 0;
-        padding: 22px 16px;
-        text-align: center;
-        font-size: 13px;
-        font-weight: 650;
-        color: #7d8d85;
-    }
-}
 
 /* --- Modals become bottom sheets --------------------------------------------
    Individual modals set their own width (.manage-menu 1050px,
@@ -20851,16 +21728,17 @@ select.dd-native {
    such table needs a min-width floor AND a scrolling host, or it turns to soup
    on a phone. Phase 2 replaces these with .tbl-stack where a card list reads
    better; this is the floor that keeps them usable until then. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #mbBody, .ws-scroll, .weekly-kpi-scroll-area {
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
     }
     .mb-table { min-width: 760px; }
     .kb-table, .cb-table, .kpi-full-table { min-width: 640px; }
+
 }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .tbl-scroll,
     .kb-table-container, .kpi-scroll-area, .vw-scroll-area, .bd-scroll,
     .ws-scroll, .weekly-kpi-scroll-area {
@@ -20878,7 +21756,30 @@ select.dd-native {
     }
 }
 
-@media (max-width: 640px) {
+/* STACKED CARDS — the answer to "I don't want to scroll horizontally in any
+   tool" (Ethan, 2026-09-19), and it was already written. It just sat one tier
+   too narrow.
+
+   .tbl-stack turns a table into one card per record: the header row goes away
+   and each cell carries its own label from data-label. That is the only strategy
+   that never needs a sideways scroll, because a card is as wide as its container
+   and as tall as it needs to be.
+
+   It was gated at 640px — phone only. So an iPad at 768px got the TABLE form of a
+   ten-column list inside a ~908px modal, which cannot fit however you slice it:
+   Description collapsed to one word per line and the row actions were pushed off
+   the right-hand edge, where #recycleInvModal's own `overflow-x: hidden` clipped
+   them instead of scrolling to them — unreachable, with nothing to say so. Moving
+   the gate to the whole compact band is the entire fix.
+
+   Blast radius is exactly one table today: the Recycle Inventory My Requests
+   list is the only thing carrying .tbl-stack, and it already has its data-labels.
+   That is also the invitation — any other tool table that reads as a list of
+   records rather than a grid of comparisons should get .tbl-stack and
+   data-label on its cells, and it will stop scrolling sideways everywhere at
+   once. Keep the columns ONLY where the columns are the point (a KPI comparison
+   across five stores); those keep their min-width and the edge fade above. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* Stacked cards. Add data-label="Column Name" to each <td> to light this up. */
     .tbl-stack { min-width: 0 !important; display: block; }
     .tbl-stack thead { display: none; }
@@ -20911,17 +21812,93 @@ select.dd-native {
         text-align: left;
     }
     .tbl-stack td[data-label=""]::before { content: none; }
+}
 
-    /* Tables that keep their columns: drop the desktop min-widths to something a
-       phone can actually pan across rather than 1080px of dead grid. */
+/* --- TABLET EXCEPTION: a stacked card lays its fields out in a GRID -----------
+   The card above is a PHONE card. At 390px "UNIT COST ......... $5.00" is a label
+   and a value nearly touching, and space-between is exactly right. At 800px the
+   same rule puts 600px of nothing between them, nine times down the card, and the
+   record reads as a column of stranded pairs rather than as one thing (Ethan,
+   screenshot, 2026-09-19: "it looks weird like this. Very empty").
+
+   So on a tablet the card stops being a list of rows and becomes a grid of
+   fields: label ABOVE value, left aligned, as many per line as fit. Same markup,
+   same data-labels, no new classes — auto-fit does the arithmetic, so it holds
+   at 744px and at 1366px and at every width between without a second breakpoint.
+
+   minmax(150px, 1fr): 150 is the widest thing that has to sit on one line here
+   (a SKU like MO04-1018F-E7, and the Review dropdown's "Against Store" face).
+   A ~780px card fits five columns, a ~640px card fits four, and the eight short
+   fields of a recycle line land in two tidy rows either way.
+
+   Prose and the action buttons span the whole card. A description is a sentence,
+   not a field, and the reply/delete pair is the card's footer — neither belongs
+   in a column. [data-label=""] is the generic hook for that second case: a cell
+   with no label is not a field, whatever table it is in. */
+@media (min-width: 701px) and (min-height: 540px)
+   and (max-width: 1366px) and (pointer: coarse) {
+    .tbl-stack tr {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 2px 20px;
+        align-items: start;
+        padding: 13px 15px;
+    }
+    /* Block, not flex: the label goes above the value instead of being pushed to
+       the far side of the card. text-align comes back to the left with it. */
+    .tbl-stack td {
+        display: block;
+        text-align: left;
+        padding: 5px 0;
+        min-width: 0;                 /* a grid item's automatic minimum is its
+                                         content; without this a long SKU would
+                                         widen its own track and break the fit */
+    }
+    .tbl-stack td::before {
+        display: block;
+        margin-bottom: 3px;
+    }
+    .tbl-stack td[data-label=""] { grid-column: 1 / -1; }
+}
+
+/* Tables that KEEP their columns get a lower floor so a phone can pan across
+   them rather than 1080px of dead grid. Phone only, deliberately: a tablet has
+   the width to leave these at their desktop floors, and the 11px type below was
+   sized against a 390px screen — it would be needlessly small on an iPad. */
+@media (max-width: 640px) {
     .dc-tbl { min-width: 640px; }
     .dc-tbl-score { min-width: 700px; }
     .lv-tbl, .lv-tbl-buy { min-width: 720px; font-size: 11px; }
     .bd-tbl { min-width: 640px; }
 }
 
+/* ...and the one that has to fit outright, because a tablet can now open it.
+   Both district tables are `table-layout: fixed` with a colgroup, so a column is
+   whatever percentage it was given and CONTENT NEVER WIDENS IT — an over-long
+   header just spills out of the table, and .lv-tbl-scroll grows a sideways
+   scrollbar for 18px of one word. That is the shape of overflow Ethan ruled out
+   ("for any tool, I don't want to have to scroll horizontally"), and the fix is
+   the one .dc-tbl-score already asks for a few thousand lines up: let the header
+   wrap. That rule has been losing to `.lv-tbl th { white-space: nowrap }` ever
+   since — same specificity, later in the file — which is why it never took.
+   Said here so it only reaches the compact band: on the desktop these tables sit
+   at a 1080px floor with room for the longest key on one line, and quietly
+   rewrapping the district board there is not what was asked for. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    .dc-tbl th, .dc-tbl-score th {
+        white-space: normal; line-height: 1.3;
+        /* Wrapping is not enough on its own: a scorecard category column is 8.5%
+           of the table, which is 55px on an iPad mini, and "Merchandising" is one
+           word that does not fit on any line at 9.5px. break-word only breaks a
+           word that cannot fit as a whole, so the ordinary keys are untouched and
+           only the long ones give. Measured: without it the header spilled 9px
+           past a fixed column and the wrapper scrolled sideways for it. */
+        overflow-wrap: break-word;
+    }
+}
+
 /* --- Grids collapse ---------------------------------------------------------- */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .sam-board { grid-template-columns: 1fr; }
     /* .sam-board > .sam-card is height:300px so the feed column height-matches
        the rail beside it. Stacked in one column there is nothing to match, and
@@ -20977,7 +21954,7 @@ select.dd-native {
    table above it. Desktop is untouched by design — this is additive. */
 .lv-cards, .lv-cards-none, .lv-picks { display: none; }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* The one line the card list can still print: no payload for this store. */
     .lv-cards-none {
         display: block;
@@ -21071,12 +22048,12 @@ select.dd-native {
    every one of them is a wide grid and reflowing a wide grid onto 390px is how
    you get four columns of mush.
 
-   Hidden by their own strip classes, not by a blanket `.lv-strip`: the shop-floor
-   board in tv.html mounts into that same class, and a TV is not a phone even if
-   somebody sizes the window down. Same reason `.lv-tbl-scroll` is scoped to the
-   live surfaces — it is also the Daily Breakdown modal's table wrapper, and that
-   popout stays. */
-@media (max-width: 900px) {
+   Hidden by their own strip classes, not by a blanket `.lv-strip`: the full-screen
+   view mounts into that same class, and it is where a shop-floor TV reads the
+   board from across the room — not a phone, even when the window is small. Same
+   reason `.lv-tbl-scroll` is scoped to the live surfaces — it is also the Daily
+   Breakdown modal's table wrapper, and that popout stays. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     #cc-strip-live,
     .lv-dist-strip,
     .lv-fc-strip,
@@ -21113,8 +22090,8 @@ select.dd-native {
        store card — which has no .lv-dist-detail — was 334px. One inset is enough
        on a phone; .cc-body keeps it and the two inner wrappers give it up, which
        is also what makes the two roles' cards finally the same width.
-       Scoped under .cc-body so the tv.html board and the full-screen view, which
-       mount the same classes with room to spare, are untouched. */
+       Scoped under .cc-body so the full-screen view, which mounts the same
+       classes with room to spare, is untouched. */
     .cc-body .lv-card-inner,
     .cc-body .lv-dist-detail,
     .cc-body .lv-detail { padding-left: 0; padding-right: 0; }
@@ -21146,10 +22123,21 @@ select.dd-native {
        #dc-summary on the district one. */
     .cc-summary { display: none; }
 
+    /* ...and with it the control whose only job is to go back to it. Every
+       compact screen now opens the board on a tab and keeps it there (see
+       _ccSyncCompactOpen), so "▴ Summary" collapsed the card to a view that is
+       not drawn — a header over nothing. _tabSwitch writes display:'' on it when
+       a tab opens, which is exactly a hand-back to the stylesheet, so no
+       !important is needed to hold this. */
+    .cc-collapse { display: none; }
+
     /* Two controls that mean nothing on a phone. Full screen IS the phone, and the
        Daily Breakdown popout is a wide day-by-day grid — the one shape a phone
        cannot show, which is why it is not in the cut list either. The mute switch
-       beside them stays; a chime is a phone thing. */
+       beside them stays; a chime is a phone thing.
+       This was briefly relaxed for a tablet and put back (Ethan, 2026-09-19:
+       "too crammed and too much info") — the grid's shape is the reason, and a
+       tablet is not enough wider to change it. */
     .lv-head .bd-open,
     .lv-head .lv-full,
     .lv-sound-host .bd-open,
@@ -21221,12 +22209,22 @@ select.dd-native {
     /* Ctrl K in the Tools panel search box. There is no Ctrl key on a phone. */
     #jumpToolsKey, .jump-tools-key { display: none; }
 
-    /* Store picker. Sized against the day toggle directly above it rather than
-       against the form controls elsewhere on the site: this is a compact readout
-       you tap, not a field you fill in, and at 44px tall with 16px text it was the
-       heaviest thing on the card. The tap target is the whole 30px row plus its
-       padding, which is comfortable for a control this far from the thumb's reach
-       and in line with the toggle it sits under. */
+    /* Store picker — THE HOUSE DROPDOWN, in every respect but its width.
+       It is hand-built (a button and a <ul>, see the note in _lvCardDeckHtml:
+       a native <select> opens an OS popup that cannot be styled), which is
+       exactly why it never matched: _ddEnhance only ever reaches a real
+       <select>, so the one dropdown on the Live Dashboard that is not one sat
+       outside the standard and drifted (Ethan, 2026-09-19: "make the MSM live
+       dashboard dropdown match the design of all other dropdowns on the site,
+       this might've been missed"). It was a 30px white lozenge with a 999px
+       radius and a solid-charcoal chosen row, against a site of 34px faces at an
+       8px radius whose chosen row is an emerald tint.
+       Every value below is read off .dd-btn / .dd-list / .dd-opt and the compact
+       overrides of them, through the same --dd-* tokens, so the two cannot drift
+       apart again without the tokens moving together.
+       The one thing NOT copied is `width: 100%`. A .dd-btn is a form field and
+       fills its row; this is a readout you tap, sitting inline beside the day
+       toggle, so it stays content-width. Same look, different job. */
     /* Flush left with the card below it and with the head above it — the 12px
        inset was making the picker float in from both. */
     .lv-picks {
@@ -21239,26 +22237,37 @@ select.dd-native {
     .lv-pickbtn {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        min-height: 0;
-        height: 30px;
-        padding: 0 8px 0 10px;
-        border: 1px solid #dfe7e2;
-        border-radius: 999px;
+        gap: 8px;                      /* .dd-btn */
+        min-height: 34px;              /* body .dd-btn, compact */
+        height: 34px;
+        padding: 0 11px;
+        border: 1px solid var(--dd-line);
+        border-radius: 8px;            /* :where(.dd-btn) */
         background: #fff;
         font: inherit;
-        font-size: 12px;
-        font-weight: 800;
-        letter-spacing: .01em;
+        font-size: 12.5px;             /* body .dd-btn, compact */
+        font-weight: 650;
         color: var(--slate-charcoal, #17201c);
         cursor: pointer;
         -webkit-tap-highlight-color: transparent;
     }
-    .lv-pickchev { width: 13px; height: 13px; color: #9aa6a0; flex: 0 0 auto; }
+    .lv-pickchev { width: 13px; height: 13px; color: #94a3b8; flex: 0 0 auto;
+                   transition: transform .15s ease; }
     .lv-pickwrap.open .lv-pickchev { transform: rotate(180deg); }
     .lv-pdot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+    /* A soft emerald halo, not a hard outline — see the note on .dd-btn. Open
+       counts as focused whether or not the keyboard put it there. */
     .lv-pickbtn:focus-visible,
-    .lv-pickopt:focus-visible { outline: 2px solid #178048; outline-offset: 1px; }
+    .lv-pickwrap.open .lv-pickbtn {
+        outline: none;
+        border-color: var(--dd-accent);
+        box-shadow: 0 0 0 3px var(--dd-ring);
+    }
+    .lv-pickopt:focus-visible {
+        outline: none;
+        background: var(--dd-row-hi);
+        box-shadow: inset 0 0 0 1.5px var(--dd-accent);
+    }
 
     /* The list. Closed by default so it costs no height; opening it floats over
        the card rather than pushing the figures down the screen. */
@@ -21276,12 +22285,12 @@ select.dd-native {
         -webkit-overflow-scrolling: touch;
         min-width: 132px;
         margin: 0;
-        padding: 5px;
+        padding: 5px;                            /* .dd-list */
         list-style: none;
         background: #fff;
-        border: 1px solid #e3ebe6;
+        border: 1px solid var(--dd-line);
         border-radius: 12px;
-        box-shadow: 0 10px 26px rgba(15, 30, 22, .14);
+        box-shadow: 0 12px 34px rgba(16, 24, 40, .18);
     }
     .lv-picklist li { list-style: none; }
     .lv-pickopt {
@@ -21290,20 +22299,26 @@ select.dd-native {
         gap: 8px;
         width: 100%;
         min-height: 0;
-        padding: 8px 10px;
+        padding: 9px 11px;                       /* .dd-opt */
         border: 0;
         border-radius: 8px;
         background: none;
         font: inherit;
-        font-size: 12.5px;
-        font-weight: 700;
+        font-size: 13.5px;
+        font-weight: 650;
         color: #4c5c54;
         text-align: left;
         cursor: pointer;
     }
+    .lv-pickopt:hover { background: var(--dd-row-hover); }
+    /* An emerald tint, not solid charcoal. The whole site answers "what is
+       chosen" this way — see the long note on .dd-opt.on, which is the rule this
+       copies; black was retired there for being a colour the palette has to
+       apologise for, and this was the last place still wearing it. */
     .lv-pickopt.on {
-        background: var(--slate-charcoal, #17201c);
-        color: #fff;
+        background: var(--dd-accent-tint);
+        color: var(--dd-accent-deep);
+        font-weight: 780;
     }
 
     /* ---- the head above it: one alignment, one type scale --------------------
@@ -21380,11 +22395,86 @@ select.dd-native {
     .ew-perf { display: none; }
 }
 
+/* --- TABLET EXCEPTION: the Command Centers get their tabs back ---------------
+   Ethan, 2026-09-19: "you can now add ebay, scorecard, and store breakdown back
+   in". Those are three TABS, and a tab is unreachable without its bar — so the
+   first thing a tablet earns back here is the chrome, not the panels.
+
+   The TAB BAR comes back; the SUMMARY does not. Its cut above is argued from a
+   phone — "seven cells restating the card below it" — and the reason holds on a
+   tablet for a different cause: the board opens on the Live Dashboard, so the
+   card those cells restate is on screen from the first moment (Ethan,
+   2026-09-19: "I would get rid of the summary option for tablet. Just have it
+   default to live dashboard"). That leaves the bar as the only chrome, carrying
+   the tabs a role actually has — three for a manager (Live, eBay, Scorecard),
+   four for a DM or the CEO, who also get Store Breakdown.
+
+   The "▴ Summary" collapse goes with it, in the compact block further down: a
+   control whose whole job is to return you to a view that no longer exists.
+   With no way to collapse and a tab open from the start, the board always shows
+   exactly one panel, which is why .cc-widget:not(.cc-expanded) never applies
+   here and the summary needs no second rule to keep it hidden.
+
+   Plain class selectors and no !important, exactly as the cut is written; this
+   block sits after it and wins on source order.
+
+   The panels, strips and summary CELLS are opted in one at a time with
+   data-tablet="show" (18 of them, all on index.html); the display each one gets
+   back is set in the TABLET EXCEPTION block near the [data-mobile] curation,
+   because "flex" is right for a tab button and wrong for all three of the
+   others. The three summary cells keep their opt-in even though the strip they
+   sit in is hidden — the cut is per-cell and the strip's visibility is a
+   separate question, so a summary brought back later would not need finding
+   them again. */
+@media (min-width: 701px) and (min-height: 540px)
+   and (max-width: 1366px) and (pointer: coarse) {
+    .cc-tabbar { display: flex; }
+
+    /* (The equal-width tabs are NOT here — see the note under the segmented
+       controls block below, which has to come after it to land.) */
+
+    /* NO DAILY BREAKDOWN HERE, on purpose. It was restored for a tablet and then
+       taken back off after Ethan saw it: "you can actually remove live breakdown
+       from tablet version. It's too crammed and too much info." Eight columns of
+       money over 31 days, squeezed from an 840px floor into 638px of card, is
+       the same judgement the compact block already made about a phone — the
+       reason was always the popout's SHAPE, and a tablet turns out not to be
+       enough wider to change it. Both halves of that cut stand again, so there
+       is nothing to write here; the note exists so the next person does not
+       "fix" the missing button. */
+
+    /* "Categories at risk" and its chips are one wrapping flex row, so the label
+       sits on the first line and every chip after it starts where the label
+       ends — but a chip that wraps to the SECOND line starts at the cell edge.
+       Measured at 744: three chips, three different left edges (40, 155, 304),
+       which is the ragged block in Ethan's screenshot.
+       Giving the label a 100% basis puts it on a line of its own, so every chip
+       lines up on one left edge and the block reads as an eyebrow over its
+       content — the same shape as .dcc-group and .cpb-section-label elsewhere.
+       It costs one 9px line per store and is why this is a tablet rule: the
+       desktop board is 1080px wide and the chips rarely wrap there at all.
+       Not the Scorecard tab. Its .dc-catwrap is a different thing wearing the
+       same class — a nowrap grid of equal section chips — and was not asked
+       about. */
+    .dc-tbl:not(.dc-tbl-score) .dc-catwrap { align-items: flex-start; }
+    .dc-tbl:not(.dc-tbl-score) .dc-catlab { flex: 0 0 100%; }
+}
+
+/* #cc-strip-live is cut on every compact screen (see the Live block above), and
+   every strip shares one grid cell — so with the strips row restored, opening
+   the Live tab reserved the height of the TALLEST strip and painted none of it:
+   an empty band under the tab bar. _tabSwitch only sets .cc-nostrip when a tab
+   has no strip ELEMENT, and Live has one; it is the CSS that hides it. So the
+   same thing is said here, where the hiding happens. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    .cc-strips:has(> #cc-strip-live.cc-active) { display: none; }
+}
+
 /* --- Segmented controls / tab bars ------------------------------------------
    The Command Center, Store Health and Workspace tab strips size their tabs off
    a min-width tuned for a full-width desktop panel (.cc-seg is 140px each, so
    four tabs demand 560px). They wrap instead of overflowing. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .cc-seg, .sh-seg, .timeframe-toggle, .goal-tab-container {
         flex-wrap: wrap;
         width: 100%;
@@ -21420,6 +22510,101 @@ select.dd-native {
     .ws-title { font-size: 18px; }
 }
 
+/* --- TABLET EXCEPTION: equal Command Center tabs ----------------------------
+   Ethan, 2026-09-19: "make the command center header buttons all the same size
+   like they are for desktop."
+
+   The block above swaps the desktop's `flex: 1 1 0` for `1 1 auto` so a four-tab
+   strip wraps on a phone instead of overflowing. An AUTO basis sizes each tab to
+   its own label first and shares only what is left over equally — so "eBay" came
+   out 67px shorter than "Store Breakdown" (measured at 744 and at 820). A zero
+   basis gives all four the same width, which is what the desktop does and what
+   this restores. `min-width: 0` is left alone: it is the half of the compact
+   rule that is still right, and the desktop's 140px floor is exactly what made
+   four tabs demand 560px.
+
+   A tablet has the room the wrapping was avoiding — 653px of strip at 744px
+   against the ~133px the longest label needs — so nothing wraps and nothing is
+   clipped; command-center-check asserts both.
+
+   IT SITS HERE, AFTER THAT BLOCK, AND THAT IS THE WHOLE POINT. `.cc-seg
+   .toggle-btn` is (0,2,0) in both places, so this is decided on source order
+   alone. Written with the other tablet restores a few hundred lines up — where
+   it belongs by subject — it lost silently, and the harness could not see it:
+   replaying a tier's rules under a probe class adds specificity and hands the
+   tie to whichever rule is being tested. Measured on the real cascade instead. */
+@media (min-width: 701px) and (min-height: 540px)
+   and (max-width: 1366px) and (pointer: coarse) {
+    .cc-seg .toggle-btn { flex: 1 1 0; }
+}
+
+/* --- TABLET EXCEPTION: Stats & Awards is whole again -------------------------
+   Ethan, 2026-09-20: "add awards into the stats page on tablet and then change
+   the stats page name back to Stats & Awards like desktop shows."
+
+   Two halves, and the second one is not on the stats page at all.
+
+   AWARDS. #ssv-awards and #stats-view-awards carry data-mobile="hide" — the
+   monthly awards are a three-across card grid of winners, which is why they were
+   cut from a 390px phone. A tablet has the room, so they come back the usual
+   way: data-tablet="show" in stats.html plus a restore here.
+
+   The blanket opt-in near the curation utilities restores an opted-in surface as
+   `display: flex !important`, and for a .stats-view that is wrong in a way that
+   would be obvious on the page — it pins the awards pane open UNDERNEATH
+   whichever view is actually selected. So the family restores its own two states,
+   the same shape #dcWidget uses for .cc-panel and for the same reason: the switch
+   is a class (showStatsView toggles .active), and an opt-in that only knows how
+   to say "show" cannot express "shown when active". #ssv-awards needs no such
+   restore — a seg button is always visible, so flex is simply correct for it.
+
+   THE NAME. The <h2> has said Stats & Awards on every build; the name being read
+   here is the one in the bottom tab bar, which the compact block above replaces
+   with the short form from data-m ("Stats") because five real labels do not fit
+   across a 390px phone. A tablet is not a phone: at 744px the bar gives each of
+   at most five links 130px+, and the longest label ("Processes & Policies") wants
+   about 110px at this size, so the bar can say what the desktop nav says.
+
+   Done for the WHOLE bar rather than for Stats alone. A bar reading "Quick Portal
+   · Processes · Stats & Awards" is the same inconsistency the request is about,
+   just moved one link over; and the short forms are a phone concession, not a set
+   of names anybody chose. "QuickPortal" with no space is deliberate — it is the
+   product name (see the <title> of index.html), and data-m's "Quick Portal" was
+   the concession, not the truth.
+
+   The span rule is (0,4,1) to clear .top-nav.nav-compact's own (0,4,1), so it is
+   decided on SOURCE ORDER alone and has to live after that block — the same trap
+   the equal-tabs block above documents at length. The type is restated rather
+   than inherited because the ::after it replaces carried its own; dropping to
+   whatever .nav-link happens to set would change the bar's weight as a side
+   effect of a text change. */
+@media (min-width: 701px) and (min-height: 540px)
+   and (max-width: 1366px) and (pointer: coarse) {
+    .stats-view[data-mobile="hide"][data-tablet="show"]              { display: block !important; }
+    .stats-view[data-mobile="hide"][data-tablet="show"]:not(.active) { display: none  !important; }
+
+    /* Ethan, 2026-09-20: "for the awards, can we stack them instead of having 2
+       per row?" There are exactly THREE awards and there always have been
+       (AWARD_NAMES, speeks.js) — so two per row is the one arrangement that
+       cannot come out even, and the third card sits alone beside a hole. One per
+       row at any tablet width, which is also the only way the three cards line up
+       their winner rows; they are different heights because the names wrap to
+       different line counts. Records keeps its two columns: that grid holds as
+       many rows as the sheet has, so a stack there would just be long. */
+    .awards-grid { grid-template-columns: 1fr; }
+
+    .top-nav .nav-bar .nav-link span,
+    .top-nav.nav-compact .nav-bar .nav-link span {
+        display: block;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: .01em;
+        line-height: 1;
+        white-space: nowrap;
+    }
+    .top-nav .nav-bar .nav-link[data-m]::after { content: none; }
+}
+
 @media (max-width: 640px) {
     .ekpi-grid, .bd-strip { grid-template-columns: repeat(2, 1fr); }
     .hotbar-btn { flex: 1 1 100%; }
@@ -21432,7 +22617,7 @@ select.dd-native {
 }
 
 /* --- Forms and tap targets ---------------------------------------------------- */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     /* iOS Safari zooms the viewport on focus for any input under 16px and never
        zooms back out. This one rule prevents the single most common "the site
        feels broken on my phone" complaint. */
@@ -21567,7 +22752,7 @@ select.dd-native {
 /* Narrow: the verdict stops being a column and becomes a line under the name,
    because at this width a 210px reservation squeezes the model down to nothing
    -- and the model is what tells you which machine on the bench this is. */
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .b2b-bench-row { flex-wrap: wrap; }
     .b2b-bench-what { flex: 1 1 100%; }
     .b2b-bench-verdict { width: auto; flex: 1 1 auto; }
@@ -21791,7 +22976,15 @@ select.dd-native {
     color: var(--pg-muted); cursor: pointer; padding: 8px 10px; border-radius: 9px;
 }
 .pg-cat:hover { background: #f1f5f9; color: var(--pg-ink); }
-.pg-cat.on { background: var(--pg-ink); color: #fff; }
+/* The house dropdown's chosen row, not a solid charcoal slab. Same change the
+   Live Dashboard store picker took on 2026-09-19, and the last place on the
+   site still wearing the pre-redesign highlight (Ethan, 2026-09-20: "the
+   dropdown has the old black highlight look instead of the new green look in
+   other dropdowns"). The weight carries the selection now that the background
+   no longer shouts. */
+.pg-cat.on {
+    background: var(--pg-accent-tint); color: var(--pg-accent-deep); font-weight: 780;
+}
 .pg-cat-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- groups: the rail's one level of nesting ------------------------------ *
@@ -22286,6 +23479,148 @@ select.dd-native {
    carries the weight the per-unit ones do not. */
 .b2b-lc-tot { font-weight: 800 !important; color: #1a1c1e; }
 
+
+/* --- TABLET EXCEPTION: the Picture Guide at the photo station ----------------
+   Ethan, 2026-09-20, with the guide open on an iPad:
+     · "can we make the have an idea button skinnier to match other bubbles"
+     · "is there anyway to make the category list look better on tablet, it feels
+        super long and weird"
+     · "I'm more inclined to having the tablets landscape at the picture station
+        to see more pictures at once, so I want it to look good in both portrait
+        and landscape"
+
+   ONE BLOCK, NO ORIENTATION BRANCH, and that is deliberate. .pg-shell already
+   swaps to a single column at 1100px, which on real hardware is exactly the
+   portrait/landscape line: every iPad is under 1100 standing up and over it
+   lying down. So the rail is a 202px sidebar one way and a ~600-760px banner the
+   other, and both cases are handled here by asking for a MINIMUM TRACK WIDTH and
+   letting auto-fill count the columns. The layout follows the rail it is given
+   instead of following a breakpoint that would have to be kept in step with the
+   one above it.
+
+   THE CATEGORY LIST. Fifteen groups in one column is what "super long and weird"
+   was: measured at 744x1133, the rail alone ran 793px tall and the first
+   photograph started at y=1345 in a 1035px viewport — the better part of a
+   screen of scrolling to reach the thing the tab is for. Each row was also ~600px
+   wide for an eight-character label with its count pushed to the far edge, which
+   is the "weird" half. 185px tracks give three columns in portrait and 5 rows
+   instead of 15; the landscape rail has 202px of content, too narrow for two
+   tracks, so it stays the single column it already was. The rail comes down to
+   ~400px and the board's top row lands on the first screen.
+
+   align-items: start so a group opened in one column does not stretch its
+   collapsed neighbours down to match it.
+
+   THE BOARD. The reason for turning the iPad sideways is more photographs at
+   once, and it was not delivering any: the board measures 633px in portrait and
+   718px in landscape, and at a 196px minimum BOTH of those are three columns —
+   same count, bigger cards, less height. 165px is the largest track that fits
+   four across the landscape mini (4x165 + 3x14 of gap = 702, inside 718), and it
+   leaves portrait on the mini alone at three. Per device: mini 3 up / 4 across,
+   Air and Pro 4 up / 5 across. Every one of those is a gain or a draw, never a
+   loss, which is the property worth having when one number serves four screens.
+
+   THE PILL. Sixth appearance of `button { min-height: 44px }` from the tap-target
+   block — .lv-mode, .modal-close-btn, the two dark X-es, the audit pills, and now
+   this. 107x44 for a 23px lozenge, which is the egg shape again at a 999px
+   radius. Named away rather than argued with; the pill is a footnote inside a
+   sentence, not a control anyone aims at, and the sentence around it is the tap
+   target if it ever needs to be one. */
+@media (min-width: 701px) and (min-height: 540px)
+   and (max-width: 1366px) and (pointer: coarse) {
+    .pg-catlist {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(185px, 100%), 1fr));
+        align-items: start;
+        /* dense so the heading row does not keep a hole where the full-width
+           tray pushed the next heading out of it. It backfills with the
+           heading that was coming next anyway, so the A-Z order is not
+           disturbed -- a full-row item can only land on a row that is still
+           empty, which is never above its own heading. */
+        grid-auto-flow: row dense;
+        /* ...AND A CEILING, because columns alone were not enough. The desktop
+           58vh is a share of the window, which is the right shape for a rail
+           standing BESIDE the board and the wrong one for a rail sitting ON TOP
+           of it: the taller the iPad, the more of itself the rail claimed before
+           the first photograph. With a group open it ran to the full 600px at
+           744x1133 and put the board at y=1157 in a 1035px viewport -- better
+           than the 1345 it started at, still a screen of rail first.
+
+           min() so one value serves both orientations without asking which one
+           this is: the vh term keeps the old behaviour wherever it is already
+           shorter, and 320px is the ceiling that puts the portrait board on the
+           first screen. The landscape
+           sidebar gives up ~55px of a list that was scrolling anyway.
+
+           min(185px, 100%) rather than a flat 185px, here and on the two grids
+           below it: auto-fill will happily lay a track WIDER than the box it is
+           in, and the open group's tray adds 14px of padding and border inside
+           an already narrow landscape sidebar -- which put the list 5px past its
+           own edge. The min() caps the track at the container, so the narrow
+           case degrades to one full-width column instead of overflowing. */
+        /* 280, not the 320 this was first set to: measured, that left the board
+           at y=1044 in a 1035px viewport -- nine pixels short, which is no
+           better than a mile. Every pixel here is a pixel off the board's top. */
+        max-height: min(52vh, 280px);
+    }
+    .pg-board { grid-template-columns: repeat(auto-fill, minmax(min(165px, 100%), 1fr)); }
+    .pg-inline-link { min-height: 0; }
+
+    /* AN OPEN GROUP IS A BAND, NOT A COLUMN. Ethan, 2026-09-20: "when you hit
+       the dropdown, can the items within the dropdown go in a row across the
+       page instead of a column? just make it differentiated that it is within
+       that dropdown."
+
+       Once the list became multi-column the sheets inside an open group were
+       still stacking down inside ONE ~200px track -- Computer Parts opened seven
+       rows deep in column three with the other three columns left blank beside
+       it. Spanning every track turns that into a full-width shelf: seven sheets
+       across instead of seven down, and the rail stops growing a hole.
+
+       The reflow is real and it is the point. An opened group moves to the next
+       line where a whole row is free, so the heading and its sheets travel
+       together as one band -- which is also what answers the second half of the
+       ask, before the tint is even considered. Only one group is open at a time
+       (_pgOpenGroup), so there is never more than one band.
+
+       The body takes the SAME auto-fill track as the list around it, so a sheet
+       lines up with the group headings above it rather than starting its own
+       rhythm -- and in the 202px landscape sidebar both come out at one column,
+       which is why there is no orientation branch here either.
+
+       The inset panel is the "differentiated" part: a tinted, bordered tray under
+       the heading says these belong to it, where an indent alone would have been
+       ambiguous across a row four sheets wide. */
+    /* THE HEADING STAYS IN ITS CELL. Ethan, 2026-09-20: "I don't think the
+       category title (ex. Computer Parts) need to move down with the dropdown,
+       I meant the items within the category can just dropdown beneath it."
+
+       Spanning the whole <section> was the blunt reading of "across the page":
+       it took the heading with it, so opening Computer Parts pulled that title
+       out of the row it shared with Accessories and Cameras and gave it a line
+       of its own. display: contents dissolves the section so that the heading
+       and the tray are two separate grid items -- the heading keeps its cell in
+       the A-Z run, and only the tray claims a full row, which auto-placement
+       puts on the line directly beneath.
+
+       Safe against _pgFilterRail, which hides and shows these sections by
+       writing style.display: it sets 'none' to hide and the EMPTY STRING to
+       show, so showing falls back to this rule rather than to an inline block
+       that would put the section back as one cell. */
+    .pg-catlist > .pg-grp { display: contents; }
+    .pg-grp.open > .pg-grp-body {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(185px, 100%), 1fr));
+        gap: 2px 6px;
+        margin: 3px 0 6px;
+        padding: 6px;
+        background: #f8fafc;
+        border: 1px solid var(--pg-line);
+        border-radius: 10px;
+    }
+}
+
 /* =========================================================
    PER-ROW ACTIONS MENU on the listing sheet (trial)
    The action cell carried a listed stepper, a recycle stepper, "Recycle..." and
@@ -22362,3 +23697,239 @@ select.dd-native {
 .b2b-rowmenu-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .b2b-rowmenu-txt b { font-size: 12.5px; font-weight: 700; color: #1a1c1e; }
 .b2b-rowmenu-txt span { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }
+
+/* ==========================================================================
+   LISTING GOALS — PAST WEEKS (managers + ASMs)
+   A read-only look back over the last four finished weeks: the seat each person
+   was given each day, and what they listed against the goal those seats added up
+   to. It is there so a manager can judge a week fairly — a person who spent it on
+   the buy counter is not marked down for a low count, and a lister who fell short
+   stands out.
+
+   Built from an approved mockup (Ethan, 2026-09-16). Deliberate choices from that
+   review, not oversights:
+   - No legend. Green lister / grey-blue buyer / dashed Off reads on its own.
+   - The daily goal is always shown under its chip; there is no toggle.
+   - Every percent bubble is ONE width, so the numbers beside them line up down
+     the column whether it says 72% or 114%.
+   - The week label has a fixed width and the "Last week" tag keeps its space on
+     older weeks (visibility, not display), so the arrows never move.
+
+   The [hidden] rules are here because these panes set display themselves, and an
+   author display rule silently beats the hidden attribute.
+   ========================================================================== */
+#listingGoalsModal {
+    --lgpw-ink: #1a1c1e;
+    --lgpw-muted: #647082;
+    --lgpw-faint: #94a3b8;
+    --lgpw-line: #e6ebf0;
+    --lgpw-soft: #f1f4f7;
+    --lgpw-sage: #5a8d3b;
+    --lgpw-sage-ink: #3f6a26;
+    --lgpw-sage-tint: #e9f2e2;
+    --lgpw-sage-ring: #cfe3c0;
+    --lgpw-buy-ink: #334155;
+    --lgpw-buy-tint: #e8edf3;
+    --lgpw-buy-ring: #cdd6e1;
+}
+#goals-pane-today[hidden], #goals-pane-past[hidden] { display: none !important; }
+/* The modal body scrolls, so a full week grows a scrollbar and a thin week does
+   not, and the arrows jumped ~14px sideways stepping between them. Reserve the
+   gutter while Past weeks is showing; Today keeps its full width. */
+#listingGoalsModal .employee-kpi-body:has(#goals-pane-past:not([hidden])) { scrollbar-gutter: stable; }
+/* This week's goal and today's date belong to Today. Past weeks is about weeks
+   that are over, so the banner goes while it is showing (user, 2026-09-16). */
+#listingGoalsModal .lg-modal-card:has(#goals-pane-past:not([hidden])) .district-kpi-header { display: none !important; }
+
+.lgpw-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; }
+/* inline-GRID with equal auto columns, not inline-flex: in a shrink-to-fit grid
+   every `1fr` track resolves to the widest track's max-content, so "Today" and
+   "Past weeks" come out the same width without either one being measured or
+   given a hand-set min-width that a relabel would silently break (Ethan,
+   2026-09-19). One column is still one column, which is what _lgpwSyncTabs
+   leaves behind when it cuts Past weeks on a phone. */
+.lgpw-seg {
+    display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    padding: 3px; background: var(--lgpw-soft); border-radius: 10px; border: 1px solid var(--lgpw-line);
+}
+.lgpw-seg button {
+    font: inherit; font-size: 12.5px; font-weight: 700; color: var(--lgpw-muted);
+    border: none; background: none; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+}
+.lgpw-seg button[aria-pressed="true"] { background: #fff; color: var(--lgpw-ink); box-shadow: 0 1px 2px rgba(16, 24, 40, .1); }
+.lgpw-seg button:focus-visible, .lgpw-wk button:focus-visible { outline: 2px solid var(--lgpw-sage); outline-offset: 2px; }
+
+.lgpw-wk { display: inline-flex; align-items: center; gap: 4px; }
+.lgpw-wk.away { visibility: hidden; }
+.lgpw-wk button {
+    width: 28px; height: 28px; padding: 0; border-radius: 8px; border: 1px solid var(--lgpw-line);
+    background: #fff; color: var(--lgpw-ink); display: grid; place-items: center; cursor: pointer;
+}
+.lgpw-wk button:disabled { color: #cbd5e1; cursor: default; }
+.lgpw-wk svg { width: 14px; height: 14px; }
+.lgpw-wk-label {
+    display: inline-flex; flex-direction: column; align-items: center; gap: 4px; width: 128px;
+    font-size: 13px; font-weight: 700; color: var(--lgpw-ink); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.lgpw-tag {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; line-height: 1;
+    color: var(--lgpw-sage-ink); background: var(--lgpw-sage-tint); border: 1px solid var(--lgpw-sage-ring);
+    border-radius: 99px; padding: 2px 7px;
+}
+.lgpw-tag.away { visibility: hidden; }
+.lgpw-pips { display: inline-flex; gap: 4px; }
+.lgpw-pips i { width: 5px; height: 5px; border-radius: 50%; background: #d5dde5; }
+.lgpw-pips i.on { background: var(--lgpw-ink); }
+
+.lgpw-store { display: flex; flex-direction: column; gap: 14px; }
+.lgpw-store + .lgpw-store { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--lgpw-line); }
+.lgpw-store-name { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--lgpw-muted); }
+
+.lgpw-sum { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 12px; background: var(--lgpw-soft); }
+.lgpw-sum-k { font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--lgpw-muted); }
+.lgpw-sum-v { font-size: 20px; font-weight: 900; letter-spacing: -.02em; color: var(--lgpw-ink); font-variant-numeric: tabular-nums; }
+.lgpw-sum-v small { font-size: 13px; font-weight: 700; color: var(--lgpw-muted); letter-spacing: 0; }
+.lgpw-track { height: 8px; border-radius: 99px; background: #dde3e9; overflow: hidden; }
+.lgpw-track i { display: block; height: 100%; border-radius: 99px; background: var(--lgpw-sage); }
+.lgpw-track i.warn { background: #d99a2b; }
+.lgpw-track i.bad { background: #d9534f; }
+
+.lgpw-pct {
+    display: inline-block; box-sizing: border-box; width: 58px; text-align: center;
+    font-size: 13px; font-weight: 800; padding: 3px 0; border-radius: 99px; font-variant-numeric: tabular-nums;
+}
+.lgpw-pct.good { color: #15803d; background: var(--lgpw-sage-tint); }
+.lgpw-pct.warn { color: #b45309; background: #fdf3e2; }
+.lgpw-pct.bad { color: #b91c1c; background: #fcecec; }
+.lgpw-pct.none { color: var(--lgpw-faint); background: var(--lgpw-soft); }
+
+.lgpw-scroll { overflow-x: auto; }
+.lgpw-grid { min-width: 480px; }
+.lgpw-row {
+    display: grid; grid-template-columns: minmax(96px, 1.6fr) repeat(6, minmax(40px, 56px)) minmax(120px, 1fr);
+    align-items: center; column-gap: 6px; padding: 9px 0; border-bottom: 1px solid var(--lgpw-soft);
+}
+.lgpw-row:last-child { border-bottom: none; }
+.lgpw-hdr { padding: 0 0 7px; border-bottom: 1px dashed var(--lgpw-line); }
+.lgpw-hdr span { font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--lgpw-muted); text-align: center; }
+.lgpw-hdr span:first-child { text-align: left; }
+.lgpw-hdr span:last-child { text-align: right; }
+.lgpw-hdr b { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0; color: var(--lgpw-faint); margin-top: 1px; }
+
+.lgpw-name { min-width: 0; font-size: 13.5px; font-weight: 700; color: var(--lgpw-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lgpw-float {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--lgpw-muted);
+    border: 1px solid var(--lgpw-line); border-radius: 99px; padding: 0 5px; margin-left: 5px; vertical-align: 1px;
+}
+.lgpw-day { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.lgpw-chip {
+    width: 34px; height: 26px; border-radius: 8px; display: grid; place-items: center;
+    font-size: 11px; font-weight: 800; letter-spacing: .02em; border: 1px solid transparent;
+}
+.lgpw-chip.l { background: var(--lgpw-sage-tint); color: var(--lgpw-sage-ink); border-color: var(--lgpw-sage-ring); }
+.lgpw-chip.b { background: var(--lgpw-buy-tint); color: var(--lgpw-buy-ink); border-color: var(--lgpw-buy-ring); }
+.lgpw-chip.off { color: #b4bfcb; border: 1px dashed #d5dde5; font-size: 9.5px; font-weight: 700; }
+/* A floater's day at ANOTHER store: the store code, quiet, so it reads as
+   "not here" rather than as a seat. Its goal still counts toward their week. */
+.lgpw-chip.away { color: var(--lgpw-muted); background: var(--lgpw-soft); border-color: var(--lgpw-line); font-size: 9.5px; }
+/* No role saved that day at all. */
+.lgpw-chip.unset { color: #cbd5e1; font-size: 12px; }
+.lgpw-g { font-size: 10px; font-weight: 700; color: var(--lgpw-faint); font-variant-numeric: tabular-nums; line-height: 1; min-height: 10px; }
+
+.lgpw-tot { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+.lgpw-tot-top { display: flex; align-items: baseline; gap: 7px; }
+.lgpw-tot-n { font-size: 15px; font-weight: 900; color: var(--lgpw-ink); font-variant-numeric: tabular-nums; }
+.lgpw-tot-n small { font-size: 12px; font-weight: 700; color: var(--lgpw-muted); }
+.lgpw-tot .lgpw-pct { width: 46px; font-size: 11px; padding: 2px 0; }
+.lgpw-tot .lgpw-track { width: 100%; max-width: 118px; height: 5px; }
+
+.lgpw-msg { padding: 36px 0; text-align: center; font-size: 13px; color: var(--lgpw-muted); }
+.lgpw-msg.err { color: #b91c1c; }
+
+@media (max-width: 520px) {
+    .lgpw-sum { grid-template-columns: 1fr auto; }
+    .lgpw-sum .lgpw-track { grid-column: 1 / -1; order: 3; }
+}
+
+/* ==========================================================================
+   DROPDOWNS ON THE PHONE — THE ONE FACE, EVERYWHERE
+   The emerald redesign (854ab7c) already reaches the phone: it is colour, set
+   at :root and on .dd-*, and no phone rule overrides a single colour of it —
+   measured face by face at 390px against 1440px. What did NOT match was SIZE.
+   Inside a tool the face is 34px and 12.5px (the .modal-menu.manage-menu rule);
+   everywhere else two blanket phone rules got to it first:
+     - `button { min-height: 44px }`, the tap-target floor, which a .dd-btn is;
+     - `.form-input, .form-input-lg, .kpi-select, .metric-dropdown
+        { font-size: 16px !important }`, the iOS zoom floor — and the face COPIES
+        its select's classes (_ddEnhance), so it inherited a floor meant for
+        typing into. A button is never typed into and never zooms.
+   So the KPI widget's metric picker, the store selector and every page-level
+   picker were 44px slabs of 16px type beside the 34px ones in the tools
+   (user, 2026-09-16: "ensure the mobile dropdowns everywhere also share this new
+   design"). One size for all of them now, the tool size.
+   `body .dd-btn` for one step of specificity over the select classes that set
+   their own padding (.form-input-lg, .idea-input), which are otherwise later in
+   the file or equal. The Feed's filter keeps its narrower id-scoped padding.
+   Have an Idea is the one id-scoped floor that had to be named: #ideaModal
+   .idea-input holds its fields at 16px !important for the same iOS zoom reason,
+   and its category dropdown's face carries .idea-input too. */
+@media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
+    body .dd-btn {
+        min-height: 34px;
+        height: 34px;
+        padding: 0 11px;
+    }
+    #ideaModal .dd-btn.idea-input { padding: 0 11px !important; font-size: 12.5px !important; }
+    body .dd-btn,
+    body .dd-btn.form-input,
+    body .dd-btn.form-input-lg,
+    body .dd-btn.kpi-select,
+    body .dd-btn.metric-dropdown,
+    body .dd-btn.idea-input { font-size: 12.5px !important; }
+    body .dd-chev { width: 13px; height: 13px; }
+}
+
+/* ============================================================================
+   THE "COPIED" FLASH — one answer for every copy button on the site
+   ============================================================================
+   Six buttons copy something to the clipboard and say so. Three of them
+   (Box Order, Recycle Report, Quick Messages) went green; three (Expense Report,
+   Listing Health, the B2B drop diagnostic) only swapped their label and sat
+   there in whatever grey they already were, so the same gesture read as
+   "something happened" in one tool and "nothing happened" in the next. Ethan,
+   2026-09-17: make them all the Box Order green, on desktop, mobile and tablet.
+
+   A CLASS, and not the inline styles the three green ones used to set, for two
+   reasons. The obvious one is that six copies of four colour values is five too
+   many. The one that actually matters is the "and tablet" part: inline styles
+   lose to any `!important` rule, and the compact build is full of them — so an
+   inline flash was one `background: ... !important` away from silently not
+   working on exactly the two layouts that were asked for.
+
+   Declared LAST in the file and !important throughout, because these buttons are
+   styled from every direction: .qm-copy-btn is (0,1,0), #quickMsgDropdown
+   .qm-copy-btn is (1,1,0), and each has a :hover that is live at the moment of
+   the click — the pointer is still on the button that was just pressed. The
+   flash has to beat all of it for the ~2s it is up, and then get out of the way
+   completely, which a class removal does and a cleared inline style only mostly
+   does.
+
+   The colours are Box Order's, verbatim: #d1fae5 / #065f46 / #34d399. */
+.is-copied,
+.is-copied:hover,
+.is-copied:focus,
+.is-copied:focus-visible {
+    background: #d1fae5 !important;
+    color: #065f46 !important;
+    border-color: #34d399 !important;
+    /* The three green ones only ever set borderColor, which does nothing on a
+       button whose border-style is none — .qm-copy-btn has a border, the
+       .btn-secondary ones may not. Naming the style makes the ring appear on all
+       of them rather than only where one happened to already exist. */
+    border-style: solid !important;
+    border-width: 1px !important;
+    /* Kills the lift/shadow the hovers add, so the button does not appear to be
+       hovering and confirming at the same time. */
+    box-shadow: none !important;
+    transform: none !important;
+}

@@ -39,11 +39,11 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.6';
+const APP_VERSION = '3.8.7';
 
-// Every .version-tag on the page, not the first: tv.html has one in the top nav
-// and the app pages have one in the sidebar greeting stack, and a page is free
-// to grow a second without needing to touch this.
+// Every .version-tag on the page, not the first: a page is free to grow a second
+// without needing to touch this, and one did — the shop-floor board had one in
+// its top nav while the app pages have one in the sidebar greeting stack.
 function _stampVersion() {
     document.querySelectorAll('.version-tag').forEach(function (el) {
         el.textContent = `v${APP_VERSION}`;
@@ -83,6 +83,7 @@ const STORE_COMMENT_URL = `${_BASE}/store-comments`;
 const CHECKLIST_URL     = `${_BASE}/checklist`;
 const STORE_AUDIT_URL   = `${_BASE}/store-audit`;
 const CLAIMS_URL        = `${_BASE}/shopify-claims`;
+const CLAIMS_DISPUTES_URL = `${_BASE}/claims-disputes`;
 const BOX_ADMIN_URL     = `${_BASE}/box-order-admin`;
 const PATCH_NOTES_URL   = `${_BASE}/patch-notes`;
 const TICKER_URL        = `${_BASE}/ticker`;
@@ -107,6 +108,7 @@ const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
 const NOTIFY_URL        = `${_BASE}/notify`;
 const DAILY_BRIEF_URL   = `${_BASE}/daily-brief`;
+const DISTRICT_WATCH_URL = `${_BASE}/district-watch`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -191,10 +193,13 @@ function _usageSessionId() {
 // where headless Chrome at 390px wide behaved nothing like a phone.) It also keys
 // off the SHORT edge, so a phone held sideways is still a phone.
 //
-// mob answers the separate, project-specific question: was the mobile LAYER
-// actually engaged — i.e. <=900px, the compact breakpoint in styles.css? Someone
-// on a half-width desktop window sees the mobile layout without being on a mobile
-// device, and that is worth knowing on its own.
+// mob answers the separate, project-specific question: was the compact LAYER
+// actually engaged? Someone on a half-width desktop window sees the mobile
+// layout without being on a mobile device, and that is worth knowing on its own.
+// It asks _isMobileLayout() rather than re-deriving a width, because since the
+// tablet port (2026-09-17) the answer is not a width at all — a landscape iPad
+// at 1180px is inside the band and a 1366x768 laptop is not. A second copy of
+// that rule here would have quietly under-reported every tablet on the estate.
 function _usageDevice() {
     try {
         const w = Math.round(window.innerWidth || 0);
@@ -206,7 +211,7 @@ function _usageDevice() {
             dpr: Math.round((window.devicePixelRatio || 1) * 100) / 100,
             touch: coarse,
             kind: !coarse ? 'desktop' : (short < 500 ? 'phone' : 'tablet'),
-            mob: w > 0 && w <= 900,
+            mob: _isMobileLayout(),
         };
     } catch (_) {
         return null;   // telemetry must never break a flush
@@ -584,6 +589,79 @@ function _closeSidePanels(exceptId) {
         }
     });
 }
+
+// ---------------------------------------------------------------------------
+// SIDE PANELS FREEZE THE PAGE ON A PHONE
+// ---------------------------------------------------------------------------
+// Every modal locks the page behind it (lockAndBlurScreen). The side panels —
+// Tools, Checklist, Goals, Cleaning — never did, which was right on a desktop,
+// where they are a drawer beside a page you may still want to scroll. On a phone
+// they fill the screen, and scrolling a checklist dragged the dashboard along
+// behind it (user, 2026-09-16: "we should freeze the site behind it like desktop
+// freezes when opening a tool").
+//
+// Watched, not called: a panel opens and closes from its toggle, a tap outside,
+// Escape, _closeSidePanels and closeAllModals, and a lock added to each of those
+// is a lock that the next new path forgets to release. A MutationObserver on the
+// panels' class sees every one of them.
+//
+// It uses the SAME lock and the SAME saved offset as the modals (body.no-scroll,
+// _lockedScrollY), so the hand-off works in both directions: opening a tool from
+// the Tools panel closes the panel inside closeAllModals, which already restores
+// _lockedScrollY before the modal re-takes the lock. _panelScrollLock is only
+// "this lock was taken for a panel" — released when the last panel closes, and
+// only if no modal has taken it over in the meantime.
+const _PANEL_LOCK_IDS = ['toolsSidePanel', 'checklistSidePanel', 'goalsSidePanel', 'auditSidePanel'];
+let _panelScrollLock = false;
+
+function _syncPanelScrollLock() {
+    const body = document.body;
+    // _panelIsFullBleed, not _isMobileLayout. The lock exists because the sheet
+    // COVERS the page on a phone; on a tablet the same panel is a third-width
+    // drawer, so two thirds of the page is in view and freezing it is just a page
+    // that has stopped working. The sheets carry overscroll-behavior: contain
+    // across the whole band, so the scroll-chaining half of the problem is
+    // already handled in CSS on both.
+    const anyOpen = _panelIsFullBleed() && _PANEL_LOCK_IDS.some(id =>
+        document.getElementById(id)?.classList.contains('open'));
+    if (anyOpen) {
+        if (!body.classList.contains('no-scroll')) {
+            _lockedScrollY = window.scrollY || window.pageYOffset || 0;
+            body.style.top = `-${_lockedScrollY}px`;
+            body.classList.add('no-scroll');
+            _panelScrollLock = true;
+        }
+        return;
+    }
+    if (!_panelScrollLock) return;
+    _panelScrollLock = false;
+    // A modal opened over (or instead of) the panel now owns the lock.
+    if (document.querySelector('.modal-menu.show')) return;
+    if (!body.classList.contains('no-scroll')) return;   // closeAllModals already let go
+    body.classList.remove('no-scroll');
+    body.style.top = '';
+    window.scrollTo(0, _lockedScrollY);
+}
+
+(function _watchPanelsForScrollLock() {
+    const start = () => {
+        const obs = new MutationObserver(_syncPanelScrollLock);
+        _PANEL_LOCK_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) obs.observe(el, { attributes: true, attributeFilter: ['class'] });
+        });
+        // Dragging across the breakpoint with a panel open: the drawer on the
+        // desktop side must not leave the page frozen. BOTH queries, because the
+        // lock now turns on the sheet/drawer line at 901px and not on the band's
+        // own edge — an iPad rotating 820 -> 1180 with the Checklist open crosses
+        // that line and no other, and without this listener the page behind the
+        // new third-width drawer would stay pinned with nothing to explain it.
+        try { window.matchMedia(_compactMediaQuery()).addEventListener('change', _syncPanelScrollLock); } catch (_) {}
+        try { window.matchMedia(_tabletMediaQuery()).addEventListener('change', _syncPanelScrollLock); } catch (_) {}
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+})();
 
 function toggleModal(modalId, badgeId = null) {
     const dropdown = document.getElementById(modalId);
@@ -1023,7 +1101,7 @@ function _annDocCard(item) {
                 <div class="ann-doc-card-name">${escapeHtml(name)}</div>
                 <div class="ann-doc-card-meta">${title && title !== name ? escapeHtml(title) + ' · ' : ''}${escapeHtml(item.author || '')}${date ? ` · ${date}` : ''}</div>
             </div>
-            <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-dl-btn">⬇ Download</a>
+            <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-dl-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download</a>
             ${removable ? `<button type="button" class="ann-doc-del" title="Remove from Documents"
                 onclick="annRemoveDoc('${item.rowId}', this)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1722,6 +1800,39 @@ function _syncLayout() {
     const totalTop = navH + tickerH;
     if (ticker) ticker.style.top = navH + 'px';
     document.documentElement.style.setProperty('--panel-top', totalTop + 'px');
+
+    // --tabbar-h: the BOTTOM bar, measured the same way the top one is.
+    //
+    // The side panels hang 10px below the nav and stop 10px above the tab bar,
+    // and until now only the top half of that was honest: --panel-top was
+    // measured, while the bottom cleared a hard-coded 61px I had counted off the
+    // bar's own rules (6 + a 48px tap target + 6 + a 1px border). That is the
+    // right number today and only today. It is wrong the moment the bar is a
+    // different height than I assumed — a larger Dynamic Type setting on iPadOS,
+    // a label wrapping to two lines at some width, a fourth link added to the
+    // bar, or any device whose home-indicator inset is not what the emulator
+    // reported. Measuring it means the panel fits between the two bars on any
+    // iPad, at any text size, without anyone having to come back and re-count
+    // (Ethan, 2026-09-19: "no matter the size of the iPad").
+    //
+    // ⚠️ THE MEASURED HEIGHT ALREADY CONTAINS THE SAFE-AREA INSET. The bar pads
+    // its own foot with `calc(6px + env(safe-area-inset-bottom))`, and a border
+    // box includes padding — so the CSS must NOT subtract env() again on top of
+    // this, or every notched device loses that strip twice. The fallback in the
+    // stylesheet is the one place env() still appears, because that branch has
+    // no measurement to have included it.
+    //
+    // position:fixed is the test for "this is the bottom bar", not a width query.
+    // The same .nav-bar element is the inline row of links inside the header on
+    // desktop, where its height means nothing to a panel; only the compact build
+    // lifts it out and pins it to the floor. Writing 0 there keeps the variable
+    // meaningful everywhere instead of publishing a number that is true in one
+    // layout and misleading in the other.
+    const bar = nav.querySelector('.nav-bar');
+    const barFixed = !!bar && window.getComputedStyle(bar).position === 'fixed';
+    const barH = barFixed ? Math.round(bar.getBoundingClientRect().height) : 0;
+    if (barH > 0) document.documentElement.style.setProperty('--tabbar-h', barH + 'px');
+    else document.documentElement.style.removeProperty('--tabbar-h');
 }
 
 // Every right-hand side panel (Tools, Checklist, Goals) hangs off --panel-top,
@@ -1748,7 +1859,18 @@ function initLayoutSync() {
     // so measure once more after layout rather than trusting the first read.
     requestAnimationFrame(_syncLayout);
     const nav = document.querySelector('.top-nav');
-    if (nav && window.ResizeObserver) new ResizeObserver(_syncLayout).observe(nav);
+    // BOTH bars, one observer. Watching .top-nav alone cannot see the tab bar
+    // change size: in the compact build the bar is position:fixed, so it is out
+    // of its parent's flow and the header's border box never moves when the bar
+    // grows. That is precisely the case this is here for — a label wrapping, a
+    // larger Dynamic Type setting — so it has to be observed in its own right or
+    // --tabbar-h would be measured once at load and then quietly go stale.
+    if (window.ResizeObserver) {
+        const ro = new ResizeObserver(_syncLayout);
+        if (nav) ro.observe(nav);
+        const bar = nav && nav.querySelector('.nav-bar');
+        if (bar) ro.observe(bar);
+    }
     window.addEventListener('resize', _syncLayout);
 }
 
@@ -2105,6 +2227,59 @@ function filterManageUsers() {
     });
 }
 
+// The shift length a row's hours and days come to, shown beside them.
+//
+// It is printed rather than left to be worked out because it is the number the
+// daily listing goal is actually built from, and the whole point of storing the
+// week and the days instead of the shift is that the shift is derived. Someone
+// typing 10 and 2 should be able to see 5h appear, not discover it a week later
+// in the efficiency table.
+function _upShiftLabel(hours, days) {
+    const h = Number(hours), d = Number(days);
+    if (!(h > 0) || !(d > 0)) return '—';
+    const cap = ListingGoalsEngine.cfg.max_shift_hours || 12;
+    const shift = Math.min(h / d, cap);
+    const txt = (Math.round(shift * 10) / 10) + 'h/day';
+    // Say when the cap has bitten, rather than showing a number that isn't the
+    // quotient and letting it look like a rounding error.
+    return (h / d > cap) ? txt + '*' : txt;
+}
+
+// Repaint one row's shift as its hours or days are typed. Reads the placeholders
+// when a box is blank, so the label tracks what the person is actually being
+// counted as rather than going to "—" the moment a box is cleared.
+window._upShiftSync = function (el) {
+    const row = el && el.closest ? el.closest('.user-manage-row') : null;
+    if (!row) return;
+    const val = (sel) => {
+        const box = row.querySelector(sel);
+        if (!box) return 0;
+        return box.value !== '' ? box.value : parseFloat(box.placeholder);
+    };
+    const out = row.querySelector('.u-shift');
+    if (out) out.textContent = _upShiftLabel(val('.u-hours'), val('.u-days'));
+};
+
+// Switching Full-time / Part-time / Floater moves the DEFAULTS the blank boxes
+// stand for. Only the placeholders change — a number someone typed is theirs and
+// survives, because the override is the exception they went out of their way to
+// record and silently dropping it on a schedule change is how that exception
+// would get lost.
+window._upScheduleSync = function (sel) {
+    const row = sel && sel.closest ? sel.closest('.user-manage-row') : null;
+    if (!row) return;
+    const c = ListingGoalsEngine.cfg;
+    const v = sel.value;
+    const h = v === 'floater' ? (c.hours_floater || 25)
+        : v === 'part_time' ? (c.hours_part_time || 20) : (c.hours_full_time || 40);
+    const d = v === 'floater' ? (c.days_floater || 5)
+        : v === 'part_time' ? (c.days_part_time || 4) : (c.days_full_time || 5);
+    const hb = row.querySelector('.u-hours'), db = row.querySelector('.u-days');
+    if (hb) hb.placeholder = h + 'h';
+    if (db) db.placeholder = d + 'd';
+    if (hb) _upShiftSync(hb);
+};
+
 function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Employee' }, target) {
     const row = document.createElement('div');
     row.className = 'user-manage-row';
@@ -2130,11 +2305,32 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     const _lc = ListingGoalsEngine.cfg;
     const scheduleValue = user.can_float ? 'floater'
         : (user.employment_type === 'part_time' ? 'part_time' : 'full_time');
+    // The label spells out the DAY the type implies, not just the week, because
+    // the day is what a goal is built from and "Part-time · 20h" on its own left
+    // a manager no way to see why a part-timer's number was what it was.
     const scheduleOptions = [
-        ['full_time', `Full-time · ${_lc.hours_full_time || 40}h`],
-        ['part_time', `Part-time · ${_lc.hours_part_time || 20}h`],
-        ['floater',   `Floater · ${_lc.hours_floater || 25}h`],
+        ['full_time', `Full-time · ${_lc.hours_full_time || 40}h / ${_lc.days_full_time || 5}d`],
+        ['part_time', `Part-time · ${_lc.hours_part_time || 20}h / ${_lc.days_part_time || 4}d`],
+        ['floater',   `Floater · ${_lc.hours_floater || 25}h / ${_lc.days_floater || 5}d`],
     ].map(([v, label]) => `<option value="${v}" ${scheduleValue === v ? 'selected' : ''}>${label}</option>`).join('');
+
+    // Hours and days, when the type's default isn't the truth for this person.
+    //
+    // Two boxes rather than one "hours per day", because a shift length typed
+    // beside a weekly figure can contradict it, and the contradiction is
+    // invisible until it shows up in Staffed For weeks later. These two are the
+    // numbers a manager reads straight off the schedule, and the shift is
+    // DERIVED from them (migration 0091) — so there is nothing to keep in step.
+    //
+    // Blank is the normal state and means "use the default for the type above".
+    // Placeholders show what that default currently is, so an empty box still
+    // says what the person is being counted as.
+    const dflHours = scheduleValue === 'floater' ? (_lc.hours_floater || 25)
+        : scheduleValue === 'part_time' ? (_lc.hours_part_time || 20) : (_lc.hours_full_time || 40);
+    const dflDays = scheduleValue === 'floater' ? (_lc.days_floater || 5)
+        : scheduleValue === 'part_time' ? (_lc.days_part_time || 4) : (_lc.days_full_time || 5);
+    const hoursVal = (user.weekly_hours != null && user.weekly_hours !== '') ? user.weekly_hours : '';
+    const daysVal = (user.days_per_week != null && user.days_per_week !== '') ? user.days_per_week : '';
 
     // hire_date is deliberately NOT edited here (user, 2026-08-10). It is stamped
     // server-side the moment a new PIN is saved, which starts the two-week
@@ -2147,7 +2343,10 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
         <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 78px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
         <select class="u-store" style="flex: 1;">${storeOptions}</select>
         <select class="u-role" style="flex: 1.5;">${roleOptions}</select>
-        <select class="u-schedule" style="flex: 1.3;" title="Weekly hours — what this person's store listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
+        <select class="u-schedule" onchange="_upScheduleSync(this)" style="flex: 1.3;" title="Weekly hours — what this person's store listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
+        <input type="number" class="u-hours" min="1" max="80" placeholder="${dflHours}h" value="${hoursVal}" oninput="_upShiftSync(this)" style="flex: 0 0 62px; max-width: 62px;" title="Hours a week, if this person isn't on the default for their schedule type. Leave blank to use it.">
+        <input type="number" class="u-days" min="1" max="${_lc.open_days || 6}" placeholder="${dflDays}d" value="${daysVal}" oninput="_upShiftSync(this)" style="flex: 0 0 56px; max-width: 56px;" title="Days a week they're in. Hours ÷ days is the shift their daily listing goal is built from. Leave blank to use the default.">
+        <span class="u-shift" style="flex: 0 0 auto; min-width: 58px; font-size: 11px; font-weight: 700; color: #64748b; text-align: center; white-space: nowrap;" title="The shift their daily listing goal is built from — hours ÷ days.">${_upShiftLabel(hoursVal || dflHours, daysVal || dflDays)}</span>
         <span class="u-notify" data-name="${escapeHtml((user.name || '').trim().toLowerCase())}" title="Email alerts — each person sets their own from the cog in the top bar."></span>
         <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
@@ -2179,6 +2378,15 @@ async function saveManageUsers() {
         // here is destroyed. Send the schedule fields explicitly; the server
         // falls back to the stored value only when a key is absent entirely.
         const schedule = row.querySelector('.u-schedule')?.value || 'full_time';
+        // Blank means "use the default for the schedule type", which the server
+        // stores as NULL — so an empty box has to travel as null, not as 0 or ''.
+        // A 0 would be a real answer meaning no hours at all, and would zero that
+        // person out of their store's capacity.
+        const numOrNull = (sel) => {
+            const v = row.querySelector(sel)?.value ?? '';
+            const n = parseInt(v, 10);
+            return (v !== '' && Number.isFinite(n) && n > 0) ? n : null;
+        };
 
         if (name || pin) {
             if (pin.length !== 4) {
@@ -2192,6 +2400,8 @@ async function saveManageUsers() {
                 name, pin, store, role,
                 employment_type: schedule === 'part_time' ? 'part_time' : 'full_time',
                 can_float: schedule === 'floater',
+                weekly_hours: numOrNull('.u-hours'),
+                days_per_week: numOrNull('.u-days'),
             });
         }
     });
@@ -2795,32 +3005,31 @@ function handlePINAutoTrigger() {
     }
 }
 
-// ── The Store role: a shop-floor display, not a person ──────────────────────
+// ── The Store role: a shared screen, on the ordinary pages ──────────────────
 //
-// One account per store, signed in on a TV on the sales floor. It is not someone
-// with a narrow set of permissions — it is a screen, so it gets exactly one page
-// and is kept on it. That is a redirect rather than a pile of role classes for
-// the same reason tv.html is its own file: a board that can only ever render one
-// card cannot accidentally show payroll to a customer.
+// One account per store, signed in on the TV on the sales floor and on the iPad
+// at the picture station. It is not a person, so it is not given a person's site
+// — but it is no longer given a site of its own either.
 //
-// Deliberately NOT a security boundary. The role sees what any signed-in pin
-// sees (see scopeFor in shopify-live); this only decides where it lands.
-const TV_PAGE = 'tv.html';
+// IT USED TO HAVE ONE. tv.html was a separate page and every other URL redirected
+// this role onto it, on the reasoning that a board which can only render one card
+// cannot accidentally show payroll to a customer. Then the picture station needed
+// Operations too, and keeping the redirect meant punching a hole in it, marking
+// one page as an exception, and giving the board a link back to itself. Ethan,
+// 2026-09-20: "What's currently on the store accounts should just be a version of
+// Quick Portal and have the tab there and then we just add operations tab with
+// just picture guide. I think we over engineered this from the start."
+//
+// He was right, and the thing that made the redirect unnecessary is the thing
+// that was built alongside it: STORE_BOARD_FEATURES. Once visibility for this
+// role is a list rather than a default, the board is safe on any page in the
+// site, because every page shows it the same three surfaces. The redirect was
+// guarding a door in a wall that no longer had a room behind it.
+//
+// Still deliberately NOT a security boundary. The role sees what any signed-in
+// pin sees (see scopeFor in shopify-live); this decides what is on the screen.
 function _tvIsBoardRole() {
     return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'store';
-}
-function _tvOnBoardPage() {
-    return /(^|\/)tv\.html$/i.test(String(window.location.pathname || ''));
-}
-// Returns true when it has started navigating — callers must stop what they were
-// doing, because the rest of a page init is pointless mid-redirect.
-function _tvGate() {
-    if (!_tvIsBoardRole() || _tvOnBoardPage()) return false;
-    // replace(), not href: nobody is standing at the TV pressing Back, and a
-    // history entry per load would let a stray remote-control press wander off
-    // the board with no way back.
-    window.location.replace(TV_PAGE);
-    return true;
 }
 
 // The board's whole init. A screen is not a session: it has one card, nobody to
@@ -2914,17 +3123,11 @@ async function checkPIN() {
             sessionStorage.setItem('speeksUserOnboardedAt', matched.onboarded_at || '');
 
             // The foundation of the nightly usage report: without this there is no
-            // record anywhere that a person opened the site at all. Recorded above
-            // the TV gate on purpose — board sessions are logged and filtered out
-            // when the report runs, rather than being dropped at source where we
-            // could never tell a quiet store from a broken beacon.
+            // record anywhere that a person opened the site at all. Board sign-ins
+            // are logged and filtered out when the report runs, rather than being
+            // dropped at source where we could never tell a quiet store from a
+            // broken beacon.
             trackUsage('signin', 'session', _usageLabel('session'));
-
-            // A shop-floor board signs in on the login page like everyone else and
-            // is sent straight to its own page. Before the dashboard init below, not
-            // after: there is no point building a QuickPortal nobody will see, and a
-            // half-built one is what would flash on the TV on the way past.
-            if (_tvGate()) return;
 
             // The board this page fetched at load was built with nobody signed in,
             // so every announcement counted as unread — the priority banner and
@@ -2953,6 +3156,16 @@ async function checkPIN() {
 
             closeAllModals();
             applyRoleBasedUI();
+
+            // A board takes the same small init here as it does on a reload, for
+            // the same reason — see the board branch in the page-load handler.
+            // Without this the ONE path that starts a board's day would be the
+            // one path that starts every poller on it.
+            if (_tvIsBoardRole()) {
+                if (document.getElementById('ccWidget')) initBoardPage();
+                if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
+                return;
+            }
 
             if (typeof initDashboardData === 'function') initDashboardData();
             initTicker();
@@ -5840,16 +6053,46 @@ function _kpiRenderMonthly(periods) {
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiColgroupHtml() + '<tbody>' + tbody + '</tbody></table></div>';
 }
 
+// May this user save NUMBERS for the store currently on screen? Mirrors the
+// store-scoping in kpi-manage's POST, and exists because the store picker is
+// delegable now (cap-kpi-dm): a manager lent the DM's view can put another
+// store's grid on screen, and the old role-only check would have offered them an
+// Edit button the edge function answers with "Cannot submit for another store".
+// Global roles (DM / CEO / owner-manager) may submit anywhere — that is the
+// backend's rule, not a guess.
+//
+// An MSM signs in as 'manager' with speeksMultiStore set (see the login block),
+// so the multi-store case is asked with isMultiStoreManager(), NOT a role string
+// — sessionStorage never holds 'multi-store manager'. The backend sees their real
+// users.role and scopes them to MULTISTORE_MANAGER_STORES, which is the same
+// answer.
+//
+// ⚠️ Paired with `canEnterKPIs` and the roleLower block in
+// supabase/functions/kpi-manage/index.ts. Change one, change the other — a
+// frontend that says yes while the backend says no is a button that 403s, which
+// is the bug this function exists to prevent.
+const _KPI_GLOBAL_EDIT_ROLES = new Set(['district manager', 'ceo', 'owner (manager)', 'owner manager']);
+function _kpiCanEditNumbers() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (_KPI_GLOBAL_EDIT_ROLES.has(role)) return true;
+    if (role !== 'manager' && role !== 'assistant manager') return false;
+    const onScreen = (_kpiResolveStore() || '').toUpperCase();
+    if (!onScreen) return false;
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return MULTISTORE_MANAGER_STORES.indexOf(onScreen) !== -1;
+    }
+    return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase() === onScreen;
+}
+
 function _kpiSyncHeaderBtns() {
     const editBtn   = document.getElementById('kpiEditBtn');
     const saveBtn   = document.getElementById('kpiSaveBtn');
     const cancelBtn = document.getElementById('kpiCancelBtn');
     const isEditing   = !!_kpiEditingPeriod;
     const hasEditable = (_kpiPeriodsData || []).some(function(p) { return p.is_editable; });
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const canEditRole = role === 'district manager' || role === 'ceo' || role === 'owner (manager)' || role === 'owner manager' || role === 'manager' || role === 'assistant manager';
+    const canEditHere = _kpiCanEditNumbers();
     const hasPeriods  = (_kpiPeriodsData || []).length > 0;
-    if (editBtn)   editBtn.style.display   = (!isEditing && canEditRole && (hasEditable || hasPeriods)) ? '' : 'none';
+    if (editBtn)   editBtn.style.display   = (!isEditing && canEditHere && (hasEditable || hasPeriods)) ? '' : 'none';
     if (saveBtn)   saveBtn.style.display   = isEditing ? '' : 'none';
     if (cancelBtn) cancelBtn.style.display = isEditing ? '' : 'none';
     _kpiDecorateEditBtn();
@@ -6197,13 +6440,32 @@ async function openKpiEntryPanelForStore(store, tab) {
     await openKpiEntryPanel(tab);
 }
 
+// Which store the picker should OPEN on. Only ever the initial selection —
+// changing it is the whole point of the control.
+//
+// This used to be `if the picker is hidden, set it to my store`, which was the
+// same statement as "I am a manager" back when only the DM, CEO and MOCD could
+// see it. cap-kpi-dm broke that equivalence: a manager lent the picker has both
+// a visible picker AND a home store, and would have landed on OVL — the first
+// option — leaving their own store the one place they had to go looking for.
+//
+// So it asks the honest question instead: do I have a store that is actually in
+// this list? A DM or CEO is 'ALL', which matches no option, so they keep
+// whatever was selected exactly as before. An MSM routed here by a store-specific
+// feed card opens on THAT store (_kpiViewStore), same as when the picker is
+// hidden from them.
+function _kpiSeedStorePicker() {
+    const sel = document.getElementById('kpiModalStoreSelect');
+    if (!sel) return;
+    const want = (_kpiViewStore || sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    if (!want) return;
+    if (Array.from(sel.options).some(o => o.value === want)) sel.value = want;
+}
+
 async function openKpiEntryPanel(tab) {
     _kpiCurrentTab = tab || 'weekly';
     _kpiEditingPeriod = null;
-    // Seed the modal store selector with the user's own store (managers); DMs keep whatever is selected
-    const sel = document.getElementById('kpiModalStoreSelect');
-    const userStore = sessionStorage.getItem('speeksUserStore');
-    if (sel && userStore && sel.offsetParent === null) sel.value = userStore;
+    _kpiSeedStorePicker();
     document.getElementById('kpi-tab-weekly') && document.getElementById('kpi-tab-weekly').classList.toggle('active', _kpiCurrentTab === 'weekly');
     document.getElementById('kpi-tab-monthly') && document.getElementById('kpi-tab-monthly').classList.toggle('active', _kpiCurrentTab === 'monthly');
     toggleModal('kpiEntryModal');
@@ -6242,10 +6504,7 @@ async function loadWorkspaceKpis() {
     _wsKpiLoaded = true;
     _kpiCurrentTab = wantTab;
     _kpiEditingPeriod = null;
-    // Managers (picker hidden) default to their own store; DMs keep selection
-    const sel = document.getElementById('kpiModalStoreSelect');
-    const userStore = sessionStorage.getItem('speeksUserStore');
-    if (sel && userStore && sel.offsetParent === null) sel.value = userStore;
+    _kpiSeedStorePicker();
     document.getElementById('kpi-tab-weekly')?.classList.toggle('active', wantTab === 'weekly');
     document.getElementById('kpi-tab-monthly')?.classList.toggle('active', wantTab === 'monthly');
     await _kpiLoadAll(wantTab);
@@ -7814,6 +8073,20 @@ const _pgEsc = s => String(s == null ? '' : s)
 const PG_EDIT_ROLES = new Set(['district manager', 'ceo']);
 
 function pgCanEdit() {
+    // THE EDITOR IS A DESKTOP TOOL. Ethan, 2026-09-20, bringing the guide back on
+    // a tablet: "we don't need the edit part for DM, just the view only version
+    // like every other role sees." It is a two-pane admin — a category rail, a
+    // shot list, per-shot photo swaps — and a lister holding an iPad is reading
+    // the board, not rebuilding it.
+    //
+    // HERE rather than on the button, because the button is not the only door.
+    // The rail's "New category" is drawn by pgRender() long after any sweep has
+    // run, the empty-state copy invites you to "Open Edit", and pgOpenAdmin() is
+    // reachable from both. One answer, and everything downstream follows it —
+    // which is the same reason PG_EDIT_ROLES exists instead of three role lists.
+    // A device is not a "who", so this does not muddy that question, and the
+    // edge function still enforces the role on every write regardless.
+    if (typeof _isMobileLayout === 'function' && _isMobileLayout()) return false;
     if (!PG_EDIT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim())) return false;
     // Feature Access as well as the role. The Edit BUTTON carries
     // data-feature="tool-picture-manage" and applyRoleBasedUI hides it, but the
@@ -9105,14 +9378,45 @@ function initOperations() {
     let initial = sign ? 'b2b'
         : hash === 'categories' ? 'ebay'
         : ['marginguide', 'pictureguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
-    const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
+    // COMPUTED display, not the inline one. The fallback below was written for
+    // Feature Access, which writes `display: none !important` onto the element —
+    // but the mobile curation cuts a plain [data-feature] tab from a STYLESHEET
+    // and leaves style.display empty, so an inline test reads every cut tab as
+    // visible. On a tablet that landed the page on SPEEKS Connect, which is cut,
+    // and drew an empty Operations page with a tab strip above it.
+    //
+    // getComputedStyle reports the element's OWN computed display even while an
+    // ancestor is hidden (.main-content is, behind the auth gate, when this
+    // runs), so it is safe this early. Same shape as _ccOpenDefaultTab.
+    const tabVisible = id => {
+        const b = document.getElementById(id);
+        return !!b && !b.hidden && getComputedStyle(b).display !== 'none';
+    };
     if (!tabVisible('ops-tab-' + initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ops-tab-"]'))
-            .find(b => b.style.display !== 'none' && !b.hidden);
+            .find(b => tabVisible(b.id));
         if (firstVisible) initial = firstVisible.id.replace('ops-tab-', '');
     }
     switchOperationsTab(initial);
     if (hash === 'categories') _ecMarkView('cats');
+
+    // A TAB STRIP WITH ONE TAB IS A LABEL THAT LOOKS CLICKABLE. Ethan saw it on
+    // the picture-station iPad, which reaches exactly one Operations tab: a green
+    // underlined "Picture Guide" sitting above a panel whose heading also says
+    // Picture Guide, with nothing to switch to. Every other role that ends up
+    // with one visible tab — an employee on a tablet, anyone whose access has
+    // been narrowed in Feature Access — had the same thing and nobody had
+    // noticed, so this is not a board rule and is not written as one.
+    //
+    // Counted from the computed display, the same as the fallback above, because
+    // the stylesheet is what cuts a tab on a tablet and it leaves style.display
+    // empty while doing it.
+    const strip = document.querySelector('.ws-subtabs');
+    if (strip) {
+        const shown = Array.from(strip.querySelectorAll('.ws-tab'))
+            .filter(b => getComputedStyle(b).display !== 'none');
+        strip.style.display = shown.length > 1 ? '' : 'none';
+    }
 }
 
 function _kpiStartEdit(periodDate) {
@@ -10718,18 +11022,7 @@ function renderQMTab(tab) {
 function copyQMToClipboard(button) {
     const textToCopy = button.getAttribute('data-message');
     navigator.clipboard.writeText(textToCopy).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!'; 
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        
-        setTimeout(() => { 
-            button.innerText = originalText; 
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 1500);
+        _copyFlash(button);
     }).catch(err => console.error('Failed to copy text: ', err));
 }
 
@@ -11421,7 +11714,13 @@ function _tabSwitch(cfg, tab) {
     const p = cfg.prefix;
     const widget = document.getElementById(cfg.widget);
     const btn = document.getElementById(p + '-tab-' + tab);
-    const collapse = btn && btn.classList.contains('active'); // clicking the open tab closes it
+    // Clicking the open tab closes it — ON A DESKTOP, where closing lands you on
+    // the summary. Every compact screen cuts that summary, so the same tap would
+    // leave a card with nothing in it at all: no panel, no strip, no summary, and
+    // (since the "▴ Summary" control is cut too) nothing to press to get back.
+    // A tab there is a selector, not a toggle, and the open one is simply inert.
+    const compact = typeof _isMobileLayout === 'function' && _isMobileLayout();
+    const collapse = !compact && !!btn && btn.classList.contains('active');
 
     cfg.tabs().forEach(t => {
         const on = !collapse && t === tab;
@@ -11560,38 +11859,130 @@ function _reconcileCommandWidgets() {
     // Nothing is lost by not opening: every panel's data is fetched on page load,
     // not on tab open (see the setTimeout block in the post-login sequence), and
     // switchCommandTab is purely presentational. The summary fills either way.
+    //
+    // ...ON A DESKTOP. EVERY COMPACT SCREEN OPENS ONE, because the summary that
+    // argument rests on is not drawn there: the compact layer cuts .cc-summary
+    // as "seven cells restating the card below it". A phone also loses the tab
+    // bar, so with nothing open the card was its own title and 68px of it —
+    // measured — with no control to reach anything. A tablet keeps the bar but
+    // made the same trade for the same reason, on Ethan's call (2026-09-19: "I
+    // would get rid of the summary option for tablet. Just have it default to
+    // live dashboard"), so both land on the first tab a role can see.
+    _ccSyncCompactOpen();
+    _ccSyncLoneTab();
 }
 
-// Kept as the one-line way back to opening on a tab, for either board, if that is
-// ever wanted again — see _reconcileCommandWidgets for why neither calls it.
+// A SEGMENTED CONTROL WITH ONE SEGMENT IS A LABEL THAT LOOKS CLICKABLE. The same
+// rule the Operations tab strip gets in initOperations, and it arrived for the
+// same reason: a store account sees exactly one Command Center tab, so the wall
+// showed a lone "Live Dashboard" pill above a panel already headed Live Dashboard.
+// It is not a board rule — anyone Feature Access has narrowed to one tab had it
+// too, and nobody had looked.
+//
+// Only when that one tab is OPEN. A lone tab that is still shut is the only way
+// into the panel behind it, so hiding it there would be how a card becomes
+// unopenable — which is the failure this is supposed to prevent, not cause.
+function _ccSyncLoneTab() {
+    [document.getElementById('ccWidget'), document.getElementById('dcWidget')].forEach(w => {
+        const seg = w && w.querySelector('.cc-seg');
+        if (!seg) return;
+        const shown = Array.from(seg.querySelectorAll('.toggle-btn'))
+            .filter(b => getComputedStyle(b).display !== 'none');
+        const lone = shown.length === 1 && shown[0].classList.contains('active');
+        seg.style.display = (shown.length && !lone) ? '' : 'none';
+    });
+}
+
+// "Does this screen need a tab open for the board to show anything?" Yes
+// wherever the summary is cut, which is the whole compact band — phone and
+// tablet alike — and no on a desktop, where the summary IS the opening view.
+// Called on load (above) and again on each band crossing, because a window
+// dragged narrow arrives in the collapsed state after load and nothing else
+// would notice.
+function _ccSyncCompactOpen() {
+    const compact = typeof _isMobileLayout === 'function' && _isMobileLayout();
+    // ...and a board, at any width. The summary's case rests on "anything more
+    // specific is one click away", and a screen on a wall has nobody to click it.
+    // The old shop-floor page opened straight onto the live card; this is that
+    // behaviour kept, now that the board is this card on the ordinary page.
+    if (!compact && !_tvIsBoardRole()) return;
+    _ccOpenDefaultTab();
+    _dcOpenDefaultTab();
+}
+
+// Opening on a tab, for either board. A phone goes through here on every load
+// (via _ccSyncCompactOpen); a desktop and a tablet deliberately do not — see
+// _reconcileCommandWidgets for why they land on the summary instead.
 //
 // Picks the first VISIBLE tab rather than assuming Live is there: Feature Access
 // can switch cc-live off per role or per person, and a role without it would
 // otherwise land on a transparent panel and read as a broken widget.
 //
-// One-shot. _reconcileCommandWidgets runs again whenever feature overrides are
-// re-applied, and re-opening a widget the manager deliberately collapsed would be
-// the panel arguing with them.
-var _ccDefaultOpened = false;
-var _dcDefaultOpened = false;
+// ONCE PER CARD, ASKED OF THE CARD. _reconcileCommandWidgets runs again whenever
+// feature overrides are re-applied, and re-opening a widget somebody deliberately
+// collapsed would be the panel arguing with them — so this has to be able to tell
+// "already opened" from "not opened yet".
+//
+// It used to be a pair of module-level flags, and that was wrong in a way nothing
+// noticed until a card had no tab bar to recover with. THE SPA ROUTER REPLACES
+// .main-content's innerHTML: coming back to the QuickPortal from Operations
+// builds a brand-new #ccWidget, collapsed, with no tab active — while the flag,
+// which lives in the module and not in the DOM, still said the card had been
+// opened. So it was skipped, and the card stayed shut. A manager could click the
+// tab and never think about it; a store account has no tab bar (see
+// _ccSyncLoneTab) and no Summary control, so it was stranded on a summary line
+// until the page was reloaded. The same hop on a phone was already worse — the
+// compact layer cuts the summary too, leaving a card with nothing in it at all.
+//
+// The state is in the DOM, so it is read from the DOM. A flag can go stale
+// against markup that was swapped underneath it; an active class cannot.
 function _openDefaultTab(cfg, open) {
     const widget = document.getElementById(cfg.widget);
     if (!widget || getComputedStyle(widget).display === 'none') return false;
+    const btns = cfg.tabs().map(t => document.getElementById(cfg.prefix + '-tab-' + t));
+    const active = btns.filter(b => b && b.classList.contains('active'));
+    // Genuinely open: leave it. Calling open() here would CLOSE it, because
+    // switchCommandTab treats the active tab as a toggle on a desktop.
+    if (active.length && widget.classList.contains('cc-expanded')) return true;
+    // A TORN STATE — a tab still flagged active on a card that is not expanded.
+    // _tabSwitch always writes the two together, so this only happens when
+    // something has reset one half without the other. Left alone, open() would
+    // read the stale flag as "you clicked the tab that was open" and collapse
+    // instead of opening, which is the one outcome this function exists to
+    // prevent. Clear the flag and open for real.
+    active.forEach(b => b.classList.remove('active'));
     const first = cfg.tabs().find(t => {
         const b = document.getElementById(cfg.prefix + '-tab-' + t);
         return b && getComputedStyle(b).display !== 'none';
     });
     if (!first) return false;
-    open(first);      // nothing is active yet, so this opens rather than toggles
+    open(first);      // nothing is active, so this opens rather than toggles
     return true;
 }
-function _ccOpenDefaultTab() {
-    if (_ccDefaultOpened) return;
-    if (_openDefaultTab(_CC_BOARD, switchCommandTab)) _ccDefaultOpened = true;
-}
-function _dcOpenDefaultTab() {
-    if (_dcDefaultOpened) return;
-    if (_openDefaultTab(_DC_BOARD, switchDistrictTab)) _dcDefaultOpened = true;
+function _ccOpenDefaultTab() { _openDefaultTab(_CC_BOARD, switchCommandTab); }
+function _dcOpenDefaultTab() { _openDefaultTab(_DC_BOARD, switchDistrictTab); }
+
+// THE CARD'S OWN NAME. "— · This Month / Store Command Center" is what the markup
+// ships with, and fetchScorecardData replaces both the moment it lands, stamping
+// the store it actually fetched for. That covered everybody, because until the
+// store accounts arrived every role that could see this card also fetched a
+// scorecard.
+//
+// A board does not: it has no Scorecard tab and initBoardPage deliberately
+// fetches only the two things on the card. So it sat under the placeholders —
+// an em dash and the literal word "Store" — on a screen whose whole job is to
+// say which store it belongs to.
+//
+// A BASELINE, not an override. It runs from applyRoleBasedUI, well before any
+// fetch, so fetchScorecardData still has the last word wherever it runs and a DM
+// switching stores is not pinned to their own. Skipped for 'ALL' — a card that
+// names no single store is a district card, and the placeholder is correct there
+// until the fetch says otherwise.
+function _ccStampStore(store) {
+    const code = String(store || '').trim().toUpperCase();
+    if (!code || code === 'ALL') return;
+    document.querySelectorAll('#cc-store-name').forEach(el => el.textContent = code);
+    document.querySelectorAll('#cc-store-eyebrow').forEach(el => el.textContent = code);
 }
 
 // ============================================================================
@@ -15131,16 +15522,19 @@ function renderLiveDashboard() {
         ? 'Last change ' + _lvClock(d.asOfCentral) + ' Central'
         : escapeHtml(_lvHeadStamp(d));
     details.forEach(el => {
-        // Two mounts don't offer the full-screen button: the one already inside
-        // the full-screen view, and the shop-floor board (.tv-card), which is a
-        // full screen with nothing to return to. Asked of the DOM rather than of
-        // the page — the board is identified by the card it renders into, which
-        // keeps this module from reaching into the auth section for _tvOnBoardPage.
-        const bare = !!el.closest('#lvFullscreen, .tv-card');
-        // The daily breakdown has its own exclusion, narrower than `bare`: it is
-        // fine — useful, even — on top of the full-screen board, but the
-        // shop-floor board is unattended and has nobody to click it.
-        const board = !!el.closest('.tv-card');
+        // One mount doesn't offer the full-screen button: the one already inside
+        // the full-screen view, which has nothing to return to.
+        //
+        // The shop-floor board used to be the second, back when it was its own
+        // page that was already a full screen. It isn't any more — it is this card
+        // on the ordinary QuickPortal — so full-screen is how the TV on the wall
+        // gets that clean view back, and it is the one control there that a board
+        // genuinely wants.
+        const bare = !!el.closest('#lvFullscreen');
+        // The daily breakdown keeps its exclusion, and it is a role question
+        // rather than a mount one: fine on top of the full-screen board, but a
+        // shop-floor screen is unattended and has nobody to click it.
+        const board = _tvIsBoardRole();
         el.innerHTML = '<div class="lv-head">'
             + '<span class="lv-head-l">' + _lvFreshness(d)
             + '<span class="lv-asof">' + stamp + '</span></span>'
@@ -15742,8 +16136,17 @@ const ListingGoalsEngine = {
         saturday_factor: 0.5, goal_factor: 0.75, open_days: 6,
         // Shown as labels in the User Permissions schedule dropdown.
         hours_full_time: 40, hours_part_time: 20, hours_floater: 25, new_hire_weeks: 2,
+        // Days present per week, per schedule type. weekly hours ÷ this is the
+        // SHIFT a daily goal is built from — see shiftFor.
+        days_full_time: 5, days_part_time: 4, days_floater: 5, max_shift_hours: 12,
     },
     _newHires: {},   // store → Set of names inside the new-hire ramp this week
+    // store → { employee name → their shift length in hours }, straight from the
+    // server. NOT derived here from hours ÷ days: that division lives in
+    // shiftHoursFor() in the store-targets function and nowhere else, because a
+    // constant duplicated across the two is exactly how the old baseForSize
+    // ladder drifted out of step with its server twin.
+    _shifts: {},
     // store → that store's own stretch factor. Kept HERE and not in cfg above,
     // because applyConfig runs once per store against one shared cfg object: a
     // per-store number in there would leave whichever store's fetch landed last
@@ -15759,6 +16162,21 @@ const ListingGoalsEngine = {
         if (row.cfg) Object.assign(this.cfg, row.cfg);
         if (row.store) this._newHires[row.store] = new Set(row.newHires || []);
         if (row.store && Number.isFinite(row.goalFactor)) this._factors[row.store] = row.goalFactor;
+        if (row.store && row.shifts) this._shifts[row.store] = row.shifts;
+    },
+
+    // Has this store's real payload landed yet? Until it has, every number this
+    // engine produces is a placeholder built on district defaults — the wrong
+    // stretch factor and, worse, the wrong shift for anyone who isn't full-time.
+    //
+    // This exists because those placeholders were being SAVED. renderManagerGoals
+    // kicks off recomputeGoalDisplays on a 30ms timer and a role tap autosaves,
+    // so a manager opening the modal on a cold cache could write a day's goals at
+    // the district factor before their own store's arrived. It is visible in the
+    // data as OVL rows reading 19 (8 × 3.0 × 0.78) beside rows reading 18
+    // (× 0.75) in the same week.
+    isReady(store) {
+        return !!(store && this._shifts[store]);
     },
 
     // This store's share of capacity, falling back to the district default for a
@@ -15808,8 +16226,36 @@ const ListingGoalsEngine = {
         const rate = this.rateFor(role, this.isNewHire(o.store, o.employee));
         if (!rate) return 0;
         return Math.round(
-            this.cfg.hours_per_day * rate * this.dayFactorFromDate(dateStr) * this.factorFor(o.store)
+            this.shiftFor(o.store, o.employee) * rate * this.dayFactorFromDate(dateStr) * this.factorFor(o.store)
         );
+    },
+
+    // How long THIS person's day is.
+    //
+    // Was cfg.hours_per_day — a flat 8 for everybody — which is the bug the whole
+    // of migration 0091 is about: the weekly goal was built from each person's
+    // real hours (40 / 20 / 25) while the daily goal pretended they all worked
+    // the same day. A floater on 25 hours a week and a part-timer on 10 both
+    // scored 18 on a lister day, exactly like someone on 40.
+    //
+    // It is not only the person's own number that was wrong. `Staffed For` on the
+    // DM's efficiency table is the SUM of these daily goals, so the inflation
+    // landed in the denominator of the ratio every store is judged on — which is
+    // why the two stores with no part-timer and no floater were the two reading
+    // sensibly while OVL, which has both, read 42%.
+    //
+    // The lookup is by name because listing_goals has no user_id to key on (see
+    // the identity note in CLAUDE.md), so a roster name and a saved name can
+    // differ — hence the loose match, the same rule the weekly rollups use.
+    // Falling back to hours_per_day keeps a person the server has never heard of
+    // scoring a full day rather than zero, which fails in the direction a manager
+    // will notice.
+    shiftFor(store, employee) {
+        const map = this._shifts[store];
+        if (!map || !employee) return this.cfg.hours_per_day;
+        if (Number.isFinite(map[employee])) return map[employee];
+        const hit = Object.keys(map).find(n => _goalsSameName(n, employee));
+        return hit ? map[hit] : this.cfg.hours_per_day;
     },
 
     // Rough weekly capacity goal for a store of `size` full-timers. ONLY a
@@ -16178,12 +16624,33 @@ function buildGoalsEditForm() {
 }
 
 // Debounced auto-save — managers just pick roles, no Save button.
+//
+// Held back until the store's own payload has landed. Before it does, every goal
+// on screen is a placeholder computed from district defaults: the district
+// stretch factor instead of the store's, and — since 0091 — a flat 8-hour day
+// for a part-timer or floater who does not work one. Writing those is how OVL
+// ended up with rows reading 19 (× 0.78) next to rows reading 18 (× 0.75) inside
+// one week. Re-armed on the same timer, so nothing is lost: the tap still saves,
+// a beat later, with the right numbers.
 window.scheduleGoalsAutosave = function() {
     const status = document.getElementById('goals-save-status');
     if (status) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
     clearTimeout(_goalsAutosaveTimer);
-    _goalsAutosaveTimer = setTimeout(() => saveGoalsData(true), 900);
+    _goalsAutosaveTimer = setTimeout(() => {
+        // Bounded, and it saves anyway at the end of it. A manager's roles are
+        // the thing that must not be lost; a goal computed on defaults is wrong
+        // but self-heals on the next render (_goalsResaveIfStale), whereas a
+        // roster nobody wrote is gone. The MSM widget keeps its own per-store
+        // state and saves through saveGoalsDataMS, so this single-store readiness
+        // check does not apply to it.
+        const waiting = !_msGoalsActive() && !ListingGoalsEngine.isReady(goalsTargetStore);
+        if (waiting && ++_goalsSaveWaits <= GOALS_SAVE_MAX_WAITS) return scheduleGoalsAutosave();
+        _goalsSaveWaits = 0;
+        saveGoalsData(true);
+    }, 900);
 };
+let _goalsSaveWaits = 0;
+const GOALS_SAVE_MAX_WAITS = 10;   // ~9s, then write what we have rather than lose it
 
 async function saveGoalsData(silent = false) {
     if (_msGoalsActive()) return saveGoalsDataMS(silent);
@@ -16628,6 +17095,282 @@ async function saveGoalsDataMS(silent = false) {
     }
 }
 
+// ============================================================================
+// LISTING GOALS — PAST WEEKS
+// The "Past weeks" side of the Listing Goals modal (managers + ASMs; the modal
+// is already gated by _canAssignGoalRoles). Read-only: for each of the last four
+// FINISHED weeks, the seat each person was given each day and what they listed
+// against the goal those seats added up to — so a manager can judge a week
+// fairly. Someone who spent it on the buy counter is not marked down for a low
+// count; a lister who fell short stands out.
+//
+// Data is store-targets ?action=roleweeks (see the note there). Listings are the
+// weekly KPI, because the daily result column is never filled in — which is
+// also why there is no per-day listed figure to show, only per-week.
+//
+// PEOPLE ARE SCORED ACROSS THE MARKET. A floater's KPI is filed under one store
+// for the whole week, so his row sums goals and listings from every store in the
+// market, and a day he spent elsewhere shows as that store's code. The store
+// summary above the grid is this store's own rows and KPI only, so for a store
+// that lent or borrowed a floater the rows need not add up to it.
+//
+// Names match EXACTLY (trimmed, case-insensitive), not with _goalsSameName: that
+// helper's first-name rule would merge Ethan Kushnir and Ethan Frye, who are both
+// in KC. Both tables are written with full names from the same user list.
+//
+// Approved look (Ethan, 2026-09-16): no legend, daily goals always visible, one
+// width for every percent bubble, fixed-width week label with a "Last week" tag.
+// Styles are the lgpw- block at the end of styles.css.
+// ============================================================================
+const LGPW_WEEKS = 4;
+const LGPW_TTL_MS = 5 * 60 * 1000;
+let _lgpw = { past: false, week: 0, data: {}, failed: {} };   // data: store -> { at, payload }
+
+function _lgpwStores() {
+    return isMultiStoreManager() ? MULTISTORE_MANAGER_STORES.slice() : [goalsTargetStore];
+}
+function _lgpwKey(name) { return String(name || '').trim().toLowerCase(); }
+function _lgpwAddDays(ds, n) {
+    const d = new Date(ds + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().split('T')[0];
+}
+// "Sep 7". Month on BOTH ends of the range, always, so every week's label is the
+// same shape and they line up (user, 2026-09-16).
+function _lgpwFmt(ds) {
+    return new Date(ds + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+function _lgpwKind(role) {
+    if (!role || role === '-') return 'unset';
+    if (role === GOALS_OFF) return 'off';
+    return role[0] === 'B' ? 'b' : 'l';
+}
+function _lgpwTone(pct) { return pct >= 100 ? 'good' : pct >= 80 ? 'warn' : 'bad'; }
+
+// PAST WEEKS IS NOT A PHONE VIEW. The grid is a name column plus seven day
+// columns; at 390px four of them are off the right-hand edge, and the card it
+// sits in clips rather than scrolls, so there is no affordance to say the rest
+// exists (Ethan, screenshot, 2026-09-17). Cut the tab rather than try to make a
+// seven-column table work at that width — Today, the roster editor, is the thing
+// somebody actually opens this on a phone to do.
+//
+// SCOPED TO THE STORE-FLOOR MANAGERS, who are the ones doing it from a phone:
+// Manager, Assistant Manager and Multi-Store Manager. District Manager, CEO,
+// MOCD and Owner (Manager) keep the tab everywhere, on the reading that a
+// leadership role looking back over four weeks is at a desk. One list, one line
+// to change if that reading is wrong.
+//
+// Phone only, not the whole compact band: a tablet has the width for all seven
+// columns, which is the entire reason the band and the tablet exception are
+// separate questions.
+const LGPW_PAST_CUT_ROLES = ['role-manager', 'role-assistant-manager', 'role-multistore-manager'];
+
+function _lgpwPastAllowed() {
+    if (!_panelIsFullBleed()) return true;          // desktop or tablet: room for it
+    return !LGPW_PAST_CUT_ROLES.includes(_speeksRoleClass());
+}
+
+// Called when the modal opens AND on a breakpoint crossing, because the answer
+// changes under an open modal: rotate an iPad into portrait, or drag a window
+// narrow, and a manager is looking at a grid whose tab is about to be taken away.
+function _lgpwSyncTabs() {
+    const p = document.getElementById('lgpw-v-past');
+    if (!p) return;
+    const ok = _lgpwPastAllowed();
+    // removeProperty, not display:'' via a value — the button has no inline
+    // display of its own to restore, and the stylesheet's .lgpw-seg button rule
+    // is what should be deciding it.
+    if (ok) p.style.removeProperty('display');
+    else p.style.setProperty('display', 'none', 'important');
+    // Cut while it is the OPEN view: fall back to Today rather than strand
+    // somebody on a clipped grid with no visible control to leave it by.
+    if (!ok && _lgpw.past) lgpwSetView(false);
+}
+
+// Switch between the role editor and the look back. Always lands on Today when
+// the modal opens (openListingGoals), so nobody goes to set roles and finds a
+// read-only grid.
+function lgpwSetView(past) {
+    _lgpw.past = !!past;
+    const t = document.getElementById('lgpw-v-today'), p = document.getElementById('lgpw-v-past');
+    if (t) t.setAttribute('aria-pressed', String(!past));
+    if (p) p.setAttribute('aria-pressed', String(!!past));
+    const today = document.getElementById('goals-pane-today'), pane = document.getElementById('goals-pane-past');
+    if (today) today.hidden = !!past;
+    if (pane) pane.hidden = !past;
+    const wk = document.getElementById('lgpw-wk');
+    if (wk) wk.classList.toggle('away', !past);
+    if (past) { _lgpw.week = 0; lgpwLoad(); }
+}
+
+function lgpwStep(dir) {
+    _lgpw.week = Math.max(0, Math.min(LGPW_WEEKS - 1, _lgpw.week + dir));
+    lgpwRender();
+}
+
+async function lgpwLoad() {
+    const stores = _lgpwStores();
+    const stale = stores.filter(s => !_lgpw.data[s] || Date.now() - _lgpw.data[s].at > LGPW_TTL_MS);
+    lgpwRender();
+    if (!stale.length) return;
+    await Promise.all(stale.map(async s => {
+        try {
+            const r = await fetch(`${STORE_TARGETS_URL}?action=roleweeks&store=${s}&v=${Date.now()}`).then(x => x.json());
+            // goals, not weeks: a store-targets deploy that predates roleweeks
+            // ignores the action and answers with evaluate(), which ALSO has a
+            // weeks array — and that rendered as a convincing "No roles were set
+            // this week" instead of an error (2026-09-16).
+            if (!r || !Array.isArray(r.goals) || !Array.isArray(r.listed)) throw new Error('bad payload');
+            _lgpw.data[s] = { at: Date.now(), payload: r };
+            delete _lgpw.failed[s];
+        } catch (e) {
+            _lgpw.failed[s] = true;
+        }
+    }));
+    if (_lgpw.past) lgpwRender();
+}
+
+function lgpwRender() {
+    const pane = document.getElementById('goals-pane-past');
+    if (!pane) return;
+    const stores = _lgpwStores();
+
+    // Week header. The label comes from the date maths alone, so it is right even
+    // before the fetch lands and the arrows never wait on the network.
+    const monday = new Date(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }) + 'T12:00:00Z');
+    monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7) - 7 * (_lgpw.week + 1));
+    const weekStart = monday.toISOString().split('T')[0];
+    const txt = document.getElementById('lgpw-wk-text');
+    if (txt) txt.textContent = `${_lgpwFmt(weekStart)} – ${_lgpwFmt(_lgpwAddDays(weekStart, 5))}`;
+    const tag = document.getElementById('lgpw-tag');
+    if (tag) tag.classList.toggle('away', _lgpw.week !== 0);
+    const pips = document.getElementById('lgpw-pips');
+    if (pips) pips.innerHTML = [3, 2, 1, 0].map(i => `<i class="${i === _lgpw.week ? 'on' : ''}"></i>`).join('');
+    const prev = document.getElementById('lgpw-prev'), next = document.getElementById('lgpw-next');
+    if (prev) prev.disabled = _lgpw.week >= LGPW_WEEKS - 1;
+    if (next) next.disabled = _lgpw.week <= 0;
+
+    pane.innerHTML = stores.map(s => {
+        const head = stores.length > 1 ? `<div class="lgpw-store-name">${escapeHtml(s)}</div>` : '';
+        const d = _lgpw.data[s];
+        let body;
+        if (d) body = _lgpwStoreHtml(s, d.payload, weekStart);
+        else if (_lgpw.failed[s]) body = '<div class="lgpw-msg err">Couldn\'t load past weeks. Close and reopen to try again.</div>';
+        else body = '<div class="lgpw-msg">Loading past weeks…</div>';
+        return `<section class="lgpw-store">${head}${body}</section>`;
+    }).join('');
+}
+
+function _lgpwStoreHtml(store, payload, weekStart) {
+    const weekEnd = _lgpwAddDays(weekStart, 6);
+    const days = [0, 1, 2, 3, 4, 5].map(i => _lgpwAddDays(weekStart, i));
+    const goals = (payload.goals || []).filter(r => r.date >= weekStart && r.date <= weekEnd);
+    const listed = (payload.listed || []).filter(r => r.weekEnd === weekEnd);
+
+    // Who belongs on this store's grid: someone given at least one WORKING seat
+    // that week, and whose week belongs to this store — a seat here, or their KPI
+    // filed here (a floater who spent the whole week at LEE but is filed under
+    // OVL shows on OVL as a row of LEE chips).
+    //
+    // Nobody without a seat, even with listings on their KPI line (user,
+    // 2026-09-16): this view judges a week against the seats it was given, and a
+    // row reading "20 / 0" has nothing to judge. Off and blank rows are not
+    // seats either — every store in the market saves an Off for a floater it did
+    // not use, and without that rule Zach showed on LEE's grid as a line of Offs.
+    const seated = new Set(goals.filter(r => _isWorkingRole(r.role)).map(r => _lgpwKey(r.employee)));
+    const people = new Map();   // key -> display name
+    const add = name => {
+        const k = _lgpwKey(name);
+        if (seated.has(k) && !people.has(k)) people.set(k, name);
+    };
+    goals.filter(r => r.store === store && _isWorkingRole(r.role)).forEach(r => add(r.employee));
+    listed.filter(r => r.store === store).forEach(r => add(r.employee));
+    if (!people.size) {
+        return '<div class="lgpw-msg">No roles were set this week.</div>';
+    }
+
+    // Today's roster order first, so the grid reads in the same order as the
+    // editor; anyone no longer on it (left, moved) follows alphabetically.
+    const order = _goalsWithFloaters(store, goalsRosterFor(store)).map(_lgpwKey);
+    const keys = [...people.keys()].sort((a, b) => {
+        const ia = order.indexOf(a), ib = order.indexOf(b);
+        if (ia !== -1 || ib !== -1) return (ia === -1 ? 1e9 : ia) - (ib === -1 ? 1e9 : ib);
+        return a.localeCompare(b);
+    });
+
+    let storeGoal = 0, storeListed = 0, storeHasKpi = false;
+    goals.filter(r => r.store === store && _isWorkingRole(r.role)).forEach(r => { storeGoal += r.goal; });
+    // Only the people on the grid, so the summary is the grid's own total and an
+    // unseated person's KPI can't lift the store's percentage.
+    listed.filter(r => r.store === store && people.has(_lgpwKey(r.employee)))
+        .forEach(r => { storeListed += r.listed; storeHasKpi = true; });
+
+    const hdr = '<div class="lgpw-row lgpw-hdr"><span>Employee</span>'
+        + days.map((ds, i) => `<span>${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i]}<b>${Number(ds.slice(8))}</b></span>`).join('')
+        + '<span>Listed / goal</span></div>';
+
+    const rows = keys.map(k => {
+        const mine = goals.filter(r => _lgpwKey(r.employee) === k);
+        let goal = 0;
+        const cells = days.map(ds => {
+            const today = mine.filter(r => r.date === ds);
+            // A working seat here, then a working seat elsewhere, then Off here,
+            // then Off elsewhere. A floater is often marked Off at home on a day
+            // he was working somewhere else, and the seat is what matters.
+            const here = today.find(r => r.store === store && _isWorkingRole(r.role));
+            const away = today.find(r => r.store !== store && _isWorkingRole(r.role));
+            const off = today.find(r => r.store === store && _isOffRole(r.role)) || today.find(r => _isOffRole(r.role));
+            if (here) {
+                goal += here.goal;
+                return `<div class="lgpw-day"><span class="lgpw-chip ${_lgpwKind(here.role)}">${escapeHtml(here.role)}</span><span class="lgpw-g">${here.goal}</span></div>`;
+            }
+            if (away) {
+                goal += away.goal;
+                return `<div class="lgpw-day"><span class="lgpw-chip away" title="${escapeHtml(away.role)} at ${escapeHtml(away.store)}">${escapeHtml(away.store)}</span><span class="lgpw-g">${away.goal}</span></div>`;
+            }
+            if (off) return '<div class="lgpw-day"><span class="lgpw-chip off">Off</span><span class="lgpw-g"></span></div>';
+            return '<div class="lgpw-day"><span class="lgpw-chip unset">–</span><span class="lgpw-g"></span></div>';
+        }).join('');
+
+        const theirs = listed.filter(r => _lgpwKey(r.employee) === k);
+        const got = theirs.length ? theirs.reduce((sum, r) => sum + r.listed, 0) : null;
+        return `<div class="lgpw-row">
+            <div class="lgpw-name">${escapeHtml(people.get(k))}${_goalsIsFloater(store, people.get(k)) ? '<span class="lgpw-float">Floater</span>' : ''}</div>
+            ${cells}
+            ${_lgpwTotHtml(got, goal)}
+        </div>`;
+    }).join('');
+
+    return `${_lgpwSumHtml(storeHasKpi ? storeListed : null, storeGoal)}
+        <div class="lgpw-scroll"><div class="lgpw-grid">${hdr}${rows}</div></div>`;
+}
+
+// No KPI filed, or no goal to measure against: a dash in a bubble of the same
+// width, so the column still lines up.
+function _lgpwPct(got, goal) {
+    if (got == null || !goal) return { txt: '—', tone: 'none', width: 0 };
+    const pct = Math.round(got / goal * 100);
+    return { txt: pct + '%', tone: _lgpwTone(pct), width: Math.min(pct, 100) };
+}
+
+function _lgpwTotHtml(got, goal) {
+    const p = _lgpwPct(got, goal);
+    return `<div class="lgpw-tot">
+        <div class="lgpw-tot-top"><span class="lgpw-tot-n">${got == null ? '—' : got} <small>/ ${goal}</small></span><span class="lgpw-pct ${p.tone}">${p.txt}</span></div>
+        <div class="lgpw-track"><i class="${p.tone}" style="width:${p.width}%"></i></div>
+    </div>`;
+}
+
+function _lgpwSumHtml(got, goal) {
+    const p = _lgpwPct(got, goal);
+    return `<div class="lgpw-sum">
+        <div><div class="lgpw-sum-k">Store · listed vs. goal</div>
+        <div class="lgpw-sum-v">${got == null ? '—' : got} <small>/ ${goal}</small></div></div>
+        <div class="lgpw-track"><i class="${p.tone}" style="width:${p.width}%"></i></div>
+        <span class="lgpw-pct ${p.tone}">${p.txt}</span>
+    </div>`;
+}
+
 // Roster size for a store (from auth cache). Only feeds the placeholder weekly
 // figure shown before the server's capacity number arrives.
 //
@@ -16682,9 +17425,13 @@ function effectiveTeamSize(store) {
 }
 // Last-4 completed weeks for the bars, each carrying the goal that was in force
 // THAT week — so re-setting this Monday's number can't re-colour history.
+// Each week also carries what it was STAFFED for and where its goal came from,
+// so the bars can show the same two readings the DM's efficiency table does and
+// can mark a week whose goal nobody actually set. Passed straight through rather
+// than picked apart — a field added on the server should not need a second edit
+// here to reach the renderer.
 function weeksFor(store) {
-    return ((_storeTargets[store] && _storeTargets[store].weeks) || [])
-        .map(w => ({ total: w.total, target: w.target }));
+    return ((_storeTargets[store] && _storeTargets[store].weeks) || []).map(w => ({ ...w }));
 }
 // Has the DM set THIS week's goal for the store by hand yet? `carried` means it is
 // running on a previous week's number, which still counts as "not set this week".
@@ -16943,22 +17690,57 @@ async function fetchStoreWeeklyHistory(store) {
 // shared target would repaint all four bars every time this week's goal changed.
 function _luWeeks(history, fallbackTarget) {
     return (history || []).map(w => (w && typeof w === 'object')
-        ? { total: w.total, target: w.target > 0 ? w.target : fallbackTarget }
+        ? { ...w, target: w.target > 0 ? w.target : fallbackTarget }
         : { total: w, target: fallbackTarget });
 }
 
 // Running 4-week listing view (manager + employee/ASM + DM widgets).
+//
+// Each bar now carries BOTH readings of its week, because showing one of them
+// was what let a store and the DM look at the same week and disagree out loud.
+// The colour is still listed vs the goal the DM set — that is the number a store
+// is held to — and under it sits listed vs what the store was actually staffed
+// for, which is the DM's efficiency column and the fairer reading of a week that
+// lost someone to a callout. A week can legitimately be red on top and over 100%
+// underneath; that combination is information, not a contradiction, and it is
+// the one the Aug 31 week at OVL was hiding.
+//
+// A goal nobody set for that week is marked. OVL ran three weeks — 17, 24 and 31
+// August — carrying the 151 typed on 10 August for a roster it no longer had,
+// and cleared it every time. Three unearned greens looked exactly like three
+// earned ones, and then the first real goal turned the run red.
 function levelUpHtml(history, target) {
     const last4 = _luWeeks(history, target).slice(-4);
     const padded = [...Array(Math.max(0, 4 - last4.length)).fill(null), ...last4];
-    const bars = padded.map(w => w == null
-        ? '<div class="lu-week empty"><span class="lu-week-num">–</span></div>'
-        : `<div class="lu-week ${w.total >= w.target ? 'green' : 'red'}"><span class="lu-week-num">${w.total}</span></div>`
-    ).join('');
+    const bars = padded.map(w => {
+        if (w == null) return '<div class="lu-week empty"><span class="lu-week-num">–</span></div>';
+        const carried = w.targetSource && w.targetSource !== 'set';
+        const eff = Number.isFinite(w.efficiency) ? w.efficiency : null;
+        // No efficiency means no roles were set that week, so there is nothing to
+        // measure against — a blank, not a 0%, which would read as a verdict.
+        const sub = eff == null
+            ? `<span class="lu-week-eff none" title="No roles were set that week, so there is nothing to measure what the store was staffed for.">–</span>`
+            : `<span class="lu-week-eff ${eff >= 100 ? 'over' : 'under'}" title="${w.total} listed against the ${w.adjusted} this store was actually staffed for that week — the figure the district sees.">${eff}%</span>`;
+        const goalNote = carried
+            ? `<span class="lu-week-carried" title="No goal was set for this week, so it was measured against the ${w.target} from ${w.targetSetFor ? _luWeekLabel(w.targetSetFor) : 'an earlier week'}.">goal not set</span>`
+            : `<span class="lu-week-goal">of ${w.target}</span>`;
+        return `<div class="lu-week ${w.total >= w.target ? 'green' : 'red'}${carried ? ' lu-week-stale' : ''}">`
+            + `<span class="lu-week-num">${w.total}</span>${goalNote}${sub}</div>`;
+    }).join('');
 
     return `
-        <div class="lu-head"><span class="lu-title">Last 4 Weeks</span></div>
+        <div class="lu-head"><span class="lu-title">Last 4 Weeks</span>
+        <span class="lu-sub">listed of goal &middot; % of what you were staffed for</span></div>
         <div class="lu-weeks">${bars}</div>`;
+}
+
+// "10 Aug" for a YYYY-MM-DD Monday. Only used inside the carried-goal tooltip,
+// where naming the week the number came from is the whole point — "an earlier
+// week" would leave a manager no way to tell a one-week carry from a month one.
+function _luWeekLabel(weekStart) {
+    const d = new Date(String(weekStart) + 'T12:00:00');
+    return isNaN(d.getTime()) ? String(weekStart)
+        : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function renderGoalsLevelUp() {
@@ -21444,8 +22226,16 @@ function b2bViewDropReport(btn) {
 
 function b2bCopyDropDiag(btn) {
     const text = _b2bReportOf(btn);
+    // Success goes through the shared flash; FAILURE deliberately does not. A copy
+    // that did not happen must never wear the confirmation colour — this button's
+    // whole history is that it used to claim success while doing nothing (see the
+    // execCommand note below), so the one thing it must not do is look right when
+    // it is wrong. The failure branch keeps its own label and its own plain
+    // restore, because 'Copy it for me' is not the label it was wearing a moment
+    // ago and _copyFlash restores what it captured.
     const done = (ok) => {
-        btn.textContent = ok ? 'Copied' : 'Select it above and press Ctrl+C';
+        if (ok) return _copyFlash(btn, 'Copied');
+        btn.textContent = 'Select it above and press Ctrl+C';
         setTimeout(() => { btn.textContent = 'Copy it for me'; }, 2400);
     };
     const manual = () => {
@@ -28256,25 +29046,176 @@ function _setUserGreeting() {
     if (el) el.innerText = `Welcome ${sessionStorage.getItem('speeksUserName') || 'User'}!`;
 }
 
+// ============================================================================
+// THE "COPIED" FLASH — the one writer for every copy button on the site
+// ============================================================================
+// Six buttons copy to the clipboard. Three went green by setting four inline
+// styles each, three only swapped their label, and the label text differed
+// ("Copied" vs "Copied!") between tools that sit two clicks apart. Ethan,
+// 2026-09-17: all of them the Box Order green, on all three layouts. The colours
+// now live in .is-copied at the end of styles.css — see the note there for why a
+// class and not inline styles (short version: inline loses to !important, and
+// the compact build is full of !important).
+//
+// SUCCESS ONLY. A copy that failed must not wear the confirmation colour, so the
+// fallback branches keep setting their own text and do not come through here.
+//
+// The re-entrancy guard is not hypothetical: every one of the six captured the
+// button's current label as "the original" on the way in, so a second click
+// during the flash captured "Copied!" and put THAT back permanently. Clicking a
+// copy button twice is the most natural thing in the world when you are not sure
+// the first one took. Capture only on the way in from rest, and cancel the
+// pending restore so the timer cannot fire against the new one.
+const _COPY_FLASH_MS = 2000;
+
+function _copyFlash(button, label) {
+    if (!button) return;
+    if (button._cfTimer) clearTimeout(button._cfTimer);
+    else button._cfWas = button.textContent;          // only when not already flashing
+    button.textContent = label || 'Copied!';
+    button.classList.add('is-copied');
+    button._cfTimer = setTimeout(function () {
+        button.textContent = button._cfWas;
+        button.classList.remove('is-copied');
+        button._cfTimer = null;
+    }, _COPY_FLASH_MS);
+}
+window._copyFlash = _copyFlash;
+
 // The one breakpoint the JS has to agree with the stylesheet about. Must stay in
-// step with the MOBILE LAYER in styles.css, where <=900px is the compact build.
-function _isMobileLayout() {
-    try { return window.matchMedia("(max-width: 900px)").matches; } catch (_) { return false; }
+// step with the MOBILE LAYER in styles.css, whose banner explains the shape.
+//
+// A FUNCTION, not a const, and that is deliberate: _syncPanelScrollLock up at
+// the top of this file reads the same query, and a `const` down here would be in
+// its temporal dead zone if that IIFE ever runs before this line executes. A
+// function declaration hoists over the whole script, so every caller gets it
+// whatever the order. One writer, so the JS and the CSS cannot drift apart
+// device by device.
+//
+// The comma is an OR of two queries, which is what matchMedia takes and what
+// `.matches` folds: narrow-anything, or touch-up-to-a-big-tablet. Do not try to
+// collapse it into one query — a range cannot express "the ceiling depends on
+// the pointer", which is the entire point (see the banner for why a bare
+// max-width: 1366px would hand every 1366x768 store laptop the phone build).
+function _compactMediaQuery() {
+    return "(max-width: 900px), (max-width: 1366px) and (pointer: coarse)";
 }
 
-// Rotating a tablet or dragging a window across 900px changes which surfaces
-// belong on screen, and the inline display written by applyRoleBasedUI does not
-// re-evaluate on its own. Re-run it on the crossing, not on every resize tick.
+function _isMobileLayout() {
+    try { return window.matchMedia(_compactMediaQuery()).matches; } catch (_) { return false; }
+}
+
+// The tablet tier. Pair to _compactMediaQuery() and the same contract: change it
+// here and in styles.css together, and nowhere else.
+//
+// BOTH DIMENSIONS. A tablet is large in two directions; a phone never is. Width
+// alone cannot tell them apart, because an iPhone 15 Pro Max on its side (932px)
+// is wider than an iPad Mini is tall. The short edge is the discriminator, and
+// 540px sits in a wide empty gap between the two populations — phones in
+// landscape top out near 430, tablets in landscape bottom out near 640. The
+// stylesheet's TABLET EXCEPTION banner has the full reasoning.
+//
+// This tier decides three things besides the panel width, so getting it wrong is
+// not cosmetic: _samCapFeed shows four feed rows instead of two,
+// _lgpwPastAllowed puts Listing Goals' Past weeks tab back, and _panelIsFullBleed
+// stops freezing the page behind a panel that no longer covers it.
+function _tabletMediaQuery() {
+    return "(min-width: 701px) and (min-height: 540px)"
+         + " and (max-width: 1366px) and (pointer: coarse)";
+}
+
+function _isTabletLayout() {
+    try { return window.matchMedia(_tabletMediaQuery()).matches; } catch (_) { return false; }
+}
+
+// Expressed as "compact but not tablet" rather than as its own width, so there is
+// still exactly one number in play. A side panel is a full-screen sheet on the
+// phone and a third-width drawer on a tablet, and only the sheet needs the page
+// behind it frozen — see _syncPanelScrollLock, which is the one caller.
+function _panelIsFullBleed() {
+    return _isMobileLayout() && !_isTabletLayout();
+}
+
+// Rotating a tablet or dragging a window across the compact band changes which
+// surfaces belong on screen, and the inline display applyRoleBasedUI writes does
+// not re-evaluate on its own. Re-run it on the crossing, not every resize tick.
+// Rotation is the live case now that landscape tablets are in the band: an iPad
+// turned from 1180 to 820 stays compact throughout and fires nothing, but one
+// turned out of the band at all fires once, here.
 try {
-    window.matchMedia("(max-width: 900px)").addEventListener("change", function () {
+    window.matchMedia(_compactMediaQuery()).addEventListener("change", function () {
         if (!document.body.classList.contains("is-authenticated")) return;
         applyRoleBasedUI();
         // The feed cap is a measured pixel height, so it is wrong the moment the
         // breakpoint moves in either direction: stale-tight going wide, unset
         // going narrow. Re-measured here rather than left until the next payload.
         if (typeof _samCapFeed === "function") _samCapFeed();
+        // Surfaces cut from one side of the band and not the other have to be
+        // re-decided here too, for the same reason the sweep above runs: the modal
+        // may be open right now. Listing Goals' Past weeks tab is the first of
+        // them — see _lgpwSyncTabs, which also leaves the view if it is the one
+        // being taken away.
+        if (typeof _lgpwSyncTabs === "function") _lgpwSyncTabs();
+        // A Command Center that is collapsed on a desktop has nothing to show on a
+        // phone — the summary it collapses TO is cut there, and so is the tab bar
+        // that would reopen it. Dragging a window across the band is the one way
+        // to arrive in that state after load, so the same rule runs again here.
+        if (typeof _ccSyncCompactOpen === "function") _ccSyncCompactOpen();
     });
 } catch (_) { /* older browsers: the initial pass still applies */ }
+
+// The TABLET line, at 901px, is a second crossing with its own consequences, and
+// an iPad rotating 820 <-> 1180 crosses THIS one and not the band's own edge — so
+// the listener above never hears about the one rotation people actually perform.
+// What changes across it: the feed shows four rows instead of two, Listing Goals'
+// Past weeks tab comes back, and — since the opt-in landed — data-mobile curation
+// is NO LONGER identical on both sides of this line. It used to be, and this
+// listener used to say so and skip the sweep; data-tablet="show" is exactly the
+// case that makes the tablet answer differ, and applyRoleBasedUI writes an inline
+// display that nothing else re-evaluates. So it runs here too.
+try {
+    window.matchMedia(_tabletMediaQuery()).addEventListener("change", function () {
+        if (!document.body.classList.contains("is-authenticated")) return;
+        applyRoleBasedUI();
+        if (typeof _samCapFeed === "function") _samCapFeed();
+        if (typeof _lgpwSyncTabs === "function") _lgpwSyncTabs();
+        // Crossing INTO the tablet tier hands the board back its tab bar; crossing
+        // out of it takes the bar away again and leaves whatever was open. Same
+        // question as above, asked from the other edge.
+        if (typeof _ccSyncCompactOpen === "function") _ccSyncCompactOpen();
+    });
+} catch (_) { /* older browsers: the initial pass still applies */ }
+
+// ROTATION INSIDE THE BAND — a gap the tablet port opened, not one it found.
+//
+// An iPad turning 820 <-> 1180 used to CROSS 900px, so the listener above fired
+// and _samCapFeed() re-measured. Both orientations are now inside the band, so
+// it fires nothing, and _samCapFeed writes a measured pixel max-height: the
+// two-row cap for a feed whose rows wrap differently at the other orientation.
+// A card that is one line across 1180px is two across 820px, so the cap carried
+// over from landscape shows a row and a half of portrait and clips the rest.
+// Nothing above catches this, because by every test it makes, nothing changed.
+//
+// Orientation only, not resize. A resize listener would fire on every pixel of
+// an iPad's rotation animation and on the iOS URL bar sliding away, and each one
+// costs a forced layout in _samCapFeed's getBoundingClientRect. The orientation
+// query changes once per turn.
+//
+// Guarded on the band, so a desktop user dragging a window into portrait shape
+// does no work. _samCapFeed already returns early off the band, but the check is
+// cheap and says what this listener is for.
+try {
+    window.matchMedia("(orientation: portrait)").addEventListener("change", function () {
+        if (!document.body.classList.contains("is-authenticated")) return;
+        if (!_isMobileLayout()) return;
+        // After the turn, not during it: the new viewport is not laid out yet
+        // when the query flips, and measuring here caps the feed to the shape it
+        // is leaving. rAF lands on the first frame that has the new geometry.
+        requestAnimationFrame(function () {
+            if (typeof _samCapFeed === "function") _samCapFeed();
+        });
+    });
+} catch (_) { /* older browsers: the cap is re-measured on the next render */ }
 
 // ⚠️ HIDING A SELECT DOES NOT HIDE A SELECT. The custom dropdown (_ddEnhance)
 // moves the native control into a `.dd-host` and covers it with a `.dd-btn`
@@ -28314,6 +29255,9 @@ function applyRoleBasedUI() {
     const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
 
+    // Before any fetch, so whichever fetch names the card later still wins.
+    if (typeof _ccStampStore === 'function') _ccStampStore(userStore);
+
     document.querySelectorAll('.dynamic-module-flex, .dynamic-module-block, .dynamic-module').forEach(module => {
         const classes = Array.from(module.classList);
         const requiredStores = classes.filter(c => c.startsWith('store-'));
@@ -28325,8 +29269,9 @@ function applyRoleBasedUI() {
         // Feature Access override (DM/CEO-managed, feature_overrides table):
         // a user-level override beats a role-level override beats the default above.
         const featureKey = module.getAttribute('data-feature');
+        let ov = null;
         if (featureKey) {
-            const ov = _featureOverrideFor(featureKey, userRoleClass, userName);
+            ov = _featureOverrideFor(featureKey, userRoleClass, userName);
             // mark cards an override removed (vs. hidden by design) so the
             // dashboard rows know when to rebalance the remaining cards
             if (ov === false && visible) module.setAttribute('data-fa-hidden', '1');
@@ -28334,12 +29279,27 @@ function applyRoleBasedUI() {
             if (ov !== null) visible = ov;
         }
 
+        // A BOARD IS OPT-IN. Every line above answers "is there a reason to hide
+        // this?" and for a shop-floor board there is almost never one — see
+        // STORE_BOARD_FEATURES. An explicit override still wins, so Feature
+        // Access keeps the last word if the role is ever given a column there.
+        if (ov === null && _isStoreBoardRole(userRoleClass)) visible = _boardSeesFeature(featureKey);
+
         // A surface cut from the phone build stays cut even when the role check
         // passes. This CANNOT be done in CSS: the branch below writes an inline
         // display with !important, which outranks every stylesheet rule — so
         // [data-mobile="hide"] silently lost to it on all 11 role-gated elements
         // that were supposed to be hidden (found with scripts/mobile-check.js).
-        if (visible && module.getAttribute('data-mobile') === 'hide' && _isMobileLayout()) {
+        //
+        // ...UNLESS the surface has earned itself back on a tablet.
+        // data-tablet="show" is the opt-in, and it is deliberately narrow: it
+        // says "cut from the phone, kept on a tablet", which is the only shape of
+        // exception this build needs. The same reasoning as the cut itself
+        // applies in reverse — the inline display wins, so the CSS rule in the
+        // TABLET EXCEPTION block cannot bring a role-gated module back on its
+        // own. Both halves exist; each covers what the other cannot reach.
+        if (visible && module.getAttribute('data-mobile') === 'hide' && _isMobileLayout()
+            && !(module.getAttribute('data-tablet') === 'show' && _isTabletLayout())) {
             visible = false;
         }
         if (visible) {
@@ -28406,6 +29366,39 @@ function applyRoleBasedUI() {
     }
 
     initMultiStoreSwitcher();
+
+    // The nav and the action buttons carry no data-feature, so the allow-list
+    // cannot see them. This is the other half.
+    _applyBoardChrome();
+}
+
+// ── THE PICTURE-STATION iPAD'S CHROME ───────────────────────────────────────
+//
+// operations.html is written for a person: five tabs, a tools panel, four nav
+// links and a row of action buttons. A board is not a person. STORE_BOARD_FEATURES
+// covers everything that carries a data-feature, which is the tab strip and the
+// tools — but the nav links, the Idea button, Quick Messages, Hotkeys and the
+// Calendar carry none, because until now no role existed that shouldn't see them.
+// Hiding them is not a feature decision with a switch behind it; it is what this
+// one page looks like when it is a photo bench. So it stays here rather than
+// being pushed into the catalog as five switches nobody will ever flip.
+//
+// ONE BIT, AND THE STYLESHEET DOES THE REST. The obvious version of this walks
+// the nav writing `display: none !important` onto each link, the way the role
+// sweep does — and that is exactly why it doesn't. An inline !important cannot
+// be taken back by a rule; it can only be taken back by the same writer
+// remembering every element it touched, which is a list that goes stale the
+// first time somebody adds a button to the nav. A class is one bit: set it and
+// the rules apply, clear it and they stop, with nothing to remember.
+//
+// See the board block in styles.css for which surfaces go and which two stay.
+// It works only because nothing the sweep writes inline contradicts it, which
+// is checked rather than assumed (scripts/store-board-check.js).
+//
+// Called from the end of applyRoleBasedUI so it tracks every re-apply —
+// _kickFeatureOverridesRefresh runs that a second time once the overrides land.
+function _applyBoardChrome() {
+    document.body.classList.toggle('is-store-board', _tvIsBoardRole());
 }
 
 // ===== MULTI-STORE MANAGER: global store switcher =====
@@ -28599,6 +29592,7 @@ function initDashboardData() {
         setTimeout(fetchScorecardData, 600);
         setTimeout(fetchAlertsData, 650);
         setTimeout(fetchMasterDistrictDashboard, 680);
+        setTimeout(fetchDistrictWatch, 720);
         setTimeout(fetchKPIData, 700);
         setTimeout(fetchDistrictMonthlyKPIs, 750);
         setTimeout(fetchRecordsData, 800);
@@ -28709,11 +29703,15 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelector('.sidebar-toggle')?.classList.add('collapsed'); 
     }
     
-    // Site-wide, except on the shop-floor board. A screen has no announcements to
-    // read, no PIN pad to pre-load the user list for, and no idea box — and cms is
-    // the very function whose polling had to be walked back once for egress.
-    // Running these on five TVs around the clock is that bill again, for nothing.
-    if (!_tvOnBoardPage()) {
+    // Site-wide, except for a board. A screen has no announcements to read, no
+    // idea box, and no PIN pad to pre-load the user list for — and cms is the very
+    // function whose polling had to be walked back once for egress. Running these
+    // on five TVs and five iPads around the clock is that bill again, for nothing.
+    //
+    // Asked of the ROLE, not the page, now that a board is on the ordinary pages.
+    // The PIN pad still arrives when it is needed: a session that has expired has
+    // no role either, so this reads false and injectGlobalAuth() runs.
+    if (!_tvIsBoardRole()) {
         loadCMS();
         injectGlobalAuth();
         injectIdeaModal();
@@ -28727,32 +29725,44 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (sessionStorage.getItem('speeksUnlocked') === 'true') {
-        // A TV is left on for weeks and reloads on its own — power cut, browser
-        // restart, someone's overnight update. Every one of those has to land back
-        // on the board, not on a QuickPortal, so the gate runs on load and not
-        // only at login. First thing inside the branch: everything below it is
-        // page setup that a redirect makes pointless.
-        if (_tvGate()) return;
         // Two pages are whole destinations rather than a tool inside one, so the
-        // visit IS the usage signal. Recorded here — past the TV gate, inside the
-        // signed-in branch — so a board and the login screen never count.
-        _trackPageVisit();
-        // …and the fact that they were here at all. The PIN path can't carry this
-        // on its own: a tab that stays open never returns to it. See _usagePresence.
-        _usagePresence();
+        // visit IS the usage signal. Recorded inside the signed-in branch, and
+        // never for a board: a TV left on for weeks reloads on its own — power
+        // cut, browser restart, an overnight update — and an iPad at the photo
+        // bench is reloaded by whoever picks it up. Counting either would file
+        // phantom visits all day, in five stores, into the nightly usage report.
+        if (!_tvIsBoardRole()) {
+            _trackPageVisit();
+            // …and the fact that they were here at all. The PIN path can't carry
+            // this on its own: a tab that stays open never returns to it. See
+            // _usagePresence.
+            _usagePresence();
+        }
         document.body.classList.add('is-authenticated');
         const authOverlay = document.getElementById('authOverlay');
         if (authOverlay) authOverlay.style.display = 'none';
         document.body.style.overflow = '';
-
-        // Already on the board: it gets its own small init and nothing else.
-        if (_tvOnBoardPage()) { initBoardPage(); return; }
 
         closeAllModals();
         applyRoleBasedUI();
         // Before anything can open a side panel: sets --panel-top so they hang
         // flush from the nav on every page, not just the dashboard.
         initLayoutSync();
+
+        // A BOARD STOPS HERE. Everything below is the dashboard — ~30 fetches and
+        // five pollers — and a board has three surfaces, two of which fetch
+        // nothing. That arithmetic is why initBoardPage was carved out in the
+        // first place: five TVs plus five iPads running the full init around the
+        // clock is the egress overage that had to be walked back once already.
+        //
+        // It is the same small init as before; only where it runs has changed.
+        // The live card it fills is the Command Center's, so it runs on the page
+        // that has one and is skipped on the page that does not.
+        if (_tvIsBoardRole()) {
+            if (document.getElementById('ccWidget')) initBoardPage();
+            initOperations();
+            return;
+        }
         initDashboardData();
         initTicker();
         initWorkspace();
@@ -28766,15 +29776,10 @@ document.addEventListener("DOMContentLoaded", () => {
         if (document.getElementById('mainKpiChart')) syncAllData();
     } else {
         // sessionStorage dies with the browser process, so a TV that power-cycles
-        // overnight wakes with no session, on the one page in the site with no PIN
-        // pad of its own. It has to go find one.
-        //
-        // It always did — but only because injectGlobalAuth() put a hidden
-        // #authOverlay on every page, which is the condition the line below tests.
-        // The board no longer injects it (see the guard at the top of this
-        // handler), so the board now has to say where it goes. _tvGate() bounces it
-        // straight back here the moment the PIN is accepted.
-        if (_tvOnBoardPage()) { window.location.replace('index.html'); return; }
+        // overnight wakes with no session at all. It needs a PIN pad, and it gets
+        // the same one as everybody else now: with no session _tvIsBoardRole() is
+        // false, so the guard at the top of this handler lets injectGlobalAuth()
+        // run and the overlay the line below tests for is there.
         if (!window.location.href.includes('index.html') && document.getElementById('authOverlay')) {
             window.location.href = "index.html"; 
             return;
@@ -28815,6 +29820,10 @@ document.body.appendChild(customTooltip);
 // When true the tooltip is pinned under a top-nav button (with a caret) rather
 // than trailing the cursor — see _anchorTipBelow + the mousemove guard.
 let _tipAnchored = false;
+// The award "i" that is currently held open BY A TAP (see the click handler at
+// the end of this section). Null on every hover-driven tooltip, so the two
+// mechanisms never read each other's state.
+let _tipTapped = null;
 function _anchorTipBelow(el) {
     // Viewport coordinates throughout — the tooltip is position:fixed, so
     // getBoundingClientRect values are used as-is with no scroll offset.
@@ -28824,6 +29833,20 @@ function _anchorTipBelow(el) {
     x = Math.max(10, Math.min(x, window.innerWidth - tw - 10));
     customTooltip.style.left = x + 'px';
     customTooltip.style.top = (r.bottom + 10) + 'px';
+}
+
+// The award "i" content, in one place because it now has TWO callers — the
+// mouseover branch below and the tap handler at the end of this section. They
+// must not be allowed to drift: the whole point of the tap path is that a
+// tablet sees the same card a mouse does.
+function _awardTipFill(btn) {
+    const wrap = btn.closest('.aw') || btn.closest('.award-card-trophy-wrap');
+    const nameEl = wrap ? wrap.querySelector('.aw-name, .award-card-name') : null;
+    const title = nameEl ? nameEl.innerText.replace(/\s+/g, ' ').trim() : 'Award';
+    customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
+    customTooltip.innerHTML = `
+        <strong style="display:block; margin-bottom: 6px; color: var(--sage-professional); font-size: 13px;">${title}</strong>
+        ${btn.dataset.desc ? `<span style="font-size: 12px; color: var(--slate-charcoal); line-height: 1.5;">${btn.dataset.desc}</span>` : ''}`;
 }
 
 // Place a trailing (non-anchored) tooltip at the cursor straight away, so it
@@ -28848,6 +29871,16 @@ document.addEventListener('mouseover', function(e) {
     // because there is no matching mouseout coming. Checked live rather than
     // cached, so Chrome's device-toolbar toggle behaves like a real device.
     if (window.matchMedia && window.matchMedia('(hover: none), (pointer: coarse)').matches) {
+        // ...EXCEPT one an award "i" is holding open by tap. A tap on anything
+        // fires this synthetic mouseover FIRST, so tearing down here would close
+        // the card a quarter of a millisecond before the click handler below is
+        // asked whether to toggle it — and every tap would then read as "open",
+        // making the dot impossible to close. While a tap owns the tooltip this
+        // handler keeps its hands off and the click handler owns the lifecycle.
+        // Self-healing: an ownership that is no longer backed by a visible card
+        // (a re-render, an SPA navigation) is dropped rather than trusted.
+        if (_tipTapped && customTooltip.classList.contains('show')) return;
+        _tipTapped = null;
         customTooltip.classList.remove('show', 'anchored');
         _tipAnchored = false;
         return;
@@ -28916,13 +29949,7 @@ document.addEventListener('mouseover', function(e) {
 
     const awardI = e.target.closest('.award-info-btn');
     if (awardI) {
-        const wrap = awardI.closest('.aw') || awardI.closest('.award-card-trophy-wrap');
-        const nameEl = wrap ? wrap.querySelector('.aw-name, .award-card-name') : null;
-        const title = nameEl ? nameEl.innerText.replace(/\s+/g, ' ').trim() : 'Award';
-        customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
-        customTooltip.innerHTML = `
-            <strong style="display:block; margin-bottom: 6px; color: var(--sage-professional); font-size: 13px;">${title}</strong>
-            ${awardI.dataset.desc ? `<span style="font-size: 12px; color: var(--slate-charcoal); line-height: 1.5;">${awardI.dataset.desc}</span>` : ''}`;
+        _awardTipFill(awardI);
         customTooltip.classList.add('show');
         return;
     }
@@ -28942,13 +29969,22 @@ document.addEventListener('mouseover', function(e) {
     }
 
     // Goal / initiative hover text — rendered in the redesigned clean tooltip.
+    // Only where the card is actually CUTTING something. This tooltip exists to
+    // recover a 2-line clamp and a nowrap title, which is still what the
+    // dashboard banner does; the Goals & Initiatives panel now shows goals in
+    // full (see .goals-side-panel .mgb-goal-desc), and repeating text that is
+    // already on screen is noise — worse, it covers the card it came from.
     const panelItem = e.target.closest('.cpb-project-item, .mgb-goal-item');
     if (panelItem) {
         const titleEl = panelItem.querySelector('.mgb-goal-title');
         const descEl  = panelItem.querySelector('.mgb-goal-desc');
         const titleText = titleEl ? titleEl.innerText.trim() : '';
         const descText  = descEl  ? descEl.innerText.trim()  : '';
-        if (titleText || descText) {
+        // +1px of slack: a clamped box reports a fractional overflow of its own
+        // from line-height rounding, which would make every card look cut.
+        const cut = (titleEl && titleEl.scrollWidth  > titleEl.clientWidth  + 1) ||
+                    (descEl  && descEl.scrollHeight > descEl.clientHeight + 1);
+        if (cut && (titleText || descText)) {
             customTooltip.innerHTML = `
                 <strong style="display:block; font-size: 12.5px; color: var(--slate-charcoal);">${titleText}</strong>
                 ${descText ? `<span style="display:block; margin-top: 4px; font-size: 12px; color: #647082; line-height: 1.45;">${descText}</span>` : ''}`;
@@ -28983,6 +30019,48 @@ document.addEventListener('mouseover', function(e) {
     customTooltip.classList.remove('show');
 });
 
+// THE ONE TOOLTIP A TOUCH DEVICE GETS.
+//
+// The mouseover handler above turns the whole tooltip system off on anything
+// with a coarse pointer, and that is right: a tap fires a synthetic mouseover
+// with no mouseout behind it, so every data-tip on the site used to pop a white
+// card over the thing you had just tapped and stay there. The cure for a tooltip
+// nobody asked for, though, is not much use to a control whose ONLY content is
+// its tooltip — the award "i" is a button that did nothing at all on an iPad
+// (Ethan, 2026-09-20: "the i buttons ... don't show anything when clicked").
+//
+// So this is the exception, and it is deliberately narrow: one selector, opened
+// by an explicit tap rather than by proximity, and closed by the next tap
+// anywhere — which is the missing mouseout, supplied by hand. Anchored under the
+// button instead of trailing the cursor, because a tap has no cursor to trail;
+// _anchorTipBelow already exists for the nav icons and wants nothing but a rect.
+//
+// Mouse users never reach this: the hover path has already shown the same card
+// (built by the same _awardTipFill), and running both would fight over it.
+document.addEventListener('click', function (e) {
+    const coarse = window.matchMedia &&
+                   window.matchMedia('(hover: none), (pointer: coarse)').matches;
+    if (!coarse) return;
+
+    // Tapping the open one closes it; tapping a different one moves to it;
+    // tapping anything else closes. Decided on _tipTapped alone and never on
+    // whether the card is visible — the mouseover above fires first on every
+    // tap, so "is it showing?" is not a question with a usable answer here.
+    const btn = e.target.closest('.award-info-btn');
+    if (btn && _tipTapped !== btn) {
+        _awardTipFill(btn);
+        customTooltip.classList.add('show', 'anchored');
+        _tipAnchored = true;
+        _anchorTipBelow(btn);   // needs the card measured, so it goes after .show
+        _tipTapped = btn;
+        return;
+    }
+
+    customTooltip.classList.remove('show', 'anchored');
+    _tipAnchored = false;
+    _tipTapped = null;
+}, true);   // capture: the SPA router below calls preventDefault on nav clicks
+
 document.addEventListener('mousemove', function(e) {
     if (_tipAnchored) return;   // pinned under a nav button — don't trail the cursor
     if (customTooltip.classList.contains('show')) {
@@ -29008,6 +30086,12 @@ document.addEventListener('mouseout', function(e) {
 
 window.addEventListener('scroll', function() {
     customTooltip.classList.remove('show');
+    // A tapped-open award card is anchored to a button that has just moved out
+    // from under it, so it goes too — and the ownership with it, or the next tap
+    // on that same dot would read as "close" and do nothing visible.
+    customTooltip.classList.remove('anchored');
+    _tipAnchored = false;
+    _tipTapped = null;
 }, { passive: true });
 
 // ============================================================================
@@ -29094,6 +30178,15 @@ document.addEventListener('click', async (e) => {
                 if (docSearch) docSearch.addEventListener('keyup', filterDocs);
             } else {
                 setTimeout(() => {
+                    // A board takes its own small init on an SPA hop as well. Without
+                    // this, walking QuickPortal -> Operations -> QuickPortal would
+                    // start every poller the two page-load paths are careful not to,
+                    // and each hop would start them again.
+                    if (_tvIsBoardRole()) {
+                        if (document.getElementById('ccWidget')) initBoardPage();
+                        if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
+                        return;
+                    }
                     if (typeof initDashboardData === 'function') initDashboardData();
                     if (typeof applyKpiReminder === 'function') applyKpiReminder();
                     if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
@@ -31498,9 +32591,23 @@ function openAuditPhotoLightbox(src) {
         // click, the ✕, or Escape (handled by the global keydown) all work.
         lb.onclick = () => { lb.style.display = 'none'; };
         lb.style.cssText = 'display:none; position:fixed; inset:0; z-index:4000; background:rgba(2,6,23,.85); align-items:center; justify-content:center; padding:30px; cursor:zoom-out;';
+        // The ✕ wears .au-lb-close and draws the SAME inline SVG as the other 220
+        // close controls on the site. It used to be a 38px circle of inline style
+        // around a text ✕ glyph, which is the exact shape scripts/close-btn-audit
+        // exists to catch: no CSS can make a text glyph match a 15px stroked SVG,
+        // so identical boxes still read as different buttons (Ethan, 2026-09-19:
+        // "fix the way the x in the top right looks to match other x buttons").
+        // Geometry and ink live in the stylesheet beside .award-video-close-btn,
+        // the other X that floats over a dark surface and therefore keeps its own
+        // colour while taking everybody else's box.
         lb.innerHTML = '<img alt="" onclick="event.stopPropagation();" style="max-width:92vw; max-height:88vh; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.5); cursor:default;">' +
-            '<button type="button" title="Close photo" onclick="event.stopPropagation(); document.getElementById(\'auditPhotoLightbox\').style.display=\'none\';" ' +
-            'style="position:absolute; top:16px; right:20px; width:38px; height:38px; border:none; border-radius:50%; background:rgba(255,255,255,0.14); color:#fff; font-size:17px; font-weight:800; line-height:1; cursor:pointer;">✕</button>';
+            '<button type="button" class="au-lb-close" title="Close photo"' +
+            ' aria-label="Close photo"' +
+            ' onclick="event.stopPropagation(); document.getElementById(\'auditPhotoLightbox\').style.display=\'none\';">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"' +
+            ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>' +
+            '</svg></button>';
         document.body.appendChild(lb);
     }
     lb.querySelector('img').src = src;
@@ -32272,8 +33379,23 @@ function _claimStores() {
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
 
-function openClaimsModal() {
-    toggleModal('claimsModal');
+// WHICH OF THE TWO TOOLS a person gets. A DM, the CEO and the MOCD have no
+// store of their own (_claimStores is empty), so the store tool would open on a
+// New Claim form they cannot file — they belong in the oversight one (Ethan,
+// 2026-09-22). Everyone else gets their own store's tool, or both of theirs
+// with a store picker if they run two.
+const _CLAIMS_OVERSIGHT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
+const _claimsIsOversight = () =>
+    _CLAIMS_OVERSIGHT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+// tab: 'view' (the claims list) | 'mismatch' | 'returns' | 'cases'
+function openClaimsTool(tab) {
+    if (_claimsIsOversight()) { openClaimsOversight(); switchOversightTab(tab === 'view' ? 'claims' : tab); }
+    else { openClaimsModal(); switchClaimsTab(tab); }
+}
+
+// A blank form. Called both when the tool opens and every time New Claim is
+// pressed, so a cancelled one never leaves half-typed values for the next claim.
+function _resetClaimForm() {
     _buildClaimStorePicker();
     ['claim-case-number', 'claim-sku', 'claim-price', 'claim-cost', 'claim-detail'].forEach(id => {
         const el = document.getElementById(id); if (el) el.value = '';
@@ -32281,7 +33403,21 @@ function openClaimsModal() {
     const r = document.getElementById('claim-reason'); if (r) r.selectedIndex = 0;
     const ct = document.getElementById('claim-type'); if (ct) ct.selectedIndex = 0;
     _onClaimReasonChange();
+}
+
+// The button on the claims list that replaced the New Claim tab.
+function startNewClaim() {
+    _resetClaimForm();
     switchClaimsTab('new');
+}
+
+function openClaimsModal() {
+    toggleModal('claimsModal');
+    _resetClaimForm();
+    switchClaimsTab('view'); // the list first; New Claim is a button on it
+    // In the background, so the Mismatches / eBay Cases badges show how many
+    // need a check-in before anyone clicks into them.
+    loadHoldItems('mgr');
 }
 
 // "Claim Type" (Damage / Loss) only applies to a Claim, not an Item-Not-Received case.
@@ -32291,18 +33427,30 @@ function _onClaimReasonChange() {
     if (wrap) wrap.style.display = reason !== 'Item Not Received' ? 'block' : 'none';
 }
 
+// 'view' is the claims list; 'mismatch', 'returns' and 'cases' are the Claims &
+// Disputes additions (CLAIMS & DISPUTES section, below the claims tool). 'new' is
+// a panel with NO TAB of its own: filing a claim is a button on the claims list
+// rather than a fifth tab (Ethan, 2026-09-22 — four tabs is already a lot). While
+// the form is up, Claims stays the lit tab, because that is where Cancel and Save
+// both land.
 function switchClaimsTab(tab) {
-    const nb = document.getElementById('claims-tab-new');
-    const vb = document.getElementById('claims-tab-view');
-    if (nb) nb.classList.toggle('active', tab === 'new');
-    if (vb) vb.classList.toggle('active', tab === 'view');
-    const np = document.getElementById('claims-panel-new');
-    const vp = document.getElementById('claims-panel-view');
-    if (np) np.style.display = tab === 'new' ? 'block' : 'none';
-    if (vp) vp.style.display = tab === 'view' ? 'block' : 'none';
-    const sb = document.getElementById('submitClaimBtn');
-    if (sb) sb.style.display = tab === 'new' ? '' : 'none';
+    ['new', 'view', 'mismatch', 'returns', 'cases'].forEach(t => {
+        const b = document.getElementById(`claims-tab-${t}`);
+        const p = document.getElementById(`claims-panel-${t}`);
+        if (b) b.classList.toggle('active', t === tab || (tab === 'new' && t === 'view'));
+        if (p) p.style.display = t === tab ? 'block' : 'none';
+    });
+    ['submitClaimBtn', 'cancelClaimBtn'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.style.display = tab === 'new' ? '' : 'none';
+    });
     if (tab === 'view') fetchMyClaims();
+    // openClaimsModal already started a load (for the tab badges); only fetch
+    // again if that one has finished, and without re-asking eBay.
+    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases') {
+        if (_holdLoading.mgr) renderHoldItems('mgr');
+        else loadHoldItems('mgr', { sync: !_holdData.mgr });
+    }
 }
 
 // MSM gets a store chooser; a single-store manager is locked to their store.
@@ -32698,12 +33846,1011 @@ async function saveEscalation(id) {
 }
 
 // =========================================================
+//  CLAIMS & DISPUTES — MISMATCHES + EBAY CASES
+//  The manager side of "our money is held or not lining up". Two tabs in the
+//  claims tool (and in the DM oversight view), backed by the claims-disputes
+//  edge function and migrations 0102 / 0103.
+//
+//  WHY A MANAGER HAS TO BE ABLE TO SAY "RESOLVED". refund-mismatch emails an
+//  order every morning while eBay and Shopify disagree, and some of those
+//  disagreements are correct: OVL refunded an eBay buyer, recovered the money
+//  through a Shopify insurance claim instead of refunding Shopify, and the
+//  order is fine. The detector can never learn that. So a manager marks it
+//  Resolved — and must say why. The database refuses a resolution without one.
+//
+//  WHEN AN ITEM SHOWS UP IS DECIDED BY THE SERVER, NOT HERE. Ethan, 2026-09-22:
+//  every type follows one rule — checked daily, invisible until it has been
+//  open its timeframe (mismatch 3 days, eBay case 2), then due every day until
+//  settled or resolved; "Still open" hides it for that timeframe again. The
+//  rule lives in claims-disputes `stateOf` so the morning email can use the
+//  same one later. This file only DRAWS `item.state`; it never re-derives it —
+//  a second copy of the rule is how the tool and the email would drift apart.
+//
+//  A REFUNDED ITEM-NOT-RECEIVED NEEDS A CLAIM. INRs sit with the returns and
+//  cases; when eBay shows the buyer was refunded, the item reads "Refunded —
+//  needs a claim" and the only way off the list is opening one or linking the
+//  one already filed. A likely match (same store, same amount, filed near the
+//  refund) is offered first, but never linked without a click: the 2026-09-22
+//  OVL check found two refunded INRs already claimed by hand and one that was
+//  never claimed, and only a person can tell those apart for certain.
+//
+//  ROLLED OUT ONE STORE AT A TIME. The tabs stay hidden (display:none in the
+//  markup) until the server says one of this user's stores is rolled out.
+//
+//  Read-only against the marketplaces: nothing here refunds, responds to or
+//  closes anything on eBay or Shopify. That is done on the sites, by hand.
+// =========================================================
+const HOLD_MIN_REASON = 10;
+
+let _holdData = { mgr: null, ov: null };        // last list response per view
+let _holdIndex = { mgr: [], ov: [] };           // items by render position, for onclick
+let _holdView = { mgr: { store: '', show: 'due', kind: '' }, ov: { store: '', show: 'due', kind: '' } };
+let _holdOpenForm = { mgr: null, ov: null };    // { id, mode: 'status' | 'claim' }
+let _holdLoading = { mgr: false, ov: false };
+
+function _holdStores(ctx) {
+    return ctx === 'ov' ? [..._CLAIMS_OVERSIGHT_STORES] : _claimStores();
+}
+function _holdWrap(ctx, tab) {
+    return document.getElementById(`hold-${ctx}-${tab}`);
+}
+
+// The server's state, drawn. See the banner: no rule lives here.
+function _holdState(type, it) { return it.state || 'due'; }
+// The site's own colours rather than this tool's own reds and greens (Ethan,
+// 2026-09-22). The red and green are styles.css --red-alert and the sage brand
+// green; the tints and deep tones are the ones the Margins tool already uses
+// (--mg-red-*, --mg-amber-*), with --win-* for informational blue.
+const _HOLD_C = {
+    red:   { bg: '#fcecec', fg: '#b23636', line: '#edc9c9', solid: 'var(--red-alert)' },
+    amber: { bg: '#fdf3e1', fg: '#b45309', line: '#f0d9a8' },
+    green: { bg: '#eef5e8', fg: '#4a7530', line: '#cfe0c0' },
+    blue:  { bg: '#e1f0fe', fg: '#0078d4', line: '#cce5ff' },
+    grey:  { bg: '#f1f5f9', fg: '#475569', line: '#e2e8f0' },
+};
+const _HOLD_STATE = {
+    // 0107: eBay is waiting on an answer from us. Nothing else about the item can
+    // move until someone says they answered it, so it leads the list.
+    // _holdStateLabel always overrides this one (it has to name the right site),
+    // so this string is a fallback only — kept accurate so it cannot mislead.
+    needs_reply: { label: 'Needs a reply from us',    bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
+    needs_claim: { label: 'Refunded — needs a claim', bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
+    due:         { label: 'Check-in due',             bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 1 },
+    checked:     { label: 'Checked in',               bg: _HOLD_C.amber.bg, fg: _HOLD_C.amber.fg, rank: 2 },
+    // 0112: we answered a dispute and the card network decides now. Nothing is
+    // due from us, so it sits with the other "moving, not waiting on you" states.
+    answered:    { label: 'Answered — with them',     bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
+    covered:     { label: 'Claim open',               bg: _HOLD_C.blue.bg,  fg: _HOLD_C.blue.fg,  rank: 3 },
+    resolved:    { label: 'Resolved',                 bg: _HOLD_C.green.bg, fg: _HOLD_C.green.fg, rank: 4 },
+    settled:     { label: 'Settled',                  bg: _HOLD_C.grey.bg,  fg: _HOLD_C.grey.fg,  rank: 5 },
+};
+// needs_reply covers an eBay case AND a dispute on either site, so the chip has
+// to name the right site — "eBay is waiting on us" on a Shopify chargeback would
+// send someone to the wrong admin. A dispute whose window has already shut says
+// so instead: it is still unanswered, but responding is no longer the fix.
+//
+// "needs a reply from us" rather than "is waiting on us" (Ethan, 2026-09-23):
+// waiting is something the site is doing, and reads as though it were the site's
+// move. The reply is OURS, and the chip should say so.
+function _holdStateLabel(type, it, s) {
+    if (it.state === 'needs_reply') {
+        // eBay takes no late reply, so once the window has shut the honest label
+        // is not "needs a reply" — nothing anyone presses brings it back.
+        if (it.missed_window) return 'Missed reply window';
+        // Someone called this resolved and the site still disagrees.
+        if (it.state_note === 'resolution_disputed') return 'Marked resolved — site disagrees';
+        const site = type === 'dispute' && it.source !== 'ebay' ? 'Shopify' : 'eBay';
+        return `${site} needs a reply from us`;
+    }
+    if (type === 'dispute' && it.state === 'answered') return 'Answered — waiting on them';
+    // The claim is open, so "Check-in due" would point at the wrong person: the
+    // carrier does not owe this one, eBay does.
+    if (it.state_note === 'delivered_after_refund') return 'Delivered — call eBay';
+    return s.label;
+}
+
+// WHICH OF THE FOUR THINGS THIS IS (Ethan, 2026-09-23: "we need to better
+// differentiate cases, INR, Payment disputes, and chargebacks"). The section
+// heading groups them; this chip is what tells you on a card whose heading has
+// scrolled off, and it is the first thing on the row for that reason.
+function _holdKindChip(type, it) {
+    if (type === 'dispute') {
+        if (it.source === 'ebay') return 'Payment dispute';
+        return it.dispute_type === 'INQUIRY' ? 'Bank inquiry' : 'Chargeback';
+    }
+    if (type !== 'ebay_case') return '';
+    if (_holdIsInr(it)) return it.kind === 'case' ? 'INR — escalated' : 'Item not received';
+    if (it.kind === 'case') return 'Case — escalated';
+    return '';
+}
+// TWO views, not three (Ethan, 2026-09-22: "we probably don't need the resolved
+// section"). "Needs Attention" is what a morning email would list. Resolved
+// items ride along in the second view so a wrong Resolved can still be reopened;
+// one the marketplace settled by itself simply drops off the tool.
+const _HOLD_VIEWS = {
+    due:     { label: 'Needs Attention',           states: ['needs_reply', 'needs_claim', 'due'] },
+    // 'settled' rides along too (Ethan, 2026-09-22): he linked a claim that was
+    // already Recovered to a mismatch, which settles it at once — and with
+    // settled in neither view the card simply vanished, with nothing to show
+    // the link had worked. Settled and resolved are both FINISHED, so they sit
+    // in the collapsed group at the bottom of this view rather than in the list.
+    waiting: { label: 'Status Changed/Claim Open', states: ['checked', 'covered', 'answered', 'resolved', 'settled'] },
+};
+// Which of that view's states are done with, and fold away.
+const _HOLD_DONE = ['resolved', 'settled'];
+// The four types the Cases & Disputes tab holds. Title Case and this order are
+// Ethan's (2026-09-23), and the order is deliberately NOT the section order
+// below: the sections run most-urgent-first, which is how you work a list, while
+// the dropdown runs commonest-first, which is how you look one up. "eBay" keeps
+// its small e in Title Case because that is the company's own spelling.
+// Keys match _holdCaseSections' groups.
+const _HOLD_KINDS = [
+    { key: '',           label: 'All Types' },
+    { key: 'inr',        label: 'Item Not Received' },
+    { key: 'case',       label: 'eBay Cases' },
+    { key: 'dispute',    label: 'eBay Payment Disputes' },
+    { key: 'chargeback', label: 'Shopify Chargebacks' },
+];
+
+const _holdIsInr = it => it.kind === 'inquiry' || (it.kind === 'case' && it.case_type === 'ITEM_NOT_RECEIVED');
+// A plain return only. An escalated one arrives folded into the case eBay opened
+// (0104), which is no longer a routine return, so it belongs with the cases.
+const _holdIsReturn = it => it.kind === 'return';
+const _holdItemKey = entry => _holdKeyFor(entry.type, entry.it);
+// One place that knows which column is an item's key, because three types now
+// use three different ones and getting it wrong silently posts against nothing.
+const _holdKeyFor = (type, it) =>
+    type === 'mismatch' ? it.issue_key : type === 'dispute' ? it.dispute_key : it.case_key;
+const _holdDelivered = it => /DELIVERED/i.test(String(it.tracking_status || ''));
+// Returns run delivered → on its way back → not shipped yet → needs a label
+// (Ethan, 2026-09-22): the ones closest to a refund first, the ones we have not
+// answered yet last, so nothing sits unnoticed at the bottom.
+// Cases & Disputes runs: whatever eBay is still holding open first — an
+// escalated case or a dispute — then an INR still open, then a refunded INR
+// that needs a carrier claim, and last the refunded ones the carrier says were
+// delivered (Ethan, 2026-09-22). That last band is the easy money: eBay hands it
+// back for the asking, so it does not need to sit at the top.
+// eBay waiting on US comes before all of it (0107): a case nobody answered is
+// the one that gets decided against us by default.
+function _holdCaseRank(it) {
+    if (it.awaiting_reply) return 0;
+    if (it.is_open && it.kind === 'case') return 1;   // escalated to an eBay case
+    if (it.is_open) return 2;                         // an INR eBay still has open
+    if (_holdDelivered(it)) return 4;
+    return 3;
+}
+function _holdReturnRank(it) {
+    const st = String(it.ebay_status || '');
+    if (/ITEM_DELIVERED/.test(st)) return 0;
+    if (/ITEM_SHIPPED/.test(st)) return 1;
+    if (/READY_FOR_SHIPPING|ITEM_READY_TO_SHIP/.test(st)) return 2;
+    if (/WAITING_FOR_RETURN_LABEL|RETURN_LABEL_PENDING/.test(st)) return 3;
+    return 4;
+}
+const _holdKeyOf = e => `${e.type}|${_holdKeyFor(e.type, e.it)}`;
+
+async function loadHoldItems(ctx, opts = {}) {
+    const stores = _holdStores(ctx);
+    const wraps = ['mismatch', 'returns', 'cases'].map(t => _holdWrap(ctx, t)).filter(Boolean);
+    if (!stores.length) { _holdNotLive(ctx); return; }
+    if (!_holdData[ctx]) wraps.forEach(w => { w.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading…</div>'; });
+    _holdLoading[ctx] = true;
+    try {
+        await _holdFetch(ctx, stores);
+        renderHoldItems(ctx);
+        // Then ask for a fresh eBay read. The function throttles this per store,
+        // so opening the tool twice in a row costs eBay nothing the second time.
+        if (opts.sync !== false && (_holdData[ctx].stores || []).length) {
+            const res = await fetch(CLAIMS_DISPUTES_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'sync', stores }),
+            });
+            const j = await res.json().catch(() => ({}));
+            if (j && j.swept && Object.keys(j.swept).length) {
+                await _holdFetch(ctx, stores);
+                renderHoldItems(ctx);
+            }
+        }
+    } catch (e) {
+        if (!_holdData[ctx]) wraps.forEach(w => { w.innerHTML = '<div style="color:var(--red-alert); padding:24px; text-align:center; font-weight:700;">Could not load. Try again in a minute.</div>'; });
+    } finally {
+        _holdLoading[ctx] = false;
+    }
+}
+
+async function _holdFetch(ctx, stores) {
+    const res = await fetch(`${CLAIMS_DISPUTES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'load failed');
+    _holdData[ctx] = json;
+}
+
+// The tabs are part of the design and are ALWAYS there; what arrives store by
+// store is the data behind them (Ethan, 2026-09-22: put the front end in place,
+// "then we'd fill it in with the returns and stuff 1 store at a time"). They used
+// to be hidden until the server said the store was rolled out, which is what the
+// first-sign-in glitch was: the bar was built twice, once before the answer and
+// once after. Until a store is in the function's ROLLOUT_STORES its manager gets
+// the tab and a line saying what is coming, instead of a tab that appears one day
+// out of nowhere.
+const _HOLD_TAB_NOUN = {
+    mismatch: 'Refund mismatches',
+    returns: 'eBay returns',
+    cases: 'eBay cases and disputes',
+};
+function _holdNotLive(ctx) {
+    const mine = _holdStores(ctx);
+    const who = mine.length ? mine.join(' and ') : 'your store';
+    ['mismatch', 'returns', 'cases'].forEach(t => {
+        const w = _holdWrap(ctx, t);
+        if (!w) return;
+        w.innerHTML = `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600; line-height:1.7;">
+            ${escapeHtml(_HOLD_TAB_NOUN[t])} aren't switched on for ${escapeHtml(who)} yet.
+            <div style="margin-top:6px; font-weight:600; color:#cbd5e1;">Stores are added one at a time, so every number is checked against eBay and Shopify before anyone works off it.</div>
+        </div>`;
+    });
+}
+
+// Items needing someone today, for the tab badges.
+function _holdDueCounts(ctx) {
+    const d = _holdData[ctx];
+    const need = x => _HOLD_VIEWS.due.states.includes(x.state);
+    if (!d) return { mismatch: 0, returns: 0, cases: 0 };
+    const due = (d.cases || []).filter(need);
+    return {
+        mismatch: (d.mismatches || []).filter(need).length,
+        returns: due.filter(_holdIsReturn).length,
+        // Disputes live on this tab too, and an unanswered one is the most
+        // expensive thing the badge can be counting.
+        cases: due.filter(c => !_holdIsReturn(c)).length + (d.disputes || []).filter(need).length,
+    };
+}
+function _holdPaintBadges(ctx) {
+    const n = _holdDueCounts(ctx);
+    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases]].forEach(([t, v]) => {
+        const b = document.getElementById(`hold-${ctx}-badge-${t}`);
+        if (!b) return;
+        b.textContent = v ? String(v) : '';
+        b.style.display = v ? 'inline-block' : 'none';
+    });
+}
+
+function renderHoldItems(ctx) {
+    _holdIndex[ctx] = [];
+    const d = _holdData[ctx];
+    if (!d) return;
+    _holdPaintBadges(ctx);
+    // Rolled out store by store: the tab is here, the data is not yet.
+    if (!(d.stores || []).length) { _holdNotLive(ctx); return; }
+    const mw = _holdWrap(ctx, 'mismatch');
+    const rw = _holdWrap(ctx, 'returns');
+    const cw = _holdWrap(ctx, 'cases');
+    // Cases indexed by eBay order, so a mismatch can say "there's an open return
+    // on this order" — the most common reason one side refunded and the other
+    // hasn't yet.
+    const casesByOrder = {};
+    // An escalated case carries the legacy order id; the mismatch has the Seller
+    // Hub one, which only its folded-in return knows. Index it under both.
+    (d.cases || []).forEach(c => [c.order_id, c.return && c.return.order_id].filter(Boolean)
+        .forEach(o => (casesByOrder[o] = casesByOrder[o] || []).push(c)));
+    if (mw) mw.innerHTML = _holdToolbar(ctx, 'mismatch') + _holdList(ctx, 'mismatch', d.mismatches || [], casesByOrder);
+    // Returns stand on their own (Ethan, 2026-09-22): a return is the routine
+    // one — the buyer wants to send it back — while an INR, an escalated case
+    // and (later) a payment dispute are money in question. Same item type and
+    // the same rule underneath; only the list is split.
+    const all = d.cases || [];
+    if (rw) rw.innerHTML = _holdToolbar(ctx, 'ebay_case', { returns: true }) + _holdSyncLine(d)
+        + _holdList(ctx, 'ebay_case', all.filter(_holdIsReturn), null, { returns: true });
+    // Disputes lead this tab. They are the only items in the tool with a hard
+    // outside deadline and the only kind that is LOST BY DEFAULT if nobody
+    // looks — on the first read, 8 of 13 open ones had no response at all.
+    if (cw) cw.innerHTML = _holdToolbar(ctx, 'ebay_case') + _holdSyncLine(d) + _holdCaseSections(ctx, d, all);
+}
+
+// FOUR DIFFERENT THINGS SHARE THIS TAB, and Ethan asked for them to stop looking
+// alike (2026-09-23). They are not the same job: a dispute is answered with
+// evidence on the site holding the money, an INR with tracking or a refund, an
+// escalated case is argued with eBay. So each gets its own heading, ordered by
+// how the money is at risk — disputes first, because they are the only items
+// here with a hard outside deadline and the only kind LOST BY DEFAULT if nobody
+// looks (8 of the 13 open on the first read had no response at all), then the
+// cases eBay has been dragged into, then the INRs. That last pair is the order
+// Ethan already asked for on 2026-09-22 ("active cases/escalated to ebay cases
+// first, INR open, INR delivered"); the headings group it, they do not reorder
+// it, and the open-before-delivered part still comes from _holdCaseRank.
+//
+// A heading is drawn ONLY when its group has something in the CURRENT view.
+// Four headings over "nothing here" is how a tab with two real items on it
+// becomes unreadable.
+function _holdCaseSections(ctx, d, all) {
+    const disputes = d.disputes || [];
+    const notReturns = all.filter(c => !_holdIsReturn(c));
+    const groups = [
+        { key: 'dispute', label: 'eBay payment disputes', one: 'eBay payment dispute', many: 'eBay payment disputes', type: 'dispute',
+          items: disputes.filter(x => x.source === 'ebay') },
+        { key: 'chargeback', label: 'Shopify chargebacks', one: 'Shopify chargeback', many: 'Shopify chargebacks', type: 'dispute',
+          items: disputes.filter(x => x.source !== 'ebay') },
+        { key: 'case', label: 'eBay cases', one: 'eBay case', many: 'eBay cases', type: 'ebay_case',
+          items: notReturns.filter(c => !_holdIsInr(c)) },
+        { key: 'inr', label: 'Item not received', one: 'item-not-received request', many: 'item-not-received requests', type: 'ebay_case',
+          items: notReturns.filter(_holdIsInr) },
+    ]
+    // Ethan, 2026-09-23: a dropdown to look at one kind at a time. It filters
+    // BEFORE the loop below, so a kind that is filtered out is gone entirely —
+    // it must not turn up in the "also on this tab" tail, which would have the
+    // page telling you about the very thing you just asked it to put away.
+    .filter(g => !_holdView[ctx].kind || g.key === _holdView[ctx].kind);
+    const hidden = [];
+    let shown = 0;
+    const blocks = groups.map(function (g) {
+        if (!g.items.length) return '';                    // this store has none at all
+        const here = _holdInView(ctx, g.items);
+        if (!here.length) {
+            // The group EXISTS but nothing in it belongs in this view. Dropping
+            // it silently is what made Ethan ask "where are the eBay payment
+            // disputes?" when WSP's single dispute was simply already answered —
+            // an absent heading cannot tell you "none" from "all handled".
+            const n = g.items.length;
+            hidden.push(n + ' ' + (n === 1 ? g.one : g.many));
+            return '';
+        }
+        shown++;
+        const body = _holdList(ctx, g.type, g.items, null, { section: true, quiet: true });
+        return body ? _holdSectionHead(g.label, here) + body : '';
+    }).filter(Boolean);
+    const tail = hidden.length
+        ? `<div style="margin-top:18px; padding:9px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:11.5px; color:#64748b; font-weight:600;">
+             Also on this tab, with nothing needed right now: ${escapeHtml(hidden.join(' · '))} —
+             under <b>${escapeHtml((_HOLD_VIEWS[_holdView[ctx].show === 'due' ? 'waiting' : 'due'] || {}).label || '')}</b>.
+           </div>`
+        : '';
+    // Nothing in any group: one plain message for the tab, rather than a blank
+    // panel that just looks broken.
+    return shown ? blocks.join('') + tail : _holdList(ctx, 'ebay_case', [], null) + tail;
+}
+
+// One definition of "is this item in the view the manager is looking at",
+// because the section headings count it and _holdList draws it — two copies
+// would drift and the count would start lying about the list under it.
+function _holdInView(ctx, items) {
+    const v = _holdView[ctx];
+    const want = (_HOLD_VIEWS[v.show] || _HOLD_VIEWS.due).states;
+    return items.filter(it => want.includes(it.state) && (!v.store || it.store_code === v.store));
+}
+
+// A heading only appears when there is more than one kind of thing on the tab;
+// otherwise it is furniture over a single list.
+//
+// It has to be LOUD. The first cut was 11px #94a3b8 uppercase and Ethan's
+// reaction was "it took me a second to even realize they were there" — a
+// divider nobody sees is not dividing anything. So: near-black text, a rule
+// under it, a colour bar beside it, and a count. The bar goes red when
+// something in that group needs a reply, which is the one thing worth spotting
+// from the top of a long tab.
+function _holdSectionHead(t, rows) {
+    const list = rows || [];
+    const hot = list.some(x => _HOLD_VIEWS.due.states.includes(x.state));
+    const bar = hot ? _HOLD_C.red.solid : '#94a3b8';
+    const count = list.length
+        ? `<span style="font-size:10.5px; font-weight:900; padding:2px 8px; border-radius:999px; background:${hot ? _HOLD_C.red.bg : '#e2e8f0'}; color:${hot ? _HOLD_C.red.fg : '#475569'};">${list.length}</span>`
+        : '';
+    return `<div style="display:flex; align-items:center; gap:9px; margin:26px 0 11px; padding-bottom:8px; border-bottom:2px solid #e2e8f0;">
+        <span style="width:4px; height:16px; border-radius:2px; background:${bar}; flex:0 0 auto;"></span>
+        <span style="font-size:13px; font-weight:900; text-transform:uppercase; letter-spacing:.7px; color:var(--slate-charcoal);">${escapeHtml(t)}</span>
+        ${count}
+    </div>`;
+}
+
+function _holdToolbar(ctx, type, opts) {
+    const d = _holdData[ctx] || {};
+    const v = _holdView[ctx];
+    const stores = d.stores || [];
+    const sel = 'padding:7px 10px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:12.5px; font-weight:600; background:#fff;';
+    const storeSel = stores.length > 1
+        ? `<select onchange="_holdView.${ctx}.store=this.value; renderHoldItems('${ctx}');" style="${sel}">`
+          + ['', ...stores].map(s => `<option value="${s}" ${s === v.store ? 'selected' : ''}>${s || 'All stores'}</option>`).join('')
+          + `</select>` : '';
+    // Returns are a list to read, not a list to work (Ethan, 2026-09-22), so
+    // they have no Needs Attention / Status Changed split to choose between.
+    const showSel = (opts && opts.returns) ? '' : `<select onchange="_holdView.${ctx}.show=this.value; renderHoldItems('${ctx}');" style="${sel}">`
+        + Object.entries(_HOLD_VIEWS).map(([k, x]) => `<option value="${k}" ${k === v.show ? 'selected' : ''}>${x.label}</option>`).join('')
+        + `</select>`;
+    // Only the Cases & Disputes tab holds four kinds of thing; returns and
+    // mismatches are one kind each, so a filter there would be a dead control.
+    const kindSel = (type === 'ebay_case' && !(opts && opts.returns))
+        ? `<select onchange="_holdView.${ctx}.kind=this.value; renderHoldItems('${ctx}');" style="${sel}">`
+          + _HOLD_KINDS.map(k => `<option value="${k.key}" ${k.key === (v.kind || '') ? 'selected' : ''}>${k.label}</option>`).join('')
+          + `</select>`
+        : '';
+    return `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">${showSel}${kindSel}${storeSel}
+        <button onclick="loadHoldItems('${ctx}')" class="btn-secondary" style="font-size:12px; padding:7px 12px; margin-left:auto;">Refresh</button></div>`;
+}
+
+// How fresh the eBay list is, and which stores could not be read. A store that
+// failed keeps its last good list, so the manager has to be told it is stale.
+function _holdSyncLine(d) {
+    const rows = d.sync || [];
+    if (!rows.length) return '<div style="font-size:11.5px; color:#94a3b8; margin-bottom:10px;">eBay has not been read yet for this store.</div>';
+    const bad = rows.filter(r => !r.ok);
+    let html = '';
+    if (bad.length) html += `<div style="font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ Couldn't fully read eBay for ${bad.map(r => escapeHtml(r.store_code)).join(', ')} — showing the last list that loaded. It will retry next time this opens.</div>`;
+    // Disputes are read from eBay AND Shopify, so a failure has to name which
+    // site went quiet — "couldn't read eBay" on a missing Shopify token would
+    // send someone to re-authorise the wrong thing (0112).
+    const badD = (d.disputeSync || []).filter(r => !r.ok);
+    if (badD.length) {
+        const by = {};
+        badD.forEach(r => (by[r.source === 'ebay' ? 'eBay' : 'Shopify'] ||= []).push(r.store_code));
+        html += `<div style="font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ Couldn't read disputes: ${
+            Object.entries(by).map(([site, ss]) => `${escapeHtml(site)} for ${ss.map(escapeHtml).join(', ')}`).join('; ')
+        }. ${escapeHtml(badD[0].detail || '')}</div>`;
+    }
+    return html;
+}
+
+function _holdList(ctx, type, items, casesByOrder, opts) {
+    const v = _holdView[ctx];
+    const multi = ((_holdData[ctx] || {}).stores || []).length > 1;
+    const returns = !!(opts && opts.returns);
+    // A return shows while eBay still has it open; the daily read moves it off
+    // this list by itself when it is refunded, closed or escalated.
+    // Same filter the section headings count with, so a heading that says 3 can
+    // never sit above a list of 2.
+    let rows = returns
+        ? items.filter(it => it.is_open && (!v.store || it.store_code === v.store))
+        : _holdInView(ctx, items);
+    // Most urgent state first, then oldest — the oldest open item is the one
+    // closest to becoming a month-end adjusting entry.
+    const at = it => new Date((type === 'mismatch' ? it.reversed_at : it.opened_at) || 0).getTime();
+    if (returns) rows.sort((a, b) => _holdReturnRank(a) - _holdReturnRank(b) || at(a) - at(b));
+    else if (type === 'ebay_case') rows.sort((a, b) => _holdCaseRank(a) - _holdCaseRank(b) || at(a) - at(b));
+    // Soonest deadline first among the ones waiting on us — with two of these
+    // open, the date is the only thing that decides which to do first.
+    else if (type === 'dispute') {
+        const due = it => new Date(it.respond_by || it.opened_at || 0).getTime();
+        rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank
+            || (a.needs_response ? due(a) - due(b) : at(b) - at(a)));
+    }
+    else rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank || at(a) - at(b));
+    if (!rows.length) {
+        const empty = returns ? 'No open returns right now.'
+            : v.show === 'due'
+            ? (type === 'mismatch' ? 'Nothing needs attention — eBay and Shopify agree, or every open one is checked in.'
+               : type === 'dispute' ? 'No dispute needs a reply from us.'
+               : 'Nothing needs attention on eBay right now.')
+            // Status Changed/Claim Open: say what would be here, not "this view"
+            : (type === 'mismatch' ? 'Nothing is checked in or waiting on an insurance claim.'
+               : type === 'dispute' ? 'No dispute is answered and waiting on a decision.'
+               : 'Nothing is checked in or waiting on a claim.');
+        // A section with nothing in THIS view says nothing at all — its heading
+        // is dropped by the caller too. Four headings each followed by "nothing
+        // here" is how a tab with two real items ends up unreadable.
+        if (opts && opts.quiet) return '';
+        return (opts && opts.section)
+            ? `<div style="padding:10px 2px; color:#94a3b8; font-weight:600; font-size:12px;">${empty}</div>`
+            : `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">${empty}</div>`;
+    }
+    const cards = list => `<div style="display:flex; flex-direction:column; gap:10px;">`
+        + list.map(it => _holdCard(ctx, type, it, multi, casesByOrder, opts)).join('') + `</div>`;
+    // Status Changed/Claim Open holds two different things: items still moving
+    // (checked in, claim open) and items that are done with. Ethan asked for the
+    // finished ones to fold away — they are there to be found, not read daily.
+    if (!returns && v.show === 'waiting') {
+        const done = rows.filter(it => _HOLD_DONE.includes(it.state));
+        const live = rows.filter(it => !_HOLD_DONE.includes(it.state));
+        if (!done.length) return cards(live);
+        const head = live.length ? cards(live)
+            : `<div style="padding:18px 20px; text-align:center; color:#94a3b8; font-weight:600;">Nothing is checked in or waiting on a claim.</div>`;
+        return head + `<details style="margin-top:14px;">
+            <summary style="cursor:pointer; font-size:12.5px; font-weight:800; color:#64748b; background:#f1f5f9; border-radius:8px; padding:9px 12px;">Resolved (${done.length})</summary>
+            <div style="margin-top:10px;">${cards(done)}</div></details>`;
+    }
+    return cards(rows);
+}
+
+const _holdPretty = s => String(s || '').replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase());
+const _holdMoney = v => (v == null || v === '') ? '' : '$' + Number(v).toFixed(2);
+const _holdDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+// due_on is a Chicago calendar date (YYYY-MM-DD); read it as that date, not as
+// UTC midnight, or it prints as the day before.
+const _holdDay = s => { if (!s) return ''; const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+// eBay deadlines are END OF DAY PACIFIC, stored as 06:59:59Z (or 07:00:00Z) the
+// next morning. Printed in the viewer's zone they read a day late — the
+// 2026-09-22 OVL check had "Issue refund by: Sep 23" in Seller Hub against
+// "Sep 24" here. So a deadline is shown as the Pacific date one second before it.
+const _holdEbayDay = iso => {
+    const t = new Date(iso).getTime();
+    return isNaN(t) ? '' : new Date(t - 1000).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric' });
+};
+// What Seller Hub says a return needs, keyed off the return's STATUS. eBay's own
+// activityDue field was checked and is not reliable for this: it said "provide
+// label" for a return Seller Hub showed as "Waiting for buyer to ship". A date
+// appears only when the next move is ours, as it does in Seller Hub.
+function _holdReturnAction(it) {
+    const st = String(it.ebay_status || '');
+    // Always red, not only inside the two-day window: the item is back in our
+    // hands and the buyer is owed their money, so it is the one stage where the
+    // clock is already running against us (Ethan, 2026-09-22).
+    if (/ITEM_DELIVERED/.test(st)) return { text: 'Return delivered — issue refund by', ours: true, urgent: true };
+    if (/WAITING_FOR_RETURN_LABEL|RETURN_LABEL_PENDING/.test(st)) return { text: 'Provide return shipping label by', ours: true };
+    if (/READY_FOR_SHIPPING|ITEM_READY_TO_SHIP/.test(st)) return { text: 'Waiting for buyer to ship', ours: false };
+    if (/ITEM_SHIPPED/.test(st)) return { text: 'Return shipped', ours: false };
+    return { text: _holdPretty(st.split(' / ').pop()), ours: true };
+}
+// The legacy "<itemId>-<transactionId>" id an inquiry carries is not what
+// Seller Hub shows as the order number, so it is not shown as one.
+const _holdIsLegacyOrder = o => /^\d{9,}-\d{9,}$/.test(String(o || ''));
+// eBay sends listing titles HTML-encoded (13&#34; for 13"). Decoded before the
+// usual escaping, or the manager reads the entity.
+const _holdUnentity = t => String(t || '')
+    .replace(/&#(\d+);/g, (m, n) => String.fromCharCode(Number(n)))
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const _holdAge = iso => { const n = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)); return `${n} day${n === 1 ? '' : 's'} ago`; };
+
+function _holdCaseTitle(it) {
+    if (it.kind === 'inquiry') return 'Item not received';
+    if (it.kind === 'case') {
+        if (it.case_type === 'ITEM_NOT_RECEIVED') return 'Item not received — escalated to eBay';
+        if (it.case_type === 'RETURN') return 'Return — escalated to eBay';
+        return 'eBay case';
+    }
+    if (it.kind === 'dispute') return 'Payment dispute';
+    return 'Return' + (it.reason ? ' — ' + escapeHtml(_holdPretty(it.reason)) : '');
+}
+
+// A claim that is probably the one already filed for this refunded INR: same
+// store, same amount, filed within 30 days after the INR opened. Offered first
+// in the picker; the manager still has to confirm it.
+function _holdClaimGuess(ctx, it) {
+    const claims = ((_holdData[ctx] || {}).claims || []).filter(c => c.store === it.store_code);
+    const opened = new Date(it.opened_at || 0).getTime();
+    return claims.find(c => Number(c.price) === Number(it.amount)
+        && new Date(c.created_at).getTime() >= opened - 86400000
+        && new Date(c.created_at).getTime() <= opened + 30 * 86400000) || null;
+}
+
+function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
+    const idx = _holdIndex[ctx].push({ type, it }) - 1;
+    const readOnly = !!(opts && opts.returns);
+    const st = it.state;
+    const s = _HOLD_STATE[st] || _HOLD_STATE.due;
+    const key = _holdKeyFor(type, it);
+    let form = _holdOpenForm[ctx] && _holdOpenForm[ctx].id === `${type}|${key}` ? _holdOpenForm[ctx].mode : null;
+    if (readOnly) form = null;
+    const inr = type === 'ebay_case' && _holdIsInr(it);
+    const chip = t => `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:#f1f5f9; color:#475569;">${t}</span>`;
+    const kv = (k, val) => val ? `<span style="white-space:nowrap;"><span style="color:#94a3b8;">${k}</span> ${val}</span>` : '';
+
+    let title, subtitle = '', facts = [], extra = '';
+    if (type === 'mismatch') {
+        const verb = it.reversal_kind === 'cancel' ? 'Cancelled' : 'Refunded';
+        title = it.direction === 'ebay_only'
+            ? `${verb} on eBay — still a sale in Shopify`
+            : `${verb} in Shopify — still a sale on eBay`;
+        facts = [
+            kv('eBay order', `<b>${escapeHtml(it.ebay_order_id)}</b>${siteCopyBtn(it.ebay_order_id, 'eBay order number')}`),
+            it.shopify_order_name ? kv('Shopify', `<b>${escapeHtml(it.shopify_order_name)}</b>${siteCopyBtn(it.shopify_order_name, 'Shopify order')}`) : '',
+            kv(verb, `${_holdDate(it.reversed_at)} · ${_holdAge(it.reversed_at)}`),
+        ];
+        const related = (casesByOrder && casesByOrder[it.ebay_order_id]) || [];
+        if (related.length) {
+            extra = `<div style="font-size:11.5px; color:#1d4ed8; margin-top:6px;">🔗 ${related.map(c => `eBay ${c.kind === 'inquiry' ? 'item-not-received inquiry' : c.kind} ${escapeHtml(c.ebay_id)} — ${escapeHtml(_holdPretty(c.ebay_status))}`).join('; ')}</div>`;
+        }
+    } else if (type === 'dispute') {
+        // 0112. The buyer went to their bank (or to eBay) instead of to us, so
+        // the reason the network gave IS the headline — it is what any evidence
+        // has to answer.
+        const ebay = it.source === 'ebay';
+        title = escapeHtml(_holdPretty(it.reason)) || 'Payment dispute';
+        // The chip already names the kind, so the subtitle says what it MEANS —
+        // the three are not the same fight and are not answered in the same place.
+        subtitle = ebay
+            ? 'The buyer disputed this through eBay'
+            : it.dispute_type === 'INQUIRY'
+            ? "The buyer's bank is asking before it pulls the money — cheapest one to win"
+            : "The buyer's bank pulled the money back";
+        // The deadline is the whole point of this card, so it is never quiet.
+        const due = it.respond_by;
+        const late = due && new Date(due).getTime() < Date.now();
+        const soon = due && !late && (new Date(due).getTime() - Date.now()) < 3 * 86400000;
+        const dueTxt = due
+            ? (it.needs_response
+                ? `<span style="white-space:nowrap; ${late || soon ? `color:${_HOLD_C.red.fg}; font-weight:800;` : 'font-weight:700;'}">${late ? 'Was due' : 'Respond by'} ${_holdEbayDay(due)}</span>`
+                : `<span style="white-space:nowrap; color:#475569;">Responded by ${_holdEbayDay(due)}</span>`)
+            : '';
+        // Straight to the page the response is typed on. The Shopify admin is
+        // keyed by the SHOP HANDLE, not the store code — CB_SHOP_DOMAINS is the
+        // map the rest of the file already uses for exactly this, and a link
+        // that 404s is worse than no link (see cbMatchListingUrl).
+        const shop = CB_SHOP_DOMAINS[it.store_code];
+        const link = ebay
+            ? 'https://www.ebay.com/sh/return/disputes'
+            : shop ? `https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/payments/disputes` : '';
+        facts = [
+            dueTxt,
+            it.order_no ? kv('Order', `<b>${escapeHtml(it.order_no)}</b>${siteCopyBtn(it.order_no, 'order number')}`) : '',
+            it.reason_code ? kv('Network code', escapeHtml(it.reason_code)) : '',
+            it.buyer ? kv('Buyer', escapeHtml(it.buyer)) : '',
+            kv('Opened', `${_holdDate(it.opened_at)} · ${_holdAge(it.opened_at)}`),
+            it.responded_at ? kv('We answered', _holdDate(it.responded_at)) : '',
+            link ? `<a href="${link}" target="_blank" rel="noopener" style="font-weight:800; color:#1d4ed8; white-space:nowrap;">Open on ${ebay ? 'eBay' : 'Shopify'} ↗</a>` : '',
+        ];
+        if (st === 'needs_reply' && it.missed_window) {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>We missed the window to respond</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us and no longer takes one, so this is very likely lost. Nothing here can reopen it; mark it resolved and say what happened so there is a record.</div>`;
+        } else if (st === 'needs_reply') {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} needs our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Unanswered disputes are lost by default.</div>`;
+        } else if (st === 'answered') {
+            extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We responded${it.responded_at ? ` ${_holdDate(it.responded_at)}` : ''} — the ${ebay ? 'eBay' : 'card'} decision can take weeks. Nothing to do until it lands.</div>`;
+        } else if (st === 'settled') {
+            extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${escapeHtml(_holdPretty(it.status_raw))}${it.closed_at ? ` · ${_holdDate(it.closed_at)}` : ''}.</div>`;
+        }
+    } else {
+        // Seller Hub leads with the item, so the card does too; the kind of case
+        // moves under it.
+        title = it.item_title ? escapeHtml(_holdUnentity(it.item_title)) : _holdCaseTitle(it);
+        subtitle = it.item_title ? _holdCaseTitle(it) : '';
+        const soon = iso => iso && (new Date(iso).getTime() - Date.now()) < 2 * 86400000;
+        const deadline = (label, iso, urgent) => iso
+            ? `<span style="white-space:nowrap; ${urgent || soon(iso) ? `color:${_HOLD_C.red.fg}; font-weight:800;` : 'font-weight:700;'}">${label} ${_holdEbayDay(iso)}</span>` : '';
+        // Where it stands, in Seller Hub's words, with our deadline when the next
+        // move is ours.
+        let where = '';
+        if (it.is_open && it.kind === 'return') {
+            const a = _holdReturnAction(it);
+            where = a.ours
+                ? deadline(escapeHtml(a.text), it.respond_by, a.urgent)
+                  // no date from eBay: "…issue refund by" would dangle
+                  || `<span style="${a.urgent ? `color:${_HOLD_C.red.fg}; font-weight:800;` : 'font-weight:700;'}">${escapeHtml(a.text.replace(/ by$/, ''))}</span>`
+                : `<span style="font-weight:700; color:#475569;">${escapeHtml(a.text)}</span>`;
+        } else if (it.is_open) {
+            where = deadline(it.kind === 'inquiry' ? 'Resolve by' : 'Respond by', it.respond_by)
+                || `<span style="font-weight:700; color:#475569;">${escapeHtml(_holdPretty(it.ebay_status))}</span>`;
+        } else {
+            where = `<span style="color:#475569;">${escapeHtml(_holdPretty(it.ebay_status))}</span>`;
+        }
+        // An escalated return arrives as ONE card — the case, with the return it
+        // came from folded in by the server (0104) — so it carries both ids, and
+        // the order number Seller Hub shows comes from the return.
+        const ret = it.return || null;
+        const returnId = it.kind === 'return' ? it.ebay_id : ret ? ret.ebay_id : '';
+        // 0106 reads the real order number for an inquiry or a case; a return
+        // already carries it, and an escalated one borrows its return's.
+        const orderNo = (ret && ret.order_id) || it.order_no || it.order_id;
+        const link = returnId ? `https://www.ebay.com/rt/ReturnDetails?returnId=${encodeURIComponent(returnId)}` : '';
+        const idLabel = it.kind === 'return' ? 'Return ID' : it.kind === 'inquiry' ? 'Request ID' : 'Case ID';
+        facts = [
+            where,
+            kv(idLabel, `<b>${escapeHtml(it.ebay_id)}</b>${siteCopyBtn(it.ebay_id, 'eBay ' + idLabel)}`),
+            ret ? kv('Return ID', `<b>${escapeHtml(ret.ebay_id)}</b>${siteCopyBtn(ret.ebay_id, 'eBay Return ID')}`) : '',
+            orderNo && !_holdIsLegacyOrder(orderNo) ? kv('Order', `${escapeHtml(orderNo)}${siteCopyBtn(orderNo, 'eBay order number')}`) : '',
+            it.buyer ? kv('Buyer', escapeHtml(it.buyer)) : '',
+            ret && ret.opened_at ? kv('Return opened', `${_holdDate(ret.opened_at)} · ${_holdAge(ret.opened_at)}`) : '',
+            kv(ret ? 'Escalated' : 'Opened', `${_holdDate(it.opened_at)} · ${_holdAge(it.opened_at)}`),
+            link ? `<a href="${link}" target="_blank" rel="noopener" style="font-weight:800; color:#1d4ed8; white-space:nowrap;">Open on eBay ↗</a>` : '',
+
+        ];
+        // What the carrier says. A refunded INR that turns up delivered is the
+        // one to look at first: eBay refunds us for it, no claim needed (0106).
+        if (it.tracking_status) {
+            const del = /DELIVERED/i.test(it.tracking_status);
+            const tn = it.tracking_number ? `${escapeHtml(it.tracking_carrier || '')} ${escapeHtml(it.tracking_number)}${siteCopyBtn(it.tracking_number, 'tracking number')}` : '';
+            facts.push(`<span style="white-space:nowrap; ${del ? `color:${_HOLD_C.green.fg}; font-weight:800;` : 'color:#475569;'}">${del ? 'Delivered' : escapeHtml(_holdPretty(it.tracking_status))}${tn ? ' · ' + tn : ''}</span>`);
+        }
+        if (it.state_note === 'delivered_after_refund') {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>It turned up after we refunded the buyer</b> — and the claim is still open. The carrier does not owe this one; eBay refunds a delivered item-not-received itself. Call eBay for it, close the claim out, then mark this resolved and say what eBay did.</div>`;
+        } else if (st === 'needs_claim' && _holdDelivered(it)) {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>The carrier says this was delivered</b> — Even though the buyer was refunded. eBay covers a delivered item-not-received, so ask eBay for it rather than filing a claim, then mark this resolved and say what eBay did.</div>`;
+        } else if (st === 'needs_claim') {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''}. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.</div>`;
+        }
+        if (it.state_note === 'outcome unread') {
+            extra += `<div style="font-size:11.5px; color:#b45309; margin-top:6px;">Closed on eBay, but we couldn't read whether the buyer was refunded yet. It clears itself on the next read, or check it on eBay.</div>`;
+        }
+    }
+    if (it.claim) {
+        const cs = CLAIM_STATUS[it.claim.status] || CLAIM_STATUS.in_progress;
+        extra += `<div style="font-size:12px; margin-top:8px;">Claim <b>${escapeHtml(it.claim.case_number || '')}</b>${siteCopyBtn(it.claim.case_number, 'claim number')} <span style="font-size:10.5px; font-weight:800; padding:2px 7px; border-radius:999px; background:${cs.bg}; color:${cs.fg};">${cs.label}</span>${it.claim.status === 'in_progress' ? ' <span style="color:#64748b;">— Check-ins happen on the claim, in the Claims tab.</span>' : ''}</div>`;
+    }
+
+    // What the last person said, if anyone has.
+    const rv = it.review;
+    let said = '';
+    // A contested resolution gets the red block below INSTEAD of the green
+    // "Resolved by…" one — showing both would have the same card saying it is
+    // settled and not settled at once.
+    if (rv && st !== 'settled' && st !== 'covered' && it.state_note !== 'resolution_disputed') {
+        const who = escapeHtml(rv.by_name || 'Someone');
+        if (rv.status === 'resolved') {
+            said = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>Resolved by ${who}</b> · ${_holdDate(rv.updated_at)}<div style="margin-top:2px;">${escapeHtml(rv.note || '')}</div></div>`;
+        } else {
+            said = `<div style="font-size:12px; background:${_HOLD_C.amber.bg}; border:1px solid ${_HOLD_C.amber.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.amber.fg};"><b>Still open</b> — ${who}, ${_holdDate(rv.updated_at)}${st === 'checked' && it.due_on ? ` · back on the list ${_holdDay(it.due_on)}` : ''}${rv.note ? `<div style="margin-top:2px;">${escapeHtml(rv.note)}</div>` : ''}</div>`;
+        }
+    }
+    // 0107/0108. Said plainly, because the move is on eBay and nothing pressed
+    // here can stand in for it: eBay's own history is what clears this.
+    // A RESOLUTION THE SITE DISAGREES WITH. This is the one Ethan asked for by
+    // name — someone marking a live dispute resolved is how money gets "lost in
+    // the wind". It is not blocked (there are honest reasons to record an
+    // outcome) but it does not silence anything, and after the grace period it
+    // is his problem, not just the store's.
+    if (it.state_note === 'resolution_disputed') {
+        const days = ((_holdData[ctx] || {}).resolutionGraceDays) || 2;
+        const since = it.resolution_disputed_since;
+        const age = since ? Math.floor((Date.now() - new Date(since).getTime()) / 86400000) : 0;
+        const site = type === 'dispute' ? (it.source === 'ebay' ? 'eBay' : 'Shopify') : 'eBay';
+        said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
+            <b>${escapeHtml(rv && rv.by_name || 'Someone')} marked this resolved${since ? ` on ${_holdDate(since)}` : ''}, but ${escapeHtml(site)} still shows no response from us.</b>
+            ${rv && rv.note ? `<div style="margin-top:2px; font-weight:600;">“${escapeHtml(rv.note)}”</div>` : ''}
+            <div style="margin-top:4px;">If it really is handled, ${escapeHtml(site)} will say so on the next read and this clears itself. If it isn't, answer it now${age >= days ? ' — this has already gone to the DM.' : ` — after ${days} day${days === 1 ? '' : 's'} it goes to the DM.`}</div>
+        </div>`;
+    }
+    // Cases only: a dispute says its own version of this above, naming the right
+    // site and its deadline.
+    if (st === 'needs_reply' && type === 'ebay_case' && it.state_note !== 'resolution_disputed' && !it.missed_window) {
+        said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
+            <b>eBay needs a reply from us${it.buyer_acted_at ? ` — the buyer last wrote ${_holdDate(it.buyer_acted_at)}` : ''}</b>
+            — answer it on eBay and this clears itself on the next read. It can't be checked in until then.</div>`;
+    } else if (st === 'needs_reply' && type === 'ebay_case' && it.missed_window) {
+        // eBay takes no late reply (Ethan, 2026-09-23), so the deadline having
+        // gone changes what this card should ask for: a record, not an argument.
+        said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
+            <b>We missed the window to reply${it.respond_by ? ` — eBay wanted an answer by ${_holdEbayDay(it.respond_by)}` : ''}.</b>
+            eBay does not take a late reply, so this is very likely decided against us. Mark it resolved and say what happened, so there is a record of it.</div>`;
+    } else if (type === 'ebay_case' && it.is_open && it.seller_replied_at) {
+        said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We answered eBay ${_holdDate(it.seller_replied_at)} — waiting on the buyer.</div>`;
+    }
+    if (st === 'settled' && !it.claim && type !== 'dispute') {
+        said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${type === 'mismatch'
+            ? `Both sites agree now${it.resolved_at ? ' (' + _holdDate(it.resolved_at) + ')' : ''} — nothing to do.`
+            : `Closed on eBay${it.closed_at ? ' (' + _holdDate(it.closed_at) + ')' : ''}${inr && it.outcome === 'no_refund' ? ' — no refund to the buyer.' : '.'}`}</div>`;
+    }
+
+    const history = (it.history || []);
+    const histHtml = history.length > 1
+        ? `<details style="margin-top:6px;"><summary style="font-size:11px; color:#64748b; cursor:pointer; font-weight:700;">History (${history.length})</summary>`
+          + history.map(h => `<div style="font-size:11.5px; color:#475569; padding:4px 0; border-top:1px solid #f1f5f9;"><b>${escapeHtml(_holdPretty(h.action))}</b> · ${escapeHtml(h.by_name || 'Someone')} · ${_holdDate(h.at)}${h.note ? ` — ${escapeHtml(h.note)}` : ''}</div>`).join('')
+          + `</details>` : '';
+
+    const sBtn = 'font-size:11.5px; font-weight:800; border-radius:8px; padding:7px 11px; cursor:pointer; line-height:1; white-space:nowrap;';
+    const acts = [];
+    if (readOnly) { /* nothing to press: the daily read moves a return along */ }
+    else if (st === 'resolved') {
+        acts.push(`<button onclick="_holdReopen('${ctx}', ${idx})" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">Reopen</button>`);
+    } else if (st === 'needs_claim' || it.state_note === 'delivered_after_refund') {
+        // Delivered after all: eBay pays that one back, so the first move is a
+        // note saying what eBay did, not a carrier claim (0106). Once a claim
+        // has already been opened the card arrives here as 'due' instead — same
+        // parcel, same move, so it gets the same button rather than a generic
+        // "Update status" that says nothing about who to ring.
+        if (_holdDelivered(it)) {
+            acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">${form === 'status' ? 'Close' : 'Delivered — Resolve it'}</button>`);
+        }
+        if (st === 'needs_claim') {
+            acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">${form === 'claim' ? 'Close' : 'Open or link a claim'}</button>`);
+        }
+    } else if (st === 'needs_reply' || st === 'due' || st === 'checked') {
+        acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.blue.bg}; border:1.5px solid ${_HOLD_C.blue.line}; color:${_HOLD_C.blue.fg};">${form === 'status' ? 'Close' : 'Update status'}</button>`);
+    }
+
+    let formHtml = '';
+    if (form === 'status' && (st === 'due' || st === 'checked' || st === 'needs_claim' || st === 'needs_reply')) {
+        const days = ((_holdData[ctx] || {}).timers || {})[type] || 0;
+        formHtml = `
+        <div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
+            <label class="form-label-caps" for="hold-note-${ctx}-${idx}">Note</label>
+            <textarea id="hold-note-${ctx}-${idx}" rows="2" class="form-input-lg" style="width:100%; box-sizing:border-box; resize:vertical;"
+                placeholder="${type === 'mismatch' ? 'e.g. Won the Shopify insurance claim SHPJG-0709… — money recovered, no Shopify refund needed'
+                    : type === 'dispute' ? 'e.g. Refunded the buyer and accepted it — cheaper than losing the chargeback fee too'
+                    : 'e.g. Buyer shipped the return, tracking 1Z…; refund once it arrives'}"></textarea>
+            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${st === 'needs_reply'
+                ? (type === 'dispute'
+                    ? (it.response_overdue
+                        ? `The response window has closed, so there is nothing to check in. <b>Resolved</b> records what happened and needs a reason.`
+                        : `<b>Still open</b> is off the table until ${escapeHtml(it.source === 'ebay' ? 'eBay' : 'Shopify')} shows our response — that is the point of this one. <b>Resolved</b> is here for a dispute we settled another way (refunded the buyer, accepted it), and needs a reason.`)
+                    : `<b>Still open</b> is off the table until eBay shows our reply — that is the point of this one. <b>Resolved</b> is still here for a case that ended some other way, and needs a reason.`)
+                : type === 'mismatch'
+                ? `<b>Insurance Claim</b> opens the claim form and takes this off the list for ${days} day${days === 1 ? '' : 's'}. <b>Resolved</b> needs a reason — why it is fine that the two sites don’t match, or what you fixed.`
+                : `<b>Still open</b> takes it off the list for ${days} day${days === 1 ? '' : 's'} (note optional). <b>Resolved</b> needs a reason.`}</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                ${st === 'needs_reply' ? ''
+                    : type === 'mismatch'
+                    ? `<button onclick="_holdInsuranceClaim('${ctx}', ${idx})" style="${sBtn} background:${_HOLD_C.amber.bg}; border:1.5px solid ${_HOLD_C.amber.line}; color:${_HOLD_C.amber.fg};">Insurance Claim</button>`
+                    : `<button onclick="_holdSave('${ctx}', ${idx}, 'still_open')" style="${sBtn} background:${_HOLD_C.amber.bg}; border:1.5px solid ${_HOLD_C.amber.line}; color:${_HOLD_C.amber.fg};">Still open</button>`}
+                <button onclick="_holdSave('${ctx}', ${idx}, 'resolved')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">Mark resolved</button>
+                ${inr && st !== 'needs_claim' ? `<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:#fff; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">Refunding the buyer? Open a claim</button>` : ''}
+            </div>
+        </div>`;
+    } else if (form === 'claim' && (inr || type === 'mismatch')) {
+        formHtml = _holdClaimForm(ctx, idx, it);
+    }
+
+    const edge = (st === 'due' || st === 'needs_claim' || st === 'needs_reply') ? `box-shadow:inset 3px 0 0 ${_HOLD_C.red.solid};` : '';
+    return `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 14px; ${edge}">
+        <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap;">
+            <div style="min-width:0; flex:1 1 240px;">
+                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:4px;">
+                    ${multi ? chip(escapeHtml(it.store_code)) : ''}
+                    ${readOnly || !_holdKindChip(type, it) ? '' : `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:#e2e8f0; color:#334155;">${escapeHtml(_holdKindChip(type, it))}</span>`}
+                    ${readOnly ? '' : `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:${s.bg}; color:${s.fg};">${escapeHtml(_holdStateLabel(type, it, s))}</span>`}
+                </div>
+                <div style="font-weight:800; font-size:13.5px; color:var(--slate-charcoal);">${title}</div>
+                ${subtitle ? `<div style="font-size:11.5px; font-weight:700; color:#64748b; margin-top:1px;">${subtitle}</div>` : ''}
+            </div>
+            <div style="display:flex; gap:10px; align-items:center;">
+                ${it.amount != null ? `<span style="font-weight:900; font-size:15px; color:var(--slate-charcoal);">${_holdMoney(it.amount)}</span>` : ''}
+                ${acts.join('')}
+            </div>
+        </div>
+        <div style="display:flex; gap:6px 14px; flex-wrap:wrap; font-size:12px; color:#334155; margin-top:6px;">${facts.filter(Boolean).join('')}</div>
+        ${extra}${said}${histHtml}${formHtml}
+    </div>`;
+}
+
+// Open a claim for an INR (same fields as New Claim, prefilled with the amount),
+// or link one already filed. A likely match goes first in the picker.
+function _holdClaimForm(ctx, idx, it) {
+    const inp = 'width:100%; padding:7px 9px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:600; box-sizing:border-box; background:#fff;';
+    const lbl = t => `<label style="display:block; font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-bottom:3px;">${t}</label>`;
+    const sBtn = 'font-size:11.5px; font-weight:800; border-radius:8px; padding:7px 11px; cursor:pointer; line-height:1; white-space:nowrap;';
+    const guess = _holdClaimGuess(ctx, it);
+    const claims = ((_holdData[ctx] || {}).claims || []).filter(c => c.store === it.store_code);
+    const ordered = guess ? [guess, ...claims.filter(c => c.id !== guess.id)] : claims;
+    const opt = c => {
+        const cs = CLAIM_STATUS[c.status] || CLAIM_STATUS.in_progress;
+        return `<option value="${escapeHtml(c.id)}">${c === guess ? '★ Likely match — ' : ''}${escapeHtml(c.case_number || '')} · ${_holdMoney(c.price)} · ${escapeHtml(c.reason_type || '')} · ${_holdDate(c.created_at)} · ${cs.label}</option>`;
+    };
+    const linkPart = claims.length ? `
+        <div style="margin-bottom:12px;">
+            <div style="font-weight:800; font-size:12px; color:var(--slate-charcoal); margin-bottom:4px;">Already filed a claim for this?</div>
+            ${guess ? `<div style="font-size:11px; color:#1d4ed8; margin-bottom:6px;">★ ${escapeHtml(guess.case_number)} is the same amount and was filed ${_holdDate(guess.created_at)} — check it's the same sale before linking.</div>` : ''}
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <select id="hold-link-${ctx}-${idx}" style="${inp} flex:1 1 220px; width:auto;">${ordered.map(opt).join('')}</select>
+                <button onclick="_holdLinkClaim('${ctx}', ${idx})" style="${sBtn} background:${_HOLD_C.blue.bg}; border:1.5px solid ${_HOLD_C.blue.line}; color:${_HOLD_C.blue.fg};">Link claim</button>
+            </div>
+        </div>` : '';
+    return `
+    <div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
+        ${linkPart}
+        <div style="font-weight:800; font-size:12px; color:var(--slate-charcoal); margin-bottom:6px;">${claims.length ? 'Or open a new one' : 'Open a claim'}</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px;">
+            <div>${lbl('Claim')}<select id="hold-cl-${ctx}-${idx}-reason" style="${inp}"><option value="Shopify Claim">Shopify Claim</option><option value="USPS Claim">USPS Claim</option><option value="UPS Claim">UPS Claim</option></select></div>
+            <div>${lbl('Type')}<select id="hold-cl-${ctx}-${idx}-type" style="${inp}"><option value="Loss">Loss</option><option value="Damage">Damage</option></select></div>
+            <div>${lbl('Claim #')}<input id="hold-cl-${ctx}-${idx}-num" style="${inp}" placeholder="e.g. SHP9D-0826…"></div>
+            <div>${lbl('Value')}<input id="hold-cl-${ctx}-${idx}-value" type="number" step="0.01" min="0" value="${it.amount != null ? Number(it.amount) : ''}" style="${inp}"></div>
+            <div>${lbl('Cost')}<input id="hold-cl-${ctx}-${idx}-cost" type="number" step="0.01" min="0" style="${inp}"></div>
+            <div>${lbl('SKU')}<input id="hold-cl-${ctx}-${idx}-sku" style="${inp}"></div>
+        </div>
+        <div style="margin-top:10px;">${lbl('Detail (optional)')}<input id="hold-cl-${ctx}-${idx}-detail" style="${inp}"></div>
+        <div style="font-size:11px; color:#64748b; margin:6px 0 8px;">Saved to the Claims tab like any other claim, and linked to this ${it.issue_key ? 'mismatch — which then follows the claim' : `eBay ${it.kind === 'case' ? 'case' : 'inquiry'}`}.</div>
+        <button onclick="_holdOpenClaim('${ctx}', ${idx})" class="btn-primary" style="font-size:12px; padding:7px 16px;">Save claim</button>
+    </div>`;
+}
+
+// Takes the render position rather than the key: keys are free text from the
+// DB, and a position can't break out of an onclick attribute.
+function _holdToggleForm(ctx, idx, mode) {
+    const cur = _holdIndex[ctx][idx];
+    if (!cur) return;
+    const id = _holdKeyOf(cur);
+    const open = _holdOpenForm[ctx];
+    _holdOpenForm[ctx] = open && open.id === id && open.mode === mode ? null : { id, mode };
+    renderHoldItems(ctx);
+    // Put the cursor where the next keystroke goes.
+    const entry = _holdIndex[ctx].findIndex(e => _holdKeyOf(e) === id);
+    const el = entry < 0 ? null : document.getElementById(mode === 'claim' ? `hold-cl-${ctx}-${entry}-num` : `hold-note-${ctx}-${entry}`);
+    if (el && !document.getElementById(`hold-link-${ctx}-${entry}`)) el.focus();
+}
+
+async function _holdPost(body) {
+    const res = await fetch(CLAIMS_DISPUTES_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, by_name: sessionStorage.getItem('speeksUserName') || null }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+    return json;
+}
+async function _holdAfterWrite(ctx) {
+    _holdOpenForm[ctx] = null;
+    await _holdFetch(ctx, _holdStores(ctx));
+    renderHoldItems(ctx);
+}
+
+async function _holdSave(ctx, idx, status) {
+    const entry = _holdIndex[ctx][idx];
+    if (!entry) return;
+    const ta = document.getElementById(`hold-note-${ctx}-${idx}`);
+    const note = ta ? ta.value.trim() : '';
+    if (status === 'resolved' && note.length < HOLD_MIN_REASON) {
+        alert('Please say why this is resolved — for example the claim that recovered the money, or what you fixed on which site.');
+        if (ta) ta.focus();
+        return;
+    }
+    try {
+        await _holdPost({ action: 'review', item_type: entry.type,
+            item_key: _holdItemKey(entry), status, note });
+        await _holdAfterWrite(ctx);
+    } catch (e) { alert('Could not save: ' + e.message); }
+}
+
+// THE ONLY REASON A MISMATCH STAYS OPEN is that an insurance claim is being
+// filed for it (Ethan, 2026-09-22) — the OVL case that started this feature:
+// refunded on eBay, claimed on Shopify insurance instead of refunding Shopify,
+// and won. So a mismatch has no bare "Still open": the button opens the same
+// claim form an INR uses, on the card itself. Saving it writes the claim and
+// the link in one call (0105), and from then on the claim's own 7-day check-in
+// does the reminding. Nothing is written until that save, so clicking this by
+// mistake and closing the form leaves no trace.
+function _holdInsuranceClaim(ctx, idx) {
+    const entry = _holdIndex[ctx][idx];
+    if (!entry || entry.type !== 'mismatch') return;
+    _holdToggleForm(ctx, idx, 'claim');
+}
+
+async function _holdReopen(ctx, idx) {
+    const entry = _holdIndex[ctx][idx];
+    if (!entry) return;
+    try {
+        await _holdPost({ action: 'reopen', item_type: entry.type,
+            item_key: _holdItemKey(entry) });
+        await _holdAfterWrite(ctx);
+    } catch (e) { alert('Could not reopen: ' + e.message); }
+}
+
+async function _holdLinkClaim(ctx, idx) {
+    const entry = _holdIndex[ctx][idx];
+    const sel = document.getElementById(`hold-link-${ctx}-${idx}`);
+    if (!entry || !sel || !sel.value) return;
+    try {
+        await _holdPost({ action: 'link_claim', item_type: entry.type, item_key: _holdItemKey(entry), claim_id: sel.value });
+        await _holdAfterWrite(ctx);
+    } catch (e) { alert('Could not link: ' + e.message); }
+}
+
+async function _holdOpenClaim(ctx, idx) {
+    const entry = _holdIndex[ctx][idx];
+    if (!entry) return;
+    const g = s => { const el = document.getElementById(`hold-cl-${ctx}-${idx}-${s}`); return el ? String(el.value).trim() : ''; };
+    if (!g('num')) { alert('Please enter the claim number.'); return; }
+    const n = v => (v === '' ? null : Number(v));
+    try {
+        await _holdPost({
+            action: 'open_claim', item_type: entry.type, item_key: _holdItemKey(entry),
+            reason_type: `${g('reason')} — ${g('type')}`, case_number: g('num'),
+            price: n(g('value')), cost: n(g('cost')), item_sku: g('sku') || null, reason_detail: g('detail') || null,
+        });
+        await _holdAfterWrite(ctx);
+        // The Claims tab keeps its own list; drop it so it refetches.
+        if (typeof fetchMyClaims === 'function' && ctx === 'mgr') _claimsAll = [];
+    } catch (e) { alert('Could not save the claim: ' + e.message); }
+}
+
+// DM/CEO oversight view: the claims summary plus the same two tabs across
+// every rolled-out store.
+function switchOversightTab(tab) {
+    ['claims', 'mismatch', 'returns', 'cases'].forEach(t => {
+        const b = document.getElementById(`ov-tab-${t}`);
+        const p = document.getElementById(`ov-panel-${t}`);
+        if (b) b.classList.toggle('active', t === tab);
+        if (p) p.style.display = t === tab ? 'block' : 'none';
+    });
+    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases') {
+        if (_holdLoading.ov) renderHoldItems('ov');
+        else loadHoldItems('ov', { sync: !_holdData.ov });
+    }
+}
+
+// =========================================================
 //  DM / CEO CLAIMS OVERSIGHT — checks & balances across all stores
 // =========================================================
 const _CLAIMS_OVERSIGHT_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 let _oversightAll = [];
 let _oversightReminders = [];
 let _ovStore = '', _ovStatus = ''; // oversight "All claims" filters
+// The DM list is every claim across every store and only grows, so it shows a
+// page at a time with the needs-attention ones first (Ethan, 2026-09-22).
+const OV_PAGE = 10;
+let _ovShown = OV_PAGE;
 
 // A reminder is a nudge, not a nag: once sent, that store's button locks until the
 // manager acknowledges it or the cooldown lapses. Without this a DM could stack up
@@ -32724,7 +34871,9 @@ function _claimReminderLock(store) {
 
 function openClaimsOversight() {
     toggleModal('claimsOversightModal');
+    switchOversightTab('claims');
     fetchAllClaims();
+    loadHoldItems('ov'); // badges for the Mismatches / eBay Cases tabs
 }
 
 async function fetchAllClaims() {
@@ -32859,8 +35008,8 @@ function renderClaimsOversight() {
     html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:6px 0 10px;">
         <div style="font-weight:800; font-size:13px; color:var(--slate-charcoal);">All claims</div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <select onchange="_ovStore=this.value; renderClaimsOversight();" style="${selStyle}">${storeOpts}</select>
-            <select onchange="_ovStatus=this.value; renderClaimsOversight();" style="${selStyle}">${statusOpts}</select>
+            <select onchange="_ovStore=this.value; _ovShown=OV_PAGE; renderClaimsOversight();" style="${selStyle}">${storeOpts}</select>
+            <select onchange="_ovStatus=this.value; _ovShown=OV_PAGE; renderClaimsOversight();" style="${selStyle}">${statusOpts}</select>
         </div>
     </div>`;
 
@@ -32882,15 +35031,27 @@ function renderClaimsOversight() {
     if (!tops.length) {
         html += `<div style="padding:18px; text-align:center; color:#94a3b8; font-weight:600; background:#f8fafc; border-radius:10px;">No claims match this view.</div>`;
     } else {
+        const page = tops.slice(0, _ovShown);
         html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12px;">
-            <thead><tr>${th('#')}${th('Store')}${th('Case #')}${th('SKU')}${th('Value')}${th('Cost')}${th('Reason')}${th('Status')}${th('Created')}${th('Reviewed')}</tr></thead><tbody>`;
+            <thead><tr>${th('#')}${th('Store')}${th('Case #')}${th('SKU')}${th('Value')}${th('Cost')}${th('Reason')}${th('Status')}${th('Created')}${th('Reviewed')}${th('', 'right')}</tr></thead><tbody>`;
         let n = 0;
-        tops.forEach(r => {
+        page.forEach(r => {
             n++;
             html += _ovRowHtml(r, byId, hasKids.has(r.id), `${n}`);
             (kidsOf[r.id] || []).forEach((k, ci) => { html += _ovRowHtml(k, byId, false, `${n}.${ci + 1}`); });
         });
         html += `</tbody></table></div>`;
+        if (tops.length > page.length) {
+            html += `<div style="display:flex; align-items:center; justify-content:center; gap:10px; padding:12px;">
+                <span style="font-size:12px; color:#94a3b8; font-weight:600;">Showing ${page.length} of ${tops.length}</span>
+                <button onclick="_ovShown += OV_PAGE; renderClaimsOversight();" class="btn-secondary" style="font-size:12px; padding:7px 14px;">Show ${Math.min(OV_PAGE, tops.length - page.length)} more</button>
+                <button onclick="_ovShown = 9999; renderClaimsOversight();" style="font-size:12px; font-weight:700; color:#1d4ed8; background:none; border:none; cursor:pointer;">Show all ${tops.length}</button>
+            </div>`;
+        } else if (tops.length > OV_PAGE) {
+            html += `<div style="text-align:center; padding:12px;">
+                <button onclick="_ovShown = OV_PAGE; renderClaimsOversight();" class="btn-secondary" style="font-size:12px; padding:7px 14px;">Show fewer</button>
+            </div>`;
+        }
     }
     body.innerHTML = html;
 }
@@ -32932,7 +35093,26 @@ function _ovRowHtml(r, byId, hasChild, num) {
         ${td(statusCell, 'white-space:nowrap;')}
         ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
         ${td(reviewed)}
+        ${td(`<button onclick="ovDeleteClaim('${r.id}')" title="Delete this claim" style="background:#fff5f5; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg}; border-radius:8px; width:30px; height:30px; cursor:pointer; font-size:14px; line-height:1;">🗑</button>`, 'text-align:right; white-space:nowrap;')}
     </tr>`;
+}
+
+// A DM or the CEO deletes a claim outright — managers only get to ask (the 🗑 on
+// their own claim rows raises a request that lands in Delete Requests above).
+async function ovDeleteClaim(id) {
+    const r = (_oversightAll || []).find(x => x.id === id);
+    const kids = (_oversightAll || []).filter(x => x.parent_id === id).length;
+    const what = r ? `${r.store || ''} ${r.case_number || ''}`.trim() : 'this claim';
+    if (!confirm(`Delete ${what}?${kids ? ` This also removes the ${kids} loss claim${kids === 1 ? '' : 's'} opened on it.` : ''} This cannot be undone.`)) return;
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_claim', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
+        await fetchAllClaims();
+    } catch (e) { alert('Could not delete: ' + e.message); }
 }
 
 // Nudge a store's manager to review their open claims. Delivers as a dedicated RED
@@ -33487,7 +35667,7 @@ function _renderClaimBubble(icon, titleHtml, bodyHtml, summary, sig, stores) {
     textEl.innerHTML = `
         <div style="line-height:1.4;"><strong>${titleHtml}</strong></div>
         <div style="line-height:1.4; opacity:0.96;">${bodyHtml}</div>
-        <button onclick="closeClaimAlertBubble(); openClaimsModal(); switchClaimsTab('view');"
+        <button onclick="closeClaimAlertBubble(); openClaimsTool('view');"
             style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
             onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Review claims</button>`;
     bubble.style.display = 'flex';
@@ -36387,22 +38567,15 @@ function sendBoxOrder() {
 
 // Failsafe for machines with no default mail client: copy the full order
 // (recipient, subject, body) to the clipboard to paste into any email.
+// THE reference implementation for the flash (Ethan pointed at this button,
+// 2026-09-17: "green like the box order tool"). It now shares _copyFlash with the
+// other five rather than owning the colours itself.
 function copyBoxOrder(button) {
     if (!_boxOrderEnsureStore()) return;
     const { email, subject, body } = _boxOrderCompose();
     const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
     navigator.clipboard.writeText(text).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!';
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        setTimeout(() => {
-            button.innerText = originalText;
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 2000);
+        _copyFlash(button);
     }).catch(() => alert('Could not copy automatically. Please select and copy the order manually.'));
 }
 
@@ -37550,6 +39723,9 @@ const EMAIL_LIST_GROUPS = [
               desc: 'Monday 9am — the pile per store, and what it would take to clear it.' },
             { key: 'cash_report', label: 'Cash On Hand',
               desc: '7am closing-cash table, read off each store\'s Day End Report.' },
+            { key: 'processed_report', label: 'Processed Stats',
+              desc: '8:10am — how many items each store listed yesterday and what '
+                  + 'they were worth, off the Day End Report.' },
             { key: 'usage_report', label: 'Site Usage',
               desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
             { key: 'recycle_report', label: 'Recycle Month-End Report',
@@ -37574,6 +39750,34 @@ const EMAIL_LIST_GROUPS = [
             { key: 'b2b_quote_ready', label: 'B2B Quote Ready',
               desc: 'A pickup has been priced and a quote is waiting on approval. '
                   + 'Leave this empty and it falls back to the single address in CRM Settings.' },
+            // Refund mismatch: a per-store list because the fix belongs to that
+            // store's manager, plus the leadership digest. The digest's key says
+            // "escalation" -- a fossil of the first design (see 0089); the label
+            // says what it is now.
+            { key: 'refund_mismatch_escalation', label: 'Refund Mismatch — Leadership',
+              desc: '8:20am, only on mornings a manager was mailed: every open order, and how many '
+                  + 'times its manager has been told.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `refund_mismatch_${s}`, label: `Refund Mismatch — ${s}`,
+              desc: '8:20am. Refunded on eBay but not Shopify, or the reverse, for 3 days '
+                  + '(1 day at month end). Raised again every 3 days until fixed. '
+                  + 'Being retired: Claims & Disputes below covers mismatches too.' })),
+            // Claims & Disputes. These take over from the two refund-mismatch
+            // lists above — a mismatch is one of four kinds of held money, and
+            // splitting them across two mails meant a manager could clear one
+            // inbox and still be losing a chargeback. Both sets are live until
+            // the refund-mismatch crons are switched off, so a manager on both
+            // gets two mails for a few mornings; that is deliberate, and better
+            // than a gap.
+            { key: 'claims_disputes_dm', label: 'Claims & Disputes — District Manager',
+              desc: '8:20am, a count per store of what still needs a person, plus missed reply '
+                  + 'windows (said once) and anyone who marked something resolved that the site '
+                  + 'disagrees with. 4:00pm again only when a deadline falls today and the store '
+                  + 'still has not answered it.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `claims_disputes_${s}`, label: `Claims & Disputes — ${s}`,
+              desc: '8:20am. Everything eBay or Shopify is waiting on this store for — cases, '
+                  + 'payment disputes, chargebacks, item-not-received and mismatches — soonest '
+                  + 'deadline first. 4:00pm again only if something closes today and is still '
+                  + 'unanswered.' })),
         ],
     },
     {
@@ -37813,17 +40017,7 @@ function sendRecycleReport() {
 function copyRecycleReport(button) {
     const { body } = _recycleReportCompose();
     navigator.clipboard.writeText(body).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!';
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        setTimeout(() => {
-            button.innerText = originalText;
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 2000);
+        _copyFlash(button);
     }).catch(() => alert('Could not copy automatically. Please select and copy the report manually.'));
 }
 
@@ -37889,12 +40083,14 @@ const FEATURE_CATALOG = [
     // it is their OWN email preferences, so there is no role that shouldn't reach
     // it. Listed here anyway (rather than left as a bare data-feature) so it has a
     // readable label in the Feature Access tool and can be switched off per person
-    // if somebody must not be emailed. 'store' is absent because the shop-floor TV
-    // boards have no inbox and no nav to click — see tv.html.
+    // if somebody must not be emailed. 'store' is absent because a shop-floor
+    // board has no inbox; it is on the ordinary nav now and would otherwise be
+    // offered a preferences panel for a mailbox nobody reads. Belt and braces
+    // either way — STORE_BOARD_FEATURES does not list it.
     { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multi-store-manager', 'assistant-manager', 'employee', 'training'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
-    { key: 'tool-claims-store',        label: 'Insurance Claims (Store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
-    { key: 'tool-claims-oversight',    label: 'Insurance Claims (Oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
+    { key: 'tool-claims-store',        label: 'Claims & Disputes (Store)',     tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Claims & Disputes (Oversight)', tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
@@ -37976,6 +40172,7 @@ const FEATURE_CATALOG = [
     { key: 'widget-listing-goals',     label: 'Listing Goals bar (Action Menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
     { key: 'widget-district-live',     label: 'District Live Dashboard',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'widget-district-watch',    label: 'District Matrix',               tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'dcc-sales-import',         label: 'District CC · Daily Import control', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'dcc-weekly-summary',       label: 'District CC · Weekly Summary control', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     // The three district action-menu rows. Defaults mirror exactly what the
@@ -37991,6 +40188,17 @@ const FEATURE_CATALOG = [
     { key: 'listing-goals-assign',     label: 'Listing Goals · Assign Roles (ASM)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Store KPIs — Workspace tab',    tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    // The store picker in the Store KPIs header — i.e. the DM's version of that
+    // tab: every store's weekly and monthly grid instead of only your own. Same
+    // shape as cap-variance-dm / cap-aging-dm, and delegable for the same reason:
+    // it is what you need to run a KPI meeting, and until 2026-09-21 the only way
+    // to hand it over was to lend somebody your login (Ethan, after doing exactly
+    // that to get through a meeting). Safe to grant — kpi-manage's GET takes a
+    // ?store= and gates nothing, so this reveals a report, not a new power. The
+    // WRITE side stays store-scoped in the edge function, and _kpiCanEditNumbers
+    // mirrors that check so a borrowed picker never offers an Edit button that
+    // would come back 403.
+    { key: 'cap-kpi-dm',               label: 'Store KPIs · All Stores (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'mocd'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     // Margin Replies — PARKED (2026-07-29), UNFINISHED. Deliberately absent from
@@ -38222,12 +40430,48 @@ function _featureOverrideFor(featureKey, userRoleClass, userName) {
     return null;
 }
 
+// ── WHAT A SHOP-FLOOR BOARD MAY SEE, and why it is a list and not a gate ────
+//
+// Everything else on this site is opt-OUT. No role classes means everyone
+// (_passesRoleClasses); def: 'all' means everyone (_featureEffectiveVisible).
+// Neither default has ever had to mean anything for the Store role, because
+// until the picture-station iPad the role could not load a page at all.
+//
+// The moment it could, those two defaults would have handed a shared sales-floor
+// PIN the Margin Guide, Customer Call Backs and SPEEKS Connect as well — not by
+// a decision anybody made, but by the absence of one. So for this role alone the
+// question is turned round, from "is there a reason to hide it?" to "is there a
+// reason to show it?", and only this list can answer yes. Adding a surface to
+// the iPad is one line here; forgetting to keep one off it is not possible.
+//
+// It is NOT a security boundary (see _tvIsBoardRole): the role sees what any
+// signed-in pin sees at the edge. This decides what is on the screen.
+//
+// Three keys, which are two screens. The Command Center card carrying its Live
+// Dashboard tab IS the board — the same renderers, on the QuickPortal page
+// instead of a page of its own — and the Picture Guide is the photo bench. Every
+// other surface on every page resolves to false for this role.
+const STORE_BOARD_FEATURES = new Set([
+    'widget-command-center',    // the dashboard row the card sits in
+    'widget-scorecard-alerts',  // ...and the card itself
+    'cc-live',                  // its Live Dashboard tab: the board
+    'widget-ops-pictureguide'   // the picture station
+]);
+function _isStoreBoardRole(userRoleClass) { return userRoleClass === 'role-store'; }
+function _boardSeesFeature(featureKey) {
+    return !!featureKey && STORE_BOARD_FEATURES.has(featureKey);
+}
+
 // Effective visibility of a feature key for this user: an override wins, else
 // the catalog default for their role (mirroring enforcement, incl. the
 // ASM-inherits-employee rule). Used to derive section nav visibility.
 function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
     const ov = _featureOverrideFor(featureKey, userRoleClass, userName);
     if (ov !== null) return ov;
+    // The same inversion applyRoleBasedUI makes on the DOM, made here too —
+    // these two resolutions are not allowed to disagree, and this is the one the
+    // Operations nav link, _SECTION_TABS and Ctrl+K ask.
+    if (_isStoreBoardRole(userRoleClass)) return _boardSeesFeature(featureKey);
     const feat = FEATURE_CATALOG.find(f => f.key === featureKey);
     if (!feat) return false;
     if (feat.def === 'all') return true;
@@ -38253,7 +40497,28 @@ const _SECTION_TABS = {
                         'ec-view-titles'],
 };
 
+// Sub-tabs that a TABLET still gets, keyed the same way as _SECTION_TABS above.
+//
+// A section's nav link is derived from what is inside the section — so on a
+// device where most of the section has been cut, it has to be derived from what
+// is LEFT. Without this, a role holding Store KPIs but not Monthly Breakdown
+// (which feature overrides can produce, even though the role classes make
+// Monthly Breakdown a superset) would get a Workspace link on an iPad and an
+// empty page behind it.
+//
+// THIS SET AND THE data-tablet="show" ATTRIBUTES ARE TWO HALVES OF ONE FACT.
+// A key here with no opted-in tab in the markup promises a section that is not
+// there; an opted-in tab missing from here hides the link that reaches it.
+// scripts/operations-tablet-check.js checks the two against each other.
+//
+// 'tool-picture-manage' is deliberately absent, and not just because it is a
+// button rather than a tab: the Picture Guide comes back on a tablet in its
+// READ-ONLY form for everyone, DM included (Ethan, 2026-09-20). See pgCanEdit().
+const _TABLET_SECTION_TABS = new Set(['widget-ops-pictureguide']);
+
 function _applySectionNavVisibility(userRoleClass, userName) {
+    const compact = _isMobileLayout();
+    const tablet = compact && typeof _isTabletLayout === 'function' && _isTabletLayout();
     Object.keys(_SECTION_TABS).forEach(href => {
         const link = document.querySelector(`.nav-bar a.nav-link[href="${href}"]`);
         if (!link) return;
@@ -38262,9 +40527,20 @@ function _applySectionNavVisibility(userRoleClass, userName) {
         // that data-mobile="hide" had already removed. _featureEffectiveVisible
         // resolves roles and overrides off the catalog, not the DOM, so it cannot
         // see the tag on its own.
-        const cutOnMobile = link.getAttribute('data-mobile') === 'hide' && _isMobileLayout();
+        //
+        // ...and for the same reason it has to honour the tablet EXCEPTION too.
+        // This is the THIRD writer enforcing the cut — the CSS utility, the
+        // applyRoleBasedUI sweep, and this — and the only one a data-tablet
+        // opt-in could not reach on its own. A Workspace link opted back in
+        // without this line is set to display:none a few microseconds later by a
+        // function that never heard of the attribute.
+        const earnedBack = link.getAttribute('data-tablet') === 'show' && tablet;
+        const cutOnMobile = link.getAttribute('data-mobile') === 'hide' && compact && !earnedBack;
+        const keys = earnedBack
+            ? _SECTION_TABS[href].filter(k => _TABLET_SECTION_TABS.has(k))
+            : _SECTION_TABS[href];
         const vis = !cutOnMobile
-            && _SECTION_TABS[href].some(k => _featureEffectiveVisible(k, userRoleClass, userName));
+            && keys.some(k => _featureEffectiveVisible(k, userRoleClass, userName));
         link.style.setProperty('display', vis ? 'flex' : 'none', 'important');
     });
 }
@@ -38307,8 +40583,15 @@ function _passesRoleClasses(classes, userRoleClass) {
 function _applyFeatureOverridesToPlainEls(userRoleClass, userName) {
     document.querySelectorAll('[data-feature]').forEach(el => {
         if (el.classList.contains('dynamic-module') || el.classList.contains('dynamic-module-flex') || el.classList.contains('dynamic-module-block')) return;
-        const ov = _featureOverrideFor(el.getAttribute('data-feature'), userRoleClass, userName);
-        const allowed = ov === null ? _passesRoleClasses(el.classList, userRoleClass) : ov;
+        const key = el.getAttribute('data-feature');
+        const ov = _featureOverrideFor(key, userRoleClass, userName);
+        // The board's inversion reaches here too, and this is the pass that
+        // matters most for it: the Operations tab strip is plain [data-feature]
+        // buttons with no role classes, so "no classes means everyone" would
+        // have put all five tabs on the picture-station iPad.
+        const allowed = ov !== null ? ov
+            : _isStoreBoardRole(userRoleClass) ? _boardSeesFeature(key)
+            : _passesRoleClasses(el.classList, userRoleClass);
         if (allowed) el.style.removeProperty('display');
         else el.style.setProperty('display', 'none', 'important');
     });
@@ -39035,6 +41318,9 @@ const JUMP_KEYWORDS = {
     'cc-scorecard':              'scorecard audit paymore practice score marketing',
     'cc-kpis':                   'weekly kpis my kpis mine vs store employee kpis conversion no deals',
     'widget-district-live':      'live dashboard today todays sales all stores district net sales orders margin pace shopify real time',
+    // Both names indexed on purpose: the UI says Matrix, the code and the edge
+    // function say watch, and either is a reasonable thing to type.
+    'widget-district-watch':     'matrix district matrix watch flags flagged alerts trending down trend conversion buy margin listing staffed goal needs attention which store problem underperforming',
     'tool-claims-store':         'claim claims shopify usps ups damaged lost package item not received insurance',
     'tool-claims-oversight':     'claims oversight all stores review insurance',
     'tool-box-order':            'boxes box shipping supplies packaging tape order',
@@ -39095,6 +41381,7 @@ const JUMP_PLACES = [
     { id: 'w-buying',    label: 'Buying & Sales',       sub: 'QuickPortal', kind: 'panel', feature: 'cc-live',                 page: 'index.html', run: () => _jumpToLive('cc-live') },
     { id: 'w-kpis',      label: 'Weekly KPIs',          sub: 'QuickPortal', kind: 'panel', feature: 'cc-kpis',                 page: 'index.html', run: () => _jumpToCcTab('kpis', 'cc-kpis') },
     { id: 'w-district',  label: 'District Command Center', sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-command', page: 'index.html' },
+    { id: 'w-dwatch',    label: 'District Matrix',         sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-watch',   page: 'index.html' },
     { id: 'w-listing',   label: 'Listing Goals',        sub: 'QuickPortal', kind: 'panel', feature: 'widget-listing-goals',    page: 'index.html' },
     { id: 'w-checklist', label: 'Checklist',            sub: 'QuickPortal', kind: 'panel', feature: 'widget-checklist-panel',  page: 'index.html' },
     { id: 'w-audit',     label: 'Cleaning Checklist',   sub: 'QuickPortal', kind: 'panel', feature: 'widget-audit-panel',      page: 'index.html' },
@@ -39102,8 +41389,14 @@ const JUMP_PLACES = [
     // --- tabs inside a tool (open the modal, then land on the tab) -----------
     { id: 'sub-audit',   label: 'SPEEKS Audit', sub: 'Inside Submit Scores',    kind: 'sub', feature: 'tool-submit-scores', keys: 'audit 165 points practice',
       run: () => { openScorecardModal(); switchScoreTab('audit'); } },
-    { id: 'sub-mycases', label: 'My Cases',     sub: 'Inside Insurance Claims', kind: 'sub', feature: 'tool-claims-store',  keys: 'my claims open cases status',
-      run: () => { openClaimsModal(); switchClaimsTab('view'); } },
+    { id: 'sub-mycases', label: 'Claims',       sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'],  keys: 'my claims open cases status insurance',
+      run: () => openClaimsTool('view') },
+    { id: 'sub-mismatch', label: 'Refund Mismatches', sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'refund mismatch ebay shopify refunded',
+      run: () => openClaimsTool('mismatch') },
+    { id: 'sub-returns', label: 'Returns', sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'ebay returns label refund shipped delivered',
+      run: () => openClaimsTool('returns') },
+    { id: 'sub-ebaycases', label: 'Cases & Disputes',  sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'ebay cases inquiry item not received dispute escalated',
+      run: () => openClaimsTool('cases') },
     // --- pages (visibility mirrors the nav link) ----------------------------
     { id: 'page-index',  label: 'QuickPortal',           sub: 'Main navigation', kind: 'page', page: 'index.html',      keys: 'home dashboard main portal' },
     { id: 'page-ops',    label: 'Operations',            sub: 'Main navigation', kind: 'page', page: 'operations.html', keys: 'operations ops' },
@@ -43265,8 +45558,9 @@ function _samIsMSM() {
 // One "everything" feed. Announcements + store notes get a permanent read;
 // reminders get a per-day dismiss (they re-surface tomorrow if still due). The
 // header's Mark-all-read clears whatever is currently active.
-// Two rows and then a scroll, on a phone only (user's call, 19 Aug). The deck is
-// a glance; twenty notifications turn the home page into a page of notifications.
+// Two rows and then a scroll on a phone, four on a tablet (user, 19 Aug and 17 Sep).
+// The deck is a glance; twenty notifications turn the home page into a page of
+// notifications.
 //
 // MEASURED rather than a fixed max-height in the stylesheet, because a feed row
 // is one line or five depending on the card — a snoozeable reminder with a
@@ -43278,10 +45572,19 @@ function _samCapFeed() {
     // Desktop puts the feed in a fixed-height card beside the rail and has its own
     // scroll; releasing the cap here is what makes this safe to call unconditionally.
     if (!_isMobileLayout()) { feed.style.maxHeight = ''; return; }
+    // Two rows on a phone, FOUR on a tablet (Ethan, 2026-09-17). Same reasoning
+    // on both — the deck is a glance, not a page of notifications — but the two
+    // was measured against a 390px phone, and a tablet has the vertical room to
+    // spare: at 1180x820 the card was showing two of five and stopping well short
+    // of the Command Center below it. Written as a count rather than a taller
+    // pixel cap so it stays honest to why this function measures at all: a row is
+    // one line or five depending on the card, so "four rows" is the only form of
+    // the rule that means the same thing on every feed.
+    const showRows = _isTabletLayout() ? 4 : 2;
     const rows = feed.querySelectorAll('.sam-ann');
-    if (rows.length <= 2) { feed.style.maxHeight = ''; return; }
+    if (rows.length <= showRows) { feed.style.maxHeight = ''; return; }
     const top = feed.getBoundingClientRect().top;
-    const cut = rows[1].getBoundingClientRect().bottom;
+    const cut = rows[showRows - 1].getBoundingClientRect().bottom;
     const pad = parseFloat(getComputedStyle(feed).paddingBottom) || 0;
     // + scrollTop, and this is the whole bug: getBoundingClientRect is measured
     // against the VIEWPORT, so once somebody has scrolled the feed to the bottom
@@ -43903,7 +46206,10 @@ function _canAssignGoalRoles() {
 // "Listing Goals" bar in the action menu: roster editor for anyone who can assign,
 // personal popup for everyone else.
 function openListingGoals() {
-    if (_canAssignGoalRoles()) toggleModal('listingGoalsModal');
+    // _lgpwSyncTabs before lgpwSetView: the sync can itself call lgpwSetView(false)
+    // to leave a view that is being cut, and doing it in this order means that only
+    // ever happens on a breakpoint crossing, never redundantly on every open.
+    if (_canAssignGoalRoles()) { _lgpwSyncTabs(); lgpwSetView(false); toggleModal('listingGoalsModal'); }
     else toggleModal('empGoalsModal');
 }
 
@@ -44032,11 +46338,9 @@ function _samReminderCfg() {
         // it is answered. The title only changes when that is ALL there is, so a
         // card carrying both still reads as the claims card it has always been.
         { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText',
-          title: _clDel === 'only' ? 'Claim Delete Requests' : 'Insurance Claims',
+          title: _clDel === 'only' ? 'Claim Delete Requests' : 'Claims & Disputes',
           urgency: 2, due: _clDel ? 'Approve' : 'Open', cls: 'sam-due-red',
-          action: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager'
-              ? "openClaimsOversight()"
-              : "openClaimsModal(); switchClaimsTab('view')" },
+          action: "openClaimsTool('view')" },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
         // month across, so a card about a July request doesn't open on August.
         // data-replyonly: no line is actually awaiting a verdict, a manager just
@@ -44493,7 +46797,7 @@ async function _rtRunCheck(tool) {
         // landing (`live`) and the buying sheet moving (`buying`). It has no feed,
         // no bubbles and no tool panels for the other pings to refresh, so
         // answering them would spend a fetch per write, per TV, for nothing.
-        if (_tvOnBoardPage() && tool !== 'live' && tool !== 'buying') return;
+        if (_tvIsBoardRole() && tool !== 'live' && tool !== 'buying') return;
         const fns = _RT_TOOL_CHECKS[tool] || [];
         for (const name of fns) {
             try { if (typeof window[name] === 'function') await window[name](); }
@@ -45623,8 +47927,22 @@ function _dmxLevelUp(history, target) {
         const k = w == null ? 'none' : (w.target && v >= w.target ? 'hit' : 'miss');
         // 3px floor so a zero week is still a visible mark, not a gap.
         const h = v == null ? 0 : Math.max(3, Math.round((v / top) * TRACK));
-        bars += '<div class="dmx-lu-w">'
-            + '<span class="dmx-lu-v dmx-lu-' + k + '">' + (v == null ? '&ndash;' : v) + '</span>'
+        // A week whose goal nobody set is graded against one carried in from an
+        // earlier week, which can turn a miss into a pass without anyone
+        // deciding it should. Marked here as well as on the store's own bars, so
+        // the DM sees the same caveat the manager does rather than the two
+        // reading the same week differently — which is what this whole change is
+        // about.
+        const stale = w != null && w.targetSource && w.targetSource !== 'set';
+        const tip = w == null ? ''
+            : ' title="' + escapeHtml(v + ' listed against a goal of ' + w.target
+                + (stale ? ' carried from ' + (w.targetSetFor ? _luWeekLabel(w.targetSetFor) : 'an earlier week')
+                           + ' — no goal was set for this one'
+                         : '')
+                + (Number.isFinite(w.efficiency) ? '. Staffed for ' + w.adjusted + ' (' + w.efficiency + '%).' : '.')) + '"';
+        bars += '<div class="dmx-lu-w"' + tip + '>'
+            + '<span class="dmx-lu-v dmx-lu-' + k + (stale ? ' dmx-lu-stale' : '') + '">'
+            + (v == null ? '&ndash;' : v) + (stale ? '<i class="dmx-lu-astk">*</i>' : '') + '</span>'
             + '<span class="dmx-lu-track"><i class="dmx-lu-' + k + '" style="height:' + h + 'px"></i></span>'
             + '<span class="dmx-lu-lab">' + labels[i] + '</span>'
             + '</div>';
@@ -46094,7 +48412,14 @@ function _dmxEfficiencyPane() {
         // at all, so the denominator is short and the ratio flatters. Flag it
         // rather than printing a number that reads as a verdict.
         const thin = r.assignedDays > 0 && r.assignedDays < (r.people.length * 4);
-        t += '<tr><td class="dmx-cl"><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
+        // Hours, Ceiling and Goal for this week were reconstructed from TODAY'S
+        // roster, because the week finished before capacity snapshots existed
+        // (migration 0093). They are the best available figures but they are not
+        // what the store was shown at the time, and they will move again if
+        // anyone is hired — so say so rather than let them pass as history.
+        const est = !!r.estimated;
+        t += '<tr' + (est ? ' class="dmx-tr-est"' : '') + '><td class="dmx-cl"><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
+            + (est ? '<span class="dmx-role dmx-role-est" title="This week ended before the app started saving each week’s roster, so Hours, Ceiling and Goal here are rebuilt from the roster as it stands TODAY — not the one the store actually had. Listed and Staffed For are real.">rebuilt</span>' : '')
             // Short form: "15 of 24 roles set" rendered wider than the column it
             // sits in and bled over both edges. The tooltip carries the sentence.
             + (thin ? '<span class="dmx-role" title="Roles were only set on '
@@ -47246,7 +49571,10 @@ function _dccPick(store) {
 // and the one an eBay or Scorecard row drills into. There is no KPIs tab — the
 // month-by-month grid came off and each store's weekly metrics live inside the
 // breakdown.
-const DC_TABS = ['live', 'stores', 'ebay', 'scorecard'];
+// 'watch' sits second, immediately after Live: it is the tab that answers "who
+// needs me today", which is the question a DM opens this card with. Everything
+// after it is for when the answer is "go look at X".
+const DC_TABS = ['live', 'watch', 'stores', 'ebay', 'scorecard'];
 
 function switchDistrictTab(tab) {
     _tabSwitch(_DC_BOARD, tab);
@@ -47287,7 +49615,8 @@ function _dcRowOpen(code) {
 // The severity classes the store board already uses, reused so a metric that is
 // red here is red there.
 function _dcSev(state) {
-    return state === 'b' ? 'dc-bad' : (state === 'w' ? 'dc-warn' : 'dc-good');
+    // 'v' is the Matrix's Watch (0110) — no other board emits it.
+    return state === 'b' ? 'dc-bad' : state === 'w' ? 'dc-warn' : state === 'v' ? 'dc-watch' : 'dc-good';
 }
 
 function _dcEbayHtml() {
@@ -47579,6 +49908,841 @@ function renderDistrictTabs() {
     const sc = document.getElementById('dc-score-body');
     if (sc) sc.innerHTML = _dcScoreHtml();
     _dcSummaryFill();
+}
+
+// ============================================================================
+// DISTRICT MATRIX — the flag tab
+// ----------------------------------------------------------------------------
+// ⚠️ CALLED "MATRIX" IN THE UI, "watch" IN THE CODE. Renamed on 2026-09-21,
+// after the backend had shipped as the `district-watch` edge function writing
+// `watch_flags` and `watch_config`. Renaming those too meant a migration, a
+// redeploy and a re-backfill to change a word only we read, so the seam was
+// left on purpose: every id, key, table and function stays `watch`, every
+// label a person sees says Matrix. Both words are in the search index.
+// ----------------------------------------------------------------------------
+// Which stores need the DM today, and why. Everything on this tab already
+// exists elsewhere as a number; the only thing it adds is the judgement that a
+// number is far enough from target, for long enough, at enough volume, to be
+// worth a conversation.
+//
+// THE JUDGEMENT IS NOT MADE HERE. The `district-watch` edge function decides
+// state, streak and shortfall nightly at 6:25 and writes a finished English
+// sentence per store per metric into watch_flags. This file ranks, colours and
+// draws. That split is deliberate and recorded in 0097's header: computing the
+// sentence client-side would let this tab and any future email word the same
+// flag differently, which is how two screens start disagreeing about one fact.
+//
+// ⚠️ RANKED BY SHORTFALL, NOT BY PERCENTAGE POINTS, and the columns say the
+// shortfall out loud. OVL at 50.2% on $91,557 of buying and LEE at 52.5% on
+// $40,198 read as the same size of problem in points and differ nearly
+// fivefold in money — $3,936 against $819. Sorting or colouring this table by
+// the percentage would send the DM to the wrong store, which is the entire
+// thing the engine was built to stop.
+//
+// ⚠️ KEEP THIS PANEL SHORT. Every dc panel is stacked in one grid cell and
+// toggled by opacity rather than display (see _tabSwitch), so the card always
+// reserves the height of the TALLEST tab. Depth belongs behind a row click —
+// which drills to the Stores tab like every other district table — not on the
+// surface here.
+
+let _dcWatch = null;   // last 'board' payload, or null before it answers
+
+// FOUR STATES SINCE 0110. Watch is new: fine for the month, but missing day
+// after day — "beginning of bad trend" (Ethan, 2026-09-23). It is BLUE, not a
+// paler amber, so it can never be read as a softer Warning: a Watch store is
+// not under target, and the colour has to say so without a legend.
+const _DCW_SEV    = { critical: 'b', warn: 'w', watch: 'v', ok: 'g' };
+const _DCW_LABEL  = { critical: 'Critical', warn: 'Warning', watch: 'Watch', ok: 'On target' };
+// Matches the severity hexes the buying-margin panel already uses, so a red
+// here and a red there are the same red.
+const _DCW_STROKE = { b: '#b91c1c', w: '#b45309', v: '#1d4ed8', g: '#047857' };
+
+async function fetchDistrictWatch() {
+    const body = document.getElementById('dc-watch-body');
+    if (!body) return;                       // not a DM/CEO page
+    try {
+        const res  = await fetch(DISTRICT_WATCH_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'board' }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        _dcWatch = data;
+        renderDistrictWatch();
+    } catch (e) {
+        // Said plainly rather than left on "Syncing…" forever. A stale board is
+        // the one failure mode that looks exactly like a working one.
+        _dcWatch = null;
+        body.innerHTML = '<div class="dcc-empty">District Matrix could not be reached &mdash; '
+            + escapeHtml(e.message || 'unknown error') + '</div>';
+    }
+}
+
+function renderDistrictWatch() {
+    const body = document.getElementById('dc-watch-body');
+    if (body) body.innerHTML = _dcWatchHtml();
+}
+
+// The last chronic_window days (7 since 0110) against the target line.
+// Deliberately unlabelled — the figures beside it are the numbers; this only
+// answers "which way".
+//
+// FIXED SCALE, never autoscaled to the data. An autoscaled sparkline makes a
+// good store's noise look like a bad store's collapse, and the dashed target
+// line has to sit at the same height on every row for the column to be
+// readable down its length.
+//
+// BOTH METRICS USE A 50-POINT SPAN — conversion 50-100%, margin 30-80% — so a
+// wobble of the same size draws the same height on either chart and the two
+// columns can be compared by eye. Widening one would quietly make that store
+// look steadier than the other.
+function _dcwSpark(vals, target, sev, lo, hi) {
+    const pts = (vals || []).filter(v => v != null);
+    if (pts.length < 2) return '';
+    const W = 104, H = 28, PAD = 3;
+    const span = hi - lo;
+    const y = v => PAD + (hi - Math.max(lo, Math.min(hi, v))) / span * (H - PAD * 2);
+    const x = i => i * (W / (pts.length - 1));
+    const line = pts.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+    return '<svg class="dcw-spark" width="' + W + '" height="' + H + '"'
+        + ' viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true" focusable="false">'
+        + '<line x1="0" y1="' + y(target).toFixed(1) + '" x2="' + W + '" y2="' + y(target).toFixed(1)
+        + '" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3 3"></line>'
+        + '<polyline points="' + line + '" fill="none" stroke="' + (_DCW_STROKE[sev] || '#64748b')
+        + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline></svg>';
+}
+
+// The rule behind the Status column, built from config so it stays true when
+// the DM re-tunes. Lives in a tooltip on the header rather than a paragraph
+// under the table: it answers "over what?" at the moment the question comes up
+// and costs the panel no height — the same call the eBay tab already makes for
+// its thresholds.
+//
+// Since 0110 the rule is Ethan's own four lines (2026-09-23), and the tooltip
+// says them in close to his words. The engine applies it; see "The rule" in
+// supabase/functions/district-watch/index.ts.
+function _dcwStatusRule(cfg) {
+    const ct = Number(cfg.conv_target || 85).toFixed(1);
+    const mt = Number(cfg.margin_target || 53).toFixed(1);
+    const wr = Math.round(Number(cfg.watch_run || 2));
+    const cr = Math.round(Number(cfg.critical_run || 4));
+    return 'Each metric is judged on two things: the month to date, and how many open days '
+        + 'in a row the store has missed. A store takes the worst of its three metrics.\n\n'
+        + 'A missed day is conversion under ' + ct + '%, buy margin under ' + mt + '%, or '
+        + 'listing under that day’s staffed goal. Sundays and days with nothing to judge '
+        + 'are skipped — they neither count nor reset the run.\n\n'
+        + 'ON TARGET — month on target, fewer than ' + wr + ' misses in a row.\n'
+        + 'WATCH — month on target, but ' + wr + '+ misses in a row: a bad trend starting.\n'
+        + 'WARNING — month under target.\n'
+        + 'CRITICAL — month under target and ' + cr + '+ misses in a row.\n\n'
+        + 'Listing reads the WEEK to date (Monday to Saturday) where the other two read the '
+        + 'month; its missed days are still counted day by day.';
+}
+
+
+
+// ---------------------------------------------------------------------------
+// THE GLANCE LINE. Ethan, 2026-09-21, looking at three full sentences a store:
+// "I would like to know at a glance why someone is in a warning or critical,
+// or if they are good and have a negative trend starting."
+//
+// Three parts, always in the same order and always in the same place, so the
+// eye can run straight down the column instead of reading:
+//
+//   LEAD   YESTERDAY'S figure — the last day the store was open (listing:
+//          the week so far — see the glance rows in _dcWatchHtml)
+//   WHY    which state, in four or five words
+//   AGE    how many days in a row it has missed
+//
+// THE LEAD IS YESTERDAY, NOT THE WINDOW, since 0110 (Ethan, 2026-09-23: "on
+// the left side, I think I want to see yesterdays numbers"). This board is
+// read every morning to decide who to call, and the one number the columns
+// to the right could not give him was how the store did the day before. It is
+// coloured by that day alone — green made target, red missed it — so a store
+// that is fine for the month and had a bad day shows exactly that.
+//
+// The engine's full sentence is not thrown away — it rides on the row's title
+// attribute. Detail is one hover away instead of printed fifteen times a page.
+//
+// WORDED HERE RATHER THAN IN THE ENGINE, on purpose: the engine stores the
+// facts (state, mtd_under, miss_run, recent_value), so re-wording this line
+// costs a cache-buster bump, not a redeploy and a re-backfill.
+//
+// THE AGE IS miss_run FROM THE ENGINE — open days in a row under target, the
+// same count the state was decided on, so the words and the colour can never
+// disagree. It used to be counted here from the series; that count survives
+// only as a fallback for a row written before 0110. How long a flag has stood
+// is still in the hover sentence ("Flagged 13 days running").
+//
+// Shown only on a flagged or watched line: on an "On target" line a single
+// missed day is exactly the noise the board exists not to raise — and the red
+// lead already shows it.
+function _dcwWhy(metric, f, lastPct) {
+    const L = metric === 'listing';
+    const lead = lastPct == null ? '—'
+        : L ? Math.round(lastPct) + '% of goal'
+        : lastPct.toFixed(1) + '%';
+
+    // PLAIN WORDS (Ethan, 2026-09-21: "I don't understand the fortnight
+    // stuff"), and since 0110 only ever about THE MONTH — the one half of the
+    // verdict the day count beside it does not already say. "Month under ·
+    // Missed 9 days in a row" is the whole Critical rule in one line; the
+    // pill says which state that makes it, and the ↑ on the 7-day figure says
+    // when a store under for the month is coming back.
+    //
+    // Two words, opening with the frame so the column reads as one thing. The
+    // phrase and its day count share one line that must stop before the
+    // conversion figure (the layout suite measures it): "Under target for the
+    // month and slipping · Missed 12+ days in a row" ran 139px into it, and
+    // "Month under, slipping" still ran 44.
+    //
+    // A clear metric says NOTHING (Ethan, 2026-09-21: "if a store is good, you
+    // don't need to even say on target. Just leave it blank").
+    //
+    // Every phrase starts with a capital (Ethan, same message) — they read as
+    // statements, not as the tail of the label beside them.
+    // Listing says "Week": its frame is the week to date, not the month
+    // (Ethan, 2026-09-23 — see judgeListing in the engine).
+    const frame = L ? 'Week' : 'Month';
+    let why = '';
+    if (f.state === 'critical' || f.state === 'warn') why = frame + (L ? ' behind' : ' under');
+    else if (f.state === 'watch') why = frame + ' fine';
+    return { lead: lead, why: why };
+}
+
+const _dcwPct   = v => (v == null ? '&mdash;' : Number(v).toFixed(1) + '%');
+const _dcwPct0  = v => (v == null ? '&mdash;' : Math.round(Number(v)) + '%');
+
+// ---------------------------------------------------------------------------
+// MONTH-TO-DATE AND THE LAST 7 DAYS, SIDE BY SIDE. The pair dates from
+// 2026-09-21 ("so if they started a month off poorly and have a comeback, I
+// can view it"); the window went from 14 days to 7 on 2026-09-23 ("adjust
+// this down to past 7 days").
+//
+// THE COLOUR MOVED ONTO MTD in 0110. Colour on this board always means "what
+// the engine judged", and since 0110 the engine judges the MONTH (plus the run
+// of misses) — the 7-day figure decides nothing and is shown neutral, as a
+// direction. Before 0110 it was the other way round, because the window was
+// what the flags were judged on.
+//
+// The arrow compares the two: ↑ the last 7 days are better than the month so
+// far (a comeback), ↓ worse (the month is flattering the store). Under half a
+// point either way draws no arrow; that is rounding, not direction.
+function _dcwPair(mtd, recent, sev, win, fmt, topTag) {
+    fmt = fmt || _dcwPct;
+    let arrow = '';
+    if (mtd != null && recent != null) {
+        const d = recent - mtd;
+        const vs = topTag ? 'the week' : 'the month';
+        if (d >= 0.5) arrow = '<span class="dcw-arrow dcw-up" title="The last ' + win + ' days are better than ' + vs + ' so far">&uarr;</span>';
+        else if (d <= -0.5) arrow = '<span class="dcw-arrow dcw-down" title="The last ' + win + ' days are worse than ' + vs + ' so far">&darr;</span>';
+    }
+    // Three fixed tracks — figure, arrow, label — on both lines, and the arrow
+    // slot is rendered EMPTY when there is no arrow. That is what keeps every
+    // figure's % sign in the same place: with the arrow inline, "85.7%↓" sat
+    // a glyph to the left of "86.8%" above it (Ethan, 2026-09-21, "align
+    // everything better").
+    return _dcwBlock(
+        fmt(mtd), '', topTag || 'MTD', 'dcw-mtd ' + _dcSev(sev),
+        fmt(recent), arrow, 'Last ' + win + ' days', 'dcw-r7');
+}
+
+// One two-line figure block, shared by all three metric columns so they are
+// built the same way and line up the same way. Every block in a column is the
+// same width (fixed tracks in .dcw-pair), so when the cell centres it under
+// the column header, every row's block lands at the same x.
+function _dcwBlock(top, topSlot, topTag, topCls, bottom, bottomSlot, bottomTag, bottomCls) {
+    return '<div class="dcw-pair">'
+        + '<span class="dcw-val ' + topCls + '">' + top + '</span>'
+        + '<span class="dcw-slot">' + topSlot + '</span>'
+        + '<span class="dcw-tag">' + topTag + '</span>'
+        + '<span class="dcw-recent ' + bottomCls + '">' + bottom + '</span>'
+        + '<span class="dcw-slot">' + bottomSlot + '</span>'
+        + '<span class="dcw-tag">' + bottomTag + '</span>'
+        + '</div>';
+}
+const _dcwMoney = v => '$' + Math.abs(Math.round(Number(v) || 0)).toLocaleString('en-US');
+
+// YYYY-MM-DD plus n days, anchored at noon UTC like every date here so no
+// offset can move the calendar day.
+function _dcwIsoAdd(iso, n) {
+    const [y, m, d] = String(iso).split('-').map(Number);
+    const t = new Date(Date.UTC(y, m - 1, d, 12));
+    t.setUTCDate(t.getUTCDate() + n);
+    return t.toISOString().slice(0, 10);
+}
+
+// How many OPEN days in a row, counting back from the judged day, a store
+// finished under target on one metric. `days` is that store's rows oldest
+// first; `judge` returns true (missed), false (made it) or null (no trading
+// to judge — Sunday, a closed day, a day with no goal set), and a null day is
+// stepped over rather than ending the run, so a Sunday never resets it.
+//
+// ⚠️ A FALLBACK ONLY since 0110 — the engine's miss_run is what the board
+// shows, because it is the count the state was decided on. This covers a row
+// written before 0110 and nothing else.
+//
+// Returns null when there is no open day to judge at all, else { n, all }:
+// all is true when the run reaches the start of the
+// series, so the real run may be longer than the board fetched (21 days).
+function _dcwMissRun(days, judge) {
+    let n = 0, seen = 0;
+    for (let i = (days || []).length - 1; i >= 0; i--) {
+        const r = judge(days[i]);
+        if (r == null) continue;
+        seen++;
+        if (!r) return { n: n, all: false };
+        n++;
+    }
+    return seen ? { n: n, all: n === seen } : null;
+}
+
+// "· Missed 3 days in a row", in the metric's own unit of success. Zero is
+// worth saying on a flagged line too — a store that made target yesterday
+// is a different conversation from one that has not in a week.
+function _dcwAgeHtml(run, metric, target) {
+    if (!run) return '';
+    const unit = metric === 'listing' ? 'its listing goal'
+        : 'the ' + Number(target).toFixed(1) + '% target';
+    let txt, tip;
+    if (run.n === 0) {
+        txt = 'Hit target yesterday';
+        tip = 'Made ' + unit + ' on its last day open.';
+    } else if (run.n === 1) {
+        txt = 'Missed yesterday';
+        tip = 'Finished under ' + unit + ' on its last day open' + (run.all ? '.' : ', and made it the day before.');
+    } else {
+        txt = 'Missed ' + run.n + (run.all ? '+' : '') + ' days in a row';
+        tip = 'Finished under ' + unit + ' on each of its last ' + run.n + ' days open'
+            + (run.all ? ' — every day the board loaded, so possibly longer.' : '.');
+    }
+    return '<span class="dcw-age" title="' + escapeHtml(tip) + '"> &middot; ' + txt + '</span>';
+}
+
+function _dcWatchHtml() {
+    const d = _dcWatch;
+    if (!d) return '<div class="dcc-empty">Syncing the district&hellip;</div>';
+
+    const cfg = d.config || {};
+    const win = Math.round(Number(cfg.chronic_window) || 7);
+    const byStore = {};
+    (d.flags || []).forEach(f => { (byStore[f.store] = byStore[f.store] || {})[f.metric] = f; });
+
+    // Each store's rows oldest first, through the judged day — for yesterday's
+    // figure, the sparklines and the fallback run count — and the day's summed
+    // listing goal beside each.
+    const daysBy = {};
+    (d.series || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)))
+        .forEach(r => { if (!d.day || r.date <= d.day) (daysBy[r.store] = daysBy[r.store] || []).push(r); });
+    const goalOn = {};
+    (d.goals || []).forEach(g => { goalOn[g.store + '|' + g.date] = Number(g.goal) || 0; });
+
+    // One metric's figure for one day, as a percentage, or null when there was
+    // nothing to judge. The engine's own definition of a day (see "The rule"):
+    // margin dollar-weighted, listing only on days that had a goal.
+    const dayPct = (s, k, r) => {
+        if (k === 'conversion') {
+            const n = Number(r.cust_conv_den) || 0;
+            return n > 0 ? 100 * (Number(r.cust_conv_num) || 0) / n : null;
+        }
+        if (k === 'margin') {
+            const v = Number(r.est_value) || 0;
+            return v > 0 ? 100 * (v - (Number(r.total_spent) || 0)) / v : null;
+        }
+        const g = goalOn[s + '|' + r.date] || 0;
+        return g > 0 ? 100 * (Number(r.devices_processed) || 0) / g : null;
+    };
+    // The last OPEN day, not the judged day: on a Monday morning the judged
+    // day is Sunday, when every store is shut.
+    const lastDay = (s, k) => {
+        const rows = daysBy[s] || [];
+        for (let i = rows.length - 1; i >= 0; i--) {
+            const p = dayPct(s, k, rows[i]);
+            if (p != null) return { pct: p, row: rows[i] };
+        }
+        return null;
+    };
+    const lastTip = (s, k, last) => {
+        if (!last) return 'Nothing to judge in the last three weeks';
+        const r = last.row, day = _dcwDay(r.date);
+        if (k === 'conversion') return day + ': ' + (Number(r.cust_conv_num) || 0) + ' of '
+            + (Number(r.cust_conv_den) || 0) + ' customers converted';
+        if (k === 'margin') return day + ': ' + _dcwMoney((Number(r.est_value) || 0) - (Number(r.total_spent) || 0))
+            + ' of gross profit on ' + _dcwMoney(r.est_value) + ' bought';
+        return day + ': ' + (Number(r.devices_processed) || 0) + ' listed against a goal of '
+            + (goalOn[s + '|' + r.date] || 0);
+    };
+
+    // The sparklines draw the same window the small figure is measured over.
+    const from = d.day ? _dcwIsoAdd(d.day, -(win - 1)) : '';
+    const sparkVals = (s, k) => (daysBy[s] || []).filter(r => r.date >= from)
+        .map(r => dayPct(s, k, r)).filter(v => v != null);
+
+    const missRun = (s, k, f) => {
+        if (f.miss_run != null) return { n: Number(f.miss_run), all: false };
+        const t = Number(f.target);
+        return _dcwMissRun(daysBy[s], r => { const p = dayPct(s, k, r); return p == null ? null : p < t; });
+    };
+
+    const stores = Object.keys(byStore);
+    if (!stores.length) {
+        return '<div class="dcc-empty">No District Matrix rows yet &mdash; the engine runs at 6:25am.</div>';
+    }
+
+    // Worst metric decides the row, and the rows sort by it. A DM reads top-down
+    // and should never have to hunt the page for the red one.
+    const rank  = { critical: 0, warn: 1, watch: 2, ok: 3 };
+    const METRICS = ['conversion', 'margin', 'listing'];
+    const worst = s => METRICS.reduce((a, k) => {
+        const f = byStore[s][k];
+        return f && rank[f.state] != null && rank[f.state] < rank[a] ? f.state : a;
+    }, 'ok');
+    stores.sort((a, b) => rank[worst(a)] - rank[worst(b)] || a.localeCompare(b));
+
+    // Watch is counted apart from the stores needing attention: it is a store
+    // that is fine for the month, and folding it into "need attention" would
+    // make the headline number cry wolf.
+    const flagged  = stores.filter(s => worst(s) === 'critical' || worst(s) === 'warn').length;
+    const watching = stores.filter(s => worst(s) === 'watch').length;
+
+    // "through Sat 20 Sep" — the judged day, not today. They differ by one and
+    // labelling it today would be a lie on every morning of the year.
+    let asOf = String(d.day || '');
+    try {
+        const [yy, mm, dd] = asOf.split('-').map(Number);
+        asOf = new Date(Date.UTC(yy, mm - 1, dd, 12)).toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC',
+        });
+    } catch (_) { /* leave the ISO date */ }
+
+    // The targets used to trail this line; they live on the column headers now,
+    // where each one sits next to the number it judges.
+    const cap = '<div class="dcw-cap">'
+        + '<span class="dcw-cap-l">' + (flagged
+            ? '<b>' + flagged + '</b> of ' + stores.length + ' stores need attention'
+            : 'All ' + stores.length + ' stores ' + (watching ? 'on target for the month' : 'clear'))
+        + (watching ? ' &middot; <b>' + watching + '</b> to watch' : '') + '</span>'
+        + '<span class="dcw-cap-r">Through ' + escapeHtml(asOf) + '</span>'
+        + '</div>';
+
+    // "Yesterday" is the last open day. On a Monday the judged day is Sunday
+    // and every store was shut, so the figures are Saturday's — say so.
+    let yLabel = 'yesterday';
+    try {
+        const [yy, mm, dd] = String(d.day).split('-').map(Number);
+        if (new Date(Date.UTC(yy, mm - 1, dd, 12)).getUTCDay() === 0) yLabel = 'Saturday';
+    } catch (_) { /* keep "yesterday" */ }
+
+    const colTip = 'Big number: month to date, coloured by the status — the month is half of '
+        + 'what the status is judged on. Small number: the last ' + win + ' days, for direction '
+        + 'only; the arrow says whether they are better or worse than the month so far.';
+
+    // No colgroup: `.dc-tbl td:first-child` already pins the store column and
+    // would win over one anyway. The remaining widths live on .dc-tbl-watch in
+    // styles.css, beside the rest of the district table rules.
+    let html = cap + '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl dc-tbl-watch">'
+        + '<thead><tr><th title="The figure beside each metric is the store&rsquo;s last day open, '
+        + 'green if it made target that day and red if it missed. Listing shows the week so far instead.">Store &middot; ' + yLabel + '</th>'
+        + '<th title="' + escapeHtml(_dcwStatusRule(cfg)) + '">Status</th>'
+        + '<th title="' + escapeHtml(colTip) + '">Customer conversion &middot; target '
+        + Number(cfg.conv_target || 85).toFixed(1) + '%</th>'
+        + '<th title="' + escapeHtml(colTip + ' Both dollar-weighted — never an average of daily '
+        + 'percentages.') + '">Buy margin &middot; target '
+        + Number(cfg.margin_target || 53).toFixed(1) + '%</th>'
+        + '<th title="' + escapeHtml('Big number: this week so far, Monday to Saturday, coloured by the '
+        + 'status — listing is judged on the week, not the month. Small number: the last ' + win
+        + ' days, for direction only.' + ' Devices processed against the total the store was '
+        + 'STAFFED to list — the roster’s goals summed — counting only days that had a goal '
+        + 'set, on both sides.') + '">Listing &middot; target 100% of goal</th>'
+        + '</tr></thead>';
+
+    stores.forEach(s => {
+        const m   = byStore[s];
+        const sev = _DCW_SEV[worst(s)];
+
+        // Each metric column: MTD over the last `win` days, and for conversion
+        // and margin the same window drawn against target. Listing has no
+        // sparkline — a day's listing runs from 40% to 400% of goal, and no
+        // fixed scale shows that without flattening the days that matter.
+        const cell = (k, fmt, spark, topTag) => {
+            const f = m[k];
+            if (!f) return '<span class="dcw-muted">&mdash;</span>';
+            return '<div class="dcw-metric">'
+                + _dcwPair(f.value == null ? null : Number(f.value),
+                           f.recent_value == null ? null : Number(f.recent_value),
+                           _DCW_SEV[f.state], win, fmt, topTag)
+                + (spark ? _dcwSpark(sparkVals(s, k), spark[0], _DCW_SEV[f.state], spark[1], spark[2]) : '')
+                + '</div>';
+        };
+        const cvCell = cell('conversion', _dcwPct, [Number(cfg.conv_target) || 85, 50, 100]);
+        const mgCell = cell('margin', _dcwPct, [Number(cfg.margin_target) || 53, 30, 80]);
+        const lsCell = cell('listing', _dcwPct0, null, 'This week');
+
+        // One line per metric, and each one is a REAL TABLE ROW, not a div
+        // inside a colspan. Ethan, 2026-09-21: "center the wordings with the
+        // warning, on target, etc. tags". The only way that stays true at
+        // every width is for the phrase to sit IN the Status column — so it
+        // does: label and figure under Store, the phrase under Status, where
+        // .lv-tbl already centres every cell. The first attempt pinned a CSS
+        // grid to the column widths by percentage and came out 24px off,
+        // because .lv-tbl and .dc-tbl disagree about the first column's width
+        // and padding; a number tuned against that is right at one width only.
+        //
+        // The engine's sentence rides on the row's title. See _dcwWhy for why
+        // the wording lives here and not in the edge function.
+        const LABEL = { conversion: 'Conversion', margin: 'Margin', listing: 'Listing' };
+        const open = ' onclick="_dcwOpen(\'' + s + '\')"';
+        const lines = METRICS.filter(k => m[k]).map(k => {
+            const f = m[k];
+            // LISTING'S LEAD IS THE WEEK SO FAR, not yesterday (Ethan,
+            // 2026-09-23: "the left column should be daily tracked against the
+            // week"). One day's listing swings from 40% to 400% of goal on who
+            // was rostered; the week to date is the number a manager can act
+            // on, and it moves every morning. It is the engine's own figure
+            // (listing's value IS week to date), so the lead and the status can
+            // never disagree. The day-by-day misses stay on the age.
+            const weekly = k === 'listing';
+            const last = weekly
+                ? (f.value == null ? null : { pct: Number(f.value), week: true })
+                : lastDay(s, k);
+            const w = _dcwWhy(k, f, last ? last.pct : null);
+            const run = f.state !== 'ok' ? missRun(s, k, f) : null;
+            // Coloured by that day (or week) alone. Compared at one decimal,
+            // as the engine compares, so a figure printed "85.0%" never shows red.
+            const hit = last && Math.round(last.pct * 10) / 10 >= Number(f.target);
+            const leadTip = weekly
+                ? (last ? 'This week so far: ' + (Number(f.sample_k) || 0) + ' listed against '
+                    + (Number(f.sample_n) || 0) + ' staffed for' : 'No listing goals set this week yet')
+                : lastTip(s, k, last);
+            return '<tr class="dcw-note ' + _dcSev(_DCW_SEV[f.state]) + '"' + open
+                + ' title="' + escapeHtml(f.reason || ('Open ' + s + '’s last 7 days')) + '">'
+                + '<td class="dcw-lc"><b>' + LABEL[k] + '</b>'
+                + '<span class="dcw-lead' + (last ? (hit ? ' dcw-y-hit' : ' dcw-y-miss') : '') + '"'
+                + ' title="' + escapeHtml(leadTip) + '">' + escapeHtml(w.lead) + '</span></td>'
+                // Two columns wide (Status + Conversion), left-aligned: the
+                // longest phrase with its day count runs past the Status
+                // column, and wrapping it to a second line broke the one-line-
+                // per-metric rhythm. It still stops well short of the
+                // conversion figure, which sits centred in the middle of its
+                // column — the layout suite measures that.
+                + '<td class="dcw-wc" colspan="2"><span class="dcw-why">' + escapeHtml(w.why) + '</span>'
+                + _dcwAgeHtml(run, k, f.target)
+                + '</td>'
+                + '<td colspan="2"></td></tr>';
+        }).join('');
+
+        html += '<tbody class="dc-grp">'
+            + _dcwRowOpen(s) + _dcStoreCell(s)
+            + _dcCell('<span class="dc-cat ' + _dcSev(sev) + '">' + _DCW_LABEL[worst(s)] + '</span>')
+            + _dcCell(cvCell) + _dcCell(mgCell) + _dcCell(lsCell) + '</tr>'
+            + lines + '</tbody>';
+    });
+
+    // No footnote under the table. It said what the Status tooltip and the
+    // three column tooltips now say, at the moment each question comes up, and
+    // a paragraph of methodology under a triage list is read once and then
+    // never again (Ethan 2026-09-21).
+    return html + '</table></div>';
+}
+
+// ---------------------------------------------------------------------------
+// The store popup — one store, day by day, three tabs.
+//
+// A POPUP RATHER THAN A JUMP TO STORE BREAKDOWN, which is what these rows used
+// to do and what every other district table still does. The Watch tab is a
+// triage list: you read it top-down, open the worst store, decide, and come
+// back to the list. Switching tabs underneath loses your place in it.
+//
+// It reads the payload the board already has in memory — no second fetch, no
+// spinner, and no chance of the popup and the row behind it disagreeing about
+// which day is the latest.
+
+let _dcwStore = null;                 // which store the popup is showing
+let _dcwTab   = 'conversion';         // which of its three tabs
+
+function _dcwRowOpen(code) {
+    return '<tr class="dc-clickable" tabindex="0" role="button"'
+        + ' onclick="_dcwOpen(\'' + code + '\')"'
+        + ' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_dcwOpen(\'' + code + '\');}"'
+        + ' title="Open ' + escapeHtml(code) + '&rsquo;s last 7 days">';
+}
+
+function _dcwOpen(store) {
+    const modal = document.getElementById('dcWatchModal');
+    if (!modal) return;
+    _dcwStore = store;
+    _dcwTab = 'conversion';
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    if (typeof trackUsage === 'function') trackUsage('open', 'dcWatchModal', 'District Matrix · ' + store);
+    _dcwModalPaint();
+}
+
+function dcwModalTab(tab) {
+    _dcwTab = tab;
+    _dcwModalPaint();
+}
+
+function _dcwModalPaint() {
+    const title = document.getElementById('dcwModalTitle');
+    const sub   = document.getElementById('dcwModalSub');
+    const body  = document.getElementById('dcwModalBody');
+    if (title) title.textContent = _dcwStore || 'Store';
+    ['conversion', 'margin', 'listing'].forEach(t => {
+        const b = document.getElementById('dcw-mtab-' + t);
+        if (b) b.classList.toggle('active', t === _dcwTab);
+    });
+    const rows = _dcwStoreDays(_dcwStore);
+    if (sub) {
+        sub.textContent = rows.length
+            ? 'Last ' + rows.length + ' open days · Through ' + _dcwDay(rows[rows.length - 1].date)
+            : 'No days recorded';
+    }
+    if (body) body.innerHTML = _dcwModalHtml(rows);
+}
+
+// The last 7 days this store actually traded. NOT the last 7 calendar days:
+// every store is closed on Sunday, so a calendar week would always carry one
+// blank row that reads like a zero-conversion day.
+function _dcwStoreDays(store) {
+    if (!_dcWatch || !store) return [];
+    const goals = {};
+    (_dcWatch.goals || []).forEach(g => {
+        if (g.store === store) goals[g.date] = Number(g.goal) || 0;
+    });
+    return (_dcWatch.series || [])
+        .filter(r => r.store === store)
+        .slice(-7)
+        .map(r => ({
+            date: r.date,
+            n: Number(r.cust_conv_den) || 0,
+            k: Number(r.cust_conv_num) || 0,
+            value: Number(r.est_value) || 0,
+            spent: Number(r.total_spent) || 0,
+            lost: Number(r.devices_lost) || 0,
+            noDeal: Number(r.no_deal_customers) || 0,
+            processed: Number(r.devices_processed) || 0,
+            procValue: Number(r.processed_value) || 0,
+            goal: goals[r.date] == null ? null : goals[r.date],
+        }));
+}
+
+function _dcwDay(iso) {
+    try {
+        const [y, m, d] = String(iso).split('-').map(Number);
+        return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC',
+        });
+    } catch (_) { return String(iso); }
+}
+
+// A proportion drawn as a bar, with the target marked on it. The bar is what
+// makes seven rows readable at a glance; the number is what makes it usable.
+// Scale is fixed per tab rather than to the data, for the same reason the
+// board's sparkline is: an autoscaled bar makes every store look identical.
+function _dcwBar(pctVal, targetPct, max, sev) {
+    if (pctVal == null) return '<span class="dcw-muted">&mdash;</span>';
+    const w = Math.max(0, Math.min(100, (pctVal / max) * 100));
+    const t = Math.max(0, Math.min(100, (targetPct / max) * 100));
+    return '<span class="dcw-bar">'
+        + '<span class="dcw-bar-fill ' + _dcSev(sev) + '" style="width:' + w.toFixed(1) + '%"></span>'
+        + (targetPct ? '<span class="dcw-bar-tick" style="left:' + t.toFixed(1) + '%"></span>' : '')
+        + '</span>';
+}
+
+function _dcwModalHtml(rows) {
+    if (!_dcWatch) {
+        return '<div class="dcx-empty" style="padding:48px 0;">'
+            + 'District Matrix has not loaded yet. Close this and try again in a moment.</div>';
+    }
+    if (!rows.length) {
+        return '<div class="dcx-empty" style="padding:48px 0;">'
+            + 'No Day End Reports recorded for ' + escapeHtml(_dcwStore || '') + ' in the last three weeks.</div>';
+    }
+    const cfg = (_dcWatch && _dcWatch.config) || {};
+    if (_dcwTab === 'margin')  return _dcwMarginTab(rows, cfg);
+    if (_dcwTab === 'listing') return _dcwListingTab(rows, cfg);
+    return _dcwConvTab(rows, Number(cfg.conv_target) || 85);
+}
+
+// The explanatory footnote under each tab went on 2026-09-21 (Ethan: "you
+// can get rid of the bottom line explaining the tool"). The listing one
+// carried the only explanation of why this screen and Store Efficiency
+// disagree — it survives as the hover on that tab's total line.
+function _dcwShell(head, body, foot, footTitle) {
+    return '<div class="dcw-mwrap">'
+        + '<div class="dcw-msum">' + head + '</div>'
+        + '<div class="lv-tbl-scroll"><table class="lv-tbl dcw-mtbl">' + body + '</table></div>'
+        + (foot ? '<div class="dcw-mtot"' + (footTitle ? ' title="' + escapeHtml(footTitle) + '"' : '')
+            + '>' + _dcwCap(foot) + '</div>' : '')
+        + '</div>';
+}
+
+// Capitalise the first WORD of each "·"-separated phrase, skipping any
+// figures in front of it (Ethan, 2026-09-21: "make the first word (even if
+// numbers come first in the sentence) first letter capitalized") — so
+// "60 of 74 customers" reads "60 Of 74 customers". Walks past tags and
+// entities so it never capitalises markup.
+function _dcwCap(html) {
+    return String(html).split(' &middot; ').map(part => {
+        let inTag = false, inEnt = false;
+        for (let i = 0; i < part.length; i++) {
+            const c = part[i];
+            if (inTag) { if (c === '>') inTag = false; continue; }
+            if (inEnt) { if (c === ';') inEnt = false; continue; }
+            if (c === '<') { inTag = true; continue; }
+            if (c === '&') { inEnt = true; continue; }
+            if (/[a-z]/.test(c)) return part.slice(0, i) + c.toUpperCase() + part.slice(i + 1);
+            if (/[A-Z]/.test(c)) return part;
+        }
+        return part;
+    }).join(' &middot; ');
+}
+
+function _dcwTile(label, value, sub, sev) {
+    return '<div class="dcw-tile">'
+        + '<div class="dcw-tile-k">' + label + '</div>'
+        + '<div class="dcw-tile-v ' + (sev ? _dcSev(sev) : '') + '">' + value + '</div>'
+        + '<div class="dcw-tile-s">' + _dcwCap(sub || '') + '</div></div>';
+}
+
+// Newest day on top (Ethan, 2026-09-21). rows stay oldest-first everywhere
+// else — the subtitle reads the last one as "through".
+const _dcwNewestFirst = rows => rows.slice().reverse();
+
+function _dcwConvTab(rows, target) {
+    const K = rows.reduce((a, r) => a + r.k, 0);
+    const N = rows.reduce((a, r) => a + r.n, 0);
+    const rate = N ? (K / N) * 100 : null;
+    const short = Math.max(0, Math.round(target / 100 * N - K));
+    const sev = rate == null ? 'g' : (rate >= target ? 'g' : (short > 3 ? 'b' : 'w'));
+
+    const head = _dcwTile('Conversion &middot; 7 days', rate == null ? '&mdash;' : rate.toFixed(1) + '%',
+                          K + ' of ' + N + ' customers', sev)
+        + _dcwTile('Customers short', String(short), 'against a ' + target.toFixed(1) + '% target',
+                   short > 0 ? (short > 3 ? 'b' : 'w') : 'g')
+        + _dcwTile('No-deal customers', String(rows.reduce((a, r) => a + r.noDeal, 0)),
+                   rows.reduce((a, r) => a + r.lost, 0) + ' devices walked out', '');
+
+    let body = '<thead><tr><th>Day</th><th>Customers</th><th>Converted</th>'
+        + '<th>Rate</th><th class="dcw-th-bar">Against target &middot; ' + target.toFixed(1) + '%</th></tr></thead><tbody>';
+    _dcwNewestFirst(rows).forEach(r => {
+        const p = r.n ? (r.k / r.n) * 100 : null;
+        // Per-DAY colour is a plain comparison to target, not the significance
+        // test. The test decides whether a day is worth FLAGGING; this column is
+        // just "what happened", and dressing a 4-of-5 day green here would hide
+        // the miss the DM opened the popup to look at. The footnote says so.
+        const s = p == null ? '' : (p >= target ? 'g' : (r.n - r.k > 2 ? 'b' : 'w'));
+        body += '<tr><td class="dcw-td-day">' + escapeHtml(_dcwDay(r.date)) + '</td>'
+            + '<td>' + r.n + '</td><td>' + r.k + '</td>'
+            + '<td class="' + (s ? _dcSev(s) : 'dc-muted') + '">' + (p == null ? '&mdash;' : p.toFixed(1) + '%') + '</td>'
+            + '<td class="dcw-td-bar">' + _dcwBar(p, target, 100, s) + '</td></tr>';
+    });
+    body += '</tbody>';
+
+    return _dcwShell(head, body,
+        '<b>' + K + ' of ' + N + '</b> customers converted over ' + rows.length + ' days'
+        + (short > 0 ? ' &middot; <b>' + short + '</b> short of target' : ' &middot; on target'));
+}
+
+function _dcwMarginTab(rows, cfg) {
+    const target = Number(cfg.margin_target) || 53;
+    // Read from config, never hardcoded: the floors are a distance FROM the
+    // target and 0099 rescaled both when the target moved to 53%. A literal
+    // here would have gone on colouring against the old 54.5% scale.
+    const red = Number(cfg.gp_short_red) || 1750;
+    const V = rows.reduce((a, r) => a + r.value, 0);
+    const C = rows.reduce((a, r) => a + r.spent, 0);
+    const margin = V ? ((V - C) / V) * 100 : null;
+    const gpShort = (target / 100) * V - (V - C);
+    // The popup shows SEVEN days against floors tuned for fourteen, so the bar
+    // is pro-rated rather than compared raw — half the window, half the money.
+    const redHere = red / 2;
+    const sev = margin == null ? 'g' : (gpShort >= redHere ? 'b' : (gpShort > 0 ? 'w' : 'g'));
+
+    const head = _dcwTile('Buy margin &middot; 7 days', margin == null ? '&mdash;' : margin.toFixed(1) + '%',
+                          'dollar-weighted, target ' + target.toFixed(1) + '%', sev)
+        + _dcwTile(gpShort > 0 ? 'Gross profit behind' : 'Gross profit ahead',
+                   _dcwMoney(gpShort), 'on ' + _dcwMoney(V) + ' of buying', sev)
+        + _dcwTile('Spent', _dcwMoney(C), 'against ' + _dcwMoney(V - C) + ' of GP', '');
+
+    let body = '<thead><tr><th>Day</th><th>Buy value</th><th>Spent</th>'
+        + '<th>Margin</th><th class="dcw-th-bar">Against target &middot; ' + target.toFixed(1) + '%</th></tr></thead><tbody>';
+    _dcwNewestFirst(rows).forEach(r => {
+        const p = r.value ? ((r.value - r.spent) / r.value) * 100 : null;
+        const s = p == null ? '' : (p >= target ? 'g' : (p < target - 4 ? 'b' : 'w'));
+        body += '<tr><td class="dcw-td-day">' + escapeHtml(_dcwDay(r.date)) + '</td>'
+            + '<td>' + _dcwMoney(r.value) + '</td><td>' + _dcwMoney(r.spent) + '</td>'
+            + '<td class="' + (s ? _dcSev(s) : 'dc-muted') + '">' + (p == null ? '&mdash;' : p.toFixed(1) + '%') + '</td>'
+            + '<td class="dcw-td-bar">' + _dcwBar(p, target, 80, s) + '</td></tr>';
+    });
+    body += '</tbody>';
+
+    return _dcwShell(head, body,
+        '<b>' + _dcwMoney(V - C) + '</b> of gross profit on <b>' + _dcwMoney(V) + '</b> bought'
+        + (gpShort > 0 ? ' &middot; <b>' + _dcwMoney(gpShort) + '</b> behind target'
+                       : ' &middot; <b>' + _dcwMoney(gpShort) + '</b> ahead'));
+}
+
+function _dcwListingTab(rows, cfg) {
+    // Seven days IS the frame now, so the floor is used whole rather than
+    // halved — listing moved from a 14-day window onto the Monday-to-Saturday
+    // week in 0100, and the old halving was there to bring a fortnight's floor
+    // down to a week's.
+    const minHere = Number(cfg.listing_short_min) || 25;
+    const val = rows.reduce((a, r) => a + r.procValue, 0);
+    // Only days WITH a goal count, on both sides — the same rule the engine
+    // applies. A day nobody filled the rota in for is not a day the store
+    // listed nothing, and counting it would flatter or damn the store at random.
+    const withGoal = rows.filter(r => r.goal != null && r.goal > 0);
+    const P = withGoal.reduce((a, r) => a + r.processed, 0);
+    const G = withGoal.reduce((a, r) => a + r.goal, 0);
+    const pctGoal = G ? (P / G) * 100 : null;
+    const short = G ? Math.round(G - P) : null;
+    // Red on the same yardstick the engine uses, not on a bigger number: a
+    // miss is unrecoverable when it is more than a week of catching up covers,
+    // and a week of catching up is listing_catchup_mult - 1 above goal.
+    const room = Math.round(G * ((Number(cfg.listing_catchup_mult) || 1.3) - 1));
+    const sev = short == null ? '' : (short > room ? 'b' : (short >= minHere ? 'w' : 'g'));
+
+    const head = _dcwTile('Against staffed goal', pctGoal == null ? '&mdash;' : Math.round(pctGoal) + '%',
+                          G ? P + ' listed of ' + G + ' staffed for' : 'no goals set', sev)
+        + _dcwTile(short != null && short > 0 ? 'Devices short' : 'Devices over',
+                   short == null ? '&mdash;' : String(Math.abs(short)),
+                   withGoal.length + ' of ' + rows.length + ' days had a goal set', sev)
+        + _dcwTile('Value processed', _dcwMoney(val),
+                   rows.reduce((a, r) => a + r.processed, 0) + ' devices in total', '');
+
+    let body = '<thead><tr><th>Day</th><th>Processed</th><th>Value</th>'
+        + '<th>Goal</th><th class="dcw-th-bar">Against goal &middot; 100%</th></tr></thead><tbody>';
+    _dcwNewestFirst(rows).forEach(r => {
+        const p = (r.goal != null && r.goal > 0) ? (r.processed / r.goal) * 100 : null;
+        const s = p == null ? '' : (p >= 100 ? 'g' : (p >= 70 ? 'w' : 'b'));
+        body += '<tr><td class="dcw-td-day">' + escapeHtml(_dcwDay(r.date)) + '</td>'
+            + '<td>' + r.processed + '</td><td>' + _dcwMoney(r.procValue) + '</td>'
+            + '<td class="' + (r.goal ? '' : 'dc-muted') + '">' + (r.goal == null ? '&mdash;' : r.goal) + '</td>'
+            + '<td class="dcw-td-bar">' + _dcwBar(p, 100, 150, s) + '</td></tr>';
+    });
+    body += '</tbody>';
+
+    // ⚠️ THIS HOVER IS LOAD-BEARING AND MUST NOT BE DROPPED. Listing became a
+    // flagged metric in 0099, but the measurement did not change: it is the Day
+    // End Report's processed count, which runs 15–30% BELOW the manager-filed
+    // weekly KPI that the DM's Store Efficiency board scores (0095). The two
+    // screens will disagree, both defensibly, and this sentence is the only
+    // thing on either of them that explains why.
+    return _dcwShell(head, body,
+        short == null
+            ? '<b>' + rows.reduce((a, r) => a + r.processed, 0) + '</b> devices processed &middot; no goals set to judge against'
+            : '<b>' + P + '</b> listed against <b>' + G + '</b> staffed for'
+              + (short > 0 ? ' &middot; <b>' + short + '</b> devices short' : ' &middot; goal cleared'),
+        'Counted against each day\u2019s staffed goal, and only on '
+        + 'days that had one set. '
+        + 'The processed figure comes from the Day End Report, which runs 15–30% below the '
+        + 'manager-filed weekly KPI the Store Efficiency board scores — so this reads harsher '
+        + 'than that board does, on the same store, in the same week.');
 }
 
 // ============================================================================
@@ -48211,9 +51375,7 @@ function expCopyReport(button) {
     const { email, subject, body } = _expCompose();
     const text = 'To: ' + email + '\nSubject: ' + subject + '\n\n' + body;
     navigator.clipboard.writeText(text).then(() => {
-        const was = button.textContent;
-        button.textContent = 'Copied';
-        setTimeout(() => { button.textContent = was; }, 1600);
+        _copyFlash(button);
     }).catch(() => alert('Could not copy. Select the preview text and copy it manually.'));
 }
 window.expCopyReport = expCopyReport;
@@ -50099,7 +53261,8 @@ const _LT_CODE_SAYS = {
 // [[tools-panel-role-sync]] is the record of what that costs — the copies drift
 // and the tool half-exists on two pages. Its body is rendered by JS anyway, so
 // static markup would buy nothing. The PANEL LINK still has to be in all five
-// (it is markup the panel reads), and tv.html has no tools panel at all.
+// (it is markup the panel reads). There is no sixth shell: tv.html is a redirect
+// stub now and a board has no tools panel on the five that remain.
 function _lhToolEl() {
     let el = document.getElementById('listingHealthToolModal');
     if (el) return el;
@@ -50275,10 +53438,7 @@ function lhToolCopy(button) {
     const fb = _lhToolFb;
     if (!fb || !fb.ask) return;
     navigator.clipboard.writeText(fb.ask).then(() => {
-        if (!button) return;
-        const was = button.textContent;
-        button.textContent = 'Copied';
-        setTimeout(() => { button.textContent = was; }, 1600);
+        _copyFlash(button);
     }).catch(() => _ltTell('Could Not Reach The Clipboard',
         'Your browser refused the copy. Select the notes above and copy them by hand.'));
 }
@@ -52819,7 +55979,24 @@ function _ddFit(host) {
     // control instead of clamping it. The feed filter is the reason the parent
     // clamp was removed in the first place; it does not get to be the reason it
     // breaks again.
-    host.style.minWidth = host.closest('.b2b-pcell')
+    // A LIST, not one selector, and this is the second entry on it. The Expense
+    // Report's Category control reproduced the B2B bug exactly (Ethan, 2026-09-17):
+    // "Shipping & Packaging Supplies" measures 224px, the field it sits in is
+    // 130px, and the face painted 86px across the Description input so its
+    // placeholder read "vas it for?" instead of "What was it for?". Same shape as
+    // "Apple" reading "pple" above, same cause, and the fix that was already
+    // written for it simply had not been pointed at this tool.
+    //
+    // WHEN TO ADD A SELECTOR HERE: the parent must have a DEFINITE width, so the
+    // percentage has a real number to resolve against. .b2b-pcell is a grid item
+    // with a fixed track; .exp-add-grid label is a flex item with a 130px
+    // flex-basis. Both qualify. A content-sized parent does NOT — see the
+    // .hub-select-wrap note above, where a percentage is the cyclic case and can
+    // collapse the control instead of clamping it. If you are unsure which kind
+    // you have, measure it; getting this wrong is a vanishing control, not a
+    // cosmetic slip.
+    const _DD_CLAMPED_SLOTS = '.b2b-pcell, .exp-add-grid label, .tbl-stack td';
+    host.style.minWidth = host.closest(_DD_CLAMPED_SLOTS)
         ? 'min(' + want + 'px, 100%)'
         : want + 'px';
 }
@@ -53118,6 +56295,18 @@ function _ddEnhance(sel) {
 
     const host = document.createElement('div');
     host.className = 'dd-host';
+    // The face copies the select's layout classes (see below), but a class on
+    // the face cannot make the HOST a flex container, and the host is what has
+    // to become one for the face to stretch to a row it shares with a text
+    // input. One marker, set here, read by .dd-host-lg in the dropdown block.
+    if (sel.classList.contains('form-input-lg')) host.classList.add('dd-host-lg');
+    // ...and an inline margin-top comes with it. The host stands where the
+    // select stood, so it owns the spacing; the five controls that say
+    // margin-top: 0 inline (the scorecard's store picker among them) are
+    // overriding .form-input-lg and have to keep overriding it. Only margin-top,
+    // and only when it is set: the other three are dead on the hidden select
+    // today, and reviving them would move controls nobody asked to move.
+    if (sel.style.marginTop) host.style.marginTop = sel.style.marginTop;
     // The select keeps every class it had: the site sizes these controls with
     // .form-input / .idea-input / .kpi-select and the face has to inherit that
     // width, so the HOST copies the layout classes and the native one keeps them
