@@ -1926,9 +1926,34 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       return out;
     };
     const tUnits = unitsIn(original);
+    // ⚠️ A PC WITH TWO DRIVES IS TITLED BY THE TOTAL. OVL's Cooler Master
+    // (KS01-7824A-E10), denied 2026-09-22, "there are multiple storage
+    // devices": Storage 1 = 1TB SSD, Storage 2 = 2TB HDD, title "3TB Storage".
+    // Only Storage 1 was ever compared, so every two-drive build was flagged
+    // severity 3 as contradicting itself — and, being a spec-conflict, it also
+    // blocked every append below. The drives are summed (1TB = 1000GB, as they
+    // are sold) and the title may state any one drive or the total.
+    const drives = Object.keys(sp).filter(k => /^storage\s*\d+$/i.test(k))
+      .map(k => String(sp[k] || "").trim())
+      .filter(v => v && !PLACEHOLDER.test(v));
+    const driveTotal = new Map<string, Set<string>>();
+    if (drives.length > 1) {
+      let gb = 0, readable = true;
+      for (const v of drives) {
+        const m = v.match(/(\d+(?:\.\d+)?)\s?(gb|tb)\b/i);
+        if (!m) { readable = false; break; }
+        gb += Number(m[1]) * (m[2].toLowerCase() === "tb" ? 1000 : 1);
+      }
+      if (readable) {
+        const fmt = (n: number) => String(Math.round(n * 100) / 100);
+        driveTotal.set("gb", new Set([fmt(gb)]));
+        driveTotal.set("tb", new Set([fmt(gb / 1000), fmt(Math.round(gb / 100) / 10)]));
+      }
+    }
     for (const k of TITLE_SPECS) {
       const v = String(sp[k] || "").trim();
       if (!v || PLACEHOLDER.test(v)) continue;
+      const isDrive = drives.length > 1 && /^storage\s*\d+$/i.test(k);
       for (const [unit, vals] of unitsIn(v)) {
         const mine = tUnits.get(unit);
         if (!mine || !mine.size) continue;
@@ -1936,9 +1961,19 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
         // both 8GB RAM and 512GB storage must not fight a spec naming one.
         const agrees = [...vals].some(x => mine.has(x));
         if (agrees) continue;
+        // One drive of several: the title may be stating the total, or a
+        // different drive, in either unit.
+        if (isDrive) {
+          const other = drives.some(d => [...(unitsIn(d).get(unit) || [])].some(x => mine.has(x)));
+          const total = ["gb", "tb"].some(u =>
+            [...(driveTotal.get(u) || [])].some(x => tUnits.get(u)?.has(x)));
+          if (other || total) continue;
+        }
         findings.push({
           code: "spec-conflict",
-          says: `The title says ${[...mine].join("/")}${unit === "in" ? '"' : unit.toUpperCase()} but this listing's own ${k} field says ${v}. One of the two is wrong, and a buyer is being shown a number the listing does not agree with. Check the unit and correct whichever is wrong.`,
+          says: `The title says ${[...mine].join("/")}${unit === "in" ? '"' : unit.toUpperCase()} but this listing's own ${isDrive
+              ? `drives say ${drives.join(" + ")}${driveTotal.size ? ` (${[...driveTotal.get("tb")!][0]}TB together)` : ""}`
+              : `${k} field says ${v}`}. One of the two is wrong, and a buyer is being shown a number the listing does not agree with. Check the unit and correct whichever is wrong.`,
           severity: 3, fixable: false,
         });
         break;
@@ -2041,7 +2076,10 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // whenever the listing agrees with itself would never see it. So the finding
     // stays and says what is actually true: two sources disagree, and a person
     // has to look. What it stops doing is proposing the swap.
-    const saidBy = listingSaysItself(wrong, identityFields(extra?.specs));
+    const echoed = listingSaysItself(wrong, identityFields(extra?.specs),
+      changedSpan(wrong, right));
+    const respelling = !!right && isMisspelling(wrong, right);
+    const saidBy = respelling ? null : echoed;
     if (!placeholder && at >= 0 && right && right !== wrong && saidBy) {
       findings.push({
         code: "name-disputed",
@@ -2065,7 +2103,8 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     } else if (!placeholder && at >= 0 && right && right !== wrong) {
       const swapped = (title.slice(0, at) + right + title.slice(at + wrong.length))
         .replace(/\s+/g, " ").trim();
-      const wrongIsWrong = nameVerdict.verdict === "wrong";
+      // A respelling is a typo whatever the model called it.
+      const wrongIsWrong = nameVerdict.verdict === "wrong" && !respelling;
       const why = String(nameVerdict.why || "").trim();
       const fits = swapped.length <= EBAY_TITLE_MAX;
       if (fits) { title = swapped; fixable = true; }
@@ -2088,6 +2127,11 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
               : `The title says "${wrong}"; it should be "${right}".`)
           : `"${wrong}" is not a real product name — it looks like "${right}" typed wrong`
             + (tidyWhy ? `. ${tidyWhy}.` : `, so nobody searching for it will find this listing.`))
+          // Say so, or the reviewer sees the same typo in the Type field and
+          // reads it as the listing disagreeing with us.
+          + (respelling && echoed
+              ? ` The listing's own ${echoed.field} has the same misspelling ("${echoed.value}"), and approving corrects it there too.`
+              : "")
           + (fits ? "" : ` The correction does not fit in 80 characters, so it needs editing by hand.`),
         // Only where we genuinely cannot settle it from the listing. Every other
         // finding on this page is read off the title and the spec table, and
@@ -3423,9 +3467,22 @@ function feedbackRun(current: string | null, suggested: string | null) {
 //
 // ⚠️ A ONE-TOKEN WINDOW MUST BE 3+ CHARACTERS. "4K" or "II" alone is in half the
 // catalogue and is never evidence that a rule overruled the listing.
-function listingSaysItself(was: string, specs: Record<string, string>) {
+//
+// ⚠️ `cover` IS THE PART BEING CHANGED, and a window must reach into it. LEE's
+// Anne Pro, denied 2026-09-19: the name check quoted "Anne Pro 01" and meant
+// "01 should be 2". The longest window any field held was "Anne Pro" — the
+// Brand — so the listing was read as vouching for the title, the fix was
+// withheld as name-disputed, and the row named Brand as the field to doubt.
+// Brand was never in question; the Model field says II, which AGREES with the
+// correction. A field only vouches for the error if it states the error.
+// Token indexes into `was`, [from, to). Omitted by the feedback hint, which
+// has no correction to measure against.
+function listingSaysItself(was: string, specs: Record<string, string>,
+                           cover?: [number, number]) {
   const w = tokens(was);
   if (!w.length) return null;
+  const reaches = (i: number, len: number) =>
+    !cover || cover[1] <= cover[0] || (i < cover[1] && i + len > cover[0]);
   const fields = Object.entries(specs)
     .map(([field, value]) => ({ field, value: String(value || ""), t: tokens(String(value || "")) }))
     .filter(f => f.t.length);
@@ -3442,12 +3499,77 @@ function listingSaysItself(was: string, specs: Record<string, string>) {
     for (let i = 0; i + len <= w.length; i++) {
       const frag = w.slice(i, i + len);
       if (len === 1 && frag[0].length < 3) continue;
+      if (!reaches(i, len)) continue;
       for (const f of fields) {
         if (holds(f.t, frag)) return { field: f.field, value: f.value, matched: frag.join(" ") };
       }
     }
   }
   return null;
+}
+
+// The tokens of `wrong` that the correction actually replaces, as [from, to) —
+// what is left once the words both sides share at either end are set aside.
+// "Anne Pro 01" -> "Anne Pro 2" is [2, 3): only "01" is in question.
+function changedSpan(wrong: string, right: string): [number, number] {
+  const a = tokens(wrong), b = tokens(right);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head
+         && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  return [head, a.length - tail];
+}
+
+// Optimal string alignment distance: Levenshtein plus one adjacent swap, which
+// is the commonest typing error there is ("Reviever" has one).
+function typoDistance(a: string, b: string): number {
+  const d: number[][] = [];
+  for (let i = 0; i <= a.length; i++) d.push([i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const c = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1])
+        d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
+}
+
+// ⚠️ A MISSPELLED WORD IS NOT AN IDENTITY CLAIM. OVL's "Sansui … Stereo
+// Reviever" and "Analogue Super NT Super Famicon", both denied 2026-09-22 with
+// "Looks good to me" — the reviewer saw a finding with no suggestion under it
+// and nothing to approve. They were held back because the Type and Model fields
+// carry the same typo, which is the whole point of name-disputed: the listing
+// gets the last word on WHAT the item is. But a lister who types "Reviever"
+// once types it in every field they fill; the field echoing it is the same
+// hand, not a second source. Nobody's product is called a Reviever.
+//
+// So a correction that is only a respelling goes through as an ordinary fix,
+// and approving it corrects the echoing field too (a replacement always does —
+// see planEchoes). "Only a respelling" is decided narrowly, and every real
+// name-disputed denial is on the far side of it:
+//   - LETTERS ONLY on both sides. T43WD-40, 2280mm, Xbox One -> 360, f/2.2 and
+//     16mm all carry a digit, and a digit is a fact, not a spelling
+//   - the same number of words changed, each 4+ letters, each ONE typing error
+//     away — or two, in a word of 8+ letters ("Reviever"). Two real words sit
+//     two edits apart all the time (Widget / Gadget); in a long word they
+//     almost never do. "microSD Card" -> "Portable SSD" is nowhere near
+function isMisspelling(wrong: string, right: string): boolean {
+  const [from, to] = changedSpan(wrong, right);
+  const a = tokens(wrong).slice(from, to);
+  const bs = changedSpan(right, wrong);
+  const b = tokens(right).slice(bs[0], bs[1]);
+  if (!a.length || a.length !== b.length) return false;
+  return a.every((x, i) => {
+    const y = b[i];
+    if (!/^[a-z]+$/.test(x) || !/^[a-z]+$/.test(y)) return false;
+    if (x.length < 4 || y.length < 4 || x === y) return false;
+    const dist = typoDistance(x, y);
+    return dist <= 1 || (dist === 2 && Math.min(x.length, y.length) >= 8);
+  });
 }
 
 // How many notes nobody has carried into an ask yet. The deck's card is built
