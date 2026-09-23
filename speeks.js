@@ -49324,7 +49324,8 @@ function _dcRowOpen(code) {
 // The severity classes the store board already uses, reused so a metric that is
 // red here is red there.
 function _dcSev(state) {
-    return state === 'b' ? 'dc-bad' : (state === 'w' ? 'dc-warn' : 'dc-good');
+    // 'v' is the Matrix's Watch (0110) — no other board emits it.
+    return state === 'b' ? 'dc-bad' : state === 'w' ? 'dc-warn' : state === 'v' ? 'dc-watch' : 'dc-good';
 }
 
 function _dcEbayHtml() {
@@ -49655,11 +49656,15 @@ function renderDistrictTabs() {
 
 let _dcWatch = null;   // last 'board' payload, or null before it answers
 
-const _DCW_SEV    = { critical: 'b', warn: 'w', ok: 'g' };
-const _DCW_LABEL  = { critical: 'Critical', warn: 'Warning', ok: 'On target' };
+// FOUR STATES SINCE 0110. Watch is new: fine for the month, but missing day
+// after day — "beginning of bad trend" (Ethan, 2026-09-23). It is BLUE, not a
+// paler amber, so it can never be read as a softer Warning: a Watch store is
+// not under target, and the colour has to say so without a legend.
+const _DCW_SEV    = { critical: 'b', warn: 'w', watch: 'v', ok: 'g' };
+const _DCW_LABEL  = { critical: 'Critical', warn: 'Warning', watch: 'Watch', ok: 'On target' };
 // Matches the severity hexes the buying-margin panel already uses, so a red
 // here and a red there are the same red.
-const _DCW_STROKE = { b: '#b91c1c', w: '#b45309', g: '#047857' };
+const _DCW_STROKE = { b: '#b91c1c', w: '#b45309', v: '#1d4ed8', g: '#047857' };
 
 async function fetchDistrictWatch() {
     const body = document.getElementById('dc-watch-body');
@@ -49688,8 +49693,9 @@ function renderDistrictWatch() {
     if (body) body.innerHTML = _dcWatchHtml();
 }
 
-// A 12-day trend against the target line. Deliberately unlabelled — the figure
-// beside it is the number; this only answers "which way".
+// The last chronic_window days (7 since 0110) against the target line.
+// Deliberately unlabelled — the figures beside it are the numbers; this only
+// answers "which way".
 //
 // FIXED SCALE, never autoscaled to the data. An autoscaled sparkline makes a
 // good store's noise look like a bad store's collapse, and the dashed target
@@ -49701,7 +49707,7 @@ function renderDistrictWatch() {
 // columns can be compared by eye. Widening one would quietly make that store
 // look steadier than the other.
 function _dcwSpark(vals, target, sev, lo, hi) {
-    const pts = (vals || []).filter(v => v != null).slice(-12);
+    const pts = (vals || []).filter(v => v != null);
     if (pts.length < 2) return '';
     const W = 104, H = 28, PAD = 3;
     const span = hi - lo;
@@ -49721,37 +49727,26 @@ function _dcwSpark(vals, target, sev, lo, hi) {
 // under the table: it answers "over what?" at the moment the question comes up
 // and costs the panel no height — the same call the eBay tab already makes for
 // its thresholds.
+//
+// Since 0110 the rule is Ethan's own four lines (2026-09-23), and the tooltip
+// says them in close to his words. The engine applies it; see "The rule" in
+// supabase/functions/district-watch/index.ts.
 function _dcwStatusRule(cfg) {
     const ct = Number(cfg.conv_target || 85).toFixed(1);
     const mt = Number(cfg.margin_target || 53).toFixed(1);
-    const gmin = Math.round(Number(cfg.gp_short_min || 750));
-    const gday = Math.round(Number(cfg.gp_day_min || 150));
-    const mmax = Number(cfg.margin_recover_max || 60).toFixed(1);
-    const lmin = Math.round(Number(cfg.listing_short_min || 25));
-    const mult = Number(cfg.listing_catchup_mult || 1.3);
-    const room = Math.round((mult - 1) * 100);
-    const need = Math.round(Number(cfg.acute_needed || 2));
-    const wind = Math.round(Number(cfg.chronic_window || 14));
-    const acut = Math.round(Number(cfg.acute_window || 3));
-    return 'A store takes the worst of its three metrics. Conversion and margin are '
-        + 'read over the last ' + wind + ' days; listing is read over the working week, '
-        + 'Monday to Saturday.\n\n'
-        + 'WARNING\n'
-        + '• Conversion under ' + ct + '% on ' + need + ' of the last ' + acut + ' days, or '
-        + 'across the whole window — counting only days where the shortfall is bigger than '
-        + 'chance explains at that day’s volume, so a 4-of-5 day never counts.\n'
-        + '• Buy margin the same way: under ' + mt + '% on ' + need + ' of the last ' + acut
-        + ' buying days — counting only days at least $' + gday.toLocaleString('en-US')
-        + ' of gross profit behind — or more than $' + gmin.toLocaleString('en-US')
-        + ' behind across the window.\n'
-        + '• Listing more than ' + lmin + ' devices behind the staffed goal for the week.\n\n'
-        + 'CRITICAL\n'
-        + '• Conversion: the month can no longer reach ' + ct + '%.\n'
-        + '• Buy margin: the month can no longer reach ' + mt + '% — the rest of it would '
-        + 'have to run above ' + mmax + '%, which no store has managed over ten days.\n'
-        + '• Listing: the week can no longer be caught up. A store is credited with '
-        + room + '% above goal on the days it has left; a shortfall bigger than that is red. '
-        + 'Once Saturday has gone the same test is applied to the whole week.';
+    const wr = Math.round(Number(cfg.watch_run || 2));
+    const cr = Math.round(Number(cfg.critical_run || 4));
+    return 'Each metric is judged on two things: the month to date, and how many open days '
+        + 'in a row the store has missed. A store takes the worst of its three metrics.\n\n'
+        + 'A missed day is conversion under ' + ct + '%, buy margin under ' + mt + '%, or '
+        + 'listing under that day’s staffed goal. Sundays and days with nothing to judge '
+        + 'are skipped — they neither count nor reset the run.\n\n'
+        + 'ON TARGET — month on target, fewer than ' + wr + ' misses in a row.\n'
+        + 'WATCH — month on target, but ' + wr + '+ misses in a row: a bad trend starting.\n'
+        + 'WARNING — month under target.\n'
+        + 'CRITICAL — month under target and ' + cr + '+ misses in a row.\n\n'
+        + 'Listing reads the WEEK to date (Monday to Saturday) where the other two read the '
+        + 'month; its missed days are still counted day by day.';
 }
 
 
@@ -49764,121 +49759,93 @@ function _dcwStatusRule(cfg) {
 // Three parts, always in the same order and always in the same place, so the
 // eye can run straight down the column instead of reading:
 //
-//   LEAD   the number that matters, in the unit the work is done in
-//   WHY    which test fired, in four or five words
-//   AGE    how long it has been like this
+//   LEAD   YESTERDAY'S figure — the last day the store was open (listing:
+//          the week so far — see the glance rows in _dcWatchHtml)
+//   WHY    which state, in four or five words
+//   AGE    how many days in a row it has missed
+//
+// THE LEAD IS YESTERDAY, NOT THE WINDOW, since 0110 (Ethan, 2026-09-23: "on
+// the left side, I think I want to see yesterdays numbers"). This board is
+// read every morning to decide who to call, and the one number the columns
+// to the right could not give him was how the store did the day before. It is
+// coloured by that day alone — green made target, red missed it — so a store
+// that is fine for the month and had a bad day shows exactly that.
 //
 // The engine's full sentence is not thrown away — it rides on the row's title
 // attribute. Detail is one hover away instead of printed fifteen times a page.
 //
-// WORDED HERE RATHER THAN IN THE ENGINE, on purpose. 0101 stores WHICH test
-// fired as four booleans instead of as a second pre-written sentence, so
-// re-wording this line costs a cache-buster bump — not a redeploy and a
-// 47-day re-backfill to make the history read consistently.
+// WORDED HERE RATHER THAN IN THE ENGINE, on purpose: the engine stores the
+// facts (state, mtd_under, miss_run, recent_value), so re-wording this line
+// costs a cache-buster bump, not a redeploy and a re-backfill.
 //
-// THE AGE IS DAYS IN A ROW THE STORE FINISHED UNDER TARGET — see _dcwMissRun.
-// It used to be watch_flags.streak, the number of days the METRIC had been
-// flagged, and "Under target · 13 days" on OVL margin read as thirteen bad
-// days running when only the last three were (Ethan, 2026-09-21: "change the
-// days part to how many days in a row they fell under target as this is a
-// tool meant to provide me guidance daily on who to talk to"). How long a
-// flag has stood is still in the hover sentence ("Flagged 13 days running").
+// THE AGE IS miss_run FROM THE ENGINE — open days in a row under target, the
+// same count the state was decided on, so the words and the colour can never
+// disagree. It used to be counted here from the series; that count survives
+// only as a fallback for a row written before 0110. How long a flag has stood
+// is still in the hover sentence ("Flagged 13 days running").
 //
-// Shown only on a line that is flagged or drifting: on an "On target" line a
-// single missed day is exactly the noise the board exists not to raise.
-function _dcwWhy(metric, f) {
-    const val = f.value == null ? null : Number(f.value);
-    const under = val != null && f.target != null && val < Number(f.target);
+// Shown only on a flagged or watched line: on an "On target" line a single
+// missed day is exactly the noise the board exists not to raise — and the red
+// lead already shows it.
+function _dcwWhy(metric, f, lastPct) {
+    const L = metric === 'listing';
+    const lead = lastPct == null ? '—'
+        : L ? Math.round(lastPct) + '% of goal'
+        : lastPct.toFixed(1) + '%';
 
-    // THE LEAD IS ALWAYS THE METRIC'S OWN PERCENTAGE, in the same unit as the
-    // target on the column header. Ethan, 2026-09-21: "for margin it should be
-    // % based like the threshold not $ behind". The first cut led with the
-    // shortfall — "$2,562 behind", "8 customers short" — which is the number
-    // the engine RANKS on, but not the number anyone compares to "53%". The
-    // shortfall is not lost: it is in the hover sentence and the popup.
-    const lead = val == null ? '\u2014'
-        : metric === 'listing' ? Math.round(val) + '% of goal'
-        : val.toFixed(1) + '%';
-
-    // THE WHY IS PLAIN WORDS, NOT THE TEST'S NAME. The first cut said which
-    // test fired — "across the fortnight", "2 of the last 3", "not yet
-    // significant" — which is accurate and means nothing to the person reading
-    // it (Ethan: "I don't understand the fortnight stuff"). What he wants to
-    // know is one of four things: on target, slipping, under target, or past
-    // saving. The mapping from test to word:
+    // PLAIN WORDS (Ethan, 2026-09-21: "I don't understand the fortnight
+    // stuff"), and since 0110 only ever about THE MONTH — the one half of the
+    // verdict the day count beside it does not already say. "Month under ·
+    // Missed 9 days in a row" is the whole Critical rule in one line; the
+    // pill says which state that makes it, and the ↑ on the 7-day figure says
+    // when a store under for the month is coming back.
     //
-    //   month_lost        Month is out of reach  /  Can't catch up this week
-    //   acute + chronic   Under target and slipping
-    //   acute             Slipping
-    //   chronic           Under target  /  Behind for the week
-    //   drifting, under   Slightly under target  /  Slightly behind
-    //   drifting, above   Slipping, still on target
-    //   ok                (blank)
+    // Two words, opening with the frame so the column reads as one thing. The
+    // phrase and its day count share one line that must stop before the
+    // conversion figure (the layout suite measures it): "Under target for the
+    // month and slipping · Missed 12+ days in a row" ran 139px into it, and
+    // "Month under, slipping" still ran 44.
     //
     // A clear metric says NOTHING (Ethan, 2026-09-21: "if a store is good, you
-    // don't need to even say on target. Just leave it blank"). Nine lines of
-    // "On target" were the noise the eye had to read past to find the three
-    // that matter; the label and green figure already say it is fine.
-    //
-    // "Slipping" on a warning and "Slipping, still on target" on a drift are
-    // deliberately different words: the first is flagged, the second is not,
-    // and the only other thing telling them apart would be colour.
+    // don't need to even say on target. Just leave it blank").
     //
     // Every phrase starts with a capital (Ethan, same message) — they read as
     // statements, not as the tail of the label beside them.
-    let why;
-    if (f.month_lost) {
-        why = metric === 'listing' ? "Can\u2019t catch up this week" : 'Month is out of reach';
-    } else if (f.acute && f.chronic) {
-        why = 'Under target and slipping';
-    } else if (f.acute) {
-        why = 'Slipping';
-    } else if (f.chronic) {
-        why = metric === 'listing' ? 'Behind for the week' : 'Under target';
-    } else if (f.drifting) {
-        // Which drift arm fired is not stored, but it can be read off the
-        // figure: a metric ABOVE target can only be drifting because the
-        // window is declining within itself.
-        why = metric === 'listing' ? 'Slightly behind'
-            : (under ? 'Slightly under target' : 'Slipping, still on target');
-    } else if (f.state !== 'ok') {
-        // Flagged, but no test boolean set — a row written before 0101. Never
-        // let a warning fall through to the blank a clear metric gets.
-        why = metric === 'listing' ? 'Behind for the week' : 'Under target';
-    } else {
-        why = '';
-    }
-
-    return { lead: lead, why: why, drift: !!f.drifting };
+    // Listing says "Week": its frame is the week to date, not the month
+    // (Ethan, 2026-09-23 — see judgeListing in the engine).
+    const frame = L ? 'Week' : 'Month';
+    let why = '';
+    if (f.state === 'critical' || f.state === 'warn') why = frame + (L ? ' behind' : ' under');
+    else if (f.state === 'watch') why = frame + ' fine';
+    return { lead: lead, why: why };
 }
 
 const _dcwPct   = v => (v == null ? '&mdash;' : Number(v).toFixed(1) + '%');
+const _dcwPct0  = v => (v == null ? '&mdash;' : Math.round(Number(v)) + '%');
 
 // ---------------------------------------------------------------------------
-// MONTH-TO-DATE AND THE LAST 14 DAYS, SIDE BY SIDE (Ethan, 2026-09-21, option 3
-// of three): "so if they started a month off poorly and have a comeback, I can
-// view it based on that not their MTD number".
+// MONTH-TO-DATE AND THE LAST 7 DAYS, SIDE BY SIDE. The pair dates from
+// 2026-09-21 ("so if they started a month off poorly and have a comeback, I
+// can view it"); the window went from 14 days to 7 on 2026-09-23 ("adjust
+// this down to past 7 days").
 //
-// MTD is the headline because it is the number the store emails report and
-// the monthly target is set against — a board that disagreed with the email
-// on the same morning would need explaining every time. The 14-day figure
-// sits beside it because it is the number the FLAGS are judged on, and the
-// only one of the two that can show a comeback: a store that opened the month
-// at 70% and has run at 90% for a fortnight still reads 80% MTD.
+// THE COLOUR MOVED ONTO MTD in 0110. Colour on this board always means "what
+// the engine judged", and since 0110 the engine judges the MONTH (plus the run
+// of misses) — the 7-day figure decides nothing and is shown neutral, as a
+// direction. Before 0110 it was the other way round, because the window was
+// what the flags were judged on.
 //
-// So the COLOUR goes on the 14-day figure, not on MTD. Colour on this board
-// always means "what the engine judged", and the engine judges the window.
-// MTD is shown neutral — a fact, not a verdict.
-//
-// The arrow compares the two: ↑ the recent run is better than the month so
-// far (a comeback), ↓ it is worse (the month is flattering the store). Under
-// half a point either way draws no arrow; that is rounding, not direction.
-function _dcwPair(mtd, recent, sev) {
+// The arrow compares the two: ↑ the last 7 days are better than the month so
+// far (a comeback), ↓ worse (the month is flattering the store). Under half a
+// point either way draws no arrow; that is rounding, not direction.
+function _dcwPair(mtd, recent, sev, win, fmt, topTag) {
+    fmt = fmt || _dcwPct;
     let arrow = '';
     if (mtd != null && recent != null) {
         const d = recent - mtd;
-        if (d >= 0.5) arrow = '<span class="dcw-arrow dcw-up" title="The last 14 days are better than the month so far">&uarr;</span>';
-        else if (d <= -0.5) arrow = '<span class="dcw-arrow dcw-down" title="The last 14 days are worse than the month so far">&darr;</span>';
+        const vs = topTag ? 'the week' : 'the month';
+        if (d >= 0.5) arrow = '<span class="dcw-arrow dcw-up" title="The last ' + win + ' days are better than ' + vs + ' so far">&uarr;</span>';
+        else if (d <= -0.5) arrow = '<span class="dcw-arrow dcw-down" title="The last ' + win + ' days are worse than ' + vs + ' so far">&darr;</span>';
     }
     // Three fixed tracks — figure, arrow, label — on both lines, and the arrow
     // slot is rendered EMPTY when there is no arrow. That is what keeps every
@@ -49886,8 +49853,8 @@ function _dcwPair(mtd, recent, sev) {
     // a glyph to the left of "86.8%" above it (Ethan, 2026-09-21, "align
     // everything better").
     return _dcwBlock(
-        _dcwPct(mtd), '', 'MTD', 'dcw-mtd',
-        _dcwPct(recent), arrow, 'Last 14 days', _dcSev(sev));
+        fmt(mtd), '', topTag || 'MTD', 'dcw-mtd ' + _dcSev(sev),
+        fmt(recent), arrow, 'Last ' + win + ' days', 'dcw-r7');
 }
 
 // One two-line figure block, shared by all three metric columns so they are
@@ -49906,15 +49873,24 @@ function _dcwBlock(top, topSlot, topTag, topCls, bottom, bottomSlot, bottomTag, 
 }
 const _dcwMoney = v => '$' + Math.abs(Math.round(Number(v) || 0)).toLocaleString('en-US');
 
+// YYYY-MM-DD plus n days, anchored at noon UTC like every date here so no
+// offset can move the calendar day.
+function _dcwIsoAdd(iso, n) {
+    const [y, m, d] = String(iso).split('-').map(Number);
+    const t = new Date(Date.UTC(y, m - 1, d, 12));
+    t.setUTCDate(t.getUTCDate() + n);
+    return t.toISOString().slice(0, 10);
+}
+
 // How many OPEN days in a row, counting back from the judged day, a store
 // finished under target on one metric. `days` is that store's rows oldest
 // first; `judge` returns true (missed), false (made it) or null (no trading
 // to judge — Sunday, a closed day, a day with no goal set), and a null day is
 // stepped over rather than ending the run, so a Sunday never resets it.
 //
-// This is literal on purpose: one day at 4 customers in 5 counts as a miss,
-// whatever its volume. The flag itself is still decided by the engine's
-// significance tests — this only says how the last few days actually went.
+// ⚠️ A FALLBACK ONLY since 0110 — the engine's miss_run is what the board
+// shows, because it is the count the state was decided on. This covers a row
+// written before 0110 and nothing else.
 //
 // Returns null when there is no open day to judge at all, else { n, all }:
 // all is true when the run reaches the start of the
@@ -49958,54 +49934,64 @@ function _dcWatchHtml() {
     if (!d) return '<div class="dcc-empty">Syncing the district&hellip;</div>';
 
     const cfg = d.config || {};
+    const win = Math.round(Number(cfg.chronic_window) || 7);
     const byStore = {};
     (d.flags || []).forEach(f => { (byStore[f.store] = byStore[f.store] || {})[f.metric] = f; });
 
-    // One array of plain percentages per store per metric — the sparkline only
-    // ever wants the y values, and keeping the ratio maths here means both
-    // charts are fed the same shape.
-    const convSeries = {}, marginSeries = {};
-    (d.series || []).forEach(r => {
-        const n = Number(r.cust_conv_den) || 0, k = Number(r.cust_conv_num) || 0;
-        if (n > 0) (convSeries[r.store] = convSeries[r.store] || []).push(100 * k / n);
-        const v = Number(r.est_value) || 0, c = Number(r.total_spent) || 0;
-        if (v > 0) (marginSeries[r.store] = marginSeries[r.store] || []).push(100 * (v - c) / v);
-    });
-
-    // Month-to-date per store, from the rows the board payload already
-    // carries (the edge function has sent them since 0097; nothing read them).
-    // Dollar-weighted for margin — sum value and cost, then divide — never an
-    // average of daily percentages, same rule as everywhere else here.
-    const mtdBy = {};
-    (d.mtd || []).forEach(r => {
-        const a = mtdBy[r.store] = mtdBy[r.store] || { k: 0, n: 0, v: 0, c: 0 };
-        a.k += Number(r.cust_conv_num) || 0;  a.n += Number(r.cust_conv_den) || 0;
-        a.v += Number(r.est_value) || 0;      a.c += Number(r.total_spent) || 0;
-    });
-    const mtdConv   = s => { const a = mtdBy[s]; return a && a.n > 0 ? 100 * a.k / a.n : null; };
-    const mtdMargin = s => { const a = mtdBy[s]; return a && a.v > 0 ? 100 * (a.v - a.c) / a.v : null; };
-
-    // The same series again, as whole rows per store oldest first, for the
-    // days-in-a-row count; and the day's summed listing goal beside each.
+    // Each store's rows oldest first, through the judged day — for yesterday's
+    // figure, the sparklines and the fallback run count — and the day's summed
+    // listing goal beside each.
     const daysBy = {};
     (d.series || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)))
         .forEach(r => { if (!d.day || r.date <= d.day) (daysBy[r.store] = daysBy[r.store] || []).push(r); });
     const goalOn = {};
     (d.goals || []).forEach(g => { goalOn[g.store + '|' + g.date] = Number(g.goal) || 0; });
-    const missRun = (s, k, f) => {
-        const t = Number(f.target);
-        if (k === 'conversion') return _dcwMissRun(daysBy[s], r => {
+
+    // One metric's figure for one day, as a percentage, or null when there was
+    // nothing to judge. The engine's own definition of a day (see "The rule"):
+    // margin dollar-weighted, listing only on days that had a goal.
+    const dayPct = (s, k, r) => {
+        if (k === 'conversion') {
             const n = Number(r.cust_conv_den) || 0;
-            return n > 0 ? 100 * (Number(r.cust_conv_num) || 0) / n < t : null;
-        });
-        if (k === 'margin') return _dcwMissRun(daysBy[s], r => {
+            return n > 0 ? 100 * (Number(r.cust_conv_num) || 0) / n : null;
+        }
+        if (k === 'margin') {
             const v = Number(r.est_value) || 0;
-            return v > 0 ? 100 * (v - (Number(r.total_spent) || 0)) / v < t : null;
-        });
-        return _dcwMissRun(daysBy[s], r => {
-            const g = goalOn[s + '|' + r.date] || 0;
-            return g > 0 ? (Number(r.devices_processed) || 0) < g : null;
-        });
+            return v > 0 ? 100 * (v - (Number(r.total_spent) || 0)) / v : null;
+        }
+        const g = goalOn[s + '|' + r.date] || 0;
+        return g > 0 ? 100 * (Number(r.devices_processed) || 0) / g : null;
+    };
+    // The last OPEN day, not the judged day: on a Monday morning the judged
+    // day is Sunday, when every store is shut.
+    const lastDay = (s, k) => {
+        const rows = daysBy[s] || [];
+        for (let i = rows.length - 1; i >= 0; i--) {
+            const p = dayPct(s, k, rows[i]);
+            if (p != null) return { pct: p, row: rows[i] };
+        }
+        return null;
+    };
+    const lastTip = (s, k, last) => {
+        if (!last) return 'Nothing to judge in the last three weeks';
+        const r = last.row, day = _dcwDay(r.date);
+        if (k === 'conversion') return day + ': ' + (Number(r.cust_conv_num) || 0) + ' of '
+            + (Number(r.cust_conv_den) || 0) + ' customers converted';
+        if (k === 'margin') return day + ': ' + _dcwMoney((Number(r.est_value) || 0) - (Number(r.total_spent) || 0))
+            + ' of gross profit on ' + _dcwMoney(r.est_value) + ' bought';
+        return day + ': ' + (Number(r.devices_processed) || 0) + ' listed against a goal of '
+            + (goalOn[s + '|' + r.date] || 0);
+    };
+
+    // The sparklines draw the same window the small figure is measured over.
+    const from = d.day ? _dcwIsoAdd(d.day, -(win - 1)) : '';
+    const sparkVals = (s, k) => (daysBy[s] || []).filter(r => r.date >= from)
+        .map(r => dayPct(s, k, r)).filter(v => v != null);
+
+    const missRun = (s, k, f) => {
+        if (f.miss_run != null) return { n: Number(f.miss_run), all: false };
+        const t = Number(f.target);
+        return _dcwMissRun(daysBy[s], r => { const p = dayPct(s, k, r); return p == null ? null : p < t; });
     };
 
     const stores = Object.keys(byStore);
@@ -50015,15 +50001,19 @@ function _dcWatchHtml() {
 
     // Worst metric decides the row, and the rows sort by it. A DM reads top-down
     // and should never have to hunt the page for the red one.
-    const rank  = { critical: 0, warn: 1, ok: 2 };
+    const rank  = { critical: 0, warn: 1, watch: 2, ok: 3 };
     const METRICS = ['conversion', 'margin', 'listing'];
     const worst = s => METRICS.reduce((a, k) => {
         const f = byStore[s][k];
-        return f && rank[f.state] < rank[a] ? f.state : a;
+        return f && rank[f.state] != null && rank[f.state] < rank[a] ? f.state : a;
     }, 'ok');
     stores.sort((a, b) => rank[worst(a)] - rank[worst(b)] || a.localeCompare(b));
 
-    const flagged = stores.filter(s => worst(s) !== 'ok').length;
+    // Watch is counted apart from the stores needing attention: it is a store
+    // that is fine for the month, and folding it into "need attention" would
+    // make the headline number cry wolf.
+    const flagged  = stores.filter(s => worst(s) === 'critical' || worst(s) === 'warn').length;
+    const watching = stores.filter(s => worst(s) === 'watch').length;
 
     // "through Sat 20 Sep" — the judged day, not today. They differ by one and
     // labelling it today would be a lie on every morning of the year.
@@ -50040,85 +50030,63 @@ function _dcWatchHtml() {
     const cap = '<div class="dcw-cap">'
         + '<span class="dcw-cap-l">' + (flagged
             ? '<b>' + flagged + '</b> of ' + stores.length + ' stores need attention'
-            : 'All ' + stores.length + ' stores clear') + '</span>'
+            : 'All ' + stores.length + ' stores ' + (watching ? 'on target for the month' : 'clear'))
+        + (watching ? ' &middot; <b>' + watching + '</b> to watch' : '') + '</span>'
         + '<span class="dcw-cap-r">Through ' + escapeHtml(asOf) + '</span>'
         + '</div>';
 
-    const win = Math.round(Number(cfg.chronic_window) || 14);
+    // "Yesterday" is the last open day. On a Monday the judged day is Sunday
+    // and every store was shut, so the figures are Saturday's — say so.
+    let yLabel = 'yesterday';
+    try {
+        const [yy, mm, dd] = String(d.day).split('-').map(Number);
+        if (new Date(Date.UTC(yy, mm - 1, dd, 12)).getUTCDay() === 0) yLabel = 'Saturday';
+    } catch (_) { /* keep "yesterday" */ }
+
+    const colTip = 'Big number: month to date, coloured by the status — the month is half of '
+        + 'what the status is judged on. Small number: the last ' + win + ' days, for direction '
+        + 'only; the arrow says whether they are better or worse than the month so far.';
 
     // No colgroup: `.dc-tbl td:first-child` already pins the store column and
     // would win over one anyway. The remaining widths live on .dc-tbl-watch in
     // styles.css, beside the rest of the district table rules.
     let html = cap + '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl dc-tbl-watch">'
-        + '<thead><tr><th>Store</th>'
+        + '<thead><tr><th title="The figure beside each metric is the store&rsquo;s last day open, '
+        + 'green if it made target that day and red if it missed. Listing shows the week so far instead.">Store &middot; ' + yLabel + '</th>'
         + '<th title="' + escapeHtml(_dcwStatusRule(cfg)) + '">Status</th>'
-        + '<th title="Big number: month to date, the same figure the store emails report. '
-        + 'Small coloured number: the last ' + win + ' days, which is what the flags are '
-        + 'judged on — an arrow shows whether the recent run is better or worse than the '
-        + 'month so far. A day only counts as under target when the shortfall is bigger '
-        + 'than chance explains at that day&rsquo;s volume.">Customer conversion &middot; target '
+        + '<th title="' + escapeHtml(colTip) + '">Customer conversion &middot; target '
         + Number(cfg.conv_target || 85).toFixed(1) + '%</th>'
-        + '<th title="Big number: month to date. Small coloured number: the last ' + win
-        + ' days, which is what the flags are judged on. Both dollar-weighted — never an average of '
-        + 'daily percentages. Ranked on gross profit behind target, because points '
-        + 'ignore how much a store buys. Judged on the same three tests as conversion '
-        + 'since 0100: recent days, the pooled window, and whether the month can still '
-        + 'be reached.">Buy margin &middot; target '
+        + '<th title="' + escapeHtml(colTip + ' Both dollar-weighted — never an average of daily '
+        + 'percentages.') + '">Buy margin &middot; target '
         + Number(cfg.margin_target || 53).toFixed(1) + '%</th>'
-        + '<th title="Devices processed against the total the store was STAFFED to '
-        + 'list — the roster&rsquo;s goals summed — for the working week, Monday to '
-        + 'Saturday. Only days that had a goal set count, on both sides. Red is not a '
-        + 'bigger miss but an unrecoverable one: more than the days left in the week '
-        + 'can absorb.">Listing this week &middot; target 100%</th>'
+        + '<th title="' + escapeHtml('Big number: this week so far, Monday to Saturday, coloured by the '
+        + 'status — listing is judged on the week, not the month. Small number: the last ' + win
+        + ' days, for direction only.' + ' Devices processed against the total the store was '
+        + 'STAFFED to list — the roster’s goals summed — counting only days that had a goal '
+        + 'set, on both sides.') + '">Listing &middot; target 100% of goal</th>'
         + '</tr></thead>';
 
     stores.forEach(s => {
         const m   = byStore[s];
         const sev = _DCW_SEV[worst(s)];
-        const cv  = m.conversion;
-        const mg  = m.margin;
-        const ls  = m.listing;
 
-        // Conversion and margin: the figure and the 12-day trend against target.
-        // The shortfall used to sit under each as a sub-line; it was cut on
-        // 2026-09-21 because the sentence under the row already says it, in
-        // words, with the streak attached. The engine still ranks on it.
-        let cvCell = '<span class="dcw-muted">&mdash;</span>';
-        if (cv) {
-            cvCell = '<div class="dcw-metric">'
-                + _dcwPair(mtdConv(s), cv.value == null ? null : Number(cv.value), _DCW_SEV[cv.state])
-                + _dcwSpark(convSeries[s], Number(cfg.conv_target) || 85, _DCW_SEV[cv.state], 50, 100)
+        // Each metric column: MTD over the last `win` days, and for conversion
+        // and margin the same window drawn against target. Listing has no
+        // sparkline — a day's listing runs from 40% to 400% of goal, and no
+        // fixed scale shows that without flattening the days that matter.
+        const cell = (k, fmt, spark, topTag) => {
+            const f = m[k];
+            if (!f) return '<span class="dcw-muted">&mdash;</span>';
+            return '<div class="dcw-metric">'
+                + _dcwPair(f.value == null ? null : Number(f.value),
+                           f.recent_value == null ? null : Number(f.recent_value),
+                           _DCW_SEV[f.state], win, fmt, topTag)
+                + (spark ? _dcwSpark(sparkVals(s, k), spark[0], _DCW_SEV[f.state], spark[1], spark[2]) : '')
                 + '</div>';
-        }
-
-        let mgCell = '<span class="dcw-muted">&mdash;</span>';
-        if (mg) {
-            mgCell = '<div class="dcw-metric">'
-                + _dcwPair(mtdMargin(s), mg.value == null ? null : Number(mg.value), _DCW_SEV[mg.state])
-                + _dcwSpark(marginSeries[s], Number(cfg.margin_target) || 53, _DCW_SEV[mg.state], 30, 80)
-                + '</div>';
-        }
-
-        // Listing cell: the same two-line block as the other two columns —
-        // percentage of the staffed goal on top, the miss in devices under it.
-        // It used to be one line with the words trailing the figure, so the
-        // words started wherever the figure happened to end ("55%" against
-        // "151%") and no two rows lined up.
-        //
-        // The COLOUR is on the top figure here, not the bottom one as in the
-        // other two columns: colour always marks what the engine judged, and
-        // for listing that is this week's percentage itself.
-        let lsCell = '<span class="dcw-muted">&mdash;</span>';
-        if (ls) {
-            const short = Math.round(Number(ls.shortfall) || 0);
-            lsCell = '<div class="dcw-metric">' + _dcwBlock(
-                ls.value == null ? '&mdash;' : Math.round(ls.value) + '%', '', 'Of goal',
-                _dcSev(_DCW_SEV[ls.state]),
-                ls.value == null ? '&mdash;'
-                    : (short > 0 ? short + ' short' : (short < 0 ? (-short) + ' over' : 'on goal')),
-                '', ls.value == null ? 'No goals set' : 'This week', 'dcw-dev')
-                + '</div>';
-        }
+        };
+        const cvCell = cell('conversion', _dcwPct, [Number(cfg.conv_target) || 85, 50, 100]);
+        const mgCell = cell('margin', _dcwPct, [Number(cfg.margin_target) || 53, 30, 80]);
+        const lsCell = cell('listing', _dcwPct0, null, 'This week');
 
         // One line per metric, and each one is a REAL TABLE ROW, not a div
         // inside a colspan. Ethan, 2026-09-21: "center the wordings with the
@@ -50136,13 +50104,31 @@ function _dcWatchHtml() {
         const open = ' onclick="_dcwOpen(\'' + s + '\')"';
         const lines = METRICS.filter(k => m[k]).map(k => {
             const f = m[k];
-            const w = _dcwWhy(k, f);
-            const run = (f.state !== 'ok' || w.drift) ? missRun(s, k, f) : null;
-            return '<tr class="dcw-note ' + _dcSev(_DCW_SEV[f.state])
-                + (w.drift ? ' dcw-drift' : '') + '"' + open
-                + ' title="' + escapeHtml(f.reason || ('Open ' + s + '\u2019s last 7 days')) + '">'
+            // LISTING'S LEAD IS THE WEEK SO FAR, not yesterday (Ethan,
+            // 2026-09-23: "the left column should be daily tracked against the
+            // week"). One day's listing swings from 40% to 400% of goal on who
+            // was rostered; the week to date is the number a manager can act
+            // on, and it moves every morning. It is the engine's own figure
+            // (listing's value IS week to date), so the lead and the status can
+            // never disagree. The day-by-day misses stay on the age.
+            const weekly = k === 'listing';
+            const last = weekly
+                ? (f.value == null ? null : { pct: Number(f.value), week: true })
+                : lastDay(s, k);
+            const w = _dcwWhy(k, f, last ? last.pct : null);
+            const run = f.state !== 'ok' ? missRun(s, k, f) : null;
+            // Coloured by that day (or week) alone. Compared at one decimal,
+            // as the engine compares, so a figure printed "85.0%" never shows red.
+            const hit = last && Math.round(last.pct * 10) / 10 >= Number(f.target);
+            const leadTip = weekly
+                ? (last ? 'This week so far: ' + (Number(f.sample_k) || 0) + ' listed against '
+                    + (Number(f.sample_n) || 0) + ' staffed for' : 'No listing goals set this week yet')
+                : lastTip(s, k, last);
+            return '<tr class="dcw-note ' + _dcSev(_DCW_SEV[f.state]) + '"' + open
+                + ' title="' + escapeHtml(f.reason || ('Open ' + s + '’s last 7 days')) + '">'
                 + '<td class="dcw-lc"><b>' + LABEL[k] + '</b>'
-                + '<span class="dcw-lead">' + escapeHtml(w.lead) + '</span></td>'
+                + '<span class="dcw-lead' + (last ? (hit ? ' dcw-y-hit' : ' dcw-y-miss') : '') + '"'
+                + ' title="' + escapeHtml(leadTip) + '">' + escapeHtml(w.lead) + '</span></td>'
                 // Two columns wide (Status + Conversion), left-aligned: the
                 // longest phrase with its day count runs past the Status
                 // column, and wrapping it to a second line broke the one-line-
@@ -50461,7 +50447,7 @@ function _dcwListingTab(rows, cfg) {
             ? '<b>' + rows.reduce((a, r) => a + r.processed, 0) + '</b> devices processed &middot; no goals set to judge against'
             : '<b>' + P + '</b> listed against <b>' + G + '</b> staffed for'
               + (short > 0 ? ' &middot; <b>' + short + '</b> devices short' : ' &middot; goal cleared'),
-        'Counted against the roster\u2019s own goals over the working week, and only on '
+        'Counted against each day\u2019s staffed goal, and only on '
         + 'days that had one set. '
         + 'The processed figure comes from the Day End Report, which runs 15–30% below the '
         + 'manager-filed weekly KPI the Store Efficiency board scores — so this reads harsher '

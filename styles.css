@@ -4241,6 +4241,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .dc-tbl td.dc-good, .dc-good { color: #178048; font-weight: 800; }
 .dc-tbl td.dc-warn, .dc-warn { color: #b3760a; font-weight: 800; }
 .dc-tbl td.dc-bad,  .dc-bad  { color: #dc2626; font-weight: 850; }
+.dc-tbl td.dc-watch, .dc-watch { color: #1d4ed8; font-weight: 800; }
 .dc-tbl td.dc-muted, .dc-muted { color: #94a3b8; font-weight: 650; }
 /* The chips sit inside a td, so they lose to it for the same reason. */
 .dc-tbl td .dc-cat, .dc-tbl td .dc-audit, .dc-tbl td .dc-muted { font-weight: 750; }
@@ -4350,7 +4351,16 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     letter-spacing: .06em; text-transform: uppercase; color: #a8b3c0; }
 .dcw-dev    { color: #647082; }
 .dcw-mtd    { color: var(--slate-charcoal); }
+/* MTD carries the verdict colour since 0110 (the month is what is judged).
+   Spelled out because .dcw-mtd above is later than the bare .dc-* rules and
+   would otherwise win. */
+.dcw-mtd.dc-good  { color: #178048; }
+.dcw-mtd.dc-watch { color: #1d4ed8; }
+.dcw-mtd.dc-warn  { color: #b3760a; }
+.dcw-mtd.dc-bad   { color: #dc2626; }
 .dcw-recent { font-size: 12px; font-weight: 800; }
+/* The 7-day figure decides nothing since 0110 — neutral, like MTD used to be. */
+.dcw-r7     { color: #647082; }
 .dcw-arrow  { font-weight: 900; }
 .dcw-up     { color: #178048; }
 .dcw-down   { color: #dc2626; }
@@ -4410,11 +4420,17 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .dcw-note.dc-good .dcw-lead { color: #178048; }
 .dcw-note.dc-warn .dcw-lead { color: #b3760a; }
 .dcw-note.dc-bad  .dcw-lead { color: #dc2626; }
-/* DRIFTING IS NOT A FOURTH STATE. The row stays green and the store stays off
-   the triage list — this only stops "on target" and "on target, but sliding"
-   looking identical at a glance, which was the whole ask. Amber on the WHY
-   only, never on the label or the lead, so it cannot be mistaken for a flag. */
-.dcw-note.dcw-drift .dcw-why { color: #b3760a; font-weight: 700; }
+/* SINCE 0110 THE LEAD IS YESTERDAY'S FIGURE, and it is coloured by that day
+   alone — made target or missed it — not by the metric's state. A store fine
+   for the month that had a bad day must read green on the label and red on
+   the number; that is the whole point of putting yesterday there. Scoped under
+   .dc-tbl so it outranks the state colours above. */
+.dc-tbl .dcw-note .dcw-lead.dcw-y-hit  { color: #178048; }
+.dc-tbl .dcw-note .dcw-lead.dcw-y-miss { color: #dc2626; }
+/* WATCH (0110): fine for the month, missing day after day. Blue, not a paler
+   amber, so it cannot be read as a softer Warning. The old "drifting" amber on
+   the why phrase went with the state that replaced it. */
+.dcw-note.dc-watch b, .dcw-note.dc-watch .dcw-why { color: #1d4ed8; }
 
 /* NO PHONE BREAKPOINT HERE, deliberately, and it is not an oversight: the
    Matrix tab carries data-mobile and is not rendered on a phone at all (see
@@ -4446,7 +4462,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .dcw-note.dc-good b { color: #178048; }
 .dcw-note.dc-warn b { color: #b3760a; }
 .dcw-note.dc-bad  b { color: #dc2626; }
-.dcw-note.dc-good, .dcw-note.dc-warn, .dcw-note.dc-bad { color: #4a5565; font-weight: 650; }
+.dcw-note.dc-good, .dcw-note.dc-watch, .dcw-note.dc-warn, .dcw-note.dc-bad { color: #4a5565; font-weight: 650; }
 
 .dcw-foot {
     margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--dp-line-2);
@@ -4545,6 +4561,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .dc-cat.dc-bad  { background: #fbeae7; color: #7f2418; font-weight: 800; }
 .dc-cat.dc-warn { background: #fdf3e2; color: #8a5a06; font-weight: 800; }
 .dc-cat.dc-good { background: #e6f4ec; color: #14532d; font-weight: 750; }
+.dc-cat.dc-watch { background: #e8effd; color: #1e3a8a; font-weight: 800; }
 
 /* The audit score opens its own breakdown modal, so it is a button inside a
    clickable row and has to read as the more specific target of the two. */
