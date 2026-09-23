@@ -548,6 +548,84 @@ t('a delivered refunded INR says so, and can be resolved without a claim', funct
     if (c.indexOf('eBay covers a delivered item-not-received') < 0) return 'does not say eBay covers it';
     return /Delivered — Resolve it/.test(c) || 'no way to resolve it without a claim';
 });
+// Ethan, 2026-09-23: a claim being open must not silence the one piece of news
+// that changes who owes us. The parcel arrived, so the carrier owes nothing and
+// eBay owes everything — and only a phone call gets it.
+t('an INR delivered after its refund comes back, even with the claim open', function () {
+    var f = fixture();
+    f.cases = [f.cases[3]];                       // the INR whose claim is open
+    f.cases[0].tracking_status = 'DELIVERED';
+    f.cases[0].tracking_carrier = 'UPS';
+    f.cases[0].outcome = 'refunded';
+    f.cases[0].state = 'due';                     // what stateOf now returns for it
+    f.cases[0].state_note = 'delivered_after_refund';
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var c = html('hold-mgr-cases');
+    if (c.indexOf('Delivered — call eBay') < 0) return 'the chip does not name the call to make';
+    if (c.indexOf('It turned up after we refunded the buyer') < 0) return 'no explanation of what changed';
+    if (c.indexOf('eBay refunds a delivered item-not-received itself') < 0) return 'does not say who owes it now';
+    return /Delivered — Resolve it/.test(c) || 'no way to record what eBay did';
+});
+// ...and it is in the view a manager actually opens, not the quiet one.
+t('a delivered-after-refund INR sits under Needs Attention, not Claim Open', function () {
+    var f = fixture();
+    f.cases = [f.cases[3]];
+    f.cases[0].tracking_status = 'DELIVERED';
+    f.cases[0].outcome = 'refunded';
+    f.cases[0].state = 'due';
+    f.cases[0].state_note = 'delivered_after_refund';
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'waiting' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    if (html('hold-mgr-cases').indexOf('Delivered — call eBay') >= 0) return 'it is still hiding in the quiet view';
+    _holdView.mgr = { store: '', show: 'due' };
+    renderHoldItems('mgr');
+    return html('hold-mgr-cases').indexOf('Delivered — call eBay') >= 0 || 'it never reaches Needs Attention';
+});
+// Ethan, 2026-09-23: "add a dropdown on the cases and disputes one to filter for
+// chargebacks, cases, INR's, and payment disputes".
+t('Cases & Disputes offers a filter for each of the four kinds', function () {
+    load('mgr');
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    var want = ['All Types', 'Item Not Received', 'eBay Cases', 'eBay Payment Disputes', 'Shopify Chargebacks'];
+    for (var i = 0; i < want.length; i++) {
+        if (h.indexOf('>' + want[i] + '</option>') < 0) return 'no option for ' + want[i];
+    }
+    var at = want.map(function (w) { return h.indexOf('>' + w + '</option>'); });
+    for (var j = 1; j < at.length; j++) if (at[j] < at[j - 1]) return 'the options are out of order at ' + want[j];
+    return true;
+});
+t('picking a kind leaves the other three out entirely', function () {
+    load('mgr');
+    _holdView.mgr.kind = 'chargeback';
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    if (!hasHeading(h, 'Shopify chargebacks')) return 'the kind picked is not shown';
+    if (hasHeading(h, 'eBay payment disputes')) return 'eBay disputes survived the filter';
+    if (hasHeading(h, 'eBay cases')) return 'eBay cases survived the filter';
+    if (hasHeading(h, 'Item not received')) return 'INRs survived the filter';
+    return true;
+});
+// The tail exists to say "this group is here but handled". A group the manager
+// has filtered AWAY is not handled — it is hidden on purpose — so naming it
+// there would have the page arguing with the control that hid it.
+t('a filtered-out kind is not named in the "also on this tab" note', function () {
+    load('mgr', 'waiting');
+    _holdView.mgr.kind = 'chargeback';
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    var i = h.indexOf('Also on this tab');
+    if (i < 0) return true;                       // nothing to say at all is fine
+    var tail = h.slice(i, i + 600);
+    return tail.indexOf('item-not-received') < 0 || 'the tail mentions a kind the filter removed';
+});
+t('the filter only appears where there is more than one kind to filter', function () {
+    load('mgr');
+    renderHoldItems('mgr');
+    if (html('hold-mgr-returns').indexOf('All Types') >= 0) return 'the returns tab has a dead filter';
+    return html('hold-mgr-mismatch').indexOf('All Types') < 0 || 'the mismatch tab has a dead filter';
+});
 t('an open return is listed but not worked, newest stage first', function () {
     var f = fixture();
     var mk = function (id, st, days) {
@@ -844,6 +922,9 @@ function cardAround(h, needle) {
 // Is there a real SECTION HEADING for this label — not merely the words, which
 // now also appear in the "Also on this tab" note at the bottom. Matching on the
 // heading's own markup is the only way to tell the two apart.
+function headingAt(h, label) {
+    return h.search(new RegExp('letter-spacing:\\.7px;[^>]*>' + label + '</span>'));
+}
 function hasHeading(h, label) {
     return new RegExp('letter-spacing:\\.7px;[^>]*>' + label + '</span>').test(h);
 }
@@ -853,7 +934,7 @@ t('disputes show on the Cases & Disputes tab, above the cases', function () {
     var h = html('hold-mgr-cases');
     if (h.indexOf('Shopify chargebacks') < 0) return 'no Shopify chargebacks heading';
     if (h.indexOf('eBay payment disputes') < 0) return 'no eBay payment disputes heading';
-    var d = h.indexOf('#MO02-6573'), c = h.indexOf('eBay cases');
+    var d = h.indexOf('#MO02-6573'), c = headingAt(h, 'eBay cases');
     if (d < 0) return 'the unanswered chargeback is not listed';
     return (c < 0 || d < c) || 'disputes are below the cases';
 });
@@ -955,7 +1036,7 @@ t('no disputes at all means no headings, not an empty section', function () {
     _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
     renderHoldItems('mgr');
     var h = html('hold-mgr-cases');
-    return (h.indexOf('payment disputes') < 0 && h.indexOf('Shopify chargebacks') < 0)
+    return (!hasHeading(h, 'eBay payment disputes') && !hasHeading(h, 'Shopify chargebacks'))
         || 'an empty disputes heading is drawn anyway';
 });
 
@@ -1010,7 +1091,7 @@ t('a group with nothing in this view draws no heading', function () {
 t('a section heading is loud enough to see: dark, ruled, and counted', function () {
     load('mgr');
     var h = html('hold-mgr-cases');
-    var i = h.indexOf('SHOPIFY CHARGEBACKS') >= 0 ? h.indexOf('SHOPIFY CHARGEBACKS') : h.indexOf('Shopify chargebacks');
+    var i = headingAt(h, 'Shopify chargebacks');
     if (i < 0) return 'no Shopify chargebacks heading';
     var head = h.slice(Math.max(0, i - 700), i + 300);
     if (/color:#94a3b8/.test(head) && !/slate-charcoal/.test(head)) return 'the heading is still the faint grey';
@@ -1021,7 +1102,7 @@ t('a section heading is loud enough to see: dark, ruled, and counted', function 
 t('a section with something needing a reply gets the red bar and a count', function () {
     load('mgr');
     var h = html('hold-mgr-cases');
-    var i = h.indexOf('Shopify chargebacks');
+    var i = headingAt(h, 'Shopify chargebacks');
     var head = h.slice(Math.max(0, i - 700), i + 400);
     // two of the three fixture chargebacks are unanswered and in this view
     if (head.indexOf('var(--red-alert)') < 0) return 'the bar is not red for a group that needs a reply';
@@ -1058,7 +1139,7 @@ t('the note is singular for one, plural for many', function () {
 t('the heading count matches the list under it', function () {
     load('mgr');
     var h = html('hold-mgr-cases');
-    var i = h.indexOf('Shopify chargebacks');
+    var i = headingAt(h, 'Shopify chargebacks');
     var head = h.slice(i, i + 400);
     var m = head.match(/>(\d+)<\/span>/);
     if (!m) return 'no count found on the heading';

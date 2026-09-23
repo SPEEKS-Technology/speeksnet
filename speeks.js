@@ -33884,7 +33884,7 @@ const HOLD_MIN_REASON = 10;
 
 let _holdData = { mgr: null, ov: null };        // last list response per view
 let _holdIndex = { mgr: [], ov: [] };           // items by render position, for onclick
-let _holdView = { mgr: { store: '', show: 'due' }, ov: { store: '', show: 'due' } };
+let _holdView = { mgr: { store: '', show: 'due', kind: '' }, ov: { store: '', show: 'due', kind: '' } };
 let _holdOpenForm = { mgr: null, ov: null };    // { id, mode: 'status' | 'claim' }
 let _holdLoading = { mgr: false, ov: false };
 
@@ -33943,6 +33943,9 @@ function _holdStateLabel(type, it, s) {
         return `${site} needs a reply from us`;
     }
     if (type === 'dispute' && it.state === 'answered') return 'Answered — waiting on them';
+    // The claim is open, so "Check-in due" would point at the wrong person: the
+    // carrier does not owe this one, eBay does.
+    if (it.state_note === 'delivered_after_refund') return 'Delivered — call eBay';
     return s.label;
 }
 
@@ -33975,6 +33978,19 @@ const _HOLD_VIEWS = {
 };
 // Which of that view's states are done with, and fold away.
 const _HOLD_DONE = ['resolved', 'settled'];
+// The four types the Cases & Disputes tab holds. Title Case and this order are
+// Ethan's (2026-09-23), and the order is deliberately NOT the section order
+// below: the sections run most-urgent-first, which is how you work a list, while
+// the dropdown runs commonest-first, which is how you look one up. "eBay" keeps
+// its small e in Title Case because that is the company's own spelling.
+// Keys match _holdCaseSections' groups.
+const _HOLD_KINDS = [
+    { key: '',           label: 'All Types' },
+    { key: 'inr',        label: 'Item Not Received' },
+    { key: 'case',       label: 'eBay Cases' },
+    { key: 'dispute',    label: 'eBay Payment Disputes' },
+    { key: 'chargeback', label: 'Shopify Chargebacks' },
+];
 
 const _holdIsInr = it => it.kind === 'inquiry' || (it.kind === 'case' && it.case_type === 'ITEM_NOT_RECEIVED');
 // A plain return only. An escalated one arrives folded into the case eBay opened
@@ -34150,15 +34166,20 @@ function _holdCaseSections(ctx, d, all) {
     const disputes = d.disputes || [];
     const notReturns = all.filter(c => !_holdIsReturn(c));
     const groups = [
-        { label: 'eBay payment disputes', one: 'eBay payment dispute', many: 'eBay payment disputes', type: 'dispute',
+        { key: 'dispute', label: 'eBay payment disputes', one: 'eBay payment dispute', many: 'eBay payment disputes', type: 'dispute',
           items: disputes.filter(x => x.source === 'ebay') },
-        { label: 'Shopify chargebacks', one: 'Shopify chargeback', many: 'Shopify chargebacks', type: 'dispute',
+        { key: 'chargeback', label: 'Shopify chargebacks', one: 'Shopify chargeback', many: 'Shopify chargebacks', type: 'dispute',
           items: disputes.filter(x => x.source !== 'ebay') },
-        { label: 'eBay cases', one: 'eBay case', many: 'eBay cases', type: 'ebay_case',
+        { key: 'case', label: 'eBay cases', one: 'eBay case', many: 'eBay cases', type: 'ebay_case',
           items: notReturns.filter(c => !_holdIsInr(c)) },
-        { label: 'Item not received', one: 'item-not-received request', many: 'item-not-received requests', type: 'ebay_case',
+        { key: 'inr', label: 'Item not received', one: 'item-not-received request', many: 'item-not-received requests', type: 'ebay_case',
           items: notReturns.filter(_holdIsInr) },
-    ];
+    ]
+    // Ethan, 2026-09-23: a dropdown to look at one kind at a time. It filters
+    // BEFORE the loop below, so a kind that is filtered out is gone entirely —
+    // it must not turn up in the "also on this tab" tail, which would have the
+    // page telling you about the very thing you just asked it to put away.
+    .filter(g => !_holdView[ctx].kind || g.key === _holdView[ctx].kind);
     const hidden = [];
     let shown = 0;
     const blocks = groups.map(function (g) {
@@ -34234,7 +34255,14 @@ function _holdToolbar(ctx, type, opts) {
     const showSel = (opts && opts.returns) ? '' : `<select onchange="_holdView.${ctx}.show=this.value; renderHoldItems('${ctx}');" style="${sel}">`
         + Object.entries(_HOLD_VIEWS).map(([k, x]) => `<option value="${k}" ${k === v.show ? 'selected' : ''}>${x.label}</option>`).join('')
         + `</select>`;
-    return `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">${showSel}${storeSel}
+    // Only the Cases & Disputes tab holds four kinds of thing; returns and
+    // mismatches are one kind each, so a filter there would be a dead control.
+    const kindSel = (type === 'ebay_case' && !(opts && opts.returns))
+        ? `<select onchange="_holdView.${ctx}.kind=this.value; renderHoldItems('${ctx}');" style="${sel}">`
+          + _HOLD_KINDS.map(k => `<option value="${k.key}" ${k.key === (v.kind || '') ? 'selected' : ''}>${k.label}</option>`).join('')
+          + `</select>`
+        : '';
+    return `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">${showSel}${kindSel}${storeSel}
         <button onclick="loadHoldItems('${ctx}')" class="btn-secondary" style="font-size:12px; padding:7px 12px; margin-left:auto;">Refresh</button></div>`;
 }
 
@@ -34508,7 +34536,9 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             const tn = it.tracking_number ? `${escapeHtml(it.tracking_carrier || '')} ${escapeHtml(it.tracking_number)}${siteCopyBtn(it.tracking_number, 'tracking number')}` : '';
             facts.push(`<span style="white-space:nowrap; ${del ? `color:${_HOLD_C.green.fg}; font-weight:800;` : 'color:#475569;'}">${del ? 'Delivered' : escapeHtml(_holdPretty(it.tracking_status))}${tn ? ' · ' + tn : ''}</span>`);
         }
-        if (st === 'needs_claim' && _holdDelivered(it)) {
+        if (it.state_note === 'delivered_after_refund') {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>It turned up after we refunded the buyer</b> — and the claim is still open. The carrier does not owe this one; eBay refunds a delivered item-not-received itself. Call eBay for it, close the claim out, then mark this resolved and say what eBay did.</div>`;
+        } else if (st === 'needs_claim' && _holdDelivered(it)) {
             extra = `<div style="font-size:12px; background:${_HOLD_C.green.bg}; border:1px solid ${_HOLD_C.green.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.green.fg};"><b>The carrier says this was delivered</b> — Even though the buyer was refunded. eBay covers a delivered item-not-received, so ask eBay for it rather than filing a claim, then mark this resolved and say what eBay did.</div>`;
         } else if (st === 'needs_claim') {
             extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The buyer was refunded</b>${it.outcome_detail ? ` (${escapeHtml(it.outcome_detail)})` : ''}. Open a claim with the carrier or Shopify to get the money back — or link the claim if it's already filed.</div>`;
@@ -34586,13 +34616,18 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     if (readOnly) { /* nothing to press: the daily read moves a return along */ }
     else if (st === 'resolved') {
         acts.push(`<button onclick="_holdReopen('${ctx}', ${idx})" style="${sBtn} background:#f8fafc; border:1.5px solid #cbd5e1; color:#475569;">Reopen</button>`);
-    } else if (st === 'needs_claim') {
+    } else if (st === 'needs_claim' || it.state_note === 'delivered_after_refund') {
         // Delivered after all: eBay pays that one back, so the first move is a
-        // note saying what eBay did, not a carrier claim (0106).
+        // note saying what eBay did, not a carrier claim (0106). Once a claim
+        // has already been opened the card arrives here as 'due' instead — same
+        // parcel, same move, so it gets the same button rather than a generic
+        // "Update status" that says nothing about who to ring.
         if (_holdDelivered(it)) {
             acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.green.bg}; border:1.5px solid ${_HOLD_C.green.line}; color:${_HOLD_C.green.fg};">${form === 'status' ? 'Close' : 'Delivered — Resolve it'}</button>`);
         }
-        acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">${form === 'claim' ? 'Close' : 'Open or link a claim'}</button>`);
+        if (st === 'needs_claim') {
+            acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'claim')" style="${sBtn} background:${_HOLD_C.red.bg}; border:1.5px solid ${_HOLD_C.red.line}; color:${_HOLD_C.red.fg};">${form === 'claim' ? 'Close' : 'Open or link a claim'}</button>`);
+        }
     } else if (st === 'needs_reply' || st === 'due' || st === 'checked') {
         acts.push(`<button onclick="_holdToggleForm('${ctx}', ${idx}, 'status')" style="${sBtn} background:${_HOLD_C.blue.bg}; border:1.5px solid ${_HOLD_C.blue.line}; color:${_HOLD_C.blue.fg};">${form === 'status' ? 'Close' : 'Update status'}</button>`);
     }
@@ -39724,7 +39759,25 @@ const EMAIL_LIST_GROUPS = [
                   + 'times its manager has been told.' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `refund_mismatch_${s}`, label: `Refund Mismatch — ${s}`,
               desc: '8:20am. Refunded on eBay but not Shopify, or the reverse, for 3 days '
-                  + '(1 day at month end). Raised again every 3 days until fixed.' })),
+                  + '(1 day at month end). Raised again every 3 days until fixed. '
+                  + 'Being retired: Claims & Disputes below covers mismatches too.' })),
+            // Claims & Disputes. These take over from the two refund-mismatch
+            // lists above — a mismatch is one of four kinds of held money, and
+            // splitting them across two mails meant a manager could clear one
+            // inbox and still be losing a chargeback. Both sets are live until
+            // the refund-mismatch crons are switched off, so a manager on both
+            // gets two mails for a few mornings; that is deliberate, and better
+            // than a gap.
+            { key: 'claims_disputes_dm', label: 'Claims & Disputes — District Manager',
+              desc: '8:20am, a count per store of what still needs a person, plus missed reply '
+                  + 'windows (said once) and anyone who marked something resolved that the site '
+                  + 'disagrees with. 4:00pm again only when a deadline falls today and the store '
+                  + 'still has not answered it.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `claims_disputes_${s}`, label: `Claims & Disputes — ${s}`,
+              desc: '8:20am. Everything eBay or Shopify is waiting on this store for — cases, '
+                  + 'payment disputes, chargebacks, item-not-received and mismatches — soonest '
+                  + 'deadline first. 4:00pm again only if something closes today and is still '
+                  + 'unanswered.' })),
         ],
     },
     {

@@ -906,11 +906,27 @@ Deno.serve(async (req: Request) => {
     }
 
     const sent: any[] = [];
+    // DETECTION ON, MAIL OFF (?mail=0, 2026-09-23). Claims & Disputes now mails a
+    // manager about their mismatches in the same list as their cases, disputes
+    // and INRs, so a second mail from here is the same money told twice in two
+    // different voices.
+    //
+    // ⚠️ THE CRON CANNOT SIMPLY BE SWITCHED OFF. This function is the DETECTOR:
+    // refund_mismatch_state is written here and nowhere else, and the new tool
+    // only ever reads it. Disabling the job would leave the tool showing the same
+    // mismatches for ever and never noticing a new one. So the job keeps running
+    // with mail=0, which does every bit of the work except the sending.
+    //
+    // dryRun=1 is NOT the same thing and is not a substitute: it returns before
+    // the state is recorded, on purpose, so that a preview cannot mark orders as
+    // told. This flag stops only the sending.
+    const mailOff = q("mail") === "0";
     // Only orders whose mail actually reached at least one recipient count as
     // told. A failed send leaves the order un-mailed for today, so a re-run
-    // picks it up and nobody already mailed gets a second copy.
+    // picks it up and nobody already mailed gets a second copy. With mail off
+    // nothing is told, so times_alerted correctly stops climbing.
     const mailedKeys = new Set<string>();
-    for (const p of plan) {
+    for (const p of mailOff ? [] : plan) {
       const to = q("to") || p.to;
       const n = p.rows.length;
       const subject = `Refund not matched on both sites — ${n} order${n === 1 ? "" : "s"}`;
@@ -929,7 +945,7 @@ Deno.serve(async (req: Request) => {
     // always answers "here is what just went out, and here is who has been told
     // before". On a silent morning leadership gets nothing, which is the point:
     // a mail from this means something needs chasing.
-    if (mailedKeys.size && told.length) {
+    if (!mailOff && mailedKeys.size && told.length) {
       const to = q("to") || (await listFor(sb, "refund_mismatch_escalation", "weekly_leadership")).join(",");
       if (to) {
         // The repeat count goes in the SUBJECT, because that is the number

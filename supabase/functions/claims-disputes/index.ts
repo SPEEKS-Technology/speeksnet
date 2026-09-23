@@ -157,14 +157,19 @@ const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 // Ethan wants every store populated with what is open now while this is built.
 const ROLLOUT_STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 
-// ⚠️ BUILD MODE, NOT THE FINISHED BEHAVIOUR (Ethan, 2026-09-22: "let's populate
-// them as they show now ignoring the timeframe rules. upon launch ... we can
-// have the timeframes going correctly"). While this is true, an item does NOT
-// wait THRESHOLD_DAYS before it shows — everything open shows at once, so each
-// store's list can be compared against Seller Hub today. A manager's own "Still
-// open" check-in still hides an item for its timeframe; only the "too new to
-// show yet" part is suspended. FLIP THIS TO false AT LAUNCH.
-const IGNORE_TIMEFRAMES = true;
+// BUILD MODE — OFF SINCE 2026-09-23, WHICH IS THE LAUNCH.
+// It was on so that each store's list could be compared against Seller Hub on
+// the day, with nothing held back (Ethan, 2026-09-22: "let's populate them as
+// they show now ignoring the timeframe rules. upon launch ... we can have the
+// timeframes going correctly"). It came off when the daily emails were switched
+// on, because that is the moment the bar starts meaning something: with mail
+// going out, "too new to show yet" is the difference between telling a manager
+// about something they could not possibly have acted on and not.
+//
+// With FIRST_SHOW_DAYS at 1 the practical effect is one day — an item opened
+// today waits until tomorrow. Turn it back on only to compare against Seller Hub
+// again, and turn it off after.
+const IGNORE_TIMEFRAMES = false;
 
 // Item-not-received cases older than this are dropped from the tool entirely
 // (Ethan, 2026-09-22: "Any INR from before August we can just ignore now") —
@@ -173,16 +178,27 @@ const IGNORE_TIMEFRAMES = true;
 const INR_FROM = "2026-08-01";
 
 // --- the timeframe per type, in whole Chicago days ---------------------------
-// How old an item must be before it shows, AND how long "Still open" hides it.
-// One number per type on purpose: Ethan asked for the two to be the same.
+// THESE WERE ONE NUMBER UNTIL 2026-09-23, because Ethan had asked for the bar to
+// show something and the bar to re-show it to be the same. They are two now, and
+// the reason is that he changed only ONE of them: "have mismatches and all other
+// first alert you after 1 day of being active ... Cases, chargebacks, and
+// disputes show up 1 day after being opened". That is the FIRST alert — how fast
+// we notice. How long a manager who has already told us they are working
+// something gets left alone is a different question, and collapsing it to one
+// day would make "Still open" buy a single day, which is no answer at all.
+// Say the word and they collapse back to one number.
+//
+// FIRST_SHOW_DAYS: how old anything must be before it is alerted on. One number
+// for every type now, so there is one answer to "when does this reach me".
+const FIRST_SHOW_DAYS = 1;
+
+// CHECKIN_DAYS: how long a manager's own "Still open" hides an item.
 //   mismatch    3  the detector's own bar (1 in the last 4 days of a month)
 //   ebay_case   2  eBay gives a seller ~3 business days before it steps in
-//   dispute     3  only ever used by a "Still open" check-in, which a dispute
-//                  can barely reach: while the site waits on evidence it cannot
-//                  be checked in at all, and once we have answered there is
-//                  nothing due from us. It is NOT a "hide it for 3 days" bar —
-//                  a dispute shows the moment it exists (see stateOf).
-const THRESHOLD_DAYS: Record<string, number> = { mismatch: 3, ebay_case: 2, dispute: 3 };
+//   dispute     3  barely reachable: while the site waits on evidence a dispute
+//                  cannot be checked in at all, and once we have answered there
+//                  is nothing due from us.
+const CHECKIN_DAYS: Record<string, number> = { mismatch: 3, ebay_case: 2, dispute: 3 };
 // How long a manager has to put right a "resolved" the site disagrees with
 // before it goes to the DM (Ethan, 2026-09-23: "if someone falsely resolves it
 // and doesn't un-resolve it after 2 days, it escalates to me"). The item is
@@ -204,7 +220,7 @@ const claimAging = (c: any) =>
   Date.parse(c.last_checked_at || c.created_at) < Date.now() - CLAIM_AGE_DAYS * 86_400_000;
 const MISMATCH_MONTH_END_DAYS = 1;
 const MONTH_END_WINDOW = 4;
-const ITEM_TYPES = Object.keys(THRESHOLD_DAYS);
+const ITEM_TYPES = Object.keys(CHECKIN_DAYS);
 const MIN_REASON = 10;
 
 const SWEEP_DAYS = 120;        // how far back each sweep asks eBay
@@ -958,14 +974,17 @@ async function sync(sb: any, stores: string[], force: boolean) {
 //   needs_claim  a refunded INR with no claim — due at once, resolved only by a claim
 //   answered     a dispute we have answered — the card network decides now, and
 //                nothing is due from us until it does (0112)
-//   covered      its claim is In Progress — the claim does the reminding now
+//   covered      its claim is In Progress — the claim does the reminding now,
+//                unless the parcel was DELIVERED after the refund, when it comes
+//                back due (note delivered_after_refund): eBay refunds a delivered
+//                item-not-received itself, so the call to make is to eBay
 //   resolved     a manager said it is settled, and why
 //   settled      the marketplaces settled it (sites agree / eBay closed it /
 //                the INR's claim finished)
 // ===========================================================================
 const isInr = (it: any) => it.kind === "inquiry" || (it.kind === "case" && it.case_type === "ITEM_NOT_RECEIVED");
 
-function stateOf(type: string, it: any, review: any, ctx: any): { state: string; due_on: string | null; note?: string } {
+function stateOf(type: string, it: any, review: any, ctx: any): { state: string; due_on: string | null; note?: string; quiet_until?: string } {
   const today = ctx.today;
   // A DISPUTE RUNS ON THE SITE'S CLOCK, NOT OURS (0112). It has a real deadline
   // from the moment it exists, so it never waits a timeframe and it never has a
@@ -999,11 +1018,56 @@ function stateOf(type: string, it: any, review: any, ctx: any): { state: string;
   }
   const claim = ctx.claimFor(type, it);
   if (type === "ebay_case" && isInr(it)) {
+    // IT ARRIVED BEFORE WE EVER HAD TO REFUND, so there is nothing to do and
+    // nothing to recover — it leaves by itself (Ethan, 2026-09-23: "you can
+    // remove it yourself from the system if it gets delivered before the INR
+    // refund date since we don't have to do anything at that point"). This is
+    // the ONLY state in the whole tool that clears with nobody's say-so, and it
+    // is safe precisely because it asserts nothing: the carrier said delivered
+    // and we never paid out, so no money is anywhere but with us.
+    if (it.outcome !== "refunded" && isDelivered(it)) {
+      return { state: "settled", due_on: null, note: "delivered before the refund was due" };
+    }
+    // THE PARCEL TURNING UP AFTER A REFUND CHANGES WHO OWES US (0106). eBay hands
+    // that money back itself, so there is nothing for a carrier claim to recover
+    // — but somebody still has to ring eBay and ask for it, and that is the one
+    // thing an open claim does not do.
+    const deliveredRefund = it.outcome === "refunded" && isDelivered(it);
+    // So a resolution counts here, and only here, among refunded INRs — the POST
+    // gate refuses exactly the same set, so the card and the refusal cannot say
+    // different things. Without this the gate ACCEPTED a resolution on a
+    // delivered INR, wrote the row, logged the event, and the card never moved.
+    if (deliveredRefund && review?.status === "resolved") return { state: "resolved", due_on: null };
     if (claim) {
-      if (claim.status === "in_progress") return { state: "covered", due_on: null };
+      // Ethan, 2026-09-23: "the daily email will notify them if the item ever ends
+      // up delivered so they can call ebay about it". A claim normally takes the
+      // chasing over (below) — but a claim still In Progress against a parcel that
+      // arrived is chasing money the carrier does not owe. So it comes back due,
+      // saying which call to make, until someone records what eBay did.
+      if (claim.status === "in_progress") {
+        return deliveredRefund
+          ? { state: "due", due_on: today, note: "delivered_after_refund" }
+          : { state: "covered", due_on: null };
+      }
       return { state: "settled", due_on: null, note: `claim ${claim.status}` };
     }
     if (it.outcome === "refunded") return { state: "needs_claim", due_on: today };
+    // TOLD ONCE, THEN QUIET UNTIL IT MATTERS (Ethan, 2026-09-23: "once they are
+    // notified about it via email, they don't need to see it again until the day
+    // of needing to refund"). An open INR is a date to keep, not a thing to do
+    // every morning — so after the first email it stops being MAILED about until
+    // the refund day. It stays on the tab throughout: it is still our money, and
+    // quieting the tool as well would be how one gets forgotten. That is what
+    // quiet_until means, and it lives here so there is still exactly one place
+    // that decides what a manager gets chased about.
+    // Not while eBay waits on US, though — that is answered below, and a
+    // deadline we are already late for is not something to go quiet about.
+    if (it.is_open && it.respond_by && !ctx.awaiting(it)) {
+      const dueDay = chicagoDay(it.respond_by);
+      if (dueDay > today && ctx.emailedBefore("ebay_case", it.case_key)) {
+        return { state: "due", due_on: today, quiet_until: dueDay };
+      }
+    }
     if (!it.is_open && it.outcome == null) {
       // Closed, but we could not read whether the buyer was refunded. Could be
       // an unclaimed refund, so it is shown rather than settled.
@@ -1048,8 +1112,16 @@ function stateOf(type: string, it: any, review: any, ctx: any): { state: string;
     return { state: "needs_reply", due_on: today, note: missedWindow(type, it) ? "missed_window" : undefined };
   }
 
-  const days = type === "mismatch" && ctx.monthEnd ? MISMATCH_MONTH_END_DAYS : THRESHOLD_DAYS[type];
-  const from = review?.status === "still_open"
+  // DUE TODAY DOES NOT CHANGE (Ethan, 2026-09-23). The one-day wait below is
+  // about how fast we notice something NEW; it is never a reason to sit on a
+  // deadline. Anything the site wants answered today — or wanted answered
+  // already — skips the wait entirely.
+  if (it.respond_by && chicagoDay(it.respond_by) <= today) return { state: "due", due_on: today };
+  const checkedIn = review?.status === "still_open";
+  const days = checkedIn
+    ? (type === "mismatch" && ctx.monthEnd ? MISMATCH_MONTH_END_DAYS : CHECKIN_DAYS[type])
+    : FIRST_SHOW_DAYS;
+  const from = checkedIn
     ? chicagoDay(review.updated_at)
     // An escalated return counts from when the RETURN opened: it was already on
     // the list, and escalating it must not hide it again for two days.
@@ -1058,13 +1130,13 @@ function stateOf(type: string, it: any, review: any, ctx: any): { state: string;
   if (today >= due_on) return { state: "due", due_on };
   // A check-in the manager made is honoured either way; only "too new to show"
   // is suspended while IGNORE_TIMEFRAMES is on (see the constant).
-  if (review?.status === "still_open") return { state: "checked", due_on };
+  if (checkedIn) return { state: "checked", due_on };
   return IGNORE_TIMEFRAMES ? { state: "due", due_on } : { state: "waiting", due_on };
 }
 
 async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean } = {}) {
   const recent = daysAgoIso(RECENT_DAYS);
-  const [mm, cs, rv, ev, sy, ln, cl, dp, ds] = await Promise.all([
+  const [mm, cs, rv, ev, sy, ln, cl, dp, el, ds] = await Promise.all([
     sb.from("refund_mismatch_state").select("*").in("store_code", stores)
       .or(`resolved_at.is.null,resolved_at.gte.${recent}`),
     // A refunded INR stays in the read however old it is: until it has a claim
@@ -1088,9 +1160,13 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     sb.from("payment_disputes")
       .select("dispute_key,source,external_id,store_code,order_no,order_id,item_title,buyer,amount,currency,dispute_type,reason,reason_code,status_raw,is_open,needs_response,response_overdue,seller_response,responded_at,opened_at,respond_by,closed_at,outcome,first_seen,last_synced")
       .in("store_code", stores).or(`is_open.eq.true,closed_at.gte.${recent}`),
+    // What the emails have already said (0114). Only which items, not when —
+    // the one rule that reads it asks "ever?", not "how long ago".
+    sb.from("hold_email_log").select("item_type,item_key").in("store_code", stores),
     sb.from("dispute_sync").select("*").in("store_code", stores),
   ]);
-  for (const r of [mm, cs, rv, ev, sy, ln, cl, dp, ds]) if (r.error) throw new Error(r.error.message);
+  for (const r of [mm, cs, rv, ev, sy, ln, cl, dp, el, ds]) if (r.error) throw new Error(r.error.message);
+  const emailedKeys = new Set((el.data || []).map((r: any) => `${r.item_type}|${r.item_key}`));
 
   const claimsById: Record<string, any> = Object.fromEntries((cl.data || []).map((c: any) => [c.id, c]));
   const caseByKey: Record<string, any> = Object.fromEntries((cs.data || []).map((c: any) => [c.case_key, c]));
@@ -1109,6 +1185,10 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     today: chicagoDay(new Date()),
     monthEnd: isMonthEnd(),
     awaiting: awaitingReply,
+    // "Have we ever told anyone about this one?" — 0114. Only the INR quiet rule
+    // asks, and it asks about items this store already has listed, so the whole
+    // log for these stores is read once above rather than a query per item.
+    emailedBefore: (type: string, key: string) => !!emailedKeys.has(`${type}|${key}`),
     claimFor: (type: string, it: any) =>
       claimByItem[`${type}|${type === "mismatch" ? it.issue_key : it.case_key}`]
       || (type === "ebay_case" && it.order_id ? claimByOrder[`${it.store_code}|${it.order_id}`] : null) || null,
@@ -1163,6 +1243,10 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     const claim = ctx.claimFor(type, it);
     return { ...it, review, history: (eventsBy[`${type}|${key}`] || []).slice(0, 20),
              state: s.state, due_on: s.due_on, state_note: s.note || null, claim,
+             // The day this item is allowed to be MAILED about again. Null means
+             // "whenever it is due". Only the emails read it — the tool lists
+             // the item either way (see the INR branch of stateOf).
+             quiet_until: s.quiet_until || null,
              // 0107: whose move eBay thinks it is
              awaiting_reply: type === "ebay_case" && ctx.awaiting(it),
              // The reply window has shut — nothing anyone presses brings it back.
@@ -1226,7 +1310,7 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     rollout: ROLLOUT_STORES, stores, today: ctx.today, monthEnd: ctx.monthEnd,
     mismatches, cases, claims, disputes, waiting,
     sync: sy.data || [], disputeSync: ds.data || [],
-    timers: THRESHOLD_DAYS, minReason: MIN_REASON,
+    timers: CHECKIN_DAYS, firstShowDays: FIRST_SHOW_DAYS, minReason: MIN_REASON,
     resolutionGraceDays: RESOLUTION_GRACE_DAYS, claimAgeDays: CLAIM_AGE_DAYS,
   };
 }
@@ -1370,7 +1454,7 @@ Deno.serve(async (req) => {
       // next_checkin_at is informational; stateOf counts whole Chicago days
       // from updated_at, which is what decides when it is due again.
       const next = status === "still_open"
-        ? new Date(Date.now() + THRESHOLD_DAYS[type] * 86_400_000).toISOString() : null;
+        ? new Date(Date.now() + CHECKIN_DAYS[type] * 86_400_000).toISOString() : null;
       const { error } = await sb.from("hold_reviews").upsert({
         item_type: type, item_key: key, store_code: store, status, note,
         by_name: by, updated_at: nowIso, next_checkin_at: next,
