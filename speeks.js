@@ -33911,7 +33911,9 @@ const _HOLD_C = {
 const _HOLD_STATE = {
     // 0107: eBay is waiting on an answer from us. Nothing else about the item can
     // move until someone says they answered it, so it leads the list.
-    needs_reply: { label: 'eBay is waiting on us',   bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
+    // _holdStateLabel always overrides this one (it has to name the right site),
+    // so this string is a fallback only — kept accurate so it cannot mislead.
+    needs_reply: { label: 'Needs a reply from us',    bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
     needs_claim: { label: 'Refunded — needs a claim', bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 0 },
     due:         { label: 'Check-in due',             bg: _HOLD_C.red.bg,   fg: _HOLD_C.red.fg,   rank: 1 },
     checked:     { label: 'Checked in',               bg: _HOLD_C.amber.bg, fg: _HOLD_C.amber.fg, rank: 2 },
@@ -33926,12 +33928,33 @@ const _HOLD_STATE = {
 // to name the right site — "eBay is waiting on us" on a Shopify chargeback would
 // send someone to the wrong admin. A dispute whose window has already shut says
 // so instead: it is still unanswered, but responding is no longer the fix.
+//
+// "needs a reply from us" rather than "is waiting on us" (Ethan, 2026-09-23):
+// waiting is something the site is doing, and reads as though it were the site's
+// move. The reply is OURS, and the chip should say so.
 function _holdStateLabel(type, it, s) {
-    if (type !== 'dispute') return s.label;
-    const site = it.source === 'ebay' ? 'eBay' : 'Shopify';
-    if (it.state === 'needs_reply') return it.response_overdue ? 'Response overdue' : `${site} is waiting on us`;
-    if (it.state === 'answered') return 'Answered — waiting on them';
+    if (it.state === 'needs_reply') {
+        if (type === 'dispute' && it.response_overdue) return 'Response overdue';
+        const site = type === 'dispute' && it.source !== 'ebay' ? 'Shopify' : 'eBay';
+        return `${site} needs a reply from us`;
+    }
+    if (type === 'dispute' && it.state === 'answered') return 'Answered — waiting on them';
     return s.label;
+}
+
+// WHICH OF THE FOUR THINGS THIS IS (Ethan, 2026-09-23: "we need to better
+// differentiate cases, INR, Payment disputes, and chargebacks"). The section
+// heading groups them; this chip is what tells you on a card whose heading has
+// scrolled off, and it is the first thing on the row for that reason.
+function _holdKindChip(type, it) {
+    if (type === 'dispute') {
+        if (it.source === 'ebay') return 'Payment dispute';
+        return it.dispute_type === 'INQUIRY' ? 'Bank inquiry' : 'Chargeback';
+    }
+    if (type !== 'ebay_case') return '';
+    if (_holdIsInr(it)) return it.kind === 'case' ? 'INR — escalated' : 'Item not received';
+    if (it.kind === 'case') return 'Case — escalated';
+    return '';
 }
 // TWO views, not three (Ethan, 2026-09-22: "we probably don't need the resolved
 // section"). "Needs Attention" is what a morning email would list. Resolved
@@ -34101,13 +34124,41 @@ function renderHoldItems(ctx) {
     // Disputes lead this tab. They are the only items in the tool with a hard
     // outside deadline and the only kind that is LOST BY DEFAULT if nobody
     // looks — on the first read, 8 of 13 open ones had no response at all.
+    if (cw) cw.innerHTML = _holdToolbar(ctx, 'ebay_case') + _holdSyncLine(d) + _holdCaseSections(ctx, d, all);
+}
+
+// FOUR DIFFERENT THINGS SHARE THIS TAB, and Ethan asked for them to stop looking
+// alike (2026-09-23). They are not the same job: a dispute is answered with
+// evidence on the site holding the money, an INR with tracking or a refund, an
+// escalated case is argued with eBay. So each gets its own heading, ordered by
+// how the money is at risk — disputes first, because they are the only items
+// here with a hard outside deadline and the only kind LOST BY DEFAULT if nobody
+// looks (8 of the 13 open on the first read had no response at all), then the
+// cases eBay has been dragged into, then the INRs. That last pair is the order
+// Ethan already asked for on 2026-09-22 ("active cases/escalated to ebay cases
+// first, INR open, INR delivered"); the headings group it, they do not reorder
+// it, and the open-before-delivered part still comes from _holdCaseRank.
+//
+// A heading is drawn ONLY when its group has something in the CURRENT view.
+// Four headings over "nothing here" is how a tab with two real items on it
+// becomes unreadable.
+function _holdCaseSections(ctx, d, all) {
     const disputes = d.disputes || [];
-    if (cw) cw.innerHTML = _holdToolbar(ctx, 'ebay_case') + _holdSyncLine(d)
-        + (disputes.length
-            ? _holdSectionHead('Payment disputes & chargebacks') + _holdList(ctx, 'dispute', disputes, null, { section: true })
-              + _holdSectionHead('eBay cases')
-            : '')
-        + _holdList(ctx, 'ebay_case', all.filter(c => !_holdIsReturn(c)), null, disputes.length ? { section: true } : null);
+    const notReturns = all.filter(c => !_holdIsReturn(c));
+    const groups = [
+        ['eBay payment disputes', 'dispute', disputes.filter(x => x.source === 'ebay')],
+        ['Shopify chargebacks', 'dispute', disputes.filter(x => x.source !== 'ebay')],
+        ['eBay cases', 'ebay_case', notReturns.filter(c => !_holdIsInr(c))],
+        ['Item not received', 'ebay_case', notReturns.filter(_holdIsInr)],
+    ];
+    const blocks = groups.map(function (g) {
+        if (!g[2].length) return '';
+        const body = _holdList(ctx, g[1], g[2], null, { section: true, quiet: true });
+        return body ? _holdSectionHead(g[0]) + body : '';
+    }).filter(Boolean);
+    // Nothing in any group: one plain message for the tab, rather than a blank
+    // panel that just looks broken.
+    return blocks.length ? blocks.join('') : _holdList(ctx, 'ebay_case', [], null);
 }
 
 // A heading only appears when there is more than one kind of thing on the tab;
@@ -34182,14 +34233,16 @@ function _holdList(ctx, type, items, casesByOrder, opts) {
         const empty = returns ? 'No open returns right now.'
             : v.show === 'due'
             ? (type === 'mismatch' ? 'Nothing needs attention — eBay and Shopify agree, or every open one is checked in.'
-               : type === 'dispute' ? 'No dispute is waiting on us.'
+               : type === 'dispute' ? 'No dispute needs a reply from us.'
                : 'Nothing needs attention on eBay right now.')
             // Status Changed/Claim Open: say what would be here, not "this view"
             : (type === 'mismatch' ? 'Nothing is checked in or waiting on an insurance claim.'
                : type === 'dispute' ? 'No dispute is answered and waiting on a decision.'
                : 'Nothing is checked in or waiting on a claim.');
-        // Inside a section the big empty panel reads as if the whole tab is
-        // empty, which it is not — the other section is right below it.
+        // A section with nothing in THIS view says nothing at all — its heading
+        // is dropped by the caller too. Four headings each followed by "nothing
+        // here" is how a tab with two real items ends up unreadable.
+        if (opts && opts.quiet) return '';
         return (opts && opts.section)
             ? `<div style="padding:10px 2px; color:#94a3b8; font-weight:600; font-size:12px;">${empty}</div>`
             : `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">${empty}</div>`;
@@ -34306,7 +34359,13 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         // has to answer.
         const ebay = it.source === 'ebay';
         title = escapeHtml(_holdPretty(it.reason)) || 'Payment dispute';
-        subtitle = `${ebay ? 'eBay payment dispute' : it.dispute_type === 'INQUIRY' ? 'Shopify inquiry — before the money is pulled' : 'Shopify chargeback'}`;
+        // The chip already names the kind, so the subtitle says what it MEANS —
+        // the three are not the same fight and are not answered in the same place.
+        subtitle = ebay
+            ? 'The buyer disputed this through eBay'
+            : it.dispute_type === 'INQUIRY'
+            ? "The buyer's bank is asking before it pulls the money — cheapest one to win"
+            : "The buyer's bank pulled the money back";
         // The deadline is the whole point of this card, so it is never quiet.
         const due = it.respond_by;
         const late = due && new Date(due).getTime() < Date.now();
@@ -34336,7 +34395,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         if (st === 'needs_reply' && it.response_overdue) {
             extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>The window to respond has already closed</b> — ${escapeHtml(ebay ? 'eBay' : 'Shopify')} recorded no response from us, so this one is very likely lost. Nothing here can reopen it; mark it resolved and say what happened so there is a record.</div>`;
         } else if (st === 'needs_reply') {
-            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} is waiting on our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Unanswered disputes are lost by default.</div>`;
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>${escapeHtml(ebay ? 'eBay' : 'Shopify')} needs our evidence${due ? ` by ${_holdEbayDay(due)}` : ''}</b> — respond on ${escapeHtml(ebay ? 'eBay' : 'Shopify')} and this clears itself on the next read. It can't be checked in until then. Unanswered disputes are lost by default.</div>`;
         } else if (st === 'answered') {
             extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We responded${it.responded_at ? ` ${_holdDate(it.responded_at)}` : ''} — the ${ebay ? 'eBay' : 'card'} decision can take weeks. Nothing to do until it lands.</div>`;
         } else if (st === 'settled') {
@@ -34425,7 +34484,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     // site and its deadline.
     if (st === 'needs_reply' && type === 'ebay_case') {
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
-            <b>eBay is waiting on a reply from us${it.buyer_acted_at ? ` since ${_holdDate(it.buyer_acted_at)}` : ''}</b>
+            <b>eBay needs a reply from us${it.buyer_acted_at ? ` — the buyer last wrote ${_holdDate(it.buyer_acted_at)}` : ''}</b>
             — answer it on eBay and this clears itself on the next read. It can't be checked in until then.</div>`;
     } else if (type === 'ebay_case' && it.is_open && it.seller_replied_at) {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We answered eBay ${_holdDate(it.seller_replied_at)} — waiting on the buyer.</div>`;
@@ -34496,6 +34555,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             <div style="min-width:0; flex:1 1 240px;">
                 <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:4px;">
                     ${multi ? chip(escapeHtml(it.store_code)) : ''}
+                    ${readOnly || !_holdKindChip(type, it) ? '' : `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:#e2e8f0; color:#334155;">${escapeHtml(_holdKindChip(type, it))}</span>`}
                     ${readOnly ? '' : `<span style="display:inline-block; font-size:10.5px; font-weight:800; padding:3px 8px; border-radius:999px; background:${s.bg}; color:${s.fg};">${escapeHtml(_holdStateLabel(type, it, s))}</span>`}
                 </div>
                 <div style="font-weight:800; font-size:13.5px; color:var(--slate-charcoal);">${title}</div>

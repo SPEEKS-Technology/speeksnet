@@ -783,7 +783,7 @@ t('a case eBay is waiting on says so, and offers no way to claim a reply', funct
     _holdData.mgr = awaitingFixture(); _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
     renderHoldItems('mgr');
     var h = html('hold-mgr-cases');
-    if (h.indexOf('eBay is waiting on us') < 0) return 'the chip does not say eBay is waiting on us';
+    if (h.indexOf('eBay needs a reply from us') < 0) return 'the chip does not say eBay needs a reply from us';
     if (/responded/i.test(h)) return 'a self-certification button is back';
     if (h.indexOf('clears itself on the next read') < 0) return 'it does not say what actually clears it';
     return /Update status/.test(h) || 'there is no way to resolve it either';
@@ -810,7 +810,11 @@ t('an answered case says so and goes back to the normal flow', function () {
     renderHoldItems('mgr');
     var h = html('hold-mgr-cases');
     if (h.indexOf('We answered eBay') < 0) return 'it does not say we answered';
-    return !/eBay is waiting on us/.test(h) || 'it still reads as waiting on us';
+    // Scoped to THIS card: the tab legitimately holds other items that do need
+    // a reply, so a whole-page regex here would only ever test the fixture.
+    var card = cardAround(h, f.cases[0].ebay_id);
+    if (!card) return 'the answered case is not listed';
+    return !/needs a reply from us/.test(card) || 'it still reads as needing a reply from us';
 });
 t('an unanswered case outranks everything else on the tab', function () {
     var f = fixture();
@@ -839,9 +843,8 @@ function cardAround(h, needle) {
 t('disputes show on the Cases & Disputes tab, above the cases', function () {
     load('mgr');
     var h = html('hold-mgr-cases');
-    if (h.indexOf('Payment disputes &amp; chargebacks') < 0 && h.indexOf('Payment disputes & chargebacks') < 0) {
-        return 'no disputes section heading';
-    }
+    if (h.indexOf('Shopify chargebacks') < 0) return 'no Shopify chargebacks heading';
+    if (h.indexOf('eBay payment disputes') < 0) return 'no eBay payment disputes heading';
     var d = h.indexOf('#MO02-6573'), c = h.indexOf('eBay cases');
     if (d < 0) return 'the unanswered chargeback is not listed';
     return (c < 0 || d < c) || 'disputes are below the cases';
@@ -852,8 +855,11 @@ t('a Shopify chargeback names Shopify, not eBay', function () {
     var h = html('hold-mgr-cases');
     var card = cardAround(h, '#MO02-6573');
     if (!card) return 'the chargeback is not listed';
-    if (!/Shopify is waiting on us/.test(card)) return 'it does not say Shopify is waiting on us';
-    return !/eBay is waiting on us/.test(card) || 'a Shopify chargeback is blaming eBay';
+    // "needs a reply from us", not "is waiting on us" — the reply is ours, and
+    // Ethan asked for the chip to say so (2026-09-23).
+    if (!/Shopify needs a reply from us/.test(card)) return 'it does not say Shopify needs a reply from us';
+    if (/is waiting on us/.test(card)) return 'the old passive wording is back';
+    return !/eBay needs a reply from us/.test(card) || 'a Shopify chargeback is pointing at eBay';
 });
 
 t('an overdue dispute says the window shut, and does not promise responding fixes it', function () {
@@ -939,7 +945,8 @@ t('no disputes at all means no headings, not an empty section', function () {
     _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
     renderHoldItems('mgr');
     var h = html('hold-mgr-cases');
-    return h.indexOf('Payment disputes') < 0 || 'an empty disputes heading is drawn anyway';
+    return (h.indexOf('payment disputes') < 0 && h.indexOf('Shopify chargebacks') < 0)
+        || 'an empty disputes heading is drawn anyway';
 });
 
 t('the Shopify link uses the shop handle, not the store code', function () {
@@ -950,4 +957,40 @@ t('the Shopify link uses the shop handle, not the store code', function () {
     if (/store\/ovl\//.test(card)) return 'it built the URL from the store code — that admin page does not exist';
     return /store\/paymore-overland-park\/payments\/disputes/.test(card)
         || 'link is not the shop handle disputes page';
+});
+
+t('each of the four kinds is named on its own card', function () {
+    var f = fixture();
+    // an escalated non-INR case, so all four kinds are present at once
+    f.cases.push({ case_key: 'case:9999', store_code: 'OVL', kind: 'case', case_type: 'RETURN', ebay_id: '9999',
+        is_open: true, amount: 100, opened_at: ago(3), ebay_status: 'CS_OPEN', review: null, history: [], state: 'due', due_on: '2026-09-20' });
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    var want = ['Chargeback', 'Payment dispute', 'Item not received', 'Case — escalated'];
+    var missing = want.filter(function (w) { return h.indexOf(w) < 0; });
+    return !missing.length || 'no chip says: ' + missing.join(', ');
+});
+
+t('the sections keep the order Ethan asked for: disputes, cases, then INRs', function () {
+    var f = fixture();
+    f.cases.push({ case_key: 'case:9999', store_code: 'OVL', kind: 'case', case_type: 'RETURN', ebay_id: '9999',
+        is_open: true, amount: 100, opened_at: ago(3), ebay_status: 'CS_OPEN', review: null, history: [], state: 'due', due_on: '2026-09-20' });
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    var dis = h.indexOf('eBay payment disputes'), cases = h.indexOf('eBay cases'), inr = h.indexOf('Item not received');
+    if (dis < 0 || cases < 0 || inr < 0) return 'a heading is missing: ' + dis + '/' + cases + '/' + inr;
+    return (dis < cases && cases < inr) || 'order is wrong: disputes@' + dis + ' cases@' + cases + ' inr@' + inr;
+});
+
+t('a group with nothing in this view draws no heading', function () {
+    var f = fixture();
+    // every dispute answered -> nothing for either dispute heading in Needs Attention
+    f.disputes.forEach(function (x) { x.needs_response = false; x.state = 'answered'; x.is_open = true; });
+    _holdData.mgr = f; _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    var h = html('hold-mgr-cases');
+    if (h.indexOf('eBay payment disputes') >= 0) return 'an empty dispute heading is still drawn';
+    return h.indexOf('Item not received') >= 0 || 'the INR heading vanished too — only empty groups should drop';
 });
