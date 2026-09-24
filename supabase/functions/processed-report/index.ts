@@ -20,7 +20,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // have sent a wrong table every morning, quietly. If this send ever moves
 // earlier again, move day-end-ingest first and keep an hour between them.
 //
-//   listed     day_end_facts.devices_processed  ("Devices Processed")
+//   listed     day_end_facts.listed_devices     ("Total Listed Devices", 0115)
+//              — devices_processed only for a day before that column existed
+//   goal       sum of listing_goals.goal for the store-day ("Staffed For")
 //   value      day_end_facts.processed_value    ("Total Value")
 //
 // DELIBERATELY THREE COLUMNS, AND DELIBERATELY NO BENCHMARK.
@@ -32,9 +34,22 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // backlog view is ever wanted it should be its own thing rather than a sub-line
 // here.
 //
-// WHY THERE IS NO % OF GOAL COLUMN EITHER
-// Worth recording, because it is the column a future reader is most likely to
-// try to add. Listed ÷ the store's daily listing goal would be wrong twice over:
+// LISTED AGAINST STAFFED FOR — ADDED 2026-09-24, AT ETHAN'S ASK
+// ("include this new line items instead of the total devices but have like
+// 20/30, so I can see if they hit their staffed for goal"). The Listed cell is
+// now listed / the day's staffed-for goal, with the % under it. Both reasons
+// the section below gave for leaving it out are gone:
+//   1. The "15-30%" disagreement did not survive a re-check on 2026-09-24: over
+//      35 store-weeks the KPI equalled the report's weekly total exactly on 29,
+//      and the rest were hand-entry slips. And Store Efficiency reads this same
+//      report now, so there is one listed figure, not two.
+//   2. The goals rework shipped on 2026-09-21; the daily goal is stable.
+// Still three columns — the goal rides inside the Listed cell, so the phone
+// widths measured below are not spent. A store with no roles set shows its
+// listed count alone and says so, rather than a percentage of nothing.
+//
+// THE ORIGINAL REASONING, KEPT FOR THE RECORD (superseded above):
+// Listed ÷ the store's daily listing goal would be wrong twice over:
 //
 //  1. The two feeds disagree. The DM's Store Efficiency board scores the
 //     manager-filed WEEKLY KPI (`kpi_entries.listed_count`); this report has
@@ -168,6 +183,20 @@ const th = (t: string, align = 'center', w = '') =>
 // all render with zero horizontal overflow, full and empty. That headroom is
 // what a fourth column would spend, so re-measure before adding one rather than
 // assuming it still fits.
+// Green at goal, amber within 70%, red below — the same bands the goals
+// widget and the DM matrix popup use, so one store reads one colour everywhere.
+const pctColor = (p: number) => p >= 100 ? '#178048' : (p >= 70 ? '#b45309' : C.red);
+// "20 / 30" and the % under it. The goal is quieter than the count: the count
+// is the news, the goal is what it is measured against.
+function goalSpan(goal: number) {
+  return `<span style="font-size:13px;font-weight:700;color:${C.faint};"> / ${int(goal)}</span>`;
+}
+function listedCell(listed: number | null, goal: number | null) {
+  if (listed === null) return int(listed) + sub('&nbsp;', C.faint);
+  if (!goal) return int(listed) + sub('no roles set', C.faint);
+  const p = Math.round((listed / goal) * 100);
+  return int(listed) + goalSpan(goal) + sub(`${p}% of staffed for`, pctColor(p));
+}
 const sub = (t: string, color: string) =>
   `<div style="font-size:10.5px;font-weight:700;color:${color};margin-top:2px;line-height:1.35;">${t}</div>`;
 
@@ -176,15 +205,16 @@ const sub = (t: string, color: string) =>
 type Read = {
   store: string;
   listed: number | null;
+  goal: number | null;     // staffed for; null when no roles were set that day
   value: number | null;
   perUnit: number | null;  // value / listed
 };
 
-function readFor(store: string, today: any): Read {
-  const listed = today ? num(today.devices_processed) : null;
+function readFor(store: string, today: any, goal: number | null): Read {
+  const listed = today ? (today.listed_devices != null ? num(today.listed_devices) : num(today.devices_processed)) : null;
   const value  = today ? num(today.processed_value)   : null;
   return {
-    store, listed, value,
+    store, listed, goal, value,
     // Guard the divisor, and treat a zero-count day as having no per-unit figure
     // rather than an infinite one.
     perUnit: (value !== null && listed !== null && listed > 0) ? value / listed : null,
@@ -204,7 +234,7 @@ function buildEmail(day: string, reads: Read[], missing: string[], carried = fal
     const dim = r.listed === null ? `color:${C.faint};` : '';
     return `<tr>
       <td align="center" style="padding:13px 6px;border-bottom:1px solid ${C.line2};text-align:center;">${badge(s)}</td>
-      <td align="center" style="${cell}${dim}">${int(r.listed)}</td>
+      <td align="center" style="${cell}${dim}">${listedCell(r.listed, r.goal)}</td>
       <td align="center" style="${cell}${dim}">${usd(r.value)}${sub(r.perUnit === null ? '&nbsp;' : `${usd(r.perUnit)}/unit`, C.faint)}</td>
     </tr>`;
   }).join('');
@@ -214,6 +244,17 @@ function buildEmail(day: string, reads: Read[], missing: string[], carried = fal
   // if it were the whole company is the one number here that could be quietly,
   // badly wrong.
   const dListed = sum((r) => r.listed);
+  // The district % only over stores that HAD a goal: a store with no roles set
+  // would otherwise add listings to the top of the ratio and nothing to the
+  // bottom, and flatter the district.
+  const withGoal = have.filter((r) => r.goal);
+  const dGoal = withGoal.reduce((a, r) => a + (r.goal || 0), 0);
+  const dListedG = withGoal.reduce((a, r) => a + (r.listed || 0), 0);
+  const dPct = dGoal ? Math.round((dListedG / dGoal) * 100) : null;
+  const dListedCell = dPct === null
+    ? int(dListed) + sub('&nbsp;', C.faint)
+    : int(dListed) + goalSpan(dGoal)
+      + sub(`${dPct}% of staffed for${withGoal.length < have.length ? ` · ${withGoal.length} stores` : ''}`, pctColor(dPct));
   const dValue  = sum((r) => r.value);
   const dPer    = dListed > 0 ? dValue / dListed : null;
 
@@ -223,7 +264,7 @@ function buildEmail(day: string, reads: Read[], missing: string[], carried = fal
       <span style="font-size:12.5px;font-weight:800;color:${C.charcoal};">All Stores</span>
       ${missing.length ? `<div style="font-size:10.5px;font-weight:700;color:${C.red};margin-top:2px;">${have.length} of ${STORES.length} reporting</div>` : ''}
     </td>
-    <td align="center" style="${totalCell}">${int(dListed)}</td>
+    <td align="center" style="${totalCell}">${dListedCell}</td>
     <td align="center" style="${totalCell}">${usd(dValue)}${sub(dPer === null ? '&nbsp;' : `${usd(dPer)}/unit`, C.faint)}</td>
   </tr>`;
 
@@ -250,12 +291,12 @@ function buildEmail(day: string, reads: Read[], missing: string[], carried = fal
   <tr><td style="height:3px;background:${C.sage};font-size:0;line-height:0;">&nbsp;</td></tr>
   <tr><td style="padding:18px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:14px;overflow:hidden;">
-      <tr>${th('Store', 'center', '24%')}${th('Listed', 'center', '30%')}${th('Processed Value', 'center', '46%')}</tr>
+      <tr>${th('Store', 'center', '24%')}${th('Listed / Staffed For', 'center', '34%')}${th('Processed Value', 'center', '42%')}</tr>
       ${body}${totalRow}
     </table>
     ${note}
   </td></tr>
-  <tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;border-top:1px solid ${C.line};background:${C.footBg};">Generated automatically by Speeks &middot; Devices Processed and Total Value, read from each store&rsquo;s Day End Report for ${prettyDay(day)}.</td></tr>
+  <tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;border-top:1px solid ${C.line};background:${C.footBg};">Generated automatically by Speeks &middot; Total Listed Devices and Total Value from each store&rsquo;s Day End Report for ${prettyDay(day)}; Staffed For is that day&rsquo;s listing goals as set in SPEEKSNET.</td></tr>
 </table></td></tr></table></body></html>`;
 }
 
@@ -301,9 +342,18 @@ Deno.serve(async (req: Request) => {
 
   try {
     const { data, error } = await sb.from('day_end_facts')
-      .select('store, date, devices_processed, processed_value')
+      .select('store, date, devices_processed, listed_devices, processed_value')
       .eq('date', day);
     if (error) throw new Error(error.message);
+
+    // Staffed For: the day's goals summed per store — the same figure Store
+    // Efficiency and the DM matrix divide by, temps included.
+    const { data: goalRows } = await sb.from('listing_goals').select('store, goal').eq('date', day);
+    const goalBy: Record<string, number> = {};
+    (goalRows || []).forEach((g: any) => {
+      const s = String(g.store || '').toUpperCase();
+      goalBy[s] = (goalBy[s] || 0) + (Number(g.goal) || 0);
+    });
 
     const byStore: Record<string, any> = {};
     (data || []).forEach((r: any) => {
@@ -311,7 +361,7 @@ Deno.serve(async (req: Request) => {
       if (STORES.includes(s)) byStore[s] = r;
     });
 
-    const reads = STORES.map((s) => readFor(s, byStore[s]));
+    const reads = STORES.map((s) => readFor(s, byStore[s], goalBy[s] || null));
     const missing = reads
       .filter((r) => r.listed === null && r.value === null)
       .map((r) => r.store);

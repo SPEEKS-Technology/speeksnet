@@ -119,6 +119,13 @@ Deno.serve(async (req: Request) => {
     // writer now collides with the first and overwrites it instead of adding to
     // it. An upsert with nothing to conflict on is just an insert, so the index
     // is load-bearing here, not belt-and-braces.
+    //
+    // ⚠️ `result` IS NOT WRITTEN HERE. It comes from the Day End Report, put on
+    // each person's row by day-end-ingest the morning after (2026-09-24). A
+    // client save sends back whatever result it last loaded, and an upsert that
+    // carried it would put a stale 0 over the report's figure. Leaving the
+    // column out means an update keeps the stored value and an insert starts
+    // null, which every reader already treats as nothing yet.
     if (employees.length > 0) {
       const rows = employees.map((e: any) => ({
         date: isoDate,
@@ -126,7 +133,6 @@ Deno.serve(async (req: Request) => {
         employee: e.employee,
         role: e.role || "",
         goal: parseInt(e.goal) || 0,
-        result: parseInt(e.result) || 0,
       }));
       const { error: upsertError } = await supabase
         .from("listing_goals")

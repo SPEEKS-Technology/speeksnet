@@ -15932,6 +15932,224 @@ function _activeRoleIn(group) {
     return _roleOf(group ? group.querySelector('.role-dot.active') : null);
 }
 
+// ---------------------------------------------------------------------------
+// TEMPS (Ethan, 2026-09-24)
+// ---------------------------------------------------------------------------
+// Temp listers work without a SPEEKSNET account — so they can never be a roster
+// row — at an expected 20 listings a day each. The manager sets how many temps
+// are in today with a − / + stepper (0 to GOALS_TEMP_MAX; "some stores may have
+// multiple temps", Ethan, 2026-09-24), and the save carries ONE extra row,
+// employee GOALS_TEMP_NAME, role GOALS_TEMP_ROLE, goal GOALS_TEMP_GOAL × count.
+// One row, not one per temp: the report cannot tell the ingest which temp is
+// which, so their listings are pooled either way. The count is read back from
+// the goal (goal ÷ 20), so it needs no column of its own. Being an ordinary listing_goals
+// row is the point: every sum of a store-day's goals (the DM matrix, Store
+// Efficiency's Staffed For, daily-brief) picks the temp up with no change of
+// its own. The row's RESULT is written by day-end-ingest: whoever the Day End
+// Report names that matched nobody on the rota, i.e. the temps.
+//
+// Not a role dot, on purpose. A temp is not one of the store's people, takes no
+// seat from anyone, and must not count toward staffedCount — the dots' rules
+// (one person per role, the shared-lister count) would all be wrong for it.
+const GOALS_TEMP_NAME = 'Temp';
+const GOALS_TEMP_ROLE = 'TEMP';
+const GOALS_TEMP_GOAL = 20;   // per temp, per day
+const GOALS_TEMP_MAX = 2;
+function _goalsIsTempRow(r) {
+    return !!r && String(r.role || '').trim().toUpperCase() === GOALS_TEMP_ROLE;
+}
+// How many temps a saved Temp row stands for. Rounded and clamped so a goal
+// someone edits by hand can never render as 1.5 temps or as 7.
+function _goalsTempCountOf(r) {
+    if (!_goalsIsTempRow(r)) return 0;
+    const n = Math.round((parseInt(r.goal, 10) || 0) / GOALS_TEMP_GOAL);
+    return Math.max(0, Math.min(GOALS_TEMP_MAX, n));
+}
+// sfx is '' for the single-store widget and '-<STORE>' for a MSM section,
+// matching how the roster rows' ids are scoped.
+function _goalsTempCount(sfx) {
+    const el = document.getElementById('temp-count' + (sfx || ''));
+    return el ? (parseInt(el.dataset.count, 10) || 0) : 0;
+}
+function _goalsTempLabel(n) { return n === 0 ? 'No temps' : (n === 1 ? '1 temp' : n + ' temps'); }
+function _goalsTempCtlHtml(sfx, n) {
+    return `<button type="button" class="goals-temp-step" aria-label="One fewer temp" ${n <= 0 ? 'disabled' : ''}
+                onclick="stepGoalsTemp('${sfx}', -1)">&minus;</button>
+            <span class="goals-temp-count${n ? ' on' : ''}" id="temp-count${sfx}" data-count="${n}" aria-live="polite">${_goalsTempLabel(n)}</span>
+            <button type="button" class="goals-temp-step" aria-label="One more temp" ${n >= GOALS_TEMP_MAX ? 'disabled' : ''}
+                onclick="stepGoalsTemp('${sfx}', 1)">+</button>`;
+}
+function stepGoalsTemp(sfx, delta) {
+    const el = document.getElementById('temp-count' + sfx);
+    if (!el) return;
+    const n = Math.max(0, Math.min(GOALS_TEMP_MAX, (parseInt(el.dataset.count, 10) || 0) + delta));
+    el.parentElement.innerHTML = _goalsTempCtlHtml(sfx, n);
+    recomputeGoalDisplays();
+    scheduleGoalsAutosave();
+}
+window.stepGoalsTemp = stepGoalsTemp;
+
+// ---------------------------------------------------------------------------
+// RESULTS — how each person finished their last day, and their week so far
+// ---------------------------------------------------------------------------
+// listing_goals.result is the Day End Report's count for that person, written
+// the morning after by day-end-ingest (it was never filled before 2026-09-24).
+// So TODAY never has one; the widget shows the last day before today that the
+// person had a row, and the week to date through that day.
+//
+// "Last day", not "yesterday": on a Monday the day before is Sunday, when every
+// store is shut, and the useful answer is Saturday. Labelled with the weekday
+// so it is never ambiguous which day it is.
+//
+// Names match EXACTLY here. These rows were written by this widget from this
+// roster, so the names are the same strings — the first-name rule elsewhere
+// (_goalsSameName) exists for older rows and would merge two Zachs.
+function _goalsDayRows(data, todayStr, startOfWeek) {
+    // day -> rows, for days before today, last row per person winning.
+    const byDay = {};
+    const todayT = goalDateObj(todayStr).getTime();
+    (data || []).forEach(r => {
+        const d = normalizeGoalDate(r.date);
+        // Today and anything after it: neither has a report yet. The widget only
+        // ever saves today, but a row dated ahead must not count as a day done.
+        if (d === todayStr || goalDateObj(d).getTime() > todayT) return;
+        const k = String(r.employee || '').trim().toLowerCase();
+        (byDay[d] = byDay[d] || {})[k] = r;
+    });
+    const days = Object.keys(byDay).sort((a, b) => goalDateObj(a) - goalDateObj(b));
+    const week = days.filter(d => goalDateObj(d) >= startOfWeek);
+    return { byDay, days, week };
+}
+function _goalsPctTone(got, goal) {
+    if (!goal) return 'none';
+    const p = got / goal * 100;
+    return p >= 100 ? 'hit' : (p >= 70 ? 'near' : 'miss');
+}
+function _goalsWeekday(d) {
+    return goalDateObj(d).toLocaleDateString('en-US', { weekday: 'short' });
+}
+function _goalsNum(v) { return v == null || v === '' ? null : (parseInt(v, 10) || 0); }
+
+// One person's results under their name: a chip for EACH day of this week
+// before today, then the week so far as its own chip, set apart by a divider.
+// It was one run-on line ("Wed 0 / 6 · Week 3 / 43") until Ethan asked for the
+// days to be separated so a full Saturday — six days — still reads at a
+// glance (2026-09-24). On a Monday this week has no days yet, so the last day
+// before it (Saturday) shows alone, without a Week chip. '' when the person
+// has no rows before today at all.
+function _goalsDayChip(d, r) {
+    const wd = _goalsWeekday(d);
+    if (_isOffRole(r.role)) return '<span class="gr-chip gr-off"><span class="gr-d">' + wd + '</span>Off</span>';
+    const got = _goalsNum(r.result), goal = parseInt(r.goal, 10) || 0;
+    if (got == null) {
+        return '<span class="gr-chip gr-wait" title="The Day End Report for this day has not been read yet">'
+            + '<span class="gr-d">' + wd + '</span><b>—</b>/' + goal + '</span>';
+    }
+    return '<span class="gr-chip gr-' + _goalsPctTone(got, goal) + '"><span class="gr-d">' + wd + '</span>'
+        + '<b>' + got + '</b>/' + goal + '</span>';
+}
+function _goalsResultLine(emp, dr) {
+    const k = String(emp || '').trim().toLowerCase();
+    const weekDays = dr.week.filter(d => dr.byDay[d][k]);
+    let days = weekDays;
+    if (!days.length) {
+        const mine = dr.days.filter(d => dr.byDay[d][k]);
+        if (!mine.length) return '';
+        days = [mine[mine.length - 1]];
+    }
+    const chips = days.map(d => _goalsDayChip(d, dr.byDay[d][k])).join('');
+
+    let wg = 0, wr = 0, any = false;
+    weekDays.forEach(d => {
+        const r = dr.byDay[d][k];
+        wg += parseInt(r.goal, 10) || 0;
+        const got = _goalsNum(r.result);
+        if (got != null) { wr += got; any = true; }
+    });
+    const week = weekDays.length && (wg || any)
+        ? '<span class="gr-sep" aria-hidden="true"></span><span class="gr-chip gr-week gr-' + _goalsPctTone(wr, wg) + '">'
+          + '<span class="gr-d">Week</span><b>' + wr + '</b>/' + wg + '</span>'
+        : '';
+    return '<div class="goals-res-line">' + chips + week + '</div>';
+}
+
+// The store's line above the roster: last open day, and the week to date, for
+// everyone on the board including a temp.
+// A store-day's listed and goal, everyone on the board (temps included).
+// known is false until at least one result for the day has been read.
+function _goalsSumDay(dr, d) {
+    return Object.values(dr.byDay[d]).reduce((a, r) => {
+        const got = _goalsNum(r.result);
+        a.goal += _isWorkingRole(r.role) ? (parseInt(r.goal, 10) || 0) : 0;
+        if (got != null) { a.got += got; a.known = true; }
+        return a;
+    }, { goal: 0, got: 0, known: false });
+}
+// This week before today, summed — the store's actual so far.
+function _goalsWeekActual(dr) {
+    return dr.week.map(d => _goalsSumDay(dr, d))
+        .reduce((a, s) => ({ goal: a.goal + s.goal, got: a.got + s.got, known: a.known || s.known }), { goal: 0, got: 0, known: false });
+}
+// The actual under the Total label (Ethan, 2026-09-24: "add an actual for the
+// total line"). The two totals beside it are GOALS — today's and the week's,
+// today included — so this says what has actually been listed against the
+// days that are done. '' on a Monday, when no day of the week is done yet.
+function _goalsTotalListedHtml(dr) {
+    if (!dr || !dr.week.length) return '';
+    const W = _goalsWeekActual(dr);
+    if (!W.known) return 'Listed so far <b class="gr-wait">—</b>';
+    return 'Listed so far <b class="gr-' + _goalsPctTone(W.got, W.goal) + '">' + W.got + '</b> of ' + W.goal
+        + (W.goal ? ' · ' + Math.round(W.got / W.goal * 100) + '%' : '');
+}
+
+function _goalsStoreResultHtml(dr) {
+    if (!dr.days.length) return '';
+    const last = dr.days[dr.days.length - 1];
+    const L = _goalsSumDay(dr, last);
+    const W = _goalsWeekActual(dr);
+    const cell = (label, s) => `<div class="goals-res-cell"><span class="gr-k">${label}</span>`
+        + (s.known ? `<b class="gr-${_goalsPctTone(s.got, s.goal)}">${s.got}</b>` : '<b class="gr-wait">—</b>')
+        + `<small>/ ${s.goal}${s.known && s.goal ? ' · ' + Math.round(s.got / s.goal * 100) + '%' : ''}</small></div>`;
+    return `<div class="goals-res-store" title="Listed, from the Day End Report, against the goals set for those days">`
+        + cell(_goalsWeekday(last) + ' listed', L)
+        + (dr.week.length ? cell('Week to date', W) : '')
+        + '</div>';
+}
+
+// The temp's row, rendered after the roster in both widgets.
+function _goalsTempRowHtml(sfx, count, priorWeek, dr) {
+    const line = dr ? _goalsResultLine(GOALS_TEMP_NAME, dr) : '';
+    return `
+        <div class="goals-mgr-row goals-temp-row">
+            <div class="goals-mgr-emp">
+                <span class="goals-roster-name">Temps <small class="goals-temp-note">${GOALS_TEMP_GOAL} a day each</small></span>
+                <div class="goals-temp-ctl">${_goalsTempCtlHtml(sfx, count || 0)}</div>
+                ${line}
+            </div>
+            <div class="goal-auto-display" id="goal-display-temp${sfx}" data-prior-week="${priorWeek || 0}">–</div>
+            <div class="goals-mgr-week" id="week-display-temp${sfx}">–</div>
+        </div>`;
+}
+// Paints the temp row's two figures and returns what it adds to the totals.
+function _goalsPaintTemp(sfx) {
+    const disp = document.getElementById('goal-display-temp' + sfx);
+    if (!disp) return { today: 0, week: 0 };
+    const today = _goalsTempCount(sfx) * GOALS_TEMP_GOAL;
+    disp.innerText = today ? today : '–';
+    disp.classList.toggle('goal-auto-set', today > 0);
+    const week = (parseInt(disp.dataset.priorWeek, 10) || 0) + today;
+    const wk = document.getElementById('week-display-temp' + sfx);
+    if (wk) wk.innerText = week || '–';
+    return { today, week };
+}
+// The save payload's temp row, or null at zero temps (the server then clears
+// any Temp row for the day, like any other name missing from a save).
+function _goalsTempPayload(sfx) {
+    const n = _goalsTempCount(sfx);
+    if (!n) return null;
+    return { employee: GOALS_TEMP_NAME, role: GOALS_TEMP_ROLE, goal: String(n * GOALS_TEMP_GOAL), result: '' };
+}
+
 // The dots for one person: the store's role ladder plus the Off chip. Shared by
 // all three renderers (flip-card form, manager widget, MSM stacked widget) so
 // the Off chip can't be added to one and forgotten in the others.
@@ -16678,7 +16896,9 @@ async function saveGoalsData(silent = false) {
         // no goal.
         const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, { employee: emp, store: goalsTargetStore })) : '';
 
-        // Results now come from the Weekly KPI (# Listed); preserve any existing value.
+        // Results come from the Day End Report, written onto each row the morning
+        // after by day-end-ingest (2026-09-24). listing-goals POST ignores this
+        // field now, so it is sent only to keep the local cache below whole.
         const existing = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
         const result = existing && existing.result != null ? String(existing.result) : '';
 
@@ -16686,6 +16906,8 @@ async function saveGoalsData(silent = false) {
             payloadEmployees.push({ employee: emp, role: role, goal: goal, result: result });
         }
     });
+    const tempRow = _goalsTempPayload('');
+    if (tempRow) payloadEmployees.push(tempRow);
 
     try {
         // Ignore the broadcast this write is about to trigger — it would come back
@@ -16812,6 +17034,7 @@ function renderManagerGoals() {
     if (storeTargetEl) storeTargetEl.innerText = `Goal: ${_weekTargetTotal} Listings`;
 
     let html = '';
+    const dr = _goalsDayRows(liveGoalsData, todayStr, startOfWeek);
     goalsRoster.forEach((emp, idx) => {
         const rec = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
 
@@ -16825,13 +17048,19 @@ function renderManagerGoals() {
             <div class="goals-mgr-emp">
                 <span class="goals-roster-name">${emp}</span>
                 <div class="goals-edit-roles" id="roles-${idx}">${rolesHtml}</div>
+                ${_goalsResultLine(emp, dr)}
             </div>
             <div class="goal-auto-display" id="goal-display-${idx}">–</div>
             <div class="goals-mgr-week" id="week-display-${idx}">–</div>
         </div>`;
     });
 
-    list.innerHTML = html;
+    const tempToday = _goalsTempCountOf(liveGoalsData.find(r => _goalsIsTempRow(r) && normalizeGoalDate(r.date) === todayStr));
+    html += _goalsTempRowHtml('', tempToday, priorWeekGoal(GOALS_TEMP_NAME, todayStr, startOfWeek), dr);
+
+    list.innerHTML = _goalsStoreResultHtml(dr) + html;
+    const totListed = document.getElementById('goals-total-listed');
+    if (totListed) totListed.innerHTML = _goalsTotalListedHtml(dr);
 
     renderGoalsLevelUp();
     setTimeout(() => { updateRoleLocks(); recomputeGoalDisplays(); }, 30);
@@ -16942,6 +17171,7 @@ function renderManagerGoalsMS() {
         st.priorWeek = {};
 
         let rows = '';
+        const dr = _goalsDayRows(st.live, todayStr, startOfWeek);
         st.roster.forEach((emp, idx) => {
             const rec = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
 
@@ -16954,11 +17184,15 @@ function renderManagerGoalsMS() {
                 <div class="goals-mgr-emp">
                     <span class="goals-roster-name">${emp}</span>
                     <div class="goals-edit-roles" id="roles-${store}-${idx}">${rolesHtml}</div>
+                    ${_goalsResultLine(emp, dr)}
                 </div>
                 <div class="goal-auto-display" id="goal-display-${store}-${idx}">–</div>
                 <div class="goals-mgr-week" id="week-display-${store}-${idx}">–</div>
             </div>`;
         });
+        const tempToday = _goalsTempCountOf(st.live.find(r => _goalsIsTempRow(r) && normalizeGoalDate(r.date) === todayStr));
+        rows += _goalsTempRowHtml('-' + store, tempToday, priorWeekGoal(GOALS_TEMP_NAME, todayStr, startOfWeek, st.live), dr);
+        rows = _goalsStoreResultHtml(dr) + rows;
 
         html += `
         <div class="ms-store-section" data-goals-scope="${store}" style="border-left: 4px solid ${ac.solid};">
@@ -16968,7 +17202,7 @@ function renderManagerGoalsMS() {
             </div>
             ${rows}
             <div class="goals-total-row">
-                <span class="goals-total-lbl">Total</span>
+                <span class="goals-total-lbl">Total<small class="goals-total-listed">${_goalsTotalListedHtml(dr)}</small></span>
                 <span id="goals-total-target-${store}" class="goals-total-val target">0</span>
                 <span id="goals-total-actual-${store}" class="goals-total-val actual">0</span>
             </div>
@@ -17013,6 +17247,10 @@ function recomputeGoalDisplaysMS() {
             weekTotal += weekVal;
         });
 
+        const tp = _goalsPaintTemp('-' + store);
+        todayTotal += tp.today;
+        weekTotal += tp.week;
+
         const tEl = document.getElementById(`goals-total-target-${store}`);
         if (tEl) tEl.innerText = todayTotal;
         const wEl = document.getElementById(`goals-total-actual-${store}`);
@@ -17049,6 +17287,8 @@ async function saveGoalsDataMS(silent = false) {
                 payloadEmployees.push({ employee: emp, role: role, goal: goal, result: result });
             }
         });
+        const tempRow = _goalsTempPayload('-' + store);
+        if (tempRow) payloadEmployees.push(tempRow);
 
         try {
             // See saveGoalsData — don't let our own broadcast bounce back.
@@ -17104,9 +17344,9 @@ async function saveGoalsDataMS(silent = false) {
 // fairly. Someone who spent it on the buy counter is not marked down for a low
 // count; a lister who fell short stands out.
 //
-// Data is store-targets ?action=roleweeks (see the note there). Listings are the
-// weekly KPI, because the daily result column is never filled in — which is
-// also why there is no per-day listed figure to show, only per-week.
+// Data is store-targets ?action=roleweeks (see the note there). Listings are
+// each person's daily Day End Report result summed to the week, from
+// 2026-08-03 (the weekly KPI before that). The temp's row shows as "Temp".
 //
 // PEOPLE ARE SCORED ACROSS THE MARKET. A floater's KPI is filed under one store
 // for the whole week, so his row sums goals and listings from every store in the
@@ -17730,7 +17970,7 @@ function levelUpHtml(history, target) {
 
     return `
         <div class="lu-head"><span class="lu-title">Last 4 Weeks</span>
-        <span class="lu-sub">listed of goal &middot; % of what you were staffed for</span></div>
+        <span class="lu-sub">Listed of goal &middot; % of what you were staffed for</span></div>
         <div class="lu-weeks">${bars}</div>`;
 }
 
@@ -37520,6 +37760,10 @@ window.recomputeGoalDisplays = function() {
         weekTotal += weekVal;
     });
 
+    const tp = _goalsPaintTemp('');
+    todayTotal += tp.today;
+    weekTotal += tp.week;
+
     const todayEl = document.getElementById('goals-total-target');
     if (todayEl) todayEl.innerText = todayTotal;
     const weekEl = document.getElementById('goals-total-actual');
@@ -48287,10 +48531,10 @@ function _dmxLastWeekStart() {
 
 // The Monday `n` weeks before this one, as YYYY-MM-DD.
 //
-// The current week is deliberately NOT offered: Listed comes from the weekly KPI,
-// which isn't filed until the week is over, so an in-progress week has no result
-// to measure and every store read as a 0%. Two completed weeks is what this
-// screen can actually answer for.
+// Listed comes from the Day End Report now (store-targets, DAY_END_FROM), not
+// the weekly KPI, so the current week IS offered (2026-09-24): measured through
+// yesterday on both sides. Until then an in-progress week had no KPI to measure
+// and every store read 0%, which is why only finished weeks were offered.
 function _dmxWeeksBack(n) {
     const d = new Date(_dmxWeekDays().start);
     d.setDate(d.getDate() - 7 * n);
@@ -48355,6 +48599,14 @@ function _dmxEffChip(pct, emptyText) {
         + '</span>';
 }
 
+// Open days (Mon–Sat) from a week's Monday through a YYYY-MM-DD date, capped at
+// six. 0 when `through` is before the week starts — a Monday morning.
+function _dmxOpenDaysThrough(weekStart, through) {
+    const a = new Date(weekStart + 'T12:00:00'), b = new Date(through + 'T12:00:00');
+    const n = Math.floor((b - a) / 86400000) + 1;
+    return Math.max(0, Math.min(6, n));
+}
+
 function _dmxEfficiencyPane() {
     const week = _dmxCapWeek || _dmxLastWeekStart();
     const rows = _dmxCap[week];
@@ -48362,12 +48614,16 @@ function _dmxEfficiencyPane() {
 
     // Spell the actual dates out. "Last week" on its own is ambiguous the moment
     // someone opens this on a Monday morning.
-    const range = _dmxWeekRangeLabel(week) + (isThisWeek ? ' (in progress)' : '');
+    // For this week, say which day the figures run through: today has goals but
+    // no report until tonight, so the server measures through yesterday.
+    const thr = isThisWeek && rows && rows[0] && rows[0].through;
+    const thrLbl = thr ? new Date(thr + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' }) : '';
+    const range = _dmxWeekRangeLabel(week) + (isThisWeek ? (thrLbl ? ' (through ' + thrLbl + ')' : ' (in progress)') : '');
 
     // Two completed weeks. The nearer one is named by relation because that is
     // how anyone refers to it out loud; the older one is named by its dates,
     // because "two weeks ago" is a sentence people have to stop and decode.
-    const back1 = _dmxWeeksBack(1), back2 = _dmxWeeksBack(2);
+    const back1 = _dmxWeeksBack(1), back2 = _dmxWeeksBack(2), back0 = _dmxWeeksBack(0);
     const btn = (label, wk) => '<button type="button" class="dmx-goalset-b dmx-b-wk'
         + (week === wk ? '' : ' dmx-b-off') + '" onclick="dmxShowEfficiency(\'' + wk + '\')">'
         + escapeHtml(label) + '</button>';
@@ -48379,6 +48635,7 @@ function _dmxEfficiencyPane() {
         // Oldest on the left, so the pair runs in the direction time does.
         + btn(_dmxWeekRangeLabel(back2), back2)
         + btn('Last Week', back1)
+        + btn('This Week', back0)
         + '</div></div>';
 
     if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';
@@ -48401,17 +48658,27 @@ function _dmxEfficiencyPane() {
     rows.forEach(r => {
         // efficiency comes back as a ratio (1.08) or null when nothing was staffed.
         //
-        // ⚠️ An in-progress week has NO efficiency, because Listed comes from the
-        // weekly KPI and that is not filed until the week ends. The server
-        // faithfully returns 0/45 = 0, and printing that gave every store a red
-        // "Below target · 0%" — which read as the button being broken rather than
-        // as the week not being over. Suppress it and say which it is.
-        const pending = isThisWeek && !r.actual;
+        // This week is measured THROUGH YESTERDAY (r.through): Staffed For is the
+        // goals of those days only (adjustedToDate), so it lines up with Listed.
+        // A Monday has nothing yet — through is before the week starts — and
+        // prints dashes rather than a red 0%, the failure the old KPI version hit
+        // on every in-progress week.
+        const adj = (isThisWeek && r.adjustedToDate != null) ? r.adjustedToDate : r.adjusted;
+        const pending = isThisWeek && !adj;
         const pct = (pending || r.efficiency == null) ? null : Math.round(r.efficiency * 100);
         // Fewer than four days per person means most of the week carried no goal
         // at all, so the denominator is short and the ratio flatters. Flag it
         // rather than printing a number that reads as a verdict.
-        const thin = r.assignedDays > 0 && r.assignedDays < (r.people.length * 4);
+        //
+        // For THIS week the frame is the days so far, not six: judged on the
+        // full week, a Wednesday put "22/36 roles" on a store that had set
+        // every seat (Ethan's screenshot, 2026-09-24). daysIn counts Mon–Sat
+        // through the server's `through`, and the "four of six" bar scales
+        // with it. A finished week reads exactly as before.
+        const daysIn = (isThisWeek && r.through) ? _dmxOpenDaysThrough(week, r.through) : 6;
+        const setDays = (isThisWeek && r.assignedDaysToDate != null) ? r.assignedDaysToDate : r.assignedDays;
+        const slots = r.people.length * daysIn;
+        const thin = daysIn > 0 && setDays > 0 && setDays < (r.people.length * daysIn * 4 / 6);
         // Hours, Ceiling and Goal for this week were reconstructed from TODAY'S
         // roster, because the week finished before capacity snapshots existed
         // (migration 0093). They are the best available figures but they are not
@@ -48423,24 +48690,26 @@ function _dmxEfficiencyPane() {
             // Short form: "15 of 24 roles set" rendered wider than the column it
             // sits in and bled over both edges. The tooltip carries the sentence.
             + (thin ? '<span class="dmx-role" title="Roles were only set on '
-                + r.assignedDays + ' of this store’s ' + (r.people.length * 6) + ' person-days. '
+                + setDays + ' of this store’s ' + slots + ' person-days' + (daysIn < 6 ? ' so far' : '') + '. '
                 + 'A day with nobody in a seat carries no goal, so it drops out of Staffed For — '
                 + 'this store’s efficiency is measured against a shorter week than it worked.">'
-                + r.assignedDays + '/' + (r.people.length * 6) + ' roles</span>' : '')
+                + setDays + '/' + slots + ' roles</span>' : '')
             + '</td>'
             + '<td class="dmx-num">' + r.hours + '</td>'
-            + '<td class="dmx-num">' + r.adjusted + '</td>'
+            + '<td class="dmx-num">' + adj + '</td>'
             + '<td class="dmx-num dmx-mute">' + r.capacity + '</td>'
             + '<td class="dmx-num">' + r.planned + '</td>'
             + '<td class="dmx-num' + (pending ? ' dmx-mute' : '') + '">' + (pending ? '–' : r.actual) + '</td>'
             + '<td class="dmx-num">' + (pct == null ? '–' : pct + '%') + '</td>'
-            + '<td>' + _dmxEffChip(pct, pending ? 'KPI not filed yet' : 'No roles set') + '</td></tr>';
+            + '<td>' + _dmxEffChip(pct, pending ? 'No days in yet' : 'No roles set') + '</td></tr>';
     });
 
     const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
-    const dAdj = sum('adjusted'), dAct = sum('actual');
-    // Same rule as a row: an unfinished week has nothing to divide.
-    const dPending = isThisWeek && !dAct;
+    const dAdj = isThisWeek ? rows.reduce((a, r) => a + (Number(r.adjustedToDate != null ? r.adjustedToDate : r.adjusted) || 0), 0)
+                            : sum('adjusted');
+    const dAct = sum('actual');
+    // Same rule as a row: a week with no finished days has nothing to divide.
+    const dPending = isThisWeek && !dAdj;
     const dPct = (dPending || !dAdj) ? null : _dmxPct(dAct, dAdj);
     t += '<tr class="dmx-tot"><td class="dmx-cl">District</td>'
         + '<td class="dmx-num">' + sum('hours') + '</td>'
@@ -48449,7 +48718,7 @@ function _dmxEfficiencyPane() {
         + '<td class="dmx-num">' + sum('planned') + '</td>'
         + '<td class="dmx-num' + (dPending ? ' dmx-mute' : '') + '">' + (dPending ? '–' : dAct) + '</td>'
         + '<td class="dmx-num">' + (dPct == null ? '–' : dPct + '%') + '</td>'
-        + '<td>' + _dmxEffChip(dPct, dPending ? 'KPI not filed yet' : 'No roles set') + '</td></tr></tbody></table>';
+        + '<td>' + _dmxEffChip(dPct, dPending ? 'No days in yet' : 'No roles set') + '</td></tr></tbody></table>';
 
     // No explanatory paragraphs (user, 2026-08-10). The column headers carry the
     // meaning, and the "X of Y roles set" tag carries the one caveat they cannot.
@@ -50251,7 +50520,7 @@ function _dcWatchHtml() {
             return v > 0 ? 100 * (v - (Number(r.total_spent) || 0)) / v : null;
         }
         const g = goalOn[s + '|' + r.date] || 0;
-        return g > 0 ? 100 * (Number(r.devices_processed) || 0) / g : null;
+        return g > 0 ? 100 * _dcwListed(r) / g : null;
     };
     // The last OPEN day, not the judged day: on a Monday morning the judged
     // day is Sunday, when every store is shut.
@@ -50270,7 +50539,7 @@ function _dcWatchHtml() {
             + (Number(r.cust_conv_den) || 0) + ' customers converted';
         if (k === 'margin') return day + ': ' + _dcwMoney((Number(r.est_value) || 0) - (Number(r.total_spent) || 0))
             + ' of gross profit on ' + _dcwMoney(r.est_value) + ' bought';
-        return day + ': ' + (Number(r.devices_processed) || 0) + ' listed against a goal of '
+        return day + ': ' + _dcwListed(r) + ' listed against a goal of '
             + (goalOn[s + '|' + r.date] || 0);
     };
 
@@ -50503,6 +50772,18 @@ function _dcwModalPaint() {
     if (body) body.innerHTML = _dcwModalHtml(rows);
 }
 
+// What a store-day LISTED — the figure listing is judged on. district-watch
+// works it out (listedOf) and sends it as `listed`: the report's Total Listed
+// Devices from 2026-09-23, Devices Processed before the report carried one. The
+// fallbacks are for a response from a build that predates the field, so the
+// board keeps meaning what it meant rather than reading every day as zero.
+function _dcwListed(r) {
+    if (!r) return 0;
+    if (r.listed != null) return Number(r.listed) || 0;
+    if (r.listed_devices != null) return Number(r.listed_devices) || 0;
+    return Number(r.devices_processed) || 0;
+}
+
 // The last 7 days this store actually traded. NOT the last 7 calendar days:
 // every store is closed on Sunday, so a calendar week would always carry one
 // blank row that reads like a zero-conversion day.
@@ -50524,6 +50805,8 @@ function _dcwStoreDays(store) {
             lost: Number(r.devices_lost) || 0,
             noDeal: Number(r.no_deal_customers) || 0,
             processed: Number(r.devices_processed) || 0,
+            listed: _dcwListed(r),
+            listedKnown: r.listed_source ? r.listed_source === 'listed' : r.listed_devices != null,
             procValue: Number(r.processed_value) || 0,
             goal: goals[r.date] == null ? null : goals[r.date],
         }));
@@ -50697,7 +50980,8 @@ function _dcwListingTab(rows, cfg) {
     // applies. A day nobody filled the rota in for is not a day the store
     // listed nothing, and counting it would flatter or damn the store at random.
     const withGoal = rows.filter(r => r.goal != null && r.goal > 0);
-    const P = withGoal.reduce((a, r) => a + r.processed, 0);
+    // Listed, not processed — the engine's listedOf(). See _dcwListed.
+    const P = withGoal.reduce((a, r) => a + r.listed, 0);
     const G = withGoal.reduce((a, r) => a + r.goal, 0);
     const pctGoal = G ? (P / G) * 100 : null;
     const short = G ? Math.round(G - P) : null;
@@ -50713,36 +50997,44 @@ function _dcwListingTab(rows, cfg) {
                    short == null ? '&mdash;' : String(Math.abs(short)),
                    withGoal.length + ' of ' + rows.length + ' days had a goal set', sev)
         + _dcwTile('Value processed', _dcwMoney(val),
-                   rows.reduce((a, r) => a + r.processed, 0) + ' devices in total', '');
+                   rows.reduce((a, r) => a + r.listed, 0) + ' listed in total', '');
 
-    let body = '<thead><tr><th>Day</th><th>Processed</th><th>Value</th>'
+    // Listed only (Ethan, 2026-09-24: "get rid of processed and just use the
+    // line items"). A Processed column sat beside it for a day while the two
+    // were compared; they matched person for person. A day from before the
+    // report had a listed count still shows its processed figure — that is the
+    // number the engine counted for it — muted, with a hover saying so.
+    let body = '<thead><tr><th>Day</th><th>Listed</th><th>Value</th>'
         + '<th>Goal</th><th class="dcw-th-bar">Against goal &middot; 100%</th></tr></thead><tbody>';
     _dcwNewestFirst(rows).forEach(r => {
-        const p = (r.goal != null && r.goal > 0) ? (r.processed / r.goal) * 100 : null;
+        const p = (r.goal != null && r.goal > 0) ? (r.listed / r.goal) * 100 : null;
         const s = p == null ? '' : (p >= 100 ? 'g' : (p >= 70 ? 'w' : 'b'));
+        const listedCell = r.listedKnown
+            ? '<td>' + r.listed + '</td>'
+            : '<td class="dc-muted" title="The Day End Report had no listed count before 23 Sep — devices processed is counted for this day">'
+              + r.listed + '</td>';
         body += '<tr><td class="dcw-td-day">' + escapeHtml(_dcwDay(r.date)) + '</td>'
-            + '<td>' + r.processed + '</td><td>' + _dcwMoney(r.procValue) + '</td>'
+            + listedCell + '<td>' + _dcwMoney(r.procValue) + '</td>'
             + '<td class="' + (r.goal ? '' : 'dc-muted') + '">' + (r.goal == null ? '&mdash;' : r.goal) + '</td>'
             + '<td class="dcw-td-bar">' + _dcwBar(p, 100, 150, s) + '</td></tr>';
     });
     body += '</tbody>';
 
-    // ⚠️ THIS HOVER IS LOAD-BEARING AND MUST NOT BE DROPPED. Listing became a
-    // flagged metric in 0099, but the measurement did not change: it is the Day
-    // End Report's processed count, which runs 15–30% BELOW the manager-filed
-    // weekly KPI that the DM's Store Efficiency board scores (0095). The two
-    // screens will disagree, both defensibly, and this sentence is the only
-    // thing on either of them that explains why.
+    // The hover says where Listed comes from. It used to warn that this tab
+    // "reads harsher" than Store Efficiency because the report ran 15–30% below
+    // the manager-filed KPI (0095). Re-checked 2026-09-24 over 35 store-weeks:
+    // the two agree exactly on 29 and the rest are hand-entry slips, so that
+    // claim was wrong — and Store Efficiency reads the same report now anyway.
     return _dcwShell(head, body,
         short == null
-            ? '<b>' + rows.reduce((a, r) => a + r.processed, 0) + '</b> devices processed &middot; no goals set to judge against'
+            ? '<b>' + rows.reduce((a, r) => a + r.listed, 0) + '</b> listed &middot; no goals set to judge against'
             : '<b>' + P + '</b> listed against <b>' + G + '</b> staffed for'
               + (short > 0 ? ' &middot; <b>' + short + '</b> devices short' : ' &middot; goal cleared'),
         'Counted against each day\u2019s staffed goal, and only on '
         + 'days that had one set. '
-        + 'The processed figure comes from the Day End Report, which runs 15–30% below the '
-        + 'manager-filed weekly KPI the Store Efficiency board scores — so this reads harsher '
-        + 'than that board does, on the same store, in the same week.');
+        + 'Listed is the Day End Report’s Total Listed Devices from 23 Sep; before that '
+        + 'the report had only devices processed, which is counted for those days. Store '
+        + 'Efficiency counts the same report.');
 }
 
 // ============================================================================

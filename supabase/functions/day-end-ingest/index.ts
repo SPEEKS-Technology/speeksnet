@@ -91,6 +91,9 @@ const FIELD_MAP: Record<string, string> = {
   fiveStarMtd: "five_star_mtd",
   devicesProcessed: "devices_processed",
   processedValue: "processed_value",
+  // Listings created (0115). Absent from mail before 2026-09-23, which lands as
+  // null here (toRow maps undefined to null), never a 0.
+  listedDevices: "listed_devices",
   queueCount: "queue_count",
   availableCount: "available_count",
   availableCost: "available_cost",
@@ -139,6 +142,127 @@ function toRow(src: Row): Row | null {
   return out;
 }
 
+// ---- Listing Goals results -------------------------------------------------
+// listing_goals.result had never been written by anything — zero on every row
+// since June (0097) — so the goals scoreboard showed goals and no results, and
+// the manager-filed weekly KPI was the only listed figure anywhere. The Day End
+// Report names every person with a count, so each goal row gets that person's
+// figure for the day: Total Listed Devices from 2026-09-23 (0115), Devices
+// Processed before then — the same listedOf() rule district-watch judges on, so
+// the goals board and the DM matrix count the same thing.
+//
+// Written here, the morning after, and only for days the report covers. The
+// manager's widget only ever saves TODAY, so the two never write the same row;
+// listing-goals POST also stopped sending `result` for the same reason.
+//
+// NAMES: exact (case, spacing ignored), else the same surname with one first
+// name the start of the other — "Jon Rodriguez" on the rota is "Jonathan
+// Rodriguez" to PayMore. A name that matches two goal rows is left alone rather
+// than guessed. Measured 2026-09-24 over 15 days: 197 of 237 report rows matched
+// exactly one goal row, none matched two. The rest are people the rota does not
+// carry (the Listers at OVL and MPL) or days no rota was saved; both come back
+// in the response so the gap stays visible instead of silently scoring 0.
+// The temps row the goals widget saves (speeks.js GOALS_TEMP_*): one row, goal 20 per temp, 0-2 temps.
+const TEMP_ROLE = "TEMP";
+
+const normName = (s: unknown) => String(s ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+function sameName(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const pa = a.split(" "), pb = b.split(" ");
+  if (pa.length < 2 || pb.length < 2 || pa[pa.length - 1] !== pb[pb.length - 1]) return false;
+  const fa = pa[0], fb = pb[0];
+  return fa.length > 2 && fb.length > 2 && (fa.startsWith(fb) || fb.startsWith(fa));
+}
+
+async function writeGoalResults(sb: any, rows: Row[], dry = false) {
+  const withTeam = rows.filter((r) => Array.isArray(r.team_production) && (r.team_production as any[]).length);
+  const out = { would_write: [] as string[], temp_assigned: [] as string[], updated: 0, unchanged: 0, unmatched_report: [] as string[], unmatched_rota: [] as string[], errors: [] as string[] };
+  if (!withTeam.length) return out;
+
+  const dates = [...new Set(withTeam.map((r) => String(r.date)))].sort();
+  const { data: goals, error } = await sb.from("listing_goals")
+    .select("store,date,employee,role,goal,result")
+    .gte("date", dates[0]).lte("date", dates[dates.length - 1]);
+  if (error) { out.errors.push(error.message); return out; }
+
+  // Everyone with a SPEEKSNET account, for the temp rule below. Same name
+  // rule as the rota match, so "Jonathan" in the report is still "Jon".
+  const { data: users } = await sb.from("users").select("name");
+  const userNames = (users || []).map((u: any) => normName(u.name)).filter(Boolean);
+  const isUser = (n: string) => userNames.some((u: string) => sameName(u, n));
+
+  const writes: any[] = [];
+  for (const day of withTeam) {
+    const team = (day.team_production as any[]).map((m) => ({
+      n: normName(m.name),
+      count: m.listed != null ? Number(m.listed) || 0 : Number(m.processed) || 0,
+      used: false,
+    }));
+    const rota = (goals || []).filter((g: any) => g.store === day.store && g.date === day.date);
+    for (const g of rota) {
+      if (String(g.role || "").toUpperCase() === TEMP_ROLE) continue;   // below, once everyone else is placed
+      const hits = team.filter((m) => sameName(normName(g.employee), m.n));
+      if (hits.length > 1) continue;   // ambiguous: never guessed
+      if (hits.length === 0) {
+        // The report ran for this store-day and this person is not in it: they
+        // listed nothing. Recorded as 0, not left null — null means "no report
+        // read yet", and the widget would show that dash forever. A working
+        // seat only; an Off row has nothing to score. The name is still
+        // returned, because a spelling that drifted from PayMore's lands here too.
+        if (Number(g.goal) > 0) {
+          out.unmatched_rota.push(`${day.store} ${day.date} ${g.employee}`);
+          if (g.result == null || Number(g.result) !== 0) {
+            writes.push({ store: g.store, date: g.date, employee: g.employee, role: g.role, goal: g.goal, result: 0 });
+          } else out.unchanged++;
+        }
+        continue;
+      }
+      hits[0].used = true;
+      if (g.result != null && Number(g.result) === hits[0].count) { out.unchanged++; continue; }
+      // role and goal ride along because the upsert is an insert-or-update on
+      // (store,date,employee) and role is NOT NULL; they are the row's own values.
+      writes.push({ store: g.store, date: g.date, employee: g.employee, role: g.role, goal: g.goal, result: hits[0].count });
+    }
+    // TEMPS. A temp lister has no SPEEKSNET account, so never a roster row of
+    // their own; the manager sets how many temps are in (0-2) instead, which saves
+    // one row with role TEMP carrying 20 per temp. That row's result is
+    // everyone in the report who matched nobody on the rota AND is not a
+    // SPEEKSNET user (Ethan, 2026-09-24: Jaime Shelton, Stephanie Holt, Sonia
+    // Smith, jahmecca curry-slaughter — "those people don't need accounts").
+    //
+    // The account test is what keeps real staff out of it. Measured Aug 3 –
+    // Sep 20, the unmatched names also include the DM listing on a store visit
+    // and floaters listing at a store whose rota had them elsewhere; all of
+    // them have accounts, so none of them is a temp. Names that land here are
+    // returned in `temp_assigned` so a mistake cannot hide.
+    const temp = rota.find((g: any) => String(g.role || "").toUpperCase() === TEMP_ROLE);
+    if (temp) {
+      const theirs = team.filter((m) => !m.used && m.count > 0 && !isUser(m.n));
+      theirs.forEach((m) => { m.used = true; });
+      const count = theirs.reduce((s, m) => s + m.count, 0);
+      out.temp_assigned.push(`${day.store} ${day.date}: ${theirs.map((m) => `${m.n} (${m.count})`).join(", ") || "nobody"}`);
+      if (temp.result == null || Number(temp.result) !== count) {
+        writes.push({ store: temp.store, date: temp.date, employee: temp.employee, role: temp.role, goal: temp.goal, result: count });
+      } else out.unchanged++;
+    }
+    // Only people with a goal row that day are worth naming here: someone who
+    // listed and has no row is output the goals board cannot see.
+    if (rota.length) {
+      for (const m of team) if (!m.used && m.count > 0) out.unmatched_report.push(`${day.store} ${day.date} ${m.n} (${m.count})`);
+    }
+  }
+  if (dry) {
+    out.would_write = writes.map((w) => `${w.store} ${w.date} ${w.employee}: ${w.result}`);
+    return out;
+  }
+  for (let i = 0; i < writes.length; i += 200) {
+    const { error: e } = await sb.from("listing_goals").upsert(writes.slice(i, i + 200), { onConflict: "store,date,employee" });
+    if (e) out.errors.push(e.message); else out.updated += Math.min(200, writes.length - i);
+  }
+  return out;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -153,6 +277,27 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_URL") ?? "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
   );
+
+  // ?goalsFrom=YYYY-MM-DD[&goalsTo=…][&dryRun=1] — re-run ONLY the Listing
+  // Goals write, off the day_end_facts already banked, with no Gmail round
+  // trip. For history (day_end_facts starts 2026-08-01, and every result before
+  // 2026-09-21 was a 0 nobody wrote), and for a day whose rota was saved or
+  // corrected after the morning run. Same function, so same matching rules.
+  const goalsFrom = url.searchParams.get("goalsFrom");
+  if (goalsFrom) {
+    const goalsTo = url.searchParams.get("goalsTo") || new Date().toISOString().slice(0, 10);
+    const { data: facts, error: fe } = await sb.from("day_end_facts")
+      .select("store,date,team_production").gte("date", goalsFrom).lte("date", goalsTo);
+    if (fe) {
+      return new Response(JSON.stringify({ ok: false, error: fe.message }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const res = await writeGoalResults(sb, (facts || []) as Row[], url.searchParams.get("dryRun") === "1");
+    return new Response(JSON.stringify({ ok: res.errors.length === 0, from: goalsFrom, to: goalsTo, days: (facts || []).length, goal_results: res }, null, 2), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
 
   // Default 2 rather than 1: the report lands at 10pm for the same day, and a
   // store that closes late (or a night the mail is slow) would otherwise fall
@@ -182,6 +327,8 @@ Deno.serve(async (req) => {
       messages_seen: report.messages_seen, parsed: raw.length, rejected,
       with_warnings: report.rows_with_warnings,
       sample: rows.slice(-5),
+      // What the Listing Goals write WOULD do; nothing is written on a dry run.
+      goal_results: await writeGoalResults(sb, rows, true),
     }, null, 2), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 
@@ -195,6 +342,10 @@ Deno.serve(async (req) => {
     if (error) errors.push(error.message);
     else written += chunk.length;
   }
+
+  // Each person's figure onto their Listing Goals row. After the facts upsert,
+  // and only on rows that landed — a failed chunk leaves its days' goals alone.
+  const goalResults = errors.length ? null : await writeGoalResults(sb, rows);
 
   // Cross-check against the feed that already exists. These two read the same
   // email by different routes, so a disagreement means a column moved — and
@@ -230,6 +381,7 @@ Deno.serve(async (req) => {
     // that the Day End template changed; investigate before trusting a draft.
     est_value_mismatches: mismatches.slice(0, 20),
     mismatch_count: mismatches.length,
+    goal_results: goalResults,
     errors,
   }, null, 2), {
     status: errors.length ? 500 : 200,

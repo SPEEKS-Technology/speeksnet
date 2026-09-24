@@ -166,7 +166,22 @@ type Fact = {
   est_value: number; total_spent: number;
   devices_lost: number; no_deal_customers: number;
   devices_processed: number;
+  listed_devices: number | null;
 };
+
+// What a store-day LISTED, which is what listing is judged on. The Day End
+// Report's own "Total Listed Devices" (0115) from 2026-09-23 on; Devices
+// Processed on the days before it existed, which is what this whole metric read
+// until then. Null-checked, not falsy-checked: a real 0 listed is a 0, not a
+// reason to go and read a different column.
+//
+// Per day, not switched on a week boundary. On the first night of the new
+// column the two figures agreed for every person at every store, so a week that
+// straddles the change is not scored in two currencies. If they start to part,
+// this is still the right figure for each day — it is the older days that were
+// the approximation.
+const listedOf = (r: { listed_devices?: unknown; devices_processed?: unknown }): number =>
+  r.listed_devices != null ? num(r.listed_devices) : num(r.devices_processed);
 
 // --- The rule, since 0110 ---------------------------------------------------
 // Ethan, 2026-09-23, with MPL at 80.9% month to date, nine misses in a row and
@@ -359,11 +374,15 @@ function judgeMargin(all: Fact[], mtd: Fact[], recent: Fact[], cfg: Config): Ver
 // nothing — counting its devices against a zero goal would flatter the store,
 // and calling it a miss would damn it for a missing spreadsheet row.
 //
-// ⚠️ THIS READS HARSHER THAN THE STORE EFFICIENCY BOARD and that is not a bug
-// to fix here. devices_processed comes from the Day End Report and runs 15-30%
-// below the manager-filed kpi_entries.listed_count the efficiency board scores
-// (0095). The UI carries a note saying so; do not quietly swap the source to
-// make the two agree without reading 0095 first.
+// WHAT IS COUNTED: listedOf() — the report's Total Listed Devices from
+// 2026-09-23 (0115), Devices Processed before it. Ethan had PayMore add the
+// column precisely so this could be judged daily on listings.
+//
+// Store Efficiency (store-targets) reads the SAME report since 2026-09-24, so
+// the two boards count the same listings. 0095's "15-30% below the KPI" did not
+// survive a re-check that day: over 35 store-weeks the KPI equalled the report's
+// weekly total exactly on 29, and the rest were hand-entry slips. Do not move
+// either board back onto kpi_entries.
 
 function judgeListing(
   all: Fact[], week: Fact[], recent: Fact[], goals: Record<string, number>, cfg: Config,
@@ -371,7 +390,7 @@ function judgeListing(
   const target = 100;
   const listOf: DayRatio = (r) => {
     const g = num(goals[r.date]);
-    return g > 0 ? { num: num(r.devices_processed), den: g } : null;
+    return g > 0 ? { num: listedOf(r), den: g } : null;
   };
   const j = judge(all, week, recent, listOf, target, cfg);
   const base = {
@@ -439,7 +458,7 @@ async function evaluateStore(
 
   const { data: win } = await supabase
     .from("day_end_facts")
-    .select("store,date,cust_conv_num,cust_conv_den,est_value,total_spent,devices_lost,no_deal_customers,devices_processed")
+    .select("store,date,cust_conv_num,cust_conv_den,est_value,total_spent,devices_lost,no_deal_customers,devices_processed,listed_devices")
     .eq("store", store).gte("date", from).lte("date", day).order("date");
 
   // The staffed goal, one row per PERSON per day, summed to a store-day here.
@@ -607,7 +626,7 @@ Deno.serve(async (req: Request) => {
       const sparkFrom = addDays(day, -20);
       const { data: series } = await supabase
         .from("day_end_facts")
-        .select("store,date,cust_conv_num,cust_conv_den,est_value,total_spent,devices_lost,no_deal_customers,devices_processed,processed_value")
+        .select("store,date,cust_conv_num,cust_conv_den,est_value,total_spent,devices_lost,no_deal_customers,devices_processed,processed_value,listed_devices")
         .gte("date", sparkFrom).lte("date", day).order("date");
 
       const { data: mtd } = await supabase
@@ -621,11 +640,8 @@ Deno.serve(async (req: Request) => {
       // only ever wants the store's total. Fetched through SATURDAY so the
       // front end can say what is left of the week, as the engine does.
       //
-      // ⚠️ READS HARSHER THAN THE EFFICIENCY BOARD. 0095 records that
-      // devices_processed and the manager-filed kpi_entries.listed_count
-      // disagree by 15-30% at every store. It IS flagged (0099 added the
-      // state, 0110 moved it onto daily goals) — but do not quietly swap
-      // the source to make the two boards agree without reading 0095 first.
+      // The count is listedOf(), attached to each series row below — the same
+      // report Store Efficiency reads (see judgeListing).
       const goalTo = addDays(weekStart(day), 5);
       const { data: goalRows } = await supabase
         .from("listing_goals")
@@ -644,7 +660,15 @@ Deno.serve(async (req: Request) => {
 
       return json({
         success: true, day, config: cfg, week_start: weekStart(day),
-        flags: flags || [], series: series || [], mtd: mtd || [], goals,
+        // `listed` is listedOf() worked out HERE, so the board's figures are the
+        // engine's by construction rather than by a second copy of the rule in
+        // speeks.js. `listed_source` says which column it came from, so the
+        // popup can mark the days before the report carried a listed count.
+        flags: flags || [], mtd: mtd || [], goals,
+        series: (series || []).map((r: any) => ({
+          ...r, listed: listedOf(r),
+          listed_source: r.listed_devices != null ? "listed" : "processed",
+        })),
       });
     }
 
