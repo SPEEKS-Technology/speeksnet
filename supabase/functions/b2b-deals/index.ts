@@ -1897,6 +1897,22 @@ Deno.serve(async (req: Request) => {
         // it can still be merged back instead of losing its link to the FK.
         await supabase.from("b2b_deal_items").update({ split_from: parent.id }).eq("split_from", child.id);
 
+        // The child's move history follows its units into the parent. It has
+        // to be re-pointed BEFORE the delete, not just for the history's sake:
+        // item_id is ON DELETE SET NULL, and 0081's item_shape check says an
+        // item move must name its line -- so a moved line could not be deleted
+        // at all, and every merge of one failed. Found by the live test on
+        // 2026-09-26.
+        const { error: hErr } = await supabase.from("b2b_deal_transfers")
+          .update({ item_id: parent.id }).eq("item_id", child.id);
+        if (hErr) {
+          await supabase.from("b2b_deal_items").update({
+            quantity: parent.quantity, recycled_qty: parent.recycled_qty,
+            wiped_qty: parent.wiped_qty, serials: parent.serials,
+          }).eq("id", parent.id);
+          return jsonResponse({ success: false, error: hErr.message }, 500);
+        }
+
         const { error: dErr } = await supabase.from("b2b_deal_items").delete().eq("id", child.id);
         if (dErr) {
           // Put the parent back rather than leave the units counted twice.
@@ -1905,6 +1921,17 @@ Deno.serve(async (req: Request) => {
             wiped_qty: parent.wiped_qty, serials: parent.serials,
           }).eq("id", parent.id);
           return jsonResponse({ success: false, error: dErr.message }, 500);
+        }
+
+        // Units coming back from another store is a move, and the log is where
+        // "why is this at LEE now" gets answered.
+        if (child.listing_store && parent.listing_store && child.listing_store !== parent.listing_store) {
+          await supabase.from("b2b_deal_transfers").insert({
+            deal_id: deal.id, kind: "item", item_id: parent.id,
+            from_store: child.listing_store, to_store: parent.listing_store,
+            moved_by: str(body.user, 120, "User"),
+            note: `Merged ${child.sku} back into ${parent.sku}`,
+          });
         }
 
         // Keep the deal's single-store column honest, as transfer_items does,
