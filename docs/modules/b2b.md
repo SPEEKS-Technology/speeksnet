@@ -132,6 +132,13 @@ Only unaccounted units can go. A line with a serial for every unit must name
 the serials that go. The client editor (`_b2bSplitEditorHtml`) sits in both the
 Split It Up picker (new line arrives unplaced) and Move Lines (arrives ticked).
 
+**Undoing a split** is `merge_item {id}`: the split line folds back into the
+line recorded in `b2b_deal_items.split_from` (0117), and only that line. Its
+units return to the parent's store. Recycled units and wipes come along. A unit
+listed under the split line's own SKU blocks the merge. Lines later split off
+the merged line are re-pointed at the parent. "Merge Back" appears on split
+lines in both screens, with a "split from 0003" note on the row.
+
 **Move history** is `GET ?transfers=<deal>[&store=…]`, rendered by
 `_b2bMoveHistoryHtml` as a folded section on the listing and read-only screens,
 fetched on first open.
