@@ -2496,3 +2496,122 @@ t('3.9.0 corp keeps a part-finished deal in flight', function () {
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();
+
+// ---------------------------------------------------------------------------
+// Split completion, 2026-09-26 review. Every complete call used to send no
+// store, which the server can only resolve for a one-store deal: corp could
+// never finish a split deal, a multi-store manager never their part, and the
+// card's quick Complete waited on the deal-wide count.
+// ---------------------------------------------------------------------------
+function _asMsm(fn) {
+    var m = sessionStorage.getItem('speeksMultiStore');
+    sessionStorage.setItem('speeksMultiStore', 'true');
+    try { return _asRole('manager', 'MPL', fn); }
+    finally { sessionStorage.setItem('speeksMultiStore', m); }
+}
+function _splitItems() {
+    return [
+        { id: 'm1', listing_store: 'MPL', quantity: 2, listed_qty: 2, recycled_qty: 0 },
+        { id: 'm2', listing_store: 'MPL', quantity: 1, listed_qty: 0, recycled_qty: 1 },
+        { id: 'o1', listing_store: 'OVL', quantity: 2, listed_qty: 0, recycled_qty: 0 },
+    ];
+}
+
+t('review corp gets no quick Complete while a part is still outstanding', function () {
+    return _asRole('ceo', 'CORP', function () {
+        return _b2bQuickAction(_b2bSplitDeal()) === null || 'offered Complete with MPL unfinished';
+    });
+});
+t('review corp finishing the last open part reads as completing the deal', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var d = _b2bSplitDeal();
+        d.listing_parts[0].outstanding_units = 0;
+        var q = _b2bQuickAction(d);
+        if (!q) return 'no quick action once every part is ready';
+        return q.label === 'Complete Deal' || 'label was ' + q.label;
+    });
+});
+t('review corp closing one part of several names the store', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var d = _b2bSplitDeal({ listing_stores: ['BAL', 'MPL', 'OVL'] });
+        d.listing_parts = [
+            { store: 'BAL', total_units: 1, outstanding_units: 1, completed_at: null },
+            { store: 'MPL', total_units: 3, outstanding_units: 0, completed_at: null },
+            { store: 'OVL', total_units: 2, outstanding_units: 0, completed_at: '2026-09-10T12:00:00Z' },
+        ];
+        var q = _b2bQuickAction(d);
+        return (q && q.label === 'Complete MPL') || 'label was ' + (q && q.label);
+    });
+});
+t('review a store whose own part is done gets the card button despite the other store', function () {
+    return _asRole('manager', 'MPL', function () {
+        // Deal-wide there are still units outstanding at OVL.
+        var d = _b2bSplitDeal({ outstanding_units: 2 });
+        d.listing_parts = [{ store: 'MPL', total_units: 3, outstanding_units: 0, completed_at: null }];
+        var q = _b2bQuickAction(d);
+        return (q && q.label === 'My Part Is Done') || 'got ' + (q && q.label);
+    });
+});
+t('review an unsplit deal keeps the whole-deal quick Complete', function () {
+    return _asRole('manager', 'WSP', function () {
+        var d = { id: 'u', stage: 'listing', listing_store: 'WSP', listing_stores: ['WSP'],
+                  total_units: 3, outstanding_units: 0, listing_parts: [] };
+        if (_b2bClosableParts(d) !== null) return 'an unsplit deal was treated as split';
+        var q = _b2bQuickAction(d);
+        return (q && q.label === 'Complete Deal') || 'lost the plain Complete';
+    });
+});
+t('review a multi-store manager can close their part from the loaded lines', function () {
+    return _asMsm(function () {
+        var d = _b2bSplitDeal();
+        var parts = _b2bClosableParts(d, _splitItems());
+        return JSON.stringify(parts) === '["MPL"]' || 'got ' + JSON.stringify(parts);
+    });
+});
+t('review a multi-store manager Complete does not wait on another store', function () {
+    return _asMsm(function () {
+        var saved = _b2bModalItems;
+        _b2bModalItems = _splitItems();
+        try { return _b2bAllSatisfied() || 'OVL lines held the button back'; }
+        finally { _b2bModalItems = saved; }
+    });
+});
+// Filtered by deal id: other checks' async sends land in B2B_SENT while these
+// run, so "the first request" is not necessarily this check's.
+function _sentFor(id) {
+    return B2B_SENT.filter(function (p) { return p && p.action === 'complete' && p.id === id; });
+}
+t('review each part is sent with its store, and a store names itself', function () {
+    return _asRole('manager', 'MPL', function () {
+        return _b2bCompleteParts('d-split-store', ['MPL']).then(function () {
+            var sent = _sentFor('d-split-store');
+            if (sent.length !== 1) return sent.length + ' requests';
+            return (sent[0].store === 'MPL' && sent[0].caller_store === 'MPL') || 'sent ' + JSON.stringify(sent[0]);
+        });
+    });
+});
+t('review corp sends no caller_store when it signs off a store part', function () {
+    return _asRole('ceo', 'CORP', function () {
+        return _b2bCompleteParts('d-split-corp', ['MPL', 'BAL']).then(function () {
+            var sent = _sentFor('d-split-corp');
+            if (sent.length !== 2) return sent.length + ' requests';
+            return sent.every(function (p) { return p.store && p.caller_store === undefined; })
+                || 'sent ' + JSON.stringify(sent);
+        });
+    });
+});
+t('review a split listing deal has no whole-deal Move button', function () {
+    return _asRole('ceo', 'CORP', function () {
+        if (_b2bMoveBtn(_b2bSplitDeal())) return 'Move is still offered on a split deal';
+        return !!_b2bMoveBtn(_b2bSplitDeal({ listing_store: 'MPL', listing_stores: ['MPL'] }))
+            || 'Move vanished from an unsplit deal';
+    });
+});
+t('review a store finished part shows its figures in Completed', function () {
+    return _asRole('manager', 'OVL', function () {
+        var d = _b2bSplitDeal({ total_units: 2, listed_units: 1, recycled_units: 1,
+                                total_cost: 40, total_wipe_fee: 0, client: { company: 'Splitco' } });
+        var html = _b2bFinishedRows([d]);
+        return html.indexOf('2 of 2') >= 0 || 'the finished part still reads as a dash';
+    });
+});

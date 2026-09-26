@@ -458,6 +458,54 @@ async function broadcastChange(
   }
 }
 
+// A store's board row for a SPLIT deal describes the store's part, not the deal.
+//
+// The deal_id fetch already keeps other stores' LINES here rather than trusting
+// the browser to hide them. The board row leaked the same thing a different
+// way: the view's totals are deal-wide, and listing_parts carries every store's
+// value and cost. So a store was sent the whole deal's money and units, and its
+// queue card duly showed "7 of 12 units done" for a job that was five units.
+//
+// Recomputed from that store's own lines with the same formulas as
+// b2b_deal_list, so every existing read site (cards, the quick Complete
+// check, the Completed list) sees the store's part with no change of its own.
+// listing_stores is left whole: a store still needs to know the deal IS split.
+async function narrowSplitRows(sb: any, rows: any[], store: string) {
+  const split = rows.filter((r) =>
+    (r.listing_stores || []).length > 1 && (r.listing_stores || []).includes(store));
+  if (!split.length) return;
+  const { data: items } = await sb.from("b2b_deal_items")
+    .select("deal_id, quantity, listed_qty, recycled_qty, wiped_qty, value, offer, cost, "
+      + "disposition, wipe_required, wipe_fee, shipping_cost")
+    .in("deal_id", split.map((r) => r.id)).eq("listing_store", store).limit(20000);
+  const byDeal: Record<string, any[]> = {};
+  for (const i of items || []) (byDeal[i.deal_id] ||= []).push(i);
+
+  for (const r of split) {
+    const mine = byDeal[r.id] || [];
+    const sum = (f: (i: any) => number) => mine.reduce((n, i) => n + f(i), 0);
+    const q = (i: any) => Number(i.quantity) || 0;
+    const offer = sum((i) => (Number(i.offer) || 0) * q(i));
+    const wipe = sum((i) => i.wipe_required ? (Number(i.wipe_fee) || 0) * q(i) : 0);
+    Object.assign(r, {
+      line_count: mine.length,
+      total_units: sum(q),
+      listed_units: sum((i) => Number(i.listed_qty) || 0),
+      recycled_units: sum((i) => Number(i.recycled_qty) || 0),
+      wiped_units: sum((i) => Number(i.wiped_qty) || 0),
+      outstanding_units: sum((i) => Math.max(0, q(i) - (Number(i.listed_qty) || 0) - (Number(i.recycled_qty) || 0))),
+      total_value: sum((i) => i.disposition === "recycle" ? 0 : (Number(i.value) || 0) * q(i)),
+      total_offer: offer,
+      total_cost: sum((i) => (Number(i.cost) || 0) * q(i)),
+      total_wipe_fee: wipe,
+      net_offer: Math.max(offer - wipe, 0),
+      total_shipping: sum((i) => (Number(i.shipping_cost) || 0) * q(i)),
+      wipe_units: sum((i) => i.wipe_required ? q(i) : 0),
+      listing_parts: (r.listing_parts || []).filter((p: any) => p && p.store === store),
+    });
+  }
+}
+
 // What we charge per device for a certified data wipe. Resolved here rather
 // than taken from the request: the browser that flags a line may be a tab left
 // open since before the fee changed, and the figure it snapshots onto the item
@@ -1643,14 +1691,11 @@ Deno.serve(async (req: Request) => {
         }).eq("id", deal.id);
 
         // A store that had finished, and has just been handed more work, is no
-        // longer finished. Dropping its part row is what reopens it -- and if
-        // the deal had already completed on the back of that row, it has to come
-        // back to listing too.
+        // longer finished. Dropping its part row is what reopens it. The deal
+        // itself cannot have completed on the back of that row: moves are only
+        // allowed in listing, checked above.
         await supabase.from("b2b_deal_listing_parts")
           .delete().eq("deal_id", deal.id).eq("store", to);
-        if (deal.stage !== "listing") {
-          await supabase.from("b2b_deals").update({ stage: "listing" }).eq("id", deal.id);
-        }
 
         for (const st of [...new Set([...from, to])]) await broadcastChange("b2b", st as string);
         const n = moving.length;
@@ -2874,9 +2919,11 @@ Deno.serve(async (req: Request) => {
 
     const archiveRows = archiveWanted === 0 ? [] : (archive.data || []);
     const archiveTotal = counted.count ?? archiveRows.length;
+    const rows = [...(open.data || []), ...archiveRows];
+    if (oneStore) await narrowSplitRows(supabase, rows, store);
     return jsonResponse({
       success: true,
-      data: [...(open.data || []), ...archiveRows],
+      data: rows,
       meta: {
         open: (open.data || []).length,
         archive_shown: archiveRows.length,

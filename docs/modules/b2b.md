@@ -100,6 +100,29 @@ store is never blocked by another's. The deal reaches `completed` when the last
 part lands. A one-store deal is the degenerate case of the same path and behaves
 exactly as it always did, which is why 0081 backfilled every existing item.
 
+**Every path into listing must stamp the lines.** `assign_listing`,
+`accept_quote` (a store-priced deal goes straight to listing at that store) and
+`transfer_location` (a listing-stage deal moved whole) all write
+`b2b_deal_items.listing_store`. The last two only set the deal column until
+2026-09-26, which left WSP's deal in listing with unassigned lines that nobody
+could complete. `transfer_location` refuses a split deal outright; Move Lines is
+the tool for that. `complete` still judges a deal with no assigned lines
+deal-wide, before the per-store logic, as a backstop.
+
+**Completing from the client names the store.** `_b2bClosableParts(deal, items?)`
+returns the parts this user can sign off now (corp: any ready part; a store or
+multi-store manager: their own), or `null` for an unsplit deal, which completes
+whole as before. `_b2bCompleteParts` sends one `complete` per store. Corp can
+also close one store's part from the listing breakdown (`b2bCompletePart`).
+`_b2bMyLines()` narrows the loaded lines to the user's stores, for the
+multi-store manager whose item fetch is unscoped.
+
+**A store's board row for a split deal is its part, not the deal.**
+`narrowSplitRows` recomputes the deal-wide totals from that store's lines (same
+formulas as the view) and filters `listing_parts` to its own entry, so cards,
+the quick Complete check and the Completed list all read the store's part.
+`listing_stores` stays whole: a store still needs to know the deal is split.
+
 `b2b_deal_list.listing_parts` (JSONB, one entry per store with its counts, money
 and completion) serves corp's per-store progress breakdown and a store's own
 numbers on the board from one fetch.

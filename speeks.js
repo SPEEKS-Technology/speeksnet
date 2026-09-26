@@ -18617,8 +18617,18 @@ function _b2bQuickAction(d) {
     if (d.stage === 'quote' && _b2bCanAccept()) {
         return { label: 'Mark Accepted', call: `b2bQuickAccept('${d.id}',this)` };
     }
-    if (d.stage === 'listing' && d.total_units > 0 && _b2bOutstanding(d) === 0) {
-        return { label: 'Complete Deal', call: `b2bQuickComplete('${d.id}',this)` };
+    if (d.stage === 'listing') {
+        // A split deal is ready part by part: a store whose own units are done
+        // gets the button without waiting on the other store, and corp gets it
+        // for whichever parts are ready.
+        const parts = _b2bClosableParts(d);
+        if (parts) {
+            if (!parts.length) return null;
+            return { label: _b2bCompleteLabel(d, parts), call: `b2bQuickComplete('${d.id}',this)` };
+        }
+        if (d.total_units > 0 && _b2bOutstanding(d) === 0) {
+            return { label: 'Complete Deal', call: `b2bQuickComplete('${d.id}',this)` };
+        }
     }
     return null;
 }
@@ -18652,11 +18662,24 @@ async function b2bQuickAccept(id, btn) {
 async function b2bQuickComplete(id, btn) {
     const d = _b2bDealById(id);
     if (!d) return;
-    if (!confirm(`Complete ${d.client?.company || 'this deal'}?\n\n`
-        + `All ${d.total_units} unit${d.total_units === 1 ? '' : 's'} are listed or recycled, `
-        + 'so the deal closes out for record keeping.')) return;
+    const parts = _b2bClosableParts(d);
+    if (parts && !parts.length) return;
+    // A store's board row already carries only its own part's units (the
+    // server narrows split rows), so total_units is the right count for it.
+    const units = parts && _b2bCanAccept()
+        ? (d.listing_parts || []).filter(p => parts.includes(p.store))
+            .reduce((n, p) => n + (Number(p.total_units) || 0), 0)
+        : d.total_units;
+    const what = parts ? _b2bCompleteLabel(d, parts) : 'Complete Deal';
+    if (!confirm(`${what} — ${d.client?.company || 'this deal'}?\n\n`
+        + `All ${units} unit${units === 1 ? '' : 's'} are listed or recycled, `
+        + (what === 'Complete Deal'
+            ? 'so the deal closes out for record keeping.'
+            : 'so that part is signed off. The deal completes once every store has finished.'))) return;
     try {
-        await _b2bBusy(btn, 'Completing…', () => _b2bSend({ action: 'complete', id, caller_store: _b2bItemScope() || undefined }));
+        await _b2bBusy(btn, 'Completing…', () => parts
+            ? _b2bCompleteParts(id, parts)
+            : _b2bSend({ action: 'complete', id, caller_store: _b2bItemScope() || undefined }));
         await b2bRefresh();
     } catch (e) {
         alert(`Couldn't complete the deal: ${e.message}`);
@@ -20107,6 +20130,59 @@ function _b2bIsTerminal(d) {
     return d.stage === 'completed' || d.stage === 'declined' || _b2bMyPartDone(d);
 }
 
+// The parts of a split deal this user can sign off right now, or null when the
+// deal is not split and completes whole the way it always has.
+//
+// Corp may close any store's part -- the server allows it, for the store that
+// has gone home with its last unit listed -- and a store only its own. A part
+// is ready when every unit on it is accounted for: counted from the loaded
+// lines when the listing screen has them (live, and what the button is looking
+// at), else from the board's listing_parts (the card has no lines).
+//
+// Every complete call used to send no store at all, which the server can only
+// resolve for a one-store deal. So corp could never finish a split deal, and a
+// multi-store manager -- who has no single caller_store -- could never finish
+// their part of one.
+function _b2bClosableParts(deal, items) {
+    const stores = (deal && deal.listing_stores) || [];
+    if (stores.length < 2) return null;
+    const mine = _b2bCanAccept() ? stores : stores.filter(s => _b2bMyStores().includes(s));
+    const parts = Array.isArray(deal.listing_parts) ? deal.listing_parts : [];
+    return mine.filter(s => {
+        const p = parts.find(x => x && x.store === s);
+        if (p && p.completed_at) return false;
+        if (items && items.length) {
+            const own = items.filter(it => it.listing_store === s);
+            return own.length > 0 && own.every(_b2bSatisfied);
+        }
+        return !!p && Number(p.total_units) > 0 && Number(p.outstanding_units) === 0;
+    });
+}
+
+// What pressing Complete on a split deal will actually do, in words. A store
+// finishes its part. Corp finishes the deal when the ready parts are the last
+// ones open, and otherwise names the stores it is signing off.
+function _b2bCompleteLabel(deal, parts) {
+    if (!_b2bCanAccept()) return 'My Part Is Done';
+    const done = new Set(((deal && deal.listing_parts) || []).filter(p => p && p.completed_at).map(p => p.store));
+    const open = ((deal && deal.listing_stores) || []).filter(s => !done.has(s));
+    return parts.length >= open.length ? 'Complete Deal' : `Complete ${parts.join(' + ')}`;
+}
+
+// Signs off each named part in turn. One request per store because that is the
+// unit the server records -- who finished which half, and when. The last
+// answer says whether the deal itself has now completed.
+async function _b2bCompleteParts(id, stores) {
+    let out = null;
+    for (const s of stores) {
+        out = await _b2bSend({
+            action: 'complete', id, store: s,
+            caller_store: _b2bCanAccept() ? undefined : s,
+        });
+    }
+    return out;
+}
+
 // Closed-out date. stage_changed_at is when it reached its terminal stage.
 function _b2bClosedAt(d) { return d.stage_changed_at || d.updated_at || d.created_at; }
 
@@ -20118,6 +20194,11 @@ function _b2bFinishedRows(rows) {
     }
     const body = rows.map(d => {
         const done = (Number(d.listed_units) || 0) + (Number(d.recycled_units) || 0);
+        // A store's finished part of a split deal sits here while the deal is
+        // still in listing elsewhere; it has closed out as far as this store is
+        // concerned, and its row carries that part's figures (the server narrows
+        // split rows for a store), so show them rather than a dash.
+        const closed = d.stage === 'completed' || _b2bMyPartDone(d);
         const sub  = d.stage === 'declined' && d.declined_reason
             ? `<div class="b2b-doc-sub">${escapeHtml(d.declined_reason)}</div>` : '';
         return `
@@ -20126,8 +20207,8 @@ function _b2bFinishedRows(rows) {
             <td><b>${escapeHtml(d.client?.company || '')}</b>${sub}</td>
             <td>${_b2bStageChip(d.stage, d)}</td>
             <td>${_b2bDealStoreTag(d)}</td>
-            <td class="c">${d.stage === 'completed' ? `${done} of ${d.total_units || 0}` : '—'}</td>
-            <td class="r b">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d)) : '—'}</td>
+            <td class="c">${closed ? `${done} of ${d.total_units || 0}` : '—'}</td>
+            <td class="r b">${closed ? _b2bMoney(_b2bNetCost(d)) : '—'}</td>
             <td class="r">${_b2bDate(_b2bClosedAt(d))}</td>
         </tr>`;
     }).join('');
@@ -23572,6 +23653,9 @@ function _b2bMoveBtn(deal) {
     if (!_b2bCanAccept()) return '';
     const kind = _b2bTransferKind(deal);
     if (!kind) return '';
+    // A split deal has no one listing store to move it off; Move Lines is the
+    // control for it, and the server refuses a whole-deal move.
+    if (kind === 'listing' && _b2bIsSplit(deal)) return '';
     return `<button class="b2b-btn b2b-btn-secondary" onclick="b2bOpenTransfer('${deal.id}')">
         Move ${kind === 'pricing' ? 'Pricing' : 'Listing'} Store</button>`;
 }
@@ -23593,6 +23677,7 @@ function _b2bMoveBtn(deal) {
 // question end up in the same file.
 let _b2bMoveSel  = {};              // itemId -> true, while picking
 let _b2bMoveTo   = null;
+let _b2bMoveNote = '';              // why, for the transfer log; kept across repaints
 
 function _b2bMoveLinesBtn(deal) {
     if (!_b2bCanAccept()) return '';
@@ -23605,6 +23690,7 @@ function b2bOpenMoveLines(id) {
     if (!deal || !_b2bCanAccept()) return;
     _b2bMoveSel = {};
     _b2bMoveTo = null;
+    _b2bMoveNote = '';
     _b2bPaintMoveLines();
     toggleModal('b2bMoveLinesModal');
 }
@@ -23669,6 +23755,9 @@ function _b2bPaintMoveLines() {
                     <span class="b2b-loc-c">${c}</span>
                 </button>`).join('')}
         </div>
+        <label class="form-label-caps" style="margin-top:14px;">Why (Optional)</label>
+        <input class="form-input-lg" maxlength="1000" placeholder="e.g. assigned to the wrong store"
+            value="${escapeHtml(_b2bMoveNote)}" oninput="_b2bMoveNote=this.value">
         <p class="b2b-hint">A line with units already live on Shopify cannot be moved — the listing
             belongs to the store that made it. Unlist those units first.</p>`;
 
@@ -23692,10 +23781,12 @@ async function b2bMoveLines(btn) {
     try {
         await _b2bBusy(btn, 'Moving…', () => _b2bSend({
             action: 'transfer_items', id: deal.id, item_ids: ids, to_store: _b2bMoveTo,
+            note: _b2bMoveNote.trim() || undefined,
             user: _b2bUser(), role: _b2bRole(), corp_delegated: _b2bHasCorpDelegation(),
         }));
         _b2bMoveSel = {};
         _b2bMoveTo = null;
+        _b2bMoveNote = '';
         closeAllModals();
         await b2bRefresh();
         const d = _b2bDealById(deal.id);
@@ -26507,7 +26598,18 @@ async function b2bAssignListing(id) {
 
 function _b2bDone(it)      { return (Number(it.listed_qty) || 0) + (Number(it.recycled_qty) || 0); }
 function _b2bSatisfied(it) { return _b2bDone(it) >= (Number(it.quantity) || 1); }
-function _b2bAllSatisfied(){ return _b2bModalItems.length > 0 && _b2bModalItems.every(_b2bSatisfied); }
+// The lines this user answers for. Corp answers for all of them; a store for its
+// own, plus any line not yet given a store. A single-store user's fetch is
+// already scoped on the server, so this is a no-op for them -- it is here for
+// the multi-store manager, whose fetch is unscoped and so carries the other
+// stores' lines on a split deal. Without it their Complete button waited on
+// work at a store they do not run.
+function _b2bMyLines() {
+    if (_b2bIsCorp()) return _b2bModalItems;
+    const mine = _b2bMyStores();
+    return _b2bModalItems.filter(it => !it.listing_store || mine.includes(it.listing_store));
+}
+function _b2bAllSatisfied(){ const own = _b2bMyLines(); return own.length > 0 && own.every(_b2bSatisfied); }
 
 // Listing a unit is a two-scan handshake: our label identifies WHICH unit, then
 // the Shopify barcode records what it became. The id of the line waiting on its
@@ -26695,7 +26797,10 @@ function _b2bListProgress() {
     // is sent one part of a split deal and would otherwise never know it was one.
     const split = ((deal && deal.listing_stores) || []).length > 1 || live.length > 1;
 
-    const mine = (split && !_b2bIsCorp()) ? live[0] : null;
+    // The first of MY stores, not the first row: a multi-store manager's fetch is
+    // unscoped, so live[0] can be another store's part.
+    const mine = (split && !_b2bIsCorp())
+        ? (live.find(p => _b2bMyStores().includes(p.store)) || live[0]) : null;
     const total = mine ? mine.total_units : live.reduce((n, p) => n + p.total_units, 0);
     const done = mine ? mine.done_units : live.reduce((n, p) => n + p.done_units, 0);
     const pct = total ? Math.round((done / total) * 100) : 0;
@@ -26712,7 +26817,10 @@ function _b2bListProgress() {
                             : ''}</span>
                     <span>${finished
                         ? '<b>Complete</b>'
-                        : `<b>${p.done_units}</b> of ${p.total_units} units · ${q}%`}</span>
+                        : `<b>${p.done_units}</b> of ${p.total_units} units · ${q}%${
+                            p.total_units && p.done_units >= p.total_units && _b2bCanAccept()
+                                ? ` <button class="b2b-mini" onclick="b2bCompletePart('${deal.id}','${p.store}',this)">Mark Complete</button>`
+                                : ''}`}</span>
                 </div>
                 ${finished ? '' : `<div class="b2b-pace-bar sm"><i style="width:${q}%"></i></div>`}
             </div>`;
@@ -26983,6 +27091,16 @@ function b2bScan(dealId) {
     // First scan: which line is this?
     const sku = raw.toUpperCase();
     const it = _b2bModalItems.find(i => (i.sku || '').toUpperCase() === sku);
+    // On a split deal a store is only sent its own lines, so a label from the
+    // other store's part lands here too. Our SKUs start with the deal's ref, so
+    // that case can be told apart and named -- "isn't a line on this deal" sends
+    // somebody looking for a mistake that is really a box at the wrong store.
+    const deal = _b2bModalDeal;
+    if (!it && deal && _b2bIsSplit(deal) && !_b2bIsCorp() && deal.ref
+        && sku.startsWith(`${String(deal.ref).toUpperCase()}-`)) {
+        return _b2bScanFlash(`${sku} is on this deal but was sent to another store. `
+            + 'If it is here, ask corp to move the line to you.', true);
+    }
     if (!it)               return _b2bScanFlash(`${sku} isn't a line on this deal.`, true);
     if (_b2bIsScrap(it))   return _b2bScanFlash(`${sku} is a recycle line — use Recycle instead of listing it.`, true, it.id);
     if (it.wipe_required && (Number(it.listed_qty) || 0) >= (Number(it.wiped_qty) || 0)) {
@@ -27160,28 +27278,68 @@ function b2bRecycleUnits(itemId) {
 function _b2bCelebrate(dealId) {
     const deal = _b2bDealById(dealId) || _b2bModalDeal;
     if (!deal) return;
-    const units = _b2bModalItems.reduce((n, it) => n + (Number(it.quantity) || 1), 0);
-    const recycled = _b2bModalItems.reduce((n, it) => n + (Number(it.recycled_qty) || 0), 0);
+    // On a split deal a store has finished ITS part, so the figures are its
+    // lines' and the cost is summed from them -- the deal's total_cost is the
+    // whole deal's.
+    const parts = _b2bClosableParts(deal, _b2bModalItems);
+    const own = _b2bMyLines();
+    const units = own.reduce((n, it) => n + (Number(it.quantity) || 1), 0);
+    const recycled = own.reduce((n, it) => n + (Number(it.recycled_qty) || 0), 0);
+    const cost = parts && !_b2bIsCorp()
+        ? Math.max(0, own.reduce((n, it) => n
+            + (Number(it.cost != null ? it.cost : it.offer) || 0) * (Number(it.quantity) || 1)
+            - (Number(it.qty_wipe_total) || 0), 0))
+        : (deal.total_cost ? _b2bNetCost(deal) : _b2bNetOffer(deal));
+    const label = parts ? _b2bCompleteLabel(deal, parts) : 'Complete Deal';
     document.getElementById('b2bDealBody').innerHTML = `
         <div class="b2b-celebrate">
             <div class="b2b-cel-ring">${_b2bIco('<polyline points="20 6 9 17 4 12"/>')}</div>
-            <div class="b2b-cel-t">Every unit is accounted for</div>
+            <div class="b2b-cel-t">${parts && !_b2bIsCorp()
+                ? 'Every unit in your part is accounted for' : 'Every unit is accounted for'}</div>
             <div class="b2b-cel-s">${escapeHtml(deal.ref)} · ${escapeHtml(deal.client?.company || '')}</div>
             <div class="b2b-cel-stats">
                 <div><b>${units - recycled}</b><span>listed</span></div>
                 ${recycled ? `<div><b>${recycled}</b><span>recycled</span></div>` : ''}
-                <div><b>${_b2bMoney(deal.total_cost ? _b2bNetCost(deal) : _b2bNetOffer(deal))}</b><span>inventory cost</span></div>
+                <div><b>${_b2bMoney(cost)}</b><span>inventory cost</span></div>
             </div>
         </div>`;
     document.getElementById('b2bDealFooter').innerHTML = `
         <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Not Yet</button>
-        <button class="b2b-btn b2b-btn-primary" onclick="b2bCompleteDeal('${deal.id}',this)">Complete Deal</button>`;
+        <button class="b2b-btn b2b-btn-primary" onclick="b2bCompleteDeal('${deal.id}',this)">${escapeHtml(label)}</button>`;
 }
 
 async function b2bCompleteDeal(id) {
-    await _b2bPost({ action: 'complete', id, caller_store: _b2bItemScope() || undefined }, "Couldn't complete the deal");
+    const deal = (_b2bModalDeal && _b2bModalDeal.id === id) ? _b2bModalDeal : _b2bDealById(id);
+    const parts = _b2bClosableParts(deal, _b2bModalItems);
+    if (parts && !parts.length) return _b2bSay('Nothing on this deal is ready to sign off yet.', true);
+    try {
+        if (parts) await _b2bCompleteParts(id, parts);
+        else await _b2bSend({ action: 'complete', id, caller_store: _b2bItemScope() || undefined });
+    } catch (e) {
+        alert(`Couldn't complete the deal: ${e.message}`);
+        return;
+    }
     closeAllModals();
     await b2bRefresh();
+}
+
+// Corp signing off ONE store's part from the listing breakdown -- the store that
+// listed its last unit and went home without pressing the button. The server
+// has always allowed this; nothing on screen offered it.
+async function b2bCompletePart(id, store, btn) {
+    if (!_b2bCanAccept()) return;
+    if (!confirm(`Mark ${store}'s part of this deal complete?\n\n`
+        + `Every unit sent to ${store} is listed or recycled. It is recorded against your name.`)) return;
+    try {
+        await _b2bBusy(btn, 'Completing…', () => _b2bCompleteParts(id, [store]));
+    } catch (e) {
+        alert(`Couldn't complete ${store}'s part: ${e.message}`);
+        return;
+    }
+    await b2bRefresh();
+    const d = _b2bDealById(id);
+    if (d && d.stage === 'listing') b2bOpenDeal(_b2bClickKind(d), id);
+    else closeAllModals();
 }
 
 // --- read-only view --------------------------------------------------------
