@@ -32,7 +32,7 @@ Deno.serve(async (req: Request) => {
   if (req.method === "GET") {
     const { data, error } = await supabase
       .from("users")
-      .select("name, pin, store, role, onboarded_at, employment_type, can_float, hire_date")
+      .select("name, pin, store, role, onboarded_at, employment_type, can_float, hire_date, weekly_hours, days_per_week")
       .order("name");
 
     if (error) return json({ error: error.message }, 500);
@@ -59,11 +59,15 @@ Deno.serve(async (req: Request) => {
     // hours, un-floated the floater, and wiped the new-hire ramp, moving every
     // store's listing goal with no error anywhere.
     //
+    // It happened AGAIN on 2026-09-17: weekly_hours / days_per_week landed in
+    // the table (migration 0091) before this function knew about them, and the
+    // next Permissions save nulled both columns for every user inside the hour.
+    //
     // If you add a column to users, add it here too, or the modal will eat it.
     const today = centralToday();
     const { data: existing } = await supabase
       .from("users")
-      .select("pin, onboarded_at, employment_type, can_float, hire_date");
+      .select("pin, onboarded_at, employment_type, can_float, hire_date, weekly_hours, days_per_week");
 
     const prev = new Map<string, any>();
     (existing || []).forEach((u: any) => prev.set(String(u.pin), u));
@@ -83,6 +87,24 @@ Deno.serve(async (req: Request) => {
       const can_float = typeof u.can_float === "boolean"
         ? u.can_float
         : (was?.can_float ?? false);
+
+      // Hours and days present, per person (migration 0091). NULL means "use the
+      // default for this employment type", which is what all but the exceptions
+      // run on — so the modal sends null for a blank box rather than a zero, and
+      // a zero would be a real answer meaning "no hours".
+      //
+      // Same preservation rule as everything else here: an older cached client
+      // that omits the keys entirely keeps whatever the row already had. Without
+      // that, one save from a stale tab would put every part-timer back on the
+      // type default and move their store's listing goal with no error anywhere.
+      const numOrNull = (v: unknown, prior: number | null) => {
+        if (v === undefined) return prior;
+        if (v === null || v === "") return null;
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+      };
+      const weekly_hours = numOrNull(u.weekly_hours, was?.weekly_hours ?? null);
+      const days_per_week = numOrNull(u.days_per_week, was?.days_per_week ?? null);
 
       // A brand-new PIN is stamped with today, which starts the two-week
       // new-hire ramp automatically — nobody has to remember to set it. An
@@ -105,6 +127,8 @@ Deno.serve(async (req: Request) => {
         employment_type,
         can_float,
         hire_date,
+        weekly_hours,
+        days_per_week,
       };
     });
 

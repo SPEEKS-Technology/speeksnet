@@ -21,6 +21,19 @@
 // Idempotent: upsert on (store, date), so re-running over the same window is
 // free. That is what makes the one-time history backfill safe to repeat.
 //
+// WHEN IT RUNS: 5:05am Central (jobid 29, hourly at :05, Central-hour guard=5).
+// It was 7:05 until migration 0096 moved the morning chain to 6:05; this has to
+// sit AHEAD of processed-report, which reads day_end_facts at 6:15 and fetches
+// nothing of its own. There is room to be this early because the Day End Report
+// mail lands at 19:00-19:01 the evening before — unlike the Daily Sales Report
+// the sales import waits on, which is not sent until 06:00.
+//
+// It used to be TWO jobs with no Central-hour guard, so both fired daily (7:05
+// and 8:05 in CDT). Harmless against an idempotent upsert, but in CST the
+// earlier twin would have landed on 6:05 — the minute sales-ingest now takes
+// the shared Apps Script lock, which is migration 0088's failure exactly. 0096
+// gave jobid 29 the guard and deactivated jobid 30.
+//
 // Auth: verify_jwt=false, ?secret= only. There is no browser path — nothing in
 // speeks.js calls this, and the secret must stay out of the frontend (it also
 // guards weekly-report, which emails real store managers).

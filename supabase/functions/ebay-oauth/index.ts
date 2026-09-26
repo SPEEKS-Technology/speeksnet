@@ -47,12 +47,31 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 // considered and rejected 2026-08-25 for exactly that reason: it would have cost
 // SPEEKS Connect upload without removing the refund capability. Refunds are held
 // off by the GET-only guard in the fee poller, never by this list.
+//
+// sell.payment.dispute (added 2026-09-23) is what the Claims & Disputes tool
+// needs to see buyer payment disputes and, crucially, whether WE have responded
+// to one. It is read-and-write in eBay's model — contest/accept live on the same
+// scope — but claims-disputes only ever GETs, the same posture as sell.finances.
+//
+// Two traps, both cost an afternoon on 2026-09-23:
+//   1. The payment-dispute resources answer on apiz.ebay.com, NOT api.ebay.com,
+//      even though they are part of the Fulfillment API and order/ is on api.
+//      The wrong gateway returns 404 with a zero-length body and no
+//      content-type, which reads exactly like a missing scope. On apiz the same
+//      call gives a real errorId 1100 "Insufficient permissions", which is the
+//      answer you were actually looking for.
+//   2. Web search will tell you the scope is sell.fulfillment. It is not — every
+//      store already held sell.fulfillment and still got 1100.
+// Verified grantable before asking anyone to log in: eBay's authorize endpoint
+// bounces an unknown scope straight to errorOauth?errorId=invalid_scope, and
+// this one goes through to sign-in instead.
 const SCOPES = Deno.env.get("EBAY_SCOPES") || [
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
   "https://api.ebay.com/oauth/api_scope/sell.finances",
+  "https://api.ebay.com/oauth/api_scope/sell.payment.dispute",
 ].join(" ");
 
 const STATE_TTL_MS = 10 * 60 * 1000;

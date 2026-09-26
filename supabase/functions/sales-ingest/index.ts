@@ -20,6 +20,67 @@
 //
 // Auth: verify_jwt=false, with two paths — ?secret= for pg_cron, and an
 // x-user-pin header re-checked against the users table for the DM/CEO button.
+//
+// WHEN IT RUNS: 6:05am Central, with a retry at 7:00 (user, 2026-09-20,
+// migration 0096). It was 8:00/9:00 from 2026-09-09, and 7:00 before that.
+// The 8:00 move was to land with the NET PROFIT tab, and that pairing still
+// holds — Net Profit moved down with it and is still five minutes behind.
+//
+// ⚠️ 6:05 IS THE FLOOR, AND IT IS SET BY THE MAILBOX, NOT BY PREFERENCE. This
+// run reads the Daily Sales Report email, and all five stores' copies arrive at
+// 06:00 SHARP (ks01/mo01-mo04@paymore.com; verified 09-19 and 09-20 through the
+// Apps Script's own action=diagnose, which reports each message's received
+// time). Anything earlier reads YESTERDAY morning's email — which carries the
+// month only through the day before yesterday — writes nothing for yesterday,
+// counts five stores missing, and fires the DM/CEO missing-data alert. Every
+// morning. 5:00am was asked for and is not available to this half of the chain.
+//
+// The Day End Report feed is the opposite case and has all the room in the
+// world: it lands at 19:00-19:01 the same evening, which is why day-end-ingest
+// and the buying/cash/Processed Stats side could move to 5:05 and 6:15.
+//
+// The schedule lives in pg_cron, NOT in this repo. It is TWO jobs, and each
+// fires HOURLY: pg_cron only speaks UTC, so the Central-hour guard inside the
+// command is the only authority on when the run happens. Exactly one firing a
+// day lands in the guarded hour whatever the current offset is — verified over
+// the next 398 days, across both DST transitions, always exactly once, never
+// twice. The other 23 firings cost one `extract` each and do nothing.
+//
+//   jobid  8  5 * * * *   main,  guard = 6   (6:05am Central)
+//   jobid 10  0 * * * *   retry, guard = 7   (7:00am Central)
+//
+// ⚠️ NET PROFIT RUNS FIVE MINUTES BEHIND THIS, NEVER ALONGSIDE IT (migration
+// 0088, carried down in 0096 — it is now :10 of hour 6). netprofit-8am/-2pm
+// call the SAME Apps Script project, which has ONE script lock, and
+// npsDailyRefresh holds it for its whole ~5-minute pass. On 2026-09-12 both
+// fired at 8:00:00: sales got the lock, Net Profit took it next, and the buying
+// half was refused — no buying stats, the Day End emails left in the inbox, and
+// a 0-of-5 cash email.
+//
+// The minutes that project now owns, and on which nothing else may be put:
+// :05 of hour 5 (day-end-ingest), :05 and :10 of hour 6 (this and Net Profit),
+// :00 of hour 7 (the retry), and :05 of hour 14 (the afternoon Net Profit).
+//
+// ⚠️ THE HOUR MUST ONLY EVER BE CHANGED IN THE GUARD, and that is the whole
+// point of this shape. It is the lesson of 2026-09-10. The run time used to
+// live in FOUR places — a -cdt schedule, a -cst schedule (a hand-maintained
+// DST table) and a Central-hour guard inside each — and moving 7am to 8am on
+// 2026-09-09 edited the two schedules and neither guard. Every job then fired
+// an hour after the only hour it was permitted to act in, did nothing, and
+// recorded "succeeded". The Sales Summary write and the cash-report email were
+// both lost, and nothing alerted: the alert lives inside the retry job, so it
+// can only fire if the run happens. jobids 9 and 11 are the retired DST twins,
+// left inactive rather than dropped.
+//
+// ⚠️ THE JOB NAMES STILL SAY 7am. Supabase grants cron.alter_job but not UPDATE
+// on cron.job, so the schedules could be moved and the labels could not. Read
+// the schedule, never the name.
+//
+// ⚠️ THE CASH EMAIL MOVED WITH IT, because cash-report is called from the end of
+// this run rather than from a cron of its own. It cannot be pulled earlier from
+// here — and note that it COULD legitimately run earlier, since it only needs
+// the 7pm Day End mail, so 6:05 is this run's constraint being imposed on it.
+// Giving it its own job is the way to get the cash email before 6:05.
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -34,7 +95,7 @@ const corsHeaders = {
 // secret guards weekly-report, which emails real store managers, and the Gmail
 // relay. The browser gets the pin path below instead.
 const SECRET = "sp33ks-sync-k3y-2026-x9mq";
-// The 7am cash email. Called from this run rather than by a cron of its own —
+// The morning cash email. Called from this run rather than by a cron of its own —
 // see the cash block below for why.
 const CASH_REPORT_URL = (Deno.env.get("SUPABASE_URL") || "") + "/functions/v1/cash-report";
 
@@ -195,7 +256,7 @@ async function ingest(sb: any, p: Record<string, string>) {
 
   // ---- cash on hand -------------------------------------------------------
   // The Day End Report carries the closing count as well as buying and reviews.
-  // It does NOT go to the sheet — it lands here, and the 7am email reads it.
+  // It does NOT go to the sheet — it lands here, and the morning email reads it.
   //
   // Wrapped whole: cash is a bonus rider on this run and must never be able to
   // fail the import that carries it. Same rule the Apps Script applies to
@@ -223,9 +284,11 @@ async function ingest(sb: any, p: Record<string, string>) {
       cash = { stored, error: storeError };
 
       // Mail it — chained off the import rather than given a cron of its own,
-      // because a second job at 7:00 would race the run that produces the data.
-      // cash-report is idempotent per day, so the 8am retry re-enters here and
-      // correctly does nothing.
+      // because a second job at the same minute would race the run that produces
+      // the data. cash-report sends once per day UNLESS a later pass holds more
+      // stores than the earlier send covered, so the 9am retry re-enters here and
+      // does nothing on a normal morning, and sends an "Updated:" email on one
+      // where the first send was short.
       //
       // CALLED UNCONDITIONALLY, and that is the point. This used to be gated on
       // having stored something, which quietly undid cash-report's own rule that
@@ -235,10 +298,25 @@ async function ingest(sb: any, p: Record<string, string>) {
       // failed write is the same case — the email then reports what IS in the
       // table and says how many stores it covers, which is the visible signal.
       // cash-report decides the day and skips Sundays on its own.
-      const u = new URL(CASH_REPORT_URL);
-      u.searchParams.set("secret", SECRET);
-      const res = await fetch(u.toString());
-      cash.mailed = res.ok ? await res.json().catch(() => ({ ok: true })) : `HTTP ${res.status}`;
+      //
+      // ⚠️ EXCEPT WHEN THE BUYING IMPORT ITSELF DID NOT RUN ON THE 8AM PASS.
+      // Cash rides on buying — no buying run, no cash rows — so "nothing stored"
+      // then means "we never looked", not "no figures arrived", and mailing it
+      // sends the CEO a morning of dashes that says the opposite of the truth.
+      // That is exactly what 2026-09-12 did: buying was refused the script lock
+      // ("another import is already running"), and 0 of 5 stores went out.
+      // The 9am retry re-runs buying and mails UNCONDITIONALLY, so deferring here
+      // costs an hour on a bad morning and keeps the no-silence rule above: if
+      // buying is still broken at 9, that pass sends the empty email, which is
+      // then true.
+      if (trigger === "cron" && buyBroke) {
+        cash.mailed = { deferred: "buying import did not run — the 9am retry sends the cash email", why: buy?.error ?? null };
+      } else {
+        const u = new URL(CASH_REPORT_URL);
+        u.searchParams.set("secret", SECRET);
+        const res = await fetch(u.toString());
+        cash.mailed = res.ok ? await res.json().catch(() => ({ ok: true })) : `HTTP ${res.status}`;
+      }
     }
   } catch (e) {
     cash = { error: String((e as Error)?.message || e) };

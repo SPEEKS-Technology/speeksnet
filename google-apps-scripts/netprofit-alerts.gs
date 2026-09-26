@@ -22,9 +22,17 @@
 //      line and returns. Nobody reads Apps Script logs. An unattended job that
 //      fails politely is indistinguishable from one that never ran.
 //
+//   2b. THE RUN FINISHED, BUT A FIGURE IN IT IS WRONG (2026-09-15). A store's
+//      collector refused, an eBay login was revoked and wrote #N/A, an importer
+//      stalled and left days short — none of which throws, so none of which the
+//      alert above ever saw. See NP_HEALTH in netprofit-sheet.gs.
+//
 //   3. THE MONTH CLOSED. One confirmation on close night, because that is the
 //      moment the figure stops moving and becomes the number a bonus is paid
 //      from. Silence on that night is the wrong default.
+//
+// And one that is not sent by a run at all: npsWatchdog (netprofit-schedule.gs)
+// mails when a pass never FINISHED — the failures that cannot report themselves.
 //
 // ⚠️ SEPTEMBER ONLY, BY AGREEMENT (user, 2026-08-28). Once the two sheets
 // become one, this duplicates the Sales alerts and should be switched off with
@@ -211,6 +219,139 @@ function _npaSendFailure(where, detail, whoFixes) {
     _npaShell('Net Profit', where + ' did not complete', '#9b2c1f', body));
 }
 
+// The watchdog found a pass unfinished and started it again (npsWatchdog).
+// Amber, not red: the tab is being refilled and nothing is needed yet. It still
+// goes out, because a cron call that keeps failing is only visible this way.
+function _npaSendRestarted(where, detail, whoFixes) {
+  if (!NPA_ENABLED) return;
+  var body = '<p style="margin:0 0 14px;color:#64707c;font-size:14px;line-height:1.5;">'
+    + '<b>' + _npaEsc(where) + '</b> did not run on time and has been <b>restarted '
+    + 'automatically</b>.</p>'
+    + '<div style="background:#fdf8ec;border:1px solid #f1e3bf;border-radius:12px;'
+    + 'padding:14px 16px;margin:0 0 14px;">'
+    + '<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;'
+    + 'color:#8a6100;font-weight:700;margin-bottom:6px;">What happened</div>'
+    + '<div style="font-size:14px;color:#1a1f24;line-height:1.5;">' + _npaEsc(detail) + '</div></div>'
+    + '<div style="background:#f4f8f5;border:1px solid #dfeae3;border-radius:12px;'
+    + 'padding:14px 16px;">'
+    + '<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;'
+    + 'color:#1f9d57;font-weight:700;margin-bottom:6px;">Who fixes it</div>'
+    + '<div style="font-size:14px;color:#1a1f24;line-height:1.5;">'
+    + _npaEsc(whoFixes) + '</div></div>';
+
+  _npaSend('Net Profit — ' + where + ' was late, restarted automatically',
+    where + ' was late and has been restarted automatically.\n\n' + detail
+      + '\n\nWho fixes it: ' + whoFixes,
+    _npaShell('Net Profit', where + ' restarted automatically', '#8a6100', body));
+}
+
+// ---------------------------------------------------------------------------
+// 2b. the run finished, but something in it is wrong
+// ---------------------------------------------------------------------------
+// The run-failed alert above only fires when a pass THROWS. Most of what breaks
+// this tab does not throw: a store's collector refused, an eBay login revoked,
+// an importer stalled. The pass completes, writes #N/A or a hole, and says so to
+// a log. NP_HEALTH (netprofit-sheet.gs) is where those land; this sends them.
+//
+// ⚠️ 'broken' REPEATS, 'check' DOES NOT. A broken entry is a figure that is wrong
+// on the tab right now, and it goes out on every pass until it clears — the
+// second email is the one that says it is STILL broken. A check is a figure
+// that is probably wrong but might be real; it goes out once per store, day and
+// kind for the month, remembered in a script property, or a genuinely cash-only
+// day would email twice a day until the month rolled.
+var NPA_SEEN_PREFIX = 'NPA_SEEN_';
+
+// PURE, so tests/np-health-check.js can drive it: which entries go out this pass,
+// and what the remembered set becomes.
+function _npaHealthToSend(issues, seen) {
+  var broken = [], fresh = [], nowSeen = (seen || []).slice();
+  (issues || []).forEach(function (i) {
+    if (i.level === 'broken') { broken.push(i); return; }
+    if (nowSeen.indexOf(i.key) >= 0) return;
+    fresh.push(i);
+    nowSeen.push(i.key);
+  });
+  return { broken: broken, fresh: fresh, seen: nowSeen };
+}
+
+function _npaSendHealth(issues, ym, what) {
+  if (!NPA_ENABLED || !issues || !issues.length) {
+    if (issues && !issues.length) Logger.log('  health: nothing wrong found — no alert sent.');
+    return;
+  }
+  var props = null, seen = [];
+  try {
+    props = PropertiesService.getScriptProperties();
+    seen = JSON.parse(props.getProperty(NPA_SEEN_PREFIX + ym) || '[]');
+  } catch (e) {
+    // Losing the memory re-sends checks already sent. Annoying, never silent.
+    Logger.log('  (could not read which checks were already sent: %s)', e);
+  }
+  var pick = _npaHealthToSend(issues, seen);
+  var list = pick.broken.concat(pick.fresh);
+  if (!list.length) {
+    Logger.log('  health: %s check(s), all already reported this month — no alert sent.',
+      issues.length);
+    return;
+  }
+
+  var card = function (i, tone) {
+    var bg = tone === 'red' ? '#fdf3f2' : '#fdf8ee';
+    var bd = tone === 'red' ? '#f3d9d5' : '#f1e3c4';
+    var ink = tone === 'red' ? '#9b2c1f' : '#8a5a00';
+    return '<div style="background:' + bg + ';border:1px solid ' + bd + ';border-radius:12px;'
+      + 'padding:14px 16px;margin:0 0 12px;">'
+      + '<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:' + ink
+      + ';font-weight:700;margin-bottom:4px;">' + _npaEsc(i.store) + '</div>'
+      + '<div style="font-size:15px;font-weight:700;color:#1a1f24;line-height:1.4;">'
+      + _npaEsc(i.what) + '</div>'
+      + (i.detail ? '<div style="font-size:12px;color:#64707c;line-height:1.5;margin-top:6px;'
+        + 'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word;">'
+        + _npaEsc(String(i.detail).slice(0, 700)) + '</div>' : '')
+      + '<div style="font-size:13px;color:#1a1f24;line-height:1.5;margin-top:10px;">'
+      + '<b>Who fixes it:</b> ' + _npaEsc(i.fix) + '</div></div>';
+  };
+
+  var body = '';
+  if (pick.broken.length) {
+    body += '<p style="margin:0 0 14px;color:#64707c;font-size:14px;line-height:1.5;">'
+      + 'The ' + _npaEsc(what) + ' finished, but these figures on the Net Profit tab are '
+      + 'wrong or missing right now. This repeats on every pass until they clear.</p>'
+      + pick.broken.map(function (i) { return card(i, 'red'); }).join('');
+  }
+  if (pick.fresh.length) {
+    body += '<p style="margin:' + (pick.broken.length ? '18px' : '0') + ' 0 14px;color:#64707c;'
+      + 'font-size:14px;line-height:1.5;">'
+      + (pick.broken.length ? 'Also, these' : 'These') + ' figures are probably wrong but '
+      + 'could be real. Each is sent once — it will not be repeated this month.</p>'
+      + pick.fresh.map(function (i) { return card(i, 'amber'); }).join('');
+  }
+
+  var subject = pick.broken.length
+    ? 'Net Profit — ' + (pick.broken.length === 1
+        ? pick.broken[0].store + ': ' + pick.broken[0].what
+        : pick.broken.length + ' problems on the tab need fixing')
+    : 'Net Profit — ' + pick.fresh.length + ' figure' + (pick.fresh.length === 1 ? '' : 's')
+      + ' worth a look';
+  if (subject.length > 140) subject = subject.slice(0, 137) + '...';
+
+  var plain = list.map(function (i) {
+    return '[' + (i.level === 'broken' ? 'BROKEN' : 'check') + '] ' + i.store + ' — ' + i.what
+      + (i.detail ? '\n  ' + i.detail : '') + '\n  Who fixes it: ' + i.fix;
+  }).join('\n\n');
+
+  _npaSend(subject, plain, _npaShell('Net Profit',
+    pick.broken.length ? 'Something on the tab is wrong' : 'Worth a look',
+    pick.broken.length ? '#9b2c1f' : '#8a5a00', body));
+
+  // Remembered only after the send was attempted. _npaSend never throws, so a
+  // failed delivery still marks these seen — the Logger line is the record.
+  if (props && pick.fresh.length) {
+    try { props.setProperty(NPA_SEEN_PREFIX + ym, JSON.stringify(pick.seen)); }
+    catch (e2) { Logger.log('  (could not remember which checks were sent: %s)', e2); }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 3. the month closed
 // ---------------------------------------------------------------------------
@@ -306,7 +447,7 @@ function _npaMonthName(ym) {
 // ---------------------------------------------------------------------------
 function npaTestEmail() {
   var ym = String(NP_FROM).slice(0, 7);
-  Logger.log('Sending three sample alerts to %s for %s', NPA_ALERT_TO, ym);
+  Logger.log('Sending four sample alerts to %s for %s', NPA_ALERT_TO, ym);
   _npaSendChanges([
     { store: 'OVL', day: 3, from: 2410.55, to: 1902.18, delta: -508.37 },
     { store: 'WSP', day: 4, from: 1655.00, to: 1836.42, delta: 181.42 }
@@ -315,5 +456,21 @@ function npaTestEmail() {
     'Claude — the collector is failing, not the sheet. Send this email on.');
   _npaSendClose(ym, { month: { OVL: 46748.07, LEE: 41654.54, WSP: 60340.92,
                                MPL: 29132.06, BAL: 39746.49 } });
+  // The health alert. The month's memory of sent checks is put back afterwards,
+  // so a test never marks a real check as already reported.
+  var save = PropertiesService.getScriptProperties().getProperty(NPA_SEEN_PREFIX + ym);
+  _npaSendHealth([
+    { level: 'broken', store: 'MPL', key: 'MPL:-:ebay-na', kind: 'ebay-na',
+      what: 'eBay Fee and Shipping show #N/A on 14 day(s), and so does Net Profit',
+      detail: 'Error: token refresh failed for MPL: 400 invalid_grant (TEST)',
+      fix: 'Someone with MPL\'s eBay seller login — this is a test, do nothing.' },
+    { level: 'check', store: 'WSP', key: 'TEST:cc-zero', kind: 'cc-zero',
+      what: 'Credit Card Fee — 3 card sale(s) on day 4 and no processing fee',
+      detail: 'A Shopify Payments card sale always carries a fee.',
+      fix: 'Claude — this is a test, do nothing.' }
+  ], ym, 'test run');
+  var props = PropertiesService.getScriptProperties();
+  if (save === null) props.deleteProperty(NPA_SEEN_PREFIX + ym);
+  else props.setProperty(NPA_SEEN_PREFIX + ym, save);
   Logger.log('Sent. Nothing was read from or written to the sheet.');
 }

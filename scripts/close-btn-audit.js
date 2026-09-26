@@ -26,6 +26,11 @@ const SEL = [
     '.modal-close-btn', '.tools-panel-close', '.cl-close', '.ex-close',
     '.lv-fs-close', '.bd-close', '.daily-bubble-close', '.goals-close-btn',
     '.award-video-close-btn', '.modal-header .close-btn',
+    // Built by openAuditPhotoLightbox and appended to <body> lazily, so it is only
+    // here once a photo has been opened -- but it is a close control like any
+    // other, and it was an inline-styled 38px circle around a text glyph until
+    // 2026-09-19. Named so a repeat is caught rather than reported by a user.
+    '.au-lb-close',
 ].join(',');
 
 (async () => {
@@ -107,7 +112,7 @@ const SEL = [
     //                 video, would clash or vanish. They must still agree with the
     //                 standard on BOX and GLYPH, and that IS asserted.
     //   standard    - everything else must be pixel-identical.
-    const isDark = r => /daily-bubble-close|award-video-close-btn/.test(r.cls);
+    const isDark = r => /daily-bubble-close|award-video-close-btn|au-lb-close/.test(r.cls);
     const notRendered = rows.filter(r => r.w === 0 || r.h === 0);
     const dark = rows.filter(r => r.w && r.h && isDark(r));
     const std = rows.filter(r => r.w && r.h && !isDark(r));

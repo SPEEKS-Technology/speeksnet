@@ -1,0 +1,277 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Picture Guide - strip borders, standardise sizes</title>
+<style>
+:root{--ink:#0f172a;--line:#e3e8ee;--em:#1f9d57;--em2:#178048;--bad:#c02626;--mut:#64748b}
+*{box-sizing:border-box}
+body{margin:0;padding:28px;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:#f6f8fa}
+h1{font-size:19px;margin:0 0 6px}
+p.sub{margin:0 0 18px;color:var(--mut);max-width:74ch}
+button{font:inherit;font-weight:700;border:0;border-radius:9px;padding:10px 18px;cursor:pointer;background:var(--em);color:#fff}
+button:hover{background:var(--em2)}
+button:disabled{background:#cbd5e1;cursor:default}
+.bar{display:flex;align-items:center;gap:8px;margin-bottom:18px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);font-size:12.5px;vertical-align:middle}
+th{background:#f8fafc;font-weight:750;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+tr:last-child td{border-bottom:0}
+canvas{display:block;border:1px solid var(--line);border-radius:4px;background:#fff}
+.ok{color:var(--em2);font-weight:750}
+.err{color:var(--bad);font-weight:750}
+code{background:#eef2f6;padding:1px 5px;border-radius:4px;font-size:11.5px}
+</style></head><body>
+<h1>Picture Guide &mdash; strip borders, standardise sizes</h1>
+<p class="sub">Photos taken out of the printed guide carry a border drawn into the image itself:
+a 3px line with a 1px antialias fringe outside it, and on the red ones a second fringe inside
+too, so black borders are 4px and red ones are 5px. The app draws its own frame and its own
+OPTIONAL flag, so that border lands as a second outline just inside the first. This finds the
+border on each photo, trims it off, and puts the trimmed photo back under the same filename
+&mdash; nothing in the database changes. It then puts every photo back to the square it was shot at &mdash;
+<b>563&times;563</b>, the same for every sheet &mdash; so all the boxes on the board are
+identical and each photo fills its own to the edge, with nothing cropped and nothing
+padded.</p>
+<p class="sub"><b>The exports are stretched, and this un-stretches them.</b> Ethan shoots
+these at 1:1 on a phone, but they arrive out of the guide document at about 563&times;596
+&mdash; taller than wide. That was established rather than assumed: the same photograph
+came out of the document in two different shapes (591&times;565 with a border on it,
+563&times;594 without), and measuring the phone in both shows the same scene at the same
+fractions of the canvas, so the document reshaped the picture instead of cropping it.
+Undoing that canvas shape makes the phone measure 2.0529 against a real iPhone 13 Pro's
+146.7/71.5 = 2.0517 &mdash; 0.06% out, from two independent exports. So scaling each
+photo back to a square is not a distortion, it is the repair of one.</p>
+<p class="sub">This is the only step here that resamples, and it only ever scales DOWN
+(563-567 wide and 593-599 tall, both to 563), so no detail is invented. Two earlier
+approaches are what it replaced: padding out to a shared shape, which leaves a band that
+reads as a border whatever colour it is; and cropping to a shared square, which fits but
+takes 13-14px off the phones on the taller sheet.</p>
+<p class="sub">Edit <code>NAMES</code> below for a new batch. The square is
+<code>SQUARE</code>, and <code>.pg-frame</code> in styles.css is square to match. If a
+future batch arrives already 1:1, this becomes a no-op rather than a problem.</p>
+<p class="sub"><b>Scan first and read the border column.</b> A batch whose borders were
+already removed before saving should report <code>none</code> on every row &mdash; that
+is the expected result, not a failure, and it means the crop is a pure centring. Any row
+claiming a border on a photo you know is clean is a reason to stop rather than to
+continue: this trims pixels off originals and puts them back under the same name.</p>
+<div class="bar">
+  <button id="scan">1 &nbsp; Scan</button>
+  <button id="go" disabled>2 &nbsp; Crop &amp; re-upload</button>
+</div>
+<p id="target" style="margin:0 0 14px;font-weight:750;color:var(--em2)"></p>
+<table id="t"><thead><tr><th>File</th><th>Before</th><th>After</th><th>Border found</th><th>New size</th><th>Status</th></tr></thead><tbody></tbody></table>
+<script>
+var URL_BASE = "https://ejzaqmyxxrkmxvzbjeuo.supabase.co";
+var KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVqemFxbXl4eHJrbXh2emJqZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNzA2NjAsImV4cCI6MjA5NDY0NjY2MH0.-SrbSaF-n8WkNW6tieDiA2FhGHB7qP4b6XrEyy2JF74";
+var NAMES = [
+"flip-fold-phones-01-home-lock-screen-open.jpg",
+"flip-fold-phones-02-about-phone.jpg",
+"flip-fold-phones-03-model-information.jpg",
+"flip-fold-phones-04-software-information.jpg",
+"flip-fold-phones-05-storage-information.jpg",
+"flip-fold-phones-06-screen-off-open.jpg",
+"flip-fold-phones-07-back-of-phone-open.jpg",
+"flip-fold-phones-08-side-of-phone.jpg",
+"flip-fold-phones-09-opposite-side-of-phone.jpg",
+"flip-fold-phones-10-top-side-of-phone.jpg",
+"flip-fold-phones-11-bottom-side-of-phone.jpg",
+"flip-fold-phones-12-home-lock-screen-closed.jpg",
+"flip-fold-phones-13-screen-off-closed.jpg",
+"flip-fold-phones-14-back-of-phone-closed.jpg",
+"flip-fold-phones-15-fold-flip-bezel.jpg"];
+var MAX_INSET = 24, TOL = 46, CONTRAST = 70, MAX_FRAC = 0.03;
+// The one square every photograph in the guide ends up on. 563 is the NARROWEST
+// edge any batch has arrived at, which makes it the largest square reachable by
+// cropping alone - no photo has to be padded out and none has to be resampled.
+// Keep .pg-frame square if this ever stops being square.
+var SQUARE = 563;
+var rows = {}, state = {};
+
+NAMES.forEach(function(name){
+  var tr = document.createElement("tr");
+  tr.innerHTML = '<td><code>' + name + '</code></td><td class="b"></td><td class="a"></td>' +
+    '<td class="d">&mdash;</td><td class="s">&mdash;</td><td class="st">waiting</td>';
+  document.querySelector("#t tbody").appendChild(tr);
+  rows[name] = tr;
+});
+
+function thumb(src, w){
+  var c = document.createElement("canvas"), r = w / src.width;
+  c.width = w; c.height = Math.round(src.height * r);
+  c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+  return c;
+}
+
+// Draw onto WHITE, never onto the canvas's transparent default: a PNG export
+// can carry partial alpha along its border, and compositing that over nothing
+// makes its edge read as black rather than as the colour a viewer sees.
+function pixels(src, w, h){
+  var c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  var g = c.getContext("2d", {willReadFrequently:true});
+  g.fillStyle = "#fff"; g.fillRect(0, 0, w, h);
+  g.drawImage(src, 0, 0);
+  return { d: g.getImageData(0, 0, w, h).data, w: w, h: h };
+}
+function ringCols(p, k){
+  var out = [], x, y;
+  function at(px, py){ var o = (py * p.w + px) * 4; return [p.d[o], p.d[o+1], p.d[o+2]]; }
+  for (x = k; x < p.w - k; x++){ out.push(at(x, k)); out.push(at(x, p.h - 1 - k)); }
+  for (y = k + 1; y < p.h - 1 - k; y++){ out.push(at(k, y)); out.push(at(p.w - 1 - k, y)); }
+  return out;
+}
+function median(list){
+  return [0,1,2].map(function(c){
+    var v = list.map(function(p){ return p[c]; }).sort(function(a,b){ return a-b; });
+    return v[v.length >> 1];
+  });
+}
+function diff(a, b){ return Math.abs(a[0]-b[0]) + Math.abs(a[1]-b[1]) + Math.abs(a[2]-b[2]); }
+
+// Anchor on the INTERIOR, never on row 0. Whatever colour the photograph's own
+// edge is, walk in from the outside until a ring finally looks like it; the
+// band outside that is whatever the printout drew, fringe and line together,
+// however many colours it is made of. Anchoring on row 0 locks onto the fringe
+// and stops after 1px, which is exactly the bug this replaced.
+//
+// Compare ring MEDIANS, not "what fraction of this ring matches". A drawn
+// border covers its whole ring, so its median IS its colour. A photograph's
+// outermost ring is mostly backdrop with the subject and its shadow poking in,
+// and a genuine interior ring scores anywhere from 71% to 100% by the fraction
+// test - useless as a threshold. The median shrugs the subject off.
+function detectInset(img){
+  var p = pixels(img, img.naturalWidth, img.naturalHeight);
+  var D = Math.min(MAX_INSET + 2, (Math.min(p.w, p.h) >> 1) - 1);
+  var refIn = median(ringCols(p, D));
+  var k = 0;
+  for (; k < MAX_INSET; k++){
+    if (diff(median(ringCols(p, k)), refIn) <= TOL) break;
+  }
+  if (!k || k >= MAX_INSET) return 0;
+  // Too thick to be a drawn line: that is the backdrop, not a border.
+  if (k > Math.max(2, Math.round(MAX_FRAC * Math.min(p.w, p.h)))) return 0;
+  // A drawn border CONTRASTS with the picture behind it; a plain margin does
+  // not. This is the guard that stops a clean photo being eaten.
+  var worst = 0;
+  for (var j = 0; j < k; j++) worst = Math.max(worst, diff(median(ringCols(p, j)), refIn));
+  if (worst < CONTRAST) return 0;
+  return k;
+}
+
+async function load(name){
+  var img = new Image();
+  img.crossOrigin = "anonymous";
+  img.src = URL_BASE + "/storage/v1/object/public/picture-guide/" + name + "?probe=" + Date.now();
+  await img.decode();
+  return img;
+}
+
+// Put the photo back to the square it was taken at. Border off, then scaled -
+// separately in x and y - onto SQUARE x SQUARE.
+//
+// Scaling the two axes by different amounts is normally the thing you must never
+// do to a photograph. Here it is the correction: the guide document renders a
+// 1:1 original into a cell about 563x596, and that stretch is already in the
+// file. See the copy above for the measurement that establishes it - the short
+// version is that the same photo exported in two different shapes, both showing
+// the same scene, and undoing the shape lands within 0.06% of the phone's real
+// proportions.
+//
+// Nothing is cropped, so no photo can lose its notch or its charging port, and
+// nothing is padded, so there is no band around anything. Both of those were
+// tried first and both were wrong.
+function standardise(img, inset, png){
+  var iw = img.naturalWidth, ih = img.naturalHeight;
+  var cw = iw - 2 * inset, ch = ih - 2 * inset;
+
+  var c = document.createElement("canvas");
+  c.width = SQUARE; c.height = SQUARE;
+  var g = c.getContext("2d");
+  // White underneath: a source PNG can carry partial alpha, and a transparent
+  // base lets that through to be composited as black by some viewers.
+  g.fillStyle = "#fff"; g.fillRect(0, 0, SQUARE, SQUARE);
+  g.imageSmoothingQuality = "high";
+  g.drawImage(img, inset, inset, cw, ch, 0, 0, SQUARE, SQUARE);
+
+  c._fit = { from: cw + "x" + ch,
+    sx: +(SQUARE / cw).toFixed(4), sy: +(SQUARE / ch).toFixed(4),
+    // How far off square the export was. This is the number that says whether
+    // the un-stretch did anything, and a batch already at 1:1 reads 0.0%.
+    skew: +((((cw / ch) / 1) - 1) * 100).toFixed(1),
+    up: (cw < SQUARE || ch < SQUARE) };
+  return c;
+}
+
+document.getElementById("scan").onclick = async function(){
+  this.disabled = true;
+  var loaded = [];
+  for (var i = 0; i < NAMES.length; i++){
+    var name = NAMES[i], tr = rows[name], st = tr.querySelector(".st");
+    try {
+      st.textContent = "scanning...";
+      var img = await load(name);
+      var inset = detectInset(img);
+      loaded.push({ name: name, img: img, inset: inset, png: /\.png$/.test(name) });
+      tr.querySelector(".b").appendChild(thumb(img, 90));
+      st.textContent = "sizing...";
+    } catch (e) {
+      st.innerHTML = '<span class="err">' + e.message + "</span>";
+    }
+  }
+  // No batch minimum to work out: the square is the same for every sheet, so a
+  // batch cannot pull the frame shape around after it.
+  var worstSkew = 0, anyUp = false;
+  loaded.forEach(function(s){
+    var tr = rows[s.name], st = tr.querySelector(".st");
+    try {
+      s.out = standardise(s.img, s.inset, s.png);
+      var f = s.out._fit;
+      worstSkew = Math.max(worstSkew, Math.abs(f.skew));
+      if (f.up) anyUp = true;
+      tr.querySelector(".a").appendChild(thumb(s.out, 90));
+      tr.querySelector(".d").innerHTML = (s.inset
+        ? '<span class="ok">' + s.inset + 'px</span>' : 'none');
+      tr.querySelector(".s").innerHTML = SQUARE + "&times;" + SQUARE
+        + '<br><small>' + f.from + ', ' + (f.skew < 0 ? 'tall by ' : 'wide by ')
+        + Math.abs(f.skew) + '%'
+        + (f.up ? ' &middot; <span class="err">scaled UP</span>' : '') + '</small>';
+      state[s.name] = s;
+      st.textContent = "ready";
+    } catch (e) {
+      st.innerHTML = '<span class="err">' + e.message + "</span>";
+    }
+  });
+  document.getElementById("target").innerHTML = loaded.length
+    ? "Standard square: " + SQUARE + "×" + SQUARE + " for every sheet. Nothing cropped, "
+      + "nothing padded. Worst stretch undone in this batch: " + worstSkew.toFixed(1) + "%"
+      + (anyUp ? ' &mdash; <span class="err">something had to be scaled UP; lower SQUARE'
+                 + ' so every photo only ever scales down</span>' : '.')
+    : "";
+  document.getElementById("go").disabled = !Object.keys(state).length;
+};
+
+document.getElementById("go").onclick = async function(){
+  this.disabled = true;
+  for (var i = 0; i < NAMES.length; i++){
+    var name = NAMES[i], s = state[name];
+    if (!s || !s.out) continue;
+    var tr = rows[name], st = tr.querySelector(".st");
+    try {
+      st.textContent = "uploading...";
+      var blob = await new Promise(function(res){
+        s.out.toBlob(res, s.png ? "image/png" : "image/jpeg", s.png ? undefined : 0.94);
+      });
+      var resp = await fetch(URL_BASE + "/storage/v1/object/picture-guide/" + name, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + KEY, apikey: KEY,
+          "Content-Type": s.png ? "image/png" : "image/jpeg",
+          "x-upsert": "true"
+        },
+        body: blob
+      });
+      if (!resp.ok) throw new Error("HTTP " + resp.status + " " + (await resp.text()));
+      tr.querySelector(".st").title = Math.round(blob.size / 1024) + " KB";
+      st.innerHTML = '<span class="ok">done</span>';
+    } catch (e) {
+      st.innerHTML = '<span class="err">' + e.message + "</span>";
+    }
+  }
+};
+</script></body></html>

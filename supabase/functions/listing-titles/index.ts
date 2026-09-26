@@ -1487,11 +1487,37 @@ const COMP_STOPWORDS = new Set([
 // System" (Wave), and an AsRock B650M titled Intel when B650M is AMD.
 
 const NAME_MODEL = "claude-opus-5";
+// ⚠️ THIS IS THE COST DIAL. Thinking tokens bill as OUTPUT, at $25 per million,
+// and on Opus 5 thinking is on by default at effort "high" — which is what this
+// call used to run at, by saying nothing. Ethan, 2026-09-08: three $10 recharges
+// in the first eight days, and ~90% of that was the model deliberating over
+// 25 titles at a time.
+//
+// "low" because of what the task actually is. The system prompt below is a list
+// of rules with an explicit abstention default, and it says the test outright:
+// whether a word is MISSPELLED, not whether the model recognises the product.
+// That is a shallow judgement made 25 times, not one deep one.
+//
+// HOW TO TELL IF THIS IS TOO LOW. The baseline at effort "high" was 52 findings
+// from 3,534 titles asked — 1.47 per 100 (12 garbled, 31 wrong, 9 disputed, on
+// 2026-09-08). Compare against that:
+//   * near zero  -> it has stopped looking. Raise to "medium".
+//   * far above  -> it has started guessing, and the findings are junk a
+//                   reviewer has to wade through. Raise to "medium".
+// Either way ai_usage_log says what the change cost, so the trade is visible in
+// both directions. Query: findings per 100 asked, before and after this date.
+const NAME_EFFORT = "low";
 // Per store per run. Mirrors MARKET_MAX and exists for the same reason: the
 // 150s edge wall cuts the RESPONSE while the function keeps executing, so an
 // over-long run reports IDLE_TIMEOUT and nobody can tell how much was saved.
 const NAME_MAX = 100;
-const NAME_BATCH = 25;          // products per request
+// 50, not 25: the 840-token system prompt is re-sent with every request and
+// nothing caches it (it is under Opus 5's minimum cacheable prefix), so halving
+// the request count halves that overhead. Input is only about a tenth of the
+// bill, so this is the small saving — but it costs nothing to take, and a failed
+// batch of 50 is not lost work: those rows keep no stamp and the next run picks
+// them up again.
+const NAME_BATCH = 50;          // products per request
 const NAME_CONCURRENCY = 4;     // batches in flight — 100 items in one round trip
 
 // ⚠️ BUMP THIS WHEN WHAT WE SEND CHANGES. It is stored next to every answer, so
@@ -1515,8 +1541,41 @@ const NAME_CODES = new Set<string>(["name-garbled", "name-wrong", "name-disputed
 // ⚠️ NOT ALL SPECS. Matching on every field would let an incidental value veto a
 // real fix — "Extreme" appearing in a Model field should not protect the word
 // "Extreme" everywhere in the title.
+//
+// ⚠️ FOR SOME THINGS THE SPEC IS THE NAME, AND A LENS IS THE CLEAREST CASE.
+// MPL's Rokinon (MO03-2519C-E10, denied 2026-09-04) is the same bug as the
+// T43WD-40 and Xbox One denials, on a field this list had not reached:
+//
+//   Maximum Aperture = f/2.2, title says f/2.2  →  we proposed f/2.0
+//   note: "This is a 2.2 lens. Shown in the pictures"
+//
+// Our knowledge was not even unreasonable — the 16mm ED AS UMC CS everyone
+// knows IS f/2.0. But Samyang/Rokinon also sell the CINE version of that same
+// optic marked T2.2, so "2.2" on the barrel is a real marking on a real
+// variant, not a mangling of 2.0. Nothing available from here settles which one
+// is in the box; the person holding it settled it in a second.
+//
+// A lens is NAMED by its focal length and maximum aperture — "16mm f/2.0" is
+// the product name, not a description of it — so both belong here for the same
+// reason Model does. Focal Length is included by symmetry rather than from a
+// denial: the identical failure is available on "16mm should be 14mm", and
+// waiting for someone to be told their lens is the wrong length first is not a
+// good reason to leave it out.
+//
+// Both values are specific measurements ("f/2.2", "16mm"), so neither can veto
+// a fix by coincidence the way a Color of "Red" would.
+//
+// ⚠️ FORM FACTOR, FOR THE SAME REASON — LEE's WD Blue SN570 (MO01-5532A2-E15,
+// denied 2026-09-15): Form Factor = 2280mm, title says 2280mm, and name-garbled
+// proposed "2280" as a typo fix. "2280mm" is not strictly millimetres (it is
+// 22 x 80), but it is how this shop writes the size in the field AND the title,
+// and it is a size, not a mangled name. Approving would have rewritten the Form
+// Factor field too (name-garbled is a CORRECTING_CODE). An M.2 drive, a
+// motherboard (ATX / Micro-ATX) and a desktop (SFF) are all named by their form
+// factor, and its values are specific enough not to veto by coincidence.
 const IDENTITY_FIELDS = [
   "MPN", "Model", "Platform", "Type", "Brand", "Release Year",
+  "Maximum Aperture", "Focal Length", "Form Factor",
 ];
 
 function identityFields(specs: Record<string, string> | undefined) {
@@ -1621,7 +1680,9 @@ async function checkNamesBatch(
           shelf: i.shelf || undefined,
         })), null, 1),
     }],
-    output_config: { format: zodOutputFormat(NameReportSchema) },
+    // effort sits beside format in output_config, not at the top level. See
+    // NAME_EFFORT — leaving it unset meant "high", which is where the bill was.
+    output_config: { effort: NAME_EFFORT, format: zodOutputFormat(NameReportSchema) },
   });
 
   const parsed = res?.parsed_output;
@@ -1865,9 +1926,34 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
       return out;
     };
     const tUnits = unitsIn(original);
+    // ⚠️ A PC WITH TWO DRIVES IS TITLED BY THE TOTAL. OVL's Cooler Master
+    // (KS01-7824A-E10), denied 2026-09-22, "there are multiple storage
+    // devices": Storage 1 = 1TB SSD, Storage 2 = 2TB HDD, title "3TB Storage".
+    // Only Storage 1 was ever compared, so every two-drive build was flagged
+    // severity 3 as contradicting itself — and, being a spec-conflict, it also
+    // blocked every append below. The drives are summed (1TB = 1000GB, as they
+    // are sold) and the title may state any one drive or the total.
+    const drives = Object.keys(sp).filter(k => /^storage\s*\d+$/i.test(k))
+      .map(k => String(sp[k] || "").trim())
+      .filter(v => v && !PLACEHOLDER.test(v));
+    const driveTotal = new Map<string, Set<string>>();
+    if (drives.length > 1) {
+      let gb = 0, readable = true;
+      for (const v of drives) {
+        const m = v.match(/(\d+(?:\.\d+)?)\s?(gb|tb)\b/i);
+        if (!m) { readable = false; break; }
+        gb += Number(m[1]) * (m[2].toLowerCase() === "tb" ? 1000 : 1);
+      }
+      if (readable) {
+        const fmt = (n: number) => String(Math.round(n * 100) / 100);
+        driveTotal.set("gb", new Set([fmt(gb)]));
+        driveTotal.set("tb", new Set([fmt(gb / 1000), fmt(Math.round(gb / 100) / 10)]));
+      }
+    }
     for (const k of TITLE_SPECS) {
       const v = String(sp[k] || "").trim();
       if (!v || PLACEHOLDER.test(v)) continue;
+      const isDrive = drives.length > 1 && /^storage\s*\d+$/i.test(k);
       for (const [unit, vals] of unitsIn(v)) {
         const mine = tUnits.get(unit);
         if (!mine || !mine.size) continue;
@@ -1875,9 +1961,19 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
         // both 8GB RAM and 512GB storage must not fight a spec naming one.
         const agrees = [...vals].some(x => mine.has(x));
         if (agrees) continue;
+        // One drive of several: the title may be stating the total, or a
+        // different drive, in either unit.
+        if (isDrive) {
+          const other = drives.some(d => [...(unitsIn(d).get(unit) || [])].some(x => mine.has(x)));
+          const total = ["gb", "tb"].some(u =>
+            [...(driveTotal.get(u) || [])].some(x => tUnits.get(u)?.has(x)));
+          if (other || total) continue;
+        }
         findings.push({
           code: "spec-conflict",
-          says: `The title says ${[...mine].join("/")}${unit === "in" ? '"' : unit.toUpperCase()} but this listing's own ${k} field says ${v}. One of the two is wrong, and a buyer is being shown a number the listing does not agree with. Check the unit and correct whichever is wrong.`,
+          says: `The title says ${[...mine].join("/")}${unit === "in" ? '"' : unit.toUpperCase()} but this listing's own ${isDrive
+              ? `drives say ${drives.join(" + ")}${driveTotal.size ? ` (${[...driveTotal.get("tb")!][0]}TB together)` : ""}`
+              : `${k} field says ${v}`}. One of the two is wrong, and a buyer is being shown a number the listing does not agree with. Check the unit and correct whichever is wrong.`,
           severity: 3, fixable: false,
         });
         break;
@@ -1980,7 +2076,10 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // whenever the listing agrees with itself would never see it. So the finding
     // stays and says what is actually true: two sources disagree, and a person
     // has to look. What it stops doing is proposing the swap.
-    const saidBy = listingSaysItself(wrong, identityFields(extra?.specs));
+    const echoed = listingSaysItself(wrong, identityFields(extra?.specs),
+      changedSpan(wrong, right));
+    const respelling = !!right && isMisspelling(wrong, right);
+    const saidBy = respelling ? null : echoed;
     if (!placeholder && at >= 0 && right && right !== wrong && saidBy) {
       findings.push({
         code: "name-disputed",
@@ -2004,7 +2103,8 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     } else if (!placeholder && at >= 0 && right && right !== wrong) {
       const swapped = (title.slice(0, at) + right + title.slice(at + wrong.length))
         .replace(/\s+/g, " ").trim();
-      const wrongIsWrong = nameVerdict.verdict === "wrong";
+      // A respelling is a typo whatever the model called it.
+      const wrongIsWrong = nameVerdict.verdict === "wrong" && !respelling;
       const why = String(nameVerdict.why || "").trim();
       const fits = swapped.length <= EBAY_TITLE_MAX;
       if (fits) { title = swapped; fixable = true; }
@@ -2027,6 +2127,11 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
               : `The title says "${wrong}"; it should be "${right}".`)
           : `"${wrong}" is not a real product name — it looks like "${right}" typed wrong`
             + (tidyWhy ? `. ${tidyWhy}.` : `, so nobody searching for it will find this listing.`))
+          // Say so, or the reviewer sees the same typo in the Type field and
+          // reads it as the listing disagreeing with us.
+          + (respelling && echoed
+              ? ` The listing's own ${echoed.field} has the same misspelling ("${echoed.value}"), and approving corrects it there too.`
+              : "")
           + (fits ? "" : ` The correction does not fit in 80 characters, so it needs editing by hand.`),
         // Only where we genuinely cannot settle it from the listing. Every other
         // finding on this page is read off the title and the spec table, and
@@ -3125,6 +3230,35 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     }
   }
 
+  // ⚠️ WRITE THE BILL DOWN. This block already knew what the run cost and threw
+  // it away with the response, which is why "is this tool using too much?"
+  // could only be answered by estimating from the source. One row per run, and
+  // never on a dry run — a dry run asked the model nothing.
+  //
+  // Fire-and-forget: a logging table must never be able to fail a sweep that
+  // has already paid for its answers and saved them.
+  if (wantLlm && save && nameUsage.batches) {
+    try {
+      await sb("ai_usage_log", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          tool: "listing-titles:names",
+          store_code: store,
+          model: NAME_MODEL,
+          effort: NAME_EFFORT,
+          batches: nameUsage.batches,
+          items: nameUsage.asked,
+          input_tokens: nameUsage.input,
+          output_tokens: nameUsage.output,
+          cost_usd: nameUsage.input / 1e6 * 5 + nameUsage.output / 1e6 * 25,
+        }),
+      });
+    } catch (e) {
+      console.error("ai_usage_log write failed (the sweep itself is fine):", String(e));
+    }
+  }
+
   return {
     store, examined: cands.length, queued: out.length,
     ...(mismatched.length ? { differentItemOnEbay: mismatched } : {}),
@@ -3302,6 +3436,19 @@ type FbRow = {
   saysItself: { field: string; value: string } | null;
 };
 
+// The run a denied row changed, for the ask.
+// ⚠️ NO SUGGESTION IS NOT AN EMPTY TITLE. A report-only finding (name-disputed)
+// stores no suggested_title, and diffing against "" made the WHOLE title the
+// removed run — the ask printed `"TeamGroup Trident Z …" -> "(removed)"` for
+// LEE's two G.Skill kits (2026-09-16), then matched "8GB (2x4GB) RAM" out of
+// that run against Memory Size and offered it as evidence the rule overruled
+// the listing. Nothing was proposed, so nothing was changed.
+function feedbackRun(current: string | null, suggested: string | null) {
+  return suggested
+    ? titleRun(String(current || ""), String(suggested))
+    : { was: "", now: "" };
+}
+
 // Does the listing itself already state the words the suggestion took out?
 //
 // ⚠️ NOT A WHOLE-RUN TEST. The changed run is whatever sits between the matching
@@ -3320,9 +3467,22 @@ type FbRow = {
 //
 // ⚠️ A ONE-TOKEN WINDOW MUST BE 3+ CHARACTERS. "4K" or "II" alone is in half the
 // catalogue and is never evidence that a rule overruled the listing.
-function listingSaysItself(was: string, specs: Record<string, string>) {
+//
+// ⚠️ `cover` IS THE PART BEING CHANGED, and a window must reach into it. LEE's
+// Anne Pro, denied 2026-09-19: the name check quoted "Anne Pro 01" and meant
+// "01 should be 2". The longest window any field held was "Anne Pro" — the
+// Brand — so the listing was read as vouching for the title, the fix was
+// withheld as name-disputed, and the row named Brand as the field to doubt.
+// Brand was never in question; the Model field says II, which AGREES with the
+// correction. A field only vouches for the error if it states the error.
+// Token indexes into `was`, [from, to). Omitted by the feedback hint, which
+// has no correction to measure against.
+function listingSaysItself(was: string, specs: Record<string, string>,
+                           cover?: [number, number]) {
   const w = tokens(was);
   if (!w.length) return null;
+  const reaches = (i: number, len: number) =>
+    !cover || cover[1] <= cover[0] || (i < cover[1] && i + len > cover[0]);
   const fields = Object.entries(specs)
     .map(([field, value]) => ({ field, value: String(value || ""), t: tokens(String(value || "")) }))
     .filter(f => f.t.length);
@@ -3339,12 +3499,77 @@ function listingSaysItself(was: string, specs: Record<string, string>) {
     for (let i = 0; i + len <= w.length; i++) {
       const frag = w.slice(i, i + len);
       if (len === 1 && frag[0].length < 3) continue;
+      if (!reaches(i, len)) continue;
       for (const f of fields) {
         if (holds(f.t, frag)) return { field: f.field, value: f.value, matched: frag.join(" ") };
       }
     }
   }
   return null;
+}
+
+// The tokens of `wrong` that the correction actually replaces, as [from, to) —
+// what is left once the words both sides share at either end are set aside.
+// "Anne Pro 01" -> "Anne Pro 2" is [2, 3): only "01" is in question.
+function changedSpan(wrong: string, right: string): [number, number] {
+  const a = tokens(wrong), b = tokens(right);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head
+         && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  return [head, a.length - tail];
+}
+
+// Optimal string alignment distance: Levenshtein plus one adjacent swap, which
+// is the commonest typing error there is ("Reviever" has one).
+function typoDistance(a: string, b: string): number {
+  const d: number[][] = [];
+  for (let i = 0; i <= a.length; i++) d.push([i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const c = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1])
+        d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
+}
+
+// ⚠️ A MISSPELLED WORD IS NOT AN IDENTITY CLAIM. OVL's "Sansui … Stereo
+// Reviever" and "Analogue Super NT Super Famicon", both denied 2026-09-22 with
+// "Looks good to me" — the reviewer saw a finding with no suggestion under it
+// and nothing to approve. They were held back because the Type and Model fields
+// carry the same typo, which is the whole point of name-disputed: the listing
+// gets the last word on WHAT the item is. But a lister who types "Reviever"
+// once types it in every field they fill; the field echoing it is the same
+// hand, not a second source. Nobody's product is called a Reviever.
+//
+// So a correction that is only a respelling goes through as an ordinary fix,
+// and approving it corrects the echoing field too (a replacement always does —
+// see planEchoes). "Only a respelling" is decided narrowly, and every real
+// name-disputed denial is on the far side of it:
+//   - LETTERS ONLY on both sides. T43WD-40, 2280mm, Xbox One -> 360, f/2.2 and
+//     16mm all carry a digit, and a digit is a fact, not a spelling
+//   - the same number of words changed, each 4+ letters, each ONE typing error
+//     away — or two, in a word of 8+ letters ("Reviever"). Two real words sit
+//     two edits apart all the time (Widget / Gadget); in a long word they
+//     almost never do. "microSD Card" -> "Portable SSD" is nowhere near
+function isMisspelling(wrong: string, right: string): boolean {
+  const [from, to] = changedSpan(wrong, right);
+  const a = tokens(wrong).slice(from, to);
+  const bs = changedSpan(right, wrong);
+  const b = tokens(right).slice(bs[0], bs[1]);
+  if (!a.length || a.length !== b.length) return false;
+  return a.every((x, i) => {
+    const y = b[i];
+    if (!/^[a-z]+$/.test(x) || !/^[a-z]+$/.test(y)) return false;
+    if (x.length < 4 || y.length < 4 || x === y) return false;
+    const dist = typoDistance(x, y);
+    return dist <= 1 || (dist === 2 && Math.min(x.length, y.length) >= 8);
+  });
 }
 
 // How many notes nobody has carried into an ask yet. The deck's card is built
@@ -3391,7 +3616,7 @@ async function feedbackFor(stores: string[], days: number) {
     } catch (_e) { /* the notes are still worth reading without them */ }
     for (const r of d) {
       const specs = extras[r.product_id]?.specs || {};
-      const run = titleRun(String(r.current_title || ""), String(r.suggested_title || ""));
+      const run = feedbackRun(r.current_title, r.suggested_title);
       const keep: Record<string, string> = {};
       for (const k of IDENTITY_SPECS) if (specs[k]) keep[k] = specs[k];
       // Plus whatever field holds the words in dispute, wherever it lives.
@@ -3725,8 +3950,14 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // — "f/3.5-5.6", "(2x8GB)", "24.2MP" — and \b in front of "(" is a boundary in
 // the wrong place. The rule actually wanted is: not glued to a letter or a
 // digit, so "SATA" never matches inside "eSATA" and "8GB" never inside "128GB".
+//
+// ⚠️ NOR HALF OF A DECIMAL. "." and "," are not letters or digits, so a run of
+// "4" matched the front of "4.00GHz" — LEE's i7-6700K (MO01-5210A-E15, denied
+// 2026-09-07) fixed "4 Thread" to "8 Thread" and the preview told the reviewer
+// Processor Speed would become 8.00GHz. A number followed by ".00" or preceded
+// by "1," is part of a bigger number, not a value of its own.
 const runRe = (was: string) =>
-  new RegExp(`(?<![A-Za-z0-9])${escapeRe(was)}(?![A-Za-z0-9])`, "gi");
+  new RegExp(`(?<![A-Za-z0-9])(?<!\\d[.,])${escapeRe(was)}(?![A-Za-z0-9])(?![.,]\\d)`, "gi");
 
 // ============ WHICH WORDS THE TITLE IS *NOT* THE ONLY PLACE FOR ==============
 // Ethan, on a CPU/motherboard combo with no room for the words that name it:
@@ -4050,6 +4281,34 @@ function titleRun(from: string, to: string): { was: string; now: string } {
            now: b.slice(head, b.length - tail).join(" ") };
 }
 
+// The run to carry into the rest of the listing. titleRun, widened by one
+// unchanged neighbour when the change is a BARE NUMBER on both sides.
+//
+// ⚠️ "4" -> "8" IS NOT A FACT, "4 Thread" -> "8 Thread" IS. The i7-6700K's fix
+// was a single digit, and a single digit is in every field that counts anything:
+// Thread Count "4 Thread" was right to change, but a Core Count of "4" would have
+// become 8 as well. Taking the next word from the title ("Thread") makes the run
+// say which count it is, and only a field saying the same thing matches.
+// A replacement only: a deletion is subtracted from fields solely when it
+// corrects something (CORRECTING_CODES), and widening it would turn it into a
+// replacement that skips that rule.
+function echoRun(from: string, to: string): { was: string; now: string } {
+  const a = String(from || "").trim().split(/\s+/);
+  const b = String(to || "").trim().split(/\s+/);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head
+         && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const run = () => ({ was: a.slice(head, a.length - tail).join(" "),
+                       now: b.slice(head, b.length - tail).join(" ") });
+  const bare = () => { const r = run();
+    return !!r.was && !!r.now && !/[A-Za-z]/.test(r.was + r.now); };
+  if (bare() && tail > 0) tail--;
+  if (bare() && head > 0) head--;
+  return run();
+}
+
 type EchoPlan = {
   html: string;
   cellHits: number;
@@ -4237,7 +4496,7 @@ async function echoSweep(store: string, limit: number) {
   const rows = q.map(r => {
     const x = raw[String(r.product_id)];
     if (!x) return { sku: r.sku, error: "product not readable in Shopify" };
-    const run = titleRun(r.current_title || "", r.suggested_title || "");
+    const run = echoRun(r.current_title || "", r.suggested_title || "");
     const plan = planEchoes(x.html, x.mfs, run.was, run.now, r.suggested_title || "",
                             isCorrecting(r.findings));
     return {
@@ -4476,7 +4735,7 @@ async function handlePost(req: Request, scope: Scope) {
   // field twice, and reported either way: what it changed, and what it could not
   // place and has left saying the old thing.
   {
-    const run = titleRun(item.current_title || "", next);
+    const run = echoRun(item.current_title || "", next);
     const plan = planEchoes(html, mfList, run.was, run.now, next,
                             isCorrecting(item.findings));
     if (plan.cellHits) { html = plan.html; specRows = plan.cellHits; }
@@ -5000,7 +5259,7 @@ Deno.serve(async (req: Request) => {
         if (url.searchParams.get("raw")) rawDesc = html;
         if (wantEcho) {
           const cur = String(cat[0].title || "");
-          const run = titleRun(cur, wantEcho);
+          const run = echoRun(cur, wantEcho);
           const plan = planEchoes(html, mfs, run.was, run.now, wantEcho,
             url.searchParams.get("correcting") === "1"
               || isCorrecting(analyse({
