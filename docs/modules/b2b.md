@@ -123,6 +123,25 @@ formulas as the view) and filters `listing_parts` to its own entry, so cards,
 the quick Complete check and the Completed list all read the store's part.
 `listing_stores` stays whole: a store still needs to know the deal is split.
 
+**Splitting one line between stores** is `split_item {id, qty, serials?}`, corp
+only, at `listing_location` or `listing`. It divides the line into two ordinary
+lines rather than teaching the read paths about part-quantities: the new line
+takes the next line number and its own SKU (sku is unique table-wide and
+`list_unit` resolves scans by it), so labels on moved units must be reprinted.
+Only unaccounted units can go. A line with a serial for every unit must name
+the serials that go. The client editor (`_b2bSplitEditorHtml`) sits in both the
+Split It Up picker (new line arrives unplaced) and Move Lines (arrives ticked).
+
+**Move history** is `GET ?transfers=<deal>[&store=…]`, rendered by
+`_b2bMoveHistoryHtml` as a folded section on the listing and read-only screens,
+fetched on first open.
+
+**`?store=` takes a comma list** on the board and item fetches, vetted against
+the known codes by `storeList`. A multi-store manager asks for both stores
+instead of ALL, so they no longer get every store's deals and every client's
+contact details. **Deploy the edge function before the client:** the old
+function reads `BAL,MPL` as one bad code.
+
 `b2b_deal_list.listing_parts` (JSONB, one entry per store with its counts, money
 and completion) serves corp's per-store progress breakdown and a store's own
 numbers on the board from one fetch.

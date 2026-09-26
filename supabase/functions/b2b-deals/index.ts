@@ -458,6 +458,13 @@ async function broadcastChange(
   }
 }
 
+// ?store= as a vetted list: "OVL", "BAL,MPL". Anything not in `allowed` is
+// dropped, so what comes back is safe to put into a PostgREST filter.
+function storeList(raw: unknown, allowed: string[]): string[] {
+  return [...new Set(String(raw ?? "").toUpperCase().split(",").map((s) => s.trim())
+    .filter((s) => allowed.includes(s)))];
+}
+
 // A store's board row for a SPLIT deal describes the store's part, not the deal.
 //
 // The deal_id fetch already keeps other stores' LINES here rather than trusting
@@ -470,14 +477,20 @@ async function broadcastChange(
 // b2b_deal_list, so every existing read site (cards, the quick Complete
 // check, the Completed list) sees the store's part with no change of its own.
 // listing_stores is left whole: a store still needs to know the deal IS split.
-async function narrowSplitRows(sb: any, rows: any[], store: string) {
-  const split = rows.filter((r) =>
-    (r.listing_stores || []).length > 1 && (r.listing_stores || []).includes(store));
+//
+// `stores` is the caller's scope -- one store, or a multi-store manager's
+// several. A deal whose every store is in scope is left whole: nothing on it
+// belongs to anyone else.
+async function narrowSplitRows(sb: any, rows: any[], stores: string[]) {
+  const split = rows.filter((r) => {
+    const on: string[] = r.listing_stores || [];
+    return on.length > 1 && on.some((s) => stores.includes(s)) && !on.every((s) => stores.includes(s));
+  });
   if (!split.length) return;
   const { data: items } = await sb.from("b2b_deal_items")
     .select("deal_id, quantity, listed_qty, recycled_qty, wiped_qty, value, offer, cost, "
       + "disposition, wipe_required, wipe_fee, shipping_cost")
-    .in("deal_id", split.map((r) => r.id)).eq("listing_store", store).limit(20000);
+    .in("deal_id", split.map((r) => r.id)).in("listing_store", stores).limit(20000);
   const byDeal: Record<string, any[]> = {};
   for (const i of items || []) (byDeal[i.deal_id] ||= []).push(i);
 
@@ -501,7 +514,7 @@ async function narrowSplitRows(sb: any, rows: any[], store: string) {
       net_offer: Math.max(offer - wipe, 0),
       total_shipping: sum((i) => (Number(i.shipping_cost) || 0) * q(i)),
       wipe_units: sum((i) => i.wipe_required ? q(i) : 0),
-      listing_parts: (r.listing_parts || []).filter((p: any) => p && p.store === store),
+      listing_parts: (r.listing_parts || []).filter((p: any) => p && stores.includes(p.store)),
     });
   }
 }
@@ -1663,7 +1676,7 @@ Deno.serve(async (req: Request) => {
           return jsonResponse({
             success: false,
             error: `${names} already ${listed.length === 1 ? "has" : "have"} units listed on Shopify, `
-              + "so they can't be moved. Unlist those units first.",
+              + "so they can't be moved whole. Split off the units still to list and move those.",
           }, 409);
         }
 
@@ -1707,6 +1720,123 @@ Deno.serve(async (req: Request) => {
             n === 1 ? "is" : "are"} now yours to list at ${to}.`,
         });
         return jsonResponse({ success: true, moved: n, stores: nowStores });
+      }
+
+      // split_item { id, qty, serials? }
+      //
+      // One line, two stores: ten laptops, six to LEE and four to OVL. The
+      // assignment lives on the LINE (0081), so rather than teach every read
+      // path about part-quantities, the line is divided into two ordinary lines
+      // and each is then assigned or moved like any other. Every per-store
+      // count, the scoped fetch and completion keep working untouched.
+      //
+      // The new line takes the next line number and its own SKU -- sku is
+      // unique across the table and list_unit resolves a scan by it -- so any
+      // label already on a moved unit is wrong and has to be reprinted; the
+      // client says so. Only units nobody has accounted for can go: a listed
+      // unit belongs to its store's Shopify listing, and a recycled one is
+      // written off where it was.
+      //
+      // Corp only, in the two stages where lines are assigned or moved.
+      if (action === "split_item") {
+        const { data: it } = await supabase.from("b2b_deal_items")
+          .select("*").eq("id", String(body.id || "")).maybeSingle();
+        if (!it) return jsonResponse({ success: false, error: "Line item not found." }, 404);
+        const deal = await getDeal(supabase, it.deal_id);
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (!mayApprove(body)) {
+          return jsonResponse({ success: false, error: "Only corp can split a line between stores." }, 403);
+        }
+        if (!["listing_location", "listing"].includes(deal.stage)) {
+          return jsonResponse({
+            success: false,
+            error: "A line can only be split while it is being assigned or listed.",
+          }, 409);
+        }
+
+        const q = Number(it.quantity) || 0;
+        const free = q - (Number(it.listed_qty) || 0) - (Number(it.recycled_qty) || 0);
+        const qty = count(body.qty, 1, 100000, "Units", 1);
+        if (qty >= q) return jsonResponse({ success: false, error: "Split off fewer units than the line has." }, 400);
+        if (qty > free) {
+          return jsonResponse({
+            success: false,
+            error: `Only ${free} unit${free === 1 ? " is" : "s are"} not yet listed or recycled, so that is the most that can be split off.`,
+          }, 409);
+        }
+
+        // Serials follow the units. A line with a serial for every unit has to
+        // say which ones are going -- guessing would put the paperwork for one
+        // device on another store's shelf. A partly-serialled line may name
+        // some or none.
+        const have = serialList(it.serials);
+        const going = (Array.isArray(body.serials) ? body.serials : []).map((s: any) => String(s || "").trim()).filter(Boolean);
+        if (going.some((s: string) => !have.includes(s))) {
+          return jsonResponse({ success: false, error: "One of those serials isn't on this line." }, 400);
+        }
+        if (new Set(going).size !== going.length) {
+          return jsonResponse({ success: false, error: "The same serial was picked twice." }, 400);
+        }
+        if (have.length >= q && going.length !== qty) {
+          return jsonResponse({
+            success: false,
+            error: `Every unit on this line has a serial, so pick the ${qty} going with the split.`,
+          }, 400);
+        }
+        if (going.length > qty) {
+          return jsonResponse({ success: false, error: "More serials picked than units being split off." }, 400);
+        }
+
+        // Certified wipes stay with the units most likely to have been done:
+        // the split takes unwiped units first, and only carries wipe
+        // certification when there are not enough unwiped units left to take.
+        const wiped = Number(it.wiped_qty) || 0;
+        const wipedFree = Math.max(0, Math.min(free, wiped - (Number(it.listed_qty) || 0)));
+        const movedWiped = Math.max(0, qty - (free - wipedFree));
+
+        const { data: last } = await supabase.from("b2b_deal_items")
+          .select("line_no").eq("deal_id", it.deal_id).order("line_no", { ascending: false }).limit(1).maybeSingle();
+        const lineNo = (Number(last?.line_no) || 0) + 1;
+
+        const copy: Record<string, unknown> = { ...it };
+        for (const k of ["id", "created_at", "updated_at"]) delete copy[k];
+        Object.assign(copy, {
+          line_no: lineNo,
+          sku: skuFor(deal.client?.acronym || "B2B", deal.deal_no, lineNo),
+          quantity: qty,
+          listed_qty: 0, recycled_qty: 0,
+          wiped_qty: movedWiped,
+          serials: going.join(", "),
+          label_printed_qty: 0, label_printed_at: null, label_printed_by: null,
+        });
+        const { data: made, error: iErr } = await supabase.from("b2b_deal_items")
+          .insert(copy).select("id, sku, line_no").single();
+        if (iErr) return jsonResponse({ success: false, error: iErr.message }, 500);
+
+        const left = q - qty;
+        const { error: uErr } = await supabase.from("b2b_deal_items").update({
+          quantity: left,
+          wiped_qty: Math.min(wiped - movedWiped, left),
+          serials: have.filter((s) => !going.includes(s)).join(", "),
+          // Which units carry a printed label is not recorded, so the most the
+          // original can claim is what it still has.
+          label_printed_qty: Math.min(Number(it.label_printed_qty) || 0, left),
+        }).eq("id", it.id);
+        if (uErr) {
+          // Undo the insert rather than leave the deal carrying the units twice.
+          await supabase.from("b2b_deal_items").delete().eq("id", made.id);
+          return jsonResponse({ success: false, error: uErr.message }, 500);
+        }
+
+        for (const st of (deal.listing_stores?.length ? deal.listing_stores : [dealStore(deal)])) {
+          if (st) await broadcastChange("b2b", st, { deal: deal.id, by: str(body.user, 80, "User") });
+        }
+        return jsonResponse({
+          success: true,
+          id: made.id, sku: made.sku, line_no: made.line_no,
+          qty, left, from_sku: it.sku,
+          relabel: (Number(it.label_printed_qty) || 0) > 0,
+        });
       }
 
 
@@ -2720,6 +2850,31 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: true, data: data || [] });
     }
 
+    // ?transfers=<deal id>[&store=<CODE>] → the deal's move log, oldest first.
+    //
+    // 0021 and 0081 have been writing it all along -- whole-deal moves and
+    // single lines -- and nothing ever read it back, so "why is this pallet at
+    // MPL when the paperwork says LEE" still meant asking around. Item rows
+    // carry the line's SKU and name so the history reads without the sheet.
+    //
+    // &store narrows it to moves into or out of that store, the same way the
+    // item fetch is scoped: a store has no business with another store's
+    // shuffles.
+    const transfersFor = url.searchParams.get("transfers");
+    if (transfersFor) {
+      const tStores = storeList(url.searchParams.get("store"), STORES);
+      let tq = supabase.from("b2b_deal_transfers")
+        .select("id, kind, item_id, from_store, to_store, moved_by, note, created_at, "
+          + "item:b2b_deal_items(sku, line_no, make, model)")
+        .eq("deal_id", transfersFor);
+      if (tStores.length) {
+        tq = tq.or(`from_store.in.(${tStores.join(",")}),to_store.in.(${tStores.join(",")})`);
+      }
+      const { data, error } = await tq.order("created_at", { ascending: true }).limit(1000);
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({ success: true, data: data || [] });
+    }
+
     // ?proof_file=<proof id> → the attachment itself.
     //
     // Streamed through here rather than handed out as a signed URL, for the same
@@ -2839,12 +2994,12 @@ Deno.serve(async (req: Request) => {
     // Corp passes no store, or ALL, and sees the deal whole.
     const dealId = url.searchParams.get("deal_id");
     if (dealId) {
-      const itemStore = String(url.searchParams.get("store") || "").toUpperCase();
-      const scopeItems = itemStore && itemStore !== "ALL" && itemStore !== "CORP"
-        && STORES.includes(itemStore) ? itemStore : null;
+      // A list, for the multi-store manager: their own stores' lines and
+      // nobody else's, rather than the whole deal.
+      const scopeItems = storeList(url.searchParams.get("store"), STORES);
       let itemQ = supabase.from("b2b_deal_items")
         .select(ITEM_COLS).eq("deal_id", dealId);
-      if (scopeItems) itemQ = itemQ.or(`listing_store.eq.${scopeItems},listing_store.is.null`);
+      if (scopeItems.length) itemQ = itemQ.or(`listing_store.in.(${scopeItems.join(",")}),listing_store.is.null`);
       const [{ data, error }, { data: listings, error: lErr }] = await Promise.all([
         itemQ
           .order("sort_order", { ascending: true })
@@ -2883,8 +3038,18 @@ Deno.serve(async (req: Request) => {
     // bounded by how much work is actually in flight. Finished deals are the
     // unbounded half, so only the recent tail rides along; ?archive=N pages
     // deeper and the response says when it truncated.
-    const store = String(url.searchParams.get("store") || "ALL").toUpperCase();
-    const oneStore = !!store && store !== "ALL";
+    //
+    // A comma list scopes to several stores at once -- the multi-store manager,
+    // who used to ask for ALL for want of a way to say "these two" and so was
+    // sent every store's deals and every client's contact details. Codes are
+    // checked against the known list, which also means nothing from the query
+    // string reaches the filter below unvetted.
+    const rawStore = String(url.searchParams.get("store") || "ALL").toUpperCase();
+    const stores = rawStore === "ALL" ? [] : storeList(rawStore, PRICING_LOCATIONS);
+    if (rawStore !== "ALL" && !stores.length) {
+      return jsonResponse({ success: false, error: "Unknown store." }, 400);
+    }
+    const oneStore = stores.length > 0;
     const archiveWanted = Math.min(ARCHIVE_MAX, Math.max(0, intOr(url.searchParams.get("archive"), ARCHIVE_DEFAULT)));
     // listing_stores is in here because a SPLIT deal names its stores only on
     // the items -- b2b_deals.listing_store is null when a deal is split, so the
@@ -2892,7 +3057,8 @@ Deno.serve(async (req: Request) => {
     // The roll-up column exists precisely so this stays one indexed predicate
     // (GIN, `cs` = contains) rather than a join against the items.
     const scoped = (q: any) => oneStore
-      ? q.or(`pricing_store.eq.${store},listing_store.eq.${store},listing_stores.cs.{${store}}`)
+      ? q.or(stores.map((st) =>
+          `pricing_store.eq.${st},listing_store.eq.${st},listing_stores.cs.{${st}}`).join(","))
       : q;
     // A board scoped to one store is a store user's board, and they have no
     // business with the client's contact details -- see CONTACT_COLS. Corp asks
@@ -2920,7 +3086,7 @@ Deno.serve(async (req: Request) => {
     const archiveRows = archiveWanted === 0 ? [] : (archive.data || []);
     const archiveTotal = counted.count ?? archiveRows.length;
     const rows = [...(open.data || []), ...archiveRows];
-    if (oneStore) await narrowSplitRows(supabase, rows, store);
+    if (oneStore) await narrowSplitRows(supabase, rows, stores);
     return jsonResponse({
       success: true,
       data: rows,

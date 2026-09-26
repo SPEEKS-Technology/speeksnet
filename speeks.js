@@ -18505,9 +18505,14 @@ function _b2bItemScope() {
 // cannot drift apart -- one scoped and the other not would mean a store seeing
 // the whole deal on a background refresh but not on open, which is the worst
 // kind of leak: intermittent.
+// A multi-store manager asks for both their stores as a list, so they are sent
+// their own lines and not the other store's on a split deal. _b2bItemScope
+// itself stays single-valued: it is also the caller_store on a complete, which
+// names exactly one store.
 const _b2bScopeQs = () => {
-    const s = _b2bItemScope();
-    return s ? `&store=${encodeURIComponent(s)}` : '';
+    if (_b2bIsCorp()) return '';
+    const mine = _b2bMyStores();
+    return mine.length ? `&store=${encodeURIComponent(mine.join(','))}` : '';
 };
 
 function _b2bInScope(deal) {
@@ -18991,10 +18996,13 @@ function b2bCloseDeal() {
 // A single-store user only pulls their own store; corp and MSMs pull the lot
 // and filter in _b2bInScope (the MSM covers two stores, which the API's
 // single-store filter can't express).
+// The board's ?store=. A multi-store manager used to get ALL -- every store's
+// deals and every client's contact details -- because the server took one code
+// or none. It takes a list now.
 function _b2bFetchScope() {
     if (_b2bIsCorp()) return 'ALL';
     const mine = _b2bMyStores();
-    return mine.length === 1 ? mine[0] : 'ALL';
+    return mine.length ? mine.join(',') : 'ALL';
 }
 
 // The client directory, or as much of it as this user has business seeing.
@@ -23691,6 +23699,7 @@ function b2bOpenMoveLines(id) {
     _b2bMoveSel = {};
     _b2bMoveTo = null;
     _b2bMoveNote = '';
+    _b2bSplitting = null;
     _b2bPaintMoveLines();
     toggleModal('b2bMoveLinesModal');
 }
@@ -23728,10 +23737,11 @@ function _b2bPaintMoveLines() {
                 <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}${
                     live ? ` · ${live} already listed` : ''}</span>
             </span>
+            ${_b2bSplitBtn(it, 'move')}
             <span class="b2b-movenow">${it.listing_store
                 ? `<span class="b2b-chip b2b-chip-neu">${escapeHtml(it.listing_store)}</span>`
                 : '<span class="b2b-f-off">unassigned</span>'}</span>
-        </div>`;
+        </div>${_b2bSplitEditorHtml(it)}`;
     }).join('');
 
     // Which stores the deal is currently spread over, as a shortcut: "everything
@@ -23758,8 +23768,8 @@ function _b2bPaintMoveLines() {
         <label class="form-label-caps" style="margin-top:14px;">Why (Optional)</label>
         <input class="form-input-lg" maxlength="1000" placeholder="e.g. assigned to the wrong store"
             value="${escapeHtml(_b2bMoveNote)}" oninput="_b2bMoveNote=this.value">
-        <p class="b2b-hint">A line with units already live on Shopify cannot be moved — the listing
-            belongs to the store that made it. Unlist those units first.</p>`;
+        <p class="b2b-hint">A line with units already live on Shopify cannot be moved whole — the listing
+            belongs to the store that made it. Split off the units still to list and move those.</p>`;
 
     const foot = document.getElementById('b2bMoveLinesFooter');
     if (foot) {
@@ -23795,6 +23805,183 @@ async function b2bMoveLines(btn) {
     } catch (e) {
         alert(`Couldn't move those lines: ${e.message}`);
     }
+}
+
+// --- splitting one line between stores ---------------------------------------
+//
+// Ten laptops, six to LEE and four to OVL. The server divides the line into two
+// ordinary lines (split_item) and each is then assigned or moved like any other,
+// so this is only the editor: how many units go, or -- on a line with a serial
+// for every unit -- which ones.
+//
+// Offered in the two places lines are routed: the Split It Up picker, where the
+// new line arrives unplaced so it is the obvious next thing to place, and Move
+// Lines, where it arrives already ticked so only the destination is left to pick.
+// In Move Lines it works on a line with units already listed, too -- splitting
+// off the unlisted remainder is how part of such a line gets to move at all.
+let _b2bSplitting   = null;         // itemId whose editor is open
+let _b2bSplitCtx    = 'assign';     // 'assign' | 'move' -- which screen to repaint
+let _b2bSplitQty    = 1;
+let _b2bSplitSerial = {};           // index into serial_list -> true
+
+function _b2bSplitFree(it) {
+    return Math.max(0, (Number(it.quantity) || 1) - _b2bDone(it));
+}
+// Can this line be split at all: more than one unit, and at least one of them
+// still unaccounted for.
+function _b2bCanSplitLine(it) {
+    return _b2bCanAccept() && (Number(it.quantity) || 1) > 1 && _b2bSplitFree(it) >= 1;
+}
+function _b2bSplitBtn(it, ctx) {
+    if (!_b2bCanSplitLine(it) || _b2bSplitting === it.id) return '';
+    return `<button class="b2b-mini" title="Send some of these units somewhere else"
+        onclick="event.stopPropagation();b2bSplitOpen('${it.id}','${ctx}')">Split</button>`;
+}
+function _b2bSplitBySerial(it) {
+    const list = it.serial_list || [];
+    return list.length > 0 && list.length >= (Number(it.quantity) || 1);
+}
+function _b2bSplitCount(it) {
+    return _b2bSplitBySerial(it)
+        ? Object.keys(_b2bSplitSerial).filter(k => _b2bSplitSerial[k]).length
+        : _b2bSplitQty;
+}
+function _b2bSplitEditorHtml(it) {
+    if (_b2bSplitting !== it.id) return '';
+    const qty = Number(it.quantity) || 1;
+    const max = Math.min(_b2bSplitFree(it), qty - 1);
+    const n = _b2bSplitCount(it);
+    const pick = _b2bSplitBySerial(it)
+        ? `<div class="b2b-splitser">${(it.serial_list || []).map((sn, i) => `
+                <label class="b2b-splitser-i ${_b2bSplitSerial[i] ? 'on' : ''}">
+                    <input type="checkbox" ${_b2bSplitSerial[i] ? 'checked' : ''}
+                        onclick="event.stopPropagation()" onchange="b2bSplitSerialToggle(${i})">
+                    <span class="b2b-mono">${escapeHtml(sn)}</span>
+                </label>`).join('')}</div>`
+        : `<label class="b2b-splitqty">Units to split off
+                <input type="number" min="1" max="${max}" value="${Math.min(_b2bSplitQty, max)}"
+                    onclick="event.stopPropagation()" oninput="b2bSplitQtySet(this.value)"></label>`;
+    const ok = n >= 1 && n <= max;
+    return `
+        <div class="b2b-splitedit" onclick="event.stopPropagation()">
+            ${pick}
+            <div class="b2b-hint">${
+                _b2bSplitBySerial(it) ? 'Tick the units that are going. ' : ''}They become a new line with their own
+                SKU${Number(it.label_printed_qty) ? ', so any label already on them has to be reprinted' : ''}.
+                ${max < qty - 1 ? `Only the ${max} unit${max === 1 ? '' : 's'} not yet listed or recycled can go.` : ''}</div>
+            <div class="b2b-splitacts">
+                <button class="b2b-btn b2b-btn-primary" id="b2bSplitGo" ${ok ? '' : 'disabled'}
+                    onclick="b2bSplitGo('${it.id}',this)">Split Off ${n} Unit${n === 1 ? '' : 's'}</button>
+                <button class="kpi-cancel-btn" onclick="b2bSplitCancel()">Cancel</button>
+            </div>
+        </div>`;
+}
+function _b2bSplitHostRepaint() {
+    if (_b2bSplitCtx === 'move') _b2bPaintMoveLines();
+    else _b2bSplitRepaint();
+}
+function b2bSplitOpen(itemId, ctx) {
+    _b2bSplitting = itemId;
+    _b2bSplitCtx = ctx === 'move' ? 'move' : 'assign';
+    _b2bSplitQty = 1;
+    _b2bSplitSerial = {};
+    _b2bSplitHostRepaint();
+}
+function b2bSplitCancel() {
+    _b2bSplitting = null;
+    _b2bSplitHostRepaint();
+}
+// Typing in the count must not repaint the editor -- that would throw away the
+// caret mid-number -- so only the button is brought up to date.
+function b2bSplitQtySet(v) {
+    _b2bSplitQty = Math.max(0, parseInt(v, 10) || 0);
+    const it = _b2bLocalItem(_b2bSplitting);
+    const go = document.getElementById('b2bSplitGo');
+    if (!it || !go) return;
+    const max = Math.min(_b2bSplitFree(it), (Number(it.quantity) || 1) - 1);
+    go.disabled = !(_b2bSplitQty >= 1 && _b2bSplitQty <= max);
+    go.textContent = `Split Off ${_b2bSplitQty} Unit${_b2bSplitQty === 1 ? '' : 's'}`;
+}
+function b2bSplitSerialToggle(i) {
+    if (_b2bSplitSerial[i]) delete _b2bSplitSerial[i];
+    else _b2bSplitSerial[i] = true;
+    _b2bSplitHostRepaint();
+}
+async function b2bSplitGo(itemId, btn) {
+    const it = _b2bLocalItem(itemId);
+    const deal = _b2bModalDeal;
+    if (!it || !deal) return;
+    const bySerial = _b2bSplitBySerial(it);
+    const serials = bySerial
+        ? Object.keys(_b2bSplitSerial).filter(k => _b2bSplitSerial[k]).map(k => it.serial_list[Number(k)])
+        : undefined;
+    const qty = _b2bSplitCount(it);
+    let out;
+    try {
+        out = await _b2bBusy(btn, 'Splitting…', () => _b2bSend({ action: 'split_item', id: itemId, qty, serials }));
+    } catch (e) {
+        alert(`Couldn't split that line: ${e.message}`);
+        return;
+    }
+    _b2bSplitting = null;
+    try { _b2bModalItems = await _b2bGet(`deal_id=${encodeURIComponent(deal.id)}${_b2bScopeQs()}`); } catch (_) {}
+    // In Move Lines the new line is what is being moved, so it arrives ticked.
+    if (_b2bSplitCtx === 'move' && out && out.id) _b2bMoveSel[out.id] = true;
+    _b2bSplitHostRepaint();
+    if (typeof _b2bRepaintListing === 'function' && document.getElementById('b2bListRows')) _b2bRepaintListing();
+    if (out && out.sku) {
+        _b2bSay(`${qty} unit${qty === 1 ? '' : 's'} split off as ${out.sku}${out.relabel ? ' — reprint their labels' : ''}.`);
+    }
+}
+
+// --- move history -------------------------------------------------------------
+//
+// b2b_deal_transfers has recorded every move since 0021 -- whole deals between
+// stores, and single lines since 0081 -- and nothing ever showed it, so "why is
+// this pallet at MPL when the paperwork says LEE" still meant asking around.
+//
+// Folded away and fetched on first open: most deals never move, and a closed
+// <details> costs nothing. A store is sent only the moves into or out of its
+// own stores (the same ?store= scope as the item fetch).
+function _b2bMoveHistoryHtml(deal) {
+    if (!deal || ['pickup', 'declined'].includes(deal.stage)) return '';
+    return `
+        <details class="b2b-xlog" ontoggle="if(this.open)b2bLoadMoveHistory(this,'${deal.id}')">
+            <summary>Move history</summary>
+            <div class="b2b-xlog-body"><div class="b2b-hint">Loading…</div></div>
+        </details>`;
+}
+async function b2bLoadMoveHistory(el, dealId) {
+    if (el.dataset.loaded) return;
+    el.dataset.loaded = '1';
+    const body = el.querySelector('.b2b-xlog-body');
+    let rows;
+    try {
+        rows = await _b2bGet(`transfers=${encodeURIComponent(dealId)}${_b2bScopeQs()}`);
+    } catch (e) {
+        delete el.dataset.loaded;
+        body.innerHTML = `<div class="b2b-hint">Couldn't load the history: ${escapeHtml(e.message)}</div>`;
+        return;
+    }
+    body.innerHTML = _b2bMoveHistoryRows(rows);
+}
+function _b2bMoveHistoryRows(rows) {
+    if (!rows || !rows.length) return '<div class="b2b-hint">Nothing on this deal has been moved.</div>';
+    const what = (r) => {
+        if (r.kind === 'item') {
+            const it = r.item || {};
+            const name = [it.make, it.model].filter(Boolean).join(' ') || 'A line';
+            return `${escapeHtml(name)} <span class="b2b-mono">${escapeHtml(it.sku || '')}</span>`;
+        }
+        return r.kind === 'pricing' ? 'The deal (pricing)' : 'The deal (listing)';
+    };
+    return `<div class="b2b-xlog-rows">${rows.map(r => `
+        <div class="b2b-xlog-row">
+            <span class="b2b-xlog-w">${what(r)}</span>
+            <span class="b2b-xlog-m">${_b2bStoreTag(r.from_store)} → ${_b2bStoreTag(r.to_store)}</span>
+            <span class="b2b-xlog-b">${escapeHtml(r.moved_by || 'Someone')} · ${_b2bDate(r.created_at)}</span>
+            ${r.note ? `<span class="b2b-xlog-n">${escapeHtml(r.note)}</span>` : ''}
+        </div>`).join('')}</div>`;
 }
 
 function b2bOpenTransfer(id) {
@@ -26413,6 +26600,7 @@ function b2bSplitToggle(on) {
     _b2bSplitPlan = {};
     _b2bSplitBrush = null;
     _b2bAssignPick = null;
+    _b2bSplitting = null;
     const d = _b2bModalDeal;
     if (d) _b2bStageListingLocation(d);
 }
@@ -26499,12 +26687,13 @@ function _b2bSplitPickerHtml() {
                 <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}${
                     _b2bIsScrap(it) ? ' · recycle' : ''}</span>
             </span>
+            ${_b2bSplitBtn(it, 'assign')}
             <span class="b2b-splitrow-s">
                 ${STORE_CODES.map(c => `<button class="b2b-splitchip ${code === c ? 'on' : ''}"
                     title="Send this line to ${c}"
                     onclick="event.stopPropagation();b2bSplitSet('${it.id}','${code === c ? '' : c}')">${c}</button>`).join('')}
             </span>
-        </div>`;
+        </div>${_b2bSplitEditorHtml(it)}`;
     };
 
     return `
@@ -26652,7 +26841,8 @@ function _b2bStageListing(deal) {
             ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
             <div id="b2bScanWrap">${_b2bScanBar(deal)}</div>
             <div id="b2bListProg">${_b2bListProgress()}</div>
-            <div id="b2bListRows" class="b2b-items b2b-ss b2b-lgrid">${_b2bListRows()}</div>`,
+            <div id="b2bListRows" class="b2b-items b2b-ss b2b-lgrid">${_b2bListRows()}</div>
+            ${_b2bMoveHistoryHtml(deal)}`,
         footer: `
             ${_b2bMoveBtn(deal)}
             ${_b2bMoveLinesBtn(deal)}
@@ -27409,7 +27599,8 @@ function _b2bStageView(deal) {
                         deal.declined_at ? _b2bDate(deal.declined_at) : '',
                     ].filter(Boolean).join(' · '))}</div></span>
             </div>` : ''}
-            ${_b2bItemTableHtml(_b2bModalItems)}`,
+            ${_b2bItemTableHtml(_b2bModalItems)}
+            ${_b2bMoveHistoryHtml(deal)}`,
         footer: `
             ${canDecline ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,

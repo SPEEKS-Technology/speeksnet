@@ -23849,6 +23849,50 @@ select.dd-native {
 .b2b-card-part-done { flex: 1 1 auto; }
 .b2b-card-done { margin-top: 6px; display: block; }
 
+/* Splitting one line between stores: the inline editor under a row. Indented
+   under its row so it reads as belonging to that line, not as a new one. */
+.b2b-splitedit {
+    display: flex; flex-direction: column; gap: 8px;
+    margin: -2px 0 4px 30px; padding: 10px 12px;
+    border: 1px dashed var(--sage-deep); border-radius: 9px;
+    background: var(--b2b-accent-tint, #eaf5ee); cursor: default;
+}
+.b2b-splitedit .b2b-hint { margin: 0; }
+.b2b-splitqty {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px; font-weight: 700; color: #1a1c1e;
+}
+.b2b-splitqty input {
+    width: 72px; padding: 6px 8px; font-size: 13px;
+    border: 1.5px solid var(--b2b-line); border-radius: 7px;
+}
+.b2b-splitser { display: flex; flex-wrap: wrap; gap: 6px; max-height: 150px; overflow-y: auto; }
+.b2b-splitser-i {
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    padding: 4px 8px; border: 1px solid var(--b2b-line); border-radius: 7px;
+    background: #fff; font-size: 11px;
+}
+.b2b-splitser-i.on { border-color: var(--sage-deep); }
+@media (max-width: 620px) { .b2b-splitedit { margin-left: 0; } }
+
+/* Move history: folded under the lines, one row per move. */
+.b2b-xlog { margin-top: 14px; border: 1px solid var(--b2b-line); border-radius: 10px; background: #fff; }
+.b2b-xlog > summary {
+    padding: 9px 12px; cursor: pointer;
+    font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--b2b-muted);
+}
+.b2b-xlog-body { padding: 0 12px 10px; }
+.b2b-xlog-rows { display: flex; flex-direction: column; gap: 6px; }
+.b2b-xlog-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 12px; align-items: center;
+    padding: 7px 0; border-top: 1px solid var(--b2b-line); font-size: 12px;
+}
+.b2b-xlog-w { font-weight: 700; color: #1a1c1e; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.b2b-xlog-m { display: inline-flex; align-items: center; gap: 4px; }
+.b2b-xlog-b { font-size: 11px; color: var(--b2b-muted); font-weight: 650; }
+.b2b-xlog-n { grid-column: 1 / -1; font-size: 11px; color: var(--b2b-muted); font-style: italic; }
+@media (max-width: 620px) { .b2b-xlog-row { grid-template-columns: 1fr; } }
+
 /* ==========================================================================
    LISTING GOALS — PAST WEEKS (managers + ASMs)
    A read-only look back over the last four finished weeks: the seat each person

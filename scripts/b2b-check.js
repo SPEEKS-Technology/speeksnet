@@ -2615,3 +2615,89 @@ t('review a store finished part shows its figures in Completed', function () {
         return html.indexOf('2 of 2') >= 0 || 'the finished part still reads as a dash';
     });
 });
+
+// ---------------------------------------------------------------------------
+// Still-open items, 2026-09-26: splitting one line between stores, the move
+// history, and the multi-store manager's scope.
+// ---------------------------------------------------------------------------
+t('open corp can split a multi-unit line, a store cannot', function () {
+    var it = { id: 'sp1', quantity: 10, listed_qty: 0, recycled_qty: 0 };
+    var corp = _asRole('ceo', 'CORP', function () { return !!_b2bSplitBtn(it, 'assign'); });
+    if (!corp) return 'corp gets no Split on a ten-unit line';
+    var store = _asRole('manager', 'OVL', function () { return !!_b2bSplitBtn(it, 'assign'); });
+    return !store || 'a store was offered Split';
+});
+t('open a one-unit line or a fully accounted line has no Split', function () {
+    return _asRole('ceo', 'CORP', function () {
+        if (_b2bSplitBtn({ id: 'a', quantity: 1, listed_qty: 0, recycled_qty: 0 }, 'move')) return 'split a single unit';
+        return !_b2bSplitBtn({ id: 'b', quantity: 3, listed_qty: 2, recycled_qty: 1 }, 'move')
+            || 'split a line with nothing left to move';
+    });
+});
+t('open a partly listed line can still split off its unlisted units', function () {
+    return _asRole('ceo', 'CORP', function () {
+        return !!_b2bSplitBtn({ id: 'c', quantity: 5, listed_qty: 3, recycled_qty: 0 }, 'move')
+            || 'no way to move the two unlisted units';
+    });
+});
+t('open the split editor caps the count at the unaccounted units', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var it = { id: 'd', quantity: 5, listed_qty: 3, recycled_qty: 0, serial_list: [] };
+        _b2bSplitting = 'd'; _b2bSplitQty = 1; _b2bSplitSerial = {};
+        try {
+            var html = _b2bSplitEditorHtml(it);
+            if (html.indexOf('max="2"') < 0) return 'the count is not capped at 2';
+            return html.indexOf('Only the 2 units') >= 0 || 'it does not say why';
+        } finally { _b2bSplitting = null; }
+    });
+});
+t('open a fully serialled line picks serials, not a number', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var it = { id: 'e', quantity: 2, listed_qty: 0, recycled_qty: 0, serial_list: ['S1', 'S2'] };
+        _b2bSplitting = 'e'; _b2bSplitSerial = {};
+        try {
+            var html = _b2bSplitEditorHtml(it);
+            if (html.indexOf('type="number"') >= 0) return 'offered a count on a serialled line';
+            return html.indexOf('S2') >= 0 || 'the serials are not listed';
+        } finally { _b2bSplitting = null; }
+    });
+});
+t('open splitting sends the picked serials and their count', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var savedItems = _b2bModalItems, savedDeal = _b2bModalDeal;
+        _b2bModalDeal = { id: 'd-ser', ref: 'SER-001', stage: 'listing' };
+        _b2bModalItems = [{ id: 'ser1', quantity: 3, listed_qty: 0, recycled_qty: 0, serial_list: ['A', 'B', 'C'] }];
+        _b2bSplitting = 'ser1'; _b2bSplitCtx = 'move'; _b2bSplitSerial = { 0: true, 2: true };
+        return b2bSplitGo('ser1', null).then(function () {
+            var p = B2B_SENT.filter(function (x) { return x && x.action === 'split_item' && x.id === 'ser1'; })[0];
+            _b2bModalItems = savedItems; _b2bModalDeal = savedDeal;
+            if (!p) return 'nothing was sent';
+            return (p.qty === 2 && JSON.stringify(p.serials) === '["A","C"]') || 'sent ' + JSON.stringify(p);
+        });
+    });
+});
+t('open a multi-store manager scopes the board and items to both stores', function () {
+    return _asMsm(function () {
+        if (_b2bFetchScope() !== 'BAL,MPL') return 'board scope was ' + _b2bFetchScope();
+        return _b2bScopeQs() === '&store=' + encodeURIComponent('BAL,MPL') || 'item scope was ' + _b2bScopeQs();
+    });
+});
+t('open corp is still unscoped', function () {
+    return _asRole('ceo', 'CORP', function () {
+        return (_b2bFetchScope() === 'ALL' && _b2bScopeQs() === '') || 'corp got scoped';
+    });
+});
+t('open the move history names the line, the stores and who moved it', function () {
+    var html = _b2bMoveHistoryRows([
+        { kind: 'item', from_store: 'LEE', to_store: 'OVL', moved_by: 'Ethan', note: 'wrong box',
+          created_at: '2026-09-20T10:00:00Z', item: { sku: 'SPL-001-0003', make: 'Dell', model: 'Latitude' } },
+        { kind: 'listing', from_store: 'OVL', to_store: 'WSP', moved_by: 'Haydn', created_at: '2026-09-18T21:40:00Z' },
+    ]);
+    if (html.indexOf('SPL-001-0003') < 0) return 'no SKU';
+    if (html.indexOf('wrong box') < 0) return 'no note';
+    if (html.indexOf('Haydn') < 0) return 'no mover';
+    return html.indexOf('The deal (listing)') >= 0 || 'a whole-deal move is not labelled';
+});
+t('open an unmoved deal says so', function () {
+    return _b2bMoveHistoryRows([]).indexOf('Nothing on this deal has been moved') >= 0 || 'blank history';
+});
