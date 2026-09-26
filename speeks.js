@@ -23735,9 +23735,9 @@ function _b2bPaintMoveLines() {
             <span class="b2b-splitrow-m">
                 <b>${escapeHtml(_b2bItemName(it))}</b>
                 <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}${
-                    live ? ` · ${live} already listed` : ''}</span>
+                    live ? ` · ${live} already listed` : ''}${_b2bSplitFromNote(it)}</span>
             </span>
-            ${_b2bSplitBtn(it, 'move')}
+            ${_b2bSplitBtn(it, 'move')}${_b2bMergeBtn(it, 'move')}
             <span class="b2b-movenow">${it.listing_store
                 ? `<span class="b2b-chip b2b-chip-neu">${escapeHtml(it.listing_store)}</span>`
                 : '<span class="b2b-f-off">unassigned</span>'}</span>
@@ -23876,6 +23876,52 @@ function _b2bSplitEditorHtml(it) {
             </div>
         </div>`;
 }
+// Undoing a split. Only a line split off another (split_from, 0117) can be
+// merged, and only back into that line -- two lines with the same make and
+// model are not necessarily one line cut in half. A split line with units
+// already listed under its own SKU cannot go back: that Shopify listing points
+// at it. The server refuses both too.
+function _b2bMergeBtn(it, ctx) {
+    if (!_b2bCanAccept() || !it.split_from || Number(it.listed_qty) || _b2bSplitting === it.id) return '';
+    return `<button class="b2b-mini" title="Undo the split: put these units back on the line they came from"
+        onclick="event.stopPropagation();b2bMergeLine('${it.id}','${ctx}',this)">Merge Back</button>`;
+}
+// "split from 0003", so the two halves of a split read as related on screen.
+function _b2bSplitFromNote(it) {
+    if (!it.split_from) return '';
+    const parent = _b2bModalItems.find(x => x.id === it.split_from);
+    return parent ? ` · split from ${_b2bLineNo(parent)}` : ' · split line';
+}
+async function b2bMergeLine(itemId, ctx, btn) {
+    const it = _b2bLocalItem(itemId);
+    const deal = _b2bModalDeal;
+    if (!it || !deal) return;
+    const parent = _b2bModalItems.find(x => x.id === it.split_from);
+    const units = Number(it.quantity) || 1;
+    if (!confirm(`Merge ${units} unit${units === 1 ? '' : 's'} of ${it.sku || 'this line'} back into ${
+        parent ? parent.sku : 'the line it was split from'}?
+
+`
+        + `They go back to ${parent && parent.listing_store ? parent.listing_store : "that line's store"}`
+        + ` and ${it.sku || 'this line'} stops existing.`)) return;
+    let out;
+    try {
+        out = await _b2bBusy(btn, 'Merging…', () => _b2bSend({ action: 'merge_item', id: itemId }));
+    } catch (e) {
+        alert(`Couldn't merge that line: ${e.message}`);
+        return;
+    }
+    delete _b2bSplitPlan[itemId];
+    delete _b2bMoveSel[itemId];
+    try { _b2bModalItems = await _b2bGet(`deal_id=${encodeURIComponent(deal.id)}${_b2bScopeQs()}`); } catch (_) {}
+    _b2bSplitCtx = ctx === 'move' ? 'move' : 'assign';
+    _b2bSplitHostRepaint();
+    if (typeof _b2bRepaintListing === 'function' && document.getElementById('b2bListRows')) _b2bRepaintListing();
+    if (out && out.sku) {
+        _b2bSay(`Merged back into ${out.sku}${out.relabel ? ` — labels printed for ${out.merged_sku} need replacing` : ''}.`);
+    }
+}
+
 function _b2bSplitHostRepaint() {
     if (_b2bSplitCtx === 'move') _b2bPaintMoveLines();
     else _b2bSplitRepaint();
@@ -26685,9 +26731,9 @@ function _b2bSplitPickerHtml() {
             <span class="b2b-splitrow-m">
                 <b>${escapeHtml(_b2bItemName(it))}</b>
                 <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}${
-                    _b2bIsScrap(it) ? ' · recycle' : ''}</span>
+                    _b2bIsScrap(it) ? ' · recycle' : ''}${_b2bSplitFromNote(it)}</span>
             </span>
-            ${_b2bSplitBtn(it, 'assign')}
+            ${_b2bSplitBtn(it, 'assign')}${_b2bMergeBtn(it, 'assign')}
             <span class="b2b-splitrow-s">
                 ${STORE_CODES.map(c => `<button class="b2b-splitchip ${code === c ? 'on' : ''}"
                     title="Send this line to ${c}"

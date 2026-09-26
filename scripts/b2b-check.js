@@ -2701,3 +2701,50 @@ t('open the move history names the line, the stores and who moved it', function 
 t('open an unmoved deal says so', function () {
     return _b2bMoveHistoryRows([]).indexOf('Nothing on this deal has been moved') >= 0 || 'blank history';
 });
+
+// Undoing a split (0117 split_from).
+t('open only a split line offers Merge Back, and only to corp', function () {
+    var child = { id: 'mc', split_from: 'mp', quantity: 4, listed_qty: 0, recycled_qty: 0 };
+    var plain = { id: 'mq', quantity: 4, listed_qty: 0, recycled_qty: 0 };
+    return _asRole('ceo', 'CORP', function () {
+        if (!_b2bMergeBtn(child, 'move')) return 'no Merge Back on a split line';
+        if (_b2bMergeBtn(plain, 'move')) return 'Merge Back on a line that was never split';
+        return _asRole('manager', 'OVL', function () {
+            return !_b2bMergeBtn(child, 'move') || 'a store was offered Merge Back';
+        });
+    });
+});
+t('open a split line with listed units cannot be merged back', function () {
+    return _asRole('ceo', 'CORP', function () {
+        return !_b2bMergeBtn({ id: 'ml', split_from: 'mp', quantity: 4, listed_qty: 1, recycled_qty: 0 }, 'move')
+            || 'offered to merge a line with a live Shopify listing';
+    });
+});
+t('open a split line says which line it came from', function () {
+    var saved = _b2bModalItems;
+    _b2bModalItems = [
+        { id: 'mp', sku: 'VIS-001-0003', line_no: 3 },
+        { id: 'mc', sku: 'VIS-001-0007', line_no: 7, split_from: 'mp' },
+    ];
+    try {
+        return _b2bSplitFromNote(_b2bModalItems[1]) === ' · split from 0003'
+            || 'got "' + _b2bSplitFromNote(_b2bModalItems[1]) + '"';
+    } finally { _b2bModalItems = saved; }
+});
+t('open merging sends merge_item for the split line', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var savedItems = _b2bModalItems, savedDeal = _b2bModalDeal, savedConfirm = window.confirm;
+        _b2bModalDeal = { id: 'd-merge', ref: 'MRG-001', stage: 'listing' };
+        _b2bModalItems = [
+            { id: 'mp2', sku: 'MRG-001-0001', quantity: 6, listing_store: 'LEE' },
+            { id: 'mc2', sku: 'MRG-001-0004', quantity: 4, split_from: 'mp2', listed_qty: 0 },
+        ];
+        window.confirm = function () { return true; };
+        return b2bMergeLine('mc2', 'move', null).then(function () {
+            window.confirm = savedConfirm;
+            _b2bModalItems = savedItems; _b2bModalDeal = savedDeal;
+            var p = B2B_SENT.filter(function (x) { return x && x.action === 'merge_item' && x.id === 'mc2'; });
+            return p.length === 1 || p.length + ' merge requests';
+        });
+    });
+});

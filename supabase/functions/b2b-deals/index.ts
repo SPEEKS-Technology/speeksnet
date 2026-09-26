@@ -287,6 +287,8 @@ const ITEM_COLS = [
   // b2b_deals.listing_store is now the single-store convenience and
   // b2b_deals.listing_stores the trigger-maintained roll-up.
   "listing_store",
+  // The line this one was split off (0117), so a split can be undone.
+  "split_from",
 ].join(",");
 
 // `computer` folds the old laptop/desktop split into one type; the legacy two
@@ -1801,6 +1803,7 @@ Deno.serve(async (req: Request) => {
         const copy: Record<string, unknown> = { ...it };
         for (const k of ["id", "created_at", "updated_at"]) delete copy[k];
         Object.assign(copy, {
+          split_from: it.id,
           line_no: lineNo,
           sku: skuFor(deal.client?.acronym || "B2B", deal.deal_no, lineNo),
           quantity: qty,
@@ -1836,6 +1839,100 @@ Deno.serve(async (req: Request) => {
           id: made.id, sku: made.sku, line_no: made.line_no,
           qty, left, from_sku: it.sku,
           relabel: (Number(it.label_printed_qty) || 0) > 0,
+        });
+      }
+
+      // merge_item { id }   -- undo a split: fold a split line back into the
+      //                        line it came from (split_from, 0117).
+      //
+      // Only a line split off another can be merged, and only into that line:
+      // two lines with the same make and model are not necessarily one line cut
+      // in half, and the client may have quoted them separately.
+      //
+      // The units go back to the parent's store. A unit already listed under
+      // the split line's SKU blocks it -- that Shopify listing points at a line
+      // that would stop existing -- but recycled units and wipe certifications
+      // simply come along. Labels printed with the split line's SKU are wrong
+      // afterwards; the client says so.
+      if (action === "merge_item") {
+        const { data: child } = await supabase.from("b2b_deal_items")
+          .select("*").eq("id", String(body.id || "")).maybeSingle();
+        if (!child) return jsonResponse({ success: false, error: "Line item not found." }, 404);
+        if (!child.split_from) {
+          return jsonResponse({ success: false, error: "This line wasn't split off another, so there is nothing to merge it back into." }, 409);
+        }
+        const deal = await getDeal(supabase, child.deal_id);
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (!mayApprove(body)) {
+          return jsonResponse({ success: false, error: "Only corp can merge lines." }, 403);
+        }
+        if (!["listing_location", "listing"].includes(deal.stage)) {
+          return jsonResponse({
+            success: false,
+            error: "Lines can only be merged while they are being assigned or listed.",
+          }, 409);
+        }
+        const { data: parent } = await supabase.from("b2b_deal_items")
+          .select("*").eq("id", child.split_from).maybeSingle();
+        if (!parent || parent.deal_id !== child.deal_id) {
+          return jsonResponse({ success: false, error: "The line this was split from is gone, so it can't be merged back." }, 409);
+        }
+        if ((Number(child.listed_qty) || 0) > 0) {
+          return jsonResponse({
+            success: false,
+            error: `${child.sku} already has units listed on Shopify under its own SKU, so it can't be merged back. Unlist them first.`,
+          }, 409);
+        }
+
+        const qty = (Number(parent.quantity) || 0) + (Number(child.quantity) || 0);
+        const { error: pErr } = await supabase.from("b2b_deal_items").update({
+          quantity: qty,
+          recycled_qty: (Number(parent.recycled_qty) || 0) + (Number(child.recycled_qty) || 0),
+          wiped_qty: Math.min(qty, (Number(parent.wiped_qty) || 0) + (Number(child.wiped_qty) || 0)),
+          serials: [...serialList(parent.serials), ...serialList(child.serials)].join(", "),
+        }).eq("id", parent.id);
+        if (pErr) return jsonResponse({ success: false, error: pErr.message }, 500);
+
+        // Anything later split off the child now descends from the parent, so
+        // it can still be merged back instead of losing its link to the FK.
+        await supabase.from("b2b_deal_items").update({ split_from: parent.id }).eq("split_from", child.id);
+
+        const { error: dErr } = await supabase.from("b2b_deal_items").delete().eq("id", child.id);
+        if (dErr) {
+          // Put the parent back rather than leave the units counted twice.
+          await supabase.from("b2b_deal_items").update({
+            quantity: parent.quantity, recycled_qty: parent.recycled_qty,
+            wiped_qty: parent.wiped_qty, serials: parent.serials,
+          }).eq("id", parent.id);
+          return jsonResponse({ success: false, error: dErr.message }, 500);
+        }
+
+        // Keep the deal's single-store column honest, as transfer_items does,
+        // and drop part rows that no longer describe anything: a store with no
+        // lines left, or the parent's store if it had finished and has just
+        // been handed units still to list.
+        const { data: fresh } = await supabase.from("b2b_deals")
+          .select("listing_stores").eq("id", deal.id).maybeSingle();
+        const nowStores: string[] = fresh?.listing_stores || [];
+        if (deal.stage === "listing") {
+          await supabase.from("b2b_deals").update({
+            listing_store: nowStores.length === 1 ? nowStores[0] : null,
+          }).eq("id", deal.id);
+        }
+        const stale = ((deal.listing_stores || []) as string[]).filter((st) => !nowStores.includes(st));
+        const handedBack = (Number(child.quantity) || 0) - (Number(child.recycled_qty) || 0) > 0;
+        if (handedBack && parent.listing_store) stale.push(parent.listing_store);
+        if (stale.length) {
+          await supabase.from("b2b_deal_listing_parts").delete().eq("deal_id", deal.id).in("store", stale);
+        }
+
+        for (const st of new Set([...(deal.listing_stores || []), ...nowStores])) {
+          await broadcastChange("b2b", st as string, { deal: deal.id, by: str(body.user, 80, "User") });
+        }
+        return jsonResponse({
+          success: true,
+          id: parent.id, sku: parent.sku, quantity: qty, merged_sku: child.sku,
+          relabel: (Number(child.label_printed_qty) || 0) > 0,
         });
       }
 
