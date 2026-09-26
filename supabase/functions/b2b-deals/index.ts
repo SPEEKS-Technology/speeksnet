@@ -1205,9 +1205,30 @@ Deno.serve(async (req: Request) => {
         const to = oneOf(String(body.to_store ?? "").toUpperCase(),
           kind === "pricing" ? PRICING_LOCATIONS : STORES,
           "Store")!;
+        // A split deal has no single listing store to move it off -- its stores
+        // live on the lines. Moving it whole would stamp one store on the deal
+        // while the lines stayed split, so it reads as both at once. Moving
+        // lines is transfer_items' job.
+        if (kind === "listing" && (deal.listing_stores || []).length > 1) {
+          return jsonResponse({
+            success: false,
+            error: "This deal is split across stores. Use Move Lines to move items between them.",
+          }, 409);
+        }
         const from = kind === "pricing" ? deal.pricing_store : deal.listing_store;
         if (from === to) {
           return jsonResponse({ success: false, error: `This deal is already at ${to}.` }, 409);
+        }
+
+        // Once a deal is in listing its lines carry the store (0081), so moving
+        // the deal has to move them too -- otherwise the new store is handed a
+        // deal whose store-scoped fetch returns none of its lines, and the old
+        // one keeps seeing them. Before that (listing_location) nothing is
+        // assigned yet and assign_listing stamps them.
+        if (kind === "listing" && deal.stage === "listing") {
+          const { error: iErr } = await supabase.from("b2b_deal_items")
+            .update({ listing_store: to }).eq("deal_id", deal.id);
+          if (iErr) return jsonResponse({ success: false, error: iErr.message }, 500);
         }
 
         const patch: Record<string, unknown> = kind === "pricing"
@@ -1406,6 +1427,16 @@ Deno.serve(async (req: Request) => {
 
         // CORP priced it, so someone still has to say which store lists it.
         const toCorp = deal.pricing_store === "CORP";
+        // A store-priced deal goes straight to listing at that store, so its
+        // lines have to carry that store too -- since 0081 the ITEM is what the
+        // store-scoped fetch, per-store completion and the progress bars read.
+        // Setting only the deal column is how WSP's deal (2026-09-18) reached
+        // listing with three unassigned lines that nobody could complete.
+        if (!toCorp) {
+          const { error: iErr } = await supabase.from("b2b_deal_items")
+            .update({ listing_store: deal.pricing_store }).eq("deal_id", deal.id);
+          if (iErr) return jsonResponse({ success: false, error: iErr.message }, 500);
+        }
         const { error } = await supabase.from("b2b_deals").update({
           stage: toCorp ? "listing_location" : "listing",
           listing_store: toCorp ? null : deal.pricing_store,
@@ -1840,6 +1871,26 @@ Deno.serve(async (req: Request) => {
           .select("outstanding_units, listing_stores").eq("id", deal.id).maybeSingle();
         const stores: string[] = roll?.listing_stores || [];
 
+        // No line carries a store, so there are no parts to speak of: the deal
+        // reached listing before its lines were assigned. Judge it deal-wide,
+        // the way the old code did. This has to come BEFORE the part logic --
+        // left to it, an unassigned deal read as split and was refused, or a
+        // caller_store matched no lines, counted nothing outstanding, and
+        // signed off a part with units still to list.
+        if (!stores.length) {
+          const left = roll?.outstanding_units ?? 0;
+          if (left > 0) {
+            return jsonResponse({
+              success: false,
+              error: `${left} unit${left === 1 ? "" : "s"} still need listing or recycling.`,
+            }, 409);
+          }
+          const { error } = await supabase.from("b2b_deals").update({ stage: "completed" }).eq("id", deal.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          await broadcastChange("b2b", dealStore(deal));
+          return jsonResponse({ success: true, part: null, deal_completed: true, waiting_on: [] });
+        }
+
         // WHOSE part. A store user completes their own and may not complete
         // anybody else's; corp names the store it means. Falling back to the
         // whole deal when there is only one store keeps every existing caller
@@ -1898,24 +1949,18 @@ Deno.serve(async (req: Request) => {
         const { data: done } = await supabase.from("b2b_deal_listing_parts")
           .select("store").eq("deal_id", deal.id);
         const doneSet = new Set((done || []).map((r: any) => r.store));
-        const allIn = stores.length > 0 && stores.every((s) => doneSet.has(s));
-        // No listing_stores at all means a deal from before 0081 whose items
-        // were never assigned; the deal-wide count is the only answer available
-        // and it is the one the old code used.
-        const legacyDone = stores.length === 0 && (roll?.outstanding_units ?? 0) === 0;
+        const allIn = stores.every((s) => doneSet.has(s));
 
-        if (allIn || legacyDone) {
+        if (allIn) {
           const { error } = await supabase.from("b2b_deals").update({ stage: "completed" }).eq("id", deal.id);
           if (error) return jsonResponse({ success: false, error: error.message }, 500);
         }
 
-        for (const st of (stores.length ? stores : [dealStore(deal)].filter(Boolean))) {
-          await broadcastChange("b2b", st as string);
-        }
+        for (const st of stores) await broadcastChange("b2b", st);
         return jsonResponse({
           success: true,
           part,
-          deal_completed: allIn || legacyDone,
+          deal_completed: allIn,
           waiting_on: stores.filter((s) => !doneSet.has(s)),
         });
       }
