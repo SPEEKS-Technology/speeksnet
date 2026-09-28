@@ -15994,12 +15994,14 @@ window.stepGoalsTemp = stepGoalsTemp;
 // ---------------------------------------------------------------------------
 // listing_goals.result is the Day End Report's count for that person, written
 // the morning after by day-end-ingest (it was never filled before 2026-09-24).
-// So TODAY never has one; the widget shows the last day before today that the
-// person had a row, and the week to date through that day.
+// So TODAY never has one; the widget shows each day of THIS week before today
+// that the person had a row, and the week to date through the last of them.
 //
-// "Last day", not "yesterday": on a Monday the day before is Sunday, when every
-// store is shut, and the useful answer is Saturday. Labelled with the weekday
-// so it is never ambiguous which day it is.
+// THIS WEEK ONLY — on a Monday it shows nothing at all (Ethan, 2026-09-28).
+// It used to fall back to the last worked day, which on a Monday is Saturday,
+// but Saturday closes the previous week and says nothing about the one ahead.
+// Monday's own result arrives Tuesday morning. Labelled with the weekday so it
+// is never ambiguous which day a chip is.
 //
 // Names match EXACTLY here. These rows were written by this widget from this
 // roster, so the names are the same strings — the first-name rule elsewhere
@@ -16034,9 +16036,9 @@ function _goalsNum(v) { return v == null || v === '' ? null : (parseInt(v, 10) |
 // before today, then the week so far as its own chip, set apart by a divider.
 // It was one run-on line ("Wed 0 / 6 · Week 3 / 43") until Ethan asked for the
 // days to be separated so a full Saturday — six days — still reads at a
-// glance (2026-09-24). On a Monday this week has no days yet, so the last day
-// before it (Saturday) shows alone, without a Week chip. '' when the person
-// has no rows before today at all.
+// glance (2026-09-24). '' when the person has no rows this week before today —
+// which is everyone on a Monday; see the RESULTS header for why last week's
+// Saturday no longer stands in.
 function _goalsDayChip(d, r) {
     const wd = _goalsWeekday(d);
     if (_isOffRole(r.role)) return '<span class="gr-chip gr-off"><span class="gr-d">' + wd + '</span>Off</span>';
@@ -16051,13 +16053,8 @@ function _goalsDayChip(d, r) {
 function _goalsResultLine(emp, dr) {
     const k = String(emp || '').trim().toLowerCase();
     const weekDays = dr.week.filter(d => dr.byDay[d][k]);
-    let days = weekDays;
-    if (!days.length) {
-        const mine = dr.days.filter(d => dr.byDay[d][k]);
-        if (!mine.length) return '';
-        days = [mine[mine.length - 1]];
-    }
-    const chips = days.map(d => _goalsDayChip(d, dr.byDay[d][k])).join('');
+    if (!weekDays.length) return '';
+    const chips = weekDays.map(d => _goalsDayChip(d, dr.byDay[d][k])).join('');
 
     let wg = 0, wr = 0, any = false;
     weekDays.forEach(d => {
@@ -16102,9 +16099,10 @@ function _goalsTotalListedHtml(dr) {
         + (W.goal ? ' · ' + Math.round(W.got / W.goal * 100) + '%' : '');
 }
 
+// This week only, like the per-person chips: nothing on a Monday.
 function _goalsStoreResultHtml(dr) {
-    if (!dr.days.length) return '';
-    const last = dr.days[dr.days.length - 1];
+    if (!dr.week.length) return '';
+    const last = dr.week[dr.week.length - 1];
     const L = _goalsSumDay(dr, last);
     const W = _goalsWeekActual(dr);
     const cell = (label, s) => `<div class="goals-res-cell"><span class="gr-k">${label}</span>`
@@ -16112,7 +16110,7 @@ function _goalsStoreResultHtml(dr) {
         + `<small>/ ${s.goal}${s.known && s.goal ? ' · ' + Math.round(s.got / s.goal * 100) + '%' : ''}</small></div>`;
     return `<div class="goals-res-store" title="Listed, from the Day End Report, against the goals set for those days">`
         + cell(_goalsWeekday(last) + ' listed', L)
-        + (dr.week.length ? cell('Week to date', W) : '')
+        + cell('Week to date', W)
         + '</div>';
 }
 

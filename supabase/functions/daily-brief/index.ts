@@ -312,7 +312,12 @@ async function loadFacts(sb: any, from: string, to: string): Promise<Map<string,
       custConvNum: r.cust_conv_num, custConvDen: r.cust_conv_den,
       devConv: r.dev_conv_den ? Number(r.dev_conv_num) / Number(r.dev_conv_den) : null,
       totalCustomers: r.total_customers,
-      listed: r.devices_processed,
+      // LISTED, not processed: the report's Total Listed Devices from 2026-09-23,
+      // Devices Processed only for a day before it carried one — the same rule as
+      // the goals board, Store Efficiency and the matrix. The 25/40 bars were set
+      // on processed counts and kept as they were when this switched (Ethan,
+      // 2026-09-28); revisit them if the listed counts run differently.
+      listed: r.listed_devices != null ? Number(r.listed_devices) : r.devices_processed,
       processedValue: r.processed_value == null ? null : Number(r.processed_value),
       fiveStarMtd: r.five_star_mtd,
       availableCount: r.available_count,
@@ -583,6 +588,12 @@ function systemPrompt(): string {
 // for a surname to disambiguate) is worse than the ambiguity.
 const firstName = (full: unknown) => String(full ?? "").trim().split(/\s+/)[0] || "";
 
+// One Team Production member's listings: their Total Listed Devices from
+// 2026-09-23, Devices Processed on older reports that have no listed column.
+// The same fallback day-end-ingest uses for per-person goal results.
+const memberListed = (m: any) =>
+  m?.listed != null ? Number(m.listed) || 0 : Number(m?.processed) || 0;
+
 function userPrompt(store: string, refDate: string, signals: Signal[], recent: string[], f: Facts, siblings: string[]): string {
   const praise = signals.filter((s) => s.dir === "praise");
   const correct = signals.filter((s) => s.dir === "correct");
@@ -615,16 +626,16 @@ function userPrompt(store: string, refDate: string, signals: Signal[], recent: s
   const team = Array.isArray(f.teamProduction) ? f.teamProduction.filter((t: any) => t?.name) : [];
   if (listingFired && team.length) {
     const num = (x: unknown) => Number(x) || 0;
-    const byCount = [...team].sort((a: any, b: any) => num(b.processed) - num(a.processed))[0];
+    const byCount = [...team].sort((a: any, b: any) => memberListed(b) - memberListed(a))[0];
     const byValue = [...team].sort((a: any, b: any) => num(b.value) - num(a.value))[0];
     lines.push("");
     // First names only, trimmed here — see firstName above.
     const led = firstName(byCount?.name), ledVal = firstName(byValue?.name);
     if (byCount && byValue && byCount.name === byValue.name) {
-      lines.push(`Led the board on BOTH counts: ${led}, ${byCount.processed} items and ${fmtMoney(num(byCount.value))} of value.`);
+      lines.push(`Led the board on BOTH counts: ${led}, ${memberListed(byCount)} items and ${fmtMoney(num(byCount.value))} of value.`);
       lines.push("Unambiguous, so you may name them for the listing day.");
     } else {
-      lines.push(`Most items listed: ${led} (${byCount.processed} items).`);
+      lines.push(`Most items listed: ${led} (${memberListed(byCount)} items).`);
       lines.push(`Highest value processed: ${ledVal} (${fmtMoney(num(byValue.value))}).`);
       lines.push("These are two DIFFERENT people. Either name one and say which of the two things they led, or name nobody and praise the store. Do not call someone the leader without saying what they led.");
     }
@@ -704,11 +715,18 @@ function factSnapshot(f: Facts) {
     // one claim a column of numbers cannot settle, so the strip has to show who led
     // on items AND who led on value: MPL 2026-08-13 was Calvin on items (9) and
     // Olivia on value ($4,150), and the draft called Olivia the processing leader.
+    //
+    // FULL names are correct HERE and only here: this is his private verification
+    // card, not a message to a store, and "Calvin" alone is harder to check against
+    // a report than "Calvin Oyugi". The trim to first names happens on the way into
+    // the PROMPT — see firstName.
     topLister: (() => {
       const tp = (Array.isArray(f.teamProduction) ? f.teamProduction : []).filter((p: any) => p?.name);
       if (!tp.length) return null;
-      const top = [...tp].sort((a: any, b: any) => (Number(b.processed) || 0) - (Number(a.processed) || 0))[0];
-      return { name: String(top.name ?? ""), processed: top.processed ?? null, value: top.value ?? null };
+      const top = [...tp].sort((a: any, b: any) => memberListed(b) - memberListed(a))[0];
+      // `processed` keeps its name because the card reads it, but it carries the
+      // LISTED count now — see memberListed.
+      return { name: String(top.name ?? ""), processed: memberListed(top), value: top.value ?? null };
     })(),
     topProducer: (() => {
       const tp = (Array.isArray(f.teamProduction) ? f.teamProduction : []).filter((p: any) => p?.name);

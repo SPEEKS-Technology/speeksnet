@@ -3011,7 +3011,9 @@ function diagnoseSummaryTab() {
 //   Sales tab  -> B, C          (the sheet's own daily figures, summed Sun..Sat)
 //   Buy tab    -> O, P, Q       (ditto; the email agrees to the dollar, but the
 //                                sheet is there even when an email is not)
-//   The email  -> R, T, V, Y, Z, AA, AB   (nowhere else carries these)
+//   The email  -> R, T, V, Y, Z, AB      (nowhere else carries these)
+//   Day End    -> AA           (LISTED devices since 2026-09-23, summed off the
+//                                daily reports; see _weeklyFiguresFor)
 //
 // Left alone, always: D and E are formulas; G, H, J, K, M, X and AC are the
 // user's to key in. They are CLEARED on the new block rather than left holding
@@ -3127,9 +3129,11 @@ function ingestWeeklySummary(opts) {
     // actually be filled. A shift that runs and then fails leaves the tab with
     // last week duplicated and no way to tell from looking at it.
     var emails = _weeklyEmailsByStore(report, start, end);
+    var dayEnds = _weeklyDayEndListed(start, end, report);
     var figures = {};
     SUMMARY_STORES.forEach(function (store) {
-      figures[store] = _weeklyFiguresFor(ss, store, start, end, emails[store], report);
+      figures[store] = _weeklyFiguresFor(ss, store, start, end, emails[store], report,
+        dayEnds ? dayEnds[store] : null);
     });
 
     var blocked = report.incomplete.length > 0;
@@ -3252,7 +3256,7 @@ function _summaryWeekLabel(start, end) {
 // ------------------------------------------------------------
 // The figures
 // ------------------------------------------------------------
-function _weeklyFiguresFor(ss, store, start, end, email, report) {
+function _weeklyFiguresFor(ss, store, start, end, email, report, dayEnd) {
   var f = { store: store };
 
   // --- Sales tab: revenue and cost, Sun..Sat. A week can straddle two months,
@@ -3313,6 +3317,10 @@ function _weeklyFiguresFor(ss, store, start, end, email, report) {
   // columns and nothing else; the rest are reported rather than guessed at.
   if (!email) {
     report.missingEmails.push({ store: store, week: _iso(start) + '..' + _iso(end) });
+    // AA does not need the email once the Day End Reports cover the week.
+    if (dayEnd && !dayEnd.missing.length && dayEnd.days > 0) {
+      f.processedItems = dayEnd.total; f.processedSource = 'day-end';
+    }
     return f;
   }
   f.custNum = email.cust ? email.cust.num : null;
@@ -3324,8 +3332,37 @@ function _weeklyFiguresFor(ss, store, start, end, email, report) {
   f.traffic  = f.custDen;
   f.qty            = email.availCount;
   f.value          = email.availProjection;
-  f.processedItems = email.processedItems;
   f.processedValue = email.processedValue;
+
+  // --- AA, Processed Items: LISTED devices since 2026-09-23, not devices
+  // processed — the count every other listing figure in the app moved to when
+  // PayMore added the column (Ethan asked for both). Three sources, best first:
+  //   1. the week's Day End Reports, summed — the same numbers Listing Goals and
+  //      Store Efficiency show, so the sheet cannot disagree with the app;
+  //   2. the weekly email's own listed count, when a day's report is missing;
+  //   3. the weekly email's Devices Processed, only when neither has a listed
+  //      figure — i.e. a week from before the template change.
+  // AB (Processed Value) stays Devices Processed' value: PayMore gives no value
+  // for listings, and the two columns are no longer the same devices.
+  var deOk = dayEnd && !dayEnd.missing.length && dayEnd.days > 0;
+  if (deOk) {
+    f.processedItems = dayEnd.total; f.processedSource = 'day-end';
+    if (email.listedDevices != null && email.listedDevices !== dayEnd.total) {
+      report.warnings.push({ store: store, note: 'Listed devices: Day End Reports and the weekly email disagree',
+        dayEnd: dayEnd.total, email: email.listedDevices });
+    }
+  } else if (email.listedDevices != null) {
+    f.processedItems = email.listedDevices; f.processedSource = 'weekly-email';
+    if (dayEnd && dayEnd.missing.length) {
+      report.warnings.push({ store: store, field: 'AA',
+        note: 'no Day End Report for ' + dayEnd.missing.join(', ') + ' — used the weekly email\'s listed count' });
+    }
+  } else {
+    f.processedItems = email.processedItems; f.processedSource = 'devices-processed';
+    report.warnings.push({ store: store, field: 'AA',
+      note: 'no listed-devices figure for this week — wrote Devices Processed instead',
+      missing_days: dayEnd ? dayEnd.missing : null });
+  }
 
   // The email and the Buy tab compute the same week from different systems. They
   // matched to the dollar on every store when this was built, so a disagreement
@@ -3632,6 +3669,54 @@ function parseWeeklyEmail(msg) {
   if (ps >= 0) {
     out.processedItems = _wkInt(_wkAfter(lines, 'devices processed', ps, lines.length));
     out.processedValue = _wkMoney(_wkAfter(lines, 'total value', ps, lines.length));
+  }
+
+  // --- Listed devices, the same count _deParse takes off the Day End Report
+  // (see the note there): a Processed Stats card if the template has one, else
+  // Team Production's "Total Listed Devices" summed. Null, not 0, on a report
+  // without the column — the caller then falls back rather than writing a zero.
+  var listedCard = ps >= 0 ? _wkInt(_wkAfter(lines, 'total listed devices', ps, lines.length)) : null;
+  var tpRows = _deTeamProduction(lines, null) || [];
+  var hasListed = tpRows.some(function (r) { return r.listed != null; });
+  out.listedDevices = listedCard != null ? listedCard
+    : hasListed ? tpRows.reduce(function (s, r) { return s + (r.listed || 0); }, 0)
+    : null;
+  return out;
+}
+
+// Listed devices per store for Sun..Sat, summed off that week's Day End
+// Reports — the figure Listing Goals, Store Efficiency and the matrix all count
+// since 2026-09-23. Per day it is listed ?? devices processed, the same rule as
+// everywhere else, so a week straddling the template change still sums.
+//
+// `missing` names open days with no report. The caller refuses a short sum
+// rather than writing it: six days summed as five reads as a bad week, not as a
+// gap, and nothing in the cell would say otherwise.
+function _weeklyDayEndListed(start, end, report) {
+  var out = {};
+  SUMMARY_STORES.forEach(function (s) { out[s] = { total: 0, days: 0, missing: [] }; });
+  var r;
+  try {
+    // Back to the week's Sunday from today, plus slack for mail filed late.
+    var days = Math.ceil((_todayInTz().getTime() - start.getTime()) / 86400000) + 3;
+    r = dayEndFacts({ days: days });
+  } catch (err) {
+    report.warnings.push({ field: 'AA', reason: 'Day End Reports could not be read: '
+      + String(err && err.message || err) });
+    return null;
+  }
+  var byKey = {};
+  (r.rows || []).forEach(function (row) { byKey[row.store + '|' + row.date] = row; });
+
+  for (var d = new Date(start); d <= end; d = _addDays(d, 1)) {
+    var iso = _iso(d);
+    var closed = _isPlannedClosure(d.getFullYear(), d.getMonth(), d.getDate());
+    SUMMARY_STORES.forEach(function (s) {
+      var row = byKey[s + '|' + iso];
+      var n = row ? (row.listedDevices != null ? row.listedDevices : row.devicesProcessed) : null;
+      if (n == null) { if (!closed) out[s].missing.push(iso); return; }
+      out[s].total += n; out[s].days++;
+    });
   }
   return out;
 }
