@@ -33673,7 +33673,7 @@ function _onClaimReasonChange() {
 // the form is up, Claims stays the lit tab, because that is where Cancel and Save
 // both land.
 function switchClaimsTab(tab) {
-    ['new', 'view', 'mismatch', 'returns', 'cases'].forEach(t => {
+    ['new', 'view', 'mismatch', 'returns', 'cases', 'payments'].forEach(t => {
         const b = document.getElementById(`claims-tab-${t}`);
         const p = document.getElementById(`claims-panel-${t}`);
         if (b) b.classList.toggle('active', t === tab || (tab === 'new' && t === 'view'));
@@ -33686,7 +33686,7 @@ function switchClaimsTab(tab) {
     if (tab === 'view') fetchMyClaims();
     // openClaimsModal already started a load (for the tab badges); only fetch
     // again if that one has finished, and without re-asking eBay.
-    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases') {
+    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases' || tab === 'payments') {
         if (_holdLoading.mgr) renderHoldItems('mgr');
         else loadHoldItems('mgr', { sync: !_holdData.mgr });
     }
@@ -34116,6 +34116,14 @@ async function saveEscalation(id) {
 //  ROLLED OUT ONE STORE AT A TIME. The tabs stay hidden (display:none in the
 //  markup) until the server says one of this user's stores is rolled out.
 //
+//  PAYMENTS (0119, Ethan 2026-09-28: "I would call the tab Payments"). Shopify
+//  orders we have not been paid for — a card authorization about to run out,
+//  or one that already has, or a partial payment. The CFO's month-end list had
+//  two of these with no eBay side at all, so no other tab could ever show them.
+//  Normal authorized orders are held back by the server until the card is close
+//  to expiring (2 days — Ethan kept that on 2026-09-28), and the tab does not
+//  count them: they are normal, and he had the line saying so taken off.
+//
 //  Read-only against the marketplaces: nothing here refunds, responds to or
 //  closes anything on eBay or Shopify. That is done on the sites, by hand.
 // =========================================================
@@ -34172,6 +34180,16 @@ const _HOLD_STATE = {
 // waiting is something the site is doing, and reads as though it were the site's
 // move. The reply is OURS, and the chip should say so.
 function _holdStateLabel(type, it, s) {
+    // 0119. A card that can still be charged has a day it stops being chargeable,
+    // and that day is the label; one that can't be charged any more says so.
+    if (type === 'payment') {
+        if (it.state === 'needs_reply') {
+            if (it.state_note === 'resolution_disputed') return 'Marked resolved — Shopify can still charge it';
+            return _holdPaymentExpiresToday(it) ? 'Card expires today' : 'Charge the card soon';
+        }
+        if (it.state === 'due') return 'Card expired — not collected';
+        return s.label;
+    }
     if (it.state === 'needs_reply') {
         // eBay takes no late reply, so once the window has shut the honest label
         // is not "needs a reply" — nothing anyone presses brings it back.
@@ -34193,6 +34211,13 @@ function _holdStateLabel(type, it, s) {
 // heading groups them; this chip is what tells you on a card whose heading has
 // scrolled off, and it is the first thing on the row for that reason.
 function _holdKindChip(type, it) {
+    // The CFO's own words for these two, so his list and this tab read alike.
+    if (type === 'payment') {
+        const fs = String(it.financial_status || '');
+        if (fs === 'PARTIALLY_PAID') return 'Partially paid';
+        if (fs === 'PENDING') return 'Payment pending';
+        return it.capturable ? 'Card authorized' : 'Card expired';
+    }
     if (type === 'dispute') {
         if (it.source === 'ebay') return 'Payment dispute';
         return it.dispute_type === 'INQUIRY' ? 'Bank inquiry' : 'Chargeback';
@@ -34239,7 +34264,8 @@ const _holdItemKey = entry => _holdKeyFor(entry.type, entry.it);
 // One place that knows which column is an item's key, because three types now
 // use three different ones and getting it wrong silently posts against nothing.
 const _holdKeyFor = (type, it) =>
-    type === 'mismatch' ? it.issue_key : type === 'dispute' ? it.dispute_key : it.case_key;
+    type === 'mismatch' ? it.issue_key : type === 'dispute' ? it.dispute_key
+    : type === 'payment' ? it.order_key : it.case_key;
 const _holdDelivered = it => /DELIVERED/i.test(String(it.tracking_status || ''));
 // Returns run delivered → on its way back → not shipped yet → needs a label
 // (Ethan, 2026-09-22): the ones closest to a refund first, the ones we have not
@@ -34270,7 +34296,7 @@ const _holdKeyOf = e => `${e.type}|${_holdKeyFor(e.type, e.it)}`;
 
 async function loadHoldItems(ctx, opts = {}) {
     const stores = _holdStores(ctx);
-    const wraps = ['mismatch', 'returns', 'cases'].map(t => _holdWrap(ctx, t)).filter(Boolean);
+    const wraps = ['mismatch', 'returns', 'cases', 'payments'].map(t => _holdWrap(ctx, t)).filter(Boolean);
     if (!stores.length) { _holdNotLive(ctx); return; }
     if (!_holdData[ctx]) wraps.forEach(w => { w.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading…</div>'; });
     _holdLoading[ctx] = true;
@@ -34316,11 +34342,12 @@ const _HOLD_TAB_NOUN = {
     mismatch: 'Refund mismatches',
     returns: 'eBay returns',
     cases: 'eBay cases and disputes',
+    payments: 'Unpaid Shopify orders',
 };
 function _holdNotLive(ctx) {
     const mine = _holdStores(ctx);
     const who = mine.length ? mine.join(' and ') : 'your store';
-    ['mismatch', 'returns', 'cases'].forEach(t => {
+    ['mismatch', 'returns', 'cases', 'payments'].forEach(t => {
         const w = _holdWrap(ctx, t);
         if (!w) return;
         w.innerHTML = `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600; line-height:1.7;">
@@ -34334,7 +34361,7 @@ function _holdNotLive(ctx) {
 function _holdDueCounts(ctx) {
     const d = _holdData[ctx];
     const need = x => _HOLD_VIEWS.due.states.includes(x.state);
-    if (!d) return { mismatch: 0, returns: 0, cases: 0 };
+    if (!d) return { mismatch: 0, returns: 0, cases: 0, payments: 0 };
     const due = (d.cases || []).filter(need);
     return {
         mismatch: (d.mismatches || []).filter(need).length,
@@ -34342,11 +34369,12 @@ function _holdDueCounts(ctx) {
         // Disputes live on this tab too, and an unanswered one is the most
         // expensive thing the badge can be counting.
         cases: due.filter(c => !_holdIsReturn(c)).length + (d.disputes || []).filter(need).length,
+        payments: (d.payments || []).filter(need).length,
     };
 }
 function _holdPaintBadges(ctx) {
     const n = _holdDueCounts(ctx);
-    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases]].forEach(([t, v]) => {
+    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases], ['payments', n.payments]].forEach(([t, v]) => {
         const b = document.getElementById(`hold-${ctx}-badge-${t}`);
         if (!b) return;
         b.textContent = v ? String(v) : '';
@@ -34384,6 +34412,23 @@ function renderHoldItems(ctx) {
     // outside deadline and the only kind that is LOST BY DEFAULT if nobody
     // looks — on the first read, 8 of 13 open ones had no response at all.
     if (cw) cw.innerHTML = _holdToolbar(ctx, 'ebay_case') + _holdSyncLine(d) + _holdCaseSections(ctx, d, all);
+    // Payments (0119): Shopify orders we have not been paid for. Its own tab,
+    // because nothing here involves eBay and the fix is always on Shopify.
+    const pw = _holdWrap(ctx, 'payments');
+    if (pw) pw.innerHTML = _holdToolbar(ctx, 'payment') + _holdPaymentSyncLine(d) + _holdList(ctx, 'payment', d.payments || [], null);
+}
+
+// Payments are read from Shopify only, so a failure says Shopify — the eBay
+// line above would send someone to re-authorise the wrong site.
+//
+// There is deliberately NO line counting the orders held back until their card
+// is close to running out. There was one ("13 more orders are authorized and
+// not shipped yet — normal…") and Ethan had it taken off on 2026-09-28: those
+// orders are normal, and a line about them on every open is noise.
+function _holdPaymentSyncLine(d) {
+    const bad = (d.paymentSync || []).filter(r => !r.ok);
+    if (!bad.length) return '';
+    return `<div style="font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ Couldn't read Shopify payments for ${bad.map(r => escapeHtml(r.store_code)).join(', ')} — showing the last list that loaded. ${escapeHtml(bad[0].detail || '')}</div>`;
 }
 
 // FOUR DIFFERENT THINGS SHARE THIS TAB, and Ethan asked for them to stop looking
@@ -34550,16 +34595,26 @@ function _holdList(ctx, type, items, casesByOrder, opts) {
         rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank
             || (a.needs_response ? due(a) - due(b) : at(b) - at(a)));
     }
+    // Payments: the card that runs out first, then the ones we can no longer
+    // charge, oldest first — the oldest uncollected order is the likeliest to be
+    // on the CFO's month-end list.
+    else if (type === 'payment') {
+        const when = it => new Date((it.capturable ? it.auth_expires_at : it.ordered_at) || 0).getTime();
+        rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank
+            || (b.capturable ? 1 : 0) - (a.capturable ? 1 : 0) || when(a) - when(b));
+    }
     else rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank || at(a) - at(b));
     if (!rows.length) {
         const empty = returns ? 'No open returns right now.'
             : v.show === 'due'
             ? (type === 'mismatch' ? 'Nothing needs attention — eBay and Shopify agree, or every open one is checked in.'
                : type === 'dispute' ? 'No dispute needs a reply from us.'
+               : type === 'payment' ? 'No card is close to running out, and nothing is left uncollected.'
                : 'Nothing needs attention on eBay right now.')
             // Status Changed/Claim Open: say what would be here, not "this view"
             : (type === 'mismatch' ? 'Nothing is checked in or waiting on an insurance claim.'
                : type === 'dispute' ? 'No dispute is answered and waiting on a decision.'
+               : type === 'payment' ? 'No unpaid order is checked in or resolved.'
                : 'Nothing is checked in or waiting on a claim.');
         // A section with nothing in THIS view says nothing at all — its heading
         // is dropped by the caller too. Four headings each followed by "nothing
@@ -34625,6 +34680,14 @@ const _holdUnentity = t => String(t || '')
     .replace(/&#(\d+);/g, (m, n) => String.fromCharCode(Number(n)))
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 const _holdAge = iso => { const n = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)); return `${n} day${n === 1 ? '' : 's'} ago`; };
+// A card authorization runs out at a TIME, not end of day — #MO01-9799's was
+// 4:57pm Central on its last day — so the time is shown, in Central, which is
+// where every store is. "Expires Sep 28" alone reads as "any time today".
+const _HOLD_CHI_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
+const _holdChiWhen = iso => { const x = new Date(iso); return isNaN(x.getTime()) ? ''
+    : x.toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+const _holdPaymentExpiresToday = it => !!it.auth_expires_at
+    && _HOLD_CHI_DAY.format(new Date(it.auth_expires_at)) === _HOLD_CHI_DAY.format(new Date());
 
 function _holdCaseTitle(it) {
     if (it.kind === 'inquiry') return 'Item not received';
@@ -34723,6 +34786,49 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         } else if (st === 'settled') {
             extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${escapeHtml(_holdPretty(it.status_raw))}${it.closed_at ? ` · ${_holdDate(it.closed_at)}` : ''}.</div>`;
         }
+    } else if (type === 'payment') {
+        // 0119. A Shopify order we have not been paid for. The item leads, like
+        // the eBay cards, because that is what the store has on the shelf; the
+        // subtitle says which of the CFO's two problems this is.
+        const fs = String(it.financial_status || '');
+        const partial = fs === 'PARTIALLY_PAID';
+        title = it.item_title ? escapeHtml(it.item_title) : escapeHtml(it.order_name || 'Shopify order');
+        subtitle = it.capturable
+            ? 'Authorized, not charged yet — Shopify charges the card when the order is fulfilled'
+            : partial ? 'Partly paid — the rest of the order was never charged'
+            : fs === 'PENDING' ? "Waiting on the customer's payment"
+            : 'The card authorization ran out before the order was fulfilled';
+        const exp = it.auth_expires_at;
+        const soon = exp && (new Date(exp).getTime() - Date.now()) < 2 * 86400000;
+        const when = exp
+            ? (it.capturable
+                ? `<span style="white-space:nowrap; ${soon ? `color:${_HOLD_C.red.fg}; font-weight:800;` : 'font-weight:700;'}">Card expires ${escapeHtml(_holdChiWhen(exp))}</span>`
+                : `<span style="white-space:nowrap; color:${_HOLD_C.red.fg}; font-weight:800;">Card expired ${_holdDate(exp)}</span>`)
+            : '';
+        const shop = CB_SHOP_DOMAINS[it.store_code];
+        const link = shop && it.order_id ? `https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/orders/${encodeURIComponent(it.order_id)}` : '';
+        const from = { web: 'Online store', pos: 'POS', shopify_draft_order: 'Draft order' }[it.source_name] || '';
+        facts = [
+            when,
+            it.order_name ? kv('Order', `<b>${escapeHtml(it.order_name)}</b>${siteCopyBtn(it.order_name, 'Shopify order')}`) : '',
+            Number(it.total) !== Number(it.amount) ? kv('Order total', _holdMoney(it.total)) : '',
+            Number(it.received) > 0 ? kv('Collected', _holdMoney(it.received)) : '',
+            it.ordered_at ? kv('Ordered', `${_holdDate(it.ordered_at)} · ${_holdAge(it.ordered_at)}`) : '',
+            it.fulfillment_status ? kv('Fulfilment', escapeHtml(_holdPretty(it.fulfillment_status))
+                + (Number(it.unfulfilled_items) > 0 ? ` · ${Number(it.unfulfilled_items)} not shipped` : '')) : '',
+            from ? kv('From', escapeHtml(from)) : '',
+            link ? `<a href="${link}" target="_blank" rel="noopener" style="font-weight:800; color:#1d4ed8; white-space:nowrap;">Open in Shopify ↗</a>` : '',
+        ];
+        if (st === 'needs_reply' && it.state_note !== 'resolution_disputed') {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>Shopify can charge this card until ${escapeHtml(_holdChiWhen(exp) || 'the authorization runs out')}</b> — after that it can't. Fulfil the order (Shopify charges the card when it ships), or cancel it if it isn't going. Either clears this on the next read. It can't be checked in until then.</div>`;
+        } else if (st === 'due' || st === 'checked') {
+            const owed = partial
+                ? `${_holdMoney(it.received)} of ${_holdMoney(it.total)} was collected; the ${_holdMoney(it.amount)} left was never charged. `
+                : '';
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>Shopify can't charge this card any more</b>${exp ? ` — the authorization ran out ${_holdDate(exp)}` : ''}. ${owed}Collect it another way (send the customer an invoice from the order, or take payment in store), or cancel or refund what didn't ship. Shopify showing it paid or cancelled clears this; otherwise mark it resolved and say what happened.</div>`;
+        } else if (st === 'settled') {
+            extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${it.outcome ? `Shopify: ${escapeHtml(_holdPretty(it.outcome))}` : 'Nothing owed'}${it.closed_at ? ` · ${_holdDate(it.closed_at)}` : ''} — nothing to do.</div>`;
+        }
     } else {
         // Seller Hub leads with the item, so the card does too; the kind of case
         // moves under it.
@@ -34816,9 +34922,14 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         const days = ((_holdData[ctx] || {}).resolutionGraceDays) || 2;
         const since = it.resolution_disputed_since;
         const age = since ? Math.floor((Date.now() - new Date(since).getTime()) / 86400000) : 0;
-        const site = type === 'dispute' ? (it.source === 'ebay' ? 'eBay' : 'Shopify') : 'eBay';
+        const site = type === 'dispute' ? (it.source === 'ebay' ? 'eBay' : 'Shopify') : type === 'payment' ? 'Shopify' : 'eBay';
+        // A payment has nothing to "respond" to: what Shopify still shows is a
+        // card it can charge and an order nobody charged or cancelled.
+        const still = type === 'payment'
+            ? 'Shopify can still charge this card — the order was not charged or cancelled.'
+            : `${site} still shows no response from us.`;
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
-            <b>${escapeHtml(rv && rv.by_name || 'Someone')} marked this resolved${since ? ` on ${_holdDate(since)}` : ''}, but ${escapeHtml(site)} still shows no response from us.</b>
+            <b>${escapeHtml(rv && rv.by_name || 'Someone')} marked this resolved${since ? ` on ${_holdDate(since)}` : ''}, but ${escapeHtml(still)}</b>
             ${rv && rv.note ? `<div style="margin-top:2px; font-weight:600;">“${escapeHtml(rv.note)}”</div>` : ''}
             <div style="margin-top:4px;">If it really is handled, ${escapeHtml(site)} will say so on the next read and this clears itself. If it isn't, answer it now${age >= days ? ' — this has already gone to the DM.' : ` — after ${days} day${days === 1 ? '' : 's'} it goes to the DM.`}</div>
         </div>`;
@@ -34838,7 +34949,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     } else if (type === 'ebay_case' && it.is_open && it.seller_replied_at) {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We answered eBay ${_holdDate(it.seller_replied_at)} — waiting on the buyer.</div>`;
     }
-    if (st === 'settled' && !it.claim && type !== 'dispute') {
+    if (st === 'settled' && !it.claim && type !== 'dispute' && type !== 'payment') {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${type === 'mismatch'
             ? `Both sites agree now${it.resolved_at ? ' (' + _holdDate(it.resolved_at) + ')' : ''} — nothing to do.`
             : `Closed on eBay${it.closed_at ? ' (' + _holdDate(it.closed_at) + ')' : ''}${inr && it.outcome === 'no_refund' ? ' — no refund to the buyer.' : '.'}`}</div>`;
@@ -34880,8 +34991,11 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             <textarea id="hold-note-${ctx}-${idx}" rows="2" class="form-input-lg" style="width:100%; box-sizing:border-box; resize:vertical;"
                 placeholder="${type === 'mismatch' ? 'e.g. Won the Shopify insurance claim SHPJG-0709… — money recovered, no Shopify refund needed'
                     : type === 'dispute' ? 'e.g. Refunded the buyer and accepted it — cheaper than losing the chargeback fee too'
+                    : type === 'payment' ? 'e.g. Customer paid the $28.20 in store 9/29, receipt #…'
                     : 'e.g. Buyer shipped the return, tracking 1Z…; refund once it arrives'}"></textarea>
-            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${st === 'needs_reply'
+            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${st === 'needs_reply' && type === 'payment'
+                ? `<b>Still open</b> is off the table while Shopify can still charge the card — fulfilling or cancelling the order is the fix, and the next read sees it. <b>Resolved</b> is recorded, but it stays on the list until Shopify agrees.`
+                : st === 'needs_reply'
                 ? (type === 'dispute'
                     ? (it.response_overdue
                         ? `The response window has closed, so there is nothing to check in. <b>Resolved</b> records what happened and needs a reason.`
@@ -35067,13 +35181,13 @@ async function _holdOpenClaim(ctx, idx) {
 // DM/CEO oversight view: the claims summary plus the same two tabs across
 // every rolled-out store.
 function switchOversightTab(tab) {
-    ['claims', 'mismatch', 'returns', 'cases'].forEach(t => {
+    ['claims', 'mismatch', 'returns', 'cases', 'payments'].forEach(t => {
         const b = document.getElementById(`ov-tab-${t}`);
         const p = document.getElementById(`ov-panel-${t}`);
         if (b) b.classList.toggle('active', t === tab);
         if (p) p.style.display = t === tab ? 'block' : 'none';
     });
-    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases') {
+    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases' || tab === 'payments') {
         if (_holdLoading.ov) renderHoldItems('ov');
         else loadHoldItems('ov', { sync: !_holdData.ov });
     }
@@ -41645,6 +41759,8 @@ const JUMP_PLACES = [
       run: () => openClaimsTool('returns') },
     { id: 'sub-ebaycases', label: 'Cases & Disputes',  sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'ebay cases inquiry item not received dispute escalated',
       run: () => openClaimsTool('cases') },
+    { id: 'sub-payments', label: 'Payments', sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'payments unpaid shopify card authorization expiring expired partially paid capture',
+      run: () => openClaimsTool('payments') },
     // --- pages (visibility mirrors the nav link) ----------------------------
     { id: 'page-index',  label: 'QuickPortal',           sub: 'Main navigation', kind: 'page', page: 'index.html',      keys: 'home dashboard main portal' },
     { id: 'page-ops',    label: 'Operations',            sub: 'Main navigation', kind: 'page', page: 'operations.html', keys: 'operations ops' },

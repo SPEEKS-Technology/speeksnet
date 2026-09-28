@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260928b" defer></script>
+  <script src="speeks.js?v=20260928c" defer></script>
 </head>
 <body class="preload">
 
@@ -190,6 +190,7 @@
             <button id="claims-tab-mismatch" class="tab-btn" onclick="switchClaimsTab('mismatch')">Mismatches<span id="hold-mgr-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
             <button id="claims-tab-returns" class="tab-btn" onclick="switchClaimsTab('returns')">Returns<span id="hold-mgr-badge-returns" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
             <button id="claims-tab-cases" class="tab-btn" onclick="switchClaimsTab('cases')">Cases &amp; Disputes<span id="hold-mgr-badge-cases" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="claims-tab-payments" class="tab-btn" onclick="switchClaimsTab('payments')">Payments<span id="hold-mgr-badge-payments" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
         </div>
     </div>
 
@@ -272,6 +273,10 @@
             <div style="font-size:12px; color:#64748b; margin-bottom:10px;">Item-not-received requests, escalated cases and (soon) payment disputes. Respond on eBay; check in here. A refunded item-not-received needs a claim.</div>
             <div id="hold-mgr-cases"></div>
         </div>
+        <div id="claims-panel-payments" style="display:none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:10px;">Shopify orders we haven't been paid for: a card about to run out before the order ships, or one that already has. Charge or cancel it on Shopify; if the card can't be charged any more, collect another way and say what happened here.</div>
+            <div id="hold-mgr-payments"></div>
+        </div>
     </div>
 
     <div class="manage-footer flex-end">
@@ -298,6 +303,7 @@
             <button id="ov-tab-mismatch" class="tab-btn" onclick="switchOversightTab('mismatch')">Mismatches<span id="hold-ov-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
             <button id="ov-tab-returns" class="tab-btn" onclick="switchOversightTab('returns')">Returns<span id="hold-ov-badge-returns" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
             <button id="ov-tab-cases" class="tab-btn" onclick="switchOversightTab('cases')">Cases &amp; Disputes<span id="hold-ov-badge-cases" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="ov-tab-payments" class="tab-btn" onclick="switchOversightTab('payments')">Payments<span id="hold-ov-badge-payments" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
         </div>
     </div>
     <div class="manage-content">
@@ -305,6 +311,7 @@
         <div id="ov-panel-mismatch" style="display:none;"><div id="hold-ov-mismatch"></div></div>
         <div id="ov-panel-returns" style="display:none;"><div id="hold-ov-returns"></div></div>
         <div id="ov-panel-cases" style="display:none;"><div id="hold-ov-cases"></div></div>
+        <div id="ov-panel-payments" style="display:none;"><div id="hold-ov-payments"></div></div>
     </div>
 </div>
 
