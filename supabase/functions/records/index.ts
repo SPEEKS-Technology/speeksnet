@@ -20,6 +20,17 @@
 // The person replace is scoped to a single label and rewrites every column the
 // table has, so it cannot strand a half-written row the way a partial
 // full-replace can.
+//
+// SINCE 0117 the store-held rows are kept by records-watch every morning, and
+// the Company rows are company-wide totals it alone writes:
+//   - GET leaves Company rows out unless ?company=1. A browser still on the old
+//     speeks.js used them as the card headline; without them it falls back to
+//     the top store, which is what the headline is supposed to be now.
+//   - POST never writes a Company row. The old tool mirrored the top store into
+//     that column and saved it, which would overwrite the district total.
+//   - POST only touches a row whose value or date actually changed, because the
+//     tool sends every cell on every save and an untouched cell must keep the
+//     exact day (record_on) the job stamped on it.
 // ============================================================================
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -66,7 +77,7 @@ Deno.serve(async (req: Request) => {
 
     const { data, error } = await supabase
       .from("records")
-      .select("id, store, label, value, period, person, ordinal")
+      .select("id, store, label, value, period, person, ordinal, record_on")
       // ordinal is the DM's hand-picked place on a person board. NULLs sort last
       // so a label that has never been ordered still comes back in a stable
       // order and the frontend's value-descending fallback takes over.
@@ -76,7 +87,10 @@ Deno.serve(async (req: Request) => {
     // store → section and period → subtext for the frontend. `person` is passed
     // straight through: a row that has one is held by that person, and the
     // frontend keys its whole layout off whether it is set.
-    return reply((data || []).map((r: any) => ({
+    const withCompany = url.searchParams.get("company") === "1";
+    return reply((data || [])
+      .filter((r: any) => withCompany || String(r.store).trim().toLowerCase() !== "company")
+      .map((r: any) => ({
       id: r.id,
       section: r.store,
       label: r.label,
@@ -84,6 +98,7 @@ Deno.serve(async (req: Request) => {
       subtext: r.period,
       person: r.person,
       ordinal: r.ordinal,
+      recordOn: r.record_on,
     })));
   }
 
@@ -142,17 +157,34 @@ Deno.serve(async (req: Request) => {
       return reply({ success: true, written: rows.length });
     }
 
-    // Store-held metrics: one UPDATE per (store, label).
+    // Store-held metrics: one UPDATE per (store, label), for the cells that
+    // changed. value_num follows the text so records-watch compares against
+    // what the DM typed; record_on is cleared because a hand edit names no day.
     if (Array.isArray(body)) {
+      const { data: cur } = await supabase
+        .from("records").select("store, label, value, period").is("person", null);
+      const same = (rec: any) => (cur || []).some((c: any) =>
+        c.store === rec.store && c.label === rec.label &&
+        String(c.value ?? "").trim() === String(rec.value ?? "").trim() &&
+        String(c.period ?? "").trim() === String(rec.date ?? "").trim());
+      let written = 0;
       for (const rec of body) {
+        if (String(rec.store || "").trim().toLowerCase() === "company") continue;
+        if (same(rec)) continue;
+        const num = parseFloat(String(rec.value ?? "").replace(/[^0-9.\-]/g, ""));
         await supabase
           .from("records")
-          .update({ value: rec.value, period: rec.date, updated_at: new Date().toISOString() })
+          .update({
+            value: rec.value, period: rec.date,
+            value_num: Number.isFinite(num) ? num : null, record_on: null,
+            updated_at: new Date().toISOString(),
+          })
           .eq("store", rec.store)
           .eq("label", rec.label)
           .is("person", null);
+        written++;
       }
-      return reply({ success: true });
+      return reply({ success: true, written });
     }
 
     return reply({ success: true });

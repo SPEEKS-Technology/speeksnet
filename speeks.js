@@ -9931,8 +9931,10 @@ let recordsCache = JSON.parse(localStorage.getItem('speeksRecordsCache')) || nul
 
 async function fetchRecordsData() { 
     try { 
-        const response = await fetch(`${RECORDS_URL}?v=${Date.now()}`);
-        recordsCache = await response.json(); 
+        // company=1: the company-wide rows are only sent to a client that knows
+        // they are totals and not the card headline (see the records fn, 0117).
+        const response = await fetch(`${RECORDS_URL}?company=1&v=${Date.now()}`);
+        recordsCache = await response.json();
         localStorage.setItem('speeksRecordsCache', JSON.stringify(recordsCache)); 
         
         if (document.getElementById('pane-records')?.classList.contains('active')) {
@@ -9953,35 +9955,23 @@ function showStatsView(name) {
     });
 }
 
-/* Who actually holds the company record.
+/* Who holds the record on a card's headline.
  *
- * A "Company" row carries only the number and the month — no store — so the
- * headline never said whose record it was, even though the answer sits in the
- * leaderboard directly underneath it. Half the metrics have no Company row at
- * all and already fall back to the top store, in which case the holder IS that
- * row and there is nothing to look up.
+ * The headline is always the top STORE (0117). It used to be a "Company" row
+ * that copied the top store's number with no store on it, so this had to match
+ * the number back to a store. Company rows are now company-wide totals shown in
+ * their own section, and the headline is the top store's own row.
  *
- * Matching is on the parsed number, not the string: these values are hand-typed
- * and inconsistently spaced ("$ 11,212.00"). Subtext only breaks ties, since two
- * stores can legitimately hold the same figure — and when it can't break one,
- * both names are shown rather than one picked arbitrarily.
- *
- * If nothing matches we say nothing. A Company row no store's number reproduces
- * is a company-wide total rather than somebody's record, and naming a store for
- * it would be worse than the blank that's there today.
+ * What is left is ties. Two stores can hold the same figure (conversion is a
+ * whole percent), and when they do both are named rather than one picked
+ * arbitrarily. Matching is on the parsed number, since a hand-edited value can
+ * still be spaced oddly ("$ 11,212.00").
  */
 function _recHolders(champ, stores) {
     if (!champ || !stores.length) return [];
-    if (stores.includes(champ)) return [String(champ.section).trim()];
-
     const target = parseNum(champ.value);
-    if (!target) return [];
-    const hits = stores.filter(s => parseNum(s.value) === target);
-    if (hits.length < 2) return hits.map(s => String(s.section).trim());
-
-    const norm = v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const exact = hits.filter(s => norm(s.subtext) === norm(champ.subtext));
-    return (exact.length ? exact : hits).map(s => String(s.section).trim());
+    const hits = target ? stores.filter(s => parseNum(s.value) === target) : [];
+    return (hits.length ? hits : [champ]).map(s => String(s.section).trim());
 }
 
 /* Records whose hero IS first place, rather than a company-wide total.
@@ -10037,14 +10027,17 @@ function renderRecords() {
         return;
     }
     
-    const map = {}; 
-    recordsCache.forEach(r => { 
+    // Company rows are company-wide totals (every store summed), not a copy of
+    // the top store, so they stay off the cards and get their own section.
+    const map = {};
+    const company = {};
+    recordsCache.forEach(r => {
         let l = String(r.label).trim();
-        let s = String(r.section).toUpperCase().trim(); 
-        
-        if (!map[l]) map[l] = { c: null, s: [] }; 
-        if (s === 'COMPANY' || s === 'COMPANY WIDE') map[l].c = r; 
-        else map[l].s.push(r); 
+        let s = String(r.section).toUpperCase().trim();
+
+        if (s === 'COMPANY' || s === 'COMPANY WIDE') { company[l] = r; return; }
+        if (!map[l]) map[l] = { s: [] };
+        map[l].s.push(r);
     });
     
     let bC = 0;
@@ -10070,16 +10063,15 @@ function renderRecords() {
         // A store board ranks by the number. A person board ranks by the place
         // the DM set with the arrows in the tool, falling back to the number.
         d.s.sort(byPerson ? _recPersonOrder : (a, b) => parseNum(b.value) - parseNum(a.value));
-        let cR = d.c || d.s[0];
+        let cR = d.s[0];
 
         html += `
         <div class="rec">
             <div class="rec-h">${l}</div>`;
 
         if (cR) {
-            // Who holds it. For a person metric that is the name on the row —
-            // no lookup, because the row already says. _recHolders exists only
-            // because a store metric's Company row carries no store.
+            // Who holds it. For a person metric that is the name on the row;
+            // for a store metric it is the top store, plus any store tied with it.
             const who = byPerson
                 ? [String(cR.person || '').trim()].filter(Boolean).map(escapeHtml).join('')
                 : _recHolders(cR, d.s).map(escapeHtml).join(' &middot; ');
@@ -10090,8 +10082,8 @@ function renderRecords() {
                 : (cR.subtext || '');
             html += `
             <div class="rec-champ">
-                <div class="cc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></svg> Company Record</div>
-                <div class="cv">${cR.value || '-'}</div>
+                <div class="cc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></svg> ${byPerson ? 'Company Record' : 'Store Record'}</div>
+                <div class="cv">${escapeHtml(cR.value || '-')}</div>
                 <div class="cs">${who ? `<b class="ch">${who}</b>` : ''}${who && when ? '<span class="cd">&middot;</span>' : ''}${when}</div>
             </div>`;
         }
@@ -10138,7 +10130,43 @@ function renderRecords() {
     });
 
     html += '</div>';
-    cont.innerHTML = html;
+    // Company-wide first: the whole company's best, then each store's (Ethan).
+    cont.innerHTML = _recCompanySection(company, rank) + html;
+}
+
+/* Company-wide records: the whole company added together on its best day or in
+ * its best month. Kept by records-watch from 2026 onward (0117). Two metrics
+ * cannot simply be added, and say how they are combined:
+ *   margin      all gross profit / all net sales, leaving out any store in its
+ *               opening month (the same rule as the store margin record)
+ *   conversion  each store's close rate weighted by its # of customers
+ * A metric the job has not filled yet is left out rather than drawn as a dash,
+ * and the whole section waits until there is something in it. It sits ABOVE the
+ * store cards, with no subtitle — Ethan asked for both. */
+const RECORD_COMPANY_NOTE = {
+    'Monthly Sell Margin Record': 'All stores’ gross profit ÷ all net sales',
+    'Monthly Customer Conversion Record': 'Close rate weighted by # of customers',
+};
+function _recCompanySection(company, rank) {
+    const labels = Object.keys(company)
+        .filter(l => String(company[l].value || '').trim())
+        .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    if (!labels.length) return '';
+    const tiles = labels.map(l => {
+        const r = company[l];
+        const note = RECORD_COMPANY_NOTE[l];
+        return `
+        <div class="rec-co-tile"${note ? ` title="${escapeHtml(note)}"` : ''}>
+            <div class="rec-co-l">${escapeHtml(l.replace(/ Record$/, ''))}</div>
+            <div class="rec-co-v">${escapeHtml(r.value)}</div>
+            <div class="rec-co-d">${escapeHtml(r.subtext || '')}</div>
+        </div>`;
+    }).join('');
+    return `
+    <section class="rec-co">
+        <div class="rec-co-h"><div class="rec-co-t">Company-Wide Records</div></div>
+        <div class="rec-co-grid">${tiles}</div>
+    </section>`;
 }
 
 function toggleBoard(id, btn) {
@@ -10169,7 +10197,7 @@ async function toggleManageRecords() {
         
         try {
             if (!recordsCache || recordsCache.length === 0) {
-                const res = await fetch(`${RECORDS_URL}?v=${Date.now()}`);
+                const res = await fetch(`${RECORDS_URL}?company=1&v=${Date.now()}`);
                 recordsCache = await res.json();
                 localStorage.setItem('speeksRecordsCache', JSON.stringify(recordsCache));
             }
@@ -10229,8 +10257,9 @@ function populateRecordsModal() {
     };
     sections.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 
-    // The Company column is auto-filled from the highest store, so make sure it
-    // exists as a column even if no metric has a company record yet.
+    // The Company column is the company-wide figure (every store summed, 0117),
+    // kept by records-watch and read-only here. It is still a column so the DM
+    // sees it next to the stores; make sure it exists even before the first run.
     let companyKey = sections.find(s => s.toUpperCase().startsWith('COMPANY'));
     if (!companyKey) { companyKey = 'COMPANY'; sections.push(companyKey); }
 
@@ -10243,15 +10272,15 @@ function populateRecordsModal() {
         sections.forEach(s => {
             const rec = byLabel[label][s];
             if (s === companyKey) {
-                // Read-only, auto-filled from the winning store (see _recomputeCompanyRecords).
-                body += `<div class="record-manage-row cr-cell cr-input cr-company" data-store="${escapeHtml(companyKey)}" data-label="${escapeHtml(label)}" title="Auto-filled from the store with the highest value">
+                // Read-only: the company-wide total, written only by records-watch.
+                body += `<div class="record-manage-row cr-cell cr-input cr-company" data-store="${escapeHtml(companyKey)}" data-label="${escapeHtml(label)}" title="Every store added together — filled in automatically each morning">
                     <input type="text" class="r-val" value="${escapeHtml(rec ? (rec.value || '') : '')}" placeholder="—" readonly tabindex="-1">
                     <input type="text" class="r-date" value="${escapeHtml(rec ? (rec.subtext || '') : '')}" placeholder="—" readonly tabindex="-1">
                 </div>`;
             } else if (rec) {
                 body += `<div class="record-manage-row cr-cell cr-input" data-store="${escapeHtml(rec.section || '')}" data-label="${escapeHtml(rec.label || '')}">
-                    <input type="text" class="r-val" placeholder="Value" value="${escapeHtml(rec.value || '')}" oninput="_recomputeCompanyRecords()">
-                    <input type="text" class="r-date" placeholder="Date" value="${escapeHtml(rec.subtext || '')}" oninput="_recomputeCompanyRecords()">
+                    <input type="text" class="r-val" placeholder="Value" value="${escapeHtml(rec.value || '')}">
+                    <input type="text" class="r-date" placeholder="Date" value="${escapeHtml(rec.subtext || '')}">
                 </div>`;
             } else {
                 body += `<div class="cr-cell cr-empty"></div>`;
@@ -10261,7 +10290,7 @@ function populateRecordsModal() {
 
     const cols = `minmax(150px, 1.3fr) repeat(${sections.length}, minmax(118px, 1fr))`;
     list.innerHTML =
-        `<p class="cr-hint">Each column is a store. Fill a metric across the stores — the <strong>Company</strong> column auto-fills with the highest value.</p>` +
+        `<p class="cr-hint">These fill themselves in every morning from the Daily Sales Summary and the Monthly Breakdown, and only ever go up. Edit a store here to correct one &mdash; a lower number sticks unless the data really beats it. <strong>Company</strong> is every store added together and is kept automatically.</p>` +
         // The person editors live INSIDE the scroller, not after it. Two nested
         // scrollers would otherwise hide them below the fold on a short screen
         // with no scrollbar to say they were there — the tool would look like
@@ -10270,7 +10299,6 @@ function populateRecordsModal() {
             `<div class="cr-grid" style="grid-template-columns:${cols};">${head}${body}</div>` +
             RECORD_PERSON_LABELS.map(_recPersonSection).join('') +
         `</div>`;
-    _recomputeCompanyRecords();
     // Numbers the places and greys the arrow that has nowhere to go. Runs after
     // the markup lands because it is derived from position, not from the data.
     document.querySelectorAll('#manageRecordsList .cr-people').forEach(_recRenumber);
@@ -10493,35 +10521,6 @@ function _recAddPerson(btn) {
     });
 }
 
-// The Company column mirrors whichever store has the highest value for each
-// metric (value + that store's date). Runs on load and on every store edit, so
-// the DM never has to copy the record over by hand. Read-only company inputs
-// don't feed themselves. Uses parseNum so "$21,950.00" / "93.00%" compare right.
-function _recomputeCompanyRecords() {
-    const list = document.getElementById('manageRecordsList');
-    if (!list) return;
-    const byLabel = {};
-    list.querySelectorAll('.record-manage-row.cr-input:not(.cr-company)').forEach(cell => {
-        const label = cell.getAttribute('data-label');
-        (byLabel[label] = byLabel[label] || []).push(cell);
-    });
-    list.querySelectorAll('.record-manage-row.cr-company').forEach(comp => {
-        const label = comp.getAttribute('data-label');
-        const cells = byLabel[label] || [];
-        let bestVal = '', bestDate = '', bestNum = -Infinity, found = false;
-        cells.forEach(c => {
-            const v = (c.querySelector('.r-val')?.value || '').trim();
-            if (!v) return;
-            const n = parseNum(v);
-            if (n > bestNum) { bestNum = n; bestVal = v; bestDate = (c.querySelector('.r-date')?.value || '').trim(); found = true; }
-        });
-        const valEl = comp.querySelector('.r-val');
-        const dateEl = comp.querySelector('.r-date');
-        if (valEl) valEl.value = found ? bestVal : '';
-        if (dateEl) dateEl.value = found ? bestDate : '';
-    });
-}
-
 // NOTE: populateAlertsModal lives with the rest of the alerts module (see the
 // definition further down, next to saveAlertsData). An older duplicate that
 // used decimal→percentage input conversion was removed from here — the alerts
@@ -10533,7 +10532,9 @@ async function saveManageRecords() {
     btn.style.opacity = "0.7";
 
     const updatedRecords = [];
-    document.querySelectorAll('.record-manage-row').forEach(row => {
+    // Not the Company column: it is the company-wide total records-watch keeps,
+    // and the records fn refuses to write it anyway.
+    document.querySelectorAll('.record-manage-row:not(.cr-company)').forEach(row => {
         updatedRecords.push({
             store: row.getAttribute('data-store'),
             label: row.getAttribute('data-label'),
@@ -39968,6 +39969,11 @@ const EMAIL_LIST_GROUPS = [
             { key: 'processed_report', label: 'Processed Stats',
               desc: '8:10am — how many items each store listed yesterday and what '
                   + 'they were worth, off the Day End Report.' },
+            { key: 'record_watch_leadership', label: 'Company Records — Leadership',
+              desc: '6:40am, only on a morning a store broke or came within 5% of a record: daily '
+                  + 'buy or sell, or a monthly one once the Monthly Breakdown is in. Copied on every store\'s email.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `record_watch_${s}`, label: `Company Records — ${s}`,
+              desc: `The ${s} manager and ASM: the same email, whenever it is about ${s}.` })),
             { key: 'usage_report', label: 'Site Usage',
               desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
             { key: 'recycle_report', label: 'Recycle Month-End Report',
