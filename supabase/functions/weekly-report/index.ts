@@ -9,6 +9,7 @@
 // Data sources (all live in Supabase):
 //   • app_cache.buy_sell_hub  — daily buy/sell/GP arrays + monthly GP goal
 //   • kpi_entries             — weekly per-employee listings/conversion
+//   • day_end_facts           — the store's weekly LISTED total (from 2026-08-03)
 //   • scorecards              — category scores
 //   • store_targets           — weekly listing targets + team size
 //   • checklist_completions   — ops activity
@@ -182,6 +183,9 @@ const buyColor = (m: number) => (m >= 51 ? C.green : C.red);
 const tgtColor = (p: number) => (p >= 100 ? C.green : p >= 80 ? C.amber : C.red);
 const scoreColor = (s10: number) => (s10 >= 8 ? C.green : s10 >= 6 ? C.amber : C.red);
 
+// First Monday day_end_facts covers whole — the same cut-over store-targets uses.
+const DAY_END_FROM = '2026-08-03';
+
 function pad(d: number) { return d < 10 ? '0' + d : '' + d; }
 function ymd(d: Date) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
 function parseYMD(s: string) { const p = s.split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
@@ -218,6 +222,22 @@ async function gather(sb: any, weekEnd: Date) {
   // 2) weekly KPI rows for the week-ending Sunday
   const kpis = (await sb.from('kpi_entries').select('*')
     .eq('period_type', 'weekly').eq('period_end_date', weekEndStr)).data ?? [];
+
+  // 2b) the store's LISTED count for the week, off the Day End Report — the same
+  // figure the goals board and Store Efficiency count (store-targets explains
+  // the switch; Ethan: not relying on managers to pull the data the right way).
+  // Per day: Total Listed Devices from 2026-09-23, Devices Processed before it.
+  // A store with no report rows for the week, or a week before DAY_END_FROM,
+  // keeps the KPI total — there is nothing else to count it from.
+  const dayEndListed: Record<string, number> = {};
+  if (ymd(weekStart) >= DAY_END_FROM) {
+    const de = (await sb.from('day_end_facts').select('store, listed_devices, devices_processed')
+      .gte('date', ymd(weekStart)).lte('date', weekEndStr)).data ?? [];
+    for (const r of de) {
+      const v = r.listed_devices != null ? n(r.listed_devices) : n(r.devices_processed);
+      dayEndListed[r.store] = (dayEndListed[r.store] ?? 0) + v;
+    }
+  }
 
   // 3) store targets
   const targets = (await sb.from('store_targets').select('*')).data ?? [];
@@ -266,7 +286,12 @@ async function gather(sb: any, weekEnd: Date) {
 
     // listings (single week)
     const k = kpis.filter((r: any) => r.store === s);
-    const processed = k.reduce((a: number, r: any) => a + n(r.listed_count), 0);
+    // Store total from the Day End Report (see 2b); the per-person rows below
+    // and the Top Performer stay on the KPI, which is the only place a person's
+    // listings sit beside their conversion and listing dollars.
+    const processed = dayEndListed[s] != null
+      ? dayEndListed[s]
+      : k.reduce((a: number, r: any) => a + n(r.listed_count), 0);
     const retail = k.reduce((a: number, r: any) => a + n(r.listed_retail_price), 0);
     const lcost = k.reduce((a: number, r: any) => a + n(r.listed_cost), 0);
     const lsold = k.reduce((a: number, r: any) => a + n(r.listed_sold_value), 0);

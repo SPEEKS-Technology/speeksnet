@@ -62,6 +62,16 @@ const LIST_KEYS = new Set([
   // managers are mailed, listing every open order and how many times each was
   // raised. The key is a fossil of an earlier age-based design (see 0089).
   "refund_mismatch_escalation",
+  // claims_disputes_*: read by claims-disputes-email and offered in the tool
+  // since 0102, but never added here — so every add or remove from the panel
+  // came back "Unknown list" and the lists could only be changed with SQL.
+  "claims_disputes_dm",
+  ...STORES.map((s) => `claims_disputes_${s}`),
+  // record_watch_*: the morning Company Records mail (records-watch, 0117). A
+  // store's list is its manager and ASM; leadership (DM + CEO) is copied on
+  // every store's mail.
+  "record_watch_leadership",
+  ...STORES.map((s) => `record_watch_${s}`),
 ]);
 
 // Only these roles may add/remove recipients (frontend hides the tool for

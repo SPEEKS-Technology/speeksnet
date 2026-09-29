@@ -480,7 +480,11 @@ function npsMonthClose() {
     // On a close the grid holds the month being closed, so Days Thru lands on
     // its final day and Tracking stops projecting — the closed month reads as
     // fact, not as a forecast. That is the figure the bonus is paid on.
-    _npxSync(false);
+    // NPX_CLOSE_RUN: this sync is for the closing month only -- see its note in
+    // netprofit-summary.gs. Reset in finally so a throw cannot leave the flag on
+    // for the next trigger in this execution.
+    NPX_CLOSE_RUN = true;
+    try { _npxSync(false); } finally { NPX_CLOSE_RUN = false; }
 
     props.setProperty(NPS_LAST_CLOSED_KEY, target);
     Logger.log('%s is CLOSED. Nothing will rewrite it — the daily refresh only '

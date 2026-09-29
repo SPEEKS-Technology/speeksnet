@@ -144,6 +144,26 @@
 //     detail. The re-install everyone expected was never necessary.
 // eBay's sell.payment.dispute IS needed, and is per-store consent — until Ethan
 // signs in, that half reports itself as not connected rather than as broken.
+//
+// ----------------------------------------------------------------------------
+// PAYMENTS — SHOPIFY ORDERS WE HAVE NOT BEEN PAID FOR (0119, 2026-09-28). The
+// CFO's month-end list had two LEE lines with no eBay side at all — "CC
+// expiring" and "partially fulfilled" — and Ethan: "I would call the tab
+// Payments and then store those two things there." Both are one fact: Shopify
+// says money is still owed on the order. See 0119 for what the first read found.
+//
+// A web order is authorized when placed and charged when fulfilled, so an
+// authorized order is normal, not a problem — 17 of them on the first read, all
+// under a week old. What turns one into a problem is the AUTHORIZATION RUNNING
+// OUT (7 days on Shopify Payments), because after that Shopify cannot charge the
+// card at all. So a payment runs on the card's clock, like a dispute runs on the
+// site's: hidden until PAYMENT_WARN_DAYS before the authorization expires, then
+// due every day, and it CANNOT be checked in or quietly resolved while the card
+// can still be charged — charging it (fulfilling the order) or cancelling it on
+// Shopify is the fix, and the next read clears it by itself. Once the card can
+// no longer be charged (expired, or a partial payment whose balance was never
+// authorized) the item shows at once, and a check-in or a written resolution
+// works, because what is left is collecting another way or writing it off.
 // ============================================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -198,7 +218,18 @@ const FIRST_SHOW_DAYS = 1;
 //   dispute     3  barely reachable: while the site waits on evidence a dispute
 //                  cannot be checked in at all, and once we have answered there
 //                  is nothing due from us.
-const CHECKIN_DAYS: Record<string, number> = { mismatch: 3, ebay_case: 2, dispute: 3 };
+//   payment     3  only reachable once the card can no longer be charged, when
+//                  the manager is chasing the customer another way.
+const CHECKIN_DAYS: Record<string, number> = { mismatch: 3, ebay_case: 2, dispute: 3, payment: 3 };
+// PAYMENTS RUN ON THE CARD'S CLOCK (0119). An authorized order shows this many
+// Chicago days before its authorization runs out — day 5 of Shopify's 7 — so a
+// manager has two mornings to fulfil it or cancel it. Earlier than that it is
+// just an order nobody has shipped yet, which is most of them on any given day.
+const PAYMENT_WARN_DAYS = 2;
+// An authorization with no expiry on it (a gateway that does not report one) is
+// treated as Shopify Payments' own 7 days from the order, rather than as never
+// expiring — the expensive direction to be wrong in is "it can wait".
+const AUTH_FALLBACK_DAYS = 7;
 // How long a manager has to put right a "resolved" the site disagrees with
 // before it goes to the DM (Ethan, 2026-09-23: "if someone falsely resolves it
 // and doesn't un-resolve it after 2 days, it escalates to me"). The item is
@@ -537,8 +568,11 @@ const awaitingReply = (it: any) =>
 // late is far better than eBay doing it for us. Telling a manager the window is
 // shut on one they could still act on is the expensive direction to be wrong in,
 // so an overdue INR stays due and simply reads as late.
+// A PAYMENT's window is the card authorization: once Shopify says the order is
+// no longer capturable, nothing pressed on Shopify charges that card again.
 const missedWindow = (type: string, it: any) =>
-  type === "dispute"
+  type === "payment" ? !it.capturable
+  : type === "dispute"
     ? it.source === "ebay" && !!it.response_overdue
     : it.kind === "case" && !!it.respond_by && Date.parse(it.respond_by) < Date.now();
 
@@ -583,12 +617,15 @@ const SHOPIFY_DISPUTES_QL = `{
   }
 }`;
 
-async function shopifyRead(shop: string, token: string, query: string): Promise<any> {
+// `variables` exists so a paged read (0119) can carry Shopify's own cursor
+// without the query text ever being assembled — the constant-query guard above
+// still holds, and variables cannot turn a query into a mutation.
+async function shopifyRead(shop: string, token: string, query: string, variables?: Record<string, unknown>): Promise<any> {
   if (/\bmutation\b/i.test(query)) throw new Error("refused: not a read-only Shopify query");
   const res = await fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify(variables ? { query, variables } : { query }),
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error(`Shopify ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
@@ -765,6 +802,134 @@ async function sweepDisputes(sb: any, store: string, ebayRow: any, shopRow: any)
   return out;
 }
 
+// ===========================================================================
+// PAYMENTS (0119) — Shopify orders that still owe us money. See the header.
+//
+// One search finds them: the four financial statuses that mean "not fully
+// paid", minus cancelled orders. It was checked against all five stores on
+// 2026-09-28 and returned 18 orders — every authorized one, both of the CFO's,
+// and two expired ones his list did not have. Same guard as the dispute read:
+// the query is a constant, and shopifyRead refuses a mutation.
+// ===========================================================================
+const UNPAID_SEARCH =
+  "(financial_status:authorized OR financial_status:partially_paid OR financial_status:pending OR financial_status:expired) AND -status:cancelled";
+const UNPAID_STATUSES = new Set(["AUTHORIZED", "PARTIALLY_PAID", "PENDING", "EXPIRED"]);
+const UNPAID_FIELDS = `
+  id legacyResourceId name createdAt cancelledAt sourceName
+  displayFinancialStatus displayFulfillmentStatus capturable
+  totalPriceSet { shopMoney { amount currencyCode } }
+  totalOutstandingSet { shopMoney { amount } }
+  totalCapturableSet { shopMoney { amount } }
+  totalReceivedSet { shopMoney { amount } }
+  transactions(first: 10) { kind status authorizationExpiresAt }
+  lineItems(first: 10) { nodes { title unfulfilledQuantity } }`;
+const UNPAID_QL = `query ($after: String) {
+  orders(first: 50, after: $after, sortKey: CREATED_AT, reverse: true, query: ${JSON.stringify(UNPAID_SEARCH)}) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ${UNPAID_FIELDS} }
+  }
+}`;
+// An order that dropped out of the search is read by id to learn WHY — paid,
+// cancelled, refunded — rather than assumed paid. "It stopped matching" is not
+// the same thing as "we got the money".
+const UNPAID_BY_ID_QL = `query ($ids: [ID!]!) {
+  nodes(ids: $ids) { ... on Order { ${UNPAID_FIELDS} } }
+}`;
+const UNPAID_PAGES = 10;
+
+function mapUnpaidOrder(o: any, store: string) {
+  const money = (s: any) => num(s?.shopMoney?.amount) ?? 0;
+  const outstanding = money(o.totalOutstandingSet);
+  const capAmt = money(o.totalCapturableSet);
+  // The LATEST successful authorization is the live one: #MO01-8907 carries two,
+  // the first captured on 8/20 and a re-authorization that expired 9/17.
+  const auths = (o.transactions || [])
+    .filter((t: any) => t.kind === "AUTHORIZATION" && t.status === "SUCCESS" && t.authorizationExpiresAt)
+    .map((t: any) => t.authorizationExpiresAt).sort();
+  const lines = o.lineItems?.nodes || [];
+  const waiting = lines.filter((l: any) => Number(l.unfulfilledQuantity) > 0);
+  return {
+    order_key: `${store}:${o.legacyResourceId}`, store_code: store,
+    order_id: String(o.legacyResourceId), order_name: o.name ?? null,
+    source_name: o.sourceName ?? null,
+    item_title: (waiting[0] || lines[0])?.title ?? null,
+    unfulfilled_items: waiting.reduce((n: number, l: any) => n + Number(l.unfulfilledQuantity || 0), 0),
+    total: money(o.totalPriceSet), outstanding,
+    capturable: !!o.capturable, capturable_amount: capAmt,
+    received: money(o.totalReceivedSet),
+    // See 0119: an authorized order reads outstanding 0, so what is owed is both.
+    amount: Math.round((outstanding + (o.capturable ? capAmt : 0)) * 100) / 100,
+    currency: o.totalPriceSet?.shopMoney?.currencyCode ?? null,
+    financial_status: o.displayFinancialStatus ?? null,
+    fulfillment_status: o.displayFulfillmentStatus ?? null,
+    ordered_at: o.createdAt ?? null,
+    auth_expires_at: auths.length ? auths[auths.length - 1] : null,
+    raw: o,
+  };
+}
+
+async function sweepPayments(sb: any, store: string, shopRow: any) {
+  const nowIso = new Date().toISOString();
+  const done = async (ok: boolean, detail: string, count = 0) => {
+    await sb.from("unpaid_order_sync").upsert(
+      { store_code: store, synced_at: nowIso, ok, detail }, { onConflict: "store_code" });
+    return { ok, count, detail };
+  };
+  try {
+    if (!shopRow?.access_token) throw new Error("no Shopify credentials");
+    const rows: any[] = [];
+    let after: string | null = null;
+    let complete = false;
+    for (let page = 0; page < UNPAID_PAGES; page++) {
+      const d = await shopifyRead(shopRow.shop, shopRow.access_token, UNPAID_QL, { after });
+      for (const o of d?.orders?.nodes || []) if (o?.legacyResourceId) rows.push(mapUnpaidOrder(o, store));
+      if (!d?.orders?.pageInfo?.hasNextPage) { complete = true; break; }
+      after = d.orders.pageInfo.endCursor;
+    }
+
+    const keys = rows.map((r) => r.order_key);
+    if (rows.length) {
+      const { data: prior } = await sb.from("unpaid_orders").select("order_key,first_seen").in("order_key", keys);
+      const seenBy: Record<string, string> = Object.fromEntries((prior || []).map((p: any) => [p.order_key, p.first_seen]));
+      const up = rows.map((r) => ({ ...r, is_open: true, closed_at: null, outcome: null,
+                                    first_seen: seenBy[r.order_key] || nowIso, last_synced: nowIso }));
+      const { error } = await sb.from("unpaid_orders").upsert(up, { onConflict: "order_key" });
+      if (error) return await done(false, `save: ${error.message}`, rows.length);
+    }
+
+    // CLOSING ONE NEEDS SHOPIFY TO SAY SO. Only after a read that reached the
+    // last page — a capped read has not seen every order, and closing the ones
+    // it missed would clear money nobody collected.
+    let closed = 0;
+    if (complete) {
+      const { data: open } = await sb.from("unpaid_orders").select("order_key,order_id")
+        .eq("store_code", store).eq("is_open", true);
+      const gone = (open || []).filter((r: any) => !keys.includes(r.order_key));
+      for (let i = 0; i < gone.length; i += 50) {
+        const batch = gone.slice(i, i + 50);
+        const d = await shopifyRead(shopRow.shop, shopRow.access_token, UNPAID_BY_ID_QL,
+          { ids: batch.map((r: any) => `gid://shopify/Order/${r.order_id}`) });
+        const nodes = d?.nodes || [];
+        for (const r of batch) {
+          const o = nodes.find((n: any) => n && String(n.legacyResourceId) === String(r.order_id));
+          const st = String(o?.displayFinancialStatus || "").toUpperCase();
+          // Still unpaid and not cancelled: the search missed it, so leave it open.
+          if (o && !o.cancelledAt && UNPAID_STATUSES.has(st)) continue;
+          const outcome = !o ? "deleted" : o.cancelledAt ? "cancelled" : st.toLowerCase();
+          await sb.from("unpaid_orders").update({
+            ...(o ? mapUnpaidOrder(o, store) : {}),
+            is_open: false, closed_at: nowIso, outcome, last_synced: nowIso,
+          }).eq("order_key", r.order_key);
+          closed++;
+        }
+      }
+    }
+    return await done(true, `${rows.length} unpaid${closed ? `, ${closed} cleared` : ""}${complete ? "" : `, stopped at ${UNPAID_PAGES} pages so none were cleared`}`, rows.length);
+  } catch (e) {
+    return await done(false, String((e as any)?.message ?? e).slice(0, 200));
+  }
+}
+
 async function sweepStore(sb: any, ebayRow: any) {
   const store = ebayRow.store_code;
   const host = EBAY_HOSTS[ebayRow.environment as string] || EBAY_HOSTS.production;
@@ -924,9 +1089,14 @@ async function sync(sb: any, stores: string[], force: boolean) {
   const dBy: Record<string, any> = {};
   for (const r of lastD || []) (dBy[r.store_code] ||= {})[r.source] = r;
   const dueD = stores.filter((s) => isDue(dBy[s]?.shopify) || isDue(dBy[s]?.ebay));
+  // Payments (0119) too: a Shopify-only read with its own clock, so an eBay
+  // store that keeps failing cannot make it re-read Shopify on every open.
+  const { data: lastP } = await sb.from("unpaid_order_sync").select("*").in("store_code", stores);
+  const pBy: Record<string, any> = Object.fromEntries((lastP || []).map((r: any) => [r.store_code, r]));
+  const dueP = stores.filter((s) => isDue(pBy[s]));
 
   const out: Record<string, any> = {};
-  const touched = [...new Set([...due, ...dueD])];
+  const touched = [...new Set([...due, ...dueD, ...dueP])];
   if (!touched.length) return { swept: out, skipped: stores };
 
   const { data: ebayRows } = await sb.from("ebay_stores")
@@ -958,6 +1128,8 @@ async function sync(sb: any, stores: string[], force: boolean) {
         out[s] = { ...(out[s] || {}), disputes: { error: String((e as any)?.message ?? e).slice(0, 200) } };
       }
     }
+    // Records its own state and never throws, like the dispute read.
+    if (dueP.includes(s)) out[s] = { ...(out[s] || {}), payments: await sweepPayments(sb, s, shopFor(s)) };
   }));
   return { swept: out, skipped: stores.filter((s) => !touched.includes(s)) };
 }
@@ -974,6 +1146,10 @@ async function sync(sb: any, stores: string[], force: boolean) {
 //   needs_claim  a refunded INR with no claim — due at once, resolved only by a claim
 //   answered     a dispute we have answered — the card network decides now, and
 //                nothing is due from us until it does (0112)
+//                (0119: a PAYMENT whose card can still be charged is needs_reply
+//                too — same meaning, the site is waiting on us and it cannot be
+//                snoozed — and one we can no longer charge is due, with note
+//                missed_window)
 //   covered      its claim is In Progress — the claim does the reminding now,
 //                unless the parcel was DELIVERED after the refund, when it comes
 //                back due (note delivered_after_refund): eBay refunds a delivered
@@ -1015,6 +1191,34 @@ function stateOf(type: string, it: any, review: any, ctx: any): { state: string;
       return { state: "needs_reply", due_on: today, note: missed ? "missed_window" : undefined };
     }
     return { state: "answered", due_on: null };
+  }
+  // A PAYMENT RUNS ON THE CARD'S CLOCK (0119). Nothing owed, or Shopify says the
+  // order stopped being unpaid: settled. While the card can still be charged it
+  // is the dispute rule again — hidden until PAYMENT_WARN_DAYS before the
+  // authorization runs out, then needs_reply: due daily, no check-in, and a
+  // manager's "resolved" is recorded but silences nothing, because charging or
+  // cancelling it on Shopify is the fix and the next read sees it. Once the card
+  // can no longer be charged, the window has shut: it shows at once, and a
+  // check-in or a resolution counts, because what is left is chasing the
+  // customer another way or recording that we could not.
+  if (type === "payment") {
+    if (!it.is_open) return { state: "settled", due_on: null, note: it.outcome || undefined };
+    if (!(Number(it.amount) > 0)) return { state: "settled", due_on: null };
+    if (it.capturable) {
+      const expiresDay = it.auth_expires_at
+        ? chicagoDay(it.auth_expires_at)
+        : addDays(chicagoDay(it.ordered_at || it.first_seen), AUTH_FALLBACK_DAYS);
+      const due_on = addDays(expiresDay, -PAYMENT_WARN_DAYS);
+      if (today < due_on) return { state: "waiting", due_on };
+      if (review?.status === "resolved") return { state: "needs_reply", due_on: today, note: "resolution_disputed" };
+      return { state: "needs_reply", due_on: today };
+    }
+    if (review?.status === "resolved") return { state: "resolved", due_on: null };
+    if (review?.status === "still_open") {
+      const back = addDays(chicagoDay(review.updated_at), CHECKIN_DAYS.payment);
+      if (today < back) return { state: "checked", due_on: back, note: "missed_window" };
+    }
+    return { state: "due", due_on: today, note: "missed_window" };
   }
   const claim = ctx.claimFor(type, it);
   if (type === "ebay_case" && isInr(it)) {
@@ -1136,7 +1340,7 @@ function stateOf(type: string, it: any, review: any, ctx: any): { state: string;
 
 async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean } = {}) {
   const recent = daysAgoIso(RECENT_DAYS);
-  const [mm, cs, rv, ev, sy, ln, cl, dp, el, ds] = await Promise.all([
+  const [mm, cs, rv, ev, sy, ln, cl, dp, el, ds, up, us] = await Promise.all([
     sb.from("refund_mismatch_state").select("*").in("store_code", stores)
       .or(`resolved_at.is.null,resolved_at.gte.${recent}`),
     // A refunded INR stays in the read however old it is: until it has a claim
@@ -1164,8 +1368,14 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
     // the one rule that reads it asks "ever?", not "how long ago".
     sb.from("hold_email_log").select("item_type,item_key").in("store_code", stores),
     sb.from("dispute_sync").select("*").in("store_code", stores),
+    // Payments (0119): open however old — an uncollected order does not stop
+    // being money because it has been ignored — plus recently cleared ones.
+    sb.from("unpaid_orders")
+      .select("order_key,store_code,order_id,order_name,source_name,item_title,unfulfilled_items,total,outstanding,capturable,capturable_amount,received,amount,currency,financial_status,fulfillment_status,ordered_at,auth_expires_at,is_open,closed_at,outcome,first_seen,last_synced")
+      .in("store_code", stores).or(`is_open.eq.true,closed_at.gte.${recent}`),
+    sb.from("unpaid_order_sync").select("*").in("store_code", stores),
   ]);
-  for (const r of [mm, cs, rv, ev, sy, ln, cl, dp, el, ds]) if (r.error) throw new Error(r.error.message);
+  for (const r of [mm, cs, rv, ev, sy, ln, cl, dp, el, ds, up, us]) if (r.error) throw new Error(r.error.message);
   const emailedKeys = new Set((el.data || []).map((r: any) => `${r.item_type}|${r.item_key}`));
 
   const claimsById: Record<string, any> = Object.fromEntries((cl.data || []).map((c: any) => [c.id, c]));
@@ -1234,7 +1444,7 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
   }
   const caseRows = (cs.data || []).filter((c: any) => !folded.has(c.case_key));
 
-  const waiting: Record<string, number> = { mismatch: 0, ebay_case: 0, dispute: 0 };
+  const waiting: Record<string, number> = { mismatch: 0, ebay_case: 0, dispute: 0, payment: 0 };
   const build = (type: string, it: any, key: string) => {
     // A check-in made on the return before it escalated carries onto the case
     // until someone acts on the case itself.
@@ -1291,6 +1501,14 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
       || (a.needs_response
         ? String(a.respond_by || "9999").localeCompare(String(b.respond_by || "9999"))
         : String(b.opened_at || "").localeCompare(String(a.opened_at || ""))));
+  // The card that runs out first leads: that is the only order a manager with
+  // two of these can act on. Ones we can no longer charge follow, oldest first.
+  const payments = (up.data || [])
+    .map((p: any) => build("payment", p, p.order_key)).filter(keep("payment"))
+    .sort((a: any, b: any) =>
+      (b.capturable ? 1 : 0) - (a.capturable ? 1 : 0)
+      || String(a.capturable ? a.auth_expires_at || "9999" : a.ordered_at || "")
+           .localeCompare(String(b.capturable ? b.auth_expires_at || "9999" : b.ordered_at || "")));
   const cases = caseRows
     .filter((c: any) => !(isInr(c) && String(c.opened_at || "") < INR_FROM))   // see INR_FROM
     .map((c: any) => build("ebay_case", c, c.case_key)).filter(keep("ebay_case"));
@@ -1308,17 +1526,19 @@ async function list(sb: any, stores: string[], opts: { includeWaiting?: boolean 
 
   return {
     rollout: ROLLOUT_STORES, stores, today: ctx.today, monthEnd: ctx.monthEnd,
-    mismatches, cases, claims, disputes, waiting,
-    sync: sy.data || [], disputeSync: ds.data || [],
+    mismatches, cases, claims, disputes, payments, waiting,
+    sync: sy.data || [], disputeSync: ds.data || [], paymentSync: us.data || [],
     timers: CHECKIN_DAYS, firstShowDays: FIRST_SHOW_DAYS, minReason: MIN_REASON,
     resolutionGraceDays: RESOLUTION_GRACE_DAYS, claimAgeDays: CLAIM_AGE_DAYS,
+    paymentWarnDays: PAYMENT_WARN_DAYS,
   };
 }
 
 async function itemStore(sb: any, type: string, key: string): Promise<string | null> {
   const [table, col] = type === "mismatch" ? ["refund_mismatch_state", "issue_key"]
     : type === "ebay_case" ? ["ebay_cases", "case_key"]
-    : type === "dispute" ? ["payment_disputes", "dispute_key"] : ["", ""];
+    : type === "dispute" ? ["payment_disputes", "dispute_key"]
+    : type === "payment" ? ["unpaid_orders", "order_key"] : ["", ""];
   if (!table) return null;
   const { data } = await sb.from(table).select("store_code").eq(col, key).maybeSingle();
   return data?.store_code ?? null;
@@ -1376,7 +1596,7 @@ Deno.serve(async (req) => {
       if (!asked.length) return json({ success: false, error: "pass ?stores=OVL,LEE" }, 400);
       const preview = ops && url.searchParams.get("preview") === "1";
       const stores = preview ? asked : rolledOut(asked);
-      if (!stores.length) return json({ success: true, rollout: ROLLOUT_STORES, stores: [], mismatches: [], cases: [], claims: [], waiting: {}, sync: [] });
+      if (!stores.length) return json({ success: true, rollout: ROLLOUT_STORES, stores: [], mismatches: [], cases: [], claims: [], payments: [], waiting: {}, sync: [] });
       return json({ success: true, preview, ...(await list(sb, stores, { includeWaiting: preview })) });
     }
 
@@ -1421,6 +1641,15 @@ Deno.serve(async (req) => {
           return json({ success: false, error: d.response_overdue
             ? `The window to respond to this one on ${where} has already closed, so it cannot be checked in. Mark it resolved and say what happened, so there is a record of it.`
             : `${where} is still waiting on our response to this dispute, so it cannot be checked in. Respond on ${where} — the next read clears it by itself — or mark it resolved and say what happened.` }, 400);
+        }
+      }
+      // And for payments (0119): while Shopify can still charge the card, the
+      // fix is charging it or cancelling the order, and snoozing it is how the
+      // authorization runs out unnoticed — #MO01-9799 was on its last day.
+      if (action === "review" && type === "payment" && String(body.status || "") === "still_open") {
+        const { data: p } = await sb.from("unpaid_orders").select("capturable,is_open").eq("order_key", key).maybeSingle();
+        if (p?.is_open && p.capturable) {
+          return json({ success: false, error: "Shopify can still charge this card, so it can't be checked in. Fulfil the order (Shopify charges it then) or cancel it — the next read clears it by itself. Or mark it resolved and say what happened." }, 400);
         }
       }
       // Reopen DELETES the review rather than writing "still open" over it.

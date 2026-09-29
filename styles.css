@@ -2182,6 +2182,33 @@ select.bs-hidden-select:focus {
 .rec-more { margin: 4px 10px 12px; text-align: center; font-size: 11.5px; font-weight: 800; color: #178048; padding: 8px; border-radius: 9px; background: #f4faf6; border: 1px solid #eef2f6; cursor: pointer; transition: background .15s; }
 .rec-more:hover { background: #e8f7ee; }
 
+/* Company-wide records (0117): every store added together, ABOVE the store
+   cards. Tiles rather than a fourth row of cards — there is no leaderboard to
+   hold, just a number and when, and six cards the size of the store ones would
+   outweigh the page they sit on.
+
+   EVERY TILE THE SAME SIZE (Ethan). Fixed column counts rather than auto-fill:
+   auto-fill left a wide screen with six tiles and two empty tracks, and a
+   narrow one with a lone tile on its last row. 6 across, 3 across, 2 across,
+   so six tiles always make full rows. The counts follow the SECTION's width
+   (a container query), not the window's, so the rule is right wherever the
+   section is put — and the layout check can measure it at a known width.
+   Rows are 1fr too, so a tile whose date is longer cannot be taller.
+
+   The label always reserves TWO lines. "Monthly Customer Conversion" wraps
+   where "Daily Buy" does not, and without the reserve every figure in the row
+   sat at a different height. */
+.rec-co { margin-bottom: 22px; container-type: inline-size; }
+.rec-co-h { margin: 0 2px 10px; }
+.rec-co-t { font-size: 13px; font-weight: 850; letter-spacing: .03em; text-transform: uppercase; color: var(--slate-charcoal); }
+.rec-co-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; }
+@container (min-width: 900px) { .rec-co-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+@container (max-width: 600px) { .rec-co-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.rec-co-tile { min-width: 0; background: #fff; border: 1px solid #e6ebf1; border-radius: 12px; padding: 12px 13px; box-shadow: 0 1px 2px rgba(16,24,40,.05); display: flex; flex-direction: column; }
+.rec-co-l { font-size: 10px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; color: #647082; line-height: 1.3; min-height: 2.6em; }
+.rec-co-v { font-size: 20px; font-weight: 850; letter-spacing: -.015em; color: var(--slate-charcoal); margin-top: 6px; line-height: 1.1; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.rec-co-d { font-size: 11px; font-weight: 700; color: #94a3b8; margin-top: 3px; }
+
 @media (max-width: 900px), (max-width: 1366px) and (pointer: coarse) {
     .champions-row { grid-template-columns: 1fr; }
     .awards-grid, .records-grid { grid-template-columns: 1fr 1fr; }
@@ -9465,6 +9492,13 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     background: #e8f7ee !important; border: 1px solid rgba(90,141,59,.25) !important;
     border-radius: 12px !important; padding: 15px 18px !important; margin-bottom: 18px !important;
     min-height: 0 !important; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    /* flex-shrink: 0 — the card is a flex column capped at 84vh, and with
+       min-height: 0 a tall roster (the per-day result chips; an MSM's two stores
+       stacked) squashed this strip: the green box shrank while the goal and the
+       date pill kept their size and hung out of the bottom, so both read as
+       sitting low (Ethan, 2026-09-24). The ROSTER is what should give way — it
+       scrolls. listing-goals-header-layout-check.js measures this. */
+    flex-shrink: 0 !important;
 }
 #listingGoalsModal #goals-store-target {
     order: 1; color: #1c1f23 !important; font-size: 19px !important; font-weight: 800 !important;
@@ -9587,6 +9621,60 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     padding: 8px 0 !important; width: 60px; margin: 0 auto !important; border: 1px solid rgba(90,141,59,.2);
 }
 #listingGoalsModal .goals-mgr-week { color: #647082 !important; }
+
+/* Results off the Day End Report (2026-09-24): each person's last day and week
+   to date under their name, the store's pair above the roster. hit / near /
+   miss are >=100%, >=70%, below. */
+/* One chip per day this week, then a divider, then the Week chip. Wraps
+   rather than scrolls: six days plus the week is seven chips, which fits a
+   desktop row and folds to two lines on a phone. */
+.goals-res-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.gr-chip { display: inline-flex; align-items: baseline; gap: 3px; font-size: 11px; font-weight: 600; line-height: 1;
+    padding: 4px 7px; border-radius: 7px; border: 1px solid #e3e8ee; background: #f8fafc; color: #647082; white-space: nowrap; }
+.gr-chip b { font-weight: 800; font-size: 12px; }
+.gr-chip .gr-d { font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: #94a3b8; }
+/* color re-stated: the bare .gr-hit/.gr-near/.gr-miss below colour ALL their
+   text, and on a chip only the count should carry the tone, not the "/goal". */
+.gr-chip.gr-hit  { background: #e8f7ee; border-color: #c6ecd6; color: #647082; }
+.gr-chip.gr-near { background: #fef6e7; border-color: #f8e0b0; color: #647082; }
+.gr-chip.gr-miss { background: #fdeeee; border-color: #f6d0d0; color: #647082; }
+.gr-chip.gr-hit b  { color: #178048; }
+.gr-chip.gr-near b { color: #b45309; }
+.gr-chip.gr-miss b { color: #b91c1c; }
+.gr-chip.gr-off, .gr-chip.gr-wait { background: transparent; border-style: dashed; color: #94a3b8; }
+.gr-chip.gr-week { border-width: 1.5px; }
+.gr-chip.gr-week .gr-d { color: #475569; }
+.gr-sep { width: 1px; align-self: stretch; background: #d5dce4; margin: 0 3px; }
+.gr-k { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: .04em; }
+.gr-hit { color: #178048; }
+.gr-near { color: #b45309; }
+.gr-miss { color: #b91c1c; }
+.gr-none, .gr-wait { color: #94a3b8; }
+/* The actual under "Total" — sentence case inside an uppercase label. */
+#listingGoalsModal .goals-total-listed, .goals-total-listed {
+    display: block; margin-top: 3px; font-size: 11px; font-weight: 600; color: #647082;
+    text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.goals-total-listed:empty { display: none; }
+.goals-total-listed b { font-weight: 800; }
+.goals-res-store { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+.goals-res-cell { flex: 1 1 140px; min-width: 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+    padding: 8px 10px; border: 1px solid #e3e8ee; border-radius: 10px; background: #f8fafc; font-variant-numeric: tabular-nums; }
+.goals-res-cell b { font-size: 16px; font-weight: 800; }
+.goals-res-cell small { font-size: 12px; font-weight: 700; color: #647082; }
+.goals-res-cell .gr-k { flex-basis: 100%; }
+
+/* The temps row. A 0-2 stepper, not a role dot — see GOALS_TEMP_* in speeks.js. */
+.goals-temp-row .goals-roster-name { color: #647082; }
+.goals-temp-note { font-size: 10px; font-weight: 700; color: #94a3b8; margin-left: 4px; }
+.goals-temp-ctl { display: inline-flex; align-items: center; gap: 6px; width: fit-content; }
+.goals-temp-step { font: inherit; font-size: 15px; font-weight: 800; line-height: 1; width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center; padding: 0; cursor: pointer;
+    color: #178048; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; }
+.goals-temp-step:hover:not(:disabled) { border-color: #1f9d57; background: #e8f7ee; }
+.goals-temp-step:disabled { color: #cbd5e1; cursor: default; }
+.goals-temp-count { min-width: 64px; text-align: center; font-size: 11px; font-weight: 700; color: #647082;
+    background: #f1f5f9; border: 1px dashed #cbd5e1; border-radius: 999px; padding: 4px 10px; }
+.goals-temp-count.on { background: #1f9d57; border: 1px solid #1f9d57; color: #fff; }
 
 /* total row */
 #listingGoalsModal .goals-total-row {
@@ -18194,6 +18282,10 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .dbr-btn.go:hover:not(:disabled) { background: #178048; }
 .dbr-btn.ghost { background: #fff; color: var(--dbr-muted); border-color: var(--dbr-line); }
 .dbr-btn.ghost:hover:not(:disabled) { background: #f7f9fa; border-color: #d5dee5; }
+/* Draft sits between the two: it spends a model call but sends nothing, so it
+   is outlined in the accent rather than filled with it. */
+.dbr-btn.draft { background: #fff; color: var(--dbr-accent); border-color: var(--dbr-accent); flex-shrink: 0; }
+.dbr-btn.draft:hover:not(:disabled) { background: #f0f9f3; }
 .dbr-all { background: var(--dbr-accent); color: #fff; flex-shrink: 0; }
 .dbr-all:hover { background: #178048; }
 /* Two bulk controls need a holder of their own: .dbr-head is space-between, so

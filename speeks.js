@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.7';
+const APP_VERSION = '3.9.0';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -9931,8 +9931,10 @@ let recordsCache = JSON.parse(localStorage.getItem('speeksRecordsCache')) || nul
 
 async function fetchRecordsData() { 
     try { 
-        const response = await fetch(`${RECORDS_URL}?v=${Date.now()}`);
-        recordsCache = await response.json(); 
+        // company=1: the company-wide rows are only sent to a client that knows
+        // they are totals and not the card headline (see the records fn, 0117).
+        const response = await fetch(`${RECORDS_URL}?company=1&v=${Date.now()}`);
+        recordsCache = await response.json();
         localStorage.setItem('speeksRecordsCache', JSON.stringify(recordsCache)); 
         
         if (document.getElementById('pane-records')?.classList.contains('active')) {
@@ -9953,35 +9955,23 @@ function showStatsView(name) {
     });
 }
 
-/* Who actually holds the company record.
+/* Who holds the record on a card's headline.
  *
- * A "Company" row carries only the number and the month — no store — so the
- * headline never said whose record it was, even though the answer sits in the
- * leaderboard directly underneath it. Half the metrics have no Company row at
- * all and already fall back to the top store, in which case the holder IS that
- * row and there is nothing to look up.
+ * The headline is always the top STORE (0117). It used to be a "Company" row
+ * that copied the top store's number with no store on it, so this had to match
+ * the number back to a store. Company rows are now company-wide totals shown in
+ * their own section, and the headline is the top store's own row.
  *
- * Matching is on the parsed number, not the string: these values are hand-typed
- * and inconsistently spaced ("$ 11,212.00"). Subtext only breaks ties, since two
- * stores can legitimately hold the same figure — and when it can't break one,
- * both names are shown rather than one picked arbitrarily.
- *
- * If nothing matches we say nothing. A Company row no store's number reproduces
- * is a company-wide total rather than somebody's record, and naming a store for
- * it would be worse than the blank that's there today.
+ * What is left is ties. Two stores can hold the same figure (conversion is a
+ * whole percent), and when they do both are named rather than one picked
+ * arbitrarily. Matching is on the parsed number, since a hand-edited value can
+ * still be spaced oddly ("$ 11,212.00").
  */
 function _recHolders(champ, stores) {
     if (!champ || !stores.length) return [];
-    if (stores.includes(champ)) return [String(champ.section).trim()];
-
     const target = parseNum(champ.value);
-    if (!target) return [];
-    const hits = stores.filter(s => parseNum(s.value) === target);
-    if (hits.length < 2) return hits.map(s => String(s.section).trim());
-
-    const norm = v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const exact = hits.filter(s => norm(s.subtext) === norm(champ.subtext));
-    return (exact.length ? exact : hits).map(s => String(s.section).trim());
+    const hits = target ? stores.filter(s => parseNum(s.value) === target) : [];
+    return (hits.length ? hits : [champ]).map(s => String(s.section).trim());
 }
 
 /* Records whose hero IS first place, rather than a company-wide total.
@@ -10037,14 +10027,17 @@ function renderRecords() {
         return;
     }
     
-    const map = {}; 
-    recordsCache.forEach(r => { 
+    // Company rows are company-wide totals (every store summed), not a copy of
+    // the top store, so they stay off the cards and get their own section.
+    const map = {};
+    const company = {};
+    recordsCache.forEach(r => {
         let l = String(r.label).trim();
-        let s = String(r.section).toUpperCase().trim(); 
-        
-        if (!map[l]) map[l] = { c: null, s: [] }; 
-        if (s === 'COMPANY' || s === 'COMPANY WIDE') map[l].c = r; 
-        else map[l].s.push(r); 
+        let s = String(r.section).toUpperCase().trim();
+
+        if (s === 'COMPANY' || s === 'COMPANY WIDE') { company[l] = r; return; }
+        if (!map[l]) map[l] = { s: [] };
+        map[l].s.push(r);
     });
     
     let bC = 0;
@@ -10070,16 +10063,15 @@ function renderRecords() {
         // A store board ranks by the number. A person board ranks by the place
         // the DM set with the arrows in the tool, falling back to the number.
         d.s.sort(byPerson ? _recPersonOrder : (a, b) => parseNum(b.value) - parseNum(a.value));
-        let cR = d.c || d.s[0];
+        let cR = d.s[0];
 
         html += `
         <div class="rec">
             <div class="rec-h">${l}</div>`;
 
         if (cR) {
-            // Who holds it. For a person metric that is the name on the row —
-            // no lookup, because the row already says. _recHolders exists only
-            // because a store metric's Company row carries no store.
+            // Who holds it. For a person metric that is the name on the row;
+            // for a store metric it is the top store, plus any store tied with it.
             const who = byPerson
                 ? [String(cR.person || '').trim()].filter(Boolean).map(escapeHtml).join('')
                 : _recHolders(cR, d.s).map(escapeHtml).join(' &middot; ');
@@ -10090,8 +10082,8 @@ function renderRecords() {
                 : (cR.subtext || '');
             html += `
             <div class="rec-champ">
-                <div class="cc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></svg> Company Record</div>
-                <div class="cv">${cR.value || '-'}</div>
+                <div class="cc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></svg> ${byPerson ? 'Company Record' : 'Store Record'}</div>
+                <div class="cv">${escapeHtml(cR.value || '-')}</div>
                 <div class="cs">${who ? `<b class="ch">${who}</b>` : ''}${who && when ? '<span class="cd">&middot;</span>' : ''}${when}</div>
             </div>`;
         }
@@ -10138,7 +10130,43 @@ function renderRecords() {
     });
 
     html += '</div>';
-    cont.innerHTML = html;
+    // Company-wide first: the whole company's best, then each store's (Ethan).
+    cont.innerHTML = _recCompanySection(company, rank) + html;
+}
+
+/* Company-wide records: the whole company added together on its best day or in
+ * its best month. Kept by records-watch from 2026 onward (0117). Two metrics
+ * cannot simply be added, and say how they are combined:
+ *   margin      all gross profit / all net sales, leaving out any store in its
+ *               opening month (the same rule as the store margin record)
+ *   conversion  each store's close rate weighted by its # of customers
+ * A metric the job has not filled yet is left out rather than drawn as a dash,
+ * and the whole section waits until there is something in it. It sits ABOVE the
+ * store cards, with no subtitle — Ethan asked for both. */
+const RECORD_COMPANY_NOTE = {
+    'Monthly Sell Margin Record': 'All stores’ gross profit ÷ all net sales',
+    'Monthly Customer Conversion Record': 'Close rate weighted by # of customers',
+};
+function _recCompanySection(company, rank) {
+    const labels = Object.keys(company)
+        .filter(l => String(company[l].value || '').trim())
+        .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    if (!labels.length) return '';
+    const tiles = labels.map(l => {
+        const r = company[l];
+        const note = RECORD_COMPANY_NOTE[l];
+        return `
+        <div class="rec-co-tile"${note ? ` title="${escapeHtml(note)}"` : ''}>
+            <div class="rec-co-l">${escapeHtml(l.replace(/ Record$/, ''))}</div>
+            <div class="rec-co-v">${escapeHtml(r.value)}</div>
+            <div class="rec-co-d">${escapeHtml(r.subtext || '')}</div>
+        </div>`;
+    }).join('');
+    return `
+    <section class="rec-co">
+        <div class="rec-co-h"><div class="rec-co-t">Company-Wide Records</div></div>
+        <div class="rec-co-grid">${tiles}</div>
+    </section>`;
 }
 
 function toggleBoard(id, btn) {
@@ -10169,7 +10197,7 @@ async function toggleManageRecords() {
         
         try {
             if (!recordsCache || recordsCache.length === 0) {
-                const res = await fetch(`${RECORDS_URL}?v=${Date.now()}`);
+                const res = await fetch(`${RECORDS_URL}?company=1&v=${Date.now()}`);
                 recordsCache = await res.json();
                 localStorage.setItem('speeksRecordsCache', JSON.stringify(recordsCache));
             }
@@ -10229,8 +10257,9 @@ function populateRecordsModal() {
     };
     sections.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 
-    // The Company column is auto-filled from the highest store, so make sure it
-    // exists as a column even if no metric has a company record yet.
+    // The Company column is the company-wide figure (every store summed, 0117),
+    // kept by records-watch and read-only here. It is still a column so the DM
+    // sees it next to the stores; make sure it exists even before the first run.
     let companyKey = sections.find(s => s.toUpperCase().startsWith('COMPANY'));
     if (!companyKey) { companyKey = 'COMPANY'; sections.push(companyKey); }
 
@@ -10243,15 +10272,15 @@ function populateRecordsModal() {
         sections.forEach(s => {
             const rec = byLabel[label][s];
             if (s === companyKey) {
-                // Read-only, auto-filled from the winning store (see _recomputeCompanyRecords).
-                body += `<div class="record-manage-row cr-cell cr-input cr-company" data-store="${escapeHtml(companyKey)}" data-label="${escapeHtml(label)}" title="Auto-filled from the store with the highest value">
+                // Read-only: the company-wide total, written only by records-watch.
+                body += `<div class="record-manage-row cr-cell cr-input cr-company" data-store="${escapeHtml(companyKey)}" data-label="${escapeHtml(label)}" title="Every store added together — filled in automatically each morning">
                     <input type="text" class="r-val" value="${escapeHtml(rec ? (rec.value || '') : '')}" placeholder="—" readonly tabindex="-1">
                     <input type="text" class="r-date" value="${escapeHtml(rec ? (rec.subtext || '') : '')}" placeholder="—" readonly tabindex="-1">
                 </div>`;
             } else if (rec) {
                 body += `<div class="record-manage-row cr-cell cr-input" data-store="${escapeHtml(rec.section || '')}" data-label="${escapeHtml(rec.label || '')}">
-                    <input type="text" class="r-val" placeholder="Value" value="${escapeHtml(rec.value || '')}" oninput="_recomputeCompanyRecords()">
-                    <input type="text" class="r-date" placeholder="Date" value="${escapeHtml(rec.subtext || '')}" oninput="_recomputeCompanyRecords()">
+                    <input type="text" class="r-val" placeholder="Value" value="${escapeHtml(rec.value || '')}">
+                    <input type="text" class="r-date" placeholder="Date" value="${escapeHtml(rec.subtext || '')}">
                 </div>`;
             } else {
                 body += `<div class="cr-cell cr-empty"></div>`;
@@ -10261,7 +10290,7 @@ function populateRecordsModal() {
 
     const cols = `minmax(150px, 1.3fr) repeat(${sections.length}, minmax(118px, 1fr))`;
     list.innerHTML =
-        `<p class="cr-hint">Each column is a store. Fill a metric across the stores — the <strong>Company</strong> column auto-fills with the highest value.</p>` +
+        `<p class="cr-hint">These fill themselves in every morning from the Daily Sales Summary and the Monthly Breakdown, and only ever go up. Edit a store here to correct one &mdash; a lower number sticks unless the data really beats it. <strong>Company</strong> is every store added together and is kept automatically.</p>` +
         // The person editors live INSIDE the scroller, not after it. Two nested
         // scrollers would otherwise hide them below the fold on a short screen
         // with no scrollbar to say they were there — the tool would look like
@@ -10270,7 +10299,6 @@ function populateRecordsModal() {
             `<div class="cr-grid" style="grid-template-columns:${cols};">${head}${body}</div>` +
             RECORD_PERSON_LABELS.map(_recPersonSection).join('') +
         `</div>`;
-    _recomputeCompanyRecords();
     // Numbers the places and greys the arrow that has nowhere to go. Runs after
     // the markup lands because it is derived from position, not from the data.
     document.querySelectorAll('#manageRecordsList .cr-people').forEach(_recRenumber);
@@ -10493,35 +10521,6 @@ function _recAddPerson(btn) {
     });
 }
 
-// The Company column mirrors whichever store has the highest value for each
-// metric (value + that store's date). Runs on load and on every store edit, so
-// the DM never has to copy the record over by hand. Read-only company inputs
-// don't feed themselves. Uses parseNum so "$21,950.00" / "93.00%" compare right.
-function _recomputeCompanyRecords() {
-    const list = document.getElementById('manageRecordsList');
-    if (!list) return;
-    const byLabel = {};
-    list.querySelectorAll('.record-manage-row.cr-input:not(.cr-company)').forEach(cell => {
-        const label = cell.getAttribute('data-label');
-        (byLabel[label] = byLabel[label] || []).push(cell);
-    });
-    list.querySelectorAll('.record-manage-row.cr-company').forEach(comp => {
-        const label = comp.getAttribute('data-label');
-        const cells = byLabel[label] || [];
-        let bestVal = '', bestDate = '', bestNum = -Infinity, found = false;
-        cells.forEach(c => {
-            const v = (c.querySelector('.r-val')?.value || '').trim();
-            if (!v) return;
-            const n = parseNum(v);
-            if (n > bestNum) { bestNum = n; bestVal = v; bestDate = (c.querySelector('.r-date')?.value || '').trim(); found = true; }
-        });
-        const valEl = comp.querySelector('.r-val');
-        const dateEl = comp.querySelector('.r-date');
-        if (valEl) valEl.value = found ? bestVal : '';
-        if (dateEl) dateEl.value = found ? bestDate : '';
-    });
-}
-
 // NOTE: populateAlertsModal lives with the rest of the alerts module (see the
 // definition further down, next to saveAlertsData). An older duplicate that
 // used decimal→percentage input conversion was removed from here — the alerts
@@ -10533,7 +10532,9 @@ async function saveManageRecords() {
     btn.style.opacity = "0.7";
 
     const updatedRecords = [];
-    document.querySelectorAll('.record-manage-row').forEach(row => {
+    // Not the Company column: it is the company-wide total records-watch keeps,
+    // and the records fn refuses to write it anyway.
+    document.querySelectorAll('.record-manage-row:not(.cr-company)').forEach(row => {
         updatedRecords.push({
             store: row.getAttribute('data-store'),
             label: row.getAttribute('data-label'),
@@ -15932,6 +15933,222 @@ function _activeRoleIn(group) {
     return _roleOf(group ? group.querySelector('.role-dot.active') : null);
 }
 
+// ---------------------------------------------------------------------------
+// TEMPS (Ethan, 2026-09-24)
+// ---------------------------------------------------------------------------
+// Temp listers work without a SPEEKSNET account — so they can never be a roster
+// row — at an expected 20 listings a day each. The manager sets how many temps
+// are in today with a − / + stepper (0 to GOALS_TEMP_MAX; "some stores may have
+// multiple temps", Ethan, 2026-09-24), and the save carries ONE extra row,
+// employee GOALS_TEMP_NAME, role GOALS_TEMP_ROLE, goal GOALS_TEMP_GOAL × count.
+// One row, not one per temp: the report cannot tell the ingest which temp is
+// which, so their listings are pooled either way. The count is read back from
+// the goal (goal ÷ 20), so it needs no column of its own. Being an ordinary listing_goals
+// row is the point: every sum of a store-day's goals (the DM matrix, Store
+// Efficiency's Staffed For, daily-brief) picks the temp up with no change of
+// its own. The row's RESULT is written by day-end-ingest: whoever the Day End
+// Report names that matched nobody on the rota, i.e. the temps.
+//
+// Not a role dot, on purpose. A temp is not one of the store's people, takes no
+// seat from anyone, and must not count toward staffedCount — the dots' rules
+// (one person per role, the shared-lister count) would all be wrong for it.
+const GOALS_TEMP_NAME = 'Temp';
+const GOALS_TEMP_ROLE = 'TEMP';
+const GOALS_TEMP_GOAL = 20;   // per temp, per day
+const GOALS_TEMP_MAX = 2;
+function _goalsIsTempRow(r) {
+    return !!r && String(r.role || '').trim().toUpperCase() === GOALS_TEMP_ROLE;
+}
+// How many temps a saved Temp row stands for. Rounded and clamped so a goal
+// someone edits by hand can never render as 1.5 temps or as 7.
+function _goalsTempCountOf(r) {
+    if (!_goalsIsTempRow(r)) return 0;
+    const n = Math.round((parseInt(r.goal, 10) || 0) / GOALS_TEMP_GOAL);
+    return Math.max(0, Math.min(GOALS_TEMP_MAX, n));
+}
+// sfx is '' for the single-store widget and '-<STORE>' for a MSM section,
+// matching how the roster rows' ids are scoped.
+function _goalsTempCount(sfx) {
+    const el = document.getElementById('temp-count' + (sfx || ''));
+    return el ? (parseInt(el.dataset.count, 10) || 0) : 0;
+}
+function _goalsTempLabel(n) { return n === 0 ? 'No temps' : (n === 1 ? '1 temp' : n + ' temps'); }
+function _goalsTempCtlHtml(sfx, n) {
+    return `<button type="button" class="goals-temp-step" aria-label="One fewer temp" ${n <= 0 ? 'disabled' : ''}
+                onclick="stepGoalsTemp('${sfx}', -1)">&minus;</button>
+            <span class="goals-temp-count${n ? ' on' : ''}" id="temp-count${sfx}" data-count="${n}" aria-live="polite">${_goalsTempLabel(n)}</span>
+            <button type="button" class="goals-temp-step" aria-label="One more temp" ${n >= GOALS_TEMP_MAX ? 'disabled' : ''}
+                onclick="stepGoalsTemp('${sfx}', 1)">+</button>`;
+}
+function stepGoalsTemp(sfx, delta) {
+    const el = document.getElementById('temp-count' + sfx);
+    if (!el) return;
+    const n = Math.max(0, Math.min(GOALS_TEMP_MAX, (parseInt(el.dataset.count, 10) || 0) + delta));
+    el.parentElement.innerHTML = _goalsTempCtlHtml(sfx, n);
+    recomputeGoalDisplays();
+    scheduleGoalsAutosave();
+}
+window.stepGoalsTemp = stepGoalsTemp;
+
+// ---------------------------------------------------------------------------
+// RESULTS — how each person finished their last day, and their week so far
+// ---------------------------------------------------------------------------
+// listing_goals.result is the Day End Report's count for that person, written
+// the morning after by day-end-ingest (it was never filled before 2026-09-24).
+// So TODAY never has one; the widget shows each day of THIS week before today
+// that the person had a row, and the week to date through the last of them.
+//
+// THIS WEEK ONLY — on a Monday it shows nothing at all (Ethan, 2026-09-28).
+// It used to fall back to the last worked day, which on a Monday is Saturday,
+// but Saturday closes the previous week and says nothing about the one ahead.
+// Monday's own result arrives Tuesday morning. Labelled with the weekday so it
+// is never ambiguous which day a chip is.
+//
+// Names match EXACTLY here. These rows were written by this widget from this
+// roster, so the names are the same strings — the first-name rule elsewhere
+// (_goalsSameName) exists for older rows and would merge two Zachs.
+function _goalsDayRows(data, todayStr, startOfWeek) {
+    // day -> rows, for days before today, last row per person winning.
+    const byDay = {};
+    const todayT = goalDateObj(todayStr).getTime();
+    (data || []).forEach(r => {
+        const d = normalizeGoalDate(r.date);
+        // Today and anything after it: neither has a report yet. The widget only
+        // ever saves today, but a row dated ahead must not count as a day done.
+        if (d === todayStr || goalDateObj(d).getTime() > todayT) return;
+        const k = String(r.employee || '').trim().toLowerCase();
+        (byDay[d] = byDay[d] || {})[k] = r;
+    });
+    const days = Object.keys(byDay).sort((a, b) => goalDateObj(a) - goalDateObj(b));
+    const week = days.filter(d => goalDateObj(d) >= startOfWeek);
+    return { byDay, days, week };
+}
+function _goalsPctTone(got, goal) {
+    if (!goal) return 'none';
+    const p = got / goal * 100;
+    return p >= 100 ? 'hit' : (p >= 70 ? 'near' : 'miss');
+}
+function _goalsWeekday(d) {
+    return goalDateObj(d).toLocaleDateString('en-US', { weekday: 'short' });
+}
+function _goalsNum(v) { return v == null || v === '' ? null : (parseInt(v, 10) || 0); }
+
+// One person's results under their name: a chip for EACH day of this week
+// before today, then the week so far as its own chip, set apart by a divider.
+// It was one run-on line ("Wed 0 / 6 · Week 3 / 43") until Ethan asked for the
+// days to be separated so a full Saturday — six days — still reads at a
+// glance (2026-09-24). '' when the person has no rows this week before today —
+// which is everyone on a Monday; see the RESULTS header for why last week's
+// Saturday no longer stands in.
+function _goalsDayChip(d, r) {
+    const wd = _goalsWeekday(d);
+    if (_isOffRole(r.role)) return '<span class="gr-chip gr-off"><span class="gr-d">' + wd + '</span>Off</span>';
+    const got = _goalsNum(r.result), goal = parseInt(r.goal, 10) || 0;
+    if (got == null) {
+        return '<span class="gr-chip gr-wait" title="The Day End Report for this day has not been read yet">'
+            + '<span class="gr-d">' + wd + '</span><b>—</b>/' + goal + '</span>';
+    }
+    return '<span class="gr-chip gr-' + _goalsPctTone(got, goal) + '"><span class="gr-d">' + wd + '</span>'
+        + '<b>' + got + '</b>/' + goal + '</span>';
+}
+function _goalsResultLine(emp, dr) {
+    const k = String(emp || '').trim().toLowerCase();
+    const weekDays = dr.week.filter(d => dr.byDay[d][k]);
+    if (!weekDays.length) return '';
+    const chips = weekDays.map(d => _goalsDayChip(d, dr.byDay[d][k])).join('');
+
+    let wg = 0, wr = 0, any = false;
+    weekDays.forEach(d => {
+        const r = dr.byDay[d][k];
+        wg += parseInt(r.goal, 10) || 0;
+        const got = _goalsNum(r.result);
+        if (got != null) { wr += got; any = true; }
+    });
+    const week = weekDays.length && (wg || any)
+        ? '<span class="gr-sep" aria-hidden="true"></span><span class="gr-chip gr-week gr-' + _goalsPctTone(wr, wg) + '">'
+          + '<span class="gr-d">Week</span><b>' + wr + '</b>/' + wg + '</span>'
+        : '';
+    return '<div class="goals-res-line">' + chips + week + '</div>';
+}
+
+// The store's line above the roster: last open day, and the week to date, for
+// everyone on the board including a temp.
+// A store-day's listed and goal, everyone on the board (temps included).
+// known is false until at least one result for the day has been read.
+function _goalsSumDay(dr, d) {
+    return Object.values(dr.byDay[d]).reduce((a, r) => {
+        const got = _goalsNum(r.result);
+        a.goal += _isWorkingRole(r.role) ? (parseInt(r.goal, 10) || 0) : 0;
+        if (got != null) { a.got += got; a.known = true; }
+        return a;
+    }, { goal: 0, got: 0, known: false });
+}
+// This week before today, summed — the store's actual so far.
+function _goalsWeekActual(dr) {
+    return dr.week.map(d => _goalsSumDay(dr, d))
+        .reduce((a, s) => ({ goal: a.goal + s.goal, got: a.got + s.got, known: a.known || s.known }), { goal: 0, got: 0, known: false });
+}
+// The actual under the Total label (Ethan, 2026-09-24: "add an actual for the
+// total line"). The two totals beside it are GOALS — today's and the week's,
+// today included — so this says what has actually been listed against the
+// days that are done. '' on a Monday, when no day of the week is done yet.
+function _goalsTotalListedHtml(dr) {
+    if (!dr || !dr.week.length) return '';
+    const W = _goalsWeekActual(dr);
+    if (!W.known) return 'Listed so far <b class="gr-wait">—</b>';
+    return 'Listed so far <b class="gr-' + _goalsPctTone(W.got, W.goal) + '">' + W.got + '</b> of ' + W.goal
+        + (W.goal ? ' · ' + Math.round(W.got / W.goal * 100) + '%' : '');
+}
+
+// This week only, like the per-person chips: nothing on a Monday.
+function _goalsStoreResultHtml(dr) {
+    if (!dr.week.length) return '';
+    const last = dr.week[dr.week.length - 1];
+    const L = _goalsSumDay(dr, last);
+    const W = _goalsWeekActual(dr);
+    const cell = (label, s) => `<div class="goals-res-cell"><span class="gr-k">${label}</span>`
+        + (s.known ? `<b class="gr-${_goalsPctTone(s.got, s.goal)}">${s.got}</b>` : '<b class="gr-wait">—</b>')
+        + `<small>/ ${s.goal}${s.known && s.goal ? ' · ' + Math.round(s.got / s.goal * 100) + '%' : ''}</small></div>`;
+    return `<div class="goals-res-store" title="Listed, from the Day End Report, against the goals set for those days">`
+        + cell(_goalsWeekday(last) + ' listed', L)
+        + cell('Week to date', W)
+        + '</div>';
+}
+
+// The temp's row, rendered after the roster in both widgets.
+function _goalsTempRowHtml(sfx, count, priorWeek, dr) {
+    const line = dr ? _goalsResultLine(GOALS_TEMP_NAME, dr) : '';
+    return `
+        <div class="goals-mgr-row goals-temp-row">
+            <div class="goals-mgr-emp">
+                <span class="goals-roster-name">Temps <small class="goals-temp-note">${GOALS_TEMP_GOAL} a day each</small></span>
+                <div class="goals-temp-ctl">${_goalsTempCtlHtml(sfx, count || 0)}</div>
+                ${line}
+            </div>
+            <div class="goal-auto-display" id="goal-display-temp${sfx}" data-prior-week="${priorWeek || 0}">–</div>
+            <div class="goals-mgr-week" id="week-display-temp${sfx}">–</div>
+        </div>`;
+}
+// Paints the temp row's two figures and returns what it adds to the totals.
+function _goalsPaintTemp(sfx) {
+    const disp = document.getElementById('goal-display-temp' + sfx);
+    if (!disp) return { today: 0, week: 0 };
+    const today = _goalsTempCount(sfx) * GOALS_TEMP_GOAL;
+    disp.innerText = today ? today : '–';
+    disp.classList.toggle('goal-auto-set', today > 0);
+    const week = (parseInt(disp.dataset.priorWeek, 10) || 0) + today;
+    const wk = document.getElementById('week-display-temp' + sfx);
+    if (wk) wk.innerText = week || '–';
+    return { today, week };
+}
+// The save payload's temp row, or null at zero temps (the server then clears
+// any Temp row for the day, like any other name missing from a save).
+function _goalsTempPayload(sfx) {
+    const n = _goalsTempCount(sfx);
+    if (!n) return null;
+    return { employee: GOALS_TEMP_NAME, role: GOALS_TEMP_ROLE, goal: String(n * GOALS_TEMP_GOAL), result: '' };
+}
+
 // The dots for one person: the store's role ladder plus the Off chip. Shared by
 // all three renderers (flip-card form, manager widget, MSM stacked widget) so
 // the Off chip can't be added to one and forgotten in the others.
@@ -16678,7 +16895,9 @@ async function saveGoalsData(silent = false) {
         // no goal.
         const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, { employee: emp, store: goalsTargetStore })) : '';
 
-        // Results now come from the Weekly KPI (# Listed); preserve any existing value.
+        // Results come from the Day End Report, written onto each row the morning
+        // after by day-end-ingest (2026-09-24). listing-goals POST ignores this
+        // field now, so it is sent only to keep the local cache below whole.
         const existing = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
         const result = existing && existing.result != null ? String(existing.result) : '';
 
@@ -16686,6 +16905,8 @@ async function saveGoalsData(silent = false) {
             payloadEmployees.push({ employee: emp, role: role, goal: goal, result: result });
         }
     });
+    const tempRow = _goalsTempPayload('');
+    if (tempRow) payloadEmployees.push(tempRow);
 
     try {
         // Ignore the broadcast this write is about to trigger — it would come back
@@ -16812,6 +17033,7 @@ function renderManagerGoals() {
     if (storeTargetEl) storeTargetEl.innerText = `Goal: ${_weekTargetTotal} Listings`;
 
     let html = '';
+    const dr = _goalsDayRows(liveGoalsData, todayStr, startOfWeek);
     goalsRoster.forEach((emp, idx) => {
         const rec = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
 
@@ -16825,13 +17047,19 @@ function renderManagerGoals() {
             <div class="goals-mgr-emp">
                 <span class="goals-roster-name">${emp}</span>
                 <div class="goals-edit-roles" id="roles-${idx}">${rolesHtml}</div>
+                ${_goalsResultLine(emp, dr)}
             </div>
             <div class="goal-auto-display" id="goal-display-${idx}">–</div>
             <div class="goals-mgr-week" id="week-display-${idx}">–</div>
         </div>`;
     });
 
-    list.innerHTML = html;
+    const tempToday = _goalsTempCountOf(liveGoalsData.find(r => _goalsIsTempRow(r) && normalizeGoalDate(r.date) === todayStr));
+    html += _goalsTempRowHtml('', tempToday, priorWeekGoal(GOALS_TEMP_NAME, todayStr, startOfWeek), dr);
+
+    list.innerHTML = _goalsStoreResultHtml(dr) + html;
+    const totListed = document.getElementById('goals-total-listed');
+    if (totListed) totListed.innerHTML = _goalsTotalListedHtml(dr);
 
     renderGoalsLevelUp();
     setTimeout(() => { updateRoleLocks(); recomputeGoalDisplays(); }, 30);
@@ -16942,6 +17170,7 @@ function renderManagerGoalsMS() {
         st.priorWeek = {};
 
         let rows = '';
+        const dr = _goalsDayRows(st.live, todayStr, startOfWeek);
         st.roster.forEach((emp, idx) => {
             const rec = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
 
@@ -16954,11 +17183,15 @@ function renderManagerGoalsMS() {
                 <div class="goals-mgr-emp">
                     <span class="goals-roster-name">${emp}</span>
                     <div class="goals-edit-roles" id="roles-${store}-${idx}">${rolesHtml}</div>
+                    ${_goalsResultLine(emp, dr)}
                 </div>
                 <div class="goal-auto-display" id="goal-display-${store}-${idx}">–</div>
                 <div class="goals-mgr-week" id="week-display-${store}-${idx}">–</div>
             </div>`;
         });
+        const tempToday = _goalsTempCountOf(st.live.find(r => _goalsIsTempRow(r) && normalizeGoalDate(r.date) === todayStr));
+        rows += _goalsTempRowHtml('-' + store, tempToday, priorWeekGoal(GOALS_TEMP_NAME, todayStr, startOfWeek, st.live), dr);
+        rows = _goalsStoreResultHtml(dr) + rows;
 
         html += `
         <div class="ms-store-section" data-goals-scope="${store}" style="border-left: 4px solid ${ac.solid};">
@@ -16968,7 +17201,7 @@ function renderManagerGoalsMS() {
             </div>
             ${rows}
             <div class="goals-total-row">
-                <span class="goals-total-lbl">Total</span>
+                <span class="goals-total-lbl">Total<small class="goals-total-listed">${_goalsTotalListedHtml(dr)}</small></span>
                 <span id="goals-total-target-${store}" class="goals-total-val target">0</span>
                 <span id="goals-total-actual-${store}" class="goals-total-val actual">0</span>
             </div>
@@ -17013,6 +17246,10 @@ function recomputeGoalDisplaysMS() {
             weekTotal += weekVal;
         });
 
+        const tp = _goalsPaintTemp('-' + store);
+        todayTotal += tp.today;
+        weekTotal += tp.week;
+
         const tEl = document.getElementById(`goals-total-target-${store}`);
         if (tEl) tEl.innerText = todayTotal;
         const wEl = document.getElementById(`goals-total-actual-${store}`);
@@ -17049,6 +17286,8 @@ async function saveGoalsDataMS(silent = false) {
                 payloadEmployees.push({ employee: emp, role: role, goal: goal, result: result });
             }
         });
+        const tempRow = _goalsTempPayload('-' + store);
+        if (tempRow) payloadEmployees.push(tempRow);
 
         try {
             // See saveGoalsData — don't let our own broadcast bounce back.
@@ -17104,9 +17343,9 @@ async function saveGoalsDataMS(silent = false) {
 // fairly. Someone who spent it on the buy counter is not marked down for a low
 // count; a lister who fell short stands out.
 //
-// Data is store-targets ?action=roleweeks (see the note there). Listings are the
-// weekly KPI, because the daily result column is never filled in — which is
-// also why there is no per-day listed figure to show, only per-week.
+// Data is store-targets ?action=roleweeks (see the note there). Listings are
+// each person's daily Day End Report result summed to the week, from
+// 2026-08-03 (the weekly KPI before that). The temp's row shows as "Temp".
 //
 // PEOPLE ARE SCORED ACROSS THE MARKET. A floater's KPI is filed under one store
 // for the whole week, so his row sums goals and listings from every store in the
@@ -17730,7 +17969,7 @@ function levelUpHtml(history, target) {
 
     return `
         <div class="lu-head"><span class="lu-title">Last 4 Weeks</span>
-        <span class="lu-sub">listed of goal &middot; % of what you were staffed for</span></div>
+        <span class="lu-sub">Listed of goal &middot; % of what you were staffed for</span></div>
         <div class="lu-weeks">${bars}</div>`;
 }
 
@@ -33434,7 +33673,7 @@ function _onClaimReasonChange() {
 // the form is up, Claims stays the lit tab, because that is where Cancel and Save
 // both land.
 function switchClaimsTab(tab) {
-    ['new', 'view', 'mismatch', 'returns', 'cases'].forEach(t => {
+    ['new', 'view', 'mismatch', 'returns', 'cases', 'payments'].forEach(t => {
         const b = document.getElementById(`claims-tab-${t}`);
         const p = document.getElementById(`claims-panel-${t}`);
         if (b) b.classList.toggle('active', t === tab || (tab === 'new' && t === 'view'));
@@ -33447,7 +33686,7 @@ function switchClaimsTab(tab) {
     if (tab === 'view') fetchMyClaims();
     // openClaimsModal already started a load (for the tab badges); only fetch
     // again if that one has finished, and without re-asking eBay.
-    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases') {
+    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases' || tab === 'payments') {
         if (_holdLoading.mgr) renderHoldItems('mgr');
         else loadHoldItems('mgr', { sync: !_holdData.mgr });
     }
@@ -33877,6 +34116,14 @@ async function saveEscalation(id) {
 //  ROLLED OUT ONE STORE AT A TIME. The tabs stay hidden (display:none in the
 //  markup) until the server says one of this user's stores is rolled out.
 //
+//  PAYMENTS (0119, Ethan 2026-09-28: "I would call the tab Payments"). Shopify
+//  orders we have not been paid for — a card authorization about to run out,
+//  or one that already has, or a partial payment. The CFO's month-end list had
+//  two of these with no eBay side at all, so no other tab could ever show them.
+//  Normal authorized orders are held back by the server until the card is close
+//  to expiring (2 days — Ethan kept that on 2026-09-28), and the tab does not
+//  count them: they are normal, and he had the line saying so taken off.
+//
 //  Read-only against the marketplaces: nothing here refunds, responds to or
 //  closes anything on eBay or Shopify. That is done on the sites, by hand.
 // =========================================================
@@ -33933,6 +34180,16 @@ const _HOLD_STATE = {
 // waiting is something the site is doing, and reads as though it were the site's
 // move. The reply is OURS, and the chip should say so.
 function _holdStateLabel(type, it, s) {
+    // 0119. A card that can still be charged has a day it stops being chargeable,
+    // and that day is the label; one that can't be charged any more says so.
+    if (type === 'payment') {
+        if (it.state === 'needs_reply') {
+            if (it.state_note === 'resolution_disputed') return 'Marked resolved — Shopify can still charge it';
+            return _holdPaymentExpiresToday(it) ? 'Card expires today' : 'Charge the card soon';
+        }
+        if (it.state === 'due') return 'Card expired — not collected';
+        return s.label;
+    }
     if (it.state === 'needs_reply') {
         // eBay takes no late reply, so once the window has shut the honest label
         // is not "needs a reply" — nothing anyone presses brings it back.
@@ -33954,6 +34211,13 @@ function _holdStateLabel(type, it, s) {
 // heading groups them; this chip is what tells you on a card whose heading has
 // scrolled off, and it is the first thing on the row for that reason.
 function _holdKindChip(type, it) {
+    // The CFO's own words for these two, so his list and this tab read alike.
+    if (type === 'payment') {
+        const fs = String(it.financial_status || '');
+        if (fs === 'PARTIALLY_PAID') return 'Partially paid';
+        if (fs === 'PENDING') return 'Payment pending';
+        return it.capturable ? 'Card authorized' : 'Card expired';
+    }
     if (type === 'dispute') {
         if (it.source === 'ebay') return 'Payment dispute';
         return it.dispute_type === 'INQUIRY' ? 'Bank inquiry' : 'Chargeback';
@@ -34000,7 +34264,8 @@ const _holdItemKey = entry => _holdKeyFor(entry.type, entry.it);
 // One place that knows which column is an item's key, because three types now
 // use three different ones and getting it wrong silently posts against nothing.
 const _holdKeyFor = (type, it) =>
-    type === 'mismatch' ? it.issue_key : type === 'dispute' ? it.dispute_key : it.case_key;
+    type === 'mismatch' ? it.issue_key : type === 'dispute' ? it.dispute_key
+    : type === 'payment' ? it.order_key : it.case_key;
 const _holdDelivered = it => /DELIVERED/i.test(String(it.tracking_status || ''));
 // Returns run delivered → on its way back → not shipped yet → needs a label
 // (Ethan, 2026-09-22): the ones closest to a refund first, the ones we have not
@@ -34031,7 +34296,7 @@ const _holdKeyOf = e => `${e.type}|${_holdKeyFor(e.type, e.it)}`;
 
 async function loadHoldItems(ctx, opts = {}) {
     const stores = _holdStores(ctx);
-    const wraps = ['mismatch', 'returns', 'cases'].map(t => _holdWrap(ctx, t)).filter(Boolean);
+    const wraps = ['mismatch', 'returns', 'cases', 'payments'].map(t => _holdWrap(ctx, t)).filter(Boolean);
     if (!stores.length) { _holdNotLive(ctx); return; }
     if (!_holdData[ctx]) wraps.forEach(w => { w.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading…</div>'; });
     _holdLoading[ctx] = true;
@@ -34077,11 +34342,12 @@ const _HOLD_TAB_NOUN = {
     mismatch: 'Refund mismatches',
     returns: 'eBay returns',
     cases: 'eBay cases and disputes',
+    payments: 'Unpaid Shopify orders',
 };
 function _holdNotLive(ctx) {
     const mine = _holdStores(ctx);
     const who = mine.length ? mine.join(' and ') : 'your store';
-    ['mismatch', 'returns', 'cases'].forEach(t => {
+    ['mismatch', 'returns', 'cases', 'payments'].forEach(t => {
         const w = _holdWrap(ctx, t);
         if (!w) return;
         w.innerHTML = `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600; line-height:1.7;">
@@ -34095,7 +34361,7 @@ function _holdNotLive(ctx) {
 function _holdDueCounts(ctx) {
     const d = _holdData[ctx];
     const need = x => _HOLD_VIEWS.due.states.includes(x.state);
-    if (!d) return { mismatch: 0, returns: 0, cases: 0 };
+    if (!d) return { mismatch: 0, returns: 0, cases: 0, payments: 0 };
     const due = (d.cases || []).filter(need);
     return {
         mismatch: (d.mismatches || []).filter(need).length,
@@ -34103,11 +34369,12 @@ function _holdDueCounts(ctx) {
         // Disputes live on this tab too, and an unanswered one is the most
         // expensive thing the badge can be counting.
         cases: due.filter(c => !_holdIsReturn(c)).length + (d.disputes || []).filter(need).length,
+        payments: (d.payments || []).filter(need).length,
     };
 }
 function _holdPaintBadges(ctx) {
     const n = _holdDueCounts(ctx);
-    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases]].forEach(([t, v]) => {
+    [['mismatch', n.mismatch], ['returns', n.returns], ['cases', n.cases], ['payments', n.payments]].forEach(([t, v]) => {
         const b = document.getElementById(`hold-${ctx}-badge-${t}`);
         if (!b) return;
         b.textContent = v ? String(v) : '';
@@ -34145,6 +34412,24 @@ function renderHoldItems(ctx) {
     // outside deadline and the only kind that is LOST BY DEFAULT if nobody
     // looks — on the first read, 8 of 13 open ones had no response at all.
     if (cw) cw.innerHTML = _holdToolbar(ctx, 'ebay_case') + _holdSyncLine(d) + _holdCaseSections(ctx, d, all);
+    // Payments (0119): Shopify orders we have not been paid for. Its own tab,
+    // because nothing here involves eBay and the fix is always on Shopify.
+    const pw = _holdWrap(ctx, 'payments');
+    if (pw) pw.innerHTML = _holdToolbar(ctx, 'payment') + _holdPaymentSyncLine(d) + _holdList(ctx, 'payment', d.payments || [], null);
+}
+
+// Payments are read from Shopify only, so a failure says Shopify — the eBay
+// line above would send someone to re-authorise the wrong site.
+//
+// There is deliberately NO line counting the orders held back until their card
+// is close to running out. There was one ("13 more orders are authorized and
+// not shipped yet — normal…") and Ethan had it taken off on 2026-09-28: those
+// orders are normal, and a line about them on every open is noise.
+function _holdPaymentSyncLine(d) {
+    const bad = (d.paymentSync || []).filter(r => !r.ok);
+    const age = _holdAgeLine(d.paymentSync, 'Shopify');
+    if (!bad.length) return age;
+    return age + `<div style="font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ Couldn't read Shopify payments for ${bad.map(r => escapeHtml(r.store_code)).join(', ')} — showing the last list that loaded. ${escapeHtml(bad[0].detail || '')}</div>`;
 }
 
 // FOUR DIFFERENT THINGS SHARE THIS TAB, and Ethan asked for them to stop looking
@@ -34285,7 +34570,28 @@ function _holdSyncLine(d) {
             Object.entries(by).map(([site, ss]) => `${escapeHtml(site)} for ${ss.map(escapeHtml).join(', ')}`).join('; ')
         }. ${escapeHtml(badD[0].detail || '')}</div>`;
     }
-    return html;
+    // AGE, not just failure. A read that never ran leaves the last ok=true row in
+    // place, so "no warning" used to be indistinguishable from "fresh". The OLDEST
+    // read across the three sources is the one that decides it: a list is only as
+    // current as its stalest half. Past _HOLD_STALE_H it turns red, and the
+    // morning and 4pm mails say the same thing (claims-disputes-email).
+    return html + _holdAgeLine([...rows, ...(d.disputeSync || []), ...(d.paymentSync || [])], 'eBay and Shopify');
+}
+const _HOLD_STALE_H = 6;
+
+// The age half of both sync lines. Payments passes only its own Shopify rows,
+// so its tab never blames eBay for a read eBay had no part in.
+function _holdAgeLine(syncRows, sites) {
+    const times = (syncRows || []).map(r => Date.parse(r.synced_at)).filter(isFinite);
+    if (!times.length) return '';
+    const h = (Date.now() - Math.min(...times)) / 3600000;
+    const ago = h < 1 ? Math.max(1, Math.round(h * 60)) + ' min ago'
+        : h < 48 ? Math.round(h) + ' hour' + (Math.round(h) === 1 ? '' : 's') + ' ago'
+        : Math.round(h / 24) + ' days ago';
+    const were = sites.indexOf(' and ') >= 0 ? 'were' : 'was';
+    return h > _HOLD_STALE_H
+        ? `<div style="font-size:12px; color:#b3261e; background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ ${escapeHtml(sites)} ${were} last read ${escapeHtml(ago)}. Anything newer is not on this list yet. Press Refresh, and tell Ethan if this stays red.</div>`
+        : `<div style="font-size:11.5px; color:#94a3b8; margin-bottom:10px;">${escapeHtml(sites)} last read ${escapeHtml(ago)}.</div>`;
 }
 
 function _holdList(ctx, type, items, casesByOrder, opts) {
@@ -34311,16 +34617,26 @@ function _holdList(ctx, type, items, casesByOrder, opts) {
         rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank
             || (a.needs_response ? due(a) - due(b) : at(b) - at(a)));
     }
+    // Payments: the card that runs out first, then the ones we can no longer
+    // charge, oldest first — the oldest uncollected order is the likeliest to be
+    // on the CFO's month-end list.
+    else if (type === 'payment') {
+        const when = it => new Date((it.capturable ? it.auth_expires_at : it.ordered_at) || 0).getTime();
+        rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank
+            || (b.capturable ? 1 : 0) - (a.capturable ? 1 : 0) || when(a) - when(b));
+    }
     else rows.sort((a, b) => (_HOLD_STATE[a.state] || _HOLD_STATE.due).rank - (_HOLD_STATE[b.state] || _HOLD_STATE.due).rank || at(a) - at(b));
     if (!rows.length) {
         const empty = returns ? 'No open returns right now.'
             : v.show === 'due'
             ? (type === 'mismatch' ? 'Nothing needs attention — eBay and Shopify agree, or every open one is checked in.'
                : type === 'dispute' ? 'No dispute needs a reply from us.'
+               : type === 'payment' ? 'No card is close to running out, and nothing is left uncollected.'
                : 'Nothing needs attention on eBay right now.')
             // Status Changed/Claim Open: say what would be here, not "this view"
             : (type === 'mismatch' ? 'Nothing is checked in or waiting on an insurance claim.'
                : type === 'dispute' ? 'No dispute is answered and waiting on a decision.'
+               : type === 'payment' ? 'No unpaid order is checked in or resolved.'
                : 'Nothing is checked in or waiting on a claim.');
         // A section with nothing in THIS view says nothing at all — its heading
         // is dropped by the caller too. Four headings each followed by "nothing
@@ -34386,6 +34702,14 @@ const _holdUnentity = t => String(t || '')
     .replace(/&#(\d+);/g, (m, n) => String.fromCharCode(Number(n)))
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 const _holdAge = iso => { const n = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)); return `${n} day${n === 1 ? '' : 's'} ago`; };
+// A card authorization runs out at a TIME, not end of day — #MO01-9799's was
+// 4:57pm Central on its last day — so the time is shown, in Central, which is
+// where every store is. "Expires Sep 28" alone reads as "any time today".
+const _HOLD_CHI_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
+const _holdChiWhen = iso => { const x = new Date(iso); return isNaN(x.getTime()) ? ''
+    : x.toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+const _holdPaymentExpiresToday = it => !!it.auth_expires_at
+    && _HOLD_CHI_DAY.format(new Date(it.auth_expires_at)) === _HOLD_CHI_DAY.format(new Date());
 
 function _holdCaseTitle(it) {
     if (it.kind === 'inquiry') return 'Item not received';
@@ -34484,6 +34808,49 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         } else if (st === 'settled') {
             extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${escapeHtml(_holdPretty(it.status_raw))}${it.closed_at ? ` · ${_holdDate(it.closed_at)}` : ''}.</div>`;
         }
+    } else if (type === 'payment') {
+        // 0119. A Shopify order we have not been paid for. The item leads, like
+        // the eBay cards, because that is what the store has on the shelf; the
+        // subtitle says which of the CFO's two problems this is.
+        const fs = String(it.financial_status || '');
+        const partial = fs === 'PARTIALLY_PAID';
+        title = it.item_title ? escapeHtml(it.item_title) : escapeHtml(it.order_name || 'Shopify order');
+        subtitle = it.capturable
+            ? 'Authorized, not charged yet — Shopify charges the card when the order is fulfilled'
+            : partial ? 'Partly paid — the rest of the order was never charged'
+            : fs === 'PENDING' ? "Waiting on the customer's payment"
+            : 'The card authorization ran out before the order was fulfilled';
+        const exp = it.auth_expires_at;
+        const soon = exp && (new Date(exp).getTime() - Date.now()) < 2 * 86400000;
+        const when = exp
+            ? (it.capturable
+                ? `<span style="white-space:nowrap; ${soon ? `color:${_HOLD_C.red.fg}; font-weight:800;` : 'font-weight:700;'}">Card expires ${escapeHtml(_holdChiWhen(exp))}</span>`
+                : `<span style="white-space:nowrap; color:${_HOLD_C.red.fg}; font-weight:800;">Card expired ${_holdDate(exp)}</span>`)
+            : '';
+        const shop = CB_SHOP_DOMAINS[it.store_code];
+        const link = shop && it.order_id ? `https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/orders/${encodeURIComponent(it.order_id)}` : '';
+        const from = { web: 'Online store', pos: 'POS', shopify_draft_order: 'Draft order' }[it.source_name] || '';
+        facts = [
+            when,
+            it.order_name ? kv('Order', `<b>${escapeHtml(it.order_name)}</b>${siteCopyBtn(it.order_name, 'Shopify order')}`) : '',
+            Number(it.total) !== Number(it.amount) ? kv('Order total', _holdMoney(it.total)) : '',
+            Number(it.received) > 0 ? kv('Collected', _holdMoney(it.received)) : '',
+            it.ordered_at ? kv('Ordered', `${_holdDate(it.ordered_at)} · ${_holdAge(it.ordered_at)}`) : '',
+            it.fulfillment_status ? kv('Fulfilment', escapeHtml(_holdPretty(it.fulfillment_status))
+                + (Number(it.unfulfilled_items) > 0 ? ` · ${Number(it.unfulfilled_items)} not shipped` : '')) : '',
+            from ? kv('From', escapeHtml(from)) : '',
+            link ? `<a href="${link}" target="_blank" rel="noopener" style="font-weight:800; color:#1d4ed8; white-space:nowrap;">Open in Shopify ↗</a>` : '',
+        ];
+        if (st === 'needs_reply' && it.state_note !== 'resolution_disputed') {
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>Shopify can charge this card until ${escapeHtml(_holdChiWhen(exp) || 'the authorization runs out')}</b> — after that it can't. Fulfil the order (Shopify charges the card when it ships), or cancel it if it isn't going. Either clears this on the next read. It can't be checked in until then.</div>`;
+        } else if (st === 'due' || st === 'checked') {
+            const owed = partial
+                ? `${_holdMoney(it.received)} of ${_holdMoney(it.total)} was collected; the ${_holdMoney(it.amount)} left was never charged. `
+                : '';
+            extra = `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};"><b>Shopify can't charge this card any more</b>${exp ? ` — the authorization ran out ${_holdDate(exp)}` : ''}. ${owed}Collect it another way (send the customer an invoice from the order, or take payment in store), or cancel or refund what didn't ship. Shopify showing it paid or cancelled clears this; otherwise mark it resolved and say what happened.</div>`;
+        } else if (st === 'settled') {
+            extra = `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${it.outcome ? `Shopify: ${escapeHtml(_holdPretty(it.outcome))}` : 'Nothing owed'}${it.closed_at ? ` · ${_holdDate(it.closed_at)}` : ''} — nothing to do.</div>`;
+        }
     } else {
         // Seller Hub leads with the item, so the card does too; the kind of case
         // moves under it.
@@ -34577,9 +34944,14 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
         const days = ((_holdData[ctx] || {}).resolutionGraceDays) || 2;
         const since = it.resolution_disputed_since;
         const age = since ? Math.floor((Date.now() - new Date(since).getTime()) / 86400000) : 0;
-        const site = type === 'dispute' ? (it.source === 'ebay' ? 'eBay' : 'Shopify') : 'eBay';
+        const site = type === 'dispute' ? (it.source === 'ebay' ? 'eBay' : 'Shopify') : type === 'payment' ? 'Shopify' : 'eBay';
+        // A payment has nothing to "respond" to: what Shopify still shows is a
+        // card it can charge and an order nobody charged or cancelled.
+        const still = type === 'payment'
+            ? 'Shopify can still charge this card — the order was not charged or cancelled.'
+            : `${site} still shows no response from us.`;
         said += `<div style="font-size:12px; background:${_HOLD_C.red.bg}; border:1px solid ${_HOLD_C.red.line}; border-radius:8px; padding:8px 10px; margin-top:8px; color:${_HOLD_C.red.fg};">
-            <b>${escapeHtml(rv && rv.by_name || 'Someone')} marked this resolved${since ? ` on ${_holdDate(since)}` : ''}, but ${escapeHtml(site)} still shows no response from us.</b>
+            <b>${escapeHtml(rv && rv.by_name || 'Someone')} marked this resolved${since ? ` on ${_holdDate(since)}` : ''}, but ${escapeHtml(still)}</b>
             ${rv && rv.note ? `<div style="margin-top:2px; font-weight:600;">“${escapeHtml(rv.note)}”</div>` : ''}
             <div style="margin-top:4px;">If it really is handled, ${escapeHtml(site)} will say so on the next read and this clears itself. If it isn't, answer it now${age >= days ? ' — this has already gone to the DM.' : ` — after ${days} day${days === 1 ? '' : 's'} it goes to the DM.`}</div>
         </div>`;
@@ -34599,7 +34971,7 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
     } else if (type === 'ebay_case' && it.is_open && it.seller_replied_at) {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">We answered eBay ${_holdDate(it.seller_replied_at)} — waiting on the buyer.</div>`;
     }
-    if (st === 'settled' && !it.claim && type !== 'dispute') {
+    if (st === 'settled' && !it.claim && type !== 'dispute' && type !== 'payment') {
         said += `<div style="font-size:11.5px; color:#64748b; margin-top:6px;">${type === 'mismatch'
             ? `Both sites agree now${it.resolved_at ? ' (' + _holdDate(it.resolved_at) + ')' : ''} — nothing to do.`
             : `Closed on eBay${it.closed_at ? ' (' + _holdDate(it.closed_at) + ')' : ''}${inr && it.outcome === 'no_refund' ? ' — no refund to the buyer.' : '.'}`}</div>`;
@@ -34641,8 +35013,11 @@ function _holdCard(ctx, type, it, multi, casesByOrder, opts) {
             <textarea id="hold-note-${ctx}-${idx}" rows="2" class="form-input-lg" style="width:100%; box-sizing:border-box; resize:vertical;"
                 placeholder="${type === 'mismatch' ? 'e.g. Won the Shopify insurance claim SHPJG-0709… — money recovered, no Shopify refund needed'
                     : type === 'dispute' ? 'e.g. Refunded the buyer and accepted it — cheaper than losing the chargeback fee too'
+                    : type === 'payment' ? 'e.g. Customer paid the $28.20 in store 9/29, receipt #…'
                     : 'e.g. Buyer shipped the return, tracking 1Z…; refund once it arrives'}"></textarea>
-            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${st === 'needs_reply'
+            <div style="font-size:11px; color:#64748b; margin:4px 0 8px;">${st === 'needs_reply' && type === 'payment'
+                ? `<b>Still open</b> is off the table while Shopify can still charge the card — fulfilling or cancelling the order is the fix, and the next read sees it. <b>Resolved</b> is recorded, but it stays on the list until Shopify agrees.`
+                : st === 'needs_reply'
                 ? (type === 'dispute'
                     ? (it.response_overdue
                         ? `The response window has closed, so there is nothing to check in. <b>Resolved</b> records what happened and needs a reason.`
@@ -34828,13 +35203,13 @@ async function _holdOpenClaim(ctx, idx) {
 // DM/CEO oversight view: the claims summary plus the same two tabs across
 // every rolled-out store.
 function switchOversightTab(tab) {
-    ['claims', 'mismatch', 'returns', 'cases'].forEach(t => {
+    ['claims', 'mismatch', 'returns', 'cases', 'payments'].forEach(t => {
         const b = document.getElementById(`ov-tab-${t}`);
         const p = document.getElementById(`ov-panel-${t}`);
         if (b) b.classList.toggle('active', t === tab);
         if (p) p.style.display = t === tab ? 'block' : 'none';
     });
-    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases') {
+    if (tab === 'mismatch' || tab === 'returns' || tab === 'cases' || tab === 'payments') {
         if (_holdLoading.ov) renderHoldItems('ov');
         else loadHoldItems('ov', { sync: !_holdData.ov });
     }
@@ -37520,6 +37895,10 @@ window.recomputeGoalDisplays = function() {
         weekTotal += weekVal;
     });
 
+    const tp = _goalsPaintTemp('');
+    todayTotal += tp.today;
+    weekTotal += tp.week;
+
     const todayEl = document.getElementById('goals-total-target');
     if (todayEl) todayEl.innerText = todayTotal;
     const weekEl = document.getElementById('goals-total-actual');
@@ -39726,6 +40105,11 @@ const EMAIL_LIST_GROUPS = [
             { key: 'processed_report', label: 'Processed Stats',
               desc: '8:10am — how many items each store listed yesterday and what '
                   + 'they were worth, off the Day End Report.' },
+            { key: 'record_watch_leadership', label: 'Company Records — Leadership',
+              desc: '6:40am, only on a morning a store broke or came within 5% of a record: daily '
+                  + 'buy or sell, or a monthly one once the Monthly Breakdown is in. Copied on every store\'s email.' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `record_watch_${s}`, label: `Company Records — ${s}`,
+              desc: `The ${s} manager and ASM: the same email, whenever it is about ${s}.` })),
             { key: 'usage_report', label: 'Site Usage',
               desc: 'Nightly 8pm, plus the Saturday and month-end summaries.' },
             { key: 'recycle_report', label: 'Recycle Month-End Report',
@@ -41397,6 +41781,8 @@ const JUMP_PLACES = [
       run: () => openClaimsTool('returns') },
     { id: 'sub-ebaycases', label: 'Cases & Disputes',  sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'ebay cases inquiry item not received dispute escalated',
       run: () => openClaimsTool('cases') },
+    { id: 'sub-payments', label: 'Payments', sub: 'Inside Claims & Disputes', kind: 'sub', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'payments unpaid shopify card authorization expiring expired partially paid capture',
+      run: () => openClaimsTool('payments') },
     // --- pages (visibility mirrors the nav link) ----------------------------
     { id: 'page-index',  label: 'QuickPortal',           sub: 'Main navigation', kind: 'page', page: 'index.html',      keys: 'home dashboard main portal' },
     { id: 'page-ops',    label: 'Operations',            sub: 'Main navigation', kind: 'page', page: 'operations.html', keys: 'operations ops' },
@@ -44962,6 +45348,14 @@ function _agRenderBubble(icon, title, bodyText) {
    night's Day End Report facts, decides on its own whether a
    store has earned a message, and writes a PENDING draft.
    NOTHING reaches a store until it is approved here.
+
+   Since 2026-09-29 that pending draft has NO TEXT. The kind
+   (praise / praise + nudge) and the numbers are there, but the
+   sentence is only written -- one paid model call -- when he
+   presses Draft on that card. Ethan's call, to save usage: he
+   reads the stats and picks which stores are worth it each
+   morning. An empty message is the "not drafted yet" state;
+   there is no separate status for it.
    Approving inserts through the same store_comments shape the
    Send Store Comment tool uses, so read receipts, the green
    bubble and the reads tab behave identically.
@@ -45181,10 +45575,17 @@ async function checkDailyBriefDrafts() {
         summary = 'Could not be generated this morning. No store has been messaged.';
         sig = 'fail|' + _dbDate + '|' + errs.join('|');
     } else {
-        const stores = pending.map(d => d.store).join(', ');
-        title = 'Store Messages to Approve';
-        summary = `${pending.length} draft${pending.length === 1 ? '' : 's'} ready for ${stores}`
-            + '. Nothing goes out to a store until you approve it.';
+        // Short and nameless on purpose (Ethan 2026-09-29): the feed row only has
+        // to say there is a choice waiting. Which stores, and what kind, is on the
+        // cards one click away.
+        const n = pending.length, undrafted = pending.filter(d => !_dbHasText(d)).length;
+        const pl = (k, w) => k + ' ' + w + (k === 1 ? '' : 's');
+        // One title whichever stage it is at (Ethan 2026-09-29); only the line
+        // under it moves from "pick" to "approve".
+        title = 'Store Messages to Review';
+        summary = undrafted
+            ? pl(n, 'store') + ' earned a message today. Nothing is drafted until you pick.'
+            : pl(n, 'draft') + ' ready. Nothing goes out until you approve it.';
         sig = 'pend|' + pending.map(d => d.id).join(',');
     }
     if (t) {
@@ -45195,6 +45596,10 @@ async function checkDailyBriefDrafts() {
         // replaces a draft breaks through a snooze -- it is different work.
         t.dataset.sig = sig;
         if (failed) t.dataset.failed = '1'; else delete t.dataset.failed;
+        // The feed row's title and chip come from here too, so the row and the
+        // sentence under it cannot disagree about whether this is a pick or an OK.
+        t.dataset.title = title;
+        t.dataset.due = failed ? 'Broken' : 'Review';
     }
     b.style.display = 'flex';
     _dbRepaintOpen();
@@ -45221,7 +45626,7 @@ async function openDailyBriefReview() {
 // would throw away the caret and the edit. Only a status change, a new run or a
 // busy flag is worth touching the DOM for.
 function _dbSig() {
-    return _dbDrafts.map(d => d.id + ':' + d.status).join('|')
+    return _dbDrafts.map(d => d.id + ':' + d.status + (_dbHasText(d) ? ':t' : '')).join('|')
         + '#' + (_dbRun ? [_dbRun.ran_at, _dbRun.drafted, _dbRun.ok].join(':') : 'norun')
         + '#' + Object.keys(_dbBusy).filter(k => _dbBusy[k]).join(',')
         // Crossing noon retires every pending draft without any row changing, so
@@ -45243,6 +45648,9 @@ function _dbRenderReview(force) {
     const pending = past ? [] : _dbDrafts.filter(d => d.status === 'pending');
     const decided = past ? _dbDrafts.slice() : _dbDrafts.filter(d => d.status !== 'pending');
     const refDate = (_dbDrafts[0] && _dbDrafts[0].ref_date) || (_dbRun && _dbRun.ref_date) || '';
+    const undraftedN = pending.filter(d => !_dbHasText(d)).length;
+    // "Ready" = something to send: the model wrote it, or he typed his own.
+    const readyN = pending.filter(d => _dbSendText(d)).length;
 
     // --- banner: did the generator run, and did it work? ---
     let banner = '';
@@ -45268,12 +45676,15 @@ function _dbRenderReview(force) {
                 // "Drafts" capitalised: a line opening with a figure still starts a
                 // sentence. The feed row gets this from the central sentence-case fix
                 // in _samGatherReminders; this string never passes through it.
-                ? _samEsc(pending.length + ' Draft' + (pending.length === 1 ? '' : 's') + ' waiting on you. Edit anything before you send it.')
+                ? _samEsc(undraftedN
+                    ? pending.length + ' Store' + (pending.length === 1 ? '' : 's') + ' earned a message. Draft the ones worth sending, or write your own.'
+                    : pending.length + ' Draft' + (pending.length === 1 ? '' : 's') + ' waiting on you. Edit anything before you send it.')
                 : 'Nothing is waiting on you.'}</div>
         </div>
-        ${pending.length > 1 ? `<div class="dbr-head-btns">
-            <button class="dbr-btn ghost" onclick="_dbSkipAll()">Skip All ${pending.length}</button>
-            <button class="dbr-btn dbr-all" onclick="_dbApproveAll()">Approve All ${pending.length}</button>
+        ${(pending.length > 1 || undraftedN > 1 || readyN > 1) ? `<div class="dbr-head-btns">
+            ${pending.length > 1 ? `<button class="dbr-btn ghost" onclick="_dbSkipAll()">Skip All ${pending.length}</button>` : ''}
+            ${undraftedN > 1 ? `<button class="dbr-btn draft" onclick="_dbDraftAll()">Draft All ${undraftedN}</button>` : ''}
+            ${readyN > 1 ? `<button class="dbr-btn dbr-all" onclick="_dbApproveAll()">Approve All ${readyN}</button>` : ''}
         </div>` : ''}
     </div>`;
 
@@ -45284,7 +45695,7 @@ function _dbRenderReview(force) {
         const tint = (typeof STORE_TINTS === 'object' && STORE_TINTS[d.store]) || '#1f9d57';
         const k = KIND[d.kind] || [d.kind || 'Draft', 'grey'];
         const text = (_dbEdits[id] != null) ? _dbEdits[id] : String(d.message || '');
-        const busy = !!_dbBusy[id];
+        const busy = _dbBusy[id] || false;   // true = sending, 'draft' = model writing
         const n = text.trim().length;
         const edited = text.trim() !== String(d.message || '').trim();
         return `<div class="dbr-card">
@@ -45297,7 +45708,7 @@ function _dbRenderReview(force) {
             </div>
             <textarea class="dbr-msg" rows="2" ${busy ? 'disabled' : ''}
                 oninput="_dbOnEdit('${id}', this)"
-                placeholder="Write the message for ${_samEsc(d.store)}…">${_samEsc(text)}</textarea>
+                placeholder="${_dbHasText(d) ? 'Write the message for ' + _samEsc(d.store) + '…' : 'Not drafted yet. Press Draft Message, or write your own here.'}">${_samEsc(text)}</textarea>
             ${/* No "Fired On" line: the green cells in the strip below already say
                   which metrics caused the draft, and repeating them as prose was the
                   same information twice. `reason` is still written to comment_drafts
@@ -45305,7 +45716,8 @@ function _dbRenderReview(force) {
             ${_dbStripHtml(d.facts, d.signals)}
             <div class="dbr-actions">
                 <button class="dbr-btn ghost" ${busy ? 'disabled' : ''} onclick="_dbDecide('${id}','skipped')">Skip Today</button>
-                <button class="dbr-btn go" ${busy ? 'disabled' : ''} onclick="_dbDecide('${id}','approved')">${busy ? 'Sending…' : 'Approve &amp; Send'}</button>
+                ${_dbHasText(d) ? '' : `<button class="dbr-btn draft" ${busy ? 'disabled' : ''} onclick="_dbDraft('${id}')">${busy === 'draft' ? 'Drafting…' : 'Draft Message'}</button>`}
+                <button class="dbr-btn go" id="dbApprove-${id}" ${(busy || !n) ? 'disabled' : ''}${n ? '' : ' title="Draft it or type your own first"'} onclick="_dbDecide('${id}','approved')">${busy === true ? 'Sending…' : 'Approve &amp; Send'}</button>
             </div>
         </div>`;
     }).join('');
@@ -45367,6 +45779,14 @@ function _dbOnEdit(id, el) {
     const d = _dbDrafts.find(x => String(x.id) === String(id));
     const badge = document.getElementById('dbEdited-' + id);
     if (badge) badge.hidden = !(d && el.value.trim() !== String(d.message || '').trim());
+    // Nothing to send, nothing to approve: greyed until there is text, whether
+    // the model wrote it or he typed it. Toggled here because a keystroke never
+    // repaints the card (see _dbSig).
+    const ap = document.getElementById('dbApprove-' + id);
+    if (ap && !_dbBusy[id]) {
+        ap.disabled = !n;
+        if (n) ap.removeAttribute('title'); else ap.title = 'Draft it or type your own first';
+    }
 }
 
 // opts.silent: no confirm and no refetch -- used by Approve All, which confirms
@@ -45428,7 +45848,9 @@ async function _dbDecide(id, status, opts) {
 }
 
 async function _dbApproveAll() {
-    const pending = _dbDrafts.filter(d => d.status === 'pending');
+    // Undrafted stores with nothing typed are left alone -- not sent blank and
+    // not skipped, since he may still want to draft them after this.
+    const pending = _dbDrafts.filter(d => d.status === 'pending' && _dbSendText(d));
     if (!pending.length) return;
     // Every message in the confirm, in full. "Approve All" is the one control
     // here that can post to five stores from a single click, so it shows exactly
@@ -45475,6 +45897,66 @@ async function _dbSkipAll() {
     await checkDailyBriefDrafts();
     _dbRenderReview(true);
     if (failed) alert(`${done} skipped, ${failed} could not be skipped. The ones that failed are still waiting.`);
+}
+
+function _dbHasText(d) { return !!String((d && d.message) || '').trim(); }
+function _dbSendText(d) {
+    const id = String(d.id);
+    return ((_dbEdits[id] != null ? _dbEdits[id] : d.message) || '').trim();
+}
+
+// One store's sentence, written by the model now because he asked. The fn
+// refuses past noon and refuses to write twice, so a double click or a second
+// tab costs one call, not two.
+// opts.silent: no alerts and no refetch -- Draft All refetches once at the end.
+async function _dbDraft(id, opts) {
+    const silent = !!(opts && opts.silent);
+    if (_dbBusy[id]) return false;
+    const d = _dbDrafts.find(x => String(x.id) === String(id));
+    if (!d || d.status !== 'pending' || _dbHasText(d)) return false;
+    if (_dbPastWindow()) { _dbRenderReview(true); return false; }
+    // Typed his own already? Drafting would put the model's text in its place.
+    const typed = (_dbEdits[String(id)] || '').trim();
+    if (typed && (silent || !confirm(`Replace what you typed for ${d.store} with a drafted message?`))) return false;
+
+    _dbBusy[id] = 'draft';
+    _dbRenderReview();
+    // Our own write echoes back as a ping; the model call can take a while.
+    try { if (typeof _rtMute === 'function') _rtMute('dailyBrief', 30000); } catch (_) {}
+    let ok = false;
+    try {
+        const pin = sessionStorage.getItem('speeksUserPin') || '';
+        const r = await fetch(`${DAILY_BRIEF_URL}?action=draft`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ id: id })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || `Request failed (HTTP ${r.status})`);
+        d.message = String(j.message || '');
+        delete _dbEdits[String(id)];
+        ok = true;
+    } catch (e) {
+        if (!silent) alert(`Could not draft the ${d.store} message: ` + ((e && e.message) || 'unknown error'));
+    }
+    _dbBusy[id] = false;
+    _dbRenderReview(true);
+    if (!silent) checkDailyBriefDrafts();
+    return ok;
+}
+
+// Sequential on purpose: the fn shows each call the sentences already written
+// this morning so two stores do not get the same one, and it can only see the
+// ones that have finished. Cards he has typed into are left alone.
+async function _dbDraftAll() {
+    const todo = _dbDrafts.filter(d => d.status === 'pending' && !_dbHasText(d)
+        && !(_dbEdits[String(d.id)] || '').trim());
+    if (!todo.length) return;
+    let failed = 0;
+    for (const d of todo) { if (!(await _dbDraft(String(d.id), { silent: true }))) failed++; }
+    await checkDailyBriefDrafts();
+    _dbRenderReview(true);
+    if (failed) alert(`${todo.length - failed} drafted, ${failed} could not be. Try those again from their own card.`);
 }
 
 function startDailyBriefReminder() {
@@ -46423,9 +46905,9 @@ function _samReminderCfg() {
     const _dbT = document.getElementById('dailyBriefAlertBubbleText');
     const _dbFailed = !!(_dbT && _dbT.dataset && _dbT.dataset.failed);
     cfg.push({ key: 'dailyBrief', id: 'dailyBriefAlertBubble', text: 'dailyBriefAlertBubbleText',
-        title: _dbFailed ? 'Message Drafts Failed' : 'Store Messages to Approve',
+        title: (_dbT && _dbT.dataset && _dbT.dataset.title) || (_dbFailed ? 'Message Drafts Failed' : 'Store Messages to Review'),
         urgency: _dbFailed ? 1 : 3,
-        due: _dbFailed ? 'Broken' : 'Approve',
+        due: (_dbT && _dbT.dataset && _dbT.dataset.due) || (_dbFailed ? 'Broken' : 'Review'),
         cls: _dbFailed ? 'sam-due-amber' : 'sam-due-red',
         noSnooze: true, action: "openDailyBriefReview()" });
     // RETIRED 2026-08-17 — the weekly per-store totals are now set by the system
@@ -48287,10 +48769,10 @@ function _dmxLastWeekStart() {
 
 // The Monday `n` weeks before this one, as YYYY-MM-DD.
 //
-// The current week is deliberately NOT offered: Listed comes from the weekly KPI,
-// which isn't filed until the week is over, so an in-progress week has no result
-// to measure and every store read as a 0%. Two completed weeks is what this
-// screen can actually answer for.
+// Listed comes from the Day End Report now (store-targets, DAY_END_FROM), not
+// the weekly KPI, so the current week IS offered (2026-09-24): measured through
+// yesterday on both sides. Until then an in-progress week had no KPI to measure
+// and every store read 0%, which is why only finished weeks were offered.
 function _dmxWeeksBack(n) {
     const d = new Date(_dmxWeekDays().start);
     d.setDate(d.getDate() - 7 * n);
@@ -48355,6 +48837,14 @@ function _dmxEffChip(pct, emptyText) {
         + '</span>';
 }
 
+// Open days (Mon–Sat) from a week's Monday through a YYYY-MM-DD date, capped at
+// six. 0 when `through` is before the week starts — a Monday morning.
+function _dmxOpenDaysThrough(weekStart, through) {
+    const a = new Date(weekStart + 'T12:00:00'), b = new Date(through + 'T12:00:00');
+    const n = Math.floor((b - a) / 86400000) + 1;
+    return Math.max(0, Math.min(6, n));
+}
+
 function _dmxEfficiencyPane() {
     const week = _dmxCapWeek || _dmxLastWeekStart();
     const rows = _dmxCap[week];
@@ -48362,12 +48852,16 @@ function _dmxEfficiencyPane() {
 
     // Spell the actual dates out. "Last week" on its own is ambiguous the moment
     // someone opens this on a Monday morning.
-    const range = _dmxWeekRangeLabel(week) + (isThisWeek ? ' (in progress)' : '');
+    // For this week, say which day the figures run through: today has goals but
+    // no report until tonight, so the server measures through yesterday.
+    const thr = isThisWeek && rows && rows[0] && rows[0].through;
+    const thrLbl = thr ? new Date(thr + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' }) : '';
+    const range = _dmxWeekRangeLabel(week) + (isThisWeek ? (thrLbl ? ' (through ' + thrLbl + ')' : ' (in progress)') : '');
 
     // Two completed weeks. The nearer one is named by relation because that is
     // how anyone refers to it out loud; the older one is named by its dates,
     // because "two weeks ago" is a sentence people have to stop and decode.
-    const back1 = _dmxWeeksBack(1), back2 = _dmxWeeksBack(2);
+    const back1 = _dmxWeeksBack(1), back2 = _dmxWeeksBack(2), back0 = _dmxWeeksBack(0);
     const btn = (label, wk) => '<button type="button" class="dmx-goalset-b dmx-b-wk'
         + (week === wk ? '' : ' dmx-b-off') + '" onclick="dmxShowEfficiency(\'' + wk + '\')">'
         + escapeHtml(label) + '</button>';
@@ -48379,6 +48873,7 @@ function _dmxEfficiencyPane() {
         // Oldest on the left, so the pair runs in the direction time does.
         + btn(_dmxWeekRangeLabel(back2), back2)
         + btn('Last Week', back1)
+        + btn('This Week', back0)
         + '</div></div>';
 
     if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';
@@ -48401,17 +48896,27 @@ function _dmxEfficiencyPane() {
     rows.forEach(r => {
         // efficiency comes back as a ratio (1.08) or null when nothing was staffed.
         //
-        // ⚠️ An in-progress week has NO efficiency, because Listed comes from the
-        // weekly KPI and that is not filed until the week ends. The server
-        // faithfully returns 0/45 = 0, and printing that gave every store a red
-        // "Below target · 0%" — which read as the button being broken rather than
-        // as the week not being over. Suppress it and say which it is.
-        const pending = isThisWeek && !r.actual;
+        // This week is measured THROUGH YESTERDAY (r.through): Staffed For is the
+        // goals of those days only (adjustedToDate), so it lines up with Listed.
+        // A Monday has nothing yet — through is before the week starts — and
+        // prints dashes rather than a red 0%, the failure the old KPI version hit
+        // on every in-progress week.
+        const adj = (isThisWeek && r.adjustedToDate != null) ? r.adjustedToDate : r.adjusted;
+        const pending = isThisWeek && !adj;
         const pct = (pending || r.efficiency == null) ? null : Math.round(r.efficiency * 100);
         // Fewer than four days per person means most of the week carried no goal
         // at all, so the denominator is short and the ratio flatters. Flag it
         // rather than printing a number that reads as a verdict.
-        const thin = r.assignedDays > 0 && r.assignedDays < (r.people.length * 4);
+        //
+        // For THIS week the frame is the days so far, not six: judged on the
+        // full week, a Wednesday put "22/36 roles" on a store that had set
+        // every seat (Ethan's screenshot, 2026-09-24). daysIn counts Mon–Sat
+        // through the server's `through`, and the "four of six" bar scales
+        // with it. A finished week reads exactly as before.
+        const daysIn = (isThisWeek && r.through) ? _dmxOpenDaysThrough(week, r.through) : 6;
+        const setDays = (isThisWeek && r.assignedDaysToDate != null) ? r.assignedDaysToDate : r.assignedDays;
+        const slots = r.people.length * daysIn;
+        const thin = daysIn > 0 && setDays > 0 && setDays < (r.people.length * daysIn * 4 / 6);
         // Hours, Ceiling and Goal for this week were reconstructed from TODAY'S
         // roster, because the week finished before capacity snapshots existed
         // (migration 0093). They are the best available figures but they are not
@@ -48423,24 +48928,26 @@ function _dmxEfficiencyPane() {
             // Short form: "15 of 24 roles set" rendered wider than the column it
             // sits in and bled over both edges. The tooltip carries the sentence.
             + (thin ? '<span class="dmx-role" title="Roles were only set on '
-                + r.assignedDays + ' of this store’s ' + (r.people.length * 6) + ' person-days. '
+                + setDays + ' of this store’s ' + slots + ' person-days' + (daysIn < 6 ? ' so far' : '') + '. '
                 + 'A day with nobody in a seat carries no goal, so it drops out of Staffed For — '
                 + 'this store’s efficiency is measured against a shorter week than it worked.">'
-                + r.assignedDays + '/' + (r.people.length * 6) + ' roles</span>' : '')
+                + setDays + '/' + slots + ' roles</span>' : '')
             + '</td>'
             + '<td class="dmx-num">' + r.hours + '</td>'
-            + '<td class="dmx-num">' + r.adjusted + '</td>'
+            + '<td class="dmx-num">' + adj + '</td>'
             + '<td class="dmx-num dmx-mute">' + r.capacity + '</td>'
             + '<td class="dmx-num">' + r.planned + '</td>'
             + '<td class="dmx-num' + (pending ? ' dmx-mute' : '') + '">' + (pending ? '–' : r.actual) + '</td>'
             + '<td class="dmx-num">' + (pct == null ? '–' : pct + '%') + '</td>'
-            + '<td>' + _dmxEffChip(pct, pending ? 'KPI not filed yet' : 'No roles set') + '</td></tr>';
+            + '<td>' + _dmxEffChip(pct, pending ? 'No days in yet' : 'No roles set') + '</td></tr>';
     });
 
     const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
-    const dAdj = sum('adjusted'), dAct = sum('actual');
-    // Same rule as a row: an unfinished week has nothing to divide.
-    const dPending = isThisWeek && !dAct;
+    const dAdj = isThisWeek ? rows.reduce((a, r) => a + (Number(r.adjustedToDate != null ? r.adjustedToDate : r.adjusted) || 0), 0)
+                            : sum('adjusted');
+    const dAct = sum('actual');
+    // Same rule as a row: a week with no finished days has nothing to divide.
+    const dPending = isThisWeek && !dAdj;
     const dPct = (dPending || !dAdj) ? null : _dmxPct(dAct, dAdj);
     t += '<tr class="dmx-tot"><td class="dmx-cl">District</td>'
         + '<td class="dmx-num">' + sum('hours') + '</td>'
@@ -48449,7 +48956,7 @@ function _dmxEfficiencyPane() {
         + '<td class="dmx-num">' + sum('planned') + '</td>'
         + '<td class="dmx-num' + (dPending ? ' dmx-mute' : '') + '">' + (dPending ? '–' : dAct) + '</td>'
         + '<td class="dmx-num">' + (dPct == null ? '–' : dPct + '%') + '</td>'
-        + '<td>' + _dmxEffChip(dPct, dPending ? 'KPI not filed yet' : 'No roles set') + '</td></tr></tbody></table>';
+        + '<td>' + _dmxEffChip(dPct, dPending ? 'No days in yet' : 'No roles set') + '</td></tr></tbody></table>';
 
     // No explanatory paragraphs (user, 2026-08-10). The column headers carry the
     // meaning, and the "X of Y roles set" tag carries the one caveat they cannot.
@@ -50251,7 +50758,7 @@ function _dcWatchHtml() {
             return v > 0 ? 100 * (v - (Number(r.total_spent) || 0)) / v : null;
         }
         const g = goalOn[s + '|' + r.date] || 0;
-        return g > 0 ? 100 * (Number(r.devices_processed) || 0) / g : null;
+        return g > 0 ? 100 * _dcwListed(r) / g : null;
     };
     // The last OPEN day, not the judged day: on a Monday morning the judged
     // day is Sunday, when every store is shut.
@@ -50270,7 +50777,7 @@ function _dcWatchHtml() {
             + (Number(r.cust_conv_den) || 0) + ' customers converted';
         if (k === 'margin') return day + ': ' + _dcwMoney((Number(r.est_value) || 0) - (Number(r.total_spent) || 0))
             + ' of gross profit on ' + _dcwMoney(r.est_value) + ' bought';
-        return day + ': ' + (Number(r.devices_processed) || 0) + ' listed against a goal of '
+        return day + ': ' + _dcwListed(r) + ' listed against a goal of '
             + (goalOn[s + '|' + r.date] || 0);
     };
 
@@ -50503,6 +51010,18 @@ function _dcwModalPaint() {
     if (body) body.innerHTML = _dcwModalHtml(rows);
 }
 
+// What a store-day LISTED — the figure listing is judged on. district-watch
+// works it out (listedOf) and sends it as `listed`: the report's Total Listed
+// Devices from 2026-09-23, Devices Processed before the report carried one. The
+// fallbacks are for a response from a build that predates the field, so the
+// board keeps meaning what it meant rather than reading every day as zero.
+function _dcwListed(r) {
+    if (!r) return 0;
+    if (r.listed != null) return Number(r.listed) || 0;
+    if (r.listed_devices != null) return Number(r.listed_devices) || 0;
+    return Number(r.devices_processed) || 0;
+}
+
 // The last 7 days this store actually traded. NOT the last 7 calendar days:
 // every store is closed on Sunday, so a calendar week would always carry one
 // blank row that reads like a zero-conversion day.
@@ -50524,6 +51043,8 @@ function _dcwStoreDays(store) {
             lost: Number(r.devices_lost) || 0,
             noDeal: Number(r.no_deal_customers) || 0,
             processed: Number(r.devices_processed) || 0,
+            listed: _dcwListed(r),
+            listedKnown: r.listed_source ? r.listed_source === 'listed' : r.listed_devices != null,
             procValue: Number(r.processed_value) || 0,
             goal: goals[r.date] == null ? null : goals[r.date],
         }));
@@ -50697,7 +51218,8 @@ function _dcwListingTab(rows, cfg) {
     // applies. A day nobody filled the rota in for is not a day the store
     // listed nothing, and counting it would flatter or damn the store at random.
     const withGoal = rows.filter(r => r.goal != null && r.goal > 0);
-    const P = withGoal.reduce((a, r) => a + r.processed, 0);
+    // Listed, not processed — the engine's listedOf(). See _dcwListed.
+    const P = withGoal.reduce((a, r) => a + r.listed, 0);
     const G = withGoal.reduce((a, r) => a + r.goal, 0);
     const pctGoal = G ? (P / G) * 100 : null;
     const short = G ? Math.round(G - P) : null;
@@ -50713,36 +51235,44 @@ function _dcwListingTab(rows, cfg) {
                    short == null ? '&mdash;' : String(Math.abs(short)),
                    withGoal.length + ' of ' + rows.length + ' days had a goal set', sev)
         + _dcwTile('Value processed', _dcwMoney(val),
-                   rows.reduce((a, r) => a + r.processed, 0) + ' devices in total', '');
+                   rows.reduce((a, r) => a + r.listed, 0) + ' listed in total', '');
 
-    let body = '<thead><tr><th>Day</th><th>Processed</th><th>Value</th>'
+    // Listed only (Ethan, 2026-09-24: "get rid of processed and just use the
+    // line items"). A Processed column sat beside it for a day while the two
+    // were compared; they matched person for person. A day from before the
+    // report had a listed count still shows its processed figure — that is the
+    // number the engine counted for it — muted, with a hover saying so.
+    let body = '<thead><tr><th>Day</th><th>Listed</th><th>Value</th>'
         + '<th>Goal</th><th class="dcw-th-bar">Against goal &middot; 100%</th></tr></thead><tbody>';
     _dcwNewestFirst(rows).forEach(r => {
-        const p = (r.goal != null && r.goal > 0) ? (r.processed / r.goal) * 100 : null;
+        const p = (r.goal != null && r.goal > 0) ? (r.listed / r.goal) * 100 : null;
         const s = p == null ? '' : (p >= 100 ? 'g' : (p >= 70 ? 'w' : 'b'));
+        const listedCell = r.listedKnown
+            ? '<td>' + r.listed + '</td>'
+            : '<td class="dc-muted" title="The Day End Report had no listed count before 23 Sep — devices processed is counted for this day">'
+              + r.listed + '</td>';
         body += '<tr><td class="dcw-td-day">' + escapeHtml(_dcwDay(r.date)) + '</td>'
-            + '<td>' + r.processed + '</td><td>' + _dcwMoney(r.procValue) + '</td>'
+            + listedCell + '<td>' + _dcwMoney(r.procValue) + '</td>'
             + '<td class="' + (r.goal ? '' : 'dc-muted') + '">' + (r.goal == null ? '&mdash;' : r.goal) + '</td>'
             + '<td class="dcw-td-bar">' + _dcwBar(p, 100, 150, s) + '</td></tr>';
     });
     body += '</tbody>';
 
-    // ⚠️ THIS HOVER IS LOAD-BEARING AND MUST NOT BE DROPPED. Listing became a
-    // flagged metric in 0099, but the measurement did not change: it is the Day
-    // End Report's processed count, which runs 15–30% BELOW the manager-filed
-    // weekly KPI that the DM's Store Efficiency board scores (0095). The two
-    // screens will disagree, both defensibly, and this sentence is the only
-    // thing on either of them that explains why.
+    // The hover says where Listed comes from. It used to warn that this tab
+    // "reads harsher" than Store Efficiency because the report ran 15–30% below
+    // the manager-filed KPI (0095). Re-checked 2026-09-24 over 35 store-weeks:
+    // the two agree exactly on 29 and the rest are hand-entry slips, so that
+    // claim was wrong — and Store Efficiency reads the same report now anyway.
     return _dcwShell(head, body,
         short == null
-            ? '<b>' + rows.reduce((a, r) => a + r.processed, 0) + '</b> devices processed &middot; no goals set to judge against'
+            ? '<b>' + rows.reduce((a, r) => a + r.listed, 0) + '</b> listed &middot; no goals set to judge against'
             : '<b>' + P + '</b> listed against <b>' + G + '</b> staffed for'
               + (short > 0 ? ' &middot; <b>' + short + '</b> devices short' : ' &middot; goal cleared'),
         'Counted against each day\u2019s staffed goal, and only on '
         + 'days that had one set. '
-        + 'The processed figure comes from the Day End Report, which runs 15–30% below the '
-        + 'manager-filed weekly KPI the Store Efficiency board scores — so this reads harsher '
-        + 'than that board does, on the same store, in the same week.');
+        + 'Listed is the Day End Report’s Total Listed Devices from 23 Sep; before that '
+        + 'the report had only devices processed, which is counted for those days. Store '
+        + 'Efficiency counts the same report.');
 }
 
 // ============================================================================

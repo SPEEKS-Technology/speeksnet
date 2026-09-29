@@ -1,0 +1,30 @@
+-- 0115 — day_end_facts.listed_devices: listings created, per store per day
+--
+-- WHY
+-- On 2026-09-23 PayMore added "Total Listed Devices" to the Day End Report's
+-- Team Production table, ahead of Devices Processed — asked for by Ethan, so
+-- the report counts listings created rather than devices processed. That is the
+-- figure Listing Goals and the DM matrix's listing verdict have been missing:
+-- both currently lean on devices_processed, which 0095 records running 15-30%
+-- below the manager-filed weekly kpi_entries.listed_count at every store.
+--
+-- The new column also broke the Team Production parse the same night: the old
+-- reader matched a fixed header and read cells by fixed position, so the
+-- 2026-09-23 rows landed with team_production NULL at all five stores and no
+-- warning. sales-email-import.gs now reads columns off the header and warns
+-- when the section is present but yields nothing; each member's row in
+-- team_production gains a `listed` key from this date on.
+--
+-- WHAT THIS HOLDS
+-- The store's day: a Processed Stats card if the template ever grows one, else
+-- the sum of the per-person `listed` figures. Summing is safe because Team
+-- Production's Devices Processed summed exactly to the store card on all 225
+-- store-days checked (Aug–Sep 2026) — the table is the whole store.
+--
+-- NULL, never 0, before 2026-09-23. A 0 would read as a day nobody listed, and
+-- every consumer has to fall back to devices_processed on those days anyway.
+--
+-- Nothing reads this column yet. Switching judgeListing (district-watch) onto
+-- it is its own change — see the listing comments there and 0095 before doing it.
+
+alter table day_end_facts add column if not exists listed_devices int;

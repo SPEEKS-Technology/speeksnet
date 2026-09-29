@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260923f">
+  <link rel="stylesheet" href="styles.css?v=20260929a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260923f" defer></script>
+  <script src="speeks.js?v=20260929a" defer></script>
 </head>
 <body class="preload">
 
@@ -187,6 +187,7 @@
             <button id="claims-tab-mismatch" class="tab-btn" onclick="switchClaimsTab('mismatch')">Mismatches<span id="hold-mgr-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
             <button id="claims-tab-returns" class="tab-btn" onclick="switchClaimsTab('returns')">Returns<span id="hold-mgr-badge-returns" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
             <button id="claims-tab-cases" class="tab-btn" onclick="switchClaimsTab('cases')">Cases &amp; Disputes<span id="hold-mgr-badge-cases" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="claims-tab-payments" class="tab-btn" onclick="switchClaimsTab('payments')">Payments<span id="hold-mgr-badge-payments" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
         </div>
     </div>
 
@@ -269,6 +270,10 @@
             <div style="font-size:12px; color:#64748b; margin-bottom:10px;">Item-not-received requests, escalated cases and (soon) payment disputes. Respond on eBay; check in here. A refunded item-not-received needs a claim.</div>
             <div id="hold-mgr-cases"></div>
         </div>
+        <div id="claims-panel-payments" style="display:none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:10px;">Shopify orders we haven't been paid for: a card about to run out before the order ships, or one that already has. Charge or cancel it on Shopify; if the card can't be charged any more, collect another way and say what happened here.</div>
+            <div id="hold-mgr-payments"></div>
+        </div>
     </div>
 
     <div class="manage-footer flex-end">
@@ -295,6 +300,7 @@
             <button id="ov-tab-mismatch" class="tab-btn" onclick="switchOversightTab('mismatch')">Mismatches<span id="hold-ov-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
             <button id="ov-tab-returns" class="tab-btn" onclick="switchOversightTab('returns')">Returns<span id="hold-ov-badge-returns" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
             <button id="ov-tab-cases" class="tab-btn" onclick="switchOversightTab('cases')">Cases &amp; Disputes<span id="hold-ov-badge-cases" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
+            <button id="ov-tab-payments" class="tab-btn" onclick="switchOversightTab('payments')">Payments<span id="hold-ov-badge-payments" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
         </div>
     </div>
     <div class="manage-content">
@@ -302,6 +308,7 @@
         <div id="ov-panel-mismatch" style="display:none;"><div id="hold-ov-mismatch"></div></div>
         <div id="ov-panel-returns" style="display:none;"><div id="hold-ov-returns"></div></div>
         <div id="ov-panel-cases" style="display:none;"><div id="hold-ov-cases"></div></div>
+        <div id="ov-panel-payments" style="display:none;"><div id="hold-ov-payments"></div></div>
     </div>
 </div>
 
@@ -1666,7 +1673,7 @@
         <div class="tool-head-titles">
           <span class="tool-head-eyebrow">SPEEKS Tools</span>
           <span class="tool-head-title">Daily Store Messages</span>
-          <span class="tool-head-sub">Drafted from last night&#39;s Day End Reports. Nothing reaches a store until you approve it.</span>
+          <span class="tool-head-sub">Built from last night&#39;s Day End Reports. Nothing is drafted until you pick, and nothing reaches a store until you approve it.</span>
         </div>
       </div>
       <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
