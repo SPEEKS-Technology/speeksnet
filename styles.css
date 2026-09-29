@@ -18282,6 +18282,10 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .dbr-btn.go:hover:not(:disabled) { background: #178048; }
 .dbr-btn.ghost { background: #fff; color: var(--dbr-muted); border-color: var(--dbr-line); }
 .dbr-btn.ghost:hover:not(:disabled) { background: #f7f9fa; border-color: #d5dee5; }
+/* Draft sits between the two: it spends a model call but sends nothing, so it
+   is outlined in the accent rather than filled with it. */
+.dbr-btn.draft { background: #fff; color: var(--dbr-accent); border-color: var(--dbr-accent); flex-shrink: 0; }
+.dbr-btn.draft:hover:not(:disabled) { background: #f0f9f3; }
 .dbr-all { background: var(--dbr-accent); color: #fff; flex-shrink: 0; }
 .dbr-all:hover { background: #178048; }
 /* Two bulk controls need a holder of their own: .dbr-head is space-between, so

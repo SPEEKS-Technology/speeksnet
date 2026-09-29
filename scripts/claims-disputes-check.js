@@ -1326,8 +1326,10 @@ t('payments: the link goes to the order in the right Shopify admin', function ()
 // normal, and saying so under the dropdowns on every open was noise.
 t('payments: no explanation line under the dropdowns', function () {
     if (/authorized and not shipped yet/.test(payLoad())) return 'the held-back line is back';
-    // Toolbar first, then the cards — nothing in between.
-    var kids = document.getElementById('hold-mgr-payments').children;
+    // Toolbar, the one-line "Shopify last read" age (Ethan asked for it here on
+    // 2026-09-29 — it is a status, not an explanation), then the cards.
+    var kids = [].slice.call(document.getElementById('hold-mgr-payments').children)
+        .filter(function (k) { return !/last read/.test(k.textContent); });
     if (kids.length !== 2) return kids.length + ' blocks on the tab, expected the toolbar and the list';
     return kids[1].textContent.indexOf('#MO01-9799') >= 0 || 'the block under the toolbar is not the list: ' + kids[1].textContent.slice(0, 120);
 });
@@ -1370,4 +1372,26 @@ t('payments: the tab opens from its button', function () {
     var p = document.getElementById('claims-panel-payments');
     return (p && p.style.display === 'block' && document.getElementById('claims-tab-payments').classList.contains('active'))
         || 'the Payments panel did not open';
+});
+
+// FRESHNESS (2026-09-29). A read that never ran leaves the last ok row in place,
+// so the line has to say how OLD the list is, and go red past _HOLD_STALE_H.
+t('freshness: a recent read says when, quietly', function () {
+    var now = new Date(Date.now() - 25 * 60000).toISOString();
+    var h = _holdSyncLine({ sync: [{ store_code: 'OVL', ok: true, synced_at: now }],
+        disputeSync: [{ store_code: 'OVL', source: 'ebay', ok: true, synced_at: now }], paymentSync: [] });
+    if (!/last read 25 min ago/.test(h)) return 'got: ' + h;
+    return !/b3261e/.test(h) || 'fresh read drawn red';
+});
+t('freshness: the stalest source decides, and past 6 hours it turns red', function () {
+    var fresh = new Date().toISOString(), old = new Date(Date.now() - 9 * 3600000).toISOString();
+    var h = _holdSyncLine({ sync: [{ store_code: 'OVL', ok: true, synced_at: fresh }],
+        disputeSync: [], paymentSync: [{ store_code: 'OVL', ok: true, synced_at: old }] });
+    if (!/last read 9 hours ago/.test(h)) return 'got: ' + h;
+    return /b3261e/.test(h) || 'stale read not drawn red';
+});
+t('freshness: the Payments tab shows its own Shopify age, not eBay', function () {
+    var h = _holdPaymentSyncLine({ paymentSync: [{ store_code: 'OVL', ok: true, synced_at: new Date(Date.now() - 10 * 60000).toISOString() }] });
+    if (!/Shopify last read 10 min ago/.test(h)) return 'got: ' + h;
+    return !/eBay/.test(h) || 'payments line mentions eBay';
 });

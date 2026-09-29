@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.8.7';
+const APP_VERSION = '3.9.0';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -34427,8 +34427,9 @@ function renderHoldItems(ctx) {
 // orders are normal, and a line about them on every open is noise.
 function _holdPaymentSyncLine(d) {
     const bad = (d.paymentSync || []).filter(r => !r.ok);
-    if (!bad.length) return '';
-    return `<div style="font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ Couldn't read Shopify payments for ${bad.map(r => escapeHtml(r.store_code)).join(', ')} — showing the last list that loaded. ${escapeHtml(bad[0].detail || '')}</div>`;
+    const age = _holdAgeLine(d.paymentSync, 'Shopify');
+    if (!bad.length) return age;
+    return age + `<div style="font-size:12px; color:#b45309; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ Couldn't read Shopify payments for ${bad.map(r => escapeHtml(r.store_code)).join(', ')} — showing the last list that loaded. ${escapeHtml(bad[0].detail || '')}</div>`;
 }
 
 // FOUR DIFFERENT THINGS SHARE THIS TAB, and Ethan asked for them to stop looking
@@ -34569,7 +34570,28 @@ function _holdSyncLine(d) {
             Object.entries(by).map(([site, ss]) => `${escapeHtml(site)} for ${ss.map(escapeHtml).join(', ')}`).join('; ')
         }. ${escapeHtml(badD[0].detail || '')}</div>`;
     }
-    return html;
+    // AGE, not just failure. A read that never ran leaves the last ok=true row in
+    // place, so "no warning" used to be indistinguishable from "fresh". The OLDEST
+    // read across the three sources is the one that decides it: a list is only as
+    // current as its stalest half. Past _HOLD_STALE_H it turns red, and the
+    // morning and 4pm mails say the same thing (claims-disputes-email).
+    return html + _holdAgeLine([...rows, ...(d.disputeSync || []), ...(d.paymentSync || [])], 'eBay and Shopify');
+}
+const _HOLD_STALE_H = 6;
+
+// The age half of both sync lines. Payments passes only its own Shopify rows,
+// so its tab never blames eBay for a read eBay had no part in.
+function _holdAgeLine(syncRows, sites) {
+    const times = (syncRows || []).map(r => Date.parse(r.synced_at)).filter(isFinite);
+    if (!times.length) return '';
+    const h = (Date.now() - Math.min(...times)) / 3600000;
+    const ago = h < 1 ? Math.max(1, Math.round(h * 60)) + ' min ago'
+        : h < 48 ? Math.round(h) + ' hour' + (Math.round(h) === 1 ? '' : 's') + ' ago'
+        : Math.round(h / 24) + ' days ago';
+    const were = sites.indexOf(' and ') >= 0 ? 'were' : 'was';
+    return h > _HOLD_STALE_H
+        ? `<div style="font-size:12px; color:#b3261e; background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:8px 10px; margin-bottom:10px;">⚠️ ${escapeHtml(sites)} ${were} last read ${escapeHtml(ago)}. Anything newer is not on this list yet. Press Refresh, and tell Ethan if this stays red.</div>`
+        : `<div style="font-size:11.5px; color:#94a3b8; margin-bottom:10px;">${escapeHtml(sites)} last read ${escapeHtml(ago)}.</div>`;
 }
 
 function _holdList(ctx, type, items, casesByOrder, opts) {
@@ -45326,6 +45348,14 @@ function _agRenderBubble(icon, title, bodyText) {
    night's Day End Report facts, decides on its own whether a
    store has earned a message, and writes a PENDING draft.
    NOTHING reaches a store until it is approved here.
+
+   Since 2026-09-29 that pending draft has NO TEXT. The kind
+   (praise / praise + nudge) and the numbers are there, but the
+   sentence is only written -- one paid model call -- when he
+   presses Draft on that card. Ethan's call, to save usage: he
+   reads the stats and picks which stores are worth it each
+   morning. An empty message is the "not drafted yet" state;
+   there is no separate status for it.
    Approving inserts through the same store_comments shape the
    Send Store Comment tool uses, so read receipts, the green
    bubble and the reads tab behave identically.
@@ -45545,10 +45575,17 @@ async function checkDailyBriefDrafts() {
         summary = 'Could not be generated this morning. No store has been messaged.';
         sig = 'fail|' + _dbDate + '|' + errs.join('|');
     } else {
-        const stores = pending.map(d => d.store).join(', ');
-        title = 'Store Messages to Approve';
-        summary = `${pending.length} draft${pending.length === 1 ? '' : 's'} ready for ${stores}`
-            + '. Nothing goes out to a store until you approve it.';
+        // Short and nameless on purpose (Ethan 2026-09-29): the feed row only has
+        // to say there is a choice waiting. Which stores, and what kind, is on the
+        // cards one click away.
+        const n = pending.length, undrafted = pending.filter(d => !_dbHasText(d)).length;
+        const pl = (k, w) => k + ' ' + w + (k === 1 ? '' : 's');
+        // One title whichever stage it is at (Ethan 2026-09-29); only the line
+        // under it moves from "pick" to "approve".
+        title = 'Store Messages to Review';
+        summary = undrafted
+            ? pl(n, 'store') + ' earned a message today. Nothing is drafted until you pick.'
+            : pl(n, 'draft') + ' ready. Nothing goes out until you approve it.';
         sig = 'pend|' + pending.map(d => d.id).join(',');
     }
     if (t) {
@@ -45559,6 +45596,10 @@ async function checkDailyBriefDrafts() {
         // replaces a draft breaks through a snooze -- it is different work.
         t.dataset.sig = sig;
         if (failed) t.dataset.failed = '1'; else delete t.dataset.failed;
+        // The feed row's title and chip come from here too, so the row and the
+        // sentence under it cannot disagree about whether this is a pick or an OK.
+        t.dataset.title = title;
+        t.dataset.due = failed ? 'Broken' : 'Review';
     }
     b.style.display = 'flex';
     _dbRepaintOpen();
@@ -45585,7 +45626,7 @@ async function openDailyBriefReview() {
 // would throw away the caret and the edit. Only a status change, a new run or a
 // busy flag is worth touching the DOM for.
 function _dbSig() {
-    return _dbDrafts.map(d => d.id + ':' + d.status).join('|')
+    return _dbDrafts.map(d => d.id + ':' + d.status + (_dbHasText(d) ? ':t' : '')).join('|')
         + '#' + (_dbRun ? [_dbRun.ran_at, _dbRun.drafted, _dbRun.ok].join(':') : 'norun')
         + '#' + Object.keys(_dbBusy).filter(k => _dbBusy[k]).join(',')
         // Crossing noon retires every pending draft without any row changing, so
@@ -45607,6 +45648,9 @@ function _dbRenderReview(force) {
     const pending = past ? [] : _dbDrafts.filter(d => d.status === 'pending');
     const decided = past ? _dbDrafts.slice() : _dbDrafts.filter(d => d.status !== 'pending');
     const refDate = (_dbDrafts[0] && _dbDrafts[0].ref_date) || (_dbRun && _dbRun.ref_date) || '';
+    const undraftedN = pending.filter(d => !_dbHasText(d)).length;
+    // "Ready" = something to send: the model wrote it, or he typed his own.
+    const readyN = pending.filter(d => _dbSendText(d)).length;
 
     // --- banner: did the generator run, and did it work? ---
     let banner = '';
@@ -45632,12 +45676,15 @@ function _dbRenderReview(force) {
                 // "Drafts" capitalised: a line opening with a figure still starts a
                 // sentence. The feed row gets this from the central sentence-case fix
                 // in _samGatherReminders; this string never passes through it.
-                ? _samEsc(pending.length + ' Draft' + (pending.length === 1 ? '' : 's') + ' waiting on you. Edit anything before you send it.')
+                ? _samEsc(undraftedN
+                    ? pending.length + ' Store' + (pending.length === 1 ? '' : 's') + ' earned a message. Draft the ones worth sending, or write your own.'
+                    : pending.length + ' Draft' + (pending.length === 1 ? '' : 's') + ' waiting on you. Edit anything before you send it.')
                 : 'Nothing is waiting on you.'}</div>
         </div>
-        ${pending.length > 1 ? `<div class="dbr-head-btns">
-            <button class="dbr-btn ghost" onclick="_dbSkipAll()">Skip All ${pending.length}</button>
-            <button class="dbr-btn dbr-all" onclick="_dbApproveAll()">Approve All ${pending.length}</button>
+        ${(pending.length > 1 || undraftedN > 1 || readyN > 1) ? `<div class="dbr-head-btns">
+            ${pending.length > 1 ? `<button class="dbr-btn ghost" onclick="_dbSkipAll()">Skip All ${pending.length}</button>` : ''}
+            ${undraftedN > 1 ? `<button class="dbr-btn draft" onclick="_dbDraftAll()">Draft All ${undraftedN}</button>` : ''}
+            ${readyN > 1 ? `<button class="dbr-btn dbr-all" onclick="_dbApproveAll()">Approve All ${readyN}</button>` : ''}
         </div>` : ''}
     </div>`;
 
@@ -45648,7 +45695,7 @@ function _dbRenderReview(force) {
         const tint = (typeof STORE_TINTS === 'object' && STORE_TINTS[d.store]) || '#1f9d57';
         const k = KIND[d.kind] || [d.kind || 'Draft', 'grey'];
         const text = (_dbEdits[id] != null) ? _dbEdits[id] : String(d.message || '');
-        const busy = !!_dbBusy[id];
+        const busy = _dbBusy[id] || false;   // true = sending, 'draft' = model writing
         const n = text.trim().length;
         const edited = text.trim() !== String(d.message || '').trim();
         return `<div class="dbr-card">
@@ -45661,7 +45708,7 @@ function _dbRenderReview(force) {
             </div>
             <textarea class="dbr-msg" rows="2" ${busy ? 'disabled' : ''}
                 oninput="_dbOnEdit('${id}', this)"
-                placeholder="Write the message for ${_samEsc(d.store)}…">${_samEsc(text)}</textarea>
+                placeholder="${_dbHasText(d) ? 'Write the message for ' + _samEsc(d.store) + '…' : 'Not drafted yet. Press Draft Message, or write your own here.'}">${_samEsc(text)}</textarea>
             ${/* No "Fired On" line: the green cells in the strip below already say
                   which metrics caused the draft, and repeating them as prose was the
                   same information twice. `reason` is still written to comment_drafts
@@ -45669,7 +45716,8 @@ function _dbRenderReview(force) {
             ${_dbStripHtml(d.facts, d.signals)}
             <div class="dbr-actions">
                 <button class="dbr-btn ghost" ${busy ? 'disabled' : ''} onclick="_dbDecide('${id}','skipped')">Skip Today</button>
-                <button class="dbr-btn go" ${busy ? 'disabled' : ''} onclick="_dbDecide('${id}','approved')">${busy ? 'Sending…' : 'Approve &amp; Send'}</button>
+                ${_dbHasText(d) ? '' : `<button class="dbr-btn draft" ${busy ? 'disabled' : ''} onclick="_dbDraft('${id}')">${busy === 'draft' ? 'Drafting…' : 'Draft Message'}</button>`}
+                <button class="dbr-btn go" id="dbApprove-${id}" ${(busy || !n) ? 'disabled' : ''}${n ? '' : ' title="Draft it or type your own first"'} onclick="_dbDecide('${id}','approved')">${busy === true ? 'Sending…' : 'Approve &amp; Send'}</button>
             </div>
         </div>`;
     }).join('');
@@ -45731,6 +45779,14 @@ function _dbOnEdit(id, el) {
     const d = _dbDrafts.find(x => String(x.id) === String(id));
     const badge = document.getElementById('dbEdited-' + id);
     if (badge) badge.hidden = !(d && el.value.trim() !== String(d.message || '').trim());
+    // Nothing to send, nothing to approve: greyed until there is text, whether
+    // the model wrote it or he typed it. Toggled here because a keystroke never
+    // repaints the card (see _dbSig).
+    const ap = document.getElementById('dbApprove-' + id);
+    if (ap && !_dbBusy[id]) {
+        ap.disabled = !n;
+        if (n) ap.removeAttribute('title'); else ap.title = 'Draft it or type your own first';
+    }
 }
 
 // opts.silent: no confirm and no refetch -- used by Approve All, which confirms
@@ -45792,7 +45848,9 @@ async function _dbDecide(id, status, opts) {
 }
 
 async function _dbApproveAll() {
-    const pending = _dbDrafts.filter(d => d.status === 'pending');
+    // Undrafted stores with nothing typed are left alone -- not sent blank and
+    // not skipped, since he may still want to draft them after this.
+    const pending = _dbDrafts.filter(d => d.status === 'pending' && _dbSendText(d));
     if (!pending.length) return;
     // Every message in the confirm, in full. "Approve All" is the one control
     // here that can post to five stores from a single click, so it shows exactly
@@ -45839,6 +45897,66 @@ async function _dbSkipAll() {
     await checkDailyBriefDrafts();
     _dbRenderReview(true);
     if (failed) alert(`${done} skipped, ${failed} could not be skipped. The ones that failed are still waiting.`);
+}
+
+function _dbHasText(d) { return !!String((d && d.message) || '').trim(); }
+function _dbSendText(d) {
+    const id = String(d.id);
+    return ((_dbEdits[id] != null ? _dbEdits[id] : d.message) || '').trim();
+}
+
+// One store's sentence, written by the model now because he asked. The fn
+// refuses past noon and refuses to write twice, so a double click or a second
+// tab costs one call, not two.
+// opts.silent: no alerts and no refetch -- Draft All refetches once at the end.
+async function _dbDraft(id, opts) {
+    const silent = !!(opts && opts.silent);
+    if (_dbBusy[id]) return false;
+    const d = _dbDrafts.find(x => String(x.id) === String(id));
+    if (!d || d.status !== 'pending' || _dbHasText(d)) return false;
+    if (_dbPastWindow()) { _dbRenderReview(true); return false; }
+    // Typed his own already? Drafting would put the model's text in its place.
+    const typed = (_dbEdits[String(id)] || '').trim();
+    if (typed && (silent || !confirm(`Replace what you typed for ${d.store} with a drafted message?`))) return false;
+
+    _dbBusy[id] = 'draft';
+    _dbRenderReview();
+    // Our own write echoes back as a ping; the model call can take a while.
+    try { if (typeof _rtMute === 'function') _rtMute('dailyBrief', 30000); } catch (_) {}
+    let ok = false;
+    try {
+        const pin = sessionStorage.getItem('speeksUserPin') || '';
+        const r = await fetch(`${DAILY_BRIEF_URL}?action=draft`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ id: id })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || `Request failed (HTTP ${r.status})`);
+        d.message = String(j.message || '');
+        delete _dbEdits[String(id)];
+        ok = true;
+    } catch (e) {
+        if (!silent) alert(`Could not draft the ${d.store} message: ` + ((e && e.message) || 'unknown error'));
+    }
+    _dbBusy[id] = false;
+    _dbRenderReview(true);
+    if (!silent) checkDailyBriefDrafts();
+    return ok;
+}
+
+// Sequential on purpose: the fn shows each call the sentences already written
+// this morning so two stores do not get the same one, and it can only see the
+// ones that have finished. Cards he has typed into are left alone.
+async function _dbDraftAll() {
+    const todo = _dbDrafts.filter(d => d.status === 'pending' && !_dbHasText(d)
+        && !(_dbEdits[String(d.id)] || '').trim());
+    if (!todo.length) return;
+    let failed = 0;
+    for (const d of todo) { if (!(await _dbDraft(String(d.id), { silent: true }))) failed++; }
+    await checkDailyBriefDrafts();
+    _dbRenderReview(true);
+    if (failed) alert(`${todo.length - failed} drafted, ${failed} could not be. Try those again from their own card.`);
 }
 
 function startDailyBriefReminder() {
@@ -46787,9 +46905,9 @@ function _samReminderCfg() {
     const _dbT = document.getElementById('dailyBriefAlertBubbleText');
     const _dbFailed = !!(_dbT && _dbT.dataset && _dbT.dataset.failed);
     cfg.push({ key: 'dailyBrief', id: 'dailyBriefAlertBubble', text: 'dailyBriefAlertBubbleText',
-        title: _dbFailed ? 'Message Drafts Failed' : 'Store Messages to Approve',
+        title: (_dbT && _dbT.dataset && _dbT.dataset.title) || (_dbFailed ? 'Message Drafts Failed' : 'Store Messages to Review'),
         urgency: _dbFailed ? 1 : 3,
-        due: _dbFailed ? 'Broken' : 'Approve',
+        due: (_dbT && _dbT.dataset && _dbT.dataset.due) || (_dbFailed ? 'Broken' : 'Review'),
         cls: _dbFailed ? 'sam-due-amber' : 'sam-due-red',
         noSnooze: true, action: "openDailyBriefReview()" });
     // RETIRED 2026-08-17 — the weekly per-store totals are now set by the system

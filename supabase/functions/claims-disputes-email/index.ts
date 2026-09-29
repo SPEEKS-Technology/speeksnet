@@ -246,6 +246,81 @@ async function fetchState(): Promise<any> {
   return body;
 }
 
+// ---------------------------------------------------------------------------
+// FRESHNESS (Ethan 2026-09-29: "I'm having everyone rely on this directly").
+//
+// The list is a mirror, and until now the mirror was only refreshed when
+// somebody opened the tab. Nothing scheduled a read, and nothing said how old
+// the list was, so a morning mail could be built off yesterday's sweep and look
+// exactly as trustworthy as a fresh one.
+//
+// So every real send READS FIRST: it asks claims-disputes for a sweep of all
+// five stores (the normal 20-minute throttle applies, so a tab opened a minute
+// ago is not re-read), then builds the mail from what that left. A full sweep
+// took ~11s on 2026-09-29; the cap below is far above that and still well
+// inside this function's own limit. A sweep that fails or overruns does NOT
+// stop the mail — a stale mail is better than none — it makes the mail SAY so.
+//
+// Two sends firing in the same minute (the 8:20 pair) can both sweep. Harmless:
+// the sweep only upserts, so the second is a repeat, not a conflict.
+// ---------------------------------------------------------------------------
+const STALE_HOURS = 6;
+const SYNC_CAP_MS = 100_000;
+
+async function refresh(): Promise<string | null> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), SYNC_CAP_MS);
+  try {
+    const u = `${SUPABASE_URL}/functions/v1/claims-disputes?action=sync&stores=ALL&secret=${encodeURIComponent(OPS_SECRET)}`;
+    const res = await fetch(u, { signal: ctl.signal });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body || body.success === false) {
+      return `the read before this mail failed (${res.status}): ${String(body?.error ?? "").slice(0, 160)}`;
+    }
+    return null;
+  } catch (e) {
+    return ctl.signal.aborted ? `the read before this mail did not finish in ${SYNC_CAP_MS / 1000}s`
+      : `the read before this mail failed: ${String((e as Error)?.message ?? e).slice(0, 160)}`;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Per store, every reason its list cannot be trusted as current: a source that
+// failed, one never read, or one older than STALE_HOURS. Read from the same
+// sync rows the tab shows, so the mail and the tab cannot disagree about it.
+function staleness(d: any, now = Date.now()): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  const add = (s: string, why: string) => (out[s] ||= []).push(why);
+  const check = (s: string, label: string, r: any) => {
+    if (!r) { add(s, `${label} has never been read`); return; }
+    if (!r.ok) { add(s, `${label} could not be read (${String(r.detail || "no reason given").slice(0, 120)})`); return; }
+    const h = (now - Date.parse(r.synced_at)) / 3_600_000;
+    if (!(h <= STALE_HOURS)) add(s, `${label} last read ${isFinite(h) ? Math.round(h) + " hours ago" : "at an unknown time"}`);
+  };
+  for (const s of STORES) {
+    check(s, "eBay returns and cases", (d.sync || []).find((r: any) => r.store_code === s));
+    const ds = (d.disputeSync || []).filter((r: any) => r.store_code === s);
+    check(s, "eBay payment disputes", ds.find((r: any) => r.source === "ebay"));
+    check(s, "Shopify chargebacks", ds.find((r: any) => r.source === "shopify"));
+    check(s, "Shopify unpaid orders", (d.paymentSync || []).find((r: any) => r.store_code === s));
+  }
+  return out;
+}
+
+// A red row straight under the header. Inserted rather than threaded through
+// every template, so all four mails carry it identically.
+function withWarning(html: string, lines: string[]): string {
+  if (!lines.length) return html;
+  const row = `<tr><td style="padding:12px 14px;background:#fdecea;border-top:1px solid #f5c2bd;">
+      <div style="font-size:13px;font-weight:800;color:${C.bad};">This list may be out of date</div>
+      <div style="font-size:12px;color:${C.ink};margin-top:5px;line-height:1.6;">${lines.map(esc).join("<br>")}</div>
+      <div style="font-size:12px;color:${C.faint};margin-top:6px;line-height:1.6;">Anything that arrived since then is not below. Check eBay and Shopify directly today.</div>
+    </td></tr>`;
+  const i = html.indexOf("</td></tr>");
+  return i < 0 ? html : html.slice(0, i + 10) + row + html.slice(i + 10);
+}
+
 function allRows(d: any): Row[] {
   return [
     ...(d.disputes || []).map(disputeRow),
@@ -639,8 +714,18 @@ Deno.serve(async (req: Request) => {
   };
 
   try {
+    // READ FIRST — see FRESHNESS. ?nosync=1 skips it, for looking at a template.
+    const syncErr = url.searchParams.get("nosync") === "1" ? null : await refresh();
     const data = await fetchState();
     const today = data.today || chicagoDay(new Date());
+    const stale = staleness(data);
+    const staleStores = STORES.filter((s) => stale[s]?.length);
+    // The DM hears about every store; a manager only about their own.
+    const dmWarn = [
+      ...(syncErr ? [`All stores: ${syncErr}.`] : []),
+      ...staleStores.map((s) => `${STORE_NAME[s] || s}: ${stale[s].join("; ")}.`),
+    ];
+    const storeWarn = (s: string) => stale[s]?.length ? [`${stale[s].join("; ")}.`] : [];
     const rows = allRows(data).filter((r) => !only || r.store === only);
 
     // Everything ever mailed, so "new" means new to the manager rather than new
@@ -660,13 +745,15 @@ Deno.serve(async (req: Request) => {
     if (kind === "manager_daily") {
       for (const s of STORES) {
         const list = byStore[s];
-        if (!list.length) { sent.push({ store: s, skipped: "nothing to say" }); continue; }
+        // "Nothing to say" is only true if the list is current. A stale store with
+        // an empty list gets the mail anyway, because the warning IS the news.
+        if (!list.length && !storeWarn(s).length) { sent.push({ store: s, skipped: "nothing to say" }); continue; }
         const extras = {
           returns: (data.cases || []).filter((c: any) => isPlainReturn(c) && c.store_code === s && c.is_open).length,
           claims: (data.claims || []).filter((c: any) => c.store === s && c.aging).length,
           quiet: rows.filter((r) => r.store === s && r.quiet && r.quiet > today).length,
         };
-        const html = managerDaily(s, list, seen, extras, today);
+        const html = withWarning(managerDaily(s, list, seen, extras, today), storeWarn(s));
         previews.push(html);
         const subject = `Claims & Disputes — ${STORE_NAME[s] || s}: ${list.length} need${list.length === 1 ? "s" : ""} you`;
         const to = await listFor(`claims_disputes_${s}`);
@@ -693,7 +780,7 @@ Deno.serve(async (req: Request) => {
       if (kind === "manager_nudge") {
         for (const s of STORES) {
           if (!dueNow[s].length) { sent.push({ store: s, skipped: "nothing closing today" }); continue; }
-          const html = managerNudge(s, dueNow[s], today);
+          const html = withWarning(managerNudge(s, dueNow[s], today), storeWarn(s));
           previews.push(html);
           const subject = `Closes today — ${dueNow[s].length} unanswered at ${STORE_NAME[s] || s}`;
           const to = await listFor(`claims_disputes_${s}`);
@@ -705,10 +792,22 @@ Deno.serve(async (req: Request) => {
         }
       } else {
         const stores = STORES.filter((s) => dueNow[s].length);
-        if (!stores.length) {
+        if (!stores.length && dmWarn.length) {
+          // Nothing due that we can SEE — which is only reassuring if the list is
+          // current. When it is not, the DM is told that instead of nothing.
+          const html = withWarning(shell("Claims &amp; Disputes may be out of date",
+            "Nothing shows as due today, but at least one store could not be read recently, so that may not be the whole picture.",
+            "", "SPEEKSNET · Claims &amp; Disputes"), dmWarn);
+          previews.push(html);
+          const subject = `Claims & Disputes could not be read — ${staleStores.join(", ") || "all stores"}`;
+          const to = await listFor("claims_disputes_dm");
+          if (!to.length) sent.push({ skipped: "no recipients" });
+          else if (dry) sent.push({ to, subject, stale: staleStores });
+          else sent.push({ to, subject, stale: staleStores, ...(await relay(to.join(","), subject, html)) });
+        } else if (!stores.length) {
           sent.push({ skipped: "no store has anything due today outstanding" });
         } else {
-          const html = dmDueToday(dueNow, today);
+          const html = withWarning(dmDueToday(dueNow, today), dmWarn);
           previews.push(html);
           const n = stores.reduce((a, s) => a + dueNow[s].length, 0);
           const subject = `Due today, still unanswered — ${stores.join(", ")}`;
@@ -751,10 +850,10 @@ Deno.serve(async (req: Request) => {
       const contested = rows.filter((r) =>
         r.contestedSince && Date.now() - Date.parse(r.contestedSince) > 2 * 86400000);
 
-      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || contested.length;
+      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || contested.length || dmWarn.length;
       if (!anything) sent.push({ skipped: "nothing outstanding anywhere" });
       else {
-        const html = dmDigest(byStore, counts, newMissed, contested, today);
+        const html = withWarning(dmDigest(byStore, counts, newMissed, contested, today), dmWarn);
         previews.push(html);
         const subject = `Claims & Disputes — what is still with the managers`;
         const to = await listFor("claims_disputes_dm");
@@ -775,7 +874,7 @@ Deno.serve(async (req: Request) => {
       return new Response(previews[0] || "<p>Nothing to show — this run had nothing to say.</p>",
         { headers: { ...cors, "Content-Type": "text/html; charset=utf-8" } });
     }
-    return json({ success: true, kind, today, dry, sent });
+    return json({ success: true, kind, today, dry, sent, syncErr, stale });
   } catch (e) {
     return json({ success: false, error: String(e).slice(0, 400) }, 500);
   }
