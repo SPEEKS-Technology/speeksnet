@@ -62,10 +62,13 @@ t('names match exactly — two Zachs do not merge', function () {
     return _goalsResultLine('Zach Marchesano', dr()) === '' || 'Zach Marchesano picked up Zach Marbs’ rows';
 });
 
-t('on a Monday, last Saturday shows alone and no week chip', function () {
+// Was "on a Monday, last Saturday shows alone". Ethan changed the rule on
+// 2026-09-28 (a1ad0ea): THIS WEEK ONLY, so a Monday shows nothing — Saturday
+// closes the previous week and says nothing about the one ahead.
+t('on a Monday, nothing shows — not last Saturday, not a week chip', function () {
     // Garrett has no row this week; his last day is last Saturday.
     var html = _goalsResultLine('Garrett Burnell', dr());
-    if (!/gr-chip gr-hit"><span class="gr-d">Sat<\/span><b>12<\/b>\/9/.test(html)) return 'Saturday not shown: ' + html;
+    if (/gr-d">Sat</.test(html)) return 'last Saturday is still shown on a Monday: ' + html;
     return !/gr-week/.test(html) || 'last week leaked into this week: ' + html;
 });
 
