@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260929a">
+  <link rel="stylesheet" href="styles.css?v=20260930c">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260929a" defer></script>
+  <script src="speeks.js?v=20260930c" defer></script>
 </head>
 <body class="preload">
 
@@ -605,7 +605,7 @@
       </div>
       <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
-    <div style="padding: 12px 20px 2px;">
+    <div class="mp-search-bar">
         <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:0;">
             <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
             <input type="text" id="manageDocsSearch" class="kb-search-input doc-search-input" placeholder="Search policies…" autocomplete="off" oninput="filterManageDocs()" onkeydown="if(event.key===&quot;Escape&quot;){this.value=&quot;&quot;;filterManageDocs();}">
@@ -613,7 +613,7 @@
     </div>
     <div class="manage-content" id="manageDocsList"></div>
     <div class="manage-footer">
-        <button class="btn-secondary" onclick="addManageRow()">+ Add Policy</button>
+        <button class="btn-secondary" onclick="addNewPolicy()">+ Add Policy</button>
         <button class="btn-primary" id="saveDocsBtn" onclick="saveDocs()">Save Changes</button>
     </div>
 </div>

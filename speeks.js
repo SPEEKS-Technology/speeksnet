@@ -2513,8 +2513,15 @@ function populateManageModal() {
     if (globalDocsData.length === 0) {
         addManageRow();
     } else {
-        globalDocsData.forEach(doc => addManageRow(doc));
+        // Categories from the saved data, computed once: while the list is being
+        // built the rows are still arriving, so reading them would give the first
+        // cards only the categories above them.
+        const cats = _manageDocCategories(globalDocsData.map(d => d.category));
+        globalDocsData.forEach(doc => addManageRow(doc, false, cats));
     }
+    // Every open starts at the top. The list element is reused between opens,
+    // so without this it kept the scroll position from the last visit.
+    list.scrollTop = 0;
 }
 
 // Live-filter the policy cards by title / category / description / link — same
@@ -2537,13 +2544,62 @@ function filterManageDocs() {
     });
 }
 
-function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', link: '' }) {
+// Every category in use, "Pinned" stripped (it's a flag, not a category —
+// see addManageRow). There is no category table: a category exists only while
+// some policy carries it, so one that nothing uses drops out of the list. By
+// default this reads the editor's current rows, not the saved data — a category
+// typed into one card is offered to the next card added, and one whose last
+// policy was deleted or moved is gone without waiting for a save.
+function _manageDocCategories(from) {
+    const seen = new Map();
+    const add = (c) => {
+        String(c || '').split(',').map(x => x.trim()).forEach(x => {
+            if (x && !/^["']?pinned["']?$/i.test(x) && !seen.has(x.toLowerCase())) seen.set(x.toLowerCase(), x);
+        });
+    };
+    if (from) from.forEach(add);
+    else document.querySelectorAll('#manageDocsList .m-category').forEach(el => add(el.value));
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
+// Category picker: a real <select> of existing categories plus "+ New
+// category…", not an <input list> + <datalist> — see the note on
+// _mbmToggleSection's select for why the datalist was dropped elsewhere. The
+// .m-category text box is still the field of record (saveDocs and
+// filterManageDocs read it); the select writes into it, and it is only shown
+// when a new category is being typed.
+function _manageCatPick(sel) {
+    const input = sel.closest('.mp-f-cat')?.querySelector('.m-category');
+    if (!input) return;
+    const isNew = sel.value === '__new';
+    input.style.display = isNew ? '' : 'none';
+    if (isNew) { input.value = ''; input.focus(); }
+    else input.value = sel.value;
+}
+
+// "+ Add Policy": the new card goes at the TOP and the list scrolls there.
+// Appending it put it below every existing policy, off-screen, so clicking the
+// button looked like it did nothing. The search is cleared too — a filter left
+// in the box would hide the blank card.
+function addNewPolicy() {
+    const search = document.getElementById('manageDocsSearch');
+    if (search && search.value) { search.value = ''; filterManageDocs(); }
+    const row = addManageRow(undefined, true);
+    const list = document.getElementById('manageDocsList');
+    if (list) list.scrollTo({ top: 0, behavior: 'smooth' });
+    row.querySelector('.m-title')?.focus({ preventScroll: true });
+}
+
+function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', link: '' }, atTop = false, cats = null) {
     let baseCat = doc.category || '';
     let isPinned = baseCat.toLowerCase().includes('pinned');
     
     if (isPinned) {
         baseCat = baseCat.replace(/,?\s*["']?pinned["']?/ig, '').trim();
     }
+
+    const catOpts = (cats || _manageDocCategories()).slice();
+    if (baseCat && !catOpts.includes(baseCat)) catOpts.push(baseCat);
 
     const row = document.createElement('div');
     row.className = 'manage-row';
@@ -2562,7 +2618,12 @@ function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', l
         </div>
         <div class="mp-field mp-f-cat">
             <label>Category</label>
-            <input type="text" class="m-category" placeholder="Category" value="${baseCat}">
+            <select class="m-cat-sel" onchange="_manageCatPick(this)">
+                ${baseCat ? '' : '<option value="" selected>Choose a category…</option>'}
+                ${catOpts.map(c => `<option value="${escapeHtml(c)}"${c === baseCat ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+                <option value="__new">+ New category…</option>
+            </select>
+            <input type="text" class="m-category" placeholder="New category name" value="${escapeHtml(baseCat)}" style="display:none;">
         </div>
         <label class="pin-label mp-f-pin">
             <input type="checkbox" class="m-pinned" ${isPinned ? 'checked' : ''}> Pin
@@ -2577,7 +2638,9 @@ function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', l
             <input type="text" class="m-link" placeholder="https://drive.google.com/…" value="${doc.link || ''}">
         </div>
     `;
-    document.getElementById('manageDocsList').appendChild(row);
+    const list = document.getElementById('manageDocsList');
+    if (atTop) list.prepend(row); else list.appendChild(row);
+    return row;
 }
 
 async function saveDocs() {

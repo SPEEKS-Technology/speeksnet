@@ -892,6 +892,16 @@ input, textarea, select,
 #manageDocsList .del-btn.mp-f-del:hover { background: #dc2626; color: #fff; }
 #manageDocsList .del-btn.mp-f-del svg { width: 14px; height: 14px; }
 
+/* Search bar above the policy list. The old 2px bottom padding put the cards
+   right against the bar, so a card scrolled under it looked sliced off. The
+   gap plus a hairline gives the scroll area a clear top edge. */
+.mp-search-bar { padding: 12px 20px 16px; border-bottom: 1px solid #eee; background: #fff; }
+
+/* Category is a select of existing categories; "+ New category…" reveals the
+   .m-category text box beneath it (see _manageCatPick). */
+#manageDocsList .m-cat-sel { width: 100%; }
+#manageDocsList .mp-f-cat .m-category { margin-top: 6px; }
+
 .manage-footer { 
     padding: 15px 20px; 
     border-top: 1px solid #eee; 
