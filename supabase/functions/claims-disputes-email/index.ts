@@ -321,6 +321,48 @@ function withWarning(html: string, lines: string[]): string {
   return i < 0 ? html : html.slice(0, i + 10) + row + html.slice(i + 10);
 }
 
+// ---------------------------------------------------------------------------
+// BACKUPS RIDE ON THE DM DIGEST (Ethan, 2026-09-30: "put it in an existing email
+// and only alert me when it's after a certain time"). Nothing to do with claims —
+// this is simply the one mail that reaches Ethan alone every morning. The backup
+// script posts a backup_runs row (0120) after each run; when the newest GOOD one
+// is older than BACKUP_STALE_HOURS the digest gets a red "Backups" row, and it is
+// sent even on a morning with no claims to report. Otherwise it adds nothing.
+//
+// 48 hours: the backup runs at 2am, or on the next unlock if the laptop was
+// closed, so one missed night is routine and two in a row is not. From Sep 22
+// to Sep 30 it went nine nights without one and nobody knew.
+// ---------------------------------------------------------------------------
+const BACKUP_STALE_HOURS = 48;
+
+async function backupWarning(now = Date.now()): Promise<string[]> {
+  const fix = "Open or unlock the laptop so it can catch up; if it still does not, the reason is in BACKUP-PROBLEM.txt under %LOCALAPPDATA%\\SPEEKSNET Backup, or in LAST-BACKUP.txt in the Drive backups folder.";
+  try {
+    const rows = await sb(`backup_runs?select=finished_at,snapshot&ok=eq.true&order=finished_at.desc&limit=1`,
+      { headers: { Prefer: "return=representation" } }) || [];
+    if (!rows.length) return [`No complete SPEEKSNET backup has ever been recorded. ${fix}`];
+    const h = (now - Date.parse(rows[0].finished_at)) / 3_600_000;
+    if (h <= BACKUP_STALE_HOURS) return [];
+    const when = new Date(rows[0].finished_at).toLocaleString("en-US", {
+      timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    });
+    return [`The last complete SPEEKSNET backup was ${Math.floor(h / 24)} days ago (${when}, folder ${rows[0].snapshot}). ${fix}`];
+  } catch (e) {
+    // Saying so beats staying quiet: a check that cannot run is how Sep 22-30 happened.
+    return [`Could not check the SPEEKSNET backups: ${String((e as Error)?.message ?? e).slice(0, 160)}`];
+  }
+}
+
+function withBackupWarning(html: string, lines: string[]): string {
+  if (!lines.length) return html;
+  const row = `<tr><td style="padding:12px 14px;background:#fdecea;border-top:1px solid #f5c2bd;">
+      <div style="font-size:13px;font-weight:800;color:${C.bad};">Backups</div>
+      <div style="font-size:12px;color:${C.ink};margin-top:5px;line-height:1.6;">${lines.map(esc).join("<br>")}</div>
+    </td></tr>`;
+  const i = html.indexOf("</td></tr>");
+  return i < 0 ? html : html.slice(0, i + 10) + row + html.slice(i + 10);
+}
+
 function allRows(d: any): Row[] {
   return [
     ...(d.disputes || []).map(disputeRow),
@@ -850,22 +892,23 @@ Deno.serve(async (req: Request) => {
       const contested = rows.filter((r) =>
         r.contestedSince && Date.now() - Date.parse(r.contestedSince) > 2 * 86400000);
 
-      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || contested.length || dmWarn.length;
+      const backupWarn = await backupWarning();
+      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || contested.length || dmWarn.length || backupWarn.length;
       if (!anything) sent.push({ skipped: "nothing outstanding anywhere" });
       else {
-        const html = withWarning(dmDigest(byStore, counts, newMissed, contested, today), dmWarn);
+        const html = withBackupWarning(withWarning(dmDigest(byStore, counts, newMissed, contested, today), dmWarn), backupWarn);
         previews.push(html);
         const subject = `Claims & Disputes — what is still with the managers`;
         const to = await listFor("claims_disputes_dm");
         if (!to.length) sent.push({ skipped: "no recipients" });
-        else if (dry) sent.push({ to, subject, newMissed: newMissed.length, contested: contested.length });
+        else if (dry) sent.push({ to, subject, newMissed: newMissed.length, contested: contested.length, backupWarn });
         else {
           const r = await relay(to.join(","), subject, html);
           // Only the missed windows are logged for this mail: they are the ones
           // whose whole behaviour depends on having been said once. Logging the
           // table's contents would make every count "already seen" tomorrow.
           if (r.ok) for (const m of newMissed) await logIt("dm_digest", m.store, [m], today);
-          sent.push({ to, subject, newMissed: newMissed.length, contested: contested.length, ...r });
+          sent.push({ to, subject, newMissed: newMissed.length, contested: contested.length, backupWarn, ...r });
         }
       }
     }
