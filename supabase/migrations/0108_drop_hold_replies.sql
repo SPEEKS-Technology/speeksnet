@@ -1,0 +1,17 @@
+-- 0108 — the "I responded on eBay" button is gone, and so is its table.
+--
+-- 0107 let a manager self-certify that they had answered a case, which unlocked
+-- the item's status. Ethan tried it on BAL case 5383343292 the same afternoon and
+-- called it: "I want to make sure that they can't mark it responded if it hasn't
+-- been". A button that takes someone's word for it is exactly the hole this
+-- layer was built to close.
+--
+-- It is not needed anyway. eBay's own case history says whether we replied
+-- (ebay_cases.seller_replied_at, from the SELLER entries), so the item clears
+-- itself the moment a real reply exists, and there is nothing for a person to
+-- assert. What a manager CAN still do is mark it RESOLVED with a reason — that
+-- is a claim about the outcome, written down and attributed, not a claim about
+-- having done a thing eBay can see for itself.
+--
+-- The two ebay_cases columns from 0107 stay; they are the signal.
+drop table if exists hold_replies;

@@ -175,9 +175,44 @@ Deno.serve(async (req) => {
   // draft-order sales will resume and this would strip them as recovery. Every
   // stripped draft is listed individually in the detail for exactly that
   // reason — when real ones start appearing, move the boundary.
+  //
+  // ⚠️ AND THE SHELF LIFE EXPIRED (user, 2026-09-06): "I just want every store
+  // to accurately show what they sold each day excluding draft orders we sent
+  // to customers to get money back from the ebay glitch as those aren't real
+  // sales." That is a narrower rule than the date, and it is the right one now
+  // that real draft sales have resumed. Two of them had already been caught by
+  // the date alone:
+  //
+  //   LEE #MO01-9401  Sep 3  1,749.99, cost 1,200.00  — matches no refund LEE
+  //     ever made. A repayment invoice has no cost of goods behind it; this one
+  //     carries $1,200 of inventory, because it is a sale.
+  //   MPL #MO03-3217  Sep 2    229.99, cost   100.00  — matches no refund, and
+  //     was CANCELLED the next day. Customers paying money back do not cancel.
+  //
+  // So from REPAYMENT_AMOUNT_MATCH_FROM the amount match stops being a reported
+  // signal and becomes the test: a draft comes out only when it is dated in the
+  // repayment window AND its amount equals an eBay order total we actually
+  // refunded at that store. Everything else is a real sale and stays in.
+  //
+  // ⚠️ THE CUTOVER IS SEP 1, AND LATE AUGUST DELIBERATELY KEEPS THE DATE RULE.
+  // Aug 26-31 is not an unexamined leftover: the stores CONFIRMED, order by
+  // order, that every draft they sent in that window was a repayment —
+  // including LEE #MO01-9161 ($1,549.99), which matched no amount either. The
+  // stores' own account of what they invoiced is better evidence than this
+  // test, and mirror-fix.gs's pins were built on it. Applying the amount rule
+  // backwards would silently reinstate sales the stores have already said were
+  // not sales, and would contradict cells that are already locked.
+  //
+  // Choosing Sep 1 rather than Sep 3 costs nothing and settles MPL: every OVL
+  // draft on Sep 1 and Sep 2 matches a refund, so those days are unchanged,
+  // while MPL's Sep 2 correctly flips back to being a sale.
   const REPAYMENT_DRAFTS_FROM = "2026-08-26";
-  const looksLikeRepayment = (_st: string, day: string, _amt: number) =>
-    day >= REPAYMENT_DRAFTS_FROM;
+  const REPAYMENT_AMOUNT_MATCH_FROM = "2026-09-01";
+  const looksLikeRepayment = (st: string, day: string, amt: number) => {
+    if (day < REPAYMENT_DRAFTS_FROM) return false;
+    if (day < REPAYMENT_AMOUNT_MATCH_FROM) return true;
+    return refundedAmounts[st] ? refundedAmounts[st].has(amt) : false;
+  };
 
   // The duplicate ledger: eBay order id -> the Shopify copy we identified as
   // the duplicate.
@@ -321,12 +356,18 @@ Deno.serve(async (req) => {
                             order: o.name, amount: amt,
                             matches_a_refund_amount: !!refundedAmounts[store]?.has(amt) });
             } else {
-              // A real invoiced sale. Counted as selling, and listed so the
-              // judgement is visible rather than buried in a total.
+              // A real invoiced sale. Counted as selling, and listed with the
+              // reason so the judgement is auditable rather than buried in a
+              // total — this is the half of the rule that can wrongly cost a
+              // store a day, so it says out loud why each one was kept.
               b.draft_kept = r2((b.draft_kept || 0) + amt);
               b.draft_kept_orders = (b.draft_kept_orders || 0) + 1;
               detail.push({ day: sold, store, kind: "draft order KEPT as a real sale",
-                            order: o.name, amount: amt });
+                            order: o.name, amount: amt,
+                            why: sold < REPAYMENT_DRAFTS_FROM
+                              ? "dated before the first eBay refund, so it cannot be a repayment for one"
+                              : "matches no eBay order total we refunded at this store — "
+                                + "no evidence it is a glitch repayment" });
             }
           }
 

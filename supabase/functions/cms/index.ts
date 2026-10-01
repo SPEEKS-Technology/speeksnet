@@ -89,12 +89,31 @@ async function queueNotification(n: {
 // the email's subject line reads like the card on the site, not like markup.
 function annParts(html: string): { title: string; snippet: string } {
   const raw = String(html || "");
-  const strong = raw.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i);
+  // DROP THE PRIORITY MARKER FIRST. A high-priority post is stored with a
+  // "<span ...>🚨 HIGH PRIORITY</span>" at the head — a rendering flourish for the
+  // feed's hero card, not part of what anyone wrote. strip() below only removes
+  // TAGS, so the span's tags went and its text stayed, and every priority email
+  // opened "🚨 HIGH PRIORITY Team, as a reminder, ..." (Ethan, 2026-09-17).
+  // Three reasons it does not belong here, any one of which is enough:
+  //   - the email already says so twice, in the "Priority: ..." subject and in the
+  //     PRIORITY ANNOUNCEMENT tag under the card;
+  //   - it eats ~16 of the 300 characters the snippet gets;
+  //   - the emoji does not survive the trip to Gmail and lands as replacement
+  //     characters, which is what made this visible at all. The relay is what
+  //     mangles it and the relay is not in this repo, so this removes the emoji
+  //     the app injects rather than claiming to have fixed the encoding — one a
+  //     user types into a post will still arrive mangled.
+  // _samParseAnn does the same removal with querySelectorAll('span'); there is no
+  // DOM in Deno, so this matches the span by its text and falls back to trimming a
+  // bare leading marker if the wrapper ever changes shape.
+  const demarked = raw.replace(/<span\b[^>]*>(?:(?!<\/span>)[\s\S])*?HIGH PRIORITY[\s\S]*?<\/span>/gi, " ");
   const strip = (s: string) => s.replace(/<[^>]*>/g, " ")
     .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ").trim();
+    .replace(/\s+/g, " ").trim()
+    .replace(/^\u{1F6A8}?\s*HIGH PRIORITY\s*/iu, "").trim();
+  const strong = demarked.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i);
   const title = strong ? strip(strong[1]) : "";
-  const rest = strong ? strip(raw.replace(strong[0], "")) : strip(raw);
+  const rest = strong ? strip(demarked.replace(strong[0], "")) : strip(demarked);
   return {
     title: title || (rest.slice(0, 70) || "New announcement"),
     snippet: (title ? rest : rest.slice(70)).slice(0, 300),

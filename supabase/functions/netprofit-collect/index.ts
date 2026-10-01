@@ -27,6 +27,15 @@
 // five stores since Jul 1, zero of them shipping); and ShopifyPaymentsPayoutSummary
 // has no shipping field. These stores bill labels to the Shopify invoice, not to
 // the Payments balance. The timeline is the only per-order source that exists.
+//
+// ⚠️ SHIPPING COST IS THE SUM OF TWO SOURCES ON TWO DIFFERENT BOOKING RULES.
+// Our OWN outbound label comes off the Shopify order timeline and books to the
+// SALE day, because the store chooses when to buy it. EBAY-BILLED labels — the
+// buyer's return leg, which eBay buys and charges to us — come off the eBay
+// Finances feed and book to the day EBAY CHARGED them, because nobody here
+// controls that timing. The asymmetry is deliberate; see the SHIPPING_LABEL
+// branch in the eBay pass for the full reasoning and for what it cost to get
+// wrong (25 charges, $311.80, booked nowhere at all until 2026-09-09).
 // ============================================================================
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -40,6 +49,35 @@ const SHOP_BY_STORE: Record<string, string> = {
   WSP: "paymore-westport.myshopify.com",
   MPL: "paymore-maplewood.myshopify.com",
   BAL: "paymore-ballwin.myshopify.com",
+};
+
+// ============================================================================
+// SALES THE STORE RECOVERED BY HAND — the manual list (2026-09-18)
+//
+// Marketplace Connect only imports orders for listings MC ITSELF created. A
+// sale on a SPEEKS Connect listing — ours, published through eBay's Inventory
+// API — never crosses into Shopify at all. It is not late; it is never coming.
+// The stores' answer is to invoice the buyer through a Shopify DRAFT ORDER, so
+// the money is real and on the tab, just under a Shopify order that carries no
+// eBay order id to join on. OVL 18-15155-99419 (sold Sep 15, invoiced Sep 16
+// as #KS01-14917) is the case that found this.
+//
+// findHandKeyed() below finds those unaided. This list is for the ones it
+// cannot: a draft keyed at a different figure, a sale recovered as a POS order,
+// anything where the amounts no longer line up. An entry here is taken on trust
+// and OVERRIDES the matcher — so the note is not decoration, it is the evidence
+// the next person gets.
+//
+// ⚠️ A DEPLOY PER ENTRY. Deliberate at this size: these are rare and each one is
+// a judgement about real money. If it ever needs more than a handful it belongs
+// in a table with the reason recorded per row, not in the source.
+// ============================================================================
+const EBAY_ACCOUNTED: Record<string, Record<string,
+  { shopify_order: string; booked_day: string; note: string }>> = {
+  // OVL: {
+  //   "18-15155-99419": { shopify_order: "#KS01-14917", booked_day: "2026-09-16",
+  //     note: "the shape, for reference — the matcher finds this one unaided" },
+  // },
 };
 
 const json = (b: unknown, s = 200) =>
@@ -169,6 +207,23 @@ const EBAY_FEE_NEW = new Set([
   "FINAL_VALUE_FEE",
   "FINAL_VALUE_FEE_FIXED_PER_ORDER",
 ]);
+
+// ⚠️ THE FINANCES READ IS A RACE UNLESS THE WINDOW IS CLOSED (2026-09-17).
+// eBay pages transactions by OFFSET, and the window runs to today, so eBay is
+// still writing into the range as we page it: a row inserted ahead of the
+// cursor shifts every later row down one and the row on a page boundary is
+// never returned. Ending the window a few minutes in the PAST makes the set
+// immutable for the second or two the read takes, which removes the race
+// rather than detecting it. Nothing is lost — every pass re-reads the whole
+// month, so a fee posted inside the lag lands on the next pass, and the 8am
+// and 2pm passes are hours away from this edge either way.
+const FIN_SETTLE_LAG_MS = 5 * 60 * 1000;
+// And when a read comes back short anyway, read it again before giving up: the
+// drift is a race, not a fault, so the same read a moment later is almost
+// always whole. MPL on 2026-09-17 read 265 of 266 and put #N/A across sixteen
+// days; the very next read was complete.
+const FIN_PAGE_ATTEMPTS = 3;
+const FIN_RETRY_PAUSE_MS = 1500;
 
 const EBAY_FIN_HOST: Record<string, string> = {
   production: "https://apiz.ebay.com",
@@ -322,11 +377,58 @@ Deno.serve(async (req: Request) => {
   if (!t) return json({ error: `no shopify_stores row for ${store}` }, 404);
 
   const warnings: string[] = [];
+  // ⚠️ THE THINGS THAT BREAK THE SHEET, AS FIELDS RATHER THAN PROSE. `warnings`
+  // is for a person reading a response; this is for netprofit-sheet.gs, which
+  // emails on it. Matching on warning text would break the first time a
+  // sentence was reworded, and a broken alert is silent by definition.
+  const health = {
+    // Why the eBay pass failed, verbatim. When set, eBay Fee AND Shipping went
+    // out as null for every day and the sheet writes #N/A. A revoked seller
+    // login reads "token refresh failed ... invalid_grant".
+    ebay_error: null as string | null,
+    // eBay sales inside the window, on a day that is already over, that have no
+    // Shopify order. Their SALES are missing from the day as well as their fee:
+    // Marketplace Connect has not imported them. Sep 11-13 was exactly this.
+    not_yet_imported: { n: 0, fee: 0, orders: [] as { ebay_order_id: string; day: string }[] },
+    // eBay sales with no Shopify order that eBay has since REFUNDED — cancelled
+    // before Marketplace Connect imported them, so there is no sale to miss.
+    // Reported for visibility only; nothing alerts on it. See the ORPHAN note.
+    cancelled_before_import: { n: 0, orders: [] as { ebay_order_id: string; day: string }[] },
+    // eBay sales with no Shopify order that the STORE booked by hand, as a
+    // draft-order invoice, because Marketplace Connect was never going to bring
+    // them across. Nothing is missing: the money is on the tab and the fee has
+    // been moved to sit with it. Reported so a hand-keyed sale is visible and
+    // can be checked, NOT because anything is wrong. See findHandKeyed.
+    recovered_by_draft: { n: 0, fee: 0, orders: [] as {
+      ebay_order_id: string; sold_day: string; shopify_order: string;
+      booked_day: string; fee: number; matched_by: string }[] },
+    unknown_label_messages: 0,
+    orders_with_truncated_events: 0,
+    page_cap_hit: false,
+    unhandled_ebay_types: {} as Record<string, number>,
+    shopifyql_errors: [] as string[],
+  };
+
+  // Where the time went, returned with the response as timings_ms. The sheet
+  // ignores it; it exists so the next "why was this slow" is a number, not a
+  // theory. 2026-09-17 took most of a morning to reconstruct from outside.
+  const timing = { total: 0, shopifyql: 0, scan: 0, scan_pages: 0, scan_chunks: 0,
+                   scan_orders: 0, throttle_waits: 0, throttle_wait: 0, transient_retries: 0 };
+  const tAll0 = Date.now();
+  const sleep = (ms: number) => new Promise((s) => setTimeout(s, ms));
 
   async function gql(query: string, variables: unknown = {}) {
     // Shopify's throttle is a leaky bucket and a cost-heavy page can be refused
     // outright. Back off and retry rather than returning a short month, which
     // would read as a quiet business day rather than a failed fetch.
+    //
+    // ⚠️ WAIT FOR WHAT THE BUCKET SAYS IT NEEDS (2026-09-17). The old back-off was
+    // a blind 2s/4s/6s/8s that gave up after four tries — fine for one request
+    // at a time. The order scan now runs SCAN_CHUNKS pages at once, and the same
+    // bucket is shared with shopify-live-refresh every minute and with the
+    // catalog jobs, so a refusal is routine rather than exceptional. Shopify
+    // returns how short the bucket is and how fast it refills; waiting exactly
+    // that long is faster than guessing and much less likely to run out of tries.
     for (let attempt = 0; ; attempt++) {
       const r = await fetch(`https://${t.shop}/admin/api/${API_VERSION}/graphql.json`, {
         method: "POST",
@@ -334,13 +436,30 @@ Deno.serve(async (req: Request) => {
         body: JSON.stringify({ query, variables }),
       });
       const body = await r.json().catch(() => null);
-      const throttled = body?.errors?.some((e: any) =>
-        e?.extensions?.code === "THROTTLED" || /throttl/i.test(e?.message || ""));
-      if (throttled && attempt < 4) {
-        await new Promise((s) => setTimeout(s, 2000 * (attempt + 1)));
+      // A 429 or 5xx with no JSON behind it is Shopify having a moment, not an
+      // answer. It used to throw immediately and fail the whole store's pass.
+      if (!body && (r.status === 429 || r.status >= 500) && attempt < 4) {
+        timing.transient_retries++;
+        await sleep(1500 * (attempt + 1));
         continue;
       }
       if (!body) throw new Error(`Shopify returned non-JSON (HTTP ${r.status})`);
+      const throttled = body?.errors?.some((e: any) =>
+        e?.extensions?.code === "THROTTLED" || /throttl/i.test(e?.message || ""));
+      if (throttled && attempt < 10) {
+        const cost = body?.extensions?.cost;
+        const ts = cost?.throttleStatus;
+        let ms = 2000 * (attempt + 1);
+        if (ts && Number(ts.restoreRate) > 0) {
+          const short = (Number(cost.requestedQueryCost) || 0) - (Number(ts.currentlyAvailable) || 0);
+          ms = Math.ceil(Math.max(short, 0) / Number(ts.restoreRate) * 1000) + 300;
+        }
+        ms = Math.min(Math.max(ms, 300), 10000);
+        timing.throttle_waits++;
+        timing.throttle_wait += ms;
+        await sleep(ms);
+        continue;
+      }
       return body;
     }
   }
@@ -370,11 +489,16 @@ Deno.serve(async (req: Request) => {
   //   * a row's SALE half never travels, only its RETURN half. An exchange
   //     books the returned item and its replacement under one order name, and
   //     dragging the replacement back would invent revenue on the wrong day.
+  const tQl0 = Date.now();
   const qlBody = await gql(
     `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, returns GROUP BY day, order_name SINCE ${from} UNTIL ${to}") {
          parseErrors tableData { rows } } }`);
+  timing.shopifyql = Date.now() - tQl0;
   const ql = qlBody?.data?.shopifyqlQuery;
-  if (ql?.parseErrors?.length) warnings.push(`shopifyql: ${ql.parseErrors.join("; ")}`);
+  if (ql?.parseErrors?.length) {
+    warnings.push(`shopifyql: ${ql.parseErrors.join("; ")}`);
+    health.shopifyql_errors = ql.parseErrors.map(String);
+  }
   const qlRows = (ql?.tableData?.rows || []).map((row: any) => ({
     day: String(row.day).slice(0, 10),
     order: String(row.order_name || ""),
@@ -419,6 +543,17 @@ Deno.serve(async (req: Request) => {
       orders: 0,
       ebay_orders: 0,
       ebay_net_sales: 0,
+      // The two counts that let the sheet tell an EMPTY cell from a WRONG one.
+      // A $0 card fee is right on a day that took only cash and eBay, and wrong
+      // on a day that ran cards; a $0 eBay fee is wrong on any day that sold on
+      // eBay. Neither is visible from the fee column alone — netprofit-sheet.gs
+      // reads these to decide whether an empty figure is worth an email.
+      card_orders: 0,
+      // What eBay CHARGED on this day's sales, before any credit. ebay_fee is
+      // net of refund credits and can legitimately be zero or negative; this
+      // cannot be zero on a day with eBay sales unless the fee went missing.
+      // null when the eBay pass failed, like ebay_fee.
+      ebay_sale_fees: null,
     };
   }
 
@@ -429,8 +564,10 @@ Deno.serve(async (req: Request) => {
   // order's first transaction returns fees: [] and reads as "no card fee".
   // eBay-gateway orders legitimately carry none; eBay takes its cut its own way.
   //
-  // Filtered on created_at so an order counts on the day it was SOLD. A capture
-  // can land the next day and must not drag the money onto that day.
+  // Booked to the day the order SOLD — its processedAt, the same day ShopifyQL
+  // files its sale under. A capture can land the next day and must not drag the
+  // money onto that day. See the SALE DAY note in the loop for why this is not
+  // the order's createdAt.
   let cursor: string | null = null;
   let pages = 0;
   const feeByKind: Record<string, number> = {};
@@ -456,6 +593,19 @@ Deno.serve(async (req: Request) => {
     d.setUTCDate(d.getUTCDate() - 40);
     return d.toISOString().slice(0, 10);
   })();
+  // ⚠️ AND FORWARD PAST IT, because an order can be CREATED after the day it
+  // sold. Marketplace Connect imports eBay sales late — a day or two routinely,
+  // ten days in the Aug 25 backfill — so an order sold on the last day of the
+  // window may not exist in Shopify until after it. Stopping the scan at `to`
+  // would lose that order's fees and label from every month. Orders created
+  // after `to` are only kept if they SOLD inside the window (the days[] guard
+  // below), so this widens what is seen, never what is booked. On the daily
+  // pass `to` is today and there is nothing past it to read.
+  const scanTo = (() => {
+    const d = new Date(to + "T12:00:00Z");
+    d.setUTCDate(d.getUTCDate() + 14);
+    return d.toISOString().slice(0, 10);
+  })();
   // eBay Order Id -> the Chicago day the order SOLD. This is what makes eBay
   // fees land on the sale date instead of the settlement date: a refund posted
   // on Aug 10 against a Jul 5 order credits its fee back to JUL 5.
@@ -466,129 +616,244 @@ Deno.serve(async (req: Request) => {
   // Orders that already carry a Shopify Shipping label, so an eBay-bought label
   // on the same order can be spotted as a possible double count.
   const ordersWithShopifyLabel = new Set<string>();
-  do {
-    // ONE pass for both the card fee and the shipping label. Page size is 25,
-    // not 100: the events connection makes each order node far more expensive
-    // (measured ~38 cost points per 25 orders), and a 100-order page with events
-    // trips Shopify's throttle on every request rather than occasionally.
-    const body: any = await gql(
-      `query($q: String!, $after: String) {
-         orders(first: 25, after: $after, sortKey: CREATED_AT, query: $q) {
-           pageInfo { hasNextPage endCursor }
-           edges { node {
-             name createdAt processedAt sourceName
-             customAttributes { key value }
-             transactions { kind status gateway
-               fees { type amount { amount } } }
-             refunds(first: 10) {
-               refundLineItems(first: 1) { edges { node { quantity } } }
-             }
-             events(first: 50) {
-               pageInfo { hasNextPage }
-               edges { node { message createdAt } }
-             }
-           } }
+  // Every eBay order id carried by ANY scanned Shopify order, whatever day it
+  // sold. ebayOrderDay only holds the ones that sold inside the window; this is
+  // what lets the eBay pass tell "sold outside the window" from "no Shopify
+  // order exists at all" — see the ORPHAN note there.
+  const seenEbayIds = new Set<string>();
+  const ebayIdsOf = (o: any): string[] => {
+    const ids: string[] = [];
+    for (const ca of o.customAttributes || []) {
+      if (String(ca.key).trim().toLowerCase() !== "ebay order id") continue;
+      const id = String(ca.value || "").trim();
+      if (id) ids.push(id);
+    }
+    const srcId = String(o.sourceIdentifier || "").trim();
+    if (/^\d{2}-\d{5}-\d{5}$/.test(srcId)) ids.push(srcId);
+    return ids;
+  };
+  // ONE pass for both the card fee and the shipping label. Page size is 25,
+  // not 100: the events connection makes each order node far more expensive
+  // (measured ~38 cost points per 25 orders), and a 100-order page with events
+  // trips Shopify's throttle on every request rather than occasionally.
+  const ORDERS_Q = `query($q: String!, $after: String) {
+     orders(first: 25, after: $after, sortKey: CREATED_AT, query: $q) {
+       pageInfo { hasNextPage endCursor }
+       edges { node {
+         name createdAt processedAt sourceName sourceIdentifier
+         customAttributes { key value }
+         transactions { kind status gateway
+           fees { type amount { amount } } }
+         refunds(first: 10) {
+           refundLineItems(first: 1) { edges { node { quantity } } }
          }
-       }`,
-      { q: `created_at:>=${scanFrom} AND created_at:<=${to}`, after: cursor });
-    if (body.errors?.length) {
-      return json({ error: "shopify orders query failed", detail: body.errors, store }, 502);
+         events(first: 50) {
+           pageInfo { hasNextPage }
+           edges { node { message createdAt } }
+         }
+       } }
+     }
+   }`;
+
+  // ⚠️ THE SCAN RUNS IN SLICES AT ONCE, AND IS RE-JOINED IN THE ORIGINAL ORDER.
+  //
+  // WHY (2026-09-17). One cursor over the whole window meant pages one after
+  // another: OVL took 67-97s through Sep 16 against a hard 150-second limit on
+  // an edge request, and the window grows every day of the month (it starts 40
+  // days back and runs to today). At 9:35 that morning the restarted pass shared
+  // OVL's Shopify bucket with the catalog refresh and the request died at
+  // 150.075s — OVL's column went unwritten. Splitting the creation-date range
+  // into SCAN_CHUNKS slices and paging them together cuts the wall time to
+  // roughly that of the slowest slice.
+  //
+  // ⚠️ WHY THE OUTPUT IS UNCHANGED, AND WHAT WOULD CHANGE IT. The loop below is
+  // ORDER-SENSITIVE even though it looks like plain summing: every accumulator
+  // rounds as it goes, so the same amounts added in a different order can land
+  // a cent apart; ebayOrderDay is last-write-wins for the attribute and
+  // first-write-wins for sourceIdentifier. So orders are NOT processed as each
+  // slice returns. Each slice is a contiguous stretch of created_at, its pages
+  // come back CREATED_AT-sorted exactly as before, and the slices are joined
+  // oldest first — which is the original single-cursor order. The boundaries
+  // are explicit UTC instants used as <X on one side and >=X on the other, so
+  // every order falls in exactly one slice; the outer bounds keep their original
+  // date form so the window itself does not move. A name seen twice is dropped
+  // as belt and braces, and counted.
+  //
+  // Verified before release by running this beside the single-cursor version
+  // for all five stores and comparing the responses field by field.
+  const SCAN_CHUNKS = 4;
+  const SCAN_PAGE_CAP = 200;   // per slice; the old cap was 200 for the whole scan
+  const scanQueries = (() => {
+    const outerFrom = `created_at:>=${scanFrom}`;
+    const outerTo = `created_at:<=${scanTo}`;
+    const lo = Date.parse(scanFrom + "T00:00:00Z");
+    // Nothing is created in the future, so the part of the window after
+    // tomorrow is always empty and not worth a slice of its own.
+    const hi = Math.min(Date.parse(scanTo + "T00:00:00Z"), Date.now() + 86400000);
+    if (!(hi - lo > 86400000 * SCAN_CHUNKS)) return [`${outerFrom} AND ${outerTo}`];
+    const cuts: string[] = [];
+    for (let i = 1; i < SCAN_CHUNKS; i++) {
+      cuts.push(new Date(lo + Math.round((hi - lo) * i / SCAN_CHUNKS)).toISOString().slice(0, 19) + "Z");
     }
-    const conn = body.data.orders;
-    for (const e of conn.edges) {
-      const o = e.node;
+    return Array.from({ length: SCAN_CHUNKS }, (_, i) => [
+      i === 0 ? outerFrom : `created_at:>='${cuts[i - 1]}'`,
+      i === SCAN_CHUNKS - 1 ? outerTo : `created_at:<'${cuts[i]}'`,
+    ].join(" AND "));
+  })();
+  const tScan0 = Date.now();
+  const slices = await Promise.all(scanQueries.map(async (q) => {
+    const nodes: any[] = [];
+    let after: string | null = null;
+    let n = 0;
+    do {
+      const page: any = await gql(ORDERS_Q, { q, after });
+      if (page.errors?.length) return { error: page.errors, nodes, pages: n, capHit: false };
+      const conn = page.data.orders;
+      for (const e of conn.edges) nodes.push(e.node);
+      after = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+      n++;
+    } while (after && n < SCAN_PAGE_CAP);
+    return { error: null, nodes, pages: n, capHit: !!after };
+  }));
+  const failedSlice = slices.find((x) => x.error);
+  if (failedSlice) {
+    return json({ error: "shopify orders query failed", detail: failedSlice.error, store }, 502);
+  }
+  const scannedOrders: any[] = [];
+  const scannedNames = new Set<string>();
+  let scanDuplicates = 0;
+  for (const sl of slices) {
+    for (const node of sl.nodes) {
+      if (scannedNames.has(node.name)) { scanDuplicates++; continue; }
+      scannedNames.add(node.name);
+      scannedOrders.push(node);
+    }
+    pages += sl.pages;
+  }
+  if (slices.some((x) => x.capHit)) cursor = "page cap";
+  if (scanDuplicates) warnings.push(`${scanDuplicates} order(s) came back in two scan slices and were counted once`);
+  timing.scan = Date.now() - tScan0;
+  timing.scan_pages = pages;
+  timing.scan_chunks = scanQueries.length;
+  timing.scan_orders = scannedOrders.length;
 
-      // Collected BEFORE the window guard, because an order's sale day and its
-      // creation day are not always the same one and the sale day is the one
-      // the re-dating below needs.
-      const soldOn = chicagoDay(o.processedAt || o.createdAt);
-      const returnedLineItems = (o.refunds || []).some((rf: any) =>
-        (rf.refundLineItems?.edges || []).length > 0);
-      if (returnedLineItems && soldOn >= from && soldOn <= to) saleDay[o.name] = soldOn;
+  for (const o of scannedOrders) {
 
-      const d = chicagoDay(o.createdAt);
-      if (!days[d]) continue; // outside the ShopifyQL window; never invent a row
-      days[d].orders++;
-      const isEbay = o.sourceName === "ebay"
-        || (o.transactions || []).some((x: any) => x.gateway === "ebay");
-      if (isEbay) days[d].ebay_orders++;
-      for (const tx of o.transactions || []) {
-        if (tx.status !== "SUCCESS") continue;
-        for (const f of tx.fees || []) {
-          const amt = Number(f.amount?.amount) || 0;
-          // Tracked by transaction kind so we can SEE whether Shopify hands the
-          // processing fee back on a refund, rather than assuming either way.
-          const k = `${tx.kind}:${f.type}`;
-          feeByKind[k] = round2((feeByKind[k] || 0) + amt);
-          if (f.type === "processing_fee") days[d].cc_fee = round2(days[d].cc_fee + amt);
-        }
-      }
+    // Collected BEFORE the window guard, because an order's sale day and its
+    // creation day are not always the same one and the sale day is the one
+    // the re-dating below needs.
+    const soldOn = chicagoDay(o.processedAt || o.createdAt);
+    const returnedLineItems = (o.refunds || []).some((rf: any) =>
+      (rf.refundLineItems?.edges || []).length > 0);
+    if (returnedLineItems && soldOn >= from && soldOn <= to) saleDay[o.name] = soldOn;
 
-      // Shipping labels. The label is bought the day AFTER the sale, but it is
-      // charged to the SALE day because the event hangs off this order — which
-      // is exactly the attribution asked for, and exactly why the sheet writer
-      // needs a 1-day lag and an MTD restatement pass.
-      if (o.events?.pageInfo?.hasNextPage) ordersWithTruncatedEvents++;
-      for (const ee of o.events?.edges || []) {
-        const msg = String(ee.node?.message || "");
-        if (!/shipping label/i.test(msg)) continue;
-        labelEvents++;
-        const v = parseLabelCost(msg);
-        if (v === null) {
-          if (unknownLabelMessages.length < 20) unknownLabelMessages.push(msg);
-          continue;
-        }
-        const shape = labelShape(msg);
-        const bucket = labelShapes[shape] || { n: 0, amount: 0 };
-        bucket.n++;
-        bucket.amount = round2(bucket.amount + v);
-        labelShapes[shape] = bucket;
-        // chargedOn is when the money moved; day is the order it is booked to.
-        // A carrier reweigh can land weeks after the sale, which is the whole
-        // reason the sheet needs an MTD restatement pass and not just a 1-day
-        // lag — see the lagDays tally below.
-        const chargedOn = ee.node?.createdAt ? chicagoDay(String(ee.node.createdAt)) : "";
-        if (chargedOn && chargedOn !== d) {
-          const lag = Math.round(
-            (Date.parse(chargedOn + "T12:00:00Z") - Date.parse(d + "T12:00:00Z")) / 86400000);
-          const lb = labelLag[shape] || { n: 0, maxLag: 0, over7: 0, amountOver7: 0 };
-          lb.n++;
-          lb.maxLag = Math.max(lb.maxLag, lag);
-          if (lag > 7) { lb.over7++; lb.amountOver7 = round2(lb.amountOver7 + v); }
-          labelLag[shape] = lb;
-        }
-        const bookTo = shippingBookingDay(d, chargedOn, shape);
-        if (wantLabels) {
-          labelDetail.push({ order: o.name, day: d, chargedOn, book_to: bookTo,
-                             shape, amount: v, msg });
-        }
-        // A charge can now land outside the window. That is the rule working,
-        // not a leak — but it is counted, because a silent one would be.
-        if (!days[bookTo]) {
-          if (bookTo > to) { outOfWindow.after = round2(outOfWindow.after + v); outOfWindow.after_n++; }
-          else { outOfWindow.before = round2(outOfWindow.before + v); outOfWindow.before_n++; }
-          continue;
-        }
-        if (bookTo !== d) { rebooked.n++; rebooked.amount = round2(rebooked.amount + v); }
-        days[bookTo].shipping_cost = round2((days[bookTo].shipping_cost || 0) + v);
-        ordersWithShopifyLabel.add(o.name);
-      }
-
-      // Marketplace Connect writes the eBay Order Id as a custom attribute — it
-      // is the ONLY join between a Shopify order and eBay's Finances API, since
-      // MC writes no metafields. Verified format matches exactly: "17-14959-57173".
-      for (const ca of o.customAttributes || []) {
-        if (String(ca.key).trim().toLowerCase() !== "ebay order id") continue;
-        const id = String(ca.value || "").trim();
-        if (id) ebayOrderDay[id] = { day: d, name: o.name };
+    // ⚠️ THE SALE DAY, NOT THE DAY THE ORDER WAS CREATED. Every cost below —
+    // card fee, our label, and (through ebayOrderDay) the eBay fee — books to
+    // `d`, and Sales and Cost come from ShopifyQL, which files an order under
+    // its processedAt. For a till sale the two are the same day. For an eBay
+    // sale they are not: Marketplace Connect creates the Shopify order when it
+    // IMPORTS it, and when the import runs late the costs used to go with it.
+    //
+    // Measured 2026-09-15: the importer stalled over Sep 11-13 and 46 eBay
+    // orders at all five stores were created one to two days after they sold.
+    // OVL's Sep 12 and 13 kept their $9,228 of sales and showed $0.00 of eBay
+    // fee, with the fees and labels of 15 orders piled onto Sep 14; LEE and
+    // WSP lost Sep 11's the same way. Nothing guarded it, because every
+    // month total was still right — only the days were wrong.
+    const d = soldOn;
+    for (const id of ebayIdsOf(o)) seenEbayIds.add(id);
+    if (!days[d]) continue; // sold outside the window; never invent a row
+    days[d].orders++;
+    const isEbay = o.sourceName === "ebay"
+      || (o.transactions || []).some((x: any) => x.gateway === "ebay");
+    if (isEbay) days[d].ebay_orders++;
+    if ((o.transactions || []).some((x: any) => x.status === "SUCCESS"
+        && x.gateway === "shopify_payments" && (x.kind === "SALE" || x.kind === "CAPTURE"))) {
+      days[d].card_orders++;
+    }
+    for (const tx of o.transactions || []) {
+      if (tx.status !== "SUCCESS") continue;
+      for (const f of tx.fees || []) {
+        const amt = Number(f.amount?.amount) || 0;
+        // Tracked by transaction kind so we can SEE whether Shopify hands the
+        // processing fee back on a refund, rather than assuming either way.
+        const k = `${tx.kind}:${f.type}`;
+        feeByKind[k] = round2((feeByKind[k] || 0) + amt);
+        if (f.type === "processing_fee") days[d].cc_fee = round2(days[d].cc_fee + amt);
       }
     }
-    cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
-    pages++;
-    // 25 per page means a busy store's month needs ~30 pages. The old cap of 60
-    // was sized for 100-order pages and would now truncate a month silently.
-  } while (cursor && pages < 200);
-  if (cursor) warnings.push("stopped at 200 pages — range too wide, split it");
+
+    // Shipping labels. The label is bought the day AFTER the sale, but it is
+    // charged to the SALE day because the event hangs off this order — which
+    // is exactly the attribution asked for, and exactly why the sheet writer
+    // needs a 1-day lag and an MTD restatement pass.
+    if (o.events?.pageInfo?.hasNextPage) ordersWithTruncatedEvents++;
+    for (const ee of o.events?.edges || []) {
+      const msg = String(ee.node?.message || "");
+      if (!/shipping label/i.test(msg)) continue;
+      labelEvents++;
+      const v = parseLabelCost(msg);
+      if (v === null) {
+        if (unknownLabelMessages.length < 20) unknownLabelMessages.push(msg);
+        continue;
+      }
+      const shape = labelShape(msg);
+      const bucket = labelShapes[shape] || { n: 0, amount: 0 };
+      bucket.n++;
+      bucket.amount = round2(bucket.amount + v);
+      labelShapes[shape] = bucket;
+      // chargedOn is when the money moved; day is the order it is booked to.
+      // A carrier reweigh can land weeks after the sale, which is the whole
+      // reason the sheet needs an MTD restatement pass and not just a 1-day
+      // lag — see the lagDays tally below.
+      const chargedOn = ee.node?.createdAt ? chicagoDay(String(ee.node.createdAt)) : "";
+      if (chargedOn && chargedOn !== d) {
+        const lag = Math.round(
+          (Date.parse(chargedOn + "T12:00:00Z") - Date.parse(d + "T12:00:00Z")) / 86400000);
+        const lb = labelLag[shape] || { n: 0, maxLag: 0, over7: 0, amountOver7: 0 };
+        lb.n++;
+        lb.maxLag = Math.max(lb.maxLag, lag);
+        if (lag > 7) { lb.over7++; lb.amountOver7 = round2(lb.amountOver7 + v); }
+        labelLag[shape] = lb;
+      }
+      const bookTo = shippingBookingDay(d, chargedOn, shape);
+      if (wantLabels) {
+        labelDetail.push({ order: o.name, day: d, chargedOn, book_to: bookTo,
+                           shape, amount: v, msg });
+      }
+      // A charge can now land outside the window. That is the rule working,
+      // not a leak — but it is counted, because a silent one would be.
+      if (!days[bookTo]) {
+        if (bookTo > to) { outOfWindow.after = round2(outOfWindow.after + v); outOfWindow.after_n++; }
+        else { outOfWindow.before = round2(outOfWindow.before + v); outOfWindow.before_n++; }
+        continue;
+      }
+      if (bookTo !== d) { rebooked.n++; rebooked.amount = round2(rebooked.amount + v); }
+      days[bookTo].shipping_cost = round2((days[bookTo].shipping_cost || 0) + v);
+      ordersWithShopifyLabel.add(o.name);
+    }
+
+    // Marketplace Connect writes the eBay Order Id as a custom attribute — it
+    // is the ONLY join between a Shopify order and eBay's Finances API, since
+    // MC writes no metafields. Verified format matches exactly: "17-14959-57173".
+    for (const ca of o.customAttributes || []) {
+      if (String(ca.key).trim().toLowerCase() !== "ebay order id") continue;
+      const id = String(ca.value || "").trim();
+      if (id) ebayOrderDay[id] = { day: d, name: o.name };
+    }
+    // The same id also sits in sourceIdentifier on the copies Marketplace
+    // Connect makes (see sales-true-daily's header). Every September order
+    // carries both, but an order with only this one would otherwise leave its
+    // fee unmatched and report the sale as never imported.
+    const srcId = String(o.sourceIdentifier || "").trim();
+    if (/^\d{2}-\d{5}-\d{5}$/.test(srcId) && !ebayOrderDay[srcId]) {
+      ebayOrderDay[srcId] = { day: d, name: o.name };
+    }
+  }
+  if (cursor) warnings.push(`stopped at ${SCAN_PAGE_CAP} pages in a scan slice — range too wide, split it`);
+  health.page_cap_hit = !!cursor;
+  health.orders_with_truncated_events = ordersWithTruncatedEvents;
+  health.unknown_label_messages = unknownLabelMessages.length;
   if (ordersWithTruncatedEvents) {
     warnings.push(`${ordersWithTruncatedEvents} order(s) had more than 50 timeline events; `
       + "a label message could sit past the cut and its cost be missed");
@@ -663,11 +928,19 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // --- eBay fees (and eBay-bought labels) -----------------------------------
-  // Every row is attributed by its ORDER, not by its own transaction date, so a
+  // --- eBay fees (and eBay-billed labels) -----------------------------------
+  // A FEE is attributed by its ORDER, not by its own transaction date, so a
   // refund settled weeks later credits its fee back to the day the item SOLD.
-  // Rows whose order is not in this month's map belong to another month and are
-  // counted, not guessed at.
+  // A CHARGE whose order is not in this month's map belongs to another month,
+  // was already counted there, and is reported rather than guessed at. A CREDIT
+  // in the same position is RESCUED onto the day it posted — it was in no month
+  // at all — see the fee attribution block for the full reasoning.
+  //
+  // ⚠️ A LABEL IS THE EXCEPTION AND BOOKS BY ITS OWN DATE. It is billed weeks
+  // after the sale, so requiring an order match dropped every one of them into
+  // `unmatched` and lost the postage from both months. See the SHIPPING_LABEL
+  // branch below — it is handled before the order lookup for exactly that
+  // reason, and `unmatched` now counts fees only.
   //
   // ⚠️ The scan window runs from `from` to TODAY, not to `to`. Fees and refunds
   // settle days after the sale, so a window that stops at month end misses them
@@ -678,6 +951,18 @@ Deno.serve(async (req: Request) => {
     // Voided / refunded eBay labels. Non-zero here means postage came back.
     label_credits: 0, label_credit_count: 0,
     rows: 0, matched: 0, unmatched: 0,
+    // A fee credit whose order sold in an earlier month, re-booked onto the day
+    // the credit itself posted rather than discarded. The fee attribution block
+    // below says why a CREDIT is rescued and a CHARGE is not.
+    refund_credits_rebooked: 0, refund_credits_rebooked_amount: 0,
+    // `unmatched` split by direction, because the two mean opposite things: a
+    // stranded credit understates Net Profit, a stranded charge OVERSTATES it.
+    unmatched_sale_fees: 0, unmatched_refund_credits: 0,
+    // Labels booked by their own post date, so an order this window cannot see is
+    // not a failure the way it is for a fee. `label_outside_window` is postage
+    // that belongs to a day outside the range — the tie between two months.
+    label_outside_window: 0, label_outside_window_count: 0,
+    label_no_order_in_window: 0,
     account_fees_unattributed: 0, skipped_disputes: 0, skipped_transfers: 0,
     unhandled_types: {} as Record<string, number>,
     overlap_orders: [] as string[],
@@ -690,6 +975,7 @@ Deno.serve(async (req: Request) => {
     // Paging integrity. `transactions` short of `transactions_expected` is the
     // dropped-row failure; it throws rather than reporting a short fee.
     transactions: 0, transactions_expected: 0, duplicate_page_rows: 0,
+    short_reads_retried: 0,
   };
   try {
     const er = await fetch(
@@ -705,7 +991,24 @@ Deno.serve(async (req: Request) => {
     const upper = new Date(Math.max(
       new Date(`${to}T00:00:00.000Z`).getTime(), today.getTime()));
     upper.setUTCDate(upper.getUTCDate() + 1);
+    // Close the window short of now — see FIN_SETTLE_LAG_MS. A closed month is
+    // already immutable and clamping it changes nothing; a range that runs to
+    // today is the only one that can drift, and this is what stops it.
+    const settledTo = Date.now() - FIN_SETTLE_LAG_MS;
+    if (upper.getTime() > settledTo) upper.setTime(settledTo);
     const filter = `transactionDate:[${from}T00:00:00.000Z..${upper.toISOString().slice(0, 23)}Z]`;
+
+    // The day last month stopped accepting charges. A fee credit dated AFTER it
+    // was never in that month's figures and can be rescued onto a day in this
+    // window; one dated on or before it already is, and rescuing it would count
+    // it twice. Same calendar the shipping rule uses, one month back.
+    const prevMonthClose = (() => {
+      const y = Number(from.slice(0, 4));
+      const m = Number(from.slice(5, 7));
+      const py = m === 1 ? y - 1 : y;
+      const pm = m === 1 ? 12 : m - 1;
+      return monthCloseDay(`${py}-${String(pm).padStart(2, "0")}`);
+    })();
 
     // ⚠️ OFFSET PAGING OVER A LIVE SET. The window deliberately runs to TODAY,
     // so eBay is still writing into the range while we page through it. Offset
@@ -722,55 +1025,70 @@ Deno.serve(async (req: Request) => {
     // count to reach eBay's own `total` (catches the drop). A short read throws,
     // which the catch below turns into ebay_fee = null and a warning — the same
     // honest #N/A an HTTP failure produces, instead of a plausible wrong number.
-    const seen = new Set<string>();
-    const txs: any[] = [];
+    // ⚠️ RETRIED, NOT ABANDONED. A read that comes back short is tried again
+    // (FIN_PAGE_ATTEMPTS) before it becomes an #N/A, because drift is a race and
+    // the next read is almost always whole. The guarantee is unchanged: a total
+    // KNOWN to be short is still never reported.
+    let txs: any[] = [];
     let expected = 0;
     let dupePageRows = 0;
-    for (let off = 0; off < 20000; off += 200) {
-      const r2 = await ebayGet(
-        `${host}/sell/finances/v1/transaction?limit=200&offset=${off}`
-        + `&filter=${encodeURIComponent(filter)}`, token);
-      // 204 = No Content, which is how the Finances API says "that offset is past
-      // the end". It is a normal terminator, not a failure: WSP July holds exactly
-      // 1000 transactions, so offset 1000 answers 204. Treating it as an error
-      // threw away the whole store's fee (and, worse, its eBay shipping — see the
-      // catch below).
-      if (r2.status === 204) break;
-      if (r2.status !== 200) {
-        throw new Error(`finances HTTP ${r2.status}: ${(await r2.text()).slice(0, 200)}`);
+    let shortReads = 0;
+    for (let attempt = 1; attempt <= FIN_PAGE_ATTEMPTS; attempt++) {
+      const seen = new Set<string>();
+      txs = [];
+      expected = 0;
+      dupePageRows = 0;
+      for (let off = 0; off < 20000; off += 200) {
+        const r2 = await ebayGet(
+          `${host}/sell/finances/v1/transaction?limit=200&offset=${off}`
+          + `&filter=${encodeURIComponent(filter)}`, token);
+        // 204 = No Content, which is how the Finances API says "that offset is past
+        // the end". It is a normal terminator, not a failure: WSP July holds exactly
+        // 1000 transactions, so offset 1000 answers 204. Treating it as an error
+        // threw away the whole store's fee (and, worse, its eBay shipping — see the
+        // catch below).
+        if (r2.status === 204) break;
+        if (r2.status !== 200) {
+          throw new Error(`finances HTTP ${r2.status}: ${(await r2.text()).slice(0, 200)}`);
+        }
+        const b2 = await r2.json();
+        const page = b2?.transactions || [];
+        // `total` is re-read every page on purpose: it is the live count, and the
+        // largest one seen is the bar the final tally has to clear.
+        expected = Math.max(expected, Number(b2?.total) || 0);
+        for (const x of page) {
+          // No id means it cannot be de-duplicated; keep it rather than drop it,
+          // and let the count check be the safety net.
+          const id = String(x?.transactionId || "");
+          if (id && seen.has(id)) { dupePageRows++; continue; }
+          if (id) seen.add(id);
+          txs.push(x);
+        }
+        // ⚠️ STOP ON A SHORT PAGE, NOT ON `total`. WSP July came back with total
+        // exactly 1000 — a round number that is far more likely to be a reporting
+        // cap than a true count, and trusting it would have stopped paging with
+        // real transactions still unread. A full page always means "ask again";
+        // only a page that comes back short proves the end. `total` is kept as the
+        // floor the final count must clear, never as the thing that ends the loop.
+        if (page.length < 200) break;
       }
-      const b2 = await r2.json();
-      const page = b2?.transactions || [];
-      // `total` is re-read every page on purpose: it is the live count, and the
-      // largest one seen is the bar the final tally has to clear.
-      expected = Math.max(expected, Number(b2?.total) || 0);
-      for (const x of page) {
-        // No id means it cannot be de-duplicated; keep it rather than drop it,
-        // and let the count check be the safety net.
-        const id = String(x?.transactionId || "");
-        if (id && seen.has(id)) { dupePageRows++; continue; }
-        if (id) seen.add(id);
-        txs.push(x);
-      }
-      // ⚠️ STOP ON A SHORT PAGE, NOT ON `total`. WSP July came back with total
-      // exactly 1000 — a round number that is far more likely to be a reporting
-      // cap than a true count, and trusting it would have stopped paging with
-      // real transactions still unread. A full page always means "ask again";
-      // only a page that comes back short proves the end. `total` is kept as the
-      // floor the final count must clear, never as the thing that ends the loop.
-      if (page.length < 200) break;
+      if (txs.length >= expected) break;
+      shortReads++;
+      if (attempt < FIN_PAGE_ATTEMPTS) await sleep(FIN_RETRY_PAUSE_MS);
     }
     ebay.transactions = txs.length;
     ebay.transactions_expected = expected;
     ebay.duplicate_page_rows = dupePageRows;
+    ebay.short_reads_retried = shortReads;
     // Equal is the normal case. MORE than expected is fine and is why the dedupe
     // runs first — eBay wrote new rows while we paged, and they are real. FEWER
     // is the failure: rows the paging lost.
     if (txs.length < expected) {
       throw new Error(
-        `finances paging incomplete: read ${txs.length} of ${expected} transactions `
-        + `(${expected - txs.length} lost to offset drift). Refusing to report a `
-        + "fee total that is short — a low fee overstates Net Profit.");
+        `finances paging incomplete after ${FIN_PAGE_ATTEMPTS} attempts: read `
+        + `${txs.length} of ${expected} transactions (${expected - txs.length} lost to `
+        + "offset drift). Refusing to report a fee total that is short — a low fee "
+        + "overstates Net Profit.");
     }
 
     // Only now that the WHOLE range came back 200 do the nulls become zeros: a
@@ -780,6 +1098,208 @@ Deno.serve(async (req: Request) => {
       days[d].ebay_fee = 0;
       days[d].ebay_fee_new = 0;
       days[d].ebay_fee_other = 0;
+      days[d].ebay_sale_fees = 0;
+    }
+    // "Already over" is decided in the stores' calendar, same as everything else
+    // here. Today's eBay sales are routinely not imported yet and today is never
+    // written, so they are not a gap.
+    const todayChicago = chicagoDay(new Date().toISOString());
+
+    // ── ORPHANS: an eBay sale inside the window with NO Shopify order at all ──
+    // Two very different things look identical here, and both used to be
+    // mishandled:
+    //   * a sale the importer has not brought across yet — the day is missing
+    //     the SALE as well as the fee (Sep 11-13 was this);
+    //   * a sale cancelled before it was ever imported — nothing is missing.
+    //     Three of these (LEE 15-15146-24542, WSP 01-15172-32087 and
+    //     14-15112-68662, confirmed cancelled 2026-09-15) were the first thing
+    //     the "not imported" alert ever reported.
+    //
+    // ⚠️ AND THE CANCELLED KIND WAS UNDERSTATING THE FEE. Its SALE row had no
+    // order to join to and was dropped as "another month's", while its REFUND
+    // row — the fee eBay handed back — was rescued onto the day it posted. The
+    // charge vanished and the credit stayed: $40.31 at LEE and $140.29 at WSP
+    // came off the fee column that eBay never actually kept.
+    //
+    // So an orphan is DATED BY eBAY'S OWN SALE DATE, exactly as if it had a
+    // Shopify order: its fee books to the day it sold and any credit follows it
+    // there, the way a matched refund does. A cancellation nets to zero on its
+    // own day; an unimported sale shows its real fee now, and sits on the same
+    // day when its order arrives. It only counts as NOT IMPORTED while eBay has
+    // no refund against it — a refunded orphan was a cancellation, not a gap.
+    // (A PARTLY refunded unimported sale would be read as cancelled. None has
+    // been seen; if one appears, compare amounts here.)
+    //
+    // seenEbayIds, not ebayOrderDay, decides "no Shopify order": an order that
+    // exists but sold just outside the window must stay another month's, and a
+    // sale a few seconds either side of midnight can fall on different days in
+    // Shopify and eBay.
+    const refundedIds = new Set<string>();
+    for (const x of txs) {
+      if (String(x.transactionType) === "REFUND") refundedIds.add(String(x.orderId || "").trim());
+    }
+    // Gathered here and resolved below, not booked as we go: deciding whether an
+    // orphan was recovered by hand takes a Shopify read, and ONE read for the
+    // whole set is the difference between a free check and one call per orphan.
+    const orphans: { oid: string; soldDay: string; fee: number; gross: number[] }[] = [];
+    for (const x of txs) {
+      if (String(x.transactionType) !== "SALE") continue;
+      const oid = String(x.orderId || "").trim();
+      if (!oid || ebayOrderDay[oid] || seenEbayIds.has(oid)) continue;
+      const soldDay = x.transactionDate ? chicagoDay(String(x.transactionDate)) : "";
+      if (!soldDay || !days[soldDay]) continue;
+      ebayOrderDay[oid] = { day: soldDay, name: "" };  // "" = no Shopify order
+      if (refundedIds.has(oid)) {
+        health.cancelled_before_import.n++;
+        if (health.cancelled_before_import.orders.length < 25) {
+          health.cancelled_before_import.orders.push({ ebay_order_id: oid, day: soldDay });
+        }
+      } else if (soldDay < todayChicago) {
+        // Today's are routinely not imported YET, and today is never written.
+        const fee = Number(x?.totalFeeAmount?.value) || 0;
+        // What the BUYER paid, which is what a hand-keyed invoice is written
+        // for. Two readings of it, because eBay states the basis one way and
+        // the net another, and which of the two equals the Shopify figure is
+        // not worth a guess: totalFeeBasisAmount is the gross eBay charged the
+        // fee on, and amount is that gross less the fee. Both are offered to
+        // the matcher and a UNIQUE hit is still required, so offering two can
+        // never turn one confident match into a wrong one — only into no match.
+        const gross = [
+          round2(Number(x?.totalFeeBasisAmount?.value) || 0),
+          round2((Number(x?.amount?.value) || 0) + fee),
+        ].filter((v) => v > 0);
+        orphans.push({ oid, soldDay, fee, gross });
+      }
+    }
+
+    // ── A SALE THE STORE RECOVERED BY HAND IS NOT A GAP (2026-09-18) ────────
+    // The alert above assumed one cause for "eBay sold it, Shopify has never
+    // heard of it": Marketplace Connect is behind. There is a second, and it
+    // never clears on its own — MC imports orders only for listings IT created,
+    // so a sale on one of OUR SPEEKS Connect listings is never coming across at
+    // all. The store invoices the buyer through a draft order instead, and the
+    // money lands in Shopify under an order with no eBay id on it.
+    //
+    // Left alone that fires not_imported on every pass, twice a day, forever,
+    // telling somebody to go and check a connector that is working fine. OVL
+    // 18-15155-99419 did exactly that from Sep 17 to Sep 18.
+    //
+    // ⚠️ THE FEE FOLLOWS THE MONEY, NOT THE CALENDAR. Everywhere else in this
+    // file a fee books to the day the item SOLD, and that rule is right because
+    // Shopify and eBay agree on that day. Here they do not: eBay sold it on the
+    // 15th, the invoice was paid on the 16th, and the REVENUE is on the 16th
+    // because that is the only day Shopify knows about. Leaving the fee on the
+    // 15th puts a cost on a day with no sale behind it and a sale on the 16th
+    // with no cost — both days wrong by the fee, in opposite directions. Moving
+    // it makes each day's Net Profit internally true. The 15th is still light by
+    // the sale itself, and nothing here can fix that: the revenue figure comes
+    // from ShopifyQL, which has never heard of this sale either.
+    //
+    // ⚠️ A UNIQUE MATCH OR NO MATCH. sep-fix.gs records the trap directly — this
+    // same $349.99 equals the total of three unrelated refunded OVL orders. So a
+    // candidate must be a draft-sourced Shopify order that carries NO eBay id,
+    // for the same money, created on or within HAND_KEYED_DAYS after the eBay
+    // sale — and it must be the ONLY one. Two candidates is not a coin toss, it
+    // is an unanswered question, and it stays in not_yet_imported where somebody
+    // will see it. One draft is never claimed by two orphans.
+    const HAND_KEYED_DAYS = 4;
+    async function findHandKeyed(list: typeof orphans) {
+      const found: Record<string, { day: string; name: string; how: string }> = {};
+      // The manual list first, and it WINS. It exists for what the matcher
+      // cannot see, so a matcher that disagrees with it is not a tiebreak.
+      const manual = EBAY_ACCOUNTED[store] || {};
+      const unresolved = list.filter((o) => {
+        const m = manual[o.oid];
+        if (!m) return true;
+        found[o.oid] = { day: m.booked_day, name: m.shopify_order,
+                         how: "named in EBAY_ACCOUNTED: " + m.note };
+        return false;
+      });
+      if (!unresolved.length) return found;
+
+      // Only reached when there IS an orphan, so the ordinary pass — every eBay
+      // sale accounted for — pays nothing for this. source_name is a supported
+      // order-search field, so Shopify does the filtering and a store with 400
+      // orders in the window returns only the dozen drafts among them.
+      let earliest = unresolved[0].soldDay;
+      for (const o of unresolved) if (o.soldDay < earliest) earliest = o.soldDay;
+      const DRAFTS_Q = `query($q: String!, $after: String) {
+         orders(first: 50, after: $after, sortKey: CREATED_AT, query: $q) {
+           pageInfo { hasNextPage endCursor }
+           edges { node {
+             name createdAt processedAt sourceIdentifier
+             customAttributes { key value }
+             currentSubtotalPriceSet { shopMoney { amount } }
+             totalPriceSet { shopMoney { amount } }
+           } }
+         }
+       }`;
+      const q = `created_at:>=${earliest}T00:00:00Z AND created_at:<=${scanTo}T23:59:59Z`
+        + " AND source_name:shopify_draft_order";
+      const drafts: any[] = [];
+      let after: string | null = null;
+      for (let page = 0; page < 10; page++) {
+        const b: any = await gql(DRAFTS_Q, { q, after });
+        const conn = b?.data?.orders;
+        if (!conn) break;
+        for (const e of conn.edges || []) drafts.push(e.node);
+        if (!conn.pageInfo?.hasNextPage) break;
+        after = conn.pageInfo.endCursor;
+      }
+
+      const claimed = new Set<string>();
+      for (const o of unresolved) {
+        const hits = drafts.filter((dr) => {
+          if (claimed.has(dr.name)) return false;
+          // A draft that already carries an eBay id joined through the normal
+          // path and is another order, not a recovery of this one.
+          if (ebayIdsOf(dr).length) return false;
+          const dday = chicagoDay(dr.processedAt || dr.createdAt);
+          const gap = Math.round((Date.parse(dday + "T12:00:00Z")
+            - Date.parse(o.soldDay + "T12:00:00Z")) / 86400000);
+          if (gap < 0 || gap > HAND_KEYED_DAYS) return false;
+          const sub = round2(Number(dr.currentSubtotalPriceSet?.shopMoney?.amount) || 0);
+          const tot = round2(Number(dr.totalPriceSet?.shopMoney?.amount) || 0);
+          return o.gross.some((g) => Math.abs(g - sub) < 0.005 || Math.abs(g - tot) < 0.005);
+        });
+        if (hits.length !== 1) continue;
+        claimed.add(hits[0].name);
+        found[o.oid] = {
+          day: chicagoDay(hits[0].processedAt || hits[0].createdAt),
+          name: hits[0].name,
+          how: "the only draft-order invoice at this store for this money, within "
+            + HAND_KEYED_DAYS + " days of the sale",
+        };
+      }
+      return found;
+    }
+
+    const handKeyed = orphans.length ? await findHandKeyed(orphans) : {};
+    for (const o of orphans) {
+      const rec = handKeyed[o.oid];
+      if (rec) {
+        // Outside the window there is no day row to book against, so the fee
+        // stays where the orphan pass put it. Still recovered — the point of
+        // saying so is that nobody is waiting on an import that is not coming.
+        const bookTo = days[rec.day] ? rec.day : o.soldDay;
+        ebayOrderDay[o.oid] = { day: bookTo, name: rec.name };
+        health.recovered_by_draft.n++;
+        health.recovered_by_draft.fee = round2(health.recovered_by_draft.fee + o.fee);
+        if (health.recovered_by_draft.orders.length < 25) {
+          health.recovered_by_draft.orders.push({
+            ebay_order_id: o.oid, sold_day: o.soldDay, shopify_order: rec.name,
+            booked_day: bookTo, fee: round2(o.fee),
+            matched_by: bookTo === rec.day ? rec.how
+              : rec.how + " (its day is outside this window, so the fee stays on the sale day)",
+          });
+        }
+        continue;
+      }
+      health.not_yet_imported.n++;
+      health.not_yet_imported.fee = round2(health.not_yet_imported.fee + o.fee);
+      if (health.not_yet_imported.orders.length < 25) {
+        health.not_yet_imported.orders.push({ ebay_order_id: o.oid, day: o.soldDay });
+      }
     }
 
     for (const x of txs) {
@@ -819,9 +1339,142 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
+      // ── EBAY-BILLED SHIPPING LABELS BOOK ON THE DAY EBAY CHARGED THEM ─────
+      // Handled BEFORE the order lookup below, and that placement is the whole
+      // fix. These rows used to fall through to `ebayOrderDay[oid]` like a fee —
+      // but a return label is billed weeks after the sale, so its order was
+      // almost never inside the window, every row landed in `unmatched`, and the
+      // postage was dropped from BOTH months. Measured 2026-09-09: 25 charges,
+      // $311.80, every one a "Return shipping label", and `label_count` read 0
+      // at all five stores. A real cost that reads as zero is the one direction
+      // this file must never fail in.
+      //
+      // ⚠️ THE POST DATE, NOT THE SALE DATE (Ethan's call, 2026-09-09). WE DO
+      // NOT BUY THESE. The buyer opens a return, eBay buys the label and bills
+      // us, and the row carries exactly ONE date — `transactionDate`, all 25
+      // already `PAYOUT`. So there is no purchase-vs-post choice to make: the
+      // day eBay stamps the charge is the only day that exists. It is also the
+      // rule shippingBookingDay() already applies to a carrier price
+      // adjustment, for the same reason — a cost whose timing the store does not
+      // control cannot be gamed, so it books when it was charged. Note the
+      // asymmetry this leaves, which is deliberate: our OWN outbound Shopify
+      // label still books to the SALE day, because we choose when to buy it.
+      //
+      // ⚠️ IT NEEDS NO ORDER MATCH, and that is why nothing can be silently
+      // dropped again — the date comes off the transaction itself. A label whose
+      // post day falls outside this window belongs to another day's row and is
+      // COUNTED, not discarded: `label_outside_window` is what says so, and on a
+      // month boundary it is the figure that ties one month's postage to the
+      // next. It is also why booking here can never re-open a closed month, the
+      // way sale-day attribution would have to for an August sale returned in
+      // September.
+      if (type === "SHIPPING_LABEL") {
+        const postDay = x.transactionDate ? chicagoDay(String(x.transactionDate)) : "";
+        // ⚠️ THE SIGN COMES FROM bookingEntry, NOT FROM THE TYPE NAME — the same
+        // rule the NON_SALE_CHARGE branch above follows. A voided or refunded
+        // label arrives as SHIPPING_LABEL with bookingEntry CREDIT and a
+        // POSITIVE amount: it is money handed back. Adding it unsigned charged
+        // us for postage twice — once when the label was bought, again when eBay
+        // refunded it. Confirmed against the CFO's consolidated report, which
+        // carries these as negative "Ebay Shipping" (OVL #KS01-12833, 7/23:
+        // ($65.90)).
+        const credit = String(x.bookingEntry) === "CREDIT";
+        const signed = credit ? -amt : amt;
+        // The window guard comes FIRST so every tally below describes exactly
+        // what was booked. Counting a row we then refuse to book would make
+        // `labels` disagree with the sum of the days, which is the kind of
+        // quiet drift that took a month to find the first time.
+        if (!postDay || !days[postDay]) {
+          ebay.label_outside_window = round2(ebay.label_outside_window + signed);
+          ebay.label_outside_window_count++;
+          continue;
+        }
+        if (credit) {
+          ebay.label_credits = round2(ebay.label_credits + amt);
+          ebay.label_credit_count++;
+        }
+        // Most are the buyer's return leg — verified by transactionMemo "Return
+        // shipping label" and a RETURN_ID reference. An order legitimately
+        // carries BOTH legs: we buy the outbound label on Shopify, eBay bills us
+        // the return. That is a return costing postage twice, not a double
+        // count, and it is exactly the cost the GP-based view never charged
+        // anyone for.
+        //
+        // A NON-return eBay label on an order that ALREADY has a Shopify label
+        // is a different matter and still worth flagging. That check needs the
+        // Shopify order name, so it can only fire when the order happens to sit
+        // in this window — the booking above never waits for it, and
+        // `label_no_order_in_window` says how often the name was unavailable.
+        const isReturn = /return/i.test(String(x.transactionMemo || ""))
+          || (x.references || []).some((r: any) => String(r?.referenceType) === "RETURN_ID");
+        const owner = ebayOrderDay[oid];
+        if (isReturn) {
+          ebay.return_labels = round2(ebay.return_labels + signed);
+          ebay.return_label_count++;
+        } else if (!credit && owner && ordersWithShopifyLabel.has(owner.name)) {
+          ebay.overlap_orders.push(owner.name);
+        }
+        if (!owner || !owner.name) ebay.label_no_order_in_window++;
+        ebay.labels = round2(ebay.labels + signed);
+        ebay.label_count++;
+        days[postDay].shipping_cost = round2((days[postDay].shipping_cost || 0) + signed);
+        continue;
+      }
+
+      // ── WHICH DAY A FEE BELONGS TO, and the one case where it is not the sale
+      // A fee is the cost of a sale, so it books to the day the item SOLD, and
+      // a refund settled weeks later credits its fee back to that original sale
+      // date. That is the whole point of the ebayOrderDay join and it stays.
+      //
+      // ⚠️ BUT A CREDIT ON AN ORDER THIS WINDOW CANNOT SEE USED TO BE THROWN
+      // AWAY, which silently leaves the fee too HIGH. Caught by Ethan tying
+      // LEE's Sep 1-6 against eBay's own transaction report, 2026-09-09: eBay
+      // credited $94.32 of fees back, we booked $41.27, and the missing $53.05
+      // was five refunds and a claim against orders sold in August or earlier.
+      // Same guard that was eating the return labels — and it fails in the SAFE
+      // direction, a fee left too high making Net Profit too LOW, so no guard in
+      // this file was ever going to notice. Company-wide: $766.13 of credits
+      // dropped in six days, against $228.05 of postage dropped the other way.
+      //
+      // ⚠️ THE ASYMMETRY IS DELIBERATE: A CHARGE IS DROPPED, A CREDIT IS KEPT.
+      // An unmatched SALE fee belongs to a sale in an earlier month and was
+      // already charged there, so booking it here would count it twice. An
+      // unmatched CREDIT was not in that month's figures — the return had not
+      // happened when the month closed — so it belongs to nobody unless this
+      // month takes it. That is exactly the rule shippingBookingDay() already
+      // applies to a label bought after the close.
+      //
+      // ⚠️ AND THE RESCUE IS GUARDED ON LAST MONTH'S CLOSE, or it would double
+      // count. That close run scanned up to its own close day, so a credit dated
+      // on or before it is already in the closed figures; only one dated AFTER
+      // it fell through both months. Measured on LEE: four of the five strays
+      // qualify ($48.19), and the Sep 1 one does not, because August's 7pm close
+      // on Sep 1 had already caught it.
       const hit = ebayOrderDay[oid];
-      if (!oid || !hit || !days[hit.day]) { ebay.unmatched++; continue; }
-      const d = hit.day;
+      let d = hit && days[hit.day] ? hit.day : "";
+      if (!d && type === "REFUND") {
+        const creditDay = x.transactionDate ? chicagoDay(String(x.transactionDate)) : "";
+        if (creditDay && days[creditDay] && creditDay > prevMonthClose) {
+          d = creditDay;
+          ebay.refund_credits_rebooked++;
+          ebay.refund_credits_rebooked_amount =
+            round2(ebay.refund_credits_rebooked_amount + fee);
+        }
+      }
+      if (!d) {
+        // Still nowhere to put it. Counted BY DIRECTION, because the two mean
+        // opposite things: a stranded credit only understates Net Profit, while
+        // a stranded CHARGE overstates it and is the one worth chasing.
+        ebay.unmatched++;
+        if (type === "REFUND") {
+          ebay.unmatched_refund_credits = round2(ebay.unmatched_refund_credits + fee);
+        } else {
+          // Only another month's sales reach here now — an orphan inside the
+          // window was given its own day by the ORPHAN pass above.
+          ebay.unmatched_sale_fees = round2(ebay.unmatched_sale_fees + fee);
+        }
+        continue;
+      }
       ebay.matched++;
 
       if (type === "SALE" || type === "REFUND") {
@@ -869,53 +1522,36 @@ Deno.serve(async (req: Request) => {
         if (type === "SALE") {
           ebay.sale_fees = round2(ebay.sale_fees + fee);
           days[d].ebay_fee = round2((days[d].ebay_fee || 0) + fee);
+          days[d].ebay_sale_fees = round2((days[d].ebay_sale_fees || 0) + fee);
         } else {
           // DEBIT row, but totalFeeAmount is the fee eBay hands BACK to us.
           ebay.refund_fee_credits = round2(ebay.refund_fee_credits + fee);
           days[d].ebay_fee = round2((days[d].ebay_fee || 0) - fee);
         }
-      } else {
-        // An eBay label never appears in the Shopify timeline, so it is real
-        // ADDITIONAL postage. Most are RETURN labels — verified by
-        // transactionMemo "Return shipping label" and a RETURN_ID reference —
-        // and an order legitimately carries BOTH: we buy the outbound label on
-        // Shopify, eBay bills us the buyer's return leg. That is a return
-        // costing postage twice, not a double count, and it is exactly the kind
-        // of cost the GP-based view never charged anyone for.
-        //
-        // A NON-return eBay label on an order that already has a Shopify label
-        // is a different matter and still worth flagging.
-        // ⚠️ THE SIGN COMES FROM bookingEntry, NOT FROM THE TYPE NAME — the same
-        // rule the NON_SALE_CHARGE branch above already follows. A voided or
-        // refunded label comes back as SHIPPING_LABEL with bookingEntry CREDIT
-        // and a POSITIVE amount: it is money handed back. Adding it unsigned
-        // charged us for postage twice — once when we bought the label, again
-        // when eBay refunded it. Confirmed against the CFO's consolidated
-        // report, which carries these as negative "Ebay Shipping" (OVL
-        // #KS01-12833, 7/23: ($65.90)).
-        const credit = String(x.bookingEntry) === "CREDIT";
-        const signed = credit ? -amt : amt;
-        if (credit) {
-          ebay.label_credits = round2(ebay.label_credits + amt);
-          ebay.label_credit_count++;
-        }
-        const isReturn = /return/i.test(String(x.transactionMemo || ""))
-          || (x.references || []).some((r: any) => String(r?.referenceType) === "RETURN_ID");
-        if (isReturn) {
-          ebay.return_labels = round2(ebay.return_labels + signed);
-          ebay.return_label_count++;
-        } else if (!credit && ordersWithShopifyLabel.has(hit.name)) {
-          ebay.overlap_orders.push(hit.name);
-        }
-        ebay.labels = round2(ebay.labels + signed);
-        ebay.label_count++;
-        days[d].shipping_cost = round2((days[d].shipping_cost || 0) + signed);
       }
     }
 
     if (ebay.unmatched) {
-      warnings.push(`${ebay.unmatched} eBay finance row(s) had no matching order in `
-        + "this month — expected, they belong to sales outside the range");
+      warnings.push(`${ebay.unmatched} eBay FEE row(s) had no matching order in `
+        + "this month — they belong to sales outside the range. Labels are not in "
+        + "this count: they book by their own post date and need no match");
+    }
+    if (ebay.refund_credits_rebooked) {
+      warnings.push(`${ebay.refund_credits_rebooked} fee credit(s) worth `
+        + `$${ebay.refund_credits_rebooked_amount} were for orders sold before this `
+        + "window and are booked on the day the credit posted. These were dropped "
+        + "entirely before 2026-09-09, which is why the fee column ran high");
+    }
+    if (ebay.unmatched_refund_credits) {
+      warnings.push(`$${ebay.unmatched_refund_credits} of fee CREDITS arrived on or `
+        + "before last month's close, so they are already in that closed month. Not "
+        + "rescued here, deliberately, to avoid counting them twice");
+    }
+    if (ebay.unmatched_sale_fees) {
+      warnings.push(`$${ebay.unmatched_sale_fees} of eBay fee CHARGES belong to sales `
+        + "outside this window and are in no day. They should already sit in the month "
+        + "those sales closed in — this is the direction that OVERSTATES Net Profit, so "
+        + "a large figure here is worth chasing");
     }
     if (ebay.overlap_orders.length) {
       warnings.push(`${ebay.overlap_orders.length} order(s) carry BOTH a Shopify label and `
@@ -925,6 +1561,28 @@ Deno.serve(async (req: Request) => {
     if (Object.keys(ebay.unhandled_types).length) {
       warnings.push("unrecognised eBay finance transaction type(s), NOT counted anywhere: "
         + JSON.stringify(ebay.unhandled_types));
+      health.unhandled_ebay_types = ebay.unhandled_types;
+    }
+    if (health.not_yet_imported.n) {
+      // ⚠️ THE FEE IS NOT MISSING, AND THIS LINE USED TO SAY IT WAS (2026-09-18).
+      // The ORPHAN pass above dates an unimported sale by eBay's own sale date, so
+      // its fee is already on that day and stays there when the order arrives. What
+      // the day is genuinely short of is the SALE. netprofit-sheet.gs emailed the
+      // old wording twice a day, and "the eBay fee is missing" sent people looking
+      // for a figure that was sitting right where it belonged.
+      warnings.push(`${health.not_yet_imported.n} eBay sale(s) on a finished day have no `
+        + "Shopify order, so those days are short the SALES. Their "
+        + `${health.not_yet_imported.fee} of eBay fee is already booked on the day each `
+        + "one sold and needs nothing doing to it");
+    }
+    if (health.recovered_by_draft.n) {
+      warnings.push(`${health.recovered_by_draft.n} eBay sale(s) never came into Shopify `
+        + "and were invoiced by hand instead: "
+        + health.recovered_by_draft.orders.map((o) =>
+            `${o.ebay_order_id} sold ${o.sold_day} -> ${o.shopify_order} on ${o.booked_day}`)
+          .slice(0, 5).join("; ")
+        + `. ${health.recovered_by_draft.fee} of eBay fee moved onto the day the invoice `
+        + "was paid, so each day's cost sits with its own revenue");
     }
     if (ebay.account_fees_unattributed) {
       warnings.push(`$${ebay.account_fees_unattributed} of account-level eBay charges `
@@ -946,9 +1604,11 @@ Deno.serve(async (req: Request) => {
       days[d].ebay_fee = null;
       days[d].ebay_fee_new = null;
       days[d].ebay_fee_other = null;
+      days[d].ebay_sale_fees = null;
       days[d].shipping_cost = null;
     }
     warnings.push(`eBay fee unavailable: ${String(e)}`);
+    health.ebay_error = String(e);
   }
 
   // --- what is still blocked ------------------------------------------------
@@ -1093,8 +1753,9 @@ Deno.serve(async (req: Request) => {
     paymentsLedger: ledger,
     shippingLabelShapes: labelShapes,
     shippingAttribution: {
-      rule: "a label books to the SALE day unless it was charged after that month "
-          + "closed; a carrier price adjustment always books to the day charged",
+      rule: "OUR outbound label books to the SALE day unless it was charged after "
+          + "that month closed; a carrier price adjustment, and an EBAY-BILLED "
+          + "label (the buyer's return leg), always book to the day charged",
       month_closes: monthCloseDay(from.slice(0, 7)) + " 19:00 America/Chicago",
       scanned_orders_from: scanFrom,
       rebooked_to_a_different_day: rebooked,
@@ -1104,6 +1765,8 @@ Deno.serve(async (req: Request) => {
     shippingLabelDetail: wantLabels ? labelDetail : undefined,
     blocked,
     warnings,
+    health,
+    timings_ms: { ...timing, total: Date.now() - tAll0 },
     days: list,
   });
 });
