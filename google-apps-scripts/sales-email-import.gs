@@ -488,7 +488,7 @@ function _handle(e) {
   if (['ingest', 'diagnose', 'diagnoseBuying', 'diagnoseReviews', 'buying',
        'diagnoseWeekly', 'diagnoseSummary', 'weekly', 'rehearseShift',
        'backfillConversions', 'verifyConversions', 'dayEndFacts',
-       'netprofit'].indexOf(action) < 0) {
+       'netprofit', 'monthEnd'].indexOf(action) < 0) {
     return _json({ ok: false, error: 'unknown action "' + action + '"' });
   }
 
@@ -532,6 +532,11 @@ function _handle(e) {
       return _json(dayEndFacts({ days: p.days ? parseInt(p.days, 10) : 30 }));
     }
     if (action === 'buying') return _json(ingestBuyingEmails({ dryRun: dryRun }));
+    // The last day of a month, from Shopify. See fillMonthEndFromShopify for why
+    // this can't ride on the 6:05 import. force=1 runs it outside days 1-3.
+    if (action === 'monthEnd') {
+      return _json(fillMonthEndFromShopify({ dryRun: dryRun, force: p.force === '1' }));
+    }
 
     // Net Profit's two daily passes, driven from pg_cron instead of from an
     // Apps Script time-based trigger.
@@ -892,6 +897,152 @@ function ingestSalesEmails(opts) {
       });
     }
 
+    return report;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ------------------------------------------------------------
+// Month-end fill: the one day no email ever carries
+// ------------------------------------------------------------
+// ⚠️ THE LAST DAY OF EVERY MONTH NEVER ARRIVES BY EMAIL. The Daily Sales Report
+// is month-to-date: the 6:00am send covers "the 1st through yesterday". On the
+// 1st, "this month" has no finished days, so no store sends anything (checked
+// 2026-09-01 and 2026-10-01: zero messages from all five senders). From the 2nd
+// on, the report covers the NEW month only. 8/31 and 9/30 both had to be keyed
+// by hand, and both set off the 7:00 missing-data alert.
+//
+// So on the 1st-3rd, this reads that one day from Shopify instead, using the
+// same ShopifyQL the email is built from. It was checked to the cent before
+// being trusted: sales-true-daily's reported_net_sales / reported_cost matched
+// the email for OVL on 9/1 and 9/2 (sales and COGS), and the COGS for all five
+// stores on 9/29. Use the REPORTED figures, not true_sales. The email reports
+// Shopify as-is, and the sheet has to read the same as every other day.
+//
+// It fills BLANK days only and never overwrites. A hand-keyed figure, a formula,
+// or anything the email path wrote stays exactly as it is. That makes a re-run
+// harmless, and it is why the window is three days: a failed 1st gets picked up
+// on the 2nd.
+//
+// It has its own action and its own cron (5:50, migrations 0122/0123), and is
+// NOT folded into the 6:05 import. That import already runs 105-134s against
+// sales-ingest's 150s ceiling, and five more Shopify calls inside it would be
+// the run that gets killed. It reads Shopify, not the 6:00 mail, so it can run
+// before the chain instead of after it. By the 6:05 import, Days Thru and the
+// goal colours are computed on a finished month, and the day counts as
+// `unverified`, not `missing`, so nothing alerts. (It was 6:50 for an hour on
+// 10-01, which was too late: the morning had already been read off an
+// unfinished month.) A store Shopify returns nothing for stays blank, so the
+// alert still fires for the day a person really does need to look at.
+var SHOPIFY_DAY_URL  = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/sales-true-daily';
+var MONTH_END_WINDOW = 3;   // days into the new month it keeps trying
+
+function fillMonthEndFromShopify(opts) {
+  opts = opts || {};
+  var today = _todayInTz();
+  var day = new Date(today.getFullYear(), today.getMonth(), 0);   // last day of last month
+  var iso = _iso(day);
+  var report = { ok: true, dryRun: !!opts.dryRun, day: iso,
+                 written: [], left: [], errors: [], daysThru: [], goalColors: [] };
+  if (today.getDate() > MONTH_END_WINDOW && !opts.force) {
+    report.skipped = 'only acts on days 1-' + MONTH_END_WINDOW + ' of a month';
+    return report;
+  }
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return { ok: false, day: iso, error: 'another import is already running' };
+
+  try {
+    var tabName = _tabNameFor(day);
+    var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(tabName);
+    if (!sh) return { ok: false, day: iso, error: 'no tab named "' + tabName + '"' };
+    var t = { sheet: sh, values: sh.getDataRange().getValues() };
+
+    // A store counts as filled when EITHER cell holds anything. Half a day
+    // keyed by hand is still somebody's decision, and not one to finish for them.
+    var need = [];
+    Object.keys(SALES_COL_BASES).forEach(function (store) {
+      var base = SALES_COL_BASES[store];
+      var r = _findDayRow(t.values, base, day.getDate());
+      if (r < 0) {
+        report.errors.push({ store: store, error: 'no row for day ' + day.getDate() + ' in ' + tabName });
+        return;
+      }
+      var sRng = sh.getRange(r + 1, base + COL_SALES + 1);
+      var cRng = sh.getRange(r + 1, base + COL_COST + 1);
+      if (_num(t.values[r][base + COL_SALES]) != null || _num(t.values[r][base + COL_COST]) != null
+          || sRng.getFormula() || cRng.getFormula()) {
+        report.left.push({ store: store, reason: 'already filled' });
+        return;
+      }
+      need.push({ store: store, base: base, row: r, sRng: sRng, cRng: cRng });
+    });
+    if (!need.length) return report;
+
+    var resps = UrlFetchApp.fetchAll(need.map(function (n) {
+      return {
+        url: SHOPIFY_DAY_URL + '?secret=' + encodeURIComponent(SECRET)
+          + '&from=' + iso + '&to=' + iso + '&store=' + n.store,
+        muteHttpExceptions: true
+      };
+    }));
+
+    need.forEach(function (n, i) {
+      var res = resps[i], row = null, why = null;
+      try {
+        if (res.getResponseCode() !== 200) {
+          why = 'sales-true-daily HTTP ' + res.getResponseCode() + ': '
+            + String(res.getContentText() || '').slice(0, 200);
+        } else {
+          (JSON.parse(res.getContentText()).rows || []).forEach(function (x) {
+            if (x.store === n.store && x.day === iso) row = x;
+          });
+          if (!row) why = 'no row for ' + iso + ' in the reply';
+          else if (typeof row.reported_net_sales !== 'number' || typeof row.reported_cost !== 'number') {
+            why = 'reply had no numeric sales/cost';
+          }
+        }
+      } catch (e) {
+        why = 'bad reply: ' + String(e && e.message || e).slice(0, 200);
+      }
+      if (why) { report.errors.push({ store: n.store, error: why }); return; }
+
+      if (!opts.dryRun) {
+        n.sRng.setValue(row.reported_net_sales);
+        n.cRng.setValue(row.reported_cost);
+        t.values[n.row][n.base + COL_SALES] = row.reported_net_sales;
+        t.values[n.row][n.base + COL_COST]  = row.reported_cost;
+      }
+      report.written.push({ store: n.store, sales: row.reported_net_sales, cost: row.reported_cost });
+    });
+
+    if (report.written.length) {
+      if (UPDATE_DAYS_THRU) report.daysThru = _syncDaysThru(t, opts.dryRun);
+      if (COLOR_GOAL_CELLS) report.goalColors = _syncGoalColors(t, opts.dryRun);
+    }
+
+    // Say so. A figure that appears in the sheet with no email behind it is
+    // exactly the kind of thing that gets chased later as a discrepancy.
+    if (report.written.length && !opts.dryRun) {
+      try {
+        var lines = report.written.map(function (w) {
+          return w.store + ': sales ' + _fmtUsd(w.sales) + ', cost ' + _fmtUsd(w.cost);
+        });
+        if (report.errors.length) {
+          lines.push('', 'NOT filled (still blank, needs keying by hand):');
+          report.errors.forEach(function (e) { lines.push(e.store + ': ' + e.error); });
+        }
+        GmailApp.sendEmail(CHANGE_ALERT_TO,
+          'Sales Summary: ' + _fmtMD(iso) + ' filled from Shopify (month-end)',
+          'No Daily Sales Report is ever sent for the last day of a month, so '
+            + _fmtMD(iso) + ' was read from Shopify instead. These are the same figures the '
+            + 'email would have carried:\n\n' + lines.join('\n'));
+      } catch (merr) {
+        report.errors.push({ error: 'notice email failed: ' + String(merr && merr.message || merr) });
+      }
+    }
+    report.ok = !report.errors.length;
     return report;
   } finally {
     lock.releaseLock();

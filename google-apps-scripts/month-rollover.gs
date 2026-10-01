@@ -602,6 +602,13 @@ function _mrBuildTab(ss, src, targetYm, opts) {
     }
   }
 
+  // ---- the last day's formulas, put back in step with the rest ----
+  // See _mrHealLastDay. Before the week columns are authored: those are sparse
+  // by design and the heal leaves sparse columns alone, but it should never
+  // have to reason about formulas this pass is about to replace.
+  rep.healed = _mrHealLastDay(tab, opts.family, false);
+  rep.healedRefs = _mrHealRefs(tab, opts.family, false);
+
   // ---- the week-ending column, onto the new month's weeks ----
   // Authored, not copied: where a week ends is a fact about the calendar, and
   // no amount of copying moves a formula onto a different Sunday. The FORM is
@@ -685,6 +692,184 @@ function _mrBuildTab(ss, src, targetYm, opts) {
   // written, and both were being fixed by hand or not at all.
   rep.carried = _mrCarryOverPass(tab, targetYm, false);
   return rep;
+}
+
+// ---- the last day row -------------------------------------------------------
+// ⚠️ BOTH RESIZE PATHS LEAVE THE LAST DAY'S FORMULAS POINTING AT THE WRONG ROW.
+// The resize works inside the run, never off the end, so the TTL ranges keep
+// finishing on the last day row. That is right for the TTL ranges and wrong for
+// the last day row itself, which is the SOURCE month's last day, moved:
+//   * 31 -> 30 deletes day 30's row. Old day 31 becomes day 30, and every
+//     running total in it pointed at the row that was just deleted: #REF!.
+//     It hides behind IF(blank) until the day is keyed, so it surfaced on
+//     2026-10-01, the morning 9/30 went in (Sales Sep 26, every block).
+//   * 30 -> 31 inserts a row before the last day. Old day 30 becomes day 31,
+//     and its "previous row" still points two rows up, at day 29. That is
+//     no error, just a running total that silently leaves out day 30.
+//     October 2026 was built from a September already carrying the #REF!, so
+//     it inherited that instead. Same repair, found by mrRepairLastDayPreview
+//     on 10-01.
+//
+// The fix is a fact about the grid, not a guess about any one formula: a day
+// column is one formula repeated, in R1C1 the same text on every day. Day 1
+// is allowed to differ (it has no previous row to add). So wherever days
+// 2..N-1 agree exactly and the last day disagrees, the last day gets the
+// shared R1C1. A column that is not uniform (the week-ending columns, sparse by
+// design) is left alone. A cell holding a typed number or a bare "=1100" is
+// never touched, so this is safe on a month that already has figures in it.
+//
+// Returns the cells it changed (or would change, with dryRun).
+function _mrHealLastDay(tab, family, dryRun) {
+  var width = family === 'buy' ? MR_BUY_WIDTH : MR_SALES_WIDTH;
+  var firstRow = family === 'buy' ? MR_BUY_FIRST_ROW : MR_SALES_FIRST_ROW;
+  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+  if (!lastRow || !lastCol) return [];
+  var values = tab.getRange(1, 1, lastRow, lastCol).getValues();
+  var r1c1 = tab.getRange(1, 1, lastRow, lastCol).getFormulasR1C1();
+  var bases = _mrBases(values, width);
+  var codes = Object.keys(bases);
+  if (!codes.length) return [];
+  var rows = _mrDayRows(values, bases[codes[0]], firstRow);
+  var n = Object.keys(rows).length;
+  if (n < 5) return [];
+  var last = rows[n];
+  var out = [];
+  for (var c = 0; c < lastCol; c++) {
+    var have = (r1c1[last] || [])[c];
+    if (!have || _mrIsBareNumberFormula(have)) continue;
+    var want = (r1c1[rows[2]] || [])[c];
+    if (!want || _mrIsBareNumberFormula(want) || want === have) continue;
+    var uniform = true;
+    for (var d = 3; d < n; d++) {
+      if ((r1c1[rows[d]] || [])[c] !== want) { uniform = false; break; }
+    }
+    if (!uniform) continue;
+    var cell = tab.getRange(last + 1, c + 1);
+    out.push({ cell: _mrA1(last, c), was: cell.getFormula(), r1c1: want });
+    if (!dryRun) cell.setFormulaR1C1(want);
+  }
+  return out;
+}
+
+// ⚠️ THE SECOND RULE, FOR A COLUMN THAT IS NOT UNIFORM. On 2026-10-01 the heal
+// fixed the running-sales column in every block and left the running GP column
+// (G, R, AC, AN, AY, BJ) at #REF!. Its days 2..N-1 do not all share one R1C1, so
+// _mrHealLastDay rightly refused to guess from the column. This one does not
+// need the column. It needs only the row directly above: when the broken
+// formula is that row's formula with one or more references replaced by
+// #REF!, and nothing else different, those references are the ones the
+// deleted row took with it, so the row above's R1C1 is the repair.
+// Anything that differs in more than the deleted references is reported, never
+// written.
+function _mrHealRefs(tab, family, dryRun) {
+  var width = family === 'buy' ? MR_BUY_WIDTH : MR_SALES_WIDTH;
+  var firstRow = family === 'buy' ? MR_BUY_FIRST_ROW : MR_SALES_FIRST_ROW;
+  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+  if (!lastRow || !lastCol) return { fixed: [], refused: [] };
+  var values = tab.getRange(1, 1, lastRow, lastCol).getValues();
+  var r1c1 = tab.getRange(1, 1, lastRow, lastCol).getFormulasR1C1();
+  var bases = _mrBases(values, width);
+  var codes = Object.keys(bases);
+  var out = { fixed: [], refused: [] };
+  if (!codes.length) return out;
+  var rows = _mrDayRows(values, bases[codes[0]], firstRow);
+  var n = Object.keys(rows).length;
+  if (n < 3) return out;
+  var last = rows[n], above = rows[n - 1];
+  for (var c = 0; c < lastCol; c++) {
+    var have = String((r1c1[last] || [])[c] || '');
+    if (have.indexOf('#REF!') < 0) continue;
+    var want = String((r1c1[above] || [])[c] || '');
+    var cellA1 = _mrA1(last, c);
+    if (!want || want.indexOf('#REF!') >= 0) {
+      out.refused.push(cellA1 + ': the row above has no usable formula (' + (want || 'empty') + ')');
+      continue;
+    }
+    if (!_mrSameButRefs(have.split('#REF!'), want)) {
+      out.refused.push(cellA1 + ': differs from the row above in more than the lost reference. '
+        + 'Have ' + have + ', above ' + want);
+      continue;
+    }
+    out.fixed.push({ cell: cellA1, was: tab.getRange(last + 1, c + 1).getFormula(), r1c1: want });
+    if (!dryRun) tab.getRange(last + 1, c + 1).setFormulaR1C1(want);
+  }
+  return out;
+}
+
+// Is `want` exactly `parts` joined with one cell reference in each gap? Walked
+// by hand, with no regex, for the same reason as _mrIsBareNumberFormula: this
+// file is pasted between editors, and a mangled backslash fails silently.
+function _mrSameButRefs(parts, want) {
+  if (want.indexOf(parts[0]) !== 0) return false;
+  var pos = parts[0].length;
+  for (var i = 1; i < parts.length; i++) {
+    var at = i === parts.length - 1
+      ? want.length - parts[i].length                      // the tail must end the string
+      : want.indexOf(parts[i], pos + 1);
+    if (at <= pos || want.slice(at).indexOf(parts[i]) !== 0) return false;
+    if (!_mrIsR1C1Ref(want.slice(pos, at))) return false;
+    pos = at + parts[i].length;
+  }
+  return pos === want.length;
+}
+
+// One R1C1 cell reference: R[-1]C[0], RC[-2], R5C3, R[2]C. A sheet prefix is
+// allowed ('Sales Aug 26'!R33C3); a range or a function is not.
+function _mrIsR1C1Ref(s) {
+  var bang = s.lastIndexOf('!');
+  if (bang >= 0) s = s.slice(bang + 1);
+  if (s.charAt(0) !== 'R' || s.indexOf('C') < 1) return false;
+  var ALLOWED = 'RC[]-0123456789';
+  for (var i = 0; i < s.length; i++) if (ALLOWED.indexOf(s.charAt(i)) < 0) return false;
+  return s.split('R').length === 2 && s.split('C').length === 2;
+}
+
+// Every #REF! left on a tab, after a heal, so a repair can say what it could
+// NOT fix instead of reporting a clean tab.
+function _mrRefErrors(tab) {
+  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+  if (!lastRow || !lastCol) return [];
+  var f = tab.getRange(1, 1, lastRow, lastCol).getFormulas();
+  var out = [];
+  for (var r = 0; r < lastRow; r++) {
+    for (var c = 0; c < lastCol; c++) {
+      if (String((f[r] || [])[c] || '').indexOf('#REF!') >= 0) out.push(_mrA1(r, c));
+    }
+  }
+  return out;
+}
+
+// RUN FROM THE EDITOR. The repair for tabs that were built before the heal
+// existed: Sep 2026 (#REF! on day 30) and Oct 2026 (day 31, inherited from Sep).
+// Preview first, read the log, then apply. Safe on a tab with figures in it,
+// see _mrHealLastDay.
+function mrRepairLastDayPreview() { _mrRepairLastDay(['2026-09', '2026-10'], true); }
+function mrRepairLastDayApply()   { _mrRepairLastDay(['2026-09', '2026-10'], false); }
+
+function _mrRepairLastDay(months, dryRun) {
+  var ss = _mrSs();
+  var idx = _mrIndex(ss);
+  months.forEach(function (ym) {
+    var m = idx[ym] || {};
+    [['sales', m.sales], ['buy', m.buy]].forEach(function (p) {
+      var tab = p[1];
+      if (!tab) { Logger.log('%s %s: no tab', ym, p[0]); return; }
+      var fixed = _mrHealLastDay(tab, p[0], dryRun);
+      Logger.log('%s "%s": %s %s cell(s)%s', ym, tab.getName(), dryRun ? 'WOULD fix' : 'fixed',
+        fixed.length, fixed.length ? ': ' + fixed.map(function (x) {
+          return x.cell + ' ' + x.was + ' -> ' + x.r1c1; }).join(' | ') : '');
+      // Second rule, for the #REF!s a non-uniform column leaves behind.
+      var refs = _mrHealRefs(tab, p[0], dryRun);
+      if (refs.fixed.length) {
+        Logger.log('  #REF! %s %s cell(s) from the row above: %s', dryRun ? 'WOULD repair' : 'repaired',
+          refs.fixed.length, refs.fixed.map(function (x) {
+            return x.cell + ' ' + x.was + ' -> ' + x.r1c1; }).join(' | '));
+      }
+      refs.refused.forEach(function (why) { Logger.log('  !! not repaired, %s', why); });
+      var left = dryRun ? [] : _mrRefErrors(tab);
+      if (left.length) Logger.log('  !! still #REF! at %s. Send this log to Claude.', left.join(', '));
+    });
+  });
 }
 
 // Month-dependent footer cells, found by their label. Returns a PLAN rather
