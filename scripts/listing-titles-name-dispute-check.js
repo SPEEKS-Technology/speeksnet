@@ -130,6 +130,25 @@ const CASES = [
       specs: { Brand: 'Rokinon', Model: 'AS UMC CS', Collection: 'Camera Lens',
                'Maximum Aperture': 'f/2.2' },
       field: 'Maximum Aperture' },
+    // ⚠️ OVL Dell Precision 5520, denied 2026-09-28: "Suggesting a different
+    // processor, this is incorrect." Photo 3 is Windows reporting the 6820HQ;
+    // the bottom plate says Precision 5520. Our "the 5520 is Kaby Lake" was wrong.
+    { what: 'Dell Precision 5520',
+      title: 'Dell Precision 5520 15.6" i7-6820HQ 2.7GHz 32GB RAM 512GB SSD Quadro M1200',
+      v: { verdict: 'wrong', wrong_text: 'i7-6820HQ 2.7GHz', correct_text: 'i7-7820HQ 2.9GHz',
+           why: 'The Precision 5520 shipped with 7th-gen Kaby Lake CPUs, not the 6820HQ' },
+      specs: { Brand: 'Dell', Model: 'Precision', MPN: '5520', 'Release Year': '2018',
+               'Screen Size': '15.6"', Processor: 'i7-6820HQ', Color: 'Silver' },
+      field: 'Processor' },
+    // ⚠️ LEE Kingston HyperX Fury, denied 2026-09-24: "ITS 2X4 STICKS TO = 8GB".
+    // HX424C15FB/4 is one 4GB stick, and the photos show two of them.
+    { what: 'Kingston 2x4GB',
+      title: 'Kingston HyperX Fury 8GB (2x4GB) RAM DDR4 2400MHz HX424C15FB/4',
+      v: { verdict: 'wrong', wrong_text: '8GB (2x4GB)', correct_text: '4GB',
+           why: 'Part number HX424C15FB/4 is a single 4GB module, not an 8GB kit' },
+      specs: { Brand: 'Kingston', Model: 'HyperX Fury', MPN: 'HX424C15FB/4',
+               'Memory Size': '8GB (2x4GB) RAM' },
+      field: 'Memory Size' },
 ];
 for (const c of CASES) {
     const r = run(c.title, c.v, c.specs);
@@ -207,21 +226,34 @@ console.log('\n== 4. Only IDENTITY fields can veto a correction ==');
        'and Focal Length vetoes too', (r4.findings[0] || {}).code);
 }
 
-console.log('\n== 4b. Form Factor is identity (LEE WD SN570, denied 2026-09-15) ==');
+console.log('\n== 4b. "2280mm" is fixed, field and all (reversed 2026-09-30) ==');
 {
-    // "2280mm is the correct way to describe this piece for an SSD". Form Factor
-    // says it, the title says it, and name-garbled offered "2280" as a typo fix -
-    // which would have rewritten the Form Factor field as well.
-    const title = 'Western Digital WD 2280mm Blue SN570 1TB M.2 NVMe Gen 3.0 x 4 SSD';
-    const r = run(title,
-        { verdict: 'garbled', wrong_text: '2280mm', correct_text: '2280',
-          why: 'M.2 form factor is 2280, not "2280mm"' },
-        { Brand: 'Western Digital WD', Model: 'Blue SN570', MPN: 'WDS100T3B0C-00BNN0',
-          'Sub-Collection': 'Hard Drive (HDD, SSD)', 'Form Factor': '2280mm' });
-    const f = r.findings[0] || {};
-    ok(f.code === 'name-disputed', 'it is name-disputed, not name-garbled', f.code);
-    ok(r.title === title && r.fixable === false, 'and nothing is offered to approve');
-    ok(/Form Factor/.test(f.says || ''), 'it names Form Factor as the field that says so');
+    // Held back as house style after the SN570 denial (09-15), then denied again
+    // on the SN580 (09-25). Ethan, 09-30: the tool is there to say what to change
+    // it TO. 2280 is a size CODE (22 x 80); "2280mm" is 2.28 metres, and nobody
+    // searching "2280" matches it. Both drives, both verdicts the model gives.
+    for (const [model, gen] of [['Blue SN570', '3.0'], ['Blue SN580', '4.0']]) {
+        const title = `Western Digital WD 2280mm ${model} 1TB M.2 NVMe Gen ${gen} x 4 SSD`;
+        for (const verdict of ['garbled', 'wrong']) {
+            const r = run(title,
+                { verdict, wrong_text: '2280mm', correct_text: '2280',
+                  why: 'M.2 form factor is 2280, not "2280mm"' },
+                { Brand: 'Western Digital WD', Model: model,
+                  'Sub-Collection': 'Hard Drive (HDD, SSD)', 'Form Factor': '2280mm' });
+            const f = r.findings[0] || {};
+            ok(f.code === 'name-garbled', `${model} (${verdict}): an ordinary fix`, f.code);
+            ok(r.fixable === true && r.title === title.replace('2280mm', '2280'),
+               `${model} (${verdict}): 2280mm -> 2280 is offered`, r.title);
+            ok(/Form Factor has the same mistake/.test(f.says || ''),
+               `${model} (${verdict}): and it says the field gets corrected too`, f.says);
+        }
+    }
+    // ⚠️ ONLY the unit comes off. Form Factor still vetoes any other change.
+    const r = run('Western Digital WD 2280mm Blue SN580 1TB M.2 NVMe SSD',
+        { verdict: 'wrong', wrong_text: '2280mm', correct_text: '2230' },
+        { 'Form Factor': '2280mm' });
+    ok((r.findings[0] || {}).code === 'name-disputed',
+       'a different size is still disputed', (r.findings[0] || {}).code);
 }
 
 console.log('\n== 5. The existing guards still hold ==');

@@ -9437,9 +9437,15 @@ function initOperations() {
     if (sign) _b2bPendingSign = sign[1];
     // #categories is the feed card's destination: the Categories view inside
     // SPEEKS Connect, which is a view of a tab rather than a tab of its own.
-    if (hash === 'categories') { _ecView = 'cats'; }
+    // #photos is the no-pictures card's: the same view, on the Picture Quality
+    // tab. Since Listing Health became tabs (2026-09-30) each card lands on ITS
+    // tool — the category card opening on Titles would bury what it pointed at.
+    if (hash === 'categories' || hash === 'photos') {
+        _ecView = 'cats';
+        _lhTab = hash === 'photos' ? 'photos' : 'cats';
+    }
     let initial = sign ? 'b2b'
-        : hash === 'categories' ? 'ebay'
+        : (hash === 'categories' || hash === 'photos') ? 'ebay'
         : ['marginguide', 'pictureguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
     // COMPUTED display, not the inline one. The fallback below was written for
     // Feature Access, which writes `display: none !important` onto the element —
@@ -9461,7 +9467,7 @@ function initOperations() {
         if (firstVisible) initial = firstVisible.id.replace('ops-tab-', '');
     }
     switchOperationsTab(initial);
-    if (hash === 'categories') _ecMarkView('cats');
+    if (hash === 'categories' || hash === 'photos') _ecMarkView('cats');
 
     // A TAB STRIP WITH ONE TAB IS A LABEL THAT LOOKS CLICKABLE. Ethan saw it on
     // the picture-station iPad, which reaches exactly one Operations tab: a green
@@ -40700,6 +40706,11 @@ const FEATURE_CATALOG = [
     // listing-titles function — a backend that says yes while the button says no
     // is a tool reachable by URL that nobody can see.
     { key: 'ec-view-titles',           label: 'SPEEKS Connect · Titles', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
+    // Picture Quality (2026-09-30): listing photos graded against the Picture
+    // Guide. DM and CEO only while it is new (Ethan, 2026-09-23); it widens to
+    // the ec-view-photos audience later. ⚠️ Must match PQ_DEFAULT_ROLES in the
+    // picture-quality function, for the same reason ec-view-titles must match.
+    { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // Live bench intake: the capture tool on a machine being tested posts its
     // own specs into the open deal. `def: []` is the whole point -- it ships off
@@ -40941,7 +40952,7 @@ const _SECTION_TABS = {
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
                         'tool-picture-manage', 'widget-ops-callbacks',
                         'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos',
-                        'ec-view-titles'],
+                        'ec-view-titles', 'ec-view-picture-quality'],
 };
 
 // Sub-tabs that a TABLET still gets, keyed the same way as _SECTION_TABS above.
@@ -41748,6 +41759,7 @@ const JUMP_KEYWORDS = {
     'ec-view-categories':        'speeks connect categories other collection wrong category shelf file shopify',
     'ec-view-photos':            'speeks connect listing health no pictures photos missing image online store',
     'ec-view-titles':            'speeks connect listing health titles title fix keywords seo rename wrong title bundle cib ebay',
+    'ec-view-picture-quality':   'speeks connect listing health picture quality photos retake reorder crooked square guide',
     'tool-listing-health':       'listing health title notes denied dismissed rule wrong feedback ask claude copy prompt',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
@@ -41811,7 +41823,7 @@ const JUMP_PLACES = [
     { id: 'ops-pg',      label: 'Picture Guide',      sub: 'Operations', kind: 'tab', feature: 'widget-ops-pictureguide',   page: 'operations.html', hash: 'pictureguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
-    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
+    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles', 'ec-view-picture-quality'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
     // card are separate Feature Access keys, and a single row would be invisible to
@@ -47026,7 +47038,7 @@ function _samReminderCfg() {
     cfg.push({ key: 'photoAlert', id: 'photoAlertBubble', text: 'photoAlertBubbleText',
         title: 'Listings With No Pictures',
         urgency: 2, due: 'Action', cls: 'sam-due-red',
-        action: "window.location.href='operations.html#categories'" });
+        action: "window.location.href='operations.html#photos'" });
     // Somebody dismissed a suggestion and wrote WHY the rule was wrong. Not an
     // alarm — nothing is unbuyable and no customer can see it — but it is the
     // only evidence this tool ever gets that a rule needs changing, and it went
@@ -52651,6 +52663,8 @@ async function ecLoad() {
             // eBay across stores but not file stock) must leave the eBay
             // numbers on screen, not replace them with an error.
             _rcCounts = await _rcFetch(`?view=counts`).catch(() => null);
+            _pqCounts = (typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('ec-view-picture-quality'))
+                ? await _pqFetch('?view=counts').catch(() => null) : null;
             _ecScope = _ecHealth.scope;
         } else if (_ecView === 'cats') {
             // Its own function, its own scope. shopify-recat decides who may
@@ -52717,6 +52731,22 @@ async function ecLoad() {
             } catch (e) {
                 _ltData = null;
                 _ltErr = e.message || String(e);
+            }
+            // Picture Quality: its own function, its own switch, and a failure
+            // that stays inside its own section.
+            const wantPictures = typeof _jumpFeatureVisible === 'function'
+                && _jumpFeatureVisible('ec-view-picture-quality');
+            if (!wantPictures) {
+                _pqData = null; _pqErr = null;
+            } else try {
+                _pqData = await _pqFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`);
+                _pqErr = null;
+                if (!_ecScope && _pqData?.scope) {
+                    _ecScope = { allStores: !!_pqData.scope.corp, stores: _pqData.scope.stores };
+                }
+            } catch (e) {
+                _pqData = null;
+                _pqErr = e.message || String(e);
             }
         } else {
             _ecData = await _ecFetch(`?view=listings${_ecStore ? `&store=${_ecStore}` : ''}`);
@@ -52913,6 +52943,11 @@ function ecSetStore(store) {
     // name is a reassuring statement about a store nobody has checked yet.
     _lhPhotos = null;
     _lhPhotoErr = null;
+    // And Picture Quality, for the same reason, back on its worst tab.
+    _pqData = null;
+    _pqErr = null;
+    _pqTier = null;
+    _pqPicked = false;
     // ⚠️ AND THE TITLE TAB GOES BACK TO WRONG. Ethan, arriving at WSP on
     // Opportunity because that is where he had been left on the store before:
     // "when switching from store to store, can you reset the default for the
@@ -52924,6 +52959,7 @@ function ecSetStore(store) {
     // If Wrong is empty the tab strip already falls through to the first tier
     // that has rows, so this is a starting point rather than a demand.
     _ltTier = 3;
+    _ltPicked = false;
     ecLoad();
 }
 window.ecSetStore = ecSetStore;
@@ -53326,7 +53362,8 @@ function _ecHealthHtml() {
 // question, and it belongs next to the other whole-district numbers rather than
 // above a list of one store's rows.
 //
-// ⚠️ IN THE SAME ORDER AS THE PANEL: photos, then titles, then categories. A DM
+// ⚠️ IN THE SAME ORDER AS THE PANEL: the No Photos alarm on the face of the
+// card, then one dropdown per tab — Title Quality, Picture Quality, Categories. A DM
 // reads a card here, picks a store, and lands on a page whose sections have to
 // be in the order they just scanned — reshuffling them makes the card and the
 // page feel like two different tools.
@@ -53369,15 +53406,48 @@ function _ecHealthCats(store) {
     const hasPics = Object.prototype.hasOwnProperty.call(_rcCounts, 'photos');
     const hasCats = Object.prototype.hasOwnProperty.call(_rcCounts, 'other');
     const hasTitles = Object.prototype.hasOwnProperty.call(_rcCounts, 'titles');
-    return (hasPics ? row('No Photos', pics, 'ec-bad') : '')
-         // RED, alongside No Photos, and for the same reason: everything else on
-         // this card is work queued up, while these two are a shopper being shown
-         // something wrong on the live storefront right now.
-         + (hasTitles ? row('Wrong Titles', titlesBad, 'ec-bad')
-                      + row('Titles To Review', titles) : '')
-         + (hasCats ? row('In &ldquo;Other&rdquo;', other) + row('No Suggestion', none)
-                    + row('Wrong Category', wrong) : '');
+    // ⚠️ ONE DROPDOWN PER TOOL, IN THE ORDER OF THE TABS (2026-09-30). Ethan:
+    // "we need rows for the new picture quality reasons. Maybe add more dropdowns
+    // like eBay upload but for picture and title quality as well." Three tools
+    // of three rows each made every card twelve rows tall, so each tool folds —
+    // and its SUMMARY carries the count, coloured, so a shut drawer never hides
+    // work: red when something there is wrong in front of a buyer, amber when it
+    // is queued, green at zero.
+    // No Photos sits INSIDE Picture Quality, first and red (Ethan, 2026-09-30:
+    // "You can throw No Photos in with Picture Quality") — it was on the face of
+    // the card as an alarm, but the drawer's red count already raises it.
+    const grp = (label, parts) => {
+        const n = parts.reduce((s, p) => s + (p.n || 0), 0);
+        const unknown = parts.every(p => p.n == null);
+        const cls = unknown ? 'ec-off' : parts.some(p => p.bad && p.n) ? 'ec-bad' : n ? 'ec-warn' : 'ec-ok';
+        return `<details class="ec-hebay ec-hgrp">
+          <summary><span>${label}</span><span class="ec-hgrp-n ${cls}">${unknown ? '—' : n}</span></summary>
+          ${parts.map(p => row(p.k, p.n, p.bad)).join('')}
+        </details>`;
+    };
+    const pq = _pqCounts?.counts ? (_pqCounts.counts[store] || {}) : null;
+    const pqParts = [
+        ...(hasPics ? [{ k: 'No Photos', n: pics, bad: 'ec-bad' }] : []),
+        ...(pq ? [{ k: 'Retake', n: pq.retake || 0, bad: 'ec-bad' },
+                  { k: 'Fix These Photos', n: pq.fix || 0 },
+                  { k: 'Reorder', n: pq.reorder || 0 }] : [])];
+    return ''
+         // Wrong Titles is RED inside its drawer for the reason No Photos is: a
+         // shopper being shown something wrong on the live storefront right now.
+         + (hasTitles ? grp('Title Quality', [
+               { k: 'Wrong Titles', n: titlesBad, bad: 'ec-bad' },
+               { k: 'Titles To Review', n: titles }]) : '')
+         + (pqParts.length ? grp('Picture Quality', pqParts) : '')
+         + (hasCats ? grp('Categories', [
+               { k: 'In &ldquo;Other&rdquo;', n: other },
+               { k: 'No Suggestion', n: none },
+               { k: 'Wrong Category', n: wrong }]) : '');
 }
+
+// Picture Quality's per-store open counts, for the All Stores cards. Its own
+// function and its own switch, like the queue; absent (no drawer) when the
+// reader does not hold it or the read failed.
+let _pqCounts = null;
 
 // --- LISTING HEALTH: one page, because it is one question -------------------
 //
@@ -53468,6 +53538,12 @@ function _lhMay(half) {
         return typeof _jumpFeatureVisible === 'function'
             ? _jumpFeatureVisible('ec-view-titles') : true;
     }
+    // Picture Quality is its own function too; same posture as Titles.
+    if (half === 'pictures') {
+        if (_pqData?.scope) return true;
+        return typeof _jumpFeatureVisible === 'function'
+            ? _jumpFeatureVisible('ec-view-picture-quality') : false;
+    }
     const scope = _lhScope || _rcData?.scope;
     const key = half === 'photos' ? 'mayPhotos' : 'mayCats';
     if (scope && typeof scope[key] === 'boolean') return scope[key];
@@ -53476,29 +53552,63 @@ function _lhMay(half) {
         : true;
 }
 
+// ============ LISTING HEALTH IS THREE TABS, NOT THREE STACKED SECTIONS ========
+// Ethan, 2026-09-30: "put picture quality on one tab, listing title on another
+// tab, and categories on the last tab within listing health. swap title and
+// picture tab order" — so: Titles | Picture Quality | Categories.
+//
+// The stack had outgrown itself: three tools, two of them long, and whichever
+// sat third was below a hundred rows of the other two. A tab is one tool at a
+// time, with every tool's count visible at once in the strip.
+//
+// ⚠️ THE ALARM MUST NOT HIDE BEHIND A TAB. "Live With No Photos" is the one
+// reading on this page that should be zero, and it now lives inside Picture
+// Quality, which is not the first tab. So that tab's chip goes RED whenever a
+// listing has no photo, whichever tab is open — the same reason the header line
+// leads with the photo count (_ecSyncChrome).
+let _lhTab = null;   // 'titles' | 'photos' | 'cats' — null until somebody picks one
+
+function lhSetTab(t) { _lhTab = t; ecRender(); }
+window.lhSetTab = lhSetTab;
+
 function _lhHtml() {
     // No Upload drawer here — it lives at the bottom of the All Stores page,
     // with the other whole-estate things. This page is the daily one.
-    const photos = _lhMay('photos') ? _lhPhotosHtml() : '';
-    // ⚠️ TITLES GOES LAST, AND IT IS ABOUT LENGTH, NOT IMPORTANCE. It sat
-    // between the alarm and the filing queue on the argument that its top tier
-    // (a title that is WRONG) belongs beside the photo alarm. True, but it is
-    // now the longest section on the page by a wide margin — 138 rows against
-    // the alarm's handful — so placing it second pushed Categories off the
-    // bottom of the screen and out of the day. Ethan, 2026-08-31: "move
-    // categories under no pictures since there will be a lot more titles."
-    // The two SHORT sections stay where a manager can see both without
-    // scrolling; the long grind goes underneath them.
-    const cats = _lhMay('cats') ? _lhCatsHtml() : '';
-    const titles = _lhMay('titles') ? _ltHtml() : '';
-    // Reachable only by a race: the pill needs one of the two, so losing both
-    // between the click and the render means an override changed underneath.
-    // Say that, rather than drawing an empty page that looks broken.
-    if (!photos && !cats && !titles) {
+    // ONE PHOTOS TAB, TWO SWITCHES. "Live With No Photos" is the first sub-tab
+    // of Picture Quality. Each keeps its OWN switch: managers and ASMs hold
+    // ec-view-photos, only the DM holds Picture Quality for now, so a manager
+    // sees this tab with the one sub-tab they have.
+    const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
+    const catN = _rcData?.counts
+        ? (_rcData.counts.other || 0) + (_rcData.counts.misfiled || 0) + (_rcData.counts.unmatched || 0)
+        : (_rcData?.queue || []).length;
+    const tabs = [
+        { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
+          n: (_ltData?.queue || []).length, bad: !!_ltErr },
+        { v: 'photos', label: 'Picture Quality', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
+          n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).length, bad: noPhotos > 0 || !!_lhPhotoErr },
+        { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
+    ].filter(t => t.on);
+    // Reachable only by a race: the pill needs one of the switches, so losing
+    // all of them between the click and the render means an override changed
+    // underneath. Say that, rather than drawing an empty page that looks broken.
+    if (!tabs.length) {
         return '<div class="ec-empty">Listing Health is not switched on for you.</div>';
     }
-    return photos + cats + titles;
+    // First visit: Titles, the first tab — unless a listing has no photo, which
+    // is the one thing on this page a shopper is looking at right now.
+    if (!tabs.some(t => t.v === _lhTab)) {
+        const alarm = tabs.find(t => t.v === 'photos' && noPhotos > 0);
+        _lhTab = (alarm || tabs[0]).v;
+    }
+    const strip = tabs.length < 2 ? '' : `<div class="lh-tabs" role="tablist">${tabs.map(t => `
+        <button type="button" role="tab" class="lh-tab${t.v === _lhTab ? ' lh-tab-on' : ''}"
+                aria-selected="${t.v === _lhTab}" onclick="lhSetTab('${t.v}')">${t.label}
+          <span class="lh-tab-n${t.bad ? ' lh-tab-bad' : t.n ? '' : ' lh-tab-zero'}">${t.n}</span>
+        </button>`).join('')}</div>`;
+    return strip + tabs.find(t => t.v === _lhTab).html();
 }
+
 
 // --- the photo alarm --------------------------------------------------------
 //
@@ -53511,9 +53621,14 @@ function _lhHtml() {
 // in-stock products with no photos that were never published. That is a real
 // and much bigger problem, and folding it in would turn the one number in this
 // panel that should read zero into a 500-row backlog nobody could alarm on.
-function _lhPhotosHtml() {
+// `bare`: the rows without the section frame, for the No Photos TAB of Picture
+// Quality — where this alarm now lives (Ethan, 2026-09-30: "Should we include
+// Live with no photos as a tab in this tool to keep listing health at 3 tabs
+// instead of 4?"). Same markup either way, so the alarm reads the same.
+function _lhPhotosHtml(bare) {
     const store = _ecEsc(_ecStore || '');
-    const head = (inner, badge) => _lhSec('Photos', 'Live With No Photos', inner, badge);
+    const head = bare ? (inner => inner)
+                      : ((inner, badge) => _lhSec('Photos', 'Live With No Photos', inner, badge));
 
     // ⚠️ A FAILED CHECK IS NOT AN ALL CLEAR. Same rule the All Stores card
     // follows: drawing the calm green line for a request that never answered
@@ -53604,6 +53719,472 @@ function _lhCatsHtml() {
 }
 
 
+// --- Picture Quality --------------------------------------------------------
+//
+// THE FOURTH TOOL ON THIS PAGE, and the first that LOOKS at the listing. Built
+// 2026-09-30 on the picture-quality function (see its header for the rules
+// Ethan calibrated on 22 listings across WSP and OVL, 19 of 21 agreeing).
+//
+// THREE TABS, BY WHAT THE MANAGER HAS TO DO — the same split as the verdicts:
+//   Retake            so much of the guide is missing that the fix is a reshoot
+//   Fix These Photos  named photos to redo (not square, crooked, flaw not shown)
+//   Reorder           the photos are fine, the order is not — one click
+// ⚠️ NOTHING HERE WRITES TO A LISTING EXCEPT APPROVE REORDER, and that only on
+// the photos the order was worked out for (the server refuses if they changed).
+// Retake and Fix are camera jobs; the row carries the SKU, the photos as they
+// are NOW and the guide sheet, and Check Again grades it afresh once the new
+// photos are up. Dismiss records why the tool was wrong — the note is how a
+// rule gets found wrong, the same lesson the title tool learned.
+//
+// ⚠️ REORDER IS SHOWN SIDE BY SIDE, as Ethan specified (2026-09-25): the order
+// now, the order suggested, and the guide sheet's own sequence, so the manager
+// approves against the standard rather than against our say-so.
+const PQ_URL = `${_BASE}/picture-quality`;
+
+let _pqData = null;   // { store, shop, queue, guide } from picture-quality?view=review
+let _pqErr = null;
+let _pqTier = null;   // null until somebody picks a tab: then the worst tab with rows opens
+// ⚠️ A TAB SOMEBODY CLICKED STAYS CLICKED, EVEN EMPTY. Each tab now keeps its own
+// dismissed rows (Ethan, 2026-09-30), so an empty tab is somewhere worth going —
+// and the old "jump to a tab with rows" would bounce the click straight back out.
+let _pqPicked = false;
+let _pqBusy = new Set();      // productIds with a request in flight
+let _pqChecking = new Set();  // …of which: Check Again, which takes a minute
+
+async function _pqFetch(path) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(`${PQ_URL}${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`,
+        { headers: { 'x-user-pin': pin } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || body.error || `Request failed (${r.status})`);
+    return body;
+}
+
+// ⚠️ A 200 CAN STILL BE A FAILURE. Check Again answers as a stream (spaces to
+// keep a two-look grade alive past the gateway's 150s), so the status goes out
+// before the work is done and a failure arrives as a 200 with an `error` field.
+async function _pqPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(PQ_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok && body.ok !== false && !body.error, status: r.status, body };
+}
+
+async function _pqReload() {
+    try { _pqData = await _pqFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`); _pqErr = null; }
+    catch (e) { _pqErr = e.message || String(e); }
+    ecRender();
+}
+
+function _pqSay(title, say, kind) {
+    return _ltAsk({ kind: kind || 'bad', eyebrow: 'Picture Quality', title,
+                    body: `<p class="lt-ask-say">${_ecEsc(say)}</p>`, cancel: null, go: 'Got It' });
+}
+
+const _PQ_TIERS = [
+    { v: 'nophotos', label: 'No Photos',        cls: 'lt-t-bad',  half: 'photos' },
+    { v: 'retake',   label: 'Retake',           cls: 'lt-t-bad',  half: 'pictures' },
+    { v: 'fix',      label: 'Fix These Photos', cls: 'lt-t-warn', half: 'pictures' },
+    { v: 'reorder',  label: 'Reorder',          cls: 'lt-t-ok',   half: 'pictures' },
+];
+
+function _pqHtml() {
+    const head = (inner, badge) => _lhSec('Photos', 'Picture Quality', inner, badge);
+    const store = _ecEsc(_ecStore || '');
+    const mayPics = _lhMay('pictures');
+    // Only the tabs this reader holds. See _lhHtml: two switches, one section.
+    const tiers = _PQ_TIERS.filter(t => _lhMay(t.half));
+    if (!tiers.length) return '';
+    const all = (mayPics && _pqData?.queue) || [];
+    const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
+    const count = v => v === 'nophotos' ? noPhotos : all.filter(r => r.verdict === v).length;
+    // Land on the worst tab with anything in it — No Photos first, because a
+    // listing a shopper sees as an empty square outranks every photo it does have.
+    if (!_pqTier || !tiers.some(t => t.v === _pqTier) || (!_pqPicked && !count(_pqTier))) {
+        const first = tiers.find(t => count(t.v));
+        _pqTier = first ? first.v : tiers[0].v;
+    }
+    const tabs = tiers.length < 2 ? '' : `<div class="rc-modes lt-modes">${tiers.map(t => {
+        const n = count(t.v);
+        return `<button type="button" class="rc-mode${t.v === _pqTier ? ' rc-mode-on' : ''}"
+                onclick="pqSetTier('${t.v}')">${t.label}
+                <span class="rc-chip-n ${n ? t.cls : ''}">${n}</span></button>`;
+    }).join('')}</div>`;
+
+    let inner;
+    if (_pqTier === 'nophotos') {
+        inner = _lhPhotosHtml(true);
+    } else if (_pqErr) {
+        inner = `<div class="lh-unknown">
+            <span class="lh-unknown-t">Could Not Check ${store}</span>
+            <span class="lh-why">${_ecEsc(_pqErr)}</span>
+            <span class="lh-why">This is not an all clear — nobody has looked yet.</span>
+          </div>`;
+    } else if (!_pqData) {
+        inner = '';
+    } else if (!count(_pqTier)) {
+        inner = `<div class="lh-clear">
+            <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>All Clear — Nothing To ${_ecEsc(tiers.find(t => t.v === _pqTier)?.label || '')} At ${store}</span>
+          </div>`;
+    } else {
+        const rows = all.filter(r => r.verdict === _pqTier);
+        inner = `<div class="lt-rows">${rows.map(_pqRow).join('')}</div>`;
+    }
+    const total = tiers.reduce((s, t) => s + count(t.v), 0);
+    const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
+    return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
+                `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
+}
+
+// WHAT WAS ANSWERED, folded under the queue — the drawer the Titles section
+// keeps, for the same two reasons: a decision you cannot undo is one people
+// hesitate over, and the notes are the only evidence a rule is wrong. Ethan
+// (2026-09-30): "when a re-order is denied, it should just go into a dropdown
+// like denying a category does".
+// ⚠️ ONE DRAWER PER TAB, holding what was dismissed FROM that tab (Ethan,
+// 2026-09-30: "When dismissed, it should stay on that tab under a dismissed
+// dropdown like the category tool"). The point is putting a row back once the
+// rule is fixed or the check turns out right — and the place to look for a
+// dismissed retake is Retake, not one drawer shared by all three.
+// ⚠️ THE DRAWER HOLDS ONLY NOTES STILL WAITING ON CLAUDE (Ethan, 2026-09-30):
+// "the total sitting in these dropdowns for both tools should equal the amount
+// of listing health notes I have waiting for me to send to you". A row leaves it
+// one of two ways — Undo here (the rule was fixed, or the check was right: the
+// listing goes back to work), or Clear in Listing Health Notes (it was looked at
+// and the listing is fine). Cleared rows stay dismissed in the table; they are
+// just no longer waiting on anyone.
+const _pqWaiting = r => !!(r.note || '').trim() && !r.triaged;
+// The bar over both drawers, in one wording (Ethan, 2026-09-30: "1 Note
+// Explained…").
+const _lhNotesSaid = n => `${n} Note${n === 1 ? '' : 's'} Explained The Check Was Wrong`;
+function _pqDismissedHtml(tier) {
+    const d = ((_pqData && _pqData.dismissed) || []).filter(r => _pqWaiting(r) && (!tier || r.verdict === tier));
+    if (!d.length) return '';
+    const noted = d.length;
+    const rows = d.map(r => {
+        const busy = _pqBusy.has(r.productId);
+        return `<div class="lt-dn-row">
+          <div class="lt-dn-main">
+            <div class="lt-dn-title">${_ecEsc(r.title || '')}</div>
+            <div class="lt-dn-meta">
+              <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+              <span class="lt-dn-as">${r.as === 'reorder' ? 'Order Is Fine' : 'Photos Are Fine'}</span>
+              <span>${_ecEsc(r.by || '')}${r.at ? ' · ' + _lhWhen(r.at) : ''}</span>
+            </div>
+            ${r.note ? `<div class="lt-dn-note">${_ecEsc(r.note)}</div>` : ''}
+          </div>
+          <button class="lt-dn-undo" onclick="pqReopen('${_ecEsc(r.productId)}')" ${busy ? 'disabled' : ''}
+                  title="Put this back in the queue">${busy ? '…' : 'Undo'}</button>
+        </div>`;
+    }).join('');
+    return `<details class="lt-denied">
+      <summary>${d.length} Dismissed</summary>
+      ${noted ? `<div class="lt-ask-bar">
+        <span class="lt-ask-n">${_lhNotesSaid(noted)}</span>
+        <button class="lt-ask-btn" onclick="openListingHealthTool()"
+                title="Read the notes and copy the ask for Claude">Open Listing Health Notes</button>
+      </div>` : ''}
+      <div class="lt-dn-rows">${rows}</div>
+    </details>`;
+}
+
+async function pqReopen(pid) {
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: 'reopen', store: _ecStore, productId: pid });
+    _pqBusy.delete(pid);
+    if (!res.ok) await _pqSay('Could Not Undo That', res.body?.detail || res.body?.error || 'Try again.');
+    await _pqReload();
+}
+window.pqReopen = pqReopen;
+
+// ⚠️ NO LINE ABOVE THE ROWS, ON ANY TAB OF EITHER TOOL (Ethan, 2026-09-30):
+// "these are here because there are issues, so just explain the problem on the
+// line item." Each tab used to open with a sentence about the whole pile (and
+// Wrong / Retake with a red alarm bar); the tab name and each row's own reason
+// already say it, so the sentence was a second reading of the same thing.
+
+function pqSetTier(v) { _pqTier = v; _pqPicked = true; ecRender(); }
+window.pqSetTier = pqSetTier;
+
+// One strip of photos, in the order given, numbered by their CURRENT position so
+// "photo 6" on a finding and on the strip are the same photo.
+// `showMoves`: the Suggested strip — a photo landing somewhere new is outlined
+// green, its corner number (where it is NOW) green too; one staying put is left
+// plain, so the change is what stands out.
+function _pqStrip(photos, order, flagged, showMoves) {
+    return `<div class="pq-strip">${order.map((n, i) => {
+        const p = photos[n - 1];
+        if (!p) return '';
+        const mv = showMoves && n !== i + 1;
+        // Opens in the audit tool's viewer, over the page, not a new tab (Ethan,
+        // 2026-09-30). Still a real link, so a middle-click or Ctrl-click opens
+        // the full-size file in a tab for anyone who wants that.
+        return `<a class="pq-ph${flagged.has(n) ? ' pq-ph-flag' : ''}${mv ? ' pq-ph-moved' : ''}" href="${_ecEsc(p.full || p.thumb)}"
+                   target="_blank" rel="noopener" title="Photo ${n}${mv ? ' — moves to position ' + (i + 1) : ''}"
+                   onclick="if (!event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); openAuditPhotoLightbox(this.href); }">
+                  <img loading="lazy" src="${_ecEsc(p.thumb)}" alt="Photo ${n}">
+                  <span class="pq-n">${n}</span></a>`;
+    }).join('')}</div>`;
+}
+
+// Which guide shots the check called missing, by the guide's own label. Newer
+// findings carry it (`shot`, `shots`); a row graded before that carries only the
+// sentence, so the sentence is read as a fallback rather than showing nothing.
+function _pqMissing(findings) {
+    const out = new Set();
+    for (const f of findings || []) {
+        if (f.shot) out.add(String(f.shot).toLowerCase());
+        for (const s of f.shots || []) out.add(String(s).toLowerCase());
+        const m = /^Missing: (.+)\.$/.exec(f.text || '');
+        if (m) out.add(m[1].toLowerCase());
+        const r = /required shots are missing: (.+)\.$/.exec(f.text || '');
+        if (r) r[1].split(/,\s*/).forEach(s => out.add(s.toLowerCase()));
+    }
+    return out;
+}
+
+// ⚠️ EVERY SLOT SAYS WHAT IT IS, even when it has no picture. Ethan, first look
+// (2026-09-30): "Anything that doesn't have a picture or is optional should be
+// better notated in this view" — slot 9 (Extra Accessories) was an empty box
+// that read as a broken image. Three states, each named in the box itself:
+//   Missing   the check says this listing has no photo of it (red)
+//   If Needed the shot applies only sometimes — the tooltip says when (dashed)
+//   no example the guide has no example photo for this shot yet
+function _pqGuideStrip(sheet, missing) {
+    const g = sheet && (_pqData?.guide || {})[sheet];
+    if (!g) return '';
+    const miss = missing || new Set();
+    return `<div class="pq-strip pq-guide">${g.shots.map((s, i) => {
+        const isMiss = miss.has(String(s.label).toLowerCase());
+        const tip = s.label + (s.cond ? ' — only if: ' + s.cond : '') + (isMiss ? ' — missing from this listing' : '');
+        return `<span class="pq-ph pq-gph${s.cond ? ' pq-gph-cond' : ''}${isMiss ? ' pq-gph-miss' : ''}" title="${_ecEsc(tip)}">
+          ${s.img ? `<img loading="lazy" src="${_ecEsc(s.img)}" alt="${_ecEsc(s.label)}" class="pq-gimg"
+                    onclick="openAuditPhotoLightbox(this.src)">`
+                  : '<span class="pq-noimg">No Example Photo</span>'}
+          <span class="pq-n">${i + 1}</span>
+          ${isMiss ? '<span class="pq-tag pq-tag-miss">Missing</span>'
+            : s.cond ? '<span class="pq-tag">If Needed</span>' : ''}
+          <span class="pq-glab">${_ecEsc(s.label)}</span>
+        </span>`;
+    }).join('')}</div>`;
+}
+
+// "Sep 30" — the day it was graded, in the sheet line (Ethan, 2026-09-30:
+// "Checked {Date} Against: New In Box").
+function _pqDay(iso) {
+    const d = new Date(iso || '');
+    return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// The retake sentence for ONE listing, with the check's count of what is
+// missing kept ("3 of 5 required shots are missing") — the guide strip below
+// names which, so the names are not repeated here.
+function _pqRetakeSaid(findings) {
+    const f = (findings || []).find(x => x.code === 'retake');
+    const m = f && /(\d+ of \d+ required shots are missing)/.exec(f.text || '');
+    return `This listing is missing so much of the Picture Guide that a buyer cannot judge the item${
+        m ? ' — ' + _ecEsc(m[1]) : ''}. <strong>Retake it following the guide</strong>, then press Recheck.`;
+}
+
+// ⚠️ ONE LINE PER PROBLEM, NOT PER PHOTO (Ethan, 2026-09-30, on a RAM listing
+// that read "Photo 2 … wrong angle / Photo 3 … wrong angle / Photo 4 … wrong
+// angle / Photo 2 is blurry / Photo 3 is blurry …": "any way to make this look
+// not as chaotic?"). The same three photos named twice, seven lines for two
+// problems. Grouped, it is "Taken From The Wrong Angle — Photos 2, 3, 4" and
+// "Blurry — Photos 2, 3, 4", which is also the order the store fixes them in.
+// The server's sentences are unchanged (the notes and the ask still quote
+// them); this only regroups them for reading.
+//   not square  → "Not Square (Should Be 1×1)" — the size it IS was noise; the
+//                 size it should be is what the store needs (Ethan, same day)
+//   framing     → one group per problem it names ("…standard: crooked, cut off")
+//   missing     → one line naming the shots
+//   anything else with a photo → its own words, with the photo stripped off
+function _pqFindingLines(findings) {
+    const cap = s => String(s).replace(/(^|\s)([a-z])/g, (m, a, b) => a + b.toUpperCase());
+    const groups = new Map(), misses = [], loose = [];
+    const add = (label, n) => {
+        if (!groups.has(label)) groups.set(label, new Set());
+        groups.get(label).add(n);
+    };
+    for (const f of findings || []) {
+        const text = String(f.text || '');
+        if (f.code === 'missing_shot') { misses.push(f.shot || text.replace(/^Missing:\s*|\.$/g, '')); continue; }
+        if (!f.photo) { loose.push(text); continue; }
+        if (f.code === 'not_square') { add('Not Square (Should Be 1×1)', f.photo); continue; }
+        if (f.code === 'framing') {
+            const m = /standard:\s*(.+?)\.?$/.exec(text);
+            (m ? m[1].split(/,\s*/) : ['not to the guide\'s standard']).forEach(p => add(cap(p), f.photo));
+            continue;
+        }
+        // "Photo 4 is blurry." → "Blurry"; "Photo 1 doesn't show what the item is." → as said.
+        const said = text.replace(/^Photo \d+\s+/, '').replace(/\.$/, '').replace(/^is\s+/, '');
+        add(cap(said), f.photo);
+    }
+    const nums = s => { const a = [...s].sort((x, y) => x - y); return (a.length === 1 ? 'Photo ' : 'Photos ') + a.join(', '); };
+    return [
+        ...(misses.length ? [`<li><b>Missing</b> — ${_ecEsc(misses.join(', '))}</li>`] : []),
+        ...[...groups].map(([label, s]) => `<li><b>${_ecEsc(label)}</b> — ${nums(s)}</li>`),
+        ...loose.map(t => `<li>${_ecEsc(t)}</li>`),
+    ].join('');
+}
+
+function _pqRow(r) {
+    const id = String(r.productId || '');
+    const numeric = _ecEsc(id.split('/').pop());
+    const shop = _ecEsc(_pqData?.shop || '');
+    const busy = _pqBusy.has(id);
+    const checking = _pqChecking.has(id);
+    const photos = r.photos || [];
+    const flagged = new Set((r.findings || []).map(f => f.photo).filter(Boolean));
+    const now = photos.map((_, i) => i + 1);
+    const isReorder = r.verdict === 'reorder' && r.reorder && Array.isArray(r.reorder.suggested);
+    const findings = (r.verdict === 'retake' ? `<li class="pq-retake-said">${_pqRetakeSaid(r.findings)}</li>` : '')
+        + _pqFindingLines((r.findings || []).filter(f => r.verdict !== 'retake' || f.code !== 'retake'));
+    // The row's own reason, now there is no tab sentence above it.
+    const why = isReorder
+        ? `<li>The photos are good but in the wrong order${(r.reorder.why || []).length
+            ? ' — ' + _ecEsc(r.reorder.why.join('; ')) : ''}.</li>` : '';
+    const titleNotes = (r.titleNotes || []).length
+        ? `<details class="lt-comps pq-tnotes"><summary>${r.titleNotes.length} Title Note${r.titleNotes.length === 1 ? '' : 's'} From The Photos (Not Checked Yet)</summary>
+             <ul>${r.titleNotes.map(t => `<li>${_ecEsc(t.issue || '')}${t.suggestion ? ' → ' + _ecEsc(t.suggestion) : ''}</li>`).join('')}</ul>
+           </details>` : '';
+
+    const missing = _pqMissing(r.findings);
+    const moved = isReorder ? r.reorder.suggested.filter((n, i) => n !== i + 1).length : 0;
+    const body = isReorder
+        // ⚠️ ONE SCROLL FOR ALL THREE ROWS, ONE BOX SIZE (Ethan, 2026-09-30: "do
+        // you have a better way to make this not feel so chaotic looking?"). The
+        // three strips used to scroll separately, at two box sizes, so slot 3 of
+        // the guide sat under nothing in particular. Now column N is position N
+        // in every row, the labels stay pinned on the left, and only the photos
+        // that MOVE are marked — each with where it was — so the eye goes to the
+        // change instead of reading twelve near-identical squares twice.
+        ? `<div class="pq-cmp pq-ro">
+             <div class="pq-ro-row"><span class="lt-lab">Now</span>${_pqStrip(photos, now, flagged)}</div>
+             <div class="pq-ro-row"><span class="lt-lab">Suggested${moved
+               ? `<br><span class="pq-lab-moved">${moved} Moved</span>` : ''}</span>${_pqStrip(photos, r.reorder.suggested, new Set(), true)}</div>
+             <div class="pq-ro-row"><span class="lt-lab">Guide</span>${_pqGuideStrip(r.sheet, missing)}</div>
+           </div>`
+        // ⚠️ THE GUIDE IS ALWAYS SHOWN, never in a drawer. It was a <details>
+        // first; Ethan (2026-09-30): "I wouldn't give the option to hide the
+        // guide pictures. I think it's important to see." It IS the answer to
+        // "which photos", so it sits under the listing's own, like Reorder's.
+        : `<div class="pq-cmp">
+             <div class="pq-cmp-row"><span class="lt-lab">Photos</span>${_pqStrip(photos, now, flagged)}</div>
+             <div class="pq-cmp-row"><span class="lt-lab">Guide${missing.size
+               ? `<br><span class="pq-lab-miss">${missing.size} Missing</span>` : ''}</span>${_pqGuideStrip(r.sheet, missing)}</div>
+           </div>`;
+
+    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}">
+      <div class="lt-main">
+        <div class="pq-title">${_ecEsc(r.title || 'Untitled Listing')}</div>
+        <div class="pq-sheet">Checked ${_pqDay(r.reviewedAt)} Against: <b>${_ecEsc(r.sheetName || '—')}</b></div>
+        ${r.stale ? `<div class="pq-stale">${r.staleWhy === 'recipe'
+            ? 'The check has been improved since this listing was graded'
+            : 'The photos or notes changed after this was checked'} —
+            press Recheck before acting on it.</div>` : ''}
+        <ul class="lt-why">${findings}${why}</ul>
+        ${body}
+        ${titleNotes}
+      </div>
+      <div class="lt-side">
+        <div class="lt-meta">
+          <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+          <span class="lt-price">${photos.length} Photo${photos.length === 1 ? '' : 's'}</span>
+        </div>
+        <div class="ec-pills rc-links">
+          ${numeric ? `<a class="ec-pill ec-pill-shopify" href="https://${shop}/admin/products/${numeric}"
+               target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
+          ${r.handle ? `<a class="ec-pill ec-pill-store" href="https://${shop}/products/${_ecEsc(r.handle)}"
+               target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}
+        </div>
+        <div class="lt-acts pq-acts">
+          ${isReorder && !r.stale
+            ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve'}</button>
+               <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', true)" ${busy ? 'disabled' : ''}
+                  title="The current order is fine. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
+            : `<button class="lt-ok" onclick="pqRecheck('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
+                  title="After the photos are retaken in Shopify, this grades them again now instead of waiting for the next sweep. About a minute.">${checking ? 'Checking…' : 'Recheck'}</button>
+               <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
+                  title="The photos are fine as they are. Say why, and the note comes to Listing Health Notes so the rule gets looked at.">Dismiss</button>`}
+        </div>
+        <!-- What Recheck is FOR, on the row. Ethan asked what "Check Again"
+             meant; a button that needs asking about needs a sentence. -->
+        ${isReorder && !r.stale ? `<span class="pq-hint">Approve saves this order to Shopify.</span>`
+          : `<span class="pq-hint">Retook the photos? Recheck grades them now.</span>`}
+      </div>
+    </div>`;
+}
+
+async function pqDismiss(pid, isReorder) {
+    const row = (_pqData?.queue || []).find(r => r.productId === pid);
+    if (!row) return;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Picture Quality',
+        title: isReorder ? 'Keep The Current Photo Order?' : 'Are These Photos Fine As They Are?',
+        body: `<p class="lt-ask-say">${_ecEsc(row.title || '')}</p>`,
+        note: { label: isReorder ? 'Why Keep This Order?' : 'Why Are They Fine?', required: true,
+                placeholder: isReorder ? 'e.g. the box shot first is deliberate here' : 'e.g. the serial is under the battery cover',
+                hint: 'Required — this note is how we find out a rule is wrong. Nothing on the listing changes.' },
+        go: 'Dismiss It', cancel: 'Cancel' });
+    if (!said) return;
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: isReorder ? 'deny-reorder' : 'dismiss', store: _ecStore,
+                                productId: pid, reason: said.note || '' });
+    _pqBusy.delete(pid);
+    if (!res.ok) {
+        await _pqSay('That Was Not Recorded', res.body?.detail || res.body?.error || 'Could not record that.');
+        ecRender();
+        return;
+    }
+    await _pqReload();
+}
+window.pqDismiss = pqDismiss;
+
+async function pqReorder(pid) {
+    const row = (_pqData?.queue || []).find(r => r.productId === pid);
+    if (!row || !row.reorder) return;
+    const said = await _ltAsk({
+        kind: 'ok', eyebrow: 'Picture Quality', title: 'Save This Photo Order?',
+        body: `<p class="lt-ask-say">${_ecEsc(row.title || '')}</p>
+               ${_pqStrip(row.photos || [], row.reorder.suggested, new Set())}
+               <p class="lt-ask-say">The photos are rearranged in Shopify — nothing is added or removed.</p>`,
+        go: 'Save The Order', cancel: 'Cancel' });
+    if (!said) return;
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: 'reorder', store: _ecStore, productId: pid });
+    _pqBusy.delete(pid);
+    if (!res.ok) {
+        await _pqSay('The Order Was Not Saved', res.body?.detail || res.body?.error || 'Shopify did not take the change.');
+        await _pqReload();
+        return;
+    }
+    await _pqReload();
+}
+window.pqReorder = pqReorder;
+
+async function pqRecheck(pid) {
+    _pqBusy.add(pid); _pqChecking.add(pid); ecRender();
+    const res = await _pqPost({ action: 'recheck', store: _ecStore, productId: pid });
+    _pqBusy.delete(pid); _pqChecking.delete(pid);
+    if (!res.ok) {
+        await _pqSay('Could Not Check It Again', res.body?.detail || res.body?.error || 'The check did not finish.');
+        ecRender();
+        return;
+    }
+    if (res.body.verdict === 'pass') {
+        await _pqSay('These Photos Now Pass', 'The listing meets the guide and has left the list.', 'ok');
+    }
+    await _pqReload();
+}
+window.pqRecheck = pqRecheck;
+
+
 // --- Listing Titles ---------------------------------------------------------
 //
 // THE THIRD TOOL ON THIS PAGE, and the one that reads a title rather than a
@@ -53635,6 +54216,7 @@ const LT_URL = `${_BASE}/listing-titles`;
 let _ltData = null;   // { store, queue, counts } from listing-titles?view=review
 let _ltErr = null;    // why the queue could not be read, when it could not
 let _ltTier = 3;      // which tab: 3 Wrong, 2 Hard To Find, 1 Opportunity
+let _ltPicked = false; // a clicked tab stays put even when empty — see _pqPicked
 // Titles the reviewer has typed over the suggestion, by productId. Held here
 // rather than read off the DOM at submit time because the reconciler replaces
 // the subtree on every state change and an in-progress edit would be lost.
@@ -53880,6 +54462,92 @@ function _lhToolEl() {
 }
 
 let _lhToolFb = null;
+let _lhToolPq = null;   // picture-quality?view=feedback, or { error }
+
+// The Picture Quality half of the notes. Same shape as the title half — a copy
+// button first, the notes grouped by what the tool said, Clear at the bottom —
+// so one habit works for both. Ethan (2026-09-30): "should we add a notes
+// section as well and act just like the listing health notes tool currently
+// for you to fix?"
+function _lhToolPqHtml() {
+    const fb = _lhToolPq;
+    if (!fb) return '';
+    if (fb.error) {
+        return `<div class="lh-tool-pq"><div class="lh-tool-h">Picture Quality</div>
+          <div class="lh-tool-err"><b>Could not read the picture notes.</b><span>${_ecEsc(fb.error)}</span></div></div>`;
+    }
+    const n = fb.total || 0;
+    const done = fb.done || [];
+    const doneHtml = done.length ? `
+      <details class="lh-tool-done"><summary>${done.length} Cleared</summary>
+        ${done.map(r => `<div class="lh-tool-done-row">
+          <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+          <span class="lh-tool-done-note">“${_ecEsc(r.note || '')}”</span>
+          <span class="lh-tool-done-when">${_lhWhen(r.takenAt)}</span>
+        </div>`).join('')}
+      </details>` : '';
+    if (!n) {
+        return `<div class="lh-tool-pq"><div class="lh-tool-h">Picture Quality</div>
+          <div class="lh-tool-clear"><div class="lh-tool-clear-h"><span class="lh-tool-tick">✓</span>
+            <b>No Picture Notes Waiting.</b></div>
+          <span>When somebody says a listing's photos are fine and writes why, it lands here.</span></div>
+          ${doneHtml}</div>`;
+    }
+    const groups = (fb.groups || []).map(g => `
+      <div class="lh-tool-grp">
+        <div class="lh-tool-grp-h"><span class="lh-tool-grp-n">${g.n}</span><span>${_ecEsc(g.label || g.code)}</span></div>
+        ${(g.rows || []).map(r => `
+          <div class="lh-tool-row">
+            <div class="lh-tool-note">“${_ecEsc(r.note || '')}”</div>
+            <div class="lh-tool-meta">
+              <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+              <span>${_ecEsc(r.store || '')}</span>
+              <span>${_ecEsc(r.by || '')}</span>
+            </div>
+            <div class="lh-tool-ttl"><span class="lt-lab">Listing</span><span>${_ecEsc(r.title || '')}</span></div>
+            ${(r.findings || []).map(t => `<div class="lh-tool-ttl"><span class="lt-lab">We said</span><span>${_ecEsc(t)}</span></div>`).join('')}
+          </div>`).join('')}
+      </div>`).join('');
+    return `<div class="lh-tool-pq"><div class="lh-tool-h">Picture Quality</div>
+      <div class="lt-ask-bar">
+        <span class="lt-ask-n">${n} Note${n === 1 ? '' : 's'} Said The Photo Check Was Wrong</span>
+        <button class="lt-ask-btn" onclick="lhToolPqCopy(this)">Copy The Ask For Claude</button>
+      </div>
+      <p class="lh-tool-say">It carries each listing's photos and what the check said, and asks
+        for the reasoning before any rule changes. Nothing is sent from here.</p>
+      ${groups}
+      <div class="lh-tool-finish">
+        <span>Once Claude has been through them:</span>
+        <button class="lh-tool-done-btn" onclick="lhToolPqDone()">Clear ${n} Note${n === 1 ? '' : 's'}</button>
+      </div>
+      ${doneHtml}</div>`;
+}
+
+function lhToolPqCopy(button) {
+    const fb = _lhToolPq;
+    if (!fb || !fb.ask) return;
+    navigator.clipboard.writeText(fb.ask).then(() => _copyFlash(button))
+        .catch(() => _pqSay('Could Not Reach The Clipboard',
+            'Your browser refused the copy. Select the notes and copy them by hand.'));
+}
+window.lhToolPqCopy = lhToolPqCopy;
+
+async function lhToolPqDone() {
+    const fb = _lhToolPq;
+    if (!fb || !fb.total) return;
+    const n = fb.total;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Listing Health', title: `Clear ${n} Picture Note${n === 1 ? '' : 's'}?`,
+        body: `<p class="lt-ask-say">Do this once Claude has been through them. The notes are kept
+                under <b>Cleared</b>; nothing on any listing changes.</p>`,
+        go: 'Clear Them', cancel: 'Not Yet' });
+    if (!said) return;
+    await _pqPost({ action: 'triaged', keys: fb.keys || [] });
+    try { _lhToolPq = await _pqFetch('?view=feedback&days=30'); }
+    catch (_) { _lhToolPq = { total: 0, groups: [], done: fb.done || [] }; }
+    renderListingHealthTool();
+}
+window.lhToolPqDone = lhToolPqDone;
 
 function _lhWhen(t) {
     const d = t ? new Date(t) : null;
@@ -53894,6 +54562,14 @@ async function openListingHealthTool() {
     const body = document.getElementById('listingHealthToolBody');
     if (body) body.innerHTML = '<div class="status-message">Reading the notes…</div>';
     _lhToolFb = null;
+    _lhToolPq = null;
+    // Picture Quality's notes, alongside — only for a reader who holds that
+    // tool, and a failure there must not take the title notes down with it.
+    if (typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('ec-view-picture-quality')) {
+        _pqFetch('?view=feedback&days=30')
+            .then(fb => { _lhToolPq = fb; if (_lhToolFb) renderListingHealthTool(); })
+            .catch(e => { _lhToolPq = { error: e.message || String(e) }; if (_lhToolFb) renderListingHealthTool(); });
+    }
     try {
         _lhToolFb = await _ltFetch('?view=feedback&days=30');
     } catch (e) {
@@ -53947,12 +54623,12 @@ function renderListingHealthTool() {
     if (!n) {
         // Two lines: the tick belongs ON the headline, not stacked above it as a
         // row of its own. (Ethan, 2026-09-04.)
-        body.innerHTML = `<div class="lh-tool-clear">
+        body.innerHTML = `<div class="lh-tool-h">Title Quality</div><div class="lh-tool-clear">
           <div class="lh-tool-clear-h"><span class="lh-tool-tick">✓</span>
-            <b>Nothing waiting on you.</b></div>
+            <b>No Title Notes Waiting.</b></div>
           <span>When somebody dismisses a title suggestion and writes why the rule
            was wrong, it lands here.</span>
-        </div>${doneHtml}`;
+        </div>${doneHtml}${_lhToolPqHtml()}`;
         return;
     }
     // Grouped by the rule that fired, the same way the ask is — one dismissal is
@@ -53988,9 +54664,10 @@ function renderListingHealthTool() {
     // a card he could not act on; putting the action under a scroll of evidence
     // would reproduce that one level down.
     body.innerHTML = `
+      <div class="lh-tool-h">Title Quality</div>
       <div class="lt-ask-bar">
-        <span class="lt-ask-n">${n} dismissal${n === 1 ? '' : 's'} explained a rule was wrong${
-          fb.settled ? ` · ${fb.settled} look${fb.settled === 1 ? 's' : ''} like the rule overruled the listing` : ''}</span>
+        <span class="lt-ask-n">${n} Note${n === 1 ? '' : 's'} Said The Title Check Was Wrong${
+          fb.settled ? ` · ${fb.settled} Look${fb.settled === 1 ? 's' : ''} Like The Rule Overruled The Listing` : ''}</span>
         <button class="lt-ask-btn" onclick="lhToolCopy(this)">Copy The Ask For Claude</button>
       </div>
       <p class="lh-tool-say">Paste it into Claude. It groups these by the rule that
@@ -54010,7 +54687,7 @@ function renderListingHealthTool() {
              things. The count carries its own noun and pluralises with it. -->
         <button class="lh-tool-done-btn" onclick="lhToolDone()">Clear ${n} Note${n === 1 ? '' : 's'}</button>
       </div>
-      ${doneHtml}`;
+      ${doneHtml}${_lhToolPqHtml()}`;
 }
 
 // Copies, then marks these notes read so the next ask carries only new ones.
@@ -54099,28 +54776,39 @@ function _ltListerPill(r) {
     return `<span class="lt-lister" title="Listed by ${_ecEsc(name)}, from this product's Shopify tags">${_ecEsc(name)}</span>`;
 }
 
-function _ltDeniedHtml() {
-    const d = _ltData && _ltData.denied;
-    if (!d || !(d.rows || []).length) return '';
+// ⚠️ ONE DRAWER PER TAB — see _pqDismissedHtml. A row dismissed from Wrong is
+// kept under Wrong. The tally stays estate-wide on every tab: it is about rules,
+// and a rule does not belong to a tab.
+// ⚠️ ONLY NOTES STILL WAITING ON CLAUDE — see _pqWaiting, the same rule, so the
+// two drawers together equal Listing Health Notes. The same filter the notes
+// tool's own count uses (notedCount: not-a-problem, a note, not triaged).
+// "Ours Is Fine" rows are not in here: they say the rule was RIGHT, carry no
+// note, and are never sent to Claude, so there is nothing for them to wait on.
+const _ltWaiting = r => r.as !== 'ebay-stale' && !!(r.note || '').trim() && !r.triagedAt;
+function _ltDeniedHtml(tier) {
+    const all = _ltData && _ltData.denied;
+    if (!all) return '';
+    const d = { rows: (all.rows || []).filter(r => _ltWaiting(r) && (tier == null || r.severity === tier)) };
+    if (!d.rows.length) return '';
     const when = t => {
         const x = new Date(t);
         return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     };
-    // ⚠️ THE TALLY EXCLUDES eBay-STALE DISMISSALS, and the server already did
-    // that — repeated here only in the wording. Those say the rule was RIGHT and
-    // the fix lives in Marketplace Connect; counting them would make title-drift
-    // look like our worst rule exactly when it was doing its job.
-    const tally = (d.tally || []).filter(t => t.n >= 2);
-    // ⚠️ SAME EXCLUSION AS THE TALLY. "Ours Is Fine" says the rule was RIGHT and
-    // the stale copy is on eBay, so its note is not feedback about a rule and
-    // must not be counted into an ask to go and change one.
-    // ⚠️ AND NOT ALREADY CARRIED INTO AN ASK. Counting every note ever written
-    // would leave the bar up forever, which is how a nag stops being read.
-    const noted = d.rows.filter(r => r.as !== 'ebay-stale' && (r.note || '').trim()
-                                  && !r.triagedAt).length;
+    // The tally is counted HERE, from the rows in this drawer — one rule
+    // dismissed twice among the notes waiting, which is the argument the notes
+    // are making. The server's tally counts every dismissal ever, answered ones
+    // included, which would keep a rule flagged long after it was fixed.
+    const byCode = {};
+    for (const r of d.rows) for (const f of (r.findings || [])) {
+        const c = String(f && f.code || '');
+        if (c) byCode[c] = (byCode[c] || 0) + 1;
+    }
+    const tally = Object.entries(byCode).filter(([, n]) => n >= 2)
+        .sort((a, b) => b[1] - a[1]).map(([code, n]) => ({ code, n }));
+    const noted = d.rows.length;
     const tallyHtml = tally.length
         ? `<div class="lt-tally">
-             <div class="lt-tally-h">Confirmed Correct More Than Once — Worth A Look At The Rule</div>
+             <div class="lt-tally-h">Dismissed More Than Once — Worth A Look At The Rule</div>
              ${tally.map(t => `<div class="lt-tally-row">
                  <span class="lt-tally-n">${t.n}</span>
                  <span>${_ecEsc(_LT_CODE_SAYS[t.code] || t.code)}</span></div>`).join('')}
@@ -54148,21 +54836,19 @@ function _ltDeniedHtml() {
         </div>`;
     }).join('');
     return `<details class="lt-denied">
-      <!-- ⚠️ "CONFIRMED CORRECT", NOT "DISMISSED". Ethan, 2026-09-03: "change
-           the Dismissed name to something more direct". Dismissed named what
-           happened to the ROW; every row in here is a person having read a title
-           and decided it is right — which is what both answers assert (the rule
-           was wrong, or the rule was right and eBay holds the stale copy). It is
-           also the more inviting word: this drawer is a record of work done, not
-           a bin of things brushed aside. -->
-      <summary>${d.rows.length} Confirmed Correct</summary>
+      <!-- ⚠️ "DISMISSED", THE SAME WORD IN ALL THREE TOOLS (Ethan, 2026-09-30:
+           "we should standardize our language for that across all 3 tools for
+           these dropdowns"). It was "Confirmed Correct" here from 2026-09-03 and
+           "Confirmed Fine" in Picture Quality; every one of these rows got here
+           by a button that now says Dismiss, so the drawer says so too. -->
+      <summary>${d.rows.length} Dismissed</summary>
       <!-- ⚠️ THE NOTE IS THE ONLY EVIDENCE A RULE IS WRONG, and it was landing
            in here where nobody read it on a schedule. The COUNT belongs beside
            the tally, which is the argument it is making; the work itself is the
            Listing Health tool, so this opens that rather than doing the job a
            second time in a second place. -->
       ${noted ? `<div class="lt-ask-bar">
-        <span class="lt-ask-n">${noted} dismissal${noted === 1 ? '' : 's'} explained a rule was wrong</span>
+        <span class="lt-ask-n">${_lhNotesSaid(noted)}</span>
         <button class="lt-ask-btn" onclick="openListingHealthTool()"
                 title="Read the notes and copy the ask for Claude">Open Listing Health Notes</button>
       </div>` : ''}
@@ -54172,7 +54858,7 @@ function _ltDeniedHtml() {
 }
 
 function _ltHtml() {
-    const head = (inner, badge) => _lhSec('Titles', 'Listing Titles', inner, badge);
+    const head = (inner, badge) => _lhSec('Titles', 'Title Quality', inner, badge);
     const store = _ecEsc(_ecStore || '');
 
     // ⚠️ A FAILED READ IS NOT AN ALL CLEAR — the same rule the photo alarm
@@ -54190,7 +54876,9 @@ function _ltHtml() {
     const all = _ltData.queue || [];
     const byTier = n => all.filter(r => r.severity === n);
     const total = all.length;
-    if (!total) {
+    // All clear with NO TABS only when nothing was dismissed either — otherwise
+    // the tabs stay, because the dismissed rows live on them.
+    if (!total && !((_ltData.denied || {}).rows || []).some(_ltWaiting)) {
         // The scope line matters MOST here. "All clear" over a list narrowed to
         // eBay is a much smaller claim than "all clear" over the whole storefront,
         // and the reader cannot tell which they are looking at without it.
@@ -54203,7 +54891,7 @@ function _ltHtml() {
 
     // Land on the worst tier that has anything in it. Opening on an empty
     // "Wrong" tab hides the work and reads as a broken panel.
-    if (!byTier(_ltTier).length) {
+    if (!_ltPicked && !byTier(_ltTier).length) {
         const first = _LT_TIERS.find(t => byTier(t.n).length);
         if (first) _ltTier = first.n;
     }
@@ -54223,10 +54911,11 @@ function _ltHtml() {
     return head(`
       ${_ltScopeNote(_ltData.ebayScope)}
       <div class="rc-modes lt-modes">${tabs}</div>
-      ${_ltTierSaid(_ltTier, byTier(_ltTier).length, store)}
-      <div class="lt-rows">${rows}</div>
-      ${_ltDeniedHtml()}`,
-      `<span class="lh-count ${worst === 3 ? 'lh-count-bad' : worst === 2 ? 'lh-count-warn' : 'lh-count-ok'}">${total}</span>`);
+      ${rows ? `<div class="lt-rows">${rows}</div>`
+        : `<div class="lh-clear"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>All Clear — Nothing Waiting Here At ${store}</span></div>`}
+      ${_ltDeniedHtml(_ltTier)}`,
+      `<span class="lh-count ${!total ? 'lh-count-ok' : worst === 3 ? 'lh-count-bad' : worst === 2 ? 'lh-count-warn' : 'lh-count-ok'}">${total}</span>`);
 }
 
 // WHAT IS AND IS NOT IN THIS LIST, in one line. The queue is customer-facing
@@ -54255,30 +54944,8 @@ function _ltScopeNote(sc) {
         hidden from it.</div>`;
 }
 
-// Plain English, and it says who fixes it. Each tier is a different KIND of
-// problem, so one blurb for all three would have to be vague enough to fit a
-// misdescribed listing and a missing keyword at once.
-function _ltTierSaid(tier, n, store) {
-    if (!n) return '';
-    const isAre = n === 1 ? 'listing is' : 'listings are';
-    if (tier === 3) {
-        return `<div class="lh-alarm">
-            <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            <span>${n} ${isAre} describing the wrong thing to a buyer at ${store} — a mismatched
-            title is a misdescribed sale, not just a missed one.
-            <strong>Read both titles before deciding</strong>, then fix the one that is wrong.</span>
-          </div>`;
-    }
-    if (tier === 2) {
-        return `<div class="lt-said">${n} ${isAre} missing the words a buyer would search for, so they
-            are close to invisible however good the price is. <strong>The store fixes these</strong> —
-            approve the suggestion or type a better title.</div>`;
-    }
-    return `<div class="lt-said">${n} ${isAre} findable and could be more so. Nothing here is broken,
-        so this is the pile to work when the other two are empty.</div>`;
-}
-
-function ltSetTier(n) { _ltTier = n; ecRender(); }
+// No tier sentence above the rows — see the note over pqSetTier.
+function ltSetTier(n) { _ltTier = n; _ltPicked = true; ecRender(); }
 window.ltSetTier = ltSetTier;
 
 function _ltRow(r) {
@@ -54448,7 +55115,8 @@ function _ltDenyKind(r) {
         ? { as: 'ebay-stale', label: 'Ours Is Fine',
             hint: 'Our Shopify title is right as it is — it is the eBay copy that needs correcting, and Marketplace Connect owns that. Clears the row without recording this as a bad rule.',
             ask: 'Confirm our Shopify title here is the right one?\n\nThis clears the row and records that the EBAY listing is the copy that needs correcting. Nothing is changed on either listing.' }
-        : { as: 'not-a-problem', label: 'Deny',
+        // "Dismiss", the word all three tools use (2026-09-30). It was Deny.
+        : { as: 'not-a-problem', label: 'Dismiss',
             hint: 'This title is fine as it is — the finding was wrong.',
             ask: 'Why is this title fine as it is?' };
 }
@@ -54566,7 +55234,7 @@ function _ltAsk(o) {
                is neutral. "Dismiss It" in the same green as "Change The Title"
                tells a reviewer the two are the same kind of act, and they are
                not. -->
-          <button type="button" class="lt-ask-go ${kind === 'ok' ? '' : 'lta-' + kind}"${o.busy ? ' disabled' : ''}>${_ecEsc(o.go || 'Confirm')}</button>
+          <button type="button" class="lt-ask-go ${kind === 'ok' ? '' : 'lta-' + kind}"${o.busy || (o.note && o.note.required) ? ' disabled' : ''}>${_ecEsc(o.go || 'Confirm')}</button>
         </div>
       </div>`;
     el.classList.add('open');
@@ -54575,8 +55243,17 @@ function _ltAsk(o) {
     if (cancel) cancel.onclick = () => _ltAskClose(null);
     el.querySelector('.lt-ask-go').onclick = () => {
         const box = el.querySelector('#ltAskNote');
+        if (o.note && o.note.required && !(box && box.value.trim())) return;
         _ltAskClose({ note: box ? box.value.trim() : '' });
     };
+    // ⚠️ A REQUIRED NOTE HOLDS THE BUTTON until something is typed. Ethan
+    // (2026-09-30): "the notes need to be required ... or else I will have
+    // nothing to give you as to what to fix." Spaces do not count. Enter is
+    // already refused on a disabled button (_ltAskKey).
+    if (o.note && o.note.required) {
+        const box = el.querySelector('#ltAskNote'), go = el.querySelector('.lt-ask-go');
+        box.addEventListener('input', () => { go.disabled = !box.value.trim(); });
+    }
     // The field first when there is one — the question has already been read by
     // then, and the answer is what we are waiting for.
     const first = el.querySelector('#ltAskNote') || el.querySelector('.lt-ask-go');
@@ -54725,9 +55402,11 @@ async function ltDeny(pid) {
     const row = (_ltData?.queue || []).find(r => r.productId === pid);
     if (!row) return;
     // A reason, because a denial is information: it is the only signal that a
-    // rule is wrong, and "denied" with no note teaches nobody anything. Blank is
-    // allowed — refusing to record the denial without one would just mean fewer
-    // denials and a queue nobody trusts.
+    // rule is wrong, and "denied" with no note teaches nobody anything.
+    // ⚠️ REQUIRED SINCE 2026-09-30. It was optional, on the theory that forcing
+    // one would mean fewer denials; Ethan: "the notes need to be required for
+    // both this and title tool or else I will have nothing to give you as to
+    // what to fix." The server refuses a blank one too.
     const kind = _ltDenyKind(row);
     // ⚠️ ONLY ONE OF THE TWO ANSWERS HAS ANYTHING TO LEARN FROM.
     // A Deny says our rule was wrong, and the note is the only place that can
@@ -54761,10 +55440,10 @@ async function ltDeny(pid) {
             body: `<div class="lt-ask-pair"><div class="lt-now">
                      <span class="lt-lab">Title</span>
                      <span class="lt-cur">${_ecEsc(row.current || '')}</span></div></div>`,
-            note: { label: 'Why Is It Fine? (Optional)',
+            note: { label: 'Why Is It Fine?', required: true,
                     placeholder: 'e.g. the model name really does repeat on the box',
-                    hint: 'Shown in Confirmed Correct below, and it is how we find out a rule'
-                        + ' is wrong. Four dismissals of one rule is a rule to go and fix.' },
+                    hint: 'Required — shown in Confirmed Correct on this tab, and it is how we find'
+                        + ' out a rule is wrong. Four dismissals of one rule is a rule to go and fix.' },
             go: 'Dismiss It', cancel: 'Cancel' });
     if (!said) return;
     const reason = said.note || '';
@@ -54934,7 +55613,7 @@ function _rcHtml() {
     };
     const skips = skipped.length ? `
       <details class="rc-skips">
-        <summary>${skipped.length} Skipped At ${_ecEsc(_ecStore)}</summary>
+        <summary>${skipped.length} Dismissed</summary>
         ${skipped.map(s => `
           <div class="rc-skiprow">
             <div class="rc-skipmain">
@@ -55046,7 +55725,7 @@ function _rcHtml() {
                     onclick="rcFileOne(this.dataset.id, this)">Submit</button>
             <button class="ec-btn ec-btn-sm ec-btn-off" data-id="${id}"
                     title="${_rcMode === 'misfiled' ? 'Leave it on the shelf it is on and stop offering it' : 'Leave it in Other and stop offering it'}"
-                    onclick="rcSkip(this.dataset.id, this)">Remove</button>
+                    onclick="rcSkip(this.dataset.id, this)">Dismiss</button>
           </td>
         </tr>`;
     }).join('');
@@ -55248,10 +55927,10 @@ async function rcFileSelected() {
 window.rcFileSelected = rcFileSelected;
 
 async function rcSkip(id, btn) {
-    if (btn) { btn.disabled = true; btn.textContent = 'Removing…'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Dismissing…'; }
     const res = await _rcPost({ action: 'skip', store: _ecStore, productId: id });
     if (!res.ok) {
-        if (btn) { btn.disabled = false; btn.textContent = 'Remove'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Dismiss'; }
         alert(res.body?.detail || res.body?.error || 'Could not skip that.');
         return;
     }

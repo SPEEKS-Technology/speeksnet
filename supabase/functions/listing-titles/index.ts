@@ -7,7 +7,11 @@
 //     GET  ?view=review&store=OVL     the queue, one row per product
 //     GET  ?view=counts               per-store open totals and nothing else —
 //                                     what the page header and the feed read
-//     POST {action:"approve", store, productId, title?}   writes Shopify
+//     POST {action:"approve", store, productId, title?, fields?}   writes Shopify
+//          fields: [{field:"Platform", value:"Apple II"}] — named corrections,
+//          written to the spec row, the metafield and the attribute arrays
+//     POST {action:"fields"|"fields-preview", store, productId, fields}
+//          the same corrections alone, on a reviewed listing (title untouched)
 //     POST {action:"deny",    store, productId, reason}
 //
 //   THE SWEEP, ?secret= :
@@ -1573,10 +1577,35 @@ const NAME_CODES = new Set<string>(["name-garbled", "name-wrong", "name-disputed
 // Factor field too (name-garbled is a CORRECTING_CODE). An M.2 drive, a
 // motherboard (ATX / Micro-ATX) and a desktop (SFF) are all named by their form
 // factor, and its values are specific enough not to veto by coincidence.
+// ⚠️ …EXCEPT "2280mm" ITSELF, reversed 2026-09-30 (Ethan, on LEE's SN580,
+// MO01-5700A3-E15: "you are the super computer here — we can assume something
+// as humans and be wrong"). The point of the tool is to say what to change it
+// TO. An M.2 size is a code (2280 = 22mm × 80mm); "2280mm" reads as 2.28 metres
+// and a buyer searching "2280" never matches it. Form Factor stays an identity
+// field for everything else — see isM2Misnomer, which lets exactly that one
+// correction through as an ordinary fix, field included.
+//
+// ⚠️ PROCESSOR AND MEMORY SIZE, 2026-09-30 — two name-wrong denials in a week,
+// both the listing right and our knowledge wrong, both read off the item:
+//   OVL Dell Precision 5520 (KS01-B2B325-QTY7-R6R3): Processor = i7-6820HQ, and
+//     photo 3 is Windows reporting exactly that. We "corrected" it to the
+//     7820HQ because the 5520 is a Kaby Lake machine — some shipped Skylake.
+//   LEE Kingston HyperX Fury (MO01-5580B-E15): Memory Size = 8GB (2x4GB), and
+//     the photos show two HX424C15FB/4 sticks. We shrank it to one stick's 4GB.
+// A CPU or a memory total is the machine's own account of what is inside it,
+// read off the machine; outside knowledge of what a model "shipped with" does
+// not overrule it.
 const IDENTITY_FIELDS = [
   "MPN", "Model", "Platform", "Type", "Brand", "Release Year",
-  "Maximum Aperture", "Focal Length", "Form Factor",
+  "Maximum Aperture", "Focal Length", "Form Factor", "Processor", "Memory Size",
 ];
+
+// "2280mm" -> "2280": the one form-factor correction that is always right.
+function isM2Misnomer(wrong: string, right: string): boolean {
+  const m = /^(.*?)\b(22(?:30|42|60|80|110))\s?mm\b(.*)$/i.exec(wrong.trim());
+  return !!m && `${m[1]}${m[2]}${m[3]}`.replace(/\s+/g, " ").trim().toLowerCase()
+    === right.replace(/\s+/g, " ").trim().toLowerCase();
+}
 
 function identityFields(specs: Record<string, string> | undefined) {
   const out: Record<string, string> = {};
@@ -1635,7 +1664,13 @@ is never penalised. In particular:
 
   And a stated specification that contradicts a part number in the same title is
   always reportable — "PC3-14900" is 1866MHz whatever the title says. That is
-  arithmetic, not recognition.
+  arithmetic, not recognition. BUT a memory part number names ONE module: a
+  title selling two of them as "8GB (2x4GB)" with the single-module part number
+  (HX424C15FB/4) is two 4GB sticks and is correct. Never shrink a kit size to
+  one module's size.
+- Do NOT correct a CPU, GPU, RAM amount or storage size to what you believe a
+  model shipped with. One model ships in several configurations and used units
+  get parts swapped; the shop reads the spec off the machine.
 - Do NOT report a title for being short, vague, incomplete, badly punctuated,
   oddly capitalised, or for missing details. Other checks handle all of that.
 - Do NOT report condition or handling words: Broken, For Parts, Read, No Power,
@@ -2078,7 +2113,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // has to look. What it stops doing is proposing the swap.
     const echoed = listingSaysItself(wrong, identityFields(extra?.specs),
       changedSpan(wrong, right));
-    const respelling = !!right && isMisspelling(wrong, right);
+    const respelling = !!right && (isMisspelling(wrong, right) || isM2Misnomer(wrong, right));
     const saidBy = respelling ? null : echoed;
     if (!placeholder && at >= 0 && right && right !== wrong && saidBy) {
       findings.push({
@@ -2130,7 +2165,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
           // Say so, or the reviewer sees the same typo in the Type field and
           // reads it as the listing disagreeing with us.
           + (respelling && echoed
-              ? ` The listing's own ${echoed.field} has the same misspelling ("${echoed.value}"), and approving corrects it there too.`
+              ? ` The listing's own ${echoed.field} has the same ${isM2Misnomer(wrong, right) ? "mistake" : "misspelling"} ("${echoed.value}"), and approving corrects it there too.`
               : "")
           + (fits ? "" : ` The correction does not fit in 80 characters, so it needs editing by hand.`),
         // Only where we genuinely cannot settle it from the listing. Every other
@@ -4513,6 +4548,154 @@ async function echoSweep(store: string, limit: number) {
   };
 }
 
+// ============ FIELD CORRECTIONS: THE LISTING, NOT JUST THE TITLE ==============
+// Ethan, 2026-09-30, after three feedback fixes landed as titles only: "the idea
+// of this system is the beginning parts of listing review by fixing titles and
+// adjusting parts of the listing that reflected the poor title."
+//
+// planEchoes carries the WORDS the title changed into fields stating the same
+// words. That works for a swap ("Point & Shoot" -> "SLR") and cannot work for a
+// rewrite: "Might and Magic II Book One (PC, 1986)" -> "…Book One Secret of the
+// Inner Sanctum (Apple II, 1986)" is one run from "II" to "PC,", which no field
+// holds, so Platform went on saying PC, Game Name "II Book One", and the Meraki's
+// Type "10 Gigabit" — under titles that had stopped saying so.
+//
+// So a fix can now name the FIELD and the value it should hold, and this writes
+// that value everywhere the listing states that field:
+//   - the spec-table row of that name in the description
+//   - the metafield of that name (Game Name <-> custom.game_name)
+//   - the entry of that name inside filter_attributes / title_attributes /
+//     other_attributes, the arrays PayMore's lister builds from
+//   - and, for a field with no spec-table row (What's Included), a literal copy
+//     of its old value in the description — the "Items included in this sale"
+//     line is that field printed.
+// ⚠️ SET, NEVER CREATE. A field the listing does not have is reported back as
+// not found, never invented: a new metafield needs a type and a definition this
+// function has no business choosing.
+// ⚠️ THE WHOLE VALUE IS REPLACED, because the reviewer approved a value, not a
+// run. Inside a spec cell the old value is spliced out entity-aware (a cell's
+// marker <div> survives); a cell whose text is broken across tags is left and
+// reported, never rebuilt.
+type FieldFix = { field: string; value: string };
+
+const FIELD_ALIAS: Record<string, string> = {
+  whatsincluded: "whatsinclude", included: "whatsinclude", notincluded: "notincluded",
+};
+const fieldId = (s: string) => {
+  const k = String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return FIELD_ALIAS[k] || k;
+};
+
+function parseFieldFixes(raw: unknown): FieldFix[] | string {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) return "fields must be a list of {field, value}";
+  if (raw.length > 12) return "at most 12 field corrections at once";
+  const out: FieldFix[] = [];
+  for (const r of raw) {
+    const field = String((r as any)?.field || "").trim();
+    const value = String((r as any)?.value || "").replace(/\s+/g, " ").trim();
+    if (!field || !value) return "every field correction needs a field and a value";
+    if (value.length > 200 || /[<>]/.test(value)) return `the value for ${field} is not a plain value`;
+    if (PLACEHOLDER.test(value)) return `"${value}" is a placeholder, not a value, for ${field}`;
+    out.push({ field, value });
+  }
+  return out;
+}
+
+function planFieldFixes(html: string, mfs: { id: string; key: string; value: string }[],
+                        fixes: FieldFix[]) {
+  let out = html;
+  let cellHits = 0;
+  const mfUpdates = new Map<string, string>();
+  const echoes: Echo[] = [];
+  const notFound: string[] = [];
+  const cur = (f: { id: string; value: string }) => mfUpdates.get(f.id) ?? f.value;
+  for (const fix of fixes) {
+    const id = fieldId(fix.field);
+    const e: Echo = { field: fix.field, was: "", now: fix.value, where: [] };
+    const saw = (v: string, at: string) => { if (!e.was) e.was = v.trim(); if (!e.where.includes(at)) e.where.push(at); };
+
+    let tabled = false, already = false;
+    const cells = specCells(out);
+    for (let i = cells.length - 1; i >= 0; i--) {
+      const c = cells[i];
+      if (fieldId(c.key) !== id) continue;
+      tabled = true;
+      if (c.value.trim() === fix.value) { already = true; continue; }
+      const inner = out.slice(c.start, c.end);
+      const d = decodeWithMap(inner);
+      const at = d.text.indexOf(c.value.trim());
+      let next: string | null = null;
+      if (at >= 0) next = inner.slice(0, d.from[at]) + escapeHtml(fix.value) + inner.slice(d.to[at + c.value.trim().length - 1]);
+      else if (!/[<>]/.test(inner)) next = escapeHtml(fix.value);
+      if (next === null) { notFound.push(`${fix.field} (spec table cell has markup inside it — edit by hand)`); continue; }
+      out = out.slice(0, c.start) + next + out.slice(c.end);
+      cellHits++;
+      saw(c.value, "spec table");
+    }
+
+    let oldPlain = "";
+    for (const f of mfs) {
+      const pairs = jsonPairs(cur(f));
+      if (pairs) {
+        let touched = false;
+        const np = pairs.map(p => {
+          if (fieldId(p.key) !== id || p.value.trim() === fix.value) return p;
+          touched = true; saw(p.value, f.key);
+          return { ...p, value: fix.value };
+        });
+        if (touched) mfUpdates.set(f.id, JSON.stringify(np));
+        continue;
+      }
+      if (fieldId(f.key) !== id) continue;
+      if (cur(f).trim() === fix.value) { already = true; continue; }
+      oldPlain = oldPlain || cur(f).trim();
+      saw(cur(f), f.key);
+      mfUpdates.set(f.id, fix.value);
+    }
+
+    // No row of its own in the spec table: the description prints the old value
+    // somewhere else (What's Included is the "Items included in this sale" line).
+    // Long values only — a literal swap of "PC" would find it inside other words.
+    let swapped = false;
+    if (!tabled && oldPlain.length >= 20) {
+      const swap = swapTitleInHtml(out, oldPlain, fix.value);
+      if (swap.hits) { out = swap.html; cellHits += swap.hits; saw(oldPlain, "description"); swapped = true; }
+    }
+    // ⚠️ WHAT'S INCLUDED IS PRINTED ONE ITEM PER LINE, not as the field's text.
+    // BAL's Canon AE-1 (2026-09-30): whats_include "Shoulder/Neck Strap, Camera
+    // Body Cap" is on the page as <span><div>Shoulder/Neck Strap</div></span>
+    // <span><div>Camera Body Cap</div></span> under the title's own line — no
+    // literal copy to swap. So the item lines are rewritten, in exactly that
+    // shape, and ONLY when the lines after the title are the old field's items,
+    // one for one. Anything else is a list somebody edited by hand, and it is
+    // reported rather than overwritten.
+    if (!tabled && !swapped && id === "whatsinclude" && oldPlain) {
+      const box = /(Items included in this sale:[\s\S]*?<div\b[^>]*>)(\s*(?:<span><div>[\s\S]*?<\/div><\/span>\s*)+)(<\/div>)/i.exec(out);
+      const items = box ? [...box[2].matchAll(/<span><div>([\s\S]*?)<\/div><\/span>/gi)].map(m => m[1]) : [];
+      const oldItems = oldPlain.split(/\s*,\s*/).filter(Boolean);
+      const tail = items.slice(items.length - oldItems.length).map(s => stripTags(s));
+      if (box && items.length >= oldItems.length
+          && tail.every((s, i) => s.toLowerCase() === oldItems[i].toLowerCase())) {
+        const lead = items.slice(0, items.length - oldItems.length);
+        const lines = [...lead, ...fix.value.split(/\s*,\s*/).filter(Boolean).map(escapeHtml)]
+          .map(s => `<span><div>${s}</div></span>`).join("");
+        // The whitespace either side of the lines is kept byte for byte.
+        const indent = (/^\s*/.exec(box[2]) || [""])[0];
+        const trail = (/\s*$/.exec(box[2]) || [""])[0];
+        out = out.slice(0, box.index) + box[1] + indent + lines + trail + out.slice(box.index + box[0].length - box[3].length);
+        cellHits++;
+        saw(oldPlain, "description");
+      } else {
+        notFound.push(`${fix.field} (the description's item list does not match the field — edit it by hand)`);
+      }
+    }
+    if (e.where.length) echoes.push(e);
+    else if (!already) notFound.push(fix.field);
+  }
+  return { html: out, cellHits, mfUpdates, echoes, notFound };
+}
+
 async function handlePost(req: Request, scope: Scope) {
   const body = await req.json().catch(() => ({}));
   const action = String(body.action || "");
@@ -4561,10 +4744,16 @@ async function handlePost(req: Request, scope: Scope) {
   // ⚠️ REOPEN READS THE TABLE, NOT THE QUEUE VIEW. The view is status='open' by
   // definition, so looking a denied row up in it always fails — the one row
   // reopen exists to act on is the one row the queue cannot see.
-  const q: any[] = action === "reopen"
+  // ⚠️ FIELDS-ONLY READS THE TABLE TOO, at any status: its whole use is the
+  // listing whose title was ALREADY fixed (status applied) and whose spec fields
+  // were left saying the old thing. It still needs a row — this tool reviewed
+  // the listing — so it is never a licence to edit an arbitrary product.
+  const fieldsOnly = action === "fields" || action === "fields-preview";
+  const q: any[] = action === "reopen" || fieldsOnly
     ? await rows(
         `listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
-        + `&status=eq.denied&select=product_id,sku,current_title,suggested_title,findings,basis&limit=1`)
+        + (fieldsOnly ? "" : `&status=eq.denied`)
+        + `&select=product_id,sku,current_title,suggested_title,findings,basis&limit=1`)
     : await rows(
         `listing_title_queue?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
         + `&select=product_id,sku,current_title,suggested_title,findings,basis&limit=1`);
@@ -4584,6 +4773,12 @@ async function handlePost(req: Request, scope: Scope) {
     // decision a reviewer has already made should never be lost to a typo.
     const asRaw = String(body.as || "").trim();
     const decidedAs = asRaw === "ebay-stale" ? "ebay-stale" : "not-a-problem";
+    // ⚠️ "NOT A PROBLEM" NEEDS ITS WHY (Ethan, 2026-09-30): the note is the only
+    // thing that says what to fix. "Ours Is Fine" is exempt — it says the rule
+    // was right, and its note is never read into an ask.
+    if (decidedAs === "not-a-problem" && !String(body.reason || "").trim()) {
+      return json({ error: "reason required", detail: "Say why the title is fine — that note is how a wrong rule gets fixed." }, 400);
+    }
     await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
       method: "PATCH", headers: { Prefer: "return=minimal" },
       body: JSON.stringify({
@@ -4616,15 +4811,30 @@ async function handlePost(req: Request, scope: Scope) {
   // second before it. A preview computed from a stored snapshot, or by a second
   // implementation on the client, would eventually describe a change that is not
   // the change being made, which is worse than showing nothing.
-  if (action !== "approve" && action !== "preview") {
+  if (action !== "approve" && action !== "preview" && !fieldsOnly) {
     return json({ error: `unknown action: ${action}` }, 400);
+  }
+  const fixes = parseFieldFixes(body.fields);
+  if (typeof fixes === "string") return json({ error: "bad field corrections", detail: fixes }, 400);
+  if (fieldsOnly && !fixes.length) return json({ error: "fields required" }, 400);
+
+  const { shop, token } = await shopFor(store);
+
+  // Fields-only keeps the title it has NOW — read live, because the row's
+  // current_title is whatever the last sweep saw, which is the OLD title on
+  // exactly the rows this exists for.
+  if (fieldsOnly) {
+    const live = await shopifyGql(shop, token,
+      `query($id: ID!) { product(id: $id) { title } }`, { id: productId });
+    item.current_title = String(live?.product?.title || "");
+    if (!item.current_title) return json({ error: "product not readable in Shopify" }, 404);
   }
 
   // An edited title beats the suggestion always — the person is holding the
   // item. A row that arrived with no suggestion can ONLY be approved with one
   // typed, which is the point of leaving it null.
   const typed = String(body.title || "").replace(/\s+/g, " ").trim();
-  const next = typed || String(item.suggested_title || "");
+  const next = fieldsOnly ? item.current_title : (typed || String(item.suggested_title || ""));
   if (!next) {
     return json({ error: "a title is required",
                   detail: "This row has no suggested title — it needs one typed in before it can be approved." }, 400);
@@ -4633,12 +4843,10 @@ async function handlePost(req: Request, scope: Scope) {
     return json({ error: "title too long",
                   detail: `eBay refuses a title over ${EBAY_TITLE_MAX} characters; this one is ${next.length}.` }, 400);
   }
-  if (next === item.current_title) {
+  if (!fieldsOnly && next === item.current_title) {
     return json({ error: "nothing to change",
                   detail: "That is the title the listing already has." }, 400);
   }
-
-  const { shop, token } = await shopFor(store);
 
   // ⚠️ THE DESCRIPTION CARRIES ITS OWN COPY OF THE TITLE.
   // PayMore's listing tool writes the title into the description body too — as
@@ -4743,6 +4951,19 @@ async function handlePost(req: Request, scope: Scope) {
     alsoUpdated = plan.echoes;
     stillSays = plan.stillSays;
   }
+  // The reviewer's named field corrections, LAST, on top of everything above —
+  // an explicit "Platform = Apple II" beats whatever the run-carry did to the
+  // same field, and a field it corrects is no longer "still saying" anything.
+  let fieldsNotFound: string[] = [];
+  if (fixes.length) {
+    const ff = planFieldFixes(html, mfList.map(f => ({ ...f, value: mfChanged.get(f.id) ?? f.value })), fixes);
+    if (ff.cellHits) { html = ff.html; specRows += ff.cellHits; }
+    for (const [id, v] of ff.mfUpdates) mfChanged.set(id, v);
+    const fixed = new Set(ff.echoes.map(e => fieldId(e.field)));
+    alsoUpdated = [...alsoUpdated.filter(e => !fixed.has(fieldId(e.field))), ...ff.echoes];
+    stillSays = stillSays.filter(s => !fixed.has(fieldId(s.field)));
+    fieldsNotFound = ff.notFound;
+  }
   if (descHits || specRows) descriptionHtml = html;
   // Back to the field the id belongs to, because the write is addressed by
   // namespace + key. `type` is passed through unchanged: a metafield that has a
@@ -4754,27 +4975,39 @@ async function handlePost(req: Request, scope: Scope) {
     return f ? { namespace: f.namespace, key: f.key, type: f.type, value } : null;
   }).filter(Boolean) as { namespace: string; key: string; type: string; value: string }[];
 
-  if (action === "preview") {
+  if (action === "preview" || action === "fields-preview") {
     return json({ ok: true, preview: true, title: next,
                   descriptionCopies: descHits, specRows,
                   metafields: staleMetafields.length,
-                  alsoUpdated, stillSays });
+                  alsoUpdated, stillSays,
+                  ...(fieldsNotFound.length ? { fieldsNotFound } : {}) });
+  }
+  if (fieldsOnly && !descriptionHtml && !staleMetafields.length) {
+    return json({ error: "nothing to change",
+                  detail: fieldsNotFound.length
+                    ? `No field of these names on this listing: ${fieldsNotFound.join(", ")}.`
+                    : "Every field already says that." }, 400);
   }
 
-  const data = await shopifyGql(shop, token, `
-    mutation($input: ProductInput!) {
-      productUpdate(input: $input) {
-        product { id title }
-        userErrors { field message }
-      }
-    }`, { input: { id: productId, title: next,
-                   ...(descriptionHtml ? { descriptionHtml } : {}) } });
-  const errs = data?.productUpdate?.userErrors || [];
-  if (errs.length) {
-    return json({ error: "shopify refused the change",
-                  detail: errs.map((e: any) => `${(e.field || []).join(".")}: ${e.message}`).join("; ") }, 422);
+  // Fields-only with nothing in the description to change sends no
+  // productUpdate at all — re-sending an unchanged title is a write for nothing.
+  let saved = next;
+  if (!fieldsOnly || descriptionHtml) {
+    const data = await shopifyGql(shop, token, `
+      mutation($input: ProductInput!) {
+        productUpdate(input: $input) {
+          product { id title }
+          userErrors { field message }
+        }
+      }`, { input: { id: productId, ...(fieldsOnly ? {} : { title: next }),
+                     ...(descriptionHtml ? { descriptionHtml } : {}) } });
+    const errs = data?.productUpdate?.userErrors || [];
+    if (errs.length) {
+      return json({ error: "shopify refused the change",
+                    detail: errs.map((e: any) => `${(e.field || []).join(".")}: ${e.message}`).join("; ") }, 422);
+    }
+    saved = data?.productUpdate?.product?.title || next;
   }
-  const saved = data?.productUpdate?.product?.title || next;
 
   // ⚠️ A SEPARATE MUTATION, AFTER the title has landed, and its failure is
   // swallowed. Same rule the descriptionHtml read follows: a title fix that
@@ -4821,7 +5054,9 @@ async function handlePost(req: Request, scope: Scope) {
     body: JSON.stringify({
       store_code: store, product_id: productId, sku: item.sku,
       before_title: item.current_title, after_title: saved,
-      edited: !!typed && typed !== String(item.suggested_title || ""),
+      // A fields-only correction is recorded as an edit with an unchanged
+      // title: the ledger is where "who changed Platform, and when" lives.
+      edited: fieldsOnly || (!!typed && typed !== String(item.suggested_title || "")),
       basis: item.basis, findings: item.findings || [], applied_by: scope.name,
       // Which spec fields moved with the title. Without this the ledger says
       // a title changed on Sep 3 and nothing about the four other places on
@@ -4829,20 +5064,24 @@ async function handlePost(req: Request, scope: Scope) {
       spec_changes: alsoUpdated,
     }),
   });
-  await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
-    method: "PATCH", headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({
-      status: "applied", applied_title: saved,
-      decided_by: scope.name, decided_at: new Date().toISOString(),
-    }),
-  });
-  // ebay_catalog still holds the old title until the next catalogue sweep, and
-  // the queue view keys off it — so patch it here too, or the row sits in the
-  // queue looking undone until that sweep runs.
-  await sb(`ebay_catalog?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
-    method: "PATCH", headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({ title: saved, updated_at: new Date().toISOString() }),
-  }).catch(() => { /* cosmetic only; the next sweep fixes it */ });
+  // A fields-only correction decides nothing about the title, so it leaves the
+  // queue row exactly where it was.
+  if (!fieldsOnly) {
+    await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({
+        status: "applied", applied_title: saved,
+        decided_by: scope.name, decided_at: new Date().toISOString(),
+      }),
+    });
+    // ebay_catalog still holds the old title until the next catalogue sweep, and
+    // the queue view keys off it — so patch it here too, or the row sits in the
+    // queue looking undone until that sweep runs.
+    await sb(`ebay_catalog?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ title: saved, updated_at: new Date().toISOString() }),
+    }).catch(() => { /* cosmetic only; the next sweep fixes it */ });
+  }
 
   // descHits is reported because a SILENT no-op is what hid this for weeks: the
   // approve said ok, the title changed, and nobody could tell from the answer
@@ -4853,6 +5092,7 @@ async function handlePost(req: Request, scope: Scope) {
                 ...(metafieldsFixed ? { metafieldsFixed } : {}),
                 ...(metafieldsLeft ? { metafieldsLeft, metafieldsWhy } : {}),
                 ...(alsoUpdated.length ? { alsoUpdated } : {}),
+                ...(fieldsNotFound.length ? { fieldsNotFound } : {}),
                 // ⚠️ REPORTED EVEN THOUGH NOTHING WAS DONE ABOUT IT. A field
                 // still stating what the title just stopped stating is the one
                 // outcome a reviewer has to hear about — it is the case this
