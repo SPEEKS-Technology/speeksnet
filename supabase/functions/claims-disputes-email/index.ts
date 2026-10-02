@@ -3,11 +3,12 @@
 // FOUR SENDS, ONE FUNCTION, ?kind= picks which. Since 0119 every one of them
 // carries Payments too — Shopify orders we have not been paid for — and a card
 // on its last chargeable day is "due today" for both 4pm mails, the same as a
-// dispute (Ethan, 2026-09-28).
+// dispute (Ethan, 2026-09-28). Since 2026-10-02 "due today" means the deadline
+// is today OR TOMORROW — see dueSoon.
 //
 //   manager_daily   08:20 CT  to each store's manager. Everything of theirs that
 //                             needs a person, soonest deadline first.
-//   manager_nudge   16:00 CT  to a store, ONLY when something closes today, it
+//   manager_nudge   16:00 CT  to a store, ONLY when something is due today, it
 //                             was on this morning's mail, and it still has not
 //                             been answered. Answer it and this never arrives.
 //   dm_digest       08:20 CT  to the DM. Counts per store, plus the two things a
@@ -63,7 +64,7 @@ const SHOP_HANDLE: Record<string, string> = {
 // --- the house look ---------------------------------------------------------
 // Lifted from refund-mismatch, which this replaces. Every SPEEKS report looks
 // like this; a mail that invents its own palette reads as somebody else's.
-const C = { ink: "#12241c", faint: "#6d8579", line: "#dde7e1", bad: "#b3261e", warn: "#8a5a00", chip: "#eef5f1" };
+const C = { ink: "#12241c", faint: "#5b7166", line: "#dde7e1", bad: "#b3261e", warn: "#8a5a00", chip: "#eef5f1" };
 const FONT = "-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
 const esc = (s: unknown) =>
@@ -312,7 +313,7 @@ function staleness(d: any, now = Date.now()): Record<string, string[]> {
 // every template, so all four mails carry it identically.
 function withWarning(html: string, lines: string[]): string {
   if (!lines.length) return html;
-  const row = `<tr><td style="padding:12px 14px;background:#fdecea;border-top:1px solid #f5c2bd;">
+  const row = `<tr><td style="padding:12px 14px;background:#ffffff;border-top:3px solid #b3261e;">
       <div style="font-size:13px;font-weight:800;color:${C.bad};">This list may be out of date</div>
       <div style="font-size:12px;color:${C.ink};margin-top:5px;line-height:1.6;">${lines.map(esc).join("<br>")}</div>
       <div style="font-size:12px;color:${C.faint};margin-top:6px;line-height:1.6;">Anything that arrived since then is not below. Check eBay and Shopify directly today.</div>
@@ -355,7 +356,7 @@ async function backupWarning(now = Date.now()): Promise<string[]> {
 
 function withBackupWarning(html: string, lines: string[]): string {
   if (!lines.length) return html;
-  const row = `<tr><td style="padding:12px 14px;background:#fdecea;border-top:1px solid #f5c2bd;">
+  const row = `<tr><td style="padding:12px 14px;background:#ffffff;border-top:3px solid #b3261e;">
       <div style="font-size:13px;font-weight:800;color:${C.bad};">Backups</div>
       <div style="font-size:12px;color:${C.ink};margin-top:5px;line-height:1.6;">${lines.map(esc).join("<br>")}</div>
     </td></tr>`;
@@ -376,7 +377,24 @@ function allRows(d: any): Row[] {
 // window. quiet_until is the INR rule (Ethan, 2026-09-23: "once they are
 // notified about it via email, they don't need to see it again until the day of
 // needing to refund") — set by stateOf, only ever read here.
-const mailable = (r: Row, today: string) => NEED.includes(r.state) && !(r.quiet && r.quiet > today);
+// Quiet ends a day before the refund day, not on it — see DUE TODAY MEANS BY
+// TOMORROW below. Otherwise an INR would be hidden on the very day it is meant
+// to be called due.
+const mailable = (r: Row, today: string) => NEED.includes(r.state) && !(r.quiet && r.quiet > addDaysIso(today, 1));
+
+// DUE TODAY MEANS BY TOMORROW (Ethan, 2026-10-02: "something due tomorrow we
+// would get alerted as due today today, so keep everything the same just move it
+// a day forward"). What prompted it: OVL #KS01-15083's card ran out at 11:04 AM
+// on Oct 1. It was "due today" on the 8:20 mails, but by 4pm it was already
+// missed, so neither 4pm alert said a word about it. The next morning it turned
+// up as "worth a conversation", which looked like a different list from the one
+// the 4pm alert had been about. Card deadlines fall at whatever time the order
+// was placed, so most are gone before 4pm on their own day. Calling them due
+// the day BEFORE gives each one a full day of morning mail and a 4pm alert while
+// it can still be charged. An item stays "due today" on its real day as well,
+// until it is dealt with or missed. The real date is still printed on the item.
+const dueSoon = (r: Row, today: string) =>
+  !!r.due && !r.missed && r.due >= today && r.due <= addDaysIso(today, 1);
 
 // Soonest deadline first, then oldest, then biggest. A thing closing tonight
 // belongs above a thing closing in three weeks whatever type it is — Ethan's
@@ -389,16 +407,34 @@ const bySoonest = (a: Row, b: Row) =>
 // ---------------------------------------------------------------------------
 // The house shell
 // ---------------------------------------------------------------------------
-function shell(title: string, sub: string, body: string, foot: string, band = C.chip, titleColor = C.ink) {
-  return `<body style="margin:0;padding:18px;background:#f4f7f5;font-family:${FONT}">
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="width:600px;max-width:100%;margin:0 auto;background:#ffffff;border:1px solid ${C.line};border-radius:12px;">
-    <tr><td style="padding:16px 14px;background:${band};border-radius:12px 12px 0 0;">
-      <div style="font-size:17px;font-weight:800;color:${titleColor};">${title}</div>
+// DARK MODE (Ethan's phone, 2026-10-01). Outlook on iOS doesn't honour a dark
+// stylesheet; it inverts the light colours itself. Two things in the old shell
+// broke under that:
+//   * the header band was a pale tint (#fbeceb pink, #eef5f1 green). Inverted,
+//     a tint turns muddy — the 4pm alert came out brown, with the grey subtitle
+//     almost invisible on it. The band is now plain white, which inverts to the
+//     same dark as the rest of the card, and the alert says "alert" with a red
+//     rule along the top plus its red title, both of which survive inversion.
+//   * <body> had 18px of padding and the card was width:600px; max-width:100%.
+//     On a phone that is 100% of the body PLUS the padding, so the card ran
+//     past the grey ground on the right, and the light grey turned into a
+//     mid-grey slab. The ground is now a full-width white table and the card
+//     a fluid table capped at 600px, so nothing can overhang anything.
+// Keep any new band or row on white (or the near-white #f7faf8 already used for
+// section rows) — no new tints.
+function shell(title: string, sub: string, body: string, foot: string, alert = false) {
+  const accent = alert ? C.bad : "#1c6b47";
+  return `<body style="margin:0;padding:0;background:#ffffff;font-family:${FONT}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#ffffff;"><tr><td align="center" style="padding:12px 8px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid ${C.line};border-radius:12px;border-collapse:separate;">
+    <tr><td style="padding:16px 14px;background:#ffffff;border-top:4px solid ${accent};border-radius:12px 12px 0 0;">
+      <div style="font-size:17px;font-weight:800;color:${alert ? C.bad : C.ink};">${title}</div>
       <div style="font-size:12.5px;color:${C.faint};margin-top:5px;line-height:1.6;">${sub}</div>
     </td></tr>
     ${body}
     <tr><td style="padding:12px 14px;text-align:center;color:${C.faint};font-size:10.5px;line-height:1.6;border-top:1px solid ${C.line};background:#f7faf8;border-radius:0 0 12px 12px;">${foot}</td></tr>
   </table>
+</td></tr></table>
 </body>`;
 }
 
@@ -410,9 +446,12 @@ const sectionRow = (label: string, color = C.faint) =>
 function itemRow(r: Row, today: string) {
   const late = r.due && r.due < today;
   const todayDue = r.due && r.due === today;
+  // Due a day early (dueSoon), but the real deadline is still what is printed.
+  const tomorrowDue = r.due && r.due === addDaysIso(today, 1);
   const dueTxt = r.missed
     ? (r.missedText === "" ? "" : `<span style="color:${C.bad};font-weight:700;"> · ${esc(r.missedText || "reply window shut")}</span>`)
     : todayDue ? `<span style="color:${C.bad};font-weight:700;"> · closes today</span>`
+    : tomorrowDue ? `<span style="color:${C.bad};font-weight:700;"> · due today — closes tomorrow</span>`
     : late ? `<span style="color:${C.bad};font-weight:700;"> · was due ${esc(prettyDay(r.due))}</span>`
     : r.due ? `<span style="color:${C.warn};font-weight:700;"> · ${esc(r.dueVerb || "answer by")} ${esc(prettyDay(r.due))}</span>` : "";
   const facts = r.facts.map(esc).join(" &nbsp;·&nbsp; ");
@@ -455,13 +494,13 @@ function managerDaily(store: string, rows: Row[], seen: Set<string>, extras: { r
   const list = rows.slice().sort(bySoonest);
   const fresh = list.filter((r) => !seen.has(`${r.type}|${r.key}`));
   const rest = list.filter((r) => seen.has(`${r.type}|${r.key}`));
-  const closing = list.filter((r) => r.due && r.due === today && !r.missed).length;
+  const closing = list.filter((r) => dueSoon(r, today)).length;
   const total = list.reduce((s, r) => s + (r.amount || 0), 0);
 
   let body = `<tr><td style="padding:12px 14px;border-top:1px solid ${C.line};">
     <table role="presentation" width="100%"><tr>
       <td style="font-size:12px;color:${C.faint};"><b style="color:${C.ink};font-size:19px;">${list.length}</b><br>need you</td>
-      <td style="font-size:12px;color:${C.faint};"><b style="color:${closing ? C.bad : C.ink};font-size:19px;">${closing}</b><br>close today</td>
+      <td style="font-size:12px;color:${C.faint};"><b style="color:${closing ? C.bad : C.ink};font-size:19px;">${closing}</b><br>due today</td>
       <td style="font-size:12px;color:${C.faint};text-align:right;"><b style="color:${C.ink};font-size:19px;">${money(total)}</b><br>at stake</td>
     </tr></table></td></tr>`;
 
@@ -501,13 +540,13 @@ function managerNudge(store: string, rows: Row[], today: string) {
   const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
   const body = rows.sort(bySoonest).map((r) => itemRow(r, today)).join("");
   return shell(
-    `${money(total)} closes today`,
+    `${money(total)} due today`,
     // "Still open on the site" rather than "no response from us": since 0119 a
     // card that runs out today lands here too, and there is no reply to it.
     `${esc(STORE_NAME[store] || store)}. ${rows.length === 1 ? "This was" : "These were"} on your email this morning and ${rows.length === 1 ? "is" : "are"} still open on the site.`,
     body,
-    `Sent at 4:00 PM only when something closes today and nothing has changed since the morning email.<br>Answer it — or charge or cancel the order — and this stops. The next read of the site clears it by itself.`,
-    "#fbeceb", C.bad,
+    `Sent at 4:00 PM only when something closes today or tomorrow and nothing has changed since the morning email.<br>Answer it — or charge or cancel the order — and this stops. The next read of the site clears it by itself.`,
+    true,
   );
 }
 
@@ -516,13 +555,16 @@ function managerNudge(store: string, rows: Row[], today: string) {
 // ---------------------------------------------------------------------------
 function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, newMissed: Row[], contested: Row[], today: string) {
   const col = (n: number, color?: string) =>
-    `<td style="text-align:center;font-size:15px;font-weight:700;color:${n ? (color || C.ink) : "#c9d5cd"};">${n || "—"}</td>`;
+    `<td style="text-align:center;padding:0 3px;font-size:15px;font-weight:700;color:${n ? (color || C.ink) : "#c9d5cd"};">${n || "—"}</td>`;
 
-  const head = ["Store", "Disputes", "INRs", "Cases", "Mismatch", "Payments", "Claims 7d", "Due today"];
+  // SHORT HEADERS (Ethan's phone, 2026-10-02). Eight full-word headers with no
+  // gap between cells ran together into "STOREDISPUTESINRSCASES…" at phone
+  // width. Short single words with padding fit at 360px; the footer spells them out.
+  const head = ["Store", "Disp", "INR", "Case", "Mism", "Pay", "Claims", "Due"];
   const last = head.length - 1;
   let table = `<tr><td style="padding:14px 12px;border-top:1px solid ${C.line};">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-      <tr>${head.map((h, i) => `<th style="text-align:${i ? "center" : "left"};font-size:9.5px;font-weight:700;letter-spacing:.03em;color:${i === last ? C.bad : C.faint};text-transform:uppercase;padding-bottom:7px;border-bottom:1.5px solid ${C.ink};">${esc(h)}</th>`).join("")}</tr>`;
+      <tr>${head.map((h, i) => `<th style="text-align:${i ? "center" : "left"};padding:0 3px 7px;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.03em;color:${i === last ? C.bad : C.faint};text-transform:uppercase;border-bottom:1.5px solid ${C.ink};">${esc(h)}</th>`).join("")}</tr>`;
 
   let any = false;
   for (const s of STORES) {
@@ -566,7 +608,7 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
     "What is still sitting with the managers",
     "Counts are items still needing a person to do something. Anything already answered or settled is left out.",
     body,
-    `Sent on the mornings the managers are emailed, so this is what went out to them today.<br>A store with nothing outstanding is left out of the table entirely.`,
+    `Disp = disputes · INR = item not received · Case = eBay cases · Mism = refund mismatches · Pay = unpaid orders · Claims = claims over 7 days · Due = deadline today or tomorrow.<br>Sent on the mornings the managers are emailed, so this is what went out to them today.<br>A store with nothing outstanding is left out of the table entirely.`,
   );
 }
 
@@ -582,12 +624,12 @@ function dmDueToday(byStore: Record<string, Row[]>, today: string) {
     body += byStore[s].sort(bySoonest).map((r) => itemRow(r, today)).join("");
   }
   return shell(
-    `${money(total)} closes today and is still unanswered`,
-    `${stores.length === 1 ? "One store has" : `${stores.length} stores have`} something whose deadline is today. ${
+    `${money(total)} due today and still unanswered`,
+    `${stores.length === 1 ? "One store has" : `${stores.length} stores have`} something whose deadline is today or tomorrow. ${
       stores.length === 1 ? "It was" : "They were"} on this morning's email and ${stores.length === 1 ? "is" : "are"} still open on the site.`,
     body,
-    `Sent at 4:00 PM only when a deadline falls today and the store has not dealt with it.<br>Nothing here can be cleared from this email — the store has to answer it, or charge or cancel the order, on the site.`,
-    "#fbeceb", C.bad,
+    `Sent at 4:00 PM only when a deadline falls today or tomorrow and the store has not dealt with it.<br>Nothing here can be cleared from this email — the store has to answer it, or charge or cancel the order, on the site.`,
+    true,
   );
 }
 
@@ -678,7 +720,7 @@ Deno.serve(async (req: Request) => {
     const pay = (o: Partial<Row>) => mk({ type: "payment", linkLabel: "Open in Shopify",
       dueVerb: "charge the card by", missedText: "card expired", ...o });
     const cardToday = pay({ key: "p1", state: "needs_reply", kindLabel: "Card not charged yet",
-      title: "Pitfall (Atari 2600, 1982)", amount: 16.26, due: day, facts: ["Order #MO02-7002", "1 not shipped"],
+      title: "Pitfall (Atari 2600, 1982)", amount: 16.26, due: addDaysIso(day, 1), facts: ["Order #MO02-7002", "1 not shipped"],
       link: "https://admin.shopify.com/store/paymore-westport/orders/1" });
     const cardGone = pay({ key: "p2", state: "due", note: "missed_window", missed: true, missedText: "",
       kindLabel: "Card expired — not collected", title: "Sony PlayStation 5 Digital", amount: 452.93,
@@ -793,7 +835,7 @@ Deno.serve(async (req: Request) => {
         const extras = {
           returns: (data.cases || []).filter((c: any) => isPlainReturn(c) && c.store_code === s && c.is_open).length,
           claims: (data.claims || []).filter((c: any) => c.store === s && c.aging).length,
-          quiet: rows.filter((r) => r.store === s && r.quiet && r.quiet > today).length,
+          quiet: rows.filter((r) => r.store === s && r.quiet && r.quiet > addDaysIso(today, 1)).length,
         };
         const html = withWarning(managerDaily(s, list, seen, extras, today), storeWarn(s));
         previews.push(html);
@@ -816,15 +858,14 @@ Deno.serve(async (req: Request) => {
     if (kind === "manager_nudge" || kind === "dm_due_today") {
       const dueNow: Record<string, Row[]> = {};
       for (const s of STORES) {
-        dueNow[s] = byStore[s].filter((r) =>
-          r.due && r.due === today && !r.missed && mailedToday.has(`${r.type}|${r.key}`));
+        dueNow[s] = byStore[s].filter((r) => dueSoon(r, today) && mailedToday.has(`${r.type}|${r.key}`));
       }
       if (kind === "manager_nudge") {
         for (const s of STORES) {
           if (!dueNow[s].length) { sent.push({ store: s, skipped: "nothing closing today" }); continue; }
           const html = withWarning(managerNudge(s, dueNow[s], today), storeWarn(s));
           previews.push(html);
-          const subject = `Closes today — ${dueNow[s].length} unanswered at ${STORE_NAME[s] || s}`;
+          const subject = `Due today — ${dueNow[s].length} unanswered at ${STORE_NAME[s] || s}`;
           const to = await listFor(`claims_disputes_${s}`);
           if (!to.length) { sent.push({ store: s, skipped: "no recipients" }); continue; }
           if (dry) { sent.push({ store: s, to, subject, items: dueNow[s].length }); continue; }
@@ -877,7 +918,7 @@ Deno.serve(async (req: Request) => {
           mismatch: list.filter((r) => r.type === "mismatch").length,
           payments: list.filter((r) => r.type === "payment").length,
           claims: (data.claims || []).filter((c: any) => c.store === s && c.aging).length,
-          dueToday: list.filter((r) => r.due && r.due === today && !r.missed).length,
+          dueToday: list.filter((r) => dueSoon(r, today)).length,
         };
       }
       // SHOWN ONCE, AND ONLY ONCE. There is nothing for the DM to clear on a
