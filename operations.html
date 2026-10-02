@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260929a">
+  <link rel="stylesheet" href="styles.css?v=20260930m">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260929a" defer></script>
+  <script src="speeks.js?v=20260930m" defer></script>
 </head>
 <body class="preload">
 
@@ -602,7 +602,7 @@
       </div>
       <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
-    <div style="padding: 12px 20px 2px;">
+    <div class="mp-search-bar">
         <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:0;">
             <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
             <input type="text" id="manageDocsSearch" class="kb-search-input doc-search-input" placeholder="Search policies…" autocomplete="off" oninput="filterManageDocs()" onkeydown="if(event.key===&quot;Escape&quot;){this.value=&quot;&quot;;filterManageDocs();}">
@@ -610,7 +610,7 @@
     </div>
     <div class="manage-content" id="manageDocsList"></div>
     <div class="manage-footer">
-        <button class="btn-secondary" onclick="addManageRow()">+ Add Policy</button>
+        <button class="btn-secondary" onclick="addNewPolicy()">+ Add Policy</button>
         <button class="btn-primary" id="saveDocsBtn" onclick="saveDocs()">Save Changes</button>
     </div>
 </div>
@@ -628,7 +628,7 @@
 
     <div class="ws-layout">
       <div class="ws-subtabs">
-        <button class="ws-tab active" data-mobile="hide" data-feature-any="ec-upload,ec-view-categories,ec-view-photos,ec-view-titles" id="ops-tab-ebay" onclick="switchOperationsTab('ebay')"><svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg> SPEEKS Connect</button>
+        <button class="ws-tab active" data-mobile="hide" data-feature-any="ec-upload,ec-view-categories,ec-view-photos,ec-view-titles,ec-view-picture-quality" id="ops-tab-ebay" onclick="switchOperationsTab('ebay')"><svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg> SPEEKS Connect</button>
         <button class="ws-tab" data-mobile="hide" data-feature="widget-ops-marginguide" id="ops-tab-marginguide" onclick="switchOperationsTab('marginguide')"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg> Margin Guide</button>
         <button class="ws-tab" data-mobile="hide" data-tablet="show" data-feature="widget-ops-pictureguide" id="ops-tab-pictureguide" onclick="switchOperationsTab('pictureguide')"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/><path d="M8 5l1.5-2h5L16 5"/></svg> Picture Guide</button>
         <button class="ws-tab" data-mobile="hide" data-feature="widget-ops-callbacks" id="ops-tab-callbacks" onclick="switchOperationsTab('callbacks')"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.81.36 1.6.7 2.34a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.74-1.74a2 2 0 0 1 2.11-.45c.74.34 1.53.57 2.34.7A2 2 0 0 1 22 16.92z"/></svg> Customer Call Backs</button>
@@ -910,7 +910,7 @@
                            quietly re-open the tool to everybody it was closed
                            to. The label is what changed, because the label is
                            what lies. -->
-                      <button id="ecViewCatsBtn" class="mb-view-btn role-district-manager role-ceo role-mocd role-manager role-owner-manager" data-feature-any="ec-view-categories,ec-view-photos,ec-view-titles" style="display:none;" onclick="ecSetView('cats')"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Listing Health</button>
+                      <button id="ecViewCatsBtn" class="mb-view-btn role-district-manager role-ceo role-mocd role-manager role-owner-manager" data-feature-any="ec-view-categories,ec-view-photos,ec-view-titles,ec-view-picture-quality" style="display:none;" onclick="ecSetView('cats')"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Listing Health</button>
                   </div>
                   <select id="ecStoreFilter" class="kpi-select cb-store-filter" onchange="ecSetStore(this.value)" style="display:none;"></select>
                   <button id="ecRefreshBtn" class="ec-btn" onclick="ecRefresh()" title="Re-read Shopify and eBay now">

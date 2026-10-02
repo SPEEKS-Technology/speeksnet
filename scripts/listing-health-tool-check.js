@@ -190,7 +190,7 @@ console.log('\n== It is in the Tools panel of every shell that has one ==');
         ok(view.shown, 'and it is actually open');
         ok(view.title.trim() === 'Listing Health', 'it is called Listing Health', view.title.trim());
         ok(/SPEEKS Tools/.test(view.eyebrow), 'and reads as a SPEEKS Tool', view.eyebrow.trim());
-        ok(/3 dismissals explained a rule was wrong/.test(view.bar),
+        ok(/3 Notes Said The Title Check Was Wrong/.test(view.bar),
            'the bar says how many notes are waiting', view.bar);
         ok(/Copy The Ask For Claude/.test(view.btn), 'the Copy button is there', view.btn);
         // ⚠️ "Copy", NOT "Send". Nothing reaches Claude on its own.

@@ -892,6 +892,16 @@ input, textarea, select,
 #manageDocsList .del-btn.mp-f-del:hover { background: #dc2626; color: #fff; }
 #manageDocsList .del-btn.mp-f-del svg { width: 14px; height: 14px; }
 
+/* Search bar above the policy list. The old 2px bottom padding put the cards
+   right against the bar, so a card scrolled under it looked sliced off. The
+   gap plus a hairline gives the scroll area a clear top edge. */
+.mp-search-bar { padding: 12px 20px 16px; border-bottom: 1px solid #eee; background: #fff; }
+
+/* Category is a select of existing categories; "+ New category…" reveals the
+   .m-category text box beneath it (see _manageCatPick). */
+#manageDocsList .m-cat-sel { width: 100%; }
+#manageDocsList .mp-f-cat .m-category { margin-top: 6px; }
+
 .manage-footer { 
     padding: 15px 20px; 
     border-top: 1px solid #eee; 
@@ -18852,6 +18862,35 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .lh-count-warn { background: var(--cb-gold-tint); color: #b7791f; }
 .lh-count-bad  { background: var(--cb-red-tint);  color: #d1443b; }
 
+/* LISTING HEALTH'S OWN TABS — Titles | Picture Quality | Categories (2026-09-30).
+   An underline strip, deliberately NOT the rc-mode pills: each tool already has
+   pills of its own for its tiers directly underneath, and two rows of the same
+   control would read as one control with too many options. The strip is the
+   page; the pills are inside a tool. */
+.lh-tabs {
+    display: flex; gap: 4px; border-bottom: 1px solid var(--cb-line, #e3e8ee);
+    margin-bottom: 16px; overflow-x: auto; scrollbar-width: none;
+}
+.lh-tabs::-webkit-scrollbar { display: none; }
+/* ONE WIDTH FOR ALL THREE (Ethan, 2026-09-30: "Make the 3 tabs the same size").
+   Sized to the longest label plus its count, so none of them wraps or truncates. */
+.lh-tab {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    flex: 0 0 200px; box-sizing: border-box;
+    background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    padding: 9px 14px; font-family: inherit; font-size: 13px; font-weight: 800;
+    color: var(--cb-muted, #647082); cursor: pointer; white-space: nowrap;
+}
+.lh-tab:hover { color: var(--cb-ink, #1f2733); }
+.lh-tab-on { color: var(--cb-ink, #1f2733); border-bottom-color: var(--cb-sage, #1f9d57); }
+.lh-tab-n {
+    border-radius: 20px; padding: 1px 8px; min-width: 20px; text-align: center;
+    font-size: 11px; font-weight: 800; background: var(--cb-gold-tint, #fdf3e1); color: #b7791f;
+}
+.lh-tab-zero { background: var(--cb-line-2, #eef1f5); color: var(--cb-faint, #8a94a3); }
+/* The no-photos alarm, visible from whichever tab is open. */
+.lh-tab-bad { background: #d1443b; color: #fff; }
+
 /* ALL CLEAR IS ONE LINE. This section is an alarm whose correct reading is
    zero, and it is directly above a working queue — given a full-height empty
    state it would push the actual work off the screen every single day for the
@@ -18861,6 +18900,13 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     background: var(--cb-sage-tint); border: 1px solid #cfe6d4; border-radius: 10px;
     padding: 11px 14px; font-size: 12.5px; font-weight: 700; color: #178048;
 }
+/* ONE GAP, 14px, above whatever comes after a header or a tab strip — the green
+   bubble included (Ethan, 2026-09-30: "same spacing between green bubbles and
+   headers"). The tabs had 12 and the header 14, so the same bubble sat at two
+   distances; and the scope line under the title tool's bubble had none. */
+.lh-sec .rc-modes { margin-bottom: 14px; }
+.lh-sec .lt-scope { margin-bottom: 14px; }
+.lh-clear + .lt-scope { margin-top: 10px; }
 .lh-clear svg { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ...and NOT-KNOWN is its own state, never folded into either of the other
@@ -18924,6 +18970,12 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .ec-hebay:not([open]) > .ec-hrow { display: none; }
 /* The last row inside the drawer keeps the card's own bottom rhythm. */
 .ec-hebay > .ec-hrow:last-child { border-bottom: 0; }
+/* A TOOL'S drawer on the All Stores card (Title Quality / Picture Quality /
+   Categories). Unlike eBay Upload these are daily work, so the heading reads at
+   row strength and carries the tool's total on the right, coloured like a row
+   value — a shut drawer must never look like a clean store. */
+.ec-hgrp > summary { font-size: 12px; color: var(--cb-muted); }
+.ec-hgrp-n { margin-left: auto; font-size: 13px; font-weight: 800; }
 
 /* --- Categories: the filing queue ---------------------------------------- *
    A queue of SUGGESTIONS, so it is deliberately quieter than the eBay feed
@@ -19471,6 +19523,139 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     overflow-wrap: anywhere;
 }
 
+/* =========================================================
+   PICTURE QUALITY  (pq-*)  [2026-09-30]
+   The title tool's row (lt-row / lt-main / lt-side) with a photo strip where the
+   title would be. Verdict as the left edge, same reason as lt-sev: the manager
+   is reading the PHOTOS in here, and a tinted card would sit behind them.
+   ========================================================= */
+.pq-v-retake  { border-left: 3px solid #d1443b; }
+.pq-v-fix     { border-left: 3px solid #d69e2e; }
+.pq-v-reorder { border-left: 3px solid var(--cb-sage); }
+.pq-title { font-size: 13px; font-weight: 800; color: var(--cb-ink); line-height: 1.4; overflow-wrap: anywhere; }
+.pq-sheet { font-size: 11px; font-weight: 600; color: var(--cb-faint); }
+.pq-sheet b { font-weight: 800; color: var(--cb-muted); }
+/* The photos moved under the verdict. Amber, not red: the listing may well be
+   fixed now — it is the CHECK that is out of date. */
+.pq-stale {
+    font-size: 11.5px; font-weight: 700; color: #8a5a00; line-height: 1.45;
+    background: var(--cb-gold-tint, #fdf3e1); border-radius: 8px; padding: 7px 10px;
+}
+.pq-cmp { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pq-cmp-row { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.pq-cmp-row > .lt-lab { padding-top: 22px; }
+/* ⚠️ A STRIP SCROLLS SIDEWAYS INSIDE ITSELF, never the page. A 15-photo listing
+   is wider than any row, and the order is the whole point of the Reorder view,
+   so wrapping to two lines would break "left to right is first to last". */
+.pq-strip {
+    display: flex; gap: 6px; overflow-x: auto; min-width: 0; flex: 1 1 auto;
+    padding-bottom: 4px; scrollbar-width: thin;
+}
+.pq-ph {
+    position: relative; flex: 0 0 auto; width: 72px; height: 72px;
+    border-radius: 8px; overflow: hidden; background: var(--cb-panel-2, #f6f8fa);
+    border: 1px solid var(--cb-line); display: block;
+}
+.pq-ph img { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* A photo a finding names. The outline is the link between "Photo 6 isn't
+   square" in the list and photo 6 in the strip. */
+.pq-ph-flag { border: 2px solid #d1443b; }
+.pq-n {
+    position: absolute; top: 3px; left: 3px; min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 8px; background: rgba(16, 24, 40, .72); color: #fff;
+    font-size: 10px; font-weight: 800; line-height: 16px; text-align: center;
+}
+/* The guide's own shots, labelled, since the label is what the photo is FOR. */
+.pq-guide .pq-gph { height: auto; width: 84px; background: none; border: 0; overflow: visible; }
+.pq-gph img, .pq-noimg {
+    width: 84px; height: 84px; object-fit: contain; border-radius: 8px;
+    border: 1px solid var(--cb-line); background: var(--cb-panel-2, #f6f8fa); display: block;
+}
+.pq-gph-cond img, .pq-gph-cond .pq-noimg { border-style: dashed; opacity: .75; }
+/* No example photo yet: SAY so in the box. An empty grey square read as a
+   broken image (Ethan, 2026-09-30, the Item Lots sheet's Extra Accessories). */
+.pq-noimg {
+    display: flex !important; align-items: center; justify-content: center; text-align: center;
+    padding: 6px; box-sizing: border-box;
+    font-size: 9.5px; font-weight: 800; line-height: 1.25; color: var(--cb-faint);
+    text-transform: uppercase; letter-spacing: .03em;
+}
+/* A guide shot this listing does not have. Red, and labelled in the box, so the
+   strip answers "which ones" without reading the sentence above it. */
+.pq-gph-miss img, .pq-gph-miss .pq-noimg { border: 2px solid #d1443b; opacity: 1; }
+.pq-gph-miss .pq-glab { color: #b3322a; }
+.pq-tag {
+    position: absolute; top: 64px; left: 3px; padding: 1px 5px; border-radius: 6px;
+    font-size: 9px; font-weight: 800; letter-spacing: .02em;
+    background: rgba(255, 255, 255, .92); color: var(--cb-muted); border: 1px solid var(--cb-line);
+}
+.pq-tag-miss { background: #d1443b; color: #fff; border-color: #d1443b; }
+/* Buttons sized to their words. The title tool's lt-acts stretch two buttons
+   across a 210px column, which is right for "Approve" beside an edit box and
+   read as chunky here (Ethan, 2026-09-30) — and "Approve Order" wrapped. */
+/* ⚠️ EVERY ROW'S SIDE COLUMN IS THE SAME SHAPE. Each line (SKU, links, buttons,
+   hint) spans the full 210px, so the blocks line up down the list instead of
+   ending at whatever width their words came to (Ethan, 2026-09-30). The two
+   buttons split the width evenly — same size, whatever their labels say. */
+.pq-row .lt-side { align-items: stretch; }
+/* SKU over Shopify, photo count over Store: the same two columns as the pills,
+   each centred in its column (Ethan, 2026-09-30). */
+.pq-row .lt-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; justify-items: center; }
+.pq-row .rc-links { display: flex; gap: 6px; }
+.pq-row .rc-links .ec-pill { flex: 1 1 0; justify-content: center; }
+.pq-acts { width: 100%; }
+.pq-acts .lt-ok, .pq-acts .lt-no {
+    flex: 1 1 0; min-width: 0; padding: 5px 8px; font-size: 11.5px; line-height: 1.3;
+    border-radius: 7px; white-space: nowrap; text-align: center;
+}
+.pq-hint { font-size: 10.5px; font-weight: 600; color: var(--cb-faint); line-height: 1.35; text-align: center; }
+/* The picture notes, under the title notes in Listing Health Notes. */
+.lh-tool-pq { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--cb-line, #e3e8ee); }
+/* "Title Quality" / "Picture Quality" over each half of Listing Health Notes. */
+.lh-tool-h {
+    font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--cb-faint, #8a94a3); margin-bottom: 10px;
+}
+.pq-glab {
+    display: block; margin-top: 3px; font-size: 10px; font-weight: 700; line-height: 1.3;
+    color: var(--cb-muted); overflow-wrap: anywhere; text-align: center;
+}
+.pq-tnotes summary { margin-top: 2px; }
+/* REORDER: three rows, one scroll (Ethan, 2026-09-30: "not feel so chaotic").
+   The rows scroll TOGETHER inside .pq-ro, so column N is position N in Now,
+   Suggested and Guide alike; the labels are pinned so they never scroll away.
+   The strips inside stop scrolling on their own, and the guide's boxes drop to
+   the photos' 72px so the columns actually line up. */
+.pq-ro { overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.pq-ro-row { display: flex; align-items: flex-start; gap: 9px; width: max-content; min-width: 100%; }
+.pq-ro-row > .lt-lab {
+    position: sticky; left: 0; z-index: 2; align-self: stretch;
+    background: var(--cb-card); padding-top: 22px;
+}
+.pq-ro .pq-strip { overflow: visible; flex: none; padding-bottom: 0; }
+.pq-ro .pq-guide .pq-gph { width: 72px; }
+.pq-ro .pq-gph img, .pq-ro .pq-noimg { width: 72px; height: 72px; }
+.pq-ro .pq-tag { top: 52px; }
+/* What moves: green outline, green number. What stays is left plain. */
+.pq-ph-moved { border: 2px solid var(--cb-sage, #1f9d57); }
+.pq-ph-moved .pq-n { background: var(--cb-sage, #1f9d57); }
+.pq-lab-moved { color: #178048; }
+.pq-ph, .pq-gimg { cursor: zoom-in; }
+/* Problem first, photos after: "Blurry — Photos 2, 3, 4". */
+/* Red, like the outlines on the photos it names (Ethan, 2026-09-30). */
+.pq-row .lt-why b { font-weight: 800; color: #b3322a; }
+.pq-lab-miss { color: #b3322a; }
+/* Patch Notes: Add New and Edit Previous are the same width (Ethan, 2026-09-30). */
+#pnmTab-add, #pnmTab-edit { width: 140px; justify-content: center; text-align: center; }
+/* Narrow: the side column goes under the photos rather than squeezing them. */
+@media (max-width: 900px) {
+    .pq-row { flex-wrap: wrap; }
+    /* Still a column, full width: side by side, the photo count stopped sitting
+       over the Store pill and the buttons stopped being one size. */
+    .pq-row .lt-side { flex: 1 1 100%; }
+    .pq-cmp-row > .lt-lab, .pq-ro-row > .lt-lab { flex-basis: 64px; }
+}
+
 
 
 /* =========================================================
@@ -19633,8 +19818,13 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .lt-ask-hint { font-size: 11px; font-weight: 650; color: var(--lta-faint); line-height: 1.45; }
 
 /* --- actions --- */
+/* ⚠️ THE BUTTONS ARE ONE WIDTH — the widest label's (Ethan, 2026-09-30: "make
+   the Dismiss It and Cancel bubbles the same size"). A shrink-to-fit grid whose
+   columns are all 1fr sizes every column to the widest one; margin-left:auto
+   keeps the pair on the right, where flex-end had it. */
 .lt-ask-acts {
-    display: flex; justify-content: flex-end; gap: 9px;
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(120px, 1fr); gap: 9px;
+    width: max-content; max-width: 100%; margin-left: auto; box-sizing: border-box;
     padding: 4px 18px 18px;
 }
 .lt-ask-go, .lt-ask-cancel {
@@ -19665,7 +19855,7 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 @media (max-width: 560px) {
     .lt-ask-ov { padding: 14px; align-items: flex-start; }
     .lt-ask-card { margin-top: 22px; }
-    .lt-ask-acts { flex-direction: column-reverse; }
+    .lt-ask-acts { display: flex; flex-direction: column-reverse; width: auto; margin-left: 0; }
     .lt-ask-go, .lt-ask-cancel { width: 100%; }
     /* The label column costs a third of a phone screen and says nothing the
        colour does not. */

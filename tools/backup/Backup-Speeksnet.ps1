@@ -62,16 +62,44 @@ New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 # make a REAL directory on a drive that is about to appear, and the backup would
 # land somewhere nobody looks. Stop instead, and leave the reason where the next
 # run (and Ethan) will see it.
-$rootDrive = Split-Path -Qualifier $Root
-if ($rootDrive -and -not (Test-Path ($rootDrive + '\'))) {
-    $msg = "$(Get-Date -Format 'yyyy-MM-dd HH:mm')  BACKUP DID NOT RUN: $rootDrive is not available. " +
-           "Google Drive for desktop is probably not running or not signed in. Nothing was written."
+#
+# THE DRIVE LETTER BEING THERE IS NOT ENOUGH. The 2am run on Sep 30 (and, by all
+# signs, every night since Sep 22) died this way: the task woke the laptop with the lid shut, it dropped straight
+# back into Modern Standby, and G: existed but Drive would not serve a file — so
+# the first New-Item threw, before there was a log to write to, and PowerShell
+# was gone within a second. conhost reported exit 0, so the task looked like it
+# had run, and the catch-up run it would otherwise have made never came. So:
+# wait for the folder above $Root to actually answer, and any failure before
+# the log exists goes to BACKUP-PROBLEM.txt instead of nowhere.
+function Stop-Early([string]$why) {
+    $msg = "$(Get-Date -Format 'yyyy-MM-dd HH:mm')  BACKUP DID NOT RUN: $why Nothing was written."
     Add-Content -Path (Join-Path $WorkDir 'BACKUP-PROBLEM.txt') -Value $msg -Encoding UTF8
     Write-Host $msg
     exit 1
 }
+$rootParent = Split-Path -Parent $Root
+$waitUntil = (Get-Date).AddMinutes(15)
+while (-not (Test-Path -LiteralPath $rootParent)) {
+    if ((Get-Date) -gt $waitUntil) {
+        Stop-Early "$rootParent did not answer for 15 minutes. Google Drive for desktop is probably not running, not signed in, or the PC is in standby."
+    }
+    Start-Sleep -Seconds 30
+}
 
-New-Item -ItemType Directory -Force -Path $Root, $snap, $logDir | Out-Null
+# Runs on unlock and logon as well as at 2am, so most days it is started more
+# than once. One completed snapshot a day is the job; a later start is a no-op.
+$today = Get-Date -Format 'yyyy-MM-dd'
+if (Get-ChildItem -LiteralPath $Root -Directory -Filter "${today}_*" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike '*.partial' }) {
+    Write-Host "Already backed up today ($today). Nothing to do."
+    exit 0
+}
+
+try {
+    New-Item -ItemType Directory -Force -Path $Root, $snap, $logDir -ErrorAction Stop | Out-Null
+} catch {
+    Stop-Early "could not create $snap ($($_.Exception.Message))."
+}
 
 function Log([string]$msg) {
     $line = '{0}  {1}' -f (Get-Date -Format 'HH:mm:ss'), $msg
@@ -510,4 +538,24 @@ $lines += "Folder: $finalPath  ($(Format-Size $snapSize))"
 $lines += "Log:    $log"
 [IO.File]::WriteAllText((Join-Path $Root 'LAST-BACKUP.txt'), ($lines -join "`r`n"))
 Log ($lines[0])
+
+# ---- tell SPEEKSNET (0120) -------------------------------------------------------
+# One row in backup_runs, which the 8:20 DM digest reads: if the newest good one
+# gets too old, Ethan is told. Nothing here can fail the backup — the snapshot is
+# already on Drive. A run that never reaches this line posts nothing, and that is
+# exactly what ages the last good row into an alert.
+try {
+    if (-not $pat) { throw 'no Supabase access token saved' }
+    $q = { param($s) if ($null -eq $s) { 'null' } else { "'" + ([string]$s).Replace("'", "''") + "'" } }
+    $partsJson = ($results | ConvertTo-Json -Depth 5 -Compress)
+    $sql = "insert into public.backup_runs (started_at, ok, computer, snapshot, size, parts) values (" +
+        (& $q $started.ToString('o')) + "::timestamptz, $($allOk.ToString().ToLower()), " +
+        (& $q $env:COMPUTERNAME) + ", " + (& $q (Split-Path $finalPath -Leaf)) + ", " +
+        (& $q (Format-Size $snapSize)) + ", " + (& $q $partsJson) + "::jsonb)"
+    Invoke-RestMethod -Method Post -Uri "$api/database/query" -Headers @{ Authorization = "Bearer $pat" } `
+        -ContentType 'application/json' -Body (@{ query = $sql } | ConvertTo-Json -Compress) -TimeoutSec 60 | Out-Null
+    Log 'reported to SPEEKSNET (backup_runs)'
+} catch {
+    Log "could not report to SPEEKSNET (the backup itself is fine): $($_.Exception.Message)"
+}
 if (-not $allOk) { exit 1 }
