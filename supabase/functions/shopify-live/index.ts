@@ -461,6 +461,10 @@ type StoreMetrics = {
   // path. Null means "no comparison available", which the UI states rather than
   // filling with zeros.
   cmp?: StoreCompare | null;
+  // NET PROFIT, from October 2026 the figure the stores are graded on. See
+  // loadNp / npFor. Absent on a row that cannot carry one (an orders-sourced
+  // row has no cost of goods, so no GP, so no NP either).
+  np?: NpMetrics | null;
   error?: string;
   // ⚠️ WHERE THE FIGURES CAME FROM, AND IT IS NOT DECORATION. "shopifyql" is the
   // real thing: net sales and cost of goods as Shopify reports them, the same
@@ -755,6 +759,190 @@ async function fetchStore(
   return base;
 }
 
+// --- net profit ---------------------------------------------------------------
+// FROM OCTOBER 2026 STORES ARE GRADED ON NET PROFIT (Ethan, 2026-10-02), so the
+// goal bar, the pace pill and the tracking figure all have to be NP.
+//
+// NP for a FINISHED day is a fact: daily_np, the mirror of the workbook's Net
+// Profit tab (np-sync, every 15 minutes), which is what the P&L was checked
+// against through September. NP for a day the tab does not have yet — today
+// always, and yesterday until the 6:10 pass lands — cannot be known: the eBay
+// fees post days later and the labels are bought tomorrow. Those days are
+// ESTIMATED as their live GP less the store's own cost rate (eBay + shipping +
+// card + royalty as a share of sales) over its last 30 finished days. That is
+// the replacement for the flat 21% the site used to apply to every store: BAL
+// pays ~9% of sales to eBay where OVL pays ~5.5%, and one rate for both was
+// flattering one and punishing the other.
+//
+// The estimate is never presented as a fact: `estimated` says how much of the
+// month-to-date figure is estimate, and the UI says so.
+//
+// THE GOAL IS monthly_np_goals, not the hub's <store>Goal (which is the Sales
+// tab's GP Goal cell and is blank from October by design).
+type NpDay = { np: number; sales: number; gp: number; ebay: number; ship: number };
+type NpMetrics = {
+  goal: number | null;
+  today: number | null;          // estimate
+  mtd: number;                   // banked + estimate for unbanked days
+  banked: number;                // finished days on the NP tab
+  bankedDays: number;
+  estimated: number;             // the part of mtd that is estimate
+  costRate: number;              // share of sales, 0..1
+  // The banked days' own sales, eBay fees and shipping (Ethan 2026-10-02: eBay
+  // fees and shipping as columns on the Month table). Finished days only, the
+  // same days as `banked`, so fee ÷ sales is a real share and never part
+  // estimate. Shipping on a day whose labels have not landed is still in here,
+  // as the tab has it.
+  bankedSales: number;
+  bankedEbay: number;
+  bankedShip: number;
+  // Each day's sales off the NP tab, day 1 at [0], 0 for a day it has not got.
+  // The Live dashboard's bought-vs-sold reads this from October 2026: it used
+  // the hub's wkSell, which came off the Sales Summary tab and is empty now that
+  // tab is retired (2026-10-03). Same shape the hub array had.
+  sellByDay?: number[];
+  pctOfGoal: number | null;
+  paceIndex: number | null;
+  track: number | null;          // month-end on the current run rate
+  lastMonth: number | null;      // last month's NP, whole month
+  prev: { day: number | null; dayEstimated: boolean; mtd: number;
+          pctOfGoal: number | null; paceIndex: number | null; track: number | null } | null;
+};
+const NP_FROM = "2026-10";
+// Used only when a store has no finished NP day in the last 30 at all (a brand
+// new store). It is the old flat rate, and the figure is marked estimated.
+const NP_FALLBACK_RATE = 0.21;
+
+async function loadNp(sb: any, c: Central) {
+  const ym = `${c.y}-${String(c.m).padStart(2, "0")}`;
+  const today = iso(c);
+  const lm = c.m === 1 ? wholeMonth(c.y - 1, 12) : wholeMonth(c.y, c.m - 1);
+  const back = new Date(Date.UTC(c.y, c.m - 1, c.d - 30));
+  const from30 = back.toISOString().slice(0, 10);
+  const since = from30 < lm.from ? from30 : lm.from;
+  const out = {
+    goals: {} as Record<string, number>,
+    month: {} as Record<string, Record<string, NpDay>>,
+    rate: {} as Record<string, number>,
+    lastMonth: {} as Record<string, number | null>,
+  };
+  try {
+    const [{ data: g }, { data: rows }] = await Promise.all([
+      sb.from("monthly_np_goals").select("store, np_goal").eq("ym", ym),
+      sb.from("daily_np").select("date, store, sales, gp, np, ebay_fee, shipping_cost, cc_fee, royalty, shipping_final")
+        .gte("date", since).lt("date", today),
+    ]);
+    for (const r of g || []) out.goals[String(r.store).toUpperCase()] = Number(r.np_goal);
+    const cost: Record<string, [number, number]> = {};
+    for (const r of rows || []) {
+      const code = String(r.store).toUpperCase();
+      const d = String(r.date);
+      if (r.np === null || r.sales === null) continue;
+      if (d.slice(0, 7) === ym) {
+        (out.month[code] ||= {})[d] = { np: Number(r.np), sales: Number(r.sales), gp: Number(r.gp),
+          ebay: Number(r.ebay_fee || 0), ship: Number(r.shipping_cost || 0) };
+      }
+      if (d >= lm.from && d <= lm.to) out.lastMonth[code] = (out.lastMonth[code] || 0) + Number(r.np);
+      // The rate is taken only off days whose shipping is FINAL: a morning row
+      // with no labels on it yet would understate the cost of every estimate.
+      if (d >= from30 && r.shipping_final) {
+        const k = cost[code] ||= [0, 0];
+        k[0] += Number(r.ebay_fee || 0) + Number(r.shipping_cost || 0) + Number(r.cc_fee || 0) + Number(r.royalty || 0);
+        k[1] += Number(r.sales || 0);
+      }
+    }
+    for (const code of STORE_ORDER) {
+      const k = cost[code];
+      out.rate[code] = k && k[1] > 0 ? k[0] / k[1] : NP_FALLBACK_RATE;
+    }
+  } catch (_) { /* no NP block rather than a wrong one */ }
+  return out;
+}
+
+// One store's NP. The unbanked part is everything Shopify has counted this month
+// that the NP tab has not: Shopify's month-to-date GP and sales LESS the banked
+// days' own GP and sales. Taken as a difference, not by guessing which days are
+// missing, so a day the tab skipped (or a 6:05am refresh before the 6:10 pass)
+// is still counted exactly once.
+function npFor(
+  m: { mtdNet: number; mtdGp: number; netToday: number; gpToday: number; prev: DayMetrics | null },
+  code: string, np: Awaited<ReturnType<typeof loadNp>>, c: Central, pd: PrevDay,
+  elapsedPct: number, prevElapsedPct: number,
+): NpMetrics {
+  const rate = np.rate[code] ?? NP_FALLBACK_RATE;
+  const days = np.month[code] || {};
+  let bNp = 0, bSales = 0, bGp = 0, bEbay = 0, bShip = 0, n = 0;
+  for (const v of Object.values(days)) { bNp += v.np; bSales += v.sales; bGp += v.gp; bEbay += v.ebay; bShip += v.ship; n++; }
+  const est = (gp: number, sales: number) => gp - rate * sales;
+  const unbanked = est(m.mtdGp - bGp, m.mtdNet - bSales);
+  const mtd = round2(bNp + unbanked);
+  const goal = np.goals[code] ?? null;
+  const pct = goal && goal > 0 ? round2(mtd / goal * 100) : null;
+  let prev: NpMetrics["prev"] = null;
+  if (m.prev && pd.inMonth) {
+    const y = days[pd.iso];
+    const pMtd = round2(bNp + est(m.prev.mtdGp - bGp, m.prev.mtdNet - bSales));
+    const pPct = goal && goal > 0 ? round2(pMtd / goal * 100) : null;
+    prev = {
+      day: y ? round2(y.np) : round2(est(m.prev.gpToday, m.prev.netToday)),
+      dayEstimated: !y,
+      mtd: pMtd,
+      pctOfGoal: pPct,
+      paceIndex: pPct !== null && prevElapsedPct > 0 ? Math.round(pPct / prevElapsedPct * 100) : null,
+      track: prevElapsedPct > 0 ? round2(pMtd / (prevElapsedPct / 100)) : null,
+    };
+  }
+  return {
+    goal,
+    today: round2(est(m.gpToday, m.netToday)),
+    mtd, banked: round2(bNp), bankedDays: n,
+    estimated: round2(unbanked),
+    costRate: Math.round(rate * 10000) / 10000,
+    bankedSales: round2(bSales), bankedEbay: round2(bEbay), bankedShip: round2(bShip),
+    sellByDay: Array.from({ length: new Date(Date.UTC(c.y, c.m, 0)).getUTCDate() }, (_, i) => {
+      const v = days[`${c.y}-${String(c.m).padStart(2, "0")}-${String(i + 1).padStart(2, "0")}`];
+      return v ? round2(v.sales) : 0;
+    }),
+    pctOfGoal: pct,
+    paceIndex: pct !== null && elapsedPct > 0 ? Math.round(pct / elapsedPct * 100) : null,
+    track: elapsedPct > 0 ? round2(mtd / (elapsedPct / 100)) : null,
+    lastMonth: np.lastMonth[code] === undefined || np.lastMonth[code] === null ? null : round2(np.lastMonth[code] as number),
+    prev,
+  };
+}
+
+// The district's NP is the stores' NP added up — never re-estimated at a district
+// rate, which would let a high-fee store hide inside a blended average.
+function npRoll(parts: NpMetrics[], elapsedPct: number, prevElapsedPct: number): NpMetrics | null {
+  if (!parts.length) return null;
+  const sum = (f: (p: NpMetrics) => number) => round2(parts.reduce((a, p) => a + f(p), 0));
+  const goal = parts.every(p => p.goal && p.goal > 0) ? sum(p => p.goal || 0) : null;
+  const mtd = sum(p => p.mtd);
+  const pct = goal ? round2(mtd / goal * 100) : null;
+  const pp = parts.map(p => p.prev).filter(Boolean) as NonNullable<NpMetrics["prev"]>[];
+  const pMtd = round2(pp.reduce((a, p) => a + p.mtd, 0));
+  const pPct = goal && pp.length === parts.length ? round2(pMtd / goal * 100) : null;
+  const lm = parts.every(p => p.lastMonth !== null) ? sum(p => p.lastMonth || 0) : null;
+  return {
+    goal, today: sum(p => p.today || 0), mtd, banked: sum(p => p.banked),
+    bankedDays: Math.min(...parts.map(p => p.bankedDays)),
+    estimated: sum(p => p.estimated),
+    costRate: 0,
+    bankedSales: sum(p => p.bankedSales || 0), bankedEbay: sum(p => p.bankedEbay || 0), bankedShip: sum(p => p.bankedShip || 0),
+    pctOfGoal: pct,
+    paceIndex: pct !== null && elapsedPct > 0 ? Math.round(pct / elapsedPct * 100) : null,
+    track: elapsedPct > 0 ? round2(mtd / (elapsedPct / 100)) : null,
+    lastMonth: lm,
+    prev: pp.length === parts.length ? {
+      day: round2(pp.reduce((a, p) => a + (p.day || 0), 0)),
+      dayEstimated: pp.some(p => p.dayEstimated),
+      mtd: pMtd, pctOfGoal: pPct,
+      paceIndex: pPct !== null && prevElapsedPct > 0 ? Math.round(pPct / prevElapsedPct * 100) : null,
+      track: prevElapsedPct > 0 ? round2(pMtd / (prevElapsedPct / 100)) : null,
+    } : null,
+  };
+}
+
 // --- goals ------------------------------------------------------------------
 // The monthly GP goal is a static number the DM already maintains, and it is
 // already synced into app_cache/buy_sell_hub as <store>Goal. Read it rather than
@@ -893,6 +1081,17 @@ async function refresh(sb: any, now: Date, force: boolean) {
     }
   }
 
+  // Net Profit, beside the GP figures above rather than instead of them: until
+  // the front end that reads it is merged, the site still reads the GP fields, so
+  // they stay exactly as they were. Only from NP_FROM — September has no NP goal
+  // to pace against, and its GP goal bar is history.
+  const npOn = `${c.y}-${String(c.m).padStart(2, "0")}` >= NP_FROM;
+  const npData = npOn ? await loadNp(sb, c) : null;
+  for (const m of metrics) {
+    m.np = (npData && !m.error && m.source !== "orders")
+      ? npFor(m, m.code, npData, c, pd, elapsedPct, prevElapsedPct) : null;
+  }
+
   const ordered = STORE_ORDER
     .map(code => metrics.find(m => m.code === code))
     .filter(Boolean) as StoreMetrics[];
@@ -935,6 +1134,7 @@ async function refresh(sb: any, now: Date, force: boolean) {
     storesTotal: ordered.length,
     // Same overlay shape as a store's, summed over the stores that reported.
     prev: rollPrev(healthy, dGoal, prevElapsedPct),
+    np: npOn ? npRoll(healthy.map(m => m.np).filter(Boolean) as NpMetrics[], elapsedPct, prevElapsedPct) : null,
   };
 
   const payload = {
@@ -956,6 +1156,9 @@ async function refresh(sb: any, now: Date, force: boolean) {
     // above: when this no longer matches the span the clock says it should, the
     // comparisons are refetched.
     cmpThrough,
+    // 'np' from October 2026: the goal, pace and tracking are Net Profit, and
+    // each row's `np` block carries them. The GP fields stay for the old front end.
+    goalKind: npOn ? "np" : "gp",
     district,
     stores: ordered,
   };
@@ -1139,6 +1342,10 @@ Deno.serve(async (req: Request) => {
     // month. Either way the Month tab renders without them rather than dashing out
     // a band that looks broken.
     cmpThrough: p.cmpThrough ?? null,
+    // 'np' from October 2026 — the switch the front end reads before it grades
+    // anything on Net Profit. Forgetting to pass it through here is exactly what
+    // left the board on GP after the np blocks were already in the payload.
+    goalKind: p.goalKind ?? "gp",
     // Everyone gets the roll-up now — see scopeFor. Still routed through `scope`
     // rather than reading p.district directly, so re-introducing a gate is a
     // change to one function and not to this response shape.

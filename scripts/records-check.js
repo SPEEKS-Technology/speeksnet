@@ -131,6 +131,7 @@ t('tool: Company column is read-only and never saved', function () {
             { section: 'Company', label: 'Daily Buy Record', value: '$38,519.00', subtext: 'August 24, 2026' },
             { section: 'Company', label: 'Daily Sell Record', value: '$35,913.59', subtext: 'August 31, 2026' },
             { section: 'Company', label: 'Monthly Revenue Record', value: '$656,392', subtext: 'August 2026' },
+            { section: 'Company', label: 'Monthly Net Profit Record', value: '$214,617', subtext: 'September 2026' },
             { section: 'Company', label: 'Monthly Gross Profit Record', value: '$365,574', subtext: 'August 2026' },
             { section: 'Company', label: 'Monthly Sell Margin Record', value: '56.71%', subtext: 'July 2026' },
             { section: 'Company', label: 'Monthly Customer Conversion Record', value: '88.35%', subtext: 'June 2026' },
@@ -151,7 +152,7 @@ t('tool: Company column is read-only and never saved', function () {
             if (el.scrollWidth > el.clientWidth + 1) bad.push('"' + el.textContent + '" clipped');
         });
         var tiles = Array.from(host.querySelectorAll('.rec-co-tile'));
-        if (tiles.length !== 6) bad.push(tiles.length + ' tiles');
+        if (tiles.length !== 7) bad.push(tiles.length + ' tiles');
         // Every tile the same size, and the figures on one line across a row —
         // which only holds if the two-line label reserve is doing its job.
         var r0 = tiles[0].getBoundingClientRect();
@@ -171,7 +172,11 @@ t('tool: Company column is read-only and never saved', function () {
             if (Math.max.apply(null, v) - Math.min.apply(null, v) > 1) bad.push('figures uneven in a row: ' + v.join('/'));
         });
         var perRow = Object.keys(rows).map(function (k) { return rows[k].length; });
-        if (perRow.some(function (x) { return x !== perRow[0]; })) bad.push('rows not full: ' + perRow.join('+'));
+        // Every row full except the last, which may be short but never longer.
+        if (perRow.slice(0, -1).some(function (x) { return x !== perRow[0]; }) || perRow[perRow.length - 1] > perRow[0])
+            bad.push('rows not full: ' + perRow.join('+'));
+        // Wide: four over three (Ethan 2026-10-02), not six and an orphan.
+        if (w >= 788 && perRow.join('+') !== '4+3') bad.push('tablet/wide layout is ' + perRow.join('+') + ', want 4+3');
         return bad.length ? bad.slice(0, 4).join('; ') : true;
     });
 });

@@ -64,7 +64,23 @@ type Day = {
   resale: number | null;
   paid: number | null;
   buyMargin: number | null;
+  // Net Profit and what it costs to get there, from daily_np (the mirror of the
+  // workbook's Net Profit tab). All null on a day the tab does not have yet —
+  // today, and every month before September 2026.
+  np?: number | null;
+  ebayFee?: number | null;
+  shipping?: number | null;
+  ccFee?: number | null;
+  royalty?: number | null;
+  // false while the day's shipping can still move (it lands on the next day's
+  // 2pm pass): the NP is then higher than it will end up.
+  shipFinal?: boolean | null;
 };
+
+// From October 2026 stores are graded on NET profit, and the month's goal is an
+// NP goal (gp-goals, monthly_np_goals). Earlier months keep the GP goal they
+// were given. Same rule, same constant, as gp-goals.
+const NP_FROM = "2026-10";
 
 // A day is only a row if the sheet actually carries something for it. Null, not
 // zero: a day nobody has keyed yet and a day the store genuinely bought nothing
@@ -205,6 +221,54 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // ---- Net Profit, from the mirror of the NP tab -----------------------
+    // WHERE THE TAB HAS A DAY, ITS SALES / COST / GP WIN TOO. The NP tab and the
+    // Sales tab carry identical sales and GP (September 2026 checked: every store
+    // to the cent), but only the NP tab will outlive the Sales Summary import,
+    // and taking all of a day from one source is what guarantees that
+    //   GP − eBay − shipping − card − royalty = NP
+    // holds on every row of the table rather than nearly holding.
+    const { data: npRows, error: npErr } = await supabase
+      .from("daily_np")
+      .select("date, store, sales, cost, gp, ebay_fee, shipping_cost, cc_fee, royalty, np, shipping_final")
+      .gte("date", month + "-01")
+      .lte("date", month + "-" + String(daysInMonth).padStart(2, "0"));
+    if (npErr) throw npErr;
+    const nn = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    let npDays = 0;
+    for (const r of npRows || []) {
+      const code = String(r.store || "").toUpperCase();
+      const d = stores[code]?.days[Number(String(r.date).slice(8, 10)) - 1];
+      if (!d) continue;
+      npDays++;
+      if (r.sales !== null) { d.sales = nn(r.sales); d.cost = nn(r.cost); d.gp = nn(r.gp); }
+      d.np = nn(r.np);
+      d.ebayFee = nn(r.ebay_fee);
+      d.shipping = nn(r.shipping_cost);
+      d.ccFee = nn(r.cc_fee);
+      d.royalty = nn(r.royalty);
+      d.shipFinal = !!r.shipping_final;
+    }
+
+    // ---- eBay: what the fee is made of, and the standing behind it -------
+    // ebay_fee_month (ebay-fee-mix, 0132): the month's fees by kind, net of
+    // refund credits — the final value fee as a share of eBay sales, and the
+    // "very high item not as described" fee eBay adds in a category whose INAD
+    // rate is very high against peers. ebay_metrics: the store's service metrics
+    // as last entered in Performance Metrics, which decide Top Rated (and its
+    // final-value-fee discount). Together they say WHY a store's eBay fee is what
+    // it is. Missing rows are simply absent; the popout shows what there is.
+    const [{ data: feeRows }, { data: metRows }] = await Promise.all([
+      supabase.from("ebay_fee_month").select("store, ebay_sales, sale_lines, fvf, fvf_fixed, inad, inad_lines, intl, other, total, synced_at").eq("ym", month),
+      supabase.from("ebay_metrics").select("store, transaction_defect, late_shipment, cases_without_resolution, tracking_on_time, current_high, current_very_high, projected_high, projected_very_high, updated_at"),
+    ]);
+    const ebay: Record<string, unknown> = {};
+    for (const code of STORES) {
+      const fee = (feeRows || []).find((r: Record<string, unknown>) => String(r.store).toUpperCase() === code) || null;
+      const met = (metRows || []).find((r: Record<string, unknown>) => String(r.store).toUpperCase() === code) || null;
+      if (fee || met) ebay[code] = { fees: fee, metrics: met };
+    }
+
     // ---- the goal this month is carrying --------------------------------
     // monthly_gp_goals is the record, not the sheet: the goal is entered on
     // SPEEKS and pushed into the workbook from there. The cache only ever knew
@@ -212,14 +276,21 @@ Deno.serve(async (req: Request) => {
     // nothing to measure against; now a month keeps the goal it was given.
     // The cached figure stays as the fallback for the current month, so nothing
     // regresses on a month whose goals predate this table.
+    //
+    // From NP_FROM the goal is a Net Profit goal. The cached hub figure is a GP
+    // goal (the Sales tab's), so for an NP month it is dropped rather than left
+    // as a fallback: a GP number in an NP goal bar would read as a store miles
+    // ahead of plan.
+    const goalKind = month >= NP_FROM ? "np" : "gp";
+    if (goalKind === "np") for (const code of STORES) stores[code].goal = null;
     const { data: goalRows, error: goalErr } = await supabase
-      .from("monthly_gp_goals")
-      .select("store, gp_goal")
+      .from(goalKind === "np" ? "monthly_np_goals" : "monthly_gp_goals")
+      .select(goalKind === "np" ? "store, np_goal" : "store, gp_goal")
       .eq("ym", month);
     if (goalErr) throw goalErr;
-    for (const r of goalRows || []) {
+    for (const r of (goalRows || []) as Record<string, unknown>[]) {
       const code = String(r.store || "").toUpperCase();
-      if (stores[code]) stores[code].goal = Number(r.gp_goal);
+      if (stores[code]) stores[code].goal = Number(goalKind === "np" ? r.np_goal : r.gp_goal);
     }
 
     // ---- the same month a year ago -------------------------------------
@@ -257,6 +328,13 @@ Deno.serve(async (req: Request) => {
       months,
       daysInMonth,
       source,
+      // 'np' from October 2026: the goal is Net Profit and the headline is NP.
+      goalKind,
+      // How many store-days carry NP. 0 means the month predates the NP tab (or
+      // it is the 1st, before the first pass), and the popout says so instead
+      // of showing an NP of nothing.
+      npDays,
+      ebay,
       // Which day the month has reached, so the table can stop at today rather
       // than printing a fortnight of empty rows for days that have not happened.
       today: isCurrent ? Number(today.slice(8, 10)) : null,

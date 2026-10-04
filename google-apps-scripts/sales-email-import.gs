@@ -531,7 +531,19 @@ function _handle(e) {
     if (action === 'dayEndFacts') {
       return _json(dayEndFacts({ days: p.days ? parseInt(p.days, 10) : 30 }));
     }
-    if (action === 'buying') return _json(ingestBuyingEmails({ dryRun: dryRun }));
+    if (action === 'buying') {
+      var bRep = ingestBuyingEmails({ dryRun: dryRun });
+      // The Shopify Daily Sales Report emails are no longer read (selling comes
+      // off the Net Profit tab from Oct 2026), so nothing archived them any more
+      // and they piled up in the inbox. Swept here, on the run that still happens
+      // every morning. Never allowed to fail the buying report it rides on.
+      try {
+        bRep.salesEmailsArchived = _archiveSalesReportEmails(dryRun);
+      } catch (aerr) {
+        bRep.salesEmailsArchived = { error: String(aerr && aerr.message || aerr) };
+      }
+      return _json(bRep);
+    }
     // The last day of a month, from Shopify. See fillMonthEndFromShopify for why
     // this can't ride on the 6:05 import. force=1 runs it outside days 1-3.
     if (action === 'monthEnd') {
@@ -603,6 +615,38 @@ function _handle(e) {
   } catch (err) {
     return _json({ ok: false, error: String(err && err.message || err) });
   }
+}
+
+// ------------------------------------------------------------
+// Archive the Shopify "Daily Sales Report" emails (2026-10-04)
+// ------------------------------------------------------------
+// Ethan: "get rid of the old sales summary emails". ingestSalesEmails used to
+// archive each one as it read it; it no longer runs (sales-ingest calls
+// action=buying since 2026-10-03), so this does only that archive step.
+//
+// ARCHIVED, NEVER DELETED: they stay searchable in All Mail.
+//
+// Narrow on purpose. The same store addresses send other mail too — a
+// draft-order invoice to a customer (NOT_A_REPORT_SUBJECTS) — so a thread is
+// only archived when EVERY message in it is from a store sender AND its subject
+// starts "Daily Sales Report" / "Daily sales report for …". One message that
+// is anything else and the whole thread is left where it is.
+var SALES_REPORT_SUBJECT = /^\s*daily sales report\b/i;
+function _archiveSalesReportEmails(dryRun) {
+  var senders = Object.keys(STORE_SENDERS);
+  var q = 'in:inbox from:(' + senders.join(' OR ') + ') subject:"daily sales report"';
+  var out = { archived: 0, left: 0, dryRun: !!dryRun };
+  GmailApp.search(q, 0, 100).forEach(function (thread) {
+    var ok = thread.getMessages().every(function (m) {
+      var from = String(m.getFrom() || '').toLowerCase();
+      var fromStore = senders.some(function (s) { return from.indexOf(s) >= 0; });
+      return fromStore && SALES_REPORT_SUBJECT.test(m.getSubject()) && !_notAReport(m.getSubject());
+    });
+    if (!ok) { out.left++; return; }
+    if (!dryRun) thread.moveToArchive();
+    out.archived++;
+  });
+  return out;
 }
 
 function _json(obj) {
@@ -3412,9 +3456,20 @@ function _weeklyFiguresFor(ss, store, start, end, email, report, dayEnd) {
 
   // --- Sales tab: revenue and cost, Sun..Sat. A week can straddle two months,
   // so this walks days and picks the tab per day rather than reading one tab.
+  //
+  // ⚠️ FROM 1 OCTOBER 2026 THE DAY IS READ OFF THE NET PROFIT TAB, not the Sales
+  // tab. The Sales tabs are retired from October (Ethan 2026-10-03, who deletes
+  // "Sales Oct 26" onward) and the NP tab carries the same Sales and Cost per day,
+  // to the cent, plus the fees. Same day-row lookup: both tabs keep the day
+  // number in the block's own first column. NP_BASES / NP_OFF_* / _npTabName are
+  // netprofit-sheet.gs's, which lives in this same project. A week that straddles
+  // 30 Sep / 1 Oct reads each day from the tab that owns it.
   var rev = 0, cogs = 0, gaps = [];
   for (var d = new Date(start); d <= end; d = _addDays(d, 1)) {
-    var cells = _dayCells(ss, _tabNameFor(d), SALES_COL_BASES[store], d, [COL_SALES, COL_COST]);
+    var npDay = _iso(d) >= '2026-10-01';
+    var cells = npDay
+      ? _dayCells(ss, _npTabName(_iso(d).slice(0, 7)), NP_BASES[store], d, [NP_OFF_SALES, NP_OFF_COST])
+      : _dayCells(ss, _tabNameFor(d), SALES_COL_BASES[store], d, [COL_SALES, COL_COST]);
     if (!cells || cells[0] == null || cells[1] == null) { gaps.push(_iso(d)); continue; }
     rev += cells[0]; cogs += cells[1];
   }

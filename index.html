@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260930m">
+  <link rel="stylesheet" href="styles.css?v=20261003c">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260930m" defer></script>
+  <script src="speeks.js?v=20261003c" defer></script>
 </head>
 
 <body class="preload">
@@ -1257,7 +1257,7 @@
                   <span class="ew-standings-title">Leaderboard</span>
                   <div class="ew-seg ew-seg-sm">
                       <button class="toggle-btn active" id="lb-tab-rev" onclick="switchLeaderboardMetric('Revenue')">Revenue</button>
-                      <button class="toggle-btn" id="lb-tab-gp" onclick="switchLeaderboardMetric('GP')">GP</button>
+                      <button class="toggle-btn" id="lb-tab-gp" onclick="switchLeaderboardMetric('NP')">Net Profit</button>
                   </div>
               </div>
               <div id="lb-wrapper" class="lb-wrapper-inner">
@@ -1265,7 +1265,7 @@
                       <div class="status-message">Syncing Data...</div>
                   </div>
               </div>
-              <div class="ew-standings-foot">Updated as of <span id="lb-last-updated">—</span></div>
+              <div class="ew-standings-foot"><span id="lb-last-updated-label">Updated as of </span><span id="lb-last-updated">—</span></div>
           </div>
       </div>
   </div>
@@ -2110,7 +2110,7 @@
     <div class="manage-content" id="emailRecipientsBody"></div>
 </div>
 
-<!-- The month's GP goal per store. Entered here, not in the spreadsheet: the
+<!-- The month's profit goal per store (NET profit from October 2026). Entered here, not in the spreadsheet: the
      goal is a decision, and the rollover writes it into the new tabs so the
      workbook's own formulas keep working. District Manager only,
      unless Feature Access hands 'tool-store-goals' to someone else. -->
@@ -2137,7 +2137,7 @@
         <div class="tool-head-titles">
           <span class="tool-head-eyebrow">SPEEKS Tools</span>
           <span class="tool-head-title">Month Setup</span>
-          <span class="tool-head-sub">Each store's gross profit goal, and the days they are open to buy.</span>
+          <span class="tool-head-sub">Each store's net profit goal, and the days they are open to buy.</span>
         </div>
       </div>
       <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>

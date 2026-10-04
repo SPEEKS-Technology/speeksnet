@@ -102,8 +102,8 @@ const AGING_INV_URL     = `${_BASE}/aging-inventory`;
 const EXPENSES_URL      = `${_BASE}/expenses`;
 const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
-const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const SUMMARY_WEEKLY_URL = `${_BASE}/summary-weekly`;
+const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
 const NOTIFY_URL        = `${_BASE}/notify`;
@@ -1985,13 +1985,24 @@ function feedLeaderboardToTicker(leaderboardData) {
         }).sort((a, b) => b.val - a.val);
         return scores.length && scores[0].val > 0 ? scores[0].store : null;
     };
-    const gpLeader = getLeader(leaderboardData.gp || {});
-    const revLeader = getLeader(leaderboardData.revenue || {});
+    // From October the profit leader is the NET profit leader, off the live
+    // payload (see _lbLiveRows). The hub's GP leader is not used as a stand-in:
+    // a GP leader announced as the NP leader would be wrong in public.
+    const top = rows => {
+        if (!rows || !rows.length) return null;
+        const r = rows.slice().sort((a, b) => b.val - a.val)[0];
+        return r.val > 0 ? r.store : null;
+    };
+    const npRows = (typeof _lbLiveRows === 'function') ? _lbLiveRows('NP') : null;
+    const npMode = !!npRows;
+    const gpLeader = npMode ? top(npRows) : getLeader(leaderboardData.gp || {});
+    const revLeader = npMode ? top(_lbLiveRows('Revenue')) : getLeader(leaderboardData.revenue || {});
+    const pk = npMode ? 'Net Profit' : 'GP';
     let text;
     if (gpLeader && revLeader && gpLeader !== revLeader) {
-        text = `Monthly GP Leader: ${gpLeader}  ·  Revenue Leader: ${revLeader}`;
+        text = `Monthly ${pk} Leader: ${gpLeader}  ·  Revenue Leader: ${revLeader}`;
     } else if (gpLeader || revLeader) {
-        text = `${gpLeader || revLeader} is leading district GP & Revenue this month`;
+        text = `${gpLeader || revLeader} is leading district ${pk} & Revenue this month`;
     }
     if (text) {
         _tickerLeaderboard = { icon: '🏆', text, _type: 'leaderboard' };
@@ -4031,7 +4042,7 @@ function _kpiHeaderRowsHtml() {
         '</tr><tr class="kpi-grid-header-row">' +
         '<th class="kpi-grid-th kpi-col-input">Buy Value</th>' +
         '<th class="kpi-grid-th kpi-col-input">Buy Cost</th>' +
-        '<th class="kpi-grid-th kpi-col-computed">Est. GP</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">Est. Buy Profit</th>' +
         '<th class="kpi-grid-th kpi-col-computed">Margin %</th>' +
         '<th class="kpi-grid-th kpi-col-input"># Trans.</th>' +
         '<th class="kpi-grid-th kpi-col-input"># Conv.</th>' +
@@ -4044,7 +4055,7 @@ function _kpiHeaderRowsHtml() {
         '<th class="kpi-grid-th kpi-col-input">ND Value</th>' +
         '<th class="kpi-grid-th kpi-col-input">ND Cost</th>' +
         '<th class="kpi-grid-th kpi-col-computed">Lost Profit</th>' +
-        '<th class="kpi-grid-th kpi-col-computed">% vs Buy GP</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">% vs Buy Profit</th>' +
         '<th class="kpi-grid-th kpi-col-input"># Listed</th>' +
         '<th class="kpi-grid-th kpi-col-input">Retail ($)</th>' +
         '<th class="kpi-grid-th kpi-col-input">Cost ($)</th>' +
@@ -4519,11 +4530,11 @@ function _kpiExportCSV(periods, spanTag) {
 
     const headers = [
         'Period','Employee',
-        'Buy Value','Buy Cost','Est. GP','Margin %',
+        'Buy Value','Buy Cost','Est. Buy Profit','Margin %',
         '# Trans','# Conv.','Conv. %',
         '# Devices','# Dev Conv.','Dev Conv. %',
         'Avg Time (min)',
-        '# No Deals','ND Value','ND Cost','Lost Profit','% vs Buy GP',
+        '# No Deals','ND Value','ND Cost','Lost Profit','% vs Buy Profit',
         '# Listed','Retail ($)','Cost ($)','Sold ($)','Listed Margin %','% Sold',
         'Google Reviews'
     ];
@@ -4701,6 +4712,10 @@ const _MB_DERIVED = [
     ['pct_non_ebay_sales',      v => (v.pct_sales_at_pos != null && v.pct_sales_online != null && v.pct_sales_draft_order != null)
         ? _mbR2(v.pct_sales_at_pos + v.pct_sales_online + v.pct_sales_draft_order) : null],
     ['shipping_cost_pct_sales', v => _mbPctOf(v.shipping_label_cost, v.net_sales)],
+    // Net Profit rows (0131, 2026-10-02): GP stays in the breakdown, NP is added
+    // beside it, and eBay fees with it because the fee gap is why NP differs.
+    ['net_profit_pct',          v => _mbPctOf(v.net_profit, v.net_sales)],
+    ['ebay_fee_pct_sales',      v => _mbPctOf(v.ebay_fees, v.net_sales)],
     ['recycled_pct_inventory',  v => _mbPctOf(v.recycled_inventory, v.inventory_cost)],
 ];
 const _MB_DERIVED_KEYS = new Set(_MB_DERIVED.map(d => d[0]));
@@ -9655,7 +9670,11 @@ async function fetchHubData() {
             if (_lbUpd) _lbUpd.innerText = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
             if (document.getElementById('lb-wrapper')) drawLeaderboard();
         } else if (document.getElementById('lb-wrapper')) {
-            document.getElementById('lb-wrapper').innerHTML = '<div class="status-message" style="color:var(--red-alert);">Please Deploy "New Version" of Hub App Script!</div>';
+            // No leaderboard arrays is NORMAL from October 2026: they came off the
+            // Sales Summary tab, which is retired. The standings come off the live
+            // payload (_lbLiveRows), so draw from that rather than telling anybody
+            // to redeploy the hub.
+            drawLeaderboard();
         }
         _tickerSourceDone('hub');
     } catch(e) {
@@ -9664,6 +9683,23 @@ async function fetchHubData() {
         // has time to succeed and set the leaderboard before the ticker starts.
         setTimeout(() => _tickerSourceDone('hub'), 2000);
     }
+}
+
+// "Updated as of" on the Command Center header. The hub stamps {store}BuyDate
+// when the SALES TAB's revenue or GP changes, and the Sales tab is retired
+// (2026-10-03) — so that stamp stops moving for good. From an NP month the date
+// is the last day the Net Profit tab has closed for the store, off the live
+// payload, which is the day the board's figures actually run through. Null when
+// there is no live payload yet; the caller falls back to the hub's stamp.
+function _ccUpdatedNp(store) {
+    const d = (typeof _lvData !== 'undefined') ? _lvData : null;
+    if (!d || !Array.isArray(d.stores) || d.goalKind !== 'np') return null;
+    const m = d.stores.find(x => x && String(x.code).toLowerCase() === String(store || '').toLowerCase());
+    const n = m && m.np && Number(m.np.bankedDays);
+    const ym = String(d.asOfCentral || '').slice(0, 7);
+    if (!n || !/^\d{4}-\d{2}$/.test(ym)) return null;
+    const dt = new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1, n);
+    return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 function renderBuyingSales() {
@@ -9750,7 +9786,7 @@ function renderBuyingSales() {
         el.classList.toggle('bad', sellMarginNum < 55.0);
         el.classList.toggle('good', sellMarginNum >= 55.0);
     });
-    const _buyDate = hubDataCache[`${store}BuyDate`] || '—';
+    const _buyDate = _ccUpdatedNp(store) || hubDataCache[`${store}BuyDate`] || '—';
     document.querySelectorAll('#cc-updated').forEach(el => el.innerText = _buyDate);
     document.querySelectorAll('#bs-pace-asof').forEach(el => el.innerText = 'as of ' + _buyDate);
     const _mEnd = new Date(); _mEnd.setMonth(_mEnd.getMonth() + 1, 0); // last day of current month
@@ -9922,8 +9958,10 @@ function switchLeaderboardMetric(metric) {
         revBtn.classList.toggle('active', metric === 'Revenue');
         revBtn.style.color = metric === 'Revenue' ? 'var(--slate-charcoal)' : '#a0aab2';
         
-        gpBtn.classList.toggle('active', metric === 'GP');
-        gpBtn.style.color = metric === 'GP' ? 'var(--slate-charcoal)' : '#a0aab2';
+        // The id is still lb-tab-gp so the markup did not have to change shape;
+        // the button it names has said Net Profit since October 2026.
+        gpBtn.classList.toggle('active', metric !== 'Revenue');
+        gpBtn.style.color = metric !== 'Revenue' ? 'var(--slate-charcoal)' : '#a0aab2';
     }
     
     drawLeaderboard(); 
@@ -10082,6 +10120,9 @@ const RECORD_CARD_ORDER = [
     'Daily Sell Record',
     'Single Day Google Reviews',
     'Monthly Revenue Record',
+    // Net Profit sits first of the monthly profit records: from October 2026 it
+    // is the figure the stores are graded on (records-watch, 2026-10-02).
+    'Monthly Net Profit Record',
     'Monthly Gross Profit Record',
     'Monthly Sell Margin Record',
     'Monthly Customer Conversion Record',
@@ -10214,6 +10255,7 @@ function renderRecords() {
  * store cards, with no subtitle — Ethan asked for both. */
 const RECORD_COMPANY_NOTE = {
     'Monthly Sell Margin Record': 'All stores’ gross profit ÷ all net sales',
+    'Monthly Net Profit Record': 'All five stores’ net profit, months every store has one',
     'Monthly Customer Conversion Record': 'Close rate weighted by # of customers',
 };
 function _recCompanySection(company, rank) {
@@ -10359,7 +10401,7 @@ function populateRecordsModal() {
 
     const cols = `minmax(150px, 1.3fr) repeat(${sections.length}, minmax(118px, 1fr))`;
     list.innerHTML =
-        `<p class="cr-hint">These fill themselves in every morning from the Daily Sales Summary and the Monthly Breakdown, and only ever go up. Edit a store here to correct one &mdash; a lower number sticks unless the data really beats it. <strong>Company</strong> is every store added together and is kept automatically.</p>` +
+        `<p class="cr-hint">These fill themselves in every morning from the daily buying and selling figures and the Monthly Breakdown, and only ever go up. Edit a store here to correct one &mdash; a lower number sticks unless the data really beats it. <strong>Company</strong> is every store added together and is kept automatically.</p>` +
         // The person editors live INSIDE the scroller, not after it. Two nested
         // scrollers would otherwise hide them below the fold on a short screen
         // with no scrollbar to say they were there — the tool would look like
@@ -12178,7 +12220,74 @@ const _lvCols = () => ({
 // column and the pace pill read those directly, and leaving them live would put
 // a figure that counts today beside four that stop at yesterday — on the one tab
 // whose entire promise is that everything on it covers the same days.
+// ---- NET PROFIT (2026-10-02) ----------------------------------------------
+// From October 2026 stores are graded on Net Profit. shopify-live carries an `np`
+// block on every store row and on the district (see npFor there): the NP goal,
+// NP banked off the workbook's Net Profit tab, an ESTIMATE for the days the tab
+// has not reached (today always; yesterday until the 6:10 pass) at the store's
+// own cost rate, and % of goal / pace / tracking worked from that.
+//
+// It is laid over the view HERE, once, so that every renderer that already reads
+// goal / pctOfGoal / paceIndex — the pace pills, the goal bars, the phone card,
+// the collapsed summary — is on NP without being touched. The NP figures for the
+// span on screen ride alongside as npDay / npMtd / npTrack; `npKind` is what a
+// renderer checks before it relabels anything.
+//
+// The three modes take the same figures the GP fields do: Today is live (with
+// today's estimate in it), Yesterday and Month stop at yesterday's close.
+function _lvNpKind() { return !!(_lvData && _lvData.goalKind === 'np'); }
+function _lvNpOverlay(v, n) {
+    if (!n || !_lvNpKind()) return v;
+    const p = n.prev;
+    const live = _lvIsToday() || !p;
+    const out = {
+        npKind: true,
+        npGoal: n.goal,
+        goal: n.goal || 0,
+        // The day fields hold the MONTH on the Month tab, as every GP field does.
+        npDay: live ? n.today : (_lvIsMtd() ? p.mtd : p.day),
+        npDayEst: live ? true : (_lvIsMtd() ? n.estimated !== 0 && n.bankedDays < ((_lvData.prev && _lvData.prev.daysElapsed) || 0) : !!p.dayEstimated),
+        npMtd: live ? n.mtd : p.mtd,
+        npTrack: live ? n.track : p.track,
+        npLastMonth: n.lastMonth,
+        pctOfGoal: live ? n.pctOfGoal : p.pctOfGoal,
+        paceIndex: live ? n.paceIndex : p.paceIndex,
+        // Finished days only (the NP tab's own days), for the Month table's eBay
+        // fees and Shipping columns. Same on every tab: a fee is not known for a
+        // day that has not closed.
+        npBSales: n.bankedSales, npBEbay: n.bankedEbay, npBShip: n.bankedShip,
+    };
+    return Object.assign({}, v, out);
+}
+// "Estimated Net Profit", not "Net Profit est." (Ethan 2026-10-02: say it in the
+// label). The word joins the label in the label's own case: "Net Profit" ->
+// "Estimated Net Profit", "Net profit today" -> "Estimated net profit today".
+// The tooltip says how it is worked out: GP less the store's own cost rate.
+function _lvEstName(label, on) {
+    if (!on) return label;
+    const titled = /^[A-Z]\S*\s+[A-Z]/.test(label) || !/\s/.test(label);
+    const text = /^[a-z]/.test(label) ? 'estimated ' + label
+        : 'Estimated ' + (titled ? label : label.charAt(0).toLowerCase() + label.slice(1));
+    return '<span class="lv-est" title="Estimated: sales less cost of goods, then less this store\'s own rate for eBay fees, shipping, card fees and royalty over its last 30 finished days. The Net Profit tab replaces it the next morning.">' + text + '</span>';
+}
+
 function _lvView(m) {
+    if (!m) return m;
+    return _lvNpOverlay(_lvViewGp(m), m.np);
+}
+// NO GP ON AN NP MONTH (Ethan 2026-10-02: "when I said everything tied to GP
+// needs to be moved to NP, I meant it"). Every margin a store sees is the NET
+// margin — NP over net sales for the span on screen — and gross profit is not
+// shown as a figure of its own anywhere on the board.
+function _lvNetMargin(v) {
+    const n = Number(v && v.npDay), s = Number(v && v.netToday);
+    return (isFinite(n) && s > 0) ? n / s * 100 : null;
+}
+function _lvNetMarginMtd(v) {
+    const n = Number(v && v.npMtd), s = Number(v && v.mtdNet);
+    return (isFinite(n) && s > 0) ? n / s * 100 : null;
+}
+function _lvViewGp(m) {
     if (!m) return m;
     if (_lvIsPrev() && m.prev) return Object.assign({}, m, m.prev);
     if (_lvIsMtd()) {
@@ -13084,14 +13193,18 @@ function renderGpGoals() {
         .map(s => String(s.code).toUpperCase());
     const stores = codes.length ? codes : ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
     const editable = _gpCanEdit();
+    // From October 2026 the month's goal is NET profit (gp-goals answers with
+    // kind 'np'); September and earlier keep their gross-profit goals, so
+    // looking back at one still says what it was measured against.
+    const np = _gpGoals.kind === 'np';
 
     let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
         The month's targets for <b>${escapeHtml(_gpMonthName(_gpGoals.month))}</b>.
-        Saving writes them into the Sales Summary workbook as well, so the sheet
+        Saving writes them into the ${np ? 'Net Profit tab of the' : ''} Sales Summary workbook as well, so the sheet
         and the site cannot drift apart.${editable ? '' : ' Only the District Manager can change these.'}</p>`;
 
     html += `<div class="gp-sec"><div class="gp-sec-head">
-        <span class="gp-sec-t">Gross profit goals</span>
+        <span class="gp-sec-t">${np ? 'Net profit goals' : 'Gross profit goals'}</span>
         <span class="gp-sec-s">${stores.length} stores</span></div>`;
     html += '<div class="gp-goal-rows">';
     stores.forEach(code => {
@@ -13111,7 +13224,7 @@ function renderGpGoals() {
     });
     html += '</div>';
 
-    html += `<div class="gp-goal-total">Company goal <b id="gpGoalTotal">—</b></div></div>`;
+    html += `<div class="gp-goal-total">Company ${np ? 'NP' : 'GP'} goal <b id="gpGoalTotal">—</b></div></div>`;
 
     html += _gpBuyDaysHtml(editable);
 
@@ -13375,8 +13488,8 @@ async function checkGpGoalReminder() {
     const monthName = _gpMonthName(data.month);
     const n = data.missing.length;
     const summary = n === 5
-        ? `No goals set for ${monthName} yet — the goal bars have nothing to measure against until they are in.`
-        : `${data.missing.join(', ')} ${n === 1 ? 'has' : 'have'} no ${monthName} goal yet.`;
+        ? `No ${data.kind === 'np' ? 'net profit ' : ''}goals set for ${monthName} yet — the goal bars have nothing to measure against until they are in.`
+        : `${data.missing.join(', ')} ${n === 1 ? 'has' : 'have'} no ${monthName} ${data.kind === 'np' ? 'net profit ' : ''}goal yet.`;
     if (t) {
         t.innerHTML = '<div style="line-height:1.4;"><strong>Store goals for ' + escapeHtml(monthName) + '</strong></div>'
             + '<div style="line-height:1.4; opacity:0.96;">' + escapeHtml(summary) + '</div>';
@@ -13499,13 +13612,25 @@ function setDailyStore(code) {
 // from the totals, never averaged across days — days differ in size, so a mean
 // of the daily percentages is not the month's percentage.
 function _bdTotals(days) {
-    const t = { sales: 0, cost: 0, gp: 0, resale: 0, paid: 0, sellDays: 0, buyDays: 0 };
+    const t = { sales: 0, cost: 0, gp: 0, resale: 0, paid: 0, sellDays: 0, buyDays: 0,
+                np: 0, ebay: 0, ship: 0, cc: 0, royalty: 0, npSales: 0, npDays: 0, npLast: 0, shipPending: 0 };
     days.forEach(d => {
         if (d.sales !== null) { t.sales += d.sales; t.cost += d.cost; t.gp += d.gp; t.sellDays++; }
         if (d.resale !== null) { t.resale += d.resale; t.paid += d.paid; t.buyDays++; }
+        // Net Profit sums over the days the NP tab has, which run a day behind
+        // the selling columns (today is never on it). Its own sales base and its
+        // own last day go with it, so the net margin and the NP projection are
+        // worked over the same days as the NP itself rather than over a day more.
+        if (d.np !== null && d.np !== undefined) {
+            t.np += d.np; t.ebay += d.ebayFee || 0; t.ship += d.shipping || 0;
+            t.cc += d.ccFee || 0; t.royalty += d.royalty || 0; t.npSales += d.sales || 0;
+            t.npDays++; t.npLast = Math.max(t.npLast, d.day);
+            if (!d.shipFinal) t.shipPending++;
+        }
     });
     t.margin = t.sales > 0 ? t.gp / t.sales * 100 : null;
     t.buyMargin = t.resale > 0 ? (t.resale - t.paid) / t.resale * 100 : null;
+    t.netMargin = t.npSales > 0 ? t.np / t.npSales * 100 : null;
     return t;
 }
 
@@ -13515,6 +13640,13 @@ function _bdTotals(days) {
 // server-side total could.
 const BD_ALL = 'SPEEKS';
 
+// ⚠️ SUPERSEDED FOR SEPTEMBER 2026 ON (2026-10-02). The company is graded on real
+// Net Profit from October, and buysell-daily now carries each day's NP from the
+// workbook's Net Profit tab (daily_np): Sales − Cost − eBay fees − Shipping −
+// Card fees − 7% royalty. Where a month has that, _bdNetGp returns it. The flat
+// rate below survives ONLY as the estimate for months before the NP tab existed,
+// and is labelled as an estimate wherever it is shown.
+//
 // Net GP is gross profit less a flat 21% of REVENUE (not of GP) — the sheet's
 // own definition, confirmed against two independent OVL figures to the cent:
 //   July actual  71,104.03 - .21 x 130,482.88 = 43,702.63
@@ -13524,6 +13656,7 @@ const BD_ALL = 'SPEEKS';
 // this is the line that has to grow, not the six call sites.
 const BD_NET_GP_RATE = 0.21;
 function _bdNetGp(t) {
+    if (t && t.npDays) return t.np;
     return (t && t.sellDays) ? t.gp - t.sales * BD_NET_GP_RATE : null;
 }
 
@@ -13550,6 +13683,7 @@ function _bdCompany(payload) {
     const days = [];
     for (let day = 1; day <= n; day++) {
         let sales = null, cost = null, gp = null, resale = null, paid = null;
+        let np = null, ebayFee = null, shipping = null, ccFee = null, royalty = null, shipFinal = true;
         codes.forEach(c => {
             const x = ((d.stores[c] || {}).days || []).find(y => y.day === day);
             if (!x) return;
@@ -13557,10 +13691,18 @@ function _bdCompany(payload) {
                 sales = (sales || 0) + x.sales; cost = (cost || 0) + x.cost; gp = (gp || 0) + x.gp;
             }
             if (x.resale !== null) { resale = (resale || 0) + x.resale; paid = (paid || 0) + x.paid; }
+            if (x.np !== null && x.np !== undefined) {
+                np = (np || 0) + x.np; ebayFee = (ebayFee || 0) + (x.ebayFee || 0);
+                shipping = (shipping || 0) + (x.shipping || 0); ccFee = (ccFee || 0) + (x.ccFee || 0);
+                royalty = (royalty || 0) + (x.royalty || 0);
+                // The company's day is final only when every store's is.
+                if (!x.shipFinal) shipFinal = false;
+            }
         });
         days.push({
             day, sales, cost, gp, resale, paid,
             buyMargin: resale > 0 ? (resale - paid) / resale : null,
+            np, ebayFee, shipping, ccFee, royalty, shipFinal: np === null ? null : shipFinal,
         });
     }
     // The company's goal is the sum of the five it is made of — the same
@@ -13700,6 +13842,84 @@ function _bdPickers() {
         + ' onchange="setDailyMonth(this.value)">' + months + '</select>';
 }
 
+// ---- Net Profit helpers (2026-10-02) ------------------------------------------
+// The three NP cells of a table row. A day with sales and no NP is a day the NP
+// tab has not reached yet (today, or the morning before the 6:10 pass) — dashed,
+// never zero. A day whose shipping has not landed is starred: its NP is the
+// figure BEFORE the labels, and it will come down at the 2pm pass.
+function _bdNpCells(x, cell, dash) {
+    if (x.np === null || x.np === undefined) return dash('lv-quietnum') + dash('lv-quietnum') + dash('lv-boldnum') + dash('');
+    const pend = !x.shipFinal;
+    return cell('lv-quietnum', x.ebayFee === null ? '&mdash;' : _lvMoney(x.ebayFee, true))
+        + cell('lv-quietnum', x.shipping === null ? '<span title="Shipping lands on the 2pm pass">&mdash;</span>'
+                                                   : _lvMoney(x.shipping, true))
+        + cell('lv-boldnum', _lvMoney(x.np, true) + (pend ? '<sup class="bd-pend">*</sup>' : ''))
+        + cell('', _lvPct(x.sales > 0 ? x.np / x.sales * 100 : null));
+}
+
+function _bdShipPendingNote(n) {
+    return n === 1 ? '* 1 day before shipping' : '* ' + n + ' days before shipping';
+}
+
+// WHERE THE GROSS PROFIT WENT. Gross profit less these four is the Net Profit,
+// so this strip is the answer to "why is our NP lower than our GP says it should
+// be". Each cost is shown as a share of SALES, because that is the only way to
+// compare a $95k store with a $160k one, against last month and against the
+// district.
+//
+// THE DISTRICT LINE IS THE POINT (Ethan 2026-10-02). eBay fees are not the same
+// rate everywhere: a store that is not Top Rated, or that sells in the
+// high-fee categories, pays a visibly higher share of its sales to eBay (BAL's
+// September: 9.2% of sales against OVL's 5.5%, with $1.9k of "item not as
+// described" fees alone). A store running more than BD_COST_HOT_PTS above the
+// district on a cost is marked, so the gap is the first thing on the screen
+// rather than something to work out.
+//
+// The district is the five stores over the SAME days as the store's own NP, so a
+// mid-month comparison is never this store's 12 days against the district's 11.
+const BD_COST_HOT_PTS = 1.0;
+function _bdCostStrip(t, pt, prevNm, d, cap) {
+    const pctOf = (v, base) => base > 0 ? v / base * 100 : null;
+    const co = _bdCompany(d);
+    const dt = (co && _bdStore !== BD_ALL)
+        ? _bdTotals(co.days.filter(x => x.day <= Math.min(cap, t.npLast))) : null;
+    const pts = v => (v >= 0 ? '+' : '&minus;') + Math.abs(v).toFixed(1) + ' pts';
+    const one = (label, key, sub) => {
+        const p = pctOf(t[key], t.npSales);
+        const pp = (pt && pt.npDays) ? pctOf(pt[key], pt.npSales) : null;
+        const dp = dt && dt.npDays ? pctOf(dt[key], dt.npSales) : null;
+        const gap = (p !== null && dp !== null) ? p - dp : null;
+        // Only the two costs a store controls are judged: eBay fees (how it lists
+        // and describes, which drives the INAD fee) and shipping. Card fees track
+        // payment mix and the royalty is a flat 7%, so neither can be "too high".
+        const hot = (key === 'ebay' || key === 'ship') && gap !== null && gap > BD_COST_HOT_PTS;
+        // Lower is better for a cost, so the colours run the other way from a
+        // revenue tile: above the district is the red one.
+        const flag = gap === null ? ''
+            : '<span class="bd-mom ' + (gap > 0.25 ? 'down' : (gap < -0.25 ? 'up' : '')) + '">' + pts(gap) + '</span>';
+        const rows = [];
+        if (pp !== null) rows.push({ k: prevNm, v: _lvPct(pp), d: '' });
+        if (dp !== null) rows.push({ k: 'District', v: _lvPct(dp), d: flag });
+        return '<div class="cc-cell bd-tile' + (hot ? ' bd-tile-hot' : '') + '">'
+            + '<span class="sh-stripe g"></span>'
+            + '<div class="sh-k">' + label + (sub ? ' <span class="bd-k-sub">&middot; ' + sub + '</span>' : '') + '</div>'
+            + '<div class="bd-tile-row"><div class="bd-tile-main">'
+            + '<div class="sh-v">' + _lvMoney(t[key], false) + '</div>'
+            + '<div class="bd-track">' + (p === null ? '' : _lvPct(p) + ' of sales') + '</div></div>'
+            + (rows.length ? '<div class="bd-tile-cmp">' + rows.map(c =>
+                '<div class="bd-cmp"><span class="bd-cmp-k">' + escapeHtml(c.k) + '</span>'
+                + '<span class="bd-cmp-v">' + c.v + '</span><span class="bd-cmp-d">' + (c.d || '') + '</span></div>'
+              ).join('') + '</div>' : '')
+            + '</div></div>';
+    };
+    return '<div class="bd-strip bd-strip2 bd-strip-cost">'
+        + one('eBay Fees', 'ebay', '')
+        + one('Shipping', 'ship', 'Labels &amp; Returns')
+        + one('Card Fees', 'cc', '')
+        + one('Royalty', 'royalty', '7% of Sales')
+        + '</div>';
+}
+
 function _bdRender() {
     const el = _bdEl();
     if (!el) return;
@@ -13800,9 +14020,19 @@ function _bdRender() {
     const proj = (d.isCurrent && last > 0) ? (d.daysInMonth / last) : 1;
     const at = v => (v === null ? null : v * proj);      // this month, at month end
     const prevNm = prevYm ? _bdMonthName(prevYm).split(' ')[0] : '';
+    // NET PROFIT MONTHS. From October 2026 the goal is an NP goal (goalKind
+    // 'np'), and any month the NP tab covers (September on) shows real NP. NP
+    // runs a day behind the selling columns — today is never on the tab — so it
+    // projects off its OWN last day: dividing by the selling columns' last day
+    // would under-project NP by a day every morning.
+    const npKind = d.goalKind === 'np';
+    const showNp = t.npDays > 0 || npKind;
+    const projNp = (d.isCurrent && t.npLast > 0) ? (d.daysInMonth / t.npLast) : 1;
     // Now that the projection is known, the header's goal chip can say what the
     // month is TRACKING to rather than what it has banked so far.
-    html = html.replace('<!--GOALCHIP-->', _bdGoalChip(store, t, proj, d.isCurrent));
+    html = html.replace('<!--GOALCHIP-->', npKind
+        ? _bdGoalChip(store, { gp: t.np, sellDays: t.npDays }, projNp, d.isCurrent)
+        : _bdGoalChip(store, t, proj, d.isCurrent));
 
     // The month-end projection of a figure, on the month in progress only.
     const proj_ = v => (d.isCurrent && v !== null && proj !== 1) ? _lvMoney(v * proj, false) : '';
@@ -13866,7 +14096,9 @@ function _bdRender() {
         const spec = {
             sales:     [pyT.sales,  at(t.sales),  'good'],
             gp:        [pyT.gp,     at(t.gp),     'good'],
-            net:       [pyNet,      net === null ? null : net * proj, 'good'],
+            // No 2025 Net Profit exists anywhere — the NP tab starts in 2026 — so
+            // a real NP is never set against last year's 21% estimate.
+            net:       [t.npDays ? null : pyNet, net === null ? null : net * proj, 'good'],
             resale:    [pyT.resale, at(t.resale), 'good'],
             // Grey, like every other comparison of what buying COST: paying out
             // more is what buying more looks like.
@@ -13899,8 +14131,12 @@ function _bdRender() {
     // Net GP belongs upstairs — it is the last step of the selling figures, not
     // a footnote to them (user's call 2026-08-12).
     const net = _bdNetGp(t);
-    const pnet = pt ? _bdNetGp(pt) : null;
-    const dNet = pnet ? _bdDelta(net * proj, pnet, 'good') : '';
+    // Like for like only: a real NP is compared with last month's real NP, never
+    // with the 21% estimate a month before September carries.
+    const pnet = (pt && (!t.npDays || pt.npDays)) ? _bdNetGp(pt) : null;
+    const netProj = t.npDays ? projNp : proj;
+    const dNet = pnet ? _bdDelta(net * netProj, pnet, 'good') : '';
+    const proj_n = v => (d.isCurrent && v !== null && netProj !== 1) ? _lvMoney(v * netProj, false) : '';
 
     html += '<div class="bd-strip bd-strip-top bd-strip-tight">'
         + tile('Sales', _lvMoney(t.sales, false), {
@@ -13908,24 +14144,40 @@ function _bdRender() {
             note: pt ? '' : (d.isCurrent ? 'Month To Date' : 'Month Total'),
             cmp: [lastMo(pt && _lvMoney(pt.sales, false), dSales), lastYr('sales')],
         })
-        + tile('Gross Profit', _lvMoney(t.gp, false), {
+        // No Gross Profit tile on an NP month (Ethan 2026-10-02: everything that
+        // was GP is NP now). The cost strip underneath is the bridge from sales
+        // to net profit, so nothing is lost by not printing GP as a headline.
+        + (t.npDays ? '' : tile('Gross Profit', _lvMoney(t.gp, false), {
             track: proj_(t.gp),
             note: pt ? '' : (d.isCurrent ? 'Month To Date' : 'Month Total'),
             cmp: [lastMo(pt && _lvMoney(pt.gp, false), dGp), lastYr('gp')],
-        })
-        // No arrow on margin: a percentage change OF a percentage is a figure
-        // almost nobody reads correctly. Last month's margin sits beside it and
-        // the difference in points is there to be seen. No projection either —
-        // a ratio is directly comparable mid-month.
-        + tile('Sell Margin <span class="bd-k-sub">&middot; On Sales</span>', _lvPct(t.margin), {
-            cmp: [lastMo((pt && pt.margin !== null) ? _lvPct(pt.margin) : '', ''), lastYr('margin')],
-        })
-        + (net === null ? '' : tile('Net GP', _lvMoney(net, false), {
-            track: proj_(net),
-            note: pnet ? '' : 'Gross Profit Less ' + Math.round(BD_NET_GP_RATE * 100) + '%',
-            cmp: [lastMo(pnet ? _lvMoney(pnet, false) : '', dNet), lastYr('net')],
         }))
+        + (t.npDays
+            ? tile('Net Profit', _lvMoney(net, false), {
+                accent: true, track: proj_n(net),
+                note: t.shipPending ? _bdShipPendingNote(t.shipPending) : '',
+                cmp: [lastMo(pnet ? _lvMoney(pnet, false) : '', dNet)],
+              })
+              + tile('Net Margin <span class="bd-k-sub">&middot; On Sales</span>', _lvPct(t.netMargin), {
+                cmp: [lastMo((pt && pt.netMargin !== null && pt.npDays) ? _lvPct(pt.netMargin) : '', '')],
+              })
+            // No arrow on margin: a percentage change OF a percentage is a figure
+            // almost nobody reads correctly. Last month's margin sits beside it and
+            // the difference in points is there to be seen. No projection either —
+            // a ratio is directly comparable mid-month.
+            : tile('Sell Margin <span class="bd-k-sub">&middot; On Sales</span>', _lvPct(t.margin), {
+                cmp: [lastMo((pt && pt.margin !== null) ? _lvPct(pt.margin) : '', ''), lastYr('margin')],
+              })
+              + (net === null ? '' : tile(npKind ? 'Net Profit' : 'Net GP', _lvMoney(net, false), {
+                track: proj_(net),
+                note: npKind ? 'Not on the Net Profit tab yet'
+                    : (pnet ? '' : 'Est. &middot; Gross Profit Less ' + Math.round(BD_NET_GP_RATE * 100) + '%'),
+                cmp: [lastMo(pnet ? _lvMoney(pnet, false) : '', dNet), lastYr('net')],
+              })))
         + '</div>';
+
+    // ---- where the gross profit went ----------------------------------------
+    html += t.npDays ? _bdCostStrip(t, pt, prevNm, d, cap) : '';
 
     // The buying half. Same shape as the row above — this is what the month
     // spent to make it possible, and it is read the same way.
@@ -13957,10 +14209,12 @@ function _bdRender() {
     // finished month measured against this month's target would be a wrong
     // number rather than a missing one.
     if (d.isCurrent && store.goal > 0) {
-        const pct = t.gp / store.goal * 100;
+        // An NP month's goal is an NP goal, so it is NP that fills the bar.
+        const banked = npKind ? t.np : t.gp;
+        const pct = banked / store.goal * 100;
         html += '<div class="lv-goal"><div class="lv-goal-top">'
-            + '<span class="lv-goal-lbl">Gross Profit Against Goal</span>'
-            + '<span class="lv-goal-fig"><b>' + _lvMoney(t.gp, false) + '</b> of '
+            + '<span class="lv-goal-lbl">' + (npKind ? 'Net Profit' : 'Gross Profit') + ' Against Goal</span>'
+            + '<span class="lv-goal-fig"><b>' + _lvMoney(banked, false) + '</b> of '
             + _lvMoney(store.goal, false) + '</span></div>'
             + '<div class="lv-goal-bar"><i style="width:' + Math.max(0, Math.min(100, pct)) + '%"></i></div>'
             + '<div class="lv-goal-foot">' + _lvPct(pct) + ' Banked</div></div>';
@@ -13983,9 +14237,11 @@ function _bdRender() {
           + (d.isCurrent ? ' so far' : ' this month') + '</span>'
         : '';
     html += '<div class="lv-tbl-scroll"><table class="lv-tbl bd-tbl"><thead>'
-        + '<tr class="bd-grp"><th></th><th colspan="4">Selling</th>'
+        + '<tr class="bd-grp"><th></th><th colspan="' + (showNp ? 6 : 4) + '">Selling</th>'
         + '<th colspan="3" class="bd-sep">Buying' + buyDays + '</th></tr>'
-        + '<tr><th>Day</th><th>Sales</th><th>Cost</th><th>Gross profit</th><th>Margin</th>'
+        + '<tr><th>Day</th><th>Sales</th><th>Cost</th>'
+        + (showNp ? '<th>eBay fees</th><th>Shipping</th><th>Net profit</th><th>Net margin</th>'
+                  : '<th>Gross profit</th><th>Margin</th>')
         + '<th class="bd-sep">Bought<span class="bd-th-sub">resale value</span></th>'
         + '<th>Cash paid</th><th>Buy margin</th>'
         + '</tr></thead><tbody>';
@@ -14014,7 +14270,7 @@ function _bdRender() {
         // empty and exists only so the Selling|Buying rule has something to be
         // drawn on across a week label. Spanning the whole width left a gap in
         // the line at every week.
-        html += '<tr class="bd-wkrow"><td colspan="5">' + escapeHtml(moAbbr) + ' ' + a
+        html += '<tr class="bd-wkrow"><td colspan="' + (showNp ? 7 : 5) + '">' + escapeHtml(moAbbr) + ' ' + a
             + (b > a ? ' &ndash; ' + b : '')
             + '</td><td colspan="3" class="bd-sep"></td></tr>';
         wk.forEach(x => {
@@ -14027,12 +14283,16 @@ function _bdRender() {
             // instead of stepping across when the date gains a digit.
             + '<td><span class="bd-day"><b>' + x.day + '</b>'
             + '<span class="bd-dow">' + escapeHtml(w.nm) + '</span></span></td>'
-            + (x.sales === null
-                ? dash('lv-strongnum') + dash('lv-quietnum') + dash('lv-boldnum') + dash('')
-                : cell('lv-strongnum', _lvMoney(x.sales, true))
-                  + cell('lv-quietnum', _lvMoney(x.cost, true))
-                  + cell('lv-boldnum', _lvMoney(x.gp, true))
-                  + cell('', _lvPct(x.sales > 0 ? x.gp / x.sales * 100 : null)))
+            + (showNp
+                ? (x.sales === null ? dash('lv-strongnum') + dash('lv-quietnum')
+                    : cell('lv-strongnum', _lvMoney(x.sales, true)) + cell('lv-quietnum', _lvMoney(x.cost, true)))
+                  + _bdNpCells(x, cell, dash)
+                : (x.sales === null
+                    ? dash('lv-strongnum') + dash('lv-quietnum') + dash('lv-boldnum') + dash('')
+                    : cell('lv-strongnum', _lvMoney(x.sales, true))
+                      + cell('lv-quietnum', _lvMoney(x.cost, true))
+                      + cell('lv-boldnum', _lvMoney(x.gp, true))
+                      + cell('', _lvPct(x.sales > 0 ? x.gp / x.sales * 100 : null))))
             + (x.resale === null
                 ? '<td class="lv-strongnum bd-dash bd-sep">&mdash;</td>'
                   + dash('lv-quietnum') + dash('lv-boldnum')
@@ -14046,8 +14306,11 @@ function _bdRender() {
         + '<td><span class="bd-day"><b>TTL</b></span></td>'
         + cell('lv-strongnum', _lvMoney(t.sales, true))
         + cell('lv-quietnum', _lvMoney(t.cost, true))
-        + cell('lv-boldnum', _lvMoney(t.gp, true))
-        + cell('', _lvPct(t.margin))
+        + (showNp ? (t.npDays
+            ? cell('lv-quietnum', _lvMoney(t.ebay, true)) + cell('lv-quietnum', _lvMoney(t.ship, true))
+              + cell('lv-boldnum', _lvMoney(t.np, true)) + cell('', _lvPct(t.netMargin))
+            : dash('lv-quietnum') + dash('lv-quietnum') + dash('lv-boldnum') + dash(''))
+          : cell('lv-boldnum', _lvMoney(t.gp, true)) + cell('', _lvPct(t.margin)))
         + '<td class="lv-strongnum bd-sep">' + _lvMoney(t.resale, false) + '</td>'
         + cell('lv-quietnum', _lvMoney(t.paid, false))
         + cell('lv-boldnum', _lvPct(t.buyMargin))
@@ -14058,6 +14321,11 @@ function _bdRender() {
     // It means the figures for that day were never captured, and the totals
     // above are short by whatever they were. Said plainly rather than left for
     // someone to notice that a month came up light.
+    if (showNp && t.shipPending) {
+        html += '<div class="lv-note">* Shipping for ' + (t.shipPending === 1 ? 'this day is' : 'these days is')
+            + ' not in yet &mdash; it lands on the 2pm Net Profit pass the next day, so the net'
+            + ' profit marked * will come down by whatever the labels cost.</div>';
+    }
     if (blanks) {
         html += '<div class="lv-note bd-warn">' + blanks
             + (blanks === 1 ? ' day has' : ' days have')
@@ -14152,13 +14420,13 @@ function _lvSubPair(k1, v1, k2, v2) {
 // actually got to. No forecast is involved, which is the point: the District
 // board below projects to month-end (OVL can read 124% there against ~18% banked
 // here), so this bar spells out which of the two it is.
-function _lvGoalBar(gp, goal, pctOfGoal, elapsedPct, paceIdx) {
+function _lvGoalBar(gp, goal, pctOfGoal, elapsedPct, paceIdx, np) {
     if (!goal) return '';
     const banked = pctOfGoal === null || pctOfGoal === undefined ? 0 : Number(pctOfGoal);
     const tick = Math.max(0, Math.min(100, Number(elapsedPct) || 0));
     return '<div class="lv-goal">'
         + '<div class="lv-goal-top">'
-        + '<span class="lv-goal-lbl">Gross profit banked this month</span>'
+        + '<span class="lv-goal-lbl">' + (np ? 'Net profit banked this month' : 'Gross profit banked this month') + '</span>'
         + '<span class="lv-goal-fig"><b>' + _lvMoney(gp, false) + '</b> of ' + _lvMoney(goal, false)
         + ' <span class="lv-pill ' + _lvPaceCls(paceIdx) + '">'
         + (paceIdx === null || paceIdx === undefined ? 'no goal set' : paceIdx + '% pace') + '</span></span>'
@@ -14206,7 +14474,12 @@ function _lvStoreTiles(v, d) {
         + _lvTile('Average Order', v.aov === null ? '—' : _lvMoney(v.aov, true),
             (mtdAov === null || !_lvHasMonth(d) || _lvIsMtd())
                 ? '' : 'Month Average ' + _lvMoney(mtdAov, false))
-        + _lvTile('Gross Margin', _lvPct(v.marginToday), 'Total Cost ' + _lvMoney(v.cogsToday, false));
+        + (v.npKind
+            // The fourth tile is the one the store is graded on. Gross profit and its
+            // margin ride underneath: they are the step before it, not a rival to it.
+            ? _lvTile(_lvEstName('Net Profit', v.npDayEst), _lvMoney(v.npDay, true),
+                'Net Margin ' + _lvPct(_lvNetMargin(v)))
+            : _lvTile('Gross Margin', _lvPct(v.marginToday), 'Total Cost ' + _lvMoney(v.cogsToday, false)));
 }
 
 function _lvStoreDetail(d, v) {
@@ -14219,13 +14492,17 @@ function _lvStoreDetail(d, v) {
         const days = _lvDays(d);
         chips = _lvChip('Days so far', String(days))
             + _lvChip('Average day', _lvMoney((Number(v.netToday) || 0) / days, false))
-            + _lvChip('Average profit a day', _lvMoney((Number(v.gpToday) || 0) / days, false));
+            + _lvChip(v.npKind ? 'Average net profit a day' : 'Average profit a day',
+                _lvMoney((Number(v.npKind ? v.npDay : v.gpToday) || 0) / days, false));
     } else {
-        chips = _lvChip(prev ? 'Gross profit on the day' : 'Gross profit today',
-            _lvMoney(v.gpToday, true));
+        chips = v.npKind
+            ? _lvChip(_lvEstName(prev ? 'Net profit on the day' : 'Net profit today', v.npDayEst), _lvMoney(v.npDay, true))
+            : _lvChip(prev ? 'Gross profit on the day' : 'Gross profit today',
+                _lvMoney(v.gpToday, true));
         if (_lvHasMonth(d)) {
             chips += _lvChip('Net sales this month', _lvMoney(v.mtdNet, false))
-                + _lvChip('Margin this month', _lvPct(v.mtdMargin))
+                + (v.npKind ? _lvChip('Net margin this month', _lvPct(_lvNetMarginMtd(v)))
+                            : _lvChip('Margin this month', _lvPct(v.mtdMargin)))
                 + _lvChip('Orders this month', String(v.mtdOrders));
         } else {
             chips += _lvChip('Refunded', _lvMoney(v.returnsToday, false));
@@ -14242,7 +14519,7 @@ function _lvStoreDetail(d, v) {
     return _lvForecast([v], d)
         + '<div class="lv-chips">' + chips + '</div>'
         + (_lvHasMonth(d)
-            ? _lvGoalBar(v.mtdGp, v.goal, v.pctOfGoal, _lvElapsedPct(d), v.paceIndex)
+            ? _lvGoalBar(v.npKind ? v.npMtd : v.mtdGp, v.goal, v.pctOfGoal, _lvElapsedPct(d), v.paceIndex, v.npKind)
             : '<div class="lv-note">This was the last day of the previous month, so '
               + 'month-to-date and pace are not shown against it.</div>')
         + foot
@@ -14254,7 +14531,9 @@ function _lvStoreDetail(d, v) {
 function _lvDayClose(v, d) {
     let s = '<div class="lv-last lv-final">Finished <b>' + escapeHtml(_lvDayName(d.prev.date, true))
         + '</b> with <b>' + v.ordersToday + (v.ordersToday === 1 ? ' order' : ' orders') + '</b>'
-        + ' &middot; <b>' + _lvMoney(v.gpToday, true) + '</b> gross profit';
+        + (v.npKind
+            ? ' &middot; <b>' + _lvMoney(v.npDay, true) + '</b> ' + _lvEstName('net profit', v.npDayEst)
+            : ' &middot; <b>' + _lvMoney(v.gpToday, true) + '</b> gross profit');
     if (v.returnsToday > 0) s += ' &middot; <b>' + _lvMoney(v.returnsToday, false) + '</b> refunded';
     return s + '.</div>';
 }
@@ -14279,6 +14558,15 @@ function _lvHub() {
     return (typeof hubDataCache !== 'undefined' && hubDataCache) ? hubDataCache : null;
 }
 function _lvBuyArr(key, code) {
+    // SELLING OFF THE NP TAB FROM OCTOBER 2026. The hub's wkSell was read off the
+    // Sales Summary month tab, which is retired (2026-10-03) — with it deleted the
+    // hub sends no array and bought-vs-sold would go blank. shopify-live carries
+    // each store's daily sales from the Net Profit tab (np.sellByDay, same shape:
+    // day 1 at [0]) and that is used whenever it is there.
+    if (key === 'wkSell' && typeof _lvData !== 'undefined' && _lvData && Array.isArray(_lvData.stores)) {
+        const m = _lvData.stores.find(x => x && String(x.code).toUpperCase() === String(code).toUpperCase());
+        if (m && m.np && Array.isArray(m.np.sellByDay)) return m.np.sellByDay;
+    }
     const h = _lvHub();
     const byStore = h && h[key];
     const arr = byStore && byStore[code];
@@ -14359,18 +14647,44 @@ function _lvBuySum(rows) {
 // month-to-date view does not already say.
 function _lvFcFor(code) {
     const h = _lvHub();
-    if (!h) return null;
+    const np = _lvFcNp(code);
+    if (!h && !np) return null;
     const k = String(code).toLowerCase();
     const n = v => { const x = parseNum(v); return isFinite(x) ? x : 0; };
     return {
-        buyProj: n(h[k + 'BuyProj']), trackRev: n(h[k + 'TrackRev']),
-        trackGp: n(h[k + 'TrackGP']), goal: n(h[k + 'Goal']),
+        buyProj: n(h && h[k + 'BuyProj']),
+        // On an NP month the selling projections are worked here from Shopify's own
+        // month-to-date, not read off the Sales tab: the same straight-line rule
+        // the sheet used (total ÷ days through × days in month), so the figures do
+        // not move, and the Sales Summary import can be retired without these
+        // tiles going to zero the day it stops.
+        trackRev: np ? np.trackRev : n(h && h[k + 'TrackRev']),
+        trackGp: np ? np.trackGp : n(h && h[k + 'TrackGP']),
+        goal: np ? (np.goal || 0) : n(h && h[k + 'Goal']),
+        trackNp: np ? np.trackNp : null,
         // Google reviews ride the same pipe as everything else here: keyed into the
         // Sales Summary sheet, projected there, and served through the hub — so the
         // one number asked to behave "like buying and selling" is computed in the
         // same place by the same kind of formula. Zero until the sheet carries them.
-        reviews: n(h[k + 'Reviews']), reviewsProj: n(h[k + 'ReviewsProj']),
-        reviewsGoal: n(h[k + 'ReviewsGoal']),
+        reviews: n(h && h[k + 'Reviews']), reviewsProj: n(h && h[k + 'ReviewsProj']),
+        reviewsGoal: n(h && h[k + 'ReviewsGoal']),
+    };
+}
+// The NP month's projections for one store, off the live payload. Month mode
+// stops at yesterday's close like every figure on that tab; the others are live.
+function _lvFcNp(code) {
+    if (!_lvNpKind()) return null;
+    const m = ((_lvData && _lvData.stores) || []).find(s => String(s.code).toUpperCase() === String(code).toUpperCase());
+    if (!m || m.error || !m.np) return null;
+    const live = !_lvIsMtd() || !m.prev || !m.np.prev;
+    const el = live ? (_lvData.month && _lvData.month.elapsedPct) : (_lvData.prev && _lvData.prev.elapsedPct);
+    const per = el > 0 ? 100 / el : 0;
+    const net = live ? m.mtdNet : m.prev.mtdNet, gp = live ? m.mtdGp : m.prev.mtdGp;
+    return {
+        goal: m.np.goal,
+        trackNp: live ? m.np.track : m.np.prev.track,
+        trackRev: per ? net * per : 0,
+        trackGp: per ? gp * per : 0,
     };
 }
 // Has this store's review count moved? The hub carries AF4:AJ34 as `wkReviews`,
@@ -14627,9 +14941,15 @@ function _lvFcSum(views) {
     const add = f => fcs.reduce((a, x) => a + f(x), 0);
     const trackGp = add(f => f.trackGp), goal = add(f => f.goal);
     const reviewsGoal = add(f => f.reviewsGoal);
+    // On an NP month the goal is an NP goal, so "tracking to goal" is NP tracking
+    // over it — and only when every store on screen has an NP figure, or the sum
+    // would be four stores' NP over five stores' goal.
+    const npAll = fcs.every(f => f.trackNp !== null && f.trackNp !== undefined);
+    const trackNp = npAll ? add(f => f.trackNp) : null;
+    const tracked = _lvNpKind() ? trackNp : trackGp;
     return {
         buyProj: add(f => f.buyProj), trackRev: add(f => f.trackRev),
-        trackGp, goal, pct: goal > 0 ? trackGp / goal * 100 : null,
+        trackGp, trackNp, goal, pct: (goal > 0 && tracked !== null) ? tracked / goal * 100 : null,
         reviews: add(f => f.reviews), reviewsProj: add(f => f.reviewsProj), reviewsGoal,
     };
 }
@@ -14706,6 +15026,11 @@ function _lvCmpSum(views, key) {
         // Net profit is gross profit less 21% of sales, the same constant the
         // Tracking tile and the Daily Breakdown use, so the three cannot disagree.
         thenNetGp: then('gp') - then('net') * BD_NET_GP_RATE,
+        // Real NP for last month, off the NP tab (shopify-live npFor). Last year
+        // has none — the NP tab starts in 2026 — and gets no NP row at all rather
+        // than a real figure set against a 21% estimate.
+        thenNp: (_lvNpKind() && key === 'lastMonth' && parts.every(v => v.np && v.np.lastMonth !== null))
+            ? parts.reduce((a, v) => a + v.np.lastMonth, 0) : null,
         // The projections for the SAME stores, through the one function the
         // Tracking tiles are built from.
         fc: _lvFcSum(parts),
@@ -14792,9 +15117,13 @@ function _lvForecast(views, d) {
     // sits between, which is the one thing a band of four figures must not do.
     // Same constant as the Daily Breakdown (BD_NET_GP_RATE), so the boards
     // cannot quote different net figures for one month.
-    const trackNet = (f.trackGp > 0 && f.trackRev > 0)
-        ? f.trackGp - f.trackRev * BD_NET_GP_RATE : null;
-    const mtdNet = mtdGp - mtdRev * BD_NET_GP_RATE;
+    // On an NP month this is REAL net profit — the NP tab plus the per-store
+    // estimate for unbanked days — and the 21% below is not used at all.
+    const npOn = _lvNpKind() && f.trackNp !== null;
+    const trackNet = npOn ? f.trackNp : ((f.trackGp > 0 && f.trackRev > 0)
+        ? f.trackGp - f.trackRev * BD_NET_GP_RATE : null);
+    const mtdNet = npOn ? views.reduce((a, v) => a + (Number(v.npDay) || 0), 0)
+        : mtdGp - mtdRev * BD_NET_GP_RATE;
 
     // Stores that got through a whole open day without a new review. Computed
     // once: it drives both the tile's class and its sub-line.
@@ -14819,11 +15148,13 @@ function _lvForecast(views, d) {
     // only ever carried this month's count.
     const cmpRev = _lvCmpRows(views, d, s => [s.fc && s.fc.trackRev, s.thenNet]);
     const cmpGp = _lvCmpRows(views, d, s => [s.fc && s.fc.trackGp, s.thenGp]);
-    const cmpNet = _lvCmpRows(views, d, s => [
-        (s.fc && s.fc.trackGp > 0 && s.fc.trackRev > 0)
-            ? s.fc.trackGp - s.fc.trackRev * BD_NET_GP_RATE : null,
-        s.thenNetGp,
-    ]);
+    const cmpNet = npOn
+        ? _lvCmpRows(views, d, s => [s.fc && s.fc.trackNp, s.thenNp])
+        : _lvCmpRows(views, d, s => [
+            (s.fc && s.fc.trackGp > 0 && s.fc.trackRev > 0)
+                ? s.fc.trackGp - s.fc.trackRev * BD_NET_GP_RATE : null,
+            s.thenNetGp,
+        ]);
     const cmpBuy = _lvCmpRows(views, d, s => [s.buyFc && s.buyFc.buyProj, s.thenResale]);
     return _lvSplit('Tracking to month-end', '')
         + '<div class="lv-strip lv-fc-strip ' + (hasReviews ? 's4' : 's3') + '">'
@@ -14832,10 +15163,14 @@ function _lvForecast(views, d) {
         + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), soFar(mtdRev),
             false, '', cmpRev)
         + (trackNet === null ? '' : _lvTile('Tracking Net Profit',
-            _lvMoney(trackNet, false), soFar(mtdNet), false, '', cmpNet))
-        + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
+            _lvMoney(trackNet, false),
+            soFar(mtdNet) + (npOn && f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''),
+            npOn, '', cmpNet))
+        // An NP month has no GP tile at all — NP is the figure, and a second
+        // profit projection beside it only invites reading the wrong one.
+        + (npOn ? '' : _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
             soFar(mtdGp) + (f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''),
-            false, '', cmpGp)
+            false, '', cmpGp))
         // The only tile whose sub-line carries figures rather than a caption, and
         // deliberately: the projection alone ("45") is the one number here nobody
         // can sanity-check by eye, because unlike revenue there is no running total
@@ -14928,6 +15263,22 @@ function _lvCombine(stores) {
         mtdNet, mtdGp, mtdOrders: stores.reduce((a, m) => a + m.mtdOrders, 0),
         mtdMargin: mtdNet > 0 ? mtdGp / mtdNet * 100 : null,
         goal, pctOfGoal: goal > 0 ? mtdGp / goal * 100 : null,
+        // An NP pair (the MSM's "Both") is the two stores' NP added up, against
+        // the two NP goals — the same as the district, never re-estimated.
+        ..._lvCombineNp(stores),
+    };
+}
+function _lvCombineNp(views) {
+    if (!views.length || !views.every(v => v.npKind)) return {};
+    const add = k => views.reduce((a, v) => a + (Number(v[k]) || 0), 0);
+    const goal = views.every(v => v.npGoal > 0) ? add('npGoal') : 0;
+    const npMtd = add('npMtd');
+    return {
+        npKind: true, npGoal: goal, goal, npDay: add('npDay'), npMtd,
+        npDayEst: views.some(v => v.npDayEst),
+        npTrack: views.every(v => v.npTrack !== null) ? add('npTrack') : null,
+        pctOfGoal: goal > 0 ? npMtd / goal * 100 : null,
+        npBSales: add('npBSales'), npBEbay: add('npBEbay'), npBShip: add('npBShip'),
     };
 }
 
@@ -14957,9 +15308,14 @@ function _lvRollupTiles(r, d, label, views) {
             : _lvTile('Against Goal', _lvPct(r.pctOfGoal),
                 r.goal ? 'Of ' + _lvMoney(r.goal, false) : '');
     } else if (_lvHasMonth(d)) {
-        last = _lvTile('Month to Date Revenue', _lvMoney(r.mtdNet, false), days);
+        last = r.npKind
+            ? _lvTile(_lvEstName('Net Profit This Month', true), _lvMoney(r.npMtd, false),
+                _lvSubPair('Revenue', _lvMoney(r.mtdNet, false), 'Days', days))
+            : _lvTile('Month to Date Revenue', _lvMoney(r.mtdNet, false), days);
     } else {
-        last = _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'On The Day');
+        last = r.npKind
+            ? _lvTile(_lvEstName('Net Profit', r.npDayEst), _lvMoney(r.npDay, true), 'On The Day')
+            : _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'On The Day');
     }
     // Refunds rides under Orders, the way it already does on a single store's own
     // tiles — it is the other half of the same count.
@@ -14970,9 +15326,12 @@ function _lvRollupTiles(r, d, label, views) {
                      'Refunds', r.returnsToday > 0 ? _lvMoney(r.returnsToday, false) : 'none');
     return _lvTile(_lvHeadKey(), _lvMoney(r.netToday, true), _lvStamp(d), true)
         + _lvTile('Orders', String(r.ordersToday), r.aov === null ? label : ordersSub)
-        + _lvTile('Gross Margin', _lvPct(r.marginToday),
-            _lvSubPair('Total Cost', _lvMoney(r.cogsToday, false),
-                       'Total Profit', _lvMoney(r.gpToday, false)))
+        + (r.npKind
+            ? _lvTile(_lvEstName('Net Profit', r.npDayEst), _lvMoney(r.npDay, !_lvIsMtd()),
+                'Net Margin ' + _lvPct(_lvNetMargin(r)))
+            : _lvTile('Gross Margin', _lvPct(r.marginToday),
+                _lvSubPair('Total Cost', _lvMoney(r.cogsToday, false),
+                           'Total Profit', _lvMoney(r.gpToday, false))))
         + last;
 }
 
@@ -15005,7 +15364,7 @@ function _lvStoreRow(v, d, foot, rev) {
         // (It was 7 against eight columns; adding Refunds makes it nine.)
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
             + '<b>' + escapeHtml(v.code) + '</b></span></td>'
-            + '<td colspan="' + (rev === null || rev === undefined ? 9 : 10)
+            + '<td colspan="' + ((rev === null || rev === undefined ? 9 : 10) + (_lvFeeCols() ? 2 : 0))
             + '" class="lv-row-errmsg">not reporting &middot; '
             + escapeHtml(v.error) + '</td></tr>';
     }
@@ -15027,7 +15386,7 @@ function _lvStoreRow(v, d, foot, rev) {
     const trackCell = (proj, actual, strong) =>
         (proj > 0) ? _lvMoney(proj, strong) : _lvMoney(actual, strong);
     const gp = _lvHasMonth(d)
-        ? _lvMoney(v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
+        ? _lvMoney(v.npKind ? v.npMtd : v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
         : '—';
     // The whole row flashes, not just the money cell — at a glance the eye catches
     // the band across the table long before it resolves which column moved.
@@ -15041,21 +15400,62 @@ function _lvStoreRow(v, d, foot, rev) {
         // these all along (cost under the margin tile, GP as a chip); the table did
         // not, so the district read sales without the money actually made on them.
         + (cols.cost ? '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>' : '')
-        + '<td class="lv-strongnum">' + trackCell(fc && fc.trackGp, v.gpToday, false) + '</td>'
+        + '<td class="lv-strongnum">' + (v.npKind
+            ? (fc && fc.trackNp ? _lvMoney(fc.trackNp, false) : _lvMoney(v.npDay, false))
+            : trackCell(fc && fc.trackGp, v.gpToday, false)) + '</td>'
         // Refunds sits beside Orders because it is the other half of the same
         // count — what came back out of the till against what went in.
         + '<td class="lv-quietnum"' + (v.returnsToday === null || v.returnsToday === undefined
             ? ' title="This cache was written before the feed carried month-to-date'
               + ' refunds — it fills in on the next refresh."' : '') + '>'
         + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
+        + (_lvFeeCols() ? _lvFeeCell(v, 'npBEbay', d, foot) + _lvFeeCell(v, 'npBShip', d, foot) : '')
         + (cols.orders ? '<td>' + v.ordersToday + '</td>' : '')
-        + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
+        + '<td class="lv-boldnum">' + _lvPct(v.npKind ? _lvNetMargin(v) : v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
         + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex + '%') + '</span></td>'
         + (rev === null || rev === undefined ? ''
             : '<td class="lv-boldnum">' + (rev > 0 ? _lvNum(rev) : '—') + '</td>')
         + (cols.tail ? '<td>' + tail + '</td>' : '') + '</tr>';
+}
+
+// EBAY FEES AND SHIPPING ON THE MONTH TABLE (Ethan 2026-10-02: "after the refund
+// column"). The two costs a store controls on the way from GP to NP — the same
+// two the Daily Breakdown cost strip judges. Month tab, NP months only.
+//
+// They are the FINISHED days off the NP tab (np.bankedEbay / bankedShip), not a
+// projection, so they agree with the sheet and with "NP this month" beside them.
+// The share of sales is over the same days' sales, so it is a real rate.
+//
+// A store's figure goes red — the text, not the cell, the rule Ethan set for the
+// Daily Breakdown — when its share of sales is more than BD_COST_HOT_PTS above
+// the district's. Never on the district row itself: it is the yardstick.
+function _lvFeeCols() { return _lvIsMtd() && _lvNpKind(); }
+function _lvFeeShare(v, key, d, foot) {
+    const amt = Number(v[key]), sales = Number(v.npBSales);
+    if (!isFinite(amt) || v[key] === undefined || v[key] === null || !(sales > 0)) return null;
+    const share = amt / sales * 100;
+    const dn = d && d.district && d.district.np;
+    const dk = key === 'npBEbay' ? 'bankedEbay' : 'bankedShip';
+    const dShare = dn && dn.bankedSales > 0 ? Number(dn[dk]) / dn.bankedSales * 100 : null;
+    return { amt, share, dShare, hot: !foot && dShare !== null && share - dShare > BD_COST_HOT_PTS };
+}
+// "$510 · 6.8%". The separator is its OWN class, not .lv-of: the phone/tablet
+// rule hides .lv-of, and a hidden separator ran the two figures together as
+// "$5106.8%" (caught by np-mobile-layout-check.js).
+function _lvFeeHtml(f) {
+    return _lvMoney(f.amt, false) + '<span class="lv-fee-sep"> &middot; </span>'
+        + '<span class="lv-fee-pct' + (f.hot ? ' lv-fee-hot' : '') + '">' + f.share.toFixed(1) + '%</span>';
+}
+function _lvFeeCell(v, key, d, foot) {
+    const f = _lvFeeShare(v, key, d, foot);
+    if (!f) return '<td class="lv-quietnum">—</td>';
+    // The PERCENTAGE goes red, not the dollars (Ethan 2026-10-02): the share is
+    // what is being judged, and $218 means nothing until it is set against sales.
+    return '<td class="lv-quietnum"'
+        + ' title="' + f.share.toFixed(1) + '% of sales' + (f.dShare !== null ? ' (district ' + f.dShare.toFixed(1) + '%)' : '') + '">'
+        + _lvFeeHtml(f) + '</td>';
 }
 
 // The phone view of the live dashboard.
@@ -15177,9 +15577,14 @@ function _lvCards(stores, d, rollup, rollupLabel) {
             // back out to buy stock. The fifth — % to goal — is on the header line
             // above, because it is the one figure a column of cards is scanned for.
             + fig('Net Sales', _lvMoney(v.netToday, false))
-            + fig('Gross Profit', _lvMoney(v.gpToday, false))
-            + fig('Margin', _lvPct(v.marginToday))
+            + (v.npKind ? fig(_lvEstName('Net Profit', v.npDayEst), _lvMoney(v.npDay, false))
+                        : fig('Gross Profit', _lvMoney(v.gpToday, false)))
+            + fig(v.npKind ? 'Net Margin' : 'Margin', _lvPct(v.npKind ? _lvNetMargin(v) : v.marginToday))
             + (buy ? fig('Bought Value', _lvMoney(buy.bought, false)) : '')
+            + (_lvFeeCols() ? (() => {
+                const e = _lvFeeShare(v, 'npBEbay', d, isRoll), sh = _lvFeeShare(v, 'npBShip', d, isRoll);
+                return fig('eBay Fees', e ? _lvFeeHtml(e) : '—') + fig('Shipping', sh ? _lvFeeHtml(sh) : '—');
+            })() : '')
             + '</div>'
             + '</li>';
     }
@@ -15365,9 +15770,15 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         + '<th>' + (_lvIsMtd() ? 'Tracking net sales'
             : (_lvIsToday() ? 'Net today' : 'Net sales')) + '</th>'
         + (cols.cost ? '<th>Cost</th>' : '')
-        + '<th>' + (_lvIsMtd() ? 'Tracking gross profit' : 'Gross profit') + '</th>'
-        + '<th>Refunds</th>' + (cols.orders ? '<th>Orders</th>' : '') + '<th>Margin</th>'
-        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>% to goal</th>'
+        + '<th>' + (_lvNpKind()
+            ? (_lvIsMtd() ? 'Tracking net profit' : _lvEstName('Net profit', _lvIsToday()))
+            : (_lvIsMtd() ? 'Tracking gross profit' : 'Gross profit')) + '</th>'
+        + '<th>Refunds</th>'
+        + (_lvFeeCols() ? '<th title="Finished days, off the Net Profit tab">eBay fees</th>'
+            + '<th title="Finished days, off the Net Profit tab">Shipping</th>' : '')
+        + (cols.orders ? '<th>Orders</th>' : '') + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
+        + '<th>' + (_lvNpKind() ? (_lvHasMonth(d) ? 'NP this month' : 'NP')
+            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th><th>% to goal</th>'
         + (cols.tail ? '<th>Last order</th>' : '')
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
@@ -15383,7 +15794,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
             code: rollupLabel, name: '',
             // Its own projection, summed from the stores above it by the one
             // function the Tracking tiles also use.
-            fcSum: _lvIsMtd() ? _lvFcSum(stores.map(_lvView)) : null,
+            fcSum: _lvIsMtd() ? _lvFcSum(stores.filter(m => !m.error).map(_lvView)) : null,
             paceIndex: _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
@@ -15687,6 +16098,18 @@ function _lvAfterRender() {
     // Two of the district board's summary cells are today's selling, which only
     // this module knows. Guarded because the district widget is DM/CEO only.
     if (typeof _dcSummaryFill === 'function') _dcSummaryFill();
+    // The district board grades on NP from the live payload; repaint it when that
+    // moves (it no-ops when nothing it shows has changed).
+    if (typeof _dccNpRefresh === 'function') _dccNpRefresh();
+    // The standings and the ticker rank on NP from this payload too.
+    if (typeof drawLeaderboard === 'function') drawLeaderboard();
+    // The header's "Updated as of" reads the NP tab's last closed day (see
+    // _ccUpdatedNp), which only this payload carries.
+    if (typeof hubDataCache !== 'undefined' && hubDataCache && typeof renderBuyingSales === 'function') renderBuyingSales();
+    if (typeof feedLeaderboardToTicker === 'function' && _lvNpKind()) {
+        feedLeaderboardToTicker((typeof cachedLeaderboardData !== 'undefined' && cachedLeaderboardData)
+            || { activeStores: (_lvData.stores || []).map(m => m.code) });
+    }
     // Consumed. The highlight is a CSS animation that plays when the element is
     // inserted, so leaving these set would replay it on every unrelated re-render
     // (a tab switch, the day toggle) and turn "just now" into background noise.
@@ -30708,29 +31131,84 @@ function renderKpiChart(payload, metric) {
 }
 
 // --- CHART: DRAW LEADERBOARD ---
+// THE STANDINGS FROM THE LIVE PAYLOAD (2026-10-02). From October the district
+// ranks on NET PROFIT, which only the live payload carries (shopify-live npFor),
+// and the hub's leaderboard arrays are the Sales tab's — the sheet being retired.
+// So both metrics read the live payload when it is there.
+//
+// FINISHED DAYS ONLY (Ethan 2026-10-02: "the leaderboard should be from previous
+// day like it was"). Net Profit = np.banked, the days the NP tab has closed, so
+// the board agrees with the sheet to the cent. It is never np.mtd, which adds
+// today's estimate: on Oct 2 that put OVL at $6,742 against the sheet's $2,817
+// and read as a wrong number. Revenue = mtdNet less netToday, so it is also
+// through yesterday. Today's estimate stays on the Live dashboard, where it is
+// labelled. The hub arrays stay only as the Revenue fallback for a page that
+// has no live feed.
+//
+// The array carries `thru` (an ISO date, or null when no day has closed yet this
+// month) for the "Through …" footer.
+function _lbLiveRows(metric) {
+    const d = (typeof _lvData !== 'undefined') ? _lvData : null;
+    if (!d || !Array.isArray(d.stores) || !d.stores.length) return null;
+    const ok = d.stores.filter(m => !m.error);
+    const today = String(d.asOfCentral || '').slice(0, 10);
+    const ym = today.slice(0, 7);
+    const dayIso = n => n > 0 ? ym + '-' + String(n).padStart(2, '0') : null;
+    let rows;
+    if (metric === 'NP') {
+        if (!(typeof _lvNpKind === 'function' && _lvNpKind())) return null;
+        const withNp = ok.filter(m => m.np);
+        rows = withNp.map(m => ({ store: String(m.code).toUpperCase(), val: Number(m.np.banked) || 0 }));
+        // The NP tab closes days in order, so N banked days = through day N. The
+        // footer takes the store furthest behind, so it never overstates any row.
+        rows.thru = withNp.length ? dayIso(Math.min(...withNp.map(m => Number(m.np.bankedDays) || 0))) : null;
+        return rows;
+    }
+    rows = ok.map(m => ({ store: String(m.code).toUpperCase(),
+        val: Math.max(0, (Number(m.mtdNet) || 0) - (Number(m.netToday) || 0)) }));
+    rows.thru = today ? dayIso(Number(today.slice(8, 10)) - 1) : null;
+    return rows;
+}
+
 function drawLeaderboard() {
     // Standings list (replaced the Chart.js "race" — see combined Performance widget).
-    // Reads the same cachedLeaderboardData the race used; Revenue/GP toggle unchanged.
+    // Revenue / Net Profit toggle; see _lbLiveRows for where each comes from.
     const wrapper = document.getElementById('lb-wrapper');
     const monthLabel = document.getElementById('lb-month-display');
-    if (!wrapper || !cachedLeaderboardData || !cachedLeaderboardData.activeStores) return;
+    if (!wrapper) return;
+    const live = _lbLiveRows(currentLeaderboardMetric === 'Revenue' ? 'Revenue' : 'NP');
+    if (!live && (!cachedLeaderboardData || !cachedLeaderboardData.activeStores)) return;
 
     const now = new Date();
     if (monthLabel) monthLabel.innerText = now.toLocaleString('default', { month: 'long', year: 'numeric' });
 
     const colors = { 'OVL': '#7c6fd6', 'LEE': '#4e90cf', 'WSP': '#2ea36a', 'MPL': '#d99f43', 'BAL': '#d9776a' };
-    const dataPacket = currentLeaderboardMetric === 'Revenue' ? cachedLeaderboardData.revenue : cachedLeaderboardData.gp;
     const myStore = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
 
-    const rows = cachedLeaderboardData.activeStores
-        .filter(st => dataPacket && dataPacket[st])
+    // Net Profit has no hub fallback on purpose: the hub only knows GP, and a GP
+    // figure under a Net Profit heading is the one mistake this toggle must not make.
+    const dataPacket = (!live && currentLeaderboardMetric === 'Revenue') ? cachedLeaderboardData.revenue : null;
+    const rows = (live || (dataPacket ? cachedLeaderboardData.activeStores
+        .filter(st => dataPacket[st])
         .map(st => {
             const arr = dataPacket[st];
             const lastIdx = arr.findLastIndex(v => v !== null && v !== undefined);
             return { store: st, val: lastIdx !== -1 ? (arr[lastIdx] || 0) : 0 };
-        })
-        .sort((a, b) => b.val - a.val);
+        }) : []))
+        .slice().sort((a, b) => b.val - a.val);
 
+    // Live rows say which day they run through; the footer says it rather than
+    // the refresh time, because "Updated as of Fri" over Thursday's figures is
+    // what made a correct number look wrong.
+    const upd = document.getElementById('lb-last-updated');
+    if (live && upd) {
+        upd.innerText = live.thru
+            ? 'Through ' + new Date(live.thru + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+            : '—';
+        const lbl = document.getElementById('lb-last-updated-label');
+        if (lbl) lbl.textContent = '';
+    }
+    if (live && !live.thru) { wrapper.innerHTML = '<div class="status-message">First results tomorrow morning.</div>'; return; }
     if (!rows.length) { wrapper.innerHTML = '<div class="status-message">No data yet.</div>'; return; }
 
     const fmt = v => '$' + Math.round(v).toLocaleString();
@@ -40196,10 +40674,10 @@ const EMAIL_LIST_GROUPS = [
         lists: [
             { key: 'connect_alerts', label: 'SPEEKS Connect Errors',
               desc: 'Checked every 15 minutes; mails only when the eBay integration is actually broken.' },
-            { key: 'sales_import_alert', label: 'Sales Import',
-              desc: 'The nightly Shopify sales email failing to reach the Sales Summary sheet.' },
+            { key: 'sales_import_alert', label: 'Daily Buying Import',
+              desc: 'The nightly PayMore Day End Report failing to reach the Buy tab.' },
             { key: 'summary_weekly_alert', label: 'Weekly Summary Import',
-              desc: 'The same, for the Saturday summary. Deliberately narrower than the daily list above.' },
+              desc: 'The Monday Summary tab update failing or coming up short. Its revenue and cost come off the Net Profit tab from October 2026.' },
             { key: 'b2b_quote_ready', label: 'B2B Quote Ready',
               desc: 'A pickup has been priced and a quote is waiting on approval. '
                   + 'Leave this empty and it falls back to the single address in CRM Settings.' },
@@ -41796,7 +42274,7 @@ const JUMP_KEYWORDS = {
     'tool-user-permissions':     'users permissions pin login accounts roles add user',
     'tool-feature-access':       'feature access hide show toggle delegation permissions',
     'tool-email-recipients':     'email recipients reports distribution who gets',
-    'tool-store-goals':          'month setup store goals gp gross profit monthly target buying days holidays closed',
+    'tool-store-goals':          'month setup store goals np net profit gp gross profit monthly target buying days holidays closed',
     // Both halves of the split answer the same search — only one is ever visible
     // to a given person, so they can never both come back in one result list.
     'tool-expenses':             'expense report expenses mileage miles reimbursement receipts monthly spend',
@@ -45521,7 +45999,13 @@ const _DB_STRIP = [
     { label: 'Buy Margin', fmt: f => _dbPct(f.buyMarginPct),
       keys: ['buy_margin', 'buy_margin_improving', 'buy_margin_low'] },
     { label: 'Net Sales', fmt: f => _dbMoney(f.netSales), keys: ['net_sales'] },
-    { label: 'Sell Margin', fmt: f => _dbPct(f.sellMarginPct), keys: ['sell_margin'] },
+    // From October 2026 (daily-brief NP_FROM) a day's card shows NET margin off
+    // the Net Profit tab, never the gross selling margin, and nothing praises a
+    // margin on those days. "before shipping" until the 2pm pass lands the labels.
+    { label: f => f.npDay ? 'Net Margin' : 'Sell Margin',
+      fmt: f => _dbPct(f.npDay ? f.netMarginPct : f.sellMarginPct),
+      sub: f => (f.npDay && f.netMarginFinal === false) ? 'before shipping' : '',
+      keys: ['sell_margin'] },
     { label: 'Cust. Conv.', fmt: f => _dbPct(f.custConvPct),
       sub: f => (f.custConvNum != null && f.custConvDen != null) ? f.custConvNum + ' of ' + f.custConvDen : '',
       keys: ['conv', 'conv_perfect', 'conv_low'] },
@@ -45574,7 +46058,7 @@ function _dbStripHtml(facts, signals) {
         // reads as a figure we have when we do not.
         const sub = (c.sub && val !== '—') ? (c.sub(f) || '') : '';
         return `<div class="dbr-cell${hit ? ' fired' : ''}${c.people ? ' wide' : ''}">
-            <span class="dbr-cl">${_samEsc(c.label)}</span>
+            <span class="dbr-cl">${_samEsc(typeof c.label === 'function' ? c.label(f) : c.label)}</span>
             <span class="dbr-cv">${_samEsc(val)}</span>
             ${sub ? `<span class="dbr-cs">${_samEsc(sub)}</span>` : ''}
         </div>`;
@@ -49485,6 +49969,62 @@ function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) 
     };
 }
 
+// NET PROFIT ON THE DISTRICT BOARD (2026-10-02). From October the stores are
+// graded on NP, and the hub's <store>Goal / TrackGP / Pct are the Sales tab's
+// GP figures — blank goal, GP tracking — so grading off them would sort the rail
+// on a number nobody is measured on any more. The NP for each store is on the
+// live payload (shopify-live npFor: the NP tab plus the store's own estimate for
+// the days it has not reached), so it is laid over the rows here.
+//
+// Applied at render, not only when the rows are built: the board can load before
+// the live payload does, and the live payload refreshes every minute. A row with
+// no NP block (live not loaded, or a store not reporting) keeps the hub figures.
+//
+// THE SHEET'S OWN FORMULA, NOT THE LIVE ONE (Ethan 2026-10-03: "the % tracking
+// to goals do not match the spreadsheet"). The NP tab's "% of NP Goal" is
+//     NP Tracking / NP Goal,   NP Tracking = NP so far / Days Thru month x Days
+// over the days the tab has CLOSED — OVL on Oct 3: $7,042.80 / 2 x 31 = $109,163
+// = 198.5% of $55,000. This board first used the live projection (np.track:
+// closed days PLUS today's estimate, over the selling-day share of the month),
+// which put OVL at 153% against the sheet's 198.5%. The GP board this replaced
+// always matched the sheet because it read the Sales tab's own TrackGP, so the
+// NP board reads the same days the same way: banked NP, banked days, the
+// month's calendar days. Revenue, NP and net margin are over those same closed
+// days, so every figure on a store's card agrees with its column on the tab.
+// The Live tab keeps the live projection; it is the in-day view.
+function _dccApplyNp() {
+    const np = (typeof _lvNpKind === 'function') && _lvNpKind();
+    let sig = '';
+    _dccRows.forEach(r => {
+        const m = np ? ((_lvData.stores || []).find(x => String(x.code).toUpperCase() === r.store && !x.error)) : null;
+        const n = m && m.np;
+        if (!n) { r.npKind = false; return; }
+        r.npKind = true;
+        r.goal = Math.round(n.goal || 0);
+        const days = Number(n.bankedDays) || 0;
+        const inMonth = Number(_lvData.month && _lvData.month.daysTotal) || 0;
+        const banked = Number(n.banked) || 0, bSales = Number(n.bankedSales) || 0;
+        const track = days > 0 && inMonth > 0 ? banked / days * inMonth : null;
+        r.rev = Math.round(bSales);
+        r.npMargin = bSales > 0 ? banked / bSales * 100 : NaN;
+        r.npNow = Math.round(banked);
+        r.npTrack = track === null ? 0 : Math.round(track);
+        r.salesPct = r.goal > 0 && track !== null ? track / r.goal * 100 : NaN;
+        sig += r.store + r.goal + ':' + r.npTrack + '|';
+    });
+    return sig;
+}
+// Repaint the district board when the NP figures it grades on have moved — not
+// on every live tick, which would collapse whatever the DM had open on it.
+let _dccNpSig = '';
+function _dccNpRefresh() {
+    if (!_dccRows.length) return;
+    const sig = _dccApplyNp();
+    if (sig === _dccNpSig) return;
+    _dccNpSig = sig;
+    _dccRepaint();
+}
+
 // Capitalise the first letter of each word, leaving words that already carry a
 // capital alone so "eBay" survives. Used on backend-supplied captions.
 function _dccCap(str) {
@@ -49507,7 +50047,9 @@ function _dccChecks(r) {
         // rather than the reader having to remember which is which.
         { key: 'paudit',  s: !r.official ? null : (r.official.pct >= 80 ? null : (r.official.pct >= 50 ? 'w' : 'b')) },
         { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min') },
-        { key: 'sellM',   s: _dccTier(r.sellM, 55.5, 'min') },
+        // The 55.5% floor is a GROSS margin floor. An NP month has no agreed net
+        // margin floor yet, so the check is off rather than judging NP on a GP bar.
+        { key: 'sellM',   s: r.npKind ? null : _dccTier(r.sellM, 55.5, 'min') },
         // Still only judged when above zero: a missing figure parses to 0 and must
         // not read as a 0% margin.
         { key: 'buyM',    s: r.buyM > 0 ? _dccTier(r.buyM, 51, 'min') : null },
@@ -49710,7 +50252,10 @@ function _dccEbayBlock(r) {
         }).join('') + '</div></div>';
 }
 
-// ---- Sales Import (Shopify daily email -> Sales Summary sheet) --------------
+// ---- Daily Import (PayMore Day End email -> Buy tab) ------------------------
+// BUYING ONLY since 2026-10-03: the Shopify -> Sales tab half is retired and
+// selling comes off the Net Profit tab (np-sync). sales-ingest keeps its name
+// and its run history; it now calls the Apps Script's action=buying.
 // Normally nobody touches this: pg_cron runs it at 7am Central with an 8am retry.
 // The button exists for the mornings when a store's email lands late — one click
 // beats keying ten numbers in by hand. Backend re-checks the role by pin, so this
@@ -49775,26 +50320,18 @@ async function runSalesImport(ev) {
                 true);
         } else {
             const s = d.summary || {};
-            const bits = [];
-            if (s.filled)    bits.push(`${s.filled} store-day${s.filled === 1 ? '' : 's'} filled in`);
-            if (s.corrected) bits.push(`${s.corrected} corrected`);
-            if (s.missing)   bits.push(`${s.missing} still to enter by hand`);
-            let msg = bits.length ? 'Sales import — ' + bits.join(', ') + '.' : 'Sales import — already up to date.';
-
-            // The same run also does BUYING (the Apps Script folds it in), so say
-            // so — otherwise half the work is invisible and a buying failure
-            // looks like a clean success.
             const b = s.buying;
-            if (b && !b.ok) {
-                msg += ' Buying import failed.';
-            } else if (b) {
+            let msg;
+            if (!b || !b.ok) {
+                msg = 'Buying import failed.';
+            } else {
                 const bb = [];
                 if (b.filled)    bb.push(`${b.filled} day${b.filled === 1 ? '' : 's'} filled in`);
                 if (b.corrected) bb.push(`${b.corrected} corrected`);
                 if (b.missing)   bb.push(`${b.missing} still to enter`);
-                msg += bb.length ? ' Buying — ' + bb.join(', ') + '.' : ' Buying — already up to date.';
+                msg = bb.length ? 'Buying import — ' + bb.join(', ') + '.' : 'Buying import — already up to date.';
             }
-            _siSay(msg, !!s.missing || !!(b && (!b.ok || b.missing)));
+            _siSay(msg, !!(!b || !b.ok || b.missing));
         }
 
         await fetchSalesImportStatus();
@@ -49945,8 +50482,8 @@ function _siLineHtml() {
     // something needs attention.
     const state = _salesImport ? _salesImport.state : null;
     const lr = _salesImport ? _salesImport.lastRun : null;
-    let hover = 'Pulls the Shopify and PayMore daily emails into this month\'s Sales and Buy'
-        + ' tabs. Runs by itself every morning at 7am.';
+    let hover = 'Pulls the PayMore Day End emails into this month\'s Buy tab (buying, reviews'
+        + ' and cash). Runs by itself every morning. Selling comes off the Net Profit tab.';
     if (state === 'never')          hover = 'Has not run yet. ' + hover;
     else if (state === 'failed')    hover = 'The last run FAILED. ' + hover;
     else if (state === 'attention') {
@@ -49985,12 +50522,22 @@ function _dccBuyBlock(r) {
         + (r.edited ? '<em>' + escapeHtml(r.edited) + '</em>' : '') + '</div><div class="dcc-rows">'
         // The goal is a GP goal and this figure is gpTrack/goal, so the label says
         // so — "Sales vs goal" read as revenue against goal, which it never was.
-        + _dccStatRow('GP tracking vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
-        + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
-        + _dccStatRow('GP (MTD)', _dccMoney(r.gpNow),
-                      '', null, r.goal > 0 ? Math.round(r.gpNow / r.goal * 100) + '% of goal' : '')
-        + _dccStatRow('GP tracking', _dccMoney(r.gpTrack), '', null)
-        + _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccJudge(r, 'sellM', r.sellM > 0))
+        // From October it is an NP goal and NP tracking (see _dccApplyNp), and the
+        // label follows; GP stays on the board as the step before it.
+        + (r.npKind
+            ? _dccStatRow('NP tracking vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
+              + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
+              + _dccStatRow('NP (MTD)', _dccMoney(r.npNow),
+                            '', null, r.goal > 0 ? Math.round(r.npNow / r.goal * 100) + '% of goal' : '')
+              + _dccStatRow('NP tracking', _dccMoney(r.npTrack), '', null)
+              + _dccStatRow('Net margin', isFinite(r.npMargin) ? _dccFix(r.npMargin) : '—', isFinite(r.npMargin) ? '%' : '', null)
+            : _dccStatRow('GP tracking vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
+              + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
+              + _dccStatRow('GP (MTD)', _dccMoney(r.gpNow),
+                            '', null, r.goal > 0 ? Math.round(r.gpNow / r.goal * 100) + '% of goal' : '')
+              + _dccStatRow('GP tracking', _dccMoney(r.gpTrack), '', null))
+        // Gross margin, so not on an NP month — the net margin row above replaces it.
+        + (r.npKind ? '' : _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccJudge(r, 'sellM', r.sellM > 0)))
         + _dccStatRow('Buy tracking', _dccMoney(r.buyTrack), '', null)
         + _dccStatRow('Buy margin', _dccFix(r.buyM), '%', _dccJudge(r, 'buyM', r.buyM > 0))
         + _dccStatRow('Variance total', (r.vari > 0 ? '+' : '') + r.vari.toFixed(2), '%',
@@ -50093,6 +50640,7 @@ function _dccPaneHtml(r, portalLink) {
 
 // --- board ------------------------------------------------------------------
 function _dccBoardHtml(portalLinks) {
+    _dccApplyNp();
     if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district…</div>';
     // Open on the store at the TOP of the rail — the district leader on % to
     // goal. (This used to land on the last card, the worst performer.) Only the
@@ -50105,7 +50653,9 @@ function _dccBoardHtml(portalLinks) {
     // The store goal is a GP goal — gpTrack / goal reproduces each store's own
     // "% to goal" exactly, revenue does not — so the district total has to be GP
     // as well or the headline compares two different things.
-    const totGP = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
+    // From October: NP tracking against the NP goal, for the same reason.
+    const npAll = _dccRows.length && _dccRows.every(r => r.npKind);
+    const totGP = _dccRows.reduce((a, r) => a + (npAll ? r.npTrack : r.gpTrack), 0);
     const totGoal = _dccRows.reduce((a, r) => a + r.goal, 0);
 
     // The icon tile and the "District / Command Center" title used to live here.
@@ -50116,7 +50666,7 @@ function _dccBoardHtml(portalLinks) {
     return '<div class="dcc">'
         + '<div class="dcc-head">'
         + '<span class="dcc-sum">'
-        + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + ' GP goal</i>'
+        + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + (npAll ? ' NP goal' : ' GP goal') + '</i>'
         + '</span>'
         + '<div class="dcc-head-side">' + _siLineHtml() + _swLineHtml() + '</div></div>'
         + '<div class="dcc-body"><div class="dcc-grid">'
@@ -50426,7 +50976,9 @@ function _dcSummaryFill() {
     }
     if (!_dccRows.length) return;
     const n = _dccRows.length;
-    const gp = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
+    _dccApplyNp();
+    const npAll = _dccRows.every(r => r.npKind);
+    const gp = _dccRows.reduce((a, r) => a + (npAll ? r.npTrack : r.gpTrack), 0);
     const goal = _dccRows.reduce((a, r) => a + r.goal, 0);
     const pct = goal > 0 ? gp / goal * 100 : 0;
     set('dc-sum-goal', Math.round(pct) + '<small>%</small>',
@@ -51260,9 +51812,9 @@ function _dcwMarginTab(rows, cfg) {
 
     const head = _dcwTile('Buy margin &middot; 7 days', margin == null ? '&mdash;' : margin.toFixed(1) + '%',
                           'dollar-weighted, target ' + target.toFixed(1) + '%', sev)
-        + _dcwTile(gpShort > 0 ? 'Gross profit behind' : 'Gross profit ahead',
+        + _dcwTile(gpShort > 0 ? 'Buy profit behind' : 'Buy profit ahead',
                    _dcwMoney(gpShort), 'on ' + _dcwMoney(V) + ' of buying', sev)
-        + _dcwTile('Spent', _dcwMoney(C), 'against ' + _dcwMoney(V - C) + ' of GP', '');
+        + _dcwTile('Spent', _dcwMoney(C), 'against ' + _dcwMoney(V - C) + ' of buy profit', '');
 
     let body = '<thead><tr><th>Day</th><th>Buy value</th><th>Spent</th>'
         + '<th>Margin</th><th class="dcw-th-bar">Against target &middot; ' + target.toFixed(1) + '%</th></tr></thead><tbody>';

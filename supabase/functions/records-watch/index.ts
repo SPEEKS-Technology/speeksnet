@@ -94,6 +94,11 @@ const L = {
   gp: 'Monthly Gross Profit Record',
   margin: 'Monthly Sell Margin Record',
   conv: 'Monthly Customer Conversion Record',
+  // From October 2026 the company is graded on Net Profit. GP keeps its record
+  // (it is still in the Monthly Breakdown every month); NP gets one beside it,
+  // read off the Breakdown's net_profit row (0131 — September pre-filled from
+  // the Net Profit tab). A store-month that predates the row simply has no NP.
+  np: 'Monthly Net Profit Record',
 };
 type Metric = keyof typeof L;
 
@@ -135,7 +140,7 @@ const money0 = (x: number) => '$' + Math.round(x).toLocaleString('en-US');
 const pct2 = (x: number) => x.toFixed(2) + '%';
 const pct0 = (x: number) => Math.round(x) + '%';
 const FMT: Record<Metric, (x: number) => string> = {
-  buy: money2, sell: money2, rev: money0, gp: money0, margin: pct2, conv: pct0,
+  buy: money2, sell: money2, rev: money0, gp: money0, margin: pct2, conv: pct0, np: money0,
 };
 // How far apart two figures are, in words. A rate's gap is in points — "2.15
 // points short" — because "$" or "%" of a percentage reads as nonsense.
@@ -143,6 +148,8 @@ const gapText = (m: Metric, d: number) =>
   m === 'margin' ? `${d.toFixed(2)} points`
     : m === 'conv' ? `${Math.round(d)} point${Math.round(d) === 1 ? '' : 's'}`
     : FMT[m](d);
+
+const NP_FROM = '2026-10-01';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
   'August', 'September', 'October', 'November', 'December'];
@@ -263,7 +270,7 @@ Deno.serve(async (req: Request) => {
       sb.from('records').select('id, store, label, value, period, value_num, record_on').is('person', null),
       allDaily(sb, today),
       sb.from('monthly_brief').select('store, year, month, metric_key, value')
-        .in('metric_key', ['net_sales', 'gross_profit', 'gross_profit_pct', 'customer_close_rate', 'num_customers']),
+        .in('metric_key', ['net_sales', 'gross_profit', 'gross_profit_pct', 'customer_close_rate', 'num_customers', 'net_profit']),
       // Monthly rows are dated the 1st of their month, so the window starts at
       // the 1st of the month before the retry window — or last month's own
       // "already judged" row falls outside it and the month is judged again.
@@ -308,7 +315,7 @@ Deno.serve(async (req: Request) => {
     })).filter((r) => STORES.includes(r.store));
 
     // Monthly: pivot monthly_brief to one row per store-month.
-    type M = { store: string; mo: string; ns?: number; gp?: number; pct?: number; ccr?: number; nc?: number };
+    type M = { store: string; mo: string; ns?: number; gp?: number; pct?: number; ccr?: number; nc?: number; np?: number };
     const mm: Record<string, M> = {};
     (monthRes.data || []).forEach((r: any) => {
       const s = String(r.store).toUpperCase();
@@ -317,7 +324,7 @@ Deno.serve(async (req: Request) => {
       const k = `${s}|${mo}`;
       const row = mm[k] = mm[k] || { store: s, mo };
       const key = ({ net_sales: 'ns', gross_profit: 'gp', gross_profit_pct: 'pct',
-        customer_close_rate: 'ccr', num_customers: 'nc' } as any)[r.metric_key];
+        customer_close_rate: 'ccr', num_customers: 'nc', net_profit: 'np' } as any)[r.metric_key];
       (row as any)[key] = Number(r.value);
     });
     const months = Object.values(mm).filter((r) => Number(r.mo.slice(0, 4)) >= FROM_YEAR);
@@ -350,7 +357,12 @@ Deno.serve(async (req: Request) => {
       const r = mm[`${s}|${month}`];
       // All four in, or not yet: Ethan types the month in on the 1st, and a
       // run that caught him halfway must not judge half a store.
-      if (!r || r.ns === undefined || r.gp === undefined || r.pct === undefined || r.ccr === undefined) {
+      // From the first NP month (October 2026) Net Profit is one of the figures
+      // a month needs before it is judged: judging without it would mark the month
+      // done and the NP record would never be checked for it.
+      const needNp = month >= NP_FROM;
+      if (!r || r.ns === undefined || r.gp === undefined || r.pct === undefined || r.ccr === undefined
+        || (needNp && r.np === undefined)) {
         waiting.push(`${s} ${month.slice(0, 7)}`); continue;
       }
       const when = monthText(month);
@@ -359,10 +371,11 @@ Deno.serve(async (req: Request) => {
         judge(s, 'gp', r.gp, month, when),
         marginCounts(r) ? judge(s, 'margin', r.pct, month, when) : null,
         judge(s, 'conv', r.ccr, month, when),
+        judge(s, 'np', r.np, month, when),
       ].filter(Boolean);
       verdicts.push({
         day: month, store: s, scope: 'monthly',
-        figures: { net_sales: r.ns, gross_profit: r.gp, gross_profit_pct: r.pct, customer_close_rate: r.ccr }, hits,
+        figures: { net_sales: r.ns, gross_profit: r.gp, gross_profit_pct: r.pct, customer_close_rate: r.ccr, net_profit: r.np ?? null }, hits,
       });
       judgedMonth.add(s);
     }
@@ -391,6 +404,7 @@ Deno.serve(async (req: Request) => {
       const gp = best(mo, (r) => r.gp ?? null, (r) => r.mo); put(s, 'gp', gp?.gp, gp?.mo, true);
       const mg = best(mo.filter(marginCounts), (r) => r.pct ?? null, (r) => r.mo); put(s, 'margin', mg?.pct, mg?.mo, true);
       const cv = best(mo, (r) => r.ccr ?? null, (r) => r.mo); put(s, 'conv', cv?.ccr, cv?.mo, true);
+      const np = best(mo, (r) => r.np ?? null, (r) => r.mo); put(s, 'np', np?.np, np?.mo, true);
     }
 
     // Company daily: every store summed, on days all five were judged (or past).
@@ -418,12 +432,16 @@ Deno.serve(async (req: Request) => {
       const cNc = sum((r) => r.nc, withC);
       return {
         mo, ns: sum((r) => r.ns), gp: sum((r) => r.gp),
+        // The company's NP only for a month every store has one, or a month with
+        // four stores' NP would set a company record nobody earned.
+        np: rs.length === STORES.length && rs.every((r) => r.np !== undefined) ? sum((r) => r.np) : null,
         pct: sNs ? sum((r) => r.gp, settled) / sNs * 100 : null,
         ccr: cNc ? withC.reduce((a, r) => a + (r.ccr! * r.nc!), 0) / cNc : null,
       };
     });
     const crv = best(co, (r) => r.ns, (r) => r.mo); put('Company', 'rev', crv?.ns, crv?.mo, true);
     const cgp = best(co, (r) => r.gp, (r) => r.mo); put('Company', 'gp', cgp?.gp, cgp?.mo, true);
+    const cnp = best(co, (r) => r.np, (r) => r.mo); put('Company', 'np', cnp?.np, cnp?.mo, true);
     const cmg = best(co, (r) => r.pct, (r) => r.mo); put('Company', 'margin', cmg?.pct, cmg?.mo, true);
     const ccv = best(co, (r) => r.ccr, (r) => r.mo);
     // Company conversion is a weighted average, not a whole number, so it

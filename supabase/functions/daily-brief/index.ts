@@ -170,6 +170,17 @@ const G = {
 
 type Facts = Record<string, any>;
 
+// NET PROFIT FROM OCTOBER 2026 (Ethan 2026-10-02: "ensure GP does not touch
+// anything on this site anymore"). On a day from NP_FROM the selling margin —
+// which is GROSS margin — is neither praised in a draft nor shown on the review
+// card. The card shows the day's NET margin off the Net Profit tab instead
+// (daily_np), and says so when that day's shipping has not landed yet, because
+// before the 2pm pass the NP is the figure without the labels.
+//
+// There is no net-margin praise rule. The 56% / 62% bars were set on gross
+// margin and mean nothing for net; a net bar is Ethan's call, not a guess here.
+const NP_FROM = "2026-10-01";
+
 const fmtMoney = (x: number) => "$" + Math.round(x).toLocaleString("en-US");
 
 // He does not write dashes, and an em dash is the single most recognisable tell of
@@ -259,12 +270,16 @@ function refDayFor(iso: string): string {
 // email costs us conversion and listed items rather than the whole draft.
 // ---------------------------------------------------------------------------
 async function loadFacts(sb: any, from: string, to: string): Promise<Map<string, Facts>> {
-  const [de, bs, lg] = await Promise.all([
+  const [de, bs, lg, np] = await Promise.all([
     sb.from("day_end_facts").select("*").gte("date", from).lte("date", to),
     sb.from("daily_buysell").select("store,date,buy,sell,gp,buy_margin_pct").gte("date", from).lte("date", to),
     // Listing goals across the WHOLE window, not just the ref day: the low-listing
     // nudge needs a pattern, and a pattern needs each historical day's own goal.
     sb.from("listing_goals").select("store,date,role,goal").gte("date", from).lte("date", to),
+    to >= NP_FROM
+      ? sb.from("daily_np").select("store,date,sales,np,shipping_final")
+          .gte("date", from > NP_FROM ? from : NP_FROM).lte("date", to)
+      : Promise.resolve({ data: [] }),
   ]);
 
   // Store daily listing goal = the sum of every rostered person's goal, which is
@@ -337,6 +352,15 @@ async function loadFacts(sb: any, from: string, to: string): Promise<Map<string,
     // Null, not zero, when there is no goal to divide by — three days in the
     // window have no listing_goals rows at all, and 0% would read as a disaster.
     f.listedPct = (f.storeGoal && f.listed != null) ? f.listed / f.storeGoal : null;
+  }
+  // Net margin for NP days (see NP_FROM). Attached to a day the other sources
+  // already have; the NP tab alone never creates a day to draft about.
+  for (const r of np.data ?? []) {
+    const f = out.get(`${r.store}|${r.date}`);
+    if (!f) continue;
+    const sales = Number(r.sales) || 0;
+    f.netMargin = sales > 0 && r.np != null ? Number(r.np) / sales : null;
+    f.netMarginFinal = !!r.shipping_final;
   }
   return out;
 }
@@ -439,7 +463,7 @@ function evaluate(f: Facts, hist: Facts[], ctx: {
     push({ key: "net_sales", dir: "praise", points: f.netSales >= T.excNetSales ? 2 : 1,
       fact: `net sales ${money(f.netSales)}` });
   }
-  if (f.sellMargin != null && f.netSales >= T.floorNetSales && f.sellMargin >= T.sellMargin) {
+  if (String(f.date) < NP_FROM && f.sellMargin != null && f.netSales >= T.floorNetSales && f.sellMargin >= T.sellMargin) {
     push({ key: "sell_margin", dir: "praise", points: f.sellMargin >= T.excSellMargin ? 2 : 1,
       fact: `selling margin ${pct(f.sellMargin)}` });
   }
@@ -696,7 +720,12 @@ function factSnapshot(f: Facts) {
     cashSpent: f.cashSpent ?? null,
     buyMarginPct: r1(f.buyMargin),
     netSales: f.netSales ?? null,
-    sellMarginPct: r1(f.sellMargin),
+    // On an NP day the gross figure is withheld (null) and the net one sent, so
+    // an old card cannot show GP and a new one has nothing GP to show.
+    npDay: String(f.date) >= NP_FROM,
+    sellMarginPct: String(f.date) >= NP_FROM ? null : r1(f.sellMargin),
+    netMarginPct: r1(f.netMargin),
+    netMarginFinal: f.netMarginFinal ?? null,
     custConvPct: r1(f.custConv),
     custConvNum: f.custConvNum ?? null,
     custConvDen: f.custConvDen ?? null,

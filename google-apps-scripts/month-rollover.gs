@@ -1054,6 +1054,42 @@ function _mrWriteGoals(ss, ym, goals) {
   return { ok: true, tab: tab.getName(), found: found, wrote: wrote };
 }
 
+// ---- NP goals (from October 2026) --------------------------------------------
+// From October the company is graded on Net Profit, and gp-goals sends an NP
+// month's goals as `npGoals`. They go in the "NP Goal" cell of each store block
+// on that month's "Net Profit {Mon} {YY}" tab — row 2, base+4, beside the label
+// at base+3 — which the tab's own "% of NP Goal" formula already divides by.
+//
+// Each block is checked by the store code on its own row 2 (base+2) before
+// anything is written: the tab is laid out by netprofit-sheet.gs, a different
+// project, and a write keyed only on column numbers would land a goal in the
+// wrong store the day that layout moves. The TTL block's goal is a formula
+// summing the five and is never touched.
+var MR_NP_BASES = { OVL: 0, LEE: 18, WSP: 36, MPL: 54, BAL: 72 };
+var MR_NP_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function _mrWriteNpGoals(ss, ym, goals) {
+  var name = 'Net Profit ' + MR_NP_MON[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(2, 4);
+  var tab = ss.getSheetByName(name);
+  // Not an error worth failing the save over: the NP rollover makes the tab on
+  // the 1st, and np-sync reports a site/sheet goal mismatch until it is written.
+  if (!tab) return { ok: false, error: 'no ' + name + ' tab yet' };
+  var row = tab.getRange(2, 1, 1, 90).getValues()[0];
+  var forms = tab.getRange(2, 1, 1, 90).getFormulas()[0];
+  var wrote = [], skipped = [];
+  Object.keys(MR_NP_BASES).forEach(function (code) {
+    if (goals[code] === undefined || goals[code] === null || goals[code] === '') return;
+    var b = MR_NP_BASES[code];
+    if (String(row[b + 2]).trim() !== code || String(row[b + 3]).trim().toLowerCase() !== 'np goal') {
+      skipped.push(code + ': block label is "' + row[b + 2] + '" / "' + row[b + 3] + '"');
+      return;
+    }
+    if (forms[b + 4]) { skipped.push(code + ': goal cell holds a formula'); return; }
+    tab.getRange(2, b + 5).setValue(Number(goals[code]));
+    wrote.push(code + '=' + goals[code]);
+  });
+  return { ok: skipped.length === 0, tab: name, wrote: wrote, skipped: skipped };
+}
+
 // Write a month's buying-days count into that month's Buy tab — one cell per
 // store block at base+4, never beside the label. SPEEKS derives the number from
 // the closed dates it holds; the sheet only needs the total.
@@ -1132,6 +1168,11 @@ function _mrFetchGoals(ym) {
     var res = UrlFetchApp.fetch(MR_GOALS_URL + '?month=' + encodeURIComponent(ym), { muteHttpExceptions: true });
     if (res.getResponseCode() !== 200) return {};
     var j = JSON.parse(res.getContentText());
+    // ⚠️ From October 2026 gp-goals answers with NET profit goals (kind 'np').
+    // Those must never land in the Sales tab's "GP Goal" cell, which is all this
+    // rollover writes goals into — so an NP month rolls with no GP goal at all.
+    // The NP goals reach the Net Profit tab through the `goals` doPost instead.
+    if (j && j.kind === 'np') return {};
     return (j && j.goals) || {};
   } catch (e) {
     return {};
@@ -1886,6 +1927,7 @@ function doPost(e) {
     if (!/^\d{4}-\d{2}$/.test(ym)) return _mrJson({ error: 'bad month' });
     var ss = _mrSs();
     var out = { goals: _mrWriteGoals(ss, ym, body.goals || {}) };
+    if (body.npGoals) out.npGoals = _mrWriteNpGoals(ss, ym, body.npGoals);
     // Only when SPEEKS actually had the closed-days panel open. A save that did
     // not touch them sends null, and the sheet's count is left alone.
     if (body.buyDays !== null && body.buyDays !== undefined) {
