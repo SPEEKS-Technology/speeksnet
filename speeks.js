@@ -25345,8 +25345,8 @@ function b2bOpenTransfer(id) {
             </div>
             <label class="form-label-caps" style="margin-top:14px;">Why (optional)</label>
             <input id="b2bMoveNote" class="form-input-lg" placeholder="e.g. LEE is backed up until Friday">
-            <p class="b2b-hint">The move is recorded with your name against it, so the trail
-                survives the deal being reopened later.</p>`,
+            <p class="b2b-hint">The move is recorded with your name against it, so the deal
+                keeps a trail of every store it has been through.</p>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             <button class="kpi-cancel-btn" onclick="b2bOpenDeal('${_b2bClickKind(deal)}','${deal.id}')">Cancel</button>
@@ -28708,7 +28708,9 @@ function _b2bStageView(deal) {
     const canDecline = _b2bIsCorp() && !['listing', 'completed', 'declined'].includes(deal.stage);
     // Reopen is gone -- a declined deal is final (see the edge fn). Deletion is
     // the only way a deal leaves the record now; the trashcan in the modal header
-    // (every stage, via delDeal) raises the request and CORP approves it.
+    // (every stage, via delDeal) raises the request and CORP approves it. The
+    // decline dialog's note says so too -- it used to promise a reopen the server
+    // has refused since the reopen action was retired.
     _b2bShowDeal({
         stage: deal.stage,
         delDeal: deal,
@@ -28769,8 +28771,9 @@ function b2bDeclineDeal(id) {
                 placeholder="A sentence for whoever reads this in six months"></textarea>
             <div class="b2b-note bad" style="margin-top:14px;">
                 <span class="b2b-note-k">Note</span>
-                The deal stays on record and can be reopened if the client comes back —
-                it just stops appearing as work in flight.
+                The deal stays on record, marked declined with your reason — it just
+                stops appearing as work in flight. Declines are final: there is no
+                reopening it, so a client who comes back starts a new deal.
             </div>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
