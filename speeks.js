@@ -25530,9 +25530,19 @@ function _b2bSplitBtn(it, ctx) {
     return `<button class="b2b-mini" title="Send some of these units somewhere else"
         onclick="event.stopPropagation();b2bSplitOpen('${it.id}','${ctx}')">Split</button>`;
 }
+// Pick by serial only when there is a real one to pick. A line of NO SERIAL
+// units has nothing to tell apart -- it used to render one identical
+// "NO SERIAL" checkbox per unit -- so it gets the count box, and b2bSplitGo
+// sends that many NO SERIALs, because the server still wants a serial named
+// for every unit going off a line that has one for every unit.
 function _b2bSplitBySerial(it) {
     const list = it.serial_list || [];
-    return list.length > 0 && list.length >= (Number(it.quantity) || 1);
+    return list.length > 0 && list.length >= (Number(it.quantity) || 1)
+        && list.some(s => s !== B2B_NO_SERIAL);
+}
+function _b2bSplitAllNoSerial(it) {
+    const list = it.serial_list || [];
+    return list.length > 0 && list.length >= (Number(it.quantity) || 1) && !_b2bSplitBySerial(it);
 }
 function _b2bSplitCount(it) {
     return _b2bSplitBySerial(it)
@@ -25651,10 +25661,11 @@ async function b2bSplitGo(itemId, btn) {
     const deal = _b2bModalDeal;
     if (!it || !deal) return;
     const bySerial = _b2bSplitBySerial(it);
+    const qty = _b2bSplitCount(it);
     const serials = bySerial
         ? Object.keys(_b2bSplitSerial).filter(k => _b2bSplitSerial[k]).map(k => it.serial_list[Number(k)])
+        : _b2bSplitAllNoSerial(it) ? Array(qty).fill(B2B_NO_SERIAL)
         : undefined;
-    const qty = _b2bSplitCount(it);
     let out;
     try {
         out = await _b2bBusy(btn, 'Splitting…', () => _b2bSend({ action: 'split_item', id: itemId, qty, serials }));

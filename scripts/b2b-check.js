@@ -2676,6 +2676,48 @@ t('open splitting sends the picked serials and their count', function () {
         });
     });
 });
+// A line of NO SERIAL units has nothing to pick between. It used to render one
+// identical "NO SERIAL" checkbox per unit, and the server then refused any two
+// of them as "the same serial picked twice" (fixed 2026-10-05).
+t('open a NO SERIAL line splits by count, not by identical checkboxes', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var it = { id: 'nos', quantity: 3, listed_qty: 0, recycled_qty: 0,
+            serial_list: [B2B_NO_SERIAL, B2B_NO_SERIAL, B2B_NO_SERIAL] };
+        _b2bSplitting = 'nos'; _b2bSplitQty = 1; _b2bSplitSerial = {};
+        try {
+            var html = _b2bSplitEditorHtml(it);
+            if (html.indexOf('b2b-splitser') >= 0) return 'still offered NO SERIAL checkboxes';
+            return html.indexOf('type="number"') >= 0 || 'no count box';
+        } finally { _b2bSplitting = null; }
+    });
+});
+t('open splitting NO SERIAL units sends one NO SERIAL per unit', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var savedItems = _b2bModalItems, savedDeal = _b2bModalDeal;
+        _b2bModalDeal = { id: 'd-nos', ref: 'NOS-001', stage: 'listing' };
+        _b2bModalItems = [{ id: 'nos1', quantity: 3, listed_qty: 0, recycled_qty: 0,
+            serial_list: [B2B_NO_SERIAL, B2B_NO_SERIAL, B2B_NO_SERIAL] }];
+        _b2bSplitting = 'nos1'; _b2bSplitCtx = 'move'; _b2bSplitQty = 2; _b2bSplitSerial = {};
+        return b2bSplitGo('nos1', null).then(function () {
+            var p = B2B_SENT.filter(function (x) { return x && x.action === 'split_item' && x.id === 'nos1'; })[0];
+            _b2bModalItems = savedItems; _b2bModalDeal = savedDeal;
+            if (!p) return 'nothing was sent';
+            return (p.qty === 2 && JSON.stringify(p.serials) === JSON.stringify([B2B_NO_SERIAL, B2B_NO_SERIAL]))
+                || 'sent ' + JSON.stringify(p);
+        });
+    });
+});
+t('open a line with one real serial among NO SERIALs still picks by serial', function () {
+    return _asRole('ceo', 'CORP', function () {
+        var it = { id: 'mix', quantity: 2, listed_qty: 0, recycled_qty: 0, serial_list: ['M1', B2B_NO_SERIAL] };
+        _b2bSplitting = 'mix'; _b2bSplitSerial = {};
+        try {
+            var html = _b2bSplitEditorHtml(it);
+            if (html.indexOf('type="number"') >= 0) return 'offered a count on a serialled line';
+            return html.indexOf('M1') >= 0 || 'the real serial is not listed';
+        } finally { _b2bSplitting = null; }
+    });
+});
 t('open a multi-store manager scopes the board and items to both stores', function () {
     return _asMsm(function () {
         if (_b2bFetchScope() !== 'BAL,MPL') return 'board scope was ' + _b2bFetchScope();

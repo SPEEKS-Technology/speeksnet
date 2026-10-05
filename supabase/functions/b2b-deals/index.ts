@@ -1771,13 +1771,28 @@ Deno.serve(async (req: Request) => {
         // say which ones are going -- guessing would put the paperwork for one
         // device on another store's shelf. A partly-serialled line may name
         // some or none.
+        //
+        // The serials are a LIST, not a set: "NO SERIAL" is a legitimate entry
+        // and five monitors carry it five times. So each picked serial takes
+        // one matching entry off the line, and "picked twice" means picked more
+        // times than the line has it. This was a Set until 2026-10-05, which
+        // refused any split of two or more NO SERIAL units, and filtered the
+        // remainder by value -- so splitting ONE off stripped every NO SERIAL
+        // from the line left behind, and Merge Back could not put them back.
         const have = serialList(it.serials);
         const going = (Array.isArray(body.serials) ? body.serials : []).map((s: any) => String(s || "").trim()).filter(Boolean);
-        if (going.some((s: string) => !have.includes(s))) {
-          return jsonResponse({ success: false, error: "One of those serials isn't on this line." }, 400);
-        }
-        if (new Set(going).size !== going.length) {
-          return jsonResponse({ success: false, error: "The same serial was picked twice." }, 400);
+        const staying = [...have];
+        for (const s of going) {
+          const at = staying.indexOf(s);
+          if (at < 0) {
+            return jsonResponse({
+              success: false,
+              error: have.includes(s)
+                ? `"${s}" was picked more times than this line has it.`
+                : "One of those serials isn't on this line.",
+            }, 400);
+          }
+          staying.splice(at, 1);
         }
         if (have.length >= q && going.length !== qty) {
           return jsonResponse({
@@ -1796,9 +1811,19 @@ Deno.serve(async (req: Request) => {
         const wipedFree = Math.max(0, Math.min(free, wiped - (Number(it.listed_qty) || 0)));
         const movedWiped = Math.max(0, qty - (free - wipedFree));
 
+        // Never reuse a number. The highest line still on the deal is not
+        // enough: Merge Back deletes the split line, so splitting again after
+        // merging the top line away handed out its number -- and its SKU --
+        // a second time, and a label still on a unit from the first split
+        // scanned to the wrong line. b2b_deals.last_line_no (0140) remembers
+        // the highest one this has ever handed out. If the column is missing
+        // (function deployed ahead of the migration) the read errors, hw is
+        // null and this falls back to the old max+1.
         const { data: last } = await supabase.from("b2b_deal_items")
           .select("line_no").eq("deal_id", it.deal_id).order("line_no", { ascending: false }).limit(1).maybeSingle();
-        const lineNo = (Number(last?.line_no) || 0) + 1;
+        const { data: hw } = await supabase.from("b2b_deals")
+          .select("last_line_no").eq("id", it.deal_id).maybeSingle();
+        const lineNo = Math.max(Number(last?.line_no) || 0, Number(hw?.last_line_no) || 0) + 1;
 
         const copy: Record<string, unknown> = { ...it };
         for (const k of ["id", "created_at", "updated_at"]) delete copy[k];
@@ -1820,7 +1845,7 @@ Deno.serve(async (req: Request) => {
         const { error: uErr } = await supabase.from("b2b_deal_items").update({
           quantity: left,
           wiped_qty: Math.min(wiped - movedWiped, left),
-          serials: have.filter((s) => !going.includes(s)).join(", "),
+          serials: staying.join(", "),
           // Which units carry a printed label is not recorded, so the most the
           // original can claim is what it still has.
           label_printed_qty: Math.min(Number(it.label_printed_qty) || 0, left),
@@ -1830,6 +1855,9 @@ Deno.serve(async (req: Request) => {
           await supabase.from("b2b_deal_items").delete().eq("id", made.id);
           return jsonResponse({ success: false, error: uErr.message }, 500);
         }
+        // Not fatal if it fails: the split itself is done and correct, and the
+        // worst case is the old behaviour on the next split after a merge.
+        await supabase.from("b2b_deals").update({ last_line_no: lineNo }).eq("id", it.deal_id);
 
         for (const st of (deal.listing_stores?.length ? deal.listing_stores : [dealStore(deal)])) {
           if (st) await broadcastChange("b2b", st, { deal: deal.id, by: str(body.user, 80, "User") });
