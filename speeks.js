@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.9.0';
+const APP_VERSION = '3.9.1';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -260,7 +260,7 @@ const USAGE_TRACK = Object.assign(Object.create(null), {
     // reference tools
     'hotkeysDropdown':  'Hotkeys & Commands',
     'quickMsgDropdown': 'Quick Messages',
-    'calendarDropdown': 'Strategic Calendar',
+    'calendarDropdown': 'Store Calendar',
     // the counter tools. NOTE there is deliberately no event for merely opening
     // the Margin Guide tab or landing on the policy library — visiting a page is
     // not using it. The tracked moment is a category AND an item picked (someone
@@ -949,18 +949,980 @@ function toggleNotifs() {
         loadPatchNotes();    // fetch patch notes, mark seen, re-render
     }
 }
-// The Google embed is a snapshot: the iframe fetches once when the page loads and
-// never refetches, so an edit made in Google after that never appears until a full
-// page reload. Force a fresh load every time the modal is opened by swapping in a
-// clone of the frame — replacing the node is what actually restarts the load, and
-// unlike appending a cache-buster to the URL it can't upset the embed's own params.
-// (Cross-origin means we can't reach inside the frame to reload it directly.)
+// ===== STORE CALENDAR =====
+// Replaced the Google Calendar embed (Ethan, 2026-10-01). Same button, same
+// popup; what it opens is now SPEEKSNET's own calendar, backed by the
+// store-calendar edge function and store_calendar_events (migration 0125).
+//
+// Two kinds of event, and the look keeps them apart at a glance:
+//   * store events    — green. Belong to one store; that store's manager
+//                       adds, edits and deletes them. An MSM does both BAL and MPL
+//                       and switches between them with the store chips.
+//   * company events  — dark slate with a lock. Posted from the Company events
+//                       tab by the district roles (DM, CEO, MOCD) to any set of
+//                       stores; read-only on a store's calendar.
+// Everyone else at a store (ASMs, buyers, employees, the TV account) sees their
+// store's calendar read-only. The district roles open on the all-stores view,
+// each store event tagged with its code, and can narrow to one store to see
+// exactly what that manager sees.
+//
+// The gates below only decide what to DRAW. The edge function re-checks every
+// write against the PIN's real role and store, so a hand-edited sessionStorage
+// gets a refusal, not a write.
+//
+// Repeating events (repeat, 0138) keep their first date in the row and are
+// expanded here for whichever dates are on screen.
+const STORE_CALENDAR_URL = `${_BASE}/store-calendar`;
+const _SCAL_DISTRICT_ROLES = ['district manager', 'ceo', 'mocd'];
+const _SCAL_MANAGER_ROLES = ['manager', 'owner (manager)'];
+// The TYPE of an event is its colour — a dot on every chip and row, and a key
+// under the calendar for the types on screen. Scope is already carried by the
+// chip itself (green = this store, slate + lock = company), so colour is free
+// to mean one thing. The old Google calendar used colours with no fixed meaning
+// (Ethan, 2026-10-01: "the colors don't mean anything, that's what I want you
+// to do"). The type is always written out as well, in rows and the detail
+// sheet, so nothing depends on telling two dots apart.
+//
+// The types are DATA (store_calendar_categories, 0128), and the DM adds and
+// removes them in the Event Types tab — the DM alone, enforced by the edge
+// function. The seed below is the same 18 rows 0128 inserted, so the calendar
+// draws right before the first load and in the check harness; the load then
+// replaces it with whatever the table holds. A removed type stays in these maps
+// (active: false), so events already filed under it keep their name and colour;
+// it just stops being offered in the dropdowns.
+const _SCAL_TYPE_SEED = [
+    ['meeting', 'Meetings', '#2563eb', 10], ['hours', 'Holiday/Hour Changes', '#dc2626', 20],
+    ['payday', 'Pay Day', '#16a34a', 30], ['celebration', 'Birthday/Anniversary', '#db2777', 40],
+    ['staffing', 'Staffing/PTO', '#7c3aed', 50], ['travel', 'Travel', '#0d9488', 60],
+    ['community', 'Events', '#65a30d', 70], ['delivery', 'B2B Pickups', '#64748b', 80],
+    ['recycling', 'Recycling Pickups', '#ca8a04', 90], ['inventory', 'Inventory', '#b45309', 100],
+    ['promo', 'Promotions', '#ea580c', 110], ['training', 'Training', '#0284c7', 120],
+    ['opening', 'Store Opening', '#9f1239', 130], ['maintenance', 'Maintenance/Repairs', '#334155', 140],
+    ['shipment', 'Deliveries', '#c026d3', 150], ['audit', 'Audits/Inspections', '#0891b2', 160],
+    ['deadline', 'Deadlines', '#78350f', 170], ['other', 'Other', '#94a3b8', 999]
+];
+// Swatches offered when the DM adds a type. Spread round the wheel and in
+// lightness; any hex the table holds still draws.
+const _SCAL_TYPE_SWATCHES = ['#2563eb', '#0284c7', '#0891b2', '#0d9488', '#16a34a', '#65a30d', '#ca8a04', '#b45309',
+    '#ea580c', '#dc2626', '#9f1239', '#db2777', '#c026d3', '#7c3aed', '#334155', '#94a3b8'];
+let _scalTypes = [];
+const _SCAL_CATEGORIES = {};   // key -> label, in display order
+const _SCAL_CAT_COLORS = {};   // key -> colour
+function _scalSetTypes(list) {
+    _scalTypes = list.map(t => ({ key: String(t.key), label: String(t.label), color: String(t.color), sort: Number(t.sort) || 0, active: t.active !== false }))
+        .sort((a, b) => a.sort - b.sort || a.label.localeCompare(b.label));
+    Object.keys(_SCAL_CATEGORIES).forEach(k => { delete _SCAL_CATEGORIES[k]; });
+    Object.keys(_SCAL_CAT_COLORS).forEach(k => { delete _SCAL_CAT_COLORS[k]; });
+    _scalTypes.forEach(t => { _SCAL_CATEGORIES[t.key] = t.label; _SCAL_CAT_COLORS[t.key] = t.color; });
+    if (!_SCAL_CAT_COLORS.other) { _SCAL_CATEGORIES.other = 'Other'; _SCAL_CAT_COLORS.other = '#94a3b8'; }
+}
+_scalSetTypes(_SCAL_TYPE_SEED.map(([key, label, color, sort]) => ({ key, label, color, sort })));
+// What the Type dropdown offers: the active types, Other last.
+function _scalActiveTypes() { return _scalTypes.filter(t => t.active).map(t => t.key); }
+function _scalDefaultType(pref) { return _scalActiveTypes().includes(pref) ? pref : 'other'; }
+function _scalCatDot(cat) {
+    return `<i class="scal-cdot" style="background:${_SCAL_CAT_COLORS[cat] || _SCAL_CAT_COLORS.other}" aria-hidden="true"></i>`;
+}
+// The corporate roles manage types: the DM alone at first ("only give DM
+// access"), then CEO and MOCD too (2026-10-05). Drawing only; the edge
+// function re-checks the PIN.
+function _scalIsTypeAdmin() { return _scalIsDistrict(); }   // DM, CEO, MOCD (Ethan, 2026-10-05)
+const _SCAL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const _SCAL_DOWS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const _scal = {
+    events: [], loaded: false, error: '',
+    month: null,          // Date at the 1st of the month on screen
+    weekStart: null,      // Date of the Sunday on screen in week view
+    view: 'month',        // month | week | list
+    tab: 'calendar',      // calendar | company (district roles only)
+    store: '',            // a store code, or 'ALL' (district only)
+    companyList: 'upcoming',
+    panel: null,          // { kind: 'detail'|'edit'|'day', ... } — the side sheet
+    companyForm: null,    // the event being edited in the Company events tab
+    saving: false
+};
+
+function _scalRole() { return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(); }
+function _scalIsDistrict() { return _SCAL_DISTRICT_ROLES.includes(_scalRole()); }
+// The stores this person may add store events to. Drawing only — see the banner.
+function _scalWritableStores() {
+    if (_scalIsDistrict()) return [];
+    if (isMultiStoreManager()) return MULTISTORE_MANAGER_STORES.slice();
+    if (_SCAL_MANAGER_ROLES.includes(_scalRole())) {
+        const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+        return STORE_CODES.includes(s) ? [s] : [];
+    }
+    return [];
+}
+function _scalCanWriteStore(store) { return _scalWritableStores().includes(String(store || '').toUpperCase()); }
+// The stores the filter chips offer — every store for corporate, and for an
+// MSM just their two, as the same All / BAL / MPL row (Ethan, 2026-10-05: "be
+// like DM, just with only All, BAL, and MPL"). Empty = no chips.
+function _scalFilterStores() { return _scalIsDistrict() ? STORE_CODES : isMultiStoreManager() ? MULTISTORE_MANAGER_STORES : []; }
+// "All" for an MSM is both their stores; they can add from it and pick which
+// store in the form. For corporate "All" stays read-only for store events.
+function _scalCanAddHere(store) { return store === 'ALL' ? _scalWritableStores().length > 1 : _scalCanWriteStore(store); }
+// A PAST event can't be edited (Ethan, 2026-10-05) — only deleted. Past = its
+// last day is before today and it doesn't repeat. The edge function enforces it.
+function _scalIsPastEvent(ev) { return _scalRepeatOf(ev) === 'none' && (ev.end_date || ev.event_date) < _scalTodayISO(); }
+
+// Dates are handled as local yyyy-mm-dd strings throughout. Everyone using this
+// is in Central, and a Date at local midnight never crosses a day boundary the
+// way toISOString() (UTC) does in the evening.
+function _scalISO(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function _scalParse(iso) { const [y, m, d] = String(iso).split('-').map(Number); return new Date(y, m - 1, d); }
+function _scalAddDays(d, n) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() + n); return x; }
+function _scalTodayISO() { return _scalISO(new Date()); }
+function _scalFmtTime(t, short) {
+    if (!t) return '';
+    const [h, m] = String(t).split(':').map(Number);
+    const ap = h >= 12 ? (short ? 'p' : ' PM') : (short ? 'a' : ' AM');
+    const h12 = h % 12 || 12;
+    if (short) return m ? `${h12}:${String(m).padStart(2, '0')}${ap}` : `${h12}${ap}`;
+    return `${h12}:${String(m).padStart(2, '0')}${ap}`;
+}
+function _scalFmtDate(iso, withYear) {
+    const d = _scalParse(iso);
+    const s = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    return withYear === false ? s : `${s}, ${d.getFullYear()}`;
+}
+function _scalWhen(ev) {
+    let s = _scalFmtDate(ev.event_date);
+    if (ev.end_date && ev.end_date !== ev.event_date) s += ` – ${_scalFmtDate(ev.end_date)}`;
+    if (ev.all_day) return s + ' · All day';
+    return s + ' · ' + _scalFmtTime(ev.start_time) + (ev.end_time ? ` – ${_scalFmtTime(ev.end_time)}` : '');
+}
+
+// Does this event show on the calendar for `store` ('ALL' = every store)?
+function _scalShowsOn(ev, store) {
+    // A birthday or anniversary posted by COMPANY shows on every store's
+    // calendar, whatever stores it was posted to (Ethan, 2026-10-05: "We want to
+    // encourage comraderie"). One a store posts itself stays on that store.
+    if (ev.scope === 'company' && ev.category === 'celebration') return true;
+    if (store === 'ALL') {
+        const mine = _scalFilterStores();
+        return ev.scope === 'company' ? (ev.stores || []).some(s => mine.includes(s)) : mine.includes(ev.store);
+    }
+    return ev.scope === 'company' ? (ev.stores || []).includes(store) : ev.store === store;
+}
+
+// Every (event, day) pair between fromISO and toISO inclusive, for the store
+// filter. A multi-day event appears on each of its days; a yearly one on its
+// anniversary in any year at or after the first.
+// REPEAT (0138, Ethan 2026-10-04: Daily / Weekly / Monthly / Quarterly / Yearly).
+// An event's repeat rule; rows written before 0138 only had repeats_yearly.
+const _SCAL_REPEATS = { none: 'Never', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', yearly: 'Yearly' };
+function _scalRepeatOf(ev) { return _SCAL_REPEATS[ev.repeat] && ev.repeat !== 'none' ? ev.repeat : (ev.repeats_yearly ? 'yearly' : 'none'); }
+// The start date of every instance of `ev` that begins between fromISO and
+// toISO, never before its first date. Monthly / quarterly / yearly land on the
+// same day of the month; a month without that day (the 31st, Feb 29) is
+// SKIPPED, not shifted, as Google does. Only the dates on screen are made, so
+// an endless repeat costs nothing.
+function _scalRepeatStarts(ev, fromISO, toISO) {
+    const rep = _scalRepeatOf(ev), first = ev.event_date;
+    if (rep === 'none') return [first];
+    const out = [], d0 = _scalParse(first), lo = fromISO > first ? fromISO : first;
+    if (rep === 'daily' || rep === 'weekly') {
+        const step = rep === 'daily' ? 1 : 7;
+        const gap = Math.max(0, Math.round((_scalParse(lo) - d0) / 864e5));
+        for (let d = _scalAddDays(d0, Math.ceil(gap / step) * step); _scalISO(d) <= toISO; d = _scalAddDays(d, step)) out.push(_scalISO(d));
+        return out;
+    }
+    const step = rep === 'monthly' ? 1 : rep === 'quarterly' ? 3 : 12;
+    const l = _scalParse(lo);
+    const monthsIn = (l.getFullYear() - d0.getFullYear()) * 12 + l.getMonth() - d0.getMonth();
+    for (let k = Math.max(0, Math.floor(monthsIn / step) - 1) * step; ; k += step) {
+        const y = d0.getFullYear() + Math.floor((d0.getMonth() + k) / 12), m = (d0.getMonth() + k) % 12;
+        const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
+        if (iso > toISO) break;
+        if (_scalISO(_scalParse(iso)) === iso && iso >= lo) out.push(iso);   // skip a missing day
+    }
+    return out;
+}
+
+function _scalOccurrences(fromISO, toISO, store) {
+    const out = [];
+    _scal.events.forEach(ev => {
+        if (!_scalShowsOn(ev, store)) return;
+        const span = ev.end_date ? Math.round((_scalParse(ev.end_date) - _scalParse(ev.event_date)) / 864e5) : 0;
+        const starts = _scalRepeatStarts(ev, _scalISO(_scalAddDays(_scalParse(fromISO), -span)), toISO);
+        starts.forEach(st => {
+            const sd = _scalParse(st);
+            for (let i = 0; i <= span; i++) {
+                const day = _scalISO(_scalAddDays(sd, i));
+                if (day >= fromISO && day <= toISO) out.push({ ev, day, first: i === 0, last: i === span, start: st, multi: span > 0 });
+            }
+        });
+    });
+    // Company first, then timed by start, then all-day store events — so the
+    // thing everyone has to know about is the top line of the cell.
+    out.sort((a, b) => a.day.localeCompare(b.day)
+        || (a.ev.scope === b.ev.scope ? 0 : a.ev.scope === 'company' ? -1 : 1)
+        || (a.ev.all_day === b.ev.all_day ? 0 : a.ev.all_day ? -1 : 1)
+        || String(a.ev.start_time || '').localeCompare(String(b.ev.start_time || ''))
+        || a.ev.title.localeCompare(b.ev.title));
+    return out;
+}
+
+const _SCAL_LOCK = '<svg class="scal-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+const _SCAL_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const _SCAL_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+
+// One event as a chip in a day cell / week column. `cls` and `style` are for
+// the spanning bars, which are the same chip placed across grid columns.
+function _scalChip(o, store, cls, style) {
+    const ev = o.ev;
+    const time = !ev.all_day && o.first ? ` ${_scalFmtTime(ev.start_time, true)}` : '';
+    const label = escapeHtml(ev.title) + escapeHtml(time);
+    const open = `onclick="event.stopPropagation(); _scalOpenDetail('${ev.id}')"${style ? ` style="${style}"` : ''}`;
+    const k = cls ? ' ' + cls : '';
+    const dot = _scalCatDot(ev.category);
+    const tip = escapeHtml((_SCAL_CATEGORIES[ev.category] || 'Other') + ' · ' + (store === 'ALL' && ev.store ? ev.store + ' · ' : '') + ev.title);
+    if (ev.scope === 'company') {
+        return `<button type="button" class="scal-chip scal-chip-company${k}" ${open} title="${tip}">${_SCAL_LOCK}${dot}<span>${label}</span></button>`;
+    }
+    // The store code, not a second dot: the dot is the type everywhere.
+    if (store === 'ALL') {
+        return `<button type="button" class="scal-chip scal-chip-tagged${k}" ${open} title="${tip}">${dot}<b>${escapeHtml(ev.store)}</b><span>${label}</span></button>`;
+    }
+    return `<button type="button" class="scal-chip scal-chip-store${k}" ${open} title="${tip}">${dot}<span>${label}</span></button>`;
+}
+
+function _scalRender() {
+    const root = document.getElementById('scalRoot');
+    if (!root) return;
+    const district = _scalIsDistrict();
+    const head = document.getElementById('scalHeadExtra');
+    if (head) {
+        if (district) {
+            head.innerHTML = `<div class="scal-seg" role="tablist">
+                <button type="button" role="tab" aria-selected="${_scal.tab === 'calendar'}" class="${_scal.tab === 'calendar' ? 'on' : ''}" onclick="_scalSetTab('calendar')">Calendar</button>
+                <button type="button" role="tab" aria-selected="${_scal.tab === 'company'}" class="${_scal.tab === 'company' ? 'on' : ''}" onclick="_scalSetTab('company')">Company Events</button>
+                ${_scalIsTypeAdmin() ? `<button type="button" role="tab" aria-selected="${_scal.tab === 'types'}" class="${_scal.tab === 'types' ? 'on' : ''}" onclick="_scalSetTab('types')">Event Types</button>` : ''}
+            </div>`;
+        } else {
+            // Everyone else gets Company Events too, read-only (Ethan,
+            // 2026-10-05: "all roles should see a view only version of company
+            // events in case they are curious").
+            head.innerHTML = `<div class="scal-seg" role="tablist">
+                <button type="button" role="tab" aria-selected="${_scal.tab === 'calendar'}" class="${_scal.tab === 'calendar' ? 'on' : ''}" onclick="_scalSetTab('calendar')">Calendar</button>
+                <button type="button" role="tab" aria-selected="${_scal.tab === 'company'}" class="${_scal.tab === 'company' ? 'on' : ''}" onclick="_scalSetTab('company')">Company Events</button>
+            </div>`;   // no store tag here any more (Ethan, 2026-10-05: "get rid of that for all stores")
+        }
+    }
+    if (_scal.tab === 'company') { root.innerHTML = _scalCompanyHTML(!district); return; }
+    if (_scalIsTypeAdmin() && _scal.tab === 'types') { root.innerHTML = _scalTypesHTML(); return; }
+    root.innerHTML = `${_scalToolbarHTML()}
+        <div class="scal-body">${_scal.error && !_scal.loaded
+            ? `<div class="scal-empty">${escapeHtml(_scal.error)}</div>`
+            : _scal.view === 'week' ? _scalWeekHTML() : _scal.view === 'list' ? _scalListHTML() : _scalMonthHTML()}</div>
+        ${_scalLegendHTML()}
+        ${_scalPanelHTML()}`;
+}
+
+function _scalToolbarHTML() {
+    const district = _scalIsDistrict();
+    const title = _scal.view === 'week'
+        ? (() => { const a = _scal.weekStart, b = _scalAddDays(a, 6);
+            return a.getMonth() === b.getMonth()
+                ? `${_SCAL_MONTHS[a.getMonth()]} ${a.getDate()}–${b.getDate()}, ${b.getFullYear()}`
+                : `${_SCAL_MONTHS[a.getMonth()].slice(0, 3)} ${a.getDate()} – ${_SCAL_MONTHS[b.getMonth()].slice(0, 3)} ${b.getDate()}, ${b.getFullYear()}`; })()
+        : `${_SCAL_MONTHS[_scal.month.getMonth()]} ${_scal.month.getFullYear()}`;
+    const views = ['month', 'week', 'list'].map(v =>
+        `<button type="button" class="${_scal.view === v ? 'on' : ''}" onclick="_scalSetView('${v}')">${v[0].toUpperCase() + v.slice(1)}</button>`).join('');
+    const chips = _scalFilterStores();
+    const filter = chips.length ? `<div class="scal-filter" role="group" aria-label="Stores">
+            <button type="button" class="scal-fchip ${_scal.store === 'ALL' ? 'on' : ''}" onclick="_scalSetStore('ALL')">All</button>
+            ${chips.map(s => `<button type="button" class="scal-fchip ${_scal.store === s ? 'on' : ''}" onclick="_scalSetStore('${s}')"><span class="scal-dot" style="background:${STORE_TINTS[s]}"></span>${s}</button>`).join('')}
+        </div>` : '';
+    const add = _scalCanAddHere(_scal.store)
+        ? `<button type="button" class="scal-btn-primary" onclick="_scalOpenEdit(null, '${_scalTodayISO() >= _scalISO(_scal.month) ? _scalTodayISO() : _scalISO(_scal.month)}')">${_SCAL_PLUS}Add event</button>` : '';
+    return `<div class="scal-toolbar">
+        <div class="scal-nav">
+            <button type="button" class="scal-icon-btn" aria-label="Previous" onclick="_scalStep(-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <button type="button" class="scal-icon-btn" aria-label="Next" onclick="_scalStep(1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+            <div class="scal-title">${title}</div>
+        </div>
+        ${filter}
+        <div class="scal-actions">
+            <div class="scal-seg scal-seg-sm">${views}</div>
+            ${add}
+        </div>
+    </div>`;
+}
+
+function _scalMonthHTML() {
+    const first = _scal.month;
+    const gridStart = _scalAddDays(first, -first.getDay());
+    const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+    const weeks = Math.ceil((first.getDay() + last.getDate()) / 7);
+    const occ = _scalOccurrences(_scalISO(gridStart), _scalISO(_scalAddDays(gridStart, weeks * 7 - 1)), _scal.store);
+    let rows = '';
+    for (let w = 0; w < weeks; w++) {
+        rows += _scalWeekRowHTML(_scalAddDays(gridStart, w * 7), occ, { limit: 3, month: first.getMonth() });
+    }
+    return `<div class="scal-month">
+        <div class="scal-dows">${_SCAL_DOWS.map(w => `<div>${w}</div>`).join('')}</div>
+        <div class="scal-grid">${rows}</div>
+    </div>`;
+}
+
+function _scalWeekHTML() {
+    const a = _scal.weekStart;
+    const occ = _scalOccurrences(_scalISO(a), _scalISO(_scalAddDays(a, 6)), _scal.store);
+    return `<div class="scal-month scal-weekview">
+        <div class="scal-grid">${_scalWeekRowHTML(a, occ, { limit: Infinity, week: true })}</div>
+    </div>`;
+}
+
+// ONE WEEK as a 7-column grid, shared by the month view (one per row) and the
+// week view. An event that spans days is ONE bar across them, the way Google
+// draws it (Ethan, 2026-10-01), instead of a chip repeated in every cell:
+//   row 1           the day numbers
+//   rows 2..L+1     a lane each for the spanning bars, packed first-fit
+//   last row        that day's single-day events, then "+N more"
+// The day cells sit behind everything (grid-row 1 / -1) and take the clicks;
+// the number and single-day stacks let clicks through (pointer-events: none)
+// so an empty part of a day still opens it. A bar that carries on from the
+// week before, or into the next, has a flat end on that side.
+// `limit` is how many lines a day shows before "+N more" — lanes count, since
+// a lane is a line of that day whether or not this day has a bar in it.
+function _scalWeekRowHTML(weekStart, occAll, opts) {
+    const days = []; for (let i = 0; i < 7; i++) days.push(_scalISO(_scalAddDays(weekStart, i)));
+    const occ = occAll.filter(o => o.day >= days[0] && o.day <= days[6]);
+    const col = iso => days.indexOf(iso);
+
+    // Spanning events → one segment per (event instance, week).
+    const segs = {};
+    occ.filter(o => o.multi).forEach(o => {
+        const k = o.ev.id + '|' + o.start;
+        const c = col(o.day);
+        if (!segs[k]) segs[k] = { o, c0: c, c1: c, head: false, tail: false };
+        const s = segs[k];
+        s.c0 = Math.min(s.c0, c); s.c1 = Math.max(s.c1, c);
+        if (o.first) { s.head = true; s.o = o; }
+        if (o.last) s.tail = true;
+    });
+    const bars = Object.values(segs).sort((a, b) => a.c0 - b.c0 || (b.c1 - b.c0) - (a.c1 - a.c0)
+        || (a.o.ev.scope === b.o.ev.scope ? 0 : a.o.ev.scope === 'company' ? -1 : 1));
+    const lanes = [];
+    bars.forEach(b => {
+        let l = 0;
+        while (lanes[l] && lanes[l].some(x => !(b.c1 < x.c0 || b.c0 > x.c1))) l++;
+        (lanes[l] = lanes[l] || []).push(b); b.lane = l;
+    });
+    const shownLanes = Math.min(lanes.length, opts.limit);
+    const singleRow = shownLanes + 2;
+
+    const today = _scalTodayISO();
+    const canAdd = _scalCanAddHere(_scal.store);
+    let html = '';
+    days.forEach((iso, i) => {
+        const d = _scalParse(iso);
+        const has = occ.some(o => o.day === iso);
+        const out = opts.month != null && d.getMonth() !== opts.month;
+        const click = canAdd ? `onclick="_scalOpenEdit(null, '${iso}')"` : (has ? `onclick="_scalOpenDay('${iso}')"` : '');
+        html += `<div class="scal-cell${out ? ' out' : ''}${canAdd || has ? ' clickable' : ''}"${has ? ' data-has="1"' : ''} data-day="${iso}" style="grid-column:${i + 1};grid-row:1 / -1" ${click}></div>`;
+        html += opts.week
+            ? `<div class="scal-whead${iso === today ? ' today' : ''}" style="grid-column:${i + 1};grid-row:1"><span>${_SCAL_DOWS[i]}</span><b>${d.getDate()}</b></div>`
+            : `<div class="scal-num${iso === today ? ' today' : ''}" style="grid-column:${i + 1};grid-row:1">${d.getDate()}</div>`;
+    });
+    bars.filter(b => b.lane < shownLanes).forEach(b => {
+        const cls = 'scal-bar' + (b.head ? '' : ' cont-l') + (b.tail ? '' : ' cont-r');
+        html += _scalChip(Object.assign({}, b.o, { first: b.head }), _scal.store, cls,
+            `grid-column:${b.c0 + 1} / span ${b.c1 - b.c0 + 1};grid-row:${b.lane + 2}`);
+    });
+    days.forEach((iso, i) => {
+        const singles = occ.filter(o => o.day === iso && !o.multi);
+        const hiddenBars = bars.filter(b => b.lane >= shownLanes && b.c0 <= i && b.c1 >= i).length;
+        const room = Math.max(0, opts.limit - shownLanes);
+        const shown = singles.slice(0, room);
+        const more = singles.length - shown.length + hiddenBars;
+        if (!shown.length && !more) return;
+        html += `<div class="scal-singles" data-day="${iso}" style="grid-column:${i + 1};grid-row:${singleRow}">
+            ${shown.map(o => _scalChip(o, _scal.store)).join('')}
+            ${more > 0 ? `<button type="button" class="scal-more" onclick="event.stopPropagation(); _scalOpenDay('${iso}')">+${more} more</button>` : ''}
+        </div>`;
+    });
+    return `<div class="scal-wk" style="grid-template-rows:auto${shownLanes ? ` repeat(${shownLanes}, auto)` : ''} 1fr">${html}</div>`;
+}
+
+function _scalListHTML() {
+    const first = _scal.month;
+    const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+    const occ = _scalOccurrences(_scalISO(first), _scalISO(last), _scal.store).filter(o => o.first || o.day === _scalISO(first));
+    if (!occ.length) return `<div class="scal-empty">Nothing on the calendar for ${_SCAL_MONTHS[first.getMonth()]}.</div>`;
+    const today = _scalTodayISO();
+    let html = '', lastDay = '';
+    occ.forEach(o => {
+        if (o.day !== lastDay) {
+            if (lastDay) html += '</div>';
+            lastDay = o.day;
+            html += `<div class="scal-lday${o.day === today ? ' today' : ''}"><div class="scal-ldate">${escapeHtml(_scalFmtDate(o.day, false))}</div>`;
+        }
+        html += _scalRowHTML(o.ev);
+    });
+    return `<div class="scal-list">${html}</div></div>`;
+}
+
+// One event as a full-width row — used by the list view and the day sheet.
+function _scalRowHTML(ev) {
+    const tag = ev.scope === 'company'
+        ? `<span class="scal-tag scal-tag-company">${_SCAL_LOCK}Company</span>`
+        : (_scal.store === 'ALL' ? `<span class="scal-tag"><span class="scal-dot" style="background:${STORE_TINTS[ev.store]}"></span>${escapeHtml(ev.store)}</span>` : '');
+    const time = ev.all_day ? 'All day' : _scalFmtTime(ev.start_time) + (ev.end_time ? ` – ${_scalFmtTime(ev.end_time)}` : '');
+    return `<button type="button" class="scal-row" onclick="_scalOpenDetail('${ev.id}')">
+        <span class="scal-rtime">${escapeHtml(time)}</span>
+        <span class="scal-rtitle">${escapeHtml(ev.title)}<small>${_scalCatDot(ev.category)}${escapeHtml(_SCAL_CATEGORIES[ev.category] || 'Other')}${_scalRepeatOf(ev) !== 'none' ? ' · Repeats ' + _SCAL_REPEATS[_scalRepeatOf(ev)] : ''}</small></span>
+        ${tag}
+    </button>`;
+}
+
+function _scalLegendHTML() {
+    const store = _scal.store;
+    const own = store === 'ALL'
+        ? '<span><i class="scal-key scal-key-tagged"></i>Store Event</span>'
+        : `<span><i class="scal-key scal-key-store"></i>Store Event</span>`;
+    const hint = _scalCanAddHere(store) ? 'Click any day to add an event'
+        : _scalIsDistrict() ? ''
+        : 'Your store manager keeps this calendar';
+    // A key for only the types actually on screen — fifteen swatches for a
+    // month holding four kinds of thing would be a legend nobody reads.
+    let from, to;
+    if (_scal.view === 'week') { from = _scalISO(_scal.weekStart); to = _scalISO(_scalAddDays(_scal.weekStart, 6)); }
+    else if (_scal.view === 'list') { from = _scalISO(_scal.month); to = _scalISO(new Date(_scal.month.getFullYear(), _scal.month.getMonth() + 1, 0)); }
+    else {
+        // Month: every day the grid draws, including the spill-over days from
+        // the months either side — the key matches what is on screen, exactly.
+        const first = _scal.month, start = _scalAddDays(first, -first.getDay());
+        const weeks = Math.ceil((first.getDay() + new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate()) / 7);
+        from = _scalISO(start); to = _scalISO(_scalAddDays(start, weeks * 7 - 1));
+    }
+    const seen = new Set(_scalOccurrences(from, to, store).map(o => o.ev.category));
+    const types = Object.keys(_SCAL_CATEGORIES).filter(c => seen.has(c))
+        .map(c => `<span>${_scalCatDot(c)}${escapeHtml(_SCAL_CATEGORIES[c])}</span>`).join('');
+    return `<div class="scal-legend"><span><i class="scal-key scal-key-company"></i>Company-Wide Event</span>${own}${hint ? `<span class="scal-hint">${hint}</span>` : ''}</div>
+        ${types ? `<div class="scal-legend scal-types">${types}</div>` : ''}`;
+}
+
+// ---- the side sheet: event detail, the day's list, or the store-event form ----
+function _scalPanelHTML() {
+    const p = _scal.panel;
+    if (!p) return '';
+    let inner = '';
+    if (p.kind === 'day') {
+        const occ = _scalOccurrences(p.day, p.day, _scal.store);
+        inner = `<div class="scal-phead"><h4>${escapeHtml(_scalFmtDate(p.day))}</h4><button type="button" class="scal-icon-btn" aria-label="Close" onclick="_scalClosePanel()">${_SCAL_X}</button></div>
+            <div class="scal-pbody">${occ.map(o => _scalRowHTML(o.ev)).join('') || '<div class="scal-empty">Nothing this day.</div>'}</div>
+            ${_scalCanAddHere(_scal.store) ? `<div class="scal-pfoot"><button type="button" class="scal-btn-primary" onclick="_scalOpenEdit(null, '${p.day}')">${_SCAL_PLUS}Add event</button></div>` : ''}`;
+    } else if (p.kind === 'detail') {
+        const ev = _scal.events.find(e => e.id === p.id);
+        if (!ev) { _scal.panel = null; return ''; }
+        const company = ev.scope === 'company';
+        const badge = company ? `<span class="scal-tag scal-tag-company">${_SCAL_LOCK}Company-wide</span>`
+            : `<span class="scal-store-pill">${escapeHtml(ev.store)}</span>`;
+        const stores = company ? `<div class="scal-field"><span class="scal-lbl">Showing on</span><div class="scal-tags">${ev.stores.map(s => `<span class="scal-tag">${escapeHtml(s)}</span>`).join('')}</div></div>` : '';
+        const by = ev.created_by ? `<div class="scal-by"><b>Posted by ${escapeHtml(ev.created_by)}</b>${ev.created_at ? ` · ${escapeHtml(new Date(ev.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }))}` : ''}${ev.source === 'google' ? ' · from the old Google calendar' : ''}</div>` : '';
+        let actions = '';
+        if (!company && _scalCanWriteStore(ev.store) && _scalIsPastEvent(ev)) {
+            actions = `<button type="button" class="scal-btn-danger" onclick="_scalDelete('${ev.id}')">Delete</button>`;
+        } else if (!company && _scalCanWriteStore(ev.store)) {
+            actions = `<button type="button" class="scal-btn-danger" onclick="_scalDelete('${ev.id}')">Delete</button><button type="button" class="scal-btn-primary" onclick="_scalOpenEdit('${ev.id}')">Edit</button>`;
+        } else if (company && _scalIsDistrict() && !_scalIsPastEvent(ev)) {
+            actions = `<button type="button" class="scal-btn-primary" onclick="_scalEditCompany('${ev.id}')">Edit in Company Events</button>`;
+        }
+        const note = company && !_scalIsDistrict()
+            ? '<div class="scal-note">Company events are set by the DM. Managers can see them but can\'t edit or delete them.</div>' : '';
+        inner = `<div class="scal-phead">${badge}<button type="button" class="scal-icon-btn" aria-label="Close" onclick="_scalClosePanel()">${_SCAL_X}</button></div>
+            <div class="scal-pbody">
+                <h2 class="scal-dtitle">${escapeHtml(ev.title)}</h2>
+                <div class="scal-dwhen">${escapeHtml(_scalWhen(ev))}${_scalRepeatOf(ev) !== 'none' ? ' · Repeats ' + _SCAL_REPEATS[_scalRepeatOf(ev)] : ''}</div>
+                <div class="scal-field"><span class="scal-lbl">Type</span><div class="scal-dtype">${_scalCatDot(ev.category)}${escapeHtml(_SCAL_CATEGORIES[ev.category] || 'Other')}</div></div>
+                ${stores}
+                ${ev.notes ? `<div class="scal-field"><span class="scal-lbl">Details</span><p class="scal-notes">${escapeHtml(ev.notes)}</p></div>` : ''}
+                ${by}${note}
+            </div>
+            ${actions ? `<div class="scal-pfoot">${actions}</div>` : ''}`;
+    } else if (p.kind === 'edit') {
+        inner = `<div class="scal-phead"><h4>${p.ev.id ? 'Edit Event' : 'New Event'}</h4>${p.pickStore ? '' : `<span class="scal-store-pill">${escapeHtml(p.ev.store)}</span>`}<button type="button" class="scal-icon-btn" aria-label="Close" onclick="_scalClosePanel()">${_SCAL_X}</button></div>
+            <form class="scal-pbody scal-form" id="scalEditForm" onsubmit="event.preventDefault(); _scalSaveStore()">
+                ${p.pickStore ? `<div class="scal-field"><div class="scal-lblrow"><span class="scal-lbl">Show on</span><button type="button" class="scal-link" onclick="_scalPickAllMine()">All stores</button></div>
+                    <div class="scal-picks scal-picks-mine">${_scalWritableStores().map(s => `<label class="scal-pick"><input type="checkbox" name="scalEStores" value="${s}" ${p.stores.includes(s) ? 'checked' : ''} onchange="_scalSyncStoreSave()">${s}</label>`).join('')}</div></div>` : ''}
+                ${_scalFormFields(p.ev, 'scalE', _scalActiveTypes())}
+                <div class="scal-hint">${p.pickStore ? 'Each store you pick gets its own copy.' : `Shows on the ${escapeHtml(p.ev.store)} calendar only.`}</div>
+                <div class="scal-error" id="scalEError" role="alert"></div>
+            </form>
+            <div class="scal-pfoot"><button type="button" class="scal-btn" onclick="_scalClosePanel()">Cancel</button><button type="submit" form="scalEditForm" class="scal-btn-primary" id="scalESave" ${_scal.saving ? 'disabled' : ''}>${_scal.saving ? 'Saving…' : p.pickStore ? _scalStoreSaveLabel(p.stores) : 'Save Event'}</button></div>`;
+    }
+    return `<div class="scal-scrim" onclick="_scalClosePanel()"></div><aside class="scal-panel" aria-label="Event">${inner}</aside>`;
+}
+
+// The fields both forms share. `p` prefixes the ids so the store sheet and the
+// Company events form can never collide if both are ever in the DOM.
+function _scalFormFields(ev, p, cats) {
+    const allDay = ev.all_day !== false;
+    return `<div class="scal-field"><label class="scal-lbl" for="${p}Title">Title</label>
+            <input id="${p}Title" class="scal-input" maxlength="140" value="${escapeHtml(ev.title || '')}" autocomplete="off" required></div>
+        <div class="scal-two">
+            <div class="scal-field"><label class="scal-lbl" for="${p}Date">Date</label><input id="${p}Date" type="date" class="scal-input" value="${escapeHtml(ev.event_date || '')}" required onchange="_scalStartChanged('${p}')"></div>
+            <div class="scal-field"><label class="scal-lbl" for="${p}End">Ends</label><input id="${p}End" type="date" class="scal-input" value="${allDay ? escapeHtml(ev.end_date || ev.event_date || '') : ''}" ${allDay ? 'required' : 'disabled'}></div>
+        </div>
+        <label class="scal-toggle"><input type="checkbox" id="${p}AllDay" ${allDay ? 'checked' : ''} onchange="_scalAllDayChanged('${p}', this.checked)">All day</label>
+        <div class="scal-two" id="${p}Times" ${allDay ? 'hidden' : ''}>
+            <div class="scal-field"><label class="scal-lbl" for="${p}Start">Starts</label><input id="${p}Start" type="time" class="scal-input" value="${escapeHtml(String(ev.start_time || '').slice(0, 5))}"></div>
+            <div class="scal-field"><label class="scal-lbl" for="${p}EndT">Ends</label><input id="${p}EndT" type="time" class="scal-input" value="${escapeHtml(String(ev.end_time || '').slice(0, 5))}"></div>
+        </div>
+        <div class="scal-field"><label class="scal-lbl" for="${p}Cat">Type</label>
+            <select id="${p}Cat" class="scal-input">${cats.concat(cats.includes(ev.category) || !ev.category ? [] : [ev.category])
+                .map(c => `<option value="${c}" ${ev.category === c ? 'selected' : ''}>${escapeHtml(_SCAL_CATEGORIES[c] || c)}</option>`).join('')}</select></div>
+        <div class="scal-field"><label class="scal-lbl" for="${p}Notes">Notes</label>
+            <textarea id="${p}Notes" class="scal-input" rows="4" maxlength="2000">${escapeHtml(ev.notes || '')}</textarea></div>
+        <div class="scal-field"><label class="scal-lbl" for="${p}Repeat">Repeat</label>
+            <select id="${p}Repeat" class="scal-input">${Object.keys(_SCAL_REPEATS).map(r => `<option value="${r}" ${_scalRepeatOf(ev) === r ? 'selected' : ''}>${_SCAL_REPEATS[r]}</option>`).join('')}</select></div>`;
+}
+
+// A timed event is one day, so its end DATE is greyed out and cleared unless
+// All day is on (Ethan, 2026-10-05); the times row shows instead. For an
+// all-day event the end date is REQUIRED (same day, later: "I don't think for
+// all day, the end date should be optional") — it starts as the start date, so
+// a one-day event still needs no extra typing, and the server stores an end
+// equal to the start as no end at all.
+function _scalAllDayChanged(p, on) {
+    const t = document.getElementById(p + 'Times'); if (t) t.hidden = on;
+    const e = document.getElementById(p + 'End');
+    if (e) {
+        e.disabled = !on; e.required = on;
+        e.value = on ? (e.value || (document.getElementById(p + 'Date') || {}).value || '') : '';
+    }
+}
+// Moving the start past the end drags the end along; so does a start with no end.
+function _scalStartChanged(p) {
+    const s = document.getElementById(p + 'Date'), e = document.getElementById(p + 'End');
+    if (s && e && !e.disabled && s.value && (!e.value || e.value < s.value)) e.value = s.value;
+}
+function _scalReadForm(p) {
+    const v = id => (document.getElementById(p + id) || {}).value || '';
+    const allDay = !!(document.getElementById(p + 'AllDay') || {}).checked;
+    return {
+        title: v('Title').trim(), event_date: v('Date'), end_date: allDay ? (v('End') || null) : null,
+        all_day: allDay, start_time: allDay ? null : (v('Start') || null), end_time: allDay ? null : (v('EndT') || null),
+        category: v('Cat') || 'other', notes: v('Notes'),
+        repeat: (document.getElementById(p + 'Repeat') || {}).value || 'none'
+    };
+}
+
+// ---- the Company events tab (district roles) ----
+// `readOnly`: everyone but corporate — the company events that show on their
+// own store(s), with no form and no edit/delete. The edge function refuses a
+// company write from them regardless.
+function _scalCompanyHTML(readOnly) {
+    const today = _scalTodayISO();
+    const mine = isMultiStoreManager() ? 'ALL' : _scal.store;
+    const company = _scal.events.filter(e => e.scope === 'company' && (!readOnly || _scalShowsOn(e, mine)));
+    // "Upcoming" means not over yet — a multi-day event in progress still counts.
+    const isPast = e => (e.end_date || e.event_date) < today && _scalRepeatOf(e) === 'none';
+    const past = _scal.companyList === 'past';
+    // ONE MONTH AT A TIME, both lists. Past (2026-10-04: "will past events show
+    // month by month or will it just be this giant long list") steps between the
+    // months that actually had events, newest first. Upcoming (2026-10-05: "only
+    // need to show upcoming events for current month ... offer the ability to
+    // switch what month you look at") opens on this month and steps forward a
+    // month at a time; it lists each REPEAT that falls in that month on its own
+    // date, so a yearly birthday turns up in its month, not just its first year.
+    const monthName = k => `${_SCAL_MONTHS[Number(k.slice(5, 7)) - 1]} ${k.slice(0, 4)}`;
+    const spanOf = e => e.end_date ? Math.round((_scalParse(e.end_date) - _scalParse(e.event_date)) / 864e5) : 0;
+    const nav = (label, count, olderCall, newerCall) => `<div class="scal-pastnav">
+                <button type="button" class="scal-icon-btn" aria-label="Older month" ${olderCall ? `onclick="${olderCall}"` : 'disabled'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+                <div class="scal-pastmonth">${label}<small>${count} event${count === 1 ? '' : 's'}</small></div>
+                <button type="button" class="scal-icon-btn" aria-label="Newer month" ${newerCall ? `onclick="${newerCall}"` : 'disabled'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+            </div>`;
+    let items = [], pastNav = '';
+    if (past) {
+        const rows = company.filter(isPast);
+        const ym = e => e.event_date.slice(0, 7);
+        const months = Array.from(new Set(rows.map(ym))).sort().reverse();
+        if (!months.includes(_scal.pastMonth)) _scal.pastMonth = months[0] || null;
+        const i = months.indexOf(_scal.pastMonth);
+        items = rows.filter(e => ym(e) === _scal.pastMonth).reverse().map(e => ({ e, date: e.event_date }));
+        if (months.length) pastNav = nav(monthName(_scal.pastMonth), items.length,
+            i < months.length - 1 ? `_scalSetPastMonth('${months[i + 1]}')` : '', i > 0 ? `_scalSetPastMonth('${months[i - 1]}')` : '');
+    } else {
+        const thisMonth = today.slice(0, 7);
+        if (!_scal.upMonth || _scal.upMonth < thisMonth) _scal.upMonth = thisMonth;
+        const y = Number(_scal.upMonth.slice(0, 4)), m = Number(_scal.upMonth.slice(5, 7)) - 1;
+        const mStart = `${_scal.upMonth}-01`, mEnd = _scalISO(new Date(y, m + 1, 0));
+        company.filter(e => !isPast(e)).forEach(e => {
+            const span = spanOf(e);
+            _scalRepeatStarts(e, _scalISO(_scalAddDays(_scalParse(mStart), -span)), mEnd).forEach(st => {
+                const end = _scalISO(_scalAddDays(_scalParse(st), span));
+                // In this month, and not already over (this month starts today).
+                if (st <= mEnd && end >= mStart && end >= today) items.push({ e, date: st });
+            });
+        });
+        items.sort((a, b) => a.date.localeCompare(b.date) || String(a.e.start_time || '').localeCompare(String(b.e.start_time || '')) || a.e.title.localeCompare(b.e.title));
+        const step = n => { const d = new Date(y, m + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+        pastNav = nav(monthName(_scal.upMonth), items.length,
+            _scal.upMonth > thisMonth ? `_scalSetUpMonth('${step(-1)}')` : '', `_scalSetUpMonth('${step(1)}')`);
+    }
+    const f = _scal.companyForm || _scalBlankCompany();
+    const list = items.length ? items.map(({ e, date }) => {
+        const d = _scalParse(date), span = spanOf(e);
+        const meta = [e.all_day ? 'All day' : _scalFmtTime(e.start_time) + (e.end_time ? ` – ${_scalFmtTime(e.end_time)}` : ''),
+            _SCAL_CATEGORIES[e.category], _scalRepeatOf(e) !== 'none' ? 'Repeats ' + _SCAL_REPEATS[_scalRepeatOf(e)] : '',
+            span ? `through ${_scalAddDays(d, span).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''].filter(Boolean).join(' · ');
+        const all = e.stores.length === STORE_CODES.length;
+        return `<div class="scal-crow${f.id === e.id ? ' editing' : ''}">
+            <div class="scal-cdate"><span>${_SCAL_MONTHS[d.getMonth()].slice(0, 3)}</span><b>${d.getDate()}</b></div>
+            <div class="scal-cmain"><div class="scal-ctitle">${escapeHtml(e.title)}</div><div class="scal-cmeta">${escapeHtml(meta)}</div></div>
+            <div class="scal-tags">${all ? '<span class="scal-tag">All stores</span>' : e.stores.map(s => `<span class="scal-tag">${s}</span>`).join('')}</div>
+            ${readOnly ? '' : `<div class="scal-cbtns">
+                ${past ? '' : `<button type="button" class="scal-icon-btn" aria-label="Edit ${escapeHtml(e.title)}" onclick="_scalEditCompany('${e.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>`}
+                <button type="button" class="scal-icon-btn danger" aria-label="Delete ${escapeHtml(e.title)}" onclick="_scalDelete('${e.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
+            </div>`}
+        </div>`;
+    }).join('') : `<div class="scal-empty">${past ? 'No past company events.' : `Nothing coming up in ${monthName(_scal.upMonth)}.`}</div>`;
+    const picks = STORE_CODES.map(s => `<label class="scal-pick"><input type="checkbox" name="scalCStores" value="${s}" ${f.stores.includes(s) ? 'checked' : ''} onchange="_scalSyncPostLabel()">${s}</label>`).join('');
+    return `<div class="scal-company${readOnly ? ' scal-company-ro' : ''}">
+        <section class="scal-clist">
+            <div class="scal-chead">
+                <div><div class="scal-title">${_scal.companyList === 'past' ? 'Past' : 'Upcoming'} Company Events</div>
+                ${readOnly ? '' : '<div class="scal-sub">These show on every store calendar you pick. Managers can\'t change them.</div>'}</div>
+                <div class="scal-seg scal-seg-sm">
+                    <button type="button" class="${_scal.companyList === 'upcoming' ? 'on' : ''}" onclick="_scalSetCompanyList('upcoming')">Upcoming</button>
+                    <button type="button" class="${_scal.companyList === 'past' ? 'on' : ''}" onclick="_scalSetCompanyList('past')">Past</button>
+                </div>
+            </div>
+            ${pastNav}
+            <div class="scal-crows">${_scal.error && !_scal.loaded ? `<div class="scal-empty">${escapeHtml(_scal.error)}</div>` : list}</div>
+        </section>
+        ${readOnly ? '' : `<form class="scal-cform scal-form" id="scalCompanyForm" onsubmit="event.preventDefault(); _scalSaveCompany()">
+            <div class="scal-title">${f.id ? 'Edit Company Event' : 'New Company Event'}</div>
+            ${_scalFormFields(f, 'scalC', _scalActiveTypes())}
+            <div class="scal-field"><div class="scal-lblrow"><span class="scal-lbl">Show on</span><button type="button" class="scal-link" onclick="_scalPickAll()">All stores</button></div>
+                <div class="scal-picks">${picks}</div></div>
+            <div class="scal-error" id="scalCError" role="alert"></div>
+            <div class="scal-cfoot">
+                <button type="button" class="scal-btn" onclick="_scalEditCompany(null)">${f.id ? 'Cancel edit' : 'Clear'}</button>
+                <button type="submit" class="scal-btn-primary" id="scalCPost" ${_scal.saving ? 'disabled' : ''}>${_scalPostLabel(f.stores, f.id)}</button>
+            </div>
+        </form>`}
+    </div>`;
+}
+
+// ---- the Event Types tab (the DM only) ----
+// Add a type, remove one, bring a removed one back. Removing never touches an
+// event: what is already filed under a type keeps its name and colour, and the
+// type just stops being offered. Other can't go — it is the fallback for a
+// removed type on any NEW event. Names are Title Cased by the server, which
+// is what decides; the hint here only says it will happen.
+function _scalTypesHTML() {
+    const used = {};
+    _scal.events.forEach(e => { used[e.category] = (used[e.category] || 0) + 1; });
+    const n = k => used[k] ? `${used[k]} Event${used[k] === 1 ? '' : 's'}` : '';
+    const active = _scalTypes.filter(t => t.active), removed = _scalTypes.filter(t => !t.active);
+    // EDIT (Ethan, 2026-10-04). The pencil loads a type into the right-hand
+    // form; saving renames and/or recolours it everywhere at once, because the
+    // events hold the key, not the name. Other can change colour, not name.
+    const editing = _scal.typeEdit ? _scalTypes.find(t => t.key === _scal.typeEdit) : null;
+    const pick = _scal.typeColor || (editing ? editing.color : _SCAL_TYPE_SWATCHES[0]);
+    const swatches = _SCAL_TYPE_SWATCHES.includes(pick) ? _SCAL_TYPE_SWATCHES : _SCAL_TYPE_SWATCHES.concat([pick]);
+    const pencil = t => `<button type="button" class="scal-icon-btn" aria-label="Edit ${escapeHtml(t.label)}" onclick="_scalEditType('${t.key}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>`;
+    const row = (t, btns) => `<div class="scal-trow${editing && editing.key === t.key ? ' editing' : ''}">${_scalCatDot(t.key)}<span class="scal-tname">${escapeHtml(t.label)}</span><span class="scal-tcount">${n(t.key)}</span><span class="scal-cbtns">${btns}</span></div>`;
+    const isOther = editing && editing.key === 'other';
+    return `<div class="scal-company scal-typestab">
+        <section class="scal-clist">
+            <div class="scal-chead"><div>
+                <div class="scal-title">Event Types</div>
+            </div></div>
+            <div class="scal-trows">${active.map(t => row(t, pencil(t) + (t.key === 'other' ? '<span class="scal-tfixed" title="Other is where everything else goes">Can\'t remove</span>'
+                : `<button type="button" class="scal-icon-btn danger" aria-label="Remove ${escapeHtml(t.label)}" onclick="_scalRemoveType('${t.key}')">${_SCAL_X}</button>`))).join('')}</div>
+            ${removed.length ? `<div class="scal-lbl scal-tremoved">Removed: events already filed under these keep them</div>
+                <div class="scal-trows">${removed.map(t => row(t, `<button type="button" class="scal-btn" onclick="_scalRestoreType('${t.key}')">Bring back</button>`)).join('')}</div>` : ''}
+        </section>
+        <form class="scal-cform scal-form" onsubmit="event.preventDefault(); _scalSaveType()">
+            <div class="scal-title">${editing ? `Edit ${escapeHtml(editing.label)}` : 'Add a Type'}</div>
+            <div class="scal-field"><label class="scal-lbl" for="scalTName">Name</label>
+                <input id="scalTName" class="scal-input" maxlength="40" autocomplete="off" placeholder="e.g. Vendor Visits" value="${editing ? escapeHtml(editing.label) : ''}" ${isOther ? 'disabled' : ''}>
+                <div class="scal-hint">${isOther ? 'Other keeps its name, since it\'s where everything else goes. You can change its colour.'
+                    : editing ? ''
+                    : ''}</div></div>
+            <div class="scal-field"><span class="scal-lbl">Colour</span>
+                <div class="scal-swatches" role="radiogroup" aria-label="Colour">${swatches.map(c =>
+                    `<button type="button" role="radio" aria-checked="${c === pick}" aria-label="${c}" class="scal-swatch${c === pick ? ' on' : ''}" style="background:${c}" onclick="_scalPickTypeColor('${c}')"></button>`).join('')}</div></div>
+            <div class="scal-error" id="scalTError" role="alert"></div>
+            <div class="scal-cfoot">
+                ${editing ? '<button type="button" class="scal-btn" onclick="_scalEditType(null)">Cancel</button>' : ''}
+                <button type="submit" class="scal-btn-primary" ${_scal.saving ? 'disabled' : ''}>${_scal.saving ? 'Saving…' : editing ? 'Save Changes' : 'Add Type'}</button>
+            </div>
+        </form>
+    </div>`;
+}
+function _scalEditType(key) {
+    _scal.typeEdit = key; _scal.typeColor = null; _scalRender();
+    const el = document.getElementById('scalTName');
+    if (el && key && !el.disabled) el.focus();
+}
+function _scalPickTypeColor(c) {
+    const name = (document.getElementById('scalTName') || {}).value || '';
+    _scal.typeColor = c; _scalRender();
+    const el = document.getElementById('scalTName'); if (el) el.value = name;
+}
+function _scalUpsertType(t) {
+    const list = _scalTypes.filter(x => x.key !== t.key).concat([t]);
+    _scalSetTypes(list);
+}
+// Add, or save the type being edited — one form does both.
+async function _scalSaveType() {
+    if (_scal.saving) return;
+    const editing = _scal.typeEdit ? _scalTypes.find(t => t.key === _scal.typeEdit) : null;
+    const el = document.getElementById('scalTName');
+    const label = (el && el.value || '').trim();
+    const err = document.getElementById('scalTError');
+    if (!label) { err.textContent = 'Give the type a name.'; return; }
+    const color = _scal.typeColor || (editing ? editing.color : _SCAL_TYPE_SWATCHES[0]);
+    _scal.saving = true; _scalRender();
+    try {
+        const r = await _scalSend(editing ? { action: 'type_edit', key: editing.key, label, color } : { action: 'type_add', label, color });
+        _scalUpsertType(Object.assign({}, editing || {}, r.category));
+        _scal.saving = false; _scal.typeColor = null; _scal.typeEdit = null; _scalRender();
+    } catch (e) {
+        _scal.saving = false; _scalRender();
+        const n = document.getElementById('scalTName'); if (n) n.value = label;
+        const x = document.getElementById('scalTError'); if (x) x.textContent = e.message || 'Could not add it.';
+    }
+}
+async function _scalRemoveType(key) {
+    const t = _scalTypes.find(x => x.key === key);
+    if (!t || !confirm(`Remove "${t.label}"? Events already filed under it keep it; it just can't be picked for new ones.`)) return;
+    try { const r = await _scalSend({ action: 'type_remove', key }); _scalUpsertType(r.category); _scalRender(); }
+    catch (e) { alert(e.message || 'Could not remove it.'); }
+}
+async function _scalRestoreType(key) {
+    const t = _scalTypes.find(x => x.key === key);
+    if (!t) return;
+    try { const r = await _scalSend({ action: 'type_add', label: t.label, color: t.color }); _scalUpsertType(r.category); _scalRender(); }
+    catch (e) { alert(e.message || 'Could not bring it back.'); }
+}
+
+function _scalBlankCompany() {
+    return { id: null, scope: 'company', title: '', event_date: _scalTodayISO(), all_day: true, category: _scalDefaultType('meeting'), stores: STORE_CODES.slice(), notes: '' };
+}
+function _scalPostLabel(stores, id) {
+    if (_scal.saving) return 'Saving…';
+    const n = stores.length;
+    if (id) return 'Save changes';
+    return n === STORE_CODES.length ? `Post to all ${n} stores` : n === 1 ? `Post to ${stores[0]}` : `Post to ${n} stores`;
+}
+function _scalCheckedStores() {
+    return Array.from(document.querySelectorAll('input[name="scalCStores"]:checked')).map(i => i.value);
+}
+function _scalSyncPostLabel() {
+    const b = document.getElementById('scalCPost');
+    if (b) b.textContent = _scalPostLabel(_scalCheckedStores(), (_scal.companyForm || {}).id);
+}
+function _scalPickAll() {
+    document.querySelectorAll('input[name="scalCStores"]').forEach(i => { i.checked = true; });
+    _scalSyncPostLabel();
+}
+
+// ---- state changes ----
+function _scalSetTab(t) { _scal.tab = t; _scal.panel = null; _scal.typeEdit = null; _scal.typeColor = null; _scalRender(); }
+function _scalSetView(v) {
+    _scal.view = v;
+    if (v === 'week') {
+        // Land on the week holding today if it's in the month on screen, else the 1st.
+        const t = new Date(), m = _scal.month;
+        const anchor = t.getFullYear() === m.getFullYear() && t.getMonth() === m.getMonth() ? t : m;
+        _scal.weekStart = _scalAddDays(anchor, -anchor.getDay());
+    }
+    _scalRender();
+}
+function _scalSetStore(s) { _scal.store = s; _scal.panel = null; _scalRender(); }
+function _scalSetCompanyList(l) { _scal.companyList = l; _scalRender(); }
+function _scalSetPastMonth(m) { _scal.pastMonth = m; _scalRender(); }
+function _scalSetUpMonth(m) { _scal.upMonth = m; _scalRender(); }
+function _scalStep(n) {
+    if (_scal.view === 'week') {
+        _scal.weekStart = _scalAddDays(_scal.weekStart, 7 * n);
+        _scal.month = new Date(_scal.weekStart.getFullYear(), _scal.weekStart.getMonth(), 1);
+    } else {
+        _scal.month = new Date(_scal.month.getFullYear(), _scal.month.getMonth() + n, 1);
+    }
+    _scalRender();
+}
+function _scalOpenDetail(id) { _scal.panel = { kind: 'detail', id }; _scalRender(); }
+function _scalOpenDay(day) { _scal.panel = { kind: 'day', day }; _scalRender(); }
+function _scalClosePanel() { _scal.panel = null; _scal.saving = false; _scalRender(); }
+function _scalOpenEdit(id, day) {
+    // An MSM adding an event gets the DM's "Show on" picker — All stores / BAL
+    // / MPL (Ethan, 2026-10-05) — ticked to whichever view they added from.
+    const mine = _scalWritableStores();
+    const pickStore = !id && mine.length > 1;
+    const stores = pickStore ? (_scal.store === 'ALL' ? mine.slice() : [_scal.store]) : null;
+    const ev = id ? Object.assign({}, _scal.events.find(e => e.id === id))
+        : { id: null, scope: 'store', store: stores ? stores[0] : _scal.store, title: '', event_date: day, all_day: true, category: _scalDefaultType('staffing'), notes: '' };
+    if (!ev || !_scalCanWriteStore(ev.store) || (id && _scalIsPastEvent(ev))) return;
+    _scal.panel = { kind: 'edit', ev, pickStore, stores };
+    _scalRender();
+    const t = document.getElementById('scalETitle');
+    if (t) t.focus();
+}
+function _scalEditCompany(id) {
+    const ev = id && _scal.events.find(e => e.id === id);
+    if (ev && _scalIsPastEvent(ev)) return;
+    _scal.companyForm = ev ? Object.assign({}, ev, { stores: ev.stores.slice() }) : null;
+    _scal.tab = 'company';
+    _scal.panel = null;
+    if (ev) {
+        _scal.companyList = (ev.end_date || ev.event_date) < _scalTodayISO() && _scalRepeatOf(ev) === 'none' ? 'past' : 'upcoming';
+        _scal.pastMonth = ev.event_date.slice(0, 7);   // land on the month it's in
+        _scal.upMonth = ev.event_date.slice(0, 7);     // (clamped to this month at the earliest)
+    }
+    _scalRender();
+    const t = document.getElementById('scalCTitle');
+    if (t) t.focus();
+}
+
+// ---- network ----
+async function _scalLoad() {
+    try {
+        const res = await fetch(`${STORE_CALENDAR_URL}?v=${Date.now()}`);
+        const j = await res.json();
+        if (!j || !j.success || !Array.isArray(j.events)) throw new Error((j && j.error) || 'Could not load the calendar');
+        _scal.events = j.events;
+        if (Array.isArray(j.categories) && j.categories.length) _scalSetTypes(j.categories);
+        _scal.loaded = true;
+        _scal.error = '';
+    } catch (e) {
+        // Keep whatever was already on screen; only an empty first load says so.
+        _scal.error = "Couldn't load the calendar. Check the connection and open it again.";
+    }
+    const modal = document.getElementById('calendarDropdown');
+    if (modal && modal.classList.contains('show')) _scalRender();
+}
+
+async function _scalSend(payload) {
+    return postWrite(STORE_CALENDAR_URL, Object.assign({ pin: sessionStorage.getItem('speeksUserPin') || '' }, payload));
+}
+function _scalUpsertLocal(ev) {
+    const i = _scal.events.findIndex(e => e.id === ev.id);
+    if (i >= 0) _scal.events[i] = ev; else _scal.events.push(ev);
+    _scal.events.sort((a, b) => a.event_date.localeCompare(b.event_date) || String(a.start_time || '').localeCompare(String(b.start_time || '')));
+}
+
+async function _scalSaveStore() {
+    const p = _scal.panel;
+    if (!p || p.kind !== 'edit' || _scal.saving) return;
+    // A store event belongs to ONE store (0125's shape check), so picking both
+    // of an MSM's stores saves one copy each, in turn. Each copy is then that
+    // store's own: edited or deleted there without touching the other.
+    const stores = p.pickStore ? _scalPickedMine() : [p.ev.store];
+    const ev = Object.assign(_scalReadForm('scalE'), { scope: 'store', store: stores[0] });
+    const err = document.getElementById('scalEError');
+    if (!stores.length) { err.textContent = 'Pick at least one store.'; return; }
+    if (!ev.title) { err.textContent = 'Give the event a title.'; return; }
+    if (ev.all_day && !ev.end_date) { err.textContent = 'Pick an end date.'; return; }
+    if (ev.all_day && ev.end_date < ev.event_date) { err.textContent = 'The end date is before the start date.'; return; }
+    if (!ev.all_day && !ev.start_time) { err.textContent = 'Pick a start time, or make it all day.'; return; }
+    p.ev = Object.assign({}, p.ev, ev);
+    if (p.pickStore) p.stores = stores;
+    _scal.saving = true; _scalRender();
+    const done = [];
+    try {
+        let r;
+        for (const st of stores) {
+            r = await _scalSend({ action: 'save', id: p.ev.id || undefined, event: Object.assign({}, ev, { store: st }) });
+            _scalUpsertLocal(r.event); done.push(st);
+        }
+        _scal.saving = false;
+        _scal.panel = null;
+        // Jump to where it landed, in case the date was moved off this month.
+        const d = _scalParse(r.event.event_date);
+        _scal.month = new Date(d.getFullYear(), d.getMonth(), 1);
+        _scalRender();
+    } catch (e) {
+        // A copy already saved stays saved; untick it so a retry doesn't double it.
+        if (done.length && p.pickStore) p.stores = stores.filter(s => !done.includes(s));
+        _scal.saving = false; _scalRender();
+        const el = document.getElementById('scalEError');
+        if (el) el.textContent = (done.length ? `Saved to ${done.join(' and ')}, but not the rest: ` : '') + (e.message || 'Could not save.');
+    }
+}
+function _scalPickedMine() { return Array.from(document.querySelectorAll('input[name="scalEStores"]:checked')).map(i => i.value); }
+function _scalStoreSaveLabel(stores) { return stores.length > 1 ? 'Save to Both Stores' : stores.length ? `Save to ${stores[0]}` : 'Save Event'; }
+function _scalSyncStoreSave() {
+    const p = _scal.panel; if (p && p.pickStore) p.stores = _scalPickedMine();
+    const b = document.getElementById('scalESave'); if (b) b.textContent = _scalStoreSaveLabel(_scalPickedMine());
+}
+function _scalPickAllMine() {
+    document.querySelectorAll('input[name="scalEStores"]').forEach(i => { i.checked = true; });
+    _scalSyncStoreSave();
+}
+
+async function _scalSaveCompany() {
+    if (_scal.saving) return;
+    const prev = _scal.companyForm || _scalBlankCompany();
+    const ev = Object.assign(_scalReadForm('scalC'), { scope: 'company', stores: _scalCheckedStores() });
+    const err = document.getElementById('scalCError');
+    if (!ev.title) { err.textContent = 'Give the event a title.'; return; }
+    if (ev.all_day && !ev.end_date) { err.textContent = 'Pick an end date.'; return; }
+    if (ev.all_day && ev.end_date < ev.event_date) { err.textContent = 'The end date is before the start date.'; return; }
+    if (!ev.stores.length) { err.textContent = 'Pick at least one store.'; return; }
+    if (!ev.all_day && !ev.start_time) { err.textContent = 'Pick a start time, or make it all day.'; return; }
+    _scal.companyForm = Object.assign({}, prev, ev);
+    _scal.saving = true; _scalRender();
+    try {
+        const r = await _scalSend({ action: 'save', id: prev.id || undefined, event: ev });
+        _scalUpsertLocal(r.event);
+        _scal.saving = false;
+        _scal.companyForm = null;
+        _scalRender();
+    } catch (e) {
+        _scal.saving = false; _scalRender();
+        const el = document.getElementById('scalCError');
+        if (el) el.textContent = e.message || 'Could not save.';
+    }
+}
+
+async function _scalDelete(id) {
+    const ev = _scal.events.find(e => e.id === id);
+    if (!ev) return;
+    const where = ev.scope === 'company' ? `from ${ev.stores.length === STORE_CODES.length ? 'every store' : ev.stores.join(', ')}` : `from the ${ev.store} calendar`;
+    if (!confirm(`Delete "${ev.title}" ${where}?`)) return;
+    try {
+        await _scalSend({ action: 'delete', id });
+        _scal.events = _scal.events.filter(e => e.id !== id);
+        if (_scal.companyForm && _scal.companyForm.id === id) _scal.companyForm = null;
+        _scal.panel = null;
+        _scalRender();
+    } catch (e) {
+        alert(e.message || 'Could not delete.');
+    }
+}
+
+// Opening resets to this month and the person's own store, then draws from
+// what's cached while a fresh copy loads — so a change made at another store
+// since the last open is there without a page reload (the old embed's problem).
 function toggleCalendar() {
     const modal = document.getElementById('calendarDropdown');
-    const frame = modal && modal.querySelector('iframe');
-    // Only on the way in — reloading as it closes would just burn a fetch.
-    if (frame && modal && !modal.classList.contains('show')) {
-        frame.replaceWith(frame.cloneNode(true));
+    if (modal && !modal.classList.contains('show')) {
+        const t = new Date();
+        _scal.month = new Date(t.getFullYear(), t.getMonth(), 1);
+        _scal.weekStart = _scalAddDays(t, -t.getDay());
+        _scal.panel = null; _scal.saving = false;
+        _scal.tab = 'calendar'; _scal.companyList = 'upcoming'; _scal.pastMonth = null; _scal.upMonth = null;
+        _scal.typeEdit = null; _scal.typeColor = null;
+        if (_scalIsDistrict() || isMultiStoreManager()) _scal.store = 'ALL';
+        else {
+            const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+            _scal.store = STORE_CODES.includes(s) ? s : (isMultiStoreManager() ? MULTISTORE_MANAGER_STORES[0] : STORE_CODES[0]);
+        }
+        if (!_scal.loaded) document.getElementById('scalRoot') && (document.getElementById('scalRoot').innerHTML = '<div class="scal-empty">Loading the calendar…</div>');
+        else _scalRender();
+        _scalLoad();
     }
     toggleModal('calendarDropdown');
 }
