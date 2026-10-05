@@ -95,6 +95,22 @@ if (Get-ChildItem -LiteralPath $Root -Directory -Filter "${today}_*" -ErrorActio
     exit 0
 }
 
+# THE NETWORK MAY NOT BE THERE EITHER. The unlock trigger fires the moment the
+# lock screen goes away, which is before Wi-Fi has reconnected. On Oct 1 the
+# 1:43pm run started that way: every part failed on DNS inside two seconds and
+# left an empty .partial. Drive answered fine, because G: serves its cache
+# offline. So wait for the hosts the backup actually talks to.
+$netUntil = (Get-Date).AddMinutes(15)
+foreach ($h in @('api.supabase.com', 'github.com')) {
+    while ($true) {
+        try { [Net.Dns]::GetHostAddresses($h) | Out-Null; break } catch { }
+        if ((Get-Date) -gt $netUntil) {
+            Stop-Early "could not reach $h for 15 minutes. The PC has no internet connection."
+        }
+        Start-Sleep -Seconds 20
+    }
+}
+
 try {
     New-Item -ItemType Directory -Force -Path $Root, $snap, $logDir -ErrorAction Stop | Out-Null
 } catch {
