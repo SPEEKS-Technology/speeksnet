@@ -1,8 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-// The two decisions a month needs before it starts: each store's gross-profit
-// goal, and the days the stores are shut.
+// The two decisions a month needs before it starts: each store's profit goal
+// (GROSS profit through September 2026, NET profit from October — see NP_FROM),
+// and the days the stores are shut.
 //
 // ⚠️ NOT the `monthly-goals` function, which is a different feature entirely
 // (the written goals/initiatives panel), and NOT `store_monthly_goals`, which
@@ -34,6 +35,22 @@ const corsHeaders = {
 };
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
+
+// FROM OCTOBER 2026 THE GOAL IS NET PROFIT. Paul moved the company from GP to NP
+// grading at the start of October (Ethan, 2026-10-02). Rather than a second
+// panel, the month decides which goal this function is talking about: a month
+// from NP_FROM on reads and saves monthly_np_goals, an earlier one keeps reading
+// monthly_gp_goals, so September's GP goals are still there to look back on and
+// every caller that reads `goals` / `missing` / `complete` (the Month Setup
+// panel, its reminder) is switched over without being told.
+//
+// `kind` says which it is. The push to the sheet follows the kind too: an NP
+// month's goals go to the "NP Goal" cells of its Net Profit tab, a GP month's to
+// the Sales tab's "GP Goal" cells, exactly as before.
+const NP_FROM = "2026-10";
+function goalKind(ym: string): "np" | "gp" { return ym >= NP_FROM ? "np" : "gp"; }
+function goalTable(ym: string) { return goalKind(ym) === "np" ? "monthly_np_goals" : "monthly_gp_goals"; }
+function goalCol(ym: string) { return goalKind(ym) === "np" ? "np_goal" : "gp_goal"; }
 
 // A goal is a month's gross profit for one store. Six figures is already
 // unusual; seven is a typo with a zero in it, and it would silently rescale
@@ -148,11 +165,17 @@ async function pushToSheet(
   const url = Deno.env.get("MONTH_ROLLOVER_URL");
   const secret = Deno.env.get("SYNC_SECRET");
   if (!url || !secret) return "not configured";
+  // An NP month sends its goals as `npGoals` with an empty `goals`, so a
+  // month-rollover script published before NP goals existed writes nothing,
+  // rather than putting a Net Profit goal in the Sales tab's GP Goal cell.
+  const np = goalKind(month) === "np";
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "goals", secret, month, goals, buyDays }),
+      body: JSON.stringify({
+        action: "goals", secret, month, goals: np ? {} : goals, npGoals: np ? goals : undefined, buyDays,
+      }),
       redirect: "follow",
     });
     const txt = (await res.text()).slice(0, 300);
@@ -177,8 +200,8 @@ Deno.serve(async (req: Request) => {
       const asked = String(url.searchParams.get("month") || "").trim();
       const month = /^\d{4}-\d{2}$/.test(asked) ? asked : centralMonth();
       const { data, error } = await supabase
-        .from("monthly_gp_goals")
-        .select("store, gp_goal, set_by, set_at")
+        .from(goalTable(month))
+        .select(`store, ${goalCol(month)}, set_by, set_at`)
         .eq("ym", month);
       if (error) throw error;
 
@@ -187,7 +210,7 @@ Deno.serve(async (req: Request) => {
       for (const r of data || []) {
         const code = String(r.store || "").toUpperCase();
         if (!STORES.includes(code)) continue;
-        goals[code] = Number(r.gp_goal);
+        goals[code] = Number((r as Record<string, unknown>)[goalCol(month)]);
         if (!setAt || String(r.set_at) > setAt) { setAt = String(r.set_at); setBy = String(r.set_by || ""); }
       }
       const { data: shut } = await supabase
@@ -206,6 +229,7 @@ Deno.serve(async (req: Request) => {
       const missing = STORES.filter((s) => !(s in goals));
       return json({
         month,
+        kind: goalKind(month),
         goals,
         total: Object.values(goals).reduce((a, b) => a + b, 0),
         complete: missing.length === 0,
@@ -236,7 +260,8 @@ Deno.serve(async (req: Request) => {
       if (!/^\d{4}-\d{2}$/.test(month)) return json({ error: "Bad month" }, 400);
 
       const raw = (body.goals || {}) as Record<string, unknown>;
-      const rows: { store: string; ym: string; gp_goal: number; set_by: string }[] = [];
+      const col = goalCol(month);
+      const rows: ({ store: string; ym: string; set_by: string } & Record<string, unknown>)[] = [];
       for (const code of STORES) {
         if (!(code in raw)) continue;
         const v = Number(raw[code]);
@@ -246,18 +271,18 @@ Deno.serve(async (req: Request) => {
         if (raw[code] === "" || raw[code] === null) continue;
         if (!Number.isFinite(v) || v < 0) return json({ error: `Bad goal for ${code}` }, 400);
         if (v > MAX_GOAL) return json({ error: `${code}'s goal looks like a typo (over $1M)` }, 400);
-        rows.push({ store: code, ym: month, gp_goal: Math.round(v * 100) / 100, set_by: String(user.name || "") });
+        rows.push({ store: code, ym: month, [col]: Math.round(v * 100) / 100, set_by: String(user.name || "") });
       }
 
       const clear = STORES.filter((c) => c in raw && !rows.some((r) => r.store === c));
       if (clear.length) {
         const { error } = await supabase
-          .from("monthly_gp_goals").delete().eq("ym", month).in("store", clear);
+          .from(goalTable(month)).delete().eq("ym", month).in("store", clear);
         if (error) throw error;
       }
       if (rows.length) {
         const { error } = await supabase
-          .from("monthly_gp_goals").upsert(rows, { onConflict: "store,ym" });
+          .from(goalTable(month)).upsert(rows, { onConflict: "store,ym" });
         if (error) throw error;
       }
 
@@ -289,11 +314,11 @@ Deno.serve(async (req: Request) => {
         buyDays = buyingDays(month, shut.map((s) => s.day));
       }
 
-      const sheet = await pushToSheet(month, Object.fromEntries(rows.map((r) => [r.store, r.gp_goal])), buyDays);
+      const sheet = await pushToSheet(month, Object.fromEntries(rows.map((r) => [r.store, Number(r[col])])), buyDays);
       await broadcastChange("gpGoals");
 
       const missing = STORES.filter((s) => !rows.some((r) => r.store === s));
-      return json({ success: true, month, saved: rows.length, missing, complete: missing.length === 0, buyDays, sheet });
+      return json({ success: true, month, kind: goalKind(month), saved: rows.length, missing, complete: missing.length === 0, buyDays, sheet });
     }
 
     return json({ error: "Method not allowed" }, 405);

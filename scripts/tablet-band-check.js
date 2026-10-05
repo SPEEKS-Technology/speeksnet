@@ -920,7 +920,7 @@ t('the phone card keeps the layout it was approved with', function () {
 // that removing one is a decision somebody makes, not something that rots away.
 var TB_EARNED_BACK = [
     ['#notifySettingsBtn',    'Settings button'],
-    ['[data-tip="Strategic Calendar"]', 'Calendar button'],
+    ['[data-tip="Store Calendar"]', 'Calendar button'],
     ['[data-feature="widget-dm-goals"]',    'Monthly Team Goals (DM)'],
     ['[data-feature="widget-goals-panel"]', 'Goals & Initiatives (manager)'],
     ['[data-feature="widget-dm-audit"]',    'Cleaning Checklist (DM/CEO)'],

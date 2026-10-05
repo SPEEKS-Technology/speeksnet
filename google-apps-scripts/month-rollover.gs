@@ -78,6 +78,21 @@ var MR_BUY_WIDTH = 5;
 // 2026-09-02. See _mrReviewBase.
 var MR_REVIEW_WIDTH = 7;
 var MR_BUY_FIRST_ROW = 1;     // 0-based
+
+// ⚠️ EVERY SUNDAY ON A BUY TAB CARRIES A TYPED 0, AND THE ROLL USED TO ERASE IT.
+// The stores do not buy on Sundays, and the Buy tab has always had a $0 keyed on
+// every Sunday of the month from day one. Two readers depend on it: the daily
+// import treats a blank Buy cell on a past day as "no Day End Report arrived —
+// key it by hand" and emails about it, and "Days thru Month" skips a pre-zeroed
+// Sunday. A 0 is a typed value, so the clearing pass below wiped every one of
+// them, and the first Monday of October 2026 emailed that all five stores had
+// no report for Sunday the 4th.
+//
+// Offsets inside a store block: base+1 Buy, base+2 Sell — the two cells the
+// import writes (COL_BUY / COL_SELL in sales-email-import.gs). Written only
+// where the cell is blank and holds no real formula, so it can never overwrite
+// a figure, and running it twice changes nothing.
+var MR_BUY_SUNDAY_ZERO = [1, 2];
 var MR_HEADER_ROWS = 4;
 
 // Footer cells worth updating, by the LABEL beside them. Matched as a whole
@@ -397,12 +412,33 @@ function _mrRetarget(f, prevName, srcName, cutRow, delta) {
 // first column to the right of every store block that holds a 1 and a 2 in
 // consecutive day rows. Nothing else on the tab looks like that, and it cannot
 // be broken by relabelling a header.
+//
+// ⚠️ SHAPE ALONE IS NOT ENOUGH — THE COMPANY TTL BLOCK HAS A DAY COLUMN TOO.
+// It starts at Z, right after BAL, and it numbers its days exactly like the
+// reviews table does. The first live preview of the repair (2026-10-05) picked
+// Z, and Apply would have wiped the reviews day column at AE and written the TTL
+// formula over OVL's counts in AF. The roll had the same aim from 09-02; it only
+// escaped because the deployed copy predated the pass. So a candidate must ALSO
+// carry the five store codes, in order, in the header rows of the five columns
+// after it — which AE:AJ does and the company block cannot (it is one block, not
+// five stores side by side).
 function _mrReviewBase(values, bases, firstRow, lastCol, width) {
   var after = 0;
   Object.keys(bases).forEach(function (c) { after = Math.max(after, bases[c] + width); });
+  var hdr = Math.min(MR_HEADER_ROWS, values.length);
+  var storesFollow = function (c) {
+    for (var r = 0; r < hdr; r++) {
+      var row = values[r] || [], hit = true;
+      for (var i = 0; i < MR_STORES.length; i++) {
+        if (String(row[c + 1 + i] === undefined ? '' : row[c + 1 + i]).trim().toUpperCase() !== MR_STORES[i]) { hit = false; break; }
+      }
+      if (hit) return true;
+    }
+    return false;
+  };
   for (var c = after; c < lastCol; c++) {
     var rows = _mrDayRows(values, c, firstRow);
-    if (rows[1] !== undefined && rows[2] !== undefined) return c;
+    if (rows[1] !== undefined && rows[2] !== undefined && storesFollow(c)) return c;
   }
   return -1;
 }
@@ -421,6 +457,113 @@ function _mrLastDayRow(sheet, width, firstRow) {
   var last = 0;
   for (var d in rows) if (rows[d] + 1 > last) last = rows[d] + 1;
   return last;
+}
+
+// ---- the reviews mini-table: renumber, clear, TTL ---------------------------
+// Its day column gets renumbered and last month's counts get cleared, for the
+// same reasons the store blocks do. Kept apart from the store blocks because it
+// is a different WIDTH and holds no weekly column, and because a wrong guess
+// here would write over five stores' buying data.
+//
+// ⚠️ THE ROWS COME FROM THE STORE GRID, NOT FROM THE BLOCK'S OWN DAY COLUMN.
+// The block's day column is the thing a resize breaks — October 2026 arrived
+// reading 1..29, 28, 30, because the 30->31 insert copies the day-28 row across
+// every column and nothing renumbered this one. The store blocks are renumbered
+// first and the import finds its row through them, so they are the authority.
+// The block's own day 1 must still sit on the same row, or it is left alone:
+// that is the check that a different-shaped tab cannot be written over.
+//
+// ⚠️ THE TTL COLUMN IS WRITTEN, NOT COPIED. Its formula is documented in
+// hub-google-reviews.gs and had gone missing below day 5 in September, so every
+// roll carried the hole forward and row 36's "days elapsed" read off a column
+// that was mostly empty. Authoring the one known formula is what stops a lost
+// cell from being inherited for ever.
+//
+// Shared by the roll and by mrRepairReviews*, so the repair is the same code
+// that will run on the 1st.
+function _mrResetReviews(tab, wantCount, dryRun) {
+  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+  var rng = tab.getRange(1, 1, lastRow, lastCol);
+  var values = rng.getValues(), formulas = rng.getFormulas();
+  var bases = _mrBases(values, MR_BUY_WIDTH);
+  var codes = Object.keys(bases);
+  if (!codes.length) return { warn: 'reviews: no store blocks — block left alone' };
+  var revBase = _mrReviewBase(values, bases, MR_BUY_FIRST_ROW, lastCol, MR_BUY_WIDTH);
+  if (revBase < 0) return { warn: 'reviews: no day column found to the right of the store blocks — block left alone' };
+
+  var grid = _mrDayRows(values, bases[codes[0]], MR_BUY_FIRST_ROW);
+  var start = grid[1];
+  var own = _mrDayRows(values, revBase, MR_BUY_FIRST_ROW)[1];
+  if (start === undefined || own !== start) {
+    return { warn: 'reviews: day 1 is on row ' + (own === undefined ? '(none)' : own + 1) + ' in ' + _mrColLetter(revBase)
+      + ' but row ' + (start === undefined ? '(none)' : start + 1) + ' in the store grid — block left alone' };
+  }
+  if (Object.keys(grid).length !== wantCount) {
+    return { warn: 'reviews: the store grid has ' + Object.keys(grid).length + ' day rows, expected '
+      + wantCount + ' — block left alone' };
+  }
+
+  var revEnd = Math.min(revBase + MR_REVIEW_WIDTH, lastCol);
+  var ttlCol = revBase + MR_REVIEW_WIDTH - 1;             // AK when the block is AE:AK
+  var first = _mrColLetter(revBase + 1), lastStore = _mrColLetter(ttlCol - 1);
+  var out = { col: _mrColLetter(revBase), days: wantCount, width: revEnd - revBase,
+              cleared: 0, relabelled: [], ttl: 0, wiped: [] };
+  var rows = [];
+  for (var d = 1; d <= wantCount; d++) {
+    var r = start + (d - 1);
+    var was = (values[r] || [])[revBase];
+    if (String(was) !== String(d)) out.relabelled.push(_mrA1(r, revBase) + ' ' + was + '->' + d);
+    var row = [d];                                        // the day number, renumbered
+    for (var c = revBase + 1; c < revEnd; c++) {
+      var f = (formulas[r] || [])[c];
+      if (c === ttlCol) {
+        var n = r + 1;
+        var want = '=IF(COUNT(' + first + n + ':' + lastStore + n + ')=0,"",SUM('
+          + first + n + ':' + lastStore + n + '))';
+        if (f !== want) out.ttl++;
+        row.push(want);
+        continue;
+      }
+      // Same rule as a store block: a formula goes back verbatim to the cell it
+      // already occupies, a typed value is last month's count and goes.
+      row.push(f && !_mrIsBareNumberFormula(f) ? f : '');
+      if (!f || _mrIsBareNumberFormula(f)) {
+        var v = (values[r] || [])[c];
+        if (v !== '' && v !== null && v !== undefined) { out.cleared++; out.wiped.push(_mrA1(r, c) + '=' + v); }
+      }
+    }
+    rows.push(row);
+  }
+  if (!dryRun) tab.getRange(start + 1, revBase + 1, wantCount, revEnd - revBase).setValues(rows);
+  return out;
+}
+
+// The Sunday zeros — see MR_BUY_SUNDAY_ZERO. Fills blanks only.
+function _mrSundayZeros(tab, ym, dryRun) {
+  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+  var rng = tab.getRange(1, 1, lastRow, lastCol);
+  var values = rng.getValues(), formulas = rng.getFormulas();
+  var bases = _mrBases(values, MR_BUY_WIDTH);
+  var sundays = _mrSundays(ym);
+  var out = { written: [], kept: 0 };
+  Object.keys(bases).forEach(function (code) {
+    var base = bases[code];
+    var rows = _mrDayRows(values, base, MR_BUY_FIRST_ROW);
+    sundays.forEach(function (d) {
+      var r = rows[d];
+      if (r === undefined) return;
+      MR_BUY_SUNDAY_ZERO.forEach(function (off) {
+        var c = base + off;
+        var f = (formulas[r] || [])[c];
+        if (f && !_mrIsBareNumberFormula(f)) return;     // a real formula owns the cell
+        var v = (values[r] || [])[c];
+        if (v !== '' && v !== null && v !== undefined) { out.kept++; return; }   // never overwrite a figure
+        out.written.push(code + ' ' + _mrA1(r, c));
+        if (!dryRun) tab.getRange(r + 1, c + 1).setValue(0);
+      });
+    });
+  });
+  return out;
 }
 
 // ---- the tab builder --------------------------------------------------------
@@ -488,6 +631,7 @@ function _mrBuildTab(ss, src, targetYm, opts) {
                          + (p.note ? ' (' + p.note + ')' : ''));
       });
     rep.plan = { dayRows: srcCount + ' -> ' + wantCount, sundays: tgtSun.join(',') };
+    if (opts.family === 'buy') rep.sundayZeros = tgtSun.length * codes.length * MR_BUY_SUNDAY_ZERO.length;
     if (opts.family === 'buy') {
       var dryRev = _mrReviewBase(srcValues, bases, firstRow, srcLastCol, width);
       rep.reviews = dryRev < 0
@@ -569,38 +713,21 @@ function _mrBuildTab(ss, src, targetYm, opts) {
   });
 
   // ---- the reviews mini-table, same treatment ----
-  // Its day column gets renumbered and last month's counts get cleared, for the
-  // same reasons the store blocks do. Kept separate rather than folded into
-  // tgtBases because it is a different WIDTH and holds no weekly column, and
-  // because a wrong guess here would write over five stores' buying data.
+  // See _mrResetReviews. Then the Sunday zeros, which the clearing pass above
+  // has just erased along with last month's figures — see MR_BUY_SUNDAY_ZERO.
   if (opts.family === 'buy') {
-    var revBase = _mrReviewBase(values, tgtBases, firstRow, lastCol, width);
-    if (revBase < 0) {
-      rep.warn.push('reviews: no day column found to the right of the store blocks — block left alone');
-    } else {
-      var revRows = _mrDayRows(values, revBase, firstRow);
-      var revStart = revRows[1];
-      var revEnd = Math.min(revBase + MR_REVIEW_WIDTH, lastCol);
-      var revGrid = [];
-      for (var rd = 1; rd <= wantCount; rd++) {
-        var rr = revStart + (rd - 1);
-        var rrow = [rd];                                  // the day number, renumbered
-        for (var rc = revBase + 1; rc < revEnd; rc++) {
-          var rf = (formulas[rr] || [])[rc];
-          // Same rule as a store block: a formula goes back verbatim to the cell
-          // it already occupies, a typed value is last month's count and goes.
-          rrow.push(rf && !_mrIsBareNumberFormula(rf) ? rf : '');
-          if (!rf || _mrIsBareNumberFormula(rf)) {
-            var rv = (values[rr] || [])[rc];
-            if (rv !== '' && rv !== null && rv !== undefined) rep.cleared++;
-          }
-        }
-        revGrid.push(rrow);
-      }
-      tab.getRange(revStart + 1, revBase + 1, wantCount, revEnd - revBase).setValues(revGrid);
-      rep.reviews = { col: _mrColLetter(revBase), days: wantCount, width: revEnd - revBase };
-    }
+    var rv = _mrResetReviews(tab, wantCount, false);
+    if (rv.warn) rep.warn.push(rv.warn);
+    else { rep.reviews = rv; rep.cleared += rv.cleared; }
+    rep.sundayZeros = _mrSundayZeros(tab, targetYm, false).written.length;
   }
+
+  // ---- the last day's formulas, put back in step with the rest ----
+  // See _mrHealLastDay. Before the week columns are authored: those are sparse
+  // by design and the heal leaves sparse columns alone, but it should never
+  // have to reason about formulas this pass is about to replace.
+  rep.healed = _mrHealLastDay(tab, opts.family, false);
+  rep.healedRefs = _mrHealRefs(tab, opts.family, false);
 
   // ---- the week-ending column, onto the new month's weeks ----
   // Authored, not copied: where a week ends is a fact about the calendar, and
@@ -685,6 +812,184 @@ function _mrBuildTab(ss, src, targetYm, opts) {
   // written, and both were being fixed by hand or not at all.
   rep.carried = _mrCarryOverPass(tab, targetYm, false);
   return rep;
+}
+
+// ---- the last day row -------------------------------------------------------
+// ⚠️ BOTH RESIZE PATHS LEAVE THE LAST DAY'S FORMULAS POINTING AT THE WRONG ROW.
+// The resize works inside the run, never off the end, so the TTL ranges keep
+// finishing on the last day row. That is right for the TTL ranges and wrong for
+// the last day row itself, which is the SOURCE month's last day, moved:
+//   * 31 -> 30 deletes day 30's row. Old day 31 becomes day 30, and every
+//     running total in it pointed at the row that was just deleted: #REF!.
+//     It hides behind IF(blank) until the day is keyed, so it surfaced on
+//     2026-10-01, the morning 9/30 went in (Sales Sep 26, every block).
+//   * 30 -> 31 inserts a row before the last day. Old day 30 becomes day 31,
+//     and its "previous row" still points two rows up, at day 29. That is
+//     no error, just a running total that silently leaves out day 30.
+//     October 2026 was built from a September already carrying the #REF!, so
+//     it inherited that instead. Same repair, found by mrRepairLastDayPreview
+//     on 10-01.
+//
+// The fix is a fact about the grid, not a guess about any one formula: a day
+// column is one formula repeated, in R1C1 the same text on every day. Day 1
+// is allowed to differ (it has no previous row to add). So wherever days
+// 2..N-1 agree exactly and the last day disagrees, the last day gets the
+// shared R1C1. A column that is not uniform (the week-ending columns, sparse by
+// design) is left alone. A cell holding a typed number or a bare "=1100" is
+// never touched, so this is safe on a month that already has figures in it.
+//
+// Returns the cells it changed (or would change, with dryRun).
+function _mrHealLastDay(tab, family, dryRun) {
+  var width = family === 'buy' ? MR_BUY_WIDTH : MR_SALES_WIDTH;
+  var firstRow = family === 'buy' ? MR_BUY_FIRST_ROW : MR_SALES_FIRST_ROW;
+  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+  if (!lastRow || !lastCol) return [];
+  var values = tab.getRange(1, 1, lastRow, lastCol).getValues();
+  var r1c1 = tab.getRange(1, 1, lastRow, lastCol).getFormulasR1C1();
+  var bases = _mrBases(values, width);
+  var codes = Object.keys(bases);
+  if (!codes.length) return [];
+  var rows = _mrDayRows(values, bases[codes[0]], firstRow);
+  var n = Object.keys(rows).length;
+  if (n < 5) return [];
+  var last = rows[n];
+  var out = [];
+  for (var c = 0; c < lastCol; c++) {
+    var have = (r1c1[last] || [])[c];
+    if (!have || _mrIsBareNumberFormula(have)) continue;
+    var want = (r1c1[rows[2]] || [])[c];
+    if (!want || _mrIsBareNumberFormula(want) || want === have) continue;
+    var uniform = true;
+    for (var d = 3; d < n; d++) {
+      if ((r1c1[rows[d]] || [])[c] !== want) { uniform = false; break; }
+    }
+    if (!uniform) continue;
+    var cell = tab.getRange(last + 1, c + 1);
+    out.push({ cell: _mrA1(last, c), was: cell.getFormula(), r1c1: want });
+    if (!dryRun) cell.setFormulaR1C1(want);
+  }
+  return out;
+}
+
+// ⚠️ THE SECOND RULE, FOR A COLUMN THAT IS NOT UNIFORM. On 2026-10-01 the heal
+// fixed the running-sales column in every block and left the running GP column
+// (G, R, AC, AN, AY, BJ) at #REF!. Its days 2..N-1 do not all share one R1C1, so
+// _mrHealLastDay rightly refused to guess from the column. This one does not
+// need the column. It needs only the row directly above: when the broken
+// formula is that row's formula with one or more references replaced by
+// #REF!, and nothing else different, those references are the ones the
+// deleted row took with it, so the row above's R1C1 is the repair.
+// Anything that differs in more than the deleted references is reported, never
+// written.
+function _mrHealRefs(tab, family, dryRun) {
+  var width = family === 'buy' ? MR_BUY_WIDTH : MR_SALES_WIDTH;
+  var firstRow = family === 'buy' ? MR_BUY_FIRST_ROW : MR_SALES_FIRST_ROW;
+  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+  if (!lastRow || !lastCol) return { fixed: [], refused: [] };
+  var values = tab.getRange(1, 1, lastRow, lastCol).getValues();
+  var r1c1 = tab.getRange(1, 1, lastRow, lastCol).getFormulasR1C1();
+  var bases = _mrBases(values, width);
+  var codes = Object.keys(bases);
+  var out = { fixed: [], refused: [] };
+  if (!codes.length) return out;
+  var rows = _mrDayRows(values, bases[codes[0]], firstRow);
+  var n = Object.keys(rows).length;
+  if (n < 3) return out;
+  var last = rows[n], above = rows[n - 1];
+  for (var c = 0; c < lastCol; c++) {
+    var have = String((r1c1[last] || [])[c] || '');
+    if (have.indexOf('#REF!') < 0) continue;
+    var want = String((r1c1[above] || [])[c] || '');
+    var cellA1 = _mrA1(last, c);
+    if (!want || want.indexOf('#REF!') >= 0) {
+      out.refused.push(cellA1 + ': the row above has no usable formula (' + (want || 'empty') + ')');
+      continue;
+    }
+    if (!_mrSameButRefs(have.split('#REF!'), want)) {
+      out.refused.push(cellA1 + ': differs from the row above in more than the lost reference. '
+        + 'Have ' + have + ', above ' + want);
+      continue;
+    }
+    out.fixed.push({ cell: cellA1, was: tab.getRange(last + 1, c + 1).getFormula(), r1c1: want });
+    if (!dryRun) tab.getRange(last + 1, c + 1).setFormulaR1C1(want);
+  }
+  return out;
+}
+
+// Is `want` exactly `parts` joined with one cell reference in each gap? Walked
+// by hand, with no regex, for the same reason as _mrIsBareNumberFormula: this
+// file is pasted between editors, and a mangled backslash fails silently.
+function _mrSameButRefs(parts, want) {
+  if (want.indexOf(parts[0]) !== 0) return false;
+  var pos = parts[0].length;
+  for (var i = 1; i < parts.length; i++) {
+    var at = i === parts.length - 1
+      ? want.length - parts[i].length                      // the tail must end the string
+      : want.indexOf(parts[i], pos + 1);
+    if (at <= pos || want.slice(at).indexOf(parts[i]) !== 0) return false;
+    if (!_mrIsR1C1Ref(want.slice(pos, at))) return false;
+    pos = at + parts[i].length;
+  }
+  return pos === want.length;
+}
+
+// One R1C1 cell reference: R[-1]C[0], RC[-2], R5C3, R[2]C. A sheet prefix is
+// allowed ('Sales Aug 26'!R33C3); a range or a function is not.
+function _mrIsR1C1Ref(s) {
+  var bang = s.lastIndexOf('!');
+  if (bang >= 0) s = s.slice(bang + 1);
+  if (s.charAt(0) !== 'R' || s.indexOf('C') < 1) return false;
+  var ALLOWED = 'RC[]-0123456789';
+  for (var i = 0; i < s.length; i++) if (ALLOWED.indexOf(s.charAt(i)) < 0) return false;
+  return s.split('R').length === 2 && s.split('C').length === 2;
+}
+
+// Every #REF! left on a tab, after a heal, so a repair can say what it could
+// NOT fix instead of reporting a clean tab.
+function _mrRefErrors(tab) {
+  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+  if (!lastRow || !lastCol) return [];
+  var f = tab.getRange(1, 1, lastRow, lastCol).getFormulas();
+  var out = [];
+  for (var r = 0; r < lastRow; r++) {
+    for (var c = 0; c < lastCol; c++) {
+      if (String((f[r] || [])[c] || '').indexOf('#REF!') >= 0) out.push(_mrA1(r, c));
+    }
+  }
+  return out;
+}
+
+// RUN FROM THE EDITOR. The repair for tabs that were built before the heal
+// existed: Sep 2026 (#REF! on day 30) and Oct 2026 (day 31, inherited from Sep).
+// Preview first, read the log, then apply. Safe on a tab with figures in it,
+// see _mrHealLastDay.
+function mrRepairLastDayPreview() { _mrRepairLastDay(['2026-09', '2026-10'], true); }
+function mrRepairLastDayApply()   { _mrRepairLastDay(['2026-09', '2026-10'], false); }
+
+function _mrRepairLastDay(months, dryRun) {
+  var ss = _mrSs();
+  var idx = _mrIndex(ss);
+  months.forEach(function (ym) {
+    var m = idx[ym] || {};
+    [['sales', m.sales], ['buy', m.buy]].forEach(function (p) {
+      var tab = p[1];
+      if (!tab) { Logger.log('%s %s: no tab', ym, p[0]); return; }
+      var fixed = _mrHealLastDay(tab, p[0], dryRun);
+      Logger.log('%s "%s": %s %s cell(s)%s', ym, tab.getName(), dryRun ? 'WOULD fix' : 'fixed',
+        fixed.length, fixed.length ? ': ' + fixed.map(function (x) {
+          return x.cell + ' ' + x.was + ' -> ' + x.r1c1; }).join(' | ') : '');
+      // Second rule, for the #REF!s a non-uniform column leaves behind.
+      var refs = _mrHealRefs(tab, p[0], dryRun);
+      if (refs.fixed.length) {
+        Logger.log('  #REF! %s %s cell(s) from the row above: %s', dryRun ? 'WOULD repair' : 'repaired',
+          refs.fixed.length, refs.fixed.map(function (x) {
+            return x.cell + ' ' + x.was + ' -> ' + x.r1c1; }).join(' | '));
+      }
+      refs.refused.forEach(function (why) { Logger.log('  !! not repaired, %s', why); });
+      var left = dryRun ? [] : _mrRefErrors(tab);
+      if (left.length) Logger.log('  !! still #REF! at %s. Send this log to Claude.', left.join(', '));
+    });
+  });
 }
 
 // Month-dependent footer cells, found by their label. Returns a PLAN rather
@@ -869,6 +1174,42 @@ function _mrWriteGoals(ss, ym, goals) {
   return { ok: true, tab: tab.getName(), found: found, wrote: wrote };
 }
 
+// ---- NP goals (from October 2026) --------------------------------------------
+// From October the company is graded on Net Profit, and gp-goals sends an NP
+// month's goals as `npGoals`. They go in the "NP Goal" cell of each store block
+// on that month's "Net Profit {Mon} {YY}" tab — row 2, base+4, beside the label
+// at base+3 — which the tab's own "% of NP Goal" formula already divides by.
+//
+// Each block is checked by the store code on its own row 2 (base+2) before
+// anything is written: the tab is laid out by netprofit-sheet.gs, a different
+// project, and a write keyed only on column numbers would land a goal in the
+// wrong store the day that layout moves. The TTL block's goal is a formula
+// summing the five and is never touched.
+var MR_NP_BASES = { OVL: 0, LEE: 18, WSP: 36, MPL: 54, BAL: 72 };
+var MR_NP_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function _mrWriteNpGoals(ss, ym, goals) {
+  var name = 'Net Profit ' + MR_NP_MON[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(2, 4);
+  var tab = ss.getSheetByName(name);
+  // Not an error worth failing the save over: the NP rollover makes the tab on
+  // the 1st, and np-sync reports a site/sheet goal mismatch until it is written.
+  if (!tab) return { ok: false, error: 'no ' + name + ' tab yet' };
+  var row = tab.getRange(2, 1, 1, 90).getValues()[0];
+  var forms = tab.getRange(2, 1, 1, 90).getFormulas()[0];
+  var wrote = [], skipped = [];
+  Object.keys(MR_NP_BASES).forEach(function (code) {
+    if (goals[code] === undefined || goals[code] === null || goals[code] === '') return;
+    var b = MR_NP_BASES[code];
+    if (String(row[b + 2]).trim() !== code || String(row[b + 3]).trim().toLowerCase() !== 'np goal') {
+      skipped.push(code + ': block label is "' + row[b + 2] + '" / "' + row[b + 3] + '"');
+      return;
+    }
+    if (forms[b + 4]) { skipped.push(code + ': goal cell holds a formula'); return; }
+    tab.getRange(2, b + 5).setValue(Number(goals[code]));
+    wrote.push(code + '=' + goals[code]);
+  });
+  return { ok: skipped.length === 0, tab: name, wrote: wrote, skipped: skipped };
+}
+
 // Write a month's buying-days count into that month's Buy tab — one cell per
 // store block at base+4, never beside the label. SPEEKS derives the number from
 // the closed dates it holds; the sheet only needs the total.
@@ -947,6 +1288,11 @@ function _mrFetchGoals(ym) {
     var res = UrlFetchApp.fetch(MR_GOALS_URL + '?month=' + encodeURIComponent(ym), { muteHttpExceptions: true });
     if (res.getResponseCode() !== 200) return {};
     var j = JSON.parse(res.getContentText());
+    // ⚠️ From October 2026 gp-goals answers with NET profit goals (kind 'np').
+    // Those must never land in the Sales tab's "GP Goal" cell, which is all this
+    // rollover writes goals into — so an NP month rolls with no GP goal at all.
+    // The NP goals reach the Net Profit tab through the `goals` doPost instead.
+    if (j && j.kind === 'np') return {};
     return (j && j.goals) || {};
   } catch (e) {
     return {};
@@ -1003,6 +1349,9 @@ function _mrReport(r) {
         ? rep.reviews.col + ' renumbered 1-' + rep.reviews.days
           + ', ' + rep.reviews.width + ' cols cleared'
         : 'NOT FOUND — ' + rep.reviews.note));
+    }
+    if (rep.sundayZeros !== undefined) {
+      Logger.log('  sundays: ' + rep.sundayZeros + ' Buy/Sell cells set to 0');
     }
     if (rep.retarget) Logger.log('  lastmo : ' + rep.retarget.cells + ' refs  '
       + rep.retarget.from + ' -> ' + rep.retarget.to
@@ -1497,6 +1846,50 @@ function mrPostRollRepair(ym, apply) {
 function mrRepairPreview() { mrPostRollRepair(_mrCentralMonth(), false); }
 function mrRepairApply()   { mrPostRollRepair(_mrCentralMonth(), true); }
 
+// ---- repair: this month's Buy tab, reviews block + Sunday zeros -------------
+// Written 2026-10-05 for Buy Oct 26, which the roll built without its reviews
+// pass: September's counts were still in AF:AJ from day 4 down, the day column
+// read 1..29, 28, 30, and AK's TTL formula only existed on days 2-5. The Sunday
+// zeros were missing too, which is what emailed "no Day End Report" for the 4th.
+//
+// ⚠️ THE REVIEWS PASS CLEARS EVERY TYPED COUNT, OCTOBER'S INCLUDED. It cannot tell
+// a leftover September figure from a real October one. So after Apply, run
+// runBuyingRepairNow in the SALES IMPORT project: it re-reads the last nine days
+// of Day End Reports and writes the month-to-date counts back, through the same
+// _reviewSanity checks the daily run uses. Do it the same day — until then the
+// hub shows no reviews for the month.
+//
+// ⚠️ AND DO IT BEFORE THE NEXT 6:05 IMPORT IF YOU CAN. Left as it is, September's
+// leftovers sit above every new October day, and _reviewSanity refuses any
+// count lower than the one above it: "month-to-date reviews went DOWN".
+function mrRepairBuyTabPreview() { _mrRepairBuyTab(_mrCentralMonth(), true); }
+function mrRepairBuyTabApply()   { _mrRepairBuyTab(_mrCentralMonth(), false); }
+
+function _mrRepairBuyTab(ym, dryRun) {
+  var tab = (_mrIndex(_mrSs())[ym] || {}).buy;
+  if (!tab) { Logger.log('no Buy tab for %s', ym); return; }
+  Logger.log('=== %s %s ===', dryRun ? 'PREVIEW (nothing written)' : 'REPAIRING', tab.getName());
+
+  var rv = _mrResetReviews(tab, _mrDaysIn(ym), dryRun);
+  if (rv.warn) {
+    Logger.log('reviews: SKIPPED — %s', rv.warn);
+  } else {
+    Logger.log('reviews: block at %s, days 1-%s', rv.col, String(rv.days));
+    Logger.log('  day labels fixed: %s', rv.relabelled.length ? rv.relabelled.join('  ') : 'none needed');
+    Logger.log('  TTL formula written on %s of %s rows', String(rv.ttl), String(rv.days));
+    Logger.log('  typed counts cleared: %s', String(rv.cleared));
+    if (rv.wiped.length) Logger.log('    %s', rv.wiped.join('  '));
+  }
+
+  var z = _mrSundayZeros(tab, ym, dryRun);
+  Logger.log('sundays %s: %s Buy/Sell cells set to 0, %s already had a figure',
+    _mrSundays(ym).join(','), String(z.written.length), String(z.kept));
+  if (z.written.length) Logger.log('  %s', z.written.join('  '));
+
+  if (dryRun) Logger.log('Nothing was written. Run mrRepairBuyTabApply to write it.');
+  else if (!rv.warn) Logger.log('NEXT: run runBuyingRepairNow in the sales import project to refill this month\'s review counts.');
+}
+
 // Next month's tabs with a (PREVIEW) suffix, to be checked beside the real ones.
 // Nothing reads a PREVIEW tab — the name does not match what the site's parsers
 // look for, which is exactly why the suffix is safe.
@@ -1701,6 +2094,7 @@ function doPost(e) {
     if (!/^\d{4}-\d{2}$/.test(ym)) return _mrJson({ error: 'bad month' });
     var ss = _mrSs();
     var out = { goals: _mrWriteGoals(ss, ym, body.goals || {}) };
+    if (body.npGoals) out.npGoals = _mrWriteNpGoals(ss, ym, body.npGoals);
     // Only when SPEEKS actually had the closed-days panel open. A save that did
     // not touch them sends null, and the sheet's count is left alone.
     if (body.buyDays !== null && body.buyDays !== undefined) {

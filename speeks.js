@@ -39,7 +39,7 @@
 // Stored without the leading "v" so it is usable as data (comparisons, a header
 // on an API call, a patch-notes lookup); the "v" is presentation and is added
 // at the point of display.
-const APP_VERSION = '3.9.0';
+const APP_VERSION = '3.9.1';
 
 // Every .version-tag on the page, not the first: a page is free to grow a second
 // without needing to touch this, and one did — the shop-floor board had one in
@@ -102,8 +102,8 @@ const AGING_INV_URL     = `${_BASE}/aging-inventory`;
 const EXPENSES_URL      = `${_BASE}/expenses`;
 const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
-const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const SUMMARY_WEEKLY_URL = `${_BASE}/summary-weekly`;
+const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
 const NOTIFY_URL        = `${_BASE}/notify`;
@@ -260,7 +260,7 @@ const USAGE_TRACK = Object.assign(Object.create(null), {
     // reference tools
     'hotkeysDropdown':  'Hotkeys & Commands',
     'quickMsgDropdown': 'Quick Messages',
-    'calendarDropdown': 'Strategic Calendar',
+    'calendarDropdown': 'Store Calendar',
     // the counter tools. NOTE there is deliberately no event for merely opening
     // the Margin Guide tab or landing on the policy library — visiting a page is
     // not using it. The tracked moment is a category AND an item picked (someone
@@ -949,18 +949,980 @@ function toggleNotifs() {
         loadPatchNotes();    // fetch patch notes, mark seen, re-render
     }
 }
-// The Google embed is a snapshot: the iframe fetches once when the page loads and
-// never refetches, so an edit made in Google after that never appears until a full
-// page reload. Force a fresh load every time the modal is opened by swapping in a
-// clone of the frame — replacing the node is what actually restarts the load, and
-// unlike appending a cache-buster to the URL it can't upset the embed's own params.
-// (Cross-origin means we can't reach inside the frame to reload it directly.)
+// ===== STORE CALENDAR =====
+// Replaced the Google Calendar embed (Ethan, 2026-10-01). Same button, same
+// popup; what it opens is now SPEEKSNET's own calendar, backed by the
+// store-calendar edge function and store_calendar_events (migration 0125).
+//
+// Two kinds of event, and the look keeps them apart at a glance:
+//   * store events    — green. Belong to one store; that store's manager
+//                       adds, edits and deletes them. An MSM does both BAL and MPL
+//                       and switches between them with the store chips.
+//   * company events  — dark slate with a lock. Posted from the Company events
+//                       tab by the district roles (DM, CEO, MOCD) to any set of
+//                       stores; read-only on a store's calendar.
+// Everyone else at a store (ASMs, buyers, employees, the TV account) sees their
+// store's calendar read-only. The district roles open on the all-stores view,
+// each store event tagged with its code, and can narrow to one store to see
+// exactly what that manager sees.
+//
+// The gates below only decide what to DRAW. The edge function re-checks every
+// write against the PIN's real role and store, so a hand-edited sessionStorage
+// gets a refusal, not a write.
+//
+// Repeating events (repeat, 0138) keep their first date in the row and are
+// expanded here for whichever dates are on screen.
+const STORE_CALENDAR_URL = `${_BASE}/store-calendar`;
+const _SCAL_DISTRICT_ROLES = ['district manager', 'ceo', 'mocd'];
+const _SCAL_MANAGER_ROLES = ['manager', 'owner (manager)'];
+// The TYPE of an event is its colour — a dot on every chip and row, and a key
+// under the calendar for the types on screen. Scope is already carried by the
+// chip itself (green = this store, slate + lock = company), so colour is free
+// to mean one thing. The old Google calendar used colours with no fixed meaning
+// (Ethan, 2026-10-01: "the colors don't mean anything, that's what I want you
+// to do"). The type is always written out as well, in rows and the detail
+// sheet, so nothing depends on telling two dots apart.
+//
+// The types are DATA (store_calendar_categories, 0128), and the DM adds and
+// removes them in the Event Types tab — the DM alone, enforced by the edge
+// function. The seed below is the same 18 rows 0128 inserted, so the calendar
+// draws right before the first load and in the check harness; the load then
+// replaces it with whatever the table holds. A removed type stays in these maps
+// (active: false), so events already filed under it keep their name and colour;
+// it just stops being offered in the dropdowns.
+const _SCAL_TYPE_SEED = [
+    ['meeting', 'Meetings', '#2563eb', 10], ['hours', 'Holiday/Hour Changes', '#dc2626', 20],
+    ['payday', 'Pay Day', '#16a34a', 30], ['celebration', 'Birthday/Anniversary', '#db2777', 40],
+    ['staffing', 'Staffing/PTO', '#7c3aed', 50], ['travel', 'Travel', '#0d9488', 60],
+    ['community', 'Events', '#65a30d', 70], ['delivery', 'B2B Pickups', '#64748b', 80],
+    ['recycling', 'Recycling Pickups', '#ca8a04', 90], ['inventory', 'Inventory', '#b45309', 100],
+    ['promo', 'Promotions', '#ea580c', 110], ['training', 'Training', '#0284c7', 120],
+    ['opening', 'Store Opening', '#9f1239', 130], ['maintenance', 'Maintenance/Repairs', '#334155', 140],
+    ['shipment', 'Deliveries', '#c026d3', 150], ['audit', 'Audits/Inspections', '#0891b2', 160],
+    ['deadline', 'Deadlines', '#78350f', 170], ['other', 'Other', '#94a3b8', 999]
+];
+// Swatches offered when the DM adds a type. Spread round the wheel and in
+// lightness; any hex the table holds still draws.
+const _SCAL_TYPE_SWATCHES = ['#2563eb', '#0284c7', '#0891b2', '#0d9488', '#16a34a', '#65a30d', '#ca8a04', '#b45309',
+    '#ea580c', '#dc2626', '#9f1239', '#db2777', '#c026d3', '#7c3aed', '#334155', '#94a3b8'];
+let _scalTypes = [];
+const _SCAL_CATEGORIES = {};   // key -> label, in display order
+const _SCAL_CAT_COLORS = {};   // key -> colour
+function _scalSetTypes(list) {
+    _scalTypes = list.map(t => ({ key: String(t.key), label: String(t.label), color: String(t.color), sort: Number(t.sort) || 0, active: t.active !== false }))
+        .sort((a, b) => a.sort - b.sort || a.label.localeCompare(b.label));
+    Object.keys(_SCAL_CATEGORIES).forEach(k => { delete _SCAL_CATEGORIES[k]; });
+    Object.keys(_SCAL_CAT_COLORS).forEach(k => { delete _SCAL_CAT_COLORS[k]; });
+    _scalTypes.forEach(t => { _SCAL_CATEGORIES[t.key] = t.label; _SCAL_CAT_COLORS[t.key] = t.color; });
+    if (!_SCAL_CAT_COLORS.other) { _SCAL_CATEGORIES.other = 'Other'; _SCAL_CAT_COLORS.other = '#94a3b8'; }
+}
+_scalSetTypes(_SCAL_TYPE_SEED.map(([key, label, color, sort]) => ({ key, label, color, sort })));
+// What the Type dropdown offers: the active types, Other last.
+function _scalActiveTypes() { return _scalTypes.filter(t => t.active).map(t => t.key); }
+function _scalDefaultType(pref) { return _scalActiveTypes().includes(pref) ? pref : 'other'; }
+function _scalCatDot(cat) {
+    return `<i class="scal-cdot" style="background:${_SCAL_CAT_COLORS[cat] || _SCAL_CAT_COLORS.other}" aria-hidden="true"></i>`;
+}
+// The corporate roles manage types: the DM alone at first ("only give DM
+// access"), then CEO and MOCD too (2026-10-05). Drawing only; the edge
+// function re-checks the PIN.
+function _scalIsTypeAdmin() { return _scalIsDistrict(); }   // DM, CEO, MOCD (Ethan, 2026-10-05)
+const _SCAL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const _SCAL_DOWS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const _scal = {
+    events: [], loaded: false, error: '',
+    month: null,          // Date at the 1st of the month on screen
+    weekStart: null,      // Date of the Sunday on screen in week view
+    view: 'month',        // month | week | list
+    tab: 'calendar',      // calendar | company (district roles only)
+    store: '',            // a store code, or 'ALL' (district only)
+    companyList: 'upcoming',
+    panel: null,          // { kind: 'detail'|'edit'|'day', ... } — the side sheet
+    companyForm: null,    // the event being edited in the Company events tab
+    saving: false
+};
+
+function _scalRole() { return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(); }
+function _scalIsDistrict() { return _SCAL_DISTRICT_ROLES.includes(_scalRole()); }
+// The stores this person may add store events to. Drawing only — see the banner.
+function _scalWritableStores() {
+    if (_scalIsDistrict()) return [];
+    if (isMultiStoreManager()) return MULTISTORE_MANAGER_STORES.slice();
+    if (_SCAL_MANAGER_ROLES.includes(_scalRole())) {
+        const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+        return STORE_CODES.includes(s) ? [s] : [];
+    }
+    return [];
+}
+function _scalCanWriteStore(store) { return _scalWritableStores().includes(String(store || '').toUpperCase()); }
+// The stores the filter chips offer — every store for corporate, and for an
+// MSM just their two, as the same All / BAL / MPL row (Ethan, 2026-10-05: "be
+// like DM, just with only All, BAL, and MPL"). Empty = no chips.
+function _scalFilterStores() { return _scalIsDistrict() ? STORE_CODES : isMultiStoreManager() ? MULTISTORE_MANAGER_STORES : []; }
+// "All" for an MSM is both their stores; they can add from it and pick which
+// store in the form. For corporate "All" stays read-only for store events.
+function _scalCanAddHere(store) { return store === 'ALL' ? _scalWritableStores().length > 1 : _scalCanWriteStore(store); }
+// A PAST event can't be edited (Ethan, 2026-10-05) — only deleted. Past = its
+// last day is before today and it doesn't repeat. The edge function enforces it.
+function _scalIsPastEvent(ev) { return _scalRepeatOf(ev) === 'none' && (ev.end_date || ev.event_date) < _scalTodayISO(); }
+
+// Dates are handled as local yyyy-mm-dd strings throughout. Everyone using this
+// is in Central, and a Date at local midnight never crosses a day boundary the
+// way toISOString() (UTC) does in the evening.
+function _scalISO(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function _scalParse(iso) { const [y, m, d] = String(iso).split('-').map(Number); return new Date(y, m - 1, d); }
+function _scalAddDays(d, n) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() + n); return x; }
+function _scalTodayISO() { return _scalISO(new Date()); }
+function _scalFmtTime(t, short) {
+    if (!t) return '';
+    const [h, m] = String(t).split(':').map(Number);
+    const ap = h >= 12 ? (short ? 'p' : ' PM') : (short ? 'a' : ' AM');
+    const h12 = h % 12 || 12;
+    if (short) return m ? `${h12}:${String(m).padStart(2, '0')}${ap}` : `${h12}${ap}`;
+    return `${h12}:${String(m).padStart(2, '0')}${ap}`;
+}
+function _scalFmtDate(iso, withYear) {
+    const d = _scalParse(iso);
+    const s = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    return withYear === false ? s : `${s}, ${d.getFullYear()}`;
+}
+function _scalWhen(ev) {
+    let s = _scalFmtDate(ev.event_date);
+    if (ev.end_date && ev.end_date !== ev.event_date) s += ` – ${_scalFmtDate(ev.end_date)}`;
+    if (ev.all_day) return s + ' · All day';
+    return s + ' · ' + _scalFmtTime(ev.start_time) + (ev.end_time ? ` – ${_scalFmtTime(ev.end_time)}` : '');
+}
+
+// Does this event show on the calendar for `store` ('ALL' = every store)?
+function _scalShowsOn(ev, store) {
+    // A birthday or anniversary posted by COMPANY shows on every store's
+    // calendar, whatever stores it was posted to (Ethan, 2026-10-05: "We want to
+    // encourage comraderie"). One a store posts itself stays on that store.
+    if (ev.scope === 'company' && ev.category === 'celebration') return true;
+    if (store === 'ALL') {
+        const mine = _scalFilterStores();
+        return ev.scope === 'company' ? (ev.stores || []).some(s => mine.includes(s)) : mine.includes(ev.store);
+    }
+    return ev.scope === 'company' ? (ev.stores || []).includes(store) : ev.store === store;
+}
+
+// Every (event, day) pair between fromISO and toISO inclusive, for the store
+// filter. A multi-day event appears on each of its days; a yearly one on its
+// anniversary in any year at or after the first.
+// REPEAT (0138, Ethan 2026-10-04: Daily / Weekly / Monthly / Quarterly / Yearly).
+// An event's repeat rule; rows written before 0138 only had repeats_yearly.
+const _SCAL_REPEATS = { none: 'Never', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', yearly: 'Yearly' };
+function _scalRepeatOf(ev) { return _SCAL_REPEATS[ev.repeat] && ev.repeat !== 'none' ? ev.repeat : (ev.repeats_yearly ? 'yearly' : 'none'); }
+// The start date of every instance of `ev` that begins between fromISO and
+// toISO, never before its first date. Monthly / quarterly / yearly land on the
+// same day of the month; a month without that day (the 31st, Feb 29) is
+// SKIPPED, not shifted, as Google does. Only the dates on screen are made, so
+// an endless repeat costs nothing.
+function _scalRepeatStarts(ev, fromISO, toISO) {
+    const rep = _scalRepeatOf(ev), first = ev.event_date;
+    if (rep === 'none') return [first];
+    const out = [], d0 = _scalParse(first), lo = fromISO > first ? fromISO : first;
+    if (rep === 'daily' || rep === 'weekly') {
+        const step = rep === 'daily' ? 1 : 7;
+        const gap = Math.max(0, Math.round((_scalParse(lo) - d0) / 864e5));
+        for (let d = _scalAddDays(d0, Math.ceil(gap / step) * step); _scalISO(d) <= toISO; d = _scalAddDays(d, step)) out.push(_scalISO(d));
+        return out;
+    }
+    const step = rep === 'monthly' ? 1 : rep === 'quarterly' ? 3 : 12;
+    const l = _scalParse(lo);
+    const monthsIn = (l.getFullYear() - d0.getFullYear()) * 12 + l.getMonth() - d0.getMonth();
+    for (let k = Math.max(0, Math.floor(monthsIn / step) - 1) * step; ; k += step) {
+        const y = d0.getFullYear() + Math.floor((d0.getMonth() + k) / 12), m = (d0.getMonth() + k) % 12;
+        const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
+        if (iso > toISO) break;
+        if (_scalISO(_scalParse(iso)) === iso && iso >= lo) out.push(iso);   // skip a missing day
+    }
+    return out;
+}
+
+function _scalOccurrences(fromISO, toISO, store) {
+    const out = [];
+    _scal.events.forEach(ev => {
+        if (!_scalShowsOn(ev, store)) return;
+        const span = ev.end_date ? Math.round((_scalParse(ev.end_date) - _scalParse(ev.event_date)) / 864e5) : 0;
+        const starts = _scalRepeatStarts(ev, _scalISO(_scalAddDays(_scalParse(fromISO), -span)), toISO);
+        starts.forEach(st => {
+            const sd = _scalParse(st);
+            for (let i = 0; i <= span; i++) {
+                const day = _scalISO(_scalAddDays(sd, i));
+                if (day >= fromISO && day <= toISO) out.push({ ev, day, first: i === 0, last: i === span, start: st, multi: span > 0 });
+            }
+        });
+    });
+    // Company first, then timed by start, then all-day store events — so the
+    // thing everyone has to know about is the top line of the cell.
+    out.sort((a, b) => a.day.localeCompare(b.day)
+        || (a.ev.scope === b.ev.scope ? 0 : a.ev.scope === 'company' ? -1 : 1)
+        || (a.ev.all_day === b.ev.all_day ? 0 : a.ev.all_day ? -1 : 1)
+        || String(a.ev.start_time || '').localeCompare(String(b.ev.start_time || ''))
+        || a.ev.title.localeCompare(b.ev.title));
+    return out;
+}
+
+const _SCAL_LOCK = '<svg class="scal-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+const _SCAL_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const _SCAL_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+
+// One event as a chip in a day cell / week column. `cls` and `style` are for
+// the spanning bars, which are the same chip placed across grid columns.
+function _scalChip(o, store, cls, style) {
+    const ev = o.ev;
+    const time = !ev.all_day && o.first ? ` ${_scalFmtTime(ev.start_time, true)}` : '';
+    const label = escapeHtml(ev.title) + escapeHtml(time);
+    const open = `onclick="event.stopPropagation(); _scalOpenDetail('${ev.id}')"${style ? ` style="${style}"` : ''}`;
+    const k = cls ? ' ' + cls : '';
+    const dot = _scalCatDot(ev.category);
+    const tip = escapeHtml((_SCAL_CATEGORIES[ev.category] || 'Other') + ' · ' + (store === 'ALL' && ev.store ? ev.store + ' · ' : '') + ev.title);
+    if (ev.scope === 'company') {
+        return `<button type="button" class="scal-chip scal-chip-company${k}" ${open} title="${tip}">${_SCAL_LOCK}${dot}<span>${label}</span></button>`;
+    }
+    // The store code, not a second dot: the dot is the type everywhere.
+    if (store === 'ALL') {
+        return `<button type="button" class="scal-chip scal-chip-tagged${k}" ${open} title="${tip}">${dot}<b>${escapeHtml(ev.store)}</b><span>${label}</span></button>`;
+    }
+    return `<button type="button" class="scal-chip scal-chip-store${k}" ${open} title="${tip}">${dot}<span>${label}</span></button>`;
+}
+
+function _scalRender() {
+    const root = document.getElementById('scalRoot');
+    if (!root) return;
+    const district = _scalIsDistrict();
+    const head = document.getElementById('scalHeadExtra');
+    if (head) {
+        if (district) {
+            head.innerHTML = `<div class="scal-seg" role="tablist">
+                <button type="button" role="tab" aria-selected="${_scal.tab === 'calendar'}" class="${_scal.tab === 'calendar' ? 'on' : ''}" onclick="_scalSetTab('calendar')">Calendar</button>
+                <button type="button" role="tab" aria-selected="${_scal.tab === 'company'}" class="${_scal.tab === 'company' ? 'on' : ''}" onclick="_scalSetTab('company')">Company Events</button>
+                ${_scalIsTypeAdmin() ? `<button type="button" role="tab" aria-selected="${_scal.tab === 'types'}" class="${_scal.tab === 'types' ? 'on' : ''}" onclick="_scalSetTab('types')">Event Types</button>` : ''}
+            </div>`;
+        } else {
+            // Everyone else gets Company Events too, read-only (Ethan,
+            // 2026-10-05: "all roles should see a view only version of company
+            // events in case they are curious").
+            head.innerHTML = `<div class="scal-seg" role="tablist">
+                <button type="button" role="tab" aria-selected="${_scal.tab === 'calendar'}" class="${_scal.tab === 'calendar' ? 'on' : ''}" onclick="_scalSetTab('calendar')">Calendar</button>
+                <button type="button" role="tab" aria-selected="${_scal.tab === 'company'}" class="${_scal.tab === 'company' ? 'on' : ''}" onclick="_scalSetTab('company')">Company Events</button>
+            </div>`;   // no store tag here any more (Ethan, 2026-10-05: "get rid of that for all stores")
+        }
+    }
+    if (_scal.tab === 'company') { root.innerHTML = _scalCompanyHTML(!district); return; }
+    if (_scalIsTypeAdmin() && _scal.tab === 'types') { root.innerHTML = _scalTypesHTML(); return; }
+    root.innerHTML = `${_scalToolbarHTML()}
+        <div class="scal-body">${_scal.error && !_scal.loaded
+            ? `<div class="scal-empty">${escapeHtml(_scal.error)}</div>`
+            : _scal.view === 'week' ? _scalWeekHTML() : _scal.view === 'list' ? _scalListHTML() : _scalMonthHTML()}</div>
+        ${_scalLegendHTML()}
+        ${_scalPanelHTML()}`;
+}
+
+function _scalToolbarHTML() {
+    const district = _scalIsDistrict();
+    const title = _scal.view === 'week'
+        ? (() => { const a = _scal.weekStart, b = _scalAddDays(a, 6);
+            return a.getMonth() === b.getMonth()
+                ? `${_SCAL_MONTHS[a.getMonth()]} ${a.getDate()}–${b.getDate()}, ${b.getFullYear()}`
+                : `${_SCAL_MONTHS[a.getMonth()].slice(0, 3)} ${a.getDate()} – ${_SCAL_MONTHS[b.getMonth()].slice(0, 3)} ${b.getDate()}, ${b.getFullYear()}`; })()
+        : `${_SCAL_MONTHS[_scal.month.getMonth()]} ${_scal.month.getFullYear()}`;
+    const views = ['month', 'week', 'list'].map(v =>
+        `<button type="button" class="${_scal.view === v ? 'on' : ''}" onclick="_scalSetView('${v}')">${v[0].toUpperCase() + v.slice(1)}</button>`).join('');
+    const chips = _scalFilterStores();
+    const filter = chips.length ? `<div class="scal-filter" role="group" aria-label="Stores">
+            <button type="button" class="scal-fchip ${_scal.store === 'ALL' ? 'on' : ''}" onclick="_scalSetStore('ALL')">All</button>
+            ${chips.map(s => `<button type="button" class="scal-fchip ${_scal.store === s ? 'on' : ''}" onclick="_scalSetStore('${s}')"><span class="scal-dot" style="background:${STORE_TINTS[s]}"></span>${s}</button>`).join('')}
+        </div>` : '';
+    const add = _scalCanAddHere(_scal.store)
+        ? `<button type="button" class="scal-btn-primary" onclick="_scalOpenEdit(null, '${_scalTodayISO() >= _scalISO(_scal.month) ? _scalTodayISO() : _scalISO(_scal.month)}')">${_SCAL_PLUS}Add event</button>` : '';
+    return `<div class="scal-toolbar">
+        <div class="scal-nav">
+            <button type="button" class="scal-icon-btn" aria-label="Previous" onclick="_scalStep(-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <button type="button" class="scal-icon-btn" aria-label="Next" onclick="_scalStep(1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+            <div class="scal-title">${title}</div>
+        </div>
+        ${filter}
+        <div class="scal-actions">
+            <div class="scal-seg scal-seg-sm">${views}</div>
+            ${add}
+        </div>
+    </div>`;
+}
+
+function _scalMonthHTML() {
+    const first = _scal.month;
+    const gridStart = _scalAddDays(first, -first.getDay());
+    const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+    const weeks = Math.ceil((first.getDay() + last.getDate()) / 7);
+    const occ = _scalOccurrences(_scalISO(gridStart), _scalISO(_scalAddDays(gridStart, weeks * 7 - 1)), _scal.store);
+    let rows = '';
+    for (let w = 0; w < weeks; w++) {
+        rows += _scalWeekRowHTML(_scalAddDays(gridStart, w * 7), occ, { limit: 3, month: first.getMonth() });
+    }
+    return `<div class="scal-month">
+        <div class="scal-dows">${_SCAL_DOWS.map(w => `<div>${w}</div>`).join('')}</div>
+        <div class="scal-grid">${rows}</div>
+    </div>`;
+}
+
+function _scalWeekHTML() {
+    const a = _scal.weekStart;
+    const occ = _scalOccurrences(_scalISO(a), _scalISO(_scalAddDays(a, 6)), _scal.store);
+    return `<div class="scal-month scal-weekview">
+        <div class="scal-grid">${_scalWeekRowHTML(a, occ, { limit: Infinity, week: true })}</div>
+    </div>`;
+}
+
+// ONE WEEK as a 7-column grid, shared by the month view (one per row) and the
+// week view. An event that spans days is ONE bar across them, the way Google
+// draws it (Ethan, 2026-10-01), instead of a chip repeated in every cell:
+//   row 1           the day numbers
+//   rows 2..L+1     a lane each for the spanning bars, packed first-fit
+//   last row        that day's single-day events, then "+N more"
+// The day cells sit behind everything (grid-row 1 / -1) and take the clicks;
+// the number and single-day stacks let clicks through (pointer-events: none)
+// so an empty part of a day still opens it. A bar that carries on from the
+// week before, or into the next, has a flat end on that side.
+// `limit` is how many lines a day shows before "+N more" — lanes count, since
+// a lane is a line of that day whether or not this day has a bar in it.
+function _scalWeekRowHTML(weekStart, occAll, opts) {
+    const days = []; for (let i = 0; i < 7; i++) days.push(_scalISO(_scalAddDays(weekStart, i)));
+    const occ = occAll.filter(o => o.day >= days[0] && o.day <= days[6]);
+    const col = iso => days.indexOf(iso);
+
+    // Spanning events → one segment per (event instance, week).
+    const segs = {};
+    occ.filter(o => o.multi).forEach(o => {
+        const k = o.ev.id + '|' + o.start;
+        const c = col(o.day);
+        if (!segs[k]) segs[k] = { o, c0: c, c1: c, head: false, tail: false };
+        const s = segs[k];
+        s.c0 = Math.min(s.c0, c); s.c1 = Math.max(s.c1, c);
+        if (o.first) { s.head = true; s.o = o; }
+        if (o.last) s.tail = true;
+    });
+    const bars = Object.values(segs).sort((a, b) => a.c0 - b.c0 || (b.c1 - b.c0) - (a.c1 - a.c0)
+        || (a.o.ev.scope === b.o.ev.scope ? 0 : a.o.ev.scope === 'company' ? -1 : 1));
+    const lanes = [];
+    bars.forEach(b => {
+        let l = 0;
+        while (lanes[l] && lanes[l].some(x => !(b.c1 < x.c0 || b.c0 > x.c1))) l++;
+        (lanes[l] = lanes[l] || []).push(b); b.lane = l;
+    });
+    const shownLanes = Math.min(lanes.length, opts.limit);
+    const singleRow = shownLanes + 2;
+
+    const today = _scalTodayISO();
+    const canAdd = _scalCanAddHere(_scal.store);
+    let html = '';
+    days.forEach((iso, i) => {
+        const d = _scalParse(iso);
+        const has = occ.some(o => o.day === iso);
+        const out = opts.month != null && d.getMonth() !== opts.month;
+        const click = canAdd ? `onclick="_scalOpenEdit(null, '${iso}')"` : (has ? `onclick="_scalOpenDay('${iso}')"` : '');
+        html += `<div class="scal-cell${out ? ' out' : ''}${canAdd || has ? ' clickable' : ''}"${has ? ' data-has="1"' : ''} data-day="${iso}" style="grid-column:${i + 1};grid-row:1 / -1" ${click}></div>`;
+        html += opts.week
+            ? `<div class="scal-whead${iso === today ? ' today' : ''}" style="grid-column:${i + 1};grid-row:1"><span>${_SCAL_DOWS[i]}</span><b>${d.getDate()}</b></div>`
+            : `<div class="scal-num${iso === today ? ' today' : ''}" style="grid-column:${i + 1};grid-row:1">${d.getDate()}</div>`;
+    });
+    bars.filter(b => b.lane < shownLanes).forEach(b => {
+        const cls = 'scal-bar' + (b.head ? '' : ' cont-l') + (b.tail ? '' : ' cont-r');
+        html += _scalChip(Object.assign({}, b.o, { first: b.head }), _scal.store, cls,
+            `grid-column:${b.c0 + 1} / span ${b.c1 - b.c0 + 1};grid-row:${b.lane + 2}`);
+    });
+    days.forEach((iso, i) => {
+        const singles = occ.filter(o => o.day === iso && !o.multi);
+        const hiddenBars = bars.filter(b => b.lane >= shownLanes && b.c0 <= i && b.c1 >= i).length;
+        const room = Math.max(0, opts.limit - shownLanes);
+        const shown = singles.slice(0, room);
+        const more = singles.length - shown.length + hiddenBars;
+        if (!shown.length && !more) return;
+        html += `<div class="scal-singles" data-day="${iso}" style="grid-column:${i + 1};grid-row:${singleRow}">
+            ${shown.map(o => _scalChip(o, _scal.store)).join('')}
+            ${more > 0 ? `<button type="button" class="scal-more" onclick="event.stopPropagation(); _scalOpenDay('${iso}')">+${more} more</button>` : ''}
+        </div>`;
+    });
+    return `<div class="scal-wk" style="grid-template-rows:auto${shownLanes ? ` repeat(${shownLanes}, auto)` : ''} 1fr">${html}</div>`;
+}
+
+function _scalListHTML() {
+    const first = _scal.month;
+    const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+    const occ = _scalOccurrences(_scalISO(first), _scalISO(last), _scal.store).filter(o => o.first || o.day === _scalISO(first));
+    if (!occ.length) return `<div class="scal-empty">Nothing on the calendar for ${_SCAL_MONTHS[first.getMonth()]}.</div>`;
+    const today = _scalTodayISO();
+    let html = '', lastDay = '';
+    occ.forEach(o => {
+        if (o.day !== lastDay) {
+            if (lastDay) html += '</div>';
+            lastDay = o.day;
+            html += `<div class="scal-lday${o.day === today ? ' today' : ''}"><div class="scal-ldate">${escapeHtml(_scalFmtDate(o.day, false))}</div>`;
+        }
+        html += _scalRowHTML(o.ev);
+    });
+    return `<div class="scal-list">${html}</div></div>`;
+}
+
+// One event as a full-width row — used by the list view and the day sheet.
+function _scalRowHTML(ev) {
+    const tag = ev.scope === 'company'
+        ? `<span class="scal-tag scal-tag-company">${_SCAL_LOCK}Company</span>`
+        : (_scal.store === 'ALL' ? `<span class="scal-tag"><span class="scal-dot" style="background:${STORE_TINTS[ev.store]}"></span>${escapeHtml(ev.store)}</span>` : '');
+    const time = ev.all_day ? 'All day' : _scalFmtTime(ev.start_time) + (ev.end_time ? ` – ${_scalFmtTime(ev.end_time)}` : '');
+    return `<button type="button" class="scal-row" onclick="_scalOpenDetail('${ev.id}')">
+        <span class="scal-rtime">${escapeHtml(time)}</span>
+        <span class="scal-rtitle">${escapeHtml(ev.title)}<small>${_scalCatDot(ev.category)}${escapeHtml(_SCAL_CATEGORIES[ev.category] || 'Other')}${_scalRepeatOf(ev) !== 'none' ? ' · Repeats ' + _SCAL_REPEATS[_scalRepeatOf(ev)] : ''}</small></span>
+        ${tag}
+    </button>`;
+}
+
+function _scalLegendHTML() {
+    const store = _scal.store;
+    const own = store === 'ALL'
+        ? '<span><i class="scal-key scal-key-tagged"></i>Store Event</span>'
+        : `<span><i class="scal-key scal-key-store"></i>Store Event</span>`;
+    const hint = _scalCanAddHere(store) ? 'Click any day to add an event'
+        : _scalIsDistrict() ? ''
+        : 'Your store manager keeps this calendar';
+    // A key for only the types actually on screen — fifteen swatches for a
+    // month holding four kinds of thing would be a legend nobody reads.
+    let from, to;
+    if (_scal.view === 'week') { from = _scalISO(_scal.weekStart); to = _scalISO(_scalAddDays(_scal.weekStart, 6)); }
+    else if (_scal.view === 'list') { from = _scalISO(_scal.month); to = _scalISO(new Date(_scal.month.getFullYear(), _scal.month.getMonth() + 1, 0)); }
+    else {
+        // Month: every day the grid draws, including the spill-over days from
+        // the months either side — the key matches what is on screen, exactly.
+        const first = _scal.month, start = _scalAddDays(first, -first.getDay());
+        const weeks = Math.ceil((first.getDay() + new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate()) / 7);
+        from = _scalISO(start); to = _scalISO(_scalAddDays(start, weeks * 7 - 1));
+    }
+    const seen = new Set(_scalOccurrences(from, to, store).map(o => o.ev.category));
+    const types = Object.keys(_SCAL_CATEGORIES).filter(c => seen.has(c))
+        .map(c => `<span>${_scalCatDot(c)}${escapeHtml(_SCAL_CATEGORIES[c])}</span>`).join('');
+    return `<div class="scal-legend"><span><i class="scal-key scal-key-company"></i>Company-Wide Event</span>${own}${hint ? `<span class="scal-hint">${hint}</span>` : ''}</div>
+        ${types ? `<div class="scal-legend scal-types">${types}</div>` : ''}`;
+}
+
+// ---- the side sheet: event detail, the day's list, or the store-event form ----
+function _scalPanelHTML() {
+    const p = _scal.panel;
+    if (!p) return '';
+    let inner = '';
+    if (p.kind === 'day') {
+        const occ = _scalOccurrences(p.day, p.day, _scal.store);
+        inner = `<div class="scal-phead"><h4>${escapeHtml(_scalFmtDate(p.day))}</h4><button type="button" class="scal-icon-btn" aria-label="Close" onclick="_scalClosePanel()">${_SCAL_X}</button></div>
+            <div class="scal-pbody">${occ.map(o => _scalRowHTML(o.ev)).join('') || '<div class="scal-empty">Nothing this day.</div>'}</div>
+            ${_scalCanAddHere(_scal.store) ? `<div class="scal-pfoot"><button type="button" class="scal-btn-primary" onclick="_scalOpenEdit(null, '${p.day}')">${_SCAL_PLUS}Add event</button></div>` : ''}`;
+    } else if (p.kind === 'detail') {
+        const ev = _scal.events.find(e => e.id === p.id);
+        if (!ev) { _scal.panel = null; return ''; }
+        const company = ev.scope === 'company';
+        const badge = company ? `<span class="scal-tag scal-tag-company">${_SCAL_LOCK}Company-wide</span>`
+            : `<span class="scal-store-pill">${escapeHtml(ev.store)}</span>`;
+        const stores = company ? `<div class="scal-field"><span class="scal-lbl">Showing on</span><div class="scal-tags">${ev.stores.map(s => `<span class="scal-tag">${escapeHtml(s)}</span>`).join('')}</div></div>` : '';
+        const by = ev.created_by ? `<div class="scal-by"><b>Posted by ${escapeHtml(ev.created_by)}</b>${ev.created_at ? ` · ${escapeHtml(new Date(ev.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }))}` : ''}${ev.source === 'google' ? ' · from the old Google calendar' : ''}</div>` : '';
+        let actions = '';
+        if (!company && _scalCanWriteStore(ev.store) && _scalIsPastEvent(ev)) {
+            actions = `<button type="button" class="scal-btn-danger" onclick="_scalDelete('${ev.id}')">Delete</button>`;
+        } else if (!company && _scalCanWriteStore(ev.store)) {
+            actions = `<button type="button" class="scal-btn-danger" onclick="_scalDelete('${ev.id}')">Delete</button><button type="button" class="scal-btn-primary" onclick="_scalOpenEdit('${ev.id}')">Edit</button>`;
+        } else if (company && _scalIsDistrict() && !_scalIsPastEvent(ev)) {
+            actions = `<button type="button" class="scal-btn-primary" onclick="_scalEditCompany('${ev.id}')">Edit in Company Events</button>`;
+        }
+        const note = company && !_scalIsDistrict()
+            ? '<div class="scal-note">Company events are set by the DM. Managers can see them but can\'t edit or delete them.</div>' : '';
+        inner = `<div class="scal-phead">${badge}<button type="button" class="scal-icon-btn" aria-label="Close" onclick="_scalClosePanel()">${_SCAL_X}</button></div>
+            <div class="scal-pbody">
+                <h2 class="scal-dtitle">${escapeHtml(ev.title)}</h2>
+                <div class="scal-dwhen">${escapeHtml(_scalWhen(ev))}${_scalRepeatOf(ev) !== 'none' ? ' · Repeats ' + _SCAL_REPEATS[_scalRepeatOf(ev)] : ''}</div>
+                <div class="scal-field"><span class="scal-lbl">Type</span><div class="scal-dtype">${_scalCatDot(ev.category)}${escapeHtml(_SCAL_CATEGORIES[ev.category] || 'Other')}</div></div>
+                ${stores}
+                ${ev.notes ? `<div class="scal-field"><span class="scal-lbl">Details</span><p class="scal-notes">${escapeHtml(ev.notes)}</p></div>` : ''}
+                ${by}${note}
+            </div>
+            ${actions ? `<div class="scal-pfoot">${actions}</div>` : ''}`;
+    } else if (p.kind === 'edit') {
+        inner = `<div class="scal-phead"><h4>${p.ev.id ? 'Edit Event' : 'New Event'}</h4>${p.pickStore ? '' : `<span class="scal-store-pill">${escapeHtml(p.ev.store)}</span>`}<button type="button" class="scal-icon-btn" aria-label="Close" onclick="_scalClosePanel()">${_SCAL_X}</button></div>
+            <form class="scal-pbody scal-form" id="scalEditForm" onsubmit="event.preventDefault(); _scalSaveStore()">
+                ${p.pickStore ? `<div class="scal-field"><div class="scal-lblrow"><span class="scal-lbl">Show on</span><button type="button" class="scal-link" onclick="_scalPickAllMine()">All stores</button></div>
+                    <div class="scal-picks scal-picks-mine">${_scalWritableStores().map(s => `<label class="scal-pick"><input type="checkbox" name="scalEStores" value="${s}" ${p.stores.includes(s) ? 'checked' : ''} onchange="_scalSyncStoreSave()">${s}</label>`).join('')}</div></div>` : ''}
+                ${_scalFormFields(p.ev, 'scalE', _scalActiveTypes())}
+                <div class="scal-hint">${p.pickStore ? 'Each store you pick gets its own copy.' : `Shows on the ${escapeHtml(p.ev.store)} calendar only.`}</div>
+                <div class="scal-error" id="scalEError" role="alert"></div>
+            </form>
+            <div class="scal-pfoot"><button type="button" class="scal-btn" onclick="_scalClosePanel()">Cancel</button><button type="submit" form="scalEditForm" class="scal-btn-primary" id="scalESave" ${_scal.saving ? 'disabled' : ''}>${_scal.saving ? 'Saving…' : p.pickStore ? _scalStoreSaveLabel(p.stores) : 'Save Event'}</button></div>`;
+    }
+    return `<div class="scal-scrim" onclick="_scalClosePanel()"></div><aside class="scal-panel" aria-label="Event">${inner}</aside>`;
+}
+
+// The fields both forms share. `p` prefixes the ids so the store sheet and the
+// Company events form can never collide if both are ever in the DOM.
+function _scalFormFields(ev, p, cats) {
+    const allDay = ev.all_day !== false;
+    return `<div class="scal-field"><label class="scal-lbl" for="${p}Title">Title</label>
+            <input id="${p}Title" class="scal-input" maxlength="140" value="${escapeHtml(ev.title || '')}" autocomplete="off" required></div>
+        <div class="scal-two">
+            <div class="scal-field"><label class="scal-lbl" for="${p}Date">Date</label><input id="${p}Date" type="date" class="scal-input" value="${escapeHtml(ev.event_date || '')}" required onchange="_scalStartChanged('${p}')"></div>
+            <div class="scal-field"><label class="scal-lbl" for="${p}End">Ends</label><input id="${p}End" type="date" class="scal-input" value="${allDay ? escapeHtml(ev.end_date || ev.event_date || '') : ''}" ${allDay ? 'required' : 'disabled'}></div>
+        </div>
+        <label class="scal-toggle"><input type="checkbox" id="${p}AllDay" ${allDay ? 'checked' : ''} onchange="_scalAllDayChanged('${p}', this.checked)">All day</label>
+        <div class="scal-two" id="${p}Times" ${allDay ? 'hidden' : ''}>
+            <div class="scal-field"><label class="scal-lbl" for="${p}Start">Starts</label><input id="${p}Start" type="time" class="scal-input" value="${escapeHtml(String(ev.start_time || '').slice(0, 5))}"></div>
+            <div class="scal-field"><label class="scal-lbl" for="${p}EndT">Ends</label><input id="${p}EndT" type="time" class="scal-input" value="${escapeHtml(String(ev.end_time || '').slice(0, 5))}"></div>
+        </div>
+        <div class="scal-field"><label class="scal-lbl" for="${p}Cat">Type</label>
+            <select id="${p}Cat" class="scal-input">${cats.concat(cats.includes(ev.category) || !ev.category ? [] : [ev.category])
+                .map(c => `<option value="${c}" ${ev.category === c ? 'selected' : ''}>${escapeHtml(_SCAL_CATEGORIES[c] || c)}</option>`).join('')}</select></div>
+        <div class="scal-field"><label class="scal-lbl" for="${p}Notes">Notes</label>
+            <textarea id="${p}Notes" class="scal-input" rows="4" maxlength="2000">${escapeHtml(ev.notes || '')}</textarea></div>
+        <div class="scal-field"><label class="scal-lbl" for="${p}Repeat">Repeat</label>
+            <select id="${p}Repeat" class="scal-input">${Object.keys(_SCAL_REPEATS).map(r => `<option value="${r}" ${_scalRepeatOf(ev) === r ? 'selected' : ''}>${_SCAL_REPEATS[r]}</option>`).join('')}</select></div>`;
+}
+
+// A timed event is one day, so its end DATE is greyed out and cleared unless
+// All day is on (Ethan, 2026-10-05); the times row shows instead. For an
+// all-day event the end date is REQUIRED (same day, later: "I don't think for
+// all day, the end date should be optional") — it starts as the start date, so
+// a one-day event still needs no extra typing, and the server stores an end
+// equal to the start as no end at all.
+function _scalAllDayChanged(p, on) {
+    const t = document.getElementById(p + 'Times'); if (t) t.hidden = on;
+    const e = document.getElementById(p + 'End');
+    if (e) {
+        e.disabled = !on; e.required = on;
+        e.value = on ? (e.value || (document.getElementById(p + 'Date') || {}).value || '') : '';
+    }
+}
+// Moving the start past the end drags the end along; so does a start with no end.
+function _scalStartChanged(p) {
+    const s = document.getElementById(p + 'Date'), e = document.getElementById(p + 'End');
+    if (s && e && !e.disabled && s.value && (!e.value || e.value < s.value)) e.value = s.value;
+}
+function _scalReadForm(p) {
+    const v = id => (document.getElementById(p + id) || {}).value || '';
+    const allDay = !!(document.getElementById(p + 'AllDay') || {}).checked;
+    return {
+        title: v('Title').trim(), event_date: v('Date'), end_date: allDay ? (v('End') || null) : null,
+        all_day: allDay, start_time: allDay ? null : (v('Start') || null), end_time: allDay ? null : (v('EndT') || null),
+        category: v('Cat') || 'other', notes: v('Notes'),
+        repeat: (document.getElementById(p + 'Repeat') || {}).value || 'none'
+    };
+}
+
+// ---- the Company events tab (district roles) ----
+// `readOnly`: everyone but corporate — the company events that show on their
+// own store(s), with no form and no edit/delete. The edge function refuses a
+// company write from them regardless.
+function _scalCompanyHTML(readOnly) {
+    const today = _scalTodayISO();
+    const mine = isMultiStoreManager() ? 'ALL' : _scal.store;
+    const company = _scal.events.filter(e => e.scope === 'company' && (!readOnly || _scalShowsOn(e, mine)));
+    // "Upcoming" means not over yet — a multi-day event in progress still counts.
+    const isPast = e => (e.end_date || e.event_date) < today && _scalRepeatOf(e) === 'none';
+    const past = _scal.companyList === 'past';
+    // ONE MONTH AT A TIME, both lists. Past (2026-10-04: "will past events show
+    // month by month or will it just be this giant long list") steps between the
+    // months that actually had events, newest first. Upcoming (2026-10-05: "only
+    // need to show upcoming events for current month ... offer the ability to
+    // switch what month you look at") opens on this month and steps forward a
+    // month at a time; it lists each REPEAT that falls in that month on its own
+    // date, so a yearly birthday turns up in its month, not just its first year.
+    const monthName = k => `${_SCAL_MONTHS[Number(k.slice(5, 7)) - 1]} ${k.slice(0, 4)}`;
+    const spanOf = e => e.end_date ? Math.round((_scalParse(e.end_date) - _scalParse(e.event_date)) / 864e5) : 0;
+    const nav = (label, count, olderCall, newerCall) => `<div class="scal-pastnav">
+                <button type="button" class="scal-icon-btn" aria-label="Older month" ${olderCall ? `onclick="${olderCall}"` : 'disabled'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+                <div class="scal-pastmonth">${label}<small>${count} event${count === 1 ? '' : 's'}</small></div>
+                <button type="button" class="scal-icon-btn" aria-label="Newer month" ${newerCall ? `onclick="${newerCall}"` : 'disabled'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+            </div>`;
+    let items = [], pastNav = '';
+    if (past) {
+        const rows = company.filter(isPast);
+        const ym = e => e.event_date.slice(0, 7);
+        const months = Array.from(new Set(rows.map(ym))).sort().reverse();
+        if (!months.includes(_scal.pastMonth)) _scal.pastMonth = months[0] || null;
+        const i = months.indexOf(_scal.pastMonth);
+        items = rows.filter(e => ym(e) === _scal.pastMonth).reverse().map(e => ({ e, date: e.event_date }));
+        if (months.length) pastNav = nav(monthName(_scal.pastMonth), items.length,
+            i < months.length - 1 ? `_scalSetPastMonth('${months[i + 1]}')` : '', i > 0 ? `_scalSetPastMonth('${months[i - 1]}')` : '');
+    } else {
+        const thisMonth = today.slice(0, 7);
+        if (!_scal.upMonth || _scal.upMonth < thisMonth) _scal.upMonth = thisMonth;
+        const y = Number(_scal.upMonth.slice(0, 4)), m = Number(_scal.upMonth.slice(5, 7)) - 1;
+        const mStart = `${_scal.upMonth}-01`, mEnd = _scalISO(new Date(y, m + 1, 0));
+        company.filter(e => !isPast(e)).forEach(e => {
+            const span = spanOf(e);
+            _scalRepeatStarts(e, _scalISO(_scalAddDays(_scalParse(mStart), -span)), mEnd).forEach(st => {
+                const end = _scalISO(_scalAddDays(_scalParse(st), span));
+                // In this month, and not already over (this month starts today).
+                if (st <= mEnd && end >= mStart && end >= today) items.push({ e, date: st });
+            });
+        });
+        items.sort((a, b) => a.date.localeCompare(b.date) || String(a.e.start_time || '').localeCompare(String(b.e.start_time || '')) || a.e.title.localeCompare(b.e.title));
+        const step = n => { const d = new Date(y, m + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+        pastNav = nav(monthName(_scal.upMonth), items.length,
+            _scal.upMonth > thisMonth ? `_scalSetUpMonth('${step(-1)}')` : '', `_scalSetUpMonth('${step(1)}')`);
+    }
+    const f = _scal.companyForm || _scalBlankCompany();
+    const list = items.length ? items.map(({ e, date }) => {
+        const d = _scalParse(date), span = spanOf(e);
+        const meta = [e.all_day ? 'All day' : _scalFmtTime(e.start_time) + (e.end_time ? ` – ${_scalFmtTime(e.end_time)}` : ''),
+            _SCAL_CATEGORIES[e.category], _scalRepeatOf(e) !== 'none' ? 'Repeats ' + _SCAL_REPEATS[_scalRepeatOf(e)] : '',
+            span ? `through ${_scalAddDays(d, span).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''].filter(Boolean).join(' · ');
+        const all = e.stores.length === STORE_CODES.length;
+        return `<div class="scal-crow${f.id === e.id ? ' editing' : ''}">
+            <div class="scal-cdate"><span>${_SCAL_MONTHS[d.getMonth()].slice(0, 3)}</span><b>${d.getDate()}</b></div>
+            <div class="scal-cmain"><div class="scal-ctitle">${escapeHtml(e.title)}</div><div class="scal-cmeta">${escapeHtml(meta)}</div></div>
+            <div class="scal-tags">${all ? '<span class="scal-tag">All stores</span>' : e.stores.map(s => `<span class="scal-tag">${s}</span>`).join('')}</div>
+            ${readOnly ? '' : `<div class="scal-cbtns">
+                ${past ? '' : `<button type="button" class="scal-icon-btn" aria-label="Edit ${escapeHtml(e.title)}" onclick="_scalEditCompany('${e.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>`}
+                <button type="button" class="scal-icon-btn danger" aria-label="Delete ${escapeHtml(e.title)}" onclick="_scalDelete('${e.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
+            </div>`}
+        </div>`;
+    }).join('') : `<div class="scal-empty">${past ? 'No past company events.' : `Nothing coming up in ${monthName(_scal.upMonth)}.`}</div>`;
+    const picks = STORE_CODES.map(s => `<label class="scal-pick"><input type="checkbox" name="scalCStores" value="${s}" ${f.stores.includes(s) ? 'checked' : ''} onchange="_scalSyncPostLabel()">${s}</label>`).join('');
+    return `<div class="scal-company${readOnly ? ' scal-company-ro' : ''}">
+        <section class="scal-clist">
+            <div class="scal-chead">
+                <div><div class="scal-title">${_scal.companyList === 'past' ? 'Past' : 'Upcoming'} Company Events</div>
+                ${readOnly ? '' : '<div class="scal-sub">These show on every store calendar you pick. Managers can\'t change them.</div>'}</div>
+                <div class="scal-seg scal-seg-sm">
+                    <button type="button" class="${_scal.companyList === 'upcoming' ? 'on' : ''}" onclick="_scalSetCompanyList('upcoming')">Upcoming</button>
+                    <button type="button" class="${_scal.companyList === 'past' ? 'on' : ''}" onclick="_scalSetCompanyList('past')">Past</button>
+                </div>
+            </div>
+            ${pastNav}
+            <div class="scal-crows">${_scal.error && !_scal.loaded ? `<div class="scal-empty">${escapeHtml(_scal.error)}</div>` : list}</div>
+        </section>
+        ${readOnly ? '' : `<form class="scal-cform scal-form" id="scalCompanyForm" onsubmit="event.preventDefault(); _scalSaveCompany()">
+            <div class="scal-title">${f.id ? 'Edit Company Event' : 'New Company Event'}</div>
+            ${_scalFormFields(f, 'scalC', _scalActiveTypes())}
+            <div class="scal-field"><div class="scal-lblrow"><span class="scal-lbl">Show on</span><button type="button" class="scal-link" onclick="_scalPickAll()">All stores</button></div>
+                <div class="scal-picks">${picks}</div></div>
+            <div class="scal-error" id="scalCError" role="alert"></div>
+            <div class="scal-cfoot">
+                <button type="button" class="scal-btn" onclick="_scalEditCompany(null)">${f.id ? 'Cancel edit' : 'Clear'}</button>
+                <button type="submit" class="scal-btn-primary" id="scalCPost" ${_scal.saving ? 'disabled' : ''}>${_scalPostLabel(f.stores, f.id)}</button>
+            </div>
+        </form>`}
+    </div>`;
+}
+
+// ---- the Event Types tab (the DM only) ----
+// Add a type, remove one, bring a removed one back. Removing never touches an
+// event: what is already filed under a type keeps its name and colour, and the
+// type just stops being offered. Other can't go — it is the fallback for a
+// removed type on any NEW event. Names are Title Cased by the server, which
+// is what decides; the hint here only says it will happen.
+function _scalTypesHTML() {
+    const used = {};
+    _scal.events.forEach(e => { used[e.category] = (used[e.category] || 0) + 1; });
+    const n = k => used[k] ? `${used[k]} Event${used[k] === 1 ? '' : 's'}` : '';
+    const active = _scalTypes.filter(t => t.active), removed = _scalTypes.filter(t => !t.active);
+    // EDIT (Ethan, 2026-10-04). The pencil loads a type into the right-hand
+    // form; saving renames and/or recolours it everywhere at once, because the
+    // events hold the key, not the name. Other can change colour, not name.
+    const editing = _scal.typeEdit ? _scalTypes.find(t => t.key === _scal.typeEdit) : null;
+    const pick = _scal.typeColor || (editing ? editing.color : _SCAL_TYPE_SWATCHES[0]);
+    const swatches = _SCAL_TYPE_SWATCHES.includes(pick) ? _SCAL_TYPE_SWATCHES : _SCAL_TYPE_SWATCHES.concat([pick]);
+    const pencil = t => `<button type="button" class="scal-icon-btn" aria-label="Edit ${escapeHtml(t.label)}" onclick="_scalEditType('${t.key}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>`;
+    const row = (t, btns) => `<div class="scal-trow${editing && editing.key === t.key ? ' editing' : ''}">${_scalCatDot(t.key)}<span class="scal-tname">${escapeHtml(t.label)}</span><span class="scal-tcount">${n(t.key)}</span><span class="scal-cbtns">${btns}</span></div>`;
+    const isOther = editing && editing.key === 'other';
+    return `<div class="scal-company scal-typestab">
+        <section class="scal-clist">
+            <div class="scal-chead"><div>
+                <div class="scal-title">Event Types</div>
+            </div></div>
+            <div class="scal-trows">${active.map(t => row(t, pencil(t) + (t.key === 'other' ? '<span class="scal-tfixed" title="Other is where everything else goes">Can\'t remove</span>'
+                : `<button type="button" class="scal-icon-btn danger" aria-label="Remove ${escapeHtml(t.label)}" onclick="_scalRemoveType('${t.key}')">${_SCAL_X}</button>`))).join('')}</div>
+            ${removed.length ? `<div class="scal-lbl scal-tremoved">Removed: events already filed under these keep them</div>
+                <div class="scal-trows">${removed.map(t => row(t, `<button type="button" class="scal-btn" onclick="_scalRestoreType('${t.key}')">Bring back</button>`)).join('')}</div>` : ''}
+        </section>
+        <form class="scal-cform scal-form" onsubmit="event.preventDefault(); _scalSaveType()">
+            <div class="scal-title">${editing ? `Edit ${escapeHtml(editing.label)}` : 'Add a Type'}</div>
+            <div class="scal-field"><label class="scal-lbl" for="scalTName">Name</label>
+                <input id="scalTName" class="scal-input" maxlength="40" autocomplete="off" placeholder="e.g. Vendor Visits" value="${editing ? escapeHtml(editing.label) : ''}" ${isOther ? 'disabled' : ''}>
+                <div class="scal-hint">${isOther ? 'Other keeps its name, since it\'s where everything else goes. You can change its colour.'
+                    : editing ? ''
+                    : ''}</div></div>
+            <div class="scal-field"><span class="scal-lbl">Colour</span>
+                <div class="scal-swatches" role="radiogroup" aria-label="Colour">${swatches.map(c =>
+                    `<button type="button" role="radio" aria-checked="${c === pick}" aria-label="${c}" class="scal-swatch${c === pick ? ' on' : ''}" style="background:${c}" onclick="_scalPickTypeColor('${c}')"></button>`).join('')}</div></div>
+            <div class="scal-error" id="scalTError" role="alert"></div>
+            <div class="scal-cfoot">
+                ${editing ? '<button type="button" class="scal-btn" onclick="_scalEditType(null)">Cancel</button>' : ''}
+                <button type="submit" class="scal-btn-primary" ${_scal.saving ? 'disabled' : ''}>${_scal.saving ? 'Saving…' : editing ? 'Save Changes' : 'Add Type'}</button>
+            </div>
+        </form>
+    </div>`;
+}
+function _scalEditType(key) {
+    _scal.typeEdit = key; _scal.typeColor = null; _scalRender();
+    const el = document.getElementById('scalTName');
+    if (el && key && !el.disabled) el.focus();
+}
+function _scalPickTypeColor(c) {
+    const name = (document.getElementById('scalTName') || {}).value || '';
+    _scal.typeColor = c; _scalRender();
+    const el = document.getElementById('scalTName'); if (el) el.value = name;
+}
+function _scalUpsertType(t) {
+    const list = _scalTypes.filter(x => x.key !== t.key).concat([t]);
+    _scalSetTypes(list);
+}
+// Add, or save the type being edited — one form does both.
+async function _scalSaveType() {
+    if (_scal.saving) return;
+    const editing = _scal.typeEdit ? _scalTypes.find(t => t.key === _scal.typeEdit) : null;
+    const el = document.getElementById('scalTName');
+    const label = (el && el.value || '').trim();
+    const err = document.getElementById('scalTError');
+    if (!label) { err.textContent = 'Give the type a name.'; return; }
+    const color = _scal.typeColor || (editing ? editing.color : _SCAL_TYPE_SWATCHES[0]);
+    _scal.saving = true; _scalRender();
+    try {
+        const r = await _scalSend(editing ? { action: 'type_edit', key: editing.key, label, color } : { action: 'type_add', label, color });
+        _scalUpsertType(Object.assign({}, editing || {}, r.category));
+        _scal.saving = false; _scal.typeColor = null; _scal.typeEdit = null; _scalRender();
+    } catch (e) {
+        _scal.saving = false; _scalRender();
+        const n = document.getElementById('scalTName'); if (n) n.value = label;
+        const x = document.getElementById('scalTError'); if (x) x.textContent = e.message || 'Could not add it.';
+    }
+}
+async function _scalRemoveType(key) {
+    const t = _scalTypes.find(x => x.key === key);
+    if (!t || !confirm(`Remove "${t.label}"? Events already filed under it keep it; it just can't be picked for new ones.`)) return;
+    try { const r = await _scalSend({ action: 'type_remove', key }); _scalUpsertType(r.category); _scalRender(); }
+    catch (e) { alert(e.message || 'Could not remove it.'); }
+}
+async function _scalRestoreType(key) {
+    const t = _scalTypes.find(x => x.key === key);
+    if (!t) return;
+    try { const r = await _scalSend({ action: 'type_add', label: t.label, color: t.color }); _scalUpsertType(r.category); _scalRender(); }
+    catch (e) { alert(e.message || 'Could not bring it back.'); }
+}
+
+function _scalBlankCompany() {
+    return { id: null, scope: 'company', title: '', event_date: _scalTodayISO(), all_day: true, category: _scalDefaultType('meeting'), stores: STORE_CODES.slice(), notes: '' };
+}
+function _scalPostLabel(stores, id) {
+    if (_scal.saving) return 'Saving…';
+    const n = stores.length;
+    if (id) return 'Save changes';
+    return n === STORE_CODES.length ? `Post to all ${n} stores` : n === 1 ? `Post to ${stores[0]}` : `Post to ${n} stores`;
+}
+function _scalCheckedStores() {
+    return Array.from(document.querySelectorAll('input[name="scalCStores"]:checked')).map(i => i.value);
+}
+function _scalSyncPostLabel() {
+    const b = document.getElementById('scalCPost');
+    if (b) b.textContent = _scalPostLabel(_scalCheckedStores(), (_scal.companyForm || {}).id);
+}
+function _scalPickAll() {
+    document.querySelectorAll('input[name="scalCStores"]').forEach(i => { i.checked = true; });
+    _scalSyncPostLabel();
+}
+
+// ---- state changes ----
+function _scalSetTab(t) { _scal.tab = t; _scal.panel = null; _scal.typeEdit = null; _scal.typeColor = null; _scalRender(); }
+function _scalSetView(v) {
+    _scal.view = v;
+    if (v === 'week') {
+        // Land on the week holding today if it's in the month on screen, else the 1st.
+        const t = new Date(), m = _scal.month;
+        const anchor = t.getFullYear() === m.getFullYear() && t.getMonth() === m.getMonth() ? t : m;
+        _scal.weekStart = _scalAddDays(anchor, -anchor.getDay());
+    }
+    _scalRender();
+}
+function _scalSetStore(s) { _scal.store = s; _scal.panel = null; _scalRender(); }
+function _scalSetCompanyList(l) { _scal.companyList = l; _scalRender(); }
+function _scalSetPastMonth(m) { _scal.pastMonth = m; _scalRender(); }
+function _scalSetUpMonth(m) { _scal.upMonth = m; _scalRender(); }
+function _scalStep(n) {
+    if (_scal.view === 'week') {
+        _scal.weekStart = _scalAddDays(_scal.weekStart, 7 * n);
+        _scal.month = new Date(_scal.weekStart.getFullYear(), _scal.weekStart.getMonth(), 1);
+    } else {
+        _scal.month = new Date(_scal.month.getFullYear(), _scal.month.getMonth() + n, 1);
+    }
+    _scalRender();
+}
+function _scalOpenDetail(id) { _scal.panel = { kind: 'detail', id }; _scalRender(); }
+function _scalOpenDay(day) { _scal.panel = { kind: 'day', day }; _scalRender(); }
+function _scalClosePanel() { _scal.panel = null; _scal.saving = false; _scalRender(); }
+function _scalOpenEdit(id, day) {
+    // An MSM adding an event gets the DM's "Show on" picker — All stores / BAL
+    // / MPL (Ethan, 2026-10-05) — ticked to whichever view they added from.
+    const mine = _scalWritableStores();
+    const pickStore = !id && mine.length > 1;
+    const stores = pickStore ? (_scal.store === 'ALL' ? mine.slice() : [_scal.store]) : null;
+    const ev = id ? Object.assign({}, _scal.events.find(e => e.id === id))
+        : { id: null, scope: 'store', store: stores ? stores[0] : _scal.store, title: '', event_date: day, all_day: true, category: _scalDefaultType('staffing'), notes: '' };
+    if (!ev || !_scalCanWriteStore(ev.store) || (id && _scalIsPastEvent(ev))) return;
+    _scal.panel = { kind: 'edit', ev, pickStore, stores };
+    _scalRender();
+    const t = document.getElementById('scalETitle');
+    if (t) t.focus();
+}
+function _scalEditCompany(id) {
+    const ev = id && _scal.events.find(e => e.id === id);
+    if (ev && _scalIsPastEvent(ev)) return;
+    _scal.companyForm = ev ? Object.assign({}, ev, { stores: ev.stores.slice() }) : null;
+    _scal.tab = 'company';
+    _scal.panel = null;
+    if (ev) {
+        _scal.companyList = (ev.end_date || ev.event_date) < _scalTodayISO() && _scalRepeatOf(ev) === 'none' ? 'past' : 'upcoming';
+        _scal.pastMonth = ev.event_date.slice(0, 7);   // land on the month it's in
+        _scal.upMonth = ev.event_date.slice(0, 7);     // (clamped to this month at the earliest)
+    }
+    _scalRender();
+    const t = document.getElementById('scalCTitle');
+    if (t) t.focus();
+}
+
+// ---- network ----
+async function _scalLoad() {
+    try {
+        const res = await fetch(`${STORE_CALENDAR_URL}?v=${Date.now()}`);
+        const j = await res.json();
+        if (!j || !j.success || !Array.isArray(j.events)) throw new Error((j && j.error) || 'Could not load the calendar');
+        _scal.events = j.events;
+        if (Array.isArray(j.categories) && j.categories.length) _scalSetTypes(j.categories);
+        _scal.loaded = true;
+        _scal.error = '';
+    } catch (e) {
+        // Keep whatever was already on screen; only an empty first load says so.
+        _scal.error = "Couldn't load the calendar. Check the connection and open it again.";
+    }
+    const modal = document.getElementById('calendarDropdown');
+    if (modal && modal.classList.contains('show')) _scalRender();
+}
+
+async function _scalSend(payload) {
+    return postWrite(STORE_CALENDAR_URL, Object.assign({ pin: sessionStorage.getItem('speeksUserPin') || '' }, payload));
+}
+function _scalUpsertLocal(ev) {
+    const i = _scal.events.findIndex(e => e.id === ev.id);
+    if (i >= 0) _scal.events[i] = ev; else _scal.events.push(ev);
+    _scal.events.sort((a, b) => a.event_date.localeCompare(b.event_date) || String(a.start_time || '').localeCompare(String(b.start_time || '')));
+}
+
+async function _scalSaveStore() {
+    const p = _scal.panel;
+    if (!p || p.kind !== 'edit' || _scal.saving) return;
+    // A store event belongs to ONE store (0125's shape check), so picking both
+    // of an MSM's stores saves one copy each, in turn. Each copy is then that
+    // store's own: edited or deleted there without touching the other.
+    const stores = p.pickStore ? _scalPickedMine() : [p.ev.store];
+    const ev = Object.assign(_scalReadForm('scalE'), { scope: 'store', store: stores[0] });
+    const err = document.getElementById('scalEError');
+    if (!stores.length) { err.textContent = 'Pick at least one store.'; return; }
+    if (!ev.title) { err.textContent = 'Give the event a title.'; return; }
+    if (ev.all_day && !ev.end_date) { err.textContent = 'Pick an end date.'; return; }
+    if (ev.all_day && ev.end_date < ev.event_date) { err.textContent = 'The end date is before the start date.'; return; }
+    if (!ev.all_day && !ev.start_time) { err.textContent = 'Pick a start time, or make it all day.'; return; }
+    p.ev = Object.assign({}, p.ev, ev);
+    if (p.pickStore) p.stores = stores;
+    _scal.saving = true; _scalRender();
+    const done = [];
+    try {
+        let r;
+        for (const st of stores) {
+            r = await _scalSend({ action: 'save', id: p.ev.id || undefined, event: Object.assign({}, ev, { store: st }) });
+            _scalUpsertLocal(r.event); done.push(st);
+        }
+        _scal.saving = false;
+        _scal.panel = null;
+        // Jump to where it landed, in case the date was moved off this month.
+        const d = _scalParse(r.event.event_date);
+        _scal.month = new Date(d.getFullYear(), d.getMonth(), 1);
+        _scalRender();
+    } catch (e) {
+        // A copy already saved stays saved; untick it so a retry doesn't double it.
+        if (done.length && p.pickStore) p.stores = stores.filter(s => !done.includes(s));
+        _scal.saving = false; _scalRender();
+        const el = document.getElementById('scalEError');
+        if (el) el.textContent = (done.length ? `Saved to ${done.join(' and ')}, but not the rest: ` : '') + (e.message || 'Could not save.');
+    }
+}
+function _scalPickedMine() { return Array.from(document.querySelectorAll('input[name="scalEStores"]:checked')).map(i => i.value); }
+function _scalStoreSaveLabel(stores) { return stores.length > 1 ? 'Save to Both Stores' : stores.length ? `Save to ${stores[0]}` : 'Save Event'; }
+function _scalSyncStoreSave() {
+    const p = _scal.panel; if (p && p.pickStore) p.stores = _scalPickedMine();
+    const b = document.getElementById('scalESave'); if (b) b.textContent = _scalStoreSaveLabel(_scalPickedMine());
+}
+function _scalPickAllMine() {
+    document.querySelectorAll('input[name="scalEStores"]').forEach(i => { i.checked = true; });
+    _scalSyncStoreSave();
+}
+
+async function _scalSaveCompany() {
+    if (_scal.saving) return;
+    const prev = _scal.companyForm || _scalBlankCompany();
+    const ev = Object.assign(_scalReadForm('scalC'), { scope: 'company', stores: _scalCheckedStores() });
+    const err = document.getElementById('scalCError');
+    if (!ev.title) { err.textContent = 'Give the event a title.'; return; }
+    if (ev.all_day && !ev.end_date) { err.textContent = 'Pick an end date.'; return; }
+    if (ev.all_day && ev.end_date < ev.event_date) { err.textContent = 'The end date is before the start date.'; return; }
+    if (!ev.stores.length) { err.textContent = 'Pick at least one store.'; return; }
+    if (!ev.all_day && !ev.start_time) { err.textContent = 'Pick a start time, or make it all day.'; return; }
+    _scal.companyForm = Object.assign({}, prev, ev);
+    _scal.saving = true; _scalRender();
+    try {
+        const r = await _scalSend({ action: 'save', id: prev.id || undefined, event: ev });
+        _scalUpsertLocal(r.event);
+        _scal.saving = false;
+        _scal.companyForm = null;
+        _scalRender();
+    } catch (e) {
+        _scal.saving = false; _scalRender();
+        const el = document.getElementById('scalCError');
+        if (el) el.textContent = e.message || 'Could not save.';
+    }
+}
+
+async function _scalDelete(id) {
+    const ev = _scal.events.find(e => e.id === id);
+    if (!ev) return;
+    const where = ev.scope === 'company' ? `from ${ev.stores.length === STORE_CODES.length ? 'every store' : ev.stores.join(', ')}` : `from the ${ev.store} calendar`;
+    if (!confirm(`Delete "${ev.title}" ${where}?`)) return;
+    try {
+        await _scalSend({ action: 'delete', id });
+        _scal.events = _scal.events.filter(e => e.id !== id);
+        if (_scal.companyForm && _scal.companyForm.id === id) _scal.companyForm = null;
+        _scal.panel = null;
+        _scalRender();
+    } catch (e) {
+        alert(e.message || 'Could not delete.');
+    }
+}
+
+// Opening resets to this month and the person's own store, then draws from
+// what's cached while a fresh copy loads — so a change made at another store
+// since the last open is there without a page reload (the old embed's problem).
 function toggleCalendar() {
     const modal = document.getElementById('calendarDropdown');
-    const frame = modal && modal.querySelector('iframe');
-    // Only on the way in — reloading as it closes would just burn a fetch.
-    if (frame && modal && !modal.classList.contains('show')) {
-        frame.replaceWith(frame.cloneNode(true));
+    if (modal && !modal.classList.contains('show')) {
+        const t = new Date();
+        _scal.month = new Date(t.getFullYear(), t.getMonth(), 1);
+        _scal.weekStart = _scalAddDays(t, -t.getDay());
+        _scal.panel = null; _scal.saving = false;
+        _scal.tab = 'calendar'; _scal.companyList = 'upcoming'; _scal.pastMonth = null; _scal.upMonth = null;
+        _scal.typeEdit = null; _scal.typeColor = null;
+        if (_scalIsDistrict() || isMultiStoreManager()) _scal.store = 'ALL';
+        else {
+            const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+            _scal.store = STORE_CODES.includes(s) ? s : (isMultiStoreManager() ? MULTISTORE_MANAGER_STORES[0] : STORE_CODES[0]);
+        }
+        if (!_scal.loaded) document.getElementById('scalRoot') && (document.getElementById('scalRoot').innerHTML = '<div class="scal-empty">Loading the calendar…</div>');
+        else _scalRender();
+        _scalLoad();
     }
     toggleModal('calendarDropdown');
 }
@@ -1985,13 +2947,24 @@ function feedLeaderboardToTicker(leaderboardData) {
         }).sort((a, b) => b.val - a.val);
         return scores.length && scores[0].val > 0 ? scores[0].store : null;
     };
-    const gpLeader = getLeader(leaderboardData.gp || {});
-    const revLeader = getLeader(leaderboardData.revenue || {});
+    // From October the profit leader is the NET profit leader, off the live
+    // payload (see _lbLiveRows). The hub's GP leader is not used as a stand-in:
+    // a GP leader announced as the NP leader would be wrong in public.
+    const top = rows => {
+        if (!rows || !rows.length) return null;
+        const r = rows.slice().sort((a, b) => b.val - a.val)[0];
+        return r.val > 0 ? r.store : null;
+    };
+    const npRows = (typeof _lbLiveRows === 'function') ? _lbLiveRows('NP') : null;
+    const npMode = !!npRows;
+    const gpLeader = npMode ? top(npRows) : getLeader(leaderboardData.gp || {});
+    const revLeader = npMode ? top(_lbLiveRows('Revenue')) : getLeader(leaderboardData.revenue || {});
+    const pk = npMode ? 'Net Profit' : 'GP';
     let text;
     if (gpLeader && revLeader && gpLeader !== revLeader) {
-        text = `Monthly GP Leader: ${gpLeader}  ·  Revenue Leader: ${revLeader}`;
+        text = `Monthly ${pk} Leader: ${gpLeader}  ·  Revenue Leader: ${revLeader}`;
     } else if (gpLeader || revLeader) {
-        text = `${gpLeader || revLeader} is leading district GP & Revenue this month`;
+        text = `${gpLeader || revLeader} is leading district ${pk} & Revenue this month`;
     }
     if (text) {
         _tickerLeaderboard = { icon: '🏆', text, _type: 'leaderboard' };
@@ -2513,8 +3486,15 @@ function populateManageModal() {
     if (globalDocsData.length === 0) {
         addManageRow();
     } else {
-        globalDocsData.forEach(doc => addManageRow(doc));
+        // Categories from the saved data, computed once: while the list is being
+        // built the rows are still arriving, so reading them would give the first
+        // cards only the categories above them.
+        const cats = _manageDocCategories(globalDocsData.map(d => d.category));
+        globalDocsData.forEach(doc => addManageRow(doc, false, cats));
     }
+    // Every open starts at the top. The list element is reused between opens,
+    // so without this it kept the scroll position from the last visit.
+    list.scrollTop = 0;
 }
 
 // Live-filter the policy cards by title / category / description / link — same
@@ -2537,13 +3517,62 @@ function filterManageDocs() {
     });
 }
 
-function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', link: '' }) {
+// Every category in use, "Pinned" stripped (it's a flag, not a category —
+// see addManageRow). There is no category table: a category exists only while
+// some policy carries it, so one that nothing uses drops out of the list. By
+// default this reads the editor's current rows, not the saved data — a category
+// typed into one card is offered to the next card added, and one whose last
+// policy was deleted or moved is gone without waiting for a save.
+function _manageDocCategories(from) {
+    const seen = new Map();
+    const add = (c) => {
+        String(c || '').split(',').map(x => x.trim()).forEach(x => {
+            if (x && !/^["']?pinned["']?$/i.test(x) && !seen.has(x.toLowerCase())) seen.set(x.toLowerCase(), x);
+        });
+    };
+    if (from) from.forEach(add);
+    else document.querySelectorAll('#manageDocsList .m-category').forEach(el => add(el.value));
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
+// Category picker: a real <select> of existing categories plus "+ New
+// category…", not an <input list> + <datalist> — see the note on
+// _mbmToggleSection's select for why the datalist was dropped elsewhere. The
+// .m-category text box is still the field of record (saveDocs and
+// filterManageDocs read it); the select writes into it, and it is only shown
+// when a new category is being typed.
+function _manageCatPick(sel) {
+    const input = sel.closest('.mp-f-cat')?.querySelector('.m-category');
+    if (!input) return;
+    const isNew = sel.value === '__new';
+    input.style.display = isNew ? '' : 'none';
+    if (isNew) { input.value = ''; input.focus(); }
+    else input.value = sel.value;
+}
+
+// "+ Add Policy": the new card goes at the TOP and the list scrolls there.
+// Appending it put it below every existing policy, off-screen, so clicking the
+// button looked like it did nothing. The search is cleared too — a filter left
+// in the box would hide the blank card.
+function addNewPolicy() {
+    const search = document.getElementById('manageDocsSearch');
+    if (search && search.value) { search.value = ''; filterManageDocs(); }
+    const row = addManageRow(undefined, true);
+    const list = document.getElementById('manageDocsList');
+    if (list) list.scrollTo({ top: 0, behavior: 'smooth' });
+    row.querySelector('.m-title')?.focus({ preventScroll: true });
+}
+
+function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', link: '' }, atTop = false, cats = null) {
     let baseCat = doc.category || '';
     let isPinned = baseCat.toLowerCase().includes('pinned');
     
     if (isPinned) {
         baseCat = baseCat.replace(/,?\s*["']?pinned["']?/ig, '').trim();
     }
+
+    const catOpts = (cats || _manageDocCategories()).slice();
+    if (baseCat && !catOpts.includes(baseCat)) catOpts.push(baseCat);
 
     const row = document.createElement('div');
     row.className = 'manage-row';
@@ -2562,7 +3591,12 @@ function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', l
         </div>
         <div class="mp-field mp-f-cat">
             <label>Category</label>
-            <input type="text" class="m-category" placeholder="Category" value="${baseCat}">
+            <select class="m-cat-sel" onchange="_manageCatPick(this)">
+                ${baseCat ? '' : '<option value="" selected>Choose a category…</option>'}
+                ${catOpts.map(c => `<option value="${escapeHtml(c)}"${c === baseCat ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+                <option value="__new">+ New category…</option>
+            </select>
+            <input type="text" class="m-category" placeholder="New category name" value="${escapeHtml(baseCat)}" style="display:none;">
         </div>
         <label class="pin-label mp-f-pin">
             <input type="checkbox" class="m-pinned" ${isPinned ? 'checked' : ''}> Pin
@@ -2577,7 +3611,9 @@ function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', l
             <input type="text" class="m-link" placeholder="https://drive.google.com/…" value="${doc.link || ''}">
         </div>
     `;
-    document.getElementById('manageDocsList').appendChild(row);
+    const list = document.getElementById('manageDocsList');
+    if (atTop) list.prepend(row); else list.appendChild(row);
+    return row;
 }
 
 async function saveDocs() {
@@ -3968,7 +5004,7 @@ function _kpiHeaderRowsHtml() {
         '</tr><tr class="kpi-grid-header-row">' +
         '<th class="kpi-grid-th kpi-col-input">Buy Value</th>' +
         '<th class="kpi-grid-th kpi-col-input">Buy Cost</th>' +
-        '<th class="kpi-grid-th kpi-col-computed">Est. GP</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">Est. Buy Profit</th>' +
         '<th class="kpi-grid-th kpi-col-computed">Margin %</th>' +
         '<th class="kpi-grid-th kpi-col-input"># Trans.</th>' +
         '<th class="kpi-grid-th kpi-col-input"># Conv.</th>' +
@@ -3981,7 +5017,7 @@ function _kpiHeaderRowsHtml() {
         '<th class="kpi-grid-th kpi-col-input">ND Value</th>' +
         '<th class="kpi-grid-th kpi-col-input">ND Cost</th>' +
         '<th class="kpi-grid-th kpi-col-computed">Lost Profit</th>' +
-        '<th class="kpi-grid-th kpi-col-computed">% vs Buy GP</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">% vs Buy Profit</th>' +
         '<th class="kpi-grid-th kpi-col-input"># Listed</th>' +
         '<th class="kpi-grid-th kpi-col-input">Retail ($)</th>' +
         '<th class="kpi-grid-th kpi-col-input">Cost ($)</th>' +
@@ -4456,11 +5492,11 @@ function _kpiExportCSV(periods, spanTag) {
 
     const headers = [
         'Period','Employee',
-        'Buy Value','Buy Cost','Est. GP','Margin %',
+        'Buy Value','Buy Cost','Est. Buy Profit','Margin %',
         '# Trans','# Conv.','Conv. %',
         '# Devices','# Dev Conv.','Dev Conv. %',
         'Avg Time (min)',
-        '# No Deals','ND Value','ND Cost','Lost Profit','% vs Buy GP',
+        '# No Deals','ND Value','ND Cost','Lost Profit','% vs Buy Profit',
         '# Listed','Retail ($)','Cost ($)','Sold ($)','Listed Margin %','% Sold',
         'Google Reviews'
     ];
@@ -4638,6 +5674,10 @@ const _MB_DERIVED = [
     ['pct_non_ebay_sales',      v => (v.pct_sales_at_pos != null && v.pct_sales_online != null && v.pct_sales_draft_order != null)
         ? _mbR2(v.pct_sales_at_pos + v.pct_sales_online + v.pct_sales_draft_order) : null],
     ['shipping_cost_pct_sales', v => _mbPctOf(v.shipping_label_cost, v.net_sales)],
+    // Net Profit rows (0131, 2026-10-02): GP stays in the breakdown, NP is added
+    // beside it, and eBay fees with it because the fee gap is why NP differs.
+    ['net_profit_pct',          v => _mbPctOf(v.net_profit, v.net_sales)],
+    ['ebay_fee_pct_sales',      v => _mbPctOf(v.ebay_fees, v.net_sales)],
     ['recycled_pct_inventory',  v => _mbPctOf(v.recycled_inventory, v.inventory_cost)],
 ];
 const _MB_DERIVED_KEYS = new Set(_MB_DERIVED.map(d => d[0]));
@@ -9374,9 +10414,15 @@ function initOperations() {
     if (sign) _b2bPendingSign = sign[1];
     // #categories is the feed card's destination: the Categories view inside
     // SPEEKS Connect, which is a view of a tab rather than a tab of its own.
-    if (hash === 'categories') { _ecView = 'cats'; }
+    // #photos is the no-pictures card's: the same view, on the Picture Quality
+    // tab. Since Listing Health became tabs (2026-09-30) each card lands on ITS
+    // tool — the category card opening on Titles would bury what it pointed at.
+    if (hash === 'categories' || hash === 'photos') {
+        _ecView = 'cats';
+        _lhTab = hash === 'photos' ? 'photos' : 'cats';
+    }
     let initial = sign ? 'b2b'
-        : hash === 'categories' ? 'ebay'
+        : (hash === 'categories' || hash === 'photos') ? 'ebay'
         : ['marginguide', 'pictureguide', 'callbacks', 'b2b', 'ebay'].includes(hash) ? hash : 'ebay';
     // COMPUTED display, not the inline one. The fallback below was written for
     // Feature Access, which writes `display: none !important` onto the element —
@@ -9398,7 +10444,7 @@ function initOperations() {
         if (firstVisible) initial = firstVisible.id.replace('ops-tab-', '');
     }
     switchOperationsTab(initial);
-    if (hash === 'categories') _ecMarkView('cats');
+    if (hash === 'categories' || hash === 'photos') _ecMarkView('cats');
 
     // A TAB STRIP WITH ONE TAB IS A LABEL THAT LOOKS CLICKABLE. Ethan saw it on
     // the picture-station iPad, which reaches exactly one Operations tab: a green
@@ -9586,7 +10632,11 @@ async function fetchHubData() {
             if (_lbUpd) _lbUpd.innerText = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
             if (document.getElementById('lb-wrapper')) drawLeaderboard();
         } else if (document.getElementById('lb-wrapper')) {
-            document.getElementById('lb-wrapper').innerHTML = '<div class="status-message" style="color:var(--red-alert);">Please Deploy "New Version" of Hub App Script!</div>';
+            // No leaderboard arrays is NORMAL from October 2026: they came off the
+            // Sales Summary tab, which is retired. The standings come off the live
+            // payload (_lbLiveRows), so draw from that rather than telling anybody
+            // to redeploy the hub.
+            drawLeaderboard();
         }
         _tickerSourceDone('hub');
     } catch(e) {
@@ -9595,6 +10645,23 @@ async function fetchHubData() {
         // has time to succeed and set the leaderboard before the ticker starts.
         setTimeout(() => _tickerSourceDone('hub'), 2000);
     }
+}
+
+// "Updated as of" on the Command Center header. The hub stamps {store}BuyDate
+// when the SALES TAB's revenue or GP changes, and the Sales tab is retired
+// (2026-10-03) — so that stamp stops moving for good. From an NP month the date
+// is the last day the Net Profit tab has closed for the store, off the live
+// payload, which is the day the board's figures actually run through. Null when
+// there is no live payload yet; the caller falls back to the hub's stamp.
+function _ccUpdatedNp(store) {
+    const d = (typeof _lvData !== 'undefined') ? _lvData : null;
+    if (!d || !Array.isArray(d.stores) || d.goalKind !== 'np') return null;
+    const m = d.stores.find(x => x && String(x.code).toLowerCase() === String(store || '').toLowerCase());
+    const n = m && m.np && Number(m.np.bankedDays);
+    const ym = String(d.asOfCentral || '').slice(0, 7);
+    if (!n || !/^\d{4}-\d{2}$/.test(ym)) return null;
+    const dt = new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1, n);
+    return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 function renderBuyingSales() {
@@ -9681,7 +10748,7 @@ function renderBuyingSales() {
         el.classList.toggle('bad', sellMarginNum < 55.0);
         el.classList.toggle('good', sellMarginNum >= 55.0);
     });
-    const _buyDate = hubDataCache[`${store}BuyDate`] || '—';
+    const _buyDate = _ccUpdatedNp(store) || hubDataCache[`${store}BuyDate`] || '—';
     document.querySelectorAll('#cc-updated').forEach(el => el.innerText = _buyDate);
     document.querySelectorAll('#bs-pace-asof').forEach(el => el.innerText = 'as of ' + _buyDate);
     const _mEnd = new Date(); _mEnd.setMonth(_mEnd.getMonth() + 1, 0); // last day of current month
@@ -9853,8 +10920,10 @@ function switchLeaderboardMetric(metric) {
         revBtn.classList.toggle('active', metric === 'Revenue');
         revBtn.style.color = metric === 'Revenue' ? 'var(--slate-charcoal)' : '#a0aab2';
         
-        gpBtn.classList.toggle('active', metric === 'GP');
-        gpBtn.style.color = metric === 'GP' ? 'var(--slate-charcoal)' : '#a0aab2';
+        // The id is still lb-tab-gp so the markup did not have to change shape;
+        // the button it names has said Net Profit since October 2026.
+        gpBtn.classList.toggle('active', metric !== 'Revenue');
+        gpBtn.style.color = metric !== 'Revenue' ? 'var(--slate-charcoal)' : '#a0aab2';
     }
     
     drawLeaderboard(); 
@@ -10013,6 +11082,9 @@ const RECORD_CARD_ORDER = [
     'Daily Sell Record',
     'Single Day Google Reviews',
     'Monthly Revenue Record',
+    // Net Profit sits first of the monthly profit records: from October 2026 it
+    // is the figure the stores are graded on (records-watch, 2026-10-02).
+    'Monthly Net Profit Record',
     'Monthly Gross Profit Record',
     'Monthly Sell Margin Record',
     'Monthly Customer Conversion Record',
@@ -10145,6 +11217,7 @@ function renderRecords() {
  * store cards, with no subtitle — Ethan asked for both. */
 const RECORD_COMPANY_NOTE = {
     'Monthly Sell Margin Record': 'All stores’ gross profit ÷ all net sales',
+    'Monthly Net Profit Record': 'All five stores’ net profit, months every store has one',
     'Monthly Customer Conversion Record': 'Close rate weighted by # of customers',
 };
 function _recCompanySection(company, rank) {
@@ -10290,7 +11363,7 @@ function populateRecordsModal() {
 
     const cols = `minmax(150px, 1.3fr) repeat(${sections.length}, minmax(118px, 1fr))`;
     list.innerHTML =
-        `<p class="cr-hint">These fill themselves in every morning from the Daily Sales Summary and the Monthly Breakdown, and only ever go up. Edit a store here to correct one &mdash; a lower number sticks unless the data really beats it. <strong>Company</strong> is every store added together and is kept automatically.</p>` +
+        `<p class="cr-hint">These fill themselves in every morning from the daily buying and selling figures and the Monthly Breakdown, and only ever go up. Edit a store here to correct one &mdash; a lower number sticks unless the data really beats it. <strong>Company</strong> is every store added together and is kept automatically.</p>` +
         // The person editors live INSIDE the scroller, not after it. Two nested
         // scrollers would otherwise hide them below the fold on a short screen
         // with no scrollbar to say they were there — the tool would look like
@@ -12109,7 +13182,74 @@ const _lvCols = () => ({
 // column and the pace pill read those directly, and leaving them live would put
 // a figure that counts today beside four that stop at yesterday — on the one tab
 // whose entire promise is that everything on it covers the same days.
+// ---- NET PROFIT (2026-10-02) ----------------------------------------------
+// From October 2026 stores are graded on Net Profit. shopify-live carries an `np`
+// block on every store row and on the district (see npFor there): the NP goal,
+// NP banked off the workbook's Net Profit tab, an ESTIMATE for the days the tab
+// has not reached (today always; yesterday until the 6:10 pass) at the store's
+// own cost rate, and % of goal / pace / tracking worked from that.
+//
+// It is laid over the view HERE, once, so that every renderer that already reads
+// goal / pctOfGoal / paceIndex — the pace pills, the goal bars, the phone card,
+// the collapsed summary — is on NP without being touched. The NP figures for the
+// span on screen ride alongside as npDay / npMtd / npTrack; `npKind` is what a
+// renderer checks before it relabels anything.
+//
+// The three modes take the same figures the GP fields do: Today is live (with
+// today's estimate in it), Yesterday and Month stop at yesterday's close.
+function _lvNpKind() { return !!(_lvData && _lvData.goalKind === 'np'); }
+function _lvNpOverlay(v, n) {
+    if (!n || !_lvNpKind()) return v;
+    const p = n.prev;
+    const live = _lvIsToday() || !p;
+    const out = {
+        npKind: true,
+        npGoal: n.goal,
+        goal: n.goal || 0,
+        // The day fields hold the MONTH on the Month tab, as every GP field does.
+        npDay: live ? n.today : (_lvIsMtd() ? p.mtd : p.day),
+        npDayEst: live ? true : (_lvIsMtd() ? n.estimated !== 0 && n.bankedDays < ((_lvData.prev && _lvData.prev.daysElapsed) || 0) : !!p.dayEstimated),
+        npMtd: live ? n.mtd : p.mtd,
+        npTrack: live ? n.track : p.track,
+        npLastMonth: n.lastMonth,
+        pctOfGoal: live ? n.pctOfGoal : p.pctOfGoal,
+        paceIndex: live ? n.paceIndex : p.paceIndex,
+        // Finished days only (the NP tab's own days), for the Month table's eBay
+        // fees and Shipping columns. Same on every tab: a fee is not known for a
+        // day that has not closed.
+        npBSales: n.bankedSales, npBEbay: n.bankedEbay, npBShip: n.bankedShip,
+    };
+    return Object.assign({}, v, out);
+}
+// "Estimated Net Profit", not "Net Profit est." (Ethan 2026-10-02: say it in the
+// label). The word joins the label in the label's own case: "Net Profit" ->
+// "Estimated Net Profit", "Net profit today" -> "Estimated net profit today".
+// The tooltip says how it is worked out: GP less the store's own cost rate.
+function _lvEstName(label, on) {
+    if (!on) return label;
+    const titled = /^[A-Z]\S*\s+[A-Z]/.test(label) || !/\s/.test(label);
+    const text = /^[a-z]/.test(label) ? 'estimated ' + label
+        : 'Estimated ' + (titled ? label : label.charAt(0).toLowerCase() + label.slice(1));
+    return '<span class="lv-est" title="Estimated: sales less cost of goods, then less this store\'s own rate for eBay fees, shipping, card fees and royalty over its last 30 finished days. The Net Profit tab replaces it the next morning.">' + text + '</span>';
+}
+
 function _lvView(m) {
+    if (!m) return m;
+    return _lvNpOverlay(_lvViewGp(m), m.np);
+}
+// NO GP ON AN NP MONTH (Ethan 2026-10-02: "when I said everything tied to GP
+// needs to be moved to NP, I meant it"). Every margin a store sees is the NET
+// margin — NP over net sales for the span on screen — and gross profit is not
+// shown as a figure of its own anywhere on the board.
+function _lvNetMargin(v) {
+    const n = Number(v && v.npDay), s = Number(v && v.netToday);
+    return (isFinite(n) && s > 0) ? n / s * 100 : null;
+}
+function _lvNetMarginMtd(v) {
+    const n = Number(v && v.npMtd), s = Number(v && v.mtdNet);
+    return (isFinite(n) && s > 0) ? n / s * 100 : null;
+}
+function _lvViewGp(m) {
     if (!m) return m;
     if (_lvIsPrev() && m.prev) return Object.assign({}, m, m.prev);
     if (_lvIsMtd()) {
@@ -13015,14 +14155,18 @@ function renderGpGoals() {
         .map(s => String(s.code).toUpperCase());
     const stores = codes.length ? codes : ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
     const editable = _gpCanEdit();
+    // From October 2026 the month's goal is NET profit (gp-goals answers with
+    // kind 'np'); September and earlier keep their gross-profit goals, so
+    // looking back at one still says what it was measured against.
+    const np = _gpGoals.kind === 'np';
 
     let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
         The month's targets for <b>${escapeHtml(_gpMonthName(_gpGoals.month))}</b>.
-        Saving writes them into the Sales Summary workbook as well, so the sheet
+        Saving writes them into the ${np ? 'Net Profit tab of the' : ''} Sales Summary workbook as well, so the sheet
         and the site cannot drift apart.${editable ? '' : ' Only the District Manager can change these.'}</p>`;
 
     html += `<div class="gp-sec"><div class="gp-sec-head">
-        <span class="gp-sec-t">Gross profit goals</span>
+        <span class="gp-sec-t">${np ? 'Net profit goals' : 'Gross profit goals'}</span>
         <span class="gp-sec-s">${stores.length} stores</span></div>`;
     html += '<div class="gp-goal-rows">';
     stores.forEach(code => {
@@ -13042,7 +14186,7 @@ function renderGpGoals() {
     });
     html += '</div>';
 
-    html += `<div class="gp-goal-total">Company goal <b id="gpGoalTotal">—</b></div></div>`;
+    html += `<div class="gp-goal-total">Company ${np ? 'NP' : 'GP'} goal <b id="gpGoalTotal">—</b></div></div>`;
 
     html += _gpBuyDaysHtml(editable);
 
@@ -13306,8 +14450,8 @@ async function checkGpGoalReminder() {
     const monthName = _gpMonthName(data.month);
     const n = data.missing.length;
     const summary = n === 5
-        ? `No goals set for ${monthName} yet — the goal bars have nothing to measure against until they are in.`
-        : `${data.missing.join(', ')} ${n === 1 ? 'has' : 'have'} no ${monthName} goal yet.`;
+        ? `No ${data.kind === 'np' ? 'net profit ' : ''}goals set for ${monthName} yet — the goal bars have nothing to measure against until they are in.`
+        : `${data.missing.join(', ')} ${n === 1 ? 'has' : 'have'} no ${monthName} ${data.kind === 'np' ? 'net profit ' : ''}goal yet.`;
     if (t) {
         t.innerHTML = '<div style="line-height:1.4;"><strong>Store goals for ' + escapeHtml(monthName) + '</strong></div>'
             + '<div style="line-height:1.4; opacity:0.96;">' + escapeHtml(summary) + '</div>';
@@ -13430,13 +14574,25 @@ function setDailyStore(code) {
 // from the totals, never averaged across days — days differ in size, so a mean
 // of the daily percentages is not the month's percentage.
 function _bdTotals(days) {
-    const t = { sales: 0, cost: 0, gp: 0, resale: 0, paid: 0, sellDays: 0, buyDays: 0 };
+    const t = { sales: 0, cost: 0, gp: 0, resale: 0, paid: 0, sellDays: 0, buyDays: 0,
+                np: 0, ebay: 0, ship: 0, cc: 0, royalty: 0, npSales: 0, npDays: 0, npLast: 0, shipPending: 0 };
     days.forEach(d => {
         if (d.sales !== null) { t.sales += d.sales; t.cost += d.cost; t.gp += d.gp; t.sellDays++; }
         if (d.resale !== null) { t.resale += d.resale; t.paid += d.paid; t.buyDays++; }
+        // Net Profit sums over the days the NP tab has, which run a day behind
+        // the selling columns (today is never on it). Its own sales base and its
+        // own last day go with it, so the net margin and the NP projection are
+        // worked over the same days as the NP itself rather than over a day more.
+        if (d.np !== null && d.np !== undefined) {
+            t.np += d.np; t.ebay += d.ebayFee || 0; t.ship += d.shipping || 0;
+            t.cc += d.ccFee || 0; t.royalty += d.royalty || 0; t.npSales += d.sales || 0;
+            t.npDays++; t.npLast = Math.max(t.npLast, d.day);
+            if (!d.shipFinal) t.shipPending++;
+        }
     });
     t.margin = t.sales > 0 ? t.gp / t.sales * 100 : null;
     t.buyMargin = t.resale > 0 ? (t.resale - t.paid) / t.resale * 100 : null;
+    t.netMargin = t.npSales > 0 ? t.np / t.npSales * 100 : null;
     return t;
 }
 
@@ -13446,6 +14602,13 @@ function _bdTotals(days) {
 // server-side total could.
 const BD_ALL = 'SPEEKS';
 
+// ⚠️ SUPERSEDED FOR SEPTEMBER 2026 ON (2026-10-02). The company is graded on real
+// Net Profit from October, and buysell-daily now carries each day's NP from the
+// workbook's Net Profit tab (daily_np): Sales − Cost − eBay fees − Shipping −
+// Card fees − 7% royalty. Where a month has that, _bdNetGp returns it. The flat
+// rate below survives ONLY as the estimate for months before the NP tab existed,
+// and is labelled as an estimate wherever it is shown.
+//
 // Net GP is gross profit less a flat 21% of REVENUE (not of GP) — the sheet's
 // own definition, confirmed against two independent OVL figures to the cent:
 //   July actual  71,104.03 - .21 x 130,482.88 = 43,702.63
@@ -13455,6 +14618,7 @@ const BD_ALL = 'SPEEKS';
 // this is the line that has to grow, not the six call sites.
 const BD_NET_GP_RATE = 0.21;
 function _bdNetGp(t) {
+    if (t && t.npDays) return t.np;
     return (t && t.sellDays) ? t.gp - t.sales * BD_NET_GP_RATE : null;
 }
 
@@ -13481,6 +14645,7 @@ function _bdCompany(payload) {
     const days = [];
     for (let day = 1; day <= n; day++) {
         let sales = null, cost = null, gp = null, resale = null, paid = null;
+        let np = null, ebayFee = null, shipping = null, ccFee = null, royalty = null, shipFinal = true;
         codes.forEach(c => {
             const x = ((d.stores[c] || {}).days || []).find(y => y.day === day);
             if (!x) return;
@@ -13488,10 +14653,18 @@ function _bdCompany(payload) {
                 sales = (sales || 0) + x.sales; cost = (cost || 0) + x.cost; gp = (gp || 0) + x.gp;
             }
             if (x.resale !== null) { resale = (resale || 0) + x.resale; paid = (paid || 0) + x.paid; }
+            if (x.np !== null && x.np !== undefined) {
+                np = (np || 0) + x.np; ebayFee = (ebayFee || 0) + (x.ebayFee || 0);
+                shipping = (shipping || 0) + (x.shipping || 0); ccFee = (ccFee || 0) + (x.ccFee || 0);
+                royalty = (royalty || 0) + (x.royalty || 0);
+                // The company's day is final only when every store's is.
+                if (!x.shipFinal) shipFinal = false;
+            }
         });
         days.push({
             day, sales, cost, gp, resale, paid,
             buyMargin: resale > 0 ? (resale - paid) / resale : null,
+            np, ebayFee, shipping, ccFee, royalty, shipFinal: np === null ? null : shipFinal,
         });
     }
     // The company's goal is the sum of the five it is made of — the same
@@ -13631,6 +14804,84 @@ function _bdPickers() {
         + ' onchange="setDailyMonth(this.value)">' + months + '</select>';
 }
 
+// ---- Net Profit helpers (2026-10-02) ------------------------------------------
+// The three NP cells of a table row. A day with sales and no NP is a day the NP
+// tab has not reached yet (today, or the morning before the 6:10 pass) — dashed,
+// never zero. A day whose shipping has not landed is starred: its NP is the
+// figure BEFORE the labels, and it will come down at the 2pm pass.
+function _bdNpCells(x, cell, dash) {
+    if (x.np === null || x.np === undefined) return dash('lv-quietnum') + dash('lv-quietnum') + dash('lv-boldnum') + dash('');
+    const pend = !x.shipFinal;
+    return cell('lv-quietnum', x.ebayFee === null ? '&mdash;' : _lvMoney(x.ebayFee, true))
+        + cell('lv-quietnum', x.shipping === null ? '<span title="Shipping lands on the 2pm pass">&mdash;</span>'
+                                                   : _lvMoney(x.shipping, true))
+        + cell('lv-boldnum', _lvMoney(x.np, true) + (pend ? '<sup class="bd-pend">*</sup>' : ''))
+        + cell('', _lvPct(x.sales > 0 ? x.np / x.sales * 100 : null));
+}
+
+function _bdShipPendingNote(n) {
+    return n === 1 ? '* 1 day before shipping' : '* ' + n + ' days before shipping';
+}
+
+// WHERE THE GROSS PROFIT WENT. Gross profit less these four is the Net Profit,
+// so this strip is the answer to "why is our NP lower than our GP says it should
+// be". Each cost is shown as a share of SALES, because that is the only way to
+// compare a $95k store with a $160k one, against last month and against the
+// district.
+//
+// THE DISTRICT LINE IS THE POINT (Ethan 2026-10-02). eBay fees are not the same
+// rate everywhere: a store that is not Top Rated, or that sells in the
+// high-fee categories, pays a visibly higher share of its sales to eBay (BAL's
+// September: 9.2% of sales against OVL's 5.5%, with $1.9k of "item not as
+// described" fees alone). A store running more than BD_COST_HOT_PTS above the
+// district on a cost is marked, so the gap is the first thing on the screen
+// rather than something to work out.
+//
+// The district is the five stores over the SAME days as the store's own NP, so a
+// mid-month comparison is never this store's 12 days against the district's 11.
+const BD_COST_HOT_PTS = 1.0;
+function _bdCostStrip(t, pt, prevNm, d, cap) {
+    const pctOf = (v, base) => base > 0 ? v / base * 100 : null;
+    const co = _bdCompany(d);
+    const dt = (co && _bdStore !== BD_ALL)
+        ? _bdTotals(co.days.filter(x => x.day <= Math.min(cap, t.npLast))) : null;
+    const pts = v => (v >= 0 ? '+' : '&minus;') + Math.abs(v).toFixed(1) + ' pts';
+    const one = (label, key, sub) => {
+        const p = pctOf(t[key], t.npSales);
+        const pp = (pt && pt.npDays) ? pctOf(pt[key], pt.npSales) : null;
+        const dp = dt && dt.npDays ? pctOf(dt[key], dt.npSales) : null;
+        const gap = (p !== null && dp !== null) ? p - dp : null;
+        // Only the two costs a store controls are judged: eBay fees (how it lists
+        // and describes, which drives the INAD fee) and shipping. Card fees track
+        // payment mix and the royalty is a flat 7%, so neither can be "too high".
+        const hot = (key === 'ebay' || key === 'ship') && gap !== null && gap > BD_COST_HOT_PTS;
+        // Lower is better for a cost, so the colours run the other way from a
+        // revenue tile: above the district is the red one.
+        const flag = gap === null ? ''
+            : '<span class="bd-mom ' + (gap > 0.25 ? 'down' : (gap < -0.25 ? 'up' : '')) + '">' + pts(gap) + '</span>';
+        const rows = [];
+        if (pp !== null) rows.push({ k: prevNm, v: _lvPct(pp), d: '' });
+        if (dp !== null) rows.push({ k: 'District', v: _lvPct(dp), d: flag });
+        return '<div class="cc-cell bd-tile' + (hot ? ' bd-tile-hot' : '') + '">'
+            + '<span class="sh-stripe g"></span>'
+            + '<div class="sh-k">' + label + (sub ? ' <span class="bd-k-sub">&middot; ' + sub + '</span>' : '') + '</div>'
+            + '<div class="bd-tile-row"><div class="bd-tile-main">'
+            + '<div class="sh-v">' + _lvMoney(t[key], false) + '</div>'
+            + '<div class="bd-track">' + (p === null ? '' : _lvPct(p) + ' of sales') + '</div></div>'
+            + (rows.length ? '<div class="bd-tile-cmp">' + rows.map(c =>
+                '<div class="bd-cmp"><span class="bd-cmp-k">' + escapeHtml(c.k) + '</span>'
+                + '<span class="bd-cmp-v">' + c.v + '</span><span class="bd-cmp-d">' + (c.d || '') + '</span></div>'
+              ).join('') + '</div>' : '')
+            + '</div></div>';
+    };
+    return '<div class="bd-strip bd-strip2 bd-strip-cost">'
+        + one('eBay Fees', 'ebay', '')
+        + one('Shipping', 'ship', 'Labels &amp; Returns')
+        + one('Card Fees', 'cc', '')
+        + one('Royalty', 'royalty', '7% of Sales')
+        + '</div>';
+}
+
 function _bdRender() {
     const el = _bdEl();
     if (!el) return;
@@ -13731,9 +14982,19 @@ function _bdRender() {
     const proj = (d.isCurrent && last > 0) ? (d.daysInMonth / last) : 1;
     const at = v => (v === null ? null : v * proj);      // this month, at month end
     const prevNm = prevYm ? _bdMonthName(prevYm).split(' ')[0] : '';
+    // NET PROFIT MONTHS. From October 2026 the goal is an NP goal (goalKind
+    // 'np'), and any month the NP tab covers (September on) shows real NP. NP
+    // runs a day behind the selling columns — today is never on the tab — so it
+    // projects off its OWN last day: dividing by the selling columns' last day
+    // would under-project NP by a day every morning.
+    const npKind = d.goalKind === 'np';
+    const showNp = t.npDays > 0 || npKind;
+    const projNp = (d.isCurrent && t.npLast > 0) ? (d.daysInMonth / t.npLast) : 1;
     // Now that the projection is known, the header's goal chip can say what the
     // month is TRACKING to rather than what it has banked so far.
-    html = html.replace('<!--GOALCHIP-->', _bdGoalChip(store, t, proj, d.isCurrent));
+    html = html.replace('<!--GOALCHIP-->', npKind
+        ? _bdGoalChip(store, { gp: t.np, sellDays: t.npDays }, projNp, d.isCurrent)
+        : _bdGoalChip(store, t, proj, d.isCurrent));
 
     // The month-end projection of a figure, on the month in progress only.
     const proj_ = v => (d.isCurrent && v !== null && proj !== 1) ? _lvMoney(v * proj, false) : '';
@@ -13797,7 +15058,9 @@ function _bdRender() {
         const spec = {
             sales:     [pyT.sales,  at(t.sales),  'good'],
             gp:        [pyT.gp,     at(t.gp),     'good'],
-            net:       [pyNet,      net === null ? null : net * proj, 'good'],
+            // No 2025 Net Profit exists anywhere — the NP tab starts in 2026 — so
+            // a real NP is never set against last year's 21% estimate.
+            net:       [t.npDays ? null : pyNet, net === null ? null : net * proj, 'good'],
             resale:    [pyT.resale, at(t.resale), 'good'],
             // Grey, like every other comparison of what buying COST: paying out
             // more is what buying more looks like.
@@ -13830,8 +15093,12 @@ function _bdRender() {
     // Net GP belongs upstairs — it is the last step of the selling figures, not
     // a footnote to them (user's call 2026-08-12).
     const net = _bdNetGp(t);
-    const pnet = pt ? _bdNetGp(pt) : null;
-    const dNet = pnet ? _bdDelta(net * proj, pnet, 'good') : '';
+    // Like for like only: a real NP is compared with last month's real NP, never
+    // with the 21% estimate a month before September carries.
+    const pnet = (pt && (!t.npDays || pt.npDays)) ? _bdNetGp(pt) : null;
+    const netProj = t.npDays ? projNp : proj;
+    const dNet = pnet ? _bdDelta(net * netProj, pnet, 'good') : '';
+    const proj_n = v => (d.isCurrent && v !== null && netProj !== 1) ? _lvMoney(v * netProj, false) : '';
 
     html += '<div class="bd-strip bd-strip-top bd-strip-tight">'
         + tile('Sales', _lvMoney(t.sales, false), {
@@ -13839,24 +15106,40 @@ function _bdRender() {
             note: pt ? '' : (d.isCurrent ? 'Month To Date' : 'Month Total'),
             cmp: [lastMo(pt && _lvMoney(pt.sales, false), dSales), lastYr('sales')],
         })
-        + tile('Gross Profit', _lvMoney(t.gp, false), {
+        // No Gross Profit tile on an NP month (Ethan 2026-10-02: everything that
+        // was GP is NP now). The cost strip underneath is the bridge from sales
+        // to net profit, so nothing is lost by not printing GP as a headline.
+        + (t.npDays ? '' : tile('Gross Profit', _lvMoney(t.gp, false), {
             track: proj_(t.gp),
             note: pt ? '' : (d.isCurrent ? 'Month To Date' : 'Month Total'),
             cmp: [lastMo(pt && _lvMoney(pt.gp, false), dGp), lastYr('gp')],
-        })
-        // No arrow on margin: a percentage change OF a percentage is a figure
-        // almost nobody reads correctly. Last month's margin sits beside it and
-        // the difference in points is there to be seen. No projection either —
-        // a ratio is directly comparable mid-month.
-        + tile('Sell Margin <span class="bd-k-sub">&middot; On Sales</span>', _lvPct(t.margin), {
-            cmp: [lastMo((pt && pt.margin !== null) ? _lvPct(pt.margin) : '', ''), lastYr('margin')],
-        })
-        + (net === null ? '' : tile('Net GP', _lvMoney(net, false), {
-            track: proj_(net),
-            note: pnet ? '' : 'Gross Profit Less ' + Math.round(BD_NET_GP_RATE * 100) + '%',
-            cmp: [lastMo(pnet ? _lvMoney(pnet, false) : '', dNet), lastYr('net')],
         }))
+        + (t.npDays
+            ? tile('Net Profit', _lvMoney(net, false), {
+                accent: true, track: proj_n(net),
+                note: t.shipPending ? _bdShipPendingNote(t.shipPending) : '',
+                cmp: [lastMo(pnet ? _lvMoney(pnet, false) : '', dNet)],
+              })
+              + tile('Net Margin <span class="bd-k-sub">&middot; On Sales</span>', _lvPct(t.netMargin), {
+                cmp: [lastMo((pt && pt.netMargin !== null && pt.npDays) ? _lvPct(pt.netMargin) : '', '')],
+              })
+            // No arrow on margin: a percentage change OF a percentage is a figure
+            // almost nobody reads correctly. Last month's margin sits beside it and
+            // the difference in points is there to be seen. No projection either —
+            // a ratio is directly comparable mid-month.
+            : tile('Sell Margin <span class="bd-k-sub">&middot; On Sales</span>', _lvPct(t.margin), {
+                cmp: [lastMo((pt && pt.margin !== null) ? _lvPct(pt.margin) : '', ''), lastYr('margin')],
+              })
+              + (net === null ? '' : tile(npKind ? 'Net Profit' : 'Net GP', _lvMoney(net, false), {
+                track: proj_(net),
+                note: npKind ? 'Not on the Net Profit tab yet'
+                    : (pnet ? '' : 'Est. &middot; Gross Profit Less ' + Math.round(BD_NET_GP_RATE * 100) + '%'),
+                cmp: [lastMo(pnet ? _lvMoney(pnet, false) : '', dNet), lastYr('net')],
+              })))
         + '</div>';
+
+    // ---- where the gross profit went ----------------------------------------
+    html += t.npDays ? _bdCostStrip(t, pt, prevNm, d, cap) : '';
 
     // The buying half. Same shape as the row above — this is what the month
     // spent to make it possible, and it is read the same way.
@@ -13888,10 +15171,12 @@ function _bdRender() {
     // finished month measured against this month's target would be a wrong
     // number rather than a missing one.
     if (d.isCurrent && store.goal > 0) {
-        const pct = t.gp / store.goal * 100;
+        // An NP month's goal is an NP goal, so it is NP that fills the bar.
+        const banked = npKind ? t.np : t.gp;
+        const pct = banked / store.goal * 100;
         html += '<div class="lv-goal"><div class="lv-goal-top">'
-            + '<span class="lv-goal-lbl">Gross Profit Against Goal</span>'
-            + '<span class="lv-goal-fig"><b>' + _lvMoney(t.gp, false) + '</b> of '
+            + '<span class="lv-goal-lbl">' + (npKind ? 'Net Profit' : 'Gross Profit') + ' Against Goal</span>'
+            + '<span class="lv-goal-fig"><b>' + _lvMoney(banked, false) + '</b> of '
             + _lvMoney(store.goal, false) + '</span></div>'
             + '<div class="lv-goal-bar"><i style="width:' + Math.max(0, Math.min(100, pct)) + '%"></i></div>'
             + '<div class="lv-goal-foot">' + _lvPct(pct) + ' Banked</div></div>';
@@ -13914,9 +15199,11 @@ function _bdRender() {
           + (d.isCurrent ? ' so far' : ' this month') + '</span>'
         : '';
     html += '<div class="lv-tbl-scroll"><table class="lv-tbl bd-tbl"><thead>'
-        + '<tr class="bd-grp"><th></th><th colspan="4">Selling</th>'
+        + '<tr class="bd-grp"><th></th><th colspan="' + (showNp ? 6 : 4) + '">Selling</th>'
         + '<th colspan="3" class="bd-sep">Buying' + buyDays + '</th></tr>'
-        + '<tr><th>Day</th><th>Sales</th><th>Cost</th><th>Gross profit</th><th>Margin</th>'
+        + '<tr><th>Day</th><th>Sales</th><th>Cost</th>'
+        + (showNp ? '<th>eBay fees</th><th>Shipping</th><th>Net profit</th><th>Net margin</th>'
+                  : '<th>Gross profit</th><th>Margin</th>')
         + '<th class="bd-sep">Bought<span class="bd-th-sub">resale value</span></th>'
         + '<th>Cash paid</th><th>Buy margin</th>'
         + '</tr></thead><tbody>';
@@ -13945,7 +15232,7 @@ function _bdRender() {
         // empty and exists only so the Selling|Buying rule has something to be
         // drawn on across a week label. Spanning the whole width left a gap in
         // the line at every week.
-        html += '<tr class="bd-wkrow"><td colspan="5">' + escapeHtml(moAbbr) + ' ' + a
+        html += '<tr class="bd-wkrow"><td colspan="' + (showNp ? 7 : 5) + '">' + escapeHtml(moAbbr) + ' ' + a
             + (b > a ? ' &ndash; ' + b : '')
             + '</td><td colspan="3" class="bd-sep"></td></tr>';
         wk.forEach(x => {
@@ -13958,12 +15245,16 @@ function _bdRender() {
             // instead of stepping across when the date gains a digit.
             + '<td><span class="bd-day"><b>' + x.day + '</b>'
             + '<span class="bd-dow">' + escapeHtml(w.nm) + '</span></span></td>'
-            + (x.sales === null
-                ? dash('lv-strongnum') + dash('lv-quietnum') + dash('lv-boldnum') + dash('')
-                : cell('lv-strongnum', _lvMoney(x.sales, true))
-                  + cell('lv-quietnum', _lvMoney(x.cost, true))
-                  + cell('lv-boldnum', _lvMoney(x.gp, true))
-                  + cell('', _lvPct(x.sales > 0 ? x.gp / x.sales * 100 : null)))
+            + (showNp
+                ? (x.sales === null ? dash('lv-strongnum') + dash('lv-quietnum')
+                    : cell('lv-strongnum', _lvMoney(x.sales, true)) + cell('lv-quietnum', _lvMoney(x.cost, true)))
+                  + _bdNpCells(x, cell, dash)
+                : (x.sales === null
+                    ? dash('lv-strongnum') + dash('lv-quietnum') + dash('lv-boldnum') + dash('')
+                    : cell('lv-strongnum', _lvMoney(x.sales, true))
+                      + cell('lv-quietnum', _lvMoney(x.cost, true))
+                      + cell('lv-boldnum', _lvMoney(x.gp, true))
+                      + cell('', _lvPct(x.sales > 0 ? x.gp / x.sales * 100 : null))))
             + (x.resale === null
                 ? '<td class="lv-strongnum bd-dash bd-sep">&mdash;</td>'
                   + dash('lv-quietnum') + dash('lv-boldnum')
@@ -13977,8 +15268,11 @@ function _bdRender() {
         + '<td><span class="bd-day"><b>TTL</b></span></td>'
         + cell('lv-strongnum', _lvMoney(t.sales, true))
         + cell('lv-quietnum', _lvMoney(t.cost, true))
-        + cell('lv-boldnum', _lvMoney(t.gp, true))
-        + cell('', _lvPct(t.margin))
+        + (showNp ? (t.npDays
+            ? cell('lv-quietnum', _lvMoney(t.ebay, true)) + cell('lv-quietnum', _lvMoney(t.ship, true))
+              + cell('lv-boldnum', _lvMoney(t.np, true)) + cell('', _lvPct(t.netMargin))
+            : dash('lv-quietnum') + dash('lv-quietnum') + dash('lv-boldnum') + dash(''))
+          : cell('lv-boldnum', _lvMoney(t.gp, true)) + cell('', _lvPct(t.margin)))
         + '<td class="lv-strongnum bd-sep">' + _lvMoney(t.resale, false) + '</td>'
         + cell('lv-quietnum', _lvMoney(t.paid, false))
         + cell('lv-boldnum', _lvPct(t.buyMargin))
@@ -13989,6 +15283,11 @@ function _bdRender() {
     // It means the figures for that day were never captured, and the totals
     // above are short by whatever they were. Said plainly rather than left for
     // someone to notice that a month came up light.
+    if (showNp && t.shipPending) {
+        html += '<div class="lv-note">* Shipping for ' + (t.shipPending === 1 ? 'this day is' : 'these days is')
+            + ' not in yet &mdash; it lands on the 2pm Net Profit pass the next day, so the net'
+            + ' profit marked * will come down by whatever the labels cost.</div>';
+    }
     if (blanks) {
         html += '<div class="lv-note bd-warn">' + blanks
             + (blanks === 1 ? ' day has' : ' days have')
@@ -14083,13 +15382,13 @@ function _lvSubPair(k1, v1, k2, v2) {
 // actually got to. No forecast is involved, which is the point: the District
 // board below projects to month-end (OVL can read 124% there against ~18% banked
 // here), so this bar spells out which of the two it is.
-function _lvGoalBar(gp, goal, pctOfGoal, elapsedPct, paceIdx) {
+function _lvGoalBar(gp, goal, pctOfGoal, elapsedPct, paceIdx, np) {
     if (!goal) return '';
     const banked = pctOfGoal === null || pctOfGoal === undefined ? 0 : Number(pctOfGoal);
     const tick = Math.max(0, Math.min(100, Number(elapsedPct) || 0));
     return '<div class="lv-goal">'
         + '<div class="lv-goal-top">'
-        + '<span class="lv-goal-lbl">Gross profit banked this month</span>'
+        + '<span class="lv-goal-lbl">' + (np ? 'Net profit banked this month' : 'Gross profit banked this month') + '</span>'
         + '<span class="lv-goal-fig"><b>' + _lvMoney(gp, false) + '</b> of ' + _lvMoney(goal, false)
         + ' <span class="lv-pill ' + _lvPaceCls(paceIdx) + '">'
         + (paceIdx === null || paceIdx === undefined ? 'no goal set' : paceIdx + '% pace') + '</span></span>'
@@ -14137,7 +15436,12 @@ function _lvStoreTiles(v, d) {
         + _lvTile('Average Order', v.aov === null ? '—' : _lvMoney(v.aov, true),
             (mtdAov === null || !_lvHasMonth(d) || _lvIsMtd())
                 ? '' : 'Month Average ' + _lvMoney(mtdAov, false))
-        + _lvTile('Gross Margin', _lvPct(v.marginToday), 'Total Cost ' + _lvMoney(v.cogsToday, false));
+        + (v.npKind
+            // The fourth tile is the one the store is graded on. Gross profit and its
+            // margin ride underneath: they are the step before it, not a rival to it.
+            ? _lvTile(_lvEstName('Net Profit', v.npDayEst), _lvMoney(v.npDay, true),
+                'Net Margin ' + _lvPct(_lvNetMargin(v)))
+            : _lvTile('Gross Margin', _lvPct(v.marginToday), 'Total Cost ' + _lvMoney(v.cogsToday, false)));
 }
 
 function _lvStoreDetail(d, v) {
@@ -14150,13 +15454,17 @@ function _lvStoreDetail(d, v) {
         const days = _lvDays(d);
         chips = _lvChip('Days so far', String(days))
             + _lvChip('Average day', _lvMoney((Number(v.netToday) || 0) / days, false))
-            + _lvChip('Average profit a day', _lvMoney((Number(v.gpToday) || 0) / days, false));
+            + _lvChip(v.npKind ? 'Average net profit a day' : 'Average profit a day',
+                _lvMoney((Number(v.npKind ? v.npDay : v.gpToday) || 0) / days, false));
     } else {
-        chips = _lvChip(prev ? 'Gross profit on the day' : 'Gross profit today',
-            _lvMoney(v.gpToday, true));
+        chips = v.npKind
+            ? _lvChip(_lvEstName(prev ? 'Net profit on the day' : 'Net profit today', v.npDayEst), _lvMoney(v.npDay, true))
+            : _lvChip(prev ? 'Gross profit on the day' : 'Gross profit today',
+                _lvMoney(v.gpToday, true));
         if (_lvHasMonth(d)) {
             chips += _lvChip('Net sales this month', _lvMoney(v.mtdNet, false))
-                + _lvChip('Margin this month', _lvPct(v.mtdMargin))
+                + (v.npKind ? _lvChip('Net margin this month', _lvPct(_lvNetMarginMtd(v)))
+                            : _lvChip('Margin this month', _lvPct(v.mtdMargin)))
                 + _lvChip('Orders this month', String(v.mtdOrders));
         } else {
             chips += _lvChip('Refunded', _lvMoney(v.returnsToday, false));
@@ -14173,7 +15481,7 @@ function _lvStoreDetail(d, v) {
     return _lvForecast([v], d)
         + '<div class="lv-chips">' + chips + '</div>'
         + (_lvHasMonth(d)
-            ? _lvGoalBar(v.mtdGp, v.goal, v.pctOfGoal, _lvElapsedPct(d), v.paceIndex)
+            ? _lvGoalBar(v.npKind ? v.npMtd : v.mtdGp, v.goal, v.pctOfGoal, _lvElapsedPct(d), v.paceIndex, v.npKind)
             : '<div class="lv-note">This was the last day of the previous month, so '
               + 'month-to-date and pace are not shown against it.</div>')
         + foot
@@ -14185,7 +15493,9 @@ function _lvStoreDetail(d, v) {
 function _lvDayClose(v, d) {
     let s = '<div class="lv-last lv-final">Finished <b>' + escapeHtml(_lvDayName(d.prev.date, true))
         + '</b> with <b>' + v.ordersToday + (v.ordersToday === 1 ? ' order' : ' orders') + '</b>'
-        + ' &middot; <b>' + _lvMoney(v.gpToday, true) + '</b> gross profit';
+        + (v.npKind
+            ? ' &middot; <b>' + _lvMoney(v.npDay, true) + '</b> ' + _lvEstName('net profit', v.npDayEst)
+            : ' &middot; <b>' + _lvMoney(v.gpToday, true) + '</b> gross profit');
     if (v.returnsToday > 0) s += ' &middot; <b>' + _lvMoney(v.returnsToday, false) + '</b> refunded';
     return s + '.</div>';
 }
@@ -14210,6 +15520,15 @@ function _lvHub() {
     return (typeof hubDataCache !== 'undefined' && hubDataCache) ? hubDataCache : null;
 }
 function _lvBuyArr(key, code) {
+    // SELLING OFF THE NP TAB FROM OCTOBER 2026. The hub's wkSell was read off the
+    // Sales Summary month tab, which is retired (2026-10-03) — with it deleted the
+    // hub sends no array and bought-vs-sold would go blank. shopify-live carries
+    // each store's daily sales from the Net Profit tab (np.sellByDay, same shape:
+    // day 1 at [0]) and that is used whenever it is there.
+    if (key === 'wkSell' && typeof _lvData !== 'undefined' && _lvData && Array.isArray(_lvData.stores)) {
+        const m = _lvData.stores.find(x => x && String(x.code).toUpperCase() === String(code).toUpperCase());
+        if (m && m.np && Array.isArray(m.np.sellByDay)) return m.np.sellByDay;
+    }
     const h = _lvHub();
     const byStore = h && h[key];
     const arr = byStore && byStore[code];
@@ -14290,18 +15609,44 @@ function _lvBuySum(rows) {
 // month-to-date view does not already say.
 function _lvFcFor(code) {
     const h = _lvHub();
-    if (!h) return null;
+    const np = _lvFcNp(code);
+    if (!h && !np) return null;
     const k = String(code).toLowerCase();
     const n = v => { const x = parseNum(v); return isFinite(x) ? x : 0; };
     return {
-        buyProj: n(h[k + 'BuyProj']), trackRev: n(h[k + 'TrackRev']),
-        trackGp: n(h[k + 'TrackGP']), goal: n(h[k + 'Goal']),
+        buyProj: n(h && h[k + 'BuyProj']),
+        // On an NP month the selling projections are worked here from Shopify's own
+        // month-to-date, not read off the Sales tab: the same straight-line rule
+        // the sheet used (total ÷ days through × days in month), so the figures do
+        // not move, and the Sales Summary import can be retired without these
+        // tiles going to zero the day it stops.
+        trackRev: np ? np.trackRev : n(h && h[k + 'TrackRev']),
+        trackGp: np ? np.trackGp : n(h && h[k + 'TrackGP']),
+        goal: np ? (np.goal || 0) : n(h && h[k + 'Goal']),
+        trackNp: np ? np.trackNp : null,
         // Google reviews ride the same pipe as everything else here: keyed into the
         // Sales Summary sheet, projected there, and served through the hub — so the
         // one number asked to behave "like buying and selling" is computed in the
         // same place by the same kind of formula. Zero until the sheet carries them.
-        reviews: n(h[k + 'Reviews']), reviewsProj: n(h[k + 'ReviewsProj']),
-        reviewsGoal: n(h[k + 'ReviewsGoal']),
+        reviews: n(h && h[k + 'Reviews']), reviewsProj: n(h && h[k + 'ReviewsProj']),
+        reviewsGoal: n(h && h[k + 'ReviewsGoal']),
+    };
+}
+// The NP month's projections for one store, off the live payload. Month mode
+// stops at yesterday's close like every figure on that tab; the others are live.
+function _lvFcNp(code) {
+    if (!_lvNpKind()) return null;
+    const m = ((_lvData && _lvData.stores) || []).find(s => String(s.code).toUpperCase() === String(code).toUpperCase());
+    if (!m || m.error || !m.np) return null;
+    const live = !_lvIsMtd() || !m.prev || !m.np.prev;
+    const el = live ? (_lvData.month && _lvData.month.elapsedPct) : (_lvData.prev && _lvData.prev.elapsedPct);
+    const per = el > 0 ? 100 / el : 0;
+    const net = live ? m.mtdNet : m.prev.mtdNet, gp = live ? m.mtdGp : m.prev.mtdGp;
+    return {
+        goal: m.np.goal,
+        trackNp: live ? m.np.track : m.np.prev.track,
+        trackRev: per ? net * per : 0,
+        trackGp: per ? gp * per : 0,
     };
 }
 // Has this store's review count moved? The hub carries AF4:AJ34 as `wkReviews`,
@@ -14558,9 +15903,15 @@ function _lvFcSum(views) {
     const add = f => fcs.reduce((a, x) => a + f(x), 0);
     const trackGp = add(f => f.trackGp), goal = add(f => f.goal);
     const reviewsGoal = add(f => f.reviewsGoal);
+    // On an NP month the goal is an NP goal, so "tracking to goal" is NP tracking
+    // over it — and only when every store on screen has an NP figure, or the sum
+    // would be four stores' NP over five stores' goal.
+    const npAll = fcs.every(f => f.trackNp !== null && f.trackNp !== undefined);
+    const trackNp = npAll ? add(f => f.trackNp) : null;
+    const tracked = _lvNpKind() ? trackNp : trackGp;
     return {
         buyProj: add(f => f.buyProj), trackRev: add(f => f.trackRev),
-        trackGp, goal, pct: goal > 0 ? trackGp / goal * 100 : null,
+        trackGp, trackNp, goal, pct: (goal > 0 && tracked !== null) ? tracked / goal * 100 : null,
         reviews: add(f => f.reviews), reviewsProj: add(f => f.reviewsProj), reviewsGoal,
     };
 }
@@ -14637,6 +15988,11 @@ function _lvCmpSum(views, key) {
         // Net profit is gross profit less 21% of sales, the same constant the
         // Tracking tile and the Daily Breakdown use, so the three cannot disagree.
         thenNetGp: then('gp') - then('net') * BD_NET_GP_RATE,
+        // Real NP for last month, off the NP tab (shopify-live npFor). Last year
+        // has none — the NP tab starts in 2026 — and gets no NP row at all rather
+        // than a real figure set against a 21% estimate.
+        thenNp: (_lvNpKind() && key === 'lastMonth' && parts.every(v => v.np && v.np.lastMonth !== null))
+            ? parts.reduce((a, v) => a + v.np.lastMonth, 0) : null,
         // The projections for the SAME stores, through the one function the
         // Tracking tiles are built from.
         fc: _lvFcSum(parts),
@@ -14723,9 +16079,13 @@ function _lvForecast(views, d) {
     // sits between, which is the one thing a band of four figures must not do.
     // Same constant as the Daily Breakdown (BD_NET_GP_RATE), so the boards
     // cannot quote different net figures for one month.
-    const trackNet = (f.trackGp > 0 && f.trackRev > 0)
-        ? f.trackGp - f.trackRev * BD_NET_GP_RATE : null;
-    const mtdNet = mtdGp - mtdRev * BD_NET_GP_RATE;
+    // On an NP month this is REAL net profit — the NP tab plus the per-store
+    // estimate for unbanked days — and the 21% below is not used at all.
+    const npOn = _lvNpKind() && f.trackNp !== null;
+    const trackNet = npOn ? f.trackNp : ((f.trackGp > 0 && f.trackRev > 0)
+        ? f.trackGp - f.trackRev * BD_NET_GP_RATE : null);
+    const mtdNet = npOn ? views.reduce((a, v) => a + (Number(v.npDay) || 0), 0)
+        : mtdGp - mtdRev * BD_NET_GP_RATE;
 
     // Stores that got through a whole open day without a new review. Computed
     // once: it drives both the tile's class and its sub-line.
@@ -14750,11 +16110,13 @@ function _lvForecast(views, d) {
     // only ever carried this month's count.
     const cmpRev = _lvCmpRows(views, d, s => [s.fc && s.fc.trackRev, s.thenNet]);
     const cmpGp = _lvCmpRows(views, d, s => [s.fc && s.fc.trackGp, s.thenGp]);
-    const cmpNet = _lvCmpRows(views, d, s => [
-        (s.fc && s.fc.trackGp > 0 && s.fc.trackRev > 0)
-            ? s.fc.trackGp - s.fc.trackRev * BD_NET_GP_RATE : null,
-        s.thenNetGp,
-    ]);
+    const cmpNet = npOn
+        ? _lvCmpRows(views, d, s => [s.fc && s.fc.trackNp, s.thenNp])
+        : _lvCmpRows(views, d, s => [
+            (s.fc && s.fc.trackGp > 0 && s.fc.trackRev > 0)
+                ? s.fc.trackGp - s.fc.trackRev * BD_NET_GP_RATE : null,
+            s.thenNetGp,
+        ]);
     const cmpBuy = _lvCmpRows(views, d, s => [s.buyFc && s.buyFc.buyProj, s.thenResale]);
     return _lvSplit('Tracking to month-end', '')
         + '<div class="lv-strip lv-fc-strip ' + (hasReviews ? 's4' : 's3') + '">'
@@ -14763,10 +16125,14 @@ function _lvForecast(views, d) {
         + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), soFar(mtdRev),
             false, '', cmpRev)
         + (trackNet === null ? '' : _lvTile('Tracking Net Profit',
-            _lvMoney(trackNet, false), soFar(mtdNet), false, '', cmpNet))
-        + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
+            _lvMoney(trackNet, false),
+            soFar(mtdNet) + (npOn && f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''),
+            npOn, '', cmpNet))
+        // An NP month has no GP tile at all — NP is the figure, and a second
+        // profit projection beside it only invites reading the wrong one.
+        + (npOn ? '' : _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
             soFar(mtdGp) + (f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''),
-            false, '', cmpGp)
+            false, '', cmpGp))
         // The only tile whose sub-line carries figures rather than a caption, and
         // deliberately: the projection alone ("45") is the one number here nobody
         // can sanity-check by eye, because unlike revenue there is no running total
@@ -14859,6 +16225,22 @@ function _lvCombine(stores) {
         mtdNet, mtdGp, mtdOrders: stores.reduce((a, m) => a + m.mtdOrders, 0),
         mtdMargin: mtdNet > 0 ? mtdGp / mtdNet * 100 : null,
         goal, pctOfGoal: goal > 0 ? mtdGp / goal * 100 : null,
+        // An NP pair (the MSM's "Both") is the two stores' NP added up, against
+        // the two NP goals — the same as the district, never re-estimated.
+        ..._lvCombineNp(stores),
+    };
+}
+function _lvCombineNp(views) {
+    if (!views.length || !views.every(v => v.npKind)) return {};
+    const add = k => views.reduce((a, v) => a + (Number(v[k]) || 0), 0);
+    const goal = views.every(v => v.npGoal > 0) ? add('npGoal') : 0;
+    const npMtd = add('npMtd');
+    return {
+        npKind: true, npGoal: goal, goal, npDay: add('npDay'), npMtd,
+        npDayEst: views.some(v => v.npDayEst),
+        npTrack: views.every(v => v.npTrack !== null) ? add('npTrack') : null,
+        pctOfGoal: goal > 0 ? npMtd / goal * 100 : null,
+        npBSales: add('npBSales'), npBEbay: add('npBEbay'), npBShip: add('npBShip'),
     };
 }
 
@@ -14888,9 +16270,14 @@ function _lvRollupTiles(r, d, label, views) {
             : _lvTile('Against Goal', _lvPct(r.pctOfGoal),
                 r.goal ? 'Of ' + _lvMoney(r.goal, false) : '');
     } else if (_lvHasMonth(d)) {
-        last = _lvTile('Month to Date Revenue', _lvMoney(r.mtdNet, false), days);
+        last = r.npKind
+            ? _lvTile(_lvEstName('Net Profit This Month', true), _lvMoney(r.npMtd, false),
+                _lvSubPair('Revenue', _lvMoney(r.mtdNet, false), 'Days', days))
+            : _lvTile('Month to Date Revenue', _lvMoney(r.mtdNet, false), days);
     } else {
-        last = _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'On The Day');
+        last = r.npKind
+            ? _lvTile(_lvEstName('Net Profit', r.npDayEst), _lvMoney(r.npDay, true), 'On The Day')
+            : _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'On The Day');
     }
     // Refunds rides under Orders, the way it already does on a single store's own
     // tiles — it is the other half of the same count.
@@ -14901,9 +16288,12 @@ function _lvRollupTiles(r, d, label, views) {
                      'Refunds', r.returnsToday > 0 ? _lvMoney(r.returnsToday, false) : 'none');
     return _lvTile(_lvHeadKey(), _lvMoney(r.netToday, true), _lvStamp(d), true)
         + _lvTile('Orders', String(r.ordersToday), r.aov === null ? label : ordersSub)
-        + _lvTile('Gross Margin', _lvPct(r.marginToday),
-            _lvSubPair('Total Cost', _lvMoney(r.cogsToday, false),
-                       'Total Profit', _lvMoney(r.gpToday, false)))
+        + (r.npKind
+            ? _lvTile(_lvEstName('Net Profit', r.npDayEst), _lvMoney(r.npDay, !_lvIsMtd()),
+                'Net Margin ' + _lvPct(_lvNetMargin(r)))
+            : _lvTile('Gross Margin', _lvPct(r.marginToday),
+                _lvSubPair('Total Cost', _lvMoney(r.cogsToday, false),
+                           'Total Profit', _lvMoney(r.gpToday, false))))
         + last;
 }
 
@@ -14936,7 +16326,7 @@ function _lvStoreRow(v, d, foot, rev) {
         // (It was 7 against eight columns; adding Refunds makes it nine.)
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
             + '<b>' + escapeHtml(v.code) + '</b></span></td>'
-            + '<td colspan="' + (rev === null || rev === undefined ? 9 : 10)
+            + '<td colspan="' + ((rev === null || rev === undefined ? 9 : 10) + (_lvFeeCols() ? 2 : 0))
             + '" class="lv-row-errmsg">not reporting &middot; '
             + escapeHtml(v.error) + '</td></tr>';
     }
@@ -14958,7 +16348,7 @@ function _lvStoreRow(v, d, foot, rev) {
     const trackCell = (proj, actual, strong) =>
         (proj > 0) ? _lvMoney(proj, strong) : _lvMoney(actual, strong);
     const gp = _lvHasMonth(d)
-        ? _lvMoney(v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
+        ? _lvMoney(v.npKind ? v.npMtd : v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
         : '—';
     // The whole row flashes, not just the money cell — at a glance the eye catches
     // the band across the table long before it resolves which column moved.
@@ -14972,21 +16362,62 @@ function _lvStoreRow(v, d, foot, rev) {
         // these all along (cost under the margin tile, GP as a chip); the table did
         // not, so the district read sales without the money actually made on them.
         + (cols.cost ? '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>' : '')
-        + '<td class="lv-strongnum">' + trackCell(fc && fc.trackGp, v.gpToday, false) + '</td>'
+        + '<td class="lv-strongnum">' + (v.npKind
+            ? (fc && fc.trackNp ? _lvMoney(fc.trackNp, false) : _lvMoney(v.npDay, false))
+            : trackCell(fc && fc.trackGp, v.gpToday, false)) + '</td>'
         // Refunds sits beside Orders because it is the other half of the same
         // count — what came back out of the till against what went in.
         + '<td class="lv-quietnum"' + (v.returnsToday === null || v.returnsToday === undefined
             ? ' title="This cache was written before the feed carried month-to-date'
               + ' refunds — it fills in on the next refresh."' : '') + '>'
         + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
+        + (_lvFeeCols() ? _lvFeeCell(v, 'npBEbay', d, foot) + _lvFeeCell(v, 'npBShip', d, foot) : '')
         + (cols.orders ? '<td>' + v.ordersToday + '</td>' : '')
-        + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
+        + '<td class="lv-boldnum">' + _lvPct(v.npKind ? _lvNetMargin(v) : v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
         + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex + '%') + '</span></td>'
         + (rev === null || rev === undefined ? ''
             : '<td class="lv-boldnum">' + (rev > 0 ? _lvNum(rev) : '—') + '</td>')
         + (cols.tail ? '<td>' + tail + '</td>' : '') + '</tr>';
+}
+
+// EBAY FEES AND SHIPPING ON THE MONTH TABLE (Ethan 2026-10-02: "after the refund
+// column"). The two costs a store controls on the way from GP to NP — the same
+// two the Daily Breakdown cost strip judges. Month tab, NP months only.
+//
+// They are the FINISHED days off the NP tab (np.bankedEbay / bankedShip), not a
+// projection, so they agree with the sheet and with "NP this month" beside them.
+// The share of sales is over the same days' sales, so it is a real rate.
+//
+// A store's figure goes red — the text, not the cell, the rule Ethan set for the
+// Daily Breakdown — when its share of sales is more than BD_COST_HOT_PTS above
+// the district's. Never on the district row itself: it is the yardstick.
+function _lvFeeCols() { return _lvIsMtd() && _lvNpKind(); }
+function _lvFeeShare(v, key, d, foot) {
+    const amt = Number(v[key]), sales = Number(v.npBSales);
+    if (!isFinite(amt) || v[key] === undefined || v[key] === null || !(sales > 0)) return null;
+    const share = amt / sales * 100;
+    const dn = d && d.district && d.district.np;
+    const dk = key === 'npBEbay' ? 'bankedEbay' : 'bankedShip';
+    const dShare = dn && dn.bankedSales > 0 ? Number(dn[dk]) / dn.bankedSales * 100 : null;
+    return { amt, share, dShare, hot: !foot && dShare !== null && share - dShare > BD_COST_HOT_PTS };
+}
+// "$510 · 6.8%". The separator is its OWN class, not .lv-of: the phone/tablet
+// rule hides .lv-of, and a hidden separator ran the two figures together as
+// "$5106.8%" (caught by np-mobile-layout-check.js).
+function _lvFeeHtml(f) {
+    return _lvMoney(f.amt, false) + '<span class="lv-fee-sep"> &middot; </span>'
+        + '<span class="lv-fee-pct' + (f.hot ? ' lv-fee-hot' : '') + '">' + f.share.toFixed(1) + '%</span>';
+}
+function _lvFeeCell(v, key, d, foot) {
+    const f = _lvFeeShare(v, key, d, foot);
+    if (!f) return '<td class="lv-quietnum">—</td>';
+    // The PERCENTAGE goes red, not the dollars (Ethan 2026-10-02): the share is
+    // what is being judged, and $218 means nothing until it is set against sales.
+    return '<td class="lv-quietnum"'
+        + ' title="' + f.share.toFixed(1) + '% of sales' + (f.dShare !== null ? ' (district ' + f.dShare.toFixed(1) + '%)' : '') + '">'
+        + _lvFeeHtml(f) + '</td>';
 }
 
 // The phone view of the live dashboard.
@@ -15108,9 +16539,14 @@ function _lvCards(stores, d, rollup, rollupLabel) {
             // back out to buy stock. The fifth — % to goal — is on the header line
             // above, because it is the one figure a column of cards is scanned for.
             + fig('Net Sales', _lvMoney(v.netToday, false))
-            + fig('Gross Profit', _lvMoney(v.gpToday, false))
-            + fig('Margin', _lvPct(v.marginToday))
+            + (v.npKind ? fig(_lvEstName('Net Profit', v.npDayEst), _lvMoney(v.npDay, false))
+                        : fig('Gross Profit', _lvMoney(v.gpToday, false)))
+            + fig(v.npKind ? 'Net Margin' : 'Margin', _lvPct(v.npKind ? _lvNetMargin(v) : v.marginToday))
             + (buy ? fig('Bought Value', _lvMoney(buy.bought, false)) : '')
+            + (_lvFeeCols() ? (() => {
+                const e = _lvFeeShare(v, 'npBEbay', d, isRoll), sh = _lvFeeShare(v, 'npBShip', d, isRoll);
+                return fig('eBay Fees', e ? _lvFeeHtml(e) : '—') + fig('Shipping', sh ? _lvFeeHtml(sh) : '—');
+            })() : '')
             + '</div>'
             + '</li>';
     }
@@ -15296,9 +16732,15 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         + '<th>' + (_lvIsMtd() ? 'Tracking net sales'
             : (_lvIsToday() ? 'Net today' : 'Net sales')) + '</th>'
         + (cols.cost ? '<th>Cost</th>' : '')
-        + '<th>' + (_lvIsMtd() ? 'Tracking gross profit' : 'Gross profit') + '</th>'
-        + '<th>Refunds</th>' + (cols.orders ? '<th>Orders</th>' : '') + '<th>Margin</th>'
-        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>% to goal</th>'
+        + '<th>' + (_lvNpKind()
+            ? (_lvIsMtd() ? 'Tracking net profit' : _lvEstName('Net profit', _lvIsToday()))
+            : (_lvIsMtd() ? 'Tracking gross profit' : 'Gross profit')) + '</th>'
+        + '<th>Refunds</th>'
+        + (_lvFeeCols() ? '<th title="Finished days, off the Net Profit tab">eBay fees</th>'
+            + '<th title="Finished days, off the Net Profit tab">Shipping</th>' : '')
+        + (cols.orders ? '<th>Orders</th>' : '') + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
+        + '<th>' + (_lvNpKind() ? (_lvHasMonth(d) ? 'NP this month' : 'NP')
+            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th><th>% to goal</th>'
         + (cols.tail ? '<th>Last order</th>' : '')
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
@@ -15314,7 +16756,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
             code: rollupLabel, name: '',
             // Its own projection, summed from the stores above it by the one
             // function the Tracking tiles also use.
-            fcSum: _lvIsMtd() ? _lvFcSum(stores.map(_lvView)) : null,
+            fcSum: _lvIsMtd() ? _lvFcSum(stores.filter(m => !m.error).map(_lvView)) : null,
             paceIndex: _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
@@ -15618,6 +17060,18 @@ function _lvAfterRender() {
     // Two of the district board's summary cells are today's selling, which only
     // this module knows. Guarded because the district widget is DM/CEO only.
     if (typeof _dcSummaryFill === 'function') _dcSummaryFill();
+    // The district board grades on NP from the live payload; repaint it when that
+    // moves (it no-ops when nothing it shows has changed).
+    if (typeof _dccNpRefresh === 'function') _dccNpRefresh();
+    // The standings and the ticker rank on NP from this payload too.
+    if (typeof drawLeaderboard === 'function') drawLeaderboard();
+    // The header's "Updated as of" reads the NP tab's last closed day (see
+    // _ccUpdatedNp), which only this payload carries.
+    if (typeof hubDataCache !== 'undefined' && hubDataCache && typeof renderBuyingSales === 'function') renderBuyingSales();
+    if (typeof feedLeaderboardToTicker === 'function' && _lvNpKind()) {
+        feedLeaderboardToTicker((typeof cachedLeaderboardData !== 'undefined' && cachedLeaderboardData)
+            || { activeStores: (_lvData.stores || []).map(m => m.code) });
+    }
     // Consumed. The highlight is a CSS animation that plays when the element is
     // inserted, so leaving these set would replay it on every unrelated re-render
     // (a tab switch, the day toggle) and turn "just now" into background noise.
@@ -30639,29 +32093,84 @@ function renderKpiChart(payload, metric) {
 }
 
 // --- CHART: DRAW LEADERBOARD ---
+// THE STANDINGS FROM THE LIVE PAYLOAD (2026-10-02). From October the district
+// ranks on NET PROFIT, which only the live payload carries (shopify-live npFor),
+// and the hub's leaderboard arrays are the Sales tab's — the sheet being retired.
+// So both metrics read the live payload when it is there.
+//
+// FINISHED DAYS ONLY (Ethan 2026-10-02: "the leaderboard should be from previous
+// day like it was"). Net Profit = np.banked, the days the NP tab has closed, so
+// the board agrees with the sheet to the cent. It is never np.mtd, which adds
+// today's estimate: on Oct 2 that put OVL at $6,742 against the sheet's $2,817
+// and read as a wrong number. Revenue = mtdNet less netToday, so it is also
+// through yesterday. Today's estimate stays on the Live dashboard, where it is
+// labelled. The hub arrays stay only as the Revenue fallback for a page that
+// has no live feed.
+//
+// The array carries `thru` (an ISO date, or null when no day has closed yet this
+// month) for the "Through …" footer.
+function _lbLiveRows(metric) {
+    const d = (typeof _lvData !== 'undefined') ? _lvData : null;
+    if (!d || !Array.isArray(d.stores) || !d.stores.length) return null;
+    const ok = d.stores.filter(m => !m.error);
+    const today = String(d.asOfCentral || '').slice(0, 10);
+    const ym = today.slice(0, 7);
+    const dayIso = n => n > 0 ? ym + '-' + String(n).padStart(2, '0') : null;
+    let rows;
+    if (metric === 'NP') {
+        if (!(typeof _lvNpKind === 'function' && _lvNpKind())) return null;
+        const withNp = ok.filter(m => m.np);
+        rows = withNp.map(m => ({ store: String(m.code).toUpperCase(), val: Number(m.np.banked) || 0 }));
+        // The NP tab closes days in order, so N banked days = through day N. The
+        // footer takes the store furthest behind, so it never overstates any row.
+        rows.thru = withNp.length ? dayIso(Math.min(...withNp.map(m => Number(m.np.bankedDays) || 0))) : null;
+        return rows;
+    }
+    rows = ok.map(m => ({ store: String(m.code).toUpperCase(),
+        val: Math.max(0, (Number(m.mtdNet) || 0) - (Number(m.netToday) || 0)) }));
+    rows.thru = today ? dayIso(Number(today.slice(8, 10)) - 1) : null;
+    return rows;
+}
+
 function drawLeaderboard() {
     // Standings list (replaced the Chart.js "race" — see combined Performance widget).
-    // Reads the same cachedLeaderboardData the race used; Revenue/GP toggle unchanged.
+    // Revenue / Net Profit toggle; see _lbLiveRows for where each comes from.
     const wrapper = document.getElementById('lb-wrapper');
     const monthLabel = document.getElementById('lb-month-display');
-    if (!wrapper || !cachedLeaderboardData || !cachedLeaderboardData.activeStores) return;
+    if (!wrapper) return;
+    const live = _lbLiveRows(currentLeaderboardMetric === 'Revenue' ? 'Revenue' : 'NP');
+    if (!live && (!cachedLeaderboardData || !cachedLeaderboardData.activeStores)) return;
 
     const now = new Date();
     if (monthLabel) monthLabel.innerText = now.toLocaleString('default', { month: 'long', year: 'numeric' });
 
     const colors = { 'OVL': '#7c6fd6', 'LEE': '#4e90cf', 'WSP': '#2ea36a', 'MPL': '#d99f43', 'BAL': '#d9776a' };
-    const dataPacket = currentLeaderboardMetric === 'Revenue' ? cachedLeaderboardData.revenue : cachedLeaderboardData.gp;
     const myStore = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
 
-    const rows = cachedLeaderboardData.activeStores
-        .filter(st => dataPacket && dataPacket[st])
+    // Net Profit has no hub fallback on purpose: the hub only knows GP, and a GP
+    // figure under a Net Profit heading is the one mistake this toggle must not make.
+    const dataPacket = (!live && currentLeaderboardMetric === 'Revenue') ? cachedLeaderboardData.revenue : null;
+    const rows = (live || (dataPacket ? cachedLeaderboardData.activeStores
+        .filter(st => dataPacket[st])
         .map(st => {
             const arr = dataPacket[st];
             const lastIdx = arr.findLastIndex(v => v !== null && v !== undefined);
             return { store: st, val: lastIdx !== -1 ? (arr[lastIdx] || 0) : 0 };
-        })
-        .sort((a, b) => b.val - a.val);
+        }) : []))
+        .slice().sort((a, b) => b.val - a.val);
 
+    // Live rows say which day they run through; the footer says it rather than
+    // the refresh time, because "Updated as of Fri" over Thursday's figures is
+    // what made a correct number look wrong.
+    const upd = document.getElementById('lb-last-updated');
+    if (live && upd) {
+        upd.innerText = live.thru
+            ? 'Through ' + new Date(live.thru + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+            : '—';
+        const lbl = document.getElementById('lb-last-updated-label');
+        if (lbl) lbl.textContent = '';
+    }
+    if (live && !live.thru) { wrapper.innerHTML = '<div class="status-message">First results tomorrow morning.</div>'; return; }
     if (!rows.length) { wrapper.innerHTML = '<div class="status-message">No data yet.</div>'; return; }
 
     const fmt = v => '$' + Math.round(v).toLocaleString();
@@ -40127,10 +41636,10 @@ const EMAIL_LIST_GROUPS = [
         lists: [
             { key: 'connect_alerts', label: 'SPEEKS Connect Errors',
               desc: 'Checked every 15 minutes; mails only when the eBay integration is actually broken.' },
-            { key: 'sales_import_alert', label: 'Sales Import',
-              desc: 'The nightly Shopify sales email failing to reach the Sales Summary sheet.' },
+            { key: 'sales_import_alert', label: 'Daily Buying Import',
+              desc: 'The nightly PayMore Day End Report failing to reach the Buy tab.' },
             { key: 'summary_weekly_alert', label: 'Weekly Summary Import',
-              desc: 'The same, for the Saturday summary. Deliberately narrower than the daily list above.' },
+              desc: 'The Monday Summary tab update failing or coming up short. Its revenue and cost come off the Net Profit tab from October 2026.' },
             { key: 'b2b_quote_ready', label: 'B2B Quote Ready',
               desc: 'A pickup has been priced and a quote is waiting on approval. '
                   + 'Leave this empty and it falls back to the single address in CRM Settings.' },
@@ -40637,6 +42146,11 @@ const FEATURE_CATALOG = [
     // listing-titles function — a backend that says yes while the button says no
     // is a tool reachable by URL that nobody can see.
     { key: 'ec-view-titles',           label: 'SPEEKS Connect · Titles', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'multistore-manager', 'assistant-manager'] },
+    // Picture Quality (2026-09-30): listing photos graded against the Picture
+    // Guide. DM and CEO only while it is new (Ethan, 2026-09-23); it widens to
+    // the ec-view-photos audience later. ⚠️ Must match PQ_DEFAULT_ROLES in the
+    // picture-quality function, for the same reason ec-view-titles must match.
+    { key: 'ec-view-picture-quality',  label: 'SPEEKS Connect · Picture Quality', tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // Live bench intake: the capture tool on a machine being tested posts its
     // own specs into the open deal. `def: []` is the whole point -- it ships off
@@ -40878,7 +42392,7 @@ const _SECTION_TABS = {
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
                         'tool-picture-manage', 'widget-ops-callbacks',
                         'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos',
-                        'ec-view-titles'],
+                        'ec-view-titles', 'ec-view-picture-quality'],
 };
 
 // Sub-tabs that a TABLET still gets, keyed the same way as _SECTION_TABS above.
@@ -41685,6 +43199,7 @@ const JUMP_KEYWORDS = {
     'ec-view-categories':        'speeks connect categories other collection wrong category shelf file shopify',
     'ec-view-photos':            'speeks connect listing health no pictures photos missing image online store',
     'ec-view-titles':            'speeks connect listing health titles title fix keywords seo rename wrong title bundle cib ebay',
+    'ec-view-picture-quality':   'speeks connect listing health picture quality photos retake reorder crooked square guide',
     'tool-listing-health':       'listing health title notes denied dismissed rule wrong feedback ask claude copy prompt',
     'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
     'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
@@ -41721,7 +43236,7 @@ const JUMP_KEYWORDS = {
     'tool-user-permissions':     'users permissions pin login accounts roles add user',
     'tool-feature-access':       'feature access hide show toggle delegation permissions',
     'tool-email-recipients':     'email recipients reports distribution who gets',
-    'tool-store-goals':          'month setup store goals gp gross profit monthly target buying days holidays closed',
+    'tool-store-goals':          'month setup store goals np net profit gp gross profit monthly target buying days holidays closed',
     // Both halves of the split answer the same search — only one is ever visible
     // to a given person, so they can never both come back in one result list.
     'tool-expenses':             'expense report expenses mileage miles reimbursement receipts monthly spend',
@@ -41748,7 +43263,7 @@ const JUMP_PLACES = [
     { id: 'ops-pg',      label: 'Picture Guide',      sub: 'Operations', kind: 'tab', feature: 'widget-ops-pictureguide',   page: 'operations.html', hash: 'pictureguide', fn: 'switchOperationsTab' },
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
-    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
+    { id: 'ops-ebay',    label: 'SPEEKS Connect',     sub: 'Operations', kind: 'tab', feature: ['ec-upload', 'ec-view-categories', 'ec-view-photos', 'ec-view-titles', 'ec-view-picture-quality'], page: 'operations.html', hash: 'ebay',      fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
     // Live Dashboard needs TWO rows, not three: the store surface and the district
     // card are separate Feature Access keys, and a single row would be invisible to
@@ -45446,7 +46961,13 @@ const _DB_STRIP = [
     { label: 'Buy Margin', fmt: f => _dbPct(f.buyMarginPct),
       keys: ['buy_margin', 'buy_margin_improving', 'buy_margin_low'] },
     { label: 'Net Sales', fmt: f => _dbMoney(f.netSales), keys: ['net_sales'] },
-    { label: 'Sell Margin', fmt: f => _dbPct(f.sellMarginPct), keys: ['sell_margin'] },
+    // From October 2026 (daily-brief NP_FROM) a day's card shows NET margin off
+    // the Net Profit tab, never the gross selling margin, and nothing praises a
+    // margin on those days. "before shipping" until the 2pm pass lands the labels.
+    { label: f => f.npDay ? 'Net Margin' : 'Sell Margin',
+      fmt: f => _dbPct(f.npDay ? f.netMarginPct : f.sellMarginPct),
+      sub: f => (f.npDay && f.netMarginFinal === false) ? 'before shipping' : '',
+      keys: ['sell_margin'] },
     { label: 'Cust. Conv.', fmt: f => _dbPct(f.custConvPct),
       sub: f => (f.custConvNum != null && f.custConvDen != null) ? f.custConvNum + ' of ' + f.custConvDen : '',
       keys: ['conv', 'conv_perfect', 'conv_low'] },
@@ -45499,7 +47020,7 @@ function _dbStripHtml(facts, signals) {
         // reads as a figure we have when we do not.
         const sub = (c.sub && val !== '—') ? (c.sub(f) || '') : '';
         return `<div class="dbr-cell${hit ? ' fired' : ''}${c.people ? ' wide' : ''}">
-            <span class="dbr-cl">${_samEsc(c.label)}</span>
+            <span class="dbr-cl">${_samEsc(typeof c.label === 'function' ? c.label(f) : c.label)}</span>
             <span class="dbr-cv">${_samEsc(val)}</span>
             ${sub ? `<span class="dbr-cs">${_samEsc(sub)}</span>` : ''}
         </div>`;
@@ -46963,7 +48484,7 @@ function _samReminderCfg() {
     cfg.push({ key: 'photoAlert', id: 'photoAlertBubble', text: 'photoAlertBubbleText',
         title: 'Listings With No Pictures',
         urgency: 2, due: 'Action', cls: 'sam-due-red',
-        action: "window.location.href='operations.html#categories'" });
+        action: "window.location.href='operations.html#photos'" });
     // Somebody dismissed a suggestion and wrote WHY the rule was wrong. Not an
     // alarm — nothing is unbuyable and no customer can see it — but it is the
     // only evidence this tool ever gets that a rule needs changing, and it went
@@ -49410,6 +50931,62 @@ function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) 
     };
 }
 
+// NET PROFIT ON THE DISTRICT BOARD (2026-10-02). From October the stores are
+// graded on NP, and the hub's <store>Goal / TrackGP / Pct are the Sales tab's
+// GP figures — blank goal, GP tracking — so grading off them would sort the rail
+// on a number nobody is measured on any more. The NP for each store is on the
+// live payload (shopify-live npFor: the NP tab plus the store's own estimate for
+// the days it has not reached), so it is laid over the rows here.
+//
+// Applied at render, not only when the rows are built: the board can load before
+// the live payload does, and the live payload refreshes every minute. A row with
+// no NP block (live not loaded, or a store not reporting) keeps the hub figures.
+//
+// THE SHEET'S OWN FORMULA, NOT THE LIVE ONE (Ethan 2026-10-03: "the % tracking
+// to goals do not match the spreadsheet"). The NP tab's "% of NP Goal" is
+//     NP Tracking / NP Goal,   NP Tracking = NP so far / Days Thru month x Days
+// over the days the tab has CLOSED — OVL on Oct 3: $7,042.80 / 2 x 31 = $109,163
+// = 198.5% of $55,000. This board first used the live projection (np.track:
+// closed days PLUS today's estimate, over the selling-day share of the month),
+// which put OVL at 153% against the sheet's 198.5%. The GP board this replaced
+// always matched the sheet because it read the Sales tab's own TrackGP, so the
+// NP board reads the same days the same way: banked NP, banked days, the
+// month's calendar days. Revenue, NP and net margin are over those same closed
+// days, so every figure on a store's card agrees with its column on the tab.
+// The Live tab keeps the live projection; it is the in-day view.
+function _dccApplyNp() {
+    const np = (typeof _lvNpKind === 'function') && _lvNpKind();
+    let sig = '';
+    _dccRows.forEach(r => {
+        const m = np ? ((_lvData.stores || []).find(x => String(x.code).toUpperCase() === r.store && !x.error)) : null;
+        const n = m && m.np;
+        if (!n) { r.npKind = false; return; }
+        r.npKind = true;
+        r.goal = Math.round(n.goal || 0);
+        const days = Number(n.bankedDays) || 0;
+        const inMonth = Number(_lvData.month && _lvData.month.daysTotal) || 0;
+        const banked = Number(n.banked) || 0, bSales = Number(n.bankedSales) || 0;
+        const track = days > 0 && inMonth > 0 ? banked / days * inMonth : null;
+        r.rev = Math.round(bSales);
+        r.npMargin = bSales > 0 ? banked / bSales * 100 : NaN;
+        r.npNow = Math.round(banked);
+        r.npTrack = track === null ? 0 : Math.round(track);
+        r.salesPct = r.goal > 0 && track !== null ? track / r.goal * 100 : NaN;
+        sig += r.store + r.goal + ':' + r.npTrack + '|';
+    });
+    return sig;
+}
+// Repaint the district board when the NP figures it grades on have moved — not
+// on every live tick, which would collapse whatever the DM had open on it.
+let _dccNpSig = '';
+function _dccNpRefresh() {
+    if (!_dccRows.length) return;
+    const sig = _dccApplyNp();
+    if (sig === _dccNpSig) return;
+    _dccNpSig = sig;
+    _dccRepaint();
+}
+
 // Capitalise the first letter of each word, leaving words that already carry a
 // capital alone so "eBay" survives. Used on backend-supplied captions.
 function _dccCap(str) {
@@ -49432,7 +51009,9 @@ function _dccChecks(r) {
         // rather than the reader having to remember which is which.
         { key: 'paudit',  s: !r.official ? null : (r.official.pct >= 80 ? null : (r.official.pct >= 50 ? 'w' : 'b')) },
         { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min') },
-        { key: 'sellM',   s: _dccTier(r.sellM, 55.5, 'min') },
+        // The 55.5% floor is a GROSS margin floor. An NP month has no agreed net
+        // margin floor yet, so the check is off rather than judging NP on a GP bar.
+        { key: 'sellM',   s: r.npKind ? null : _dccTier(r.sellM, 55.5, 'min') },
         // Still only judged when above zero: a missing figure parses to 0 and must
         // not read as a 0% margin.
         { key: 'buyM',    s: r.buyM > 0 ? _dccTier(r.buyM, 51, 'min') : null },
@@ -49635,7 +51214,10 @@ function _dccEbayBlock(r) {
         }).join('') + '</div></div>';
 }
 
-// ---- Sales Import (Shopify daily email -> Sales Summary sheet) --------------
+// ---- Daily Import (PayMore Day End email -> Buy tab) ------------------------
+// BUYING ONLY since 2026-10-03: the Shopify -> Sales tab half is retired and
+// selling comes off the Net Profit tab (np-sync). sales-ingest keeps its name
+// and its run history; it now calls the Apps Script's action=buying.
 // Normally nobody touches this: pg_cron runs it at 7am Central with an 8am retry.
 // The button exists for the mornings when a store's email lands late — one click
 // beats keying ten numbers in by hand. Backend re-checks the role by pin, so this
@@ -49700,26 +51282,18 @@ async function runSalesImport(ev) {
                 true);
         } else {
             const s = d.summary || {};
-            const bits = [];
-            if (s.filled)    bits.push(`${s.filled} store-day${s.filled === 1 ? '' : 's'} filled in`);
-            if (s.corrected) bits.push(`${s.corrected} corrected`);
-            if (s.missing)   bits.push(`${s.missing} still to enter by hand`);
-            let msg = bits.length ? 'Sales import — ' + bits.join(', ') + '.' : 'Sales import — already up to date.';
-
-            // The same run also does BUYING (the Apps Script folds it in), so say
-            // so — otherwise half the work is invisible and a buying failure
-            // looks like a clean success.
             const b = s.buying;
-            if (b && !b.ok) {
-                msg += ' Buying import failed.';
-            } else if (b) {
+            let msg;
+            if (!b || !b.ok) {
+                msg = 'Buying import failed.';
+            } else {
                 const bb = [];
                 if (b.filled)    bb.push(`${b.filled} day${b.filled === 1 ? '' : 's'} filled in`);
                 if (b.corrected) bb.push(`${b.corrected} corrected`);
                 if (b.missing)   bb.push(`${b.missing} still to enter`);
-                msg += bb.length ? ' Buying — ' + bb.join(', ') + '.' : ' Buying — already up to date.';
+                msg = bb.length ? 'Buying import — ' + bb.join(', ') + '.' : 'Buying import — already up to date.';
             }
-            _siSay(msg, !!s.missing || !!(b && (!b.ok || b.missing)));
+            _siSay(msg, !!(!b || !b.ok || b.missing));
         }
 
         await fetchSalesImportStatus();
@@ -49870,8 +51444,8 @@ function _siLineHtml() {
     // something needs attention.
     const state = _salesImport ? _salesImport.state : null;
     const lr = _salesImport ? _salesImport.lastRun : null;
-    let hover = 'Pulls the Shopify and PayMore daily emails into this month\'s Sales and Buy'
-        + ' tabs. Runs by itself every morning at 7am.';
+    let hover = 'Pulls the PayMore Day End emails into this month\'s Buy tab (buying, reviews'
+        + ' and cash). Runs by itself every morning. Selling comes off the Net Profit tab.';
     if (state === 'never')          hover = 'Has not run yet. ' + hover;
     else if (state === 'failed')    hover = 'The last run FAILED. ' + hover;
     else if (state === 'attention') {
@@ -49910,12 +51484,22 @@ function _dccBuyBlock(r) {
         + (r.edited ? '<em>' + escapeHtml(r.edited) + '</em>' : '') + '</div><div class="dcc-rows">'
         // The goal is a GP goal and this figure is gpTrack/goal, so the label says
         // so — "Sales vs goal" read as revenue against goal, which it never was.
-        + _dccStatRow('GP tracking vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
-        + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
-        + _dccStatRow('GP (MTD)', _dccMoney(r.gpNow),
-                      '', null, r.goal > 0 ? Math.round(r.gpNow / r.goal * 100) + '% of goal' : '')
-        + _dccStatRow('GP tracking', _dccMoney(r.gpTrack), '', null)
-        + _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccJudge(r, 'sellM', r.sellM > 0))
+        // From October it is an NP goal and NP tracking (see _dccApplyNp), and the
+        // label follows; GP stays on the board as the step before it.
+        + (r.npKind
+            ? _dccStatRow('NP tracking vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
+              + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
+              + _dccStatRow('NP (MTD)', _dccMoney(r.npNow),
+                            '', null, r.goal > 0 ? Math.round(r.npNow / r.goal * 100) + '% of goal' : '')
+              + _dccStatRow('NP tracking', _dccMoney(r.npTrack), '', null)
+              + _dccStatRow('Net margin', isFinite(r.npMargin) ? _dccFix(r.npMargin) : '—', isFinite(r.npMargin) ? '%' : '', null)
+            : _dccStatRow('GP tracking vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
+              + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
+              + _dccStatRow('GP (MTD)', _dccMoney(r.gpNow),
+                            '', null, r.goal > 0 ? Math.round(r.gpNow / r.goal * 100) + '% of goal' : '')
+              + _dccStatRow('GP tracking', _dccMoney(r.gpTrack), '', null))
+        // Gross margin, so not on an NP month — the net margin row above replaces it.
+        + (r.npKind ? '' : _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccJudge(r, 'sellM', r.sellM > 0)))
         + _dccStatRow('Buy tracking', _dccMoney(r.buyTrack), '', null)
         + _dccStatRow('Buy margin', _dccFix(r.buyM), '%', _dccJudge(r, 'buyM', r.buyM > 0))
         + _dccStatRow('Variance total', (r.vari > 0 ? '+' : '') + r.vari.toFixed(2), '%',
@@ -50018,6 +51602,7 @@ function _dccPaneHtml(r, portalLink) {
 
 // --- board ------------------------------------------------------------------
 function _dccBoardHtml(portalLinks) {
+    _dccApplyNp();
     if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district…</div>';
     // Open on the store at the TOP of the rail — the district leader on % to
     // goal. (This used to land on the last card, the worst performer.) Only the
@@ -50030,7 +51615,9 @@ function _dccBoardHtml(portalLinks) {
     // The store goal is a GP goal — gpTrack / goal reproduces each store's own
     // "% to goal" exactly, revenue does not — so the district total has to be GP
     // as well or the headline compares two different things.
-    const totGP = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
+    // From October: NP tracking against the NP goal, for the same reason.
+    const npAll = _dccRows.length && _dccRows.every(r => r.npKind);
+    const totGP = _dccRows.reduce((a, r) => a + (npAll ? r.npTrack : r.gpTrack), 0);
     const totGoal = _dccRows.reduce((a, r) => a + r.goal, 0);
 
     // The icon tile and the "District / Command Center" title used to live here.
@@ -50041,7 +51628,7 @@ function _dccBoardHtml(portalLinks) {
     return '<div class="dcc">'
         + '<div class="dcc-head">'
         + '<span class="dcc-sum">'
-        + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + ' GP goal</i>'
+        + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + (npAll ? ' NP goal' : ' GP goal') + '</i>'
         + '</span>'
         + '<div class="dcc-head-side">' + _siLineHtml() + _swLineHtml() + '</div></div>'
         + '<div class="dcc-body"><div class="dcc-grid">'
@@ -50351,7 +51938,9 @@ function _dcSummaryFill() {
     }
     if (!_dccRows.length) return;
     const n = _dccRows.length;
-    const gp = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
+    _dccApplyNp();
+    const npAll = _dccRows.every(r => r.npKind);
+    const gp = _dccRows.reduce((a, r) => a + (npAll ? r.npTrack : r.gpTrack), 0);
     const goal = _dccRows.reduce((a, r) => a + r.goal, 0);
     const pct = goal > 0 ? gp / goal * 100 : 0;
     set('dc-sum-goal', Math.round(pct) + '<small>%</small>',
@@ -51185,9 +52774,9 @@ function _dcwMarginTab(rows, cfg) {
 
     const head = _dcwTile('Buy margin &middot; 7 days', margin == null ? '&mdash;' : margin.toFixed(1) + '%',
                           'dollar-weighted, target ' + target.toFixed(1) + '%', sev)
-        + _dcwTile(gpShort > 0 ? 'Gross profit behind' : 'Gross profit ahead',
+        + _dcwTile(gpShort > 0 ? 'Buy profit behind' : 'Buy profit ahead',
                    _dcwMoney(gpShort), 'on ' + _dcwMoney(V) + ' of buying', sev)
-        + _dcwTile('Spent', _dcwMoney(C), 'against ' + _dcwMoney(V - C) + ' of GP', '');
+        + _dcwTile('Spent', _dcwMoney(C), 'against ' + _dcwMoney(V - C) + ' of buy profit', '');
 
     let body = '<thead><tr><th>Day</th><th>Buy value</th><th>Spent</th>'
         + '<th>Margin</th><th class="dcw-th-bar">Against target &middot; ' + target.toFixed(1) + '%</th></tr></thead><tbody>';
@@ -52588,6 +54177,8 @@ async function ecLoad() {
             // eBay across stores but not file stock) must leave the eBay
             // numbers on screen, not replace them with an error.
             _rcCounts = await _rcFetch(`?view=counts`).catch(() => null);
+            _pqCounts = (typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('ec-view-picture-quality'))
+                ? await _pqFetch('?view=counts').catch(() => null) : null;
             _ecScope = _ecHealth.scope;
         } else if (_ecView === 'cats') {
             // Its own function, its own scope. shopify-recat decides who may
@@ -52654,6 +54245,22 @@ async function ecLoad() {
             } catch (e) {
                 _ltData = null;
                 _ltErr = e.message || String(e);
+            }
+            // Picture Quality: its own function, its own switch, and a failure
+            // that stays inside its own section.
+            const wantPictures = typeof _jumpFeatureVisible === 'function'
+                && _jumpFeatureVisible('ec-view-picture-quality');
+            if (!wantPictures) {
+                _pqData = null; _pqErr = null;
+            } else try {
+                _pqData = await _pqFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`);
+                _pqErr = null;
+                if (!_ecScope && _pqData?.scope) {
+                    _ecScope = { allStores: !!_pqData.scope.corp, stores: _pqData.scope.stores };
+                }
+            } catch (e) {
+                _pqData = null;
+                _pqErr = e.message || String(e);
             }
         } else {
             _ecData = await _ecFetch(`?view=listings${_ecStore ? `&store=${_ecStore}` : ''}`);
@@ -52850,6 +54457,11 @@ function ecSetStore(store) {
     // name is a reassuring statement about a store nobody has checked yet.
     _lhPhotos = null;
     _lhPhotoErr = null;
+    // And Picture Quality, for the same reason, back on its worst tab.
+    _pqData = null;
+    _pqErr = null;
+    _pqTier = null;
+    _pqPicked = false;
     // ⚠️ AND THE TITLE TAB GOES BACK TO WRONG. Ethan, arriving at WSP on
     // Opportunity because that is where he had been left on the store before:
     // "when switching from store to store, can you reset the default for the
@@ -52861,6 +54473,7 @@ function ecSetStore(store) {
     // If Wrong is empty the tab strip already falls through to the first tier
     // that has rows, so this is a starting point rather than a demand.
     _ltTier = 3;
+    _ltPicked = false;
     ecLoad();
 }
 window.ecSetStore = ecSetStore;
@@ -53263,7 +54876,8 @@ function _ecHealthHtml() {
 // question, and it belongs next to the other whole-district numbers rather than
 // above a list of one store's rows.
 //
-// ⚠️ IN THE SAME ORDER AS THE PANEL: photos, then titles, then categories. A DM
+// ⚠️ IN THE SAME ORDER AS THE PANEL: the No Photos alarm on the face of the
+// card, then one dropdown per tab — Title Quality, Picture Quality, Categories. A DM
 // reads a card here, picks a store, and lands on a page whose sections have to
 // be in the order they just scanned — reshuffling them makes the card and the
 // page feel like two different tools.
@@ -53306,15 +54920,48 @@ function _ecHealthCats(store) {
     const hasPics = Object.prototype.hasOwnProperty.call(_rcCounts, 'photos');
     const hasCats = Object.prototype.hasOwnProperty.call(_rcCounts, 'other');
     const hasTitles = Object.prototype.hasOwnProperty.call(_rcCounts, 'titles');
-    return (hasPics ? row('No Photos', pics, 'ec-bad') : '')
-         // RED, alongside No Photos, and for the same reason: everything else on
-         // this card is work queued up, while these two are a shopper being shown
-         // something wrong on the live storefront right now.
-         + (hasTitles ? row('Wrong Titles', titlesBad, 'ec-bad')
-                      + row('Titles To Review', titles) : '')
-         + (hasCats ? row('In &ldquo;Other&rdquo;', other) + row('No Suggestion', none)
-                    + row('Wrong Category', wrong) : '');
+    // ⚠️ ONE DROPDOWN PER TOOL, IN THE ORDER OF THE TABS (2026-09-30). Ethan:
+    // "we need rows for the new picture quality reasons. Maybe add more dropdowns
+    // like eBay upload but for picture and title quality as well." Three tools
+    // of three rows each made every card twelve rows tall, so each tool folds —
+    // and its SUMMARY carries the count, coloured, so a shut drawer never hides
+    // work: red when something there is wrong in front of a buyer, amber when it
+    // is queued, green at zero.
+    // No Photos sits INSIDE Picture Quality, first and red (Ethan, 2026-09-30:
+    // "You can throw No Photos in with Picture Quality") — it was on the face of
+    // the card as an alarm, but the drawer's red count already raises it.
+    const grp = (label, parts) => {
+        const n = parts.reduce((s, p) => s + (p.n || 0), 0);
+        const unknown = parts.every(p => p.n == null);
+        const cls = unknown ? 'ec-off' : parts.some(p => p.bad && p.n) ? 'ec-bad' : n ? 'ec-warn' : 'ec-ok';
+        return `<details class="ec-hebay ec-hgrp">
+          <summary><span>${label}</span><span class="ec-hgrp-n ${cls}">${unknown ? '—' : n}</span></summary>
+          ${parts.map(p => row(p.k, p.n, p.bad)).join('')}
+        </details>`;
+    };
+    const pq = _pqCounts?.counts ? (_pqCounts.counts[store] || {}) : null;
+    const pqParts = [
+        ...(hasPics ? [{ k: 'No Photos', n: pics, bad: 'ec-bad' }] : []),
+        ...(pq ? [{ k: 'Retake', n: pq.retake || 0, bad: 'ec-bad' },
+                  { k: 'Fix These Photos', n: pq.fix || 0 },
+                  { k: 'Reorder', n: pq.reorder || 0 }] : [])];
+    return ''
+         // Wrong Titles is RED inside its drawer for the reason No Photos is: a
+         // shopper being shown something wrong on the live storefront right now.
+         + (hasTitles ? grp('Title Quality', [
+               { k: 'Wrong Titles', n: titlesBad, bad: 'ec-bad' },
+               { k: 'Titles To Review', n: titles }]) : '')
+         + (pqParts.length ? grp('Picture Quality', pqParts) : '')
+         + (hasCats ? grp('Categories', [
+               { k: 'In &ldquo;Other&rdquo;', n: other },
+               { k: 'No Suggestion', n: none },
+               { k: 'Wrong Category', n: wrong }]) : '');
 }
+
+// Picture Quality's per-store open counts, for the All Stores cards. Its own
+// function and its own switch, like the queue; absent (no drawer) when the
+// reader does not hold it or the read failed.
+let _pqCounts = null;
 
 // --- LISTING HEALTH: one page, because it is one question -------------------
 //
@@ -53405,6 +55052,12 @@ function _lhMay(half) {
         return typeof _jumpFeatureVisible === 'function'
             ? _jumpFeatureVisible('ec-view-titles') : true;
     }
+    // Picture Quality is its own function too; same posture as Titles.
+    if (half === 'pictures') {
+        if (_pqData?.scope) return true;
+        return typeof _jumpFeatureVisible === 'function'
+            ? _jumpFeatureVisible('ec-view-picture-quality') : false;
+    }
     const scope = _lhScope || _rcData?.scope;
     const key = half === 'photos' ? 'mayPhotos' : 'mayCats';
     if (scope && typeof scope[key] === 'boolean') return scope[key];
@@ -53413,29 +55066,63 @@ function _lhMay(half) {
         : true;
 }
 
+// ============ LISTING HEALTH IS THREE TABS, NOT THREE STACKED SECTIONS ========
+// Ethan, 2026-09-30: "put picture quality on one tab, listing title on another
+// tab, and categories on the last tab within listing health. swap title and
+// picture tab order" — so: Titles | Picture Quality | Categories.
+//
+// The stack had outgrown itself: three tools, two of them long, and whichever
+// sat third was below a hundred rows of the other two. A tab is one tool at a
+// time, with every tool's count visible at once in the strip.
+//
+// ⚠️ THE ALARM MUST NOT HIDE BEHIND A TAB. "Live With No Photos" is the one
+// reading on this page that should be zero, and it now lives inside Picture
+// Quality, which is not the first tab. So that tab's chip goes RED whenever a
+// listing has no photo, whichever tab is open — the same reason the header line
+// leads with the photo count (_ecSyncChrome).
+let _lhTab = null;   // 'titles' | 'photos' | 'cats' — null until somebody picks one
+
+function lhSetTab(t) { _lhTab = t; ecRender(); }
+window.lhSetTab = lhSetTab;
+
 function _lhHtml() {
     // No Upload drawer here — it lives at the bottom of the All Stores page,
     // with the other whole-estate things. This page is the daily one.
-    const photos = _lhMay('photos') ? _lhPhotosHtml() : '';
-    // ⚠️ TITLES GOES LAST, AND IT IS ABOUT LENGTH, NOT IMPORTANCE. It sat
-    // between the alarm and the filing queue on the argument that its top tier
-    // (a title that is WRONG) belongs beside the photo alarm. True, but it is
-    // now the longest section on the page by a wide margin — 138 rows against
-    // the alarm's handful — so placing it second pushed Categories off the
-    // bottom of the screen and out of the day. Ethan, 2026-08-31: "move
-    // categories under no pictures since there will be a lot more titles."
-    // The two SHORT sections stay where a manager can see both without
-    // scrolling; the long grind goes underneath them.
-    const cats = _lhMay('cats') ? _lhCatsHtml() : '';
-    const titles = _lhMay('titles') ? _ltHtml() : '';
-    // Reachable only by a race: the pill needs one of the two, so losing both
-    // between the click and the render means an override changed underneath.
-    // Say that, rather than drawing an empty page that looks broken.
-    if (!photos && !cats && !titles) {
+    // ONE PHOTOS TAB, TWO SWITCHES. "Live With No Photos" is the first sub-tab
+    // of Picture Quality. Each keeps its OWN switch: managers and ASMs hold
+    // ec-view-photos, only the DM holds Picture Quality for now, so a manager
+    // sees this tab with the one sub-tab they have.
+    const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
+    const catN = _rcData?.counts
+        ? (_rcData.counts.other || 0) + (_rcData.counts.misfiled || 0) + (_rcData.counts.unmatched || 0)
+        : (_rcData?.queue || []).length;
+    const tabs = [
+        { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
+          n: (_ltData?.queue || []).length, bad: !!_ltErr },
+        { v: 'photos', label: 'Picture Quality', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
+          n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).length, bad: noPhotos > 0 || !!_lhPhotoErr },
+        { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
+    ].filter(t => t.on);
+    // Reachable only by a race: the pill needs one of the switches, so losing
+    // all of them between the click and the render means an override changed
+    // underneath. Say that, rather than drawing an empty page that looks broken.
+    if (!tabs.length) {
         return '<div class="ec-empty">Listing Health is not switched on for you.</div>';
     }
-    return photos + cats + titles;
+    // First visit: Titles, the first tab — unless a listing has no photo, which
+    // is the one thing on this page a shopper is looking at right now.
+    if (!tabs.some(t => t.v === _lhTab)) {
+        const alarm = tabs.find(t => t.v === 'photos' && noPhotos > 0);
+        _lhTab = (alarm || tabs[0]).v;
+    }
+    const strip = tabs.length < 2 ? '' : `<div class="lh-tabs" role="tablist">${tabs.map(t => `
+        <button type="button" role="tab" class="lh-tab${t.v === _lhTab ? ' lh-tab-on' : ''}"
+                aria-selected="${t.v === _lhTab}" onclick="lhSetTab('${t.v}')">${t.label}
+          <span class="lh-tab-n${t.bad ? ' lh-tab-bad' : t.n ? '' : ' lh-tab-zero'}">${t.n}</span>
+        </button>`).join('')}</div>`;
+    return strip + tabs.find(t => t.v === _lhTab).html();
 }
+
 
 // --- the photo alarm --------------------------------------------------------
 //
@@ -53448,9 +55135,14 @@ function _lhHtml() {
 // in-stock products with no photos that were never published. That is a real
 // and much bigger problem, and folding it in would turn the one number in this
 // panel that should read zero into a 500-row backlog nobody could alarm on.
-function _lhPhotosHtml() {
+// `bare`: the rows without the section frame, for the No Photos TAB of Picture
+// Quality — where this alarm now lives (Ethan, 2026-09-30: "Should we include
+// Live with no photos as a tab in this tool to keep listing health at 3 tabs
+// instead of 4?"). Same markup either way, so the alarm reads the same.
+function _lhPhotosHtml(bare) {
     const store = _ecEsc(_ecStore || '');
-    const head = (inner, badge) => _lhSec('Photos', 'Live With No Photos', inner, badge);
+    const head = bare ? (inner => inner)
+                      : ((inner, badge) => _lhSec('Photos', 'Live With No Photos', inner, badge));
 
     // ⚠️ A FAILED CHECK IS NOT AN ALL CLEAR. Same rule the All Stores card
     // follows: drawing the calm green line for a request that never answered
@@ -53541,6 +55233,472 @@ function _lhCatsHtml() {
 }
 
 
+// --- Picture Quality --------------------------------------------------------
+//
+// THE FOURTH TOOL ON THIS PAGE, and the first that LOOKS at the listing. Built
+// 2026-09-30 on the picture-quality function (see its header for the rules
+// Ethan calibrated on 22 listings across WSP and OVL, 19 of 21 agreeing).
+//
+// THREE TABS, BY WHAT THE MANAGER HAS TO DO — the same split as the verdicts:
+//   Retake            so much of the guide is missing that the fix is a reshoot
+//   Fix These Photos  named photos to redo (not square, crooked, flaw not shown)
+//   Reorder           the photos are fine, the order is not — one click
+// ⚠️ NOTHING HERE WRITES TO A LISTING EXCEPT APPROVE REORDER, and that only on
+// the photos the order was worked out for (the server refuses if they changed).
+// Retake and Fix are camera jobs; the row carries the SKU, the photos as they
+// are NOW and the guide sheet, and Check Again grades it afresh once the new
+// photos are up. Dismiss records why the tool was wrong — the note is how a
+// rule gets found wrong, the same lesson the title tool learned.
+//
+// ⚠️ REORDER IS SHOWN SIDE BY SIDE, as Ethan specified (2026-09-25): the order
+// now, the order suggested, and the guide sheet's own sequence, so the manager
+// approves against the standard rather than against our say-so.
+const PQ_URL = `${_BASE}/picture-quality`;
+
+let _pqData = null;   // { store, shop, queue, guide } from picture-quality?view=review
+let _pqErr = null;
+let _pqTier = null;   // null until somebody picks a tab: then the worst tab with rows opens
+// ⚠️ A TAB SOMEBODY CLICKED STAYS CLICKED, EVEN EMPTY. Each tab now keeps its own
+// dismissed rows (Ethan, 2026-09-30), so an empty tab is somewhere worth going —
+// and the old "jump to a tab with rows" would bounce the click straight back out.
+let _pqPicked = false;
+let _pqBusy = new Set();      // productIds with a request in flight
+let _pqChecking = new Set();  // …of which: Check Again, which takes a minute
+
+async function _pqFetch(path) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(`${PQ_URL}${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`,
+        { headers: { 'x-user-pin': pin } });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || body.error || `Request failed (${r.status})`);
+    return body;
+}
+
+// ⚠️ A 200 CAN STILL BE A FAILURE. Check Again answers as a stream (spaces to
+// keep a two-look grade alive past the gateway's 150s), so the status goes out
+// before the work is done and a failure arrives as a 200 with an `error` field.
+async function _pqPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(PQ_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok && body.ok !== false && !body.error, status: r.status, body };
+}
+
+async function _pqReload() {
+    try { _pqData = await _pqFetch(`?view=review&store=${encodeURIComponent(_ecStore || '')}`); _pqErr = null; }
+    catch (e) { _pqErr = e.message || String(e); }
+    ecRender();
+}
+
+function _pqSay(title, say, kind) {
+    return _ltAsk({ kind: kind || 'bad', eyebrow: 'Picture Quality', title,
+                    body: `<p class="lt-ask-say">${_ecEsc(say)}</p>`, cancel: null, go: 'Got It' });
+}
+
+const _PQ_TIERS = [
+    { v: 'nophotos', label: 'No Photos',        cls: 'lt-t-bad',  half: 'photos' },
+    { v: 'retake',   label: 'Retake',           cls: 'lt-t-bad',  half: 'pictures' },
+    { v: 'fix',      label: 'Fix These Photos', cls: 'lt-t-warn', half: 'pictures' },
+    { v: 'reorder',  label: 'Reorder',          cls: 'lt-t-ok',   half: 'pictures' },
+];
+
+function _pqHtml() {
+    const head = (inner, badge) => _lhSec('Photos', 'Picture Quality', inner, badge);
+    const store = _ecEsc(_ecStore || '');
+    const mayPics = _lhMay('pictures');
+    // Only the tabs this reader holds. See _lhHtml: two switches, one section.
+    const tiers = _PQ_TIERS.filter(t => _lhMay(t.half));
+    if (!tiers.length) return '';
+    const all = (mayPics && _pqData?.queue) || [];
+    const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
+    const count = v => v === 'nophotos' ? noPhotos : all.filter(r => r.verdict === v).length;
+    // Land on the worst tab with anything in it — No Photos first, because a
+    // listing a shopper sees as an empty square outranks every photo it does have.
+    if (!_pqTier || !tiers.some(t => t.v === _pqTier) || (!_pqPicked && !count(_pqTier))) {
+        const first = tiers.find(t => count(t.v));
+        _pqTier = first ? first.v : tiers[0].v;
+    }
+    const tabs = tiers.length < 2 ? '' : `<div class="rc-modes lt-modes">${tiers.map(t => {
+        const n = count(t.v);
+        return `<button type="button" class="rc-mode${t.v === _pqTier ? ' rc-mode-on' : ''}"
+                onclick="pqSetTier('${t.v}')">${t.label}
+                <span class="rc-chip-n ${n ? t.cls : ''}">${n}</span></button>`;
+    }).join('')}</div>`;
+
+    let inner;
+    if (_pqTier === 'nophotos') {
+        inner = _lhPhotosHtml(true);
+    } else if (_pqErr) {
+        inner = `<div class="lh-unknown">
+            <span class="lh-unknown-t">Could Not Check ${store}</span>
+            <span class="lh-why">${_ecEsc(_pqErr)}</span>
+            <span class="lh-why">This is not an all clear — nobody has looked yet.</span>
+          </div>`;
+    } else if (!_pqData) {
+        inner = '';
+    } else if (!count(_pqTier)) {
+        inner = `<div class="lh-clear">
+            <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>All Clear — Nothing To ${_ecEsc(tiers.find(t => t.v === _pqTier)?.label || '')} At ${store}</span>
+          </div>`;
+    } else {
+        const rows = all.filter(r => r.verdict === _pqTier);
+        inner = `<div class="lt-rows">${rows.map(_pqRow).join('')}</div>`;
+    }
+    const total = tiers.reduce((s, t) => s + count(t.v), 0);
+    const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
+    return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
+                `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
+}
+
+// WHAT WAS ANSWERED, folded under the queue — the drawer the Titles section
+// keeps, for the same two reasons: a decision you cannot undo is one people
+// hesitate over, and the notes are the only evidence a rule is wrong. Ethan
+// (2026-09-30): "when a re-order is denied, it should just go into a dropdown
+// like denying a category does".
+// ⚠️ ONE DRAWER PER TAB, holding what was dismissed FROM that tab (Ethan,
+// 2026-09-30: "When dismissed, it should stay on that tab under a dismissed
+// dropdown like the category tool"). The point is putting a row back once the
+// rule is fixed or the check turns out right — and the place to look for a
+// dismissed retake is Retake, not one drawer shared by all three.
+// ⚠️ THE DRAWER HOLDS ONLY NOTES STILL WAITING ON CLAUDE (Ethan, 2026-09-30):
+// "the total sitting in these dropdowns for both tools should equal the amount
+// of listing health notes I have waiting for me to send to you". A row leaves it
+// one of two ways — Undo here (the rule was fixed, or the check was right: the
+// listing goes back to work), or Clear in Listing Health Notes (it was looked at
+// and the listing is fine). Cleared rows stay dismissed in the table; they are
+// just no longer waiting on anyone.
+const _pqWaiting = r => !!(r.note || '').trim() && !r.triaged;
+// The bar over both drawers, in one wording (Ethan, 2026-09-30: "1 Note
+// Explained…").
+const _lhNotesSaid = n => `${n} Note${n === 1 ? '' : 's'} Explained The Check Was Wrong`;
+function _pqDismissedHtml(tier) {
+    const d = ((_pqData && _pqData.dismissed) || []).filter(r => _pqWaiting(r) && (!tier || r.verdict === tier));
+    if (!d.length) return '';
+    const noted = d.length;
+    const rows = d.map(r => {
+        const busy = _pqBusy.has(r.productId);
+        return `<div class="lt-dn-row">
+          <div class="lt-dn-main">
+            <div class="lt-dn-title">${_ecEsc(r.title || '')}</div>
+            <div class="lt-dn-meta">
+              <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+              <span class="lt-dn-as">${r.as === 'reorder' ? 'Order Is Fine' : 'Photos Are Fine'}</span>
+              <span>${_ecEsc(r.by || '')}${r.at ? ' · ' + _lhWhen(r.at) : ''}</span>
+            </div>
+            ${r.note ? `<div class="lt-dn-note">${_ecEsc(r.note)}</div>` : ''}
+          </div>
+          <button class="lt-dn-undo" onclick="pqReopen('${_ecEsc(r.productId)}')" ${busy ? 'disabled' : ''}
+                  title="Put this back in the queue">${busy ? '…' : 'Undo'}</button>
+        </div>`;
+    }).join('');
+    return `<details class="lt-denied">
+      <summary>${d.length} Dismissed</summary>
+      ${noted ? `<div class="lt-ask-bar">
+        <span class="lt-ask-n">${_lhNotesSaid(noted)}</span>
+        <button class="lt-ask-btn" onclick="openListingHealthTool()"
+                title="Read the notes and copy the ask for Claude">Open Listing Health Notes</button>
+      </div>` : ''}
+      <div class="lt-dn-rows">${rows}</div>
+    </details>`;
+}
+
+async function pqReopen(pid) {
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: 'reopen', store: _ecStore, productId: pid });
+    _pqBusy.delete(pid);
+    if (!res.ok) await _pqSay('Could Not Undo That', res.body?.detail || res.body?.error || 'Try again.');
+    await _pqReload();
+}
+window.pqReopen = pqReopen;
+
+// ⚠️ NO LINE ABOVE THE ROWS, ON ANY TAB OF EITHER TOOL (Ethan, 2026-09-30):
+// "these are here because there are issues, so just explain the problem on the
+// line item." Each tab used to open with a sentence about the whole pile (and
+// Wrong / Retake with a red alarm bar); the tab name and each row's own reason
+// already say it, so the sentence was a second reading of the same thing.
+
+function pqSetTier(v) { _pqTier = v; _pqPicked = true; ecRender(); }
+window.pqSetTier = pqSetTier;
+
+// One strip of photos, in the order given, numbered by their CURRENT position so
+// "photo 6" on a finding and on the strip are the same photo.
+// `showMoves`: the Suggested strip — a photo landing somewhere new is outlined
+// green, its corner number (where it is NOW) green too; one staying put is left
+// plain, so the change is what stands out.
+function _pqStrip(photos, order, flagged, showMoves) {
+    return `<div class="pq-strip">${order.map((n, i) => {
+        const p = photos[n - 1];
+        if (!p) return '';
+        const mv = showMoves && n !== i + 1;
+        // Opens in the audit tool's viewer, over the page, not a new tab (Ethan,
+        // 2026-09-30). Still a real link, so a middle-click or Ctrl-click opens
+        // the full-size file in a tab for anyone who wants that.
+        return `<a class="pq-ph${flagged.has(n) ? ' pq-ph-flag' : ''}${mv ? ' pq-ph-moved' : ''}" href="${_ecEsc(p.full || p.thumb)}"
+                   target="_blank" rel="noopener" title="Photo ${n}${mv ? ' — moves to position ' + (i + 1) : ''}"
+                   onclick="if (!event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); openAuditPhotoLightbox(this.href); }">
+                  <img loading="lazy" src="${_ecEsc(p.thumb)}" alt="Photo ${n}">
+                  <span class="pq-n">${n}</span></a>`;
+    }).join('')}</div>`;
+}
+
+// Which guide shots the check called missing, by the guide's own label. Newer
+// findings carry it (`shot`, `shots`); a row graded before that carries only the
+// sentence, so the sentence is read as a fallback rather than showing nothing.
+function _pqMissing(findings) {
+    const out = new Set();
+    for (const f of findings || []) {
+        if (f.shot) out.add(String(f.shot).toLowerCase());
+        for (const s of f.shots || []) out.add(String(s).toLowerCase());
+        const m = /^Missing: (.+)\.$/.exec(f.text || '');
+        if (m) out.add(m[1].toLowerCase());
+        const r = /required shots are missing: (.+)\.$/.exec(f.text || '');
+        if (r) r[1].split(/,\s*/).forEach(s => out.add(s.toLowerCase()));
+    }
+    return out;
+}
+
+// ⚠️ EVERY SLOT SAYS WHAT IT IS, even when it has no picture. Ethan, first look
+// (2026-09-30): "Anything that doesn't have a picture or is optional should be
+// better notated in this view" — slot 9 (Extra Accessories) was an empty box
+// that read as a broken image. Three states, each named in the box itself:
+//   Missing   the check says this listing has no photo of it (red)
+//   If Needed the shot applies only sometimes — the tooltip says when (dashed)
+//   no example the guide has no example photo for this shot yet
+function _pqGuideStrip(sheet, missing) {
+    const g = sheet && (_pqData?.guide || {})[sheet];
+    if (!g) return '';
+    const miss = missing || new Set();
+    return `<div class="pq-strip pq-guide">${g.shots.map((s, i) => {
+        const isMiss = miss.has(String(s.label).toLowerCase());
+        const tip = s.label + (s.cond ? ' — only if: ' + s.cond : '') + (isMiss ? ' — missing from this listing' : '');
+        return `<span class="pq-ph pq-gph${s.cond ? ' pq-gph-cond' : ''}${isMiss ? ' pq-gph-miss' : ''}" title="${_ecEsc(tip)}">
+          ${s.img ? `<img loading="lazy" src="${_ecEsc(s.img)}" alt="${_ecEsc(s.label)}" class="pq-gimg"
+                    onclick="openAuditPhotoLightbox(this.src)">`
+                  : '<span class="pq-noimg">No Example Photo</span>'}
+          <span class="pq-n">${i + 1}</span>
+          ${isMiss ? '<span class="pq-tag pq-tag-miss">Missing</span>'
+            : s.cond ? '<span class="pq-tag">If Needed</span>' : ''}
+          <span class="pq-glab">${_ecEsc(s.label)}</span>
+        </span>`;
+    }).join('')}</div>`;
+}
+
+// "Sep 30" — the day it was graded, in the sheet line (Ethan, 2026-09-30:
+// "Checked {Date} Against: New In Box").
+function _pqDay(iso) {
+    const d = new Date(iso || '');
+    return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// The retake sentence for ONE listing, with the check's count of what is
+// missing kept ("3 of 5 required shots are missing") — the guide strip below
+// names which, so the names are not repeated here.
+function _pqRetakeSaid(findings) {
+    const f = (findings || []).find(x => x.code === 'retake');
+    const m = f && /(\d+ of \d+ required shots are missing)/.exec(f.text || '');
+    return `This listing is missing so much of the Picture Guide that a buyer cannot judge the item${
+        m ? ' — ' + _ecEsc(m[1]) : ''}. <strong>Retake it following the guide</strong>, then press Recheck.`;
+}
+
+// ⚠️ ONE LINE PER PROBLEM, NOT PER PHOTO (Ethan, 2026-09-30, on a RAM listing
+// that read "Photo 2 … wrong angle / Photo 3 … wrong angle / Photo 4 … wrong
+// angle / Photo 2 is blurry / Photo 3 is blurry …": "any way to make this look
+// not as chaotic?"). The same three photos named twice, seven lines for two
+// problems. Grouped, it is "Taken From The Wrong Angle — Photos 2, 3, 4" and
+// "Blurry — Photos 2, 3, 4", which is also the order the store fixes them in.
+// The server's sentences are unchanged (the notes and the ask still quote
+// them); this only regroups them for reading.
+//   not square  → "Not Square (Should Be 1×1)" — the size it IS was noise; the
+//                 size it should be is what the store needs (Ethan, same day)
+//   framing     → one group per problem it names ("…standard: crooked, cut off")
+//   missing     → one line naming the shots
+//   anything else with a photo → its own words, with the photo stripped off
+function _pqFindingLines(findings) {
+    const cap = s => String(s).replace(/(^|\s)([a-z])/g, (m, a, b) => a + b.toUpperCase());
+    const groups = new Map(), misses = [], loose = [];
+    const add = (label, n) => {
+        if (!groups.has(label)) groups.set(label, new Set());
+        groups.get(label).add(n);
+    };
+    for (const f of findings || []) {
+        const text = String(f.text || '');
+        if (f.code === 'missing_shot') { misses.push(f.shot || text.replace(/^Missing:\s*|\.$/g, '')); continue; }
+        if (!f.photo) { loose.push(text); continue; }
+        if (f.code === 'not_square') { add('Not Square (Should Be 1×1)', f.photo); continue; }
+        if (f.code === 'framing') {
+            const m = /standard:\s*(.+?)\.?$/.exec(text);
+            (m ? m[1].split(/,\s*/) : ['not to the guide\'s standard']).forEach(p => add(cap(p), f.photo));
+            continue;
+        }
+        // "Photo 4 is blurry." → "Blurry"; "Photo 1 doesn't show what the item is." → as said.
+        const said = text.replace(/^Photo \d+\s+/, '').replace(/\.$/, '').replace(/^is\s+/, '');
+        add(cap(said), f.photo);
+    }
+    const nums = s => { const a = [...s].sort((x, y) => x - y); return (a.length === 1 ? 'Photo ' : 'Photos ') + a.join(', '); };
+    return [
+        ...(misses.length ? [`<li><b>Missing</b> — ${_ecEsc(misses.join(', '))}</li>`] : []),
+        ...[...groups].map(([label, s]) => `<li><b>${_ecEsc(label)}</b> — ${nums(s)}</li>`),
+        ...loose.map(t => `<li>${_ecEsc(t)}</li>`),
+    ].join('');
+}
+
+function _pqRow(r) {
+    const id = String(r.productId || '');
+    const numeric = _ecEsc(id.split('/').pop());
+    const shop = _ecEsc(_pqData?.shop || '');
+    const busy = _pqBusy.has(id);
+    const checking = _pqChecking.has(id);
+    const photos = r.photos || [];
+    const flagged = new Set((r.findings || []).map(f => f.photo).filter(Boolean));
+    const now = photos.map((_, i) => i + 1);
+    const isReorder = r.verdict === 'reorder' && r.reorder && Array.isArray(r.reorder.suggested);
+    const findings = (r.verdict === 'retake' ? `<li class="pq-retake-said">${_pqRetakeSaid(r.findings)}</li>` : '')
+        + _pqFindingLines((r.findings || []).filter(f => r.verdict !== 'retake' || f.code !== 'retake'));
+    // The row's own reason, now there is no tab sentence above it.
+    const why = isReorder
+        ? `<li>The photos are good but in the wrong order${(r.reorder.why || []).length
+            ? ' — ' + _ecEsc(r.reorder.why.join('; ')) : ''}.</li>` : '';
+    const titleNotes = (r.titleNotes || []).length
+        ? `<details class="lt-comps pq-tnotes"><summary>${r.titleNotes.length} Title Note${r.titleNotes.length === 1 ? '' : 's'} From The Photos (Not Checked Yet)</summary>
+             <ul>${r.titleNotes.map(t => `<li>${_ecEsc(t.issue || '')}${t.suggestion ? ' → ' + _ecEsc(t.suggestion) : ''}</li>`).join('')}</ul>
+           </details>` : '';
+
+    const missing = _pqMissing(r.findings);
+    const moved = isReorder ? r.reorder.suggested.filter((n, i) => n !== i + 1).length : 0;
+    const body = isReorder
+        // ⚠️ ONE SCROLL FOR ALL THREE ROWS, ONE BOX SIZE (Ethan, 2026-09-30: "do
+        // you have a better way to make this not feel so chaotic looking?"). The
+        // three strips used to scroll separately, at two box sizes, so slot 3 of
+        // the guide sat under nothing in particular. Now column N is position N
+        // in every row, the labels stay pinned on the left, and only the photos
+        // that MOVE are marked — each with where it was — so the eye goes to the
+        // change instead of reading twelve near-identical squares twice.
+        ? `<div class="pq-cmp pq-ro">
+             <div class="pq-ro-row"><span class="lt-lab">Now</span>${_pqStrip(photos, now, flagged)}</div>
+             <div class="pq-ro-row"><span class="lt-lab">Suggested${moved
+               ? `<br><span class="pq-lab-moved">${moved} Moved</span>` : ''}</span>${_pqStrip(photos, r.reorder.suggested, new Set(), true)}</div>
+             <div class="pq-ro-row"><span class="lt-lab">Guide</span>${_pqGuideStrip(r.sheet, missing)}</div>
+           </div>`
+        // ⚠️ THE GUIDE IS ALWAYS SHOWN, never in a drawer. It was a <details>
+        // first; Ethan (2026-09-30): "I wouldn't give the option to hide the
+        // guide pictures. I think it's important to see." It IS the answer to
+        // "which photos", so it sits under the listing's own, like Reorder's.
+        : `<div class="pq-cmp">
+             <div class="pq-cmp-row"><span class="lt-lab">Photos</span>${_pqStrip(photos, now, flagged)}</div>
+             <div class="pq-cmp-row"><span class="lt-lab">Guide${missing.size
+               ? `<br><span class="pq-lab-miss">${missing.size} Missing</span>` : ''}</span>${_pqGuideStrip(r.sheet, missing)}</div>
+           </div>`;
+
+    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}">
+      <div class="lt-main">
+        <div class="pq-title">${_ecEsc(r.title || 'Untitled Listing')}</div>
+        <div class="pq-sheet">Checked ${_pqDay(r.reviewedAt)} Against: <b>${_ecEsc(r.sheetName || '—')}</b></div>
+        ${r.stale ? `<div class="pq-stale">${r.staleWhy === 'recipe'
+            ? 'The check has been improved since this listing was graded'
+            : 'The photos or notes changed after this was checked'} —
+            press Recheck before acting on it.</div>` : ''}
+        <ul class="lt-why">${findings}${why}</ul>
+        ${body}
+        ${titleNotes}
+      </div>
+      <div class="lt-side">
+        <div class="lt-meta">
+          <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+          <span class="lt-price">${photos.length} Photo${photos.length === 1 ? '' : 's'}</span>
+        </div>
+        <div class="ec-pills rc-links">
+          ${numeric ? `<a class="ec-pill ec-pill-shopify" href="https://${shop}/admin/products/${numeric}"
+               target="_blank" rel="noopener">Shopify${_EC_ICON_LINK}</a>` : ''}
+          ${r.handle ? `<a class="ec-pill ec-pill-store" href="https://${shop}/products/${_ecEsc(r.handle)}"
+               target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}
+        </div>
+        <div class="lt-acts pq-acts">
+          ${isReorder && !r.stale
+            ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve'}</button>
+               <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', true)" ${busy ? 'disabled' : ''}
+                  title="The current order is fine. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
+            : `<button class="lt-ok" onclick="pqRecheck('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
+                  title="After the photos are retaken in Shopify, this grades them again now instead of waiting for the next sweep. About a minute.">${checking ? 'Checking…' : 'Recheck'}</button>
+               <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
+                  title="The photos are fine as they are. Say why, and the note comes to Listing Health Notes so the rule gets looked at.">Dismiss</button>`}
+        </div>
+        <!-- What Recheck is FOR, on the row. Ethan asked what "Check Again"
+             meant; a button that needs asking about needs a sentence. -->
+        ${isReorder && !r.stale ? `<span class="pq-hint">Approve saves this order to Shopify.</span>`
+          : `<span class="pq-hint">Retook the photos? Recheck grades them now.</span>`}
+      </div>
+    </div>`;
+}
+
+async function pqDismiss(pid, isReorder) {
+    const row = (_pqData?.queue || []).find(r => r.productId === pid);
+    if (!row) return;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Picture Quality',
+        title: isReorder ? 'Keep The Current Photo Order?' : 'Are These Photos Fine As They Are?',
+        body: `<p class="lt-ask-say">${_ecEsc(row.title || '')}</p>`,
+        note: { label: isReorder ? 'Why Keep This Order?' : 'Why Are They Fine?', required: true,
+                placeholder: isReorder ? 'e.g. the box shot first is deliberate here' : 'e.g. the serial is under the battery cover',
+                hint: 'Required — this note is how we find out a rule is wrong. Nothing on the listing changes.' },
+        go: 'Dismiss It', cancel: 'Cancel' });
+    if (!said) return;
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: isReorder ? 'deny-reorder' : 'dismiss', store: _ecStore,
+                                productId: pid, reason: said.note || '' });
+    _pqBusy.delete(pid);
+    if (!res.ok) {
+        await _pqSay('That Was Not Recorded', res.body?.detail || res.body?.error || 'Could not record that.');
+        ecRender();
+        return;
+    }
+    await _pqReload();
+}
+window.pqDismiss = pqDismiss;
+
+async function pqReorder(pid) {
+    const row = (_pqData?.queue || []).find(r => r.productId === pid);
+    if (!row || !row.reorder) return;
+    const said = await _ltAsk({
+        kind: 'ok', eyebrow: 'Picture Quality', title: 'Save This Photo Order?',
+        body: `<p class="lt-ask-say">${_ecEsc(row.title || '')}</p>
+               ${_pqStrip(row.photos || [], row.reorder.suggested, new Set())}
+               <p class="lt-ask-say">The photos are rearranged in Shopify — nothing is added or removed.</p>`,
+        go: 'Save The Order', cancel: 'Cancel' });
+    if (!said) return;
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: 'reorder', store: _ecStore, productId: pid });
+    _pqBusy.delete(pid);
+    if (!res.ok) {
+        await _pqSay('The Order Was Not Saved', res.body?.detail || res.body?.error || 'Shopify did not take the change.');
+        await _pqReload();
+        return;
+    }
+    await _pqReload();
+}
+window.pqReorder = pqReorder;
+
+async function pqRecheck(pid) {
+    _pqBusy.add(pid); _pqChecking.add(pid); ecRender();
+    const res = await _pqPost({ action: 'recheck', store: _ecStore, productId: pid });
+    _pqBusy.delete(pid); _pqChecking.delete(pid);
+    if (!res.ok) {
+        await _pqSay('Could Not Check It Again', res.body?.detail || res.body?.error || 'The check did not finish.');
+        ecRender();
+        return;
+    }
+    if (res.body.verdict === 'pass') {
+        await _pqSay('These Photos Now Pass', 'The listing meets the guide and has left the list.', 'ok');
+    }
+    await _pqReload();
+}
+window.pqRecheck = pqRecheck;
+
+
 // --- Listing Titles ---------------------------------------------------------
 //
 // THE THIRD TOOL ON THIS PAGE, and the one that reads a title rather than a
@@ -53572,6 +55730,7 @@ const LT_URL = `${_BASE}/listing-titles`;
 let _ltData = null;   // { store, queue, counts } from listing-titles?view=review
 let _ltErr = null;    // why the queue could not be read, when it could not
 let _ltTier = 3;      // which tab: 3 Wrong, 2 Hard To Find, 1 Opportunity
+let _ltPicked = false; // a clicked tab stays put even when empty — see _pqPicked
 // Titles the reviewer has typed over the suggestion, by productId. Held here
 // rather than read off the DOM at submit time because the reconciler replaces
 // the subtree on every state change and an in-progress edit would be lost.
@@ -53817,6 +55976,92 @@ function _lhToolEl() {
 }
 
 let _lhToolFb = null;
+let _lhToolPq = null;   // picture-quality?view=feedback, or { error }
+
+// The Picture Quality half of the notes. Same shape as the title half — a copy
+// button first, the notes grouped by what the tool said, Clear at the bottom —
+// so one habit works for both. Ethan (2026-09-30): "should we add a notes
+// section as well and act just like the listing health notes tool currently
+// for you to fix?"
+function _lhToolPqHtml() {
+    const fb = _lhToolPq;
+    if (!fb) return '';
+    if (fb.error) {
+        return `<div class="lh-tool-pq"><div class="lh-tool-h">Picture Quality</div>
+          <div class="lh-tool-err"><b>Could not read the picture notes.</b><span>${_ecEsc(fb.error)}</span></div></div>`;
+    }
+    const n = fb.total || 0;
+    const done = fb.done || [];
+    const doneHtml = done.length ? `
+      <details class="lh-tool-done"><summary>${done.length} Cleared</summary>
+        ${done.map(r => `<div class="lh-tool-done-row">
+          <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+          <span class="lh-tool-done-note">“${_ecEsc(r.note || '')}”</span>
+          <span class="lh-tool-done-when">${_lhWhen(r.takenAt)}</span>
+        </div>`).join('')}
+      </details>` : '';
+    if (!n) {
+        return `<div class="lh-tool-pq"><div class="lh-tool-h">Picture Quality</div>
+          <div class="lh-tool-clear"><div class="lh-tool-clear-h"><span class="lh-tool-tick">✓</span>
+            <b>No Picture Notes Waiting.</b></div>
+          <span>When somebody says a listing's photos are fine and writes why, it lands here.</span></div>
+          ${doneHtml}</div>`;
+    }
+    const groups = (fb.groups || []).map(g => `
+      <div class="lh-tool-grp">
+        <div class="lh-tool-grp-h"><span class="lh-tool-grp-n">${g.n}</span><span>${_ecEsc(g.label || g.code)}</span></div>
+        ${(g.rows || []).map(r => `
+          <div class="lh-tool-row">
+            <div class="lh-tool-note">“${_ecEsc(r.note || '')}”</div>
+            <div class="lh-tool-meta">
+              <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
+              <span>${_ecEsc(r.store || '')}</span>
+              <span>${_ecEsc(r.by || '')}</span>
+            </div>
+            <div class="lh-tool-ttl"><span class="lt-lab">Listing</span><span>${_ecEsc(r.title || '')}</span></div>
+            ${(r.findings || []).map(t => `<div class="lh-tool-ttl"><span class="lt-lab">We said</span><span>${_ecEsc(t)}</span></div>`).join('')}
+          </div>`).join('')}
+      </div>`).join('');
+    return `<div class="lh-tool-pq"><div class="lh-tool-h">Picture Quality</div>
+      <div class="lt-ask-bar">
+        <span class="lt-ask-n">${n} Note${n === 1 ? '' : 's'} Said The Photo Check Was Wrong</span>
+        <button class="lt-ask-btn" onclick="lhToolPqCopy(this)">Copy The Ask For Claude</button>
+      </div>
+      <p class="lh-tool-say">It carries each listing's photos and what the check said, and asks
+        for the reasoning before any rule changes. Nothing is sent from here.</p>
+      ${groups}
+      <div class="lh-tool-finish">
+        <span>Once Claude has been through them:</span>
+        <button class="lh-tool-done-btn" onclick="lhToolPqDone()">Clear ${n} Note${n === 1 ? '' : 's'}</button>
+      </div>
+      ${doneHtml}</div>`;
+}
+
+function lhToolPqCopy(button) {
+    const fb = _lhToolPq;
+    if (!fb || !fb.ask) return;
+    navigator.clipboard.writeText(fb.ask).then(() => _copyFlash(button))
+        .catch(() => _pqSay('Could Not Reach The Clipboard',
+            'Your browser refused the copy. Select the notes and copy them by hand.'));
+}
+window.lhToolPqCopy = lhToolPqCopy;
+
+async function lhToolPqDone() {
+    const fb = _lhToolPq;
+    if (!fb || !fb.total) return;
+    const n = fb.total;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Listing Health', title: `Clear ${n} Picture Note${n === 1 ? '' : 's'}?`,
+        body: `<p class="lt-ask-say">Do this once Claude has been through them. The notes are kept
+                under <b>Cleared</b>; nothing on any listing changes.</p>`,
+        go: 'Clear Them', cancel: 'Not Yet' });
+    if (!said) return;
+    await _pqPost({ action: 'triaged', keys: fb.keys || [] });
+    try { _lhToolPq = await _pqFetch('?view=feedback&days=30'); }
+    catch (_) { _lhToolPq = { total: 0, groups: [], done: fb.done || [] }; }
+    renderListingHealthTool();
+}
+window.lhToolPqDone = lhToolPqDone;
 
 function _lhWhen(t) {
     const d = t ? new Date(t) : null;
@@ -53831,6 +56076,14 @@ async function openListingHealthTool() {
     const body = document.getElementById('listingHealthToolBody');
     if (body) body.innerHTML = '<div class="status-message">Reading the notes…</div>';
     _lhToolFb = null;
+    _lhToolPq = null;
+    // Picture Quality's notes, alongside — only for a reader who holds that
+    // tool, and a failure there must not take the title notes down with it.
+    if (typeof _jumpFeatureVisible === 'function' && _jumpFeatureVisible('ec-view-picture-quality')) {
+        _pqFetch('?view=feedback&days=30')
+            .then(fb => { _lhToolPq = fb; if (_lhToolFb) renderListingHealthTool(); })
+            .catch(e => { _lhToolPq = { error: e.message || String(e) }; if (_lhToolFb) renderListingHealthTool(); });
+    }
     try {
         _lhToolFb = await _ltFetch('?view=feedback&days=30');
     } catch (e) {
@@ -53884,12 +56137,12 @@ function renderListingHealthTool() {
     if (!n) {
         // Two lines: the tick belongs ON the headline, not stacked above it as a
         // row of its own. (Ethan, 2026-09-04.)
-        body.innerHTML = `<div class="lh-tool-clear">
+        body.innerHTML = `<div class="lh-tool-h">Title Quality</div><div class="lh-tool-clear">
           <div class="lh-tool-clear-h"><span class="lh-tool-tick">✓</span>
-            <b>Nothing waiting on you.</b></div>
+            <b>No Title Notes Waiting.</b></div>
           <span>When somebody dismisses a title suggestion and writes why the rule
            was wrong, it lands here.</span>
-        </div>${doneHtml}`;
+        </div>${doneHtml}${_lhToolPqHtml()}`;
         return;
     }
     // Grouped by the rule that fired, the same way the ask is — one dismissal is
@@ -53925,9 +56178,10 @@ function renderListingHealthTool() {
     // a card he could not act on; putting the action under a scroll of evidence
     // would reproduce that one level down.
     body.innerHTML = `
+      <div class="lh-tool-h">Title Quality</div>
       <div class="lt-ask-bar">
-        <span class="lt-ask-n">${n} dismissal${n === 1 ? '' : 's'} explained a rule was wrong${
-          fb.settled ? ` · ${fb.settled} look${fb.settled === 1 ? 's' : ''} like the rule overruled the listing` : ''}</span>
+        <span class="lt-ask-n">${n} Note${n === 1 ? '' : 's'} Said The Title Check Was Wrong${
+          fb.settled ? ` · ${fb.settled} Look${fb.settled === 1 ? 's' : ''} Like The Rule Overruled The Listing` : ''}</span>
         <button class="lt-ask-btn" onclick="lhToolCopy(this)">Copy The Ask For Claude</button>
       </div>
       <p class="lh-tool-say">Paste it into Claude. It groups these by the rule that
@@ -53947,7 +56201,7 @@ function renderListingHealthTool() {
              things. The count carries its own noun and pluralises with it. -->
         <button class="lh-tool-done-btn" onclick="lhToolDone()">Clear ${n} Note${n === 1 ? '' : 's'}</button>
       </div>
-      ${doneHtml}`;
+      ${doneHtml}${_lhToolPqHtml()}`;
 }
 
 // Copies, then marks these notes read so the next ask carries only new ones.
@@ -54036,28 +56290,39 @@ function _ltListerPill(r) {
     return `<span class="lt-lister" title="Listed by ${_ecEsc(name)}, from this product's Shopify tags">${_ecEsc(name)}</span>`;
 }
 
-function _ltDeniedHtml() {
-    const d = _ltData && _ltData.denied;
-    if (!d || !(d.rows || []).length) return '';
+// ⚠️ ONE DRAWER PER TAB — see _pqDismissedHtml. A row dismissed from Wrong is
+// kept under Wrong. The tally stays estate-wide on every tab: it is about rules,
+// and a rule does not belong to a tab.
+// ⚠️ ONLY NOTES STILL WAITING ON CLAUDE — see _pqWaiting, the same rule, so the
+// two drawers together equal Listing Health Notes. The same filter the notes
+// tool's own count uses (notedCount: not-a-problem, a note, not triaged).
+// "Ours Is Fine" rows are not in here: they say the rule was RIGHT, carry no
+// note, and are never sent to Claude, so there is nothing for them to wait on.
+const _ltWaiting = r => r.as !== 'ebay-stale' && !!(r.note || '').trim() && !r.triagedAt;
+function _ltDeniedHtml(tier) {
+    const all = _ltData && _ltData.denied;
+    if (!all) return '';
+    const d = { rows: (all.rows || []).filter(r => _ltWaiting(r) && (tier == null || r.severity === tier)) };
+    if (!d.rows.length) return '';
     const when = t => {
         const x = new Date(t);
         return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     };
-    // ⚠️ THE TALLY EXCLUDES eBay-STALE DISMISSALS, and the server already did
-    // that — repeated here only in the wording. Those say the rule was RIGHT and
-    // the fix lives in Marketplace Connect; counting them would make title-drift
-    // look like our worst rule exactly when it was doing its job.
-    const tally = (d.tally || []).filter(t => t.n >= 2);
-    // ⚠️ SAME EXCLUSION AS THE TALLY. "Ours Is Fine" says the rule was RIGHT and
-    // the stale copy is on eBay, so its note is not feedback about a rule and
-    // must not be counted into an ask to go and change one.
-    // ⚠️ AND NOT ALREADY CARRIED INTO AN ASK. Counting every note ever written
-    // would leave the bar up forever, which is how a nag stops being read.
-    const noted = d.rows.filter(r => r.as !== 'ebay-stale' && (r.note || '').trim()
-                                  && !r.triagedAt).length;
+    // The tally is counted HERE, from the rows in this drawer — one rule
+    // dismissed twice among the notes waiting, which is the argument the notes
+    // are making. The server's tally counts every dismissal ever, answered ones
+    // included, which would keep a rule flagged long after it was fixed.
+    const byCode = {};
+    for (const r of d.rows) for (const f of (r.findings || [])) {
+        const c = String(f && f.code || '');
+        if (c) byCode[c] = (byCode[c] || 0) + 1;
+    }
+    const tally = Object.entries(byCode).filter(([, n]) => n >= 2)
+        .sort((a, b) => b[1] - a[1]).map(([code, n]) => ({ code, n }));
+    const noted = d.rows.length;
     const tallyHtml = tally.length
         ? `<div class="lt-tally">
-             <div class="lt-tally-h">Confirmed Correct More Than Once — Worth A Look At The Rule</div>
+             <div class="lt-tally-h">Dismissed More Than Once — Worth A Look At The Rule</div>
              ${tally.map(t => `<div class="lt-tally-row">
                  <span class="lt-tally-n">${t.n}</span>
                  <span>${_ecEsc(_LT_CODE_SAYS[t.code] || t.code)}</span></div>`).join('')}
@@ -54085,21 +56350,19 @@ function _ltDeniedHtml() {
         </div>`;
     }).join('');
     return `<details class="lt-denied">
-      <!-- ⚠️ "CONFIRMED CORRECT", NOT "DISMISSED". Ethan, 2026-09-03: "change
-           the Dismissed name to something more direct". Dismissed named what
-           happened to the ROW; every row in here is a person having read a title
-           and decided it is right — which is what both answers assert (the rule
-           was wrong, or the rule was right and eBay holds the stale copy). It is
-           also the more inviting word: this drawer is a record of work done, not
-           a bin of things brushed aside. -->
-      <summary>${d.rows.length} Confirmed Correct</summary>
+      <!-- ⚠️ "DISMISSED", THE SAME WORD IN ALL THREE TOOLS (Ethan, 2026-09-30:
+           "we should standardize our language for that across all 3 tools for
+           these dropdowns"). It was "Confirmed Correct" here from 2026-09-03 and
+           "Confirmed Fine" in Picture Quality; every one of these rows got here
+           by a button that now says Dismiss, so the drawer says so too. -->
+      <summary>${d.rows.length} Dismissed</summary>
       <!-- ⚠️ THE NOTE IS THE ONLY EVIDENCE A RULE IS WRONG, and it was landing
            in here where nobody read it on a schedule. The COUNT belongs beside
            the tally, which is the argument it is making; the work itself is the
            Listing Health tool, so this opens that rather than doing the job a
            second time in a second place. -->
       ${noted ? `<div class="lt-ask-bar">
-        <span class="lt-ask-n">${noted} dismissal${noted === 1 ? '' : 's'} explained a rule was wrong</span>
+        <span class="lt-ask-n">${_lhNotesSaid(noted)}</span>
         <button class="lt-ask-btn" onclick="openListingHealthTool()"
                 title="Read the notes and copy the ask for Claude">Open Listing Health Notes</button>
       </div>` : ''}
@@ -54109,7 +56372,7 @@ function _ltDeniedHtml() {
 }
 
 function _ltHtml() {
-    const head = (inner, badge) => _lhSec('Titles', 'Listing Titles', inner, badge);
+    const head = (inner, badge) => _lhSec('Titles', 'Title Quality', inner, badge);
     const store = _ecEsc(_ecStore || '');
 
     // ⚠️ A FAILED READ IS NOT AN ALL CLEAR — the same rule the photo alarm
@@ -54127,7 +56390,9 @@ function _ltHtml() {
     const all = _ltData.queue || [];
     const byTier = n => all.filter(r => r.severity === n);
     const total = all.length;
-    if (!total) {
+    // All clear with NO TABS only when nothing was dismissed either — otherwise
+    // the tabs stay, because the dismissed rows live on them.
+    if (!total && !((_ltData.denied || {}).rows || []).some(_ltWaiting)) {
         // The scope line matters MOST here. "All clear" over a list narrowed to
         // eBay is a much smaller claim than "all clear" over the whole storefront,
         // and the reader cannot tell which they are looking at without it.
@@ -54140,7 +56405,7 @@ function _ltHtml() {
 
     // Land on the worst tier that has anything in it. Opening on an empty
     // "Wrong" tab hides the work and reads as a broken panel.
-    if (!byTier(_ltTier).length) {
+    if (!_ltPicked && !byTier(_ltTier).length) {
         const first = _LT_TIERS.find(t => byTier(t.n).length);
         if (first) _ltTier = first.n;
     }
@@ -54160,10 +56425,11 @@ function _ltHtml() {
     return head(`
       ${_ltScopeNote(_ltData.ebayScope)}
       <div class="rc-modes lt-modes">${tabs}</div>
-      ${_ltTierSaid(_ltTier, byTier(_ltTier).length, store)}
-      <div class="lt-rows">${rows}</div>
-      ${_ltDeniedHtml()}`,
-      `<span class="lh-count ${worst === 3 ? 'lh-count-bad' : worst === 2 ? 'lh-count-warn' : 'lh-count-ok'}">${total}</span>`);
+      ${rows ? `<div class="lt-rows">${rows}</div>`
+        : `<div class="lh-clear"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>All Clear — Nothing Waiting Here At ${store}</span></div>`}
+      ${_ltDeniedHtml(_ltTier)}`,
+      `<span class="lh-count ${!total ? 'lh-count-ok' : worst === 3 ? 'lh-count-bad' : worst === 2 ? 'lh-count-warn' : 'lh-count-ok'}">${total}</span>`);
 }
 
 // WHAT IS AND IS NOT IN THIS LIST, in one line. The queue is customer-facing
@@ -54192,30 +56458,8 @@ function _ltScopeNote(sc) {
         hidden from it.</div>`;
 }
 
-// Plain English, and it says who fixes it. Each tier is a different KIND of
-// problem, so one blurb for all three would have to be vague enough to fit a
-// misdescribed listing and a missing keyword at once.
-function _ltTierSaid(tier, n, store) {
-    if (!n) return '';
-    const isAre = n === 1 ? 'listing is' : 'listings are';
-    if (tier === 3) {
-        return `<div class="lh-alarm">
-            <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            <span>${n} ${isAre} describing the wrong thing to a buyer at ${store} — a mismatched
-            title is a misdescribed sale, not just a missed one.
-            <strong>Read both titles before deciding</strong>, then fix the one that is wrong.</span>
-          </div>`;
-    }
-    if (tier === 2) {
-        return `<div class="lt-said">${n} ${isAre} missing the words a buyer would search for, so they
-            are close to invisible however good the price is. <strong>The store fixes these</strong> —
-            approve the suggestion or type a better title.</div>`;
-    }
-    return `<div class="lt-said">${n} ${isAre} findable and could be more so. Nothing here is broken,
-        so this is the pile to work when the other two are empty.</div>`;
-}
-
-function ltSetTier(n) { _ltTier = n; ecRender(); }
+// No tier sentence above the rows — see the note over pqSetTier.
+function ltSetTier(n) { _ltTier = n; _ltPicked = true; ecRender(); }
 window.ltSetTier = ltSetTier;
 
 function _ltRow(r) {
@@ -54385,7 +56629,8 @@ function _ltDenyKind(r) {
         ? { as: 'ebay-stale', label: 'Ours Is Fine',
             hint: 'Our Shopify title is right as it is — it is the eBay copy that needs correcting, and Marketplace Connect owns that. Clears the row without recording this as a bad rule.',
             ask: 'Confirm our Shopify title here is the right one?\n\nThis clears the row and records that the EBAY listing is the copy that needs correcting. Nothing is changed on either listing.' }
-        : { as: 'not-a-problem', label: 'Deny',
+        // "Dismiss", the word all three tools use (2026-09-30). It was Deny.
+        : { as: 'not-a-problem', label: 'Dismiss',
             hint: 'This title is fine as it is — the finding was wrong.',
             ask: 'Why is this title fine as it is?' };
 }
@@ -54503,7 +56748,7 @@ function _ltAsk(o) {
                is neutral. "Dismiss It" in the same green as "Change The Title"
                tells a reviewer the two are the same kind of act, and they are
                not. -->
-          <button type="button" class="lt-ask-go ${kind === 'ok' ? '' : 'lta-' + kind}"${o.busy ? ' disabled' : ''}>${_ecEsc(o.go || 'Confirm')}</button>
+          <button type="button" class="lt-ask-go ${kind === 'ok' ? '' : 'lta-' + kind}"${o.busy || (o.note && o.note.required) ? ' disabled' : ''}>${_ecEsc(o.go || 'Confirm')}</button>
         </div>
       </div>`;
     el.classList.add('open');
@@ -54512,8 +56757,17 @@ function _ltAsk(o) {
     if (cancel) cancel.onclick = () => _ltAskClose(null);
     el.querySelector('.lt-ask-go').onclick = () => {
         const box = el.querySelector('#ltAskNote');
+        if (o.note && o.note.required && !(box && box.value.trim())) return;
         _ltAskClose({ note: box ? box.value.trim() : '' });
     };
+    // ⚠️ A REQUIRED NOTE HOLDS THE BUTTON until something is typed. Ethan
+    // (2026-09-30): "the notes need to be required ... or else I will have
+    // nothing to give you as to what to fix." Spaces do not count. Enter is
+    // already refused on a disabled button (_ltAskKey).
+    if (o.note && o.note.required) {
+        const box = el.querySelector('#ltAskNote'), go = el.querySelector('.lt-ask-go');
+        box.addEventListener('input', () => { go.disabled = !box.value.trim(); });
+    }
     // The field first when there is one — the question has already been read by
     // then, and the answer is what we are waiting for.
     const first = el.querySelector('#ltAskNote') || el.querySelector('.lt-ask-go');
@@ -54662,9 +56916,11 @@ async function ltDeny(pid) {
     const row = (_ltData?.queue || []).find(r => r.productId === pid);
     if (!row) return;
     // A reason, because a denial is information: it is the only signal that a
-    // rule is wrong, and "denied" with no note teaches nobody anything. Blank is
-    // allowed — refusing to record the denial without one would just mean fewer
-    // denials and a queue nobody trusts.
+    // rule is wrong, and "denied" with no note teaches nobody anything.
+    // ⚠️ REQUIRED SINCE 2026-09-30. It was optional, on the theory that forcing
+    // one would mean fewer denials; Ethan: "the notes need to be required for
+    // both this and title tool or else I will have nothing to give you as to
+    // what to fix." The server refuses a blank one too.
     const kind = _ltDenyKind(row);
     // ⚠️ ONLY ONE OF THE TWO ANSWERS HAS ANYTHING TO LEARN FROM.
     // A Deny says our rule was wrong, and the note is the only place that can
@@ -54698,10 +56954,10 @@ async function ltDeny(pid) {
             body: `<div class="lt-ask-pair"><div class="lt-now">
                      <span class="lt-lab">Title</span>
                      <span class="lt-cur">${_ecEsc(row.current || '')}</span></div></div>`,
-            note: { label: 'Why Is It Fine? (Optional)',
+            note: { label: 'Why Is It Fine?', required: true,
                     placeholder: 'e.g. the model name really does repeat on the box',
-                    hint: 'Shown in Confirmed Correct below, and it is how we find out a rule'
-                        + ' is wrong. Four dismissals of one rule is a rule to go and fix.' },
+                    hint: 'Required — shown in Confirmed Correct on this tab, and it is how we find'
+                        + ' out a rule is wrong. Four dismissals of one rule is a rule to go and fix.' },
             go: 'Dismiss It', cancel: 'Cancel' });
     if (!said) return;
     const reason = said.note || '';
@@ -54871,7 +57127,7 @@ function _rcHtml() {
     };
     const skips = skipped.length ? `
       <details class="rc-skips">
-        <summary>${skipped.length} Skipped At ${_ecEsc(_ecStore)}</summary>
+        <summary>${skipped.length} Dismissed</summary>
         ${skipped.map(s => `
           <div class="rc-skiprow">
             <div class="rc-skipmain">
@@ -54983,7 +57239,7 @@ function _rcHtml() {
                     onclick="rcFileOne(this.dataset.id, this)">Submit</button>
             <button class="ec-btn ec-btn-sm ec-btn-off" data-id="${id}"
                     title="${_rcMode === 'misfiled' ? 'Leave it on the shelf it is on and stop offering it' : 'Leave it in Other and stop offering it'}"
-                    onclick="rcSkip(this.dataset.id, this)">Remove</button>
+                    onclick="rcSkip(this.dataset.id, this)">Dismiss</button>
           </td>
         </tr>`;
     }).join('');
@@ -55185,10 +57441,10 @@ async function rcFileSelected() {
 window.rcFileSelected = rcFileSelected;
 
 async function rcSkip(id, btn) {
-    if (btn) { btn.disabled = true; btn.textContent = 'Removing…'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Dismissing…'; }
     const res = await _rcPost({ action: 'skip', store: _ecStore, productId: id });
     if (!res.ok) {
-        if (btn) { btn.disabled = false; btn.textContent = 'Remove'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Dismiss'; }
         alert(res.body?.detail || res.body?.error || 'Could not skip that.');
         return;
     }
