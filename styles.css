@@ -892,6 +892,16 @@ input, textarea, select,
 #manageDocsList .del-btn.mp-f-del:hover { background: #dc2626; color: #fff; }
 #manageDocsList .del-btn.mp-f-del svg { width: 14px; height: 14px; }
 
+/* Search bar above the policy list. The old 2px bottom padding put the cards
+   right against the bar, so a card scrolled under it looked sliced off. The
+   gap plus a hairline gives the scroll area a clear top edge. */
+.mp-search-bar { padding: 12px 20px 16px; border-bottom: 1px solid #eee; background: #fff; }
+
+/* Category is a select of existing categories; "+ New category…" reveals the
+   .m-category text box beneath it (see _manageCatPick). */
+#manageDocsList .m-cat-sel { width: 100%; }
+#manageDocsList .mp-f-cat .m-category { margin-top: 6px; }
+
 .manage-footer { 
     padding: 15px 20px; 
     border-top: 1px solid #eee; 
@@ -2202,7 +2212,10 @@ select.bs-hidden-select:focus {
 .rec-co-h { margin: 0 2px 10px; }
 .rec-co-t { font-size: 13px; font-weight: 850; letter-spacing: .03em; text-transform: uppercase; color: var(--slate-charcoal); }
 .rec-co-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; }
-@container (min-width: 900px) { .rec-co-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+/* Four across on a wide screen (Ethan 2026-10-02): seven records read as a row of
+   four over a row of three, not six and an orphan — from 700px, so a tablet gets
+   the same 4+3 instead of 3+3 and a lone card. */
+@container (min-width: 700px) { .rec-co-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @container (max-width: 600px) { .rec-co-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .rec-co-tile { min-width: 0; background: #fff; border: 1px solid #e6ebf1; border-radius: 12px; padding: 12px 13px; box-shadow: 0 1px 2px rgba(16,24,40,.05); display: flex; flex-direction: column; }
 .rec-co-l { font-size: 10px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; color: #647082; line-height: 1.3; min-height: 2.6em; }
@@ -12680,6 +12693,28 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
    they read as one block with a quiet second half. */
 .bd-strip-tight { margin-bottom: clamp(1px, 0.2vh, 5px); }
 .bd-strip2 { margin-bottom: clamp(3px, 0.5vh, 11px); }
+/* The cost strip (eBay fees, shipping, card fees, royalty) — what stands between
+   the gross profit and the net. A cost running more than a point of sales above
+   the district turns its figure red, so the store that is paying eBay
+   9% where the district pays 7% sees it before it reads a single figure
+   (Ethan 2026-10-02: "really highlight it for them"). */
+.bd-strip-cost { margin-bottom: clamp(3px, 0.5vh, 11px); }
+/* Red TEXT, not a red box (Ethan 2026-10-02): only the share of sales
+   turns red, not the dollars; the tile itself stays like its neighbours. */
+.bd-strip .bd-tile.bd-tile-hot .bd-track { color: #c0341d; font-weight: 850; }   /* the % of sales, not the dollars */
+/* "Estimated Net Profit": the whole label, for a Net Profit not off the NP tab yet
+   (today, and yesterday until the 6:10 pass). It takes the label's own styling;
+   hovering it explains the estimate (no underline: Ethan 2026-10-02). */
+.lv-est { font: inherit; color: inherit; cursor: help; }
+/* A store paying more than the district for eBay fees or shipping (Month table). */
+.lv-tbl .lv-fee-pct, .lv-fee-sep { color: #b0bac6; font-weight: 650; }
+/* Red on the share, in the table and on the phone/tablet card alike. */
+.lv-fee-pct.lv-fee-hot, .lv-tbl .lv-fee-pct.lv-fee-hot { color: #c0341d; font-weight: 800; }
+/* On a card the dollars and the share share one 17px line; the share steps down
+   a size so "$1,321 · 6.9%" fits half a 390px card. */
+.lvc-v .lv-fee-sep, .lvc-v .lv-fee-pct { font-size: .82em; }
+/* The star on a Net Profit whose shipping has not landed yet. */
+.bd-tbl sup.bd-pend { color: #c2410c; font-weight: 850; margin-left: 1px; }
 /* ONE LINE per tile, at every height — label, figure, note running across
    instead of stacking. These are secondary to the six above them and a second
    full stack cost ~65px, which is four days of table; this costs ~25px. The
@@ -18852,6 +18887,35 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .lh-count-warn { background: var(--cb-gold-tint); color: #b7791f; }
 .lh-count-bad  { background: var(--cb-red-tint);  color: #d1443b; }
 
+/* LISTING HEALTH'S OWN TABS — Titles | Picture Quality | Categories (2026-09-30).
+   An underline strip, deliberately NOT the rc-mode pills: each tool already has
+   pills of its own for its tiers directly underneath, and two rows of the same
+   control would read as one control with too many options. The strip is the
+   page; the pills are inside a tool. */
+.lh-tabs {
+    display: flex; gap: 4px; border-bottom: 1px solid var(--cb-line, #e3e8ee);
+    margin-bottom: 16px; overflow-x: auto; scrollbar-width: none;
+}
+.lh-tabs::-webkit-scrollbar { display: none; }
+/* ONE WIDTH FOR ALL THREE (Ethan, 2026-09-30: "Make the 3 tabs the same size").
+   Sized to the longest label plus its count, so none of them wraps or truncates. */
+.lh-tab {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    flex: 0 0 200px; box-sizing: border-box;
+    background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    padding: 9px 14px; font-family: inherit; font-size: 13px; font-weight: 800;
+    color: var(--cb-muted, #647082); cursor: pointer; white-space: nowrap;
+}
+.lh-tab:hover { color: var(--cb-ink, #1f2733); }
+.lh-tab-on { color: var(--cb-ink, #1f2733); border-bottom-color: var(--cb-sage, #1f9d57); }
+.lh-tab-n {
+    border-radius: 20px; padding: 1px 8px; min-width: 20px; text-align: center;
+    font-size: 11px; font-weight: 800; background: var(--cb-gold-tint, #fdf3e1); color: #b7791f;
+}
+.lh-tab-zero { background: var(--cb-line-2, #eef1f5); color: var(--cb-faint, #8a94a3); }
+/* The no-photos alarm, visible from whichever tab is open. */
+.lh-tab-bad { background: #d1443b; color: #fff; }
+
 /* ALL CLEAR IS ONE LINE. This section is an alarm whose correct reading is
    zero, and it is directly above a working queue — given a full-height empty
    state it would push the actual work off the screen every single day for the
@@ -18861,6 +18925,13 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     background: var(--cb-sage-tint); border: 1px solid #cfe6d4; border-radius: 10px;
     padding: 11px 14px; font-size: 12.5px; font-weight: 700; color: #178048;
 }
+/* ONE GAP, 14px, above whatever comes after a header or a tab strip — the green
+   bubble included (Ethan, 2026-09-30: "same spacing between green bubbles and
+   headers"). The tabs had 12 and the header 14, so the same bubble sat at two
+   distances; and the scope line under the title tool's bubble had none. */
+.lh-sec .rc-modes { margin-bottom: 14px; }
+.lh-sec .lt-scope { margin-bottom: 14px; }
+.lh-clear + .lt-scope { margin-top: 10px; }
 .lh-clear svg { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ...and NOT-KNOWN is its own state, never folded into either of the other
@@ -18924,6 +18995,12 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .ec-hebay:not([open]) > .ec-hrow { display: none; }
 /* The last row inside the drawer keeps the card's own bottom rhythm. */
 .ec-hebay > .ec-hrow:last-child { border-bottom: 0; }
+/* A TOOL'S drawer on the All Stores card (Title Quality / Picture Quality /
+   Categories). Unlike eBay Upload these are daily work, so the heading reads at
+   row strength and carries the tool's total on the right, coloured like a row
+   value — a shut drawer must never look like a clean store. */
+.ec-hgrp > summary { font-size: 12px; color: var(--cb-muted); }
+.ec-hgrp-n { margin-left: auto; font-size: 13px; font-weight: 800; }
 
 /* --- Categories: the filing queue ---------------------------------------- *
    A queue of SUGGESTIONS, so it is deliberately quieter than the eBay feed
@@ -19471,6 +19548,139 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     overflow-wrap: anywhere;
 }
 
+/* =========================================================
+   PICTURE QUALITY  (pq-*)  [2026-09-30]
+   The title tool's row (lt-row / lt-main / lt-side) with a photo strip where the
+   title would be. Verdict as the left edge, same reason as lt-sev: the manager
+   is reading the PHOTOS in here, and a tinted card would sit behind them.
+   ========================================================= */
+.pq-v-retake  { border-left: 3px solid #d1443b; }
+.pq-v-fix     { border-left: 3px solid #d69e2e; }
+.pq-v-reorder { border-left: 3px solid var(--cb-sage); }
+.pq-title { font-size: 13px; font-weight: 800; color: var(--cb-ink); line-height: 1.4; overflow-wrap: anywhere; }
+.pq-sheet { font-size: 11px; font-weight: 600; color: var(--cb-faint); }
+.pq-sheet b { font-weight: 800; color: var(--cb-muted); }
+/* The photos moved under the verdict. Amber, not red: the listing may well be
+   fixed now — it is the CHECK that is out of date. */
+.pq-stale {
+    font-size: 11.5px; font-weight: 700; color: #8a5a00; line-height: 1.45;
+    background: var(--cb-gold-tint, #fdf3e1); border-radius: 8px; padding: 7px 10px;
+}
+.pq-cmp { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pq-cmp-row { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.pq-cmp-row > .lt-lab { padding-top: 22px; }
+/* ⚠️ A STRIP SCROLLS SIDEWAYS INSIDE ITSELF, never the page. A 15-photo listing
+   is wider than any row, and the order is the whole point of the Reorder view,
+   so wrapping to two lines would break "left to right is first to last". */
+.pq-strip {
+    display: flex; gap: 6px; overflow-x: auto; min-width: 0; flex: 1 1 auto;
+    padding-bottom: 4px; scrollbar-width: thin;
+}
+.pq-ph {
+    position: relative; flex: 0 0 auto; width: 72px; height: 72px;
+    border-radius: 8px; overflow: hidden; background: var(--cb-panel-2, #f6f8fa);
+    border: 1px solid var(--cb-line); display: block;
+}
+.pq-ph img { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* A photo a finding names. The outline is the link between "Photo 6 isn't
+   square" in the list and photo 6 in the strip. */
+.pq-ph-flag { border: 2px solid #d1443b; }
+.pq-n {
+    position: absolute; top: 3px; left: 3px; min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 8px; background: rgba(16, 24, 40, .72); color: #fff;
+    font-size: 10px; font-weight: 800; line-height: 16px; text-align: center;
+}
+/* The guide's own shots, labelled, since the label is what the photo is FOR. */
+.pq-guide .pq-gph { height: auto; width: 84px; background: none; border: 0; overflow: visible; }
+.pq-gph img, .pq-noimg {
+    width: 84px; height: 84px; object-fit: contain; border-radius: 8px;
+    border: 1px solid var(--cb-line); background: var(--cb-panel-2, #f6f8fa); display: block;
+}
+.pq-gph-cond img, .pq-gph-cond .pq-noimg { border-style: dashed; opacity: .75; }
+/* No example photo yet: SAY so in the box. An empty grey square read as a
+   broken image (Ethan, 2026-09-30, the Item Lots sheet's Extra Accessories). */
+.pq-noimg {
+    display: flex !important; align-items: center; justify-content: center; text-align: center;
+    padding: 6px; box-sizing: border-box;
+    font-size: 9.5px; font-weight: 800; line-height: 1.25; color: var(--cb-faint);
+    text-transform: uppercase; letter-spacing: .03em;
+}
+/* A guide shot this listing does not have. Red, and labelled in the box, so the
+   strip answers "which ones" without reading the sentence above it. */
+.pq-gph-miss img, .pq-gph-miss .pq-noimg { border: 2px solid #d1443b; opacity: 1; }
+.pq-gph-miss .pq-glab { color: #b3322a; }
+.pq-tag {
+    position: absolute; top: 64px; left: 3px; padding: 1px 5px; border-radius: 6px;
+    font-size: 9px; font-weight: 800; letter-spacing: .02em;
+    background: rgba(255, 255, 255, .92); color: var(--cb-muted); border: 1px solid var(--cb-line);
+}
+.pq-tag-miss { background: #d1443b; color: #fff; border-color: #d1443b; }
+/* Buttons sized to their words. The title tool's lt-acts stretch two buttons
+   across a 210px column, which is right for "Approve" beside an edit box and
+   read as chunky here (Ethan, 2026-09-30) — and "Approve Order" wrapped. */
+/* ⚠️ EVERY ROW'S SIDE COLUMN IS THE SAME SHAPE. Each line (SKU, links, buttons,
+   hint) spans the full 210px, so the blocks line up down the list instead of
+   ending at whatever width their words came to (Ethan, 2026-09-30). The two
+   buttons split the width evenly — same size, whatever their labels say. */
+.pq-row .lt-side { align-items: stretch; }
+/* SKU over Shopify, photo count over Store: the same two columns as the pills,
+   each centred in its column (Ethan, 2026-09-30). */
+.pq-row .lt-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; justify-items: center; }
+.pq-row .rc-links { display: flex; gap: 6px; }
+.pq-row .rc-links .ec-pill { flex: 1 1 0; justify-content: center; }
+.pq-acts { width: 100%; }
+.pq-acts .lt-ok, .pq-acts .lt-no {
+    flex: 1 1 0; min-width: 0; padding: 5px 8px; font-size: 11.5px; line-height: 1.3;
+    border-radius: 7px; white-space: nowrap; text-align: center;
+}
+.pq-hint { font-size: 10.5px; font-weight: 600; color: var(--cb-faint); line-height: 1.35; text-align: center; }
+/* The picture notes, under the title notes in Listing Health Notes. */
+.lh-tool-pq { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--cb-line, #e3e8ee); }
+/* "Title Quality" / "Picture Quality" over each half of Listing Health Notes. */
+.lh-tool-h {
+    font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--cb-faint, #8a94a3); margin-bottom: 10px;
+}
+.pq-glab {
+    display: block; margin-top: 3px; font-size: 10px; font-weight: 700; line-height: 1.3;
+    color: var(--cb-muted); overflow-wrap: anywhere; text-align: center;
+}
+.pq-tnotes summary { margin-top: 2px; }
+/* REORDER: three rows, one scroll (Ethan, 2026-09-30: "not feel so chaotic").
+   The rows scroll TOGETHER inside .pq-ro, so column N is position N in Now,
+   Suggested and Guide alike; the labels are pinned so they never scroll away.
+   The strips inside stop scrolling on their own, and the guide's boxes drop to
+   the photos' 72px so the columns actually line up. */
+.pq-ro { overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.pq-ro-row { display: flex; align-items: flex-start; gap: 9px; width: max-content; min-width: 100%; }
+.pq-ro-row > .lt-lab {
+    position: sticky; left: 0; z-index: 2; align-self: stretch;
+    background: var(--cb-card); padding-top: 22px;
+}
+.pq-ro .pq-strip { overflow: visible; flex: none; padding-bottom: 0; }
+.pq-ro .pq-guide .pq-gph { width: 72px; }
+.pq-ro .pq-gph img, .pq-ro .pq-noimg { width: 72px; height: 72px; }
+.pq-ro .pq-tag { top: 52px; }
+/* What moves: green outline, green number. What stays is left plain. */
+.pq-ph-moved { border: 2px solid var(--cb-sage, #1f9d57); }
+.pq-ph-moved .pq-n { background: var(--cb-sage, #1f9d57); }
+.pq-lab-moved { color: #178048; }
+.pq-ph, .pq-gimg { cursor: zoom-in; }
+/* Problem first, photos after: "Blurry — Photos 2, 3, 4". */
+/* Red, like the outlines on the photos it names (Ethan, 2026-09-30). */
+.pq-row .lt-why b { font-weight: 800; color: #b3322a; }
+.pq-lab-miss { color: #b3322a; }
+/* Patch Notes: Add New and Edit Previous are the same width (Ethan, 2026-09-30). */
+#pnmTab-add, #pnmTab-edit { width: 140px; justify-content: center; text-align: center; }
+/* Narrow: the side column goes under the photos rather than squeezing them. */
+@media (max-width: 900px) {
+    .pq-row { flex-wrap: wrap; }
+    /* Still a column, full width: side by side, the photo count stopped sitting
+       over the Store pill and the buttons stopped being one size. */
+    .pq-row .lt-side { flex: 1 1 100%; }
+    .pq-cmp-row > .lt-lab, .pq-ro-row > .lt-lab { flex-basis: 64px; }
+}
+
 
 
 /* =========================================================
@@ -19633,8 +19843,13 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .lt-ask-hint { font-size: 11px; font-weight: 650; color: var(--lta-faint); line-height: 1.45; }
 
 /* --- actions --- */
+/* ⚠️ THE BUTTONS ARE ONE WIDTH — the widest label's (Ethan, 2026-09-30: "make
+   the Dismiss It and Cancel bubbles the same size"). A shrink-to-fit grid whose
+   columns are all 1fr sizes every column to the widest one; margin-left:auto
+   keeps the pair on the right, where flex-end had it. */
 .lt-ask-acts {
-    display: flex; justify-content: flex-end; gap: 9px;
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(120px, 1fr); gap: 9px;
+    width: max-content; max-width: 100%; margin-left: auto; box-sizing: border-box;
     padding: 4px 18px 18px;
 }
 .lt-ask-go, .lt-ask-cancel {
@@ -19665,7 +19880,7 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 @media (max-width: 560px) {
     .lt-ask-ov { padding: 14px; align-items: flex-start; }
     .lt-ask-card { margin-top: 22px; }
-    .lt-ask-acts { flex-direction: column-reverse; }
+    .lt-ask-acts { display: flex; flex-direction: column-reverse; width: auto; margin-left: 0; }
     .lt-ask-go, .lt-ask-cancel { width: 100%; }
     /* The label column costs a third of a phone screen and says nothing the
        colour does not. */
@@ -20044,7 +20259,11 @@ select.dd-native {
 .dd-list.dd-open {
     display: block;
     position: fixed;
-    z-index: 12000;      /* over the modal layer, which tops out well below this */
+    /* Over EVERY full-screen layer, not just the modals. It was 12000, which is
+       under .lv-fs (100001) and .bd-fs (100002): the Daily Breakdown month picker
+       opened its list behind the popout, so clicking it looked like nothing
+       happened (Ethan 2026-10-02). Still under .jump-scrim (1000000). */
+    z-index: 100100;
     max-height: 280px;
     overflow-y: auto;
     padding: 5px;
@@ -24025,3 +24244,295 @@ select.dd-native {
     box-shadow: none !important;
     transform: none !important;
 }
+
+/* =========================================================
+   STORE CALENDAR — 2026-10-01
+   Replaces the Google Calendar embed in #calendarDropdown. Built to the
+   mockups Ethan approved: store events green, company events dark slate with
+   a lock, so "the DM set this, you can't change it" reads before the words do.
+   The side sheet (.scal-panel) sits inside the popup rather than opening a
+   second modal, because closeAllModals would take the calendar down with it.
+   Everything is scoped under #calendarDropdown.
+   ========================================================= */
+#calendarDropdown {
+    --scal-ink: #1c1f23; --scal-muted: #647082; --scal-line: #e3e8ee;
+    --scal-sage: #178048; --scal-sage-tint: #e8f7ee; --scal-sage-ink: #0f5c33;
+    --scal-slate: #1f2a37; --scal-chip: #f1f5f9;
+}
+#calendarDropdown .scal-headline { display: flex; align-items: center; gap: 12px; min-width: 0; }
+#calendarDropdown .scal-head-extra:empty { display: none; }
+#calendarDropdown > .calendar-content.scal-root {
+    position: relative; display: flex; flex-direction: column; gap: 10px;
+    padding: 12px 18px 14px; background: #fff; color: var(--scal-ink); overflow: hidden;
+}
+#calendarDropdown .scal-store-pill {
+    font-size: 12px; font-weight: 600; color: var(--scal-sage-ink); background: var(--scal-sage-tint);
+    border-radius: 999px; padding: 3px 10px; white-space: nowrap;
+}
+#calendarDropdown .scal-seg { display: inline-flex; background: var(--scal-chip); border-radius: 8px; padding: 3px; gap: 2px; }
+#calendarDropdown .scal-seg button {
+    height: 28px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: var(--scal-muted); cursor: pointer;
+}
+#calendarDropdown .scal-seg-sm button { height: 26px; padding: 0 12px; font-size: 12px; }
+#calendarDropdown .scal-seg button.on { background: #fff; color: var(--scal-ink); box-shadow: 0 1px 2px rgba(16,24,40,.08); }
+
+#calendarDropdown .scal-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 0 0 auto; }
+#calendarDropdown .scal-nav, #calendarDropdown .scal-actions, #calendarDropdown .scal-filter { display: flex; align-items: center; gap: 6px; }
+#calendarDropdown .scal-filter { flex-wrap: wrap; }
+#calendarDropdown .scal-actions { margin-left: auto; gap: 8px; }
+#calendarDropdown .scal-title { font-size: 18px; font-weight: 700; letter-spacing: -.01em; margin: 0 4px; white-space: nowrap; }
+#calendarDropdown .scal-sub { font-size: 13px; color: var(--scal-muted); margin-top: 2px; }
+#calendarDropdown .scal-icon-btn {
+    width: 32px; height: 32px; flex: 0 0 auto; border: 1px solid var(--scal-line); background: #fff; border-radius: 8px;
+    color: var(--scal-ink); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+}
+#calendarDropdown .scal-icon-btn svg { width: 16px; height: 16px; }
+#calendarDropdown .scal-icon-btn:hover { background: #f8fafc; }
+#calendarDropdown .scal-icon-btn.danger { color: #b23636; }
+#calendarDropdown .scal-btn, #calendarDropdown .scal-btn-primary, #calendarDropdown .scal-btn-danger {
+    height: 34px; padding: 0 14px; border-radius: 8px; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+#calendarDropdown .scal-btn { border: 1px solid var(--scal-line); background: #fff; color: var(--scal-ink); }
+#calendarDropdown .scal-btn-primary { border: 0; background: var(--scal-sage); color: #fff; }
+#calendarDropdown .scal-btn-primary:hover { background: #0f6b3b; }
+#calendarDropdown .scal-btn-primary:disabled { opacity: .6; cursor: default; }
+#calendarDropdown .scal-btn-primary svg { width: 14px; height: 14px; }
+#calendarDropdown .scal-btn-danger { border: 1px solid #f1caca; background: #fff; color: #b23636; margin-right: auto; }
+#calendarDropdown .scal-fchip {
+    height: 30px; padding: 0 10px; border: 1px solid var(--scal-line); background: #fff; color: var(--scal-ink);
+    border-radius: 999px; font-family: inherit; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+}
+#calendarDropdown .scal-fchip.on { background: var(--scal-slate); border-color: var(--scal-slate); color: #fff; }
+#calendarDropdown .scal-dot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 auto; display: inline-block; }
+
+#calendarDropdown .scal-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+#calendarDropdown .scal-month { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 460px; }
+#calendarDropdown .scal-dows {
+    display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); flex: 0 0 auto;
+    border: 1px solid var(--scal-line); border-bottom: 0; border-radius: 10px 10px 0 0; background: #f8fafc;
+}
+#calendarDropdown .scal-dows div { padding: 8px 10px; font-size: 11px; font-weight: 600; color: var(--scal-muted); text-transform: uppercase; letter-spacing: .06em; }
+#calendarDropdown .scal-grid {
+    flex: 1 1 auto; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-rows: repeat(var(--scal-weeks, 5), minmax(92px, 1fr));
+    border-left: 1px solid var(--scal-line); border-top: 1px solid var(--scal-line); border-radius: 0 0 10px 10px; overflow: hidden;
+}
+#calendarDropdown .scal-cell {
+    border-right: 1px solid var(--scal-line); border-bottom: 1px solid var(--scal-line); padding: 5px;
+    display: flex; flex-direction: column; gap: 3px; min-width: 0; min-height: 0; overflow: hidden; background: #fff;
+}
+#calendarDropdown .scal-cell.out { background: #f8fafc; }
+#calendarDropdown .scal-cell.out .scal-num { color: #7a8494; }
+#calendarDropdown .scal-cell.clickable { cursor: pointer; }
+#calendarDropdown .scal-cell.clickable:hover { background: #f6fbf8; }
+#calendarDropdown .scal-num { height: 24px; padding-left: 4px; font-size: 12px; font-weight: 600; display: flex; align-items: center; flex: 0 0 auto; }
+#calendarDropdown .scal-num.today {
+    width: 24px; padding: 0; justify-content: center; border-radius: 999px; background: var(--scal-sage); color: #fff; font-weight: 700;
+}
+#calendarDropdown .scal-chip {
+    display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; flex: 0 0 auto; text-align: left;
+    border: 0; border-radius: 5px; padding: 3px 6px; font-family: inherit; font-size: 11px; font-weight: 600; line-height: 1.25; cursor: pointer;
+}
+#calendarDropdown .scal-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+#calendarDropdown .scal-chip-company { background: var(--scal-slate); color: #fff; }
+#calendarDropdown .scal-chip-store { background: var(--scal-sage-tint); color: var(--scal-sage-ink); }
+#calendarDropdown .scal-chip-tagged { background: #f4f6f8; color: var(--scal-ink); font-weight: 500; }
+#calendarDropdown .scal-chip-tagged b { font-size: 10px; font-weight: 700; flex: 0 0 auto; }
+#calendarDropdown .scal-chip:hover { filter: brightness(.96); }
+#calendarDropdown .scal-lock { width: 10px; height: 10px; flex: 0 0 auto; }
+#calendarDropdown .scal-more {
+    border: 0; background: transparent; padding: 1px 6px; text-align: left; cursor: pointer;
+    font-family: inherit; font-size: 11px; font-weight: 600; color: var(--scal-sage);
+}
+
+#calendarDropdown .scal-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border: 1px solid var(--scal-line); border-radius: 10px; overflow: hidden; flex: 1 1 auto; min-height: 420px; }
+#calendarDropdown .scal-wcol { border-right: 1px solid var(--scal-line); padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+#calendarDropdown .scal-wcol:last-child { border-right: 0; }
+#calendarDropdown .scal-wcol.clickable { cursor: pointer; }
+#calendarDropdown .scal-wcol.clickable:hover { background: #f6fbf8; }
+#calendarDropdown .scal-whead { display: flex; align-items: baseline; gap: 6px; padding: 2px 4px 8px; font-size: 11px; font-weight: 600; color: var(--scal-muted); text-transform: uppercase; letter-spacing: .06em; }
+#calendarDropdown .scal-whead b { font-size: 18px; color: var(--scal-ink); letter-spacing: 0; }
+#calendarDropdown .scal-whead.today b { color: var(--scal-sage); }
+#calendarDropdown .scal-wcol .scal-chip span { white-space: normal; }
+#calendarDropdown .scal-wempty { color: #9aa6ad; font-size: 12px; padding: 0 4px; }
+
+#calendarDropdown .scal-list { display: flex; flex-direction: column; gap: 14px; }
+#calendarDropdown .scal-ldate { font-size: 12px; font-weight: 700; color: var(--scal-muted); text-transform: uppercase; letter-spacing: .05em; padding: 0 4px 6px; }
+#calendarDropdown .scal-lday.today .scal-ldate { color: var(--scal-sage); }
+#calendarDropdown .scal-row {
+    display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; cursor: pointer;
+    padding: 10px 12px; border: 1px solid var(--scal-line); border-radius: 10px; background: #fff;
+    font-family: inherit; color: var(--scal-ink); margin-bottom: 6px;
+}
+#calendarDropdown .scal-row:hover { background: #f8fafc; }
+#calendarDropdown .scal-rtime { flex: 0 0 120px; font-size: 13px; color: var(--scal-muted); }
+#calendarDropdown .scal-rtitle { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 600; display: flex; flex-direction: column; gap: 2px; }
+#calendarDropdown .scal-rtitle small { font-size: 12px; font-weight: 500; color: var(--scal-muted); }
+#calendarDropdown .scal-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+#calendarDropdown .scal-tag {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+    padding: 3px 8px; border-radius: 999px; background: var(--scal-chip); color: var(--scal-ink); white-space: nowrap;
+}
+#calendarDropdown .scal-tag-company { background: var(--scal-slate); color: #fff; }
+#calendarDropdown .scal-empty { padding: 40px 12px; text-align: center; color: var(--scal-muted); font-size: 14px; }
+
+#calendarDropdown .scal-legend { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; flex: 0 0 auto; font-size: 12px; color: var(--scal-muted); }
+#calendarDropdown .scal-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+#calendarDropdown .scal-key { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+#calendarDropdown .scal-key-company { background: var(--scal-slate); }
+#calendarDropdown .scal-key-store { background: var(--scal-sage-tint); border: 1px solid #b8e3c9; }
+#calendarDropdown .scal-key-tagged { background: #f4f6f8; border: 1px solid var(--scal-line); }
+#calendarDropdown .scal-legend .scal-hint { margin-left: auto; }
+
+/* side sheet */
+#calendarDropdown .scal-scrim { position: absolute; inset: 0; background: rgba(16,24,40,.18); z-index: 4; }
+#calendarDropdown .scal-panel {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 420px; max-width: 100%; z-index: 5;
+    background: #fff; border-left: 1px solid var(--scal-line); box-shadow: -12px 0 32px rgba(16,24,40,.10);
+    display: flex; flex-direction: column;
+}
+#calendarDropdown .scal-phead { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--scal-line); }
+#calendarDropdown .scal-phead h4 { margin: 0; font-size: 16px; font-weight: 700; }
+#calendarDropdown .scal-phead .scal-icon-btn { margin-left: auto; border: 0; color: var(--scal-muted); }
+#calendarDropdown .scal-pbody { flex: 1 1 auto; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+#calendarDropdown .scal-pfoot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--scal-line); }
+#calendarDropdown .scal-dtitle { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+#calendarDropdown .scal-dwhen { font-size: 14px; color: var(--scal-muted); margin-top: -10px; }
+#calendarDropdown .scal-notes { margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+#calendarDropdown .scal-by { padding: 12px; background: #f8fafc; border: 1px solid var(--scal-line); border-radius: 10px; font-size: 13px; color: var(--scal-muted); }
+#calendarDropdown .scal-by b { color: var(--scal-ink); font-weight: 600; }
+#calendarDropdown .scal-note { padding: 12px; border-radius: 10px; background: #fdf3e1; color: #7a4b05; font-size: 13px; line-height: 1.5; }
+
+/* forms */
+#calendarDropdown .scal-form { display: flex; flex-direction: column; gap: 14px; }
+#calendarDropdown .scal-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+#calendarDropdown .scal-lbl { font-size: 12px; font-weight: 600; color: var(--scal-muted); }
+#calendarDropdown .scal-lblrow { display: flex; justify-content: space-between; align-items: baseline; }
+#calendarDropdown .scal-link { border: 0; background: none; padding: 0; color: var(--scal-sage); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+#calendarDropdown .scal-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+#calendarDropdown .scal-two[hidden] { display: none; }
+#calendarDropdown .scal-input {
+    width: 100%; box-sizing: border-box; min-height: 40px; border: 1px solid var(--scal-line); border-radius: 8px;
+    padding: 8px 12px; font-family: inherit; font-size: 14px; line-height: 1.4; color: var(--scal-ink); background: #fff;
+}
+#calendarDropdown textarea.scal-input { resize: vertical; }
+#calendarDropdown .scal-input:focus { outline: none; border-color: #1f9d57; box-shadow: 0 0 0 3px #c6ecd6; }
+#calendarDropdown .scal-toggle { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 500; cursor: pointer; }
+#calendarDropdown .scal-toggle input, #calendarDropdown .scal-pick input { accent-color: var(--scal-sage); width: 16px; height: 16px; margin: 0; }
+#calendarDropdown .scal-form .scal-hint { font-size: 12px; color: var(--scal-muted); }
+#calendarDropdown .scal-error { font-size: 13px; color: #b23636; font-weight: 600; }
+#calendarDropdown .scal-error:empty { display: none; }
+
+/* Company events tab */
+#calendarDropdown .scal-company { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 420px; margin: -12px -18px -14px; }
+#calendarDropdown .scal-clist { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; border-right: 1px solid var(--scal-line); min-height: 0; overflow-y: auto; }
+#calendarDropdown .scal-chead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+#calendarDropdown .scal-chead .scal-title { margin: 0; }
+#calendarDropdown .scal-crows { display: flex; flex-direction: column; gap: 4px; }
+#calendarDropdown .scal-crow { display: grid; grid-template-columns: 60px minmax(0, 1fr) minmax(0, 200px) auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 10px; border: 1px solid transparent; }
+#calendarDropdown .scal-crow:hover { background: #f8fafc; }
+#calendarDropdown .scal-crow.editing { background: #f2faf5; border-color: #b8e3c9; }
+#calendarDropdown .scal-cdate { display: flex; flex-direction: column; align-items: center; width: 52px; padding: 4px 0; border: 1px solid var(--scal-line); border-radius: 8px; background: #fff; }
+#calendarDropdown .scal-cdate span { font-size: 10px; font-weight: 700; color: #b23636; text-transform: uppercase; letter-spacing: .06em; }
+#calendarDropdown .scal-cdate b { font-size: 18px; font-weight: 700; line-height: 1.1; }
+#calendarDropdown .scal-ctitle { font-size: 14px; font-weight: 600; }
+#calendarDropdown .scal-cmeta { font-size: 12px; color: var(--scal-muted); margin-top: 2px; }
+#calendarDropdown .scal-cbtns { display: flex; gap: 4px; }
+#calendarDropdown .scal-cform { padding: 16px 18px; background: #fbfcfd; overflow-y: auto; min-height: 0; }
+#calendarDropdown .scal-cform .scal-title { font-size: 16px; margin: 0; }
+#calendarDropdown .scal-picks { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+#calendarDropdown .scal-pick {
+    height: 40px; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer;
+    border: 1px solid var(--scal-line); background: #fff; border-radius: 8px; font-size: 13px; font-weight: 600;
+}
+#calendarDropdown .scal-pick:has(input:checked) { background: var(--scal-sage-tint); border-color: #b8e3c9; color: var(--scal-sage-ink); }
+#calendarDropdown .scal-cfoot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+
+/* Narrow widths. The calendar button is hidden on phones for now (Ethan:
+   mobile gets its own pass after this ships), so this is the tablet case. */
+@media (max-width: 1000px) {
+    #calendarDropdown .scal-company { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+    #calendarDropdown .scal-clist { border-right: 0; border-bottom: 1px solid var(--scal-line); overflow: visible; }
+    #calendarDropdown .scal-cform { overflow: visible; }
+    #calendarDropdown .scal-crow { grid-template-columns: 60px minmax(0, 1fr) auto; }
+    #calendarDropdown .scal-crow .scal-tags { grid-column: 2 / 3; }
+    #calendarDropdown .scal-legend .scal-hint { margin-left: 0; }
+}
+
+/* Type colours (2026-10-01, with the Google import). The dot is the event's
+   TYPE everywhere — chip, row, detail, key. On the dark company chip it gets a
+   white ring, or a blue or purple dot would vanish into the slate. */
+#calendarDropdown .scal-cdot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 auto; display: inline-block; }
+#calendarDropdown .scal-chip-company .scal-cdot { box-shadow: 0 0 0 1.5px #fff; }
+#calendarDropdown .scal-rtitle small, #calendarDropdown .scal-dtype { display: inline-flex; align-items: center; gap: 6px; }
+#calendarDropdown .scal-types { gap: 6px 16px; margin-top: -4px; }
+
+/* Spanning bars (Ethan, 2026-10-01: one long bar across a multi-day event, like
+   Google). Each week is its own 7-column grid — see _scalWeekRowHTML for the rows.
+   Cells sit behind on grid-row 1 / -1 and take the clicks; the number and the
+   single-day stack pass clicks through except on their chips. */
+#calendarDropdown .scal-grid { display: flex; flex-direction: column; grid-template-rows: none; }
+#calendarDropdown .scal-wk { flex: 1 1 0; min-height: 96px; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 3px; }
+#calendarDropdown .scal-wk > * { position: relative; z-index: 1; min-width: 0; }
+#calendarDropdown .scal-wk > .scal-cell { z-index: 0; padding: 0; }
+#calendarDropdown .scal-wk > .scal-num { margin: 5px 0 0 5px; pointer-events: none; }
+#calendarDropdown .scal-wk > .scal-whead { padding: 8px 10px 4px; pointer-events: none; }
+#calendarDropdown .scal-bar { width: auto; margin: 0 5px; }
+#calendarDropdown .scal-bar.cont-l { margin-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+#calendarDropdown .scal-bar.cont-r { margin-right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+#calendarDropdown .scal-singles { display: flex; flex-direction: column; gap: 3px; padding: 0 5px 5px; overflow: hidden; pointer-events: none; }
+#calendarDropdown .scal-singles > * { pointer-events: auto; }
+#calendarDropdown .scal-weekview .scal-grid { border-top: 1px solid var(--scal-line); border-radius: 10px; }
+#calendarDropdown .scal-weekview .scal-wk { min-height: 420px; }
+#calendarDropdown .scal-weekview .scal-singles .scal-chip span { white-space: normal; }
+
+/* Same-size store chips, and same-size tabs (Ethan, 2026-10-01). */
+#calendarDropdown .scal-fchip { min-width: 72px; justify-content: center; }
+#calendarDropdown .scal-headline .scal-seg { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+#calendarDropdown .scal-headline .scal-seg button { width: 100%; padding: 0 16px; }
+
+/* Month / Week / List one width (Ethan, 2026-10-01), same as the header tabs.
+   The Today button is gone: the calendar always opens on this month. */
+#calendarDropdown .scal-actions .scal-seg { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+#calendarDropdown .scal-actions .scal-seg button { width: 100%; padding: 0 14px; }
+
+/* Event Types tab (the DM only; 0128). Reuses the Company events two-column
+   frame: the list on the left, the add form on the right. */
+#calendarDropdown .scal-trows { display: flex; flex-direction: column; gap: 2px; }
+#calendarDropdown .scal-trow { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 10px; border-radius: 8px; }
+#calendarDropdown .scal-trow:hover { background: #f8fafc; }
+#calendarDropdown .scal-trow .scal-cdot { width: 12px; height: 12px; }
+#calendarDropdown .scal-tname { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 600; }
+#calendarDropdown .scal-tcount { font-size: 12px; color: var(--scal-muted); white-space: nowrap; }
+#calendarDropdown .scal-tfixed { font-size: 12px; color: var(--scal-muted); width: 88px; text-align: right; }
+#calendarDropdown .scal-tremoved { margin-top: 14px; padding: 0 10px; }
+#calendarDropdown .scal-swatches { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+#calendarDropdown .scal-swatch { height: 32px; border: 0; border-radius: 8px; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+#calendarDropdown .scal-swatch.on { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--scal-ink); }
+
+/* 2026-10-04: Upcoming / Past one width; month headings and the past-month
+   stepper in Company events; the type being edited is highlighted. */
+#calendarDropdown .scal-chead .scal-seg { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; flex: 0 0 auto; }
+#calendarDropdown .scal-chead .scal-seg button { width: 100%; padding: 0 14px; }
+#calendarDropdown .scal-cmonth { font-size: 11px; font-weight: 700; color: var(--scal-muted); text-transform: uppercase; letter-spacing: .06em; padding: 14px 12px 6px; border-bottom: 1px solid var(--scal-line); margin-bottom: 4px; }
+#calendarDropdown .scal-crows > .scal-cmonth:first-child { padding-top: 4px; }
+#calendarDropdown .scal-pastnav { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 4px 0 8px; border-bottom: 1px solid var(--scal-line); }
+#calendarDropdown .scal-pastnav .scal-icon-btn:disabled { opacity: .35; cursor: default; }
+#calendarDropdown .scal-pastmonth { min-width: 180px; text-align: center; font-size: 15px; font-weight: 700; display: flex; flex-direction: column; }
+#calendarDropdown .scal-pastmonth small { font-size: 12px; font-weight: 500; color: var(--scal-muted); }
+#calendarDropdown .scal-trow .scal-cbtns { display: flex; align-items: center; gap: 4px; }
+#calendarDropdown .scal-trow.editing { background: #f2faf5; box-shadow: inset 0 0 0 1px #b8e3c9; }
+#calendarDropdown .scal-tfixed { width: 32px; font-size: 0; }
+#calendarDropdown .scal-input:disabled { background: #f4f6f8; color: var(--scal-muted); }
+
+#calendarDropdown .scal-hint:empty { display: none; }
+
+/* MSM "Show on" picker: their two stores, same chips as the DM's five. */
+#calendarDropdown .scal-picks-mine { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* View-only Company Events (everyone but corporate, 2026-10-05): the list alone, full width. */
+#calendarDropdown .scal-company.scal-company-ro { grid-template-columns: minmax(0, 1fr); }
+#calendarDropdown .scal-company-ro .scal-clist { border-right: 0; }
+#calendarDropdown .scal-company-ro .scal-crow { grid-template-columns: 60px minmax(0, 1fr) minmax(0, 240px); }

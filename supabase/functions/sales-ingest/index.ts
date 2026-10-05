@@ -197,11 +197,29 @@ async function ingest(sb: any, p: Record<string, string>) {
 
   const target = new URL(APPS_SCRIPT_URL);
   target.searchParams.set("secret", SECRET);
-  target.searchParams.set("action", "ingest");
-  if (p.reverify) target.searchParams.set("reverify", p.reverify);
+  // ⚠️ BUYING ONLY FROM 2026-10-03. The Sales Summary import is retired (Ethan
+  // 2026-10-02: "delete all of the old sales summary automation so I can delete
+  // those tabs for October") — selling now comes off the Net Profit tab via
+  // np-sync / daily_np. action=ingest ran the Shopify-email -> Sales tab import
+  // FIRST and buying after it; with the Sales tab gone that half would report
+  // every store "no tab named Sales Oct 26" every morning. action=buying is the
+  // same buying + reviews + cash pass on its own, and it is already in the
+  // published Apps Script, so this needed no Apps Script deploy.
+  //
+  // The report is re-wrapped in the old shape — an empty selling half with the
+  // buying report under `buying` — so sales_ingest_runs, the alert, the cash
+  // step and the status line below all keep reading exactly what they read.
+  target.searchParams.set("action", "buying");
   if (dryRun) target.searchParams.set("dryRun", "1");
   const call = await callAppsScript(target);
-  const report: Report = call.report;
+  const buyRep: any = call.report;
+  const report: Report = {
+    ok: buyRep?.ok !== false,
+    ranAt: buyRep?.ranAt,
+    error: buyRep?.ok === false ? buyRep?.error : undefined,
+    written: [], corrected: [], unchanged: 0, missing: [], unverified: [], skipped: [], errors: [],
+    buying: buyRep,
+  } as any;
 
   const written = report.written ?? [];
   const corrected = report.corrected ?? [];
@@ -241,7 +259,10 @@ async function ingest(sb: any, p: Record<string, string>) {
   // Any cell actually changed => refresh the cache now rather than leaving the
   // widget up to 10 minutes stale.
   let refreshed = false;
-  if (!dryRun && (written.length || corrected.length)) refreshed = await kickSyncBuysell();
+  // Re-gated on BUYING writes: the selling half is always empty now (see above),
+  // and the hub cache this refreshes is what carries the Buy tab to the site.
+  const buyWrote = ((buyRep?.written ?? []).length + (buyRep?.corrected ?? []).length) > 0;
+  if (!dryRun && (written.length || corrected.length || buyWrote)) refreshed = await kickSyncBuysell();
 
   // Fires if EITHER feed needs a human — sales gaps, buying gaps, or both. The
   // email renders only the sections that actually have something in them, so a
@@ -568,7 +589,7 @@ async function sendAlert(
         ${salesBlock}
         ${buyBlock}
         <p style="margin:18px 0 0;color:#9aa6ad;font-size:12px;">
-          Selling re-checked month to date &middot; buying over the last 3 days &middot; ${esc(report.ranAt || "")}
+          Buying checked over the last 3 days &middot; ${esc(report.ranAt || "")}
         </p>
       </div>
     </div>
