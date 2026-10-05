@@ -108,9 +108,38 @@ var NPX_YOY_2025 = {
          '10': 81737.06, '11': 89628.63, '12': 77261.43 }
 };
 
-// The company YoY is same-store or it is fiction: "Current" already spans five
-// stores and "Last" can only ever span three.
+// The three stores that have a 2025 to be compared against. "Last" can only
+// ever span these, whatever the block above it is called.
 var NPX_SAME_STORE = ['OVL', 'LEE', 'WSP'];
+
+// ---------------------------------------------------------------------------
+// ⚠️ THE COMPANY BLOCK IS THE COMPANY. THE SAME STORE BLOCK IS THE COMPARISON.
+//
+// This used to be one block, written same-store on BOTH rows, because a "Last"
+// of three stores under a "Current" of five prints MPL's and BAL's entire
+// revenue as year-over-year growth. That reasoning is still correct and it is
+// why the Inc/Dec caveat below is written onto the cell.
+//
+// What changed is that the tab now carries BOTH blocks, and the top one is
+// labelled "5-Store Company". Writing three stores into a block that says five
+// is the worse of the two errors: the same-store figure is at least true of
+// something, but it was appearing under a heading that says it is the company,
+// and the two blocks printed IDENTICAL numbers — $394,630.26 against
+// $394,630.26 on 2026-09-06, which is what Ethan spotted. A reader comparing
+// the two learns nothing from the pair and is misled by the top one.
+//
+// So: "Current" on the company block spans every store in NP_ORDER, "Last"
+// stays at the three that have a 2025, and the Same Store block below keeps
+// its own like-for-like three-against-three. Set this false to go back to a
+// same-store company block — in which case the two blocks agree again, and the
+// heading on the top one needs changing to say so.
+//
+// ⚠️ THE COMPANY Inc/Dec IS FIVE STORES OVER THREE AND OVERSTATES GROWTH. That
+// is arithmetic, not a bug, and it cannot be fixed while MPL and BAL have no
+// 2025 — they become comparable in 2027. The note on the cell says so, and
+// Same Store is the row to read for the trend until then.
+// ---------------------------------------------------------------------------
+var NPX_COMPANY_YOY_ALL_STORES = true;
 
 // ⚠️ The "% of GP Goal" cell computes  last-non-empty(M5:M35) / $E$2  — the NP
 // column, so it is an NP percentage carrying a GP label, and M is ONE DAY's net
@@ -141,6 +170,27 @@ var NPX_SHOPIFY_WALL_DAYS = 60;   // Shopify hides orders older than this withou
 
 var NPX_LASTMONTH_KEY = 'NPX_LAST_MONTH_FOR';
 var NPX_FORCE_LAST_MONTH = false;   // set true for one run to redo last month
+
+// ⚠️ SET ONLY BY THE 7PM MONTH CLOSE (npsMonthClose), for the length of its
+// _npxSync. A close syncs the tab of the month being CLOSED, so "last month"
+// to that sync is the month before it -- and the done marker, already moved on
+// to the new month by that morning's pass, no longer vouches for it. Without
+// this the close re-derived August on 2026-10-01: no August tab, behind the
+// 60-day wall, so it CLEARED the hand-typed August NP on the September tab.
+// That row was final the day September began; a close has no business in it.
+var NPX_CLOSE_RUN = false;
+
+// Has this month been through the 7pm close? The last-month done marker must
+// not be set before then: the 6:10am pass on the 1st reads last month off its
+// tab while the final day's fees are still arriving (the close waits until the
+// evening for exactly that), and a marker set then froze the short figure for
+// the whole new month. Until the close, every pass re-reads the tab -- cheap,
+// no Shopify involved. No close ever recorded = the old behaviour.
+function _npxMonthClosed(ym) {
+  var key = (typeof NPS_LAST_CLOSED_KEY !== 'undefined') ? NPS_LAST_CLOSED_KEY : 'NPS_LAST_CLOSED_MONTH';
+  var closed = String(PropertiesService.getScriptProperties().getProperty(key) || '');
+  return !closed || closed >= ym;
+}
 
 // ⚠️ LAST MONTH COSTS 85 SECONDS A STORE AND APPS SCRIPT ALLOWS SIX MINUTES.
 // Five stores is roughly seven, so on 2026-09-02 the run died inside BAL with
@@ -707,6 +757,12 @@ function _npxSync(preview) {
       prevYm, lmSrc);
     lmSkip = false;
   }
+  if (NPX_CLOSE_RUN && !lmSkip) {
+    Logger.log('  ...but this is the month close, which writes the closing month and '
+      + 'nothing else. The Last Month row on this tab was settled when %s began. '
+      + 'Leaving it exactly as it is.', ym);
+    lmSkip = true;
+  }
   var fromTab = (lmSkip || monthUnfinished) ? null : _npxLastMonthFromTab(ss, prevYm, lmTab);
   if (fromTab) {
     Logger.log('  reading last month off that tab — the closed figures, so the '
@@ -947,9 +1003,44 @@ function _npxSync(preview) {
       for (var z = 0; z < ssBases.length; z++) p.push(_npxA1(ssBases[z] + NPX_OFF_VAL_R, row0));
       return '=' + p.join('+');
     };
-    var note = 'Same-store: ' + NPX_SAME_STORE.join(' + ') + ' only.\n'
-      + 'MPL and BAL have no 2025 history. Including them would print their '
-      + 'entire revenue as year-over-year growth.';
+    // "Current" for the WHOLE company, which is a different set of stores from
+    // "Last" and has to be built differently as a result.
+    //
+    // ⚠️ MPL AND BAL HAVE NO YoY BLOCK, SO THERE IS NO CELL TO POINT AT. The
+    // store loop above skips them — correctly, they have no 2025 — which means
+    // rowYoY+2 in their block is empty. Their term reads the Rev Tracking
+    // column directly, exactly as their YoY block would have if they had one.
+    // The three that DO have a block are referenced, not recomputed, so a store
+    // corrected there corrects here too.
+    //
+    // ⚠️ SUM, NOT A PLUS-CHAIN. Every term can legitimately be "" — a store
+    // whose tracking column is still empty on the 1st — and  F42+""  is
+    // #VALUE!, which would blank the entire company figure rather than the one
+    // store that has no data yet. SUM ignores text and adds the rest.
+    var companyCurrent = function () {
+      if (!NPX_COMPANY_YOY_ALL_STORES) return refs(rowYoY + 2);
+      var terms = [];
+      for (var ci = 0; ci < NP_ORDER.length; ci++) {
+        var cSt = NP_ORDER[ci], cBase = NP_BASES[cSt];
+        if (yoyStores.indexOf(cSt) >= 0) {
+          terms.push(_npxA1(cBase + NPX_OFF_VAL_R, rowYoY + 2));
+          continue;
+        }
+        var cCol = _npColLetter(cBase + NPX_OFF_REVTRACK);
+        var cRng = cCol + firstDay1 + ':' + cCol + lastDay1;
+        terms.push('IFERROR(INDEX(FILTER(' + cRng + ', ' + cRng + '<>""), COUNTA(FILTER('
+          + cRng + ', ' + cRng + '<>""))), "")');
+      }
+      return '=SUM(' + terms.join(', ') + ')';
+    };
+
+    var note = 'Last year is ' + NPX_SAME_STORE.join(' + ') + ' only — MPL and BAL '
+      + 'have no 2025 history and become comparable in 2027.';
+    var noteCompany = NPX_COMPANY_YOY_ALL_STORES
+      ? 'Current is all five stores: ' + NP_ORDER.join(' + ') + '.\n' + note + '\n'
+        + '⚠️ Five stores over three: Inc/Dec counts MPL and BAL\'s entire revenue as '
+        + 'growth. Read the "Same Store" block below for the like-for-like trend.'
+      : 'Same-store: ' + NPX_SAME_STORE.join(' + ') + ' only.\n' + note;
     // ⚠️ WRITE THE TTL LABELS TOO, FOR THE SAME REASON THE STORES' ARE WRITTEN.
     // This block wrote its VALUES at rowYoY+1..+3 and left the labels alone, so
     // it silently depended on somebody having typed them in the right four rows.
@@ -989,24 +1080,37 @@ function _npxSync(preview) {
            '', null, null, true);
     }
 
+    Logger.log('  company YoY "Current": %s',
+      NPX_COMPANY_YOY_ALL_STORES ? NP_ORDER.join(' + ') + ' (all five)'
+                                 : NPX_SAME_STORE.join(' + ') + ' (same-store)');
     plan(tb + NPX_OFF_VAL_R, rowYoY + 1, 'TTL YoY last year', refs(rowYoY + 1), NPX_MONEY, note, true);
-    plan(tb + NPX_OFF_VAL_R, rowYoY + 2, 'TTL YoY current',   refs(rowYoY + 2), NPX_MONEY, note, true);
+    plan(tb + NPX_OFF_VAL_R, rowYoY + 2, 'TTL YoY current',   companyCurrent(), NPX_MONEY, noteCompany, true);
     plan(tb + NPX_OFF_VAL_R, rowYoY + 3, 'TTL YoY Inc/Dec',
       '=IFERROR((' + _npxA1(tb + NPX_OFF_VAL_R, rowYoY + 2) + '/'
-      + _npxA1(tb + NPX_OFF_VAL_R, rowYoY + 1) + ')-1,"")', NPX_PCT, null, true);
+      + _npxA1(tb + NPX_OFF_VAL_R, rowYoY + 1) + ')-1,"")', NPX_PCT, noteCompany, true);
 
-    // The tab already carries a separate "Same Store" block lower down. Point
-    // it at the block above rather than recomputing: two independent copies of
-    // one number is two chances to disagree.
+    // The tab carries a separate "Same Store" block lower down, and it is the
+    // three comparable stores on BOTH rows.
+    //
+    // ⚠️ IT CAN NO LONGER MIRROR THE BLOCK ABOVE WHOLESALE. It used to copy all
+    // three cells, which was right while the company block was itself
+    // same-store and is exactly why the two printed the same figure. "Last" is
+    // still genuinely the same number in both places and is still mirrored —
+    // one truth, one cell. "Current" and "Inc/Dec" are now the same-store
+    // figures in their own right.
     var rowSS = _npxFindRow(values, tb + NPX_OFF_YOY_LBL, 'Same Store');
     if (rowSS >= 0) {
-      Logger.log('  mirroring the "Same Store" block at row %s onto the TTL YoY block', rowSS + 1);
+      Logger.log('  "Same Store" block at row %s: last mirrors the company block, '
+        + 'current is %s on its own', rowSS + 1, NPX_SAME_STORE.join(' + '));
+      var ssNote = 'Same-store: ' + NPX_SAME_STORE.join(' + ') + ' only, on both rows — '
+        + 'the like-for-like comparison. The company block above spans all five stores.';
       plan(tb + NPX_OFF_VAL_R, rowSS + 2, 'Same Store last',
-        '=' + _npxA1(tb + NPX_OFF_VAL_R, rowYoY + 1), NPX_MONEY, null, true);
+        '=' + _npxA1(tb + NPX_OFF_VAL_R, rowYoY + 1), NPX_MONEY, ssNote, true);
       plan(tb + NPX_OFF_VAL_R, rowSS + 3, 'Same Store current',
-        '=' + _npxA1(tb + NPX_OFF_VAL_R, rowYoY + 2), NPX_MONEY, null, true);
+        refs(rowYoY + 2), NPX_MONEY, ssNote, true);
       plan(tb + NPX_OFF_VAL_R, rowSS + 4, 'Same Store Inc/Dec',
-        '=' + _npxA1(tb + NPX_OFF_VAL_R, rowYoY + 3), NPX_PCT, null, true);
+        '=IFERROR((' + _npxA1(tb + NPX_OFF_VAL_R, rowSS + 3) + '/'
+        + _npxA1(tb + NPX_OFF_VAL_R, rowSS + 2) + ')-1,"")', NPX_PCT, ssNote, true);
     }
   }
 
@@ -1086,7 +1190,10 @@ function _npxSync(preview) {
   Logger.log('\nWrote %s cell(s).', writes.length);
   // Marked only after the write succeeded. Marking before would leave the
   // marker claiming a month that a mid-run failure never finished writing.
-  if (!lmSkip && !monthUnfinished && lmOk.length === NP_ORDER.length) {
+  if (!lmSkip && !monthUnfinished && lmOk.length === NP_ORDER.length && !_npxMonthClosed(prevYm)) {
+    Logger.log('Last month (%s) written, but NOT marked done: it has not been through '
+      + 'the 7pm close yet, so its last day can still move. The next pass re-reads it.', prevYm);
+  } else if (!lmSkip && !monthUnfinished && lmOk.length === NP_ORDER.length) {
     var src = fromTab ? 'tab' : usedSales ? 'sales-tab' : 'shopify';
     lmProps.setProperty(NPX_LASTMONTH_KEY, ym + '|' + src);
     Logger.log('Last month (%s) recorded for grid month %s, from %s. %s',

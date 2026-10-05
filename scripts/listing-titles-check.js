@@ -1,3 +1,9 @@
+// ⚠️ OUT OF DATE SINCE 2026-09-30: Listing Health is now THREE TABS
+// (Titles | Picture Quality | Categories, _lhHtml), and Live With No Photos is the
+// first sub-tab of Picture Quality. Assertions below that expect every section on
+// one page (.lh-sec counts, "Categories did not become a second tab") describe the
+// old stacked layout. scripts/picture-quality-check.js covers the tabs and runs
+// under browser-check.ps1; update these before relying on them again.
 // LISTING TITLES — the third tool on the Listing Health page.
 //
 // PIN-FREE and payload-driven, like listing-health-check.js and for the same

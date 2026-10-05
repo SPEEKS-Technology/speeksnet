@@ -84,14 +84,14 @@ const js = block
              (_m, n, p) => `const ${n} = (${p.replace(/\s*:\s*string/g, '')}) =>`);
 
 let shelfNoun, isProductNoun, depluralise, singularToken, GENERIC_SHELF, PRODUCT_NOUNS,
-    alsoInSpecs, SECONDARY_SPEC, trimToFit, placeAfter;
+    alsoInSpecs, SECONDARY_SPEC, trimToFit, placeAfter, findableByModel;
 try {
     ({ shelfNoun, isProductNoun, depluralise, singularToken, GENERIC_SHELF, PRODUCT_NOUNS,
-       alsoInSpecs, SECONDARY_SPEC, trimToFit, placeAfter } =
+       alsoInSpecs, SECONDARY_SPEC, trimToFit, placeAfter, findableByModel } =
         new Function(js + `
         return { shelfNoun, isProductNoun, depluralise, singularToken,
                  GENERIC_SHELF, PRODUCT_NOUNS, alsoInSpecs, SECONDARY_SPEC,
-                 trimToFit, placeAfter };`)());
+                 trimToFit, placeAfter, findableByModel };`)());
 } catch (e) {
     console.log('  FAIL  could not lift the code out of index.ts   ' + e.message);
     process.exit(1);
@@ -528,6 +528,30 @@ console.log('\n== 11. The colour goes before the part number ==');
        'an addition that does not fit is still not made');
     ok(/: m\.k === "Color" \? tryPlaceColour\(text\)/.test(src),
        'and lazy-title routes the colour through it');
+}
+
+// =============================================================================
+console.log('\n12. MPL MILWAUKEE, DENIED 2026-10-05 "it\'s fine"');
+// Both titles carry the part number a tool buyer types, and neither listing has
+// a Model or MPN field — only Brand and a shelf. The old test demanded the field
+// and graded both "unreachable".
+ok(isProductNoun('laser'), '"Green Laser- Cross Line" says what it is (3624-20)');
+{
+    const MKE = { Brand: 'Milwaukee', 'Sub-Collection': 'Milwaukee Tool', Collection: 'Tools' };
+    ok(findableByModel('New Milwaukee 3624-20 M12 12V M12 Green Laser- Cross Line & 4- Points', MKE),
+       'a 3624-20 part number makes it findable with no Model field');
+    ok(findableByModel('Milwaukee 48-11-1850 M18 18V Red Lithium XC 5.0 M18', MKE),
+       'and so does 48-11-1850');
+    // ⚠️ THE SHAPE IS NARROW ON PURPOSE. A lens range or a size is not a part number.
+    for (const t of ['Canon EF 70-300mm Lens', 'Nikon 18-55mm f/3.5-5.6 Kit Lens',
+                     'Bose QuietComfort Headphones', 'Sony 4K 55" TV 2-Pack']) {
+        ok(!findableByModel(t, {}), `"${t}" is not findable by a part number`);
+    }
+    // The old route still works: a Model field plus a numbered token.
+    ok(findableByModel('Codi 34" MO34H-UC 4K LED Mini-LED Ultra Wide', { Model: 'MO34H-UC' }),
+       'a Model field plus a numbered token still counts');
+    ok(/const findableAnyway = findableByModel\(original, extra\?\.specs\);/.test(src),
+       'and missing-noun is the code that calls it');
 }
 
 console.log('\n' + (fails ? `${fails} FAILED` : 'all passed'));
