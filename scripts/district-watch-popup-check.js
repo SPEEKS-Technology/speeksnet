@@ -177,11 +177,12 @@ t('listing: ONLY days that had a goal set count, on both sides of the ratio', fu
     return /40<\/b> devices short|>40</.test(html) || 'the 40-device shortfall is missing';
 });
 
-t('listing: the untouched device count is still visible, just not judged', function () {
+t('listing: the whole week’s listed count is still visible, just not judged', function () {
     var html = popup('listing');
-    // 20x6 + 10 = 130 devices processed in total, $4,000x6 + $2,000 = $26,000.
-    // Dropping it entirely would lose the honest "here is what they did do".
-    if (!/130 devices in total/i.test(html)) return 'the total device count is gone';
+    // 20x6 + 10 = 130 listed in total (these fixture days predate the listed
+    // column, so processed stands in), $4,000x6 + $2,000 = $26,000. Dropping it
+    // would lose the honest "here is what they did do" on goal-less days.
+    if (!/130 listed in total/i.test(html)) return 'the total listed count is gone';
     return /\$26,000/.test(html) || 'value total is not $26,000';
 });
 
@@ -207,16 +208,69 @@ t('listing: a day with no goal row shows a dash, not a zero', function () {
     return /&mdash;/.test(html) || 'a missing goal did not render as a dash';
 });
 
-t('listing: warns that it reads harsher than the Store Efficiency board', function () {
-    // Listing became a FLAGGED metric in 0099, but the measurement did not
-    // change: Day End processed runs 15-30% below the manager-filed weekly KPI
-    // the efficiency board scores (0095). The two screens disagree, both
-    // defensibly, and this sentence is the only thing that explains why. It is
-    // now more important than it was when the tab merely displayed the number.
+t('listing: says where Listed comes from, and no longer claims a 15-30% gap', function () {
+    // The old note said this tab read harsher than Store Efficiency because the
+    // report ran 15-30% under the KPI (0095). Re-checked 2026-09-24: the two
+    // agree on 29 of 35 store-weeks, the rest are typing slips, and Store
+    // Efficiency reads the same report now. Saying otherwise would be false.
     var html = popup('listing');
-    if (!/15–30%|15-30%/.test(html)) return 'the 15-30% gap is no longer stated';
-    return /Store Efficiency/.test(html)
-        || 'the note does not name the board it disagrees with';
+    if (/15–30%|15-30%/.test(html)) return 'the retired 15-30% claim is still on the tab';
+    if (!/Total Listed Devices/.test(html)) return 'the source of Listed is not stated';
+    return /Store Efficiency counts the same report/.test(html) || 'does not say Store Efficiency agrees';
+});
+
+// --- listed vs processed (0115) ---------------------------------------------
+// From 2026-09-23 the Day End Report carries Total Listed Devices, and listing
+// is judged on it. district-watch sends it as `listed` with `listed_source`;
+// days before the column existed come through as `processed`.
+
+function popupWithListed(edit) {
+    var p = JSON.parse(JSON.stringify(POPUP));
+    p.series.forEach(function (r) {
+        r.listed = r.devices_processed; r.listed_source = 'processed';
+    });
+    edit(p.series);
+    _dcWatch = p; _dcwStore = 'OVL'; _dcwTab = 'listing';
+    return _dcwModalHtml(_dcwStoreDays('OVL'));
+}
+
+t('listing: the ratio counts LISTED, not processed, where the report has it', function () {
+    // 09-11 had 20 processed; say 30 of them were listed (a bulk lot split into
+    // listings). Judged: 30 + 20 = 50 against 80 — not the 40 processed gives.
+    var html = popupWithListed(function (s) {
+        s.forEach(function (r) {
+            if (r.date === '2026-09-11') { r.listed = 30; r.listed_source = 'listed'; }
+        });
+    });
+    return /<b>50<\/b> Listed against <b>80<\/b> staffed for/.test(html)
+        || 'judged totals are not 50 against 80: ' + (html.match(/dcw-mtot[\s\S]{0,160}/) || [''])[0];
+});
+
+t('listing: shows Listed only — no Processed column', function () {
+    // Ethan, 2026-09-24: "get rid of processed and just use the line items".
+    var html = popupWithListed(function (s) {
+        s.forEach(function (r) {
+            if (r.date === '2026-09-11') { r.listed = 30; r.listed_source = 'listed'; }
+        });
+    });
+    if (/<th>Processed<\/th>/.test(html)) return 'the Processed column is back';
+    if (!/<th>Listed<\/th><th>Value<\/th>/.test(html)) return 'the header is not Listed, Value';
+    return /<td>30<\/td><td>\$4,000<\/td>/.test(html) || 'the 09-11 row does not read 30 listed, $4,000';
+});
+
+t('listing: a day from before the listed column is marked, not passed off', function () {
+    var html = popupWithListed(function () {});
+    return /class="dc-muted" title="The Day End Report had no listed count before 23 Sep/.test(html)
+        || 'a processed-only day is not marked as such';
+});
+
+t('listing: a real 0 listed is a 0, not a fall back to processed', function () {
+    // listedOf is null-checked on the server; _dcwListed must be too. A store
+    // that listed nothing on a day it processed 20 is exactly what to show.
+    return _dcwListed({ listed: 0, devices_processed: 20 }) === 0
+        && _dcwListed({ listed_devices: 0, devices_processed: 20 }) === 0
+        && _dcwListed({ devices_processed: 20 }) === 20
+        || 'a zero listed fell back to the processed count';
 });
 
 // --- shared ------------------------------------------------------------------

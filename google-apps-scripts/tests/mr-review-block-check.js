@@ -27,6 +27,8 @@ const grab = name => {
 };
 const MR_BUY_WIDTH = 5;
 const MR_REVIEW_WIDTH = Number((src.match(/var MR_REVIEW_WIDTH = (\d+);/) || [])[1]);
+var MR_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+var MR_HEADER_ROWS = 4;
 eval(grab('_mrDayRows') + '\n' + grab('_mrReviewBase'));
 
 let fails = 0;
@@ -53,6 +55,9 @@ const buyTab = (days, opts) => {
         const r = 3 + (d - 1);
         for (let i = 0; i < 5; i++) rows[r][1 + i * 5] = d;
         rows[r][REV_BASE] = opts.revDays === false ? '' : d;
+        // The company TTL block right after BAL numbers its days too — the
+        // column the shape-only locator wrongly picked on the live tab (Z).
+        rows[r][26] = d;
     }
     // Footers below the grid carry numbers of their own — "Buying Days in Month
     // 26" — and they must not be mistaken for day rows.
@@ -81,6 +86,14 @@ ok(got !== 1 && got !== 6 && got !== 11 && got !== 16 && got !== 21,
 const end = Math.min(got + MR_REVIEW_WIDTH, 40);
 ok(got > 21 + MR_BUY_WIDTH - 1, 'the write region starts past BAL', got + '..' + (end - 1));
 ok(MR_REVIEW_WIDTH === 7, 'and is 7 columns wide (AE:AK)', String(MR_REVIEW_WIDTH));
+
+console.log('== It skips the company block\'s day column (Z) ==');
+ok(_mrReviewBase(buyTab(31), bases, FIRST, 40, MR_BUY_WIDTH) !== 26,
+   'never the TTL block at Z, though it numbers its days the same way');
+const noCodes = buyTab(31);
+['OVL', 'LEE', 'WSP', 'MPL', 'BAL'].forEach((c, i) => { noCodes[2][REV_BASE + 1 + i] = ''; });
+ok(_mrReviewBase(noCodes, bases, FIRST, 40, MR_BUY_WIDTH) === -1,
+   'day numbers with no store codes after them -> -1, not a guess');
 
 console.log('== It refuses rather than guessing ==');
 ok(_mrReviewBase(buyTab(30, { revDays: false }), bases, FIRST, 40, MR_BUY_WIDTH) === -1,

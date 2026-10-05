@@ -7,7 +7,11 @@
 //     GET  ?view=review&store=OVL     the queue, one row per product
 //     GET  ?view=counts               per-store open totals and nothing else —
 //                                     what the page header and the feed read
-//     POST {action:"approve", store, productId, title?}   writes Shopify
+//     POST {action:"approve", store, productId, title?, fields?}   writes Shopify
+//          fields: [{field:"Platform", value:"Apple II"}] — named corrections,
+//          written to the spec row, the metafield and the attribute arrays
+//     POST {action:"fields"|"fields-preview", store, productId, fields}
+//          the same corrections alone, on a reviewed listing (title untouched)
 //     POST {action:"deny",    store, productId, reason}
 //
 //   THE SWEEP, ?secret= :
@@ -70,7 +74,20 @@ const NameReportSchema = z.object({
     wrong_text: z.string().optional(),
     correct_text: z.string().optional(),
     why: z.string().optional(),
+    // See NAME_SYSTEM. Both are only claims: evidence is re-read out of the
+    // listing's own field in code before it counts for anything.
+    evidence_field: z.string().optional(),
+    evidence_text: z.string().optional(),
+    check: z.string().optional(),
   })),
+});
+
+// The photo tiebreak's answer for one disputed listing. See PHOTO_SYSTEM.
+const PhotoAnswerSchema = z.object({
+  answer: z.enum(["ours", "listing", "other", "cannot_tell"]),
+  photo: z.number().int().optional(),
+  seen: z.string().optional(),
+  should_say: z.string().optional(),
 });
 const SHOPIFY_API_VERSION = Deno.env.get("SHOPIFY_API_VERSION") || "2026-07";
 const SECRET = "sp33ks-sync-k3y-2026-x9mq";
@@ -593,6 +610,9 @@ const PRODUCT_NOUNS = [
   // and were being accused anyway: "TI-84+ CE" (Graphing Calculator),
   // "Nintendo Wii U Gamepad", "1000W Modular PSU", "CPU & Motherboard Combos".
   "calculator", "gamepad", "psu", "combo",
+  // MPL's Milwaukee 3624-20 "M12 Green Laser- Cross Line & 4- Points", denied
+  // 2026-10-05 "it's fine": a cross-line laser that says Laser, accused anyway.
+  "laser",
 ];
 
 // ⚠️ PLURALS. The list is singular and the match used to be exact, so "Bargain
@@ -616,6 +636,25 @@ const isProductNoun = (t: string): boolean => {
     PRODUCT_NOUNS.includes(w)
     || PRODUCT_NOUNS.some(n => n.length >= 5 && w.length > n.length && w.endsWith(n)));
 };
+
+// Whether a buyer can reach this listing by its model number even though the
+// title never names the kind of thing it is.
+//
+// ⚠️ THE TITLE'S OWN PART NUMBER COUNTS, NOT ONLY A SPEC FIELD. This used to
+// require a Model or MPN field, and MPL's Milwaukee stock carries neither — only
+// Brand and a shelf. So "Milwaukee 48-11-1850 M18 18V Red Lithium XC 5.0" was
+// graded unreachable (severity 2) with the part number a tool buyer actually
+// types sitting in the title. Denied 2026-10-05, rightly.
+//
+// The shape accepted from the title alone is digit groups joined by hyphens
+// (3624-20, 48-11-1850, 2767-20). Lens ranges and sizes do not qualify: in
+// "18-55mm" and "70-300mm" the unit runs straight on, so there is no word
+// boundary after the last digit group.
+function findableByModel(title: string, specs: Record<string, string> | undefined): boolean {
+  const numbered = tokens(title).some(t => /\d/.test(t) && t.length >= 3);
+  if ((specs?.["Model"] || specs?.["MPN"]) && numbered) return true;
+  return /(?:^|\s)\d{2,}(?:-\d{2,}){1,3}\b(?![-./])/.test(title);
+}
 
 // Words whose final "s" is not a plural we may strip. Two kinds: product words
 // that ARE plural (nobody searches for "a headphone"), and singulars that merely
@@ -1524,7 +1563,14 @@ const NAME_CONCURRENCY = 4;     // batches in flight — 100 items in one round 
 // changing it re-asks about every listing automatically instead of leaving old
 // answers that were given less to look at. This is the whole reason the column
 // exists: adding metafields later costs one backfill, not a wiped table.
-const ASK_RECIPE = "v1:title+brand+model";
+const ASK_RECIPE = "v2:title+fields";
+// ⚠️ v1 ANSWERS ARE KEPT, EXCEPT THE DISPUTED ONES. Bumping the recipe re-asks
+// the whole estate, and at ~3,500 listings that is a bill for answers that were
+// almost all "ok" and would be "ok" again. v2 adds the listing's fields, which
+// changes only what a dispute can be settled by — so only rows holding a
+// name-disputed finding are re-asked (candidatesFor), plus anything new or
+// retitled, which never had an answer to keep.
+const ASK_RECIPE_V1 = "v1:title+brand+model";
 
 // Carried forward on a rules-only pass, exactly as MARKET_CODES is — otherwise
 // the twice-daily cron shares a primary key with these rows and stamps them
@@ -1573,10 +1619,35 @@ const NAME_CODES = new Set<string>(["name-garbled", "name-wrong", "name-disputed
 // Factor field too (name-garbled is a CORRECTING_CODE). An M.2 drive, a
 // motherboard (ATX / Micro-ATX) and a desktop (SFF) are all named by their form
 // factor, and its values are specific enough not to veto by coincidence.
+// ⚠️ …EXCEPT "2280mm" ITSELF, reversed 2026-09-30 (Ethan, on LEE's SN580,
+// MO01-5700A3-E15: "you are the super computer here — we can assume something
+// as humans and be wrong"). The point of the tool is to say what to change it
+// TO. An M.2 size is a code (2280 = 22mm × 80mm); "2280mm" reads as 2.28 metres
+// and a buyer searching "2280" never matches it. Form Factor stays an identity
+// field for everything else — see isM2Misnomer, which lets exactly that one
+// correction through as an ordinary fix, field included.
+//
+// ⚠️ PROCESSOR AND MEMORY SIZE, 2026-09-30 — two name-wrong denials in a week,
+// both the listing right and our knowledge wrong, both read off the item:
+//   OVL Dell Precision 5520 (KS01-B2B325-QTY7-R6R3): Processor = i7-6820HQ, and
+//     photo 3 is Windows reporting exactly that. We "corrected" it to the
+//     7820HQ because the 5520 is a Kaby Lake machine — some shipped Skylake.
+//   LEE Kingston HyperX Fury (MO01-5580B-E15): Memory Size = 8GB (2x4GB), and
+//     the photos show two HX424C15FB/4 sticks. We shrank it to one stick's 4GB.
+// A CPU or a memory total is the machine's own account of what is inside it,
+// read off the machine; outside knowledge of what a model "shipped with" does
+// not overrule it.
 const IDENTITY_FIELDS = [
   "MPN", "Model", "Platform", "Type", "Brand", "Release Year",
-  "Maximum Aperture", "Focal Length", "Form Factor",
+  "Maximum Aperture", "Focal Length", "Form Factor", "Processor", "Memory Size",
 ];
+
+// "2280mm" -> "2280": the one form-factor correction that is always right.
+function isM2Misnomer(wrong: string, right: string): boolean {
+  const m = /^(.*?)\b(22(?:30|42|60|80|110))\s?mm\b(.*)$/i.exec(wrong.trim());
+  return !!m && `${m[1]}${m[2]}${m[3]}`.replace(/\s+/g, " ").trim().toLowerCase()
+    === right.replace(/\s+/g, " ").trim().toLowerCase();
+}
 
 function identityFields(specs: Record<string, string> | undefined) {
   const out: Record<string, string> = {};
@@ -1589,7 +1660,70 @@ type NameVerdict = {
   wrong_text?: string;
   correct_text?: string;
   why?: string;
+  evidence_field?: string;
+  evidence_text?: string;
+  check?: string;
+  // Attached by the sweep, never by the name check: what the listing's own
+  // photos said when the listing's fields could not settle it. Absent means
+  // nobody looked.
+  photo?: PhotoAnswer | null;
 };
+type PhotoAnswer = {
+  answer: "ours" | "listing" | "other" | "cannot_tell";
+  photo?: number; seen?: string; should_say?: string;
+};
+
+// What the name check is shown of the listing, beyond its title. Identity
+// fields plus Color — Color cannot veto anything (see IDENTITY_FIELDS) but it is
+// often the tell: a Galaxy Watch6 in "Graphite" is the aluminum model.
+function nameCheckFields(specs: Record<string, string> | undefined) {
+  const out: Record<string, string> = {};
+  for (const k of [...IDENTITY_FIELDS, "Color"]) {
+    const v = String(specs?.[k] || "").trim();
+    if (v && !PLACEHOLDER.test(v)) out[k] = v;
+  }
+  return out;
+}
+
+// ⚠️ A SECOND FIELD SETTLES A DISPUTE ONLY IF IT SAYS SO IN SO MANY WORDS.
+// MPL's Kospet (MO03-1704B-E3, denied 2026-10-05 "it's fine"): Model = "Tank
+// MK3 Ultra", the title copied it, and we were withheld as name-disputed — while
+// the MPN on the same listing, TANKM3ULT-SE-BK, spells out M3. Two of the
+// listing's own fields disagreed and one of them agreed with us; "nothing here
+// settles it" was simply false.
+//
+// But "the part number says so" is also how the worst denial ever written was
+// argued: SanDisk, Type = microSD Card, "the part number SDSSDE61 is a Portable
+// SSD". That was the model's KNOWLEDGE of the part number, and it was wrong. So
+// the test is literal and done here, not by the model: the corrected words
+// (with the word before them, so a two-character "M3" cannot match by accident)
+// must appear inside the other field's value, letters and digits only, and the
+// wrong version must not. TANKM3ULT contains "tankm3" and not "tankmk3" — it
+// passes. SDSSDE61 contains no "portablessd" — it never could.
+function fieldBacksCorrection(wrong: string, right: string,
+                              specs: Record<string, string>, echoField: string,
+                              claimed?: string): { field: string; value: string } | null {
+  const alnum = (s: string) => norm(s).replace(/ /g, "");
+  const a = tokens(wrong), b = tokens(right);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head
+         && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const ours = b.slice(Math.max(0, head - 1), b.length - tail).join("");
+  const theirs = a.slice(Math.max(0, head - 1), a.length - tail).join("");
+  if (ours.length < 5 || ours === theirs) return null;
+  const fields = identityFields(specs);
+  // The field the model named goes first; any other identity field may still
+  // carry it, and a literal match is the same evidence whoever pointed at it.
+  const order = [claimed || "", ...Object.keys(fields)].filter((k, i, all) =>
+    k && k !== echoField && fields[k] && all.indexOf(k) === i);
+  for (const k of order) {
+    const v = alnum(fields[k]);
+    if (v.includes(ours) && !(theirs && v.includes(theirs))) return { field: k, value: fields[k] };
+  }
+  return null;
+}
 
 // ⚠️ EVERY FAILED DESIGN FAILED THE SAME WAY: it flagged real products that are
 // merely rare. "Xbox Elite Controller Series 2", "HoverAir X1 Travel Combo" and
@@ -1635,13 +1769,22 @@ is never penalised. In particular:
 
   And a stated specification that contradicts a part number in the same title is
   always reportable — "PC3-14900" is 1866MHz whatever the title says. That is
-  arithmetic, not recognition.
+  arithmetic, not recognition. BUT a memory part number names ONE module: a
+  title selling two of them as "8GB (2x4GB)" with the single-module part number
+  (HX424C15FB/4) is two 4GB sticks and is correct. Never shrink a kit size to
+  one module's size.
+- Do NOT correct a CPU, GPU, RAM amount or storage size to what you believe a
+  model shipped with. One model ships in several configurations and used units
+  get parts swapped; the shop reads the spec off the machine.
 - Do NOT report a title for being short, vague, incomplete, badly punctuated,
   oddly capitalised, or for missing details. Other checks handle all of that.
 - Do NOT report condition or handling words: Broken, For Parts, Read, No Power,
   Cracked, Scratched, New, Refurbished, Factory Unlocked, WiFi Only, GSM.
 - Do NOT report manufacturer part numbers, SKUs, or model codes that look like
   gibberish (MK8F3LL/A, SM-A156U, GA10052-US). Those are real and correct.
+  Apple part numbers do NOT all start with M: M is new retail, F is Apple
+  refurbished, N is a warranty replacement unit and P is engraved. NNPX3LL/A
+  and FNPX3LL/A are as real as MNPX3LL/A — never report the first letter.
 - Do NOT report carrier names, storage sizes, colours, or screen sizes.
 - A brand written in the wrong case ("google Pixel", "AsRock") is NOT an error.
 
@@ -1650,6 +1793,20 @@ the title, character for character, in "wrong_text" — and give the correction 
 "correct_text" as it should replace that exact text. Quote the smallest span
 that contains the error. If you cannot quote the error verbatim from the title,
 return "ok" instead.
+
+Each listing comes with "fields": what the listing's own spec table says (MPN,
+Model, Color, Maximum Aperture and so on). Staff fill these by hand and often
+copy the same mistake into the title, so a field repeating the title is not
+proof the title is right. But when one field CONTRADICTS another and backs your
+correction — a Model of "Tank MK3 Ultra" next to an MPN of "TANKM3ULT-SE-BK" —
+say so: put that field's name in "evidence_field" and copy the exact part of its
+value that shows it in "evidence_text". Only when the words are literally there;
+your knowledge of what a part number means is not evidence.
+
+And whenever you report, put in "check" the one thing on the item itself that
+would settle it, in a few words a person holding it can act on: "the model
+number engraved on the back of the watch", "the aperture printed on the lens
+barrel (1:4-5.6 or 1:1.4)", "the label on the bottom of the box".
 
 Keep "why" to one short sentence a shop manager can act on.`;
 
@@ -1661,7 +1818,8 @@ const askedStamp = (title: string) => `${ASK_RECIPE}|${(title || "").trim()}`;
 
 async function checkNamesBatch(
   client: any,
-  items: { id: string; title: string; brand: string; model: string; shelf: string }[],
+  items: { id: string; title: string; brand: string; model: string; shelf: string;
+           fields: Record<string, string> }[],
 ): Promise<{ verdicts: Record<string, NameVerdict>; input: number; output: number }> {
   const out: Record<string, NameVerdict> = {};
   if (!items.length) return { verdicts: out, input: 0, output: 0 };
@@ -1678,6 +1836,7 @@ async function checkNamesBatch(
           spec_brand: i.brand || undefined,
           spec_model: i.model || undefined,
           shelf: i.shelf || undefined,
+          fields: Object.keys(i.fields).length ? i.fields : undefined,
         })), null, 1),
     }],
     // effort sits beside format in output_config, not at the top level. See
@@ -1699,6 +1858,138 @@ async function checkNamesBatch(
   // somebody can read after a run, not an estimate in a commit message.
   return {
     verdicts: out,
+    input: Number(res?.usage?.input_tokens || 0),
+    output: Number(res?.usage?.output_tokens || 0),
+  };
+}
+
+// ===================== THE PHOTO TIEBREAK ==================================
+// When the name check and one of the listing's own fields disagree and no other
+// field settles it, the photos usually can: the aperture is printed on the lens
+// barrel, the model number is engraved on the back of the watch, the box has a
+// label. One look per disputed listing, asked ONE question — never a general
+// review, which is picture-quality's job.
+//
+// ⚠️ THE PHOTO WINS OVER OUTSIDE KNOWLEDGE, IN BOTH DIRECTIONS. Ethan,
+// 2026-09-30: when the listing's own photo shows the spec, the photo is right.
+// The Rokinon's "T2.2" was settled in a second by the person holding it and
+// would have been settled the same way by its photos. So "listing" drops our
+// finding just as surely as "ours" turns it into a fix.
+//
+// ⚠️ ONLY A QUOTED SIGHTING COUNTS. An answer without `seen` (what was read or
+// seen, and where) is treated as cannot_tell. The reviewer is shown that
+// sentence, and a recommendation they cannot check against a photo is the kind
+// that got dismissed on 2026-10-05.
+const PHOTO_MODEL = "claude-sonnet-5";
+// medium, as picture-quality settled on: "low" wandered run to run on small
+// visual calls during its calibration (2026-09-25).
+const PHOTO_EFFORT = "medium";
+const PHOTO_PRICE: [number, number] = [2, 10];   // $ per million in / out
+const PHOTO_PX = 800;
+const PHOTO_PER_LISTING = 10;
+// Per store per run. A dispute is ~1 in 400 titles, so this is rarely reached;
+// it exists because the 150s edge wall cuts the response, not the work. Rows
+// over it keep their old stamp and are re-asked, and looked at, next run.
+const PHOTO_MAX = 8;
+const PHOTO_CONCURRENCY = 4;
+
+const PHOTO_SYSTEM = `You settle one disagreement about a used-electronics
+listing by looking at the listing's own photos of the unit being sold.
+
+You are told what the title says, which of the listing's fields agrees with it,
+and what our product knowledge says instead. Decide what THIS unit is:
+
+  "ours"        — the photos clearly show what our product knowledge says
+  "listing"     — the photos clearly show what the title says
+  "other"       — the photos clearly show that NEITHER is right. Put in
+                  "should_say" the words that should replace the quoted title
+                  text, written the way the title writes things.
+  "cannot_tell" — the photos do not clearly show it. This is always the safe
+                  answer and is never penalised.
+
+Count only what the photos clearly show: printed or engraved text (a model
+number on a caseback or a label, the aperture marked on a lens barrel, a box
+label, a settings or About screen), or a physical feature that on its own tells
+the variants apart. Do not use the listing's words, and do not use a stock or
+manufacturer image — it is not this unit.
+
+In "seen", write exactly what you read or saw and where, in a few words a store
+manager can check: "the caseback reads SM-R930", "the barrel reads 1:4-5.6".
+In "photo", give that photo's number. If you cannot point at it, answer
+"cannot_tell".`;
+
+// Fetched here, with a retry, and sent as bytes — picture-quality's lesson: a
+// URL handed to the API timed out on Anthropic's side on a slow CDN and lost the
+// whole listing. A slow CDN is our problem to retry.
+async function photoBlock(url: string) {
+  let last = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const type = (r.headers.get("content-type") || "image/jpeg").split(";")[0];
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      const media = ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(type) ? type : "image/jpeg";
+      return { type: "image", source: { type: "base64", media_type: media, data: btoa(bin) } };
+    } catch (e) { last = String((e as Error).message || e); await new Promise(r => setTimeout(r, 400 * (attempt + 1))); }
+  }
+  throw new Error(`could not fetch a photo (${last}): ${url.slice(0, 80)}`);
+}
+
+async function photoUrlsFor(shop: string, token: string, ids: string[]): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = {};
+  if (!ids.length) return out;
+  const data = await shopifyGql(shop, token, `
+    query($ids: [ID!]!) { nodes(ids: $ids) { ... on Product {
+      id
+      media(first: ${PHOTO_PER_LISTING}) { nodes { ... on MediaImage { image {
+        url(transform: { maxWidth: ${PHOTO_PX}, maxHeight: ${PHOTO_PX} }) } } } }
+    } } }`, { ids });
+  // Keyed by the gid, exactly as extrasFor keys its answer.
+  for (const n of (data?.nodes || [])) {
+    if (!n?.id) continue;
+    out[n.id] = (n.media?.nodes || []).map((m: any) => m?.image?.url).filter(Boolean);
+  }
+  return out;
+}
+
+async function photoTiebreak(client: any, ask: {
+  title: string; wrong: string; right: string; field: string; value: string;
+  why: string; check: string; urls: string[];
+}): Promise<{ answer: PhotoAnswer; input: number; output: number }> {
+  const blocks: any[] = [{ type: "text", text:
+    `TITLE: ${ask.title}\n`
+    + `THE TITLE SAYS: "${ask.wrong}"\n`
+    + `THE LISTING'S ${ask.field.toUpperCase()} FIELD AGREES: "${ask.value}"\n`
+    + `OUR PRODUCT KNOWLEDGE SAYS IT SHOULD BE: "${ask.right}"`
+    + (ask.why ? ` — ${ask.why}` : "") + "\n"
+    + (ask.check ? `WHAT WOULD SETTLE IT: ${ask.check}\n` : "")
+    + `\nThe listing's photos, in order:` }];
+  const photos = await Promise.all(ask.urls.map(u => photoBlock(u).catch(() => null)));
+  let n = 0;
+  photos.forEach((b, i) => {
+    if (!b) return;
+    n++;
+    blocks.push({ type: "text", text: `Photo ${i + 1}` });
+    blocks.push(b);
+  });
+  if (!n) return { answer: { answer: "cannot_tell" }, input: 0, output: 0 };
+  const res = await client.messages.parse({
+    model: PHOTO_MODEL, max_tokens: 8000, system: PHOTO_SYSTEM,
+    messages: [{ role: "user", content: blocks }],
+    output_config: { effort: PHOTO_EFFORT, format: zodOutputFormat(PhotoAnswerSchema) },
+  } as any);
+  const p = res?.parsed_output as PhotoAnswer | null;
+  // Null is "did not answer", never "cannot tell" — the caller retries next run.
+  if (!p) throw new Error("the photo tiebreak returned nothing that matched its schema");
+  // ⚠️ A SIGHTING MUST POINT AT A PHOTO THAT EXISTS AND SAY WHAT WAS SEEN.
+  const pointed = !!String(p.seen || "").trim()
+    && Number.isInteger(p.photo) && p.photo! >= 1 && p.photo! <= ask.urls.length
+    && !!photos[p.photo! - 1];
+  return {
+    answer: p.answer === "cannot_tell" || !pointed ? { answer: "cannot_tell" } : p,
     input: Number(res?.usage?.input_tokens || 0),
     output: Number(res?.usage?.output_tokens || 0),
   };
@@ -2078,34 +2369,84 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // has to look. What it stops doing is proposing the swap.
     const echoed = listingSaysItself(wrong, identityFields(extra?.specs),
       changedSpan(wrong, right));
-    const respelling = !!right && isMisspelling(wrong, right);
+    const respelling = !!right && (isMisspelling(wrong, right) || isM2Misnomer(wrong, right));
     const saidBy = respelling ? null : echoed;
-    if (!placeholder && at >= 0 && right && right !== wrong && saidBy) {
+    // ⚠️ A DISPUTE IS A QUESTION, AND IT IS OURS TO ANSWER, NOT THE REVIEWER'S.
+    // MPL, 2026-10-05: five name-disputed rows dismissed "it's fine" in under a
+    // minute, three or four seconds each. Every one of them said "nothing here
+    // settles it" and offered nothing to approve, so the title matching its own
+    // spec field looked like the listing being right — and on four of the five
+    // the title was wrong. A finding that hands the question back gets
+    // dismissed, because dismissing is what it asked for.
+    //
+    // So before giving up, two things that CAN settle it are tried, in order:
+    //   1. another of the listing's own fields saying the correction in so many
+    //      words (fieldBacksCorrection — the Kospet's MPN), and
+    //   2. the listing's own photos (the sweep's photo tiebreak, attached as
+    //      nameVerdict.photo) — the lens barrel, the caseback, the box label.
+    // Either one makes this an ordinary fix, field correction included. Only
+    // when neither can is it still disputed, and then it still says what we
+    // recommend and exactly what to look at.
+    const backedBy = saidBy && right && !placeholder
+      ? fieldBacksCorrection(wrong, right, extra?.specs || {}, saidBy.field,
+                             nameVerdict.evidence_field)
+      : null;
+    const photo = saidBy && !backedBy ? (nameVerdict.photo || null) : null;
+    const seen = String(photo?.seen || "").trim().replace(/[.;,]$/, "");
+    const shot = photo?.photo ? `Photo ${photo.photo}` : "The photos";
+    // ⚠️ "Neither" is an answer too. MPL's Watch6 titled "Classic Aluminum" is a
+    // contradiction in the title itself — if the photos show a plain Watch6, it
+    // is "Classic" that has to go, not "Aluminum". The photo's wording replaces
+    // the same quoted span and goes through every guard the model's does.
+    const should = String(photo?.should_say || "").trim();
+    const photoFix = !!seen && photo?.answer === "other" && !!should && should !== wrong
+      && !/[\[\]<>{}]|\b(actual|correct|real|proper|insert|unknown|tbd|xxx+)\b/i.test(should)
+      ? should : "";
+    const photoSaysOurs = !!seen && photo?.answer === "ours";
+    const settled = !!backedBy || photoSaysOurs || !!photoFix;
+    const fixTo = photoFix || right;
+    if (saidBy && seen && photo?.answer === "listing") {
+      // The photos show what the listing says, so the listing was right and our
+      // knowledge was not. Nothing to report — counted by the sweep instead, so
+      // how often this happens stays visible.
+    } else if (!placeholder && at >= 0 && right && right !== wrong && saidBy && !settled) {
+      const recommended = (title.slice(0, at) + right + title.slice(at + wrong.length))
+        .replace(/\s+/g, " ").trim();
+      const why = String(nameVerdict.why || "").trim().replace(/[.;,]$/, "");
+      const check = String(nameVerdict.check || "").trim().replace(/[.;,]$/, "");
       findings.push({
         code: "name-disputed",
         // Lowest, deliberately. It is not a claim the title is wrong — it is a
         // claim that we cannot tell from here, and a queue of those at the top
         // of the Wrong tab is how a reviewer learns to skim past everything.
         severity: 1,
-        // ⚠️ NEVER FIXABLE. There is nothing safe to write: the whole finding is
-        // that we do not know which of the two sources is right.
+        // ⚠️ NEVER FIXABLE. Outside knowledge alone has overruled a right
+        // listing too often (T43WD-40, Xbox One, the Rokinon's T2.2, an
+        // NNPX3LL/A Apple Watch) to put a one-click button on it. But the
+        // recommendation is SAID, title and all, so the reviewer is deciding
+        // whether to make a named change — not being asked to work it out.
         fixable: false,
-        says: `The title and our product knowledge disagree about "${wrong}", and`
-          + ` the listing's own ${saidBy.field} says "${saidBy.value}" — so nothing`
-          + ` here settles it.`
-          + (String(nameVerdict.why || "").trim()
-              ? ` We thought: ${String(nameVerdict.why).trim().replace(/[.;,]$/, "")}.`
-              : ""),
-        warn: `Check the item itself. If the listing is right, dismiss this. If`
-          + ` the ${saidBy.field} field is the wrong one, fix it in Shopify —`
-          + ` correcting the title alone would leave it saying "${saidBy.value}".`,
+        says: `We recommend "${right}" in place of "${wrong}"`
+          + (why ? ` — ${why}.` : ".")
+          + (recommended.length <= EBAY_TITLE_MAX ? ` Recommended title: "${recommended}".` : "")
+          + ` It is not one click because the listing's own ${saidBy.field} says`
+          + ` "${saidBy.value}"`
+          + (photo ? ", and its photos do not show it either way." : ", and nothing else in the listing settles it."),
+        warn: `To settle it, check ${check || "the item itself"}. If it shows "${right}",`
+          + ` change the title and the ${saidBy.field} field in Shopify — correcting the`
+          + ` title alone would leave it saying "${saidBy.value}". If it shows "${wrong}",`
+          + ` dismiss this.`,
       });
-    } else if (!placeholder && at >= 0 && right && right !== wrong) {
+    } else if (!placeholder && at >= 0 && fixTo && fixTo !== wrong) {
+      const right = fixTo;
       const swapped = (title.slice(0, at) + right + title.slice(at + wrong.length))
         .replace(/\s+/g, " ").trim();
-      // A respelling is a typo whatever the model called it.
-      const wrongIsWrong = nameVerdict.verdict === "wrong" && !respelling;
-      const why = String(nameVerdict.why || "").trim();
+      // A respelling is a typo whatever the model called it. A correction the
+      // photos or a second field settled is a fact, not a typo.
+      const wrongIsWrong = (nameVerdict.verdict === "wrong" || settled) && !respelling;
+      // The model's reason argued for ITS correction; when the photos chose a
+      // different one, what the photo shows is the reason.
+      const why = photoFix ? `${shot} shows ${seen}` : String(nameVerdict.why || "").trim();
       const fits = swapped.length <= EBAY_TITLE_MAX;
       if (fits) { title = swapped; fixable = true; }
       // ⚠️ THE REASON LEADS WITH THE FACT, and the instruction is a SEPARATE
@@ -2130,13 +2471,28 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
           // Say so, or the reviewer sees the same typo in the Type field and
           // reads it as the listing disagreeing with us.
           + (respelling && echoed
-              ? ` The listing's own ${echoed.field} has the same misspelling ("${echoed.value}"), and approving corrects it there too.`
+              ? ` The listing's own ${echoed.field} has the same ${isM2Misnomer(wrong, right) ? "mistake" : "misspelling"} ("${echoed.value}"), and approving corrects it there too.`
               : "")
+          // ⚠️ THE EVIDENCE IS QUOTED, NOT ASSERTED. The reviewer who dismissed
+          // the Kospet had the MPN on screen and no reason to read it; this
+          // sentence is that reason.
+          + (backedBy && saidBy
+              ? ` The listing's own ${backedBy.field} says "${backedBy.value}", which agrees; only its ${saidBy.field} ("${saidBy.value}") says otherwise, and approving corrects that field too.`
+              : "")
+          + (photoSaysOurs && saidBy
+              ? ` ${shot} shows it: ${seen}. The ${saidBy.field} field ("${saidBy.value}") says otherwise, and approving corrects that field too.`
+              : photoFix && saidBy
+                ? ` The ${saidBy.field} field says "${saidBy.value}"; approving corrects it where it repeats the title.`
+                : "")
           + (fits ? "" : ` The correction does not fit in 80 characters, so it needs editing by hand.`),
         // Only where we genuinely cannot settle it from the listing. Every other
         // finding on this page is read off the title and the spec table, and
         // saying so on those rows too would train people to ignore the line.
-        warn: "Checked against outside product knowledge, not against your own listing — verify this one against the product before approving.",
+        warn: backedBy
+          ? `Settled by this listing's own ${backedBy.field}, not by outside knowledge.`
+          : (photoSaysOurs || photoFix)
+            ? `Settled by ${shot.toLowerCase()} of this listing — open ${photo?.photo ? "it" : "them"} if in any doubt.`
+            : "Checked against outside product knowledge, not against your own listing — verify this one against the product before approving.",
       });
     }
     // Quote not found in the title: the model described an error it could not
@@ -2285,8 +2641,7 @@ function analyse(row: Row, extra: Extra | undefined, comps: any[] | null,
     // Only ever read when we HAVE a word and it will not fit; computing it
     // there and then would bury the message in a nested conditional.
     const cuttable = noun ? alsoInSpecs(original, extra?.specs) : [];
-    const findableAnyway = !!(extra?.specs?.["Model"] || extra?.specs?.["MPN"])
-      && tokens(original).some(t => /\d/.test(t) && t.length >= 3);
+    const findableAnyway = findableByModel(original, extra?.specs);
     // ⚠️ THE 90% RULE APPLIES HERE TOO. Ethan, 2026-08-28: "if we believe the
     // title is like 90%+ strength we don't need to change anything." A title that
     // already carries every searchable detail the listing knows AND can be found
@@ -2824,6 +3179,7 @@ async function candidatesFor(store: string, limit: number, byMarket = false,
   const seen: any[] = await allRows(
     `listing_title_reviews?store_code=eq.${store}`
     + `&select=product_id,swept_at,market_at,asked_at,asked_title,status,current_title`
+    + (byNames ? `,findings` : "")
     + `&order=product_id`);
   const bySeen = new Map(seen.map(r => [r.product_id, r]));
   const scored = cat.map(c => {
@@ -2834,7 +3190,10 @@ async function candidatesFor(store: string, limit: number, byMarket = false,
     // The name pass asks a different question: not "how long since we looked"
     // but "has this exact title ever been shown to the model". Anything whose
     // stamp does not match is unasked, whenever it was last swept.
-    const unasked = byNames && s?.asked_title !== askedStamp(c.title || "");
+    // A v1 answer still stands unless it was a dispute — see ASK_RECIPE_V1.
+    const keptV1 = s?.asked_title === `${ASK_RECIPE_V1}|${(c.title || "").trim()}`
+      && !(s?.findings || []).some((f: any) => f?.code === "name-disputed");
+    const unasked = byNames && s?.asked_title !== askedStamp(c.title || "") && !keptV1;
     const clock = byNames ? s?.asked_at : byMarket ? s?.market_at : s?.swept_at;
     // Never looked at, or looked at under a title that no longer exists: first.
     return { c, at: !s || stale || unasked || !clock ? 0 : Date.parse(clock) || 0,
@@ -2914,7 +3273,11 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
   // leaves the stored values alone.
   const askedCols = (productId: string, title: string) => {
     if (!wantLlm) return {};
-    if (nameBy[productId]) return { asked_title: askedStamp(title), asked_at: stampedAt };
+    // A dispute whose photos were not looked at this run is not finished: it
+    // keeps the old stamp so the next run asks again, and looks.
+    if (nameBy[productId] && !photoDeferred.has(productId)) {
+      return { asked_title: askedStamp(title), asked_at: stampedAt };
+    }
     const p = prior.get(productId);
     return { asked_title: p?.asked_title ?? null, asked_at: p?.asked_at ?? null };
   };
@@ -3000,6 +3363,7 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
         shelf: [extras[c.product_id]?.specs?.["Collection"],
                 extras[c.product_id]?.specs?.["Sub-Collection"]]
           .filter(Boolean).join(" / "),
+        fields: nameCheckFields(extras[c.product_id]?.specs),
       }));
       const batches: typeof items[] = [];
       for (let i = 0; i < items.length; i += NAME_BATCH) batches.push(items.slice(i, i + NAME_BATCH));
@@ -3052,6 +3416,76 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
   // convention learned from a slice, and the thresholds (8 products, 8 with the
   // field) are what stop that slice inventing a house style from three items.
   const convention = learnConvention(cands, extras);
+
+  // ===================== THE PHOTO TIEBREAK (see PHOTO_SYSTEM) ==============
+  // Which name verdicts would end up name-disputed is decided by analyse itself,
+  // asked here with nothing but the listing — the same block the per-row loop
+  // will run, so the two cannot disagree about which rows are disputes. The
+  // answer is attached to the verdict, and the loop's analyse reads it.
+  const photoDeferred = new Set<string>();
+  const photoUsage = { looked: 0, input: 0, output: 0, ours: 0, listing: 0, other: 0,
+                       cannotTell: 0, noPhotos: 0, deferred: 0, failed: [] as string[] };
+  if (wantLlm && Object.values(nameBy).some(v => v?.verdict !== "ok")) {
+    const disputed = cands.filter(c => {
+      const nv = nameBy[c.product_id];
+      if (!nv || nv.verdict === "ok") return false;
+      const a = analyse({ ...c, wantNames }, extras[c.product_id], null, null, null, null,
+                        convention, nv);
+      return a.findings.some(f => f.code === "name-disputed");
+    });
+    const now = disputed.slice(0, PHOTO_MAX);
+    // ⚠️ OVER THE CAP IS NOT "NO PHOTOS". Those rows keep their old stamp (see
+    // askedCols), so tomorrow asks about them again and looks this time.
+    for (const c of disputed.slice(PHOTO_MAX)) photoDeferred.add(c.product_id);
+    photoUsage.deferred = disputed.length - now.length;
+    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    let urls: Record<string, string[]> = {};
+    try {
+      if (now.length) {
+        const { shop, token } = await shopFor(store);
+        urls = await photoUrlsFor(shop, token, now.map(c => c.product_id));
+      }
+    } catch (e) {
+      for (const c of now) photoDeferred.add(c.product_id);
+      photoUsage.failed.push(`Shopify photos: ${String(e).slice(0, 120)}`);
+      now.length = 0;
+    }
+    const client = apiKey ? new Anthropic({ apiKey }) : null;
+    for (let i = 0; client && i < now.length; i += PHOTO_CONCURRENCY) {
+      await Promise.all(now.slice(i, i + PHOTO_CONCURRENCY).map(async c => {
+        const nv = nameBy[c.product_id];
+        const wrong = String(nv.wrong_text || "");
+        const right = String(nv.correct_text || "").trim();
+        const said = listingSaysItself(wrong, identityFields(extras[c.product_id]?.specs),
+                                       changedSpan(wrong, right));
+        const list = urls[c.product_id] || [];
+        if (!said || !list.length) {
+          // Nothing to look at is an answer: the finding says so, and there is
+          // nothing tomorrow would see that today did not.
+          nv.photo = null; photoUsage.noPhotos++;
+          return;
+        }
+        try {
+          const r = await photoTiebreak(client, {
+            title: c.title, wrong, right, field: said.field, value: said.value,
+            why: String(nv.why || "").trim(), check: String(nv.check || "").trim(), urls: list,
+          });
+          nv.photo = r.answer;
+          photoUsage.looked++;
+          photoUsage.input += r.input; photoUsage.output += r.output;
+          const k = r.answer.answer;
+          if (k === "ours") photoUsage.ours++;
+          else if (k === "listing") photoUsage.listing++;
+          else if (k === "other") photoUsage.other++;
+          else photoUsage.cannotTell++;
+        } catch (e) {
+          // A failed look is not a "cannot tell" — retry it next run.
+          photoDeferred.add(c.product_id);
+          photoUsage.failed.push(`${c.sku}: ${String(e).slice(0, 120)}`);
+        }
+      }));
+    }
+  }
 
   const out: any[] = [];
   // Pairs where the eBay listing mapped to this SKU is a DIFFERENT PRODUCT. Not
@@ -3122,7 +3556,10 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
     // dropped it. Counted rather than hidden: this rate is how we find out the
     // check has started inventing, and it is the number to watch after any
     // change to NAME_SYSTEM.
-    if (nv && nv.verdict !== "ok" && !a.findings.some(f => NAME_CODES.has(f.code))) {
+    // A verdict the PHOTOS overruled is not one the model invented; it is
+    // counted as photoTiebreak.listing instead.
+    if (nv && nv.verdict !== "ok" && nv.photo?.answer !== "listing"
+        && !a.findings.some(f => NAME_CODES.has(f.code))) {
       nameUnverified.push({ sku: row.sku, title: row.title,
                             claimed: String(nv.wrong_text || ""),
                             correction: String(nv.correct_text || "") });
@@ -3258,6 +3695,29 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
       console.error("ai_usage_log write failed (the sweep itself is fine):", String(e));
     }
   }
+  // The photo tiebreak's bill, as its own row: a different model at a different
+  // price, and the number to watch if disputes ever stop being rare.
+  if (wantLlm && save && photoUsage.looked) {
+    try {
+      await sb("ai_usage_log", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          tool: "listing-titles:photo-tiebreak",
+          store_code: store,
+          model: PHOTO_MODEL,
+          effort: PHOTO_EFFORT,
+          batches: photoUsage.looked,
+          items: photoUsage.looked,
+          input_tokens: photoUsage.input,
+          output_tokens: photoUsage.output,
+          cost_usd: photoUsage.input / 1e6 * PHOTO_PRICE[0] + photoUsage.output / 1e6 * PHOTO_PRICE[1],
+        }),
+      });
+    } catch (e) {
+      console.error("ai_usage_log write failed (the sweep itself is fine):", String(e));
+    }
+  }
 
   return {
     store, examined: cands.length, queued: out.length,
@@ -3278,6 +3738,16 @@ async function sweep(store: string, limit: number, wantMarket: boolean, save: bo
       // were dropped for it.
       unverified: nameUnverified.length,
       ...(nameUnverified.length ? { unverifiedRows: nameUnverified.slice(0, 10) } : {}),
+      // How disputes ended. `listing` is the photos proving our knowledge wrong
+      // — if that climbs, the name check is overreaching again.
+      photoTiebreak: {
+        looked: photoUsage.looked, ours: photoUsage.ours, listing: photoUsage.listing,
+        other: photoUsage.other, cannotTell: photoUsage.cannotTell,
+        noPhotos: photoUsage.noPhotos, deferred: photoUsage.deferred,
+        estCostUsd: Math.round((photoUsage.input / 1e6 * PHOTO_PRICE[0]
+          + photoUsage.output / 1e6 * PHOTO_PRICE[1]) * 100) / 100,
+        ...(photoUsage.failed.length ? { failed: photoUsage.failed.slice(0, 5) } : {}),
+      },
     } } : {}),
     saved: save,
     rows: out.map(o => ({
@@ -4513,6 +4983,154 @@ async function echoSweep(store: string, limit: number) {
   };
 }
 
+// ============ FIELD CORRECTIONS: THE LISTING, NOT JUST THE TITLE ==============
+// Ethan, 2026-09-30, after three feedback fixes landed as titles only: "the idea
+// of this system is the beginning parts of listing review by fixing titles and
+// adjusting parts of the listing that reflected the poor title."
+//
+// planEchoes carries the WORDS the title changed into fields stating the same
+// words. That works for a swap ("Point & Shoot" -> "SLR") and cannot work for a
+// rewrite: "Might and Magic II Book One (PC, 1986)" -> "…Book One Secret of the
+// Inner Sanctum (Apple II, 1986)" is one run from "II" to "PC,", which no field
+// holds, so Platform went on saying PC, Game Name "II Book One", and the Meraki's
+// Type "10 Gigabit" — under titles that had stopped saying so.
+//
+// So a fix can now name the FIELD and the value it should hold, and this writes
+// that value everywhere the listing states that field:
+//   - the spec-table row of that name in the description
+//   - the metafield of that name (Game Name <-> custom.game_name)
+//   - the entry of that name inside filter_attributes / title_attributes /
+//     other_attributes, the arrays PayMore's lister builds from
+//   - and, for a field with no spec-table row (What's Included), a literal copy
+//     of its old value in the description — the "Items included in this sale"
+//     line is that field printed.
+// ⚠️ SET, NEVER CREATE. A field the listing does not have is reported back as
+// not found, never invented: a new metafield needs a type and a definition this
+// function has no business choosing.
+// ⚠️ THE WHOLE VALUE IS REPLACED, because the reviewer approved a value, not a
+// run. Inside a spec cell the old value is spliced out entity-aware (a cell's
+// marker <div> survives); a cell whose text is broken across tags is left and
+// reported, never rebuilt.
+type FieldFix = { field: string; value: string };
+
+const FIELD_ALIAS: Record<string, string> = {
+  whatsincluded: "whatsinclude", included: "whatsinclude", notincluded: "notincluded",
+};
+const fieldId = (s: string) => {
+  const k = String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return FIELD_ALIAS[k] || k;
+};
+
+function parseFieldFixes(raw: unknown): FieldFix[] | string {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) return "fields must be a list of {field, value}";
+  if (raw.length > 12) return "at most 12 field corrections at once";
+  const out: FieldFix[] = [];
+  for (const r of raw) {
+    const field = String((r as any)?.field || "").trim();
+    const value = String((r as any)?.value || "").replace(/\s+/g, " ").trim();
+    if (!field || !value) return "every field correction needs a field and a value";
+    if (value.length > 200 || /[<>]/.test(value)) return `the value for ${field} is not a plain value`;
+    if (PLACEHOLDER.test(value)) return `"${value}" is a placeholder, not a value, for ${field}`;
+    out.push({ field, value });
+  }
+  return out;
+}
+
+function planFieldFixes(html: string, mfs: { id: string; key: string; value: string }[],
+                        fixes: FieldFix[]) {
+  let out = html;
+  let cellHits = 0;
+  const mfUpdates = new Map<string, string>();
+  const echoes: Echo[] = [];
+  const notFound: string[] = [];
+  const cur = (f: { id: string; value: string }) => mfUpdates.get(f.id) ?? f.value;
+  for (const fix of fixes) {
+    const id = fieldId(fix.field);
+    const e: Echo = { field: fix.field, was: "", now: fix.value, where: [] };
+    const saw = (v: string, at: string) => { if (!e.was) e.was = v.trim(); if (!e.where.includes(at)) e.where.push(at); };
+
+    let tabled = false, already = false;
+    const cells = specCells(out);
+    for (let i = cells.length - 1; i >= 0; i--) {
+      const c = cells[i];
+      if (fieldId(c.key) !== id) continue;
+      tabled = true;
+      if (c.value.trim() === fix.value) { already = true; continue; }
+      const inner = out.slice(c.start, c.end);
+      const d = decodeWithMap(inner);
+      const at = d.text.indexOf(c.value.trim());
+      let next: string | null = null;
+      if (at >= 0) next = inner.slice(0, d.from[at]) + escapeHtml(fix.value) + inner.slice(d.to[at + c.value.trim().length - 1]);
+      else if (!/[<>]/.test(inner)) next = escapeHtml(fix.value);
+      if (next === null) { notFound.push(`${fix.field} (spec table cell has markup inside it — edit by hand)`); continue; }
+      out = out.slice(0, c.start) + next + out.slice(c.end);
+      cellHits++;
+      saw(c.value, "spec table");
+    }
+
+    let oldPlain = "";
+    for (const f of mfs) {
+      const pairs = jsonPairs(cur(f));
+      if (pairs) {
+        let touched = false;
+        const np = pairs.map(p => {
+          if (fieldId(p.key) !== id || p.value.trim() === fix.value) return p;
+          touched = true; saw(p.value, f.key);
+          return { ...p, value: fix.value };
+        });
+        if (touched) mfUpdates.set(f.id, JSON.stringify(np));
+        continue;
+      }
+      if (fieldId(f.key) !== id) continue;
+      if (cur(f).trim() === fix.value) { already = true; continue; }
+      oldPlain = oldPlain || cur(f).trim();
+      saw(cur(f), f.key);
+      mfUpdates.set(f.id, fix.value);
+    }
+
+    // No row of its own in the spec table: the description prints the old value
+    // somewhere else (What's Included is the "Items included in this sale" line).
+    // Long values only — a literal swap of "PC" would find it inside other words.
+    let swapped = false;
+    if (!tabled && oldPlain.length >= 20) {
+      const swap = swapTitleInHtml(out, oldPlain, fix.value);
+      if (swap.hits) { out = swap.html; cellHits += swap.hits; saw(oldPlain, "description"); swapped = true; }
+    }
+    // ⚠️ WHAT'S INCLUDED IS PRINTED ONE ITEM PER LINE, not as the field's text.
+    // BAL's Canon AE-1 (2026-09-30): whats_include "Shoulder/Neck Strap, Camera
+    // Body Cap" is on the page as <span><div>Shoulder/Neck Strap</div></span>
+    // <span><div>Camera Body Cap</div></span> under the title's own line — no
+    // literal copy to swap. So the item lines are rewritten, in exactly that
+    // shape, and ONLY when the lines after the title are the old field's items,
+    // one for one. Anything else is a list somebody edited by hand, and it is
+    // reported rather than overwritten.
+    if (!tabled && !swapped && id === "whatsinclude" && oldPlain) {
+      const box = /(Items included in this sale:[\s\S]*?<div\b[^>]*>)(\s*(?:<span><div>[\s\S]*?<\/div><\/span>\s*)+)(<\/div>)/i.exec(out);
+      const items = box ? [...box[2].matchAll(/<span><div>([\s\S]*?)<\/div><\/span>/gi)].map(m => m[1]) : [];
+      const oldItems = oldPlain.split(/\s*,\s*/).filter(Boolean);
+      const tail = items.slice(items.length - oldItems.length).map(s => stripTags(s));
+      if (box && items.length >= oldItems.length
+          && tail.every((s, i) => s.toLowerCase() === oldItems[i].toLowerCase())) {
+        const lead = items.slice(0, items.length - oldItems.length);
+        const lines = [...lead, ...fix.value.split(/\s*,\s*/).filter(Boolean).map(escapeHtml)]
+          .map(s => `<span><div>${s}</div></span>`).join("");
+        // The whitespace either side of the lines is kept byte for byte.
+        const indent = (/^\s*/.exec(box[2]) || [""])[0];
+        const trail = (/\s*$/.exec(box[2]) || [""])[0];
+        out = out.slice(0, box.index) + box[1] + indent + lines + trail + out.slice(box.index + box[0].length - box[3].length);
+        cellHits++;
+        saw(oldPlain, "description");
+      } else {
+        notFound.push(`${fix.field} (the description's item list does not match the field — edit it by hand)`);
+      }
+    }
+    if (e.where.length) echoes.push(e);
+    else if (!already) notFound.push(fix.field);
+  }
+  return { html: out, cellHits, mfUpdates, echoes, notFound };
+}
+
 async function handlePost(req: Request, scope: Scope) {
   const body = await req.json().catch(() => ({}));
   const action = String(body.action || "");
@@ -4561,10 +5179,16 @@ async function handlePost(req: Request, scope: Scope) {
   // ⚠️ REOPEN READS THE TABLE, NOT THE QUEUE VIEW. The view is status='open' by
   // definition, so looking a denied row up in it always fails — the one row
   // reopen exists to act on is the one row the queue cannot see.
-  const q: any[] = action === "reopen"
+  // ⚠️ FIELDS-ONLY READS THE TABLE TOO, at any status: its whole use is the
+  // listing whose title was ALREADY fixed (status applied) and whose spec fields
+  // were left saying the old thing. It still needs a row — this tool reviewed
+  // the listing — so it is never a licence to edit an arbitrary product.
+  const fieldsOnly = action === "fields" || action === "fields-preview";
+  const q: any[] = action === "reopen" || fieldsOnly
     ? await rows(
         `listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
-        + `&status=eq.denied&select=product_id,sku,current_title,suggested_title,findings,basis&limit=1`)
+        + (fieldsOnly ? "" : `&status=eq.denied`)
+        + `&select=product_id,sku,current_title,suggested_title,findings,basis&limit=1`)
     : await rows(
         `listing_title_queue?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
         + `&select=product_id,sku,current_title,suggested_title,findings,basis&limit=1`);
@@ -4584,6 +5208,12 @@ async function handlePost(req: Request, scope: Scope) {
     // decision a reviewer has already made should never be lost to a typo.
     const asRaw = String(body.as || "").trim();
     const decidedAs = asRaw === "ebay-stale" ? "ebay-stale" : "not-a-problem";
+    // ⚠️ "NOT A PROBLEM" NEEDS ITS WHY (Ethan, 2026-09-30): the note is the only
+    // thing that says what to fix. "Ours Is Fine" is exempt — it says the rule
+    // was right, and its note is never read into an ask.
+    if (decidedAs === "not-a-problem" && !String(body.reason || "").trim()) {
+      return json({ error: "reason required", detail: "Say why the title is fine — that note is how a wrong rule gets fixed." }, 400);
+    }
     await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
       method: "PATCH", headers: { Prefer: "return=minimal" },
       body: JSON.stringify({
@@ -4616,15 +5246,30 @@ async function handlePost(req: Request, scope: Scope) {
   // second before it. A preview computed from a stored snapshot, or by a second
   // implementation on the client, would eventually describe a change that is not
   // the change being made, which is worse than showing nothing.
-  if (action !== "approve" && action !== "preview") {
+  if (action !== "approve" && action !== "preview" && !fieldsOnly) {
     return json({ error: `unknown action: ${action}` }, 400);
+  }
+  const fixes = parseFieldFixes(body.fields);
+  if (typeof fixes === "string") return json({ error: "bad field corrections", detail: fixes }, 400);
+  if (fieldsOnly && !fixes.length) return json({ error: "fields required" }, 400);
+
+  const { shop, token } = await shopFor(store);
+
+  // Fields-only keeps the title it has NOW — read live, because the row's
+  // current_title is whatever the last sweep saw, which is the OLD title on
+  // exactly the rows this exists for.
+  if (fieldsOnly) {
+    const live = await shopifyGql(shop, token,
+      `query($id: ID!) { product(id: $id) { title } }`, { id: productId });
+    item.current_title = String(live?.product?.title || "");
+    if (!item.current_title) return json({ error: "product not readable in Shopify" }, 404);
   }
 
   // An edited title beats the suggestion always — the person is holding the
   // item. A row that arrived with no suggestion can ONLY be approved with one
   // typed, which is the point of leaving it null.
   const typed = String(body.title || "").replace(/\s+/g, " ").trim();
-  const next = typed || String(item.suggested_title || "");
+  const next = fieldsOnly ? item.current_title : (typed || String(item.suggested_title || ""));
   if (!next) {
     return json({ error: "a title is required",
                   detail: "This row has no suggested title — it needs one typed in before it can be approved." }, 400);
@@ -4633,12 +5278,10 @@ async function handlePost(req: Request, scope: Scope) {
     return json({ error: "title too long",
                   detail: `eBay refuses a title over ${EBAY_TITLE_MAX} characters; this one is ${next.length}.` }, 400);
   }
-  if (next === item.current_title) {
+  if (!fieldsOnly && next === item.current_title) {
     return json({ error: "nothing to change",
                   detail: "That is the title the listing already has." }, 400);
   }
-
-  const { shop, token } = await shopFor(store);
 
   // ⚠️ THE DESCRIPTION CARRIES ITS OWN COPY OF THE TITLE.
   // PayMore's listing tool writes the title into the description body too — as
@@ -4743,6 +5386,19 @@ async function handlePost(req: Request, scope: Scope) {
     alsoUpdated = plan.echoes;
     stillSays = plan.stillSays;
   }
+  // The reviewer's named field corrections, LAST, on top of everything above —
+  // an explicit "Platform = Apple II" beats whatever the run-carry did to the
+  // same field, and a field it corrects is no longer "still saying" anything.
+  let fieldsNotFound: string[] = [];
+  if (fixes.length) {
+    const ff = planFieldFixes(html, mfList.map(f => ({ ...f, value: mfChanged.get(f.id) ?? f.value })), fixes);
+    if (ff.cellHits) { html = ff.html; specRows += ff.cellHits; }
+    for (const [id, v] of ff.mfUpdates) mfChanged.set(id, v);
+    const fixed = new Set(ff.echoes.map(e => fieldId(e.field)));
+    alsoUpdated = [...alsoUpdated.filter(e => !fixed.has(fieldId(e.field))), ...ff.echoes];
+    stillSays = stillSays.filter(s => !fixed.has(fieldId(s.field)));
+    fieldsNotFound = ff.notFound;
+  }
   if (descHits || specRows) descriptionHtml = html;
   // Back to the field the id belongs to, because the write is addressed by
   // namespace + key. `type` is passed through unchanged: a metafield that has a
@@ -4754,27 +5410,39 @@ async function handlePost(req: Request, scope: Scope) {
     return f ? { namespace: f.namespace, key: f.key, type: f.type, value } : null;
   }).filter(Boolean) as { namespace: string; key: string; type: string; value: string }[];
 
-  if (action === "preview") {
+  if (action === "preview" || action === "fields-preview") {
     return json({ ok: true, preview: true, title: next,
                   descriptionCopies: descHits, specRows,
                   metafields: staleMetafields.length,
-                  alsoUpdated, stillSays });
+                  alsoUpdated, stillSays,
+                  ...(fieldsNotFound.length ? { fieldsNotFound } : {}) });
+  }
+  if (fieldsOnly && !descriptionHtml && !staleMetafields.length) {
+    return json({ error: "nothing to change",
+                  detail: fieldsNotFound.length
+                    ? `No field of these names on this listing: ${fieldsNotFound.join(", ")}.`
+                    : "Every field already says that." }, 400);
   }
 
-  const data = await shopifyGql(shop, token, `
-    mutation($input: ProductInput!) {
-      productUpdate(input: $input) {
-        product { id title }
-        userErrors { field message }
-      }
-    }`, { input: { id: productId, title: next,
-                   ...(descriptionHtml ? { descriptionHtml } : {}) } });
-  const errs = data?.productUpdate?.userErrors || [];
-  if (errs.length) {
-    return json({ error: "shopify refused the change",
-                  detail: errs.map((e: any) => `${(e.field || []).join(".")}: ${e.message}`).join("; ") }, 422);
+  // Fields-only with nothing in the description to change sends no
+  // productUpdate at all — re-sending an unchanged title is a write for nothing.
+  let saved = next;
+  if (!fieldsOnly || descriptionHtml) {
+    const data = await shopifyGql(shop, token, `
+      mutation($input: ProductInput!) {
+        productUpdate(input: $input) {
+          product { id title }
+          userErrors { field message }
+        }
+      }`, { input: { id: productId, ...(fieldsOnly ? {} : { title: next }),
+                     ...(descriptionHtml ? { descriptionHtml } : {}) } });
+    const errs = data?.productUpdate?.userErrors || [];
+    if (errs.length) {
+      return json({ error: "shopify refused the change",
+                    detail: errs.map((e: any) => `${(e.field || []).join(".")}: ${e.message}`).join("; ") }, 422);
+    }
+    saved = data?.productUpdate?.product?.title || next;
   }
-  const saved = data?.productUpdate?.product?.title || next;
 
   // ⚠️ A SEPARATE MUTATION, AFTER the title has landed, and its failure is
   // swallowed. Same rule the descriptionHtml read follows: a title fix that
@@ -4821,7 +5489,9 @@ async function handlePost(req: Request, scope: Scope) {
     body: JSON.stringify({
       store_code: store, product_id: productId, sku: item.sku,
       before_title: item.current_title, after_title: saved,
-      edited: !!typed && typed !== String(item.suggested_title || ""),
+      // A fields-only correction is recorded as an edit with an unchanged
+      // title: the ledger is where "who changed Platform, and when" lives.
+      edited: fieldsOnly || (!!typed && typed !== String(item.suggested_title || "")),
       basis: item.basis, findings: item.findings || [], applied_by: scope.name,
       // Which spec fields moved with the title. Without this the ledger says
       // a title changed on Sep 3 and nothing about the four other places on
@@ -4829,20 +5499,24 @@ async function handlePost(req: Request, scope: Scope) {
       spec_changes: alsoUpdated,
     }),
   });
-  await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
-    method: "PATCH", headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({
-      status: "applied", applied_title: saved,
-      decided_by: scope.name, decided_at: new Date().toISOString(),
-    }),
-  });
-  // ebay_catalog still holds the old title until the next catalogue sweep, and
-  // the queue view keys off it — so patch it here too, or the row sits in the
-  // queue looking undone until that sweep runs.
-  await sb(`ebay_catalog?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
-    method: "PATCH", headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({ title: saved, updated_at: new Date().toISOString() }),
-  }).catch(() => { /* cosmetic only; the next sweep fixes it */ });
+  // A fields-only correction decides nothing about the title, so it leaves the
+  // queue row exactly where it was.
+  if (!fieldsOnly) {
+    await sb(`listing_title_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({
+        status: "applied", applied_title: saved,
+        decided_by: scope.name, decided_at: new Date().toISOString(),
+      }),
+    });
+    // ebay_catalog still holds the old title until the next catalogue sweep, and
+    // the queue view keys off it — so patch it here too, or the row sits in the
+    // queue looking undone until that sweep runs.
+    await sb(`ebay_catalog?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ title: saved, updated_at: new Date().toISOString() }),
+    }).catch(() => { /* cosmetic only; the next sweep fixes it */ });
+  }
 
   // descHits is reported because a SILENT no-op is what hid this for weeks: the
   // approve said ok, the title changed, and nobody could tell from the answer
@@ -4853,6 +5527,7 @@ async function handlePost(req: Request, scope: Scope) {
                 ...(metafieldsFixed ? { metafieldsFixed } : {}),
                 ...(metafieldsLeft ? { metafieldsLeft, metafieldsWhy } : {}),
                 ...(alsoUpdated.length ? { alsoUpdated } : {}),
+                ...(fieldsNotFound.length ? { fieldsNotFound } : {}),
                 // ⚠️ REPORTED EVEN THOUGH NOTHING WAS DONE ABOUT IT. A field
                 // still stating what the title just stopped stating is the one
                 // outcome a reviewer has to hear about — it is the case this

@@ -344,7 +344,7 @@ const DATA = {
     if (drawer) {
         ok(drawer.open === false, 'shut by default — this is work already done');
         ok(drawer.bodyHidden === true, 'and its rows are genuinely hidden while shut');
-        ok(/2 Confirmed Correct/.test(drawer.summary),
+        ok(/2 Dismissed/.test(drawer.summary),
            'the drawer is named for what is IN it — titles a person read and kept',
            drawer.summary);
         ok(drawer.rows.length === 2, 'both dismissals listed');
@@ -364,7 +364,7 @@ const DATA = {
         ok(/^1 dismissal /.test(drawer.askBar.trim()),
            'the bar counts only the dismissal that explained a rule was wrong',
            drawer.askBar.trim());
-        ok(/explained a rule was wrong/.test(drawer.askBar),
+        ok(/Explained The Check Was Wrong/.test(drawer.askBar),
            'and says what the note is FOR, not that a row was dismissed');
         // ⚠️ ONE PATH TO THE ASK. This drawer used to gather and copy the notes
         // itself, so the same job existed here AND in the Listing Health tool —

@@ -361,6 +361,11 @@ function npsDailyRefresh(e) {
     // the two weeks of "last finished never" that came from stamping it last.
     PropertiesService.getScriptProperties().setProperty(NPS_OK_KEY[passKey], today);
     _npsMark(run, 'health-sent');
+
+    // Last month too, while it is still open. See _npsPreClose. BEFORE the
+    // summary strip below, so this month's Last Month row reads a finished
+    // last month and not one missing its final day.
+    _npsPreClose(run, today, pass);
     // The summary strip second, always: Days Thru is DERIVED from the last day
     // carrying Sales, so running it before the grid is written would measure
     // yesterday's sheet and leave every Tracking figure a day behind.
@@ -414,6 +419,52 @@ function npsDailyRefresh(e) {
       'Claude — send this email on. The next run rewrites the whole month to '
         + 'date, so one missed run usually repairs itself; two in a row does not.');
     throw e;   // still fail loudly in the execution log
+  }
+}
+
+// ⚠️ THE LAST DAY OF A MONTH USED TO SIT EMPTY UNTIL 7PM ON THE 1ST. The daily
+// refresh writes the CURRENT month through yesterday, and on the 1st that is
+// "October 1 through September 30": no days at all. The pass ran, logged done,
+// and wrote nothing. 9/30 (and 8/31 before it) stayed blank on the tab all
+// morning and afternoon, the one day goals and announcements are made from it
+// (user, 2026-10-01).
+//
+// So from the 1st until the close, each daily pass also writes last month in
+// full. That is the same write the close does (NP_FROM/NP_TO on last month,
+// the grid, the health email, and the summary strip with NPX_CLOSE_RUN so the
+// Last Month row is left alone), minus the two things that make a close a
+// close: the closed marker and the close email. The morning pass skips
+// shipping as on any other day, so the final day reads "everything but
+// shipping" at 6:10 and gets shipping at 2pm, the same as every other day.
+// The 7pm close then writes it once more and seals it. That is still the
+// figure the bonus is paid on, and nothing here changes it.
+//
+// ⚠️ ITS OWN try/catch. A failure here mails and returns; it must not take
+// down the current month's pass it rides on.
+function _npsPreClose(run, today, pass) {
+  var target = _npsPrevMonth(today);
+  if (today > _npsMonthCloseDay(target).date) return;
+  if (PropertiesService.getScriptProperties().getProperty(NPS_LAST_CLOSED_KEY) === target) return;
+  var keepFrom = NP_FROM, keepTo = NP_TO;
+  try {
+    NP_FROM = target + '-01';
+    NP_TO = _npsLastDayOf(target);
+    Logger.log('=== %s is not closed yet — writing it too (%s .. %s) ===', target, NP_FROM, NP_TO);
+    _npWrite(false);
+    _npaSendHealth(NP_HEALTH, target, pass.split(' ')[0].toLowerCase() + ' pass, last month (not yet closed)');
+    NPX_CLOSE_RUN = true;
+    try { _npxSync(false); } finally { NPX_CLOSE_RUN = false; }
+    _npsMark(run, 'prev-month-done', true, { month: target, fetch: NP_LAST_FETCH });
+  } catch (e) {
+    _npsMark(run, 'prev-month-failed', false, { month: target, error: String(e).slice(0, 500) });
+    _npaSendFailure('Last month\'s Net Profit, before the close',
+      String(e && e.stack ? e.stack : e),
+      'Claude — ' + target + '\'s final day may still be blank on its tab. This month\'s pass '
+        + 'carried on. The 7pm close on ' + _npsMonthCloseDay(target).date + ' writes '
+        + target + ' in full regardless, but send this on: the morning read needs it before then.');
+  } finally {
+    NP_FROM = keepFrom;
+    NP_TO = keepTo;
   }
 }
 
@@ -480,7 +531,11 @@ function npsMonthClose() {
     // On a close the grid holds the month being closed, so Days Thru lands on
     // its final day and Tracking stops projecting — the closed month reads as
     // fact, not as a forecast. That is the figure the bonus is paid on.
-    _npxSync(false);
+    // NPX_CLOSE_RUN: this sync is for the closing month only -- see its note in
+    // netprofit-summary.gs. Reset in finally so a throw cannot leave the flag on
+    // for the next trigger in this execution.
+    NPX_CLOSE_RUN = true;
+    try { _npxSync(false); } finally { NPX_CLOSE_RUN = false; }
 
     props.setProperty(NPS_LAST_CLOSED_KEY, target);
     Logger.log('%s is CLOSED. Nothing will rewrite it — the daily refresh only '

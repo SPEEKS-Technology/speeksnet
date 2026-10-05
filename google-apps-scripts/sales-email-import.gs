@@ -306,6 +306,22 @@ var REVIEW_STOPS = ['paytonai', 'review insights', 'star reviews',
 // The trend deltas ("▲ 0%", "▼ 65.7%") that follow each figure carry no dollar
 // sign, so the money matcher steps over them for free.
 var CASH_DRAWER_LABELS = ['cash balance'];
+// ⚠️ PAYMORE CHANGED THE BLOCK ON 2026-10-03. diagnoseCashSection() on 10-05,
+// all five stores' Saturday reports:
+//
+//     Safe Balance
+//     Buying Drawer Balance
+//     Total Cash on Hand
+//
+// "Cash Balance" and "PayStation Balance" are gone, so every store's drawer came
+// back NO MATCH and the cash email went out with blank drawers. "Buying Drawer
+// Balance" is now the only drawer on the report — but in the OLD layout it was
+// the wrong pot, two lines above the right one. So it is accepted on two
+// conditions, both checked in _parseCash, never by widening the list above:
+//   1. the body has no "Cash Balance" line at all (the new layout, not the old)
+//   2. safe + it equals the report's own total, within CASH_TOTAL_TOLERANCE
+// Fail either and the drawer stays blank, which is visible. A wrong drawer is not.
+var CASH_DRAWER_NEW_LAYOUT = 'buying drawer balance';
 var CASH_SAFE_LABELS   = ['safe balance'];
 var CASH_TOTAL_LABELS  = ['total cash on hand'];
 // Every card stops at every other card, at the grid heading that follows, and at
@@ -488,7 +504,7 @@ function _handle(e) {
   if (['ingest', 'diagnose', 'diagnoseBuying', 'diagnoseReviews', 'buying',
        'diagnoseWeekly', 'diagnoseSummary', 'weekly', 'rehearseShift',
        'backfillConversions', 'verifyConversions', 'dayEndFacts',
-       'netprofit'].indexOf(action) < 0) {
+       'netprofit', 'monthEnd'].indexOf(action) < 0) {
     return _json({ ok: false, error: 'unknown action "' + action + '"' });
   }
 
@@ -531,7 +547,24 @@ function _handle(e) {
     if (action === 'dayEndFacts') {
       return _json(dayEndFacts({ days: p.days ? parseInt(p.days, 10) : 30 }));
     }
-    if (action === 'buying') return _json(ingestBuyingEmails({ dryRun: dryRun }));
+    if (action === 'buying') {
+      var bRep = ingestBuyingEmails({ dryRun: dryRun });
+      // The Shopify Daily Sales Report emails are no longer read (selling comes
+      // off the Net Profit tab from Oct 2026), so nothing archived them any more
+      // and they piled up in the inbox. Swept here, on the run that still happens
+      // every morning. Never allowed to fail the buying report it rides on.
+      try {
+        bRep.salesEmailsArchived = _archiveSalesReportEmails(dryRun);
+      } catch (aerr) {
+        bRep.salesEmailsArchived = { error: String(aerr && aerr.message || aerr) };
+      }
+      return _json(bRep);
+    }
+    // The last day of a month, from Shopify. See fillMonthEndFromShopify for why
+    // this can't ride on the 6:05 import. force=1 runs it outside days 1-3.
+    if (action === 'monthEnd') {
+      return _json(fillMonthEndFromShopify({ dryRun: dryRun, force: p.force === '1' }));
+    }
 
     // Net Profit's two daily passes, driven from pg_cron instead of from an
     // Apps Script time-based trigger.
@@ -598,6 +631,38 @@ function _handle(e) {
   } catch (err) {
     return _json({ ok: false, error: String(err && err.message || err) });
   }
+}
+
+// ------------------------------------------------------------
+// Archive the Shopify "Daily Sales Report" emails (2026-10-04)
+// ------------------------------------------------------------
+// Ethan: "get rid of the old sales summary emails". ingestSalesEmails used to
+// archive each one as it read it; it no longer runs (sales-ingest calls
+// action=buying since 2026-10-03), so this does only that archive step.
+//
+// ARCHIVED, NEVER DELETED: they stay searchable in All Mail.
+//
+// Narrow on purpose. The same store addresses send other mail too — a
+// draft-order invoice to a customer (NOT_A_REPORT_SUBJECTS) — so a thread is
+// only archived when EVERY message in it is from a store sender AND its subject
+// starts "Daily Sales Report" / "Daily sales report for …". One message that
+// is anything else and the whole thread is left where it is.
+var SALES_REPORT_SUBJECT = /^\s*daily sales report\b/i;
+function _archiveSalesReportEmails(dryRun) {
+  var senders = Object.keys(STORE_SENDERS);
+  var q = 'in:inbox from:(' + senders.join(' OR ') + ') subject:"daily sales report"';
+  var out = { archived: 0, left: 0, dryRun: !!dryRun };
+  GmailApp.search(q, 0, 100).forEach(function (thread) {
+    var ok = thread.getMessages().every(function (m) {
+      var from = String(m.getFrom() || '').toLowerCase();
+      var fromStore = senders.some(function (s) { return from.indexOf(s) >= 0; });
+      return fromStore && SALES_REPORT_SUBJECT.test(m.getSubject()) && !_notAReport(m.getSubject());
+    });
+    if (!ok) { out.left++; return; }
+    if (!dryRun) thread.moveToArchive();
+    out.archived++;
+  });
+  return out;
 }
 
 function _json(obj) {
@@ -892,6 +957,152 @@ function ingestSalesEmails(opts) {
       });
     }
 
+    return report;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ------------------------------------------------------------
+// Month-end fill: the one day no email ever carries
+// ------------------------------------------------------------
+// ⚠️ THE LAST DAY OF EVERY MONTH NEVER ARRIVES BY EMAIL. The Daily Sales Report
+// is month-to-date: the 6:00am send covers "the 1st through yesterday". On the
+// 1st, "this month" has no finished days, so no store sends anything (checked
+// 2026-09-01 and 2026-10-01: zero messages from all five senders). From the 2nd
+// on, the report covers the NEW month only. 8/31 and 9/30 both had to be keyed
+// by hand, and both set off the 7:00 missing-data alert.
+//
+// So on the 1st-3rd, this reads that one day from Shopify instead, using the
+// same ShopifyQL the email is built from. It was checked to the cent before
+// being trusted: sales-true-daily's reported_net_sales / reported_cost matched
+// the email for OVL on 9/1 and 9/2 (sales and COGS), and the COGS for all five
+// stores on 9/29. Use the REPORTED figures, not true_sales. The email reports
+// Shopify as-is, and the sheet has to read the same as every other day.
+//
+// It fills BLANK days only and never overwrites. A hand-keyed figure, a formula,
+// or anything the email path wrote stays exactly as it is. That makes a re-run
+// harmless, and it is why the window is three days: a failed 1st gets picked up
+// on the 2nd.
+//
+// It has its own action and its own cron (5:50, migrations 0122/0123), and is
+// NOT folded into the 6:05 import. That import already runs 105-134s against
+// sales-ingest's 150s ceiling, and five more Shopify calls inside it would be
+// the run that gets killed. It reads Shopify, not the 6:00 mail, so it can run
+// before the chain instead of after it. By the 6:05 import, Days Thru and the
+// goal colours are computed on a finished month, and the day counts as
+// `unverified`, not `missing`, so nothing alerts. (It was 6:50 for an hour on
+// 10-01, which was too late: the morning had already been read off an
+// unfinished month.) A store Shopify returns nothing for stays blank, so the
+// alert still fires for the day a person really does need to look at.
+var SHOPIFY_DAY_URL  = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/sales-true-daily';
+var MONTH_END_WINDOW = 3;   // days into the new month it keeps trying
+
+function fillMonthEndFromShopify(opts) {
+  opts = opts || {};
+  var today = _todayInTz();
+  var day = new Date(today.getFullYear(), today.getMonth(), 0);   // last day of last month
+  var iso = _iso(day);
+  var report = { ok: true, dryRun: !!opts.dryRun, day: iso,
+                 written: [], left: [], errors: [], daysThru: [], goalColors: [] };
+  if (today.getDate() > MONTH_END_WINDOW && !opts.force) {
+    report.skipped = 'only acts on days 1-' + MONTH_END_WINDOW + ' of a month';
+    return report;
+  }
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return { ok: false, day: iso, error: 'another import is already running' };
+
+  try {
+    var tabName = _tabNameFor(day);
+    var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(tabName);
+    if (!sh) return { ok: false, day: iso, error: 'no tab named "' + tabName + '"' };
+    var t = { sheet: sh, values: sh.getDataRange().getValues() };
+
+    // A store counts as filled when EITHER cell holds anything. Half a day
+    // keyed by hand is still somebody's decision, and not one to finish for them.
+    var need = [];
+    Object.keys(SALES_COL_BASES).forEach(function (store) {
+      var base = SALES_COL_BASES[store];
+      var r = _findDayRow(t.values, base, day.getDate());
+      if (r < 0) {
+        report.errors.push({ store: store, error: 'no row for day ' + day.getDate() + ' in ' + tabName });
+        return;
+      }
+      var sRng = sh.getRange(r + 1, base + COL_SALES + 1);
+      var cRng = sh.getRange(r + 1, base + COL_COST + 1);
+      if (_num(t.values[r][base + COL_SALES]) != null || _num(t.values[r][base + COL_COST]) != null
+          || sRng.getFormula() || cRng.getFormula()) {
+        report.left.push({ store: store, reason: 'already filled' });
+        return;
+      }
+      need.push({ store: store, base: base, row: r, sRng: sRng, cRng: cRng });
+    });
+    if (!need.length) return report;
+
+    var resps = UrlFetchApp.fetchAll(need.map(function (n) {
+      return {
+        url: SHOPIFY_DAY_URL + '?secret=' + encodeURIComponent(SECRET)
+          + '&from=' + iso + '&to=' + iso + '&store=' + n.store,
+        muteHttpExceptions: true
+      };
+    }));
+
+    need.forEach(function (n, i) {
+      var res = resps[i], row = null, why = null;
+      try {
+        if (res.getResponseCode() !== 200) {
+          why = 'sales-true-daily HTTP ' + res.getResponseCode() + ': '
+            + String(res.getContentText() || '').slice(0, 200);
+        } else {
+          (JSON.parse(res.getContentText()).rows || []).forEach(function (x) {
+            if (x.store === n.store && x.day === iso) row = x;
+          });
+          if (!row) why = 'no row for ' + iso + ' in the reply';
+          else if (typeof row.reported_net_sales !== 'number' || typeof row.reported_cost !== 'number') {
+            why = 'reply had no numeric sales/cost';
+          }
+        }
+      } catch (e) {
+        why = 'bad reply: ' + String(e && e.message || e).slice(0, 200);
+      }
+      if (why) { report.errors.push({ store: n.store, error: why }); return; }
+
+      if (!opts.dryRun) {
+        n.sRng.setValue(row.reported_net_sales);
+        n.cRng.setValue(row.reported_cost);
+        t.values[n.row][n.base + COL_SALES] = row.reported_net_sales;
+        t.values[n.row][n.base + COL_COST]  = row.reported_cost;
+      }
+      report.written.push({ store: n.store, sales: row.reported_net_sales, cost: row.reported_cost });
+    });
+
+    if (report.written.length) {
+      if (UPDATE_DAYS_THRU) report.daysThru = _syncDaysThru(t, opts.dryRun);
+      if (COLOR_GOAL_CELLS) report.goalColors = _syncGoalColors(t, opts.dryRun);
+    }
+
+    // Say so. A figure that appears in the sheet with no email behind it is
+    // exactly the kind of thing that gets chased later as a discrepancy.
+    if (report.written.length && !opts.dryRun) {
+      try {
+        var lines = report.written.map(function (w) {
+          return w.store + ': sales ' + _fmtUsd(w.sales) + ', cost ' + _fmtUsd(w.cost);
+        });
+        if (report.errors.length) {
+          lines.push('', 'NOT filled (still blank, needs keying by hand):');
+          report.errors.forEach(function (e) { lines.push(e.store + ': ' + e.error); });
+        }
+        GmailApp.sendEmail(CHANGE_ALERT_TO,
+          'Sales Summary: ' + _fmtMD(iso) + ' filled from Shopify (month-end)',
+          'No Daily Sales Report is ever sent for the last day of a month, so '
+            + _fmtMD(iso) + ' was read from Shopify instead. These are the same figures the '
+            + 'email would have carried:\n\n' + lines.join('\n'));
+      } catch (merr) {
+        report.errors.push({ error: 'notice email failed: ' + String(merr && merr.message || merr) });
+      }
+    }
+    report.ok = !report.errors.length;
     return report;
   } finally {
     lock.releaseLock();
@@ -1195,7 +1406,21 @@ function _parseCash(body) {
   var safe   = _findLabeledNear(body, CASH_SAFE_LABELS,   CASH_STOPS);
   var total  = _findLabeledNear(body, CASH_TOTAL_LABELS,  CASH_STOPS);
 
+  // The 2026-10-03 layout — see CASH_DRAWER_NEW_LAYOUT. Only when the old label
+  // is absent from the whole body, and only if the three add up.
   var why = null;
+  if (drawer == null && !/cash balance/i.test(String(body || ''))) {
+    var alt = _findLabeledNear(body, [CASH_DRAWER_NEW_LAYOUT],
+      CASH_STOPS.filter(function (s) { return s !== CASH_DRAWER_NEW_LAYOUT; }));
+    if (alt != null && total != null && safe != null &&
+        Math.abs(total - (alt + safe)) <= CASH_TOTAL_TOLERANCE) {
+      drawer = alt;
+    } else if (alt != null) {
+      why = 'new-layout drawer ' + alt + ' refused: safe ' + safe + ' + drawer does not make total ' + total;
+    }
+  }
+
+
   if (total != null && drawer != null && safe != null &&
       Math.abs(total - (drawer + safe)) > CASH_TOTAL_TOLERANCE) {
     // Not corrected — a total that does not add up is the signal that one of the
@@ -3011,7 +3236,9 @@ function diagnoseSummaryTab() {
 //   Sales tab  -> B, C          (the sheet's own daily figures, summed Sun..Sat)
 //   Buy tab    -> O, P, Q       (ditto; the email agrees to the dollar, but the
 //                                sheet is there even when an email is not)
-//   The email  -> R, T, V, Y, Z, AA, AB   (nowhere else carries these)
+//   The email  -> R, T, V, Y, Z, AB      (nowhere else carries these)
+//   Day End    -> AA           (LISTED devices since 2026-09-23, summed off the
+//                                daily reports; see _weeklyFiguresFor)
 //
 // Left alone, always: D and E are formulas; G, H, J, K, M, X and AC are the
 // user's to key in. They are CLEARED on the new block rather than left holding
@@ -3127,9 +3354,11 @@ function ingestWeeklySummary(opts) {
     // actually be filled. A shift that runs and then fails leaves the tab with
     // last week duplicated and no way to tell from looking at it.
     var emails = _weeklyEmailsByStore(report, start, end);
+    var dayEnds = _weeklyDayEndListed(start, end, report);
     var figures = {};
     SUMMARY_STORES.forEach(function (store) {
-      figures[store] = _weeklyFiguresFor(ss, store, start, end, emails[store], report);
+      figures[store] = _weeklyFiguresFor(ss, store, start, end, emails[store], report,
+        dayEnds ? dayEnds[store] : null);
     });
 
     var blocked = report.incomplete.length > 0;
@@ -3252,14 +3481,25 @@ function _summaryWeekLabel(start, end) {
 // ------------------------------------------------------------
 // The figures
 // ------------------------------------------------------------
-function _weeklyFiguresFor(ss, store, start, end, email, report) {
+function _weeklyFiguresFor(ss, store, start, end, email, report, dayEnd) {
   var f = { store: store };
 
   // --- Sales tab: revenue and cost, Sun..Sat. A week can straddle two months,
   // so this walks days and picks the tab per day rather than reading one tab.
+  //
+  // ⚠️ FROM 1 OCTOBER 2026 THE DAY IS READ OFF THE NET PROFIT TAB, not the Sales
+  // tab. The Sales tabs are retired from October (Ethan 2026-10-03, who deletes
+  // "Sales Oct 26" onward) and the NP tab carries the same Sales and Cost per day,
+  // to the cent, plus the fees. Same day-row lookup: both tabs keep the day
+  // number in the block's own first column. NP_BASES / NP_OFF_* / _npTabName are
+  // netprofit-sheet.gs's, which lives in this same project. A week that straddles
+  // 30 Sep / 1 Oct reads each day from the tab that owns it.
   var rev = 0, cogs = 0, gaps = [];
   for (var d = new Date(start); d <= end; d = _addDays(d, 1)) {
-    var cells = _dayCells(ss, _tabNameFor(d), SALES_COL_BASES[store], d, [COL_SALES, COL_COST]);
+    var npDay = _iso(d) >= '2026-10-01';
+    var cells = npDay
+      ? _dayCells(ss, _npTabName(_iso(d).slice(0, 7)), NP_BASES[store], d, [NP_OFF_SALES, NP_OFF_COST])
+      : _dayCells(ss, _tabNameFor(d), SALES_COL_BASES[store], d, [COL_SALES, COL_COST]);
     if (!cells || cells[0] == null || cells[1] == null) { gaps.push(_iso(d)); continue; }
     rev += cells[0]; cogs += cells[1];
   }
@@ -3313,6 +3553,10 @@ function _weeklyFiguresFor(ss, store, start, end, email, report) {
   // columns and nothing else; the rest are reported rather than guessed at.
   if (!email) {
     report.missingEmails.push({ store: store, week: _iso(start) + '..' + _iso(end) });
+    // AA does not need the email once the Day End Reports cover the week.
+    if (dayEnd && !dayEnd.missing.length && dayEnd.days > 0) {
+      f.processedItems = dayEnd.total; f.processedSource = 'day-end';
+    }
     return f;
   }
   f.custNum = email.cust ? email.cust.num : null;
@@ -3324,8 +3568,37 @@ function _weeklyFiguresFor(ss, store, start, end, email, report) {
   f.traffic  = f.custDen;
   f.qty            = email.availCount;
   f.value          = email.availProjection;
-  f.processedItems = email.processedItems;
   f.processedValue = email.processedValue;
+
+  // --- AA, Processed Items: LISTED devices since 2026-09-23, not devices
+  // processed — the count every other listing figure in the app moved to when
+  // PayMore added the column (Ethan asked for both). Three sources, best first:
+  //   1. the week's Day End Reports, summed — the same numbers Listing Goals and
+  //      Store Efficiency show, so the sheet cannot disagree with the app;
+  //   2. the weekly email's own listed count, when a day's report is missing;
+  //   3. the weekly email's Devices Processed, only when neither has a listed
+  //      figure — i.e. a week from before the template change.
+  // AB (Processed Value) stays Devices Processed' value: PayMore gives no value
+  // for listings, and the two columns are no longer the same devices.
+  var deOk = dayEnd && !dayEnd.missing.length && dayEnd.days > 0;
+  if (deOk) {
+    f.processedItems = dayEnd.total; f.processedSource = 'day-end';
+    if (email.listedDevices != null && email.listedDevices !== dayEnd.total) {
+      report.warnings.push({ store: store, note: 'Listed devices: Day End Reports and the weekly email disagree',
+        dayEnd: dayEnd.total, email: email.listedDevices });
+    }
+  } else if (email.listedDevices != null) {
+    f.processedItems = email.listedDevices; f.processedSource = 'weekly-email';
+    if (dayEnd && dayEnd.missing.length) {
+      report.warnings.push({ store: store, field: 'AA',
+        note: 'no Day End Report for ' + dayEnd.missing.join(', ') + ' — used the weekly email\'s listed count' });
+    }
+  } else {
+    f.processedItems = email.processedItems; f.processedSource = 'devices-processed';
+    report.warnings.push({ store: store, field: 'AA',
+      note: 'no listed-devices figure for this week — wrote Devices Processed instead',
+      missing_days: dayEnd ? dayEnd.missing : null });
+  }
 
   // The email and the Buy tab compute the same week from different systems. They
   // matched to the dollar on every store when this was built, so a disagreement
@@ -3632,6 +3905,54 @@ function parseWeeklyEmail(msg) {
   if (ps >= 0) {
     out.processedItems = _wkInt(_wkAfter(lines, 'devices processed', ps, lines.length));
     out.processedValue = _wkMoney(_wkAfter(lines, 'total value', ps, lines.length));
+  }
+
+  // --- Listed devices, the same count _deParse takes off the Day End Report
+  // (see the note there): a Processed Stats card if the template has one, else
+  // Team Production's "Total Listed Devices" summed. Null, not 0, on a report
+  // without the column — the caller then falls back rather than writing a zero.
+  var listedCard = ps >= 0 ? _wkInt(_wkAfter(lines, 'total listed devices', ps, lines.length)) : null;
+  var tpRows = _deTeamProduction(lines, null) || [];
+  var hasListed = tpRows.some(function (r) { return r.listed != null; });
+  out.listedDevices = listedCard != null ? listedCard
+    : hasListed ? tpRows.reduce(function (s, r) { return s + (r.listed || 0); }, 0)
+    : null;
+  return out;
+}
+
+// Listed devices per store for Sun..Sat, summed off that week's Day End
+// Reports — the figure Listing Goals, Store Efficiency and the matrix all count
+// since 2026-09-23. Per day it is listed ?? devices processed, the same rule as
+// everywhere else, so a week straddling the template change still sums.
+//
+// `missing` names open days with no report. The caller refuses a short sum
+// rather than writing it: six days summed as five reads as a bad week, not as a
+// gap, and nothing in the cell would say otherwise.
+function _weeklyDayEndListed(start, end, report) {
+  var out = {};
+  SUMMARY_STORES.forEach(function (s) { out[s] = { total: 0, days: 0, missing: [] }; });
+  var r;
+  try {
+    // Back to the week's Sunday from today, plus slack for mail filed late.
+    var days = Math.ceil((_todayInTz().getTime() - start.getTime()) / 86400000) + 3;
+    r = dayEndFacts({ days: days });
+  } catch (err) {
+    report.warnings.push({ field: 'AA', reason: 'Day End Reports could not be read: '
+      + String(err && err.message || err) });
+    return null;
+  }
+  var byKey = {};
+  (r.rows || []).forEach(function (row) { byKey[row.store + '|' + row.date] = row; });
+
+  for (var d = new Date(start); d <= end; d = _addDays(d, 1)) {
+    var iso = _iso(d);
+    var closed = _isPlannedClosure(d.getFullYear(), d.getMonth(), d.getDate());
+    SUMMARY_STORES.forEach(function (s) {
+      var row = byKey[s + '|' + iso];
+      var n = row ? (row.listedDevices != null ? row.listedDevices : row.devicesProcessed) : null;
+      if (n == null) { if (!closed) out[s].missing.push(iso); return; }
+      out[s].total += n; out[s].days++;
+    });
   }
   return out;
 }
@@ -4227,7 +4548,23 @@ function _deParse(body) {
     out.processedValue   = _wkMoney(_wkAfter(lines, 'total value', ps, lines.length));
   }
 
-  out.teamProduction = _deTeamProduction(lines);
+  out.teamProduction = _deTeamProduction(lines, warn);
+
+  // --- Listed devices, the store's day. The count PayMore added on 2026-09-23
+  // at Ethan's request — listings created, not devices processed — and the one
+  // Listing Goals and the DM's listing verdict actually want. Taken from a
+  // Processed Stats card if the template ever grows one, else summed off Team
+  // Production: that table's Devices Processed has summed exactly to the store
+  // card on every one of 225 store-days checked (Aug–Sep 2026), so the table is
+  // the whole store, not a leaderboard. Null — never 0 — on mail that predates
+  // the column, so a missing figure cannot read as a day nobody listed.
+  var listedCard = ps >= 0 ? _wkInt(_wkAfter(lines, 'total listed devices', ps, lines.length)) : null;
+  var tpRows = out.teamProduction || [];
+  var hasListed = tpRows.some(function (r) { return r.listed != null; });
+  out.listedDevices = listedCard != null ? listedCard
+    : hasListed ? tpRows.reduce(function (s, r) { return s + (r.listed || 0); }, 0)
+    : null;
+
   out.shoutouts      = _deShoutouts(lines);
   return out;
 }
@@ -4251,82 +4588,128 @@ function _deCardCount(lines, re) {
 // Team Production — the only place in the whole feed where a PERSON is named
 // against a number, which is what makes "great listing Zach" reproducible.
 //
-// The table is one wide row per member, preceded by that member's name and job
-// title on their own lines, and the day's top performer carries a crown. Read
-// positionally off the header rather than by label: every cell here is a bare
-// figure, so there is nothing to anchor to except column order — and the header
-// is REQUIRED, so a reordering upstream drops the section rather than silently
-// attributing the wrong number to a name.
-function _deTeamProduction(lines) {
+// The table is one row per member, preceded by that member's name and job title
+// on their own lines, and the day's top performer carries a crown. Every cell is
+// a bare figure, so there is nothing to anchor a value to except its column —
+// and the header is REQUIRED, so a reordering upstream drops the section rather
+// than silently attributing the wrong number to a name.
+//
+// ⚠️ COLUMNS ARE READ OFF THE HEADER, NOT HARD-CODED. On 2026-09-23 PayMore put
+// "Total Listed Devices" in FRONT of Devices Processed (asked for by Ethan: it
+// counts listings created, where Devices Processed counts devices). The old
+// reader matched the header as one line and indexed cells as fixed positions;
+// the new header no longer matched, and every store's table came back null with
+// NO warning — the DM's per-person lines just stopped. So now:
+//   * the header is every line after the heading made only of column-name
+//     words, joined — it survives the header wrapping across lines;
+//   * each column's position is where its name falls in that joined header, so
+//     a column added, dropped or moved is followed rather than misread;
+//   * a row's cells are gathered across lines until the next name, so a row
+//     that wraps (a "$" on one line, the figure on the next) still reads whole;
+//   * _deParse warns, with the header text, whenever the section exists but
+//     yields nothing — the next template change shows up in parse_warnings.
+//
+// Pre-2026-09-23 mail has no listed column; `listed` is simply absent there.
+var _DE_TEAM_COLS = [
+  { key: 'listed',    re: /total listed devices/i },
+  { key: 'processed', re: /devices processed/i },
+  { key: 'repriced',  re: /devices repriced/i },
+  { key: 'cost',      re: /total cost/i },
+  { key: 'value',     re: /processed value/i },
+  { key: 'time',      re: /(total\s*|avg\.?\s*|average\s*)?time/i }
+];
+
+function _deTeamHeader(lines, tp) {
+  var words = /^[\s|:\-]*((team|member|total|listed|devices|processed|repriced|cost|value|avg\.?|average|time)[\s|:\-]*)+$/i;
+  // The first header line is taken on its "Team Member" alone, whatever else it
+  // carries — the old reader tolerated anything between the names, so this must
+  // too. Only the lines AFTER it have to be pure column words.
+  var h = -1;
+  for (var i = tp + 1; i < Math.min(lines.length, tp + 6); i++) {
+    if (/team member/i.test(lines[i])) { h = i; break; }
+  }
+  if (h < 0) return { text: lines.slice(tp + 1, tp + 4).join(' | '), end: tp + 1, cols: null };
+  var parts = [lines[h]];
+  h++;
+  while (h < lines.length && h < tp + 16 && words.test(lines[h])) { parts.push(lines[h]); h++; }
+  var text = parts.join(' ').replace(/\s+/g, ' ');
+  if (!/team member/i.test(text)) return { text: text, end: h, cols: null };
+
+  // Cut each name out of the header once it is placed, so "total" in
+  // "total listed devices" cannot be found again by a later, looser pattern.
+  var rest = text.toLowerCase(), found = [];
+  _DE_TEAM_COLS.forEach(function (c) {
+    var m = rest.match(c.re);
+    if (!m) return;
+    found.push({ key: c.key, at: m.index });
+    rest = rest.slice(0, m.index) + new Array(m[0].length + 1).join('#') + rest.slice(m.index + m[0].length);
+  });
+  found.sort(function (a, b) { return a.at - b.at; });
+  var keys = found.map(function (f) { return f.key; });
+  // Processed, cost and value are what everything downstream reads; without
+  // all three the table is not the one this was written for.
+  var ok = ['processed', 'cost', 'value'].every(function (k) { return keys.indexOf(k) >= 0; });
+  return { text: text, end: h, cols: ok ? keys : null };
+}
+
+function _deTeamProduction(lines, warn) {
   var tp = _wkIdx(lines, /^team production$/i, 0);
   if (tp < 0) return null;
-  var hdr = -1;
-  for (var i = tp; i < Math.min(lines.length, tp + 4); i++) {
-    if (/team member.*devices processed.*total cost.*processed value/i.test(lines[i])) { hdr = i; break; }
+  var head = _deTeamHeader(lines, tp);
+  if (!head.cols) {
+    if (warn) warn('Team Production header not recognised: "' + head.text.slice(0, 160) + '"');
+    return null;
   }
-  if (hdr < 0) return null;
+  var cols = head.cols;
+  // Time is the last column and optional in the count: an empty time cell must
+  // not cost us the member.
+  var need = cols.filter(function (k) { return k !== 'time'; }).length;
 
-  var stop = _wkIdx(lines, /^processed stats$/i, hdr);
+  var stop = _wkIdx(lines, /^processed stats$/i, head.end);
   if (stop < 0) stop = lines.length;
 
-  var rows = [], pending = [];
-  for (var j = hdr + 1; j < stop; j++) {
-    var line = lines[j];
-    if (/^\s*Please note/i.test(line) || /devices repriced/i.test(line)) { continue; }
+  var rows = [], pending = [], cells = [];
+  function isCell(line) { return /^(\$|-?[0-9]|min\b)/i.test(line); }
 
-    var lv = _wkLevels(line);
-    // A data row is count / count / money / money / time — the two leading bare
-    // integers are what separate it from a name line or a job title.
-    var isData = lv.length >= 4 &&
-      String(lv[0]).indexOf('$') === -1 &&
-      /^[0-9]/.test(String(lv[0]).trim());
-    if (!isData) {
-      // The header's trailing cells sit on their OWN lines below the line the
-      // regex above matched, so they fall through to here and get banked as
-      // though they were content. That is what put "Time" in the name of the
-      // first member of every table. Named explicitly rather than by shape: a
-      // one-word line is also what a mononym staff member looks like.
-      if (!/^(time|total\s*time|avg\.?\s*time|average\s*time|devices\s*repriced)$/i.test(String(line).trim())) {
-        pending.push(line);
-      }
-      continue;
-    }
-
+  function flush() {
+    if (!cells.length) return;
+    var lv = _wkLevels(cells.join(' '));
+    cells = [];
+    var names = pending; pending = [];
     // The name and job title are the LAST TWO lines banked since the previous
-    // data row, not the first two.
-    //
-    // Taking the first two put the header's trailing "Time" cell — which lands on
-    // its own line after the header the regex above matches — into the name of the
-    // first member of every table, and pushed that member's real name into the
-    // role. Every store's first row read { name: "Time", role: "Garrett Burnell" }
-    // until 2026-08-14. Anchoring to the END is correct whatever precedes it,
-    // because the two lines immediately above a data row are always that member's.
+    // row, not the first two (see git history: the header's "Time" cell once
+    // became the first member's name at every store).
     var name = null, role = null;
-    if (pending.length === 1) { name = pending[0]; }
-    else if (pending.length >= 2) {
-      name = pending[pending.length - 2];
-      role = pending[pending.length - 1];
-    }
-    var top = false;
-    if (name) {
-      // U+1F451 CROWN, matched as its surrogate pair - Apps Script JS is
-      // UTF-16, so charAt(0) on an emoji returns half a character.
-      top = /👑/.test(name);
-      name = name.replace(/^[^A-Za-z]+/, '').trim();
-    }
-    pending = [];
-    if (!name) { continue; }
+    if (names.length === 1) { name = names[0]; }
+    else if (names.length >= 2) { name = names[names.length - 2]; role = names[names.length - 1]; }
+    if (!name || lv.length < need) return;
 
-    rows.push({
-      name: name,
-      role: role,
-      processed: _wkInt(lv[0]),
-      repriced:  _wkInt(lv[1]),
-      cost:      _wkMoney(lv[2]),
-      value:     _wkMoney(lv[3]),
-      top: top
+    var top = /👑/.test(name);   // U+1F451, matched as its surrogate pair
+    name = name.replace(/^[^A-Za-z]+/, '').trim();
+    if (!name) return;
+
+    var row = { name: name, role: role, top: top };
+    cols.forEach(function (k, i) {
+      if (k === 'time') return;
+      row[k] = (k === 'cost' || k === 'value') ? _wkMoney(lv[i]) : _wkInt(lv[i]);
     });
+    // A money column that is not money, or a count that is, means the cells
+    // did not line up with the header. Drop the member rather than misfile them.
+    if (row.cost === null || row.value === null || row.processed === null) return;
+    rows.push(row);
   }
+
+  for (var j = head.end; j < stop; j++) {
+    var line = lines[j];
+    if (/^\s*Please note/i.test(line)) { continue; }
+    if (isCell(line)) { cells.push(line); continue; }
+    flush();
+    if (!/^(time|total\s*time|avg\.?\s*time|average\s*time|devices\s*repriced)$/i.test(String(line).trim())) {
+      pending.push(line);
+    }
+  }
+  flush();
+  if (!rows.length && warn) warn('Team Production header read as [' + cols.join(', ') + '] but no member rows parsed');
   return rows.length ? rows : null;
 }
 
@@ -4430,7 +4813,8 @@ function diagnoseDayEndFacts() {
     Logger.log([
       row.date, row.store,
       'conv ' + row.custConvNum + '/' + row.custConvDen,
-      'listed ' + row.devicesProcessed,
+      'processed ' + row.devicesProcessed,
+      'listed ' + row.listedDevices,
       'estVal ' + row.estValue,
       'margin ' + row.estMarginPct,
       'net ' + row.netSales,

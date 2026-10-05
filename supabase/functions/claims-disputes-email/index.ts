@@ -1,10 +1,14 @@
 // claims-disputes-email — the mail side of the Claims & Disputes tool.
 //
-// FOUR SENDS, ONE FUNCTION, ?kind= picks which:
+// FOUR SENDS, ONE FUNCTION, ?kind= picks which. Since 0119 every one of them
+// carries Payments too — Shopify orders we have not been paid for — and a card
+// on its last chargeable day is "due today" for both 4pm mails, the same as a
+// dispute (Ethan, 2026-09-28). Since 2026-10-02 "due today" means the deadline
+// is today OR TOMORROW — see dueSoon.
 //
 //   manager_daily   08:20 CT  to each store's manager. Everything of theirs that
 //                             needs a person, soonest deadline first.
-//   manager_nudge   16:00 CT  to a store, ONLY when something closes today, it
+//   manager_nudge   16:00 CT  to a store, ONLY when something is due today, it
 //                             was on this morning's mail, and it still has not
 //                             been answered. Answer it and this never arrives.
 //   dm_digest       08:20 CT  to the DM. Counts per store, plus the two things a
@@ -60,7 +64,7 @@ const SHOP_HANDLE: Record<string, string> = {
 // --- the house look ---------------------------------------------------------
 // Lifted from refund-mismatch, which this replaces. Every SPEEKS report looks
 // like this; a mail that invents its own palette reads as somebody else's.
-const C = { ink: "#12241c", faint: "#6d8579", line: "#dde7e1", bad: "#b3261e", warn: "#8a5a00", chip: "#eef5f1" };
+const C = { ink: "#12241c", faint: "#5b7166", line: "#dde7e1", bad: "#b3261e", warn: "#8a5a00", chip: "#eef5f1" };
 const FONT = "-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
 const esc = (s: unknown) =>
@@ -121,6 +125,9 @@ type Row = {
   kindLabel: string; title: string; facts: string[]; amount: number | null;
   due: string; link: string; linkLabel: string; quiet: string | null; missed: boolean;
   contestedSince: string | null; openedAt: string;
+  // A payment's deadline is a card running out, not a reply (0119), so it
+  // carries its own words for "answer by" and "reply window shut".
+  dueVerb?: string; missedText?: string;
 };
 
 // The states that mean a person still has to do something. Identical to the
@@ -193,6 +200,38 @@ function mismatchRow(m: any): Row {
   };
 }
 
+// PAYMENTS (0119). A Shopify order we have not been paid for. Its deadline is
+// the card authorization running out — the one day Shopify can still charge it
+// — which is what puts it in the 4pm mails on its last day, exactly like a
+// dispute due today (Ethan, 2026-09-28: "keep this the same as payment disputes
+// and ... add this to the morning email and the reminders for both manager and
+// dm for things due today"). One the card can no longer be charged for has no
+// deadline left: it is `missed`, so it rides the morning mail and the DM hears
+// about it once, and it never triggers a 4pm "closes today".
+function paymentRow(p: any): Row {
+  const handle = SHOP_HANDLE[p.store_code];
+  const partial = p.financial_status === "PARTIALLY_PAID";
+  return {
+    type: "payment", key: p.order_key, store: p.store_code, state: p.state, note: p.state_note || null,
+    kindLabel: p.capturable ? "Card not charged yet" : partial ? "Partially paid" : "Card expired — not collected",
+    title: p.item_title || p.order_name || "Shopify order",
+    facts: [
+      p.order_name ? `Order ${p.order_name}` : "",
+      partial ? `${money(p.received)} of ${money(p.total)} collected` : "",
+      Number(p.unfulfilled_items) > 0 ? `${p.unfulfilled_items} not shipped` : "",
+    ].filter(Boolean),
+    amount: p.amount == null ? null : Number(p.amount),
+    due: p.capturable ? chicagoDay(p.auth_expires_at) : "",
+    link: handle && p.order_id ? `https://admin.shopify.com/store/${handle}/orders/${p.order_id}` : "",
+    linkLabel: "Open in Shopify",
+    quiet: p.quiet_until || null, missed: !!p.missed_window,
+    contestedSince: p.resolution_disputed_since || null, openedAt: p.ordered_at || "",
+    // "Card expired — not collected · card expired" said it twice, so the tag
+    // is only added where the label does not already say it.
+    dueVerb: "charge the card by", missedText: partial ? "card expired" : "",
+  };
+}
+
 // A plain return is a list to read, not a list to work (Ethan, 2026-09-22), and
 // the stores go through them every morning anyway. They are counted, never
 // itemised, so they cannot bury the things that do need doing.
@@ -208,11 +247,129 @@ async function fetchState(): Promise<any> {
   return body;
 }
 
+// ---------------------------------------------------------------------------
+// FRESHNESS (Ethan 2026-09-29: "I'm having everyone rely on this directly").
+//
+// The list is a mirror, and until now the mirror was only refreshed when
+// somebody opened the tab. Nothing scheduled a read, and nothing said how old
+// the list was, so a morning mail could be built off yesterday's sweep and look
+// exactly as trustworthy as a fresh one.
+//
+// So every real send READS FIRST: it asks claims-disputes for a sweep of all
+// five stores (the normal 20-minute throttle applies, so a tab opened a minute
+// ago is not re-read), then builds the mail from what that left. A full sweep
+// took ~11s on 2026-09-29; the cap below is far above that and still well
+// inside this function's own limit. A sweep that fails or overruns does NOT
+// stop the mail — a stale mail is better than none — it makes the mail SAY so.
+//
+// Two sends firing in the same minute (the 8:20 pair) can both sweep. Harmless:
+// the sweep only upserts, so the second is a repeat, not a conflict.
+// ---------------------------------------------------------------------------
+const STALE_HOURS = 6;
+const SYNC_CAP_MS = 100_000;
+
+async function refresh(): Promise<string | null> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), SYNC_CAP_MS);
+  try {
+    const u = `${SUPABASE_URL}/functions/v1/claims-disputes?action=sync&stores=ALL&secret=${encodeURIComponent(OPS_SECRET)}`;
+    const res = await fetch(u, { signal: ctl.signal });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body || body.success === false) {
+      return `the read before this mail failed (${res.status}): ${String(body?.error ?? "").slice(0, 160)}`;
+    }
+    return null;
+  } catch (e) {
+    return ctl.signal.aborted ? `the read before this mail did not finish in ${SYNC_CAP_MS / 1000}s`
+      : `the read before this mail failed: ${String((e as Error)?.message ?? e).slice(0, 160)}`;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Per store, every reason its list cannot be trusted as current: a source that
+// failed, one never read, or one older than STALE_HOURS. Read from the same
+// sync rows the tab shows, so the mail and the tab cannot disagree about it.
+function staleness(d: any, now = Date.now()): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  const add = (s: string, why: string) => (out[s] ||= []).push(why);
+  const check = (s: string, label: string, r: any) => {
+    if (!r) { add(s, `${label} has never been read`); return; }
+    if (!r.ok) { add(s, `${label} could not be read (${String(r.detail || "no reason given").slice(0, 120)})`); return; }
+    const h = (now - Date.parse(r.synced_at)) / 3_600_000;
+    if (!(h <= STALE_HOURS)) add(s, `${label} last read ${isFinite(h) ? Math.round(h) + " hours ago" : "at an unknown time"}`);
+  };
+  for (const s of STORES) {
+    check(s, "eBay returns and cases", (d.sync || []).find((r: any) => r.store_code === s));
+    const ds = (d.disputeSync || []).filter((r: any) => r.store_code === s);
+    check(s, "eBay payment disputes", ds.find((r: any) => r.source === "ebay"));
+    check(s, "Shopify chargebacks", ds.find((r: any) => r.source === "shopify"));
+    check(s, "Shopify unpaid orders", (d.paymentSync || []).find((r: any) => r.store_code === s));
+  }
+  return out;
+}
+
+// A red row straight under the header. Inserted rather than threaded through
+// every template, so all four mails carry it identically.
+function withWarning(html: string, lines: string[]): string {
+  if (!lines.length) return html;
+  const row = `<tr><td style="padding:12px 14px;background:#ffffff;border-top:3px solid #b3261e;">
+      <div style="font-size:13px;font-weight:800;color:${C.bad};">This list may be out of date</div>
+      <div style="font-size:12px;color:${C.ink};margin-top:5px;line-height:1.6;">${lines.map(esc).join("<br>")}</div>
+      <div style="font-size:12px;color:${C.faint};margin-top:6px;line-height:1.6;">Anything that arrived since then is not below. Check eBay and Shopify directly today.</div>
+    </td></tr>`;
+  const i = html.indexOf("</td></tr>");
+  return i < 0 ? html : html.slice(0, i + 10) + row + html.slice(i + 10);
+}
+
+// ---------------------------------------------------------------------------
+// BACKUPS RIDE ON THE DM DIGEST (Ethan, 2026-09-30: "put it in an existing email
+// and only alert me when it's after a certain time"). Nothing to do with claims —
+// this is simply the one mail that reaches Ethan alone every morning. The backup
+// script posts a backup_runs row (0120) after each run; when the newest GOOD one
+// is older than BACKUP_STALE_HOURS the digest gets a red "Backups" row, and it is
+// sent even on a morning with no claims to report. Otherwise it adds nothing.
+//
+// 48 hours: the backup runs at 2am, or on the next unlock if the laptop was
+// closed, so one missed night is routine and two in a row is not. From Sep 22
+// to Sep 30 it went nine nights without one and nobody knew.
+// ---------------------------------------------------------------------------
+const BACKUP_STALE_HOURS = 48;
+
+async function backupWarning(now = Date.now()): Promise<string[]> {
+  const fix = "Open or unlock the laptop so it can catch up; if it still does not, the reason is in BACKUP-PROBLEM.txt under %LOCALAPPDATA%\\SPEEKSNET Backup, or in LAST-BACKUP.txt in the Drive backups folder.";
+  try {
+    const rows = await sb(`backup_runs?select=finished_at,snapshot&ok=eq.true&order=finished_at.desc&limit=1`,
+      { headers: { Prefer: "return=representation" } }) || [];
+    if (!rows.length) return [`No complete SPEEKSNET backup has ever been recorded. ${fix}`];
+    const h = (now - Date.parse(rows[0].finished_at)) / 3_600_000;
+    if (h <= BACKUP_STALE_HOURS) return [];
+    const when = new Date(rows[0].finished_at).toLocaleString("en-US", {
+      timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    });
+    return [`The last complete SPEEKSNET backup was ${Math.floor(h / 24)} days ago (${when}, folder ${rows[0].snapshot}). ${fix}`];
+  } catch (e) {
+    // Saying so beats staying quiet: a check that cannot run is how Sep 22-30 happened.
+    return [`Could not check the SPEEKSNET backups: ${String((e as Error)?.message ?? e).slice(0, 160)}`];
+  }
+}
+
+function withBackupWarning(html: string, lines: string[]): string {
+  if (!lines.length) return html;
+  const row = `<tr><td style="padding:12px 14px;background:#ffffff;border-top:3px solid #b3261e;">
+      <div style="font-size:13px;font-weight:800;color:${C.bad};">Backups</div>
+      <div style="font-size:12px;color:${C.ink};margin-top:5px;line-height:1.6;">${lines.map(esc).join("<br>")}</div>
+    </td></tr>`;
+  const i = html.indexOf("</td></tr>");
+  return i < 0 ? html : html.slice(0, i + 10) + row + html.slice(i + 10);
+}
+
 function allRows(d: any): Row[] {
   return [
     ...(d.disputes || []).map(disputeRow),
     ...(d.cases || []).filter((c: any) => !isPlainReturn(c)).map(caseRow),
     ...(d.mismatches || []).map(mismatchRow),
+    ...(d.payments || []).map(paymentRow),
   ];
 }
 
@@ -220,7 +377,24 @@ function allRows(d: any): Row[] {
 // window. quiet_until is the INR rule (Ethan, 2026-09-23: "once they are
 // notified about it via email, they don't need to see it again until the day of
 // needing to refund") — set by stateOf, only ever read here.
-const mailable = (r: Row, today: string) => NEED.includes(r.state) && !(r.quiet && r.quiet > today);
+// Quiet ends a day before the refund day, not on it — see DUE TODAY MEANS BY
+// TOMORROW below. Otherwise an INR would be hidden on the very day it is meant
+// to be called due.
+const mailable = (r: Row, today: string) => NEED.includes(r.state) && !(r.quiet && r.quiet > addDaysIso(today, 1));
+
+// DUE TODAY MEANS BY TOMORROW (Ethan, 2026-10-02: "something due tomorrow we
+// would get alerted as due today today, so keep everything the same just move it
+// a day forward"). What prompted it: OVL #KS01-15083's card ran out at 11:04 AM
+// on Oct 1. It was "due today" on the 8:20 mails, but by 4pm it was already
+// missed, so neither 4pm alert said a word about it. The next morning it turned
+// up as "worth a conversation", which looked like a different list from the one
+// the 4pm alert had been about. Card deadlines fall at whatever time the order
+// was placed, so most are gone before 4pm on their own day. Calling them due
+// the day BEFORE gives each one a full day of morning mail and a 4pm alert while
+// it can still be charged. An item stays "due today" on its real day as well,
+// until it is dealt with or missed. The real date is still printed on the item.
+const dueSoon = (r: Row, today: string) =>
+  !!r.due && !r.missed && r.due >= today && r.due <= addDaysIso(today, 1);
 
 // Soonest deadline first, then oldest, then biggest. A thing closing tonight
 // belongs above a thing closing in three weeks whatever type it is — Ethan's
@@ -233,16 +407,34 @@ const bySoonest = (a: Row, b: Row) =>
 // ---------------------------------------------------------------------------
 // The house shell
 // ---------------------------------------------------------------------------
-function shell(title: string, sub: string, body: string, foot: string, band = C.chip, titleColor = C.ink) {
-  return `<body style="margin:0;padding:18px;background:#f4f7f5;font-family:${FONT}">
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="width:600px;max-width:100%;margin:0 auto;background:#ffffff;border:1px solid ${C.line};border-radius:12px;">
-    <tr><td style="padding:16px 14px;background:${band};border-radius:12px 12px 0 0;">
-      <div style="font-size:17px;font-weight:800;color:${titleColor};">${title}</div>
+// DARK MODE (Ethan's phone, 2026-10-01). Outlook on iOS doesn't honour a dark
+// stylesheet; it inverts the light colours itself. Two things in the old shell
+// broke under that:
+//   * the header band was a pale tint (#fbeceb pink, #eef5f1 green). Inverted,
+//     a tint turns muddy — the 4pm alert came out brown, with the grey subtitle
+//     almost invisible on it. The band is now plain white, which inverts to the
+//     same dark as the rest of the card, and the alert says "alert" with a red
+//     rule along the top plus its red title, both of which survive inversion.
+//   * <body> had 18px of padding and the card was width:600px; max-width:100%.
+//     On a phone that is 100% of the body PLUS the padding, so the card ran
+//     past the grey ground on the right, and the light grey turned into a
+//     mid-grey slab. The ground is now a full-width white table and the card
+//     a fluid table capped at 600px, so nothing can overhang anything.
+// Keep any new band or row on white (or the near-white #f7faf8 already used for
+// section rows) — no new tints.
+function shell(title: string, sub: string, body: string, foot: string, alert = false) {
+  const accent = alert ? C.bad : "#1c6b47";
+  return `<body style="margin:0;padding:0;background:#ffffff;font-family:${FONT}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#ffffff;"><tr><td align="center" style="padding:12px 8px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid ${C.line};border-radius:12px;border-collapse:separate;">
+    <tr><td style="padding:16px 14px;background:#ffffff;border-top:4px solid ${accent};border-radius:12px 12px 0 0;">
+      <div style="font-size:17px;font-weight:800;color:${alert ? C.bad : C.ink};">${title}</div>
       <div style="font-size:12.5px;color:${C.faint};margin-top:5px;line-height:1.6;">${sub}</div>
     </td></tr>
     ${body}
     <tr><td style="padding:12px 14px;text-align:center;color:${C.faint};font-size:10.5px;line-height:1.6;border-top:1px solid ${C.line};background:#f7faf8;border-radius:0 0 12px 12px;">${foot}</td></tr>
   </table>
+</td></tr></table>
 </body>`;
 }
 
@@ -254,11 +446,14 @@ const sectionRow = (label: string, color = C.faint) =>
 function itemRow(r: Row, today: string) {
   const late = r.due && r.due < today;
   const todayDue = r.due && r.due === today;
+  // Due a day early (dueSoon), but the real deadline is still what is printed.
+  const tomorrowDue = r.due && r.due === addDaysIso(today, 1);
   const dueTxt = r.missed
-    ? `<span style="color:${C.bad};font-weight:700;"> · reply window shut</span>`
+    ? (r.missedText === "" ? "" : `<span style="color:${C.bad};font-weight:700;"> · ${esc(r.missedText || "reply window shut")}</span>`)
     : todayDue ? `<span style="color:${C.bad};font-weight:700;"> · closes today</span>`
+    : tomorrowDue ? `<span style="color:${C.bad};font-weight:700;"> · due today — closes tomorrow</span>`
     : late ? `<span style="color:${C.bad};font-weight:700;"> · was due ${esc(prettyDay(r.due))}</span>`
-    : r.due ? `<span style="color:${C.warn};font-weight:700;"> · answer by ${esc(prettyDay(r.due))}</span>` : "";
+    : r.due ? `<span style="color:${C.warn};font-weight:700;"> · ${esc(r.dueVerb || "answer by")} ${esc(prettyDay(r.due))}</span>` : "";
   const facts = r.facts.map(esc).join(" &nbsp;·&nbsp; ");
   const note = noteLine(r);
   const amt = r.amount == null ? "" : `<b>${money(r.amount)}</b>`;
@@ -274,6 +469,13 @@ function itemRow(r: Row, today: string) {
 
 // The one-line "so what" under an item, in the same words the card uses.
 function noteLine(r: Row): string {
+  // A payment has no "response" — what matters is whether Shopify can still
+  // charge the card, so it gets its own three lines, in the card's words.
+  if (r.type === "payment") {
+    if (r.note === "resolution_disputed") return "Someone marked this resolved, but Shopify can still charge the card — the order was not charged or cancelled.";
+    if (r.missed) return "Shopify can't charge this card any more. Collect it another way, or cancel or refund what didn't ship.";
+    return "Fulfil the order to charge the card, or cancel it if it isn't going.";
+  }
   if (r.note === "delivered_after_refund")
     return "It turned up after we refunded the buyer. The carrier does not owe this one — call eBay, then record what they did.";
   if (r.note === "resolution_disputed")
@@ -292,13 +494,13 @@ function managerDaily(store: string, rows: Row[], seen: Set<string>, extras: { r
   const list = rows.slice().sort(bySoonest);
   const fresh = list.filter((r) => !seen.has(`${r.type}|${r.key}`));
   const rest = list.filter((r) => seen.has(`${r.type}|${r.key}`));
-  const closing = list.filter((r) => r.due && r.due === today && !r.missed).length;
+  const closing = list.filter((r) => dueSoon(r, today)).length;
   const total = list.reduce((s, r) => s + (r.amount || 0), 0);
 
   let body = `<tr><td style="padding:12px 14px;border-top:1px solid ${C.line};">
     <table role="presentation" width="100%"><tr>
       <td style="font-size:12px;color:${C.faint};"><b style="color:${C.ink};font-size:19px;">${list.length}</b><br>need you</td>
-      <td style="font-size:12px;color:${C.faint};"><b style="color:${closing ? C.bad : C.ink};font-size:19px;">${closing}</b><br>close today</td>
+      <td style="font-size:12px;color:${C.faint};"><b style="color:${closing ? C.bad : C.ink};font-size:19px;">${closing}</b><br>due today</td>
       <td style="font-size:12px;color:${C.faint};text-align:right;"><b style="color:${C.ink};font-size:19px;">${money(total)}</b><br>at stake</td>
     </tr></table></td></tr>`;
 
@@ -338,11 +540,13 @@ function managerNudge(store: string, rows: Row[], today: string) {
   const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
   const body = rows.sort(bySoonest).map((r) => itemRow(r, today)).join("");
   return shell(
-    `${money(total)} closes today`,
-    `${esc(STORE_NAME[store] || store)}. ${rows.length === 1 ? "This was" : "These were"} on your email this morning and the site still shows no response from us.`,
+    `${money(total)} due today`,
+    // "Still open on the site" rather than "no response from us": since 0119 a
+    // card that runs out today lands here too, and there is no reply to it.
+    `${esc(STORE_NAME[store] || store)}. ${rows.length === 1 ? "This was" : "These were"} on your email this morning and ${rows.length === 1 ? "is" : "are"} still open on the site.`,
     body,
-    `Sent at 4:00 PM only when something closes today and nothing has changed since the morning email.<br>Answer it and this stops — the next read of the site clears it by itself.`,
-    "#fbeceb", C.bad,
+    `Sent at 4:00 PM only when something closes today or tomorrow and nothing has changed since the morning email.<br>Answer it — or charge or cancel the order — and this stops. The next read of the site clears it by itself.`,
+    true,
   );
 }
 
@@ -351,21 +555,25 @@ function managerNudge(store: string, rows: Row[], today: string) {
 // ---------------------------------------------------------------------------
 function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, newMissed: Row[], contested: Row[], today: string) {
   const col = (n: number, color?: string) =>
-    `<td style="text-align:center;font-size:15px;font-weight:700;color:${n ? (color || C.ink) : "#c9d5cd"};">${n || "—"}</td>`;
+    `<td style="text-align:center;padding:0 3px;font-size:15px;font-weight:700;color:${n ? (color || C.ink) : "#c9d5cd"};">${n || "—"}</td>`;
 
-  const head = ["Store", "Disputes", "INRs", "Cases", "Mismatch", "Claims 7d", "Due today"];
+  // SHORT HEADERS (Ethan's phone, 2026-10-02). Eight full-word headers with no
+  // gap between cells ran together into "STOREDISPUTESINRSCASES…" at phone
+  // width. Short single words with padding fit at 360px; the footer spells them out.
+  const head = ["Store", "Disp", "INR", "Case", "Mism", "Pay", "Claims", "Due"];
+  const last = head.length - 1;
   let table = `<tr><td style="padding:14px 12px;border-top:1px solid ${C.line};">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-      <tr>${head.map((h, i) => `<th style="text-align:${i ? "center" : "left"};font-size:9.5px;font-weight:700;letter-spacing:.03em;color:${i === 6 ? C.bad : C.faint};text-transform:uppercase;padding-bottom:7px;border-bottom:1.5px solid ${C.ink};">${esc(h)}</th>`).join("")}</tr>`;
+      <tr>${head.map((h, i) => `<th style="text-align:${i ? "center" : "left"};padding:0 3px 7px;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.03em;color:${i === last ? C.bad : C.faint};text-transform:uppercase;border-bottom:1.5px solid ${C.ink};">${esc(h)}</th>`).join("")}</tr>`;
 
   let any = false;
   for (const s of STORES) {
     const c = counts[s];
-    if (!c || !(c.disputes || c.inrs || c.cases || c.mismatch || c.claims || c.dueToday)) continue;
+    if (!c || !(c.disputes || c.inrs || c.cases || c.mismatch || c.payments || c.claims || c.dueToday)) continue;
     any = true;
     table += `<tr>
       <td style="padding:11px 0;border-bottom:1px solid ${C.line};font-size:13px;font-weight:700;color:${C.ink};">${esc(s)}</td>
-      ${col(c.disputes)}${col(c.inrs)}${col(c.cases)}${col(c.mismatch)}${col(c.claims, C.warn)}${col(c.dueToday, C.bad)}
+      ${col(c.disputes)}${col(c.inrs)}${col(c.cases)}${col(c.mismatch)}${col(c.payments)}${col(c.claims, C.warn)}${col(c.dueToday, C.bad)}
     </tr>`;
   }
   table += `</table></td></tr>`;
@@ -375,10 +583,12 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
   if (newMissed.length) {
     body += sectionRow("New — worth a conversation", C.bad);
     body += newMissed.map((r) => `<tr><td style="padding:14px;border-top:1px solid ${C.line};">
-      <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">Missed reply window</div>
+      <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">${r.type === "payment" ? "Uncollected payment" : "Missed reply window"}</div>
       <div style="font-size:15px;font-weight:700;color:${C.ink};margin:4px 0 6px;">${esc(r.store)} — ${money(r.amount)} ${esc(r.kindLabel)}</div>
       <div style="font-size:13px;color:${C.ink};line-height:1.6;">${esc(r.facts.join(" · "))}<br>
-        <span style="color:${C.faint};">The deadline passed with no response recorded from the store.</span></div>
+        <span style="color:${C.faint};">${r.type === "payment"
+          ? "The card authorization ran out before the order was charged. The money has to be collected another way now."
+          : "The deadline passed with no response recorded from the store."}</span></div>
     </td></tr>`).join("");
   }
   if (contested.length) {
@@ -389,7 +599,7 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
         <div style="font-size:11px;color:${C.faint};letter-spacing:.04em;text-transform:uppercase;">Marked resolved, site disagrees · day ${days}</div>
         <div style="font-size:15px;font-weight:700;color:${C.ink};margin:4px 0 6px;">${esc(r.store)} — ${money(r.amount)} ${esc(r.kindLabel)}</div>
         <div style="font-size:13px;color:${C.ink};line-height:1.6;">${esc(r.facts.join(" · "))}<br>
-          <span style="color:${C.faint};">The site still shows no response. Past the 2-day grace, so it came to you.</span></div>
+          <span style="color:${C.faint};">${r.type === "payment" ? "Shopify can still charge the card — it was not charged or cancelled." : "The site still shows no response."} Past the 2-day grace, so it came to you.</span></div>
       </td></tr>`;
     }).join("");
   }
@@ -398,7 +608,7 @@ function dmDigest(byStore: Record<string, Row[]>, counts: Record<string, any>, n
     "What is still sitting with the managers",
     "Counts are items still needing a person to do something. Anything already answered or settled is left out.",
     body,
-    `Sent on the mornings the managers are emailed, so this is what went out to them today.<br>A store with nothing outstanding is left out of the table entirely.`,
+    `Disp = disputes · INR = item not received · Case = eBay cases · Mism = refund mismatches · Pay = unpaid orders · Claims = claims over 7 days · Due = deadline today or tomorrow.<br>Sent on the mornings the managers are emailed, so this is what went out to them today.<br>A store with nothing outstanding is left out of the table entirely.`,
   );
 }
 
@@ -414,12 +624,12 @@ function dmDueToday(byStore: Record<string, Row[]>, today: string) {
     body += byStore[s].sort(bySoonest).map((r) => itemRow(r, today)).join("");
   }
   return shell(
-    `${money(total)} closes today and is still unanswered`,
-    `${stores.length === 1 ? "One store has" : `${stores.length} stores have`} something whose deadline is today. ${
-      stores.length === 1 ? "It was" : "They were"} on this morning's email and the site still shows no response.`,
+    `${money(total)} due today and still unanswered`,
+    `${stores.length === 1 ? "One store has" : `${stores.length} stores have`} something whose deadline is today or tomorrow. ${
+      stores.length === 1 ? "It was" : "They were"} on this morning's email and ${stores.length === 1 ? "is" : "are"} still open on the site.`,
     body,
-    `Sent at 4:00 PM only when a deadline falls today and the store has not answered it.<br>Nothing here can be cleared from this email — the store has to answer on the site.`,
-    "#fbeceb", C.bad,
+    `Sent at 4:00 PM only when a deadline falls today or tomorrow and the store has not dealt with it.<br>Nothing here can be cleared from this email — the store has to answer it, or charge or cancel the order, on the site.`,
+    true,
   );
 }
 
@@ -505,9 +715,21 @@ Deno.serve(async (req: Request) => {
            link: "https://admin.shopify.com/store/paymore-westport/payments/disputes",
            linkLabel: "Respond in Shopify" });
 
+    // 0119: a card on its last chargeable day (LEE #MO01-9799, 2026-09-28) and
+    // one that already ran out (WSP #MO02-6808), both real.
+    const pay = (o: Partial<Row>) => mk({ type: "payment", linkLabel: "Open in Shopify",
+      dueVerb: "charge the card by", missedText: "card expired", ...o });
+    const cardToday = pay({ key: "p1", state: "needs_reply", kindLabel: "Card not charged yet",
+      title: "Pitfall (Atari 2600, 1982)", amount: 16.26, due: addDaysIso(day, 1), facts: ["Order #MO02-7002", "1 not shipped"],
+      link: "https://admin.shopify.com/store/paymore-westport/orders/1" });
+    const cardGone = pay({ key: "p2", state: "due", note: "missed_window", missed: true, missedText: "",
+      kindLabel: "Card expired — not collected", title: "Sony PlayStation 5 Digital", amount: 452.93,
+      facts: ["Order #MO02-6808", "1 not shipped"], openedAt: "2026-08-25T00:00:00Z",
+      link: "https://admin.shopify.com/store/paymore-westport/orders/2" });
     const dueToday = [
       cb("d1", "Product unacceptable", 199.99, "#MO02-6573", "13.3", day),
       cb("d2", "Product unacceptable", 120.00, "#MO02-6562", "13.3", day),
+      cardToday,
     ];
     const wsp = [
       ...dueToday,
@@ -522,8 +744,10 @@ Deno.serve(async (req: Request) => {
       mk({ key: "m1", type: "mismatch", state: "due", kindLabel: "Refund mismatch",
            title: "Refunded on eBay, but not on Shopify", amount: 519.99,
            facts: ["eBay order 25-15003-02000", "Shopify #MO02-6538"], openedAt: "2026-09-05T00:00:00Z" }),
+      cardGone,
     ];
     const missed = [
+      { ...cardGone, store: "WSP" },
       mk({ key: "x1", store: "MPL", kindLabel: "eBay payment dispute", missed: true, amount: 459.99,
            title: "Payment dispute", facts: ["Order 01-15084-49541", "Buyer did not recognise the transaction"] }),
       mk({ key: "x2", store: "BAL", type: "ebay_case", kindLabel: "eBay case", missed: true, amount: 799.99,
@@ -536,11 +760,11 @@ Deno.serve(async (req: Request) => {
     ];
     const byStore: Record<string, Row[]> = { OVL: [], LEE: [], WSP: wsp, MPL: [], BAL: [] };
     const counts: Record<string, any> = {
-      BAL: { disputes: 2, inrs: 5, cases: 2, mismatch: 8, claims: 2, dueToday: 0 },
-      MPL: { disputes: 2, inrs: 6, cases: 0, mismatch: 7, claims: 1, dueToday: 0 },
-      WSP: { disputes: 3, inrs: 6, cases: 0, mismatch: 2, claims: 0, dueToday: 2 },
-      LEE: { disputes: 0, inrs: 3, cases: 0, mismatch: 2, claims: 1, dueToday: 0 },
-      OVL: { disputes: 1, inrs: 3, cases: 0, mismatch: 0, claims: 0, dueToday: 0 },
+      BAL: { disputes: 2, inrs: 5, cases: 2, mismatch: 8, payments: 0, claims: 2, dueToday: 0 },
+      MPL: { disputes: 2, inrs: 6, cases: 0, mismatch: 7, payments: 0, claims: 1, dueToday: 0 },
+      WSP: { disputes: 3, inrs: 6, cases: 0, mismatch: 2, payments: 2, claims: 0, dueToday: 3 },
+      LEE: { disputes: 0, inrs: 3, cases: 0, mismatch: 2, payments: 3, claims: 1, dueToday: 0 },
+      OVL: { disputes: 1, inrs: 3, cases: 0, mismatch: 0, payments: 0, claims: 0, dueToday: 0 },
     };
     const html =
       kind === "manager_nudge" ? managerNudge("WSP", dueToday, day)
@@ -574,8 +798,18 @@ Deno.serve(async (req: Request) => {
   };
 
   try {
+    // READ FIRST — see FRESHNESS. ?nosync=1 skips it, for looking at a template.
+    const syncErr = url.searchParams.get("nosync") === "1" ? null : await refresh();
     const data = await fetchState();
     const today = data.today || chicagoDay(new Date());
+    const stale = staleness(data);
+    const staleStores = STORES.filter((s) => stale[s]?.length);
+    // The DM hears about every store; a manager only about their own.
+    const dmWarn = [
+      ...(syncErr ? [`All stores: ${syncErr}.`] : []),
+      ...staleStores.map((s) => `${STORE_NAME[s] || s}: ${stale[s].join("; ")}.`),
+    ];
+    const storeWarn = (s: string) => stale[s]?.length ? [`${stale[s].join("; ")}.`] : [];
     const rows = allRows(data).filter((r) => !only || r.store === only);
 
     // Everything ever mailed, so "new" means new to the manager rather than new
@@ -595,13 +829,15 @@ Deno.serve(async (req: Request) => {
     if (kind === "manager_daily") {
       for (const s of STORES) {
         const list = byStore[s];
-        if (!list.length) { sent.push({ store: s, skipped: "nothing to say" }); continue; }
+        // "Nothing to say" is only true if the list is current. A stale store with
+        // an empty list gets the mail anyway, because the warning IS the news.
+        if (!list.length && !storeWarn(s).length) { sent.push({ store: s, skipped: "nothing to say" }); continue; }
         const extras = {
           returns: (data.cases || []).filter((c: any) => isPlainReturn(c) && c.store_code === s && c.is_open).length,
           claims: (data.claims || []).filter((c: any) => c.store === s && c.aging).length,
-          quiet: rows.filter((r) => r.store === s && r.quiet && r.quiet > today).length,
+          quiet: rows.filter((r) => r.store === s && r.quiet && r.quiet > addDaysIso(today, 1)).length,
         };
-        const html = managerDaily(s, list, seen, extras, today);
+        const html = withWarning(managerDaily(s, list, seen, extras, today), storeWarn(s));
         previews.push(html);
         const subject = `Claims & Disputes — ${STORE_NAME[s] || s}: ${list.length} need${list.length === 1 ? "s" : ""} you`;
         const to = await listFor(`claims_disputes_${s}`);
@@ -622,15 +858,14 @@ Deno.serve(async (req: Request) => {
     if (kind === "manager_nudge" || kind === "dm_due_today") {
       const dueNow: Record<string, Row[]> = {};
       for (const s of STORES) {
-        dueNow[s] = byStore[s].filter((r) =>
-          r.due && r.due === today && !r.missed && mailedToday.has(`${r.type}|${r.key}`));
+        dueNow[s] = byStore[s].filter((r) => dueSoon(r, today) && mailedToday.has(`${r.type}|${r.key}`));
       }
       if (kind === "manager_nudge") {
         for (const s of STORES) {
           if (!dueNow[s].length) { sent.push({ store: s, skipped: "nothing closing today" }); continue; }
-          const html = managerNudge(s, dueNow[s], today);
+          const html = withWarning(managerNudge(s, dueNow[s], today), storeWarn(s));
           previews.push(html);
-          const subject = `Closes today — ${dueNow[s].length} unanswered at ${STORE_NAME[s] || s}`;
+          const subject = `Due today — ${dueNow[s].length} unanswered at ${STORE_NAME[s] || s}`;
           const to = await listFor(`claims_disputes_${s}`);
           if (!to.length) { sent.push({ store: s, skipped: "no recipients" }); continue; }
           if (dry) { sent.push({ store: s, to, subject, items: dueNow[s].length }); continue; }
@@ -640,10 +875,22 @@ Deno.serve(async (req: Request) => {
         }
       } else {
         const stores = STORES.filter((s) => dueNow[s].length);
-        if (!stores.length) {
+        if (!stores.length && dmWarn.length) {
+          // Nothing due that we can SEE — which is only reassuring if the list is
+          // current. When it is not, the DM is told that instead of nothing.
+          const html = withWarning(shell("Claims &amp; Disputes may be out of date",
+            "Nothing shows as due today, but at least one store could not be read recently, so that may not be the whole picture.",
+            "", "SPEEKSNET · Claims &amp; Disputes"), dmWarn);
+          previews.push(html);
+          const subject = `Claims & Disputes could not be read — ${staleStores.join(", ") || "all stores"}`;
+          const to = await listFor("claims_disputes_dm");
+          if (!to.length) sent.push({ skipped: "no recipients" });
+          else if (dry) sent.push({ to, subject, stale: staleStores });
+          else sent.push({ to, subject, stale: staleStores, ...(await relay(to.join(","), subject, html)) });
+        } else if (!stores.length) {
           sent.push({ skipped: "no store has anything due today outstanding" });
         } else {
-          const html = dmDueToday(dueNow, today);
+          const html = withWarning(dmDueToday(dueNow, today), dmWarn);
           previews.push(html);
           const n = stores.reduce((a, s) => a + dueNow[s].length, 0);
           const subject = `Due today, still unanswered — ${stores.join(", ")}`;
@@ -669,8 +916,9 @@ Deno.serve(async (req: Request) => {
           inrs: list.filter((r) => r.type === "ebay_case" && /item not received|refunded item|delivered after/i.test(r.kindLabel)).length,
           cases: list.filter((r) => r.type === "ebay_case" && r.kindLabel === "eBay case").length,
           mismatch: list.filter((r) => r.type === "mismatch").length,
+          payments: list.filter((r) => r.type === "payment").length,
           claims: (data.claims || []).filter((c: any) => c.store === s && c.aging).length,
-          dueToday: list.filter((r) => r.due && r.due === today && !r.missed).length,
+          dueToday: list.filter((r) => dueSoon(r, today)).length,
         };
       }
       // SHOWN ONCE, AND ONLY ONCE. There is nothing for the DM to clear on a
@@ -685,22 +933,23 @@ Deno.serve(async (req: Request) => {
       const contested = rows.filter((r) =>
         r.contestedSince && Date.now() - Date.parse(r.contestedSince) > 2 * 86400000);
 
-      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || contested.length;
+      const backupWarn = await backupWarning();
+      const anything = STORES.some((s) => byStore[s].length) || newMissed.length || contested.length || dmWarn.length || backupWarn.length;
       if (!anything) sent.push({ skipped: "nothing outstanding anywhere" });
       else {
-        const html = dmDigest(byStore, counts, newMissed, contested, today);
+        const html = withBackupWarning(withWarning(dmDigest(byStore, counts, newMissed, contested, today), dmWarn), backupWarn);
         previews.push(html);
         const subject = `Claims & Disputes — what is still with the managers`;
         const to = await listFor("claims_disputes_dm");
         if (!to.length) sent.push({ skipped: "no recipients" });
-        else if (dry) sent.push({ to, subject, newMissed: newMissed.length, contested: contested.length });
+        else if (dry) sent.push({ to, subject, newMissed: newMissed.length, contested: contested.length, backupWarn });
         else {
           const r = await relay(to.join(","), subject, html);
           // Only the missed windows are logged for this mail: they are the ones
           // whose whole behaviour depends on having been said once. Logging the
           // table's contents would make every count "already seen" tomorrow.
           if (r.ok) for (const m of newMissed) await logIt("dm_digest", m.store, [m], today);
-          sent.push({ to, subject, newMissed: newMissed.length, contested: contested.length, ...r });
+          sent.push({ to, subject, newMissed: newMissed.length, contested: contested.length, backupWarn, ...r });
         }
       }
     }
@@ -709,7 +958,7 @@ Deno.serve(async (req: Request) => {
       return new Response(previews[0] || "<p>Nothing to show — this run had nothing to say.</p>",
         { headers: { ...cors, "Content-Type": "text/html; charset=utf-8" } });
     }
-    return json({ success: true, kind, today, dry, sent });
+    return json({ success: true, kind, today, dry, sent, syncErr, stale });
   } catch (e) {
     return json({ success: false, error: String(e).slice(0, 400) }, 500);
   }

@@ -246,6 +246,32 @@ function mondayOf(ds: string): string {
   return d.toISOString().split("T")[0];
 }
 
+function addDaysIso(ds: string, n: number): string {
+  const d = new Date(ds + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().split("T")[0];
+}
+// The Sunday that closes the week — what kpi_entries.period_end_date holds.
+function sundayOf(ds: string): string { return addDaysIso(mondayOf(ds), 6); }
+
+// ---- LISTED COMES FROM THE DAY END REPORT (2026-09-24) ----------------------
+// Every "how many did the store list" figure here used to be the manager-filed
+// weekly KPI (kpi_entries.listed_count). Ethan: "store efficiency should go
+// based on day end report now so it's accurate and not relying on managers to
+// pull the data the right way". So a week from DAY_END_FROM on is read from
+// day_end_facts, per day: Total Listed Devices from 2026-09-23 (0115), Devices
+// Processed before it — the listedOf() rule district-watch judges on.
+//
+// Checked before switching, 2026-08-09 → 09-20, 35 store-weeks: the KPI equals
+// the report's weekly total EXACTLY on 29. The six that differ are hand-entry
+// slips, not a different measure — OVL w/e 08-16 report 201 / KPI 132, BAL
+// w/e 09-06 188 / 147, LEE w/e 08-30 204 / 228. (0095's "15-30% below" was
+// measured on an incomplete window and does not survive this comparison.)
+//
+// DAY_END_FROM is the first Monday day_end_facts covers whole (it starts on
+// Sat 08-01). Weeks before it keep the KPI — there is nothing else for them.
+const DAY_END_FROM = "2026-08-03";
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -366,7 +392,23 @@ Deno.serve(async (req: Request) => {
     return { ...cap, estimated: false };
   }
 
-  // Completed-week listing totals for a store (sum of listed_count), oldest -> newest.
+  // A store's listed count per day off the Day End Report, date -> count. See
+  // DAY_END_FROM. A day with no report row is absent, not 0.
+  async function dayEndListed(store: string, from: string, to: string): Promise<Record<string, number>> {
+    if (to < from) return {};
+    const { data } = await supabase
+      .from("day_end_facts")
+      .select("date, listed_devices, devices_processed")
+      .eq("store", store).gte("date", from).lte("date", to);
+    const out: Record<string, number> = {};
+    (data || []).forEach((r: any) => {
+      out[r.date] = r.listed_devices != null ? Number(r.listed_devices) || 0 : Number(r.devices_processed) || 0;
+    });
+    return out;
+  }
+
+  // Completed-week listing totals for a store, oldest -> newest, keyed by the
+  // week's closing Sunday. The Day End Report from DAY_END_FROM, the KPI before.
   async function weeklyTotals(store: string) {
     const { data } = await supabase
       .from("kpi_entries")
@@ -377,7 +419,13 @@ Deno.serve(async (req: Request) => {
     const byWeek: Record<string, number> = {};
     (data || []).forEach((r: any) => {
       const w = r.period_end_date;
+      if (mondayOf(w) >= DAY_END_FROM) return;
       byWeek[w] = (byWeek[w] || 0) + (Number(r.listed_count) || 0);
+    });
+    const de = await dayEndListed(store, DAY_END_FROM, addDaysIso(thisMonday, -1));
+    Object.keys(de).forEach((d) => {
+      const w = sundayOf(d);
+      byWeek[w] = (byWeek[w] || 0) + de[d];
     });
     return Object.keys(byWeek).sort().map((w) => ({ week: w, total: byWeek[w] }));
   }
@@ -599,7 +647,8 @@ Deno.serve(async (req: Request) => {
   //            Off days, callouts and no-shows fall out of this automatically,
   //            because an OFF person carries no goal and an unstaffed seat was
   //            never assigned. This is the honest "what should you have hit".
-  // efficiency = real listed_count ÷ adjusted. Above 1.0 means the team beat the
+  // efficiency = listed (Day End Report) ÷ adjustedToDate — `adjusted` itself
+  //            for a finished week. Above 1.0 means the team beat the
   //            capacity it actually had, which is the only fair reading of a week
   //            that lost two people to a callout.
   async function breakdown(store: string, weekStart: string) {
@@ -636,16 +685,36 @@ Deno.serve(async (req: Request) => {
     const adjusted = rows.reduce((s: number, r: any) => s + (Number(r.goal) || 0), 0);
     const offDays = rows.filter((r: any) => String(r.role || "").toUpperCase() === "OFF").length;
 
-    // Actual output is the manager-filed weekly KPI, not the daily result boxes:
-    // the KPI is the number that already drives every other scoreboard, and the
-    // daily boxes are frequently left blank.
-    const { data: kpi } = await supabase
-      .from("kpi_entries")
-      .select("listed_count")
-      .eq("store", store)
-      .eq("period_type", "weekly")
-      .eq("period_end_date", endStr);
-    const actual = (kpi || []).reduce((s: number, r: any) => s + (Number(r.listed_count) || 0), 0);
+    // Actual output is the Day End Report's listed count (see DAY_END_FROM), the
+    // KPI only for weeks before the report was banked.
+    //
+    // A WEEK IN PROGRESS is measured THROUGH YESTERDAY, on both sides: today has
+    // goals but its report does not exist until tonight, so counting today's
+    // goals against no listings would mark every store down by a day. That is
+    // what `adjustedToDate` is — the Staffed For of the days the listings cover.
+    // For a finished week it is `adjusted` exactly, so a closed week reads as it
+    // always did. This is what makes the board answerable mid-week at all; with
+    // the KPI it could only ever show weeks that were over.
+    const yesterday = addDaysIso(todayStr, -1);
+    const through = endStr < yesterday ? endStr : yesterday;
+    let actual = 0;
+    let listedSource = "day_end";
+    if (weekStart >= DAY_END_FROM) {
+      const de = await dayEndListed(store, weekStart, through);
+      actual = Object.values(de).reduce((s, n) => s + n, 0);
+    } else {
+      listedSource = "kpi";
+      const { data: kpi } = await supabase
+        .from("kpi_entries")
+        .select("listed_count")
+        .eq("store", store)
+        .eq("period_type", "weekly")
+        .eq("period_end_date", endStr);
+      actual = (kpi || []).reduce((s: number, r: any) => s + (Number(r.listed_count) || 0), 0);
+    }
+    const adjustedToDate = rows
+      .filter((r: any) => String(r.date).slice(0, 10) <= through)
+      .reduce((s: number, r: any) => s + (Number(r.goal) || 0), 0);
 
     // Per-person, per-day goal — the number the widget shows. Deliberately NOT
     // back-derived from the weekly total the way the old engine's largest-
@@ -682,6 +751,10 @@ Deno.serve(async (req: Request) => {
       planned: cap.goal,
       adjusted,
       assignedDays: rows.length,
+      // Person-days with a row through `through` — the frame the "X/Y roles"
+      // tag has to be judged in for a week still in progress, or every store
+      // reads as half-staffed on a Wednesday.
+      assignedDaysToDate: rows.filter((r: any) => String(r.date).slice(0, 10) <= through).length,
       offDays,
       actual,
       // True when this week predates the capacity snapshot (0093), so Hours,
@@ -690,7 +763,12 @@ Deno.serve(async (req: Request) => {
       // available, but they are not what the store was shown at the time and the
       // table says so rather than letting them pass as history.
       estimated: !!cap.estimated,
-      efficiency: adjusted > 0 ? Math.round((actual / adjusted) * 100) / 100 : null,
+      adjustedToDate,
+      // The last day `actual` covers: the Sunday for a finished week, yesterday
+      // for this one (earlier than weekStart on a Monday — nothing to judge yet).
+      through,
+      listedSource,
+      efficiency: adjustedToDate > 0 ? Math.round((actual / adjustedToDate) * 100) / 100 : null,
       sampleGoals: {
         weekday: { B1: perDay("B1", fullShift, false, false), B2: perDay("B2", fullShift, false, false), L: perDay("L1", fullShift, false, false), newHireLister: perDay("L1", fullShift, false, true) },
         saturday: { B1: perDay("B1", fullShift, true, false), B2: perDay("B2", fullShift, true, false), L: perDay("L1", fullShift, true, false), newHireLister: perDay("L1", fullShift, true, true) },
@@ -763,8 +841,12 @@ Deno.serve(async (req: Request) => {
     // week of goals. The client sums a person across the market and paints the
     // days he spent elsewhere as that store's code.
     //
-    // Listings are the weekly KPI, the same number breakdown() uses; the daily
-    // result column is always 0 and is not read.
+    // Listings are each person's DAILY listing_goals.result from DAY_END_FROM on
+    // — the Day End Report's per-person count, written by day-end-ingest — summed
+    // to the week. That retires the floater caveat above for those weeks: a
+    // result sits on the store-day it was earned, not on one store's KPI line.
+    // Weeks before DAY_END_FROM still read the weekly KPI. The "Temp in today"
+    // row carries the temps' listings, so it shows as its own line.
     if (action === "roleweeks") {
       if (!store || !STORES.includes(store)) return json({ error: "Unknown store" }, 400);
       const market = marketOf(store);
@@ -783,7 +865,7 @@ Deno.serve(async (req: Request) => {
       const [{ data: goalRows }, { data: kpiRows }] = await Promise.all([
         supabase
           .from("listing_goals")
-          .select("date, store, employee, role, goal, created_at")
+          .select("date, store, employee, role, goal, result, created_at")
           .in("store", market)
           .gte("date", from)
           .lte("date", to)
@@ -814,18 +896,34 @@ Deno.serve(async (req: Request) => {
         byKey[`${r.date}|${r.store}|${r.employee}`] = {
           date: r.date, store: r.store, employee: r.employee,
           role: String(r.role || "").toUpperCase(), goal: Number(r.goal) || 0,
+          result: r.result == null ? null : Number(r.result) || 0,
         };
       });
+
+      // Listed per person per week: daily results from DAY_END_FROM, the KPI
+      // before. A null result is a day the report never reached, not a 0 — a
+      // week with none at all for someone leaves them without a listed row,
+      // which the grid shows as "—" rather than as a week of nothing.
+      const listedBy: Record<string, any> = {};
+      Object.values(byKey).forEach((r: any) => {
+        if (r.result == null || mondayOf(r.date) < DAY_END_FROM) return;
+        const weekEnd = sundayOf(r.date);
+        const k = `${weekEnd}|${r.store}|${r.employee}`;
+        (listedBy[k] = listedBy[k] || { weekEnd, store: r.store, employee: r.employee, listed: 0 }).listed += r.result;
+      });
+      const kpiListed = (kpiRows || [])
+        .filter((r: any) => mondayOf(r.period_end_date) < DAY_END_FROM)
+        .map((r: any) => ({
+          weekEnd: r.period_end_date, store: r.store,
+          employee: r.employee_name, listed: Number(r.listed_count) || 0,
+        }));
 
       return json({
         store,
         market,
         weeks,
         goals: Object.values(byKey),
-        listed: (kpiRows || []).map((r: any) => ({
-          weekEnd: r.period_end_date, store: r.store,
-          employee: r.employee_name, listed: Number(r.listed_count) || 0,
-        })),
+        listed: [...kpiListed, ...Object.values(listedBy)],
       });
     }
 

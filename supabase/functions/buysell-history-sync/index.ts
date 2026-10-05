@@ -42,6 +42,16 @@ const SECRET = Deno.env.get("SYNC_SECRET") || "sp33ks-sync-k3y-2026-x9mq";
 
 const STORES = new Set(["OVL", "LEE", "WSP", "MPL", "BAL"]);
 
+// SELLING FROM THE NET PROFIT TAB FROM OCTOBER 2026 (0136, Ethan 2026-10-02:
+// the Sales Summary tabs are deleted from October on). For a day on or after
+// NP_FROM, sell and gp come from daily_np — never from the workbook, which has
+// no Sales tab for that month and would otherwise hand back nothing, written
+// here as sell 0 / gp 0 over a real day. A day the NP tab has not reached keeps
+// whatever daily_buysell already holds. Buying is unchanged: still the Buy tab.
+// capture_daily_buysell() applies the same rule to the month in progress; this
+// is what fills a month's LAST day, which only lands after the month has rolled.
+const NP_FROM = "2026-10-01";
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -208,10 +218,44 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // Selling from daily_np for NP days (see NP_FROM). Also makes a row for an NP
+    // day the Buy tab has nothing on — a Sunday the webstore still traded.
+    const npMonths = months.filter((m) => `${m}-01` >= NP_FROM);
+    if (npMonths.length) {
+      const from = npMonths.slice().sort()[0] + "-01";
+      const [{ data: np, error: npErr }, { data: have, error: hvErr }] = await Promise.all([
+        supabase.from("daily_np").select("date,store,sales,gp").gte("date", from),
+        supabase.from("daily_buysell").select("date,store,buy,sell,gp,buy_margin_pct").gte("date", from),
+      ]);
+      if (npErr || hvErr) throw new Error("daily_np / daily_buysell read: " + (npErr || hvErr)!.message);
+      const npOf = new Map((np || []).map((r: any) => [`${r.date}|${r.store}`, r]));
+      const haveOf = new Map((have || []).map((r: any) => [`${r.date}|${r.store}`, r]));
+      const seen = new Set<string>();
+      for (const r of rows as any[]) {
+        if (String(r.date) < NP_FROM) continue;
+        const k = `${r.date}|${r.store}`;
+        seen.add(k);
+        const n: any = npOf.get(k), h: any = haveOf.get(k);
+        r.sell = num(n?.sales) ?? num(h?.sell) ?? 0;
+        r.gp = num(n?.gp) ?? num(h?.gp) ?? 0;
+      }
+      for (const [k, n] of npOf as Map<string, any>) {
+        if (seen.has(k) || !npMonths.includes(String(n.date).slice(0, 7))) continue;
+        if (String(n.date).slice(0, 7) === thisMonth && Number(String(n.date).slice(8, 10)) > Number(today.slice(8, 10))) continue;
+        const h: any = haveOf.get(k);
+        rows.push({
+          date: n.date, store: n.store,
+          buy: num(h?.buy) ?? 0, sell: num(n.sales) ?? 0, gp: num(n.gp) ?? 0,
+          buy_margin_pct: num(h?.buy_margin_pct) ?? 0,
+        });
+      }
+    }
+
     if (dry) {
       return json({
         ok: true, dryRun: true, monthsWritten: months.sort(),
         wouldWrite: rows.length, totals, skipped: skipped.slice(0, 40),
+        npRows: rows.filter((r: any) => String(r.date) >= NP_FROM),
         sheetWarnings: payload.warnings || [],
       });
     }

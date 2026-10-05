@@ -123,8 +123,8 @@ function load(ctx, show) {
 var html = function (id) { return document.getElementById(id).innerHTML; };
 
 // --- markup ------------------------------------------------------------------
-t('manager modal has all four tabs and their panels', function () {
-    var miss = ['view', 'mismatch', 'returns', 'cases'].filter(function (x) {
+t('manager modal has all five tabs and their panels', function () {
+    var miss = ['view', 'mismatch', 'returns', 'cases', 'payments'].filter(function (x) {
         return !document.getElementById('claims-tab-' + x) || !document.getElementById('claims-panel-' + x);
     });
     if (miss.length) return 'missing tab/panel: ' + miss.join(', ');
@@ -133,7 +133,7 @@ t('manager modal has all four tabs and their panels', function () {
     return !document.getElementById('claims-tab-new') || 'the New Claim tab is back — it should be a button on the list';
 });
 t('oversight modal keeps the claims body inside its Claims panel', function () {
-    var ids = ['ov-tab-claims', 'ov-panel-claims', 'ov-panel-mismatch', 'ov-panel-cases', 'hold-ov-mismatch', 'hold-ov-cases', 'claims-oversight-body'];
+    var ids = ['ov-tab-claims', 'ov-panel-claims', 'ov-panel-mismatch', 'ov-panel-cases', 'ov-tab-payments', 'ov-panel-payments', 'hold-ov-mismatch', 'hold-ov-cases', 'hold-ov-payments', 'claims-oversight-body'];
     var miss = ids.filter(function (id) { return !document.getElementById(id); });
     if (miss.length) return 'missing: ' + miss.join(', ');
     return document.getElementById('ov-panel-claims').contains(document.getElementById('claims-oversight-body')) || 'oversight body moved';
@@ -730,7 +730,7 @@ t('every tab is the same width and none spills out of the row', function () {
         if (cs.visibility === 'hidden') el.style.setProperty('visibility', 'visible', 'important');
         if (cs.opacity === '0') el.style.setProperty('opacity', '1', 'important');
     }
-    var tabs = ['claims', 'mismatch', 'returns', 'cases'].map(function (t) {
+    var tabs = ['claims', 'mismatch', 'returns', 'cases', 'payments'].map(function (t) {
         var b = document.getElementById('ov-tab-' + t);
         b.style.display = '';
         var badge = document.getElementById('hold-ov-badge-' + t);
@@ -750,7 +750,7 @@ t('every tab is the same width and none spills out of the row', function () {
 // a store that is not switched on yet sees the same four tabs as everyone else,
 // each saying what is coming — not a tab bar that grows a tab one morning.
 t('the tabs are in the markup, not painted in once the server answers', function () {
-    var hidden = ['mismatch', 'returns', 'cases'].filter(function (t) {
+    var hidden = ['mismatch', 'returns', 'cases', 'payments'].filter(function (t) {
         return ['claims-tab-' + t, 'ov-tab-' + t].some(function (id) {
             var b = document.getElementById(id);
             return b && b.style.display === 'none';
@@ -766,6 +766,7 @@ t('a store that is not switched on gets the tabs and a line about it', function 
         mismatch: 'Refund mismatches',
         returns: 'eBay returns',
         cases: 'eBay cases and disputes',
+        payments: 'Unpaid Shopify orders',
     };
     for (var t2 in want) {
         var h = html('hold-mgr-' + t2);
@@ -1228,4 +1229,169 @@ t('an eBay case past its deadline says so in the words of a case', function () {
     if (!/does not take a late reply/.test(card)) return 'it does not explain why answering will not help';
     return !/answer it on eBay and this clears itself/.test(card)
         || 'it still tells them to go and answer it';
+});
+
+// --- PAYMENTS (0119, Ethan 2026-09-28: "I would call the tab Payments") --------
+// Shaped like the live read of 2026-09-28: the two LEE orders on the CFO's list
+// (#MO01-9799 on its last authorized day, #MO01-8907 partly paid), plus the WSP
+// order his list did not have. `state` is the server's, as everywhere here.
+function payFixture() {
+    var f = fixture();
+    f.stores = ['LEE', 'WSP']; f.rollout = ['LEE', 'WSP'];
+    f.timers.payment = 3; f.waiting.payment = 13; f.paymentWarnDays = 2;
+    f.paymentSync = [{ store_code: 'LEE', synced_at: ago(0.01), ok: true, detail: '9 unpaid' },
+                     { store_code: 'WSP', synced_at: ago(0.01), ok: true, detail: '1 unpaid' }];
+    f.payments = [
+        { order_key: 'LEE:6797402194150', store_code: 'LEE', order_id: '6797402194150', order_name: '#MO01-9799',
+          source_name: 'web', item_title: 'Pitfall (Atari 2600, 1982)', unfulfilled_items: 1,
+          total: 16.26, outstanding: 0, capturable: true, capturable_amount: 16.26, received: 0, amount: 16.26,
+          financial_status: 'AUTHORIZED', fulfillment_status: 'UNFULFILLED', ordered_at: ago(7), auth_expires_at: ahead(0.02),
+          is_open: true, review: null, history: [], state: 'needs_reply', due_on: '2026-09-28', state_note: null, missed_window: false },
+        { order_key: 'LEE:6700000008907', store_code: 'LEE', order_id: '6700000008907', order_name: '#MO01-8907',
+          source_name: 'web', item_title: 'Acer Chromebook N19Q3 15.6" Celeron N4020', unfulfilled_items: 1,
+          total: 244.03, outstanding: 28.2, capturable: false, capturable_amount: 0, received: 147.5, amount: 28.2,
+          financial_status: 'PARTIALLY_PAID', fulfillment_status: 'ON_HOLD', ordered_at: ago(39), auth_expires_at: ago(11),
+          is_open: true, review: null, history: [], state: 'due', due_on: '2026-09-28', state_note: 'missed_window', missed_window: true },
+        { order_key: 'WSP:6800000006808', store_code: 'WSP', order_id: '6800000006808', order_name: '#MO02-6808',
+          source_name: 'web', item_title: 'Sony PlayStation 5 Digital', unfulfilled_items: 1,
+          total: 452.93, outstanding: 452.93, capturable: false, capturable_amount: 0, received: 0, amount: 452.93,
+          financial_status: 'EXPIRED', fulfillment_status: 'UNFULFILLED', ordered_at: ago(34), auth_expires_at: ago(27),
+          is_open: true, review: null, history: [], state: 'due', due_on: '2026-09-28', state_note: 'missed_window', missed_window: true },
+    ];
+    return f;
+}
+function payLoad(f) {
+    _holdData.mgr = f || payFixture(); _holdView.mgr = { store: '', show: 'due' }; _holdOpenForm.mgr = null;
+    renderHoldItems('mgr');
+    return html('hold-mgr-payments');
+}
+// One card's markup, cut at the card boundaries: cardAround's fixed window
+// would bleed into the next card on a tab this short.
+var PAY_CARD = 'border-radius:12px; padding:12px 14px;';
+function payCard(h, needle) {
+    var i = h.indexOf(needle);
+    if (i < 0) return '';
+    var start = h.lastIndexOf(PAY_CARD, i);
+    var end = h.indexOf(PAY_CARD, i);
+    return h.slice(start < 0 ? 0 : start, end < 0 ? h.length : end);
+}
+function payIdx(name) {
+    return _holdIndex.mgr.findIndex(function (e) { return e.it.order_name === name; });
+}
+
+t('payments: the tab lists all three, the soonest-expiring card first', function () {
+    var h = payLoad();
+    var at = ['#MO01-9799', '#MO01-8907', '#MO02-6808'].map(function (n) { return h.indexOf(n); });
+    if (at.some(function (i) { return i < 0; })) return 'missing: ' + at.join(',');
+    return at[0] < at[1] || 'the card that runs out today is not first';
+});
+t('payments: the badge counts what needs someone today', function () {
+    payLoad();
+    var b = document.getElementById('hold-mgr-badge-payments');
+    return b.textContent === '3' || 'badge reads "' + b.textContent + '"';
+});
+t('payments: a card on its last day says so, with the time, and cannot be checked in', function () {
+    var c = payCard(payLoad(), '#MO01-9799');
+    if (!/Card expires today/.test(c)) return 'the chip does not say the card expires today';
+    if (!/Card expires [A-Z][a-z]{2} \d+, \d+:\d\d/.test(c)) return 'no expiry time on the card';
+    if (!/Shopify can charge this card until/.test(c)) return 'no instruction to charge it';
+    _holdToggleForm('mgr', payIdx('#MO01-9799'), 'status');
+    var form = payCard(html('hold-mgr-payments'), '#MO01-9799');
+    // The button, by what it posts — the help text says "<b>Still open</b> is
+    // off the table", which a label match would read as the button being there.
+    if (form.indexOf("'still_open')") >= 0) return 'a chargeable card offers Still open';
+    if (form.indexOf('Still open</b> is off the table') < 0) return 'the form does not say why it cannot be checked in';
+    return /Mark resolved/.test(form) || 'Mark resolved is missing';
+});
+t("payments: partly paid reads in the CFO's words, with what was collected", function () {
+    var c = payCard(payLoad(), '#MO01-8907');
+    if (!/Partially paid/.test(c)) return 'no Partially paid chip';
+    if (!/Card expired — not collected/.test(c)) return 'the state does not say it was not collected';
+    if (c.indexOf('$147.50 of $244.03 was collected') < 0) return 'does not say what was collected';
+    return c.indexOf('$28.20') >= 0 || 'the owed amount is not shown';
+});
+t('payments: an expired card can be checked in, for the payment timer', function () {
+    payLoad();
+    _holdToggleForm('mgr', payIdx('#MO02-6808'), 'status');
+    var c = payCard(html('hold-mgr-payments'), '#MO02-6808');
+    if (c.indexOf("'still_open')") < 0) return 'no Still open on a card that can no longer be charged';
+    return /off the list for 3 days/.test(c) || 'the check-in does not say how long it hides it';
+});
+t('payments: the link goes to the order in the right Shopify admin', function () {
+    var c = payCard(payLoad(), '#MO02-6808');
+    return c.indexOf('https://admin.shopify.com/store/paymore-westport/orders/6800000006808') >= 0
+        || 'no admin link to the WSP order';
+});
+// Ethan, 2026-09-28: the line counting the orders held back came off — they are
+// normal, and saying so under the dropdowns on every open was noise.
+t('payments: no explanation line under the dropdowns', function () {
+    if (/authorized and not shipped yet/.test(payLoad())) return 'the held-back line is back';
+    // Toolbar, the one-line "Shopify last read" age (Ethan asked for it here on
+    // 2026-09-29 — it is a status, not an explanation), then the cards.
+    var kids = [].slice.call(document.getElementById('hold-mgr-payments').children)
+        .filter(function (k) { return !/last read/.test(k.textContent); });
+    if (kids.length !== 2) return kids.length + ' blocks on the tab, expected the toolbar and the list';
+    return kids[1].textContent.indexOf('#MO01-9799') >= 0 || 'the block under the toolbar is not the list: ' + kids[1].textContent.slice(0, 120);
+});
+t('payments: a failed Shopify read names Shopify, not eBay', function () {
+    var f = payFixture();
+    f.paymentSync[1] = { store_code: 'WSP', synced_at: ago(0.01), ok: false, detail: 'Shopify 401' };
+    var h = payLoad(f);
+    if (!/Couldn't read Shopify payments for WSP/.test(h)) return 'the failure is not reported';
+    return !/Couldn't fully read eBay/.test(h) || 'blamed eBay';
+});
+t('payments: a resolution Shopify disagrees with says the card can still be charged', function () {
+    var f = payFixture();
+    var p = f.payments[0];
+    p.state_note = 'resolution_disputed'; p.resolution_disputed_since = ago(0.1);
+    p.review = { status: 'resolved', note: 'Customer said they would pick it up', by_name: 'Nick', updated_at: ago(0.1) };
+    var c = payCard(payLoad(f), '#MO01-9799');
+    if (!/Marked resolved — Shopify can still charge it/.test(c)) return 'the chip does not flag it';
+    if (!/Shopify can still charge this card/.test(c)) return 'the block does not say why it is still here';
+    return !/no response from us/.test(c) || 'it talks about a response, which a payment does not have';
+});
+t('payments: saving posts item_type payment against the order key', function () {
+    payLoad();
+    _holdToggleForm('mgr', payIdx('#MO02-6808'), 'status');
+    var idx = payIdx('#MO02-6808');
+    document.getElementById('hold-note-mgr-' + idx).value = 'Customer paid in store 9/29, receipt 4411';
+    // _posts is NOT cleared: an earlier async test is still waiting to read it.
+    var before = _posts.length;
+    _holdSave('mgr', idx, 'resolved');
+    var p = _posts.slice(before).filter(function (x) { return x.body && x.body.action === 'review'; })[0];
+    if (!p) return 'nothing posted';
+    return (p.body.item_type === 'payment' && p.body.item_key === 'WSP:6800000006808' && p.body.status === 'resolved')
+        || 'posted ' + JSON.stringify(p.body);
+});
+t('payments: an empty tab says there is nothing to chase', function () {
+    var f = payFixture(); f.payments = [];
+    return /No card is close to running out/.test(payLoad(f)) || 'no empty-tab message';
+});
+t('payments: the tab opens from its button', function () {
+    switchClaimsTab('payments');
+    var p = document.getElementById('claims-panel-payments');
+    return (p && p.style.display === 'block' && document.getElementById('claims-tab-payments').classList.contains('active'))
+        || 'the Payments panel did not open';
+});
+
+// FRESHNESS (2026-09-29). A read that never ran leaves the last ok row in place,
+// so the line has to say how OLD the list is, and go red past _HOLD_STALE_H.
+t('freshness: a recent read says when, quietly', function () {
+    var now = new Date(Date.now() - 25 * 60000).toISOString();
+    var h = _holdSyncLine({ sync: [{ store_code: 'OVL', ok: true, synced_at: now }],
+        disputeSync: [{ store_code: 'OVL', source: 'ebay', ok: true, synced_at: now }], paymentSync: [] });
+    if (!/last read 25 min ago/.test(h)) return 'got: ' + h;
+    return !/b3261e/.test(h) || 'fresh read drawn red';
+});
+t('freshness: the stalest source decides, and past 6 hours it turns red', function () {
+    var fresh = new Date().toISOString(), old = new Date(Date.now() - 9 * 3600000).toISOString();
+    var h = _holdSyncLine({ sync: [{ store_code: 'OVL', ok: true, synced_at: fresh }],
+        disputeSync: [], paymentSync: [{ store_code: 'OVL', ok: true, synced_at: old }] });
+    if (!/last read 9 hours ago/.test(h)) return 'got: ' + h;
+    return /b3261e/.test(h) || 'stale read not drawn red';
+});
+t('freshness: the Payments tab shows its own Shopify age, not eBay', function () {
+    var h = _holdPaymentSyncLine({ paymentSync: [{ store_code: 'OVL', ok: true, synced_at: new Date(Date.now() - 10 * 60000).toISOString() }] });
+    if (!/Shopify last read 10 min ago/.test(h)) return 'got: ' + h;
+    return !/eBay/.test(h) || 'payments line mentions eBay';
 });

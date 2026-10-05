@@ -59,7 +59,11 @@ const strip = s => s
     .replace(/([(,]\s*)(\w+)\s*:\s*string\[\]/g, '$1$2')
     .replace(/\(\s*(\w+)\s*:\s*string\s*\)/g, '($1)')
     .replace(/\(\s*(\w+)\s*:\s*string\s*,/g, '($1,')
-    .replace(/,\s*(\w+)\s*:\s*string\s*\)/g, ', $1)');
+    .replace(/,\s*(\w+)\s*:\s*string\s*\)/g, ', $1)')
+    // fieldBacksCorrection: string parameters in the MIDDLE of the list, an
+    // optional one, and an object-or-null return type.
+    .replace(/([(,]\s*)(\w+)\??\s*:\s*string\b/g, '$1$2')
+    .replace(/\)\s*:\s*\{[^{}]*\}\s*\|\s*null\s*\{/g, ') {');
 
 const helpers = strip([
     between('const decodeEnt = ', '\n\n'),
@@ -67,6 +71,7 @@ const helpers = strip([
     between('const tokens = ', '\n\n'),
     between('const IDENTITY_FIELDS = [', '\n\ntype NameVerdict'),
     between('function listingSaysItself', '\n\n// How many notes nobody has carried'),
+    between('function fieldBacksCorrection', '\n\n// ⚠️ EVERY FAILED DESIGN'),
 ].join('\n\n'));
 
 // ⚠️ SLICED SHORT ON PURPOSE, so the closing brace is added here. The slice ends
@@ -130,6 +135,25 @@ const CASES = [
       specs: { Brand: 'Rokinon', Model: 'AS UMC CS', Collection: 'Camera Lens',
                'Maximum Aperture': 'f/2.2' },
       field: 'Maximum Aperture' },
+    // ⚠️ OVL Dell Precision 5520, denied 2026-09-28: "Suggesting a different
+    // processor, this is incorrect." Photo 3 is Windows reporting the 6820HQ;
+    // the bottom plate says Precision 5520. Our "the 5520 is Kaby Lake" was wrong.
+    { what: 'Dell Precision 5520',
+      title: 'Dell Precision 5520 15.6" i7-6820HQ 2.7GHz 32GB RAM 512GB SSD Quadro M1200',
+      v: { verdict: 'wrong', wrong_text: 'i7-6820HQ 2.7GHz', correct_text: 'i7-7820HQ 2.9GHz',
+           why: 'The Precision 5520 shipped with 7th-gen Kaby Lake CPUs, not the 6820HQ' },
+      specs: { Brand: 'Dell', Model: 'Precision', MPN: '5520', 'Release Year': '2018',
+               'Screen Size': '15.6"', Processor: 'i7-6820HQ', Color: 'Silver' },
+      field: 'Processor' },
+    // ⚠️ LEE Kingston HyperX Fury, denied 2026-09-24: "ITS 2X4 STICKS TO = 8GB".
+    // HX424C15FB/4 is one 4GB stick, and the photos show two of them.
+    { what: 'Kingston 2x4GB',
+      title: 'Kingston HyperX Fury 8GB (2x4GB) RAM DDR4 2400MHz HX424C15FB/4',
+      v: { verdict: 'wrong', wrong_text: '8GB (2x4GB)', correct_text: '4GB',
+           why: 'Part number HX424C15FB/4 is a single 4GB module, not an 8GB kit' },
+      specs: { Brand: 'Kingston', Model: 'HyperX Fury', MPN: 'HX424C15FB/4',
+               'Memory Size': '8GB (2x4GB) RAM' },
+      field: 'Memory Size' },
 ];
 for (const c of CASES) {
     const r = run(c.title, c.v, c.specs);
@@ -148,17 +172,33 @@ for (const c of CASES) {
        c.field);
 }
 
-console.log('\n== 2. It says what to do with EITHER answer ==');
+console.log('\n== 2. It says what we recommend, and what to look at ==');
 {
-    const f = run(CASES[0].title, CASES[0].v, CASES[0].specs).findings[0];
-    ok(/nothing\s+here settles it/i.test(f.says), 'it admits it cannot tell');
+    // ⚠️ REWORDED 2026-10-05. "Nothing here settles it" handed the question back,
+    // and MPL dismissed five of these in under a minute. A dispute now leads with
+    // the change we recommend, the whole title, and the one thing to check.
+    const v = Object.assign({ check: 'the model number on the label on the back' }, CASES[0].v);
+    const f = run(CASES[0].title, v, CASES[0].specs).findings[0];
+    ok(/^We recommend "T34w-40" in place of "T43WD-40"/.test(f.says),
+       'it leads with the recommendation', f.says);
+    ok(/Recommended title: "Lenovo 34" T34w-40 WQHD VA Business Monitor"/.test(f.says),
+       'and gives the whole recommended title', f.says);
+    ok(/not one click because the listing's own MPN says "T43WD-40"/.test(f.says),
+       'and says why it is not one click');
+    ok(/Lenovo model numbers encode panel size/.test(f.says),
+       'the original reasoning is kept, not thrown away');
+    ok(/check the model number on the label on the back/.test(f.warn),
+       'the warn names the one thing to check', f.warn);
     ok(/dismiss this/i.test(f.warn), 'if the listing is right: dismiss');
-    ok(/fix it in Shopify/i.test(f.warn), 'if the field is wrong: fix the field');
+    ok(/change the title and the MPN field in Shopify/.test(f.warn),
+       'if the field is wrong: change both');
     // ⚠️ THE TRAP WORTH NAMING. Correcting only the title leaves the spec field
     // still saying the old thing, in the description a customer reads.
-    ok(/correcting the title alone/i.test(f.warn),
+    ok(/correcting the\s+title alone/i.test(f.warn),
        'and it warns that a title-only fix leaves the field behind');
-    ok(/We thought:/.test(f.says), 'the original reasoning is kept, not thrown away');
+    // No check from the model: it still says something a person can do.
+    const g = run(CASES[0].title, CASES[0].v, CASES[0].specs).findings[0];
+    ok(/check the item itself/.test(g.warn), 'with no check given, it says to check the item');
 }
 
 console.log('\n== 3. A name the listing does NOT vouch for is still corrected ==');
@@ -207,21 +247,34 @@ console.log('\n== 4. Only IDENTITY fields can veto a correction ==');
        'and Focal Length vetoes too', (r4.findings[0] || {}).code);
 }
 
-console.log('\n== 4b. Form Factor is identity (LEE WD SN570, denied 2026-09-15) ==');
+console.log('\n== 4b. "2280mm" is fixed, field and all (reversed 2026-09-30) ==');
 {
-    // "2280mm is the correct way to describe this piece for an SSD". Form Factor
-    // says it, the title says it, and name-garbled offered "2280" as a typo fix -
-    // which would have rewritten the Form Factor field as well.
-    const title = 'Western Digital WD 2280mm Blue SN570 1TB M.2 NVMe Gen 3.0 x 4 SSD';
-    const r = run(title,
-        { verdict: 'garbled', wrong_text: '2280mm', correct_text: '2280',
-          why: 'M.2 form factor is 2280, not "2280mm"' },
-        { Brand: 'Western Digital WD', Model: 'Blue SN570', MPN: 'WDS100T3B0C-00BNN0',
-          'Sub-Collection': 'Hard Drive (HDD, SSD)', 'Form Factor': '2280mm' });
-    const f = r.findings[0] || {};
-    ok(f.code === 'name-disputed', 'it is name-disputed, not name-garbled', f.code);
-    ok(r.title === title && r.fixable === false, 'and nothing is offered to approve');
-    ok(/Form Factor/.test(f.says || ''), 'it names Form Factor as the field that says so');
+    // Held back as house style after the SN570 denial (09-15), then denied again
+    // on the SN580 (09-25). Ethan, 09-30: the tool is there to say what to change
+    // it TO. 2280 is a size CODE (22 x 80); "2280mm" is 2.28 metres, and nobody
+    // searching "2280" matches it. Both drives, both verdicts the model gives.
+    for (const [model, gen] of [['Blue SN570', '3.0'], ['Blue SN580', '4.0']]) {
+        const title = `Western Digital WD 2280mm ${model} 1TB M.2 NVMe Gen ${gen} x 4 SSD`;
+        for (const verdict of ['garbled', 'wrong']) {
+            const r = run(title,
+                { verdict, wrong_text: '2280mm', correct_text: '2280',
+                  why: 'M.2 form factor is 2280, not "2280mm"' },
+                { Brand: 'Western Digital WD', Model: model,
+                  'Sub-Collection': 'Hard Drive (HDD, SSD)', 'Form Factor': '2280mm' });
+            const f = r.findings[0] || {};
+            ok(f.code === 'name-garbled', `${model} (${verdict}): an ordinary fix`, f.code);
+            ok(r.fixable === true && r.title === title.replace('2280mm', '2280'),
+               `${model} (${verdict}): 2280mm -> 2280 is offered`, r.title);
+            ok(/Form Factor has the same mistake/.test(f.says || ''),
+               `${model} (${verdict}): and it says the field gets corrected too`, f.says);
+        }
+    }
+    // ⚠️ ONLY the unit comes off. Form Factor still vetoes any other change.
+    const r = run('Western Digital WD 2280mm Blue SN580 1TB M.2 NVMe SSD',
+        { verdict: 'wrong', wrong_text: '2280mm', correct_text: '2230' },
+        { 'Form Factor': '2280mm' });
+    ok((r.findings[0] || {}).code === 'name-disputed',
+       'a different size is still disputed', (r.findings[0] || {}).code);
 }
 
 console.log('\n== 5. The existing guards still hold ==');
@@ -308,6 +361,114 @@ console.log('\n== 7. A respelling is a fix, even when a field has the same typo 
     ok((short.findings[0] || {}).code === 'name-disputed',
        'nor is a word under 4 letters', (short.findings[0] || {}).code);
 }
+
+console.log('\n== 8. MPL, 2026-10-05: "it\'s fine" on four titles that were wrong ==');
+{
+    // --- 8a. A SECOND FIELD SETTLES IT -------------------------------------
+    // Kospet: Model = "Tank MK3 Ultra" and the title copied it; the MPN on the
+    // same listing spells out M3. That was never a dispute.
+    const KOSPET = 'Kospet Tank MK3 Ultra 56mm Military-grade Outdoor Smart Watch TANKM3ULT-SE-BK';
+    const kSpecs = { Brand: 'Kospet', Model: 'Tank MK3 Ultra', MPN: 'TANKM3ULT-SE-BK',
+                     Type: 'Military-grade Outdoor Smart Watch',
+                     'Sub-Collection': 'Other Android Smart Watch', Collection: 'Android Smart Watch' };
+    const kV = { verdict: 'garbled', wrong_text: 'Tank MK3 Ultra', correct_text: 'Tank M3 Ultra',
+                 why: 'Model is Kospet Tank M3 Ultra, matching part code TANKM3ULT',
+                 evidence_field: 'MPN', evidence_text: 'TANKM3ULT' };
+    const k = run(KOSPET, kV, kSpecs);
+    const kf = k.findings[0] || {};
+    ok(kf.code === 'name-wrong', 'Kospet: an ordinary fix, not a dispute', kf.code);
+    ok(k.fixable === true && k.title === KOSPET.replace('MK3', 'M3'), 'Kospet: offered as one click', k.title);
+    ok(/own MPN says "TANKM3ULT-SE-BK", which agrees; only its Model \("Tank MK3 Ultra"\) says otherwise, and approving corrects that field too/.test(kf.says || ''),
+       'Kospet: it quotes the MPN and says the Model field gets fixed', kf.says);
+    ok(/Settled by this listing's own MPN/.test(kf.warn || ''), 'Kospet: and says what settled it', kf.warn);
+    // The model need not name the field — a literal match is the same evidence.
+    const k2 = run(KOSPET, Object.assign({}, kV, { evidence_field: undefined }), kSpecs);
+    ok((k2.findings[0] || {}).code === 'name-wrong', 'Kospet: settled even if the model never pointed at the MPN');
+
+    // ⚠️ THE TEST IS LITERAL. The SanDisk denial was "the part number says
+    // Portable SSD" — knowledge of a part number, and wrong. Pointing at a field
+    // that does not contain the words settles nothing.
+    const sd = CASES[2];
+    const s = run(sd.title, Object.assign({ evidence_field: 'MPN', evidence_text: 'SDSSDE61' }, sd.v), sd.specs);
+    ok((s.findings[0] || {}).code === 'name-disputed', 'SanDisk: a claimed MPN that does not say it settles nothing',
+       (s.findings[0] || {}).code);
+    // A field holding BOTH spellings settles nothing either.
+    const both = run(KOSPET, kV, Object.assign({}, kSpecs, { MPN: 'TANKM3ULT / TANKMK3' }));
+    ok((both.findings[0] || {}).code === 'name-disputed', 'a field that says both settles nothing');
+    // And two characters cannot settle anything by coincidence: "M3" alone is
+    // not enough, which is why the word before it rides along.
+    const short = run('Acme X20 Speaker', { verdict: 'wrong', wrong_text: 'X20', correct_text: 'X30' },
+                      { Model: 'X20', MPN: 'X30-BLK' });
+    ok((short.findings[0] || {}).code === 'name-disputed', 'a two-character change is never settled by a field');
+
+    // --- 8b. NOTHING IN THE LISTING SETTLES IT: SAY WHAT TO LOOK AT ----------
+    const CANON = 'Canon AF-MF EF 75-300mm 75-300mm f/1.4-5.6 Auto & Manual Lens';
+    const cSpecs = { Brand: 'Canon', Model: 'EF 75-300mm', 'Maximum Aperture': 'f/1.4-5.6',
+                     'Sub-Collection': 'Canon Camera Lens', Collection: 'Camera Lens' };
+    const cV = { verdict: 'wrong', wrong_text: 'f/1.4-5.6', correct_text: 'f/4-5.6',
+                 why: 'The Canon EF 75-300mm is an f/4-5.6 lens, not f/1.4-5.6',
+                 check: 'the aperture printed on the lens barrel (1:4-5.6)' };
+    const c = run(CANON, cV, cSpecs);
+    const cf = c.findings[0] || {};
+    ok(cf.code === 'name-disputed' && c.title === CANON, 'Canon, no photos: still a dispute, title untouched', cf.code);
+    ok(/Recommended title: "Canon AF-MF EF 75-300mm 75-300mm f\/4-5\.6 Auto & Manual Lens"/.test(cf.says || ''),
+       'Canon: but it gives the recommended title', cf.says);
+    ok(/check the aperture printed on the lens barrel/.test(cf.warn || ''), 'Canon: and what to look at', cf.warn);
+
+    // --- 8c. THE PHOTOS SETTLE IT --------------------------------------------
+    const cP = run(CANON, Object.assign({}, cV,
+        { photo: { answer: 'ours', photo: 3, seen: 'the barrel reads 1:4-5.6' } }), cSpecs);
+    const cpf = cP.findings[0] || {};
+    ok(cpf.code === 'name-wrong' && cP.fixable === true, 'Canon, photo shows f/4-5.6: a one-click fix', cpf.code);
+    ok(cP.title === CANON.replace('f/1.4-5.6', 'f/4-5.6'), 'Canon: the aperture is corrected', cP.title);
+    ok(/Photo 3 shows it: the barrel reads 1:4-5\.6/.test(cpf.says || ''), 'Canon: quoting what the photo shows', cpf.says);
+    ok(/Maximum Aperture field \("f\/1\.4-5\.6"\) says otherwise, and approving corrects that field too/.test(cpf.says || ''),
+       'Canon: and the Maximum Aperture field is corrected too');
+    ok(/Settled by photo 3/.test(cpf.warn || ''), 'Canon: it says a photo settled it', cpf.warn);
+
+    // The photos prove the LISTING right: no finding at all. (The Rokinon's
+    // T2.2 is the case this is for.)
+    const rk = CASES[3];
+    const rP = run(rk.title, Object.assign({ photo: { answer: 'listing', photo: 2, seen: 'the barrel reads T2.2' } }, rk.v), rk.specs);
+    ok(rP.findings.length === 0 && rP.title === rk.title, 'Rokinon, photo shows T2.2: nothing to report');
+
+    // Neither is right: MPL's Watch6 titled "Classic Aluminum". If the photos
+    // show a plain Watch6, it is "Classic" that goes.
+    const W6 = 'GPS Only Samsung Galaxy Watch6 Classic Aluminum Smartwatch SM-R935U';
+    const wSpecs = { Brand: 'Samsung', Model: 'Galaxy Watch6 Classic', MPN: 'SM-R935U',
+                     'Sub-Collection': 'Samsung Smart Watch', Collection: 'Android Smart Watch', Color: 'Black' };
+    // The stored message names Model as the field that agrees, and Model holds only
+    // "Classic" of the quoted span — so the correction must have dropped it. Not
+    // stored; reconstructed from that.
+    const wV = { verdict: 'wrong', wrong_text: 'Classic Aluminum', correct_text: 'Stainless Steel',
+                 why: 'Galaxy Watch6 Classic has a stainless steel case, not aluminum' };
+    const wNo = run(W6, wV, wSpecs);
+    ok((wNo.findings[0] || {}).code === 'name-disputed', 'Watch6 Classic, no photos: a dispute',
+       (wNo.findings[0] || {}).code);
+    const wO = run(W6, Object.assign({}, wV, { photo: { answer: 'other', photo: 1,
+        seen: 'a plain Watch6 with no rotating bezel', should_say: 'Aluminum' } }), wSpecs);
+    const wof = wO.findings[0] || {};
+    ok(wof.code === 'name-wrong' && wO.fixable === true, 'Watch6, photo shows neither: fixed to what it shows', wof.code);
+    ok(wO.title === 'GPS Only Samsung Galaxy Watch6 Aluminum Smartwatch SM-R935U', 'Watch6: "Classic" comes out', wO.title);
+    ok(/Photo 1 shows a plain Watch6 with no rotating bezel — "Classic Aluminum" should be "Aluminum"/.test(wof.says || ''),
+       'Watch6: the reason is the photo, not our original claim', wof.says);
+
+    // ⚠️ A SIGHTING WITH NOTHING SEEN IS NOT A SIGHTING.
+    const blind = run(CANON, Object.assign({}, cV, { photo: { answer: 'ours', photo: 3, seen: '' } }), cSpecs);
+    ok((blind.findings[0] || {}).code === 'name-disputed', 'a photo answer with no "seen" settles nothing');
+    // A photo that looked and could not tell says so.
+    const ct = run(CANON, Object.assign({}, cV, { photo: { answer: 'cannot_tell' } }), cSpecs);
+    ok(/its photos do not show it either way/.test((ct.findings[0] || {}).says || ''),
+       'cannot_tell: the finding says the photos were looked at');
+    // A placeholder from the photos is refused exactly like one from the model.
+    const ph = run(W6, Object.assign({}, wV, { photo: { answer: 'other', photo: 1,
+        seen: 'something', should_say: '[actual model]' } }), wSpecs);
+    ok((ph.findings[0] || {}).code === 'name-disputed', 'a placeholder should_say is refused');
+}
+
+console.log('\n== 9. Apple part numbers are not all M (MPL NNPX3LL/A, 2026-10-05) ==');
+ok(/N is a warranty replacement unit/.test(src) && /NNPX3LL\/A/.test(src),
+   'the name check is told N-prefixed Apple parts are real');
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all passed') + '\n');
 process.exit(fails ? 1 : 0);

@@ -171,6 +171,27 @@ var NPX_SHOPIFY_WALL_DAYS = 60;   // Shopify hides orders older than this withou
 var NPX_LASTMONTH_KEY = 'NPX_LAST_MONTH_FOR';
 var NPX_FORCE_LAST_MONTH = false;   // set true for one run to redo last month
 
+// ⚠️ SET ONLY BY THE 7PM MONTH CLOSE (npsMonthClose), for the length of its
+// _npxSync. A close syncs the tab of the month being CLOSED, so "last month"
+// to that sync is the month before it -- and the done marker, already moved on
+// to the new month by that morning's pass, no longer vouches for it. Without
+// this the close re-derived August on 2026-10-01: no August tab, behind the
+// 60-day wall, so it CLEARED the hand-typed August NP on the September tab.
+// That row was final the day September began; a close has no business in it.
+var NPX_CLOSE_RUN = false;
+
+// Has this month been through the 7pm close? The last-month done marker must
+// not be set before then: the 6:10am pass on the 1st reads last month off its
+// tab while the final day's fees are still arriving (the close waits until the
+// evening for exactly that), and a marker set then froze the short figure for
+// the whole new month. Until the close, every pass re-reads the tab -- cheap,
+// no Shopify involved. No close ever recorded = the old behaviour.
+function _npxMonthClosed(ym) {
+  var key = (typeof NPS_LAST_CLOSED_KEY !== 'undefined') ? NPS_LAST_CLOSED_KEY : 'NPS_LAST_CLOSED_MONTH';
+  var closed = String(PropertiesService.getScriptProperties().getProperty(key) || '');
+  return !closed || closed >= ym;
+}
+
 // ⚠️ LAST MONTH COSTS 85 SECONDS A STORE AND APPS SCRIPT ALLOWS SIX MINUTES.
 // Five stores is roughly seven, so on 2026-09-02 the run died inside BAL with
 // "Exceeded maximum execution time" — and because every cell is written in one
@@ -736,6 +757,12 @@ function _npxSync(preview) {
       prevYm, lmSrc);
     lmSkip = false;
   }
+  if (NPX_CLOSE_RUN && !lmSkip) {
+    Logger.log('  ...but this is the month close, which writes the closing month and '
+      + 'nothing else. The Last Month row on this tab was settled when %s began. '
+      + 'Leaving it exactly as it is.', ym);
+    lmSkip = true;
+  }
   var fromTab = (lmSkip || monthUnfinished) ? null : _npxLastMonthFromTab(ss, prevYm, lmTab);
   if (fromTab) {
     Logger.log('  reading last month off that tab — the closed figures, so the '
@@ -1163,7 +1190,10 @@ function _npxSync(preview) {
   Logger.log('\nWrote %s cell(s).', writes.length);
   // Marked only after the write succeeded. Marking before would leave the
   // marker claiming a month that a mid-run failure never finished writing.
-  if (!lmSkip && !monthUnfinished && lmOk.length === NP_ORDER.length) {
+  if (!lmSkip && !monthUnfinished && lmOk.length === NP_ORDER.length && !_npxMonthClosed(prevYm)) {
+    Logger.log('Last month (%s) written, but NOT marked done: it has not been through '
+      + 'the 7pm close yet, so its last day can still move. The next pass re-reads it.', prevYm);
+  } else if (!lmSkip && !monthUnfinished && lmOk.length === NP_ORDER.length) {
     var src = fromTab ? 'tab' : usedSales ? 'sales-tab' : 'shopify';
     lmProps.setProperty(NPX_LASTMONTH_KEY, ym + '|' + src);
     Logger.log('Last month (%s) recorded for grid month %s, from %s. %s',

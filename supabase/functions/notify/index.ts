@@ -1097,21 +1097,26 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
     }
   }
 
-  // ---- Store GP goals ----------------------------------------------------
+  // ---- Store goals (GP through September 2026, NET PROFIT from October) ---
+  // The month decides which table: from October the company is graded on Net
+  // Profit and Month Setup saves monthly_np_goals (same NP_FROM rule as gp-goals).
+  // Reading the GP table for an NP month would chase the DM for a goal nobody
+  // is asked to set any more, every day, forever.
   // Gate: _gpCanEdit defaults to District Manager. ⚠️ On the site that gate is
   // ALSO overridable per person via the Feature Access tool
   // (_featureOverrideFor('tool-store-goals')); this copies the default only, so
   // somebody granted the tool by an override sees the card but gets no email.
   // Reading feature_overrides here would fix it if that ever matters.
   {
-    const { data: goals } = await sb.from("monthly_gp_goals").select("store").eq("ym", t.ym);
+    const npMonth = t.ym >= "2026-10";
+    const { data: goals } = await sb.from(npMonth ? "monthly_np_goals" : "monthly_gp_goals").select("store").eq("ym", t.ym);
     const set = new Set((goals || []).map((r: any) => String(r.store).toUpperCase()));
     const missing = STORES.filter((s) => !set.has(s));
     if (missing.length) {
       due.push({
         slug: "gpGoals", period: t.ym, cat: "deadlines",
         title: "Monthly store goals need setting",
-        body: `${missing.join(", ")} ${missing.length === 1 ? "has" : "have"} no gross-profit goal for this month yet.`,
+        body: `${missing.join(", ")} ${missing.length === 1 ? "has" : "have"} no ${npMonth ? "net-profit" : "gross-profit"} goal for this month yet.`,
         link: "index.html", tone: "amber",
         for: (p) => p.role === "district manager",
         feature: "tool-store-goals",

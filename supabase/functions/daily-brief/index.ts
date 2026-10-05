@@ -1,8 +1,9 @@
 // ============================================================================
 // daily-brief — drafts the DM's morning store messages for review.
 //
-// Flow:  pg_cron 7:15am Central  ->  this function  ->  comment_drafts
-//        ->  Action Menu feed card  ->  he edits/approves  ->  store_comments
+// Flow:  pg_cron 7:15am Central  ->  this function  ->  comment_drafts (no text)
+//        ->  Action Menu feed card  ->  he presses Draft (?action=draft)
+//        ->  he edits/approves  ->  store_comments
 //
 // Two halves, deliberately split:
 //
@@ -18,7 +19,8 @@
 // would be unauditable and would drift; a template writing the sentence would be
 // clocked as automated inside a week. Each does the half it is good at.
 //
-// Cost: one call per surviving store, ~2.5 stores/day after the governor.
+// Cost: one call per store he chooses to DRAFT. The 7:15 run makes none — it
+// stages the candidates and stops (Ethan 2026-09-29, to save usage).
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -168,6 +170,17 @@ const G = {
 
 type Facts = Record<string, any>;
 
+// NET PROFIT FROM OCTOBER 2026 (Ethan 2026-10-02: "ensure GP does not touch
+// anything on this site anymore"). On a day from NP_FROM the selling margin —
+// which is GROSS margin — is neither praised in a draft nor shown on the review
+// card. The card shows the day's NET margin off the Net Profit tab instead
+// (daily_np), and says so when that day's shipping has not landed yet, because
+// before the 2pm pass the NP is the figure without the labels.
+//
+// There is no net-margin praise rule. The 56% / 62% bars were set on gross
+// margin and mean nothing for net; a net bar is Ethan's call, not a guess here.
+const NP_FROM = "2026-10-01";
+
 const fmtMoney = (x: number) => "$" + Math.round(x).toLocaleString("en-US");
 
 // He does not write dashes, and an em dash is the single most recognisable tell of
@@ -257,12 +270,16 @@ function refDayFor(iso: string): string {
 // email costs us conversion and listed items rather than the whole draft.
 // ---------------------------------------------------------------------------
 async function loadFacts(sb: any, from: string, to: string): Promise<Map<string, Facts>> {
-  const [de, bs, lg] = await Promise.all([
+  const [de, bs, lg, np] = await Promise.all([
     sb.from("day_end_facts").select("*").gte("date", from).lte("date", to),
     sb.from("daily_buysell").select("store,date,buy,sell,gp,buy_margin_pct").gte("date", from).lte("date", to),
     // Listing goals across the WHOLE window, not just the ref day: the low-listing
     // nudge needs a pattern, and a pattern needs each historical day's own goal.
     sb.from("listing_goals").select("store,date,role,goal").gte("date", from).lte("date", to),
+    to >= NP_FROM
+      ? sb.from("daily_np").select("store,date,sales,np,shipping_final")
+          .gte("date", from > NP_FROM ? from : NP_FROM).lte("date", to)
+      : Promise.resolve({ data: [] }),
   ]);
 
   // Store daily listing goal = the sum of every rostered person's goal, which is
@@ -312,7 +329,12 @@ async function loadFacts(sb: any, from: string, to: string): Promise<Map<string,
       custConvNum: r.cust_conv_num, custConvDen: r.cust_conv_den,
       devConv: r.dev_conv_den ? Number(r.dev_conv_num) / Number(r.dev_conv_den) : null,
       totalCustomers: r.total_customers,
-      listed: r.devices_processed,
+      // LISTED, not processed: the report's Total Listed Devices from 2026-09-23,
+      // Devices Processed only for a day before it carried one — the same rule as
+      // the goals board, Store Efficiency and the matrix. The 25/40 bars were set
+      // on processed counts and kept as they were when this switched (Ethan,
+      // 2026-09-28); revisit them if the listed counts run differently.
+      listed: r.listed_devices != null ? Number(r.listed_devices) : r.devices_processed,
       processedValue: r.processed_value == null ? null : Number(r.processed_value),
       fiveStarMtd: r.five_star_mtd,
       availableCount: r.available_count,
@@ -330,6 +352,15 @@ async function loadFacts(sb: any, from: string, to: string): Promise<Map<string,
     // Null, not zero, when there is no goal to divide by — three days in the
     // window have no listing_goals rows at all, and 0% would read as a disaster.
     f.listedPct = (f.storeGoal && f.listed != null) ? f.listed / f.storeGoal : null;
+  }
+  // Net margin for NP days (see NP_FROM). Attached to a day the other sources
+  // already have; the NP tab alone never creates a day to draft about.
+  for (const r of np.data ?? []) {
+    const f = out.get(`${r.store}|${r.date}`);
+    if (!f) continue;
+    const sales = Number(r.sales) || 0;
+    f.netMargin = sales > 0 && r.np != null ? Number(r.np) / sales : null;
+    f.netMarginFinal = !!r.shipping_final;
   }
   return out;
 }
@@ -432,7 +463,7 @@ function evaluate(f: Facts, hist: Facts[], ctx: {
     push({ key: "net_sales", dir: "praise", points: f.netSales >= T.excNetSales ? 2 : 1,
       fact: `net sales ${money(f.netSales)}` });
   }
-  if (f.sellMargin != null && f.netSales >= T.floorNetSales && f.sellMargin >= T.sellMargin) {
+  if (String(f.date) < NP_FROM && f.sellMargin != null && f.netSales >= T.floorNetSales && f.sellMargin >= T.sellMargin) {
     push({ key: "sell_margin", dir: "praise", points: f.sellMargin >= T.excSellMargin ? 2 : 1,
       fact: `selling margin ${pct(f.sellMargin)}` });
   }
@@ -583,6 +614,12 @@ function systemPrompt(): string {
 // for a surname to disambiguate) is worse than the ambiguity.
 const firstName = (full: unknown) => String(full ?? "").trim().split(/\s+/)[0] || "";
 
+// One Team Production member's listings: their Total Listed Devices from
+// 2026-09-23, Devices Processed on older reports that have no listed column.
+// The same fallback day-end-ingest uses for per-person goal results.
+const memberListed = (m: any) =>
+  m?.listed != null ? Number(m.listed) || 0 : Number(m?.processed) || 0;
+
 function userPrompt(store: string, refDate: string, signals: Signal[], recent: string[], f: Facts, siblings: string[]): string {
   const praise = signals.filter((s) => s.dir === "praise");
   const correct = signals.filter((s) => s.dir === "correct");
@@ -615,16 +652,16 @@ function userPrompt(store: string, refDate: string, signals: Signal[], recent: s
   const team = Array.isArray(f.teamProduction) ? f.teamProduction.filter((t: any) => t?.name) : [];
   if (listingFired && team.length) {
     const num = (x: unknown) => Number(x) || 0;
-    const byCount = [...team].sort((a: any, b: any) => num(b.processed) - num(a.processed))[0];
+    const byCount = [...team].sort((a: any, b: any) => memberListed(b) - memberListed(a))[0];
     const byValue = [...team].sort((a: any, b: any) => num(b.value) - num(a.value))[0];
     lines.push("");
     // First names only, trimmed here — see firstName above.
     const led = firstName(byCount?.name), ledVal = firstName(byValue?.name);
     if (byCount && byValue && byCount.name === byValue.name) {
-      lines.push(`Led the board on BOTH counts: ${led}, ${byCount.processed} items and ${fmtMoney(num(byCount.value))} of value.`);
+      lines.push(`Led the board on BOTH counts: ${led}, ${memberListed(byCount)} items and ${fmtMoney(num(byCount.value))} of value.`);
       lines.push("Unambiguous, so you may name them for the listing day.");
     } else {
-      lines.push(`Most items listed: ${led} (${byCount.processed} items).`);
+      lines.push(`Most items listed: ${led} (${memberListed(byCount)} items).`);
       lines.push(`Highest value processed: ${ledVal} (${fmtMoney(num(byValue.value))}).`);
       lines.push("These are two DIFFERENT people. Either name one and say which of the two things they led, or name nobody and praise the store. Do not call someone the leader without saying what they led.");
     }
@@ -683,7 +720,12 @@ function factSnapshot(f: Facts) {
     cashSpent: f.cashSpent ?? null,
     buyMarginPct: r1(f.buyMargin),
     netSales: f.netSales ?? null,
-    sellMarginPct: r1(f.sellMargin),
+    // On an NP day the gross figure is withheld (null) and the net one sent, so
+    // an old card cannot show GP and a new one has nothing GP to show.
+    npDay: String(f.date) >= NP_FROM,
+    sellMarginPct: String(f.date) >= NP_FROM ? null : r1(f.sellMargin),
+    netMarginPct: r1(f.netMargin),
+    netMarginFinal: f.netMarginFinal ?? null,
     custConvPct: r1(f.custConv),
     custConvNum: f.custConvNum ?? null,
     custConvDen: f.custConvDen ?? null,
@@ -704,11 +746,18 @@ function factSnapshot(f: Facts) {
     // one claim a column of numbers cannot settle, so the strip has to show who led
     // on items AND who led on value: MPL 2026-08-13 was Calvin on items (9) and
     // Olivia on value ($4,150), and the draft called Olivia the processing leader.
+    //
+    // FULL names are correct HERE and only here: this is his private verification
+    // card, not a message to a store, and "Calvin" alone is harder to check against
+    // a report than "Calvin Oyugi". The trim to first names happens on the way into
+    // the PROMPT — see firstName.
     topLister: (() => {
       const tp = (Array.isArray(f.teamProduction) ? f.teamProduction : []).filter((p: any) => p?.name);
       if (!tp.length) return null;
-      const top = [...tp].sort((a: any, b: any) => (Number(b.processed) || 0) - (Number(a.processed) || 0))[0];
-      return { name: String(top.name ?? ""), processed: top.processed ?? null, value: top.value ?? null };
+      const top = [...tp].sort((a: any, b: any) => memberListed(b) - memberListed(a))[0];
+      // `processed` keeps its name because the card reads it, but it carries the
+      // LISTED count now — see memberListed.
+      return { name: String(top.name ?? ""), processed: memberListed(top), value: top.value ?? null };
     })(),
     topProducer: (() => {
       const tp = (Array.isArray(f.teamProduction) ? f.teamProduction : []).filter((p: any) => p?.name);
@@ -732,6 +781,80 @@ function pickExamples(all: { store: string; message: string }[], rotate: number)
     out.push(all[(rotate * 3 + i * 5) % all.length].message);
   }
   return [...new Set(out)];
+}
+
+// HIS messages only, as the few-shot pool and the per-store "don't repeat these".
+// Managers and MSMs can send store comments too (see the store-comments manager
+// variant), and training the voice on their writing would quietly blend it into
+// someone else's. Shared by the dryRun replay and ?action=draft.
+async function loadVoice(sb: any) {
+  const { data } = await sb.from("store_comments").select("store,author,message,created_at")
+    .order("created_at", { ascending: false }).limit(120);
+  const mine = (data ?? []).filter((c: any) => /ethan/i.test(String(c.author ?? "")));
+  const byStore = new Map<string, string[]>();
+  for (const c of mine) {
+    const arr = byStore.get(c.store) ?? [];
+    if (arr.length < 3) arr.push(c.message);
+    byStore.set(c.store, arr);
+  }
+  return { byStore, examplesAll: mine.map((c: any) => ({ store: c.store, message: c.message })) };
+}
+
+// The ONE place a model is called. Everything before this — which store, what
+// kind, which signals — is the rule engine and costs nothing.
+async function writeSentence(anthropic: any, o: {
+  store: string; ref: string; day: number; signals: Signal[]; facts: Facts;
+  voice: { byStore: Map<string, string[]>; examplesAll: { store: string; message: string }[] };
+  siblings: string[];
+}) {
+  const recent = o.voice.byStore.get(o.store) ?? [];
+  const examples = pickExamples(o.voice.examplesAll, o.day + STORES.indexOf(o.store));
+  const sys = [
+    { type: "text" as const, text: systemPrompt() },
+    {
+      type: "text" as const,
+      text: "REAL MESSAGES HE HAS SENT — match this register, do not copy them:\n"
+        + examples.map((m) => `- "${m}"`).join("\n"),
+    },
+  ];
+  const ask = userPrompt(o.store, o.ref, o.signals, recent, o.facts, o.siblings);
+  const turns: any[] = [{ role: "user", content: ask }];
+
+  // Draft, check mechanically, and give it ONE chance to fix what it broke.
+  //
+  // The prompt has always forbidden figures and length; the blind test proved
+  // instruction alone does not hold the line (14 of 15 drafts identified,
+  // almost entirely on numbers and length). Feeding the specific violation back
+  // is far more reliable than restating the rule, and one extra call on a
+  // failing draft costs about a penny.
+  let text = "", usage: any = null, fixed: string[] = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 400,
+      // Adaptive by default on Opus 5. Effort kept low: the reasoning here is
+      // small (pick an angle, stay inside the word count).
+      output_config: { effort: "low" },
+      system: sys,
+      messages: turns,
+    });
+    usage = res.usage;
+    text = stripDashes(res.content
+      .filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim()
+      .replace(/^["“]|["”]$/g, "").trim());
+    if (!text) throw new Error(`empty completion (stop_reason ${res.stop_reason})`);
+
+    const bad = violations(text);
+    if (!bad.length) break;
+    if (attempt === 1) { fixed = bad; break; }   // second try still off: keep it, report it
+    fixed = bad;
+    turns.push({ role: "assistant", content: text });
+    turns.push({ role: "user", content:
+      "That breaks his rules:\n" + bad.map((b) => `- ${b}`).join("\n")
+      + "\n\nRewrite it. Same facts, same warmth, shorter, and with no figures. Output the message only." });
+  }
+  return { text, usage, retried: fixed.length ? fixed : undefined,
+    stillBreaking: violations(text).length ? violations(text) : undefined };
 }
 
 Deno.serve(async (req) => {
@@ -810,6 +933,13 @@ Deno.serve(async (req) => {
     const { data: draft } = await sb.from("comment_drafts").select("*").eq("id", id).single();
     if (!draft) return json({ ok: false, error: "no such draft" }, 404);
     if (draft.status !== "pending") return json({ ok: false, error: `already ${draft.status}` }, 409);
+    // A candidate the model never wrote has an empty message. Approving one with
+    // nothing typed would publish a blank comment to a store; the card refuses
+    // too, but the card is not the boundary.
+    if (status === "approved"
+      && !(typeof message === "string" && message.trim()) && !String(draft.message ?? "").trim()) {
+      return json({ ok: false, error: "nothing to send — draft it or write one first" }, 400);
+    }
 
     const patch: Record<string, unknown> = {
       status, decided_at: new Date().toISOString(), decided_by: viewer?.name ?? "system",
@@ -888,6 +1018,69 @@ Deno.serve(async (req) => {
     if (error) return json({ ok: false, error: error.message }, 500);
     if (data?.length) await broadcastChange("dailyBrief", null);
     return json({ ok: true, date: today.iso, expired: data?.length ?? 0, rows: data ?? [] });
+  }
+
+  // ---- draft: write ONE store's sentence, on his say-so ----
+  //
+  // Drafting is opt-in per store per morning (Ethan 2026-09-29, to save usage).
+  // The 7:15 run still does all of the deciding — which stores earned a message,
+  // praise or praise + nudge, the facts behind it — and leaves each one pending
+  // with an EMPTY message. The model is only called when he presses Draft on a
+  // card, so a morning he reads the stats and skips costs nothing.
+  //
+  // Facts are reloaded rather than read from comment_drafts.facts: the prompt
+  // needs teamProduction, which the snapshot deliberately trims. Same ref day,
+  // same loader the 7:15 run used.
+  if (url.searchParams.get("action") === "draft") {
+    if (req.method !== "POST") return json({ ok: false, error: "POST {id}" }, 405);
+    const body = await req.json().catch(() => ({}));
+    const id = body?.id;
+    if (!id) return json({ ok: false, error: "id required" }, 400);
+    const { data: draft } = await sb.from("comment_drafts").select("*").eq("id", id).single();
+    if (!draft) return json({ ok: false, error: "no such draft" }, 404);
+    if (draft.status !== "pending") return json({ ok: false, error: `already ${draft.status}` }, 409);
+    if (draft.date !== today.iso || today.hour >= G.expireHour) {
+      return json({ ok: false, error: `past the ${G.expireHour}:00 Central review window` }, 409);
+    }
+    // Already written (a double click, or a second tab): hand back what exists
+    // rather than paying for a second, differently-worded sentence.
+    if (String(draft.message ?? "").trim()) return json({ ok: true, id, message: draft.message, already: true });
+
+    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    if (!apiKey) return json({ ok: false, error: "ANTHROPIC_API_KEY is not set on this project" }, 500);
+
+    const ref = String(draft.ref_date);
+    const [facts, voice, others] = await Promise.all([
+      loadFacts(sb, addDays(ref, -21), ref),
+      loadVoice(sb),
+      // The other stores' sentences already written this morning, so this one
+      // avoids their shape — the job the sequential loop used to do.
+      sb.from("comment_drafts").select("store,message,edited_message").eq("date", draft.date).neq("store", draft.store),
+    ]);
+    const f = facts.get(`${draft.store}|${ref}`);
+    if (!f) return json({ ok: false, error: `no Day End facts for ${draft.store} on ${ref}` }, 500);
+    const siblings = (others.data ?? [])
+      .map((d: any) => String(d.edited_message || d.message || "").trim()).filter(Boolean);
+
+    let out;
+    try {
+      out = await writeSentence(new Anthropic({ apiKey }), {
+        store: draft.store, ref, day: parseInt(String(draft.date).slice(8), 10),
+        signals: Array.isArray(draft.signals) ? draft.signals : [], facts: f, voice, siblings,
+      });
+    } catch (err) {
+      return json({ ok: false, error: String((err as Error)?.message ?? err) }, 502);
+    }
+    // Conditional on still pending: a skip that landed while the model was
+    // writing wins, and this sentence is dropped rather than resurrecting it.
+    const { data: upd, error } = await sb.from("comment_drafts").update({
+      message: out.text, model: MODEL,
+      input_tokens: out.usage?.input_tokens ?? null, output_tokens: out.usage?.output_tokens ?? null,
+    }).eq("id", id).eq("status", "pending").select("id");
+    if (error) return json({ ok: false, error: error.message }, 500);
+    if (!upd?.length) return json({ ok: false, error: "decided while drafting" }, 409);
+    await broadcastChange("dailyBrief", draft.store);
+    return json({ ok: true, id, message: out.text, retried: out.retried, stillBreaking: out.stillBreaking });
   }
 
   // ---- generate ----
@@ -980,10 +1173,8 @@ Deno.serve(async (req) => {
   // window and hangs storeGoal / staffed / listers on every day, because the
   // low-listing pattern check needs each historical day's own goal, not just the
   // ref day's.
-  const [recs, comments, weekDrafts, decided, opened] = await Promise.all([
+  const [recs, weekDrafts, decided, opened] = await Promise.all([
     sb.from("records").select("store,label,value").eq("label", "Daily Buy Record"),
-    sb.from("store_comments").select("store,author,message,created_at")
-      .order("created_at", { ascending: false }).limit(120),
     // The governor's window: drafts already written EARLIER this Mon-Sun week.
     //
     // Strictly BEFORE today (lt, not lte). Today's own drafts are the ones this run
@@ -1022,17 +1213,6 @@ Deno.serve(async (req) => {
     if (isFinite(n) && STORES.includes(r.store)) recordFor.set(r.store, n);
   }
 
-  // HIS messages only. Managers and MSMs can send store comments too (see the
-  // store-comments manager variant), and training the voice on their writing
-  // would quietly blend it into someone else's.
-  const mine = (comments.data ?? []).filter((c: any) => /ethan/i.test(String(c.author ?? "")));
-  const byStore = new Map<string, string[]>();
-  for (const c of mine) {
-    const arr = byStore.get(c.store) ?? [];
-    if (arr.length < 3) arr.push(c.message);
-    byStore.set(c.store, arr);
-  }
-
   const usedThisWeek = new Map<string, { total: number; corrections: number }>();
   for (const d of weekDrafts.data ?? []) {
     // Neither a skip nor an expiry reached a store, so neither spends the budget.
@@ -1044,8 +1224,6 @@ Deno.serve(async (req) => {
   }
 
   // ---- evaluate every store, then rank ----
-  const anthropic = new Anthropic({ apiKey });
-  const examplesAll = mine.map((c: any) => ({ store: c.store, message: c.message }));
 
   type Candidate = {
     store: string; signals: Signal[]; score: number; kind: string;
@@ -1117,90 +1295,42 @@ Deno.serve(async (req) => {
 
   candidates.sort((a, b) => (b.override ? 1 : 0) - (a.override ? 1 : 0) || b.score - a.score);
 
-  // ---- write the sentences ----
+  // ---- the sentences are NOT written here ----
   //
-  // SEQUENTIAL, not Promise.all. Each call is shown the drafts already written
-  // this morning so it can avoid their shape — and it cannot be shown them if
-  // they are all in flight at once. Two stores firing on the same pair of signals
-  // produced the same sentence twice when this ran in parallel.
+  // Since 2026-09-29 each candidate is stored pending with an empty message and
+  // the model runs only when he presses Draft on its card (?action=draft). The
+  // rule engine above still decides everything he sees at a glance — which
+  // stores, praise or praise + nudge, and the numbers behind it — so the card
+  // and the feed nudge look the same; only the paid half waits for him.
   //
-  // The cost is latency: three or four calls at ~2s each instead of one round.
-  // Irrelevant for a 7:15am cron, and the drafts are not read until 8.
-  const results: any[] = [];
-  const written_so_far: string[] = [];
-
-  for (const c of candidates) {
-    const reason = c.signals.map((s) => s.fact).join("; ");
-    const recent = byStore.get(c.store) ?? [];
-    const examples = pickExamples(examplesAll, parts.day + STORES.indexOf(c.store));
-
-    const sys = [
-      { type: "text" as const, text: systemPrompt() },
-      {
-        type: "text" as const,
-        text: "REAL MESSAGES HE HAS SENT — match this register, do not copy them:\n"
-          + examples.map((m) => `- "${m}"`).join("\n"),
-      },
-    ];
-
-    try {
-      const ask = userPrompt(c.store, ref, c.signals, recent, c.facts, written_so_far);
-      const turns: any[] = [{ role: "user", content: ask }];
-
-      // Draft, check mechanically, and give it ONE chance to fix what it broke.
-      //
-      // The prompt has always forbidden figures and length; the blind test proved
-      // instruction alone does not hold the line (14 of 15 drafts identified,
-      // almost entirely on numbers and length). Feeding the specific violation back
-      // is far more reliable than restating the rule, and one extra call on a
-      // failing draft costs about a penny.
-      let text = "", usage: any = null, fixed: string[] = [];
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const res = await anthropic.messages.create({
-          model: MODEL,
-          max_tokens: 400,
-          // Adaptive by default on Opus 5. Effort kept low: the reasoning here is
-          // small (pick an angle, stay inside the word count) and the latency
-          // budget is a five-store fan-out inside one invocation.
-          output_config: { effort: "low" },
-          system: sys,
-          messages: turns,
-        });
-        usage = res.usage;
-        text = stripDashes(res.content
-          .filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim()
-          .replace(/^["“]|["”]$/g, "").trim());
-        if (!text) throw new Error(`empty completion (stop_reason ${res.stop_reason})`);
-
-        const bad = violations(text);
-        if (!bad.length) break;
-        if (attempt === 1) { fixed = bad; break; }   // second try still off: keep it, report it
-        fixed = bad;
-        turns.push({ role: "assistant", content: text });
-        turns.push({ role: "user", content:
-          "That breaks his rules:\n" + bad.map((b) => `- ${b}`).join("\n")
-          + "\n\nRewrite it. Same facts, same warmth, shorter, and with no figures. Output the message only." });
-      }
-
-      written_so_far.push(text);
-      results.push({
-        store: c.store, ok: true, message: text, reason, kind: c.kind, score: c.score,
-        signals: c.signals, usage, facts: factSnapshot(c.facts),
-        // Surfaced so a rule the model keeps breaking is visible in the dryRun
-        // output rather than only discoverable by reading 30 drafts by hand.
-        retried: fixed.length ? fixed : undefined,
-        stillBreaking: violations(text).length ? violations(text) : undefined,
-      });
-    } catch (err) {
-      // One store failing must not cost the others their drafts — the loop
-      // continues and the error rides out in `errors` for the caller to see.
-      results.push({ store: c.store, ok: false, error: String((err as Error)?.message ?? err), reason });
-    }
-  }
-
+  // A dryRun still writes them, sequentially, because it exists to replay a day
+  // and read the output — and only a human asking for one ever triggers it.
   if (dryRun) {
+    const anthropic = new Anthropic({ apiKey });
+    const voice = await loadVoice(sb);
+    const results: any[] = [];
+    const written_so_far: string[] = [];
+    for (const c of candidates) {
+      const reason = c.signals.map((s) => s.fact).join("; ");
+      try {
+        const out = await writeSentence(anthropic, {
+          store: c.store, ref, day: parts.day, signals: c.signals, facts: c.facts, voice, siblings: written_so_far,
+        });
+        written_so_far.push(out.text);
+        results.push({ store: c.store, ok: true, message: out.text, reason, kind: c.kind, score: c.score,
+          signals: c.signals, usage: out.usage, facts: factSnapshot(c.facts),
+          retried: out.retried, stillBreaking: out.stillBreaking });
+      } catch (err) {
+        results.push({ store: c.store, ok: false, error: String((err as Error)?.message ?? err), reason });
+      }
+    }
     return json({ ok: true, dryRun: true, date: parts.iso, refDate: ref, results, skipped: skipReasons });
   }
+
+  const results = candidates.map((c) => ({
+    store: c.store, ok: true, message: "", reason: c.signals.map((s) => s.fact).join("; "),
+    kind: c.kind, score: c.score, signals: c.signals, facts: factSnapshot(c.facts),
+  }));
 
   let written = 0;
   const errors: string[] = [];
@@ -1210,9 +1340,11 @@ Deno.serve(async (req) => {
       date: parts.iso, ref_date: ref, store: r.store, status: "pending",
       message: (r as any).message, reason: r.reason, signals: (r as any).signals,
       facts: (r as any).facts,
-      score: (r as any).score, kind: (r as any).kind, model: MODEL,
-      input_tokens: (r as any).usage?.input_tokens ?? null,
-      output_tokens: (r as any).usage?.output_tokens ?? null,
+      score: (r as any).score, kind: (r as any).kind,
+      // Tokens are filled in by ?action=draft when (if) he asks for the sentence.
+      // model stays set: whether that column takes a null was never checked, and
+      // a failed upsert here would cost him the whole card.
+      model: MODEL, input_tokens: null, output_tokens: null,
     };
     // Idempotent per morning: a second run replaces a still-pending draft rather
     // than stacking a duplicate into the review card, and never touches one he

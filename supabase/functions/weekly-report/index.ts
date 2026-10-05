@@ -8,7 +8,12 @@
 //
 // Data sources (all live in Supabase):
 //   • app_cache.buy_sell_hub  — daily buy/sell/GP arrays + monthly GP goal
+//                               (GP months; buying in every month — see below)
+//   • daily_np                — per store per day Sales/GP/fees/NP, mirrored from
+//                               the workbook's Net Profit tab by np-sync (NP months)
+//   • monthly_np_goals        — the month's NP goal per store (NP months)
 //   • kpi_entries             — weekly per-employee listings/conversion
+//   • day_end_facts           — the store's weekly LISTED total (from 2026-08-03)
 //   • scorecards              — category scores
 //   • store_targets           — weekly listing targets + team size
 //   • checklist_completions   — ops activity
@@ -19,7 +24,25 @@
 //   &to=ethan@...                        TEST: send everything to one address
 //   &types=both|leadership|manager       which report(s)
 //   &stores=BAL,LEE                      limit manager reports to these stores
-//   &dryRun=1                            return HTML, don't send
+//   &dryRun=1                            return HTML, don't send (and don't snapshot)
+//   &dryRun=1&preview=manager&stores=LEE the manager email for one store instead
+//
+// NET PROFIT FROM OCTOBER 2026 (2026-10-02). The company is graded on Net Profit
+// from October, not Gross Profit (Paul's call). A report week whose Sunday falls
+// in an NP month (weekEnd >= NP_FROM) therefore:
+//   • ranks the leaderboard on the week's NET profit and measures goal pace on
+//     MTD NP against monthly_np_goals — the GP goal is not shown at all, because
+//     a GP number beside an NP-graded store reads as a store miles ahead of plan;
+//   • takes the week's and the month's Sales / GP / NP from daily_np, NOT from
+//     the hub, because the hub comes from the Sales Summary sheet being retired
+//     and daily_np is the mirror of the tab Paul and Ethan actually read;
+//   • adds "Where the GP Went": eBay fees and shipping as % of sales MTD, store vs
+//     district, red when a store is more than LEAK_FLAG_PTS above the district on
+//     either. That is the CEO/DM ask — GP is the same game it always was, and the
+//     two costs a store can actually move between GP and NP are those two.
+// Buying (wkBuy / wkBuyMarginPct) still comes from the hub in every month: the
+// NP tab carries no buying figures. When the hub goes, buying needs a new home.
+// GP months (before NP_FROM) render exactly as they did before this change.
 // ============================================================================
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -182,6 +205,18 @@ const buyColor = (m: number) => (m >= 51 ? C.green : C.red);
 const tgtColor = (p: number) => (p >= 100 ? C.green : p >= 80 ? C.amber : C.red);
 const scoreColor = (s10: number) => (s10 >= 8 ? C.green : s10 >= 6 ? C.amber : C.red);
 
+// First Monday day_end_facts covers whole — the same cut-over store-targets uses.
+const DAY_END_FROM = '2026-08-03';
+
+// First Net Profit month — same rule, same constant, as gp-goals and
+// buysell-daily. A report belongs to the month its Sunday falls in.
+const NP_FROM = '2026-10';
+// "Where the GP Went" flags a store this many percentage points of sales above
+// the district on eBay fees or on shipping (Ethan, 2026-10-02: 1.0 point).
+const LEAK_FLAG_PTS = 1.0;
+const MONTH_NAME = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
+  'September', 'October', 'November', 'December'];
+
 function pad(d: number) { return d < 10 ? '0' + d : '' + d; }
 function ymd(d: Date) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
 function parseYMD(s: string) { const p = s.split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); }
@@ -203,6 +238,10 @@ async function gather(sb: any, weekEnd: Date) {
   const sameMonth = weekStart.getMonth() === weekEnd.getMonth();
   const daysInMonth = new Date(weekEnd.getFullYear(), weekEnd.getMonth() + 1, 0).getDate();
   const weekEndStr = ymd(weekEnd);
+  const weekStartStr = ymd(weekStart);
+  const ym = weekEndStr.slice(0, 7);
+  const npMonth = ym >= NP_FROM;
+  const monthStartStr = ym + '-01';
 
   // 1) buy/sell hub cache
   const { data: cacheRow } = await sb.from('app_cache').select('payload').eq('key', 'buy_sell_hub').single();
@@ -215,9 +254,85 @@ async function gather(sb: any, weekEnd: Date) {
     return s;
   };
 
+  // 1b) Net Profit months: the week and the month-to-date off daily_np.
+  // One read covers both — from whichever is earlier, the Monday or the 1st.
+  // Unlike the hub's per-month arrays this sees the WHOLE week when it crosses
+  // a month end (Sep 28 – Oct 4 is all seven days, not just Oct 1–4), because
+  // np-sync mirrors last month too through the 5th.
+  //
+  // A failed read THROWS rather than falling back to the hub: the fallback would
+  // be a GP figure in a Net Profit column, sent to every store as fact. A 500 to
+  // the cron is louder and wrong in a way someone notices.
+  //
+  // Nulls are kept apart from zeros:
+  //   • np null        — the tab has no NP for that day; the day doesn't count
+  //                      toward days-with-NP, so it can't drag the pace down.
+  //   • shipping null  — not written yet. The 6:10am pass writes everything but
+  //                      shipping; shipping lands at the 2:05pm pass the next day,
+  //                      so at 8:30 Monday SUNDAY ALWAYS HAS NONE. That day is
+  //                      left out of the shipping % (numerator AND denominator),
+  //                      and its NP is provisional — the email says so.
+  //   • ebay_fee null  — the eBay pass failed (=NA() on the tab); same treatment
+  //                      for the eBay %.
+  const npBy: Record<string, any> = {};
+  const npGoalBy: Record<string, number> = {};
+  const npGoalSet: Record<string, boolean> = {};
+  const provisionalDates = new Set<string>();
+  if (npMonth) {
+    for (const s of STORES) npBy[s] = {
+      wk: { sales: 0, gp: 0, np: 0, days: 0 },
+      mtd: { sales: 0, gp: 0, np: 0, npDays: 0, ebay: 0, ebaySales: 0, ship: 0, shipSales: 0 },
+    };
+    const from = weekStartStr < monthStartStr ? weekStartStr : monthStartStr;
+    const { data: npRows, error: npErr } = await sb.from('daily_np')
+      .select('date, store, sales, gp, ebay_fee, shipping_cost, np, shipping_final')
+      .gte('date', from).lte('date', weekEndStr);
+    if (npErr) throw new Error('daily_np read failed: ' + npErr.message);
+    for (const r of npRows ?? []) {
+      const b = npBy[String(r.store || '').toUpperCase()];
+      if (!b) continue;
+      const date = String(r.date).slice(0, 10);
+      const sales = n(r.sales);
+      if (date >= weekStartStr && r.np != null) {
+        b.wk.sales += sales; b.wk.gp += n(r.gp); b.wk.np += n(r.np); b.wk.days++;
+      }
+      if (date >= monthStartStr) {
+        b.mtd.sales += sales; b.mtd.gp += n(r.gp);
+        if (r.np != null) { b.mtd.np += n(r.np); b.mtd.npDays++; }
+        if (r.ebay_fee != null) { b.mtd.ebay += n(r.ebay_fee); b.mtd.ebaySales += sales; }
+        if (r.shipping_cost != null) { b.mtd.ship += n(r.shipping_cost); b.mtd.shipSales += sales; }
+      }
+      if (date >= monthStartStr && (r.shipping_cost == null || !r.shipping_final)) provisionalDates.add(date);
+    }
+    // The month's NP goal is the record on SPEEKS (Month Setup → gp-goals), never
+    // the hub's figure — that one is the Sales tab's GP goal.
+    const { data: goalRows, error: goalErr } = await sb.from('monthly_np_goals').select('store, np_goal').eq('ym', ym);
+    if (goalErr) throw new Error('monthly_np_goals read failed: ' + goalErr.message);
+    for (const g of goalRows ?? []) {
+      const code = String(g.store || '').toUpperCase();
+      npGoalBy[code] = n(g.np_goal); npGoalSet[code] = true;
+    }
+  }
+
   // 2) weekly KPI rows for the week-ending Sunday
   const kpis = (await sb.from('kpi_entries').select('*')
     .eq('period_type', 'weekly').eq('period_end_date', weekEndStr)).data ?? [];
+
+  // 2b) the store's LISTED count for the week, off the Day End Report — the same
+  // figure the goals board and Store Efficiency count (store-targets explains
+  // the switch; Ethan: not relying on managers to pull the data the right way).
+  // Per day: Total Listed Devices from 2026-09-23, Devices Processed before it.
+  // A store with no report rows for the week, or a week before DAY_END_FROM,
+  // keeps the KPI total — there is nothing else to count it from.
+  const dayEndListed: Record<string, number> = {};
+  if (weekStartStr >= DAY_END_FROM) {
+    const de = (await sb.from('day_end_facts').select('store, listed_devices, devices_processed')
+      .gte('date', ymd(weekStart)).lte('date', weekEndStr)).data ?? [];
+    for (const r of de) {
+      const v = r.listed_devices != null ? n(r.listed_devices) : n(r.devices_processed);
+      dayEndListed[r.store] = (dayEndListed[r.store] ?? 0) + v;
+    }
+  }
 
   // 3) store targets
   const targets = (await sb.from('store_targets').select('*')).data ?? [];
@@ -237,7 +352,6 @@ async function gather(sb: any, weekEnd: Date) {
   for (const a of auditScores) if (!auditBy[a.store]) auditBy[a.store] = a;
 
   // 5) store-audit readiness for this week (Daily + Weekly checklists)
-  const weekStartStr = ymd(weekStart);
   const auditItems = (await sb.from('audit_items').select('id, period, active').eq('active', true)).data ?? [];
   const dailyIds = new Set(auditItems.filter((a: any) => a.period === 'daily').map((a: any) => a.id));
   const weeklyIds = new Set(auditItems.filter((a: any) => a.period !== 'daily').map((a: any) => a.id));
@@ -261,12 +375,22 @@ async function gather(sb: any, weekEnd: Date) {
     let cash = 0;
     const lo = sameMonth ? startDay : 1;
     for (let d = lo; d <= endDay; d++) cash += n(buyA[d - 1]) * (1 - n(bmA[d - 1]));
-    const soldRev = sumDays(sellA);
-    const soldGp = sumDays(gpA);
+    let soldRev = sumDays(sellA);
+    let soldGp = sumDays(gpA);
+    // NP months: the week's selling is daily_np's (see 1b). A store with no NP
+    // rows for the week keeps the hub's sales/GP and shows no NP — a dash, not $0.
+    const npb = npBy[s];
+    let soldNp: number | null = null;
+    if (npMonth && npb && npb.wk.days) { soldRev = npb.wk.sales; soldGp = npb.wk.gp; soldNp = npb.wk.np; }
 
     // listings (single week)
     const k = kpis.filter((r: any) => r.store === s);
-    const processed = k.reduce((a: number, r: any) => a + n(r.listed_count), 0);
+    // Store total from the Day End Report (see 2b); the per-person rows below
+    // and the Top Performer stay on the KPI, which is the only place a person's
+    // listings sit beside their conversion and listing dollars.
+    const processed = dayEndListed[s] != null
+      ? dayEndListed[s]
+      : k.reduce((a: number, r: any) => a + n(r.listed_count), 0);
     const retail = k.reduce((a: number, r: any) => a + n(r.listed_retail_price), 0);
     const lcost = k.reduce((a: number, r: any) => a + n(r.listed_cost), 0);
     const lsold = k.reduce((a: number, r: any) => a + n(r.listed_sold_value), 0);
@@ -276,8 +400,30 @@ async function gather(sb: any, weekEnd: Date) {
     const gpCum = arr('leaderboard.gp', s).length ? arr('leaderboard.gp', s) : (hub?.leaderboard?.gp?.[s] ?? []);
     let gpMtd = 0;
     for (let d = endDay; d >= 1; d--) { const v = n(gpCum[d - 1]); if (v) { gpMtd = v; break; } }
-    const gpGoal = n(hub?.[s.toLowerCase() + 'Goal']);
-    const gpProj = endDay > 0 ? (gpMtd / endDay) * daysInMonth : 0;
+    let gpGoal = n(hub?.[s.toLowerCase() + 'Goal']);
+    let gpProj = endDay > 0 ? (gpMtd / endDay) * daysInMonth : 0;
+
+    // NP months: MTD NP against the NP goal, tracking = MTD NP ÷ days-with-NP ×
+    // days in month. Days-with-NP, not the calendar day: today never has a row
+    // and the report week's Sunday may be the last one in, so dividing by the
+    // calendar would under-project every store on every run. gpMtd stays GP
+    // (from daily_np) for the snapshot; there is no GP goal in an NP month.
+    let npMtd = 0, npGoal = 0, npProj = 0, npDays = 0, goalSet = false;
+    let leak: any = null;
+    if (npMonth && npb) {
+      const m = npb.mtd;
+      npMtd = m.np; npDays = m.npDays; npGoal = npGoalBy[s] ?? 0; goalSet = !!npGoalSet[s];
+      npProj = npDays ? (npMtd / npDays) * daysInMonth : 0;
+      gpMtd = m.gp; gpGoal = 0; gpProj = npDays ? (m.gp / npDays) * daysInMonth : 0;
+      leak = {
+        sales: m.sales, gp: m.gp, np: m.np, ebay: m.ebay, ship: m.ship,
+        ebaySales: m.ebaySales, shipSales: m.shipSales,
+        gpPct: m.sales ? (m.gp / m.sales) * 100 : null,
+        npPct: m.sales ? (m.np / m.sales) * 100 : null,
+        ebayPct: m.ebaySales ? (m.ebay / m.ebaySales) * 100 : null,
+        shipPct: m.shipSales ? (m.ship / m.shipSales) * 100 : null,
+      };
+    }
 
     rows[s] = {
       store: s,
@@ -286,7 +432,11 @@ async function gather(sb: any, weekEnd: Date) {
       processed, retail, listedMargin: retail ? ((retail - lcost) / retail) * 100 : 0,
       pctSold: retail ? (lsold / retail) * 100 : 0,
       target: tgt, listingPct: tgt ? (processed / tgt) * 100 : 0, people: k.length,
-      gpMtd, gpGoal, gpProj, goalPct: gpGoal ? (gpProj / gpGoal) * 100 : 0,
+      gpMtd, gpGoal, gpProj,
+      soldNp, npMargin: soldNp != null && soldRev ? (soldNp / soldRev) * 100 : null,
+      npMtd, npGoal, npProj, npDays, goalSet, leak, npMonth,
+      // goalPct is whichever goal this month is graded on.
+      goalPct: npMonth ? (npGoal ? (npProj / npGoal) * 100 : 0) : (gpGoal ? (gpProj / gpGoal) * 100 : 0),
       card: cardBy[s] || null,
       audit: auditBy[s] ? { earned: auditBy[s].earned_points, possible: auditBy[s].possible_points, pct: Number(auditBy[s].pct), date: auditBy[s].date, results: auditBy[s].results || {} } : null,
       auditWeeklyPct: auditWeeklyTotal ? ((auditWeeklyCount[s] || 0) / auditWeeklyTotal) * 100 : null,
@@ -311,6 +461,37 @@ async function gather(sb: any, weekEnd: Date) {
   company.listedMargin = company.retail ? ((company.retail - tot(r => r.retail - r.retail * r.listedMargin / 100)) / company.retail) * 100 : 0;
   company.pctSold = company.retail ? (company.lsoldVal / company.retail) * 100 : 0;
   company.goalPct = company.gpGoal ? (company.gpProj / company.gpGoal) * 100 : 0;
+  company.npMonth = npMonth;
+  if (npMonth) {
+    // District = the five stores pooled (sum ÷ sum), not an average of the five
+    // percentages — a small store's 9% shouldn't weigh what OVL's sales do.
+    const withNp = STORES.filter(s => rows[s].soldNp != null);
+    company.soldNp = withNp.length ? withNp.reduce((a, s) => a + rows[s].soldNp, 0) : null;
+    company.npMargin = company.soldNp != null && company.soldRev ? (company.soldNp / company.soldRev) * 100 : null;
+    company.npMtd = tot(r => r.npMtd); company.npGoal = tot(r => r.npGoal); company.npProj = tot(r => r.npProj);
+    company.npDays = Math.max(0, ...STORES.map(s => rows[s].npDays));
+    company.goalSet = STORES.every(s => rows[s].goalSet);
+    company.goalPct = company.npGoal ? (company.npProj / company.npGoal) * 100 : 0;
+    const L = (f: (l: any) => number) => STORES.reduce((a, s) => a + (rows[s].leak ? f(rows[s].leak) : 0), 0);
+    const sales = L(l => l.sales), gp = L(l => l.gp), np = L(l => l.np);
+    const ebay = L(l => l.ebay), ebaySales = L(l => l.ebaySales), ship = L(l => l.ship), shipSales = L(l => l.shipSales);
+    company.leak = {
+      sales, gp, np, ebay, ship, ebaySales, shipSales,
+      gpPct: sales ? (gp / sales) * 100 : null, npPct: sales ? (np / sales) * 100 : null,
+      ebayPct: ebaySales ? (ebay / ebaySales) * 100 : null, shipPct: shipSales ? (ship / shipSales) * 100 : null,
+    };
+    // A store is flagged on a cost when it runs more than LEAK_FLAG_PTS of sales
+    // above the district on it. Points, not a ratio: 1 point of a $100k month is
+    // $1,000 of NP whichever store it is.
+    for (const s of STORES) {
+      const l = rows[s].leak; if (!l) continue;
+      l.ebayGap = l.ebayPct != null && company.leak.ebayPct != null ? l.ebayPct - company.leak.ebayPct : null;
+      l.shipGap = l.shipPct != null && company.leak.shipPct != null ? l.shipPct - company.leak.shipPct : null;
+      l.ebayHi = l.ebayGap != null && l.ebayGap > LEAK_FLAG_PTS;
+      l.shipHi = l.shipGap != null && l.shipGap > LEAK_FLAG_PTS;
+    }
+  }
+  const provisional = [...provisionalDates].sort();
 
   // top performer (by listings) + flags
   const sortedKpis = [...kpis].sort((a, b) => n(b.listed_count) - n(a.listed_count));
@@ -331,7 +512,8 @@ async function gather(sb: any, weekEnd: Date) {
     if (avg < lowestVal) { lowestVal = avg; lowestCat = label; }
   }
 
-  return { weekStart, weekEnd, endDay, daysInMonth, sameMonth, rows, company, topPerformer, incomplete, lowestCat, lowestVal, kpis };
+  return { weekStart, weekEnd, endDay, daysInMonth, sameMonth, rows, company, topPerformer, incomplete, lowestCat, lowestVal, kpis,
+    npMonth, ym, monthName: MONTH_NAME[Number(ym.slice(5, 7)) - 1], provisional };
 }
 
 // ---------- shared HTML pieces (email-safe: tables + inline styles) ----------
@@ -348,7 +530,9 @@ const heroTile = () => {
 
 // `chipHtml` (optional) rides in the top-right of the hero — the manager report
 // puts its store chip there.
-const wrapEmail = (title: string, accent: string, range: string, body: string, chipHtml = '') => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>@media only screen and (max-width:520px){.gtile{display:block!important;width:100%!important;padding:6px 0!important}.pace-l,.pace-r{display:block!important;width:100%!important;text-align:left!important}.pace-r{padding-top:6px!important;font-size:24px!important}.pace-cap{font-size:12.5px!important;line-height:1.5!important}}</style></head>
+// `npMonth` swaps the footer's goal-pace sentence — the goal a month is graded
+// on is the only one the email may name.
+const wrapEmail = (title: string, accent: string, range: string, body: string, chipHtml = '', npMonth = false) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>@media only screen and (max-width:520px){.gtile{display:block!important;width:100%!important;padding:6px 0!important}.pace-l,.pace-r{display:block!important;width:100%!important;text-align:left!important}.pace-r{padding-top:6px!important;font-size:24px!important}.pace-cap{font-size:12.5px!important;line-height:1.5!important}}</style></head>
 <body style="margin:0;padding:0;background:${C.app};font-family:Inter,Arial,Helvetica,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.app};padding:20px 10px;"><tr><td align="center">
 <table role="presentation" width="680" cellpadding="0" cellspacing="0" style="max-width:680px;width:100%;background:${C.card};border:1px solid ${C.line};border-radius:${C.rCard}px;overflow:hidden;">
@@ -366,7 +550,9 @@ const wrapEmail = (title: string, accent: string, range: string, body: string, c
   <tr><td style="height:3px;background:${accent};font-size:0;line-height:0;">&nbsp;</td></tr>
   <tr><td style="padding:22px;">${body}</td></tr>
   <tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;border-top:1px solid ${C.line};background:${C.footBg};">
-    Generated automatically by Speeks · weekly figures are Mon–Sun. Goal pace is gross profit, month-to-date through the report week.
+    Generated automatically by Speeks · weekly figures are Mon–Sun. ${npMonth
+      ? 'Goal pace is net profit from the Net Profit tab, month-to-date, projected over the days it has. Net profit = sales − cost − eBay fees − shipping − card fees − 7% royalty.'
+      : 'Goal pace is gross profit, month-to-date through the report week.'}
   </td></tr>
 </table></td></tr></table></body></html>`;
 
@@ -435,6 +621,24 @@ function cashFlowSummary(r: any, ranks?: { buy?: number; rev?: number; gp?: numb
     statCell('Cash Cost', money(r.boughtCash)) +
     statCell('Buy Margin', pct(r.buyMargin), null, buyColor(r.buyMargin)),
     '');
+  if (r.npMonth) {
+    // NP month: Revenue | Net Profit | Net Margin. No Gross Profit cell (Ethan
+    // 2026-10-02: "ensure GP does not touch anything on this site anymore"). The
+    // rank rides on Net Profit; the footer is MTD NP against the NP goal.
+    const nb = r.npGoal ? Math.min(100, r.npMtd / r.npGoal * 100) : 0;
+    const nBar = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:9px 0 0;background:${C.track};border-radius:99px;"><tr><td style="background:${C.sage};height:10px;width:${nb}%;border-radius:99px;font-size:0;line-height:0;">&nbsp;</td><td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>`;
+    const dash = `<span style="color:${C.faint};">—</span>`;
+    const npVal = r.soldNp == null ? dash : money(r.soldNp);
+    const nmVal = r.npMargin == null ? dash : pct(r.npMargin);
+    const footer = r.npGoal
+      ? `<div style="font-size:12px;font-weight:700;color:${C.charcoal};">MTD Net Profit ${money(r.npMtd)} <span style="color:${C.muted};font-weight:600;">of ${money(r.npGoal)} goal</span></div>${nBar}<div style="font-size:11px;font-weight:600;color:${C.muted};margin-top:5px;">${Math.round(nb)}% banked · ${r.npDays} day${r.npDays === 1 ? '' : 's'} in · tracking to <b style="color:${r.goalPct >= 100 ? C.green : C.amber};">${moneyK(r.npProj)} (${Math.round(r.goalPct)}% of goal)</b></div>`
+      : `<div style="font-size:12px;font-weight:700;color:${C.charcoal};">MTD Net Profit ${money(r.npMtd)} <span style="color:${C.amber};font-weight:700;">· no NP goal set for this month</span></div>`;
+    return buying + channel('Selling',
+      statCell('Revenue', money(r.soldRev), ranks?.rev ?? null) +
+      statCell('Net Profit', npVal, ranks?.gp ?? null) +
+      statCell('Net Margin', nmVal),
+      footer);
+  }
   const selling = channel('Selling',
     statCell('Revenue', money(r.soldRev), ranks?.rev ?? null) +
     statCell('COGS', money(cogsSold)) +
@@ -444,8 +648,9 @@ function cashFlowSummary(r: any, ranks?: { buy?: number; rev?: number; gp?: numb
 }
 
 function leaderboardTable(rows: Record<string, any>, company: any, youStore?: string) {
-  const order = [...STORES].sort((a, b) => rows[b].soldGp - rows[a].soldGp);
   const goalC = (p: number) => (p >= 100 ? C.green : p >= 85 ? C.amber : C.red);
+  if (company.npMonth) return npLeaderboardTable(rows, company, goalC, youStore);
+  const order = [...STORES].sort((a, b) => rows[b].soldGp - rows[a].soldGp);
   const body = order.map((s, i) => {
     const r = rows[s]; const you = s === youStore;
     return `<tr${you ? ` style="background:${C.tint};"` : ''}>
@@ -474,6 +679,106 @@ function leaderboardTable(rows: Record<string, any>, company: any, youStore?: st
       <td style="${tc}text-align:center;font-weight:900;color:${buyColor(company.buyMargin)};">${pct(company.buyMargin)}</td>
       <td style="${tc}text-align:center;">${procCell(company.processed, company.listingPct)}</td>
     </tr>
+  </table>`;
+}
+
+// NP-month leaderboard. Ranked on the WEEK's net profit (it is a weekly table);
+// % Goal is the month's tracking against the NP goal. Kept a separate function
+// rather than ternaries per cell so the GP table above stays exactly as it was.
+// NP% is left uncoloured: there is no agreed NP-margin floor yet, and inventing
+// one in an email to every store would make it policy by accident.
+function npLeaderboardTable(rows: Record<string, any>, company: any, goalC: (p: number) => string, youStore?: string) {
+  const order = [...STORES].sort((a, b) => (rows[b].soldNp ?? -1e12) - (rows[a].soldNp ?? -1e12));
+  const npK = (v: number | null) => v == null ? `<span style="color:${C.faint};">—</span>` : moneyK(v);
+  const npP = (v: number | null) => v == null ? `<span style="color:${C.faint};">—</span>` : pct(v);
+  const gp = (p: number) => p > 0 ? `<span style="color:${goalC(p)};">${Math.round(p)}%</span>` : `<span style="color:${C.faint};">—</span>`;
+  const body = order.map((s, i) => {
+    const r = rows[s]; const you = s === youStore;
+    return `<tr${you ? ` style="background:${C.tint};"` : ''}>
+      <td style="padding:9px 6px;text-align:center;font-weight:900;color:${i === 0 ? C.gold : C.faint};">${i + 1}</td>
+      <td style="padding:9px 6px;">${badge(s)}${you ? ` <span style="font-size:10px;font-weight:800;color:${C.sageDeep};background:${C.tint};border:1px solid #c6ecd6;padding:2px 6px;border-radius:6px;">YOU</span>` : ''}</td>
+      <td style="padding:9px 6px;text-align:center;font-weight:900;">${npK(r.soldNp)}</td>
+      <td style="padding:9px 6px;text-align:center;font-weight:800;color:${C.muted};">${npP(r.npMargin)}</td>
+      <td style="padding:9px 6px;text-align:center;font-weight:800;">${gp(r.npGoal ? r.goalPct : 0)}</td>
+      <td style="padding:9px 6px;text-align:center;font-weight:800;">${moneyK(r.soldRev)}</td>
+      <td style="padding:9px 6px;text-align:center;font-weight:800;">${moneyK(r.boughtResale)}</td>
+      <td style="padding:9px 6px;text-align:center;font-weight:800;color:${buyColor(r.buyMargin)};">${pct(r.buyMargin)}</td>
+      <td style="padding:9px 6px;text-align:center;">${procCell(r.processed, r.listingPct)}</td>
+    </tr>`;
+  }).join('');
+  const tc = `background:${C.soft};border-top:2px solid ${C.line};`;
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;">
+    <tr>${th('#')}${th('Store', 'left')}${th('NP$')}${th('NP%')}${th('% Goal')}${th('Sold')}${th('Bought')}${th('Buy%')}${th('Proc.')}</tr>
+    ${body}
+    <tr><td style="${tc}"></td>
+      <td style="${tc}padding:10px 6px;font-weight:900;">Stores</td>
+      <td style="${tc}text-align:center;font-weight:900;">${npK(company.soldNp)}</td>
+      <td style="${tc}text-align:center;font-weight:900;color:${C.muted};">${npP(company.npMargin)}</td>
+      <td style="${tc}text-align:center;font-weight:900;">${gp(company.npGoal ? company.goalPct : 0)}</td>
+      <td style="${tc}text-align:center;font-weight:900;">${moneyK(company.soldRev)}</td>
+      <td style="${tc}text-align:center;font-weight:900;">${moneyK(company.boughtResale)}</td>
+      <td style="${tc}text-align:center;font-weight:900;color:${buyColor(company.buyMargin)};">${pct(company.buyMargin)}</td>
+      <td style="${tc}text-align:center;">${procCell(company.processed, company.listingPct)}</td>
+    </tr>
+  </table>`;
+}
+
+// "eBay Fees & Shipping" (was "Where the GP Went"; no GP column since 2026-10-02,
+// when Ethan asked that GP be off everything) — MTD, per store, the two costs that a
+// store can actually move: eBay fees and shipping, each as % of sales, beside
+// the district's. Card fees and the 7% royalty are left out on purpose: card
+// fees track sales mix, the royalty is a flat rate, and a column nobody can act
+// on dilutes the two that matter. A cost more than LEAK_FLAG_PTS above the
+// district prints RED with the gap in points, so it reads in a glance and
+// survives clients that drop background colours. `youStore` tints the
+// manager's own row the same way the leaderboard does.
+function gpWentTable(d: any, youStore?: string) {
+  const dl = d.company.leak;
+  const cellP = (p: number | null, $: number, hi: boolean, gap: number | null) => {
+    if (p == null) return `<span style="color:${C.faint};">—</span>`;
+    const col = hi ? C.red : C.charcoal;
+    return `<div style="font-weight:900;font-size:13px;color:${col};">${pct(p)}${hi ? ` <span style="font-size:10px;font-weight:900;">▲ +${gap!.toFixed(1)} pts</span>` : ''}</div>`
+      // Whole dollars, not $k: early in a month a store's fees are a few hundred
+      // dollars, and "$0.3k" says less than "$289".
+      + `<div style="font-size:9.5px;font-weight:700;color:${hi ? C.red : C.faint};">${money($)}</div>`;
+  };
+  const pp = (p: number | null) => p == null ? `<span style="color:${C.faint};">—</span>` : pct(p);
+  const order = [...STORES].sort((a, b) => (d.rows[b].leak?.sales ?? 0) - (d.rows[a].leak?.sales ?? 0));
+  const body = order.map((s) => {
+    const l = d.rows[s].leak; const you = s === youStore;
+    if (!l) return '';
+    const hi = l.ebayHi || l.shipHi;
+    return `<tr${you ? ` style="background:${C.tint};"` : hi ? ` style="background:#fdf6f6;"` : ''}>
+      <td style="padding:9px 7px;border-bottom:1px solid ${C.line2};">${badge(s)}</td>
+      <td style="padding:9px 7px;text-align:center;font-weight:800;border-bottom:1px solid ${C.line2};">${moneyK(l.sales)}</td>
+      <td style="padding:9px 7px;text-align:center;border-bottom:1px solid ${C.line2};">${cellP(l.ebayPct, l.ebay, l.ebayHi, l.ebayGap)}</td>
+      <td style="padding:9px 7px;text-align:center;border-bottom:1px solid ${C.line2};">${cellP(l.shipPct, l.ship, l.shipHi, l.shipGap)}</td>
+      <td style="padding:9px 7px;text-align:center;font-weight:900;border-bottom:1px solid ${C.line2};">${pp(l.npPct)}</td>
+    </tr>`;
+  }).join('');
+  const tc = `background:${C.soft};border-top:2px solid ${C.line};`;
+  const flagged = STORES.filter(s => d.rows[s].leak && (d.rows[s].leak.ebayHi || d.rows[s].leak.shipHi));
+  const note = flagged.length
+    ? `<tr><td colspan="5" style="padding:10px 12px;font-size:11.5px;font-weight:700;color:${C.red};">${flagged.map(s => {
+        const l = d.rows[s].leak; const parts: string[] = [];
+        if (l.ebayHi) parts.push(`eBay fees ${pct(l.ebayPct)} vs ${pct(dl.ebayPct)}`);
+        if (l.shipHi) parts.push(`shipping ${pct(l.shipPct)} vs ${pct(dl.shipPct)}`);
+        return `${s}: ${parts.join(' · ')}`;
+      }).join('<br>')}</td></tr>`
+    : `<tr><td colspan="5" style="padding:10px 12px;font-size:11.5px;font-weight:600;color:${C.muted};">No store more than ${LEAK_FLAG_PTS.toFixed(1)} pt above the district on eBay fees or shipping.</td></tr>`;
+  const prov = d.provisional.length
+    ? `<tr><td colspan="5" style="padding:0 12px 10px;font-size:10.5px;font-weight:600;color:${C.faint};">Shipping isn't final for ${d.provisional.map((x: string) => fmtMD(parseYMD(x))).join(', ')} (it lands at 2pm the next day) — those days are left out of the shipping %, and their net profit may still come down.</td></tr>`
+    : '';
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;">
+    <tr>${th('Store', 'left')}${th('Sales MTD')}${th('eBay Fees')}${th('Shipping')}${th('NP%')}</tr>
+    ${body}
+    <tr><td style="${tc}padding:10px 7px;font-weight:900;">District</td>
+      <td style="${tc}text-align:center;font-weight:900;">${moneyK(dl.sales)}</td>
+      <td style="${tc}text-align:center;">${cellP(dl.ebayPct, dl.ebay, false, null)}</td>
+      <td style="${tc}text-align:center;">${cellP(dl.shipPct, dl.ship, false, null)}</td>
+      <td style="${tc}text-align:center;font-weight:900;">${pp(dl.npPct)}</td>
+    </tr>
+    ${note}${prov}
   </table>`;
 }
 
@@ -547,9 +852,22 @@ function flagsBlock(d: any) {
   // listing target
   const under = STORES.filter(s => d.rows[s].listingPct < 100);
   if (under.length) {
-    const chips = STORES.sort((a, b) => d.rows[a].listingPct - d.rows[b].listingPct)
+    // A copy: a bare STORES.sort() here reordered the global for every later
+    // section and every manager email in the same run.
+    const chips = [...STORES].sort((a, b) => d.rows[a].listingPct - d.rows[b].listingPct)
       .map(s => chip(`${s} ${Math.round(d.rows[s].listingPct)}%`, d.rows[s].listingPct >= 100 ? 'ok' : d.rows[s].listingPct >= 80 ? 'warn' : 'bad')).join('');
     items.push(`<div style="padding:11px 14px;border-bottom:1px solid ${C.flagRule};"><div style="font-size:13px;font-weight:900;color:${C.charcoal};">Listings — ${Math.round(d.company.listingPct)}% of target</div><div style="font-size:11.5px;color:${C.muted};font-weight:600;">${under.length} of 5 stores under goal</div><div>${chips}</div></div>`);
+  }
+  // NP months: eBay fees / shipping over the district (see gpWentTable). Listed
+  // high in the block — it is the cost the CEO asked to have called out.
+  if (d.npMonth && d.company.leak) {
+    const hi: string[] = [];
+    for (const s of STORES) {
+      const l = d.rows[s].leak; if (!l) continue;
+      if (l.ebayHi) hi.push(chip(`${s} eBay ${pct(l.ebayPct)} (+${l.ebayGap.toFixed(1)})`, 'bad'));
+      if (l.shipHi) hi.push(chip(`${s} shipping ${pct(l.shipPct)} (+${l.shipGap.toFixed(1)})`, 'bad'));
+    }
+    if (hi.length) items.push(`<div style="padding:11px 14px;border-bottom:1px solid ${C.flagRule};"><div style="font-size:13px;font-weight:900;color:${C.red};">eBay fees / shipping over the district</div><div style="font-size:11.5px;color:${C.muted};font-weight:600;">MTD % of sales · district eBay ${pct(d.company.leak.ebayPct ?? 0)} · shipping ${pct(d.company.leak.shipPct ?? 0)} · flag at +${LEAK_FLAG_PTS.toFixed(1)} pt</div><div>${hi.join('')}</div></div>`);
   }
   // buy margin
   const lowBuy = STORES.filter(s => d.rows[s].buyMargin < 51);
@@ -613,8 +931,9 @@ function buildLeadership(d: any) {
   const body = `
   ${sectionLabel('Cash Flow Summary', 'all stores combined')}
   ${cashFlowSummary(d.company)}
-  ${sectionLabel('Store Leaderboard', 'ranked by weekly gross profit')}
+  ${sectionLabel('Store Leaderboard', d.npMonth ? `ranked by weekly net profit · % goal is ${d.monthName} NP tracking` : 'ranked by weekly gross profit')}
   ${leaderboardTable(d.rows, d.company)}
+  ${d.npMonth ? sectionLabel('eBay Fees &amp; Shipping', `${d.monthName} to date · eBay fees and shipping as % of sales · red = over ${LEAK_FLAG_PTS.toFixed(1)} pt above the district`) + gpWentTable(d) : ''}
   ${sectionLabel('Buying Breakdown', 'ranked by volume bought · resale value vs cash paid')}
   ${buyingTable(d.rows, d.company)}
   ${sectionLabel('Listing Productivity by Store', 'ranked by % of target')}
@@ -632,7 +951,7 @@ function buildLeadership(d: any) {
       return `<tr><td style="padding:3px 0;">${badge(s)}</td><td align="right" style="font-weight:800;color:${ac(w)};">Weekly ${fmt(w)}</td><td align="right" style="font-weight:800;color:${ac(da)};padding-left:16px;">Daily ${fmt(da)}</td></tr>`;
     }).join('')}</table></td></tr>`)}
   `;
-  return wrapEmail('Weekly Performance Report', C.sage, range, body);
+  return wrapEmail('Weekly Performance Report', C.sage, range, body, '', d.npMonth);
 }
 
 // ---------- manager email ----------
@@ -646,7 +965,9 @@ function buildManager(d: any, store: string) {
     const sorted = [...STORES].sort((a, b) => m(d.rows[b]) - m(d.rows[a]));
     return sorted.indexOf(store) + 1;
   };
-  const gpRank = rankOf(x => x.soldGp);
+  // NP months rank on the week's net profit (the leaderboard's order); the
+  // badge then rides on the Net Profit cell rather than the MTD GP line.
+  const gpRank = d.npMonth ? rankOf(x => x.soldNp ?? -1e12) : rankOf(x => x.soldGp);
   const revRank = rankOf(x => x.soldRev);
   const buyRank = rankOf(x => x.boughtResale);
   const listRank = rankOf(x => x.listingPct);
@@ -752,14 +1073,22 @@ function buildManager(d: any, store: string) {
   const worst = scoredCats[0];
   if (worst && (worst.v as number) > 0 && (worst.v as number) < 8) focus.push(`<span style="color:${C.amber};">●</span> <b>${worst.label} scored ${worst.v}/10</b> — your lowest scored category.`);
   if (r.listingPct < 100) focus.push(`<span style="color:${C.red};">●</span> <b>Listings ${Math.round(r.listingPct)}% of target</b> (${r.target - r.processed} short) — push processing volume.`);
+  // NP months: eBay fees / shipping over the district, in red, with the gap in
+  // points and what it cost — the CEO/DM ask is that a store sees this itself.
+  if (d.npMonth && r.leak) {
+    const dl = d.company.leak;
+    if (r.leak.ebayHi) focus.push(`<span style="color:${C.red};">●</span> <b style="color:${C.red};">eBay fees ${pct(r.leak.ebayPct)} of sales</b> — ${r.leak.ebayGap.toFixed(1)} pts above the district's ${pct(dl.ebayPct)} (${money(r.leak.ebay)} ${d.monthName} to date).`);
+    if (r.leak.shipHi) focus.push(`<span style="color:${C.red};">●</span> <b style="color:${C.red};">Shipping ${pct(r.leak.shipPct)} of sales</b> — ${r.leak.shipGap.toFixed(1)} pts above the district's ${pct(dl.shipPct)} (${money(r.leak.ship)} ${d.monthName} to date).`);
+  }
   if (r.buyMargin >= 51) focus.push(`<span style="color:${C.green};">●</span> <b>Buy margin ${pct(r.buyMargin)}</b> — keep the buying discipline up.`);
 
   const body = `
   ${headerCard}
   ${sectionLabel('Cash Flow Summary')}
   ${cashFlowSummary(r, { buy: buyRank, rev: revRank, gp: gpRank })}
-  ${sectionLabel('Where You Stand', 'all stores this week · ranked by gross profit')}
+  ${sectionLabel('Where You Stand', d.npMonth ? `all stores this week · ranked by net profit · % goal is ${d.monthName} NP tracking` : 'all stores this week · ranked by gross profit')}
   ${leaderboardTable(d.rows, d.company, store)}
+  ${d.npMonth ? sectionLabel('eBay Fees &amp; Shipping', `${d.monthName} to date · your eBay fees and shipping vs the district · red = over ${LEAK_FLAG_PTS.toFixed(1)} pt above`) + gpWentTable(d, store) : ''}
   ${sectionLabel('Listing Productivity', `${r.processed} of ${r.target} target · ${Math.round(r.listingPct)}%`)}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;">
     <tr>${th('Lister', 'left')}${th('Listed')}${th('Retail $')}${th('Margin')}${th('% Sold')}</tr>${teamRows}${teamTotal}
@@ -770,7 +1099,7 @@ function buildManager(d: any, store: string) {
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;">${auditHtml}</table>
   ${focus.length ? sectionLabel('Focus This Week') + rowsBox(focus.map(f => `<tr><td style="padding:10px 14px;font-size:12.5px;border-bottom:1px solid ${C.line2};">${f}</td></tr>`).join('')) : ''}
   `;
-  return wrapEmail('Your Weekly Report', C.sage, range, body, badge(store));
+  return wrapEmail('Your Weekly Report', C.sage, range, body, badge(store), d.npMonth);
 }
 
 // ---------- send (Gmail relay preferred, Resend fallback) ----------
@@ -798,6 +1127,12 @@ async function sendEmail(to: string[], subject: string, html: string) {
 }
 
 // ---------- snapshot persistence ----------
+// NP months: the gp_* columns stay GROSS profit (MTD GP off daily_np), and
+// gp_goal / goal_pct are written 0 — there is no GP goal in an NP month, and
+// the NP goal % in a column that sits beside GP figures would make the history
+// lie. 0, not NULL: it is what a month with no goal has always written, and the
+// table's DDL is not in the repo to say NULL is allowed. The table has no NP
+// columns yet; adding them is a migration.
 async function writeSnapshots(sb: any, d: any) {
   const weekEnd = ymd(d.weekEnd);
   const recs = STORES.map(s => {
@@ -806,7 +1141,7 @@ async function writeSnapshots(sb: any, d: any) {
       week_end: weekEnd, store: s, bought_resale: r.boughtResale, bought_cash: r.boughtCash, buy_margin_pct: r.buyMargin,
       sold_revenue: r.soldRev, sold_gp: r.soldGp, gp_margin_pct: r.gpMargin, processed: r.processed, listing_target: r.target,
       listing_pct: r.listingPct, retail_value: r.retail, listed_margin_pct: r.listedMargin, pct_sold: r.pctSold,
-      gp_mtd: r.gpMtd, gp_goal: r.gpGoal, gp_proj: r.gpProj, goal_pct: r.goalPct,
+      gp_mtd: r.gpMtd, gp_goal: d.npMonth ? 0 : r.gpGoal, gp_proj: r.gpProj, goal_pct: d.npMonth ? 0 : r.goalPct,
       scorecard_avg: r.card ? n(r.card.store_average) * 2 : null,
       audit_pct: r.audit ? r.audit.pct : null,
       audit_earned: r.audit ? r.audit.earned : null,
@@ -816,7 +1151,7 @@ async function writeSnapshots(sb: any, d: any) {
     week_end: weekEnd, store: 'ALL', bought_resale: d.company.boughtResale, bought_cash: d.company.boughtCash, buy_margin_pct: d.company.buyMargin,
     sold_revenue: d.company.soldRev, sold_gp: d.company.soldGp, gp_margin_pct: d.company.gpMargin, processed: d.company.processed,
     listing_target: d.company.target, listing_pct: d.company.listingPct, retail_value: d.company.retail, listed_margin_pct: d.company.listedMargin,
-    pct_sold: d.company.pctSold, gp_mtd: d.company.gpMtd, gp_goal: d.company.gpGoal, gp_proj: d.company.gpProj, goal_pct: d.company.goalPct, scorecard_avg: null,
+    pct_sold: d.company.pctSold, gp_mtd: d.company.gpMtd, gp_goal: d.npMonth ? 0 : d.company.gpGoal, gp_proj: d.company.gpProj, goal_pct: d.npMonth ? 0 : d.company.goalPct, scorecard_avg: null,
     audit_pct: null, audit_earned: null,
   } as any);
   await sb.from('weekly_report_snapshots').upsert(recs, { onConflict: 'week_end,store' });
