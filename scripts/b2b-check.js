@@ -2091,3 +2091,15 @@ t('trial: a scroll closes it, because a fixed menu cannot follow the row', funct
 // Restore the fixture for anything appended after this point.
 _b2bModalDeal = B2B_FIXTURE_DEAL;
 _b2bModalItems = b2bFixtureItems();
+
+// Declines are final on the server (b2b-deals: action "reopen" answers 409).
+// The decline dialog promised "can be reopened if the client comes back", and
+// the Move dialog leaned on the same idea -- copy the server contradicts.
+t('decline: the dialog no longer promises a reopen', function () {
+    var src = _srcOf(b2bDeclineDeal);
+    if (src.indexOf('can be reopened') > -1) return 'still says a declined deal can be reopened';
+    return src.indexOf('Declines are final') > -1 || 'does not say a decline is final';
+});
+t('decline: the Move dialog does not mention reopening', function () {
+    return !/reopen/i.test(_srcOf(b2bOpenTransfer)) || 'Move hint still talks about a reopen';
+});
