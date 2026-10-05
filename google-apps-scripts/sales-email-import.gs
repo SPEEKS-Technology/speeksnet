@@ -306,6 +306,22 @@ var REVIEW_STOPS = ['paytonai', 'review insights', 'star reviews',
 // The trend deltas ("▲ 0%", "▼ 65.7%") that follow each figure carry no dollar
 // sign, so the money matcher steps over them for free.
 var CASH_DRAWER_LABELS = ['cash balance'];
+// ⚠️ PAYMORE CHANGED THE BLOCK ON 2026-10-03. diagnoseCashSection() on 10-05,
+// all five stores' Saturday reports:
+//
+//     Safe Balance
+//     Buying Drawer Balance
+//     Total Cash on Hand
+//
+// "Cash Balance" and "PayStation Balance" are gone, so every store's drawer came
+// back NO MATCH and the cash email went out with blank drawers. "Buying Drawer
+// Balance" is now the only drawer on the report — but in the OLD layout it was
+// the wrong pot, two lines above the right one. So it is accepted on two
+// conditions, both checked in _parseCash, never by widening the list above:
+//   1. the body has no "Cash Balance" line at all (the new layout, not the old)
+//   2. safe + it equals the report's own total, within CASH_TOTAL_TOLERANCE
+// Fail either and the drawer stays blank, which is visible. A wrong drawer is not.
+var CASH_DRAWER_NEW_LAYOUT = 'buying drawer balance';
 var CASH_SAFE_LABELS   = ['safe balance'];
 var CASH_TOTAL_LABELS  = ['total cash on hand'];
 // Every card stops at every other card, at the grid heading that follows, and at
@@ -1390,7 +1406,21 @@ function _parseCash(body) {
   var safe   = _findLabeledNear(body, CASH_SAFE_LABELS,   CASH_STOPS);
   var total  = _findLabeledNear(body, CASH_TOTAL_LABELS,  CASH_STOPS);
 
+  // The 2026-10-03 layout — see CASH_DRAWER_NEW_LAYOUT. Only when the old label
+  // is absent from the whole body, and only if the three add up.
   var why = null;
+  if (drawer == null && !/cash balance/i.test(String(body || ''))) {
+    var alt = _findLabeledNear(body, [CASH_DRAWER_NEW_LAYOUT],
+      CASH_STOPS.filter(function (s) { return s !== CASH_DRAWER_NEW_LAYOUT; }));
+    if (alt != null && total != null && safe != null &&
+        Math.abs(total - (alt + safe)) <= CASH_TOTAL_TOLERANCE) {
+      drawer = alt;
+    } else if (alt != null) {
+      why = 'new-layout drawer ' + alt + ' refused: safe ' + safe + ' + drawer does not make total ' + total;
+    }
+  }
+
+
   if (total != null && drawer != null && safe != null &&
       Math.abs(total - (drawer + safe)) > CASH_TOTAL_TOLERANCE) {
     // Not corrected — a total that does not add up is the signal that one of the
