@@ -60,12 +60,105 @@ Every scope test keys off `pricing_store` / `listing_store`, so **a deal with
 neither is invisible to everyone but corp** (stated at
 `b2b-deals/index.ts:56-57`).
 
-- Client: `_b2bInScope` `speeks.js:15840`, the test at `:15843`; corp
-  short-circuits true at `:15841`.
-- Server: `scoped()` `b2b-deals/index.ts:2155-2156`.
-- Per-action ownership: `_b2bActionFor` `speeks.js:15847-15886`. The listing
-  branch (`:15876-15878`) requires `mine.includes(deal.listing_store)`.
-- Role gates `speeks.js:15781-15830`; Overview is CEO/DM-only (`_b2bCanOverview` `:15824`).
+⚠️ **Since 0081 the listing location lives on the ITEM, and the deal keeps a
+roll-up.** A deal split across stores has `listing_store` **null** and names its
+stores only in `b2b_deals.listing_stores` (a `text[]`, maintained by trigger from
+`b2b_deal_items.listing_store`). Anything that tests the single column alone will
+hide a split deal from every store working it. Use:
+
+- Client: `_b2bListsHere(deal, mine)` — checks the column **and** the roll-up.
+  `_b2bInScope` and both listing branches of `_b2bActionFor` go through it.
+- Server: `scoped()` adds `listing_stores.cs.{STORE}` alongside the two original
+  predicates. One indexed (GIN) predicate, not a join — which is the whole
+  reason the roll-up column exists.
+- `_b2bIsSplit(deal)` is `listing_stores.length > 1`. `b2b_deals.listing_store`
+  keeps its old meaning: the single store, or null when there is more than one.
+
+**A store sees only its own lines, and the SERVER enforces it.** The item
+endpoint takes `?deal_id=X&store=CODE` and filters
+`listing_store = CODE OR listing_store IS NULL` — one predicate covering both
+ends of the pipeline, since nothing is assigned before acceptance (so a pricing
+store still sees every line) and everything is after (so a listing store sees
+only its own). The client asks for its own slice via `_b2bScopeQs()`, and **both**
+fetch sites must use it: one scoped and the other not means a store sees the
+whole deal after a background poll but not on open, which is the worst kind of
+leak. A check counts the fetches against the scoped calls.
+
+Filtering in the browser was never an option — it would ship every store's lines
+and the deal's whole commercial picture to every store on it.
+
+- Per-action ownership: `_b2bActionFor`. Employees/trainees get the listing
+  branch for their own store's deals (3.8.3).
+- Role gates: `_b2bCanAccept()` is the "is this corp" gate that assigning a
+  listing location and moving lines both use. Deliberately the same one every
+  other privileged B2B action uses — a second, subtly different check is how two
+  answers to the same question end up in one file.
+
+**Per-store completion.** `b2b_deal_listing_parts` records which store finished
+its half and when; `complete` counts outstanding for **that store only**, so one
+store is never blocked by another's. The deal reaches `completed` when the last
+part lands. A one-store deal is the degenerate case of the same path and behaves
+exactly as it always did, which is why 0081 backfilled every existing item.
+
+**Every path into listing must stamp the lines.** `assign_listing`,
+`accept_quote` (a store-priced deal goes straight to listing at that store) and
+`transfer_location` (a listing-stage deal moved whole) all write
+`b2b_deal_items.listing_store`. The last two only set the deal column until
+2026-09-26, which left WSP's deal in listing with unassigned lines that nobody
+could complete. `transfer_location` refuses a split deal outright; Move Lines is
+the tool for that. `complete` still judges a deal with no assigned lines
+deal-wide, before the per-store logic, as a backstop.
+
+**Completing from the client names the store.** `_b2bClosableParts(deal, items?)`
+returns the parts this user can sign off now (corp: any ready part; a store or
+multi-store manager: their own), or `null` for an unsplit deal, which completes
+whole as before. `_b2bCompleteParts` sends one `complete` per store. Corp can
+also close one store's part from the listing breakdown (`b2bCompletePart`).
+`_b2bMyLines()` narrows the loaded lines to the user's stores, for the
+multi-store manager whose item fetch is unscoped.
+
+**A store's board row for a split deal is its part, not the deal.**
+`narrowSplitRows` recomputes the deal-wide totals from that store's lines (same
+formulas as the view) and filters `listing_parts` to its own entry, so cards,
+the quick Complete check and the Completed list all read the store's part.
+`listing_stores` stays whole: a store still needs to know the deal is split.
+
+**Splitting one line between stores** is `split_item {id, qty, serials?}`, corp
+only, at `listing_location` or `listing`. It divides the line into two ordinary
+lines rather than teaching the read paths about part-quantities: the new line
+takes the next line number and its own SKU (sku is unique table-wide and
+`list_unit` resolves scans by it), so labels on moved units must be reprinted.
+Only unaccounted units can go. A line with a serial for every unit must name
+the serials that go. The client editor (`_b2bSplitEditorHtml`) sits in both the
+Split It Up picker (new line arrives unplaced) and Move Lines (arrives ticked).
+
+**Undoing a split** is `merge_item {id}`: the split line folds back into the
+line recorded in `b2b_deal_items.split_from` (0117), and only that line. Its
+units return to the parent's store. Recycled units and wipes come along. A unit
+listed under the split line's own SKU blocks the merge. Lines later split off
+the merged line are re-pointed at the parent. "Merge Back" appears on split
+lines in both screens, with a "split from 0003" note on the row.
+
+**Move history** is `GET ?transfers=<deal>[&store=…]`, rendered by
+`_b2bMoveHistoryHtml` as a folded section on the listing and read-only screens,
+fetched on first open.
+
+**`?store=` takes a comma list** on the board and item fetches, vetted against
+the known codes by `storeList`. A multi-store manager asks for both stores
+instead of ALL, so they no longer get every store's deals and every client's
+contact details. **Deploy the edge function before the client:** the old
+function reads `BAL,MPL` as one bad code.
+
+`b2b_deal_list.listing_parts` (JSONB, one entry per store with its counts, money
+and completion) serves corp's per-store progress breakdown and a store's own
+numbers on the board from one fetch.
+
+**Moving lines** is `transfer_items`, corp only, logged into
+`b2b_deal_transfers` as `kind: 'item'`. It refuses a line with units already
+live on Shopify — that listing belongs to the store that made it. Afterwards it
+re-reads the roll-up (a deal collapsing back onto one store must stop reading as
+split) and drops the destination's part row, because a store handed more work is
+no longer finished.
 
 **Gotcha:** on acceptance the listing store is auto-set from the pricing store
 *unless the deal was priced at CORP* (`b2b-deals/index.ts:1265-1268`). So
@@ -73,10 +166,15 @@ CORP-priced deals land at `listing_location` with `listing_store = null`, have n
 owner at any store, and the only screen anyone gets is the bare store picker
 `_b2bStageListingLocation` `speeks.js:22041`.
 
-Note the item fetch (`GET ?deal_id=`, `b2b-deals/index.ts:2110-2145`) has **no
-store check at all** — any authorized caller with a deal id gets full
-value/offer/cost rollups. The only field-level scoping is contact details
-(`CONTACT_COLS` / `SCOPED_DEAL_COLS`, `index.ts:182-184`, applied at `:2161`).
+The item fetch **used to have no store check at all** — any authorized caller
+with a deal id got every line and the full value/offer/cost rollups. Since 0081
+it takes `&store=CODE` and filters (see above), which is what makes "each store
+only sees the part brought to their store" true rather than aspirational.
+It is still the caller that says which store it is, like `role` — this app has
+always trusted the browser on that (see the header in `b2b-deals`), so it is not
+a security boundary, it is the client telling the server which rule to apply.
+Field-level scoping of contact details is separate and unchanged
+(`CONTACT_COLS` / `SCOPED_DEAL_COLS`, applied on the board query).
 
 ## Screens
 

@@ -20147,7 +20147,7 @@ function _b2bPrevalStore() {
 
 // CRM notification setup (cadences + who gets the reach-out emails) is CEO-only.
 function _b2bCanCrm() { return _b2bRole() === 'ceo'; }
-function _b2bCanOverview(){ return ['ceo', 'district manager'].includes(_b2bRole()); }
+
 // Employees / trainees help PRICE items but never escalate: no submit, no quote,
 // no listing/complete, no accept. Pricing-edit only.
 function _b2bIsEmployee(){ return ['employee', 'training'].includes(_b2bRole()); }
@@ -20163,10 +20163,55 @@ function _b2bMyStores() {
 
 // --- scope + ownership ----------------------------------------------------
 
+// Does this deal get listed at one of my stores? Since 0081 the answer can live
+// on the ITEMS rather than the deal: a split deal has listing_store null and
+// names its stores only in the listing_stores roll-up, so checking the single
+// column alone would hide a split deal from every store working it.
+function _b2bListsHere(deal, mine) {
+    if (!deal) return false;
+    const who = mine || _b2bMyStores();
+    if (who.includes(deal.listing_store)) return true;
+    return (deal.listing_stores || []).some(s => who.includes(s));
+}
+
+// My store's slice of a split deal, out of the view's listing_parts. Returns
+// null for a deal I have no part in, so a caller can tell "no part" from "a
+// part with nothing done yet".
+function _b2bMyPart(deal, store) {
+    const parts = Array.isArray(deal && deal.listing_parts) ? deal.listing_parts : [];
+    const codes = store ? [store] : _b2bMyStores();
+    return parts.find(p => codes.includes(p && p.store)) || null;
+}
+const _b2bIsSplit = (deal) => ((deal && deal.listing_stores) || []).length > 1;
+
+// The one store whose lines this user is working, or '' for corp and for
+// anybody with several. Passed to the server as ?store= so the item fetch is
+// scoped THERE rather than here -- see the note on the deal_id endpoint.
+function _b2bItemScope() {
+    if (_b2bIsCorp()) return '';
+    const mine = _b2bMyStores();
+    return mine.length === 1 ? mine[0] : '';
+}
+
+
+// The &store= for an item fetch, or ''. Its own function so the two fetch sites
+// cannot drift apart -- one scoped and the other not would mean a store seeing
+// the whole deal on a background refresh but not on open, which is the worst
+// kind of leak: intermittent.
+// A multi-store manager asks for both their stores as a list, so they are sent
+// their own lines and not the other store's on a split deal. _b2bItemScope
+// itself stays single-valued: it is also the caller_store on a complete, which
+// names exactly one store.
+const _b2bScopeQs = () => {
+    if (_b2bIsCorp()) return '';
+    const mine = _b2bMyStores();
+    return mine.length ? `&store=${encodeURIComponent(mine.join(','))}` : '';
+};
+
 function _b2bInScope(deal) {
     if (_b2bIsCorp()) return true;
     const mine = _b2bMyStores();
-    return mine.includes(deal.pricing_store) || mine.includes(deal.listing_store);
+    return mine.includes(deal.pricing_store) || _b2bListsHere(deal, mine);
 }
 
 // The one action this user owns on this deal right now, or null.
@@ -20199,7 +20244,7 @@ function _b2bActionFor(deal) {
     // row already says "Corp records the certification" rather than hiding it.
     if (_b2bIsEmployee()) {
         if (st === 'pricing' && mine.includes(deal.pricing_store)) return B2B_ACTIONS.pricing;
-        if (st === 'listing' && mine.includes(deal.listing_store)) return B2B_ACTIONS.listing;
+        if (st === 'listing' && !_b2bMyPartDone(deal) && _b2bListsHere(deal, mine)) return B2B_ACTIONS.listing;
         return null;
     }
 
@@ -20223,8 +20268,21 @@ function _b2bActionFor(deal) {
         return _b2bIsDM() ? B2B_ACTIONS.pricing : null;   // DM can always step in
     }
     if (st === 'listing') {
-        if (mine.includes(deal.listing_store)) return B2B_ACTIONS.listing;
-        return _b2bIsDM() ? B2B_ACTIONS.listing : null;
+        // A store whose own half is signed off has nothing left to do on this
+        // deal, so it leaves their queue even though the deal is still open.
+        if (_b2bMyPartDone(deal)) return null;
+        if (_b2bListsHere(deal, mine)) return B2B_ACTIONS.listing;
+        // CORP AND DM GET IT TOO, and corp is the new half. Nick, 2026-09-10:
+        // "when corp is clicked on the deal while listing they can see both just
+        // from their point of view." Corp has no store of its own, so
+        // _b2bListsHere is false for every deal and a CEO fell through to null --
+        // which made _b2bClickKind return 'view' and opened the read-only sheet
+        // instead of the listing screen. On a split deal that is precisely the
+        // person who needs to see both halves at once.
+        //
+        // Their item fetch is unscoped (_b2bItemScope returns '' for corp), so
+        // corp sees every line while each store still sees only its own.
+        return (_b2bIsCorp() || _b2bIsDM()) ? B2B_ACTIONS.listing : null;
     }
     if (!_b2bIsCorp()) return null;
     // `review` and `quote` used to be one stage with an ad-hoc action literal
@@ -20257,8 +20315,18 @@ function _b2bQuickAction(d) {
     if (d.stage === 'quote' && _b2bCanAccept()) {
         return { label: 'Mark Accepted', call: `b2bQuickAccept('${d.id}',this)` };
     }
-    if (d.stage === 'listing' && d.total_units > 0 && _b2bOutstanding(d) === 0) {
-        return { label: 'Complete Deal', call: `b2bQuickComplete('${d.id}',this)` };
+    if (d.stage === 'listing') {
+        // A split deal is ready part by part: a store whose own units are done
+        // gets the button without waiting on the other store, and corp gets it
+        // for whichever parts are ready.
+        const parts = _b2bClosableParts(d);
+        if (parts) {
+            if (!parts.length) return null;
+            return { label: _b2bCompleteLabel(d, parts), call: `b2bQuickComplete('${d.id}',this)` };
+        }
+        if (d.total_units > 0 && _b2bOutstanding(d) === 0) {
+            return { label: 'Complete Deal', call: `b2bQuickComplete('${d.id}',this)` };
+        }
     }
     return null;
 }
@@ -20292,11 +20360,24 @@ async function b2bQuickAccept(id, btn) {
 async function b2bQuickComplete(id, btn) {
     const d = _b2bDealById(id);
     if (!d) return;
-    if (!confirm(`Complete ${d.client?.company || 'this deal'}?\n\n`
-        + `All ${d.total_units} unit${d.total_units === 1 ? '' : 's'} are listed or recycled, `
-        + 'so the deal closes out for record keeping.')) return;
+    const parts = _b2bClosableParts(d);
+    if (parts && !parts.length) return;
+    // A store's board row already carries only its own part's units (the
+    // server narrows split rows), so total_units is the right count for it.
+    const units = parts && _b2bCanAccept()
+        ? (d.listing_parts || []).filter(p => parts.includes(p.store))
+            .reduce((n, p) => n + (Number(p.total_units) || 0), 0)
+        : d.total_units;
+    const what = parts ? _b2bCompleteLabel(d, parts) : 'Complete Deal';
+    if (!confirm(`${what} — ${d.client?.company || 'this deal'}?\n\n`
+        + `All ${units} unit${units === 1 ? '' : 's'} are listed or recycled, `
+        + (what === 'Complete Deal'
+            ? 'so the deal closes out for record keeping.'
+            : 'so that part is signed off. The deal completes once every store has finished.'))) return;
     try {
-        await _b2bBusy(btn, 'Completing…', () => _b2bSend({ action: 'complete', id }));
+        await _b2bBusy(btn, 'Completing…', () => parts
+            ? _b2bCompleteParts(id, parts)
+            : _b2bSend({ action: 'complete', id, caller_store: _b2bItemScope() || undefined }));
         await b2bRefresh();
     } catch (e) {
         alert(`Couldn't complete the deal: ${e.message}`);
@@ -20369,6 +20450,29 @@ function _b2bStoreTag(code) {
     if (code === 'CORP') return '<span class="b2b-store b2b-store-corp">CORP</span>';
     return `<span class="b2b-store"><i class="b2b-dot" style="background:${STORE_TINTS[code] || '#94a3b8'}"></i>${escapeHtml(code)}</span>`;
 }
+
+// WHERE A DEAL IS, for a board row. Every list used to write
+// `_b2bStoreTag(d.listing_store || d.pricing_store)` inline, and that fallback
+// broke the moment a deal could be split (Nick, 2026-09-10: "The listing
+// location for example for the b2b deal named test ... is under store CORP for
+// listing?? This should not only not be possible, but I chose 2 of the actual
+// stores").
+//
+// It was CORP for a precise reason: a split deal has listing_store NULL -- the
+// single-store column cannot hold two -- so `||` fell through to pricing_store,
+// and a deal split at the listing step is one CORP priced, so pricing_store is
+// literally 'CORP'. The row then claimed the goods were at head office.
+//
+// listing_stores is the authority once anything has been assigned. Both stores
+// are shown rather than a count: "where is it" is the question the column
+// exists to answer, and "2 stores" answers it with another question.
+function _b2bDealStoreTag(deal) {
+    const stores = (deal && deal.listing_stores) || [];
+    if (stores.length > 1) {
+        return `<span class="b2b-store-split">${stores.map(_b2bStoreTag).join('')}</span>`;
+    }
+    return _b2bStoreTag(deal.listing_store || stores[0] || deal.pricing_store);
+}
 // Stroke attributes go inline rather than relying on an ancestor rule: the
 // deal modals sit outside .b2b-panel / .cb-panel, so a bare <svg> there renders
 // as a filled blob (paths) or nothing at all (lines).
@@ -20397,6 +20501,64 @@ function _b2bListedPct(deal) {
     const total = Number(deal.total_units) || 0;
     if (!total) return 0;
     return Math.round(((Number(deal.listed_units) + Number(deal.recycled_units)) / total) * 100);
+}
+
+// The listing progress on a PIPELINE CARD, which is two different pictures.
+//
+// Nick, 2026-09-10: "from a stores PoV: it looks like any other B2B deal, just
+// with only the items that were assigned. When its all completed it gets marked
+// as completed. From CORP POV: its broken into several progress bars labled by
+// each store that it got split into, and when one of them completes their
+// section it just is replaced with 'complete' instead of the progress bar on
+// that segment."
+//
+// So a store gets ONE bar and it is its own -- its part is the whole job as far
+// as it is concerned, and a card showing the other store's units would be
+// describing work it cannot do. Corp gets one labelled bar per store, and a
+// finished store's bar is replaced outright rather than shown full: a 100% bar
+// and a done bar look the same at a glance, and the difference between "all
+// listed" and "signed off as finished" is exactly what corp is scanning for.
+//
+// Falls back to the deal-wide bar whenever there are no parts -- a deal from
+// before 0081, or one still being assigned.
+function _b2bCardBar(deal, stageKey) {
+    if (stageKey !== 'listing') return '';
+    const parts = Array.isArray(deal.listing_parts) ? deal.listing_parts : [];
+
+    if (!_b2bIsCorp()) {
+        // A store's own slice, or the deal's if it somehow has no part.
+        const mine = _b2bMyPart(deal);
+        const pct = mine
+            ? (Number(mine.total_units)
+                ? Math.round(((Number(mine.listed_units) + Number(mine.recycled_units))
+                    / Number(mine.total_units)) * 100)
+                : 0)
+            : _b2bListedPct(deal);
+        if (mine && mine.completed_at) {
+            return '<div class="b2b-card-done">Complete</div>';
+        }
+        return `<div class="b2b-pace-bar sm"><i style="width:${pct}%"></i></div>`;
+    }
+
+    if (parts.length < 2) {
+        const one = parts[0];
+        if (one && one.completed_at) return '<div class="b2b-card-done">Complete</div>';
+        return `<div class="b2b-pace-bar sm"><i style="width:${_b2bListedPct(deal)}%"></i></div>`;
+    }
+
+    return `<div class="b2b-card-parts">${parts.map(p => {
+        const t = Number(p.total_units) || 0;
+        const d = (Number(p.listed_units) || 0) + (Number(p.recycled_units) || 0);
+        const pct = t ? Math.round((d / t) * 100) : 0;
+        return `
+            <div class="b2b-card-part">
+                <span class="b2b-card-part-s">${escapeHtml(p.store)}</span>
+                ${p.completed_at
+                    ? '<span class="b2b-card-part-done">Complete</span>'
+                    : `<span class="b2b-card-part-bar"><i style="width:${pct}%"></i></span>
+                       <span class="b2b-card-part-n">${d}/${t}</span>`}
+            </div>`;
+    }).join('')}</div>`;
 }
 
 // --- data -----------------------------------------------------------------
@@ -20527,10 +20689,13 @@ function b2bCloseDeal() {
 // A single-store user only pulls their own store; corp and MSMs pull the lot
 // and filter in _b2bInScope (the MSM covers two stores, which the API's
 // single-store filter can't express).
+// The board's ?store=. A multi-store manager used to get ALL -- every store's
+// deals and every client's contact details -- because the server took one code
+// or none. It takes a list now.
 function _b2bFetchScope() {
     if (_b2bIsCorp()) return 'ALL';
     const mine = _b2bMyStores();
-    return mine.length === 1 ? mine[0] : 'ALL';
+    return mine.length ? mine.join(',') : 'ALL';
 }
 
 // The client directory, or as much of it as this user has business seeing.
@@ -21265,7 +21430,9 @@ async function _b2bSyncOpenDeal(ping) {
     if (ping.by && ping.by === _b2bUser()) return;
 
     let fresh;
-    try { fresh = await _b2bGet(`deal_id=${encodeURIComponent(deal.id)}`); }
+    // Scoped: a store asks for its own lines and the server returns only those.
+    // See _b2bScopeQs.
+    try { fresh = await _b2bGet(`deal_id=${encodeURIComponent(deal.id)}${_b2bScopeQs()}`); }
     catch (_) { return; }               // transient; the poll will come round again
 
     const who = ping.by ? ` by ${ping.by}` : '';
@@ -21380,7 +21547,6 @@ async function _b2bSyncOpenDeal(ping) {
 
 function b2bSetView(view) {
     if (view === 'clients'  && !_b2bCanClientDirectory())  view = 'queue';
-    if (view === 'overview' && !_b2bCanOverview()) view = 'queue';
     if (view === 'prevals'  && !_b2bCanPreval())   view = 'queue';
     const changed = _b2bView !== view;
     _b2bView = view;
@@ -21403,7 +21569,6 @@ function b2bRender() {
     const body = document.getElementById('b2bBody');
     if (!body) return;
     if (_b2bView === 'clients'  && !_b2bCanClientDirectory())  _b2bView = 'queue';
-    if (_b2bView === 'overview' && !_b2bCanOverview()) _b2bView = 'queue';
     if (_b2bView === 'prevals'  && !_b2bCanPreval())   _b2bView = 'queue';
 
     const scoped = _b2bDeals.filter(_b2bInScope);
@@ -21418,7 +21583,7 @@ function b2bRender() {
         b.setAttribute('aria-selected', 'false');
     });
     const btn = { queue: 'b2bViewQueueBtn', pipeline: 'b2bViewPipelineBtn', finished: 'b2bViewFinishedBtn',
-                  clients: 'b2bViewClientsBtn', overview: 'b2bViewOverviewBtn',
+                  clients: 'b2bViewClientsBtn',
                   prevals: 'b2bViewPrevalsBtn' }[_b2bView];
     const activeBtn = document.getElementById(btn);
     activeBtn?.classList.add('active');
@@ -21485,7 +21650,6 @@ function b2bRender() {
     else if (_b2bView === 'prevals')  body.innerHTML = _b2bRenderPrevals();
     else if (_b2bView === 'finished') body.innerHTML = _b2bRenderFinished(scoped);
     else if (_b2bView === 'clients')  body.innerHTML = _b2bRenderClients();
-    else if (_b2bView === 'overview') body.innerHTML = _b2bRenderOverview(scoped);
     else                              body.innerHTML = _b2bRenderQueue(scoped, queue);
 }
 
@@ -21513,7 +21677,7 @@ function _b2bRenderQueue(scoped, queue) {
                     <span class="b2b-q-ref">${escapeHtml(d.ref)}</span>
                     <span class="b2b-q-co">${escapeHtml(d.client?.company || 'Unknown client')}</span>
                     ${_b2bStageChip(d.stage, d)}
-                    ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+                    ${_b2bDealStoreTag(d)}
                 </div>
                 <div class="b2b-q-meta">${meta}<span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d in stage</span></div>
                 ${bar}
@@ -21542,7 +21706,7 @@ function _b2bRenderQueue(scoped, queue) {
                     <span class="b2b-f-ref">${escapeHtml(d.ref)}</span>
                     <span class="b2b-f-co">${escapeHtml(d.client?.company || '')}</span>
                     ${_b2bStageChip(d.stage, d)}
-                    ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+                    ${_b2bDealStoreTag(d)}
                     <span class="b2b-f-val">${d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : ''}</span>
                 </div>`).join('')}
             </div>
@@ -21593,13 +21757,12 @@ function _b2bRenderPipeline(scoped) {
         const cards = inCol.length ? inCol.map(d => {
             const days = _b2bDaysIn(d);
             const act  = _b2bActionFor(d);
-            const bar  = (key === 'listing')
-                ? `<div class="b2b-pace-bar sm"><i style="width:${_b2bListedPct(d)}%"></i></div>` : '';
+            const bar  = _b2bCardBar(d, key);
             return `
             <div class="b2b-card ${act ? 'act' : ''}" onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')">
                 <div class="b2b-card-top">
                     <span class="b2b-card-ref">${escapeHtml(d.ref)}</span>
-                    ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+                    ${_b2bDealStoreTag(d)}
                 </div>
                 <div class="b2b-card-co">${escapeHtml(d.client?.company || '')}</div>
                 ${bar}
@@ -21647,7 +21810,79 @@ let _b2bArchiveDepth = B2B_ARCHIVE_STEPS[0];
 let _b2bFinOutcome   = 'all';   // all | completed | declined
 let _b2bFinQuery     = '';
 
-function _b2bIsTerminal(d) { return d.stage === 'completed' || d.stage === 'declined'; }
+// Finished — and for a store on a split deal, finished means THEIR half.
+//
+// Nick, 2026-09-11: "after I complete all of the listings for 1 store in the
+// split, that store should, in their view, have that b2b deal in completed."
+//
+// One function, because the pipeline (which excludes terminal deals), the
+// Completed list and its count all already run through it. A store's part being
+// signed off therefore moves the deal out of their board and into their
+// Completed in one change, while corp keeps following the deal itself and still
+// sees it in flight until the last store is done. Which is the whole premise:
+// "Treat it as 2 seperate deals from that point to each store."
+function _b2bMyPartDone(d) {
+    if (!d || _b2bIsCorp()) return false;     // corp follows the deal, not a part
+    if (d.stage !== 'listing') return false;
+    const mine = _b2bMyPart(d);
+    return !!(mine && mine.completed_at);
+}
+function _b2bIsTerminal(d) {
+    return d.stage === 'completed' || d.stage === 'declined' || _b2bMyPartDone(d);
+}
+
+// The parts of a split deal this user can sign off right now, or null when the
+// deal is not split and completes whole the way it always has.
+//
+// Corp may close any store's part -- the server allows it, for the store that
+// has gone home with its last unit listed -- and a store only its own. A part
+// is ready when every unit on it is accounted for: counted from the loaded
+// lines when the listing screen has them (live, and what the button is looking
+// at), else from the board's listing_parts (the card has no lines).
+//
+// Every complete call used to send no store at all, which the server can only
+// resolve for a one-store deal. So corp could never finish a split deal, and a
+// multi-store manager -- who has no single caller_store -- could never finish
+// their part of one.
+function _b2bClosableParts(deal, items) {
+    const stores = (deal && deal.listing_stores) || [];
+    if (stores.length < 2) return null;
+    const mine = _b2bCanAccept() ? stores : stores.filter(s => _b2bMyStores().includes(s));
+    const parts = Array.isArray(deal.listing_parts) ? deal.listing_parts : [];
+    return mine.filter(s => {
+        const p = parts.find(x => x && x.store === s);
+        if (p && p.completed_at) return false;
+        if (items && items.length) {
+            const own = items.filter(it => it.listing_store === s);
+            return own.length > 0 && own.every(_b2bSatisfied);
+        }
+        return !!p && Number(p.total_units) > 0 && Number(p.outstanding_units) === 0;
+    });
+}
+
+// What pressing Complete on a split deal will actually do, in words. A store
+// finishes its part. Corp finishes the deal when the ready parts are the last
+// ones open, and otherwise names the stores it is signing off.
+function _b2bCompleteLabel(deal, parts) {
+    if (!_b2bCanAccept()) return 'My Part Is Done';
+    const done = new Set(((deal && deal.listing_parts) || []).filter(p => p && p.completed_at).map(p => p.store));
+    const open = ((deal && deal.listing_stores) || []).filter(s => !done.has(s));
+    return parts.length >= open.length ? 'Complete Deal' : `Complete ${parts.join(' + ')}`;
+}
+
+// Signs off each named part in turn. One request per store because that is the
+// unit the server records -- who finished which half, and when. The last
+// answer says whether the deal itself has now completed.
+async function _b2bCompleteParts(id, stores) {
+    let out = null;
+    for (const s of stores) {
+        out = await _b2bSend({
+            action: 'complete', id, store: s,
+            caller_store: _b2bCanAccept() ? undefined : s,
+        });
+    }
+    return out;
+}
 
 // Closed-out date. stage_changed_at is when it reached its terminal stage.
 function _b2bClosedAt(d) { return d.stage_changed_at || d.updated_at || d.created_at; }
@@ -21660,6 +21895,11 @@ function _b2bFinishedRows(rows) {
     }
     const body = rows.map(d => {
         const done = (Number(d.listed_units) || 0) + (Number(d.recycled_units) || 0);
+        // A store's finished part of a split deal sits here while the deal is
+        // still in listing elsewhere; it has closed out as far as this store is
+        // concerned, and its row carries that part's figures (the server narrows
+        // split rows for a store), so show them rather than a dash.
+        const closed = d.stage === 'completed' || _b2bMyPartDone(d);
         const sub  = d.stage === 'declined' && d.declined_reason
             ? `<div class="b2b-doc-sub">${escapeHtml(d.declined_reason)}</div>` : '';
         return `
@@ -21667,9 +21907,9 @@ function _b2bFinishedRows(rows) {
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
             <td><b>${escapeHtml(d.client?.company || '')}</b>${sub}</td>
             <td>${_b2bStageChip(d.stage, d)}</td>
-            <td>${_b2bStoreTag(d.listing_store || d.pricing_store)}</td>
-            <td class="c">${d.stage === 'completed' ? `${done} of ${d.total_units || 0}` : '—'}</td>
-            <td class="r b">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d)) : '—'}</td>
+            <td>${_b2bDealStoreTag(d)}</td>
+            <td class="c">${closed ? `${done} of ${d.total_units || 0}` : '—'}</td>
+            <td class="r b">${closed ? _b2bMoney(_b2bNetCost(d)) : '—'}</td>
             <td class="r">${_b2bDate(_b2bClosedAt(d))}</td>
         </tr>`;
     }).join('');
@@ -21696,7 +21936,10 @@ function _b2bFinishedSet(scoped) {
 function _b2bRenderFinished(scoped) {
     const all  = scoped.filter(_b2bIsTerminal);
     const rows = _b2bFinishedSet(scoped);
-    const won  = all.filter(d => d.stage === 'completed');
+    // Anything terminal that was not declined is done from THIS viewer's point of
+    // view -- which for a store includes a split deal whose own half is signed
+    // off, even though the deal itself is still in flight elsewhere.
+    const won  = all.filter(d => d.stage !== 'declined');
     const lost = all.filter(d => d.stage === 'declined');
 
     const tiles = `
@@ -22144,7 +22387,7 @@ function _b2bClientDrawer(id) {
         <div class="b2b-cd-row" onclick="event.stopPropagation();b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')">
             <span class="b2b-mono b2b-cd-ref">${escapeHtml(d.ref)}</span>
             ${_b2bStageChip(d.stage, d)}
-            ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+            ${_b2bDealStoreTag(d)}
             <span class="b2b-cd-units">${d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : _b2bLineCount(d)}</span>
             <span class="b2b-cd-val">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d))
                 : d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : ''}</span>
@@ -22551,194 +22794,6 @@ async function b2bDeleteClient(id) {
     await b2bRefresh();
 }
 
-// --- view: Overview (DM/CEO) -----------------------------------------------
-
-// The day paid_at existed. Deals accepted before it cannot have a payment
-// recorded against them, so the Overview must not count them as owed -- see
-// the payment block below.
-const B2B_PAY_TRACKED_FROM = '2026-09-08';
-
-function _b2bRenderOverview(scoped) {
-    const live = scoped.filter(d => d.stage !== 'completed' && d.stage !== 'declined');
-
-    // The table scrolls inside its own wrapper rather than stretching the card.
-    // These are five-column tables with nowrap chips and a button in them, and
-    // on a phone they were rendering ~640px wide inside a 390px frame, which
-    // pushed the whole page sideways -- the one thing styles.css's own layout
-    // note (see its header) says must never happen. Every card goes through
-    // here, so the wrapper belongs here and not on the two new ones.
-    const card = (title, sub, head, body, empty) => `
-        <div class="b2b-ov">
-            <div class="b2b-ov-h"><div><span class="b2b-ov-t">${title}</span><span class="b2b-ov-s">${sub}</span></div></div>
-            ${body ? `<div class="b2b-ov-scroll"><table class="cb-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`
-                   : `<div class="b2b-doc-empty">${empty}</div>`}
-        </div>`;
-
-    // Stalled: nothing has moved in a week.
-    const stalled = live.filter(d => _b2bDaysIn(d) >= 7).sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
-    const stalledRows = stalled.map(d => `
-        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
-            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
-            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td>${_b2bStageChip(d.stage, d)}</td>
-            <td>${_b2bStoreTag(d.listing_store || d.pricing_store)}</td>
-            <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
-        </tr>`).join('');
-
-    // Two stages, oldest first. The tile used to add both together and call the
-    // total "awaiting a decision", which claimed the client was sitting on money
-    // nobody had sent them -- while the table below said "not sent" about those
-    // same deals. They are separate stages now, so the split is just a filter.
-    const byAge = (a, b) => _b2bDaysIn(b) - _b2bDaysIn(a);
-    const toApprove  = live.filter(d => d.stage === 'review').sort(byAge);
-    const withClient = live.filter(d => d.stage === 'quote').sort(byAge);
-    const quotes = [...toApprove, ...withClient];
-    const quoteRows = quotes.map(d => `
-        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
-            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
-            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td>${escapeHtml(d.client?.contact_email || '—')}</td>
-            <td class="c">${d.stage === 'review'
-                ? '<span class="b2b-age b2b-age-warn">to approve</span>'
-                : `sent ${d.quote_send_count || 1}×`}</td>
-            <td class="r b">${_b2bMoney(_b2bNetOffer(d))}</td>
-        </tr>`).join('');
-
-    // Inventory bought and paid for that is not yet earning.
-    const unlisted = live.filter(d => d.stage === 'listing' && _b2bOutstanding(d) > 0)
-        .sort((a, b) => _b2bOutstanding(b) - _b2bOutstanding(a));
-    const unlistedTotal = unlisted.reduce((s, d) => s + _b2bNetCost(d), 0);
-    const unlistedRows = unlisted.map(d => `
-        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
-            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
-            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td>${_b2bStoreTag(d.listing_store)}</td>
-            <td class="c">${_b2bOutstanding(d)} of ${d.total_units}</td>
-            <td class="r b">${_b2bMoney(_b2bNetCost(d))}</td>
-        </tr>`).join('');
-
-    // Certified wipes across everything in flight. A wipe promised at pricing is
-    // a debt from that moment: we have discounted the client for it, and the
-    // units cannot be listed until someone certifies it.
-    const wipesSold = live.reduce((n, d) => n + (Number(d.wipe_units) || 0), 0);
-    const wipesDone = live.reduce((n, d) => n + (Number(d.wiped_units) || 0), 0);
-    const wipesOwed = Math.max(0, wipesSold - wipesDone);
-    const wipeFees  = live.reduce((s, d) => s + (Number(d.total_wipe_fee) || 0), 0);
-
-    // Picked up and not yet priced. Paul, 2026-08-22, asked for exactly this
-    // section and it was the one of his four the Overview never had. Split on
-    // pricing_started_at rather than on stage, so "nobody has touched it" reads
-    // differently from "someone is part-way through it" -- which is the
-    // distinction Nick asked for on 2026-09-03 without a second stage.
-    const notPriced = live
-        .filter(d => ['pickup', 'pricing_location', 'pricing'].includes(d.stage))
-        .sort(byAge);
-    const notPricedRows = notPriced.map(d => `
-        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
-            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
-            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td>${_b2bStoreTag(d.pricing_store)}</td>
-            <td class="c">${d.stage === 'pricing'
-                ? (d.pricing_started_at
-                    ? '<span class="b2b-age b2b-age-ok">being priced</span>'
-                    : '<span class="b2b-age b2b-age-warn">not started</span>')
-                : _b2bStageChip(d.stage, d)}</td>
-            <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
-        </tr>`).join('');
-
-    // Accepted deals and whether the client has actually been paid.
-    //
-    // THE CUTOFF MATTERS. Payment tracking landed on this date; every deal
-    // accepted before it has paid_at null because nobody could record one, not
-    // because the client is owed money. Counting those as unpaid would have put
-    // a four-figure liability in front of Paul on day one that was pure
-    // artefact. So older deals are listed as "not recorded" and are left out of
-    // the total, and the tile only ever counts deals that could have been
-    // recorded. Once these have aged out this constant can go.
-    const accepted = scoped.filter(d => d.accepted_at && d.stage !== 'declined');
-    const trackable = d => String(d.accepted_at || '').slice(0, 10) >= B2B_PAY_TRACKED_FROM;
-    // Sorted on accepted_at, NOT byAge. byAge reads stage_changed_at, which on
-    // this table has nothing to do with the question being asked -- it put the
-    // rows in an order that looked random (LOCHCC-001, GD-001, LOCHCC-002,
-    // ASCEN-001: not by date, amount or ref). Longest-accepted first is the
-    // useful order for money owed, and most-recently-paid first for the rest.
-    const byAccepted = (a, b) => String(a.accepted_at || '').localeCompare(String(b.accepted_at || ''));
-    const owed = accepted.filter(d => !d.paid_at && trackable(d)).sort(byAccepted);
-    const untracked = accepted.filter(d => !d.paid_at && !trackable(d))
-        .sort((a, b) => -byAccepted(a, b));
-    const paidDeals = accepted.filter(d => d.paid_at)
-        .sort((a, b) => String(b.paid_at).localeCompare(String(a.paid_at)));
-    const owedTotal = owed.reduce((s, d) => s + _b2bNetOffer(d), 0);
-    const payRows = [...owed, ...paidDeals, ...untracked].slice(0, 40).map(d => `
-        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
-            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
-            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td class="c">${d.paid_at
-                ? `<span class="b2b-age b2b-age-ok">paid ${_b2bDate(d.paid_at)}</span>`
-                : trackable(d)
-                ? '<span class="b2b-age b2b-age-crit">unpaid</span>'
-                : '<span class="b2b-age" title="Accepted before payments were tracked here">not recorded</span>'}</td>
-            <td class="r b">${_b2bMoney(d.paid_at && d.paid_amount != null ? d.paid_amount : _b2bNetOffer(d))}</td>
-            <td class="r b2b-rowacts">${_b2bCanAccept()
-                ? `<button class="b2b-mini" onclick="event.stopPropagation();b2bMarkPaid('${d.id}')">${
-                    d.paid_at ? 'Clear' : 'Mark Paid'}</button>`
-                : ''}</td>
-        </tr>`).join('');
-
-    const tiles = `
-        <div class="b2b-tiles">
-            <div class="b2b-tile"><span class="b2b-tile-k">In Flight</span><span class="b2b-tile-v">${live.length}</span><span class="b2b-tile-c">deals moving</span></div>
-            <!-- The headline is the value ACTUALLY out with clients, and the
-                 caption used to reference deals still awaiting approval, whose
-                 value is not in it. With nothing sent yet that read "$0 · 2
-                 still to approve" directly above a table listing $3,981 and
-                 $455 -- the tile contradicting the rows under it. The caption
-                 now only describes what the number covers, and the
-                 to-approve value is stated as its own figure. -->
-            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(withClient.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${
-                withClient.length
-                    ? `${withClient.length} awaiting a client decision`
-                    : 'nothing with a client yet'}${
-                toApprove.length
-                    ? ` · ${_b2bMoney(toApprove.reduce((s, d) => s + _b2bNetOffer(d), 0))} still to approve`
-                    : ''}</span></div>
-            <div class="b2b-tile"><span class="b2b-tile-k">Unlisted Stock</span><span class="b2b-tile-v">${_b2bMoney(unlistedTotal)}</span><span class="b2b-tile-c">${unlisted.reduce((n, d) => n + _b2bOutstanding(d), 0)} units to list</span></div>
-            <div class="b2b-tile ${stalled.length ? 'warn' : ''}"><span class="b2b-tile-k">Stalled</span><span class="b2b-tile-v">${stalled.length}</span><span class="b2b-tile-c">no movement in 7+ days</span></div>
-            <!-- Certified wipes, which we charge for and therefore owe. Counted
-                 across everything in flight, since a wipe promised at pricing is
-                 outstanding until someone certifies it during listing. -->
-            <div class="b2b-tile ${wipesOwed ? 'warn' : ''}"><span class="b2b-tile-k">Certified Wipes</span><span class="b2b-tile-v">${wipesDone}<span class="b2b-tile-of"> / ${wipesSold}</span></span><span class="b2b-tile-c">${wipesOwed ? `${wipesOwed} still to certify` : 'all certified'} · ${_b2bMoney(wipeFees)} discounted</span></div>
-            <!-- What we owe clients on quotes they have already accepted. -->
-            <div class="b2b-tile ${owed.length ? 'warn' : ''}"><span class="b2b-tile-k">Owed To Clients</span><span class="b2b-tile-v">${_b2bMoney(owedTotal)}</span><span class="b2b-tile-c">${
-                owed.length ? `${owed.length} accepted deal${owed.length === 1 ? '' : 's'} not yet paid`
-                : untracked.length ? `nothing outstanding · ${untracked.length} older deal${untracked.length === 1 ? '' : 's'} predate tracking`
-                : 'everyone accepted has been paid'}</span></div>
-        </div>`;
-
-    // Ordered the way Paul asked for them (2026-08-22): what has been picked up
-    // but not priced, what is priced and waiting on him, what is out with the
-    // client, and what has been paid. Stalled leads because it is the only one
-    // that says something is wrong rather than merely where things are.
-    return tiles
-        + card('Stalled Deals', 'No movement in a week or more',
-               '<th>Ref</th><th>Client</th><th>Stage</th><th>Store</th><th class="r">In stage</th>',
-               stalledRows, 'Everything is moving')
-        + card('Picked Up, Not Yet Priced', 'Collected and waiting on someone to price it',
-               '<th>Ref</th><th>Client</th><th>Store</th><th class="c">Progress</th><th class="r">Waiting</th>',
-               notPricedRows, 'Everything collected has been priced')
-        + card('Open Quotes', 'Waiting on approval, or out with the client',
-               '<th>Ref</th><th>Client</th><th>Email</th><th class="c">Sent</th><th class="r">Offer</th>',
-               quoteRows, 'No quotes are open right now')
-        + card('Bought But Not Listed', 'Inventory paid for and not yet earning',
-               '<th>Ref</th><th>Client</th><th>Store</th><th class="c">Outstanding</th><th class="r">Cost</th>',
-               unlistedRows, 'Everything accepted has been listed')
-        + card('Paying The Client',
-               untracked.length
-                   ? 'Accepted deals, and whether the money has gone out. Deals accepted before payments were tracked here show as not recorded.'
-                   : 'Accepted deals, and whether the money has gone out',
-               '<th>Ref</th><th>Client</th><th class="c">Status</th><th class="r">Amount</th><th></th>',
-               payRows, 'Nothing has been accepted yet');
-}
 
 // ---------------------------------------------------------------------------
 // NEW DEAL
@@ -24394,7 +24449,7 @@ async function b2bOpenDeal(kind, id) {
     // assignment. See docs/modules/b2b.md, "Scope and ownership".
     if (['pricing', 'quote', 'listloc', 'listing', 'view'].includes(kind)) {
         try {
-            _b2bModalItems = await _b2bGet(`deal_id=${encodeURIComponent(id)}`);
+            _b2bModalItems = await _b2bGet(`deal_id=${encodeURIComponent(id)}${_b2bScopeQs()}`);
         } catch (e) {
             return alert(`Couldn't load the line items: ${e.message}`);
         }
@@ -24456,14 +24511,10 @@ function _b2bSummary(deal) {
                     : ''}`],
         ['Pricing',   _b2bStoreTag(deal.pricing_store)],
     );
-    // Only once there is something to say: a quote that has gone out, and a
-    // payment that has been made. Both were facts the system held and never
-    // showed anywhere a person looks.
+    // Only once there is something to say. The Paid row went with the mark-paid
+    // feature on 2026-09-10; the columns are still on the deal, so if payment
+    // tracking ever comes back this is where it showed.
     if (deal.quote_sent_at) rows.push(['Quote sent', _b2bDate(deal.quote_sent_at)]);
-    if (deal.paid_at) {
-        rows.push(['Paid', `${_b2bDate(deal.paid_at)}${
-            deal.paid_amount != null ? ` · ${_b2bMoney(deal.paid_amount, 2)}` : ''}`]);
-    }
     if (deal.listing_store) rows.push(['Listing', _b2bStoreTag(deal.listing_store)]);
     if (deal.signed_by)     rows.push(['Signed by', escapeHtml(deal.signed_by)]);
     if (deal.delivered_by || deal.received_by) {
@@ -25303,8 +25354,384 @@ function _b2bMoveBtn(deal) {
     if (!_b2bCanAccept()) return '';
     const kind = _b2bTransferKind(deal);
     if (!kind) return '';
+    // A split deal has no one listing store to move it off; Move Lines is the
+    // control for it, and the server refuses a whole-deal move.
+    if (kind === 'listing' && _b2bIsSplit(deal)) return '';
     return `<button class="b2b-btn b2b-btn-secondary" onclick="b2bOpenTransfer('${deal.id}')">
         Move ${kind === 'pricing' ? 'Pricing' : 'Listing'} Store</button>`;
+}
+
+// --- moving individual lines between listing stores -----------------------
+//
+// Nick, 2026-09-10: "I will also need the ability to make changes and transfer
+// items between listing locations in the listing stage (mostly in the event an
+// item was assigned wrong). The transferring and the assigning pricing
+// locations should be just available by corp."
+//
+// Separate from b2bOpenTransfer, which moves the WHOLE deal between stores and
+// predates any of this. Both are corp-only and both write to
+// b2b_deal_transfers; this one names the lines and stamps kind 'item'.
+//
+// Corp only, and gated on _b2bCanAccept() rather than a fresh check, because
+// that is already the "is this corp" gate every other privileged B2B action
+// uses -- a second, subtly different one is how two answers to the same
+// question end up in the same file.
+let _b2bMoveSel  = {};              // itemId -> true, while picking
+let _b2bMoveTo   = null;
+let _b2bMoveNote = '';              // why, for the transfer log; kept across repaints
+
+function _b2bMoveLinesBtn(deal) {
+    if (!_b2bCanAccept()) return '';
+    if (!deal || deal.stage !== 'listing') return '';
+    return `<button class="b2b-btn b2b-btn-secondary" onclick="b2bOpenMoveLines('${deal.id}')">Move Lines</button>`;
+}
+
+function b2bOpenMoveLines(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal || !_b2bCanAccept()) return;
+    _b2bMoveSel = {};
+    _b2bMoveTo = null;
+    _b2bMoveNote = '';
+    _b2bSplitting = null;
+    _b2bPaintMoveLines();
+    toggleModal('b2bMoveLinesModal');
+}
+
+function b2bMoveToggle(itemId) {
+    if (_b2bMoveSel[itemId]) delete _b2bMoveSel[itemId];
+    else _b2bMoveSel[itemId] = true;
+    _b2bPaintMoveLines();
+}
+function b2bMovePickTo(code) {
+    _b2bMoveTo = _b2bMoveTo === code ? null : code;
+    _b2bPaintMoveLines();
+}
+function b2bMoveAllFrom(store) {
+    _b2bModalItems.filter(it => it.listing_store === store)
+        .forEach(it => { _b2bMoveSel[it.id] = true; });
+    _b2bPaintMoveLines();
+}
+
+function _b2bPaintMoveLines() {
+    const body = document.getElementById('b2bMoveLinesBody');
+    if (!body) return;
+    const picked = Object.keys(_b2bMoveSel).filter(k => _b2bMoveSel[k]);
+    const rows = _b2bModalItems.map(it => {
+        const on = !!_b2bMoveSel[it.id];
+        const live = Number(it.listed_qty) || 0;
+        const qty = Number(it.quantity) || 1;
+        return `
+        <div class="b2b-moverow ${on ? 'on' : ''} ${live ? 'locked' : ''}"
+            ${live ? '' : `onclick="b2bMoveToggle('${it.id}')"`}
+            title="${live ? 'Units already live on Shopify — unlist them first' : ''}">
+            <span class="b2b-movecheck">${on ? _b2bIco('<polyline points="20 6 9 17 4 12"/>') : ''}</span>
+            <span class="b2b-splitrow-m">
+                <b>${escapeHtml(_b2bItemName(it))}</b>
+                <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}${
+                    live ? ` · ${live} already listed` : ''}${_b2bSplitFromNote(it)}</span>
+            </span>
+            ${_b2bSplitBtn(it, 'move')}${_b2bMergeBtn(it, 'move')}
+            <span class="b2b-movenow">${it.listing_store
+                ? `<span class="b2b-chip b2b-chip-neu">${escapeHtml(it.listing_store)}</span>`
+                : '<span class="b2b-f-off">unassigned</span>'}</span>
+        </div>${_b2bSplitEditorHtml(it)}`;
+    }).join('');
+
+    // Which stores the deal is currently spread over, as a shortcut: "everything
+    // at LEE" is the shape of a mis-assignment being unpicked.
+    const at = [...new Set(_b2bModalItems.map(it => it.listing_store).filter(Boolean))].sort();
+
+    body.innerHTML = `
+        <div class="b2b-note">
+            <span class="b2b-note-k">Move lines between listing stores</span>
+            <div>Pick the lines, then the store they should be at. Only corp can do this, and
+                it is written to the deal's transfer log with your name against it.</div>
+        </div>
+        ${at.length > 1 ? `<div class="b2b-splitacts">${at.map(s =>
+            `<button class="b2b-mini" onclick="b2bMoveAllFrom('${s}')">Select everything at ${s}</button>`).join('')}</div>` : ''}
+        <div class="b2b-moverows">${rows}</div>
+        <label class="form-label-caps" style="margin-top:14px;">Move Them To</label>
+        <div class="b2b-loc-pick sm">
+            ${STORE_CODES.map(c => `
+                <button class="b2b-loc ${_b2bMoveTo === c ? 'on' : ''}" onclick="b2bMovePickTo('${c}')">
+                    <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
+                    <span class="b2b-loc-c">${c}</span>
+                </button>`).join('')}
+        </div>
+        <label class="form-label-caps" style="margin-top:14px;">Why (Optional)</label>
+        <input class="form-input-lg" maxlength="1000" placeholder="e.g. assigned to the wrong store"
+            value="${escapeHtml(_b2bMoveNote)}" oninput="_b2bMoveNote=this.value">
+        <p class="b2b-hint">A line with units already live on Shopify cannot be moved whole — the listing
+            belongs to the store that made it. Split off the units still to list and move those.</p>`;
+
+    const foot = document.getElementById('b2bMoveLinesFooter');
+    if (foot) {
+        const n = picked.length;
+        foot.innerHTML = `
+            <span class="b2b-msg" id="b2bMoveMsg">${n
+                ? `${n} line${n === 1 ? '' : 's'} picked${_b2bMoveTo ? ` → ${_b2bMoveTo}` : ''}`
+                : ''}</span>
+            <button class="kpi-cancel-btn" onclick="closeAllModals()">Cancel</button>
+            <button class="b2b-btn b2b-btn-primary" ${n && _b2bMoveTo ? '' : 'disabled'}
+                onclick="b2bMoveLines(this)">Move ${n || ''} ${n === 1 ? 'Line' : 'Lines'}</button>`;
+    }
+}
+
+async function b2bMoveLines(btn) {
+    const deal = _b2bModalDeal;
+    const ids = Object.keys(_b2bMoveSel).filter(k => _b2bMoveSel[k]);
+    if (!deal || !ids.length || !_b2bMoveTo) return;
+    try {
+        await _b2bBusy(btn, 'Moving…', () => _b2bSend({
+            action: 'transfer_items', id: deal.id, item_ids: ids, to_store: _b2bMoveTo,
+            note: _b2bMoveNote.trim() || undefined,
+            user: _b2bUser(), role: _b2bRole(), corp_delegated: _b2bHasCorpDelegation(),
+        }));
+        _b2bMoveSel = {};
+        _b2bMoveTo = null;
+        _b2bMoveNote = '';
+        closeAllModals();
+        await b2bRefresh();
+        const d = _b2bDealById(deal.id);
+        if (d && _b2bActionFor(d)) b2bOpenDeal(_b2bClickKind(d), d.id);
+        _b2bSay(`${ids.length} line${ids.length === 1 ? '' : 's'} moved.`);
+    } catch (e) {
+        alert(`Couldn't move those lines: ${e.message}`);
+    }
+}
+
+// --- splitting one line between stores ---------------------------------------
+//
+// Ten laptops, six to LEE and four to OVL. The server divides the line into two
+// ordinary lines (split_item) and each is then assigned or moved like any other,
+// so this is only the editor: how many units go, or -- on a line with a serial
+// for every unit -- which ones.
+//
+// Offered in the two places lines are routed: the Split It Up picker, where the
+// new line arrives unplaced so it is the obvious next thing to place, and Move
+// Lines, where it arrives already ticked so only the destination is left to pick.
+// In Move Lines it works on a line with units already listed, too -- splitting
+// off the unlisted remainder is how part of such a line gets to move at all.
+let _b2bSplitting   = null;         // itemId whose editor is open
+let _b2bSplitCtx    = 'assign';     // 'assign' | 'move' -- which screen to repaint
+let _b2bSplitQty    = 1;
+let _b2bSplitSerial = {};           // index into serial_list -> true
+
+function _b2bSplitFree(it) {
+    return Math.max(0, (Number(it.quantity) || 1) - _b2bDone(it));
+}
+// Can this line be split at all: more than one unit, and at least one of them
+// still unaccounted for.
+function _b2bCanSplitLine(it) {
+    return _b2bCanAccept() && (Number(it.quantity) || 1) > 1 && _b2bSplitFree(it) >= 1;
+}
+function _b2bSplitBtn(it, ctx) {
+    if (!_b2bCanSplitLine(it) || _b2bSplitting === it.id) return '';
+    return `<button class="b2b-mini" title="Send some of these units somewhere else"
+        onclick="event.stopPropagation();b2bSplitOpen('${it.id}','${ctx}')">Split</button>`;
+}
+// Pick by serial only when there is a real one to pick. A line of NO SERIAL
+// units has nothing to tell apart -- it used to render one identical
+// "NO SERIAL" checkbox per unit -- so it gets the count box, and b2bSplitGo
+// sends that many NO SERIALs, because the server still wants a serial named
+// for every unit going off a line that has one for every unit.
+function _b2bSplitBySerial(it) {
+    const list = it.serial_list || [];
+    return list.length > 0 && list.length >= (Number(it.quantity) || 1)
+        && list.some(s => s !== B2B_NO_SERIAL);
+}
+function _b2bSplitAllNoSerial(it) {
+    const list = it.serial_list || [];
+    return list.length > 0 && list.length >= (Number(it.quantity) || 1) && !_b2bSplitBySerial(it);
+}
+function _b2bSplitCount(it) {
+    return _b2bSplitBySerial(it)
+        ? Object.keys(_b2bSplitSerial).filter(k => _b2bSplitSerial[k]).length
+        : _b2bSplitQty;
+}
+function _b2bSplitEditorHtml(it) {
+    if (_b2bSplitting !== it.id) return '';
+    const qty = Number(it.quantity) || 1;
+    const max = Math.min(_b2bSplitFree(it), qty - 1);
+    const n = _b2bSplitCount(it);
+    const pick = _b2bSplitBySerial(it)
+        ? `<div class="b2b-splitser">${(it.serial_list || []).map((sn, i) => `
+                <label class="b2b-splitser-i ${_b2bSplitSerial[i] ? 'on' : ''}">
+                    <input type="checkbox" ${_b2bSplitSerial[i] ? 'checked' : ''}
+                        onclick="event.stopPropagation()" onchange="b2bSplitSerialToggle(${i})">
+                    <span class="b2b-mono">${escapeHtml(sn)}</span>
+                </label>`).join('')}</div>`
+        : `<label class="b2b-splitqty">Units to split off
+                <input type="number" min="1" max="${max}" value="${Math.min(_b2bSplitQty, max)}"
+                    onclick="event.stopPropagation()" oninput="b2bSplitQtySet(this.value)"></label>`;
+    const ok = n >= 1 && n <= max;
+    return `
+        <div class="b2b-splitedit" onclick="event.stopPropagation()">
+            ${pick}
+            <div class="b2b-hint">${
+                _b2bSplitBySerial(it) ? 'Tick the units that are going. ' : ''}They become a new line with their own
+                SKU${Number(it.label_printed_qty) ? ', so any label already on them has to be reprinted' : ''}.
+                ${max < qty - 1 ? `Only the ${max} unit${max === 1 ? '' : 's'} not yet listed or recycled can go.` : ''}</div>
+            <div class="b2b-splitacts">
+                <button class="b2b-btn b2b-btn-primary" id="b2bSplitGo" ${ok ? '' : 'disabled'}
+                    onclick="b2bSplitGo('${it.id}',this)">Split Off ${n} Unit${n === 1 ? '' : 's'}</button>
+                <button class="kpi-cancel-btn" onclick="b2bSplitCancel()">Cancel</button>
+            </div>
+        </div>`;
+}
+// Undoing a split. Only a line split off another (split_from, 0117) can be
+// merged, and only back into that line -- two lines with the same make and
+// model are not necessarily one line cut in half. A split line with units
+// already listed under its own SKU cannot go back: that Shopify listing points
+// at it. The server refuses both too.
+function _b2bMergeBtn(it, ctx) {
+    if (!_b2bCanAccept() || !it.split_from || Number(it.listed_qty) || _b2bSplitting === it.id) return '';
+    return `<button class="b2b-mini" title="Undo the split: put these units back on the line they came from"
+        onclick="event.stopPropagation();b2bMergeLine('${it.id}','${ctx}',this)">Merge Back</button>`;
+}
+// "split from 0003", so the two halves of a split read as related on screen.
+function _b2bSplitFromNote(it) {
+    if (!it.split_from) return '';
+    const parent = _b2bModalItems.find(x => x.id === it.split_from);
+    return parent ? ` · split from ${_b2bLineNo(parent)}` : ' · split line';
+}
+async function b2bMergeLine(itemId, ctx, btn) {
+    const it = _b2bLocalItem(itemId);
+    const deal = _b2bModalDeal;
+    if (!it || !deal) return;
+    const parent = _b2bModalItems.find(x => x.id === it.split_from);
+    const units = Number(it.quantity) || 1;
+    if (!confirm(`Merge ${units} unit${units === 1 ? '' : 's'} of ${it.sku || 'this line'} back into ${
+        parent ? parent.sku : 'the line it was split from'}?
+
+`
+        + `They go back to ${parent && parent.listing_store ? parent.listing_store : "that line's store"}`
+        + ` and ${it.sku || 'this line'} stops existing.`)) return;
+    let out;
+    try {
+        out = await _b2bBusy(btn, 'Merging…', () => _b2bSend({ action: 'merge_item', id: itemId }));
+    } catch (e) {
+        alert(`Couldn't merge that line: ${e.message}`);
+        return;
+    }
+    delete _b2bSplitPlan[itemId];
+    delete _b2bMoveSel[itemId];
+    try { _b2bModalItems = await _b2bGet(`deal_id=${encodeURIComponent(deal.id)}${_b2bScopeQs()}`); } catch (_) {}
+    _b2bSplitCtx = ctx === 'move' ? 'move' : 'assign';
+    _b2bSplitHostRepaint();
+    if (typeof _b2bRepaintListing === 'function' && document.getElementById('b2bListRows')) _b2bRepaintListing();
+    if (out && out.sku) {
+        _b2bSay(`Merged back into ${out.sku}${out.relabel ? ` — labels printed for ${out.merged_sku} need replacing` : ''}.`);
+    }
+}
+
+function _b2bSplitHostRepaint() {
+    if (_b2bSplitCtx === 'move') _b2bPaintMoveLines();
+    else _b2bSplitRepaint();
+}
+function b2bSplitOpen(itemId, ctx) {
+    _b2bSplitting = itemId;
+    _b2bSplitCtx = ctx === 'move' ? 'move' : 'assign';
+    _b2bSplitQty = 1;
+    _b2bSplitSerial = {};
+    _b2bSplitHostRepaint();
+}
+function b2bSplitCancel() {
+    _b2bSplitting = null;
+    _b2bSplitHostRepaint();
+}
+// Typing in the count must not repaint the editor -- that would throw away the
+// caret mid-number -- so only the button is brought up to date.
+function b2bSplitQtySet(v) {
+    _b2bSplitQty = Math.max(0, parseInt(v, 10) || 0);
+    const it = _b2bLocalItem(_b2bSplitting);
+    const go = document.getElementById('b2bSplitGo');
+    if (!it || !go) return;
+    const max = Math.min(_b2bSplitFree(it), (Number(it.quantity) || 1) - 1);
+    go.disabled = !(_b2bSplitQty >= 1 && _b2bSplitQty <= max);
+    go.textContent = `Split Off ${_b2bSplitQty} Unit${_b2bSplitQty === 1 ? '' : 's'}`;
+}
+function b2bSplitSerialToggle(i) {
+    if (_b2bSplitSerial[i]) delete _b2bSplitSerial[i];
+    else _b2bSplitSerial[i] = true;
+    _b2bSplitHostRepaint();
+}
+async function b2bSplitGo(itemId, btn) {
+    const it = _b2bLocalItem(itemId);
+    const deal = _b2bModalDeal;
+    if (!it || !deal) return;
+    const bySerial = _b2bSplitBySerial(it);
+    const qty = _b2bSplitCount(it);
+    const serials = bySerial
+        ? Object.keys(_b2bSplitSerial).filter(k => _b2bSplitSerial[k]).map(k => it.serial_list[Number(k)])
+        : _b2bSplitAllNoSerial(it) ? Array(qty).fill(B2B_NO_SERIAL)
+        : undefined;
+    let out;
+    try {
+        out = await _b2bBusy(btn, 'Splitting…', () => _b2bSend({ action: 'split_item', id: itemId, qty, serials }));
+    } catch (e) {
+        alert(`Couldn't split that line: ${e.message}`);
+        return;
+    }
+    _b2bSplitting = null;
+    try { _b2bModalItems = await _b2bGet(`deal_id=${encodeURIComponent(deal.id)}${_b2bScopeQs()}`); } catch (_) {}
+    // In Move Lines the new line is what is being moved, so it arrives ticked.
+    if (_b2bSplitCtx === 'move' && out && out.id) _b2bMoveSel[out.id] = true;
+    _b2bSplitHostRepaint();
+    if (typeof _b2bRepaintListing === 'function' && document.getElementById('b2bListRows')) _b2bRepaintListing();
+    if (out && out.sku) {
+        _b2bSay(`${qty} unit${qty === 1 ? '' : 's'} split off as ${out.sku}${out.relabel ? ' — reprint their labels' : ''}.`);
+    }
+}
+
+// --- move history -------------------------------------------------------------
+//
+// b2b_deal_transfers has recorded every move since 0021 -- whole deals between
+// stores, and single lines since 0081 -- and nothing ever showed it, so "why is
+// this pallet at MPL when the paperwork says LEE" still meant asking around.
+//
+// Folded away and fetched on first open: most deals never move, and a closed
+// <details> costs nothing. A store is sent only the moves into or out of its
+// own stores (the same ?store= scope as the item fetch).
+function _b2bMoveHistoryHtml(deal) {
+    if (!deal || ['pickup', 'declined'].includes(deal.stage)) return '';
+    return `
+        <details class="b2b-xlog" ontoggle="if(this.open)b2bLoadMoveHistory(this,'${deal.id}')">
+            <summary>Move history</summary>
+            <div class="b2b-xlog-body"><div class="b2b-hint">Loading…</div></div>
+        </details>`;
+}
+async function b2bLoadMoveHistory(el, dealId) {
+    if (el.dataset.loaded) return;
+    el.dataset.loaded = '1';
+    const body = el.querySelector('.b2b-xlog-body');
+    let rows;
+    try {
+        rows = await _b2bGet(`transfers=${encodeURIComponent(dealId)}${_b2bScopeQs()}`);
+    } catch (e) {
+        delete el.dataset.loaded;
+        body.innerHTML = `<div class="b2b-hint">Couldn't load the history: ${escapeHtml(e.message)}</div>`;
+        return;
+    }
+    body.innerHTML = _b2bMoveHistoryRows(rows);
+}
+function _b2bMoveHistoryRows(rows) {
+    if (!rows || !rows.length) return '<div class="b2b-hint">Nothing on this deal has been moved.</div>';
+    const what = (r) => {
+        if (r.kind === 'item') {
+            const it = r.item || {};
+            const name = [it.make, it.model].filter(Boolean).join(' ') || 'A line';
+            return `${escapeHtml(name)} <span class="b2b-mono">${escapeHtml(it.sku || '')}</span>`;
+        }
+        return r.kind === 'pricing' ? 'The deal (pricing)' : 'The deal (listing)';
+    };
+    return `<div class="b2b-xlog-rows">${rows.map(r => `
+        <div class="b2b-xlog-row">
+            <span class="b2b-xlog-w">${what(r)}</span>
+            <span class="b2b-xlog-m">${_b2bStoreTag(r.from_store)} → ${_b2bStoreTag(r.to_store)}</span>
+            <span class="b2b-xlog-b">${escapeHtml(r.moved_by || 'Someone')} · ${_b2bDate(r.created_at)}</span>
+            ${r.note ? `<span class="b2b-xlog-n">${escapeHtml(r.note)}</span>` : ''}
+        </div>`).join('')}</div>`;
 }
 
 function b2bOpenTransfer(id) {
@@ -26958,9 +27385,6 @@ function _b2bAwaitingApproval(deal) {
     return deal.stage === 'review';
 }
 
-// Deals whose send step has already been offered this session, so re-opening one
-// to re-read it doesn't trap you in the same dialog every time.
-const _b2bSendPrompted = new Set();
 
 // Where the goods physically are, and where they are going.
 //
@@ -26975,10 +27399,17 @@ const _b2bSendPrompted = new Set();
 function _b2bWhereLine(deal) {
     if (!deal.pricing_store) return '';
     const at = deal.pricing_store;
+    // A SPLIT DEAL IS THE FIRST CASE WITH MORE THAN ONE ANSWER. Checking
+    // listing_store alone read a split as "not chosen yet" -- the single-store
+    // column is null precisely because two stores were chosen -- so the line
+    // said the listing store was still to come on a deal already being listed.
+    const split = (deal.listing_stores || []).length > 1;
     const to = deal.listing_store || (at === 'CORP' ? null : at);
-    const going = to
-        ? (to === at ? 'lists where it already is' : `lists at ${_b2bStoreTag(to)}`)
-        : 'listing store is chosen once the client accepts';
+    const going = split
+        ? `split across ${deal.listing_stores.map(_b2bStoreTag).join(' ')}`
+        : to
+            ? (to === at ? 'lists where it already is' : `lists at ${_b2bStoreTag(to)}`)
+            : 'listing store is chosen once the client accepts';
     return `
         <div class="b2b-note b2b-where">
             <span class="b2b-note-k">Where it is</span>
@@ -27169,31 +27600,6 @@ function b2bSaveNotes(id) {
     })).catch(e => _b2bSay(`Couldn't save that note: ${e.message}`, true));
 }
 
-// 1.2 -- record that the quote went to the client by hand.
-//
-// Paul asked for this twice. The tool's own Open In Email already stamps the
-// date, so this is for the case he actually hit: sending it himself, outside the
-// tool, which left nothing on the record at all.
-async function b2bMarkQuoteSent(id) {
-    const deal = _b2bDealById(id) || _b2bModalDeal;
-    if (!deal) return;
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-    const raw = prompt(
-        `What date did the quote go to ${deal.client?.company || 'the client'}?\n\n`
-        + `Use this when you sent it yourself rather than through Open In Email. `
-        + `It moves the deal to "Out For Quote" and starts the clock on their answer.`,
-        deal.quote_sent_at ? String(deal.quote_sent_at).slice(0, 10) : today);
-    if (raw === null) return;
-    const when = raw.trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(when)) return _b2bSay('Give the date as YYYY-MM-DD.', true);
-    try {
-        await _b2bSend({ action: 'set_quote_sent', id, quote_sent_at: when, role: _b2bRole() });
-        closeAllModals();
-        await b2bRefresh();
-    } catch (e) {
-        _b2bSay(`Couldn't record that: ${e.message}`, true);
-    }
-}
 
 // 1.4 -- correct the collection date.
 //
@@ -27219,56 +27625,6 @@ async function b2bEditPickupDate(id) {
     }
 }
 
-// 1.3 -- record that the client has been paid.
-//
-// Defaults to what we owe them (the accepted net offer), because that is the
-// figure in all but the exceptional case, and typing it again is how a wrong
-// number gets recorded.
-async function b2bMarkPaid(id) {
-    const deal = _b2bDealById(id) || _b2bModalDeal;
-    if (!deal) return;
-    if (deal.paid_at) {
-        if (!confirm(`${deal.ref} is already recorded as paid ${_b2bDate(deal.paid_at)}`
-            + `${deal.paid_amount != null ? ` (${_b2bMoney(deal.paid_amount, 2)})` : ''}`
-            + `${deal.paid_by ? ` by ${deal.paid_by}` : ''}.\n\nClear that record?`)) return;
-        try {
-            await _b2bSend({ action: 'mark_paid', id, paid_at: null, role: _b2bRole() });
-            await b2bRefresh();
-        } catch (e) { _b2bSay(`Couldn't clear it: ${e.message}`, true); }
-        return;
-    }
-    // One prompt, not two. Both answers are pre-filled with the ones that are
-    // almost always right -- what we owe, paid today -- so the common case is
-    // Enter, and a backdated or part payment is an edit rather than a second
-    // dialog. Two sequential prompts read like an interrogation for something
-    // that is usually a single confirmation.
-    const owed = _b2bNetOffer(deal);
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-    const raw = prompt(
-        `Record a payment to ${deal.client?.company || 'the client'}.\n\n`
-        + `We owe ${_b2bMoney(owed, 2)} on the accepted quote.\n`
-        + `Enter as "amount on date" — edit either part if it differs.`,
-        `${Number(owed || 0).toFixed(2)} on ${today}`);
-    if (raw === null) return;
-
-    const text = String(raw).trim();
-    const when = (text.match(/(\d{4}-\d{2}-\d{2})/) || [])[1] || today;
-    // The amount is whatever is left once the date is out of the way, so a
-    // typed "$1,250.00 on 2026-09-05" reads the same as "1250".
-    const amt = parseFloat(text.replace(when, '').replace(/[^0-9.]/g, ''));
-    if (!Number.isFinite(amt) || amt < 0) {
-        return _b2bSay("Couldn't read an amount out of that — try \"1250 on 2026-09-05\".", true);
-    }
-    if (when > today) return _b2bSay("A payment can't be dated in the future.", true);
-    try {
-        await _b2bSend({ action: 'mark_paid', id, paid_at: when, paid_amount: amt,
-                         role: _b2bRole(), user: _b2bUser() });
-        _b2bSay(`Recorded ${_b2bMoney(amt, 2)} paid ${_b2bDate(when)}.`);
-        await b2bRefresh();
-    } catch (e) {
-        _b2bSay(`Couldn't record the payment: ${e.message}`, true);
-    }
-}
 
 function _b2bStageReview(deal) {
     const canAccept = _b2bCanAccept();
@@ -27303,20 +27659,17 @@ function _b2bStageReview(deal) {
             ${_b2bIsCorp() ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
             ${canAccept ? `
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>
-                <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
-                    value="${escapeHtml(deal.client?.contact_email || '')}">
-                <!-- A complete route, not a fallback: on an unsent quote this
-                     also records the send, so Mark Accepted becomes available
-                     without anyone having to open a mail draft first. -->
+                <!-- Copy Quote is the whole send route now. It puts the quote on
+                     the clipboard AND records the send, so Mark Accepted becomes
+                     available without a mail draft or a second button.
+                     Open In Email and Sent By Hand both went on 2026-09-10 -- the
+                     first opened a BLANK draft you had to paste into anyway, and
+                     the second recorded a send made outside the tool, which Nick
+                     says does not happen. The address field went with them: it
+                     was only ever read by the mailto, so leaving it would ask for
+                     a client's email and then do nothing with it. -->
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
-                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <!-- For a quote sent by hand, outside the tool. Paul asked for
-                     this twice; Open In Email stays the normal route. Same label
-                     as the one on the quote screen's send bar -- one action
-                     should not have two names. -->
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')"
-                    data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
-                <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>`
+                    data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>`
                 : `<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">${escapeHtml(sent)}</span>`}`,
         after: () => { _b2bPaintTotals(); _b2bPaintQuoteDoc(); },
     });
@@ -27349,16 +27702,12 @@ function _b2bStageQuote(deal) {
             ${_b2bWhereLine(deal)}
             <div class="b2b-sendbar">
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
-                <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
-                    value="${escapeHtml(deal.client?.contact_email || '')}">
-                <!-- A complete route, not a fallback: on an unsent quote this
-                     also records the send, so Mark Accepted becomes available
-                     without anyone having to open a mail draft first. -->
+                <!-- One button, because Copy Quote is the whole route: it copies
+                     the quote AND records the send. The address field, Open In
+                     Email and Sent By Hand all went on 2026-09-10. -->
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
                     data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')" data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
-                <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
+                <span class="b2b-sendbar-hint">Puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
             </div>
             ${_b2bProofPanel(deal)}
             ${_b2bNotesPanel(deal)}
@@ -27407,16 +27756,12 @@ function _b2bStageQuote(deal) {
             ${banner}
             <div class="b2b-sendbar${unsent ? ' urgent' : ''}">
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
-                <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
-                    value="${escapeHtml(deal.client?.contact_email || '')}">
-                <!-- A complete route, not a fallback: on an unsent quote this
-                     also records the send, so Mark Accepted becomes available
-                     without anyone having to open a mail draft first. -->
+                <!-- One button, because Copy Quote is the whole route: it copies
+                     the quote AND records the send. The address field, Open In
+                     Email and Sent By Hand all went on 2026-09-10. -->
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()"
                     data-tip="Copies the quote and records it as sent — paste it wherever you like">Copy Quote</button>
-                <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bMarkQuoteSent('${deal.id}')" data-tip="Record a send you made yourself, or fix the date on one">Sent By Hand</button>
-                <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
+                <span class="b2b-sendbar-hint">Puts the whole quote on your clipboard and records the send — paste it into Gmail, Outlook or anywhere else.</span>
             </div>
             ${_b2bProofPanel(deal)}
             ${_b2bTotalsBar(true, _b2bModalItems.length > 1
@@ -27445,13 +27790,11 @@ function _b2bStageQuote(deal) {
         after: () => {
             _b2bPaintTotals();
             _b2bPaintQuoteDoc();
-            // The whole point of the approval step is that the quote goes out, so
-            // an approver opening an unsent one gets the send step put in front
-            // of them -- once, with a way straight back to reviewing it.
-            if (unsent && canAccept && !_b2bSendPrompted.has(deal.id)) {
-                _b2bSendPrompted.add(deal.id);
-                setTimeout(() => b2bSendQuote(deal.id, null, true), 260);
-            }
+            // There WAS an auto-prompt here: opening an unsent quote as an
+            // approver put the send step in front of you once. It went with the
+            // mail draft it existed to launch (Nick, 2026-09-10) -- a popup
+            // whose only action was "Open Email Draft" has nothing to offer once
+            // that route is gone, and Copy Quote records the send on its own.
         },
     });
 }
@@ -27866,7 +28209,15 @@ async function b2bCopyQuote() {
     } catch (_) {
         try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
     }
-    if (!copied) return _b2bSay("Your browser blocked the clipboard — use Open In Email instead.", true);
+    // Neither of the routes this used to point at still exists -- the mail draft
+    // and Sent By Hand both went on 2026-09-10 -- so it has to be actionable on
+    // its own. The quote document is rendered on the screen behind this message,
+    // so selecting it by hand is the way through, and pressing Copy Quote again
+    // is what records the send once the clipboard behaves.
+    if (!copied) {
+        return _b2bSay('Your browser blocked the clipboard. Select the quote below and copy it '
+            + 'by hand, then press Copy Quote again to record the send.', true);
+    }
 
     // Nothing to record: already sent, or this person may not approve. Copying
     // still works, it just doesn't move the deal.
@@ -27910,101 +28261,25 @@ function _b2bQuoteSubject(deal) {
     return picked ? `Your PayMore Quote — Equipment Collected ${picked}` : 'Your PayMore Quote';
 }
 
-// Step one: put the quote on the clipboard and explain the paste, so nobody
-// lands in an empty draft wondering where the quote went.
-// `auto` marks the copy that opens by itself when an approver lands on an unsent
-// quote. It stays quiet about a missing address and offers a way back to the
-// quote, because the user didn't ask for it.
-async function b2bSendQuote(id, btn, auto) {
-    const to = document.getElementById('b2bQuoteTo')?.value.trim();
-    if (!to) {
-        if (auto) return;
-        return _b2bSay('Enter an email address to open the quote against.', true);
-    }
-    const deal = _b2bModalDeal;
-    if (!deal) return;
+// THE MAIL-DRAFT ROUTE IS GONE (Nick, 2026-09-10: "Remove the open in email
+// button. Instead just have the copy quote button and the mark accepted
+// button.").
+//
+// What stood here: b2bSendQuote put the quote on the clipboard and opened a
+// two-step dialog, whose primary action b2bOpenDraft fired a `mailto:` with the
+// subject pre-filled and the body empty, then recorded the send. Plus an
+// auto-prompt that pushed that dialog at an approver opening an unsent quote,
+// and _b2bShowSendStep / _b2bIsMac, which existed only to explain the paste.
+//
+// All of it removed rather than left unreachable. The mailto never carried the
+// quote -- a draft opened blank and you pasted into it -- so it was always
+// Copy Quote plus a dialog, and Copy Quote already records the send on its own
+// (3.8.1, "Copy Quote is a complete way to send one"). Keeping dead code around
+// for a route nobody can reach is how the next person ends up reading it to
+// work out which of two paths is live.
+//
+// _b2bQuoteSubject survives: the quote document still titles itself with it.
 
-    await _b2bBusy(btn, 'Preparing…', async () => {
-        const html = _b2bQuoteInlineHtml(deal, _b2bModalItems);
-        const text = _b2bQuoteText(deal, _b2bModalItems);
-        let copied = false;
-        try {
-            await navigator.clipboard.write([new ClipboardItem({
-                'text/html':  new Blob([html], { type: 'text/html' }),
-                'text/plain': new Blob([text], { type: 'text/plain' }),
-            })]);
-            copied = true;
-        } catch (_) {
-            try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
-        }
-        _b2bShowSendStep(deal, to, copied, auto);
-    });
-}
-
-const _b2bIsMac = () => /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent || '');
-
-function _b2bShowSendStep(deal, to, copied, auto) {
-    const paste = _b2bIsMac() ? 'Cmd + V' : 'Ctrl + V';
-    const steps = copied ? [
-        `Your email app opens a new draft to <b>${escapeHtml(to)}</b> with the subject already filled in.`,
-        `Click into the message body and press <kbd>${paste}</kbd> — the full quote is already on your clipboard.`,
-        'Check it over, add anything you want to say, and send.',
-    ] : [
-        `Your email app opens a new draft to <b>${escapeHtml(to)}</b>.`,
-        'The quote is in the body as plain text — your browser blocked the clipboard, so the formatted version could not be copied.',
-        'Check it over and send.',
-    ];
-
-    _b2bShowDeal({
-        // The deal's own stage, so the header icon matches and the print
-        // whitelist sees review as well as quote.
-        stage: deal.stage,
-        eyebrow: deal.ref,
-        title: auto ? 'This Quote Is Ready To Send' : 'Send This Quote',
-        sub: auto ? 'It has been priced and approved for sending. Review it first if you would rather.'
-             : copied ? 'The quote is copied and ready to paste.' : 'The quote will be in the draft as plain text.',
-        body: `
-            <div class="b2b-sendstep">
-                <div class="b2b-sendstep-ico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</div>
-                <div class="b2b-sendstep-t">What happens next</div>
-                <ol class="b2b-sendsteps">${steps.map(s => `<li>${s}</li>`).join('')}</ol>
-                ${copied ? '<div class="b2b-sendstep-note">Nothing has been emailed yet — you send it yourself from your own mailbox, so the client\'s reply comes back to you.</div>' : ''}
-            </div>`,
-        footer: `
-            <span class="b2b-msg" id="b2bDealMsg"></span>
-            <button class="kpi-cancel-btn" onclick="b2bBackToQuote('${deal.id}')">${auto ? 'Review The Quote First' : 'Back'}</button>
-            <button class="b2b-btn b2b-btn-primary" onclick="b2bOpenDraft('${deal.id}','${escapeHtml(to).replace(/'/g, "\\'")}',${copied})">Open Email Draft</button>`,
-    });
-}
-
-function b2bBackToQuote(id) {
-    const deal = _b2bDealById(id) || _b2bModalDeal;
-    if (deal) { _b2bModalDeal = deal; _b2bStageQuote(deal); }
-}
-
-// Step two. The mailto fires first and synchronously, straight off this click:
-// an external protocol handler needs user activation, and awaiting anything
-// first would spend it.
-async function b2bOpenDraft(id, to, copied) {
-    const deal = _b2bDealById(id) || _b2bModalDeal;
-    if (!deal) return;
-
-    let href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(_b2bAscii(_b2bQuoteSubject(deal)))}`;
-    if (!copied) {
-        const ascii = _b2bAscii(_b2bQuoteText(deal, _b2bModalItems));
-        const withBody = `${href}&body=${encodeURIComponent(ascii)}`;
-        href = withBody.length > 1900
-            ? `${href}&body=${encodeURIComponent(ascii.slice(0, 1200) + '\n\n[quote truncated - use Copy instead]')}`
-            : withBody;
-    }
-    window.location.href = href;
-
-    await _b2bPost({ action: 'send_quote', id, to }, "Couldn't record the send");
-    await b2bRefresh();
-    const next = _b2bDealById(id);
-    if (next) { _b2bModalDeal = next; _b2bStageQuote(next); }
-    _b2bSay(`Draft opened for ${to}.`);
-}
 
 async function b2bAcceptQuote(id, btn) {
     if (!_b2bApprovalGate(_b2bDealById(id) || _b2bModalDeal, id, 'deal')) return;
@@ -28046,6 +28321,157 @@ async function b2bAcceptQuote(id, btn) {
 
 // --- stage 5: listing location (CORP-priced deals only) --------------------
 
+// --- stage 5b: listing location, one store or split -----------------------
+//
+// Nick, 2026-09-10: "some type of system where 1 you select if you want to
+// split up the deal, and 2 you select which items you want to go where."
+//
+// So it is two steps, and the first one is a real choice rather than a mode
+// nobody notices: All To One Store, or Split It Up. Whole-deal is the common
+// case and stays one click on a store tile, exactly as before -- the split path
+// only unfolds if it is asked for, so nothing about the ordinary route got
+// slower to pay for the new one.
+let _b2bSplitMode  = false;         // false = one store, true = per-item
+let _b2bSplitPlan  = {};            // itemId -> store code, while picking
+let _b2bSplitBrush = null;          // the store a row click assigns, for speed
+
+function _b2bSplitStores() {
+    return [...new Set(Object.values(_b2bSplitPlan).filter(Boolean))].sort();
+}
+function _b2bSplitUnplaced() {
+    return _b2bModalItems.filter(it => !_b2bSplitPlan[it.id]);
+}
+
+function b2bSplitToggle(on) {
+    _b2bSplitMode = !!on;
+    // Whichever way it goes, start from nothing. Carrying a half-finished plan
+    // into the single-store view and back is how somebody ends up shipping an
+    // assignment they thought they had cleared.
+    _b2bSplitPlan = {};
+    _b2bSplitBrush = null;
+    _b2bAssignPick = null;
+    _b2bSplitting = null;
+    const d = _b2bModalDeal;
+    if (d) _b2bStageListingLocation(d);
+}
+
+// The brush. With thirty lines going two ways, picking a store on every row
+// from a dropdown is thirty dropdowns; picking the store ONCE and then clicking
+// rows is thirty clicks. Same for "everything left goes here".
+function b2bSplitBrush(code) {
+    _b2bSplitBrush = _b2bSplitBrush === code ? null : code;
+    _b2bSplitRepaint();
+}
+function b2bSplitSet(itemId, code) {
+    if (code) _b2bSplitPlan[itemId] = code;
+    else delete _b2bSplitPlan[itemId];
+    _b2bSplitRepaint();
+}
+function b2bSplitRow(itemId) {
+    // No brush picked yet: a row click clears rather than doing nothing
+    // silently, so the control never feels dead.
+    if (!_b2bSplitBrush) return b2bSplitSet(itemId, null);
+    b2bSplitSet(itemId, _b2bSplitPlan[itemId] === _b2bSplitBrush ? null : _b2bSplitBrush);
+}
+function b2bSplitRest(code) {
+    _b2bSplitUnplaced().forEach(it => { _b2bSplitPlan[it.id] = code; });
+    _b2bSplitRepaint();
+}
+function b2bSplitClear() {
+    _b2bSplitPlan = {};
+    _b2bSplitRepaint();
+}
+
+function _b2bSplitRepaint() {
+    const host = document.getElementById('b2bSplitWrap');
+    if (host) host.innerHTML = _b2bSplitPickerHtml();
+    const go = document.getElementById('b2bAsGo');
+    if (go) {
+        const ready = _b2bSplitMode
+            ? (_b2bSplitUnplaced().length === 0 && _b2bSplitStores().length > 0)
+            : !!_b2bAssignPick;
+        go.disabled = !ready;
+        go.textContent = _b2bSplitMode && _b2bSplitStores().length > 1
+            ? `Split To ${_b2bSplitStores().length} Stores`
+            : 'Send To Listing';
+    }
+}
+
+function _b2bSplitPickerHtml() {
+    if (!_b2bSplitMode) {
+        return `
+            <label class="form-label-caps" style="margin-top:14px;">List At</label>
+            <div class="b2b-loc-pick">
+                ${STORE_CODES.map(c => `
+                    <button class="b2b-loc ${_b2bAssignPick === c ? 'on' : ''}" data-loc="${c}"
+                        onclick="b2bPickLocation('${c}')">
+                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
+                        <span class="b2b-loc-c">${c}</span>
+                    </button>`).join('')}
+            </div>`;
+    }
+
+    const left = _b2bSplitUnplaced().length;
+    const stores = _b2bSplitStores();
+    // Per-store tally as it is built, because "did I give MPL the laptops or the
+    // monitors" is the question being answered by this screen and counting rows
+    // by eye is how it gets answered wrong.
+    const tally = stores.map(c => {
+        const rows = _b2bModalItems.filter(it => _b2bSplitPlan[it.id] === c);
+        const units = rows.reduce((n, it) => n + (Number(it.quantity) || 1), 0);
+        const val = rows.reduce((n, it) => n + (_b2bIsScrap(it) ? 0 : (Number(it.value) || 0) * (Number(it.quantity) || 1)), 0);
+        return `<div class="b2b-splittally">
+            <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
+            <b>${c}</b><span>${rows.length} line${rows.length === 1 ? '' : 's'} · ${units} unit${units === 1 ? '' : 's'} · ${_b2bMoney(val)}</span>
+        </div>`;
+    }).join('');
+
+    const row = (it) => {
+        const code = _b2bSplitPlan[it.id] || '';
+        const qty = Number(it.quantity) || 1;
+        return `
+        <div class="b2b-splitrow ${code ? 'set' : ''}" onclick="b2bSplitRow('${it.id}')">
+            <span class="b2b-splitrow-n">${escapeHtml(_b2bLineNo(it))}</span>
+            <span class="b2b-splitrow-m">
+                <b>${escapeHtml(_b2bItemName(it))}</b>
+                <span>${escapeHtml(it.sku || 'no SKU')} · ${qty} unit${qty === 1 ? '' : 's'}${
+                    _b2bIsScrap(it) ? ' · recycle' : ''}${_b2bSplitFromNote(it)}</span>
+            </span>
+            ${_b2bSplitBtn(it, 'assign')}${_b2bMergeBtn(it, 'assign')}
+            <span class="b2b-splitrow-s">
+                ${STORE_CODES.map(c => `<button class="b2b-splitchip ${code === c ? 'on' : ''}"
+                    title="Send this line to ${c}"
+                    onclick="event.stopPropagation();b2bSplitSet('${it.id}','${code === c ? '' : c}')">${c}</button>`).join('')}
+            </span>
+        </div>${_b2bSplitEditorHtml(it)}`;
+    };
+
+    return `
+        <div class="b2b-splitbar">
+            <span class="form-label-caps">Pick a store, then click the lines that go there</span>
+            <div class="b2b-loc-pick sm">
+                ${STORE_CODES.map(c => `
+                    <button class="b2b-loc ${_b2bSplitBrush === c ? 'on' : ''}" onclick="b2bSplitBrush('${c}')">
+                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
+                        <span class="b2b-loc-c">${c}</span>
+                    </button>`).join('')}
+            </div>
+            <div class="b2b-splitacts">
+                ${_b2bSplitBrush && left ? `<button class="b2b-mini"
+                    onclick="b2bSplitRest('${_b2bSplitBrush}')">Everything left → ${_b2bSplitBrush}</button>` : ''}
+                ${Object.keys(_b2bSplitPlan).length ? `<button class="b2b-mini" onclick="b2bSplitClear()">Start again</button>` : ''}
+            </div>
+        </div>
+        ${tally ? `<div class="b2b-splittallies">${tally}</div>` : ''}
+        <div class="b2b-note ${left ? 'warn' : 'ok'}">
+            <span class="b2b-note-k">${left
+                ? `${left} line${left === 1 ? '' : 's'} still to place`
+                : `All ${_b2bModalItems.length} lines placed across ${stores.length} store${stores.length === 1 ? '' : 's'}`}</span>
+            ${left ? '<div>Every line has to go somewhere before this can be sent.</div>' : ''}
+        </div>
+        <div class="b2b-splitrows">${_b2bModalItems.map(row).join('')}</div>`;
+}
+
 function _b2bStageListingLocation(deal) {
     _b2bAssignPick = null;
     _b2bShowDeal({
@@ -28053,32 +28479,56 @@ function _b2bStageListingLocation(deal) {
         stage: 'listing_location',
         eyebrow: deal.ref,
         title: 'Assign Listing Store',
-        sub: 'CORP priced this one, so pick the store that will list the items.',
+        sub: _b2bSplitMode
+            ? 'Split the deal: every line needs a store before this can be sent.'
+            : 'CORP priced this one, so pick the store that will list the items.',
         full: true,
         body: `
             ${_b2bSummary(deal)}
             <div class="b2b-note ok"><span class="b2b-note-k">Accepted</span>
                 ${escapeHtml(deal.client?.company || '')} accepted ${_b2bMoney(_b2bNetOffer(deal), 2)} across ${deal.total_units} unit${deal.total_units === 1 ? '' : 's'}.</div>
             ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
-            <label class="form-label-caps" style="margin-top:14px;">List At</label>
-            <div class="b2b-loc-pick">
-                ${STORE_CODES.map(c => `
-                    <button class="b2b-loc" data-loc="${c}" onclick="b2bPickLocation('${c}')">
-                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
-                        <span class="b2b-loc-c">${c}</span>
-                    </button>`).join('')}
+            <!-- The choice, made once and up front. A split is the rarer case, so
+                 it is opt-in and the whole-deal route stays one click on a store
+                 tile. -->
+            <label class="form-label-caps" style="margin-top:14px;">Where Is It Going</label>
+            <div class="b2b-splitmode">
+                <button class="b2b-splitmode-b ${!_b2bSplitMode ? 'on' : ''}" onclick="b2bSplitToggle(false)">
+                    <b>All to one store</b><span>The whole deal is listed in one place</span>
+                </button>
+                <button class="b2b-splitmode-b ${_b2bSplitMode ? 'on' : ''}" onclick="b2bSplitToggle(true)">
+                    <b>Split it up</b><span>Choose which lines go to which store</span>
+                </button>
             </div>
-            <label class="form-label-caps" style="margin-top:16px;">What's In It</label>
-            ${_b2bItemTableHtml(_b2bModalItems)}`,
+            <div id="b2bSplitWrap">${_b2bSplitPickerHtml()}</div>
+            ${_b2bSplitMode ? '' : `
+                <label class="form-label-caps" style="margin-top:16px;">What's In It</label>
+                ${_b2bItemTableHtml(_b2bModalItems)}`}`,
         footer: `
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bAsGo" disabled onclick="b2bAssignListing('${deal.id}',this)">Send To Listing</button>`,
     });
+    _b2bSplitRepaint();
 }
 
 async function b2bAssignListing(id) {
-    if (!_b2bAssignPick) return;
-    await _b2bPost({ action: 'assign_listing', id, listing_store: _b2bAssignPick }, "Couldn't assign the listing store");
+    if (_b2bSplitMode) {
+        // Guarded here as well as on the server, because the server's version of
+        // this refuses the whole request -- and being told "3 lines have no
+        // store" after the dialog has closed is not a fixable message.
+        const left = _b2bSplitUnplaced();
+        if (left.length) {
+            return _b2bSay(`${left.length} line${left.length === 1 ? '' : 's'} still need a store.`, true);
+        }
+        const assignments = _b2bModalItems.map(it => ({ item_id: it.id, store: _b2bSplitPlan[it.id] }));
+        await _b2bPost({ action: 'assign_listing', id, assignments }, "Couldn't split the deal");
+    } else {
+        if (!_b2bAssignPick) return;
+        await _b2bPost({ action: 'assign_listing', id, listing_store: _b2bAssignPick }, "Couldn't assign the listing store");
+    }
+    _b2bSplitMode = false;
+    _b2bSplitPlan = {};
+    _b2bSplitBrush = null;
     closeAllModals();
     await b2bRefresh();
 }
@@ -28087,7 +28537,18 @@ async function b2bAssignListing(id) {
 
 function _b2bDone(it)      { return (Number(it.listed_qty) || 0) + (Number(it.recycled_qty) || 0); }
 function _b2bSatisfied(it) { return _b2bDone(it) >= (Number(it.quantity) || 1); }
-function _b2bAllSatisfied(){ return _b2bModalItems.length > 0 && _b2bModalItems.every(_b2bSatisfied); }
+// The lines this user answers for. Corp answers for all of them; a store for its
+// own, plus any line not yet given a store. A single-store user's fetch is
+// already scoped on the server, so this is a no-op for them -- it is here for
+// the multi-store manager, whose fetch is unscoped and so carries the other
+// stores' lines on a split deal. Without it their Complete button waited on
+// work at a store they do not run.
+function _b2bMyLines() {
+    if (_b2bIsCorp()) return _b2bModalItems;
+    const mine = _b2bMyStores();
+    return _b2bModalItems.filter(it => !it.listing_store || mine.includes(it.listing_store));
+}
+function _b2bAllSatisfied(){ const own = _b2bMyLines(); return own.length > 0 && own.every(_b2bSatisfied); }
 
 // Listing a unit is a two-scan handshake: our label identifies WHICH unit, then
 // the Shopify barcode records what it became. The id of the line waiting on its
@@ -28130,13 +28591,20 @@ function _b2bStageListing(deal) {
             ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
             <div id="b2bScanWrap">${_b2bScanBar(deal)}</div>
             <div id="b2bListProg">${_b2bListProgress()}</div>
-            <div id="b2bListRows" class="b2b-items b2b-ss b2b-lgrid">${_b2bListRows()}</div>`,
+            <div id="b2bListRows" class="b2b-items b2b-ss b2b-lgrid">${_b2bListRows()}</div>
+            ${_b2bMoveHistoryHtml(deal)}`,
         footer: `
             ${_b2bMoveBtn(deal)}
+            ${_b2bMoveLinesBtn(deal)}
             ${_b2bPrintAllBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
+            <!-- On a split deal this completes THIS STORE'S part, and the deal
+                 follows once the last part lands -- so the label says whose
+                 part, and _b2bAllSatisfied is already only counting the lines
+                 this user was sent. -->
             <button class="b2b-btn b2b-btn-primary" id="b2bListDone" ${_b2bAllSatisfied() ? '' : 'disabled'}
-                onclick="b2bCompleteDeal('${deal.id}',this)">Complete Deal</button>`,
+                onclick="b2bCompleteDeal('${deal.id}',this)">${
+                    _b2bIsSplit(deal) && !_b2bIsCorp() ? 'My Part Is Done' : 'Complete Deal'}</button>`,
         after: () => document.getElementById('b2bScanIn')?.focus(),
     });
 }
@@ -28201,14 +28669,116 @@ function b2bCancelPending() {
     _b2bRepaintScanBar();
 }
 
+// Per-store counts derived from THE LOADED ITEMS, not from listing_parts.
+//
+// listing_parts is a server snapshot: it only changes when the board is
+// re-fetched, so every bar drawn from it sat frozen until the page was reloaded
+// (Nick, 2026-09-11: "ITs making me have to refresh my page to be able to see
+// the updated progress bars after I finish listing something"). The items in
+// _b2bModalItems are updated the moment a unit is listed, which is exactly the
+// thing being counted -- so they are the live truth and the snapshot is not.
+//
+// This works for both audiences from one code path, because every item carries
+// its own listing_store: corp has all the lines and groups into several stores,
+// a store has only its own and groups into one. Completion still comes from
+// listing_parts, and rightly -- a part is only finished when somebody says so,
+// which is an explicit action that already refreshes.
+function _b2bLiveParts(deal) {
+    const parts = Array.isArray(deal && deal.listing_parts) ? deal.listing_parts : [];
+    const byStore = new Map();
+    (_b2bModalItems || []).forEach((it) => {
+        // Only lines that actually carry a store. An unassigned line belongs to
+        // no part yet, and bucketing it under '' would invent a nameless store
+        // in the breakdown -- or, worse, collapse a split deal to one bar.
+        const s = it.listing_store;
+        if (!s) return;
+        if (!byStore.has(s)) byStore.set(s, { store: s, total_units: 0, done_units: 0 });
+        const row = byStore.get(s);
+        row.total_units += Number(it.quantity) || 1;
+        row.done_units += _b2bDone(it);
+    });
+    // Nothing assigned yet, or nothing loaded: fall back to the snapshot rather
+    // than drawing an empty bar.
+    if (!byStore.size) {
+        return parts.map(p => ({
+            store: p.store,
+            total_units: Number(p.total_units) || 0,
+            done_units: (Number(p.listed_units) || 0) + (Number(p.recycled_units) || 0),
+            completed_at: p.completed_at, completed_by: p.completed_by,
+        }));
+    }
+    return [...byStore.values()].sort((a, b) => String(a.store).localeCompare(String(b.store)))
+        .map((row) => {
+            const snap = parts.find(p => p.store === row.store);
+            return Object.assign(row, {
+                completed_at: snap ? snap.completed_at : null,
+                completed_by: snap ? snap.completed_by : null,
+            });
+        });
+}
+
+// Listing progress, with a per-store breakdown underneath when the deal is
+// split.
+//
+// Nick, 2026-09-10: "For corp viewing the deal, it should break it down into
+// two progress bars, 1 for each store, both dropped down from the main deal
+// progress bar."
+//
+// The main bar is the DEAL's for corp -- every unit on it, wherever the unit is
+// -- and each store's own for a store, because "treat it as 2 seperate deals
+// from that point" means a store's part IS the whole job as far as it is
+// concerned. Corp is the only reader of the breakdown, and not because a store
+// is not allowed to see it: a store's items are the only ones it was sent, so a
+// breakdown of one row is noise.
 function _b2bListProgress() {
-    const total = _b2bModalItems.reduce((n, it) => n + (Number(it.quantity) || 1), 0);
-    const done  = _b2bModalItems.reduce((n, it) => n + _b2bDone(it), 0);
-    const pct   = total ? Math.round((done / total) * 100) : 0;
+    const deal = _b2bModalDeal;
+    const live = _b2bLiveParts(deal);
+    // Split is a property of the DEAL, not of what this user can see -- a store
+    // is sent one part of a split deal and would otherwise never know it was one.
+    const split = ((deal && deal.listing_stores) || []).length > 1 || live.length > 1;
+
+    // The first of MY stores, not the first row: a multi-store manager's fetch is
+    // unscoped, so live[0] can be another store's part.
+    const mine = (split && !_b2bIsCorp())
+        ? (live.find(p => _b2bMyStores().includes(p.store)) || live[0]) : null;
+    const total = mine ? mine.total_units : live.reduce((n, p) => n + p.total_units, 0);
+    const done = mine ? mine.done_units : live.reduce((n, p) => n + p.done_units, 0);
+    const pct = total ? Math.round((done / total) * 100) : 0;
+
+    const bars = (!split || !_b2bIsCorp()) ? '' : live.map(p => {
+        const q = p.total_units ? Math.round((p.done_units / p.total_units) * 100) : 0;
+        const finished = !!p.completed_at;
+        return `
+            <div class="b2b-prog-part ${finished ? 'done' : ''}">
+                <div class="b2b-prog-h">
+                    <span><span class="b2b-loc-dot" style="background:${STORE_TINTS[p.store] || '#94a3b8'}"></span>
+                        ${escapeHtml(p.store)}${finished
+                            ? ` · finished by ${escapeHtml(p.completed_by || 'someone')}`
+                            : ''}</span>
+                    <span>${finished
+                        ? '<b>Complete</b>'
+                        : `<b>${p.done_units}</b> of ${p.total_units} units · ${q}%${
+                            p.total_units && p.done_units >= p.total_units && _b2bCanAccept()
+                                ? ` <button class="b2b-mini" onclick="b2bCompletePart('${deal.id}','${p.store}',this)">Mark Complete</button>`
+                                : ''}`}</span>
+                </div>
+                ${finished ? '' : `<div class="b2b-pace-bar sm"><i style="width:${q}%"></i></div>`}
+            </div>`;
+    }).join('');
+
+    const waiting = split && _b2bIsCorp() ? live.filter(p => !p.completed_at).map(p => p.store) : [];
+
     return `
         <div class="b2b-prog">
-            <div class="b2b-prog-h"><span>Listing progress</span><span><b>${done}</b> of ${total} units · ${pct}%</span></div>
+            <div class="b2b-prog-h">
+                <span>${mine ? `Your part${mine.store ? ` · ${escapeHtml(mine.store)}` : ''}` : 'Listing progress'}${
+                    split && _b2bIsCorp() ? ` · split across ${live.length} stores` : ''}</span>
+                <span><b>${done}</b> of ${total} units · ${pct}%</span>
+            </div>
             <div class="b2b-pace-bar"><i style="width:${pct}%"></i></div>
+            ${bars ? `<div class="b2b-prog-parts">${bars}</div>` : ''}
+            ${waiting.length
+                ? `<div class="b2b-prog-wait">Waiting on ${escapeHtml(waiting.join(', '))}.</div>` : ''}
         </div>`;
 }
 
@@ -28461,6 +29031,16 @@ function b2bScan(dealId) {
     // First scan: which line is this?
     const sku = raw.toUpperCase();
     const it = _b2bModalItems.find(i => (i.sku || '').toUpperCase() === sku);
+    // On a split deal a store is only sent its own lines, so a label from the
+    // other store's part lands here too. Our SKUs start with the deal's ref, so
+    // that case can be told apart and named -- "isn't a line on this deal" sends
+    // somebody looking for a mistake that is really a box at the wrong store.
+    const deal = _b2bModalDeal;
+    if (!it && deal && _b2bIsSplit(deal) && !_b2bIsCorp() && deal.ref
+        && sku.startsWith(`${String(deal.ref).toUpperCase()}-`)) {
+        return _b2bScanFlash(`${sku} is on this deal but was sent to another store. `
+            + 'If it is here, ask corp to move the line to you.', true);
+    }
     if (!it)               return _b2bScanFlash(`${sku} isn't a line on this deal.`, true);
     if (_b2bIsScrap(it))   return _b2bScanFlash(`${sku} is a recycle line — use Recycle instead of listing it.`, true, it.id);
     if (it.wipe_required && (Number(it.listed_qty) || 0) >= (Number(it.wiped_qty) || 0)) {
@@ -28638,28 +29218,68 @@ function b2bRecycleUnits(itemId) {
 function _b2bCelebrate(dealId) {
     const deal = _b2bDealById(dealId) || _b2bModalDeal;
     if (!deal) return;
-    const units = _b2bModalItems.reduce((n, it) => n + (Number(it.quantity) || 1), 0);
-    const recycled = _b2bModalItems.reduce((n, it) => n + (Number(it.recycled_qty) || 0), 0);
+    // On a split deal a store has finished ITS part, so the figures are its
+    // lines' and the cost is summed from them -- the deal's total_cost is the
+    // whole deal's.
+    const parts = _b2bClosableParts(deal, _b2bModalItems);
+    const own = _b2bMyLines();
+    const units = own.reduce((n, it) => n + (Number(it.quantity) || 1), 0);
+    const recycled = own.reduce((n, it) => n + (Number(it.recycled_qty) || 0), 0);
+    const cost = parts && !_b2bIsCorp()
+        ? Math.max(0, own.reduce((n, it) => n
+            + (Number(it.cost != null ? it.cost : it.offer) || 0) * (Number(it.quantity) || 1)
+            - (Number(it.qty_wipe_total) || 0), 0))
+        : (deal.total_cost ? _b2bNetCost(deal) : _b2bNetOffer(deal));
+    const label = parts ? _b2bCompleteLabel(deal, parts) : 'Complete Deal';
     document.getElementById('b2bDealBody').innerHTML = `
         <div class="b2b-celebrate">
             <div class="b2b-cel-ring">${_b2bIco('<polyline points="20 6 9 17 4 12"/>')}</div>
-            <div class="b2b-cel-t">Every unit is accounted for</div>
+            <div class="b2b-cel-t">${parts && !_b2bIsCorp()
+                ? 'Every unit in your part is accounted for' : 'Every unit is accounted for'}</div>
             <div class="b2b-cel-s">${escapeHtml(deal.ref)} · ${escapeHtml(deal.client?.company || '')}</div>
             <div class="b2b-cel-stats">
                 <div><b>${units - recycled}</b><span>listed</span></div>
                 ${recycled ? `<div><b>${recycled}</b><span>recycled</span></div>` : ''}
-                <div><b>${_b2bMoney(deal.total_cost ? _b2bNetCost(deal) : _b2bNetOffer(deal))}</b><span>inventory cost</span></div>
+                <div><b>${_b2bMoney(cost)}</b><span>inventory cost</span></div>
             </div>
         </div>`;
     document.getElementById('b2bDealFooter').innerHTML = `
         <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Not Yet</button>
-        <button class="b2b-btn b2b-btn-primary" onclick="b2bCompleteDeal('${deal.id}',this)">Complete Deal</button>`;
+        <button class="b2b-btn b2b-btn-primary" onclick="b2bCompleteDeal('${deal.id}',this)">${escapeHtml(label)}</button>`;
 }
 
 async function b2bCompleteDeal(id) {
-    await _b2bPost({ action: 'complete', id }, "Couldn't complete the deal");
+    const deal = (_b2bModalDeal && _b2bModalDeal.id === id) ? _b2bModalDeal : _b2bDealById(id);
+    const parts = _b2bClosableParts(deal, _b2bModalItems);
+    if (parts && !parts.length) return _b2bSay('Nothing on this deal is ready to sign off yet.', true);
+    try {
+        if (parts) await _b2bCompleteParts(id, parts);
+        else await _b2bSend({ action: 'complete', id, caller_store: _b2bItemScope() || undefined });
+    } catch (e) {
+        alert(`Couldn't complete the deal: ${e.message}`);
+        return;
+    }
     closeAllModals();
     await b2bRefresh();
+}
+
+// Corp signing off ONE store's part from the listing breakdown -- the store that
+// listed its last unit and went home without pressing the button. The server
+// has always allowed this; nothing on screen offered it.
+async function b2bCompletePart(id, store, btn) {
+    if (!_b2bCanAccept()) return;
+    if (!confirm(`Mark ${store}'s part of this deal complete?\n\n`
+        + `Every unit sent to ${store} is listed or recycled. It is recorded against your name.`)) return;
+    try {
+        await _b2bBusy(btn, 'Completing…', () => _b2bCompleteParts(id, [store]));
+    } catch (e) {
+        alert(`Couldn't complete ${store}'s part: ${e.message}`);
+        return;
+    }
+    await b2bRefresh();
+    const d = _b2bDealById(id);
+    if (d && d.stage === 'listing') b2bOpenDeal(_b2bClickKind(d), id);
+    else closeAllModals();
 }
 
 // --- read-only view --------------------------------------------------------
@@ -28729,7 +29349,8 @@ function _b2bStageView(deal) {
                         deal.declined_at ? _b2bDate(deal.declined_at) : '',
                     ].filter(Boolean).join(' · '))}</div></span>
             </div>` : ''}
-            ${_b2bItemTableHtml(_b2bModalItems)}`,
+            ${_b2bItemTableHtml(_b2bModalItems)}
+            ${_b2bMoveHistoryHtml(deal)}`,
         footer: `
             ${canDecline ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
