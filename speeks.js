@@ -13241,9 +13241,22 @@ function _lvView(m) {
 // needs to be moved to NP, I meant it"). Every margin a store sees is the NET
 // margin — NP over net sales for the span on screen — and gross profit is not
 // shown as a figure of its own anywhere on the board.
+//
+// ONE EXCEPTION (Ethan 2026-10-06): the district table carries a Gross margin
+// column in front of Net margin. It is a rate, not a GP figure — revenue less
+// cost over revenue — and it is what shows WHERE a net margin went: a store with
+// a healthy gross margin and a weak net one is losing it to fees and shipping,
+// not to what it paid for the stock. Still no GP dollars anywhere.
 function _lvNetMargin(v) {
     const n = Number(v && v.npDay), s = Number(v && v.netToday);
     return (isFinite(n) && s > 0) ? n / s * 100 : null;
+}
+// Worked from net sales and cost for the span on screen rather than read from
+// marginToday, so the roll-up rows (summed on the page) and the stores agree by
+// construction on every tab.
+function _lvGrossMargin(v) {
+    const s = Number(v && v.netToday), c = Number(v && v.cogsToday);
+    return (s > 0 && isFinite(c)) ? (s - c) / s * 100 : null;
 }
 function _lvNetMarginMtd(v) {
     const n = Number(v && v.npMtd), s = Number(v && v.mtdNet);
@@ -13393,6 +13406,42 @@ function _lvPace(pctOfGoal, elapsedPct) {
     if (!isFinite(p) || !isFinite(e) || e <= 0) return null;
     return Math.round(p / e * 100);
 }
+
+// "% TO GOAL" ON THE TODAY TAB IS THROUGH YESTERDAY (Ethan 2026-10-06).
+// Live pace counts today's half-finished day — on an NP month, an ESTIMATE of
+// it — so it swung all day and read as behind every morning. The Today tab now
+// shows the pace at yesterday's close: exactly the figure the Yesterday tab
+// shows, read off the same view, so the two tabs can never disagree about it.
+// The header carries a "Through Yesterday" tag so nobody takes it for live.
+//
+// Worked by running _lvView in 'prev' mode rather than reaching into m.prev /
+// m.np.prev by hand: the overlay already knows which of the two applies.
+// Null on the 1st, when yesterday belongs to last month (the same rule that
+// blanks pace on the Yesterday tab).
+function _lvPaceThru() { return _lvIsToday(); }
+function _lvAsPrev(fn) {
+    const keep = _lvMode;
+    _lvMode = 'prev';
+    try { return fn(); } finally { _lvMode = keep; }
+}
+function _lvPaceThruStore(m, d) {
+    if (!(d && d.prev && d.prev.inMonth) || !m || m.error) return null;
+    const v = _lvAsPrev(() => _lvView(m));
+    return v && v.paceIndex !== undefined ? v.paceIndex : null;
+}
+// A roll-up's pace is derived from its pctOfGoal, the way the table and the card
+// deck derive it on every tab. The district payload carries its own `prev`; the
+// MSM's "Both" is a sum built on the page, so it is re-summed from the same
+// healthy stores at yesterday's close.
+function _lvPaceThruRoll(rollup, stores, d) {
+    if (!(d && d.prev && d.prev.inMonth)) return null;
+    const pv = _lvAsPrev(() => (rollup && rollup.prev)
+        ? _lvView(rollup)
+        : _lvCombine((stores || []).filter(m => m && !m.error).map(_lvView)));
+    if (!pv || pv.pctOfGoal === null || pv.pctOfGoal === undefined) return null;
+    return _lvPace(pv.pctOfGoal, d.prev.elapsedPct);
+}
+const _LV_THRU_TAG = '<span class="lv-thru">Through Yesterday</span>';
 
 // --- "something just happened at MPL" ---------------------------------------
 // The payload is a snapshot, not an event stream, so a sale or a refund is derived
@@ -16323,10 +16372,18 @@ function _lvStoreRow(v, d, foot, rev) {
     if (v.error) {
         // colspan spans every column EXCEPT the store cell — keep it in step with
         // the header row or a broken store knocks the table out of alignment.
-        // (It was 7 against eight columns; adding Refunds makes it nine.)
+        // COUNTED from the same switches _lvTable's header reads, not typed: the
+        // typed 9 outlived the Cost column by months and spanned one column past
+        // the table on every tab (found 2026-10-06 adding Gross margin).
+        const ec = _lvCols();
+        const span = 5   // net, profit, refunds, margin, month
+            + (ec.cost ? 1 : 0) + (ec.orders ? 1 : 0) + (ec.tail ? 1 : 0)
+            + (_lvFeeCols() ? 2 : 0) + (_lvNpKind() ? 1 : 0)   // fees; gross margin
+            + 1                                                // % to goal
+            + (rev === null || rev === undefined ? 0 : 1);
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
             + '<b>' + escapeHtml(v.code) + '</b></span></td>'
-            + '<td colspan="' + ((rev === null || rev === undefined ? 9 : 10) + (_lvFeeCols() ? 2 : 0))
+            + '<td colspan="' + span
             + '" class="lv-row-errmsg">not reporting &middot; '
             + escapeHtml(v.error) + '</td></tr>';
     }
@@ -16373,6 +16430,9 @@ function _lvStoreRow(v, d, foot, rev) {
         + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
         + (_lvFeeCols() ? _lvFeeCell(v, 'npBEbay', d, foot) + _lvFeeCell(v, 'npBShip', d, foot) : '')
         + (cols.orders ? '<td>' + v.ordersToday + '</td>' : '')
+        // Keyed off _lvNpKind(), like the header — not v.npKind, which a store
+        // with no NP block lacks, and a missing cell shifts the row one left.
+        + (_lvNpKind() ? '<td class="lv-boldnum">' + _lvPct(_lvGrossMargin(v)) + '</td>' : '')
         + '<td class="lv-boldnum">' + _lvPct(v.npKind ? _lvNetMargin(v) : v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
@@ -16528,7 +16588,7 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         const band = has ? ' ' + _lvPaceCls(pct) : '';
         return '<li class="lvc' + (isRoll ? ' lvc-roll' : '') + '">'
             + head + '<span class="lvc-goal' + band + '">'
-            + '<span class="lvc-goal-k">% to Goal</span>'
+            + '<span class="lvc-goal-k">% to Goal' + (_lvPaceThru() ? _LV_THRU_TAG : '') + '</span>'
             // "No Goal" in place of the figure, not on a line of its own underneath:
             // the extra row was 32px that only some cards had, so the card grew and
             // shrank as the picker moved between stores.
@@ -16574,15 +16634,21 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         // has none, so it is derived here the same way _lvTable derives it for its
         // own total row — otherwise the District card would be the one card on the
         // phone with a blank percentage.
+        // On Today both are at yesterday's close, the same figure as the table's
+        // column (see _lvPaceThru).
         const rollView = _lvView(roll);
         deck.push({ key: '_roll', label: rollLabel,
             view: Object.assign({}, rollView, { code: rollLabel, name: '',
-                paceIndex: _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
+                paceIndex: _lvPaceThru() ? _lvPaceThruRoll(roll, list, d)
+                    : _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
             buy: rollBuy, isRoll: true });
     }
     list.forEach((m, i) => {
+        const v = _lvView(m);
         deck.push({ key: String((m && m.code) || ''), label: String((m && m.code) || ''),
-            view: _lvView(m), buy: buys[i], isRoll: false });
+            view: (_lvPaceThru() && m && !m.error)
+                ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) }) : v,
+            buy: buys[i], isRoll: false });
     });
 
     // A pick that is no longer in the deck — a role change, a store that dropped
@@ -16738,16 +16804,25 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         + '<th>Refunds</th>'
         + (_lvFeeCols() ? '<th title="Finished days, off the Net Profit tab">eBay fees</th>'
             + '<th title="Finished days, off the Net Profit tab">Shipping</th>' : '')
-        + (cols.orders ? '<th>Orders</th>' : '') + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
+        + (cols.orders ? '<th>Orders</th>' : '')
+        // Gross margin sits in front of Net margin on an NP month (Ethan
+        // 2026-10-06) — see _lvGrossMargin. On a GP month the one Margin column
+        // already IS gross, so a second would repeat it.
+        + (_lvNpKind() ? '<th>Gross margin</th>' : '')
+        + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
         + '<th>' + (_lvNpKind() ? (_lvHasMonth(d) ? 'NP this month' : 'NP')
-            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th><th>% to goal</th>'
+            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th>'
+        + '<th>% to goal' + (_lvPaceThru() ? _LV_THRU_TAG : '') + '</th>'
         + (cols.tail ? '<th>Last order</th>' : '')
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
     // this list by position, so re-sorting it worst-first would cost more than the
     // ranking gains. The pace column is what makes a bad store findable.
+    const thru = _lvPaceThru();
     stores.forEach(m => {
-        html += _lvStoreRow(_lvView(m), d, false, null);
+        const v = _lvView(m);
+        html += _lvStoreRow(thru && !m.error
+            ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) }) : v, d, false, null);
     });
     html += '</tbody>';
     if (rollup) {
@@ -16757,7 +16832,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
             // Its own projection, summed from the stores above it by the one
             // function the Tracking tiles also use.
             fcSum: _lvIsMtd() ? _lvFcSum(stores.filter(m => !m.error).map(_lvView)) : null,
-            paceIndex: _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
+            paceIndex: thru ? _lvPaceThruRoll(rollup, stores, d) : _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
             lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
@@ -17382,6 +17457,17 @@ function _isWorkingRole(role) {
     const r = String(role || '').trim().toUpperCase();
     return !!r && r !== '-' && r !== GOALS_OFF;
 }
+
+// TRAINING (Ethan, 2026-10-06): somebody learning to list, expected to manage
+// HALF of what a Lister 1 would on the same day. It is half of that person's own
+// L1 goal rather than a number of its own — same shift, same Saturday factor,
+// same stretch factor — so it moves whenever the lister rate or the store's
+// factor moves, and it never needs tuning separately (see rateFor).
+//
+// A working role (they are in, and they count as staffed), but uncapped like Off:
+// a store can have more than one trainee on the same day. It is not an L role, so
+// it never satisfies "there is a lister today" (_lgCoverage, daily-brief).
+const GOALS_TRAINING = 'TR';
 // The role currently selected in one `.goals-edit-roles` group ('-' when none).
 function _activeRoleIn(group) {
     return _roleOf(group ? group.querySelector('.role-dot.active') : null);
@@ -17624,6 +17710,11 @@ function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr, store) {
     roles.forEach(r => {
         html += `<button type="button" class="role-dot ${cur === r ? 'active' : ''}" data-role="${r}" ${dis} onclick="selectRole(this, '${safeEmp}', '${r}')">${r}</button>`;
     });
+    // Training rides here rather than in goalsAvailableRoles for the same reason
+    // Off does: it is offered at every roster size, and the role ladder is not.
+    html += `<button type="button" class="role-dot ${cur === GOALS_TRAINING ? 'active' : ''}" data-role="${GOALS_TRAINING}" ${dis}`
+         + ` title="Training — half of what a Lister 1 would be expected to list today"`
+         + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_TRAINING}')">TR</button>`;
     html += `<button type="button" class="role-dot role-off ${cur === GOALS_OFF ? 'active' : ''}" data-role="${GOALS_OFF}" ${dis}`
          + ` title="Off today — no goal, and they stop holding up the daily reminder"`
          + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_OFF}')">Off</button>`;
@@ -17870,7 +17961,11 @@ const ListingGoalsEngine = {
         if (!_isWorkingRole(r)) return 0;
         if (r === 'B1') return this.cfg.rate_buyer_1;
         if (r === 'B2') return this.cfg.rate_buyer_2;
-        return isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+        const lister = isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+        // Half of what THIS person would score as L1 — so a new hire in training
+        // is half of their ramp rate, never more than they would get listing.
+        if (r === GOALS_TRAINING) return lister / 2;
+        return lister;
     },
 
     // Saturday is shorter and the busiest buy day, so it produces about half a
@@ -18253,7 +18348,7 @@ function buildGoalsEditForm() {
                 <button class="toggle-btn ${!editingYesterday ? 'active' : ''}" onclick="toggleEditDate(false)">Today</button>
                 <button class="toggle-btn ${editingYesterday ? 'active' : ''}" onclick="toggleEditDate(true)">Yesterday</button>
             </div>
-            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically. Tap Off for anyone who isn't in today; the daily reminder clears once everyone has a role or an Off.">i</span>
+            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically. TR is Training: half of what a Lister 1 would be expected to list. Tap Off for anyone who isn't in today; the daily reminder clears once everyone has a role or an Off.">i</span>
         `;
     }
     
@@ -19584,7 +19679,7 @@ async function fetchAndRenderEmployeeGoals() {
             }
         });
 
-        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2', 'OFF': 'Off Today' };
+        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2', 'TR': 'Training', 'OFF': 'Off Today' };
         const displayRole = roleTranslations[todayRole] || todayRole;
 
         const roleDescriptions = {
@@ -19592,6 +19687,7 @@ async function fetchAndRenderEmployeeGoals() {
             'B2': 'You\'re the second buyer in rotation. Hang back and jump in the moment a second customer arrives.',
             'L1': 'Dedicated listing only — no buying, no shipping, no exceptions. Your entire focus today is getting items listed and nothing else.',
             'L2': 'You\'re a primary lister throughout the day, but also serve as the emergency buyer when 4 or more separate customers are in the store at once.',
+            'TR': 'You\'re in training today — your goal is half of what a Lister 1 would be expected to list. Focus on learning the process the right way; speed comes with practice.',
             'OFF': 'You\'re marked off today — no listing goal. Enjoy the day.'
         };
         const roleDesc = roleDescriptions[todayRole] || '';
@@ -39279,7 +39375,8 @@ window.toggleAuditPanel = function(event) {
 // on big rosters) aren't listed here — the `|| 1` lookup below caps them too.
 // OFF is the exception and must stay uncapped: any number of people can be off
 // on the same day, and a cap of 1 would lock the chip after the first one.
-const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity };
+// TR (Training) is uncapped for the same reason — two trainees can share a day.
+const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity, TR: Infinity };
 
 window.updateRoleLocks = function() {
     // Role capacity is per STORE. Normally the page shows one store's dots, so the
@@ -50120,7 +50217,7 @@ function renderDmListingModal() {
     }
 
     const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
-    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', OFF: 'Off' };
+    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', TR: 'Training', OFF: 'Off' };
     pane = '<div class="dmx-ph"><div>'
         + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
         + '<div class="dmx-ps">Goal ' + sel.target + ' listings · ceiling ' + (sel.capacity || '–')

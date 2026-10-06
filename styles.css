@@ -11868,6 +11868,11 @@ body.sam-active .hotbar-btn:hover {
 /* Cost is context for the two figures either side of it, not a headline — quieter
    so Net and Gross profit stay the numbers the eye lands on. */
 .lv-tbl .lv-quietnum { color: #94a3b8; }
+/* "Through Yesterday" under the Today tab's % to goal header (see _lvPaceThru).
+   Its own line, not beside the key: the column is ~100px at the 1080px floor and
+   every header is nowrap, so side by side it spilled into the next column. */
+.lv-thru { display: block; margin-top: 2px; font-size: 8px; font-weight: 700; letter-spacing: .04em; color: #94a3b8; }
+.lvc-goal-k .lv-thru { display: inline; margin: 0 0 0 5px; }
 /* Margin: charcoal and heavy like Net and GP, but left at the body size so the
    row still has a clear order of emphasis. */
 .lv-tbl .lv-boldnum { color: var(--slate-charcoal); font-weight: 850; }
