@@ -123,3 +123,15 @@ t('desktop: the Variance tab is visible too (sanity: the sweep really ran at des
     as('District Manager'); try { applyRoleBasedUI(); } catch (e) {}
     return document.getElementById('ws-tab-vreplies').style.display !== 'none' || 'vreplies hidden — sweep did not run as desktop';
 });
+// With no hash, Workspace opens on the first tab the person can see (desktop only).
+[['Manager', 'claims'], ['District Manager', 'claims'], ['Assistant Manager', 'brief']].forEach(function (r) {
+    t('desktop: no hash opens ' + r[0] + ' on ' + r[1], function () {
+        if (_isMobileLayout()) return 'run with -WindowSize 1440,1000';
+        as(r[0], r[0] === 'District Manager' ? 'ALL' : 'OVL');
+        try { applyRoleBasedUI(); } catch (e) {}
+        try { history.replaceState(null, '', location.pathname); } catch (e) {}
+        try { initWorkspace(); } catch (e) { /* loaders need the network */ }
+        return document.getElementById('ws-pane-' + r[1]).classList.contains('active')
+            || ('landed on ' + (document.querySelector('.ws-pane.active') || {}).id);
+    });
+});

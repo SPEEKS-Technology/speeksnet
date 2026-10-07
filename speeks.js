@@ -7622,7 +7622,11 @@ function initWorkspace() {
     const hash = (window.location.hash || '').replace('#', '');
     // 'mreplies' is deliberately NOT accepted — Margin Replies is parked, so a
     // #mreplies deep link falls through to the brief. Add it back with the tab.
-    let initial = ['brief', 'kpis', 'vreplies', 'aging', 'claims'].includes(hash) ? hash : 'brief';
+    // No (or an unknown) hash → the FIRST tab this person can see, not a fixed
+    // one (Ethan, 2026-10-06: "default the user to the first tab always"). That is
+    // Claims & Disputes for managers and the DM, Monthly Breakdown for an ASM —
+    // and whatever leads the strip if the order changes again.
+    let initial = ['brief', 'kpis', 'vreplies', 'aging', 'claims'].includes(hash) ? hash : '';
     // A tab can be hidden by its role gate or a Feature Access override
     // (applyRoleBasedUI already ran), so never land on one the user can't see —
     // fall back to the first visible tab.
@@ -7634,7 +7638,7 @@ function initWorkspace() {
             .find(b => b.style.display !== 'none' && !b.hidden);
         if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '').replace(/^claimsdm$/, 'claims');
     }
-    switchWorkspaceTab(initial);
+    switchWorkspaceTab(initial || 'brief'); // nothing visible (a phone): the old default
     applyKpiReminder();
 }
 
