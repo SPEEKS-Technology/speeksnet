@@ -7879,7 +7879,37 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .ws-panel-claims .ws-scroll { overflow: visible; flex: none; min-height: 0; }
 .ws-panel-claims .ws-head { position: sticky; top: 60px; z-index: 4; background: #fff; border-bottom: 1px solid #eef2f6; }
 .ws-panel-claims .manage-content { height: auto; overflow: visible; background: #f6f8fa; padding: 20px 22px; }
-.ws-panel-claims .manage-footer { background: #ffffff; border-top: 1px solid #eef1f5; padding: 14px 22px; }
+.ws-panel-claims .manage-footer { background: #ffffff; border-top: 1px solid #eef1f5; padding: 12px 18px; }
+/* Compact like the rest of the tool (Ethan, 2026-10-06: "make the claim filling
+   out page smaller to match the rest of the pages design"). The popups used the
+   site-wide form-input-lg / btn-primary sizing — 15px text, 12px padding, 24px
+   buttons — while every control the tool draws itself (the oversight filters,
+   the check-in buttons) is 12.5px / 8px. Scoped here so other forms keep theirs. */
+.ws-panel-claims .manage-content { padding: 16px 18px; }
+.ws-panel-claims .form-label-caps { font-size: 10.5px; letter-spacing: 0.04em; color: #64748b; margin-bottom: 0; }
+.ws-panel-claims .form-input-lg { padding: 8px 10px; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 12.5px; font-weight: 600; margin-top: 4px; background-color: #fff; }
+.ws-panel-claims .form-input-lg:disabled { background-color: #f1f5f9; color: #64748b; }
+.ws-panel-claims .btn-primary,
+.ws-panel-claims .btn-secondary { padding: 8px 14px; font-size: 12px; border-radius: 8px; letter-spacing: 0.3px; box-shadow: none; }
+.ws-panel-claims .btn-primary:hover { transform: none; box-shadow: none; }
+/* The form needs no more than this; at the panel's full width a SKU box ran 1,100px. */
+.ws-panel-claims #claims-panel-new { max-width: 720px; }
+.ws-panel-claims #claims-store-row .form-input-lg { max-width: 180px; }
+/* Its Cancel / Save sit under the form, not at the far right edge of the panel. */
+.ws-panel-claims #claimsFooter { justify-content: flex-start; }
+/* Text with no size of its own (the "Nothing needs attention" lines) took the
+   page body size, 15px, and read louder than anything around it. */
+.ws-panel-claims .manage-content { font-size: 13px; }
+/* The claim rows' status pills. The row writes an 11px pill inline on its
+   <select>, but the DROPDOWNS module draws a .dd-btn over every select and
+   copies its classes, not its inline style, so on screen it was the house 13px /
+   34px face. That is the same in the old popup, and the reason the rows'
+   Denied / Recovered boxes looked heavier than every other control. Rows only
+   (td), so the oversight view's filters keep their face. */
+.ws-panel-claims td .dd-host { display: inline-block; }
+.ws-panel-claims td .dd-btn { min-height: 0; padding: 5px 10px 5px 12px; gap: 6px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+.ws-panel-claims td .dd-chev { width: 12px; height: 12px; }
+.ws-panel-claims td button[onclick^="requestClaimDelete"] { width: 28px !important; height: 28px !important; }
 /* SPEEKS Connect gets the Aging treatment too: the listing table grows with the
    store and the shared pane height would put most of it behind an inner
    scrollbar, taking the SKU box out of reach the moment you scrolled to check a

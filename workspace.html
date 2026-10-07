@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261006e">
+  <link rel="stylesheet" href="styles.css?v=20261006g">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20261006f" defer></script>
+  <script src="speeks.js?v=20261006g" defer></script>
 </head>
 <body class="preload">
 
@@ -690,7 +690,7 @@
           </div>
           <div class="ws-scroll">
             <div id="claims-ws-store" style="display:none;">
-              <div style="padding: 14px 18px 20px;">
+              <div style="padding: 12px 18px 12px;">
                   <div class="notif-tabs claims-tabs">
                       <button id="claims-tab-view" class="tab-btn active" onclick="switchClaimsTab('view')">Claims</button>
                       <button id="claims-tab-mismatch" class="tab-btn" onclick="switchClaimsTab('mismatch')">Mismatches<span id="hold-mgr-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
@@ -702,11 +702,11 @@
 
               <div class="manage-content">
                   <div id="claims-panel-new" style="display:none;">
-                      <div id="claims-store-row" style="margin-bottom: 14px;">
+                      <div id="claims-store-row" style="margin-bottom: 10px;">
                           <label class="form-label-caps">Store</label>
                           <select id="claim-store" class="form-input-lg"></select>
                       </div>
-                      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;">
+                      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px 14px; margin-bottom:10px;">
                           <div>
                               <label class="form-label-caps">Case Number</label>
                               <input id="claim-case-number" class="form-input-lg" placeholder="e.g. SHPVS-040326141943">
@@ -739,15 +739,15 @@
                               </select>
                           </div>
                       </div>
-                      <div style="margin-bottom:14px;">
+                      <div style="margin-bottom:4px;">
                           <label class="form-label-caps">Detail (optional)</label>
                           <input id="claim-detail" class="form-input-lg" placeholder="Any extra detail about the case…">
                       </div>
                   </div>
 
                   <div id="claims-panel-view">
-                      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
-                          <div style="flex:1; min-width:150px;">
+                      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px;">
+                          <div style="flex:0 0 180px;">
                               <label class="form-label-caps">Status</label>
                               <select id="claims-status-filter" class="form-input-lg" onchange="renderClaimsTable()">
                                   <option value="">All statuses</option>
@@ -756,12 +756,12 @@
                                   <option value="denied">Denied</option>
                               </select>
                           </div>
-                          <div id="claims-view-filter-row" style="display:none; flex:1; min-width:150px;">
+                          <div id="claims-view-filter-row" style="display:none; flex:0 0 140px;">
                               <label class="form-label-caps">Store</label>
                               <select id="claims-view-filter" class="form-input-lg" onchange="renderClaimsTable()"></select>
                           </div>
                           <div style="margin-left:auto; display:flex; align-items:flex-end;">
-                              <button class="btn-primary" onclick="startNewClaim()" style="padding:11px 16px; font-size:13px; white-space:nowrap;">+ New Claim</button>
+                              <button class="btn-primary" onclick="startNewClaim()" style="white-space:nowrap;">+ New Claim</button>
                           </div>
                       </div>
                       <div id="claims-table-wrap"></div>
@@ -791,7 +791,7 @@
               </div>
             </div>
             <div id="claims-ws-ov" style="display:none;">
-              <div style="padding: 14px 18px 20px;">
+              <div style="padding: 12px 18px 12px;">
                   <div class="notif-tabs claims-tabs">
                       <button id="ov-tab-claims" class="tab-btn active" onclick="switchOversightTab('claims')">Claims</button>
                       <button id="ov-tab-mismatch" class="tab-btn" onclick="switchOversightTab('mismatch')">Mismatches<span id="hold-ov-badge-mismatch" style="display:none; margin-left:5px; min-width:16px; padding:1px 5px; border-radius:999px; background:var(--red-alert); color:#fff; font-size:10px; font-weight:900; line-height:14px; text-align:center;"></span></button>
