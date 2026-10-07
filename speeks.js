@@ -7551,6 +7551,9 @@ async function loadWorkspaceKpis() {
 }
 
 function switchWorkspaceTab(name) {
+    // Aging Inventory is PAUSED (see FEATURE_CATALOG) — a stale #aging link or
+    // bookmark lands on the brief instead of opening the hidden pane.
+    if (name === 'aging' && typeof _agEnabled === 'function' && !_agEnabled()) name = 'brief';
     document.querySelectorAll('.ws-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.ws-pane').forEach(p => p.classList.remove('active'));
     document.getElementById('ws-tab-' + name)?.classList.add('active');
@@ -42199,8 +42202,14 @@ const FEATURE_CATALOG = [
     // bring it back:
     // { key: 'widget-margin-replies', label: 'Margin Replies (Tab)', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     // { key: 'cap-bmargin-dm',        label: 'Margin Replies (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
-    { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    // Aging Inventory — PAUSED (2026-10-06) while Ethan decides whether to keep
+    // it. Same parking as Margin Replies: with no catalog entry the tab, Ctrl+K
+    // and the nav dot all resolve hidden, and _agEnabled() turns off the popups
+    // and login checks. The emails are paused separately in notify
+    // (PAUSED_FEATURES). Data is untouched. Restore these two lines, and drop
+    // the key from PAUSED_FEATURES, to bring it back:
+    // { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
+    // { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     { key: 'widget-ops-marginguide',   label: 'Margin Guide (Tab)',            tab: 'widgets', group: 'Operations', def: 'all' },
     // The editor behind the Margin Guide's "Edit" button. Listed so it can
     // be delegated or pulled back without a code change; mgCanEditLadder() gates it
@@ -45867,8 +45876,17 @@ function _agHasDmDelegation() {
     const name = sessionStorage.getItem('speeksUserName') || '';
     return _featureOverrideFor('cap-aging-dm', roleClass, name) === true;
 }
-function _agIsDM() { return _agRole() === 'district manager' || _agHasDmDelegation(); }
-function _agIsStoreUser() { return _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
+// PAUSED (2026-10-06) — see the FEATURE_CATALOG note. Hiding the tab isn't
+// enough: the login checks, the realtime re-checks and the purple bubble all
+// start from _agIsDM / _agIsStoreUser, so both answer false while it's parked.
+function _agEnabled() {
+    if (typeof _featureEffectiveVisible !== 'function') return false;
+    const roleClass = 'role-' + _agRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    return _featureEffectiveVisible('widget-aging-inventory', roleClass,
+        sessionStorage.getItem('speeksUserName') || '') === true;
+}
+function _agIsDM() { return _agEnabled() && (_agRole() === 'district manager' || _agHasDmDelegation()); }
+function _agIsStoreUser() { return _agEnabled() && _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
 
 // The store user's own store(s) — an MSM sees both, stacked in one list.
 function _agMyStores() {
@@ -45985,6 +46003,7 @@ function agCancelItemEdit() { _agEditItem = null; _agClearNeDrafts(); renderAgin
 async function loadAgingInventory() {
     const body = document.getElementById('ag-body');
     if (!body) return;
+    if (!_agEnabled()) { body.innerHTML = '<div class="status-message">Aging Inventory is paused.</div>'; return; }
     body.innerHTML = '<div class="status-message">Loading aging inventory…</div>';
     const stores = _agIsDM() ? ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'] : _agMyStores();
     if (!stores.length) {
@@ -46670,7 +46689,7 @@ function _agAckedSet(key) {
 }
 
 function _agDotNeeded() {
-    return _agMyItemsCache.some(_agAwaitingStore);
+    return _agEnabled() && _agMyItemsCache.some(_agAwaitingStore);
 }
 
 async function checkAgingInvReminders() {
