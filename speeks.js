@@ -7557,11 +7557,15 @@ function switchWorkspaceTab(name) {
     document.querySelectorAll('.ws-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.ws-pane').forEach(p => p.classList.remove('active'));
     document.getElementById('ws-tab-' + name)?.classList.add('active');
+    // Claims & Disputes has two buttons (store / DM) over one pane; which one is
+    // lit is decided with the view, in _claimsShowInPage.
     document.getElementById('ws-pane-' + name)?.classList.add('active');
     _wsFitPanels();                        // see the .ws-panel rule
     try { history.replaceState(null, '', 'workspace.html#' + name); } catch (e) {}
 
-    if (name === 'brief') {
+    if (name === 'claims') {
+        _claimsShowInPage();
+    } else if (name === 'brief') {
         if (!_wsBriefLoaded) { _wsBriefLoaded = true; if (typeof fetchMonthlyBrief === 'function') fetchMonthlyBrief(); }
     } else if (name === 'kpis') {
         // MSM only: a store-specific KPI feed card routes the pane to that store
@@ -7618,15 +7622,17 @@ function initWorkspace() {
     const hash = (window.location.hash || '').replace('#', '');
     // 'mreplies' is deliberately NOT accepted — Margin Replies is parked, so a
     // #mreplies deep link falls through to the brief. Add it back with the tab.
-    let initial = ['brief', 'kpis', 'vreplies', 'aging'].includes(hash) ? hash : 'brief';
+    let initial = ['brief', 'kpis', 'vreplies', 'aging', 'claims'].includes(hash) ? hash : 'brief';
     // A tab can be hidden by its role gate or a Feature Access override
     // (applyRoleBasedUI already ran), so never land on one the user can't see —
     // fall back to the first visible tab.
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
-    if (!tabVisible('ws-tab-' + initial)) {
+    // 'claims' is either of its two buttons (see workspace.html).
+    const shown = name => tabVisible('ws-tab-' + name) || (name === 'claims' && tabVisible('ws-tab-claimsdm'));
+    if (!shown(initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ws-tab-"]'))
             .find(b => b.style.display !== 'none' && !b.hidden);
-        if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '');
+        if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '').replace(/^claimsdm$/, 'claims');
     }
     switchWorkspaceTab(initial);
     applyKpiReminder();
@@ -35234,10 +35240,68 @@ function _claimStores() {
 const _CLAIMS_OVERSIGHT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
 const _claimsIsOversight = () =>
     _CLAIMS_OVERSIGHT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
-// tab: 'view' (the claims list) | 'mismatch' | 'returns' | 'cases'
+// A WORKSPACE TAB SINCE 2026-10-06, not a popup (Ethan: "moving it from a popup to
+// an entire page"). Both popups' bodies now live in workspace.html's
+// #ws-pane-claims under their old ids, so everything below runs unchanged; what
+// changed is only how the tool is OPENED. Every caller (the red claim bubble,
+// the notification feed, Ctrl+K's sub-entries) still calls openClaimsTool(tab):
+// on the Workspace page that switches to the tab, anywhere else it carries the
+// tab across in sessionStorage and goes there.
+//
+// tab: 'view' (the claims list) | 'mismatch' | 'returns' | 'cases' | 'payments'
+let _claimsPendingTab = null;
+// 'store' | 'ov' when a tab button chose the view; null = by role (_claimsIsOversight).
+let _claimsView = null;
+const _claimsOnPage = () => !!document.getElementById('ws-pane-claims');
 function openClaimsTool(tab) {
-    if (_claimsIsOversight()) { openClaimsOversight(); switchOversightTab(tab === 'view' ? 'claims' : tab); }
-    else { openClaimsModal(); switchClaimsTab(tab); }
+    tab = tab || 'view';
+    if (!_claimsOnPage()) {
+        try { sessionStorage.setItem('speeksClaimsTab', tab); } catch (e) { /* lands on the list */ }
+        window.location.href = 'workspace.html#claims';
+        return;
+    }
+    _claimsPendingTab = tab;
+    _claimsView = null;
+    switchWorkspaceTab('claims');
+}
+
+// The two tab buttons. Each opens its own view, so someone holding both keys
+// (a manager lent the DM version) can reach both — as with the two popups.
+function openClaimsView(view) {
+    _claimsView = view === 'ov' ? 'ov' : 'store';
+    switchWorkspaceTab('claims');
+}
+
+// What opening a popup used to do, run each time the tab is shown — so coming
+// back to the tab re-reads, the way re-opening the popup did. Same order as
+// before: the tool's own start-up (a blank form, the list, the badge load),
+// then the requested sub-tab.
+function _claimsShowInPage() {
+    let tab = _claimsPendingTab;
+    _claimsPendingTab = null;
+    if (!tab) {
+        try { tab = sessionStorage.getItem('speeksClaimsTab'); sessionStorage.removeItem('speeksClaimsTab'); }
+        catch (e) { tab = null; }
+    }
+    tab = tab || 'view';
+    const ov = _claimsView ? _claimsView === 'ov' : _claimsIsOversight();
+    document.getElementById('ws-tab-claims')?.classList.toggle('active', !ov);
+    document.getElementById('ws-tab-claimsdm')?.classList.toggle('active', ov);
+    const storeEl = document.getElementById('claims-ws-store');
+    const ovEl = document.getElementById('claims-ws-ov');
+    if (storeEl) storeEl.style.display = ov ? 'none' : '';
+    if (ovEl) ovEl.style.display = ov ? '' : 'none';
+    const sub = document.getElementById('claims-ws-sub');
+    if (sub) sub.textContent = ov
+        ? 'Claims, refund mismatches and eBay cases across every store.'
+        : 'Claims, refund mismatches and eBay cases — anywhere our money is held or not lining up.';
+    if (ov) {
+        openClaimsOversight();
+        if (tab !== 'view' && tab !== 'claims') switchOversightTab(tab);
+    } else {
+        openClaimsModal();
+        if (tab !== 'view') switchClaimsTab(tab);
+    }
 }
 
 // A blank form. Called both when the tool opens and every time New Claim is
@@ -35258,8 +35322,10 @@ function startNewClaim() {
     switchClaimsTab('new');
 }
 
+// The store tool's start-up. Named for the popup it used to open; off the
+// Workspace page it routes there instead (see openClaimsTool).
 function openClaimsModal() {
-    toggleModal('claimsModal');
+    if (!_claimsOnPage()) { openClaimsTool('view'); return; }
     _resetClaimForm();
     switchClaimsTab('view'); // the list first; New Claim is a button on it
     // In the background, so the Mismatches / eBay Cases badges show how many
@@ -35291,6 +35357,10 @@ function switchClaimsTab(tab) {
         const b = document.getElementById(id);
         if (b) b.style.display = tab === 'new' ? '' : 'none';
     });
+    // On the page the footer bar itself goes too: a popup's empty footer read as
+    // its bottom edge, a page's reads as a stray white strip.
+    const foot = document.getElementById('claimsFooter');
+    if (foot) foot.style.display = tab === 'new' ? '' : 'none';
     if (tab === 'view') fetchMyClaims();
     // openClaimsModal already started a load (for the tab badges); only fetch
     // again if that one has finished, and without re-asking eBay.
@@ -36852,8 +36922,9 @@ function _claimReminderLock(store) {
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
 }
 
+// The oversight view's start-up — same story as openClaimsModal.
 function openClaimsOversight() {
-    toggleModal('claimsOversightModal');
+    if (!_claimsOnPage()) { openClaimsTool('view'); return; }
     switchOversightTab('claims');
     fetchAllClaims();
     loadHoldItems('ov'); // badges for the Mismatches / eBay Cases tabs
@@ -42082,8 +42153,6 @@ const FEATURE_CATALOG = [
     // either way — STORE_BOARD_FEATURES does not list it.
     { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multi-store-manager', 'assistant-manager', 'employee', 'training'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
-    { key: 'tool-claims-store',        label: 'Claims & Disputes (Store)',     tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
-    { key: 'tool-claims-oversight',    label: 'Claims & Disputes (Oversight)', tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
@@ -42194,6 +42263,13 @@ const FEATURE_CATALOG = [
     { key: 'cap-kpi-dm',               label: 'Store KPIs · All Stores (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'mocd'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    // Claims & Disputes — a Workspace tab since 2026-10-06 (was two SPEEKS Tools
+    // popups). The KEYS are unchanged on purpose: feature_overrides rows, the
+    // claims emails' audience in notify and the Ctrl+K sub-entries all name them.
+    // Two keys because the tool has two views: the store's own (managers) and
+    // every store (DM/CEO); each gates its own tab button in workspace.html.
+    { key: 'tool-claims-store',        label: 'Claims & Disputes — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Claims & Disputes (DM)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo'] },
     // Margin Replies — PARKED (2026-07-29), UNFINISHED. Deliberately absent from
     // the catalog, not merely defaulted off: a catalog entry would let someone
     // switch a half-built tool on from Feature Access. With no entry,
@@ -42496,7 +42572,7 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
 const _SECTION_TABS = {
     // 'widget-margin-replies' is intentionally omitted — see the parked block in
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
-    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
+    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory', 'tool-claims-store', 'tool-claims-oversight'],
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
                         'tool-picture-manage', 'widget-ops-callbacks',
                         'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos',
@@ -43364,6 +43440,7 @@ const JUMP_PLACES = [
     { id: 'ws-brief',    label: 'Monthly Breakdown',  sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-monthly-breakdown', page: 'workspace.html',  hash: 'brief',     fn: 'switchWorkspaceTab' },
     { id: 'ws-kpis',     label: 'Store KPIs',         sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-weekly-kpis',       page: 'workspace.html',  hash: 'kpis',      fn: 'switchWorkspaceTab' },
     { id: 'ws-vrep',     label: 'Variance Replies',   sub: 'Workspace',  kind: 'tab', feature: 'widget-variance-replies',     page: 'workspace.html',  hash: 'vreplies',  fn: 'switchWorkspaceTab' },
+    { id: 'ws-claims',   label: 'Claims & Disputes',  sub: 'Workspace',  kind: 'tab', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'claim claims disputes insurance shopify usps ups damaged lost refund mismatch returns cases chargeback payments', page: 'workspace.html', hash: 'claims', fn: 'switchWorkspaceTab' },
     // Margin Replies is parked (see FEATURE_CATALOG) — restore with its catalog entry:
     // { id: 'ws-mrep',  label: 'Margin Replies',     sub: 'Workspace',  kind: 'tab', feature: 'widget-margin-replies',       page: 'workspace.html',  hash: 'mreplies',  fn: 'switchWorkspaceTab' },
     { id: 'ws-aging',    label: 'Aging Inventory',    sub: 'Workspace',  kind: 'tab', feature: 'widget-aging-inventory',      page: 'workspace.html',  hash: 'aging',     fn: 'switchWorkspaceTab' },

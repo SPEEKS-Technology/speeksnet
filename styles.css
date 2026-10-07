@@ -7869,6 +7869,17 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    under the fixed .top-nav at 60px. */
 .ws-panel-vreplies { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
 .ws-panel-vreplies .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+/* Claims & Disputes (a Workspace tab since 2026-10-06, was two popups): the Aging
+   treatment, so a long list of claims or cases grows the page instead of hiding
+   behind an inner scrollbar. Its body is the popups' markup unchanged, which
+   brings .manage-content's popup sizing with it (a flat 60vh and its own
+   scroller) — undone here, and the modal-scoped grey body and footer re-applied
+   since .modal-menu.manage-menu no longer wraps them. */
+.ws-panel-claims { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.ws-panel-claims .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+.ws-panel-claims .ws-head { position: sticky; top: 60px; z-index: 4; background: #fff; border-bottom: 1px solid #eef2f6; }
+.ws-panel-claims .manage-content { height: auto; overflow: visible; background: #f6f8fa; padding: 20px 22px; }
+.ws-panel-claims .manage-footer { background: #ffffff; border-top: 1px solid #eef1f5; padding: 14px 22px; }
 /* SPEEKS Connect gets the Aging treatment too: the listing table grows with the
    store and the shared pane height would put most of it behind an inner
    scrollbar, taking the SKU box out of reach the moment you scrolled to check a
