@@ -7892,8 +7892,9 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .ws-panel-claims .btn-primary,
 .ws-panel-claims .btn-secondary { padding: 8px 14px; font-size: 12px; border-radius: 8px; letter-spacing: 0.3px; box-shadow: none; }
 .ws-panel-claims .btn-primary:hover { transform: none; box-shadow: none; }
-/* The form needs no more than this; at the panel's full width a SKU box ran 1,100px. */
-.ws-panel-claims #claims-panel-new { max-width: 720px; }
+/* Wide enough to type in comfortably, short of the panel's full width, where a
+   SKU box ran 1,100px (Ethan wanted it between the two). */
+.ws-panel-claims #claims-panel-new { max-width: 960px; }
 .ws-panel-claims #claims-store-row .form-input-lg { max-width: 180px; }
 /* Its Cancel / Save sit under the form, not at the far right edge of the panel. */
 .ws-panel-claims #claimsFooter { justify-content: flex-start; }
