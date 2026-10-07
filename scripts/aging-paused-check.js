@@ -26,22 +26,18 @@ t('Ctrl+K has no visible aging entry', function () {
     return !_featureEffectiveVisible('widget-aging-inventory', 'role-district-manager', 'Ethan Kushnir') || 'still visible';
 });
 
-// Needs the real page: run with -Html workspace.html. Without it these skip.
-['District Manager', 'Manager', 'Assistant Manager', 'CEO'].forEach(function (role) {
-    t('workspace tab hidden for ' + role, function () {
-        var tab = document.getElementById('ws-tab-aging');
-        if (!tab) return true; // no page inlined
-        sessionStorage.setItem('speeksUserRole', role);
-        sessionStorage.setItem('speeksUserName', 'Ethan Kushnir');
-        sessionStorage.setItem('speeksUserStore', 'ALL');
-        try { applyRoleBasedUI(); } catch (e) { /* the sweep runs before anything that needs the network */ }
-        return tab.style.display === 'none' || ('visible: display=' + tab.style.display);
-    });
+// Needs the real page: run with -Html workspace.html.
+// The tab must be ABSENT from the markup. An earlier version checked its
+// display after applyRoleBasedUI and passed falsely: the headless window counts
+// as a phone, where data-mobile="hide" hides it anyway, while a desktop DM still
+// saw it — the sweep reads role classes, never FEATURE_CATALOG.
+t('workspace.html has no aging tab button', function () {
+    if (!document.getElementById('ws-pane-aging')) return 'run with -Html workspace.html';
+    return !document.getElementById('ws-tab-aging') || 'ws-tab-aging is still in the markup';
 });
 t('#aging deep link opens the brief', function () {
-    if (!document.getElementById('ws-tab-aging')) return true;
     sessionStorage.setItem('speeksUserRole', 'District Manager');
     try { switchWorkspaceTab('aging'); } catch (e) { /* loaders may fail offline */ }
     var pane = document.getElementById('ws-pane-aging');
-    return !pane.classList.contains('active') || 'aging pane opened';
+    return (pane && !pane.classList.contains('active')) || 'aging pane opened';
 });

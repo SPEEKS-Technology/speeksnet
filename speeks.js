@@ -42203,9 +42203,11 @@ const FEATURE_CATALOG = [
     // { key: 'widget-margin-replies', label: 'Margin Replies (Tab)', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     // { key: 'cap-bmargin-dm',        label: 'Margin Replies (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     // Aging Inventory — PAUSED (2026-10-06) while Ethan decides whether to keep
-    // it. Same parking as Margin Replies: with no catalog entry the tab, Ctrl+K
-    // and the nav dot all resolve hidden, and _agEnabled() turns off the popups
-    // and login checks. The emails are paused separately in notify
+    // it. Same parking as Margin Replies: with no catalog entry Ctrl+K, Feature
+    // Access and the nav dot resolve hidden, and _agEnabled() turns off the popups
+    // and login checks. ⚠️ The TAB is hidden by commenting its button out of
+    // workspace.html — applyRoleBasedUI never reads this catalog, so dropping
+    // the entry alone left the tab showing for every role. The emails are paused separately in notify
     // (PAUSED_FEATURES). Data is untouched. Restore these two lines, and drop
     // the key from PAUSED_FEATURES, to bring it back:
     // { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },

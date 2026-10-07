@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20261006b" defer></script>
+  <script src="speeks.js?v=20261006c" defer></script>
 </head>
 <body class="preload">
 
@@ -644,7 +644,15 @@
              initWorkspace hash list in speeks.js.
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager" data-mobile="hide" data-feature="widget-margin-replies" id="ws-tab-mreplies" onclick="switchWorkspaceTab('mreplies')"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Margin Replies</button>
         -->
+        <!-- Aging Inventory: PAUSED (2026-10-06) while Ethan decides whether to keep it.
+             Commented out like Margin Replies above, and for the same reason: applyRoleBasedUI
+             shows a role-gated button from its role classes alone and never reads
+             FEATURE_CATALOG, so removing the catalog entry did NOT hide it. The pane below is
+             left intact but unreachable (switchWorkspaceTab sends 'aging' to the brief while
+             _agEnabled() is false). To bring it back, restore this button plus the two
+             commented FEATURE_CATALOG lines in speeks.js and empty PAUSED_FEATURES in notify.
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager" data-mobile="hide" data-feature="widget-aging-inventory" id="ws-tab-aging" onclick="switchWorkspaceTab('aging')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Aging Inventory</button>
+        -->
       </div>
 
       <div class="ws-panes">
