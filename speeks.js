@@ -33698,7 +33698,8 @@ const SCORECARD_BUCKETS = [
 
 // ============================================================================
 // PayMore practice Audit — exact transcription of Audit Playbook v3 (165 pts,
-// 94 items, 8 sections). Binary scoring: checked = full points, else 0.
+// 94 items, 8 sections; wording per PayMore's 7/22/26 checklist revision, 0140).
+// Binary scoring: checked = full points, else 0.
 // Pass = 80%, target = 90%+. Shared shape with the scorecard edge fn, which
 // re-derives earned/possible from the same point values (server-authoritative).
 // ============================================================================
@@ -33707,8 +33708,8 @@ const AUDIT_PASS_PCT = 80;
 const AUDIT_DEFINITION = [
     { key: "exterior", title: "Exterior", items: [
         { id: "ex1", pts: 1, text: "Sidewalks and entryways free of litter, debris, and obstructions" },
-        { id: "ex2", pts: 1, text: "Exterior and road signage clean, lit (if applicable), free of damage or fading" },
-        { id: "ex3", pts: 1, text: "Building exterior clean, well-maintained (windows, paint, no handmade signs on doors). Window decals and signage appropriate. Door hours match website" },
+        { id: "ex2", pts: 1, text: "Exterior & road signage clean, lit (if applicable), no damage/fading; banners within brand standard, hung straight, not ripped/torn; hours sign not handwritten" },
+        { id: "ex3", pts: 1, text: "Building exterior clean & well-maintained (windows, paint, no handmade signs); approved window decals only; door hours match website" },
     ]},
     { key: "entry", title: "Entry & Sales Floor", items: [
         { id: "ef1", pts: 1, text: "Floors swept/mopped; entry mats clean" },
@@ -33716,13 +33717,13 @@ const AUDIT_DEFINITION = [
         { id: "ef3", pts: 1, text: "Video games displayed on shelves and organized" },
         { id: "ef4", pts: 1, text: "Store lighting fully functional throughout (no burned out bulbs, adequate brightness and clean)" },
         { id: "ef5", pts: 1, text: "Walls, vents, and high surfaces free of dust and cobwebs" },
-        { id: "ef6", pts: 2, text: "Ceiling tiles in place and in good shape; less than 10% of tiles with no water damage" },
+        { id: "ef6", pts: 2, text: "Ceiling tiles in place & good shape; <10% affected; no water damage" },
         { id: "ef7", pts: 1, text: "Window ledges and sills clean; free of merchandise or debris" },
         { id: "ef8", pts: 1, text: "No recycling items in customer view" },
         { id: "ef9", pts: 1, text: "All customers greeted within 10 seconds of entering the store" },
         { id: "ef10", pts: 2, text: "Team acknowledges entering customers even while helping others" },
         { id: "ef11", pts: 1, text: "Customers asked for Google review at end of transaction" },
-        { id: "ef12", pts: 1, text: "No QR codes or signage for Google review signage in transaction area" },
+        { id: "ef12", pts: 1, text: "No QR codes / Google review signage in transaction area" },
         { id: "ef13", pts: 1, text: "Music playing from RockBot system and volume is appropriate" },
         { id: "ef14", pts: 3, text: "Retail Browsing iPads on and locked to store website" },
     ]},
@@ -33748,7 +33749,7 @@ const AUDIT_DEFINITION = [
         { id: "rc5", pts: 1, text: "No team member food or drink in customer view" },
         { id: "rc6", pts: 1, text: "PayMore branded retail bags stocked" },
         { id: "rc7", pts: 2, text: "All computers do not have any personal accounts open" },
-        { id: "rc8", pts: 1, text: "PayMore branded signage at counter; Freedom to Trade In trifold nearby; promo materials in plexi frames (not taped)" },
+        { id: "rc8", pts: 1, text: "PayMore signage at counter; Freedom to Trade In trifold nearby; promos in plexi frames (not taped); posters in frames not wrinkled or faded" },
     ]},
     { key: "buy", title: "Buy Transaction Area", items: [
         { id: "bt1", pts: 3, text: "Counter neatly arranged; no unbranded signage; testing equipment out of view (cables, gaming controllers, flashlights, etc); printer under cabinet" },
@@ -33760,7 +33761,7 @@ const AUDIT_DEFINITION = [
         { id: "bt7", pts: 2, text: "PayMore Seller Book under the counter" },
         { id: "bt8", pts: 3, text: "Last 10 transactions: at least one signature on each page half on/off sticker" },
         { id: "bt9", pts: 7, text: "Green bin (<$100), Red bin (>$100), Blue bin (video games) — labeled (not handwritten), out of view; items bubble-wrapped with purchase order receipt" },
-        { id: "bt10", pts: 3, text: "Larger items in white boxes: purchase order attached, bubble-wrapped, on shelving or neatly stacked on back counter (must be in boxes)" },
+        { id: "bt10", pts: 3, text: "Larger items in white boxes: PO attached, bubble-wrapped, on shelving or neatly stacked (must be boxed)" },
         { id: "bt11", pts: 3, text: "All intake merchandise logged immediately; no untagged or unlogged items" },
         { id: "bt12", pts: 4, text: "Cash drawer locked; keys out of customer reach" },
     ]},
@@ -33774,18 +33775,18 @@ const AUDIT_DEFINITION = [
         { id: "bh7", pts: 1, text: "All items tagged with purchase order and visible" },
         { id: "bh8", pts: 1, text: "Location on purchase order receipt matches shelf location" },
         { id: "bh9", pts: 2, text: "Shelves are organized and neat; all large items in boxes" },
-        { id: "bh10", pts: 1, text: "Items in holding bins have the Shopify barcode" },
+        { id: "bh10", pts: 1, text: "Holding bins have Shopify barcode" },
         { id: "bh11", pts: 2, text: "Ready-to-purchase shelves labeled (1, 2, 3, etc.). Not handwritten" },
-        { id: "bh12", pts: 2, text: "Black bins present, labeled correctly (E1, E2, etc.); items bubble-wrapped, not handwritten" },
+        { id: "bh12", pts: 2, text: "Black bins present, labeled E1/E2 etc. (not handwritten); items bubble-wrapped" },
         { id: "bh13", pts: 1, text: "Boxes on ready-to-purchase shelves have Shopify barcode displayed" },
         { id: "bh14", pts: 3, text: "Ready-to-purchase shelves organized and neat; all large items in boxes; items tagged" },
         { id: "bh15", pts: 1, text: "Listing Station: barcode label printer present" },
-        { id: "bh16", pts: 3, text: "Listing Station: Lenovo computer present, clean and organized" },
+        { id: "bh16", pts: 3, text: "Listing Station: Lenovo computer present, clean and organized; cords not loose, proper cable management" },
         { id: "bh17", pts: 3, text: "Testing Area: device cleaning material, external monitor, charging cables neat" },
         { id: "bh18", pts: 1, text: "Testing Area: troubleshooting accessories present (controllers, Spec-Finder, flash drives)" },
         { id: "bh19", pts: 2, text: "Testing Area: clean and organized" },
-        { id: "bh20", pts: 2, text: "Shipping Area: bubble wrap/peanuts; unused boxes neatly stacked by size" },
-        { id: "bh21", pts: 5, text: "Shipping Area: Lenovo computer, shipping label printer, scale, box re-adjusting tool, scanner present" },
+        { id: "bh20", pts: 2, text: "Shipping Area: bubble wrap / anti-static biodegradable peanuts (NOT white/pink polystyrene); unused boxes stacked by size" },
+        { id: "bh21", pts: 5, text: "Shipping Area: Lenovo computer, label printer, scale, scanner all present (box re-adjusting tool optional)" },
         { id: "bh22", pts: 2, text: "Shipping Area: clean and organized" },
         { id: "bh23", pts: 4, text: "Photography Area: photo box or well-lit table with clean white butcher paper on a roll" },
         { id: "bh24", pts: 1, text: "Adequate lighting throughout all back-of-house areas" },
@@ -33798,12 +33799,12 @@ const AUDIT_DEFINITION = [
         { id: "pa3", pts: 1, text: "Optional PayMore branded hat worn forward, or backwards during a transaction" },
         { id: "pa4", pts: 1, text: "Closed-toed shoes worn" },
         { id: "pa5", pts: 1, text: "No headphones or earbuds (unless testing a device)" },
-        { id: "pa6", pts: 1, text: "Team members conducting themselves professionally" },
+        { id: "pa6", pts: 1, text: "Team conducting themselves professionally at all times" },
     ]},
     { key: "safety", title: "Safety & Security", items: [
         { id: "ss1", pts: 3, text: "Fire extinguishers tagged, charged, and hung 3.5–5 feet above the floor" },
         { id: "ss2", pts: 2, text: "First aid kit stocked according to OSHA requirements" },
-        { id: "ss3", pts: 2, text: "Back door locked from outside, openable from inside without keys or bolts; no obstructions" },
+        { id: "ss3", pts: 2, text: "Back door locked from outside, opens from inside without keys/tools; no obstructions" },
         { id: "ss4", pts: 4, text: "Safe is locked; cash/bank deposits not sitting out" },
         { id: "ss5", pts: 5, text: "Store fully open and purchasing during all posted business hours" },
         { id: "ss6", pts: 2, text: "Labor law / workplace compliance poster displayed on the wall" },
