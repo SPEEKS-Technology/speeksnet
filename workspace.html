@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261006h">
+  <link rel="stylesheet" href="styles.css?v=20261006i">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -751,7 +751,7 @@
                            and "All statuses" / "All stores" say what they are without a label. -->
                       <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
                           <div>
-                              <select id="claims-status-filter" onchange="renderClaimsTable()">
+                              <select id="claims-status-filter" onchange="renderClaimsTable()" style="min-width:222px;">
                                   <option value="">All statuses</option>
                                   <option value="in_progress">In Progress</option>
                                   <option value="recovered">Recovered</option>
@@ -759,7 +759,7 @@
                               </select>
                           </div>
                           <div id="claims-view-filter-row" style="display:none;">
-                              <select id="claims-view-filter" onchange="renderClaimsTable()"></select>
+                              <select id="claims-view-filter" onchange="renderClaimsTable()" style="min-width:222px;"></select>
                           </div>
                           <div style="margin-left:auto; display:flex; align-items:center;">
                               <button class="btn-primary" onclick="startNewClaim()" style="white-space:nowrap;">+ New Claim</button>
