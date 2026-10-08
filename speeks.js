@@ -31449,7 +31449,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -36812,6 +36812,9 @@ async function _holdAfterWrite(ctx) {
     _holdOpenForm[ctx] = null;
     await _holdFetch(ctx, _holdStores(ctx));
     renderHoldItems(ctx);
+    // A resolution may be what clears the 4pm feed card — don't make the person
+    // who just pressed it wait for the broadcast to come back round.
+    if (typeof checkClaimsDueAlerts === 'function') checkClaimsDueAlerts();
 }
 
 async function _holdSave(ctx, idx, status) {
@@ -37678,6 +37681,80 @@ async function checkAgingClaimsDM() {
     } catch (e) {
         console.error('DM aging claim check failed:', e);
     }
+}
+
+// --- THE 4PM "DUE TODAY" ALERT, AS A FEED CARD -------------------------------
+// Ethan, 2026-10-08: "add a feed notification for the claims and disputes tool
+// only for that 4:00pm due today reminder ... they can't snooze it and it doesn't
+// go away until they mark the line item as resolved in the tool". The email is
+// unchanged; this is the same alert, kept on screen.
+//
+// Nothing here decides what is due. claims-disputes returns `dueAlerts`: the
+// items the 4pm mail (claims-disputes-email, manager_nudge) actually went out
+// about, minus the ones the tool now calls finished — resolved, settled,
+// answered on the site, or covered by a claim. See DUE_ALERT_DONE there for why
+// it is those four. So the card appears when the mail does (the email function
+// broadcasts as it logs) and stays, day after day, until each line is dealt
+// with. Not snoozeable (noSnooze), and Mark-all-read passes over it.
+//
+// STORE MANAGERS ONLY: whoever has the store tool, for their own store(s). Not
+// the DM (Ethan, 2026-10-08: "the DM does not need this for now as I use those
+// emails to reach out to them every day"), nor the CEO or MOCD.
+//
+// "Resolved" is either side: the site settling it / showing our reply, or the
+// manager marking it resolved — see DUE_ALERT_DONE in claims-disputes.
+let _claimsDuePollStarted = false;
+function _claimsDueBubbleEl() {
+    let b = document.getElementById('claimsDueAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'claimsDueAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #dc2626, #7f1d1d); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(127, 29, 29, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = '<span style="font-size:16px; flex-shrink:0; margin-top:2px;">⏰</span>'
+        + '<span id="claimsDueAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _claimsDueScope() {
+    if (_claimsIsOversight()) return [];
+    if (!_jumpFeatureVisible('tool-claims-store')) return [];
+    return _claimStores();
+}
+async function checkClaimsDueAlerts() {
+    const stores = _claimsDueScope();
+    const hide = () => { const b = document.getElementById('claimsDueAlertBubble'); if (b) b.style.display = 'none'; };
+    if (!stores.length) { hide(); return; }
+    if (!_claimsDuePollStarted) { _claimsDuePollStarted = true; setInterval(checkClaimsDueAlerts, 30 * 60 * 1000); }
+    try {
+        const res = await fetch(`${CLAIMS_DISPUTES_URL}?action=alerts&stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const j = await res.json();
+        if (!j || !j.success) return;           // a failed read leaves the card as it was
+        const items = j.dueAlerts || [];
+        if (!items.length) { hide(); return; }
+        const b = _claimsDueBubbleEl();
+        const t = document.getElementById('claimsDueAlertBubbleText');
+        if (!b || !t) return;
+        const today = j.today || '';
+        const multi = stores.length > 1;
+        const line = it => {
+            const what = _holdKindChip(it.type, it) || (it.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
+            const amt = Number(it.amount) > 0 ? ' $' + Number(it.amount).toFixed(2) : '';
+            const when = it.overdue ? 'overdue' : it.due === today ? 'due today' : it.due ? 'due tomorrow' : '';
+            return (multi ? it.store_code + ': ' : '') + what + amt + (it.order ? ' (' + it.order + ')' : '') + (when ? ' — ' + when : '');
+        };
+        const overdue = items.some(it => it.overdue);
+        const summary = (items.length > 1 ? 'Resolve ' + items.length + ': ' : '') + items.map(line).join(' · ');
+        t.dataset.summary = summary;
+        t.dataset.overdue = overdue ? '1' : '';
+        // The tab the first (most urgent) item lives on.
+        const first = items[0].type;
+        t.dataset.tab = first === 'payment' ? 'payments' : first === 'mismatch' ? 'mismatch' : 'cases';
+        t.dataset.stores = [...new Set(items.map(it => it.store_code))].join(',');
+        t.textContent = summary;
+        b.style.display = 'flex';
+    } catch (_) { /* next poll or ping retries */ }
 }
 
 // Keep the claim alert stacked UNDER the green store-comment bubble whenever that
@@ -48333,7 +48410,9 @@ function samMarkAllRead() {
     // about, which is exactly the failure the two separate controls avoid.
     const map = _samGetHidden();
     const until = Date.now() + 20 * 3600000;
-    _samGatherReminders().forEach(r => { map[r.key] = { sig: r.sig, until }; });
+    // Not the noSnooze cards: they have no Snooze of their own, so a bulk one
+    // must not supply it (see _samGatherReminders).
+    _samGatherReminders().forEach(r => { if (!r.noSnooze) map[r.key] = { sig: r.sig, until }; });
     _samSetHidden(map);
     if (typeof updateMainBadge === 'function') updateMainBadge();
     renderActionFeed();
@@ -48525,6 +48604,12 @@ function _samReminderCfg() {
     // checkAgingClaimsDM, so it is never set for a manager.
     const _clT = document.getElementById('claimAlertBubbleText');
     const _clDel = (_clT && _clT.dataset && _clT.dataset.del) || '';
+    // The 4pm due-today card: stamped by checkClaimsDueAlerts off the same items
+    // as its summary. The tab is one of a fixed four, never free text.
+    const _cdT = document.getElementById('claimsDueAlertBubbleText');
+    const _cdOver = !!(_cdT && _cdT.dataset && _cdT.dataset.overdue);
+    const _cdTab = ['cases', 'payments', 'mismatch'].includes(_cdT && _cdT.dataset && _cdT.dataset.tab)
+        ? _cdT.dataset.tab : 'cases';
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
           title: _vrFyi ? 'Variance Report to Review'
@@ -48544,6 +48629,15 @@ function _samReminderCfg() {
           title: _clDel === 'only' ? 'Claim Delete Requests' : 'Claims & Disputes',
           urgency: 2, due: _clDel ? 'Approve' : 'Open', cls: 'sam-due-red',
           action: "openClaimsTool('view')" },
+        // The 4pm "due today" mail, kept on screen (checkClaimsDueAlerts). No
+        // Snooze, and Mark-all-read skips it: it leaves when each line is
+        // resolved in the tool, and only then. Overdue once a deadline on it
+        // has passed — it stays after that too, until somebody records what
+        // happened.
+        { key: 'claimsDue', id: 'claimsDueAlertBubble', text: 'claimsDueAlertBubbleText',
+          title: _cdOver ? 'Claims & Disputes Overdue' : 'Claims & Disputes Due Today',
+          urgency: 3, due: _cdOver ? 'Overdue' : 'Due Today', cls: 'sam-due-red', noSnooze: true,
+          action: `openClaimsTool('${_cdTab}')` },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
         // month across, so a card about a July request doesn't open on August.
         // data-replyonly: no line is actually awaiting a verdict, a manager just
@@ -48884,7 +48978,12 @@ function _samGatherReminders() {
         // a new sender — counts as new information and breaks through the snooze
         // rather than staying buried until tomorrow.
         const sig = (t && t.dataset && t.dataset.sig) ? t.dataset.sig : sub;
-        if (_samIsHidden(c.key, sig)) return;
+        // A noSnooze card has no Snooze button, but Mark-all-read used to snooze
+        // it anyway (it writes every card on screen into the same map), which
+        // hid the KPI and Listing Goals deadlines for 20 hours with one click.
+        // So the map is not consulted for them at all — including any entry
+        // written before this was fixed.
+        if (!c.noSnooze && _samIsHidden(c.key, sig)) return;
         // For an MSM: if this alert covers exactly ONE store (the bubble stamps the
         // covered stores on data-stores), clicking it opens that store's tool even
         // while he's on the other store's dashboard — without switching dashboards.
@@ -48950,7 +49049,7 @@ window._rtDebug = () => ({ started: _rtStarted, clientLoaded: !!_rtClient, statu
 // on a given page — missing/failing ones are skipped.
 const _RT_TOOL_CHECKS = {
     aging:         ['checkAgingInvReminders', 'checkAgingInvDmReminders', '_agRefreshStorePopup'],
-    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM'],
+    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts'],
     recycle:       ['checkRecycleReminders'],
     variance:      ['checkVarianceReminders', 'checkVarianceDmReminders'],
     bmargin:       ['checkMarginReminders', 'checkMarginDmReminders'],
