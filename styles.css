@@ -7869,6 +7869,48 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    under the fixed .top-nav at 60px. */
 .ws-panel-vreplies { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
 .ws-panel-vreplies .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+/* Claims & Disputes (a Workspace tab since 2026-10-06, was two popups): the Aging
+   treatment, so a long list of claims or cases grows the page instead of hiding
+   behind an inner scrollbar. Its body is the popups' markup unchanged, which
+   brings .manage-content's popup sizing with it (a flat 60vh and its own
+   scroller) — undone here, and the modal-scoped grey body and footer re-applied
+   since .modal-menu.manage-menu no longer wraps them. */
+.ws-panel-claims { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.ws-panel-claims .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+.ws-panel-claims .ws-head { position: sticky; top: 60px; z-index: 4; background: #fff; border-bottom: 1px solid #eef2f6; }
+.ws-panel-claims .manage-content { height: auto; overflow: visible; background: #f6f8fa; padding: 20px 22px; }
+.ws-panel-claims .manage-footer { background: #ffffff; border-top: 1px solid #eef1f5; padding: 12px 18px; }
+/* Compact like the rest of the tool (Ethan, 2026-10-06: "make the claim filling
+   out page smaller to match the rest of the pages design"). The popups used the
+   site-wide form-input-lg / btn-primary sizing — 15px text, 12px padding, 24px
+   buttons — while every control the tool draws itself (the oversight filters,
+   the check-in buttons) is 12.5px / 8px. Scoped here so other forms keep theirs. */
+.ws-panel-claims .manage-content { padding: 16px 18px; }
+.ws-panel-claims .form-label-caps { font-size: 10.5px; letter-spacing: 0.04em; color: #64748b; margin-bottom: 0; }
+.ws-panel-claims .form-input-lg { padding: 8px 10px; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 12.5px; font-weight: 600; margin-top: 4px; background-color: #fff; }
+.ws-panel-claims .form-input-lg:disabled { background-color: #f1f5f9; color: #64748b; }
+.ws-panel-claims .btn-primary,
+.ws-panel-claims .btn-secondary { padding: 8px 14px; font-size: 12px; border-radius: 8px; letter-spacing: 0.3px; box-shadow: none; }
+.ws-panel-claims .btn-primary:hover { transform: none; box-shadow: none; }
+/* The form fields span the panel (Ethan: "stretch the whole box like before");
+   only their height and look are compact. The Store box is the exception: it
+   only ever holds a store code. */
+.ws-panel-claims #claims-store-row .form-input-lg { max-width: 180px; }
+/* Its Cancel / Save sit under the form, not at the far right edge of the panel. */
+.ws-panel-claims #claimsFooter { justify-content: flex-start; }
+/* Text with no size of its own (the "Nothing needs attention" lines) took the
+   page body size, 15px, and read louder than anything around it. */
+.ws-panel-claims .manage-content { font-size: 13px; }
+/* The claim rows' status pills. The row writes an 11px pill inline on its
+   <select>, but the DROPDOWNS module draws a .dd-btn over every select and
+   copies its classes, not its inline style, so on screen it was the house 13px /
+   34px face. That is the same in the old popup, and the reason the rows'
+   Denied / Recovered boxes looked heavier than every other control. Rows only
+   (td), so the oversight view's filters keep their face. */
+.ws-panel-claims td .dd-host { display: inline-block; }
+.ws-panel-claims td .dd-btn { min-height: 0; padding: 5px 10px 5px 12px; gap: 6px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+.ws-panel-claims td .dd-chev { width: 12px; height: 12px; }
+.ws-panel-claims td button[onclick^="requestClaimDelete"] { width: 28px !important; height: 28px !important; }
 /* SPEEKS Connect gets the Aging treatment too: the listing table grows with the
    store and the shared pane height would put most of it behind an inner
    scrollbar, taking the SKU box out of reach the moment you scrolled to check a
@@ -11868,6 +11910,11 @@ body.sam-active .hotbar-btn:hover {
 /* Cost is context for the two figures either side of it, not a headline — quieter
    so Net and Gross profit stay the numbers the eye lands on. */
 .lv-tbl .lv-quietnum { color: #94a3b8; }
+/* "Through Yesterday" under the Today tab's % to goal header (see _lvPaceThru).
+   Its own line, not beside the key: the column is ~100px at the 1080px floor and
+   every header is nowrap, so side by side it spilled into the next column. */
+.lv-thru { display: block; margin-top: 2px; font-size: 8px; font-weight: 700; letter-spacing: .04em; color: #94a3b8; }
+.lvc-goal-k .lv-thru { display: inline; margin: 0 0 0 5px; }
 /* Margin: charcoal and heavy like Net and GP, but left at the body size so the
    row still has a clear order of emphasis. */
 .lv-tbl .lv-boldnum { color: var(--slate-charcoal); font-weight: 850; }
@@ -19628,6 +19675,71 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .pq-row .lt-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; justify-items: center; }
 .pq-row .rc-links { display: flex; gap: 6px; }
 .pq-row .rc-links .ec-pill { flex: 1 1 0; justify-content: center; }
+/* Who listed it: its own line, centred under the two links. */
+.pq-lister { display: flex; justify-content: center; }
+
+/* TRAIN THE CHECKER (2026-10-08) — one photo beside the guide's example of the
+   same shot, and a row of answers. The photo is shown WHOLE inside a square
+   frame with a visible edge: the question is where the item sits in the frame,
+   so the frame's edge has to be on screen, never cropped by object-fit: cover. */
+.pqt-entry {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--cb-line, #e3e8ee);
+    font-size: 12px; color: var(--cb-muted, #647082);
+}
+.pqt-overlay {
+    position: fixed; inset: 0; z-index: 10050; background: rgba(15, 23, 42, .55);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.pqt-box {
+    background: #fff; border-radius: 14px; width: min(1100px, 100%); max-height: 100%;
+    overflow: auto; padding: 18px 20px; box-shadow: 0 20px 50px rgba(15, 23, 42, .3);
+}
+.pqt-head { display: flex; align-items: flex-start; gap: 12px; }
+.pqt-head > div:first-child { flex: 1 1 auto; }
+.pqt-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--cb-faint, #8a94a3); }
+.pqt-title { font-size: 18px; font-weight: 800; color: #1e293b; }
+.pqt-count { font-size: 12px; font-weight: 700; color: var(--cb-muted, #647082); padding-top: 6px; white-space: nowrap; }
+.pqt-x {
+    border: 0; background: none; font-size: 26px; line-height: 1; color: #94a3b8; cursor: pointer; padding: 0 4px;
+}
+.pqt-ask { margin: 10px 0 12px; font-size: 13px; color: #334155; }
+.pqt-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.pqt-fig { margin: 0; min-width: 0; }
+.pqt-frame {
+    aspect-ratio: 1 / 1; width: min(100%, 56vh); margin: 0 auto;
+    border: 2px solid #cbd5e1; border-radius: 8px; background: #f8fafc;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.pqt-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pqt-noex { font-size: 12px; font-weight: 700; color: #94a3b8; text-align: center; padding: 12px; }
+.pqt-fig figcaption { margin-top: 6px; font-size: 12px; color: var(--cb-muted, #647082); line-height: 1.4; overflow-wrap: anywhere; }
+.pqt-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.pqt-btn {
+    padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff;
+    font: inherit; font-size: 12.5px; font-weight: 700; color: #334155; cursor: pointer; white-space: nowrap;
+}
+.pqt-btn:disabled { opacity: .45; cursor: default; }
+.pqt-btn kbd {
+    margin-left: 4px; padding: 0 5px; border-radius: 4px; background: #f1f5f9; border: 1px solid #e2e8f0;
+    font-size: 10.5px; font-family: inherit; color: #64748b;
+}
+.pqt-fine { border-color: #86efac; background: #f0fdf4; color: #166534; }
+.pqt-prob.pqt-on { border-color: #fca5a5; background: #fef2f2; color: #b91c1c; }
+.pqt-save { border-color: #b91c1c; background: #b91c1c; color: #fff; }
+.pqt-save kbd { background: rgba(255, 255, 255, .2); border-color: transparent; color: #fff; }
+.pqt-skip { color: #64748b; }
+.pqt-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
+.pqt-link { border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: #475569; cursor: pointer; }
+.pqt-link:disabled { opacity: .35; cursor: default; }
+.pqt-was { font-size: 12px; font-weight: 700; color: #475569; }
+.pqt-err { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: #fef2f2; color: #b91c1c; font-size: 12.5px; font-weight: 600; }
+.pqt-empty { padding: 40px 10px; text-align: center; font-size: 14px; font-weight: 600; color: var(--cb-muted, #647082); }
+@media (max-width: 700px) {
+    .pqt-pair { grid-template-columns: 1fr; }
+    .pqt-frame { width: min(100%, 42vh); }
+    .pqt-box { padding: 14px 16px; }
+}
 .pq-acts { width: 100%; }
 .pq-acts .lt-ok, .pq-acts .lt-no {
     flex: 1 1 0; min-width: 0; padding: 5px 8px; font-size: 11.5px; line-height: 1.3;

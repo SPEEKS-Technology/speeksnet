@@ -7551,14 +7551,21 @@ async function loadWorkspaceKpis() {
 }
 
 function switchWorkspaceTab(name) {
+    // Aging Inventory is PAUSED (see FEATURE_CATALOG) — a stale #aging link or
+    // bookmark lands on the brief instead of opening the hidden pane.
+    if (name === 'aging' && typeof _agEnabled === 'function' && !_agEnabled()) name = 'brief';
     document.querySelectorAll('.ws-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.ws-pane').forEach(p => p.classList.remove('active'));
     document.getElementById('ws-tab-' + name)?.classList.add('active');
+    // Claims & Disputes has two buttons (store / DM) over one pane; which one is
+    // lit is decided with the view, in _claimsShowInPage.
     document.getElementById('ws-pane-' + name)?.classList.add('active');
     _wsFitPanels();                        // see the .ws-panel rule
     try { history.replaceState(null, '', 'workspace.html#' + name); } catch (e) {}
 
-    if (name === 'brief') {
+    if (name === 'claims') {
+        _claimsShowInPage();
+    } else if (name === 'brief') {
         if (!_wsBriefLoaded) { _wsBriefLoaded = true; if (typeof fetchMonthlyBrief === 'function') fetchMonthlyBrief(); }
     } else if (name === 'kpis') {
         // MSM only: a store-specific KPI feed card routes the pane to that store
@@ -7615,17 +7622,23 @@ function initWorkspace() {
     const hash = (window.location.hash || '').replace('#', '');
     // 'mreplies' is deliberately NOT accepted — Margin Replies is parked, so a
     // #mreplies deep link falls through to the brief. Add it back with the tab.
-    let initial = ['brief', 'kpis', 'vreplies', 'aging'].includes(hash) ? hash : 'brief';
+    // No (or an unknown) hash → the FIRST tab this person can see, not a fixed
+    // one (Ethan, 2026-10-06: "default the user to the first tab always"). That is
+    // Claims & Disputes for managers and the DM, Monthly Breakdown for an ASM —
+    // and whatever leads the strip if the order changes again.
+    let initial = ['brief', 'kpis', 'vreplies', 'aging', 'claims'].includes(hash) ? hash : '';
     // A tab can be hidden by its role gate or a Feature Access override
     // (applyRoleBasedUI already ran), so never land on one the user can't see —
     // fall back to the first visible tab.
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
-    if (!tabVisible('ws-tab-' + initial)) {
+    // 'claims' is either of its two buttons (see workspace.html).
+    const shown = name => tabVisible('ws-tab-' + name) || (name === 'claims' && tabVisible('ws-tab-claimsdm'));
+    if (!shown(initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ws-tab-"]'))
             .find(b => b.style.display !== 'none' && !b.hidden);
-        if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '');
+        if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '').replace(/^claimsdm$/, 'claims');
     }
-    switchWorkspaceTab(initial);
+    switchWorkspaceTab(initial || 'brief'); // nothing visible (a phone): the old default
     applyKpiReminder();
 }
 
@@ -13241,9 +13254,22 @@ function _lvView(m) {
 // needs to be moved to NP, I meant it"). Every margin a store sees is the NET
 // margin — NP over net sales for the span on screen — and gross profit is not
 // shown as a figure of its own anywhere on the board.
+//
+// ONE EXCEPTION (Ethan 2026-10-06): the district table carries a Gross margin
+// column in front of Net margin. It is a rate, not a GP figure — revenue less
+// cost over revenue — and it is what shows WHERE a net margin went: a store with
+// a healthy gross margin and a weak net one is losing it to fees and shipping,
+// not to what it paid for the stock. Still no GP dollars anywhere.
 function _lvNetMargin(v) {
     const n = Number(v && v.npDay), s = Number(v && v.netToday);
     return (isFinite(n) && s > 0) ? n / s * 100 : null;
+}
+// Worked from net sales and cost for the span on screen rather than read from
+// marginToday, so the roll-up rows (summed on the page) and the stores agree by
+// construction on every tab.
+function _lvGrossMargin(v) {
+    const s = Number(v && v.netToday), c = Number(v && v.cogsToday);
+    return (s > 0 && isFinite(c)) ? (s - c) / s * 100 : null;
 }
 function _lvNetMarginMtd(v) {
     const n = Number(v && v.npMtd), s = Number(v && v.mtdNet);
@@ -13393,6 +13419,42 @@ function _lvPace(pctOfGoal, elapsedPct) {
     if (!isFinite(p) || !isFinite(e) || e <= 0) return null;
     return Math.round(p / e * 100);
 }
+
+// "% TO GOAL" ON THE TODAY TAB IS THROUGH YESTERDAY (Ethan 2026-10-06).
+// Live pace counts today's half-finished day — on an NP month, an ESTIMATE of
+// it — so it swung all day and read as behind every morning. The Today tab now
+// shows the pace at yesterday's close: exactly the figure the Yesterday tab
+// shows, read off the same view, so the two tabs can never disagree about it.
+// The header carries a "Through Yesterday" tag so nobody takes it for live.
+//
+// Worked by running _lvView in 'prev' mode rather than reaching into m.prev /
+// m.np.prev by hand: the overlay already knows which of the two applies.
+// Null on the 1st, when yesterday belongs to last month (the same rule that
+// blanks pace on the Yesterday tab).
+function _lvPaceThru() { return _lvIsToday(); }
+function _lvAsPrev(fn) {
+    const keep = _lvMode;
+    _lvMode = 'prev';
+    try { return fn(); } finally { _lvMode = keep; }
+}
+function _lvPaceThruStore(m, d) {
+    if (!(d && d.prev && d.prev.inMonth) || !m || m.error) return null;
+    const v = _lvAsPrev(() => _lvView(m));
+    return v && v.paceIndex !== undefined ? v.paceIndex : null;
+}
+// A roll-up's pace is derived from its pctOfGoal, the way the table and the card
+// deck derive it on every tab. The district payload carries its own `prev`; the
+// MSM's "Both" is a sum built on the page, so it is re-summed from the same
+// healthy stores at yesterday's close.
+function _lvPaceThruRoll(rollup, stores, d) {
+    if (!(d && d.prev && d.prev.inMonth)) return null;
+    const pv = _lvAsPrev(() => (rollup && rollup.prev)
+        ? _lvView(rollup)
+        : _lvCombine((stores || []).filter(m => m && !m.error).map(_lvView)));
+    if (!pv || pv.pctOfGoal === null || pv.pctOfGoal === undefined) return null;
+    return _lvPace(pv.pctOfGoal, d.prev.elapsedPct);
+}
+const _LV_THRU_TAG = '<span class="lv-thru">Through Yesterday</span>';
 
 // --- "something just happened at MPL" ---------------------------------------
 // The payload is a snapshot, not an event stream, so a sale or a refund is derived
@@ -16323,10 +16385,18 @@ function _lvStoreRow(v, d, foot, rev) {
     if (v.error) {
         // colspan spans every column EXCEPT the store cell — keep it in step with
         // the header row or a broken store knocks the table out of alignment.
-        // (It was 7 against eight columns; adding Refunds makes it nine.)
+        // COUNTED from the same switches _lvTable's header reads, not typed: the
+        // typed 9 outlived the Cost column by months and spanned one column past
+        // the table on every tab (found 2026-10-06 adding Gross margin).
+        const ec = _lvCols();
+        const span = 5   // net, profit, refunds, margin, month
+            + (ec.cost ? 1 : 0) + (ec.orders ? 1 : 0) + (ec.tail ? 1 : 0)
+            + (_lvFeeCols() ? 2 : 0) + (_lvNpKind() ? 1 : 0)   // fees; gross margin
+            + 1                                                // % to goal
+            + (rev === null || rev === undefined ? 0 : 1);
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
             + '<b>' + escapeHtml(v.code) + '</b></span></td>'
-            + '<td colspan="' + ((rev === null || rev === undefined ? 9 : 10) + (_lvFeeCols() ? 2 : 0))
+            + '<td colspan="' + span
             + '" class="lv-row-errmsg">not reporting &middot; '
             + escapeHtml(v.error) + '</td></tr>';
     }
@@ -16373,6 +16443,9 @@ function _lvStoreRow(v, d, foot, rev) {
         + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
         + (_lvFeeCols() ? _lvFeeCell(v, 'npBEbay', d, foot) + _lvFeeCell(v, 'npBShip', d, foot) : '')
         + (cols.orders ? '<td>' + v.ordersToday + '</td>' : '')
+        // Keyed off _lvNpKind(), like the header — not v.npKind, which a store
+        // with no NP block lacks, and a missing cell shifts the row one left.
+        + (_lvNpKind() ? '<td class="lv-boldnum">' + _lvPct(_lvGrossMargin(v)) + '</td>' : '')
         + '<td class="lv-boldnum">' + _lvPct(v.npKind ? _lvNetMargin(v) : v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
@@ -16528,7 +16601,7 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         const band = has ? ' ' + _lvPaceCls(pct) : '';
         return '<li class="lvc' + (isRoll ? ' lvc-roll' : '') + '">'
             + head + '<span class="lvc-goal' + band + '">'
-            + '<span class="lvc-goal-k">% to Goal</span>'
+            + '<span class="lvc-goal-k">% to Goal' + (_lvPaceThru() ? _LV_THRU_TAG : '') + '</span>'
             // "No Goal" in place of the figure, not on a line of its own underneath:
             // the extra row was 32px that only some cards had, so the card grew and
             // shrank as the picker moved between stores.
@@ -16574,15 +16647,21 @@ function _lvCards(stores, d, rollup, rollupLabel) {
         // has none, so it is derived here the same way _lvTable derives it for its
         // own total row — otherwise the District card would be the one card on the
         // phone with a blank percentage.
+        // On Today both are at yesterday's close, the same figure as the table's
+        // column (see _lvPaceThru).
         const rollView = _lvView(roll);
         deck.push({ key: '_roll', label: rollLabel,
             view: Object.assign({}, rollView, { code: rollLabel, name: '',
-                paceIndex: _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
+                paceIndex: _lvPaceThru() ? _lvPaceThruRoll(roll, list, d)
+                    : _lvPace(rollView.pctOfGoal, _lvElapsedPct(d)) }),
             buy: rollBuy, isRoll: true });
     }
     list.forEach((m, i) => {
+        const v = _lvView(m);
         deck.push({ key: String((m && m.code) || ''), label: String((m && m.code) || ''),
-            view: _lvView(m), buy: buys[i], isRoll: false });
+            view: (_lvPaceThru() && m && !m.error)
+                ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) }) : v,
+            buy: buys[i], isRoll: false });
     });
 
     // A pick that is no longer in the deck — a role change, a store that dropped
@@ -16738,16 +16817,25 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         + '<th>Refunds</th>'
         + (_lvFeeCols() ? '<th title="Finished days, off the Net Profit tab">eBay fees</th>'
             + '<th title="Finished days, off the Net Profit tab">Shipping</th>' : '')
-        + (cols.orders ? '<th>Orders</th>' : '') + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
+        + (cols.orders ? '<th>Orders</th>' : '')
+        // Gross margin sits in front of Net margin on an NP month (Ethan
+        // 2026-10-06) — see _lvGrossMargin. On a GP month the one Margin column
+        // already IS gross, so a second would repeat it.
+        + (_lvNpKind() ? '<th>Gross margin</th>' : '')
+        + '<th>' + (_lvNpKind() ? 'Net margin' : 'Margin') + '</th>'
         + '<th>' + (_lvNpKind() ? (_lvHasMonth(d) ? 'NP this month' : 'NP')
-            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th><th>% to goal</th>'
+            : (_lvHasMonth(d) ? 'GP this month' : 'GP')) + '</th>'
+        + '<th>% to goal' + (_lvPaceThru() ? _LV_THRU_TAG : '') + '</th>'
         + (cols.tail ? '<th>Last order</th>' : '')
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
     // this list by position, so re-sorting it worst-first would cost more than the
     // ranking gains. The pace column is what makes a bad store findable.
+    const thru = _lvPaceThru();
     stores.forEach(m => {
-        html += _lvStoreRow(_lvView(m), d, false, null);
+        const v = _lvView(m);
+        html += _lvStoreRow(thru && !m.error
+            ? Object.assign({}, v, { paceIndex: _lvPaceThruStore(m, d) }) : v, d, false, null);
     });
     html += '</tbody>';
     if (rollup) {
@@ -16757,7 +16845,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
             // Its own projection, summed from the stores above it by the one
             // function the Tracking tiles also use.
             fcSum: _lvIsMtd() ? _lvFcSum(stores.filter(m => !m.error).map(_lvView)) : null,
-            paceIndex: _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
+            paceIndex: thru ? _lvPaceThruRoll(rollup, stores, d) : _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
             lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
@@ -17382,6 +17470,17 @@ function _isWorkingRole(role) {
     const r = String(role || '').trim().toUpperCase();
     return !!r && r !== '-' && r !== GOALS_OFF;
 }
+
+// TRAINING (Ethan, 2026-10-06): somebody learning to list, expected to manage
+// HALF of what a Lister 1 would on the same day. It is half of that person's own
+// L1 goal rather than a number of its own — same shift, same Saturday factor,
+// same stretch factor — so it moves whenever the lister rate or the store's
+// factor moves, and it never needs tuning separately (see rateFor).
+//
+// A working role (they are in, and they count as staffed), but uncapped like Off:
+// a store can have more than one trainee on the same day. It is not an L role, so
+// it never satisfies "there is a lister today" (_lgCoverage, daily-brief).
+const GOALS_TRAINING = 'TR';
 // The role currently selected in one `.goals-edit-roles` group ('-' when none).
 function _activeRoleIn(group) {
     return _roleOf(group ? group.querySelector('.role-dot.active') : null);
@@ -17624,6 +17723,11 @@ function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr, store) {
     roles.forEach(r => {
         html += `<button type="button" class="role-dot ${cur === r ? 'active' : ''}" data-role="${r}" ${dis} onclick="selectRole(this, '${safeEmp}', '${r}')">${r}</button>`;
     });
+    // Training rides here rather than in goalsAvailableRoles for the same reason
+    // Off does: it is offered at every roster size, and the role ladder is not.
+    html += `<button type="button" class="role-dot ${cur === GOALS_TRAINING ? 'active' : ''}" data-role="${GOALS_TRAINING}" ${dis}`
+         + ` title="Training — half of what a Lister 1 would be expected to list today"`
+         + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_TRAINING}')">TR</button>`;
     html += `<button type="button" class="role-dot role-off ${cur === GOALS_OFF ? 'active' : ''}" data-role="${GOALS_OFF}" ${dis}`
          + ` title="Off today — no goal, and they stop holding up the daily reminder"`
          + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_OFF}')">Off</button>`;
@@ -17870,7 +17974,11 @@ const ListingGoalsEngine = {
         if (!_isWorkingRole(r)) return 0;
         if (r === 'B1') return this.cfg.rate_buyer_1;
         if (r === 'B2') return this.cfg.rate_buyer_2;
-        return isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+        const lister = isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+        // Half of what THIS person would score as L1 — so a new hire in training
+        // is half of their ramp rate, never more than they would get listing.
+        if (r === GOALS_TRAINING) return lister / 2;
+        return lister;
     },
 
     // Saturday is shorter and the busiest buy day, so it produces about half a
@@ -18253,7 +18361,7 @@ function buildGoalsEditForm() {
                 <button class="toggle-btn ${!editingYesterday ? 'active' : ''}" onclick="toggleEditDate(false)">Today</button>
                 <button class="toggle-btn ${editingYesterday ? 'active' : ''}" onclick="toggleEditDate(true)">Yesterday</button>
             </div>
-            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically. Tap Off for anyone who isn't in today; the daily reminder clears once everyone has a role or an Off.">i</span>
+            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically. TR is Training: half of what a Lister 1 would be expected to list. Tap Off for anyone who isn't in today; the daily reminder clears once everyone has a role or an Off.">i</span>
         `;
     }
     
@@ -19584,7 +19692,7 @@ async function fetchAndRenderEmployeeGoals() {
             }
         });
 
-        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2', 'OFF': 'Off Today' };
+        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2', 'TR': 'Training', 'OFF': 'Off Today' };
         const displayRole = roleTranslations[todayRole] || todayRole;
 
         const roleDescriptions = {
@@ -19592,6 +19700,7 @@ async function fetchAndRenderEmployeeGoals() {
             'B2': 'You\'re the second buyer in rotation. Hang back and jump in the moment a second customer arrives.',
             'L1': 'Dedicated listing only — no buying, no shipping, no exceptions. Your entire focus today is getting items listed and nothing else.',
             'L2': 'You\'re a primary lister throughout the day, but also serve as the emergency buyer when 4 or more separate customers are in the store at once.',
+            'TR': 'You\'re in training today — your goal is half of what a Lister 1 would be expected to list. Focus on learning the process the right way; speed comes with practice.',
             'OFF': 'You\'re marked off today — no listing goal. Enjoy the day.'
         };
         const roleDesc = roleDescriptions[todayRole] || '';
@@ -31340,7 +31449,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkClaimsDueAlerts(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkCallbackMatchReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); startDailyBriefReminder(); checkCategoryQueueReminders(); checkTitleNoteReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -33589,7 +33698,8 @@ const SCORECARD_BUCKETS = [
 
 // ============================================================================
 // PayMore practice Audit — exact transcription of Audit Playbook v3 (165 pts,
-// 94 items, 8 sections). Binary scoring: checked = full points, else 0.
+// 94 items, 8 sections; wording per PayMore's 7/22/26 checklist revision, 0140).
+// Binary scoring: checked = full points, else 0.
 // Pass = 80%, target = 90%+. Shared shape with the scorecard edge fn, which
 // re-derives earned/possible from the same point values (server-authoritative).
 // ============================================================================
@@ -33598,8 +33708,8 @@ const AUDIT_PASS_PCT = 80;
 const AUDIT_DEFINITION = [
     { key: "exterior", title: "Exterior", items: [
         { id: "ex1", pts: 1, text: "Sidewalks and entryways free of litter, debris, and obstructions" },
-        { id: "ex2", pts: 1, text: "Exterior and road signage clean, lit (if applicable), free of damage or fading" },
-        { id: "ex3", pts: 1, text: "Building exterior clean, well-maintained (windows, paint, no handmade signs on doors). Window decals and signage appropriate. Door hours match website" },
+        { id: "ex2", pts: 1, text: "Exterior & road signage clean, lit (if applicable), no damage/fading; banners within brand standard, hung straight, not ripped/torn; hours sign not handwritten" },
+        { id: "ex3", pts: 1, text: "Building exterior clean & well-maintained (windows, paint, no handmade signs); approved window decals only; door hours match website" },
     ]},
     { key: "entry", title: "Entry & Sales Floor", items: [
         { id: "ef1", pts: 1, text: "Floors swept/mopped; entry mats clean" },
@@ -33607,13 +33717,13 @@ const AUDIT_DEFINITION = [
         { id: "ef3", pts: 1, text: "Video games displayed on shelves and organized" },
         { id: "ef4", pts: 1, text: "Store lighting fully functional throughout (no burned out bulbs, adequate brightness and clean)" },
         { id: "ef5", pts: 1, text: "Walls, vents, and high surfaces free of dust and cobwebs" },
-        { id: "ef6", pts: 2, text: "Ceiling tiles in place and in good shape; less than 10% of tiles with no water damage" },
+        { id: "ef6", pts: 2, text: "Ceiling tiles in place & good shape; <10% affected; no water damage" },
         { id: "ef7", pts: 1, text: "Window ledges and sills clean; free of merchandise or debris" },
         { id: "ef8", pts: 1, text: "No recycling items in customer view" },
         { id: "ef9", pts: 1, text: "All customers greeted within 10 seconds of entering the store" },
         { id: "ef10", pts: 2, text: "Team acknowledges entering customers even while helping others" },
         { id: "ef11", pts: 1, text: "Customers asked for Google review at end of transaction" },
-        { id: "ef12", pts: 1, text: "No QR codes or signage for Google review signage in transaction area" },
+        { id: "ef12", pts: 1, text: "No QR codes / Google review signage in transaction area" },
         { id: "ef13", pts: 1, text: "Music playing from RockBot system and volume is appropriate" },
         { id: "ef14", pts: 3, text: "Retail Browsing iPads on and locked to store website" },
     ]},
@@ -33639,7 +33749,7 @@ const AUDIT_DEFINITION = [
         { id: "rc5", pts: 1, text: "No team member food or drink in customer view" },
         { id: "rc6", pts: 1, text: "PayMore branded retail bags stocked" },
         { id: "rc7", pts: 2, text: "All computers do not have any personal accounts open" },
-        { id: "rc8", pts: 1, text: "PayMore branded signage at counter; Freedom to Trade In trifold nearby; promo materials in plexi frames (not taped)" },
+        { id: "rc8", pts: 1, text: "PayMore signage at counter; Freedom to Trade In trifold nearby; promos in plexi frames (not taped); posters in frames not wrinkled or faded" },
     ]},
     { key: "buy", title: "Buy Transaction Area", items: [
         { id: "bt1", pts: 3, text: "Counter neatly arranged; no unbranded signage; testing equipment out of view (cables, gaming controllers, flashlights, etc); printer under cabinet" },
@@ -33651,7 +33761,7 @@ const AUDIT_DEFINITION = [
         { id: "bt7", pts: 2, text: "PayMore Seller Book under the counter" },
         { id: "bt8", pts: 3, text: "Last 10 transactions: at least one signature on each page half on/off sticker" },
         { id: "bt9", pts: 7, text: "Green bin (<$100), Red bin (>$100), Blue bin (video games) — labeled (not handwritten), out of view; items bubble-wrapped with purchase order receipt" },
-        { id: "bt10", pts: 3, text: "Larger items in white boxes: purchase order attached, bubble-wrapped, on shelving or neatly stacked on back counter (must be in boxes)" },
+        { id: "bt10", pts: 3, text: "Larger items in white boxes: PO attached, bubble-wrapped, on shelving or neatly stacked (must be boxed)" },
         { id: "bt11", pts: 3, text: "All intake merchandise logged immediately; no untagged or unlogged items" },
         { id: "bt12", pts: 4, text: "Cash drawer locked; keys out of customer reach" },
     ]},
@@ -33665,18 +33775,18 @@ const AUDIT_DEFINITION = [
         { id: "bh7", pts: 1, text: "All items tagged with purchase order and visible" },
         { id: "bh8", pts: 1, text: "Location on purchase order receipt matches shelf location" },
         { id: "bh9", pts: 2, text: "Shelves are organized and neat; all large items in boxes" },
-        { id: "bh10", pts: 1, text: "Items in holding bins have the Shopify barcode" },
+        { id: "bh10", pts: 1, text: "Holding bins have Shopify barcode" },
         { id: "bh11", pts: 2, text: "Ready-to-purchase shelves labeled (1, 2, 3, etc.). Not handwritten" },
-        { id: "bh12", pts: 2, text: "Black bins present, labeled correctly (E1, E2, etc.); items bubble-wrapped, not handwritten" },
+        { id: "bh12", pts: 2, text: "Black bins present, labeled E1/E2 etc. (not handwritten); items bubble-wrapped" },
         { id: "bh13", pts: 1, text: "Boxes on ready-to-purchase shelves have Shopify barcode displayed" },
         { id: "bh14", pts: 3, text: "Ready-to-purchase shelves organized and neat; all large items in boxes; items tagged" },
         { id: "bh15", pts: 1, text: "Listing Station: barcode label printer present" },
-        { id: "bh16", pts: 3, text: "Listing Station: Lenovo computer present, clean and organized" },
+        { id: "bh16", pts: 3, text: "Listing Station: Lenovo computer present, clean and organized; cords not loose, proper cable management" },
         { id: "bh17", pts: 3, text: "Testing Area: device cleaning material, external monitor, charging cables neat" },
         { id: "bh18", pts: 1, text: "Testing Area: troubleshooting accessories present (controllers, Spec-Finder, flash drives)" },
         { id: "bh19", pts: 2, text: "Testing Area: clean and organized" },
-        { id: "bh20", pts: 2, text: "Shipping Area: bubble wrap/peanuts; unused boxes neatly stacked by size" },
-        { id: "bh21", pts: 5, text: "Shipping Area: Lenovo computer, shipping label printer, scale, box re-adjusting tool, scanner present" },
+        { id: "bh20", pts: 2, text: "Shipping Area: bubble wrap / anti-static biodegradable peanuts (NOT white/pink polystyrene); unused boxes stacked by size" },
+        { id: "bh21", pts: 5, text: "Shipping Area: Lenovo computer, label printer, scale, scanner all present (box re-adjusting tool optional)" },
         { id: "bh22", pts: 2, text: "Shipping Area: clean and organized" },
         { id: "bh23", pts: 4, text: "Photography Area: photo box or well-lit table with clean white butcher paper on a roll" },
         { id: "bh24", pts: 1, text: "Adequate lighting throughout all back-of-house areas" },
@@ -33689,12 +33799,12 @@ const AUDIT_DEFINITION = [
         { id: "pa3", pts: 1, text: "Optional PayMore branded hat worn forward, or backwards during a transaction" },
         { id: "pa4", pts: 1, text: "Closed-toed shoes worn" },
         { id: "pa5", pts: 1, text: "No headphones or earbuds (unless testing a device)" },
-        { id: "pa6", pts: 1, text: "Team members conducting themselves professionally" },
+        { id: "pa6", pts: 1, text: "Team conducting themselves professionally at all times" },
     ]},
     { key: "safety", title: "Safety & Security", items: [
         { id: "ss1", pts: 3, text: "Fire extinguishers tagged, charged, and hung 3.5–5 feet above the floor" },
         { id: "ss2", pts: 2, text: "First aid kit stocked according to OSHA requirements" },
-        { id: "ss3", pts: 2, text: "Back door locked from outside, openable from inside without keys or bolts; no obstructions" },
+        { id: "ss3", pts: 2, text: "Back door locked from outside, opens from inside without keys/tools; no obstructions" },
         { id: "ss4", pts: 4, text: "Safe is locked; cash/bank deposits not sitting out" },
         { id: "ss5", pts: 5, text: "Store fully open and purchasing during all posted business hours" },
         { id: "ss6", pts: 2, text: "Labor law / workplace compliance poster displayed on the wall" },
@@ -35135,10 +35245,68 @@ function _claimStores() {
 const _CLAIMS_OVERSIGHT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
 const _claimsIsOversight = () =>
     _CLAIMS_OVERSIGHT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
-// tab: 'view' (the claims list) | 'mismatch' | 'returns' | 'cases'
+// A WORKSPACE TAB SINCE 2026-10-06, not a popup (Ethan: "moving it from a popup to
+// an entire page"). Both popups' bodies now live in workspace.html's
+// #ws-pane-claims under their old ids, so everything below runs unchanged; what
+// changed is only how the tool is OPENED. Every caller (the red claim bubble,
+// the notification feed, Ctrl+K's sub-entries) still calls openClaimsTool(tab):
+// on the Workspace page that switches to the tab, anywhere else it carries the
+// tab across in sessionStorage and goes there.
+//
+// tab: 'view' (the claims list) | 'mismatch' | 'returns' | 'cases' | 'payments'
+let _claimsPendingTab = null;
+// 'store' | 'ov' when a tab button chose the view; null = by role (_claimsIsOversight).
+let _claimsView = null;
+const _claimsOnPage = () => !!document.getElementById('ws-pane-claims');
 function openClaimsTool(tab) {
-    if (_claimsIsOversight()) { openClaimsOversight(); switchOversightTab(tab === 'view' ? 'claims' : tab); }
-    else { openClaimsModal(); switchClaimsTab(tab); }
+    tab = tab || 'view';
+    if (!_claimsOnPage()) {
+        try { sessionStorage.setItem('speeksClaimsTab', tab); } catch (e) { /* lands on the list */ }
+        window.location.href = 'workspace.html#claims';
+        return;
+    }
+    _claimsPendingTab = tab;
+    _claimsView = null;
+    switchWorkspaceTab('claims');
+}
+
+// The two tab buttons. Each opens its own view, so someone holding both keys
+// (a manager lent the DM version) can reach both — as with the two popups.
+function openClaimsView(view) {
+    _claimsView = view === 'ov' ? 'ov' : 'store';
+    switchWorkspaceTab('claims');
+}
+
+// What opening a popup used to do, run each time the tab is shown — so coming
+// back to the tab re-reads, the way re-opening the popup did. Same order as
+// before: the tool's own start-up (a blank form, the list, the badge load),
+// then the requested sub-tab.
+function _claimsShowInPage() {
+    let tab = _claimsPendingTab;
+    _claimsPendingTab = null;
+    if (!tab) {
+        try { tab = sessionStorage.getItem('speeksClaimsTab'); sessionStorage.removeItem('speeksClaimsTab'); }
+        catch (e) { tab = null; }
+    }
+    tab = tab || 'view';
+    const ov = _claimsView ? _claimsView === 'ov' : _claimsIsOversight();
+    document.getElementById('ws-tab-claims')?.classList.toggle('active', !ov);
+    document.getElementById('ws-tab-claimsdm')?.classList.toggle('active', ov);
+    const storeEl = document.getElementById('claims-ws-store');
+    const ovEl = document.getElementById('claims-ws-ov');
+    if (storeEl) storeEl.style.display = ov ? 'none' : '';
+    if (ovEl) ovEl.style.display = ov ? '' : 'none';
+    const sub = document.getElementById('claims-ws-sub');
+    if (sub) sub.textContent = ov
+        ? 'Claims, refund mismatches and eBay cases across every store.'
+        : 'Claims, refund mismatches and eBay cases — anywhere our money is held or not lining up.';
+    if (ov) {
+        openClaimsOversight();
+        if (tab !== 'view' && tab !== 'claims') switchOversightTab(tab);
+    } else {
+        openClaimsModal();
+        if (tab !== 'view') switchClaimsTab(tab);
+    }
 }
 
 // A blank form. Called both when the tool opens and every time New Claim is
@@ -35159,8 +35327,10 @@ function startNewClaim() {
     switchClaimsTab('new');
 }
 
+// The store tool's start-up. Named for the popup it used to open; off the
+// Workspace page it routes there instead (see openClaimsTool).
 function openClaimsModal() {
-    toggleModal('claimsModal');
+    if (!_claimsOnPage()) { openClaimsTool('view'); return; }
     _resetClaimForm();
     switchClaimsTab('view'); // the list first; New Claim is a button on it
     // In the background, so the Mismatches / eBay Cases badges show how many
@@ -35192,6 +35362,10 @@ function switchClaimsTab(tab) {
         const b = document.getElementById(id);
         if (b) b.style.display = tab === 'new' ? '' : 'none';
     });
+    // On the page the footer bar itself goes too: a popup's empty footer read as
+    // its bottom edge, a page's reads as a stray white strip.
+    const foot = document.getElementById('claimsFooter');
+    if (foot) foot.style.display = tab === 'new' ? '' : 'none';
     if (tab === 'view') fetchMyClaims();
     // openClaimsModal already started a load (for the tab badges); only fetch
     // again if that one has finished, and without re-asking eBay.
@@ -36638,6 +36812,9 @@ async function _holdAfterWrite(ctx) {
     _holdOpenForm[ctx] = null;
     await _holdFetch(ctx, _holdStores(ctx));
     renderHoldItems(ctx);
+    // A resolution may be what clears the 4pm feed card — don't make the person
+    // who just pressed it wait for the broadcast to come back round.
+    if (typeof checkClaimsDueAlerts === 'function') checkClaimsDueAlerts();
 }
 
 async function _holdSave(ctx, idx, status) {
@@ -36753,8 +36930,9 @@ function _claimReminderLock(store) {
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
 }
 
+// The oversight view's start-up — same story as openClaimsModal.
 function openClaimsOversight() {
-    toggleModal('claimsOversightModal');
+    if (!_claimsOnPage()) { openClaimsTool('view'); return; }
     switchOversightTab('claims');
     fetchAllClaims();
     loadHoldItems('ov'); // badges for the Mismatches / eBay Cases tabs
@@ -37503,6 +37681,80 @@ async function checkAgingClaimsDM() {
     } catch (e) {
         console.error('DM aging claim check failed:', e);
     }
+}
+
+// --- THE 4PM "DUE TODAY" ALERT, AS A FEED CARD -------------------------------
+// Ethan, 2026-10-08: "add a feed notification for the claims and disputes tool
+// only for that 4:00pm due today reminder ... they can't snooze it and it doesn't
+// go away until they mark the line item as resolved in the tool". The email is
+// unchanged; this is the same alert, kept on screen.
+//
+// Nothing here decides what is due. claims-disputes returns `dueAlerts`: the
+// items the 4pm mail (claims-disputes-email, manager_nudge) actually went out
+// about, minus the ones the tool now calls finished — resolved, settled,
+// answered on the site, or covered by a claim. See DUE_ALERT_DONE there for why
+// it is those four. So the card appears when the mail does (the email function
+// broadcasts as it logs) and stays, day after day, until each line is dealt
+// with. Not snoozeable (noSnooze), and Mark-all-read passes over it.
+//
+// STORE MANAGERS ONLY: whoever has the store tool, for their own store(s). Not
+// the DM (Ethan, 2026-10-08: "the DM does not need this for now as I use those
+// emails to reach out to them every day"), nor the CEO or MOCD.
+//
+// "Resolved" is either side: the site settling it / showing our reply, or the
+// manager marking it resolved — see DUE_ALERT_DONE in claims-disputes.
+let _claimsDuePollStarted = false;
+function _claimsDueBubbleEl() {
+    let b = document.getElementById('claimsDueAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'claimsDueAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #dc2626, #7f1d1d); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(127, 29, 29, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = '<span style="font-size:16px; flex-shrink:0; margin-top:2px;">⏰</span>'
+        + '<span id="claimsDueAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _claimsDueScope() {
+    if (_claimsIsOversight()) return [];
+    if (!_jumpFeatureVisible('tool-claims-store')) return [];
+    return _claimStores();
+}
+async function checkClaimsDueAlerts() {
+    const stores = _claimsDueScope();
+    const hide = () => { const b = document.getElementById('claimsDueAlertBubble'); if (b) b.style.display = 'none'; };
+    if (!stores.length) { hide(); return; }
+    if (!_claimsDuePollStarted) { _claimsDuePollStarted = true; setInterval(checkClaimsDueAlerts, 30 * 60 * 1000); }
+    try {
+        const res = await fetch(`${CLAIMS_DISPUTES_URL}?action=alerts&stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const j = await res.json();
+        if (!j || !j.success) return;           // a failed read leaves the card as it was
+        const items = j.dueAlerts || [];
+        if (!items.length) { hide(); return; }
+        const b = _claimsDueBubbleEl();
+        const t = document.getElementById('claimsDueAlertBubbleText');
+        if (!b || !t) return;
+        const today = j.today || '';
+        const multi = stores.length > 1;
+        const line = it => {
+            const what = _holdKindChip(it.type, it) || (it.type === 'mismatch' ? 'Refund mismatch' : 'eBay case');
+            const amt = Number(it.amount) > 0 ? ' $' + Number(it.amount).toFixed(2) : '';
+            const when = it.overdue ? 'overdue' : it.due === today ? 'due today' : it.due ? 'due tomorrow' : '';
+            return (multi ? it.store_code + ': ' : '') + what + amt + (it.order ? ' (' + it.order + ')' : '') + (when ? ' — ' + when : '');
+        };
+        const overdue = items.some(it => it.overdue);
+        const summary = (items.length > 1 ? 'Resolve ' + items.length + ': ' : '') + items.map(line).join(' · ');
+        t.dataset.summary = summary;
+        t.dataset.overdue = overdue ? '1' : '';
+        // The tab the first (most urgent) item lives on.
+        const first = items[0].type;
+        t.dataset.tab = first === 'payment' ? 'payments' : first === 'mismatch' ? 'mismatch' : 'cases';
+        t.dataset.stores = [...new Set(items.map(it => it.store_code))].join(',');
+        t.textContent = summary;
+        b.style.display = 'flex';
+    } catch (_) { /* next poll or ping retries */ }
 }
 
 // Keep the claim alert stacked UNDER the green store-comment bubble whenever that
@@ -39279,7 +39531,8 @@ window.toggleAuditPanel = function(event) {
 // on big rosters) aren't listed here — the `|| 1` lookup below caps them too.
 // OFF is the exception and must stay uncapped: any number of people can be off
 // on the same day, and a cap of 1 would lock the chip after the first one.
-const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity };
+// TR (Training) is uncapped for the same reason — two trainees can share a day.
+const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity, TR: Infinity };
 
 window.updateRoleLocks = function() {
     // Role capacity is per STORE. Normally the page shows one store's dots, so the
@@ -41982,8 +42235,6 @@ const FEATURE_CATALOG = [
     // either way — STORE_BOARD_FEATURES does not list it.
     { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multi-store-manager', 'assistant-manager', 'employee', 'training'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
-    { key: 'tool-claims-store',        label: 'Claims & Disputes (Store)',     tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
-    { key: 'tool-claims-oversight',    label: 'Claims & Disputes (Oversight)', tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-listing-health',      label: 'Listing Health',                tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
@@ -42094,6 +42345,13 @@ const FEATURE_CATALOG = [
     { key: 'cap-kpi-dm',               label: 'Store KPIs · All Stores (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'mocd'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    // Claims & Disputes — a Workspace tab since 2026-10-06 (was two SPEEKS Tools
+    // popups). The KEYS are unchanged on purpose: feature_overrides rows, the
+    // claims emails' audience in notify and the Ctrl+K sub-entries all name them.
+    // Two keys because the tool has two views: the store's own (managers) and
+    // every store (DM/CEO); each gates its own tab button in workspace.html.
+    { key: 'tool-claims-store',        label: 'Claims & Disputes — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Claims & Disputes (DM)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo'] },
     // Margin Replies — PARKED (2026-07-29), UNFINISHED. Deliberately absent from
     // the catalog, not merely defaulted off: a catalog entry would let someone
     // switch a half-built tool on from Feature Access. With no entry,
@@ -42102,8 +42360,16 @@ const FEATURE_CATALOG = [
     // bring it back:
     // { key: 'widget-margin-replies', label: 'Margin Replies (Tab)', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     // { key: 'cap-bmargin-dm',        label: 'Margin Replies (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
-    { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    // Aging Inventory — PAUSED (2026-10-06) while Ethan decides whether to keep
+    // it. Same parking as Margin Replies: with no catalog entry Ctrl+K, Feature
+    // Access and the nav dot resolve hidden, and _agEnabled() turns off the popups
+    // and login checks. ⚠️ The TAB is hidden by commenting its button out of
+    // workspace.html — applyRoleBasedUI never reads this catalog, so dropping
+    // the entry alone left the tab showing for every role. The emails are paused separately in notify
+    // (PAUSED_FEATURES). Data is untouched. Restore these two lines, and drop
+    // the key from PAUSED_FEATURES, to bring it back:
+    // { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
+    // { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     { key: 'widget-ops-marginguide',   label: 'Margin Guide (Tab)',            tab: 'widgets', group: 'Operations', def: 'all' },
     // The editor behind the Margin Guide's "Edit" button. Listed so it can
     // be delegated or pulled back without a code change; mgCanEditLadder() gates it
@@ -42388,7 +42654,7 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
 const _SECTION_TABS = {
     // 'widget-margin-replies' is intentionally omitted — see the parked block in
     // FEATURE_CATALOG. Add it back alongside the catalog entries.
-    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
+    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory', 'tool-claims-store', 'tool-claims-oversight'],
     'operations.html': ['widget-ops-marginguide', 'tool-margin-manage', 'widget-ops-pictureguide',
                         'tool-picture-manage', 'widget-ops-callbacks',
                         'widget-ops-b2b', 'ec-upload', 'ec-view-categories', 'ec-view-photos',
@@ -43256,6 +43522,7 @@ const JUMP_PLACES = [
     { id: 'ws-brief',    label: 'Monthly Breakdown',  sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-monthly-breakdown', page: 'workspace.html',  hash: 'brief',     fn: 'switchWorkspaceTab' },
     { id: 'ws-kpis',     label: 'Store KPIs',         sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-weekly-kpis',       page: 'workspace.html',  hash: 'kpis',      fn: 'switchWorkspaceTab' },
     { id: 'ws-vrep',     label: 'Variance Replies',   sub: 'Workspace',  kind: 'tab', feature: 'widget-variance-replies',     page: 'workspace.html',  hash: 'vreplies',  fn: 'switchWorkspaceTab' },
+    { id: 'ws-claims',   label: 'Claims & Disputes',  sub: 'Workspace',  kind: 'tab', feature: ['tool-claims-store', 'tool-claims-oversight'], keys: 'claim claims disputes insurance shopify usps ups damaged lost refund mismatch returns cases chargeback payments', page: 'workspace.html', hash: 'claims', fn: 'switchWorkspaceTab' },
     // Margin Replies is parked (see FEATURE_CATALOG) — restore with its catalog entry:
     // { id: 'ws-mrep',  label: 'Margin Replies',     sub: 'Workspace',  kind: 'tab', feature: 'widget-margin-replies',       page: 'workspace.html',  hash: 'mreplies',  fn: 'switchWorkspaceTab' },
     { id: 'ws-aging',    label: 'Aging Inventory',    sub: 'Workspace',  kind: 'tab', feature: 'widget-aging-inventory',      page: 'workspace.html',  hash: 'aging',     fn: 'switchWorkspaceTab' },
@@ -45770,8 +46037,17 @@ function _agHasDmDelegation() {
     const name = sessionStorage.getItem('speeksUserName') || '';
     return _featureOverrideFor('cap-aging-dm', roleClass, name) === true;
 }
-function _agIsDM() { return _agRole() === 'district manager' || _agHasDmDelegation(); }
-function _agIsStoreUser() { return _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
+// PAUSED (2026-10-06) — see the FEATURE_CATALOG note. Hiding the tab isn't
+// enough: the login checks, the realtime re-checks and the purple bubble all
+// start from _agIsDM / _agIsStoreUser, so both answer false while it's parked.
+function _agEnabled() {
+    if (typeof _featureEffectiveVisible !== 'function') return false;
+    const roleClass = 'role-' + _agRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    return _featureEffectiveVisible('widget-aging-inventory', roleClass,
+        sessionStorage.getItem('speeksUserName') || '') === true;
+}
+function _agIsDM() { return _agEnabled() && (_agRole() === 'district manager' || _agHasDmDelegation()); }
+function _agIsStoreUser() { return _agEnabled() && _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
 
 // The store user's own store(s) — an MSM sees both, stacked in one list.
 function _agMyStores() {
@@ -45888,6 +46164,7 @@ function agCancelItemEdit() { _agEditItem = null; _agClearNeDrafts(); renderAgin
 async function loadAgingInventory() {
     const body = document.getElementById('ag-body');
     if (!body) return;
+    if (!_agEnabled()) { body.innerHTML = '<div class="status-message">Aging Inventory is paused.</div>'; return; }
     body.innerHTML = '<div class="status-message">Loading aging inventory…</div>';
     const stores = _agIsDM() ? ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'] : _agMyStores();
     if (!stores.length) {
@@ -46573,7 +46850,7 @@ function _agAckedSet(key) {
 }
 
 function _agDotNeeded() {
-    return _agMyItemsCache.some(_agAwaitingStore);
+    return _agEnabled() && _agMyItemsCache.some(_agAwaitingStore);
 }
 
 async function checkAgingInvReminders() {
@@ -48133,7 +48410,9 @@ function samMarkAllRead() {
     // about, which is exactly the failure the two separate controls avoid.
     const map = _samGetHidden();
     const until = Date.now() + 20 * 3600000;
-    _samGatherReminders().forEach(r => { map[r.key] = { sig: r.sig, until }; });
+    // Not the noSnooze cards: they have no Snooze of their own, so a bulk one
+    // must not supply it (see _samGatherReminders).
+    _samGatherReminders().forEach(r => { if (!r.noSnooze) map[r.key] = { sig: r.sig, until }; });
     _samSetHidden(map);
     if (typeof updateMainBadge === 'function') updateMainBadge();
     renderActionFeed();
@@ -48325,6 +48604,12 @@ function _samReminderCfg() {
     // checkAgingClaimsDM, so it is never set for a manager.
     const _clT = document.getElementById('claimAlertBubbleText');
     const _clDel = (_clT && _clT.dataset && _clT.dataset.del) || '';
+    // The 4pm due-today card: stamped by checkClaimsDueAlerts off the same items
+    // as its summary. The tab is one of a fixed four, never free text.
+    const _cdT = document.getElementById('claimsDueAlertBubbleText');
+    const _cdOver = !!(_cdT && _cdT.dataset && _cdT.dataset.overdue);
+    const _cdTab = ['cases', 'payments', 'mismatch'].includes(_cdT && _cdT.dataset && _cdT.dataset.tab)
+        ? _cdT.dataset.tab : 'cases';
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
           title: _vrFyi ? 'Variance Report to Review'
@@ -48344,6 +48629,15 @@ function _samReminderCfg() {
           title: _clDel === 'only' ? 'Claim Delete Requests' : 'Claims & Disputes',
           urgency: 2, due: _clDel ? 'Approve' : 'Open', cls: 'sam-due-red',
           action: "openClaimsTool('view')" },
+        // The 4pm "due today" mail, kept on screen (checkClaimsDueAlerts). No
+        // Snooze, and Mark-all-read skips it: it leaves when each line is
+        // resolved in the tool, and only then. Overdue once a deadline on it
+        // has passed — it stays after that too, until somebody records what
+        // happened.
+        { key: 'claimsDue', id: 'claimsDueAlertBubble', text: 'claimsDueAlertBubbleText',
+          title: _cdOver ? 'Claims & Disputes Overdue' : 'Claims & Disputes Due Today',
+          urgency: 3, due: _cdOver ? 'Overdue' : 'Due Today', cls: 'sam-due-red', noSnooze: true,
+          action: `openClaimsTool('${_cdTab}')` },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
         // month across, so a card about a July request doesn't open on August.
         // data-replyonly: no line is actually awaiting a verdict, a manager just
@@ -48684,7 +48978,12 @@ function _samGatherReminders() {
         // a new sender — counts as new information and breaks through the snooze
         // rather than staying buried until tomorrow.
         const sig = (t && t.dataset && t.dataset.sig) ? t.dataset.sig : sub;
-        if (_samIsHidden(c.key, sig)) return;
+        // A noSnooze card has no Snooze button, but Mark-all-read used to snooze
+        // it anyway (it writes every card on screen into the same map), which
+        // hid the KPI and Listing Goals deadlines for 20 hours with one click.
+        // So the map is not consulted for them at all — including any entry
+        // written before this was fixed.
+        if (!c.noSnooze && _samIsHidden(c.key, sig)) return;
         // For an MSM: if this alert covers exactly ONE store (the bubble stamps the
         // covered stores on data-stores), clicking it opens that store's tool even
         // while he's on the other store's dashboard — without switching dashboards.
@@ -48750,7 +49049,7 @@ window._rtDebug = () => ({ started: _rtStarted, clientLoaded: !!_rtClient, statu
 // on a given page — missing/failing ones are skipped.
 const _RT_TOOL_CHECKS = {
     aging:         ['checkAgingInvReminders', 'checkAgingInvDmReminders', '_agRefreshStorePopup'],
-    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM'],
+    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM', 'checkClaimsDueAlerts'],
     recycle:       ['checkRecycleReminders'],
     variance:      ['checkVarianceReminders', 'checkVarianceDmReminders'],
     bmargin:       ['checkMarginReminders', 'checkMarginDmReminders'],
@@ -50120,7 +50419,7 @@ function renderDmListingModal() {
     }
 
     const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
-    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', OFF: 'Off' };
+    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', TR: 'Training', OFF: 'Off' };
     pane = '<div class="dmx-ph"><div>'
         + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
         + '<div class="dmx-ps">Goal ' + sel.target + ' listings · ceiling ' + (sel.capacity || '–')
@@ -55351,7 +55650,13 @@ function _pqHtml() {
     }
     const total = tiers.reduce((s, t) => s + count(t.v), 0);
     const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
-    return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
+    // Train The Checker — see pqTrainOpen. Only for readers who hold the
+    // picture half; it reads the same graded listings the queue does.
+    const train = mayPics ? `<div class="pqt-entry">
+        <button type="button" class="lh-tool-done-btn" onclick="pqTrainOpen()">Train The Checker</button>
+        <span>Grade photos one at a time against the guide, so the checker learns what "to standard" means.</span>
+      </div>` : '';
+    return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : '') + train,
                 `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
 }
 
@@ -55423,6 +55728,196 @@ window.pqReopen = pqReopen;
 // already say it, so the sentence was a second reading of the same thing.
 
 function pqSetTier(v) { _pqTier = v; _pqPicked = true; ecRender(); }
+
+// ============================================================================
+// TRAIN THE CHECKER — a person grades single photos (2026-10-08)
+// ============================================================================
+// Framing — centred, level, big enough — is the call the checker could not get
+// right: four approaches scored against Ethan's answer key, and each either
+// missed what he would flag or flagged what he passed. The key only said which
+// LISTINGS were off; this collects which PHOTOS are, one at a time, beside the
+// guide's example of the same shot, into pq_photo_labels (0141). A framing
+// rule is then scored against these labels offline, for free, before any paid
+// run. Ethan: "I like building a tool to train the system on this before we
+// start spending money."
+//
+// ⚠️ ONE KEYPRESS PER PHOTO. Hundreds of photos is only bearable if a fine one
+// costs a single key: 1 = Fine, 0 = Not The Item, 2–6 toggle a problem and
+// Enter saves them, ← goes back to change an answer, → skips. Re-answering a
+// photo overwrites it (one row per photo).
+// ⚠️ NOTHING HERE CALLS A MODEL. The photos come from listings already graded,
+// read live; saving writes one row. Free to use for as long as it takes.
+let _pqTrain = null;
+const _PQ_TRAIN_PROBS = [
+    ['off_center', 'Off-Centre', '2'], ['crooked', 'Crooked', '3'], ['too_small', 'Too Small', '4'],
+    ['blurry', 'Blurry', '5'], ['cut_off', 'Cut Off', '6'],
+    // Ethan, 2026-10-08: a scuffed table "looks gross and would totally be the
+    // reason that it might not sell" — costed 5/10/15 by price on the server.
+    ['dirty_backdrop', 'Dirty Table', '7'],
+    // …and anything in frame besides the item and the white backdrop (the Onyx's
+    // grey lightbox edge, the same day). Same price scale on the server.
+    ['clutter', 'Off Backdrop', '8'],
+    // Reflections in the item (3/6/9 by price). Not on a Screen Off shot, which
+    // is meant to show them — the server skips those.
+    ['reflection', 'Reflection', '9'],
+    // Not taken in the same spot as the listing's other photos (OVL iPhone SE 2,
+    // 2026-10-08). A letter, because the digits ran out; either case works.
+    ['different_spot', 'Different Spot', 'S'],
+];
+
+async function pqTrainOpen() {
+    _pqTrain = { store: _ecStore || '', queue: [], i: 0, picks: new Set(), busy: true, err: null, skipped: 0 };
+    document.addEventListener('keydown', _pqTrainKey);
+    _pqTrainRender();
+    await _pqTrainLoad();
+}
+window.pqTrainOpen = pqTrainOpen;
+
+async function _pqTrainLoad() {
+    const t = _pqTrain;
+    if (!t) return;
+    t.busy = true; _pqTrainRender();
+    try {
+        const d = await _pqFetch(`?view=train&store=${encodeURIComponent(t.store)}&skip=${t.skipped}`);
+        if (_pqTrain !== t) return;
+        Object.assign(t, { queue: d.queue || [], i: 0, total: d.total || 0, done: d.done || 0,
+                           left: d.left || 0, store: d.store || t.store, err: null });
+    } catch (e) { t.err = e.message || String(e); }
+    t.busy = false;
+    _pqTrainRender();
+}
+
+function pqTrainClose() {
+    document.removeEventListener('keydown', _pqTrainKey);
+    _pqTrain = null;
+    const el = document.getElementById('pqTrainOverlay');
+    if (el) el.remove();
+}
+window.pqTrainClose = pqTrainClose;
+
+function pqTrainToggle(k) {
+    const t = _pqTrain;
+    if (!t || t.busy || !t.queue[t.i]) return;
+    t.picks.has(k) ? t.picks.delete(k) : t.picks.add(k);
+    _pqTrainRender();
+}
+window.pqTrainToggle = pqTrainToggle;
+
+function pqTrainMove(step) {
+    const t = _pqTrain;
+    if (!t || t.busy) return;
+    // A photo passed over unanswered stays unlabelled on the server; counting
+    // it is what keeps the next lot from starting with it again.
+    if (step > 0 && t.queue[t.i] && !t.queue[t.i].saved) t.skipped++;
+    t.i = Math.max(0, Math.min(t.queue.length, t.i + step));
+    if (t.i >= t.queue.length && t.left > t.skipped) { _pqTrainLoad(); return; }
+    // Going back shows the answer already given, so it can be changed.
+    const p = t.queue[t.i];
+    t.picks = new Set(p && p.saved === 'problem' ? p.savedProblems || [] : []);
+    _pqTrainRender();
+}
+window.pqTrainMove = pqTrainMove;
+
+async function pqTrainLabel(label) {
+    const t = _pqTrain;
+    const p = t && t.queue[t.i];
+    if (!p || t.busy) return;
+    if (label === 'problem' && !t.picks.size) return;
+    t.busy = true; _pqTrainRender();
+    const r = await _pqPost({ action: 'label', store: t.store, productId: p.productId, src: p.src, n: p.n,
+                              sheet: p.sheet, shot: p.shot, label, problems: [...t.picks] });
+    if (_pqTrain !== t) return;
+    t.busy = false;
+    if (!r.ok) { t.err = r.body.detail || r.body.error || `Could not save (${r.status})`; _pqTrainRender(); return; }
+    if (!p.saved) { t.done++; t.left--; }
+    p.saved = label; p.savedProblems = label === 'problem' ? [...t.picks] : [];
+    t.err = null; t.picks = new Set(); t.i++;
+    // The server hands out sixty at a time; past the end, fetch the next lot.
+    if (t.i >= t.queue.length && t.left > t.skipped) { await _pqTrainLoad(); return; }
+    _pqTrainRender();
+}
+window.pqTrainLabel = pqTrainLabel;
+
+function _pqTrainKey(e) {
+    if (!_pqTrain || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    const k = e.key;
+    const prob = _PQ_TRAIN_PROBS.find(x => x[2] === (k.length === 1 ? k.toUpperCase() : k));
+    if (k === 'Escape') pqTrainClose();
+    else if (k === '1') pqTrainLabel('fine');
+    else if (k === '0') pqTrainLabel('not_item');
+    else if (prob) pqTrainToggle(prob[0]);
+    else if (k === 'Enter') pqTrainLabel('problem');
+    else if (k === 'ArrowLeft') pqTrainMove(-1);
+    else if (k === 'ArrowRight') pqTrainMove(1);
+    else return;
+    e.preventDefault();
+}
+
+function _pqTrainHtml() {
+    const t = _pqTrain;
+    const head = `<div class="pqt-head">
+        <div><div class="pqt-eyebrow">Picture Quality · ${_ecEsc(t.store)}</div>
+             <div class="pqt-title">Train The Checker</div></div>
+        <div class="pqt-count">${t.done || 0} Graded · ${Math.max(0, t.left || 0)} To Go</div>
+        <button type="button" class="pqt-x" onclick="pqTrainClose()" aria-label="Close">×</button>
+      </div>`;
+    if (t.busy && !t.queue.length) return head + `<div class="pqt-empty">Loading photos…</div>`;
+    const err = t.err ? `<div class="pqt-err">${_ecEsc(t.err)}</div>` : '';
+    const p = t.queue[t.i];
+    if (!p) {
+        return head + err + `<div class="pqt-empty">${t.left > t.skipped ? 'Loading the next photos…'
+            : t.skipped ? `Done for now. The ${t.skipped} photo${t.skipped === 1 ? '' : 's'} you skipped will come back next time.`
+            : `All caught up — every photo from the graded listings at ${_ecEsc(t.store)} has an answer.`}</div>`;
+    }
+    const pick = t.picks;
+    const was = p.saved ? `<span class="pqt-was">Answered: ${_ecEsc(p.saved === 'problem'
+        ? (p.savedProblems || []).map(k => (_PQ_TRAIN_PROBS.find(x => x[0] === k) || [k, k])[1]).join(', ')
+        : p.saved === 'fine' ? 'Fine' : 'Not The Item')}</span>` : '';
+    return head + err + `
+      <div class="pqt-ask">Judge only how the photo is <b>taken</b>: centred, level, big enough, sharp, on a clean white backdrop with nothing else in frame and no reflections — the way the guide's example is.
+        Not every difference matters; would you reshoot it?</div>
+      <div class="pqt-pair">
+        <figure class="pqt-fig">
+          <div class="pqt-frame"><img src="${_ecEsc(p.img)}" alt="Listing photo ${p.n}"></div>
+          <figcaption><b>Photo ${p.n} of ${p.of}</b>${p.w && p.h && p.w !== p.h ? ` · ${p.w}×${p.h}` : ''}<br>
+            ${_ecEsc(p.title || '')} <span class="lh-sku">${_ecEsc(p.sku || '')}</span></figcaption>
+        </figure>
+        <figure class="pqt-fig">
+          <div class="pqt-frame">${p.example ? `<img src="${_ecEsc(p.example)}" alt="Guide example">`
+            : `<span class="pqt-noex">${p.shot ? 'No example photo for this shot' : 'Not matched to a guide shot'}</span>`}</div>
+          <figcaption><b>Guide: ${_ecEsc(p.shot || (p.said && p.said.length ? p.said.join(', ') : '—'))}</b><br>
+            ${_ecEsc(p.sheetName || '')}</figcaption>
+        </figure>
+      </div>
+      <div class="pqt-acts">
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqTrainLabel('fine')" ${t.busy ? 'disabled' : ''}>Fine <kbd>1</kbd></button>
+        ${_PQ_TRAIN_PROBS.map(([k, label, key]) => `<button type="button" class="pqt-btn pqt-prob${pick.has(k) ? ' pqt-on' : ''}"
+            onclick="pqTrainToggle('${k}')" ${t.busy ? 'disabled' : ''}>${label} <kbd>${key}</kbd></button>`).join('')}
+        <button type="button" class="pqt-btn pqt-save" onclick="pqTrainLabel('problem')" ${t.busy || !pick.size ? 'disabled' : ''}>Save Problems <kbd>Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqTrainLabel('not_item')" ${t.busy ? 'disabled' : ''}
+            title="A closeup of a detail, the box, a cable — framing does not apply">Not The Item <kbd>0</kbd></button>
+      </div>
+      <div class="pqt-nav">
+        <button type="button" class="pqt-link" onclick="pqTrainMove(-1)" ${t.i ? '' : 'disabled'}>← Back</button>
+        ${was}
+        <button type="button" class="pqt-link" onclick="pqTrainMove(1)">Skip →</button>
+      </div>`;
+}
+
+function _pqTrainRender() {
+    if (!_pqTrain) return;
+    let el = document.getElementById('pqTrainOverlay');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'pqTrainOverlay';
+        el.className = 'pqt-overlay';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-label', 'Train The Checker');
+        document.body.appendChild(el);
+    }
+    el.innerHTML = `<div class="pqt-box">${_pqTrainHtml()}</div>`;
+}
 window.pqSetTier = pqSetTier;
 
 // One strip of photos, in the order given, numbered by their CURRENT position so
@@ -55554,7 +56049,8 @@ function _pqRow(r) {
     const busy = _pqBusy.has(id);
     const checking = _pqChecking.has(id);
     const photos = r.photos || [];
-    const flagged = new Set((r.findings || []).map(f => f.photo).filter(Boolean));
+    // A listing-wide finding (a dirty table, a repeat) names its photos in `photos`.
+    const flagged = new Set((r.findings || []).flatMap(f => [f.photo, ...(f.photos || [])]).filter(Boolean));
     const now = photos.map((_, i) => i + 1);
     const isReorder = r.verdict === 'reorder' && r.reorder && Array.isArray(r.reorder.suggested);
     const findings = (r.verdict === 'retake' ? `<li class="pq-retake-said">${_pqRetakeSaid(r.findings)}</li>` : '')
@@ -55617,6 +56113,13 @@ function _pqRow(r) {
           ${r.handle ? `<a class="ec-pill ec-pill-store" href="https://${shop}/products/${_ecEsc(r.handle)}"
                target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}
         </div>
+        <!-- WHO LISTED IT (Ethan, 2026-10-08: "so the managers can coach their
+             teams on pictures"). The title tool's pill, resolved server-side
+             from the product's live Shopify tags — see _ltListerPill for why it
+             is always there and never a raw tag. Its own line, not a third pill
+             beside the links: those are two columns the SKU and photo count
+             centre over. -->
+        <div class="pq-lister">${_ltListerPill({ listerTag: r.lister || '' }, r.lister ? { [r.lister]: r.lister } : null)}</div>
         <div class="lt-acts pq-acts">
           ${isReorder && !r.stale
             ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve'}</button>
@@ -56260,9 +56763,12 @@ window.lhToolDone = lhToolDone;
 // the tag verbatim, because "JSmith" still tells you who a leaver was — the
 // server only sends tags that matched somebody, but a rename between the sweep
 // and the read would land here and a bare tag is better than nothing.
-function _ltLister(tag) {
+// `listers` is for a caller with its own map (Picture Quality); the title tool
+// passes nothing and reads _ltData's.
+function _ltLister(tag, listers) {
     if (!tag) return '';
-    return (_ltData && _ltData.listers && _ltData.listers[tag]) || tag;
+    const map = listers || (_ltData && _ltData.listers);
+    return (map && map[tag]) || tag;
 }
 
 // ⚠️ THE PILL IS ALWAYS THERE — a name, or "Unknown". Never nothing.
@@ -56281,8 +56787,8 @@ function _ltLister(tag) {
 // ⚠️ AND IT IS NEVER A GUESS. Unknown says the tool cannot tell you, which is
 // honest; a tag rendered raw would look like an accusation the tool cannot
 // stand behind.
-function _ltListerPill(r) {
-    const name = r && r.listerTag ? _ltLister(r.listerTag) : '';
+function _ltListerPill(r, listers) {
+    const name = r && r.listerTag ? _ltLister(r.listerTag, listers) : '';
     if (!name) {
         return `<span class="lt-lister lt-lister-unknown"
             title="No employee tag on this listing, or the tag belongs to somebody who has left. Shopify tags are where this comes from.">Unknown</span>`;

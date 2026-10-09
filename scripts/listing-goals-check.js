@@ -161,6 +161,61 @@ t('Off carries no goal whatever the shift', function () {
 });
 
 // ---------------------------------------------------------------------------
+// TRAINING (Ethan, 2026-10-06): half of what a Lister 1 would be expected to
+// list that day — the person's own L1 goal halved, so it follows the shift,
+// the Saturday factor, the store's factor and the new-hire ramp.
+// ---------------------------------------------------------------------------
+
+t('Training is half a full-timer Lister 1 day (18 -> 9)', function () {
+    lgReset();
+    ListingGoalsEngine.applyConfig(lgPayload());
+    var g = ListingGoalsEngine.goalFor('TR', LG_THU, { employee: 'Nick Hettinger', store: 'OVL' });
+    return g === 9 || 'trainee scored ' + g + ', expected 9';
+});
+
+t('Training follows the person own shift and Saturday', function () {
+    lgReset();
+    ListingGoalsEngine.applyConfig(lgPayload());
+    // Kaden 5h x 1.5 x 0.75 = 5.6 -> 6; Nick on a Saturday 8 x 1.5 x 0.5 x 0.75 = 4.5 -> 5 (L1 there is 9).
+    var k = ListingGoalsEngine.goalFor('TR', LG_THU, { employee: 'Kaden Lamothe', store: 'OVL' });
+    var s = ListingGoalsEngine.goalFor('TR', LG_SAT, { employee: 'Nick Hettinger', store: 'OVL' });
+    if (k !== 6) return 'part-time trainee scored ' + k + ', expected 6';
+    return s === 5 || 'Saturday trainee scored ' + s + ', expected 5';
+});
+
+t('A new hire in Training is half their ramp rate, never more than listing', function () {
+    lgReset();
+    ListingGoalsEngine.applyConfig(lgPayload({ newHires: ['Nick Hettinger'] }));
+    var tr = ListingGoalsEngine.goalFor('TR', LG_THU, { employee: 'Nick Hettinger', store: 'OVL' });
+    var l1 = ListingGoalsEngine.goalFor('L1', LG_THU, { employee: 'Nick Hettinger', store: 'OVL' });
+    // 8 x 1.0 x 0.75 = 6 as L1, so 3 in training.
+    if (l1 !== 6) return 'new-hire L1 ' + l1 + ', expected 6';
+    return tr === 3 || 'new-hire trainee scored ' + tr + ', expected 3';
+});
+
+t('Training moves with the lister rate (it is not a number of its own)', function () {
+    lgReset();
+    var p = lgPayload();
+    p.cfg = Object.assign({}, p.cfg, { rate_lister: 4.0 });
+    ListingGoalsEngine.applyConfig(p);
+    var g = ListingGoalsEngine.goalFor('TR', LG_THU, { employee: 'Nick Hettinger', store: 'OVL' });
+    ListingGoalsEngine.applyConfig(lgPayload());   // put the shared cfg back
+    // 8 x 2.0 x 0.75 = 12 (L1 would be 24)
+    return g === 12 || 'trainee at rate 4.0 scored ' + g + ', expected 12';
+});
+
+t('Every role widget offers TR, uncapped, and it counts as working', function () {
+    var html = goalsRoleDotsHtml(['B1', 'B2', 'L1', 'L2'], 'TR', 'Nick Hettinger', '', 'OVL');
+    if (html.indexOf('data-role="TR"') < 0) return 'no TR chip';
+    if (!/class="role-dot active" data-role="TR"/.test(html)) return 'saved TR is not shown as selected';
+    if (ROLE_CAP.TR !== Infinity) return 'TR is capped at ' + ROLE_CAP.TR;
+    if (!_isWorkingRole('TR')) return 'TR is not a working role';
+    // It must not satisfy "there is a lister today".
+    var cov = _lgCoverage([{ date: '9/17/2026', role: 'B1' }, { date: '9/17/2026', role: 'TR' }], '9/17/2026', []);
+    return cov.covered === false || 'a buyer plus a trainee counted as covered';
+});
+
+// ---------------------------------------------------------------------------
 // Placeholders must not be SAVED. Before the store's own payload lands, the
 // engine is running on district defaults -- the wrong factor and a flat day for
 // anyone who isn't full-time. OVL has rows reading 19 (x 0.78) beside rows

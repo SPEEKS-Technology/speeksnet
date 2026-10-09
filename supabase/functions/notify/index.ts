@@ -71,6 +71,15 @@ const CATEGORIES = [
 ] as const;
 type Category = typeof CATEGORIES[number];
 
+// Tools switched off for everyone, overrides included. Parking a tool on the site
+// (commenting out its FEATURE_CATALOG entry) leaves feature_overrides empty for
+// it, which featureAllows reads as "use the default" — i.e. still mail everyone.
+// So a parked tool's emails need naming here too. A queued row for a paused tool
+// is dropped, not held: un-pausing should not flush weeks of stale "item added".
+// Aging Inventory: PAUSED 2026-10-06 while Ethan decides whether to keep it.
+const PAUSED_FEATURES = new Set<string>(["widget-aging-inventory"]);
+const AGING_PAUSED = PAUSED_FEATURES.has("widget-aging-inventory");
+
 // Popout copy. Kept here rather than in the page so the labels and the routing
 // can never drift apart — the frontend renders whatever this returns.
 const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
@@ -84,7 +93,11 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   // and listing -- so the promise is real. See notifyStage in b2b-deals.
   requests:       { label: "Requests Waiting On Me" ,     blurb: "B2B deals waiting on you, plus purchase and recycle requests." },
   claims:         { label: "Insurance Claims",           blurb: "A claim that has gone unresolved past a week." },
-  variance_aging: { label: "Variance & Aging Inventory",  blurb: "New sheets and notes, plus the reply deadlines on both." },
+  // While Aging Inventory is paused the category is Variance alone. The KEY stays
+  // variance_aging so every saved preference still lines up when aging returns.
+  variance_aging: AGING_PAUSED
+    ? { label: "Variance Replies", blurb: "New sheets, the DM's review, and the reply deadline." }
+    : { label: "Variance & Aging Inventory",  blurb: "New sheets and notes, plus the reply deadlines on both." },
   deadlines:      { label: "My Deadlines",               blurb: "Store KPIs, listing goals, store goals, expense reports." },
   scores:         { label: "Scores & Audits"  ,            blurb: "A SPEEKS scorecard or a PayMore audit being submitted." },
   // Named for the queue, not the mechanism: a manager knows what "a listing
@@ -184,7 +197,9 @@ const metaFor = (c: Category, role: string) => {
 // `roles`, when present, narrows a sub the same way CATEGORY_ROLES narrows a
 // category: an ASM receives no variance at all, so showing them a "Variance
 // replies" switch would be the same lie one level down.
-type Sub = { key: string; label: string; blurb: string; kinds: string[]; roles?: Set<string> };
+// `feature` ties a sub to a tool, so a paused tool's switch is not drawn (see
+// PAUSED_FEATURES) — offering a toggle for mail that cannot arrive is the same lie.
+type Sub = { key: string; label: string; blurb: string; kinds: string[]; roles?: Set<string>; feature?: string };
 
 const STORE_SIDE_ROLES = ["manager", "owner (manager)", "owner manager"];
 
@@ -233,7 +248,8 @@ const SUBS: Record<Category, Sub[]> = {
       roles: new Set([...STORE_SIDE_ROLES, "district manager", "ceo"]) },
     { key: "aging",    label: "Aging Inventory", blurb: "New items, the DM's replies, and the review deadline.",
       kinds: ["aging_item_added", "aging_dm_note", "aging_store_reply",
-              "agingDue", "agingDmReview", "agingMgrReview"] },
+              "agingDue", "agingDmReview", "agingMgrReview"],
+      feature: "widget-aging-inventory" },
   ],
   deadlines: [
     { key: "kpis",     label: "Store KPIs", blurb: "Weekly and monthly entry.",
@@ -258,8 +274,11 @@ const SUBS: Record<Category, Sub[]> = {
 };
 
 // The subs worth showing this role. Fewer than two is not a split worth drawing.
+const liveSubs = (c: Category, role: string) =>
+  (SUBS[c] || []).filter((x) => (!x.roles || x.roles.has(role))
+    && !(x.feature && PAUSED_FEATURES.has(x.feature)));
 const subsFor = (c: Category, role: string) => {
-  const list = (SUBS[c] || []).filter((x) => !x.roles || x.roles.has(role));
+  const list = liveSubs(c, role);
   return list.length > 1 ? list : [];
 };
 
@@ -370,10 +389,14 @@ const CATEGORY_ROLES: Record<Category, Set<string> | null> = {
 };
 
 // The categories worth showing THIS person, in the canonical order.
+// A category that IS split into subs, but none survive for this role, has
+// nothing to send them — an ASM's variance_aging while aging is paused (they get
+// no variance). Categories with no subs at all are unaffected.
 const categoriesFor = (role: string) =>
   CATEGORIES.filter((c) => {
     const allowed = CATEGORY_ROLES[c];
-    return !allowed || allowed.has(role);
+    if (allowed && !allowed.has(role)) return false;
+    return !(SUBS[c] || []).length || liveSubs(c, role).length > 0;
   });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -548,6 +571,7 @@ function passesAudience(row: any, person: Person, overrides: Map<string, any[]>)
   const byRole = !roles?.length
     || roles.map((r: string) => r.toLowerCase().trim()).includes(person.role);
   const key = row.audience_feature ? String(row.audience_feature) : null;
+  if (key && PAUSED_FEATURES.has(key)) return false;
   return key ? featureAllows(overrides.get(key) || [], person, byRole) : byRole;
 }
 
@@ -1601,6 +1625,7 @@ async function runDigest(sb: any, opts: { dryRun: boolean; to: string | null; on
       // Revoke-only: `for` already said they owe it, so the override's only job
       // is to take it away from somebody the tool is hidden from.
       const fk = typeof d.feature === "function" ? d.feature(person) : (d.feature || null);
+      if (fk && PAUSED_FEATURES.has(fk)) continue;
       if (fk && !featureAllows(dueOverrides.get(fk) || [], person, true)) continue;
       if (!wants(prefs.get(person.key), d.cat, d.slug)) continue;
       hits.push({ d, person, key: `due:${d.slug}:${d.period}:${person.key}` });
