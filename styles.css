@@ -19675,6 +19675,71 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .pq-row .lt-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; justify-items: center; }
 .pq-row .rc-links { display: flex; gap: 6px; }
 .pq-row .rc-links .ec-pill { flex: 1 1 0; justify-content: center; }
+/* Who listed it: its own line, centred under the two links. */
+.pq-lister { display: flex; justify-content: center; }
+
+/* TRAIN THE CHECKER (2026-10-08) — one photo beside the guide's example of the
+   same shot, and a row of answers. The photo is shown WHOLE inside a square
+   frame with a visible edge: the question is where the item sits in the frame,
+   so the frame's edge has to be on screen, never cropped by object-fit: cover. */
+.pqt-entry {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--cb-line, #e3e8ee);
+    font-size: 12px; color: var(--cb-muted, #647082);
+}
+.pqt-overlay {
+    position: fixed; inset: 0; z-index: 10050; background: rgba(15, 23, 42, .55);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.pqt-box {
+    background: #fff; border-radius: 14px; width: min(1100px, 100%); max-height: 100%;
+    overflow: auto; padding: 18px 20px; box-shadow: 0 20px 50px rgba(15, 23, 42, .3);
+}
+.pqt-head { display: flex; align-items: flex-start; gap: 12px; }
+.pqt-head > div:first-child { flex: 1 1 auto; }
+.pqt-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--cb-faint, #8a94a3); }
+.pqt-title { font-size: 18px; font-weight: 800; color: #1e293b; }
+.pqt-count { font-size: 12px; font-weight: 700; color: var(--cb-muted, #647082); padding-top: 6px; white-space: nowrap; }
+.pqt-x {
+    border: 0; background: none; font-size: 26px; line-height: 1; color: #94a3b8; cursor: pointer; padding: 0 4px;
+}
+.pqt-ask { margin: 10px 0 12px; font-size: 13px; color: #334155; }
+.pqt-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.pqt-fig { margin: 0; min-width: 0; }
+.pqt-frame {
+    aspect-ratio: 1 / 1; width: min(100%, 56vh); margin: 0 auto;
+    border: 2px solid #cbd5e1; border-radius: 8px; background: #f8fafc;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.pqt-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pqt-noex { font-size: 12px; font-weight: 700; color: #94a3b8; text-align: center; padding: 12px; }
+.pqt-fig figcaption { margin-top: 6px; font-size: 12px; color: var(--cb-muted, #647082); line-height: 1.4; overflow-wrap: anywhere; }
+.pqt-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.pqt-btn {
+    padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff;
+    font: inherit; font-size: 12.5px; font-weight: 700; color: #334155; cursor: pointer; white-space: nowrap;
+}
+.pqt-btn:disabled { opacity: .45; cursor: default; }
+.pqt-btn kbd {
+    margin-left: 4px; padding: 0 5px; border-radius: 4px; background: #f1f5f9; border: 1px solid #e2e8f0;
+    font-size: 10.5px; font-family: inherit; color: #64748b;
+}
+.pqt-fine { border-color: #86efac; background: #f0fdf4; color: #166534; }
+.pqt-prob.pqt-on { border-color: #fca5a5; background: #fef2f2; color: #b91c1c; }
+.pqt-save { border-color: #b91c1c; background: #b91c1c; color: #fff; }
+.pqt-save kbd { background: rgba(255, 255, 255, .2); border-color: transparent; color: #fff; }
+.pqt-skip { color: #64748b; }
+.pqt-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
+.pqt-link { border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: #475569; cursor: pointer; }
+.pqt-link:disabled { opacity: .35; cursor: default; }
+.pqt-was { font-size: 12px; font-weight: 700; color: #475569; }
+.pqt-err { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: #fef2f2; color: #b91c1c; font-size: 12.5px; font-weight: 600; }
+.pqt-empty { padding: 40px 10px; text-align: center; font-size: 14px; font-weight: 600; color: var(--cb-muted, #647082); }
+@media (max-width: 700px) {
+    .pqt-pair { grid-template-columns: 1fr; }
+    .pqt-frame { width: min(100%, 42vh); }
+    .pqt-box { padding: 14px 16px; }
+}
 .pq-acts { width: 100%; }
 .pq-acts .lt-ok, .pq-acts .lt-no {
     flex: 1 1 0; min-width: 0; padding: 5px 8px; font-size: 11.5px; line-height: 1.3;

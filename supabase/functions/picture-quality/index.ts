@@ -98,7 +98,9 @@ const PRICES: Record<string, [number, number]> = {   // $ per million in / out
 
 // ⚠️ BUMP WHEN WHAT WE ASK CHANGES. It is part of every stamp, so a new recipe
 // re-grades everything instead of leaving old answers given less to look at.
-const RECIPE = "pq-v8";   // v8 2026-09-25: a flag must be seen by two independent looks
+// v8 2026-09-25: a flag must be seen by two independent looks
+// v11 (a separate framing look) scored worse and is off — see FramingReport.
+const RECIPE = "pq-v12";  // v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
 
 // Photos are sent at this size. The model sees framing, labels and screens
 // fine at 800px; full size would roughly triple the bill for nothing.
@@ -202,7 +204,7 @@ const parseList = (v: unknown): string => {
 };
 
 type Listing = {
-  id: string; title: string; handle: string; sku: string; collections: string[];
+  id: string; title: string; handle: string; sku: string; collections: string[]; tags: string[];
   condition: string; cosmetic: string; functional: string; included: string; notIncluded: string;
   // mediaId is what productReorderMedia moves; thumb is what the panel draws.
   photos: { url: string; width: number; height: number; src: string; mediaId: string; thumb: string }[];
@@ -210,7 +212,7 @@ type Listing = {
 
 async function fetchListings(shop: string, token: string, ids: string[]): Promise<Listing[]> {
   const q = `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Product {
-      id title handle
+      id title handle tags
       variants(first: 1) { nodes { sku } }
       collections(first: 12) { nodes { handle } }
       condition: metafield(namespace: "custom", key: "condition") { value }
@@ -228,6 +230,7 @@ async function fetchListings(shop: string, token: string, ids: string[]): Promis
   return (data.nodes || []).filter(Boolean).map((p: any) => ({
     id: p.id, title: p.title, handle: p.handle || "", sku: p.variants?.nodes?.[0]?.sku || "",
     collections: (p.collections?.nodes || []).map((c: any) => c.handle),
+    tags: Array.isArray(p.tags) ? p.tags.map(String) : [],
     condition: parseList(p.condition?.value),
     cosmetic: strip(p.cosmetic?.value), functional: strip(p.functional?.value),
     included: parseList(p.included?.value), notIncluded: parseList(p.notIncluded?.value),
@@ -264,6 +267,60 @@ async function boilerplateFor(shop: string, token: string): Promise<Map<string, 
     after = data.products.pageInfo.endCursor;
   }
   return counts;
+}
+
+// --- who listed it ------------------------------------------------------------
+// Ethan, 2026-10-08: "add the tag of who listed it so the managers can coach
+// their teams on pictures." The same tag and the same matcher as the title
+// tool (listing-titles listerIndex/listerFrom — read the long comments there):
+// a tag counts only when it matches a real person in `users`, a store's own
+// people beat the estate, a shared store login is never a lister, and a
+// colliding form belongs to nobody. Copied rather than imported because the
+// functions share no module; ⚠️ keep the two in step.
+//
+// ⚠️ READ LIVE, NEVER STORED. The panel already reads every queued product from
+// Shopify for its photos, so the tags come with them — no column, no migration,
+// and a rename shows right the next time the page loads.
+const squashName = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "");
+type ListerIx = { byStore: Record<string, Record<string, string>>; all: Record<string, string> };
+function listerIndex(users: { name: string; role?: string; store?: string }[]): ListerIx {
+  const up = (u: any) => String(u?.store || "").trim().toUpperCase();
+  const byStore: Record<string, Record<string, string>> = {};
+  for (const st of new Set(users.map(up).filter(s => s && s !== "CORP"))) {
+    byStore[st] = indexOf(users.filter(u => up(u) === st || up(u) === "CORP"), st);
+  }
+  return { byStore, all: indexOf(users, null) };
+}
+function indexOf(users: { name: string; role?: string; store?: string }[], home: string | null) {
+  const ix: Record<string, string> = {}, local: Record<string, boolean> = {};
+  for (const u of users) {
+    const full = String(u?.name || "").trim();
+    if (String(u?.role || "").trim().toLowerCase() === "store" || /\bteam$/i.test(full)) continue;
+    const parts = full.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) continue;
+    const first = parts[0], last = parts[parts.length - 1];
+    for (const form of [first[0] + last, first + last, first + last[0]]) {
+      const k = squashName(form);
+      if (k.length < 3) continue;
+      const isLocal = home !== null && String(u?.store || "").trim().toUpperCase() === home;
+      if (!(k in ix)) { ix[k] = full; local[k] = isLocal; continue; }
+      if (ix[k] === full) continue;
+      if (isLocal && !local[k]) { ix[k] = full; local[k] = true; }
+      else if (isLocal === local[k]) ix[k] = "";
+    }
+  }
+  return ix;
+}
+function listerFrom(tags: string[], ix: ListerIx, store: string): { tag: string; name: string } | null {
+  for (const table of [ix.byStore[store], ix.all]) {
+    if (!table) continue;
+    for (const t of tags) {
+      const raw = String(t || "").trim();
+      const hit = raw && table[squashName(raw)];
+      if (hit) return { tag: raw, name: hit };
+    }
+  }
+  return null;
 }
 
 // --- the guide ----------------------------------------------------------------
@@ -338,6 +395,8 @@ const PhotoReport = z.object({
   n: z.number().int(),
   shots: z.array(z.string()),
   whole_item: z.boolean(),
+  // An earlier photo this one repeats — the same view, barely moved. Null if none.
+  repeats: z.number().int().nullable(),
   framing: z.enum(["matches", "close", "off"]),
   framing_problems: z.array(z.enum(["crooked", "off_center", "too_small", "cut_off", "wrong_angle"])),
   issues: z.array(z.object({
@@ -377,15 +436,16 @@ sheet_fits: false only if this sheet is clearly the wrong kind of item (e.g. the
 For each photo (numbered from 1, in listing order), report:
 - shots: which sheet shot labels it covers. One photo may cover two (a front view with the lens cap off is both "Front of Projector" and "Front of Projector (Lens Open)"). Use "Box" for packaging, "Extra" for anything that is not a sheet shot.
 - whole_item: true if it is meant to show the whole item, false for a deliberate closeup (glass, mount, ports, a label). A closeup may be tight — never report cut_off on one.
-- framing: compare the photo to the sheet's EXAMPLE of the same shot — the example is the store's standard. "matches" = shot like the example. "close" = small differences a buyer would not care about. "off" = it clearly does not meet the example's standard, for one or more framing_problems:
-  crooked — the item is visibly tilted or leaning where the example is straight and level. Not for a round item shot face-on (a lens, a speaker cone).
-  off_center — the item sits well to one side or corner instead of centred like the example.
+- repeats: the number of an EARLIER photo this one repeats — the same side from the same angle, only slightly moved or re-cropped, adding nothing a buyer did not already see. Null if it shows anything new (another side, another angle, a detail).
+- framing: compare the photo to the sheet's EXAMPLE of the same shot. "matches" = shot like the example. "close" = small differences a buyer would not care about. "off" = one of these framing_problems. Judge EVERY photo of the item on its own — a listing where photo after photo sits low or to one side of the frame, or leans, is exactly what the store wants found, even when each one alone looks like a small miss:
+  crooked — the item is rotated IN THE PICTURE: edges that should run level or upright visibly slant, as if the camera was turned or the item slumped on its stand. A different VIEWPOINT is not crooked — a tablet stood on edge and shot from the corner, a game case shown at the same angle as the example, a deliberately angled side view. A round item shot face-on (a lens, a speaker cone) is never crooked.
+  off_center — the item sits clearly to one side, or low or high, in the frame instead of centred like the example (a stray cable or the stand does not count; the item does).
   too_small — the item is much smaller in the frame than in the example, leaving a lot of empty background (e.g. a phone lying small in the middle of the photo where the example fills the frame). A tall or thin item leaving space on its short sides is not this.
   cut_off — part of an item meant to be shown whole is outside the frame (e.g. the top of a tablet's screen cropped off).
-  wrong_angle — taken from a different angle than the example so it does not show what the shot is for (e.g. a "Top Side" shot taken from above with the phone lying flat, where the example is a close, angled view of the edge).
-  If framing is "matches" or "close", framing_problems is empty. Photos of OTHER things — the box, cables, chargers, controllers, cases, an everything-included spread — are staged: give them "matches". A photo of the item itself is always judged, even if it is not a sheet shot. A deliberate closeup of a detail (a label, ports, a lens mount) is never cut_off — but a photo meant to show the whole screen or body that crops part of it off is.
+  wrong_angle — the side or part the shot is FOR cannot be seen (e.g. a "Top Side" shot taken from straight above with the phone lying flat, so the top edge is not visible). A different angle from the example that still shows that side clearly is NOT wrong_angle — the guide's photos are there to show each side of the device, not to fix one exact angle. A photo that is not a sheet shot is never wrong_angle. A photo turned upside down or sideways is not wrong_angle.
+  If framing is "matches" or "close", framing_problems is empty. Photos of OTHER things that come WITH the item — its box, cables, chargers, a console's controllers, a case, an everything-included spread — are staged: give them "matches". But when that thing IS the item (a controller on the Game Controllers sheet, a box on a New In Box sheet), it is the item and is judged. A photo of the item itself is always judged, even if it is not a sheet shot. A deliberate closeup of a detail (a label, ports, a lens mount, a memory stick's pins shot on its stand) is never cut_off — but a photo meant to show the whole screen or body that crops part of it off is.
 - issues, only when clearly true, each with a severity. "major" means a buyer would notice and it hurts the listing; "minor" means you can see it but it does not matter. Only major issues are acted on:
-  blurry, too_dark_or_glare — the detail the shot exists for cannot be made out. A "Screen Off" shot is meant to be a dark screen with reflections — never report it.
+  blurry, too_dark_or_glare — the detail the shot exists for cannot be made out AND it is something a buyer needs: a label, a screen, a flaw, the face or body of the item. An edge-on view of a thin item with nothing printed on its edge (a memory stick's side) is not this, even if soft. A "Screen Off" shot is meant to be a dark screen with reflections — never report it.
   clutter — another object, a hand, or mess in frame (not lots, accessories or everything-included shots).
   stock_photo — a manufacturer or web image, not this unit.
   fake_or_edited — looks AI-generated, composited or heavily edited (a product floating unnaturally with no surface).
@@ -407,6 +467,79 @@ suggested_order: every photo number once, in the order the sheet would put them 
 title_notes: only where the photos show the title is wrong or incomplete — a model number on a box or label that differs from the title, a feature the photos contradict, or "Cartridge Only"/"Disc Only" missing from a game with no case. Empty if none.
 
 summary: one plain sentence a store manager would understand.`;
+
+// --- the framing look ----------------------------------------------------------
+//
+// ⚠️ CENTRED, LEVEL AND BIG ENOUGH ARE ASKED IN A CALL OF THEIR OWN (Ethan,
+// 2026-10-08: "I want our tool to work 100% of the time"). Inside the main
+// review they were three words among forty fields, and the model passed two PS3
+// controllers, an iPhone SE and an iPad Ethan would flag — on the gold PS3 one
+// look named four crooked photos and the next named none. A call that does
+// nothing but framing, photo by photo against the examples, is the attention
+// those three words were not getting. Measuring was tried first and failed —
+// see the note above decide().
+//
+// ⚠️ OFF BY DEFAULT — IT SCORED WORSE (2026-10-08, 19/29 against pq-v10's
+// 24/29). It swung the other way: it caught the iPhone SE, iPad and gold PS3,
+// and then called the Onyx's edge shots, the WSP PS5, the Xbox One, the Ray-Ban
+// box and the black Galaxy "crooked" — BOTH looks agreeing, so it is a steady
+// misreading of viewpoint as lean, not noise. And the extra calls pushed three
+// listings past the wall clock. Kept for calibration only: ?framing=1 on the
+// secret route turns it on. Next step is a per-PHOTO labelled set from Ethan
+// (centred / off / crooked), so this can be tuned against photos, not listings.
+const FramingReport = z.object({
+  photos: z.array(z.object({
+    n: z.number().int(),
+    item_photo: z.boolean(),
+    centred: z.enum(["centred", "slightly_off", "off"]),
+    level: z.enum(["level", "slight", "slanted"]),
+    size: z.enum(["like_example", "smaller", "much_smaller"]),
+    note: z.string(),
+  })),
+});
+type FramingT = z.infer<typeof FramingReport>;
+
+const FRAMING_SYSTEM = `You check ONE thing about a used-electronics listing's photos: whether each photo of the item is framed to the store's standard. The standard is the sheet's example photos — the item on a plain backdrop, usually on a clear stand, centred, level, and filling most of the frame.
+
+This check exists because the owner looked at a listing where every photo seemed fine at a glance and said "a lot of the photos are not centred and some are crooked". Look at each photo on its own, carefully, and compare it with the example of the same shot.
+
+For every photo, numbered from 1 in listing order:
+- item_photo: true if it shows the whole item (any side, any screen). False for a deliberate closeup of a detail (a label, ports, pins, a lens mount), and for photos of things that come with the item rather than the item itself (its box, cables, chargers, a spread of everything included). When the sheet's item IS a box or a controller, photos of that box or controller are item photos.
+- centred: where the item's own outline sits — ignore the stand, its shadow and any trailing cable. "off" = clearly to one side, or clearly high or low: the gap on one side is about twice the gap on the other or more. "slightly_off" = you can see it is not quite centred but a buyer would not notice. Otherwise "centred".
+- level: "slanted" = the item is rotated in the picture — edges that should run level or upright visibly tilt, as if the camera was turned or the item slumped on the stand. A different VIEWPOINT is not slanted: a device stood on edge and shot from its corner, a side view angled like the example, a box shown in perspective. A round item shot face-on is always "level". "slight" = a tilt you can see but would not reshoot for.
+- size: compare how much of the frame the item fills with the example of the same shot. "much_smaller" = clearly less than the example — lots of empty backdrop where the example fills the frame. A tall or thin item leaving space on its short sides is not smaller. A small item (a cartridge, a memory stick) shot as close as the example is "like_example".
+- note: a few words on what you saw.
+For a photo that is not an item photo, give "centred", "level", "like_example".`;
+
+async function framingLook(client: Anthropic, model: string, effort: string, sheetBlocks: any[], photoBlocks: any[]) {
+  const content: any[] = [...sheetBlocks, { type: "text", text: "\n\nThe listing's photos, in listing order:" }];
+  photoBlocks.forEach((b, i) => { content.push({ type: "text", text: `Photo ${i + 1}` }); content.push({ ...b }); });
+  // The second look reuses the first's prompt whole, so it is read from cache.
+  content[content.length - 1].cache_control = { type: "ephemeral" };
+  const res = await client.messages.parse({
+    model, max_tokens: 12000, system: FRAMING_SYSTEM,
+    messages: [{ role: "user", content }],
+    output_config: { effort, format: zodOutputFormat(FramingReport) },
+  } as any);
+  const parsed = res.parsed_output as FramingT | null;
+  if (!parsed) throw new Error("the framing look returned nothing that matched its schema");
+  return { report: parsed, usage: res.usage };
+}
+
+// Which photos are off, and how. Only the clear calls count — slightly off, a
+// slight tilt, a bit smaller are what the owner would not reshoot for.
+function framingFaults(f: FramingT, gameSheet: boolean): Map<number, string[]> {
+  const out = new Map<number, string[]>();
+  for (const p of f.photos) {
+    if (!p.item_photo) continue;
+    const probs: string[] = [];
+    if (p.level === "slanted") probs.push("crooked");
+    if (p.centred === "off") probs.push("off_center");
+    if (p.size === "much_smaller" && !gameSheet) probs.push("too_small");   // rule 11
+    if (probs.length) out.set(p.n, probs);
+  }
+  return out;
+}
 
 function listingText(l: Listing, standard: Map<string, number>) {
   const tag = (s: string) => ((standard.get(norm(s)) || 0) >= BOILERPLATE_MIN ? "[standard] " : "[unit] ") + s;
@@ -471,17 +604,22 @@ async function pickSheet(client: Anthropic, model: string, l: Listing, sheets: S
   return { pick: res.parsed_output as z.infer<typeof SheetPick> | null, usage: res.usage };
 }
 
-async function review(client: Anthropic, model: string, effort: string, l: Listing, sheet: Sheet,
-                      standard: Map<string, number>, otherSheets: string) {
-  // The sheet and its examples go first and are cached, so a store's fifty
-  // iPhones pay for the iPhone examples once.
-  const sheetBlocks: any[] = [{ type: "text", text: sheetText(sheet) + "\n\nExample photos from the sheet:" }];
+// The sheet and its examples go first and are cached, so a store's fifty
+// iPhones pay for the iPhone examples once.
+async function sheetBlocksFor(sheet: Sheet) {
+  const blocks: any[] = [{ type: "text", text: sheetText(sheet) + "\n\nExample photos from the sheet:" }];
   for (const [i, s] of sheet.shots.entries()) {
     if (!s.img) continue;
-    sheetBlocks.push({ type: "text", text: `Example for shot ${i + 1}: ${s.label}` });
-    sheetBlocks.push(await imageBlock(guideUrl(s.img)));
+    blocks.push({ type: "text", text: `Example for shot ${i + 1}: ${s.label}` });
+    blocks.push(await imageBlock(guideUrl(s.img)));
   }
-  sheetBlocks[sheetBlocks.length - 1].cache_control = { type: "ephemeral" };
+  blocks[blocks.length - 1].cache_control = { type: "ephemeral" };
+  return blocks;
+}
+
+async function review(client: Anthropic, model: string, effort: string, l: Listing, sheet: Sheet,
+                      standard: Map<string, number>, otherSheets: string) {
+  const sheetBlocks = await sheetBlocksFor(sheet);
 
   const listingBlocks: any[] = [{ type: "text", text:
     "OTHER SHEETS (only if this one is clearly wrong for the item): " + otherSheets +
@@ -530,9 +668,69 @@ const ISSUE_TEXT: Record<string, string> = {
   wrong_item: "shows a different item", pair_not_together: "should show both speakers together",
 };
 
-type Finding = { code: string; text: string; photo?: number; shot?: string; shots?: string[] };
+type Finding = { code: string; text: string; photo?: number; shot?: string; shots?: string[]; photos?: number[] };
 
-function decide(l: Listing, sheet: Sheet, r: ReportT) {
+// ⚠️ CENTRING IS JUDGED BY THE MODEL, AND MEASURING WAS TRIED (2026-10-08).
+// OVL round 2: Ethan called two PS3 controllers and an original Xbox
+// controller "a lot of the photos are not centred and some are crooked", and
+// the model had said "close" to nearly all of them. Two fixes to measure
+// instead, both scored against his key and both worse:
+//  - the MODEL giving an item box + lean in degrees (pq-v9, 14/19): it put the
+//    centre at 0.47–0.52 on every photo of the black PS3, rounding to the
+//    middle whatever the prompt said, and read viewpoint as lean — the Onyx's
+//    edge-on shots and Death Stranding's case came back "crooked".
+//  - PIXELS against the backdrop (prototype, not shipped): a white controller
+//    on the white sweep barely registers, and the clear stand, a trailing cable
+//    and the corner vignette all count as "item".
+// What was actually wrong was the prompt calling CONTROLLERS staged, so on the
+// Game Controllers sheet the item itself was waved through as "matches". That
+// is fixed in REVIEW_SYSTEM, and crooked now means slanted in the picture, not
+// a different viewpoint. Measure again only with a bigger labelled set.
+// pq-v10 still scored 24/29, all four framing misses passed — so since pq-v11
+// centred / level / size come from framingLook, a call that asks nothing else.
+
+
+// ⚠️ A LISTING IS FLAGGED BY ITS SCORE, NOT BY HAVING A FINDING (Ethan,
+// 2026-10-08): "I just don't need you to flag something that you believe is
+// 90%+ effective with pictures … minor things like additional photos being off
+// centre can be weighted less. Only major things and things missing that could
+// impact a sale should be higher." Every listing starts at 100 and each finding
+// costs what it costs a buyer; under PASS_BAR it goes to the queue. The
+// findings are kept either way, so a passing listing still says what it lost.
+//
+// Weights were checked offline against the saved calibration runs before any
+// paid run: the Micron RAM (one soft extra, 96) now passes as Ethan said, and
+// every other call on the key held. ⚠️ Re-score scratch runs before changing
+// a weight: HP 952XL sits at 88 (two box ends + a repeat), and a repeat at 3
+// instead of 4 tips it to 89 — the wasted slot IS why Ethan flagged it.
+const PASS_BAR = 90;
+const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake_or_edited", "wrong_item",
+  "personal_info", "flaw_not_shown", "no_photos", "pair_not_together"]);
+function pictureScore(findings: Finding[], photoCount: number) {
+  const n = Math.max(1, photoCount);
+  const info = (s: string) => /(screen|serial|model|settings|battery|info|about|storage|software|cpu|ram|gpu)/i.test(s);
+  let score = 100;
+  const costs: { code: string; cost: number; photo?: number; shot?: string }[] = [];
+  for (const f of findings) {
+    const cost =
+      ALWAYS_FLAG.has(f.code) ? 100
+      // Missing: an info shot is the only place a buyer learns that fact; a box's
+      // top or bottom is "not crucial to the sale"; a plain view sits between.
+      : f.code === "missing_shot" ? (info(f.shot || "") ? 15 : /^(top|bottom) of box$/i.test(f.shot || "") ? 4 : 8)
+      : f.code === "repeat" ? 4 * (f.photos?.length || 1)
+      // The lead photo is what a buyer sees first. Any other photo's framing is
+      // shared out by the photo count: one soft photo of fifteen costs little,
+      // most of them off costs a lot.
+      : f.code === "framing" || f.code === "lead" ? (f.photo === 1 ? 12 : 30 / n)
+      : f.code === "clutter" ? 4
+      : 8;   // blurry or glare on a sheet shot, anything new
+    score -= cost;
+    costs.push({ code: f.code, cost: Math.round(cost * 10) / 10, photo: f.photo, shot: f.shot });
+  }
+  return { score: Math.max(0, Math.round(score)), costs };
+}
+
+function decide(l: Listing, sheet: Sheet, r: ReportT, faults?: Map<number, string[]>) {
   const findings: Finding[] = [];
 
   // Rule 3 — measured, not asked.
@@ -562,9 +760,21 @@ function decide(l: Listing, sheet: Sheet, r: ReportT) {
   // "off" counts; "close" never does.
   const PROBLEM_TEXT: Record<string, string> = { crooked: "crooked", off_center: "not centred",
     too_small: "too small in the frame", cut_off: "cut off", wrong_angle: "taken from the wrong angle" };
+  // ⚠️ A PHOTO THAT IS NOT A SHEET SHOT HAS NO EXAMPLE TO BE AT THE WRONG ANGLE
+  // TO. OVL round 2 (2026-10-08): the RAM's three edge-on extras and a PS3's
+  // upside-down extra were all "wrong angle"; Ethan passed every one.
+  const extraOnly = (p: ReportT["photos"][number]) => p.shots.every(s => /^extra/i.test(s.trim()));
+  // Crooked, off-centre and too small come from the FRAMING LOOK only (see
+  // framingLook); the main review's word on them is not read. Cut off and wrong
+  // angle stay here, because they need to know what the shot is FOR.
+  // Without a framing look (the default — see FRAMING_LOOK), the review's own
+  // word on them stands, exactly as pq-v10 graded.
+  const ownLook = new Set(faults ? ["crooked", "off_center", "too_small"] : []);
   for (const p of r.photos) {
-    if (p.framing !== "off" || staged(p)) continue;
-    const probs = p.framing_problems.filter(x => !(x === "cut_off" && !p.whole_item) && !(x === "too_small" && gameSheet));
+    if (staged(p)) continue;
+    const said = p.framing !== "off" ? [] : p.framing_problems.filter(x => !ownLook.has(x)
+      && !(x === "cut_off" && !p.whole_item) && !(x === "wrong_angle" && extraOnly(p)));
+    const probs = [...(faults?.get(p.n) || []), ...said];
     if (probs.length) {
       findings.push({ code: "framing", photo: p.n,
         text: `Photo ${p.n} isn't to the guide's standard: ${probs.map(x => PROBLEM_TEXT[x] || x).join(", ")}.` });
@@ -580,6 +790,11 @@ function decide(l: Listing, sheet: Sheet, r: ReportT) {
       if (it.severity !== "major") continue;
       const issue = it.type;
       if (FRAMING.has(issue) && staged(p)) continue;
+      // A soft EXTRA hides nothing the guide asks for — the sheet's own shots
+      // carry the listing (Ethan, OVL Micron RAM 2026-10-08: the blurry edge-on
+      // shots "are fine in this instance because the ram doesn't have anything
+      // on the side to show"). A blurry SHEET shot still flags.
+      if (issue === "blurry" && extraOnly(p)) continue;
       findings.push({ code: issue, photo: p.n, text: `Photo ${p.n} ${ISSUE_TEXT[issue] || issue}.` });
     }
   }
@@ -628,14 +843,30 @@ function decide(l: Listing, sheet: Sheet, r: ReportT) {
   // to know which serials hide under a battery cover — it answered "not shown"
   // for the Xbox three runs running — so this is decided here instead.
   const serialShot = (m: string) => /serial|model info/i.test(m);
-  const counted = missingRequired.filter(m => !plainView(m) && !serialShot(m) && !(haveSettings && settingsShot(m))).length
-    + Math.max(0, missingRequired.filter(plainView).length - 1)
-    + Math.max(0, missingRequired.filter(m => haveSettings && settingsShot(m)).length - 1)
-    + (missingRequired.some(serialShot) && missingRequired.length > 1 ? 1 : 0);
+  // ⚠️ A BOX'S TOP AND BOTTOM ARE OPTIONAL — UNLESS PHOTOS WERE WASTED (Ethan,
+  // OVL HP 902XL / 952XL ink, 2026-10-08). "Where the top and bottom aren't
+  // crucial to the sale, it's alright not to have it" — but both listings spent
+  // photos 5 and 6 repeating 1 and 2, which left four real photos, so "they
+  // should've taken top and bottom." A repeat is a slot that was there to use.
+  const repeats = r.photos.filter(p => p.repeats != null && p.repeats >= 1 && p.repeats < p.n);
+  const boxEnd = (m: string) => BOX_SHEETS.has(sheet.slug) && /^(top|bottom) of box$/i.test(m);
+  const missing = repeats.length ? missingRequired : missingRequired.filter(m => !boxEnd(m));
+  const counted = missing.filter(m => !plainView(m) && !serialShot(m) && !(haveSettings && settingsShot(m))).length
+    + Math.max(0, missing.filter(plainView).length - 1)
+    + Math.max(0, missing.filter(m => haveSettings && settingsShot(m)).length - 1)
+    + (missing.some(serialShot) && missing.length > 1 ? 1 : 0);
   if (!retake && counted > 0) {
     // `shot` is the guide's own label, so the panel can mark that slot on the
     // guide strip instead of making a manager match a sentence to a picture.
-    for (const m of missingRequired) findings.push({ code: "missing_shot", shot: m, text: `Missing: ${m}.` });
+    for (const m of missing) findings.push({ code: "missing_shot", shot: m, text: `Missing: ${m}.` });
+    // Say what to change it TO: the repeat's spot is where the missing shot goes.
+    if (repeats.length) {
+      const ns = repeats.map(p => p.n), of = repeats.map(p => p.repeats);
+      const many = ns.length > 1;
+      findings.push({ code: "repeat", photos: ns,
+        text: `Photo${many ? "s" : ""} ${ns.join(" and ")} repeat${many ? "" : "s"} photo${of.length > 1 ? "s" : ""} ${of.join(" and ")} — `
+          + `use ${many ? "those spots" : "that spot"} for ${missing.join(", ")}.` });
+    }
   }
   // Rule 2 — and only a flaw that is about THIS unit. Standard template wording
   // was the other half of the first run's false flags (PS5, Epson).
@@ -672,12 +903,13 @@ function decide(l: Listing, sheet: Sheet, r: ReportT) {
     : null;
   if (!r.lead_ok && !reorder) findings.push({ code: "lead", photo: 1, text: "Photo 1 doesn't show what the item is." });
 
-  const verdict = retake ? "retake" : findings.length ? "fix" : reorder ? "reorder" : "pass";
   if (retake) {
     findings.unshift({ code: "retake", shots: missingRequired,
       text: `Retake following the guide — ${missingRequired.length} of ${required.length} required shots are missing: ${missingRequired.join(", ")}.` });
   }
-  return { verdict, findings, reorder, orderScore: Math.round(score * 100) / 100 };
+  const pic = pictureScore(findings, l.photos.length);
+  const verdict = retake ? "retake" : pic.score < PASS_BAR ? "fix" : reorder ? "reorder" : "pass";
+  return { verdict, findings, reorder, orderScore: Math.round(score * 100) / 100, pictureScore: pic.score, costs: pic.costs };
 }
 
 // --- the second look ----------------------------------------------------------
@@ -704,6 +936,8 @@ function agree(a: ReportT, b: ReportT): ReportT {
     return {
       ...p,
       shots: [...new Set([...p.shots, ...(q?.shots || [])])],
+      // A repeat stands only when both looks name the same earlier photo.
+      repeats: q && p.repeats != null && p.repeats === q.repeats ? p.repeats : null,
       whole_item: p.whole_item && !!q?.whole_item,
       framing: off ? "off" as const : "close" as const,
       framing_problems: off ? probs : [],
@@ -737,7 +971,8 @@ async function stampFor(l: Listing, sheet: Sheet | null) {
 
 // --- the sweep ----------------------------------------------------------------
 
-async function runReviews(store: string, ids: string[], model: string, effort: string, save: boolean) {
+async function runReviews(store: string, ids: string[], model: string, effort: string, save: boolean,
+                          withFraming = false) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
   const client = new Anthropic({ apiKey });
@@ -777,32 +1012,71 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
         const extra = (usage?.input_tokens || 0) + (usage?.cache_read_input_tokens || 0) + (usage?.cache_creation_input_tokens || 0);
         inTok += extra; tin += extra; tout += usage?.output_tokens || 0; outTok += usage?.output_tokens || 0;
       }
-      let d = decide(l, sheet, report);
+      // The framing look — see framingLook. Same "seen twice" rule as the main
+      // review: a second look only when the first finds something, and a photo
+      // counts only when both name it. Both looks are on the same question, so
+      // they agree far more often than two forty-field reviews did.
+      const tally = (u: any) => {
+        const i = (u?.input_tokens || 0) + (u?.cache_read_input_tokens || 0) + (u?.cache_creation_input_tokens || 0);
+        inTok += i; tin += i; tout += u?.output_tokens || 0; outTok += u?.output_tokens || 0;
+      };
+      let faults: Map<number, string[]> | undefined;
+      let framing1: FramingT | null = null, framing2: FramingT | null = null;
+      if (withFraming) {
+      const gameSheet = /^video-games/.test(sheet.slug);
+      const fSheet = await sheetBlocksFor(sheet);
+      const fPhotos = await Promise.all(l.photos.map(p => imageBlock(p.url)));
+      const f1 = await framingLook(client, model, effort, fSheet, fPhotos);
+      tally(f1.usage);
+      framing1 = f1.report;
+      faults = framingFaults(f1.report, gameSheet);
+      if (faults.size) {
+        const f2 = await framingLook(client, model, effort, fSheet, fPhotos);
+        tally(f2.usage);
+        framing2 = f2.report;
+        const again = framingFaults(f2.report, gameSheet);
+        const both = new Map<number, string[]>();
+        for (const [n, a] of faults) {
+          const b = again.get(n);
+          if (!b) continue;
+          const common = a.filter(x => b.includes(x));
+          both.set(n, common.length ? common : a);
+        }
+        faults = both;
+      }
+      }
+      let d = decide(l, sheet, report, faults);
       const firstLook = { verdict: d.verdict, findings: d.findings.map(f => f.text) };
       let secondLook: typeof firstLook | null = null;
-      if (d.verdict !== "pass") {
+      // The main review's own second look is for ITS findings; a listing whose
+      // only problem is framing has already been looked at twice above.
+      if (decide(l, sheet, report).verdict !== "pass") {
         const again = await review(client, model, effort, l, sheet, standard, others(sheet));
         const extra = (again.usage?.input_tokens || 0) + (again.usage?.cache_read_input_tokens || 0) + (again.usage?.cache_creation_input_tokens || 0);
         inTok += extra; tin += extra; tout += again.usage?.output_tokens || 0; outTok += again.usage?.output_tokens || 0;
-        const d2 = decide(l, sheet, again.report);
+        const d2 = decide(l, sheet, again.report, faults);
         secondLook = { verdict: d2.verdict, findings: d2.findings.map(f => f.text) };
         const d1 = d;
         report = agree(report, again.report);
-        d = decide(l, sheet, report);
+        d = decide(l, sheet, report, faults);
         // A reorder stands only if each look, on its own, asked for one: the
         // Synology's "Everything Included is not in the first three" came from
         // one look's labels and the next look's labels disagreed.
         if (d.reorder && !(d1.reorder && d2.reorder)) {
           d = { ...d, reorder: null };
           if (!report.lead_ok) d.findings.push({ code: "lead", photo: 1, text: "Photo 1 doesn't show what the item is." });
-          d.verdict = d.findings.some(f => f.code === "retake") ? "retake" : d.findings.length ? "fix" : "pass";
+          const pic = pictureScore(d.findings, l.photos.length);
+          d = { ...d, pictureScore: pic.score, costs: pic.costs };
+          d.verdict = d.findings.some(f => f.code === "retake") ? "retake" : pic.score < PASS_BAR ? "fix" : "pass";
         }
       }
       return { ...base, verdict: d.verdict, findings: d.findings, reorder: d.reorder,
                title_notes: report.title_notes, sheet_slug: sheet.slug, sheet_name: sheet.name,
                stamp: await stampFor(l, sheet),
-               report: { ...report, orderScore: d.orderScore, sheetPick: pick, reSheeted: !!better,
+               report: { ...report, orderScore: d.orderScore, pictureScore: d.pictureScore, costs: d.costs,
+                 sheetPick: pick, reSheeted: !!better,
                  looks: secondLook ? 2 : 1, firstLook, secondLook,
+                 ...(withFraming ? { framing: { first: framing1, second: framing2, faults: Object.fromEntries(faults || []) } } : {}),
                  notesAsSent: sentences(l.cosmetic).map(s => ((standard.get(norm(s)) || 0) >= BOILERPLATE_MIN ? "[standard] " : "[unit] ") + s),
                  cache: {
                  read: usage?.cache_read_input_tokens || 0, wrote: usage?.cache_creation_input_tokens || 0 } },
@@ -911,6 +1185,7 @@ async function reviewView(scope: Scope, asked: string) {
     + `&order=decided_at.desc&limit=100`);
   const { shop, token } = await shopFor(store);
   const sheets = await loadSheets();
+  const listerIx = listerIndex(await rows("users?select=name,role,store").catch(() => []) || []);
   const live = new Map<string, Listing>();
   for (let i = 0; i < queue.length; i += 50) {
     for (const l of await fetchListings(shop, token, queue.slice(i, i + 50).map(r => r.product_id))) live.set(l.id, l);
@@ -933,6 +1208,8 @@ async function reviewView(scope: Scope, asked: string) {
       // Telling a manager "your photos changed" when nobody touched them is the
       // sort of wrong that makes the rest of the row unbelievable.
       staleWhy: String(r.stamp || "").split(":")[0] !== RECIPE ? "recipe" : "listing",
+      // A name, or null — the panel says "Unknown" for null, never the raw tag.
+      lister: listerFrom(l.tags, listerIx, store)?.name || null,
       photos: l.photos.map(p => ({ thumb: p.thumb, full: p.src, w: p.width, h: p.height })),
     });
   }
@@ -946,6 +1223,79 @@ async function reviewView(scope: Scope, asked: string) {
   return { scope, store, shop, queue: out, guide,
            dismissed: dismissed.map(r => ({ productId: r.product_id, sku: r.sku, title: r.title, verdict: r.verdict,
              by: r.decided_by, at: r.decided_at, ...splitNote(r.decided_note), triaged: !!r.feedback_triaged_at })) };
+}
+
+// --- training: a person grades single photos ------------------------------------
+//
+// ⚠️ WHY PHOTOS AND NOT LISTINGS (2026-10-08). Framing — centred, level, big
+// enough — was the one thing four tries could not get right, and the answer key
+// only said "this LISTING is off", which cannot tell a rule which PHOTO it got
+// wrong. Ethan grades photos one at a time beside the guide's example of the
+// same shot, and those labels (pq_photo_labels, 0141) are what the next framing
+// check is scored against — free, offline — before any paid run. Ethan: "I like
+// building a tool to train the system on this before we start spending money."
+//
+// FREE TO SERVE: photos come from listings already graded (their saved report
+// says which shot each photo is), read live through the Admin API, so a sold
+// listing the storefront no longer shows (the two OVL PS3 controllers) is still
+// here. No model is called.
+const TRAIN_PROBLEMS = ["off_center", "crooked", "too_small", "blurry", "cut_off"];
+async function trainView(scope: Scope, asked: string, skip = 0) {
+  const store = scope.stores.includes(asked) ? asked : scope.stores[0];
+  const graded: any[] = await rows(`picture_quality_reviews?store_code=eq.${store}&report=not.is.null`
+    + `&select=product_id,sheet_slug,photo_count,report->photos&order=reviewed_at.desc&limit=200`);
+  const labelled: any[] = await rows(`pq_photo_labels?store_code=eq.${store}&select=product_id,photo_src,label,problems&limit=10000`);
+  const seen = new Set(labelled.map(r => `${r.product_id}|${r.photo_src}`));
+  const { shop, token } = await shopFor(store);
+  const sheets = await loadSheets();
+  const live = new Map<string, Listing>();
+  for (let i = 0; i < graded.length; i += 50) {
+    for (const l of await fetchListings(shop, token, graded.slice(i, i + 50).map(r => r.product_id))) live.set(l.id, l);
+  }
+  const queue: any[] = [];
+  let total = 0;
+  for (const g of graded) {
+    const l = live.get(g.product_id);
+    if (!l) continue;
+    const sheet = sheets.find(s => s.slug === g.sheet_slug) || null;
+    // The saved report numbers photos as they were when graded. If the photos
+    // changed since, those numbers point at other photos — show no shot then,
+    // rather than the wrong example beside the photo.
+    const same = Array.isArray(g.photos) && g.photos.length === l.photos.length;
+    l.photos.forEach((p, i) => {
+      total++;
+      const src = p.src.split("?")[0];
+      if (seen.has(`${l.id}|${src}`)) return;
+      const said = same ? g.photos.find((x: any) => x.n === i + 1) : null;
+      const shot = (said?.shots || []).find((s: string) => sheet?.shots.some(x => x.label.toLowerCase() === s.toLowerCase())) || null;
+      const ex = shot ? sheet!.shots.find(x => x.label.toLowerCase() === shot.toLowerCase()) : null;
+      queue.push({ productId: l.id, sku: l.sku, title: l.title, n: i + 1, of: l.photos.length,
+                   src, img: p.url, w: p.width, h: p.height, sheet: sheet?.slug || null, sheetName: sheet?.name || null,
+                   shot, said: said?.shots || [], example: ex?.img ? guideUrl(ex.img) : null });
+    });
+  }
+  // `skip` = photos the person passed over this session; they stay unlabelled,
+  // so without it the next lot would start with them again, forever.
+  return { store, total, done: labelled.length, queue: queue.slice(skip, skip + 60), left: queue.length, problems: TRAIN_PROBLEMS };
+}
+
+async function saveLabel(scope: Scope, body: any) {
+  const store = String(body.store || "").toUpperCase();
+  if (!scope.stores.includes(store)) return json({ error: "forbidden" }, 403);
+  const label = String(body.label || "");
+  if (!["fine", "problem", "not_item"].includes(label)) return json({ error: "label must be fine | problem | not_item" }, 400);
+  const problems = (Array.isArray(body.problems) ? body.problems : []).map(String).filter((p: string) => TRAIN_PROBLEMS.includes(p));
+  if (label === "problem" && !problems.length) return json({ error: "a problem label needs at least one problem" }, 400);
+  const src = String(body.src || "").split("?")[0];
+  if (!body.productId || !src) return json({ error: "productId and src required" }, 400);
+  await sb("pq_photo_labels?on_conflict=product_id,photo_src", {
+    method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({ store_code: store, product_id: String(body.productId), photo_src: src,
+      photo_n: Number(body.n) || null, sheet_slug: body.sheet || null, shot: body.shot || null,
+      label, problems: label === "problem" ? problems : [], note: String(body.note || "").trim().slice(0, 300) || null,
+      labelled_by: scope.name, labelled_at: new Date().toISOString() }),
+  });
+  return json({ ok: true });
 }
 
 // decided_note is "dismissed: why" or "reorder denied: why" — the answer, then
@@ -986,6 +1336,7 @@ async function feedbackView(scope: Scope, days: number) {
     framing: "Said a photo is not to the guide's standard", flaw_not_shown: "Said the main flaw is not shown",
     blurry: "Said a photo is blurry", fake_or_edited: "Said a photo looks fake or edited",
     stock_photo: "Said a photo is a stock photo", lead: "Said photo 1 does not show the item",
+    repeat: "Said photos repeat each other",
   };
   // Photos for the ask, read live — the note is about what the manager saw.
   const photosFor = new Map<string, string[]>();
@@ -1082,6 +1433,8 @@ async function handlePost(req: Request, scope: Scope) {
   // across stores, so it comes before the one-store gate below — the same shape
   // as the title tool's `triaged`, and the same rule: it marks the NOTE read,
   // never the rule fixed.
+  // A training label (see trainView) — one photo graded by a person.
+  if (action === "label") return await saveLabel(scope, body);
   if (action === "triaged") {
     const keys = Array.isArray(body.keys) ? body.keys.slice(0, 200) : [];
     let n = 0;
@@ -1158,7 +1511,7 @@ Deno.serve(async (req: Request) => {
     const url = new URL(req.url);
     const view = url.searchParams.get("view") || "";
 
-    if (req.method === "POST" || view === "review" || view === "counts" || view === "feedback") {
+    if (req.method === "POST" || view === "review" || view === "counts" || view === "feedback" || view === "train") {
       const scope = await scopeFor(req.headers.get("x-user-pin") || "");
       if (!scope) return json({ error: "unauthorized", detail: "no matching user, or Picture Quality is not switched on for you" }, 401);
       if (req.method === "POST") {
@@ -1191,6 +1544,8 @@ Deno.serve(async (req: Request) => {
         const days = Math.min(Math.max(Number(url.searchParams.get("days") || 30), 1), 180);
         return json({ scope, ...(await feedbackView(scope, days)) });
       }
+      if (view === "train") return json(await trainView(scope, (url.searchParams.get("store") || "").toUpperCase(),
+        Math.max(0, Number(url.searchParams.get("skip") || 0))));
       return json(await reviewView(scope, (url.searchParams.get("store") || "").toUpperCase()));
     }
 
@@ -1226,7 +1581,8 @@ Deno.serve(async (req: Request) => {
     // is sent with the first byte, so a failure after that arrives as a 200 with
     // an "error" field — callers check the body, not just the status.
     const save = url.searchParams.get("save") === "1";
-    return streamed(() => runReviews(store, ids, model, effort, save));
+    // ?framing=1 — the framing look, for calibration only (see FramingReport).
+    return streamed(() => runReviews(store, ids, model, effort, save, url.searchParams.get("framing") === "1"));
   } catch (e) {
     return json({ error: String((e as Error).message || e) }, 500);
   }

@@ -55650,7 +55650,13 @@ function _pqHtml() {
     }
     const total = tiers.reduce((s, t) => s + count(t.v), 0);
     const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
-    return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
+    // Train The Checker — see pqTrainOpen. Only for readers who hold the
+    // picture half; it reads the same graded listings the queue does.
+    const train = mayPics ? `<div class="pqt-entry">
+        <button type="button" class="lh-tool-done-btn" onclick="pqTrainOpen()">Train The Checker</button>
+        <span>Grade photos one at a time against the guide, so the checker learns what "to standard" means.</span>
+      </div>` : '';
+    return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : '') + train,
                 `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
 }
 
@@ -55722,6 +55728,184 @@ window.pqReopen = pqReopen;
 // already say it, so the sentence was a second reading of the same thing.
 
 function pqSetTier(v) { _pqTier = v; _pqPicked = true; ecRender(); }
+
+// ============================================================================
+// TRAIN THE CHECKER — a person grades single photos (2026-10-08)
+// ============================================================================
+// Framing — centred, level, big enough — is the call the checker could not get
+// right: four approaches scored against Ethan's answer key, and each either
+// missed what he would flag or flagged what he passed. The key only said which
+// LISTINGS were off; this collects which PHOTOS are, one at a time, beside the
+// guide's example of the same shot, into pq_photo_labels (0141). A framing
+// rule is then scored against these labels offline, for free, before any paid
+// run. Ethan: "I like building a tool to train the system on this before we
+// start spending money."
+//
+// ⚠️ ONE KEYPRESS PER PHOTO. Hundreds of photos is only bearable if a fine one
+// costs a single key: 1 = Fine, 0 = Not The Item, 2–6 toggle a problem and
+// Enter saves them, ← goes back to change an answer, → skips. Re-answering a
+// photo overwrites it (one row per photo).
+// ⚠️ NOTHING HERE CALLS A MODEL. The photos come from listings already graded,
+// read live; saving writes one row. Free to use for as long as it takes.
+let _pqTrain = null;
+const _PQ_TRAIN_PROBS = [
+    ['off_center', 'Off-Centre', '2'], ['crooked', 'Crooked', '3'], ['too_small', 'Too Small', '4'],
+    ['blurry', 'Blurry', '5'], ['cut_off', 'Cut Off', '6'],
+];
+
+async function pqTrainOpen() {
+    _pqTrain = { store: _ecStore || '', queue: [], i: 0, picks: new Set(), busy: true, err: null, skipped: 0 };
+    document.addEventListener('keydown', _pqTrainKey);
+    _pqTrainRender();
+    await _pqTrainLoad();
+}
+window.pqTrainOpen = pqTrainOpen;
+
+async function _pqTrainLoad() {
+    const t = _pqTrain;
+    if (!t) return;
+    t.busy = true; _pqTrainRender();
+    try {
+        const d = await _pqFetch(`?view=train&store=${encodeURIComponent(t.store)}&skip=${t.skipped}`);
+        if (_pqTrain !== t) return;
+        Object.assign(t, { queue: d.queue || [], i: 0, total: d.total || 0, done: d.done || 0,
+                           left: d.left || 0, store: d.store || t.store, err: null });
+    } catch (e) { t.err = e.message || String(e); }
+    t.busy = false;
+    _pqTrainRender();
+}
+
+function pqTrainClose() {
+    document.removeEventListener('keydown', _pqTrainKey);
+    _pqTrain = null;
+    const el = document.getElementById('pqTrainOverlay');
+    if (el) el.remove();
+}
+window.pqTrainClose = pqTrainClose;
+
+function pqTrainToggle(k) {
+    const t = _pqTrain;
+    if (!t || t.busy || !t.queue[t.i]) return;
+    t.picks.has(k) ? t.picks.delete(k) : t.picks.add(k);
+    _pqTrainRender();
+}
+window.pqTrainToggle = pqTrainToggle;
+
+function pqTrainMove(step) {
+    const t = _pqTrain;
+    if (!t || t.busy) return;
+    // A photo passed over unanswered stays unlabelled on the server; counting
+    // it is what keeps the next lot from starting with it again.
+    if (step > 0 && t.queue[t.i] && !t.queue[t.i].saved) t.skipped++;
+    t.i = Math.max(0, Math.min(t.queue.length, t.i + step));
+    if (t.i >= t.queue.length && t.left > t.skipped) { _pqTrainLoad(); return; }
+    // Going back shows the answer already given, so it can be changed.
+    const p = t.queue[t.i];
+    t.picks = new Set(p && p.saved === 'problem' ? p.savedProblems || [] : []);
+    _pqTrainRender();
+}
+window.pqTrainMove = pqTrainMove;
+
+async function pqTrainLabel(label) {
+    const t = _pqTrain;
+    const p = t && t.queue[t.i];
+    if (!p || t.busy) return;
+    if (label === 'problem' && !t.picks.size) return;
+    t.busy = true; _pqTrainRender();
+    const r = await _pqPost({ action: 'label', store: t.store, productId: p.productId, src: p.src, n: p.n,
+                              sheet: p.sheet, shot: p.shot, label, problems: [...t.picks] });
+    if (_pqTrain !== t) return;
+    t.busy = false;
+    if (!r.ok) { t.err = r.body.detail || r.body.error || `Could not save (${r.status})`; _pqTrainRender(); return; }
+    if (!p.saved) { t.done++; t.left--; }
+    p.saved = label; p.savedProblems = label === 'problem' ? [...t.picks] : [];
+    t.err = null; t.picks = new Set(); t.i++;
+    // The server hands out sixty at a time; past the end, fetch the next lot.
+    if (t.i >= t.queue.length && t.left > t.skipped) { await _pqTrainLoad(); return; }
+    _pqTrainRender();
+}
+window.pqTrainLabel = pqTrainLabel;
+
+function _pqTrainKey(e) {
+    if (!_pqTrain || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    const k = e.key;
+    const prob = _PQ_TRAIN_PROBS.find(x => x[2] === k);
+    if (k === 'Escape') pqTrainClose();
+    else if (k === '1') pqTrainLabel('fine');
+    else if (k === '0') pqTrainLabel('not_item');
+    else if (prob) pqTrainToggle(prob[0]);
+    else if (k === 'Enter') pqTrainLabel('problem');
+    else if (k === 'ArrowLeft') pqTrainMove(-1);
+    else if (k === 'ArrowRight') pqTrainMove(1);
+    else return;
+    e.preventDefault();
+}
+
+function _pqTrainHtml() {
+    const t = _pqTrain;
+    const head = `<div class="pqt-head">
+        <div><div class="pqt-eyebrow">Picture Quality · ${_ecEsc(t.store)}</div>
+             <div class="pqt-title">Train The Checker</div></div>
+        <div class="pqt-count">${t.done || 0} Graded · ${Math.max(0, t.left || 0)} To Go</div>
+        <button type="button" class="pqt-x" onclick="pqTrainClose()" aria-label="Close">×</button>
+      </div>`;
+    if (t.busy && !t.queue.length) return head + `<div class="pqt-empty">Loading photos…</div>`;
+    const err = t.err ? `<div class="pqt-err">${_ecEsc(t.err)}</div>` : '';
+    const p = t.queue[t.i];
+    if (!p) {
+        return head + err + `<div class="pqt-empty">${t.left > t.skipped ? 'Loading the next photos…'
+            : t.skipped ? `Done for now. The ${t.skipped} photo${t.skipped === 1 ? '' : 's'} you skipped will come back next time.`
+            : `All caught up — every photo from the graded listings at ${_ecEsc(t.store)} has an answer.`}</div>`;
+    }
+    const pick = t.picks;
+    const was = p.saved ? `<span class="pqt-was">Answered: ${_ecEsc(p.saved === 'problem'
+        ? (p.savedProblems || []).map(k => (_PQ_TRAIN_PROBS.find(x => x[0] === k) || [k, k])[1]).join(', ')
+        : p.saved === 'fine' ? 'Fine' : 'Not The Item')}</span>` : '';
+    return head + err + `
+      <div class="pqt-ask">Judge only how the photo is <b>framed</b>: centred, level, big enough, sharp — the way the guide's example is.
+        Not every difference matters; would you reshoot it?</div>
+      <div class="pqt-pair">
+        <figure class="pqt-fig">
+          <div class="pqt-frame"><img src="${_ecEsc(p.img)}" alt="Listing photo ${p.n}"></div>
+          <figcaption><b>Photo ${p.n} of ${p.of}</b>${p.w && p.h && p.w !== p.h ? ` · ${p.w}×${p.h}` : ''}<br>
+            ${_ecEsc(p.title || '')} <span class="lh-sku">${_ecEsc(p.sku || '')}</span></figcaption>
+        </figure>
+        <figure class="pqt-fig">
+          <div class="pqt-frame">${p.example ? `<img src="${_ecEsc(p.example)}" alt="Guide example">`
+            : `<span class="pqt-noex">${p.shot ? 'No example photo for this shot' : 'Not matched to a guide shot'}</span>`}</div>
+          <figcaption><b>Guide: ${_ecEsc(p.shot || (p.said && p.said.length ? p.said.join(', ') : '—'))}</b><br>
+            ${_ecEsc(p.sheetName || '')}</figcaption>
+        </figure>
+      </div>
+      <div class="pqt-acts">
+        <button type="button" class="pqt-btn pqt-fine" onclick="pqTrainLabel('fine')" ${t.busy ? 'disabled' : ''}>Fine <kbd>1</kbd></button>
+        ${_PQ_TRAIN_PROBS.map(([k, label, key]) => `<button type="button" class="pqt-btn pqt-prob${pick.has(k) ? ' pqt-on' : ''}"
+            onclick="pqTrainToggle('${k}')" ${t.busy ? 'disabled' : ''}>${label} <kbd>${key}</kbd></button>`).join('')}
+        <button type="button" class="pqt-btn pqt-save" onclick="pqTrainLabel('problem')" ${t.busy || !pick.size ? 'disabled' : ''}>Save Problems <kbd>Enter</kbd></button>
+        <button type="button" class="pqt-btn pqt-skip" onclick="pqTrainLabel('not_item')" ${t.busy ? 'disabled' : ''}
+            title="A closeup of a detail, the box, a cable — framing does not apply">Not The Item <kbd>0</kbd></button>
+      </div>
+      <div class="pqt-nav">
+        <button type="button" class="pqt-link" onclick="pqTrainMove(-1)" ${t.i ? '' : 'disabled'}>← Back</button>
+        ${was}
+        <button type="button" class="pqt-link" onclick="pqTrainMove(1)">Skip →</button>
+      </div>`;
+}
+
+function _pqTrainRender() {
+    if (!_pqTrain) return;
+    let el = document.getElementById('pqTrainOverlay');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'pqTrainOverlay';
+        el.className = 'pqt-overlay';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-label', 'Train The Checker');
+        document.body.appendChild(el);
+    }
+    el.innerHTML = `<div class="pqt-box">${_pqTrainHtml()}</div>`;
+}
 window.pqSetTier = pqSetTier;
 
 // One strip of photos, in the order given, numbered by their CURRENT position so
@@ -55916,6 +56100,13 @@ function _pqRow(r) {
           ${r.handle ? `<a class="ec-pill ec-pill-store" href="https://${shop}/products/${_ecEsc(r.handle)}"
                target="_blank" rel="noopener">Store${_EC_ICON_LINK}</a>` : ''}
         </div>
+        <!-- WHO LISTED IT (Ethan, 2026-10-08: "so the managers can coach their
+             teams on pictures"). The title tool's pill, resolved server-side
+             from the product's live Shopify tags — see _ltListerPill for why it
+             is always there and never a raw tag. Its own line, not a third pill
+             beside the links: those are two columns the SKU and photo count
+             centre over. -->
+        <div class="pq-lister">${_ltListerPill({ listerTag: r.lister || '' }, r.lister ? { [r.lister]: r.lister } : null)}</div>
         <div class="lt-acts pq-acts">
           ${isReorder && !r.stale
             ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve'}</button>
@@ -56559,9 +56750,12 @@ window.lhToolDone = lhToolDone;
 // the tag verbatim, because "JSmith" still tells you who a leaver was — the
 // server only sends tags that matched somebody, but a rename between the sweep
 // and the read would land here and a bare tag is better than nothing.
-function _ltLister(tag) {
+// `listers` is for a caller with its own map (Picture Quality); the title tool
+// passes nothing and reads _ltData's.
+function _ltLister(tag, listers) {
     if (!tag) return '';
-    return (_ltData && _ltData.listers && _ltData.listers[tag]) || tag;
+    const map = listers || (_ltData && _ltData.listers);
+    return (map && map[tag]) || tag;
 }
 
 // ⚠️ THE PILL IS ALWAYS THERE — a name, or "Unknown". Never nothing.
@@ -56580,8 +56774,8 @@ function _ltLister(tag) {
 // ⚠️ AND IT IS NEVER A GUESS. Unknown says the tool cannot tell you, which is
 // honest; a tag rendered raw would look like an accusation the tool cannot
 // stand behind.
-function _ltListerPill(r) {
-    const name = r && r.listerTag ? _ltLister(r.listerTag) : '';
+function _ltListerPill(r, listers) {
+    const name = r && r.listerTag ? _ltLister(r.listerTag, listers) : '';
     if (!name) {
         return `<span class="lt-lister lt-lister-unknown"
             title="No employee tag on this listing, or the tag belongs to somebody who has left. Shopify tags are where this comes from.">Unknown</span>`;

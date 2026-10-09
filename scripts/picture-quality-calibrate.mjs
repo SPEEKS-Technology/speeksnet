@@ -1,11 +1,12 @@
 // Picture Quality — score the live function against Ethan's hand-graded answer
-// keys. DRY RUN: nothing is saved, no listing is touched; a full run costs about
-// a dollar of model time.
+// keys. DRY RUN: nothing is saved, no listing is touched; a full run (30) costs
+// about $5 of model time (2026-10-08).
 //
 //   node scripts/picture-quality-calibrate.mjs                     # Sonnet 5, medium
 //   node scripts/picture-quality-calibrate.mjs claude-opus-5 low   # compare
 //   STORE=OVL node scripts/picture-quality-calibrate.mjs           # one key only
 //   VERBOSE=1 …                                                    # every listing's reasons
+//   FRAMING=1 …                                                    # with the framing look (off in production)
 //
 // The bar to ship on is 90%. A change counts only if it holds on BOTH keys: the
 // OVL framing fix could easily have re-broken the WSP passes, which is exactly
@@ -34,7 +35,10 @@ const KEY = [
   // OVL, graded 2026-09-25 — chosen to cover sheets WSP did not.
   ["OVL", "8212164968550", "Galaxy S26 Ultra", "pass", "settings screen and top side are both there"],
   ["OVL", "8211779977318", "Sony Alpha 7 IV", "?", "should use Point and Shoot — verdict after re-grade"],
-  ["OVL", "8015504113766", "Micron 4GB RAM", "flag", "photos 2 and 3 blurry"],
+  // Was "flag — photos 2 and 3 blurry"; Ethan reversed it 2026-10-08: top and
+  // bottom are photos 1 and 6, the soft edge-on shots have nothing to show, and
+  // photo 5 uses the stand to show the pins — not too small.
+  ["OVL", "8015504113766", "Micron 4GB RAM", "pass", "blurry edge-on shots are fine; photo 5 is the pins on the stand"],
   ["OVL", "8172635422822", "Xbox One controller", "pass", "serial is under the battery cover — not needed"],
   ["OVL", "7699563577446", "Final Fantasy XV", "pass", "correct"],
   ["OVL", "8035957506150", "Yoshi's Island DS", "flag", "not square"],
@@ -44,6 +48,15 @@ const KEY = [
   ["OVL", "8168794882150", "Ray-Ban Meta (New)", "pass", "all box sides were shown"],
   ["OVL", "8106562322534", "Death Stranding 2 (sealed)", "pass", "sealed: front + back is fine — regressed 2026-10-01 on a Recheck graded on New In Box; gameSheetFor now forces the game sheet"],
   ["OVL", "8229239717990", "iPad 8th Gen", "flag", "not full frame at times, some crooked"],
+  // OVL round 2, graded 2026-10-08 from the live queue (pq-v8 verdicts).
+  ["OVL", "15397692375142", "Onyx Boox NoteAir 2", "pass", "angle needn't match — the shots are to show the four sides"],
+  ["OVL", "15228973154406", "Surface Laptop Go 3 (OVL)", "pass", "same: corner shots at another angle still show the sides"],
+  ["OVL", "15397640667238", "PS3 controller Gold", "flag", "many photos not centred, some crooked (NOT photo 8's angle)"],
+  ["OVL", "15397643092070", "PS3 controller Black", "flag", "many photos not centred, some crooked (NOT photo 7's angle)"],
+  ["OVL", "15228995240038", "Original Xbox Duke", "flag", "photo 1 small/off-centre — and more photos off-centre or crooked"],
+  ["OVL", "15228973383782", "HP 902XL ink", "flag", "5 and 6 repeat 1 and 2 — use them for top and bottom of box"],
+  ["OVL", "15228971024486", "HP 952XL ink", "flag", "5 and 6 repeat 1 and 2 — use them for top and bottom of box"],
+  ["OVL", "15228968894566", "Galaxy S26 Cobalt Violet", "flag", "missing Storage and Software Information — perfect"],
 ];
 
 const asFlag = v => ["retake", "fix", "reorder"].includes(v) ? "flag" : v;
@@ -59,7 +72,7 @@ const calls = keyed.map(k => [k[0], [k[1]]]);
 const results = [];
 const runOne = async ([st, ids], n) => {
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const r = await fetch(`${FN}?secret=${SECRET}&store=${st}&ids=${ids.join(",")}&model=${model}&effort=${effort}`);
+    const r = await fetch(`${FN}?secret=${SECRET}&store=${st}&ids=${ids.join(",")}&model=${model}&effort=${effort}${process.env.FRAMING ? "&framing=1" : ""}`);
     const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
     // The function streams keep-alive spaces, so a failure can arrive as a 200.
     if (r.ok && !body.error) {
@@ -74,6 +87,10 @@ const runOne = async ([st, ids], n) => {
 };
 let next = 0;
 await Promise.all([0, 1, 2].map(async () => { while (next < calls.length) { const n = next++; await runOne(calls[n], n); } }));
+
+// OUT=file.json keeps every report — the measured boxes and leans in it are
+// what a framing threshold is tuned against, without paying for another run.
+if (process.env.OUT) (await import("node:fs")).writeFileSync(process.env.OUT, JSON.stringify(results, null, 1));
 
 let agree = 0, scored = 0, cost = 0;
 console.log(`\n${model} @ ${effort}\n`);
