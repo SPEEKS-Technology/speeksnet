@@ -100,7 +100,7 @@ const PRICES: Record<string, [number, number]> = {   // $ per million in / out
 // re-grades everything instead of leaving old answers given less to look at.
 // v8 2026-09-25: a flag must be seen by two independent looks
 // v11 (a separate framing look) scored worse and is off — see FramingReport.
-const RECIPE = "pq-v14";  // v14 2026-10-08: anything besides item + white backdrop costs 5/10/15 by price, like v13's dirty table. v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
+const RECIPE = "pq-v15";  // v15 2026-10-08: reflections cost 3/6/9 by price (not on Screen Off). v14: anything besides item + white backdrop costs 5/10/15 by price, like v13's dirty table. v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
 
 // Photos are sent at this size. The model sees framing, labels and screens
 // fine at 800px; full size would roughly triple the bill for nothing.
@@ -402,7 +402,7 @@ const PhotoReport = z.object({
   framing_problems: z.array(z.enum(["crooked", "off_center", "too_small", "cut_off", "wrong_angle"])),
   issues: z.array(z.object({
     type: z.enum([
-      "blurry", "too_dark_or_glare", "clutter",
+      "blurry", "too_dark_or_glare", "clutter", "reflection",
       "stock_photo", "fake_or_edited", "personal_info", "wrong_item", "pair_not_together", "dirty_backdrop",
     ]),
     severity: z.enum(["minor", "major"]),
@@ -447,6 +447,7 @@ For each photo (numbered from 1, in listing order), report:
   If framing is "matches" or "close", framing_problems is empty. Photos of OTHER things that come WITH the item — its box, cables, chargers, a console's controllers, a case, an everything-included spread — are staged: give them "matches". But when that thing IS the item (a controller on the Game Controllers sheet, a box on a New In Box sheet), it is the item and is judged. A photo of the item itself is always judged, even if it is not a sheet shot. A deliberate closeup of a detail (a label, ports, a lens mount, a memory stick's pins shot on its stand) is never cut_off — but a photo meant to show the whole screen or body that crops part of it off is.
 - issues, only when clearly true, each with a severity. "major" means a buyer would notice and it hurts the listing; "minor" means you can see it but it does not matter. Only major issues are acted on:
   blurry, too_dark_or_glare — the detail the shot exists for cannot be made out AND it is something a buyer needs: a label, a screen, a flaw, the face or body of the item. An edge-on view of a thin item with nothing printed on its edge (a memory stick's side) is not this, even if soft. A "Screen Off" shot is meant to be a dark screen with reflections — never report it.
+  reflection — the room, a light, a window, the photographer, or the phone or camera taking the photo is mirrored in the item's glossy surface (a screen, a case, the shrink-wrap of a box) — a reflection you can plainly make out. Report it on EVERY photo it shows in, as "major" whenever you can see it. NEVER on a "Screen Off" shot: that photo exists to show the dark screen, reflections and all. Soft even sheen with nothing mirrored in it is not a reflection.
   clutter — something in the frame that is not the item, its stand or the plain white backdrop: the edge of the lightbox or a wall, another item, a hand, a tool, mess. Report it on EVERY photo it shows in, and as "major" whenever you can plainly see it — a buyer's eye goes straight to it. Things that come WITH the item (its box, cables, accessories, everything included, the other items of a lot) are not clutter.
   stock_photo — a manufacturer or web image, not this unit.
   fake_or_edited — looks AI-generated, composited or heavily edited (a product floating unnaturally with no surface).
@@ -705,6 +706,13 @@ type Finding = { code: string; text: string; photo?: number; shot?: string; shot
 // every other call on the key held. ⚠️ Re-score scratch runs before changing
 // a weight: HP 952XL sits at 88 (two box ends + a repeat), and a repeat at 3
 // instead of 4 tips it to 89 — the wasted slot IS why Ethan flagged it.
+//
+// ⚠️ THE SCORE DECIDES WHETHER, NEVER WHAT (Ethan, 2026-10-08): "if a thing
+// scores under 90 the user should make all required fixes, not just enough to
+// bring them above 90 — so we probably shouldn't show the score." A flagged row
+// carries EVERY finding, minor ones included, and the panel never shows the
+// number. Do not trim a flagged listing's findings to the ones that cost most,
+// and do not put the score on screen — a visible 88 invites fixing two points.
 const PASS_BAR = 90;
 const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake_or_edited", "wrong_item",
   "personal_info", "flaw_not_shown", "no_photos", "pair_not_together"]);
@@ -726,6 +734,8 @@ function pictureScore(findings: Finding[], photoCount: number, price: number) {
       // OVL Onyx's grey lightbox edge: "when there is something else that is not
       // the white background in the photo").
       : f.code === "dirty_backdrop" || f.code === "clutter" ? (price > 250 ? 15 : price >= 100 ? 10 : 5)
+      // Reflections: "same concept as the dirty paper but 3, 6 and 9 points".
+      : f.code === "reflection" ? (price > 250 ? 9 : price >= 100 ? 6 : 3)
       // The lead photo is what a buyer sees first. Any other photo's framing is
       // shared out by the photo count: one soft photo of fifteen costs little,
       // most of them off costs a lot.
@@ -801,6 +811,17 @@ function decide(l: Listing, sheet: Sheet, r: ReportT, faults?: Map<number, strin
   // 2026-10-08, OVL Onyx Boox photo 9: the grey edge of the lightbox at the
   // left). It was "clutter", one line per photo at 4 points, skipped on staged
   // shots — but the lightbox edge is in the box photo as much as the item photo.
+  // ⚠️ REFLECTIONS, THE SAME WAY (Ethan, 2026-10-08: "same concept as the dirty
+  // paper but 3, 6 and 9 points"). The guide's own Screen Off shot is a dark
+  // screen photographed FOR its reflections, so it never counts — decided here,
+  // not trusted to the prompt alone.
+  const screenOff = (p: ReportT["photos"][number]) => p.shots.some(x => /screen off/i.test(x));
+  const reflected = r.photos.filter(p => !screenOff(p)
+    && p.issues.some(it => it.type === "reflection" && it.severity === "major")).map(p => p.n);
+  if (reflected.length) {
+    findings.push({ code: "reflection", photos: reflected,
+      text: `A reflection shows on the item in photo${reflected.length > 1 ? "s" : ""} ${reflected.join(", ")} — angle the item or the light, then retake.` });
+  }
   const cluttered = r.photos.filter(p => p.issues.some(it => it.type === "clutter" && it.severity === "major")).map(p => p.n);
   if (cluttered.length) {
     findings.push({ code: "clutter", photos: cluttered,
@@ -819,7 +840,7 @@ function decide(l: Listing, sheet: Sheet, r: ReportT, faults?: Map<number, strin
       // shots "are fine in this instance because the ram doesn't have anything
       // on the side to show"). A blurry SHEET shot still flags.
       if (issue === "blurry" && extraOnly(p)) continue;
-      if (issue === "dirty_backdrop" || issue === "clutter") continue;   // one finding for the listing, above
+      if (issue === "dirty_backdrop" || issue === "clutter" || issue === "reflection") continue;   // one finding for the listing, above
       findings.push({ code: issue, photo: p.n, text: `Photo ${p.n} ${ISSUE_TEXT[issue] || issue}.` });
     }
   }
@@ -1264,7 +1285,7 @@ async function reviewView(scope: Scope, asked: string) {
 // says which shot each photo is), read live through the Admin API, so a sold
 // listing the storefront no longer shows (the two OVL PS3 controllers) is still
 // here. No model is called.
-const TRAIN_PROBLEMS = ["off_center", "crooked", "too_small", "blurry", "cut_off", "dirty_backdrop", "clutter"];
+const TRAIN_PROBLEMS = ["off_center", "crooked", "too_small", "blurry", "cut_off", "dirty_backdrop", "clutter", "reflection"];
 async function trainView(scope: Scope, asked: string, skip = 0) {
   const store = scope.stores.includes(asked) ? asked : scope.stores[0];
   const graded: any[] = await rows(`picture_quality_reviews?store_code=eq.${store}&report=not.is.null`

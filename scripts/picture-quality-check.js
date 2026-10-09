@@ -570,7 +570,7 @@ t('train: photo beside its guide example, answers with their keys', function () 
         if (!figs[1].querySelector('img')) return 'the guide example is not shown';
         if (!/Front of Controller/.test(figs[1].textContent)) return 'the shot is not named';
         var keys = [].map.call(el.querySelectorAll('.pqt-acts kbd'), function (k) { return k.textContent; }).join(',');
-        return keys === '1,2,3,4,5,6,7,8,Enter,0' || 'keys: ' + keys;
+        return keys === '1,2,3,4,5,6,7,8,9,Enter,0' || 'keys: ' + keys;
     } finally { pqTrainClose(); }
 });
 
@@ -625,4 +625,18 @@ t('a dirty table is one line for the listing, and outlines every photo it names'
     if (lines.length !== 1 || !/dirty in photos 1, 2/.test(lines[0].textContent)) return 'lines: ' + [].map.call(lines, function (l) { return l.textContent; }).join(' | ');
     var marked = host.querySelectorAll('.pq-ph-flag').length;
     return marked >= 2 || 'only ' + marked + ' photos outlined';
+});
+
+t('a flagged row never shows its score — every fix is listed, not enough to pass', function () {
+    // Ethan, 2026-10-08: "the user should make all required fixes, not just enough
+    // to bring them above 90 … we probably shouldn't show the score".
+    var row = Object.assign({}, FIX, { stale: false, pictureScore: 84, findings: [
+        { code: 'reflection', photos: [2, 3], text: 'A reflection shows on the item in photos 2, 3 — angle the item or the light, then retake.' },
+        { code: 'framing', photo: 5, text: "Photo 5 isn't to the guide's standard: not centred." }] });
+    _pqData = data([row]); _pqTier = 'fix';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    var txt = host.querySelector('.pq-row').textContent;
+    if (/\b84\b|score/i.test(txt)) return 'the score is on the row';
+    return host.querySelectorAll('.lt-why li').length === 2 || 'not every finding is listed';
 });
