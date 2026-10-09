@@ -570,7 +570,7 @@ t('train: photo beside its guide example, answers with their keys', function () 
         if (!figs[1].querySelector('img')) return 'the guide example is not shown';
         if (!/Front of Controller/.test(figs[1].textContent)) return 'the shot is not named';
         var keys = [].map.call(el.querySelectorAll('.pqt-acts kbd'), function (k) { return k.textContent; }).join(',');
-        return keys === '1,2,3,4,5,6,7,8,9,Enter,0' || 'keys: ' + keys;
+        return keys === '1,2,3,4,5,6,7,8,9,S,Enter,0' || 'keys: ' + keys;
     } finally { pqTrainClose(); }
 });
 

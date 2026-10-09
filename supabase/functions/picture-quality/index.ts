@@ -100,7 +100,7 @@ const PRICES: Record<string, [number, number]> = {   // $ per million in / out
 // re-grades everything instead of leaving old answers given less to look at.
 // v8 2026-09-25: a flag must be seen by two independent looks
 // v11 (a separate framing look) scored worse and is off — see FramingReport.
-const RECIPE = "pq-v15";  // v15 2026-10-08: reflections cost 3/6/9 by price (not on Screen Off). v14: anything besides item + white backdrop costs 5/10/15 by price, like v13's dirty table. v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
+const RECIPE = "pq-v16";  // v16 2026-10-08: photos from two spots cost 5/10/15 by price. v15: reflections cost 3/6/9 by price (not on Screen Off). v14: anything besides item + white backdrop costs 5/10/15 by price, like v13's dirty table. v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
 
 // Photos are sent at this size. The model sees framing, labels and screens
 // fine at 800px; full size would roughly triple the bill for nothing.
@@ -422,6 +422,9 @@ const Report = z.object({
   }),
   serial: z.enum(["shown", "hidden_behind_cover", "not_shown"]),
   lead_ok: z.boolean(),
+  // Photos taken in the same spot, grouped: [[1,2,3],[4,5]]. See setupsFinding.
+  setups: z.array(z.array(z.number().int())),
+  setup_difference: z.string(),
   suggested_order: z.array(z.number().int()),
   title_notes: z.array(z.object({ issue: z.string(), suggestion: z.string(), photo: z.number().int().nullable() })),
   summary: z.string(),
@@ -462,6 +465,8 @@ missing_shots: sheet shots with no photo covering them. Include a conditional sh
 main_flaw: the one specific defect that is the main reason this unit is not in better condition — a crack, a dent, missing keys, a broken part — taken from notes marked [unit] (source "unit") or from the title (source "title"). General wear ("scuffs, scratches and wear", "minor marks") is NOT a main flaw. Ignore every sentence marked [standard] — it is the listing program's template, not about this unit. If there is no such specific defect: stated null, source "none", shown "not_applicable". A screenshot counts as showing a defect only a screen can show (Battery Health for a bad battery, a lock or iCloud screen). Otherwise: shown "yes" if a photo shows it clearly, "partly" if it is visible but not clearly, "no" if no photo shows it. Lesser flaws never need their own photo.
 
 serial: "shown" if any photo shows the serial or model label legibly; "hidden_behind_cover" if it is on a part that must be removed to see it (under a battery cover, inside a compartment) and no photo opens it; otherwise "not_shown".
+
+setups: group EVERY photo of the ITEM by where it was taken — the same backdrop, the same lighting, the same stand or surface — one array of photo numbers per spot. A listing shot all in one place is one group. Two groups means some photos were plainly taken somewhere else: a different backdrop or wall, light that is a different colour or brightness, a different surface, the stand in one and not the other. A closeup that is nearer than the others, the same spot otherwise, is the SAME spot. Leave out photos that are not of the item (a box or accessory spread shot elsewhere on purpose) and screenshots. setup_difference: a few words on what differs between the groups, or "" if one group.
 
 lead_ok: true if photo 1 is a clear shot that shows what the item is (it need not be the sheet's first shot).
 
@@ -736,6 +741,8 @@ function pictureScore(findings: Finding[], photoCount: number, price: number) {
       : f.code === "dirty_backdrop" || f.code === "clutter" ? (price > 250 ? 15 : price >= 100 ? 10 : 5)
       // Reflections: "same concept as the dirty paper but 3, 6 and 9 points".
       : f.code === "reflection" ? (price > 250 ? 9 : price >= 100 ? 6 : 3)
+      // Photos from two spots — the dirty table's scale (Ethan gave no number).
+      : f.code === "mixed_setups" ? (price > 250 ? 15 : price >= 100 ? 10 : 5)
       // The lead photo is what a buyer sees first. Any other photo's framing is
       // shared out by the photo count: one soft photo of fifteen costs little,
       // most of them off costs a lot.
@@ -821,6 +828,21 @@ function decide(l: Listing, sheet: Sheet, r: ReportT, faults?: Map<number, strin
   if (reflected.length) {
     findings.push({ code: "reflection", photos: reflected,
       text: `A reflection shows on the item in photo${reflected.length > 1 ? "s" : ""} ${reflected.join(", ")} — angle the item or the light, then retake.` });
+  }
+  // ⚠️ ONE LISTING, ONE SPOT (Ethan, 2026-10-08, OVL iPhone SE 2: the back on a
+  // grey sweep under one light, the front on a brighter backdrop at another
+  // distance — "pictures in the same listing are not taken the same way").
+  // Asked of the listing as a whole, because no single photo is wrong; it is
+  // the pair. The groups say which photos to retake: everything outside the
+  // biggest group.
+  const setups = (r.setups || []).map(g => [...new Set(g)].filter(n => n >= 1 && n <= l.photos.length)).filter(g => g.length);
+  if (setups.length > 1) {
+    const main = setups.reduce((a, b) => (b.length > a.length ? b : a));
+    const odd = setups.filter(g => g !== main).flat().sort((a, b) => a - b);
+    findings.push({ code: "mixed_setups", photos: odd,
+      text: `Photo${odd.length > 1 ? "s" : ""} ${odd.join(", ")} ${odd.length > 1 ? "were" : "was"} taken in a different spot from the rest`
+        + (r.setup_difference ? ` (${r.setup_difference.trim().replace(/\.$/, "")})` : "")
+        + ` — retake ${odd.length > 1 ? "them" : "it"} where photo${main.length > 1 ? "s" : ""} ${main.slice(0, 3).join(", ")} ${main.length > 1 ? "were" : "was"} taken.` });
   }
   const cluttered = r.photos.filter(p => p.issues.some(it => it.type === "clutter" && it.severity === "major")).map(p => p.n);
   if (cluttered.length) {
@@ -1002,6 +1024,7 @@ function agree(a: ReportT, b: ReportT): ReportT {
     serial: a.serial === "hidden_behind_cover" || b.serial === "hidden_behind_cover" ? "hidden_behind_cover"
       : a.serial === "shown" || b.serial === "shown" ? "shown" : "not_shown",
     lead_ok: a.lead_ok || b.lead_ok,
+    setups: (a.setups || []).length > 1 && (b.setups || []).length > 1 ? a.setups : [a.setups.flat()],
     title_notes: a.title_notes,
   };
 }
@@ -1285,7 +1308,7 @@ async function reviewView(scope: Scope, asked: string) {
 // says which shot each photo is), read live through the Admin API, so a sold
 // listing the storefront no longer shows (the two OVL PS3 controllers) is still
 // here. No model is called.
-const TRAIN_PROBLEMS = ["off_center", "crooked", "too_small", "blurry", "cut_off", "dirty_backdrop", "clutter", "reflection"];
+const TRAIN_PROBLEMS = ["off_center", "crooked", "too_small", "blurry", "cut_off", "dirty_backdrop", "clutter", "reflection", "different_spot"];
 async function trainView(scope: Scope, asked: string, skip = 0) {
   const store = scope.stores.includes(asked) ? asked : scope.stores[0];
   const graded: any[] = await rows(`picture_quality_reviews?store_code=eq.${store}&report=not.is.null`
@@ -1387,6 +1410,8 @@ async function feedbackView(scope: Scope, days: number) {
     blurry: "Said a photo is blurry", fake_or_edited: "Said a photo looks fake or edited",
     stock_photo: "Said a photo is a stock photo", lead: "Said photo 1 does not show the item",
     repeat: "Said photos repeat each other",
+    dirty_backdrop: "Said the table or backdrop is dirty", clutter: "Said something else is in frame",
+    reflection: "Said a reflection shows on the item", mixed_setups: "Said photos were taken in different spots",
   };
   // Photos for the ask, read live — the note is about what the manager saw.
   const photosFor = new Map<string, string[]>();

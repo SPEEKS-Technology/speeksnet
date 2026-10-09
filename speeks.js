@@ -55760,6 +55760,9 @@ const _PQ_TRAIN_PROBS = [
     // Reflections in the item (3/6/9 by price). Not on a Screen Off shot, which
     // is meant to show them — the server skips those.
     ['reflection', 'Reflection', '9'],
+    // Not taken in the same spot as the listing's other photos (OVL iPhone SE 2,
+    // 2026-10-08). A letter, because the digits ran out; either case works.
+    ['different_spot', 'Different Spot', 'S'],
 ];
 
 async function pqTrainOpen() {
@@ -55839,7 +55842,7 @@ function _pqTrainKey(e) {
     if (!_pqTrain || e.ctrlKey || e.metaKey || e.altKey) return;
     if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
     const k = e.key;
-    const prob = _PQ_TRAIN_PROBS.find(x => x[2] === k);
+    const prob = _PQ_TRAIN_PROBS.find(x => x[2] === (k.length === 1 ? k.toUpperCase() : k));
     if (k === 'Escape') pqTrainClose();
     else if (k === '1') pqTrainLabel('fine');
     else if (k === '0') pqTrainLabel('not_item');
