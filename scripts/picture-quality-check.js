@@ -570,7 +570,7 @@ t('train: photo beside its guide example, answers with their keys', function () 
         if (!figs[1].querySelector('img')) return 'the guide example is not shown';
         if (!/Front of Controller/.test(figs[1].textContent)) return 'the shot is not named';
         var keys = [].map.call(el.querySelectorAll('.pqt-acts kbd'), function (k) { return k.textContent; }).join(',');
-        return keys === '1,2,3,4,5,6,Enter,0' || 'keys: ' + keys;
+        return keys === '1,2,3,4,5,6,7,Enter,0' || 'keys: ' + keys;
     } finally { pqTrainClose(); }
 });
 
@@ -613,4 +613,16 @@ t('train @390px: the trainer fits a phone, and the photo frame is square', funct
         var fr = document.querySelector('#pqTrainOverlay .pqt-frame').getBoundingClientRect();
         return Math.abs(fr.width - fr.height) <= 2 || 'frame ' + Math.round(fr.width) + '×' + Math.round(fr.height);
     } finally { pqTrainClose(); }
+});
+
+t('a dirty table is one line for the listing, and outlines every photo it names', function () {
+    var row = Object.assign({}, FIX, { stale: false, findings: [{ code: 'dirty_backdrop', photos: [1, 2],
+        text: 'The table or backdrop is dirty in photos 1, 2 — clean it, then retake.' }] });
+    _pqData = data([row]); _pqTier = 'fix';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    var lines = host.querySelectorAll('.lt-why li');
+    if (lines.length !== 1 || !/dirty in photos 1, 2/.test(lines[0].textContent)) return 'lines: ' + [].map.call(lines, function (l) { return l.textContent; }).join(' | ');
+    var marked = host.querySelectorAll('.pq-ph-flag').length;
+    return marked >= 2 || 'only ' + marked + ' photos outlined';
 });

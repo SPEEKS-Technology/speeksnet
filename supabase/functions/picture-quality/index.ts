@@ -100,7 +100,7 @@ const PRICES: Record<string, [number, number]> = {   // $ per million in / out
 // re-grades everything instead of leaving old answers given less to look at.
 // v8 2026-09-25: a flag must be seen by two independent looks
 // v11 (a separate framing look) scored worse and is off — see FramingReport.
-const RECIPE = "pq-v12";  // v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
+const RECIPE = "pq-v13";  // v13 2026-10-08: a dirty table costs 5/10/15 by price. v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
 
 // Photos are sent at this size. The model sees framing, labels and screens
 // fine at 800px; full size would roughly triple the bill for nothing.
@@ -204,7 +204,7 @@ const parseList = (v: unknown): string => {
 };
 
 type Listing = {
-  id: string; title: string; handle: string; sku: string; collections: string[]; tags: string[];
+  id: string; title: string; handle: string; sku: string; price: number; collections: string[]; tags: string[];
   condition: string; cosmetic: string; functional: string; included: string; notIncluded: string;
   // mediaId is what productReorderMedia moves; thumb is what the panel draws.
   photos: { url: string; width: number; height: number; src: string; mediaId: string; thumb: string }[];
@@ -213,7 +213,7 @@ type Listing = {
 async function fetchListings(shop: string, token: string, ids: string[]): Promise<Listing[]> {
   const q = `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Product {
       id title handle tags
-      variants(first: 1) { nodes { sku } }
+      variants(first: 1) { nodes { sku price } }
       collections(first: 12) { nodes { handle } }
       condition: metafield(namespace: "custom", key: "condition") { value }
       cosmetic: metafield(namespace: "custom", key: "cosmetic_condition") { value }
@@ -229,6 +229,7 @@ async function fetchListings(shop: string, token: string, ids: string[]): Promis
   const data = await gql(shop, token, q, { ids });
   return (data.nodes || []).filter(Boolean).map((p: any) => ({
     id: p.id, title: p.title, handle: p.handle || "", sku: p.variants?.nodes?.[0]?.sku || "",
+    price: Number(p.variants?.nodes?.[0]?.price || 0),
     collections: (p.collections?.nodes || []).map((c: any) => c.handle),
     tags: Array.isArray(p.tags) ? p.tags.map(String) : [],
     condition: parseList(p.condition?.value),
@@ -402,7 +403,7 @@ const PhotoReport = z.object({
   issues: z.array(z.object({
     type: z.enum([
       "blurry", "too_dark_or_glare", "clutter",
-      "stock_photo", "fake_or_edited", "personal_info", "wrong_item", "pair_not_together",
+      "stock_photo", "fake_or_edited", "personal_info", "wrong_item", "pair_not_together", "dirty_backdrop",
     ]),
     severity: z.enum(["minor", "major"]),
   })),
@@ -452,6 +453,7 @@ For each photo (numbered from 1, in listing order), report:
   personal_info — a customer's name, Apple ID, email or phone number on screen.
   wrong_item — plainly a different product from the title (another model or device). A colour that differs from the title is a title_note, not this.
   pair_not_together — on a speaker-pair sheet, a pair shot showing one speaker instead of both together.
+  dirty_backdrop — the table, backdrop or stand the item is shot on is visibly dirty: scuff marks, scratches, stains, dust or debris on the surface around the item. Report it on EVERY photo it shows in, box and accessory photos included, and always as "major" — a dirty surface makes a clean item look grubby. Normal shadows, the stand's own reflections and the backdrop's gradient are not dirt.
 - note: a few words on what the photo shows.
 
 missing_shots: sheet shots with no photo covering them. Include a conditional shot ONLY when the listing shows it applies (Everything Included when items are included; Extra Accessories when extras are listed). Do not list Cosmetic Flaws or LCD Flaws here — that is main_flaw. Info shots (serial, model, CPU, RAM, storage) count as covered if ANY photo or screen shows the information legibly, including a BIOS or settings screen. A round item turned 90° looks the same — do not list its near-identical rotations as missing. BEFORE listing any shot as missing, look again at every photo you labelled Extra: it is often a shot you did not name (a top edge, a side of a box). For a box, deduce each side from what is printed on it. A serial/model closeup is not missing when the serial is hidden behind something that must be removed (a battery cover) — only when it is printed on the outside.
@@ -706,7 +708,7 @@ type Finding = { code: string; text: string; photo?: number; shot?: string; shot
 const PASS_BAR = 90;
 const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake_or_edited", "wrong_item",
   "personal_info", "flaw_not_shown", "no_photos", "pair_not_together"]);
-function pictureScore(findings: Finding[], photoCount: number) {
+function pictureScore(findings: Finding[], photoCount: number, price: number) {
   const n = Math.max(1, photoCount);
   const info = (s: string) => /(screen|serial|model|settings|battery|info|about|storage|software|cpu|ram|gpu)/i.test(s);
   let score = 100;
@@ -718,6 +720,9 @@ function pictureScore(findings: Finding[], photoCount: number) {
       // top or bottom is "not crucial to the sale"; a plain view sits between.
       : f.code === "missing_shot" ? (info(f.shot || "") ? 15 : /^(top|bottom) of box$/i.test(f.shot || "") ? 4 : 8)
       : f.code === "repeat" ? 4 * (f.photos?.length || 1)
+      // Ethan's scale: the dearer the item, the more a grubby table costs it —
+      // under $100 is 5, $100–250 is 10, over $250 is 15.
+      : f.code === "dirty_backdrop" ? (price > 250 ? 15 : price >= 100 ? 10 : 5)
       // The lead photo is what a buyer sees first. Any other photo's framing is
       // shared out by the photo count: one soft photo of fifteen costs little,
       // most of them off costs a lot.
@@ -780,6 +785,16 @@ function decide(l: Listing, sheet: Sheet, r: ReportT, faults?: Map<number, strin
         text: `Photo ${p.n} isn't to the guide's standard: ${probs.map(x => PROBLEM_TEXT[x] || x).join(", ")}.` });
     }
   }
+  // ⚠️ A DIRTY TABLE IS ONE PROBLEM, NOT ONE PER PHOTO (Ethan, 2026-10-08, on
+  // OVL Death Stranding 2's scuffed table: "this looks gross and would totally
+  // be the reason that it might not sell"). It is the same table in every shot,
+  // so it is costed once for the listing, by price — see pictureScore — and
+  // named with every photo it shows in, staged ones included.
+  const dirty = r.photos.filter(p => p.issues.some(it => it.type === "dirty_backdrop" && it.severity === "major")).map(p => p.n);
+  if (dirty.length) {
+    findings.push({ code: "dirty_backdrop", photos: dirty,
+      text: `The table or backdrop is dirty in photo${dirty.length > 1 ? "s" : ""} ${dirty.join(", ")} — clean it, then retake.` });
+  }
   const FRAMING = new Set(["clutter"]);
   for (const p of r.photos) {
     for (const it of p.issues) {
@@ -795,6 +810,7 @@ function decide(l: Listing, sheet: Sheet, r: ReportT, faults?: Map<number, strin
       // shots "are fine in this instance because the ram doesn't have anything
       // on the side to show"). A blurry SHEET shot still flags.
       if (issue === "blurry" && extraOnly(p)) continue;
+      if (issue === "dirty_backdrop") continue;   // one finding for the listing, below
       findings.push({ code: issue, photo: p.n, text: `Photo ${p.n} ${ISSUE_TEXT[issue] || issue}.` });
     }
   }
@@ -907,7 +923,7 @@ function decide(l: Listing, sheet: Sheet, r: ReportT, faults?: Map<number, strin
     findings.unshift({ code: "retake", shots: missingRequired,
       text: `Retake following the guide — ${missingRequired.length} of ${required.length} required shots are missing: ${missingRequired.join(", ")}.` });
   }
-  const pic = pictureScore(findings, l.photos.length);
+  const pic = pictureScore(findings, l.photos.length, l.price);
   const verdict = retake ? "retake" : pic.score < PASS_BAR ? "fix" : reorder ? "reorder" : "pass";
   return { verdict, findings, reorder, orderScore: Math.round(score * 100) / 100, pictureScore: pic.score, costs: pic.costs };
 }
@@ -1065,7 +1081,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
         if (d.reorder && !(d1.reorder && d2.reorder)) {
           d = { ...d, reorder: null };
           if (!report.lead_ok) d.findings.push({ code: "lead", photo: 1, text: "Photo 1 doesn't show what the item is." });
-          const pic = pictureScore(d.findings, l.photos.length);
+          const pic = pictureScore(d.findings, l.photos.length, l.price);
           d = { ...d, pictureScore: pic.score, costs: pic.costs };
           d.verdict = d.findings.some(f => f.code === "retake") ? "retake" : pic.score < PASS_BAR ? "fix" : "pass";
         }
@@ -1239,7 +1255,7 @@ async function reviewView(scope: Scope, asked: string) {
 // says which shot each photo is), read live through the Admin API, so a sold
 // listing the storefront no longer shows (the two OVL PS3 controllers) is still
 // here. No model is called.
-const TRAIN_PROBLEMS = ["off_center", "crooked", "too_small", "blurry", "cut_off"];
+const TRAIN_PROBLEMS = ["off_center", "crooked", "too_small", "blurry", "cut_off", "dirty_backdrop"];
 async function trainView(scope: Scope, asked: string, skip = 0) {
   const store = scope.stores.includes(asked) ? asked : scope.stores[0];
   const graded: any[] = await rows(`picture_quality_reviews?store_code=eq.${store}&report=not.is.null`
@@ -1257,11 +1273,15 @@ async function trainView(scope: Scope, asked: string, skip = 0) {
   for (const g of graded) {
     const l = live.get(g.product_id);
     if (!l) continue;
-    const sheet = sheets.find(s => s.slug === g.sheet_slug) || null;
-    // The saved report numbers photos as they were when graded. If the photos
-    // changed since, those numbers point at other photos — show no shot then,
-    // rather than the wrong example beside the photo.
-    const same = Array.isArray(g.photos) && g.photos.length === l.photos.length;
+    // The sheet the listing would be graded on TODAY. OVL Death Stranding 2's
+    // saved grade is from before gameSheetFor, on New In Box, and the trainer
+    // showed Ethan a sealed game beside a MacBook box (2026-10-08).
+    const saved = sheets.find(s => s.slug === g.sheet_slug) || null;
+    const sheet = gameSheetFor(l, saved, sheets);
+    // The saved report numbers photos as they were when graded, and names shots
+    // from the sheet it was graded on. If the photos changed since, or the sheet
+    // did, those answers point at the wrong example — show no shot then.
+    const same = sheet === saved && Array.isArray(g.photos) && g.photos.length === l.photos.length;
     l.photos.forEach((p, i) => {
       total++;
       const src = p.src.split("?")[0];

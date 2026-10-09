@@ -55751,6 +55751,9 @@ let _pqTrain = null;
 const _PQ_TRAIN_PROBS = [
     ['off_center', 'Off-Centre', '2'], ['crooked', 'Crooked', '3'], ['too_small', 'Too Small', '4'],
     ['blurry', 'Blurry', '5'], ['cut_off', 'Cut Off', '6'],
+    // Ethan, 2026-10-08: a scuffed table "looks gross and would totally be the
+    // reason that it might not sell" — costed 5/10/15 by price on the server.
+    ['dirty_backdrop', 'Dirty Table', '7'],
 ];
 
 async function pqTrainOpen() {
@@ -55863,7 +55866,7 @@ function _pqTrainHtml() {
         ? (p.savedProblems || []).map(k => (_PQ_TRAIN_PROBS.find(x => x[0] === k) || [k, k])[1]).join(', ')
         : p.saved === 'fine' ? 'Fine' : 'Not The Item')}</span>` : '';
     return head + err + `
-      <div class="pqt-ask">Judge only how the photo is <b>framed</b>: centred, level, big enough, sharp — the way the guide's example is.
+      <div class="pqt-ask">Judge only how the photo is <b>taken</b>: centred, level, big enough, sharp, on a clean table — the way the guide's example is.
         Not every difference matters; would you reshoot it?</div>
       <div class="pqt-pair">
         <figure class="pqt-fig">
@@ -56037,7 +56040,8 @@ function _pqRow(r) {
     const busy = _pqBusy.has(id);
     const checking = _pqChecking.has(id);
     const photos = r.photos || [];
-    const flagged = new Set((r.findings || []).map(f => f.photo).filter(Boolean));
+    // A listing-wide finding (a dirty table, a repeat) names its photos in `photos`.
+    const flagged = new Set((r.findings || []).flatMap(f => [f.photo, ...(f.photos || [])]).filter(Boolean));
     const now = photos.map((_, i) => i + 1);
     const isReorder = r.verdict === 'reorder' && r.reorder && Array.isArray(r.reorder.suggested);
     const findings = (r.verdict === 'retake' ? `<li class="pq-retake-said">${_pqRetakeSaid(r.findings)}</li>` : '')
