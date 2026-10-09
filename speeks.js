@@ -55754,6 +55754,9 @@ const _PQ_TRAIN_PROBS = [
     // Ethan, 2026-10-08: a scuffed table "looks gross and would totally be the
     // reason that it might not sell" — costed 5/10/15 by price on the server.
     ['dirty_backdrop', 'Dirty Table', '7'],
+    // …and anything in frame besides the item and the white backdrop (the Onyx's
+    // grey lightbox edge, the same day). Same price scale on the server.
+    ['clutter', 'Off Backdrop', '8'],
 ];
 
 async function pqTrainOpen() {
@@ -55866,7 +55869,7 @@ function _pqTrainHtml() {
         ? (p.savedProblems || []).map(k => (_PQ_TRAIN_PROBS.find(x => x[0] === k) || [k, k])[1]).join(', ')
         : p.saved === 'fine' ? 'Fine' : 'Not The Item')}</span>` : '';
     return head + err + `
-      <div class="pqt-ask">Judge only how the photo is <b>taken</b>: centred, level, big enough, sharp, on a clean table — the way the guide's example is.
+      <div class="pqt-ask">Judge only how the photo is <b>taken</b>: centred, level, big enough, sharp, on a clean white backdrop with nothing else in frame — the way the guide's example is.
         Not every difference matters; would you reshoot it?</div>
       <div class="pqt-pair">
         <figure class="pqt-fig">

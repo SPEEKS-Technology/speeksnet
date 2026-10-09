@@ -100,7 +100,7 @@ const PRICES: Record<string, [number, number]> = {   // $ per million in / out
 // re-grades everything instead of leaving old answers given less to look at.
 // v8 2026-09-25: a flag must be seen by two independent looks
 // v11 (a separate framing look) scored worse and is off — see FramingReport.
-const RECIPE = "pq-v13";  // v13 2026-10-08: a dirty table costs 5/10/15 by price. v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
+const RECIPE = "pq-v14";  // v14 2026-10-08: anything besides item + white backdrop costs 5/10/15 by price, like v13's dirty table. v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
 
 // Photos are sent at this size. The model sees framing, labels and screens
 // fine at 800px; full size would roughly triple the bill for nothing.
@@ -447,7 +447,7 @@ For each photo (numbered from 1, in listing order), report:
   If framing is "matches" or "close", framing_problems is empty. Photos of OTHER things that come WITH the item — its box, cables, chargers, a console's controllers, a case, an everything-included spread — are staged: give them "matches". But when that thing IS the item (a controller on the Game Controllers sheet, a box on a New In Box sheet), it is the item and is judged. A photo of the item itself is always judged, even if it is not a sheet shot. A deliberate closeup of a detail (a label, ports, a lens mount, a memory stick's pins shot on its stand) is never cut_off — but a photo meant to show the whole screen or body that crops part of it off is.
 - issues, only when clearly true, each with a severity. "major" means a buyer would notice and it hurts the listing; "minor" means you can see it but it does not matter. Only major issues are acted on:
   blurry, too_dark_or_glare — the detail the shot exists for cannot be made out AND it is something a buyer needs: a label, a screen, a flaw, the face or body of the item. An edge-on view of a thin item with nothing printed on its edge (a memory stick's side) is not this, even if soft. A "Screen Off" shot is meant to be a dark screen with reflections — never report it.
-  clutter — another object, a hand, or mess in frame (not lots, accessories or everything-included shots).
+  clutter — something in the frame that is not the item, its stand or the plain white backdrop: the edge of the lightbox or a wall, another item, a hand, a tool, mess. Report it on EVERY photo it shows in, and as "major" whenever you can plainly see it — a buyer's eye goes straight to it. Things that come WITH the item (its box, cables, accessories, everything included, the other items of a lot) are not clutter.
   stock_photo — a manufacturer or web image, not this unit.
   fake_or_edited — looks AI-generated, composited or heavily edited (a product floating unnaturally with no surface).
   personal_info — a customer's name, Apple ID, email or phone number on screen.
@@ -665,7 +665,7 @@ function orderScore(photos: ReportT["photos"], sheet: Sheet): number {
 
 const ISSUE_TEXT: Record<string, string> = {
   tilted: "is tilted", cut_off: "cuts off part of the item", too_much_empty_space: "has too much empty space",
-  blurry: "is blurry", too_dark_or_glare: "is too dark or has glare", clutter: "has clutter in frame",
+  blurry: "is blurry", too_dark_or_glare: "is too dark or has glare", clutter: "has something besides the item and the white backdrop in frame",
   stock_photo: "is a stock photo", fake_or_edited: "looks fake or edited", personal_info: "shows personal information",
   wrong_item: "shows a different item", pair_not_together: "should show both speakers together",
 };
@@ -722,12 +722,14 @@ function pictureScore(findings: Finding[], photoCount: number, price: number) {
       : f.code === "repeat" ? 4 * (f.photos?.length || 1)
       // Ethan's scale: the dearer the item, the more a grubby table costs it —
       // under $100 is 5, $100–250 is 10, over $250 is 15.
-      : f.code === "dirty_backdrop" ? (price > 250 ? 15 : price >= 100 ? 10 : 5)
+      // The same scale for anything else in frame (Ethan, the same day, on the
+      // OVL Onyx's grey lightbox edge: "when there is something else that is not
+      // the white background in the photo").
+      : f.code === "dirty_backdrop" || f.code === "clutter" ? (price > 250 ? 15 : price >= 100 ? 10 : 5)
       // The lead photo is what a buyer sees first. Any other photo's framing is
       // shared out by the photo count: one soft photo of fifteen costs little,
       // most of them off costs a lot.
       : f.code === "framing" || f.code === "lead" ? (f.photo === 1 ? 12 : 30 / n)
-      : f.code === "clutter" ? 4
       : 8;   // blurry or glare on a sheet shot, anything new
     score -= cost;
     costs.push({ code: f.code, cost: Math.round(cost * 10) / 10, photo: f.photo, shot: f.shot });
@@ -795,7 +797,15 @@ function decide(l: Listing, sheet: Sheet, r: ReportT, faults?: Map<number, strin
     findings.push({ code: "dirty_backdrop", photos: dirty,
       text: `The table or backdrop is dirty in photo${dirty.length > 1 ? "s" : ""} ${dirty.join(", ")} — clean it, then retake.` });
   }
-  const FRAMING = new Set(["clutter"]);
+  // ⚠️ SO IS ANYTHING ELSE IN FRAME, and on box and accessory photos too (Ethan,
+  // 2026-10-08, OVL Onyx Boox photo 9: the grey edge of the lightbox at the
+  // left). It was "clutter", one line per photo at 4 points, skipped on staged
+  // shots — but the lightbox edge is in the box photo as much as the item photo.
+  const cluttered = r.photos.filter(p => p.issues.some(it => it.type === "clutter" && it.severity === "major")).map(p => p.n);
+  if (cluttered.length) {
+    findings.push({ code: "clutter", photos: cluttered,
+      text: `Something besides the item and the white backdrop is in photo${cluttered.length > 1 ? "s" : ""} ${cluttered.join(", ")} — clear it out of the frame, then retake.` });
+  }
   for (const p of r.photos) {
     for (const it of p.issues) {
       // Round 3: the same Canon lens face passed in round 2 and came back
@@ -804,13 +814,12 @@ function decide(l: Listing, sheet: Sheet, r: ReportT, faults?: Map<number, strin
       // a trip to the camera.
       if (it.severity !== "major") continue;
       const issue = it.type;
-      if (FRAMING.has(issue) && staged(p)) continue;
       // A soft EXTRA hides nothing the guide asks for — the sheet's own shots
       // carry the listing (Ethan, OVL Micron RAM 2026-10-08: the blurry edge-on
       // shots "are fine in this instance because the ram doesn't have anything
       // on the side to show"). A blurry SHEET shot still flags.
       if (issue === "blurry" && extraOnly(p)) continue;
-      if (issue === "dirty_backdrop") continue;   // one finding for the listing, below
+      if (issue === "dirty_backdrop" || issue === "clutter") continue;   // one finding for the listing, above
       findings.push({ code: issue, photo: p.n, text: `Photo ${p.n} ${ISSUE_TEXT[issue] || issue}.` });
     }
   }
@@ -1255,7 +1264,7 @@ async function reviewView(scope: Scope, asked: string) {
 // says which shot each photo is), read live through the Admin API, so a sold
 // listing the storefront no longer shows (the two OVL PS3 controllers) is still
 // here. No model is called.
-const TRAIN_PROBLEMS = ["off_center", "crooked", "too_small", "blurry", "cut_off", "dirty_backdrop"];
+const TRAIN_PROBLEMS = ["off_center", "crooked", "too_small", "blurry", "cut_off", "dirty_backdrop", "clutter"];
 async function trainView(scope: Scope, asked: string, skip = 0) {
   const store = scope.stores.includes(asked) ? asked : scope.stores[0];
   const graded: any[] = await rows(`picture_quality_reviews?store_code=eq.${store}&report=not.is.null`
