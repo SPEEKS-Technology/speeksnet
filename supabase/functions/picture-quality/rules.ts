@@ -195,7 +195,7 @@ const priceStep = (price: number, low: number, mid: number, high: number) =>
 
 // --- the score -------------------------------------------------------------------
 export const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake_or_edited", "wrong_item",
-  "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead", "not_on_stand"]);
+  "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead", "not_on_stand", "turned"]);
 
 export function pictureScore(findings: Finding[], photoCount: number, price: number) {
   const n = Math.max(1, photoCount);
@@ -248,12 +248,57 @@ const ISSUE_TEXT: Record<string, string> = {
   wrong_item: "shows a different item",
 };
 const PROBLEM_TEXT: Record<string, string> = { crooked: "crooked", off_center: "not centred",
-  too_small: "too small in the frame", cut_off: "cut off", wrong_angle: "taken from the wrong angle" };
+  too_small: "too small in the frame", cut_off: "cut off", wrong_angle: "taken from the wrong angle",
+  // RAM sticks stood on end where photo 1 lies them lengthways (Ethan, 2026-10-11).
+  turned: "turned a different way from the guide and the other photos" };
 const plural = (ns: number[], one: string, many: string) => (ns.length > 1 ? many : one);
 const list = (ns: (number | string)[]) => ns.length < 3 ? ns.join(" and ") : ns.slice(0, -1).join(", ") + " and " + ns[ns.length - 1];
 
+// LOOK-ALIKE FACES ARE NOT REPEATS (Ethan, 2026-10-11, WSP Beats Studio3 and
+// Solo4): over-ear headphones on the stand look the same from the front and
+// the back, so the model labelled both "Front of Headphones", called the back a
+// repeat of photo 1 and — on the Solo4 — the back missing. Same trouble as the
+// sides of a plain box. When a repeat and its original are both labelled a shot
+// whose OPPOSITE is also on the sheet (Front ↔ Back, X ↔ Opposite X), the later
+// photo is that opposite face: no deletion, and the opposite is not missing —
+// as long as no other photo already shows the opposite. When the model has
+// pinned the back on some other photo (the Studio3's photo 9), only the
+// prompt's front/back rule can catch it. A
+// wrong deletion removes a good photo; a missed one leaves a spare. NOT top ↔
+// bottom — the WSP TeamGroup RAM's photo 3 really was photo 1 again ("Top of
+// Lot"), and Ethan deleted it.
+function oppositeShot(label: string, sheet: SheetR): string | null {
+  const t = label.trim();
+  const cands = /^front\b/i.test(t) ? [t.replace(/^front/i, "Back")]
+    : /^back\b/i.test(t) ? [t.replace(/^back/i, "Front")]
+    : /^opposite\s+/i.test(t) ? [t.replace(/^opposite\s+/i, "")]
+    : ["Opposite " + t];
+  const hit = sheet.shots.find(s => cands.some(c => c.toLowerCase() === s.label.toLowerCase()));
+  return hit ? hit.label : null;
+}
+export function lookAlikeFaces(r: ReportR, sheet: SheetR): ReportR {
+  const byN = new Map(r.photos.map(p => [p.n, p]));
+  const freed: string[] = [];
+  const photos = r.photos.map(p => {
+    const q = p.repeats != null ? byN.get(p.repeats) : undefined;
+    if (!q) return p;
+    const shared = p.shots.find(s => q.shots.some(x => x.toLowerCase() === s.toLowerCase()));
+    const opp = shared ? oppositeShot(shared, sheet) : null;
+    // Only while no OTHER photo shows that face: with the back already shown,
+    // a second front is a real repeat (the OVL PS3 controllers, the Duke, the
+    // HP 952XL box — Ethan flagged all four on 10-08).
+    if (!opp || freed.includes(opp.toLowerCase())
+      || r.photos.some(o => o !== p && o.shots.some(x => x.toLowerCase() === opp.toLowerCase()))) return p;
+    freed.push(opp.toLowerCase());
+    return { ...p, repeats: null, shots: [opp] };
+  });
+  if (!freed.length) return r;
+  return { ...r, photos, missing_shots: r.missing_shots.filter(m => !freed.includes(m.trim().toLowerCase())) };
+}
+
 // --- the verdict ---------------------------------------------------------------
-export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<number, string[]>) {
+export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<number, string[]>) {
+  const r = lookAlikeFaces(r0, sheet);
   const findings: Finding[] = [];
   const n = l.photos.length;
 
@@ -291,7 +336,11 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
     const said = p.framing !== "off" ? [] : p.framing_problems.filter(x => !ownLook.has(x) && !PAUSED.has(x)
       && !(x === "cut_off" && !p.whole_item) && !(x === "too_small" && gameSheet)
       && !(x === "wrong_angle" && extraOnly(p)));
-    const probs = [...new Set([...(faults?.get(p.n) || []), ...said])];
+    // Turned is its own automatic flag, not framing points (Ethan, 2026-10-11,
+    // WSP TeamGroup RAM photo 2 stood on end: "I would also have flagged" it).
+    if (said.includes("turned")) findings.push({ code: "turned", photo: p.n,
+      text: `Photo ${p.n} has the item turned a different way from the guide and the other photos — turn it to match, then retake.` });
+    const probs = [...new Set([...(faults?.get(p.n) || []), ...said.filter(x => x !== "turned")])];
     if (probs.length) {
       findings.push({ code: "framing", photo: p.n,
         text: `Photo ${p.n} isn't to the guide's standard: ${probs.map(x => PROBLEM_TEXT[x] || x).join(", ")}.` });
@@ -460,7 +509,10 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
     if (/^cosmetic flaws/i.test(m) && !unitCos) continue;
     if (/^lcd flaws/i.test(m) && !screenFault) continue;
     missing.push({ code: "missing_shot", tier: "needed", shot: shot.label,
-      text: `Missing: ${shot.label} — the listing says ${shot.cond.charAt(0).toLowerCase() + shot.cond.slice(1).replace(/\.$/, "")}, so it needs this photo.` });
+      text: /^everything included/i.test(m)
+        // "the listing says everything Included" read badly (WSP Galaxy Tab A9).
+        ? `Missing: ${shot.label} — the listing lists what comes with it, so it needs one photo of the item with all of it together (photos of the accessories on their own don't count).`
+        : `Missing: ${shot.label} — the listing says ${shot.cond.charAt(0).toLowerCase() + shot.cond.slice(1).replace(/\.$/, "")}, so it needs this photo.` });
   }
 
   // Repeats: −4 each for now, an automatic flag once the trainer shows the

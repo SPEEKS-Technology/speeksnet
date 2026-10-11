@@ -212,6 +212,23 @@ t("second look only when the flag is close to the line (cost cut, 10-11)", () =>
 t("a suggested deletion ALWAYS gets a second look (WSP watches, 10-11)", () => {
   const ps = report().photos; ps[4] = photo(5, { repeats: 2 });
   return needsSecondLook(listing({}), PHONE, report({ photos: ps })) || "no second look for a repeat"; });
+t("look-alike faces: a 'repeat' of the front is the back when the sheet asks for both (WSP Beats, 10-11)", () => {
+  const ps = report().photos; ps[0] = photo(1, { shots: ["Front of Controller"] }); ps[1] = photo(2, { shots: ["Front of Controller"], repeats: 1 });
+  const d = run({}, PAD, { photos: ps, missing_shots: ["Back of Controller"] });
+  return (!d.deletion && !d.findings.some(f => f.code === "repeat" || f.shot === "Back of Controller")) || say(d); });
+t("look-alike faces: with the back shown elsewhere, a second front IS a repeat (OVL PS3s, 10-08)", () => {
+  const ps = report().photos; ps[0] = photo(1, { shots: ["Front of Controller"] }); ps[3] = photo(4, { shots: ["Front of Controller"], repeats: 1 });
+  ps[6] = photo(7, { shots: ["Back of Controller"] });
+  const d = run({}, PAD, { photos: ps });
+  return (d.deletion && d.deletion.photos[0] === 4) || say(d); });
+t("look-alike faces: top ↔ bottom is NOT excused — a real repeat still deletes (WSP TeamGroup RAM)", () => {
+  const ps = report().photos; ps[0] = photo(1, { shots: ["Top of Controller"] }); ps[2] = photo(3, { shots: ["Top of Controller"], repeats: 1 });
+  const d = run({}, PAD, { photos: ps });
+  return (d.deletion && d.deletion.photos[0] === 3) || say(d); });
+t("turned is an automatic flag, even on an Extra photo (WSP TeamGroup RAM photo 2)", () => {
+  const ps = report().photos; ps[1] = photo(2, { framing: "off", framing_problems: ["turned"] });
+  const d = run({}, PHONE, { photos: ps });
+  return (flagged(d) && d.findings.some(f => f.code === "turned" && f.photo === 2)) || say(d); });
 t("two looks: a flag must be seen by both; a pass from either", () => {
   const a = report({ needed_missing: ["Everything Included"], units_claimed: 2, units_together: false, missing_shots: ["Back of Phone"] });
   const b = report({ needed_missing: [], units_claimed: 2, units_together: true, missing_shots: ["Back of Phone"] });

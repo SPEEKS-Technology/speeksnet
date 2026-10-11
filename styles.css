@@ -19743,9 +19743,12 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
     .pqt-frame { width: min(100%, 42vh); }
     .pqt-box { padding: 14px 16px; }
 }
-.pq-acts { width: 100%; }
+/* Even halves, but never narrower than the label — "Approve Deletion" was
+   clipped to "Approve Deletio" by min-width: 0 (Ethan, 2026-10-11). Too narrow
+   for both, and Dismiss drops to its own line instead of anything being cut. */
+.pq-acts { width: 100%; flex-wrap: wrap; }
 .pq-acts .lt-ok, .pq-acts .lt-no {
-    flex: 1 1 0; min-width: 0; padding: 5px 8px; font-size: 11.5px; line-height: 1.3;
+    flex: 1 1 0; min-width: max-content; padding: 5px 8px; font-size: 11.5px; line-height: 1.3;
     border-radius: 7px; white-space: nowrap; text-align: center;
 }
 .pq-hint { font-size: 10.5px; font-weight: 600; color: var(--cb-faint); line-height: 1.35; text-align: center; }
