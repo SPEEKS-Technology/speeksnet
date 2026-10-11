@@ -42,7 +42,7 @@ t('picture quality: the section draws its three tabs with counts', function () {
     _pqData = data([RETAKE, FIX, REORDER]); _pqErr = null; _pqTier = 'retake'; _ecStore = 'WSP';
     var h = _pqHtml();
     if (h.indexOf('Picture Quality') < 0) return 'no section title';
-    if (h.indexOf('Retake') < 0 || h.indexOf('Fix These Photos') < 0 || h.indexOf('One-Click Fixes') < 0) return 'a tab is missing';
+    if (h.indexOf('Retake') < 0 || h.indexOf('Fix These Photos') < 0 || h.indexOf('Quick Fixes') < 0) return 'a tab is missing';
     return h.indexOf('Acer Aspire') >= 0 || 'the retake row is not on the Retake tab';
 });
 
@@ -641,8 +641,8 @@ t('a flagged row never shows its score — every fix is listed, not enough to pa
     return host.querySelectorAll('.lt-why li').length === 2 || 'not every finding is listed';
 });
 
-// --- One-Click Fixes: Approve Deletion (2026-10-11) ---------------------------------
-t('one-click fixes: a duplicate alone gets Approve Deletion + Dismiss, and says what it does', function () {
+// --- Quick Fixes: Approve Deletion (2026-10-11) ---------------------------------
+t('quick fixes: a duplicate alone gets Approve Deletion + Dismiss, and says what it does', function () {
     var row = Object.assign({}, REORDER, { reorder: null, deletion: { photos: [5], of: [1] },
         findings: [{ code: 'repeat', photos: [5], text: 'Photo 5 is the same shot as photo 1. Approve Deletion removes it.' }] });
     _pqData = data([row]); _pqTier = 'reorder';
@@ -651,11 +651,11 @@ t('one-click fixes: a duplicate alone gets Approve Deletion + Dismiss, and says 
     var b = host.querySelector('button[onclick^="pqDeletePhotos"]');
     if (!b || b.textContent.trim() !== 'Approve Deletion') return 'no Approve Deletion button';
     if (!host.querySelector('button[onclick^="pqDismiss"]')) return 'no Dismiss';
-    if (host.querySelector('button[onclick^="pqRecheck"]')) return 'Recheck offered on a one-click fix';
+    if (host.querySelector('button[onclick^="pqRecheck"]')) return 'Recheck offered on a quick fix';
     return /Approve Deletion removes photo 5 from Shopify/.test(host.textContent) || 'the hint does not say what it does';
 });
 
-t('one-click fixes: a reorder AND a duplicate get both approvals', function () {
+t('quick fixes: a reorder AND a duplicate get both approvals', function () {
     var row = Object.assign({}, REORDER, { deletion: { photos: [6], of: [2] } });
     _pqData = data([row]); _pqTier = 'reorder';
     var host = document.getElementById('pq-host');

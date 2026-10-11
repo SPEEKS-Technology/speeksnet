@@ -1173,7 +1173,7 @@ async function applyReorder(scope: Scope, store: string, productId: string) {
 // ⚠️ A DELETION IS APPLIED ONLY TO THE PHOTOS IT WAS WORKED OUT FOR — the same
 // guard as applyReorder: the live stamp must match the graded one, and the
 // photos go by Shopify media id, never by position alone. Ethan (2026-10-11):
-// a repeated photo is a click on One-Click Fixes — "say approve deletion. Don't
+// a repeated photo is a click on Quick Fixes — "say approve deletion. Don't
 // imply that the user should delete it themselves."
 //
 // ⚠️ WHICH MUTATION IS ASKED, NOT ASSUMED. productDeleteMedia is the classic
@@ -1226,7 +1226,7 @@ async function applyDeletion(scope: Scope, store: string, productId: string) {
   // The stamp moves to the photos that remain, so the sweep does not pay to
   // re-grade a listing whose only change is the one just made. Any suggested
   // order was worked out on the old numbering, so it goes too; the repeat
-  // finding is done. A row that was only a One-Click Fix is finished.
+  // finding is done. A row that was only a Quick Fix is finished.
   const kept = { ...l, photos: l.photos.filter((_, i) => !nums.includes(i + 1)) };
   const findings = (r.findings || []).filter((f: any) => f.code !== "repeat");
   const done = r.verdict === "reorder";

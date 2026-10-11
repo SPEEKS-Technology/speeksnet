@@ -26,7 +26,7 @@
 //   pair / set / lot not all shown       dirty table or backdrop           −5/−10/−15 by price
 //   lead photo not to standard           reflections on the item           −3/−6/−9 by price
 //   anything besides item + backdrop     photos from different spots       −5
-//   missing CRUCIAL view                 photo order                       0 (One-Click Fixes)
+//   missing CRUCIAL view                 photo order                       0 (Quick Fixes)
 //   missing If Needed shot the listing calls for
 //
 // Price breaks are $100 and $250: under $100, $100–$250, over $250.
@@ -385,7 +385,7 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
   }
 
   // Repeats: −4 each for now, an automatic flag once the trainer shows the
-  // signal holds. The fix is a click on the One-Click Fixes tab, not a chore for
+  // signal holds. The fix is a click on the Quick Fixes tab, not a chore for
   // the store (Ethan: "say approve deletion. Don't imply that the user should
   // delete it themselves").
   const repeats = r.photos.filter(p => p.repeats != null && p.repeats >= 1 && p.repeats < p.n);

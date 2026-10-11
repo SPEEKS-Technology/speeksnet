@@ -55617,11 +55617,12 @@ const _PQ_TIERS = [
     { v: 'nophotos', label: 'No Photos',        cls: 'lt-t-bad',  half: 'photos' },
     { v: 'retake',   label: 'Retake',           cls: 'lt-t-bad',  half: 'pictures' },
     { v: 'fix',      label: 'Fix These Photos', cls: 'lt-t-warn', half: 'pictures' },
-    // ONE-CLICK FIXES (Ethan, 2026-10-11): the photos are fine, and the fix is a
+    // QUICK FIXES (Ethan, 2026-10-11 — first named One-Click Fixes, renamed the
+    // same day): the photos are fine, and the fix is a
     // change the tool makes when a manager approves it — a new order, or deleting
     // a duplicate. The verdict is still called 'reorder' in the table and the
     // API; only the words on screen changed.
-    { v: 'reorder',  label: 'One-Click Fixes',  cls: 'lt-t-ok',   half: 'pictures' },
+    { v: 'reorder',  label: 'Quick Fixes',  cls: 'lt-t-ok',   half: 'pictures' },
 ];
 
 function _pqHtml() {

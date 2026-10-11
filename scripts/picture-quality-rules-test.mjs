@@ -125,7 +125,7 @@ t("pair / set / lot: all units shown, together — else an automatic flag", () =
   const c = run({ title: "Pyle Speaker Pair" }, PHONE, { units_claimed: 2 });
   return (flagged(a) && /all 6/.test(a.findings[0].text) && flagged(b) && c.verdict === "pass") || `${say(a)} | ${say(b)} | ${say(c)}`; });
 
-t("a repeat: −4, Approve Deletion, and a One-Click Fix when nothing else is wrong", () => {
+t("a repeat: −4, Approve Deletion, and a Quick Fix when nothing else is wrong", () => {
   const ps = report().photos; ps[4] = photo(5, { repeats: 1 });
   const d = run({}, PHONE, { photos: ps }); const f = d.findings.find(x => x.code === "repeat");
   return (d.pictureScore === 96 && d.verdict === "reorder" && d.deletion && d.deletion.photos[0] === 5

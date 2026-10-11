@@ -21,7 +21,7 @@ const [model = "claude-sonnet-5", effort = "medium"] = process.argv.slice(2);
 // is a ONE-CLICK FIX — the photos are fine and the tool makes the change on
 // approval (a new order, a duplicate deleted) — so it scores as a pass. (It
 // used to count as a flag: Ethan kept the Surface's buried Everything Included
-// as one, which is now a One-Click Fix beside its missing Screen Off.)
+// as one, which is now a Quick Fix beside its missing Screen Off.)
 // [store, product id, name, Ethan's verdict ("?" = not scored yet), why]
 const KEY = [
   // WSP, graded 2026-09-24/25.
