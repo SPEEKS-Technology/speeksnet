@@ -21,7 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { decide, agree, pictureScore, PASS_BAR } from "../supabase/functions/picture-quality/rules.ts";
+import { decide, agree, pictureScore, PASS_BAR, PAYMORE_TEMPLATES, splitSentences, isStandardSentence } from "../supabase/functions/picture-quality/rules.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -166,12 +166,48 @@ t("two looks: a flag must be seen by both; a pass from either", () => {
   const m = agree(a, b);
   return (m.needed_missing.length === 0 && m.units_together === true && m.missing_shots.length === 1) || JSON.stringify(m).slice(0, 200); });
 
+// --- PayMore's wording: what is template, what is about THIS unit -------------------------
+t("every PayMore Good/Fair template sentence reads as standard", () => {
+  const bad = Object.entries(PAYMORE_TEMPLATES).flatMap(([k, v]) => splitSentences(v).filter(x => !isStandardSentence(x)).map(x => k + ": " + x));
+  return !bad.length || bad.join(" | "); });
+t("…and so do small edits of one (another device's name, a dropped clause)", () => {
+  const ok = ["This Samsung Galaxy Watch is in good cosmetic condition.",
+    "The back glass is in fair cosmetic condition with some scuffs and scratches.",
+    "The screen is in good cosmetic condition with minimal scuffs, scratches and wear.",
+    "This console is in excellent cosmetic condition!"];
+  const bad = ok.filter(x => !isStandardSentence(x)); return !bad.length || bad.join(" | "); });
+t("what a lister writes about the unit is NOT standard", () => {
+  const unit = ["Small crack in the bottom left corner of the screen.",
+    "The screen is in good cosmetic condition but has a chip on the corner.",
+    "Deep gouge on the lid near the left hinge.",
+    "Heavy dent on the back corner of the case.",
+    "There is a dead pixel near the center of the display.",
+    "The back glass is shattered but the phone works."];
+  const bad = unit.filter(x => isStandardSentence(x)); return !bad.length || bad.join(" | "); });
+t("Good/Fair wear in OTHER words is standard too (real lines from the 10-08 listings)", () => {
+  const ok = ["The console is in good pre-owned condition, showing a few noticeable scuffs, scratches, and signs of wear.",
+    "The headband has scuffs, scratches and wear due to heavy use.",
+    "There is some light to moderate wear from use including some small scuffs, scratches, or dings.",
+    "The top remains in good shape with a few minor but noticeable marks, and the bottom is also in good shape with minor yet noticeable scuffing and wear.",
+    "It is brand new and factory sealed.",
+    "This controller is in excellent pre-owned condition, with little to no noticeable wear or damage."];
+  const bad = ok.filter(x => !isStandardSentence(x)); return !bad.length || bad.join(" | "); });
+t("…and the two real damage lines in those listings are not", () => {
+  const unit = ["The back glass is cracked/damaged, see photos.", "The hinges function properly, but the housing is cracked/damaged."];
+  const bad = unit.filter(x => isStandardSentence(x)); return !bad.length || bad.join(" | "); });
+t("template wording never makes Cosmetic Flaws required; a unit sentence does", () => {
+  const tmpl = "The back glass is in fair cosmetic condition with some scuffs and scratches and wear.";
+  const a = run({ unitCosmetic: [tmpl].filter(x => !isStandardSentence(x)) }, PHONE, { needed_missing: ["Cosmetic Flaws"] });
+  const b = run({ unitCosmetic: ["Small crack in the bottom left corner of the screen."].filter(x => !isStandardSentence(x)) }, PHONE, { needed_missing: ["Cosmetic Flaws"] });
+  return (a.verdict === "pass" && flagged(b)) || `${say(a)} | ${say(b)}`; });
+
 // --- 2. THE REPLAY ----------------------------------------------------------------------
 const fx = JSON.parse(fs.readFileSync(path.join(here, "fixtures", "pq-replay-2026-10-08.json"), "utf8"));
 const KEY = Object.fromEntries(fs.readFileSync(path.join(here, "picture-quality-calibrate.mjs"), "utf8").split("\n")
   .map(l => /\["(WSP|OVL)", "(\d+)", "([^"]+)", "(flag|pass|\?)"/.exec(l)).filter(Boolean).map(m => [m[2], [m[3], m[4]]]));
 const sheets = new Map(fx.sheets.map(s => [s.slug, s]));
 let agreeN = 0, scored = 0;
+const unitNotes = [];
 console.log("\nREPLAY — the 2026-10-08 reports under today's rules (reported, not asserted)");
 for (const r of fx.results) {
   const k = KEY[r.product_id.split("/").pop()];
@@ -184,12 +220,16 @@ for (const r of fx.results) {
     if (m && photos[f.photo - 1]) photos[f.photo - 1] = { width: +m[1], height: +m[2] };
   }
   const l = { title: r.title, cosmetic: "", functional: "", included: "", price: 0, photos,
-    unitCosmetic: (r.notes || []).filter(x => x.startsWith("[unit]")).map(x => x.replace(/^\[unit\]\s*/, "")) };
+    // Re-read with TODAY's test (PayMore's wording), not the tag the old run gave.
+    unitCosmetic: (r.notes || []).map(x => x.replace(/^\[(unit|standard)\]\s*/, "")).filter(x => !isStandardSentence(x)) };
+  unitNotes.push(...l.unitCosmetic.map(x => `${r.store} ${k[0]}: ${x}`));
   const d = decide(l, sheet, r.report);
   const got = flagged(d) ? "flag" : "pass";
   scored++; if (got === k[1]) agreeN++;
   console.log(`${got === k[1] ? "✓" : "✗"} ${r.store} ${k[0].padEnd(28)} Ethan ${k[1]}  now ${d.verdict.padEnd(7)} ${String(d.pictureScore).padStart(3)}  (then ${r.verdict_then})`);
   if (got !== k[1] || process.env.VERBOSE) for (const f of d.findings) console.log(`      ${f.text}`);
 }
+console.log(`\nCosmetic sentences read as about THE UNIT (not PayMore's wording) — ${unitNotes.length}:`);
+for (const x of unitNotes) console.log("  " + x);
 console.log(`\nreplay: ${agreeN}/${scored} agree with Ethan · card: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

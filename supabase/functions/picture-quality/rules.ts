@@ -32,6 +32,78 @@
 // Price breaks are $100 and $250: under $100, $100–$250, over $250.
 // ============================================================================
 
+// ---------------------------------------------------------------------------
+// PAYMORE'S CONDITION TEMPLATES (Ethan, 2026-10-11, pasted from PayMore's
+// lister: the Good and Fair wording for each field, per kind of item).
+//
+// ⚠️ WHAT IT DECIDES. A cosmetic sentence that is one of these is the
+// listing program's wording, not a claim about THIS unit, so it never makes a
+// Cosmetic Flaws photo required and never becomes the main flaw. Anything
+// else the lister typed — "small crack on the bottom left of the screen" — is
+// about the unit: it makes Cosmetic Flaws required (an automatic flag when it
+// is missing) and can be the main flaw. Ethan: "detect when we should be
+// taking a picture of certain cosmetic flaws when the listing says stuff about
+// more intense conditions than fair or good."
+//
+// It replaced counting (a sentence on 4+ of a store's listings was "standard"),
+// which got it wrong both ways: a template line rare at one store read as a
+// claim, and a lister who types the same custom line often enough had it
+// waved through. See isStandardSentence for how the samples are used — as the
+// line for "normal wear", not as the only words allowed.
+// ---------------------------------------------------------------------------
+export const PAYMORE_TEMPLATES: Record<string, string> = {
+  laptops: `The top case is in fair condition due to scuffs, dents, scratches and wear. Some of these scratches are semi-deep and easily seen. The top is in good cosmetic condition with minimal wear. The bottom is in fair condition due to scuffs, dents, scratches and wear. Some of these scratches are semi-deep and easily seen. The bottom is in good cosmetic condition with minimal wear. The sides are in fair condition due to some deep scratches, dents and wear. All four sides are in good cosmetic condition with minimal wear. The ports are functional, but are in fair condition due to heavy use, dings and scratches. The screen is in fair condition due to scratches, scuffs and wear. The keyboard is in good condition with some minor wear and signs of use. The keyboard is in fair condition due to heavy usage, scratched, dents and wear. The screen is in good condition with some minor wear and scuffs. The hinges are in good condition, sturdy and functioning properly. The bezel is in good cosmetic condition with little to no wear. The bezel is in fair condition with signs of use as well as scuffs, dents and scratches. All of the ports are in good condition and clean.`,
+  phones: `The screen is in good cosmetic condition with minimal scuffs, scratches and wear! The screen is in fair cosmetic condition with some scuffs and scratches and wear. Some scratches are semi deep, but there is no major cosmetic damage. The back glass is in fair cosmetic condition with some scuffs and scratches and wear. Some scratches are semi deep, but there is no major cosmetic damage. The back glass is in good shape with minor wear. The bezel is in good shape with minor wear. The bezel has some scuffs, scratches, wear and dings along the corner, see photos. The front and back cameras are in good shape with no major wear or damage.`,
+  tablets: `The screen is in fair cosmetic condition with some scuffs and scratches and wear. Some scratches are semi deep, but there is no major cosmetic damage. The screen is in good cosmetic condition with minimal scuffs, scratches and wear! The back is in good cosmetic condition with some minor scuffs, scratches and wear, see photos. The back is in fair cosmetic condition with some scuffs and scratches and wear. Some scratches are semi deep, but there is no major cosmetic damage. The bezel is in good cosmetic condition with some minor scuffs, scratches and wear. The bezel has some scuffs, scratches, wear and dings along the corner, see photos.`,
+  watches: `This Apple Watch is in good cosmetic condition. The face/glass have no major wear or scratches. The band is in good condition with some minor wear. This Apple Watch is in fair condition due to scuffs, scratches and wear. Some of these scratches are semi-deep and easily seen. Please view our close up photos, as these are taken of the actual item being offered for sale.`,
+  misc: `This device is used but in like-new, excellent condition. There are very few, if any, scratches or scuffs. This device is used in good condition. There are some scratches or scuffs from everyday use. This device is used in fair condition. There are many visible scratches, scuffs, and/or visible dings from heavy use.`,
+  cameras: `The camera body is in good cosmetic condition with some minimal wear. The LCD and mirror are in good condition with no major wear, scratches or scuffs. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body is in fair cosmetic condition due to some scuffs, scratches and wear. Some of the wear is easily seen. The mirror and LCD both have some visible scuffs and scratches, but the images come out clear. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body is in fair cosmetic condition due to some visible scuffs, scratches and wear. However, the mirror and LCD are both in good condition with little to no wear. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body and LCD are both in good condition with some minimal wear. The mirror however, has some visible scratches and wear. The camera still takes good clear images. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body is in good cosmetic condition with some minor wear. The mirror is also in good condition with no major wear or scratches. The LCD however, has some significant scratches and wear. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body is in good condition, but the mirror and LCD both have some heavy scratches and wear. The camera still takes clear photos. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body is in fair condition due to some visible scuffs, scratches and wear. The LCD also has some heavy scratches and wear that is easily seen. The mirror however, is in good condition with no major wear or scratches. Please view our close up photos, as these are taken of the actual item being offered for sale. The LCD is in good condition, but the camera body is fair due to some visible scuffs, scratches and wear. The mirror is also fair with some easily seen scratches and wear. The camera still takes clear photos. Please view our close up photos, as these are taken of the actual item being offered for sale.`,
+  consoles: `This console is in excellent cosmetic condition. The top, bottom and sides all have minimal, if any, scuffs and wear. Please view our close up photos, as these are taken of the actual item being offered for sale. The bottom of the console is in good condition, but the top casing has some scuffs, scratches and wear. The vents have been cleaned and are in good condition. All crevices and vents have been cleaned of dust and debris. Please view our close up photos, as these are taken of the actual item being offered for sale. The top casing is in good condition with some minor wear, but the bottom has some heavy scuffs, scratches and wear. The vents have been cleaned and are in good condition. All crevices and vents have been cleaned of dust and debris. Please view our close up photos, as these are taken of the actual item being offered for sale. The top and bottom casing are both in good condition with some minor wear. The vents however, are fair with some scratches, dings and debris. The vents have been cleaned to the best of our ability. Please view our close up photos, as these are taken of the actual item being offered for sale. This console is in fair cosmetic condition. The top and bottom casings both have some heavy scuffs, scratches, dings and wear. The vents also have some dings, wear and debris. The vents have been cleaned to the best of our ability. Please view our close up photos, as these are taken of the actual item being offered for sale. The top and bottom casings are both in fair condition due to scuffs, scratches, dings and wear. The vents however, are in good condition and have been cleaned. All crevices and vents have been cleaned of dust and debris. Please view our close up photos, as these are taken of the actual item being offered for sale. The top casing is in good cosmetic condition with some minor wear. The bottom casing and vents are both in fair condition due to scuffs, scratches, dings and debris. The vents have been cleaned to the best of our ability. Please view our close up photos, as these are taken of the actual item being offered for sale. The bottom of this console is in good condition, but the top and vents are fair. The top casing and the vents are fair due to scuffs, scratches, dings and debris. The vents have been cleaned to the best of our ability. Please view our close up photos, as these are taken of the actual item being offered for sale. The console is in good pre-owned condition with a few noticeable scuffs, scratches, and wear.`,
+  pcs: `The case is in good cosmetic condition with minimal wear. The case is in fair condition due to scuffs, dents, scratches and wear. Some of these scratches are semi-deep and easily seen. The glass is in good condition with some minor wear and scuffs. The glass is in fair condition due to scratches, scuffs and wear. All sides are in good cosmetic condition with minimal wear. The sides are in fair condition due to some deep scratches, dents and wear. All of the ports are in good condition and clean. The ports are functional, but are in fair condition due to heavy use, dings and scratches.`,
+};
+
+// One splitter for notes and templates alike, so they are cut the same way.
+export const splitSentences = (s: string) =>
+  String(s || "").split(/(?<=[.!?])\s+/).map(x => x.trim()).filter(x => x.length > 12);
+const words = (s: string) => String(s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+
+// Damage the templates never describe. A sentence naming one is about the
+// unit, however template-like the rest of it reads ("the screen is in good
+// condition but has a crack in the corner").
+export const SEVERE = /\b(crack|cracked|cracks|shatter|shattered|broken|break|missing|chip|chipped|chips|burn|burned|burnt|dead pixels?|bent|peel|peeling|stain|stained|hole|torn|tear|lines? on|spots? on|bruis|discolou?r|scorch|melt|bulg|swell|swollen|water damage)/i;
+
+const TEMPLATE_WORDS: Set<string>[] = Object.values(PAYMORE_TEMPLATES)
+  .flatMap(splitSentences).map(x => new Set(words(x)));
+// ≥ 85% of a sentence's words inside ONE template sentence: the template with a
+// device name swapped or a clause dropped still counts.
+const TEMPLATE_SHARE = 0.85;
+
+// ONE flaw, at ONE place — "a dent on the back corner", "a deep scratch across
+// the screen", "a gouge on the lid" — is a claim about this unit; the plural,
+// placeless "scuffs, scratches and wear" of every Good/Fair line is not.
+const LOCATED = /\bgouge[ds]?\b|\b(dent|ding|scratch|scuff|mark|nick|scrape)\b[^.,;]{0,25}\b(on|near|along|across|at|by|in) (the|its|their)\b|\b(one|a|single)\s+(deep|large|big|long|noticeable|major|visible)\s+(scratch|dent|scuff|ding|mark|nick|scrape)\b/i;
+
+// ⚠️ MEANING, NOT WORDS (2026-10-11). The first version matched Ethan's samples
+// word for word, and the free replay showed what listings really say: 49
+// cosmetic sentences across the 30 calibration listings, 47 of them ordinary
+// Good/Fair wear in OTHER words ("The console is in good pre-owned condition,
+// showing a few noticeable scuffs…") or for items the samples do not cover
+// (games, controllers, headphones, lenses). Word-matching would have demanded a
+// Cosmetic Flaws photo on nearly every listing. The two real ones were "The
+// back glass is cracked/damaged" (WSP iPhone 11) and "the housing is cracked/
+// damaged" (WSP Acer). So a sentence is about THE UNIT only when it says more
+// than Good/Fair wear can: damage the templates never name (SEVERE), or one
+// located flaw (LOCATED) that is not one of PayMore's own lines. Everything
+// else — the templates, and any rewording of them — is standard.
+// `seen` (the old store-wide count) is accepted and ignored, so a caller that
+// still passes it changes nothing.
+export function isStandardSentence(sentence: string, _seen = 0): boolean {
+  if (SEVERE.test(sentence)) return false;
+  const w = words(sentence);
+  if (w.length && TEMPLATE_WORDS.some(t => w.filter(x => t.has(x)).length / w.length >= TEMPLATE_SHARE)) return true;
+  return !LOCATED.test(sentence);
+}
+
 export const PASS_BAR = 90;
 export const SQUARE_TOLERANCE = 0.01;
 export const RETAKE_SHARE = 0.4;

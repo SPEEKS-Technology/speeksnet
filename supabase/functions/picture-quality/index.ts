@@ -66,7 +66,7 @@
 import Anthropic from "npm:@anthropic-ai/sdk";
 import { z } from "npm:zod";
 import { zodOutputFormat } from "npm:@anthropic-ai/sdk/helpers/zod";
-import { agree, BOX_SHEETS, decide, PASS_BAR, pictureScore, type ListingR } from "./rules.ts";
+import { agree, BOX_SHEETS, decide, isStandardSentence, PASS_BAR, pictureScore, type ListingR } from "./rules.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -101,13 +101,11 @@ const PRICES: Record<string, [number, number]> = {   // $ per million in / out
 // re-grades everything instead of leaving old answers given less to look at.
 // v8 2026-09-25: a flag must be seen by two independent looks
 // v11 (a separate framing look) scored worse and is off — see FramingReport.
-const RECIPE = "pq-v17";  // v17 2026-10-11: Ethan's scoring card v2 (rules.ts). v16 2026-10-08: photos from two spots cost 5/10/15 by price. v15: reflections cost 3/6/9 by price (not on Screen Off). v14: anything besides item + white backdrop costs 5/10/15 by price, like v13's dirty table. v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
+const RECIPE = "pq-v18";  // v18 2026-10-11: PayMore's Good/Fair wording decides [standard] vs [unit]. v17: Ethan's scoring card v2 (rules.ts). v16 2026-10-08: photos from two spots cost 5/10/15 by price. v15: reflections cost 3/6/9 by price (not on Screen Off). v14: anything besides item + white backdrop costs 5/10/15 by price, like v13's dirty table. v12 2026-10-08: flagged by a weighted picture score under PASS_BAR, not by any finding. v10: controllers judged on their sheet; crooked = slanted in frame; wrong angle = side not visible; repeats
 
 // Photos are sent at this size. The model sees framing, labels and screens
 // fine at 800px; full size would roughly triple the bill for nothing.
 const PHOTO_PX = 800;
-// A sentence on at least this many of a store's listings is template text.
-const BOILERPLATE_MIN = 4;
 const MAX_IDS = 12;
 const CONCURRENCY = 4;
 
@@ -242,7 +240,10 @@ async function fetchListings(shop: string, token: string, ids: string[]): Promis
   }));
 }
 
-// RULE 6. Every sentence of every active listing's cosmetic notes, counted. A
+// RULE 6 — NOW A FALLBACK. PayMore's own Good/Fair wording (PAYMORE_TEMPLATES in
+// rules.ts, from Ethan 2026-10-11) decides first; this count covers only the
+// categories those samples do not. Every sentence of every active listing's
+// cosmetic notes, counted. A
 // sentence the listing program writes shows up on dozens of listings word for
 // word; one a lister wrote about this unit shows up once. Counted per store,
 // which is enough: each store's program output repeats within the store.
@@ -559,7 +560,9 @@ function framingFaults(f: FramingT, gameSheet: boolean): Map<number, string[]> {
 }
 
 function listingText(l: Listing, standard: Map<string, number>) {
-  const tag = (s: string) => ((standard.get(norm(s)) || 0) >= BOILERPLATE_MIN ? "[standard] " : "[unit] ") + s;
+  // PayMore's own wording first, the store-wide count only as a fallback — see
+  // PAYMORE_TEMPLATES in rules.ts.
+  const tag = (s: string) => (isStandardSentence(s, standard.get(norm(s)) || 0) ? "[standard] " : "[unit] ") + s;
   const cos = sentences(l.cosmetic).map(tag).join("\n") || "(none)";
   return [
     `TITLE: ${l.title}`,
@@ -688,7 +691,7 @@ async function review(client: Anthropic, model: string, effort: string, l: Listi
 // The listing as rules.ts needs it: the cosmetic sentences that are about THIS
 // unit, by the same frequency test the prompt's [unit]/[standard] tags use.
 const forRules = (l: Listing, standard: Map<string, number>): ListingR => ({ ...l,
-  unitCosmetic: sentences(l.cosmetic).filter(x => (standard.get(norm(x)) || 0) < BOILERPLATE_MIN) });
+  unitCosmetic: sentences(l.cosmetic).filter(x => !isStandardSentence(x, standard.get(norm(x)) || 0)) });
 
 // --- the stamp ---------------------------------------------------------------
 
@@ -708,7 +711,10 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
   const client = new Anthropic({ apiKey });
   const { shop, token } = await shopFor(store);
   const [listings, sheets, standard] = await Promise.all([
-    fetchListings(shop, token, ids), loadSheets(), boilerplateFor(shop, token)]);
+    // No store-wide sentence count any more: isStandardSentence (rules.ts) judges
+    // a note by what it says, so reading every listing in the store just to
+    // count its sentences was pure wait. boilerplateFor stays for reference.
+    fetchListings(shop, token, ids), loadSheets(), Promise.resolve(new Map<string, number>())]);
   const price = PRICES[model] || PRICES[DEFAULT_MODEL];
   let tin = 0, tout = 0;
   const out: any[] = [];
@@ -808,7 +814,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
                  sheetPick: pick, reSheeted: !!better,
                  looks: secondLook ? 2 : 1, firstLook, secondLook,
                  ...(withFraming ? { framing: { first: framing1, second: framing2, faults: Object.fromEntries(faults || []) } } : {}),
-                 notesAsSent: sentences(l.cosmetic).map(s => ((standard.get(norm(s)) || 0) >= BOILERPLATE_MIN ? "[standard] " : "[unit] ") + s),
+                 notesAsSent: sentences(l.cosmetic).map(s => (isStandardSentence(s, standard.get(norm(s)) || 0) ? "[standard] " : "[unit] ") + s),
                  cache: {
                  read: usage?.cache_read_input_tokens || 0, wrote: usage?.cache_creation_input_tokens || 0 } },
                input_tokens: inTok, output_tokens: outTok,
