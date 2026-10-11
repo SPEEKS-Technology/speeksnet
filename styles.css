@@ -23831,8 +23831,17 @@ select.dd-native {
 .pg-ename b { display: block; font-size: 13px; font-weight: 750; color: var(--pg-ink); }
 .pg-ename small { font-size: 11px; color: var(--pg-muted); }
 /* A crucial photo (Picture Quality: missing it flags the listing). */
-.pg-ename .pg-crucial { color: #b91c1c; font-weight: 800; }
 .pg-etools { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+/* The row's Crucial tick (Picture Quality). Grey until ticked, then red — the
+   same red the Picture Quality flags use, since ticked means "missing it flags". */
+.pg-ecrucial {
+    display: inline-flex; align-items: center; gap: 6px; width: 92px; height: 30px; box-sizing: border-box;
+    padding: 0 9px; border: 1px solid var(--pg-line); border-radius: 8px; background: #fff;
+    font-size: 12px; font-weight: 700; color: var(--pg-muted); cursor: pointer; user-select: none;
+}
+.pg-ecrucial input { margin: 0; accent-color: #b91c1c; cursor: pointer; }
+.pg-ecrucial.on { border-color: #fca5a5; background: #fef2f2; color: #b91c1c; }
+.pg-ecrucial-na { visibility: hidden; }
 /* The file input is the label, so the camera glyph IS the control — a visible
    "Choose file" reads as a form to fill in rather than a photo to swap. */
 .pg-ephoto {
