@@ -147,12 +147,22 @@ t("dirty table: 5 / 10 / 15 by price", () => {
   const ps = report().photos; ps[0].issues = [issue("dirty_backdrop")];
   const s = [50, 150, 300].map(price => run({ price }, PHONE, { photos: ps }).pictureScore);
   return s.join() === "95,90,85" || s.join(); });
-t("loose cords: an automatic flag in 3+ photos, nothing in 1 or 2 (Ethan, 10-11)", () => {
-  const two = report().photos; two[0].issues = [issue("loose_cord")]; two[1].issues = [issue("loose_cord")];
+t("loose cords: −5 a photo, never an automatic flag (Ethan, 10-11, OVL ADC)", () => {
+  const one = report().photos; one[0].issues = [issue("loose_cord")];
   const three = report().photos; [0, 1, 2].forEach(i => { three[i].issues = [issue("loose_cord")]; });
-  const a = run({}, PHONE, { photos: two }), b = run({}, PHONE, { photos: three });
-  return (a.verdict === "pass" && !a.findings.some(f => f.code === "loose_cords") && flagged(b)
-    && b.findings.some(f => f.code === "loose_cords" && f.photos.length === 3)) || `${say(a)} | ${say(b)}`; });
+  const a = run({}, PHONE, { photos: one }), b = run({}, PHONE, { photos: three });
+  return (a.pictureScore === 95 && a.verdict === "pass" && b.pictureScore === 85 && b.verdict === "fix") || `${say(a)} | ${say(b)}`; });
+t("a video game off the stand is an automatic flag — on game sheets only (OVL Wii Fit, 10-11)", () => {
+  const GAME = { slug: "video-games", shots: [{ label: "Front of Case", cond: null }, { label: "Back of Case", cond: null }, { label: "Opened Case With Disk", cond: null }] };
+  const ps = report({ n: 3 }).photos; ps[2].issues = [issue("not_on_stand")];
+  const g = run({ photos: [{}, {}, {}] }, GAME, { n: 3, photos: ps });
+  const other = run({}, PHONE, { photos: (() => { const q = report().photos; q[2].issues = [issue("not_on_stand")]; return q; })() });
+  return (flagged(g) && g.findings.some(f => f.code === "not_on_stand") && other.verdict === "pass") || `${say(g)} | ${say(other)}`; });
+t("a lot's group shots flat and singles on the stand are not different spots (OVL Micron lot, 10-11)", () => {
+  const ps = report().photos; ps[0].shots = ["Top of Lot"]; ps[1].shots = ["Bottom of Lot"];
+  const lot = run({}, PHONE, { photos: ps, setups: [[1, 2], [3, 4, 5, 6, 7, 8, 9, 10]] });
+  const one = run({}, PHONE, { setups: [[1, 2], [3, 4, 5, 6, 7, 8, 9, 10]] });
+  return (!lot.findings.some(f => f.code === "mixed_setups") && one.findings.some(f => f.code === "mixed_setups")) || `${say(lot)} | ${say(one)}`; });
 t("reflections: 3 / 6 / 9 by price, never on Screen Off", () => {
   const ps = report().photos; ps[1].issues = [issue("reflection")];
   const s = [50, 150, 300].map(price => run({ price }, PHONE, { photos: ps }).pictureScore);

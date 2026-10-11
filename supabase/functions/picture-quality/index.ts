@@ -403,7 +403,7 @@ const PhotoReport = z.object({
   issues: z.array(z.object({
     type: z.enum([
       "blurry", "too_dark_or_glare", "clutter", "reflection",
-      "stock_photo", "fake_or_edited", "personal_info", "wrong_item", "dirty_backdrop", "loose_cord",
+      "stock_photo", "fake_or_edited", "personal_info", "wrong_item", "dirty_backdrop", "loose_cord", "not_on_stand",
     ]),
     severity: z.enum(["minor", "major"]),
   })),
@@ -464,6 +464,7 @@ For each photo (numbered from 1, in listing order), report:
   wrong_item — plainly a different product from the title (another model or device). A colour that differs from the title is a title_note, not this.
   dirty_backdrop — the table, backdrop or stand the item is shot on is visibly dirty: scuff marks, scratches, stains, dust or debris on the surface around the item. Report it on EVERY photo it shows in, box and accessory photos included, and always as "major" — a dirty surface makes a clean item look grubby. Normal shadows, the stand's own reflections and the backdrop's gradient are not dirt.
   loose_cord — the item's own cable or power cord lies loose and sprawled across the frame instead of being tied, coiled or wrapped up neatly. Report it on EVERY photo it shows in, always as "major". A cord bundled with a tie, neatly coiled, or tucked out of the way is fine (a speaker pair with its cords wrapped is the good example), and so is a cord plugged in to show a screen on.
+  not_on_stand — VIDEO GAME SHEETS ONLY: the game (its case, opened case, disc or cartridge) is lying flat on the table or propped some other way, instead of standing upright on the clear item stand the way the guide's examples are shot. Report it on EVERY such photo, always as "major". Never on any other kind of item.
 - note: a few words on what the photo shows.
 
 missing_shots: the sheet's ALWAYS shots with no photo covering them (never an "only if" shot — those go in needed_missing). Info shots (serial, model, CPU, RAM, storage) count as covered if ANY photo or screen shows the information legibly, including a BIOS or settings screen. A round item turned 90° looks the same — do not list its near-identical rotations as missing. BEFORE listing any shot as missing, look again at every photo you labelled Extra: it is often a shot you did not name (a top edge, a side of a box). For a box, deduce each side from what is printed on it. A serial/model closeup is not missing when the serial is hidden behind something that must be removed (a battery cover) — only when it is printed on the outside.
@@ -1097,7 +1098,7 @@ async function feedbackView(scope: Scope, days: number) {
     stock_photo: "Said a photo is a stock photo", lead: "Said photo 1 does not show the item",
     repeat: "Said photos repeat each other",
     dirty_backdrop: "Said the table or backdrop is dirty", clutter: "Said something else is in frame",
-    reflection: "Said a reflection shows on the item", loose_cords: "Said cords are loose and sprawled out", mixed_setups: "Said photos were taken in different spots",
+    reflection: "Said a reflection shows on the item", loose_cords: "Said cords are loose and sprawled out", not_on_stand: "Said a game is not on the stand", mixed_setups: "Said photos were taken in different spots",
     lot_not_shown: "Said a pair, set or lot is not all shown",
   };
   // Photos for the ask, read live — the note is about what the manager saw.

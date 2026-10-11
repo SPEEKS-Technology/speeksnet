@@ -26,7 +26,7 @@
 //   pair / set / lot not all shown       dirty table or backdrop           −5/−10/−15 by price
 //   lead photo not to standard           reflections on the item           −3/−6/−9 by price
 //   anything besides item + backdrop     photos from different spots       −5
-//   loose, sprawled cords in 3+ photos
+//   video game not on the stand          loose, sprawled cord              −5 a photo
 //   missing the guide's FIRST photo      photo order                       0 (Quick Fixes)
 //     (or a view the notes put a flaw on)
 //   missing If Needed shot the listing calls for
@@ -193,7 +193,7 @@ const priceStep = (price: number, low: number, mid: number, high: number) =>
 
 // --- the score -------------------------------------------------------------------
 export const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake_or_edited", "wrong_item",
-  "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead", "loose_cords"]);
+  "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead", "not_on_stand"]);
 
 export function pictureScore(findings: Finding[], photoCount: number, price: number) {
   const n = Math.max(1, photoCount);
@@ -216,6 +216,7 @@ export function pictureScore(findings: Finding[], photoCount: number, price: num
     else if (f.code === "dirty_backdrop") cost = priceStep(price, 5, 10, 15);
     else if (f.code === "reflection") cost = priceStep(price, 3, 6, 9);
     else if (f.code === "mixed_setups") cost = 5;
+    else if (f.code === "loose_cords") cost = 5 * (f.photos?.length || 1);
     else cost = 8;   // blurry, too dark or glare on a guide shot
     score -= cost;
     costs.push({ code: f.code, cost: Math.round(cost * 10) / 10, photo: f.photo, shot: f.shot });
@@ -299,12 +300,18 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
   // gave for things too big for the lightbox.
   // LOOSE CORDS (Ethan, 2026-10-11): "For items that have cords, if they are not
   // tied or wrapped up and are just loose and sprawled out, we will want to
-  // change that because it looks bad like that" — a flag "if in more than 2
-  // photos". One or two photos with a stray cord cost nothing and are not
-  // listed. The good example is the OVL Roland MA-8 pair, cords bundled.
+  // change that because it looks bad like that." First a flag in 3+ photos; the
+  // same day, on the OVL ADC equalizer: "To make it easier as a rule just do
+  // every picture is −5 points". The good example is the OVL Roland MA-8 pair.
   const corded = withIssue("loose_cord");
-  if (corded.length > 2) findings.push({ code: "loose_cords", photos: corded,
-    text: `Cords are loose and sprawled out in photos ${list(corded)} — tie or wrap them up, then retake.` });
+  if (corded.length) findings.push({ code: "loose_cords", photos: corded,
+    text: `The cord is loose and sprawled out in ${plural(corded, "photo", "photos")} ${list(corded)} — tie or wrap it up, then retake.` });
+  // VIDEO GAMES STAND ON THE STAND (Ethan, 2026-10-11, OVL Wii Fit: "If video
+  // game are not on stands, it should be flagged"). An automatic flag, on the
+  // game sheets only — the model is asked about it only there.
+  const flat = gameSheet ? withIssue("not_on_stand") : [];
+  if (flat.length) findings.push({ code: "not_on_stand", photos: flat,
+    text: `${plural(flat, "Photo", "Photos")} ${list(flat)} ${plural(flat, "isn't", "aren't")} on the stand — a game is shot standing on the clear stand, like the guide's example. Retake ${plural(flat, "it", "them")} on the stand.` });
   const cluttered = withIssue("clutter");
   if (cluttered.length) findings.push({ code: "clutter", photos: cluttered,
     text: `Something besides the item and the white backdrop is in ${plural(cluttered, "photo", "photos")} ${list(cluttered)} — `
@@ -316,7 +323,12 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
   // One listing, one spot. The odd photos are everything outside the biggest
   // group; their own framing problems, if any, are separate findings above —
   // "if they also aren't centred then it can double up as that too".
-  const setups = (r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n)).filter(g => g.length);
+  // A LOT is the exception (Ethan, 2026-10-11, OVL Micron RAM lot): the group
+  // shots of the whole lot lie flat, and single units may go on the stand —
+  // "They both look good." Different spots still count on a single item (the
+  // OVL Sony lens: the same shots on and off the stand).
+  const isLot = (r.units_claimed || 0) > 1 || r.photos.some(p => p.shots.some(s => /\bof lot\b/i.test(s)));
+  const setups = isLot ? [] : (r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n)).filter(g => g.length);
   if (setups.length > 1) {
     const main = setups.reduce((a, b) => (b.length > a.length ? b : a));
     const odd = setups.filter(g => g !== main).flat().sort((a, b) => a - b);
