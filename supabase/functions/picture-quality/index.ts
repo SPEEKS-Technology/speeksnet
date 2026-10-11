@@ -1010,10 +1010,12 @@ async function batchSweep(store: string, limit: number, days: number, model: str
   const reqs: { p: Pending; params: unknown }[] = [];
   const direct: any[] = [];
   let pickIn = 0, pickOut = 0;
-  for (let i = 0; i < ids.length && reqs.length + direct.length < limit; i += 25) {
+  // First the listings that need grading, cheaply (no model)…
+  const todo: Listing[] = [];
+  for (let i = 0; i < ids.length && todo.length < limit; i += 25) {
     const chunk = ids.slice(i, i + 25).filter(id => !flying.has(id));
     for (const l of await fetchListings(shop, token, chunk)) {
-      if (reqs.length + direct.length >= limit) break;
+      if (todo.length >= limit) break;
       // Already graded and unchanged under this recipe: nothing to do. The
       // sheet is part of the stamp, so check against any sheet's stamp shape —
       // a stale recipe or a changed listing never matches.
@@ -1022,26 +1024,41 @@ async function batchSweep(store: string, limit: number, days: number, model: str
         const same = await Promise.all(sheets.map(s => stampFor(l, s)));
         if (same.includes(was) || was === await stampFor(l, null)) continue;
       }
+      todo.push(l);
+    }
+  }
+  // …then the sheet picks, EIGHT AT A TIME. One after another, a first night's
+  // hundred listings at ~3s a pick would outrun the function's time limit.
+  let next = 0;
+  const pickOne = async () => {
+    while (next < todo.length) {
+      const l = todo[next++];
       const base = { store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model };
       if (!l.photos.length) {
         direct.push({ ...base, verdict: "fix", findings: [{ code: "no_photos", text: "This listing has no photos." }],
                       stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null });
         continue;
       }
-      const { pick, usage } = await pickSheet(client, model, l, sheets);
-      pickIn += usage?.input_tokens || 0; pickOut += usage?.output_tokens || 0;
-      let sheet = pick?.slug && pick.confidence !== "low" ? sheets.find(s => s.slug === pick.slug) || null : null;
-      sheet = gameSheetFor(l, sheet, sheets);
-      if (!sheet) {
-        direct.push({ ...base, verdict: "no_sheet", stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null,
-                      findings: [{ code: "no_sheet", text: `Not graded — no confident sheet match (${pick?.why || "no answer"}).` }] });
-        continue;
+      try {
+        const { pick, usage } = await pickSheet(client, model, l, sheets);
+        pickIn += usage?.input_tokens || 0; pickOut += usage?.output_tokens || 0;
+        let sheet = pick?.slug && pick.confidence !== "low" ? sheets.find(s => s.slug === pick.slug) || null : null;
+        sheet = gameSheetFor(l, sheet, sheets);
+        if (!sheet) {
+          direct.push({ ...base, verdict: "no_sheet", stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null,
+                        findings: [{ code: "no_sheet", text: `Not graded — no confident sheet match (${pick?.why || "no answer"}).` }] });
+          continue;
+        }
+        const others = sheets.filter(x => x.slug !== sheet!.slug).map(x => `${x.slug} (${x.name})`).join(", ");
+        reqs.push({ p: { pid: l.id, kind: "first", sheet: sheet.slug, pick, reSheeted: false, stamp: await stampFor(l, sheet) },
+                    params: reviewParams(l, sheet, standard, others, model, effort) });
+      } catch (e) {
+        // One failed pick costs that listing tonight, not the whole batch.
+        console.error("pick failed", l.id, String((e as Error).message || e));
       }
-      const others = sheets.filter(x => x.slug !== sheet!.slug).map(x => `${x.slug} (${x.name})`).join(", ");
-      reqs.push({ p: { pid: l.id, kind: "first", sheet: sheet.slug, pick, reSheeted: false, stamp: await stampFor(l, sheet) },
-                  params: reviewParams(l, sheet, standard, others, model, effort) });
     }
-  }
+  };
+  await Promise.all(Array.from({ length: 8 }, pickOne));
   await saveRows(direct);
   const batchId = await submitBatch(client, store, model, effort, reqs);
   const price = PRICES[model] || PRICES[DEFAULT_MODEL];
