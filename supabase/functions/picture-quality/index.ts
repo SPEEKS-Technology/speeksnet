@@ -403,7 +403,7 @@ const PhotoReport = z.object({
   issues: z.array(z.object({
     type: z.enum([
       "blurry", "too_dark_or_glare", "clutter", "reflection",
-      "stock_photo", "fake_or_edited", "personal_info", "wrong_item", "dirty_backdrop",
+      "stock_photo", "fake_or_edited", "personal_info", "wrong_item", "dirty_backdrop", "loose_cord",
     ]),
     severity: z.enum(["minor", "major"]),
   })),
@@ -446,7 +446,7 @@ sheet_fits: false only if this sheet is clearly the wrong kind of item (e.g. a c
 For each photo (numbered from 1, in listing order), report:
 - shots: which sheet shot labels it covers. One photo may cover two (a front view with the lens cap off is both "Front of Projector" and "Front of Projector (Lens Open)"). Use "Box" for packaging, "Extra" for anything that is not a sheet shot.
 - whole_item: true if it is meant to show the whole item, false for a deliberate closeup (glass, mount, ports, a label). A closeup may be tight — never report cut_off on one.
-- repeats: the number of an EARLIER photo this one repeats — the same side from the same angle, only slightly moved or re-cropped, adding nothing a buyer did not already see. Null if it shows anything new (another side, another angle, a detail).
+- repeats: the number of an EARLIER photo this one repeats — the same side from the same angle, only slightly moved or re-cropped, adding nothing a buyer did not already see. Null if it shows anything new (another side, another angle, a detail). A CLOSER shot of the same view that brings a guide shot into focus is that guide shot, not a repeat: a tight front shot of glasses that shows the middle bridge is "Middle Bridge" (OVL Ray-Ban Meta, 2026-10-11 — photo 4 was called a repeat of photo 1 and the bridge was called missing). Check every closeup against the sheet's detail shots before calling it a repeat.
 - framing: compare the photo to the sheet's EXAMPLE of the same shot. "matches" = shot like the example. "close" = small differences a buyer would not care about. "off" = one of these framing_problems. Judge EVERY photo of the item on its own — a listing where photo after photo sits low or to one side of the frame, or leans, is exactly what the store wants found, even when each one alone looks like a small miss:
   crooked — the item is rotated IN THE PICTURE: edges that should run level or upright visibly slant, as if the camera was turned. An item or box propped on the ITEM STAND to show a narrow side, top or bottom will lean or sit at an angle — that is how the stand holds it, and it is NEVER crooked (OVL Xbox 360 controller box: its side shots on the stand were called crooked, and they are to standard). A different VIEWPOINT is not crooked — a tablet stood on edge and shot from the corner, a game case shown at the same angle as the example, a deliberately angled side view. A round item shot face-on (a lens, a speaker cone) is never crooked.
   off_center — the item sits clearly to one side, or low or high, in the frame instead of centred like the example (a stray cable or the stand does not count; the item does).
@@ -463,6 +463,7 @@ For each photo (numbered from 1, in listing order), report:
   personal_info — a customer's name, Apple ID, email or phone number on screen.
   wrong_item — plainly a different product from the title (another model or device). A colour that differs from the title is a title_note, not this.
   dirty_backdrop — the table, backdrop or stand the item is shot on is visibly dirty: scuff marks, scratches, stains, dust or debris on the surface around the item. Report it on EVERY photo it shows in, box and accessory photos included, and always as "major" — a dirty surface makes a clean item look grubby. Normal shadows, the stand's own reflections and the backdrop's gradient are not dirt.
+  loose_cord — the item's own cable or power cord lies loose and sprawled across the frame instead of being tied, coiled or wrapped up neatly. Report it on EVERY photo it shows in, always as "major". A cord bundled with a tie, neatly coiled, or tucked out of the way is fine (a speaker pair with its cords wrapped is the good example), and so is a cord plugged in to show a screen on.
 - note: a few words on what the photo shows.
 
 missing_shots: the sheet's ALWAYS shots with no photo covering them (never an "only if" shot — those go in needed_missing). Info shots (serial, model, CPU, RAM, storage) count as covered if ANY photo or screen shows the information legibly, including a BIOS or settings screen. A round item turned 90° looks the same — do not list its near-identical rotations as missing. BEFORE listing any shot as missing, look again at every photo you labelled Extra: it is often a shot you did not name (a top edge, a side of a box). For a box, deduce each side from what is printed on it. A serial/model closeup is not missing when the serial is hidden behind something that must be removed (a battery cover) — only when it is printed on the outside.
@@ -1096,7 +1097,7 @@ async function feedbackView(scope: Scope, days: number) {
     stock_photo: "Said a photo is a stock photo", lead: "Said photo 1 does not show the item",
     repeat: "Said photos repeat each other",
     dirty_backdrop: "Said the table or backdrop is dirty", clutter: "Said something else is in frame",
-    reflection: "Said a reflection shows on the item", mixed_setups: "Said photos were taken in different spots",
+    reflection: "Said a reflection shows on the item", loose_cords: "Said cords are loose and sprawled out", mixed_setups: "Said photos were taken in different spots",
     lot_not_shown: "Said a pair, set or lot is not all shown",
   };
   // Photos for the ask, read live — the note is about what the manager saw.

@@ -26,6 +26,7 @@
 //   pair / set / lot not all shown       dirty table or backdrop           −5/−10/−15 by price
 //   lead photo not to standard           reflections on the item           −3/−6/−9 by price
 //   anything besides item + backdrop     photos from different spots       −5
+//   loose, sprawled cords in 3+ photos
 //   missing the guide's FIRST photo      photo order                       0 (Quick Fixes)
 //     (or a view the notes put a flaw on)
 //   missing If Needed shot the listing calls for
@@ -192,7 +193,7 @@ const priceStep = (price: number, low: number, mid: number, high: number) =>
 
 // --- the score -------------------------------------------------------------------
 export const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake_or_edited", "wrong_item",
-  "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead"]);
+  "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead", "loose_cords"]);
 
 export function pictureScore(findings: Finding[], photoCount: number, price: number) {
   const n = Math.max(1, photoCount);
@@ -296,6 +297,14 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
   // Anything besides the item, its stand and the white backdrop: an automatic
   // flag (Ethan, 2026-10-11: "Nothing else should be in frame"), with the tip he
   // gave for things too big for the lightbox.
+  // LOOSE CORDS (Ethan, 2026-10-11): "For items that have cords, if they are not
+  // tied or wrapped up and are just loose and sprawled out, we will want to
+  // change that because it looks bad like that" — a flag "if in more than 2
+  // photos". One or two photos with a stray cord cost nothing and are not
+  // listed. The good example is the OVL Roland MA-8 pair, cords bundled.
+  const corded = withIssue("loose_cord");
+  if (corded.length > 2) findings.push({ code: "loose_cords", photos: corded,
+    text: `Cords are loose and sprawled out in photos ${list(corded)} — tie or wrap them up, then retake.` });
   const cluttered = withIssue("clutter");
   if (cluttered.length) findings.push({ code: "clutter", photos: cluttered,
     text: `Something besides the item and the white backdrop is in ${plural(cluttered, "photo", "photos")} ${list(cluttered)} — `

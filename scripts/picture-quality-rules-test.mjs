@@ -147,6 +147,12 @@ t("dirty table: 5 / 10 / 15 by price", () => {
   const ps = report().photos; ps[0].issues = [issue("dirty_backdrop")];
   const s = [50, 150, 300].map(price => run({ price }, PHONE, { photos: ps }).pictureScore);
   return s.join() === "95,90,85" || s.join(); });
+t("loose cords: an automatic flag in 3+ photos, nothing in 1 or 2 (Ethan, 10-11)", () => {
+  const two = report().photos; two[0].issues = [issue("loose_cord")]; two[1].issues = [issue("loose_cord")];
+  const three = report().photos; [0, 1, 2].forEach(i => { three[i].issues = [issue("loose_cord")]; });
+  const a = run({}, PHONE, { photos: two }), b = run({}, PHONE, { photos: three });
+  return (a.verdict === "pass" && !a.findings.some(f => f.code === "loose_cords") && flagged(b)
+    && b.findings.some(f => f.code === "loose_cords" && f.photos.length === 3)) || `${say(a)} | ${say(b)}`; });
 t("reflections: 3 / 6 / 9 by price, never on Screen Off", () => {
   const ps = report().photos; ps[1].issues = [issue("reflection")];
   const s = [50, 150, 300].map(price => run({ price }, PHONE, { photos: ps }).pictureScore);
