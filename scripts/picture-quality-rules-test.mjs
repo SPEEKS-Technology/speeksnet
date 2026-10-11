@@ -21,7 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { decide, agree, pictureScore, PASS_BAR, PAYMORE_TEMPLATES, splitSentences, isStandardSentence } from "../supabase/functions/picture-quality/rules.ts";
+import { decide, agree, needsSecondLook, pictureScore, PASS_BAR, PAYMORE_TEMPLATES, splitSentences, isStandardSentence } from "../supabase/functions/picture-quality/rules.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -184,6 +184,15 @@ t("a flagged listing lists EVERY finding, the small ones too", () => {
 t("the pass line is 90", () => PASS_BAR === 90 || String(PASS_BAR));
 t("pictureScore never goes below zero", () => pictureScore([{ code: "retake", text: "" }, { code: "not_square", text: "" }], 5, 50).score === 0 || "below zero");
 
+t("second look only when the flag is close to the line (cost cut, 10-11)", () => {
+  const one = report().photos; one[0].issues = [issue("clutter")];
+  const single = needsSecondLook(listing({}), PHONE, report({ photos: one }));          // one auto-flag: borderline
+  const two = report().photos; two[0].issues = [issue("clutter")]; two[1].issues = [issue("stock_photo")];
+  const sure = needsSecondLook(listing({}), PHONE, report({ photos: two }));             // two independent flags
+  const passing = needsSecondLook(listing({}), PHONE, report());                          // nothing wrong
+  const L = listing({}); L.photos = L.photos.map((p, i) => i === 0 ? { ...p, width: 1080, height: 1350 } : p);
+  const measured = needsSecondLook(L, PHONE, report({ photos: one }));                   // not square is measured
+  return (single && !sure && !passing && !measured) || [single, sure, passing, measured].join(); });
 t("two looks: a flag must be seen by both; a pass from either", () => {
   const a = report({ needed_missing: ["Everything Included"], units_claimed: 2, units_together: false, missing_shots: ["Back of Phone"] });
   const b = report({ needed_missing: [], units_claimed: 2, units_together: true, missing_shots: ["Back of Phone"] });
@@ -239,7 +248,7 @@ const fx = JSON.parse(fs.readFileSync(path.join(here, "fixtures", "pq-replay-202
 const KEY = Object.fromEntries(fs.readFileSync(path.join(here, "picture-quality-calibrate.mjs"), "utf8").split("\n")
   .map(l => /\["(WSP|OVL)", "(\d+)", "([^"]+)", "(flag|pass|\?)"/.exec(l)).filter(Boolean).map(m => [m[2], [m[3], m[4]]]));
 const sheets = new Map(fx.sheets.map(s => [s.slug, s]));
-let agreeN = 0, scored = 0;
+let agreeN = 0, scored = 0, notPass = 0, seconds = 0;
 const unitNotes = [];
 console.log("\nREPLAY — the 2026-10-08 reports under today's rules (reported, not asserted)");
 for (const r of fx.results) {
@@ -257,6 +266,7 @@ for (const r of fx.results) {
     unitCosmetic: (r.notes || []).map(x => x.replace(/^\[(unit|standard)\]\s*/, "")).filter(x => !isStandardSentence(x)) };
   unitNotes.push(...l.unitCosmetic.map(x => `${r.store} ${k[0]}: ${x}`));
   const d = decide(l, sheet, r.report);
+  if (d.verdict !== "pass") { notPass++; if (needsSecondLook(l, sheet, r.report)) seconds++; }
   const got = flagged(d) ? "flag" : "pass";
   scored++; if (got === k[1]) agreeN++;
   console.log(`${got === k[1] ? "✓" : "✗"} ${r.store} ${k[0].padEnd(28)} Ethan ${k[1]}  now ${d.verdict.padEnd(7)} ${String(d.pictureScore).padStart(3)}  (then ${r.verdict_then})`);
@@ -264,5 +274,6 @@ for (const r of fx.results) {
 }
 console.log(`\nCosmetic sentences read as about THE UNIT (not PayMore's wording) — ${unitNotes.length}:`);
 for (const x of unitNotes) console.log("  " + x);
-console.log(`\nreplay: ${agreeN}/${scored} agree with Ethan · card: ${pass} passed, ${fail} failed`);
+console.log(`
+replay: ${agreeN}/${scored} agree with Ethan · second look on ${seconds} of ${notPass} not-pass (was all ${notPass}) · card: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -497,6 +497,36 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
            pictureScore: pic.score, costs: pic.costs };
 }
 
+// --- is a second look worth paying for? ----------------------------------------------
+// ⚠️ ONLY WHEN THE FLAG IS CLOSE TO THE LINE (Ethan approved, 2026-10-11, to cut
+// cost). The second look exists to stop one look's mistake flagging a listing.
+// A flag that would survive losing any ONE of its findings is not one mistake —
+// a second look would cost another full review and almost never change the
+// verdict. So: a second look only when dropping a single model finding would
+// let the listing pass (or, for a retake, drop it out of retake). A flag that
+// rests on something MEASURED (not square, no photos) is never second-guessed.
+// The trade: a clearly flagged listing may show a finding only one look saw.
+const MEASURED = new Set(["not_square", "no_photos"]);
+export function needsSecondLook(l: ListingR, sheet: SheetR, r: ReportR): boolean {
+  const d = decide(l, sheet, r);
+  if (d.verdict === "pass") return false;
+  // A suggested ORDER still needs both looks: approving it changes the listing in
+  // Shopify, and one look's labels once moved the Synology's photos wrongly.
+  // Rare, so cheap. A repeat-only Quick Fix (deletion) does not.
+  if (d.verdict === "reorder") return !!d.reorder;
+  if (d.findings.some(f => MEASURED.has(f.code))) return false;
+  if (d.verdict === "retake") {
+    // One fewer missing shot: still a retake means the count is not marginal.
+    const fewer = { ...r, missing_shots: r.missing_shots.slice(1) };
+    return decide(l, sheet, fewer).verdict !== "retake";
+  }
+  for (let i = 0; i < d.findings.length; i++) {
+    const rest = d.findings.filter((_, j) => j !== i);
+    if (pictureScore(rest, l.photos.length, l.price).score >= PASS_BAR) return true;
+  }
+  return false;
+}
+
 // --- the second look ---------------------------------------------------------------
 // ⚠️ A FLAG HAS TO BE SEEN TWICE. Merged at the REPORT level so decide() runs
 // once on facts both looks agree on. Leniency runs one way: anything that would

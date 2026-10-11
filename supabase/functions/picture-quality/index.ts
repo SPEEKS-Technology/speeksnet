@@ -66,7 +66,7 @@
 import Anthropic from "npm:@anthropic-ai/sdk";
 import { z } from "npm:zod";
 import { zodOutputFormat } from "npm:@anthropic-ai/sdk/helpers/zod";
-import { agree, BOX_SHEETS, decide, isStandardSentence, PASS_BAR, pictureScore, type ListingR } from "./rules.ts";
+import { agree, BOX_SHEETS, decide, isStandardSentence, needsSecondLook, PASS_BAR, pictureScore, type ListingR } from "./rules.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -95,6 +95,7 @@ const DEFAULT_EFFORT = "medium";   // low wandered run to run on small visual ca
 const PRICES: Record<string, [number, number]> = {   // $ per million in / out
   "claude-sonnet-5": [2, 10],
   "claude-opus-5": [5, 25],
+  "claude-haiku-5-5": [0.1, 0.5],   // 2026-10-11, for the simple sheets (games) — see modelFor
 };
 
 // ⚠️ BUMP WHEN WHAT WE ASK CHANGES. It is part of every stamp, so a new recipe
@@ -706,6 +707,57 @@ async function stampFor(l: Listing, sheet: Sheet | null) {
   return RECIPE + ":" + Array.from(new Uint8Array(d)).slice(0, 12).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+// --- one listing's verdict, from its look(s) ------------------------------------
+//
+// Shared by the live path (runReviews) and the batch path (pollBatches), so the
+// two can never decide differently. `second` is the second look's report, or
+// null when needsSecondLook said one was not worth paying for.
+async function finalRow(l: Listing, sheet: Sheet, standard: Map<string, number>, pick: unknown, reSheeted: boolean,
+                        first: ReportT, second: ReportT | null, faults?: Map<number, string[]>) {
+  const lr = forRules(l, standard);
+  let report = first;
+  let d = decide(lr, sheet, report, faults);
+  const firstLook = { verdict: d.verdict, findings: d.findings.map(f => f.text) };
+  let secondLook: typeof firstLook | null = null;
+  if (second) {
+    const d2 = decide(lr, sheet, second, faults);
+    secondLook = { verdict: d2.verdict, findings: d2.findings.map(f => f.text) };
+    const d1 = d;
+    report = agree(report, second);
+    d = decide(lr, sheet, report, faults);
+    // A reorder stands only if each look, on its own, asked for one: the
+    // Synology's "Everything Included is not in the first three" came from
+    // one look's labels and the next look's labels disagreed.
+    if (d.reorder && !(d1.reorder && d2.reorder)) {
+      d = { ...d, reorder: null };
+      if (!report.lead_ok) d.findings.push({ code: "lead", photo: 1, text: "Photo 1 doesn't show what the item is." });
+      const pic = pictureScore(d.findings, l.photos.length, l.price);
+      d = { ...d, pictureScore: pic.score, costs: pic.costs };
+      d.verdict = d.findings.some(f => f.code === "retake") ? "retake" : pic.score < PASS_BAR ? "fix" : d.deletion ? "reorder" : "pass";
+    }
+  }
+  return { verdict: d.verdict, findings: d.findings, reorder: d.reorder, deletion: d.deletion,
+           title_notes: report.title_notes, sheet_slug: sheet.slug, sheet_name: sheet.name,
+           stamp: await stampFor(l, sheet),
+           report: { ...report, orderScore: d.orderScore, pictureScore: d.pictureScore, costs: d.costs,
+             sheetPick: pick, reSheeted, looks: second ? 2 : 1, firstLook, secondLook,
+             notesAsSent: sentences(l.cosmetic).map(s => (isStandardSentence(s, standard.get(norm(s)) || 0) ? "[standard] " : "[unit] ") + s) } };
+}
+
+async function saveRows(rowsOut: any[]) {
+  const good = rowsOut.filter(r => r.verdict !== "error");
+  if (!good.length) return;
+  await sb("picture_quality_reviews", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    // title_notes is NOT NULL (default '[]'): a null here failed the whole
+    // save the first time a result came back without it (a Pokémon card,
+    // 2026-10-11) — and with it every other listing in the call.
+    body: JSON.stringify(good.map(r => ({ reorder: null, deletion: null, ...r, title_notes: (r as any).title_notes || [], status: "open", decided_by: null, decided_at: null,
+                                         decided_note: null, reviewed_at: new Date().toISOString() }))),
+  });
+}
+
 // --- the sweep ----------------------------------------------------------------
 
 async function runReviews(store: string, ids: string[], model: string, effort: string, save: boolean,
@@ -786,39 +838,20 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
       }
       }
       const lr = forRules(l, standard);
-      let d = decide(lr, sheet, report, faults);
-      const firstLook = { verdict: d.verdict, findings: d.findings.map(f => f.text) };
-      let secondLook: typeof firstLook | null = null;
       // The main review's own second look is for ITS findings; a listing whose
       // only problem is framing has already been looked at twice above.
-      if (decide(lr, sheet, report).verdict !== "pass") {
+      // Only when the flag is close to the line — see needsSecondLook (rules.ts).
+      let second: ReportT | null = null;
+      if (needsSecondLook(lr, sheet, report)) {
         const again = await review(client, model, effort, l, sheet, standard, others(sheet));
         const extra = (again.usage?.input_tokens || 0) + (again.usage?.cache_read_input_tokens || 0) + (again.usage?.cache_creation_input_tokens || 0);
         inTok += extra; tin += extra; tout += again.usage?.output_tokens || 0; outTok += again.usage?.output_tokens || 0;
-        const d2 = decide(lr, sheet, again.report, faults);
-        secondLook = { verdict: d2.verdict, findings: d2.findings.map(f => f.text) };
-        const d1 = d;
-        report = agree(report, again.report);
-        d = decide(lr, sheet, report, faults);
-        // A reorder stands only if each look, on its own, asked for one: the
-        // Synology's "Everything Included is not in the first three" came from
-        // one look's labels and the next look's labels disagreed.
-        if (d.reorder && !(d1.reorder && d2.reorder)) {
-          d = { ...d, reorder: null };
-          if (!report.lead_ok) d.findings.push({ code: "lead", photo: 1, text: "Photo 1 doesn't show what the item is." });
-          const pic = pictureScore(d.findings, l.photos.length, l.price);
-          d = { ...d, pictureScore: pic.score, costs: pic.costs };
-          d.verdict = d.findings.some(f => f.code === "retake") ? "retake" : pic.score < PASS_BAR ? "fix" : d.deletion ? "reorder" : "pass";
-        }
+        second = again.report;
       }
-      return { ...base, verdict: d.verdict, findings: d.findings, reorder: d.reorder, deletion: d.deletion,
-               title_notes: report.title_notes, sheet_slug: sheet.slug, sheet_name: sheet.name,
-               stamp: await stampFor(l, sheet),
-               report: { ...report, orderScore: d.orderScore, pictureScore: d.pictureScore, costs: d.costs,
-                 sheetPick: pick, reSheeted: !!better,
-                 looks: secondLook ? 2 : 1, firstLook, secondLook,
+      const row = await finalRow(l, sheet, standard, pick, !!better, report, second, faults);
+      return { ...base, ...row,
+               report: { ...row.report,
                  ...(withFraming ? { framing: { first: framing1, second: framing2, faults: Object.fromEntries(faults || []) } } : {}),
-                 notesAsSent: sentences(l.cosmetic).map(s => (isStandardSentence(s, standard.get(norm(s)) || 0) ? "[standard] " : "[unit] ") + s),
                  cache: {
                  read: usage?.cache_read_input_tokens || 0, wrote: usage?.cache_creation_input_tokens || 0 } },
                input_tokens: inTok, output_tokens: outTok,
@@ -833,18 +866,7 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
   }
 
   if (save) {
-    const good = out.filter(r => r.verdict !== "error");
-    if (good.length) {
-      await sb("picture_quality_reviews", {
-        method: "POST",
-        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-        // title_notes is NOT NULL (default '[]'): a null here failed the whole
-        // save the first time a result came back without it (a Pokémon card,
-        // 2026-10-11) — and with it every other listing in the call.
-        body: JSON.stringify(good.map(r => ({ reorder: null, deletion: null, ...r, title_notes: (r as any).title_notes || [], status: "open", decided_by: null, decided_at: null,
-                                             decided_note: null, reviewed_at: new Date().toISOString() }))),
-      });
-    }
+    await saveRows(out);
     // Written down so "what did that cost" has an answer that is not an estimate.
     try {
       await sb("ai_usage_log", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
@@ -901,6 +923,207 @@ async function sweepCandidates(store: string, shop: string, token: string, limit
     }
   }
   return { need, live: ids.length, neverSeen: fresh.length + oldRecipe.length };
+}
+
+// --- the nightly sweep, through the Batch API -------------------------------------
+//
+// ⚠️ HALF PRICE, HOURS NOT SECONDS (Ethan approved, 2026-10-11). The Message
+// Batches API bills every token at 50% and returns within hours — fine for a
+// nightly sweep nobody is waiting on. Recheck stays live (runReviews): a manager
+// pressing it is waiting.
+//
+// Two steps, each its own call, both on a cron (0143):
+//   ?sweep=N&batch=1&store=X   build the night's requests and submit ONE batch
+//   ?poll=1                    collect every ended batch, decide, save — and send
+//                              a follow-up batch for any listing that needs a
+//                              re-sheet or a second look (needsSecondLook)
+// What a batch is waiting on lives in pq_batches (0143), so nothing is lost
+// between the two calls, and a listing already in flight is never sent twice.
+//
+// Photos go BY URL here, not as bytes: a night's batch of base64 photos would be
+// hundreds of MB through an edge function. A photo that fails to fetch fails
+// that one request; the listing is simply picked up by the next sweep.
+// The sheet pick stays live: text only, low effort, about a cent per hundred.
+const urlImage = (url: string) => ({ type: "image", source: { type: "url", url } });
+
+function reviewParams(l: Listing, sheet: Sheet, standard: Map<string, number>, otherSheets: string, model: string, effort: string) {
+  const sheetBlocks: any[] = [{ type: "text", text: sheetText(sheet) + "\n\nExample photos from the sheet:" }];
+  for (const [i, s] of sheet.shots.entries()) {
+    if (!s.img) continue;
+    sheetBlocks.push({ type: "text", text: `Example for shot ${i + 1}: ${s.label}` }, urlImage(guideUrl(s.img)));
+  }
+  sheetBlocks[sheetBlocks.length - 1].cache_control = { type: "ephemeral" };
+  const listingBlocks: any[] = [{ type: "text", text:
+    "OTHER SHEETS (only if this one is clearly wrong for the item): " + otherSheets +
+    "\n\nTHE LISTING:\n" + listingText(l, standard) + "\n\nIts photos, in listing order:" }];
+  l.photos.forEach((p, i) => listingBlocks.push({ type: "text", text: `Photo ${i + 1}` }, urlImage(p.url)));
+  const fmt: any = zodOutputFormat(Report);
+  return {
+    model, max_tokens: 16000, system: REVIEW_SYSTEM,
+    messages: [{ role: "user", content: [...sheetBlocks, ...listingBlocks] }],
+    // The format object carries a parse function the batch cannot send; the
+    // schema is what matters, and the answer is parsed with Report below.
+    output_config: { effort, format: { type: fmt.type, schema: fmt.schema } },
+  };
+}
+
+type Pending = { pid: string; kind: "first" | "resheet" | "second"; sheet: string; pick: unknown;
+                 reSheeted: boolean; stamp: string; first?: ReportT };
+const customId = (p: Pending) => `${p.kind[0]}${p.pid.split("/").pop()}`;
+
+async function submitBatch(client: Anthropic, store: string, model: string, effort: string,
+                           reqs: { p: Pending; params: unknown }[]) {
+  if (!reqs.length) return null;
+  const batch = await (client as any).messages.batches.create({
+    requests: reqs.map(r => ({ custom_id: customId(r.p), params: r.params })),
+  });
+  await sb("pq_batches", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
+    store_code: store, batch_id: batch.id, model, effort,
+    items: Object.fromEntries(reqs.map(r => [customId(r.p), r.p])) }) });
+  return batch.id as string;
+}
+
+// Listings in flight in a batch not yet collected — never sent twice.
+async function inFlight(store: string) {
+  const open = await rows(`pq_batches?store_code=eq.${store}&status=eq.submitted&select=items`);
+  return new Set(open.flatMap((b: any) => Object.values(b.items || {}).map((p: any) => p.pid)));
+}
+
+// NEW listings only — created in the last `days` days — whose saved grade is
+// missing or stale. The one-time backfill of the existing catalogue is a
+// separate decision (Ethan, 2026-10-11: "do not include the one time backfill").
+async function batchSweep(store: string, limit: number, days: number, model: string, effort: string) {
+  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
+  const client = new Anthropic({ apiKey });
+  const { shop, token } = await shopFor(store);
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const cat: any[] = await rows(`ebay_catalog?store_code=eq.${store}&quantity=gt.0&online_published=is.true`
+    + `&product_created_at=gte.${since}&select=product_id&order=product_created_at.desc&limit=1000`);
+  const ids = [...new Set(cat.map(c => String(c.product_id || "")).filter(Boolean)
+    .map(s => s.startsWith("gid://") ? s : `gid://shopify/Product/${s}`))];
+  const flying = await inFlight(store);
+  const seen = new Map<string, string>((await rows(`picture_quality_reviews?store_code=eq.${store}&select=product_id,stamp&limit=10000`))
+    .map((r: any) => [String(r.product_id), String(r.stamp || "")]));
+  const sheets = await loadSheets();
+  const standard = new Map<string, number>();
+  const reqs: { p: Pending; params: unknown }[] = [];
+  const direct: any[] = [];
+  let pickIn = 0, pickOut = 0;
+  for (let i = 0; i < ids.length && reqs.length + direct.length < limit; i += 25) {
+    const chunk = ids.slice(i, i + 25).filter(id => !flying.has(id));
+    for (const l of await fetchListings(shop, token, chunk)) {
+      if (reqs.length + direct.length >= limit) break;
+      // Already graded and unchanged under this recipe: nothing to do. The
+      // sheet is part of the stamp, so check against any sheet's stamp shape —
+      // a stale recipe or a changed listing never matches.
+      const was = seen.get(l.id);
+      if (was && String(was).startsWith(RECIPE + ":")) {
+        const same = await Promise.all(sheets.map(s => stampFor(l, s)));
+        if (same.includes(was) || was === await stampFor(l, null)) continue;
+      }
+      const base = { store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model };
+      if (!l.photos.length) {
+        direct.push({ ...base, verdict: "fix", findings: [{ code: "no_photos", text: "This listing has no photos." }],
+                      stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null });
+        continue;
+      }
+      const { pick, usage } = await pickSheet(client, model, l, sheets);
+      pickIn += usage?.input_tokens || 0; pickOut += usage?.output_tokens || 0;
+      let sheet = pick?.slug && pick.confidence !== "low" ? sheets.find(s => s.slug === pick.slug) || null : null;
+      sheet = gameSheetFor(l, sheet, sheets);
+      if (!sheet) {
+        direct.push({ ...base, verdict: "no_sheet", stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null,
+                      findings: [{ code: "no_sheet", text: `Not graded — no confident sheet match (${pick?.why || "no answer"}).` }] });
+        continue;
+      }
+      const others = sheets.filter(x => x.slug !== sheet!.slug).map(x => `${x.slug} (${x.name})`).join(", ");
+      reqs.push({ p: { pid: l.id, kind: "first", sheet: sheet.slug, pick, reSheeted: false, stamp: await stampFor(l, sheet) },
+                  params: reviewParams(l, sheet, standard, others, model, effort) });
+    }
+  }
+  await saveRows(direct);
+  const batchId = await submitBatch(client, store, model, effort, reqs);
+  const price = PRICES[model] || PRICES[DEFAULT_MODEL];
+  await logUsage(store, model, effort, "sweep-pick", reqs.length + direct.length, pickIn, pickOut, pickIn / 1e6 * price[0] + pickOut / 1e6 * price[1]);
+  return { store, candidates: ids.length, submitted: reqs.length, savedDirect: direct.length, batch: batchId };
+}
+
+async function logUsage(store: string, model: string, effort: string, what: string, items: number, tin: number, tout: number, cost: number) {
+  try {
+    await sb("ai_usage_log", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
+      tool: `picture-quality:${what}`, store_code: store, model, effort, batches: 1, items,
+      input_tokens: tin, output_tokens: tout, cost_usd: cost }) });
+  } catch (e) { console.error("ai_usage_log write failed:", String(e)); }
+}
+
+// Collect every ended batch: decide, save, and send the follow-ups.
+async function pollBatches() {
+  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
+  const client = new Anthropic({ apiKey });
+  const open = await rows(`pq_batches?status=eq.submitted&select=id,store_code,batch_id,model,effort,items,submitted_at&order=submitted_at`);
+  const sheets = await loadSheets();
+  const standard = new Map<string, number>();
+  const report: any[] = [];
+  for (const b of open) {
+    const info = await (client as any).messages.batches.retrieve(b.batch_id);
+    if (info.processing_status !== "ended") { report.push({ batch: b.batch_id, status: info.processing_status }); continue; }
+    const { shop, token } = await shopFor(b.store_code);
+    const items: Record<string, Pending> = b.items || {};
+    const pids = [...new Set(Object.values(items).map(p => p.pid))];
+    const live = new Map<string, Listing>();
+    for (let i = 0; i < pids.length; i += 25) for (const l of await fetchListings(shop, token, pids.slice(i, i + 25))) live.set(l.id, l);
+    const price = PRICES[b.model] || PRICES[DEFAULT_MODEL];
+    let tin = 0, tcache = 0, tout = 0, ok = 0, failed = 0, changed = 0;
+    const save: any[] = [], follow: { p: Pending; params: unknown }[] = [];
+    for await (const res of await (client as any).messages.batches.results(b.batch_id)) {
+      const p = items[res.custom_id];
+      if (!p) continue;
+      if (res.result?.type !== "succeeded") { failed++; continue; }   // picked up again by the next sweep
+      const msg = res.result.message;
+      const u = msg.usage || {};
+      tin += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0); tcache += u.cache_read_input_tokens || 0; tout += u.output_tokens || 0;
+      const l = live.get(p.pid);
+      const sheet = sheets.find(s => s.slug === p.sheet);
+      // Gone, or edited since it was sent: that grade is about photos that are
+      // no longer there. The next sweep sends it again.
+      if (!l || !sheet || await stampFor(l, sheet) !== p.stamp) { changed++; continue; }
+      const text = (msg.content || []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
+      let parsed: ReportT;
+      try { parsed = Report.parse(JSON.parse(text)); } catch { failed++; continue; }
+      ok++;
+      const others = (s: Sheet) => sheets.filter(x => x.slug !== s.slug).map(x => `${x.slug} (${x.name})`).join(", ");
+      if (p.kind === "first") {
+        // The photos point at a better sheet: one re-grade on it, as live.
+        const better = !parsed.sheet_fits && parsed.better_sheet ? sheets.find(s => s.slug === parsed.better_sheet) : null;
+        if (better && gameSheetFor(l, better, sheets) === better) {
+          const np: Pending = { ...p, kind: "resheet", sheet: better.slug, reSheeted: true, stamp: await stampFor(l, better) };
+          follow.push({ p: np, params: reviewParams(l, better, standard, others(better), b.model, b.effort) });
+          continue;
+        }
+      }
+      if (p.kind !== "second" && needsSecondLook(forRules(l, standard), sheet, parsed)) {
+        follow.push({ p: { ...p, kind: "second", first: parsed }, params: reviewParams(l, sheet, standard, others(sheet), b.model, b.effort) });
+        continue;
+      }
+      const first = p.kind === "second" ? p.first! : parsed;
+      const second = p.kind === "second" ? parsed : null;
+      const row = await finalRow(l, sheet, standard, p.pick, p.reSheeted, first, second);
+      save.push({ store_code: b.store_code, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length,
+                  model: b.model, ...row, report: { ...row.report, batch: b.batch_id } });
+    }
+    await saveRows(save);
+    // Batch tokens are half price; a cache read is a tenth of input.
+    const cost = (tin / 1e6 * price[0] + tcache / 1e6 * price[0] * 0.1 + tout / 1e6 * price[1]) * 0.5;
+    const next = await submitBatch(client, b.store_code, b.model, b.effort, follow);
+    await sb(`pq_batches?id=eq.${b.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
+      status: "done", finished_at: new Date().toISOString(), cost_usd: Math.round(cost * 1e4) / 1e4,
+      result: { ok, failed, changed, saved: save.length, followUp: follow.length, followBatch: next } }) });
+    await logUsage(b.store_code, b.model, b.effort, "batch", ok, tin + tcache, tout, cost);
+    report.push({ batch: b.batch_id, store: b.store_code, ok, failed, changed, saved: save.length, followUp: follow.length, cost_usd: Math.round(cost * 1e4) / 1e4 });
+  }
+  return { batches: report };
 }
 
 // --- the panel's half ----------------------------------------------------------
@@ -1386,6 +1609,8 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!secretOk(url)) return json({ error: "unauthorized" }, 401);
+    // ?poll=1 — collect ended batches (every store at once). See pollBatches.
+    if (url.searchParams.get("poll") === "1") return streamed(() => pollBatches());
     const store = (url.searchParams.get("store") || "").toUpperCase();
     if (!STORES.includes(store)) return json({ error: "pass ?store=OVL|LEE|WSP|MPL|BAL" }, 400);
     const model = url.searchParams.get("model") || DEFAULT_MODEL;
@@ -1395,6 +1620,12 @@ Deno.serve(async (req: Request) => {
     // ?sweep=N — grade up to N listings that need it, and SAVE. Run it again to
     // walk further; `remaining` says how far there is to go.
     const sweep = Number(url.searchParams.get("sweep") || 0);
+    // ?sweep=N&batch=1[&days=3] — the nightly path: NEW listings through the
+    // Batch API at half price. See batchSweep.
+    if (sweep > 0 && url.searchParams.get("batch") === "1") {
+      const days = Math.min(Math.max(Number(url.searchParams.get("days") || 3), 1), 30);
+      return streamed(() => batchSweep(store, Math.min(sweep, 200), days, model, effort));
+    }
     if (sweep > 0) {
       return streamed(async () => {
         const { shop, token } = await shopFor(store);

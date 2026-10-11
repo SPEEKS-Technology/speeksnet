@@ -20,7 +20,7 @@ import { z } from "npm:zod";
 import { zodOutputFormat } from "npm:@anthropic-ai/sdk/helpers/zod";
 
 const SECRET = "sp33ks-sync-k3y-2026-x9mq";   // the same secret picture-quality checks
-const PRICES: Record<string, [number, number]> = { "claude-sonnet-5": [2, 10], "claude-opus-5": [5, 25] };
+const PRICES: Record<string, [number, number]> = { "claude-sonnet-5": [2, 10], "claude-opus-5": [5, 25], "claude-haiku-5-5": [0.1, 0.5] };
 
 const Answer = z.object({
   tilt_degrees: z.number(),
