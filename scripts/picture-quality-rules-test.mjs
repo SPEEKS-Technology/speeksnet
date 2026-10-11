@@ -197,6 +197,15 @@ t("Good/Fair wear in OTHER words is standard too (real lines from the 10-08 list
 t("…and the two real damage lines in those listings are not", () => {
   const unit = ["The back glass is cracked/damaged, see photos.", "The hinges function properly, but the housing is cracked/damaged."];
   const bad = unit.filter(x => isStandardSentence(x)); return !bad.length || bad.join(" | "); });
+t("damage words in a negation or a hedged \"including some small…\" list are not a claim (random run 10-11)", () => {
+  const std = ["The case/box is also in good condition with light to moderate wear, including some small stains, creases, or tears.",
+    "The case/box is in good condition with some light to moderate wear from use including some small stains, creases, or tears.",
+    "There are no major defects like deep creases, tears, or liquid damage.",
+    "The case/box is also in good condition, with light to moderate wear that may include small stains, creases, or tears."];
+  const unit = ["The case has a tear on the back cover, including some small stains.", "The manual is missing.",
+    "No manual, and the case is cracked."];
+  const a = std.filter(x => !isStandardSentence(x)), b = unit.filter(x => isStandardSentence(x));
+  return (!a.length && !b.length) || `read as unit: ${a.join(" | ")} || read as standard: ${b.join(" | ")}`; });
 t("template wording never makes Cosmetic Flaws required; a unit sentence does", () => {
   const tmpl = "The back glass is in fair cosmetic condition with some scuffs and scratches and wear.";
   const a = run({ unitCosmetic: [tmpl].filter(x => !isStandardSentence(x)) }, PHONE, { needed_missing: ["Cosmetic Flaws"] });

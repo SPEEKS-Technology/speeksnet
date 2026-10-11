@@ -834,7 +834,10 @@ async function runReviews(store: string, ids: string[], model: string, effort: s
       await sb("picture_quality_reviews", {
         method: "POST",
         headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify(good.map(r => ({ reorder: null, deletion: null, title_notes: null, ...r, status: "open", decided_by: null, decided_at: null,
+        // title_notes is NOT NULL (default '[]'): a null here failed the whole
+        // save the first time a result came back without it (a Pokémon card,
+        // 2026-10-11) — and with it every other listing in the call.
+        body: JSON.stringify(good.map(r => ({ reorder: null, deletion: null, ...r, title_notes: (r as any).title_notes || [], status: "open", decided_by: null, decided_at: null,
                                              decided_note: null, reviewed_at: new Date().toISOString() }))),
       });
     }

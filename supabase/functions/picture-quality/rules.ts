@@ -98,8 +98,19 @@ const LOCATED = /\bgouge[ds]?\b|\b(dent|ding|scratch|scuff|mark|nick|scrape)\b[^
 // else — the templates, and any rewording of them — is standard.
 // `seen` (the old store-wide count) is accepted and ignored, so a caller that
 // still passes it changes nothing.
+// Damage words that are NOT a claim (first random run, 2026-10-11): the game
+// template "the case/box is in good condition with light to moderate wear,
+// including some small stains, creases, or tears" flagged four games for a
+// missing Cosmetic Flaws photo, and a card's "There are no major defects like
+// deep creases, tears, or liquid damage" read as damage too. A damage word
+// after a negation ("no", "without", "free of") or inside a hedged "including
+// some small…" / "such as minor…" list says what MIGHT be there, so it is cut
+// before SEVERE looks. A damage word outside such a clause still counts, and
+// the clause ends at ", and" / ", but" — "No manual, and the case is cracked"
+// is still a crack.
+const NOT_A_CLAIM = /\b(no|not any|without|free of|free from|(may|might|could)\s+(include|have|show)|including\s+(some\s+)?(small|minor|light|slight|possible|occasional)|(such as|like)\s+(some\s+)?(small|minor|light|slight|possible|occasional))\b[^.;]*?(?=,\s*(and|but)\b|[.;]|$)/gi;
 export function isStandardSentence(sentence: string, _seen = 0): boolean {
-  if (SEVERE.test(sentence)) return false;
+  if (SEVERE.test(sentence.replace(NOT_A_CLAIM, " "))) return false;
   const w = words(sentence);
   if (w.length && TEMPLATE_WORDS.some(t => w.filter(x => t.has(x)).length / w.length >= TEMPLATE_SHARE)) return true;
   return !LOCATED.test(sentence);
