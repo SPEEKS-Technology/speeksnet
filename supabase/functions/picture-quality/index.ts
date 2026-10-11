@@ -419,6 +419,7 @@ const Report = z.object({
   units_claimed: z.number().int().nullable(),
   all_units_shown: z.boolean(),
   units_together: z.boolean(),
+  all_sides_shown: z.boolean(),
   main_flaw: z.object({
     stated: z.string().nullable(),
     source: z.enum(["unit", "title", "none"]),
@@ -471,6 +472,7 @@ needed_missing: the sheet's "only if" shots that THIS listing calls for and no p
 flaw_views: the sheet's view shots (sides, back, top, bottom, corners) that a [unit] cosmetic note or the title puts a flaw ON — "dent on the back" makes the back view one. Exact shot names; empty if none.
 
 units_claimed: when the listing sells MORE THAN ONE of something — a pair, a set, a 2-pack, "Lot of 6", several units in the INCLUDED field — the number of units; otherwise null. all_units_shown: true unless the photos, taken together, plainly fail to show every unit the listing says it has (a lot of 6 games must show 6 games). units_together: true if the whole-item shots (front, back, sides, top, bottom) show all the units together; false if those shots show one unit at a time (single-unit photos as extras are fine). For a single item: null, true, true.
+all_sides_shown: true when the photos, taken together, show EVERY edge of the device — top, bottom, left and right — clearly enough to judge its condition. A corner shot shows the two edges that meet there, so four corner shots can show all four sides. Angles different from the guide's are fine; the side and corner shots exist to show the sides, not to match one exact angle. False if any edge is never seen. For a boxed item, judge the item, not the box.
 
 main_flaw: the one specific defect that is the main reason this unit is not in better condition — a crack, a dent, missing keys, a broken part — taken from notes marked [unit] (source "unit") or from the title (source "title"). General wear ("scuffs, scratches and wear", "minor marks") is NOT a main flaw. Ignore every sentence marked [standard] — it is the listing program's template, not about this unit. If there is no such specific defect: stated null, source "none", shown "not_applicable". A screenshot counts as showing a defect only a screen can show (Battery Health for a bad battery, a lock or iCloud screen). Otherwise: shown "yes" if a photo shows it clearly, "partly" if it is visible but not clearly, "no" if no photo shows it. Lesser flaws never need their own photo.
 
@@ -917,6 +919,17 @@ async function reviewView(scope: Scope, asked: string) {
     + `&verdict=in.(retake,fix,reorder)&stamp=like.${RECIPE}:*`
     + `&select=product_id,sku,title,sheet_slug,sheet_name,verdict,findings,reorder,deletion,title_notes,photo_count,reviewed_at,stamp`
     + `&order=reviewed_at.desc&limit=500`);
+  // PASSED, for agreeing with (Ethan, 2026-10-11: "Can I see all of the OVL ones
+  // on the tool even if they passed so I can confirm that I agree with the
+  // pass?"). A pass nobody can see is a pass nobody can check — and a wrong pass
+  // is the miss that never shows up anywhere else. The last 14 days only, so the
+  // tab is this week's grading rather than the whole store; "Should Flag" on a
+  // row sends the note to Listing Health Notes like a dismissal does.
+  const since = new Date(Date.now() - 14 * 86400000).toISOString();
+  queue.push(...await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open`
+    + `&verdict=eq.pass&stamp=like.${RECIPE}:*&reviewed_at=gte.${since}`
+    + `&select=product_id,sku,title,sheet_slug,sheet_name,verdict,findings,reorder,deletion,title_notes,photo_count,reviewed_at,stamp`
+    + `&order=reviewed_at.desc&limit=60`));
   // What a person already answered, for the Confirmed Fine drawer under the
   // queue — the same drawer the Categories and Titles sections keep, so a
   // dismissal (and a denied reorder) can be seen and taken back.
@@ -1046,8 +1059,8 @@ async function saveLabel(scope: Scope, body: any) {
 // the person's words. Split back apart for the screen and the ask.
 function splitNote(s: unknown) {
   const t = String(s || "");
-  const m = /^(dismissed|reorder denied)(?::\s*([\s\S]*))?$/.exec(t);
-  return m ? { as: m[1] === "reorder denied" ? "reorder" : "fine", note: (m[2] || "").trim() }
+  const m = /^(dismissed|reorder denied|should flag)(?::\s*([\s\S]*))?$/.exec(t);
+  return m ? { as: m[1] === "reorder denied" ? "reorder" : m[1] === "should flag" ? "flag" : "fine", note: (m[2] || "").trim() }
            : { as: "fine", note: t.trim() };
 }
 
@@ -1070,11 +1083,12 @@ async function feedbackView(scope: Scope, days: number) {
   const open = withNote.filter(r => !r.feedback_triaged_at);
   const done = withNote.filter(r => r.feedback_triaged_at).slice(0, 40)
     .map(r => ({ sku: r.sku, note: r.note, takenAt: r.feedback_triaged_at }));
-  const kindOf = (r: any) => r.as === "reorder" ? "reorder"
+  const kindOf = (r: any) => r.as === "reorder" ? "reorder" : r.as === "flag" ? "should_flag"
     : String((r.findings || [])[0]?.code || r.verdict || "other");
   const groups: Record<string, any[]> = {};
   for (const r of open) (groups[kindOf(r)] ||= []).push(r);
   const KIND: Record<string, string> = {
+    should_flag: "PASSED it — the manager says it should have been flagged (the note says what was missed)",
     reorder: "Suggested a new photo order", retake: "Said to retake following the guide",
     missing_shot: "Said a guide shot was missing", not_square: "Said a photo is not square",
     framing: "Said a photo is not to the guide's standard", flaw_not_shown: "Said the main flaw is not shown",
@@ -1275,14 +1289,17 @@ async function handlePost(req: Request, scope: Scope) {
   // Dismiss — "this is fine" — and Deny on a reorder, which is the same answer
   // about the order. The note is kept: dismissals are how a rule is found wrong,
   // the same lesson the title tool's Confirmed Correct drawer taught.
-  if (action === "dismiss" || action === "deny-reorder") {
+  // "should-flag" is the same answer from the other side: a PASS the manager
+  // disagrees with. It leaves the Passed tab the same way, and its note reaches
+  // Listing Health Notes as its own group.
+  if (action === "dismiss" || action === "deny-reorder" || action === "should-flag") {
     const note = String(body.reason || "").trim().slice(0, 300);
     // Required (Ethan, 2026-09-30): a dismissal with no why gives nothing to fix.
     if (!note) return json({ error: "reason required", detail: "Say why the photos are fine — that note is how a wrong rule gets fixed." }, 400);
     await sb(`picture_quality_reviews?${key}&status=eq.open`, {
       method: "PATCH", headers: { Prefer: "return=minimal" },
       body: JSON.stringify({ status: "dismissed", decided_by: scope.name, decided_at: new Date().toISOString(),
-        decided_note: (action === "deny-reorder" ? "reorder denied" : "dismissed") + (note ? `: ${note}` : "") }),
+        decided_note: (action === "deny-reorder" ? "reorder denied" : action === "should-flag" ? "should flag" : "dismissed") + (note ? `: ${note}` : "") }),
     });
     return json({ ok: true, dismissed: productId });
   }

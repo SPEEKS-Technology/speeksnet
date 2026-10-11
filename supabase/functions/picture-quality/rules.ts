@@ -136,6 +136,8 @@ export type ReportR = {
   units_claimed?: number | null;
   all_units_shown?: boolean;
   units_together?: boolean;
+  // Do the photos, taken together, show every edge of the device? See decide().
+  all_sides_shown?: boolean;
   main_flaw: { stated: string | null; source: string; shown: string; photo: number | null };
   serial: "shown" | "hidden_behind_cover" | "not_shown";
   lead_ok: boolean;
@@ -347,8 +349,17 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
     .filter(s => !(sealed && gameSheet && /opened case/i.test(s.label)))
     .filter(s => !(sheet.slug === "item-lots" && !hasBox && /\bbox\b/i.test(s.label)));
   const byLabel = new Map(sheet.shots.map(s => [s.label.toLowerCase(), s]));
+  // SIDES AND CORNERS ARE FOR SHOWING THE SIDES (Ethan, 2026-10-11, OVL Galaxy
+  // Tab A: "6,7,8,9 all do show the top, bottom, and the corners. It's okay if
+  // it's not the identical angle as long as all 4 sides are shown" — the same
+  // call he made on the Onyx Boox and the OVL Surface on 10-08). When the photos
+  // together show every edge, no side or corner shot is missing, however few
+  // photos or whatever angle did it. Not on a box: there every face is its own
+  // shot, and a box's six faces are not "four sides".
+  const sidesCovered = r.all_sides_shown === true && !BOX_SHEETS.has(sheet.slug);
   const missingRequired = [...new Set(r.missing_shots.map(m => m.trim()))]
-    .filter(m => requiredShots.some(s => s.label.toLowerCase() === m.toLowerCase()));
+    .filter(m => requiredShots.some(s => s.label.toLowerCase() === m.toLowerCase()))
+    .filter(m => !(sidesCovered && /\b(side|corner)\b/i.test(m)));
   // 40%, and at least three: Ethan is testing this line (blue on the card).
   const retake = requiredShots.length > 0 && missingRequired.length >= 3
     && missingRequired.length / requiredShots.length >= RETAKE_SHARE;
@@ -498,6 +509,7 @@ export function agree<T extends ReportR>(a: T, b: T): T {
     flaw_views: both(a.flaw_views, b.flaw_views),
     all_units_shown: a.all_units_shown !== false || b.all_units_shown !== false,
     units_together: a.units_together !== false || b.units_together !== false,
+    all_sides_shown: a.all_sides_shown === true || b.all_sides_shown === true,
     main_flaw: bothNo ? a.main_flaw
       : { ...a.main_flaw, shown: a.main_flaw.shown === "no" ? b.main_flaw.shown : a.main_flaw.shown },
     serial: a.serial === "shown" || b.serial === "shown" ? "shown"

@@ -96,6 +96,12 @@ t("a missing FIRST photo of the guide is an automatic flag (the Crucial tick is 
 t("a missing view the notes put a flaw on is crucial too", () => {
   const d = run({}, PHONE, { missing_shots: ["Back of Phone"], flaw_views: ["Back of Phone"] }); return flagged(d) || say(d); });
 
+t("all four sides shown: no side or corner shot is missing, whatever the angle (OVL Galaxy Tab, 10-11)", () => {
+  const miss = ["Side of Phone", "Top Side of Phone", "Back of Phone"];
+  const d = run({}, PHONE, { missing_shots: miss, all_sides_shown: true });
+  const n = run({}, PHONE, { missing_shots: miss, all_sides_shown: false });
+  const left = d.findings.filter(f => f.code === "missing_shot").map(f => f.shot);
+  return (left.join() === "Back of Phone" && n.findings.filter(f => f.code === "missing_shot").length === 3) || `${left.join()} | ${say(n)}`; });
 t("Core info: −15 ONCE however many are missing, each one listed", () => {
   const d = run({}, PHONE, { missing_shots: ["About Phone", "Storage Information"] });
   const core = d.findings.filter(f => f.tier === "core").length;

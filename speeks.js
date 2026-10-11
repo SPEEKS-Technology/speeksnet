@@ -55404,7 +55404,8 @@ function _lhHtml() {
         { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
           n: (_ltData?.queue || []).length, bad: !!_ltErr },
         { v: 'photos', label: 'Picture Quality', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
-          n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).length, bad: noPhotos > 0 || !!_lhPhotoErr },
+          // Passed rows ride in the same queue (for the Passed tab) but are not work.
+          n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).filter(r => r.verdict !== 'pass').length, bad: noPhotos > 0 || !!_lhPhotoErr },
         { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
     ].filter(t => t.on);
     // Reachable only by a race: the pill needs one of the switches, so losing
@@ -55613,6 +55614,12 @@ const _PQ_TIERS = [
     // a duplicate. The verdict is still called 'reorder' in the table and the
     // API; only the words on screen changed.
     { v: 'reorder',  label: 'Quick Fixes',  cls: 'lt-t-ok',   half: 'pictures' },
+    // PASSED (Ethan, 2026-10-11: "Can I see all of the OVL ones on the tool even
+    // if they passed so I can confirm that I agree with the pass?"). The last 14
+    // days of passes, for agreeing with — not work, so it never counts toward the
+    // section's total and is never the tab the section lands on. `review` marks
+    // it. "Should Flag" on a row is the disagreement, with a note.
+    { v: 'pass',     label: 'Passed',       cls: 'lt-t-ok',   half: 'pictures', review: true },
 ];
 
 function _pqHtml() {
@@ -55628,7 +55635,7 @@ function _pqHtml() {
     // Land on the worst tab with anything in it — No Photos first, because a
     // listing a shopper sees as an empty square outranks every photo it does have.
     if (!_pqTier || !tiers.some(t => t.v === _pqTier) || (!_pqPicked && !count(_pqTier))) {
-        const first = tiers.find(t => count(t.v));
+        const first = tiers.find(t => !t.review && count(t.v));
         _pqTier = first ? first.v : tiers[0].v;
     }
     const tabs = tiers.length < 2 ? '' : `<div class="rc-modes lt-modes">${tiers.map(t => {
@@ -55650,7 +55657,9 @@ function _pqHtml() {
     } else if (!_pqData) {
         inner = '';
     } else if (!count(_pqTier)) {
-        inner = `<div class="lh-clear">
+        inner = _pqTier === 'pass'
+          ? `<div class="lh-clear"><span>No Listings Passed At ${store} In The Last 14 Days</span></div>`
+          : `<div class="lh-clear">
             <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
             <span>All Clear — Nothing To ${_ecEsc(tiers.find(t => t.v === _pqTier)?.label || '')} At ${store}</span>
           </div>`;
@@ -55658,7 +55667,7 @@ function _pqHtml() {
         const rows = all.filter(r => r.verdict === _pqTier);
         inner = `<div class="lt-rows">${rows.map(_pqRow).join('')}</div>`;
     }
-    const total = tiers.reduce((s, t) => s + count(t.v), 0);
+    const total = tiers.filter(t => !t.review).reduce((s, t) => s + count(t.v), 0);
     const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
     // Train The Checker — see pqTrainOpen. Only for readers who hold the
     // picture half; it reads the same graded listings the queue does.
@@ -55702,7 +55711,7 @@ function _pqDismissedHtml(tier) {
             <div class="lt-dn-title">${_ecEsc(r.title || '')}</div>
             <div class="lt-dn-meta">
               <span class="lh-sku">${_ecEsc(r.sku || '—')}</span>
-              <span class="lt-dn-as">${r.as === 'reorder' ? 'Order Is Fine' : 'Photos Are Fine'}</span>
+              <span class="lt-dn-as">${r.as === 'reorder' ? 'Order Is Fine' : r.as === 'flag' ? 'Should Have Flagged' : 'Photos Are Fine'}</span>
               <span>${_ecEsc(r.by || '')}${r.at ? ' · ' + _lhWhen(r.at) : ''}</span>
             </div>
             ${r.note ? `<div class="lt-dn-note">${_ecEsc(r.note)}</div>` : ''}
@@ -56136,7 +56145,10 @@ function _pqRow(r) {
              centre over. -->
         <div class="pq-lister">${_ltListerPill({ listerTag: r.lister || '' }, r.lister ? { [r.lister]: r.lister } : null)}</div>
         <div class="lt-acts pq-acts">
-          ${isReorder && !r.stale
+          ${r.verdict === 'pass'
+            ? `<button class="lt-no" onclick="pqShouldFlag('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
+                  title="You would have flagged this. Say what was missed, and the note comes to Listing Health Notes.">Should Flag</button>`
+            : isReorder && !r.stale
             ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Order'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', true)" ${busy ? 'disabled' : ''}
                   title="The current order is fine. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
@@ -56151,13 +56163,15 @@ function _pqRow(r) {
         </div>
         <!-- A duplicate to delete beside a reorder, or on a flagged row: its own
              line, so the row's main pair keeps its one job. -->
-        ${del && (isReorder || !oneClick) ? `<div class="lt-acts pq-acts">
+        ${del && r.verdict !== 'pass' && (isReorder || !oneClick) ? `<div class="lt-acts pq-acts">
             <button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Approve Deletion</button></div>` : ''}
         <!-- What each button DOES, on the row. Ethan asked what "Check Again"
              meant; a button that needs asking about needs a sentence. -->
-        ${[isReorder && !r.stale && 'Approve Order saves this order to Shopify.',
+        ${(r.verdict === 'pass'
+          ? ['Agree it passes? Nothing to do. Would you have flagged it? Should Flag, and say what was missed.']
+          : [isReorder && !r.stale && 'Approve Order saves this order to Shopify.',
            del && `Approve Deletion removes ${delWhat} from Shopify.`,
-           !(isReorder && !r.stale) && !(oneClick && del) && 'Retook the photos? Recheck grades them now.']
+           !(isReorder && !r.stale) && !(oneClick && del) && 'Retook the photos? Recheck grades them now.'])
           .filter(Boolean).map(x => `<span class="pq-hint">${x}</span>`).join('')}
       </div>
     </div>`;
@@ -56187,6 +56201,32 @@ async function pqDismiss(pid, isReorder) {
     await _pqReload();
 }
 window.pqDismiss = pqDismiss;
+
+// The Passed tab's disagreement. The same note-required answer as a dismissal,
+// from the other side; the row moves to the tab's dismissed drawer, labelled
+// Should Have Flagged, and the note waits in Listing Health Notes.
+async function pqShouldFlag(pid) {
+    const row = (_pqData?.queue || []).find(r => r.productId === pid);
+    if (!row) return;
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Picture Quality', title: 'Should This Have Been Flagged?',
+        body: `<p class="lt-ask-say">${_ecEsc(row.title || '')}</p>`,
+        note: { label: 'What Did The Check Miss?', required: true,
+                placeholder: 'e.g. photos 6 and 7 are crooked',
+                hint: 'Required — this note is how a missed rule gets fixed. Nothing on the listing changes.' },
+        go: 'Send It', cancel: 'Cancel' });
+    if (!said) return;
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: 'should-flag', store: _ecStore, productId: pid, reason: said.note || '' });
+    _pqBusy.delete(pid);
+    if (!res.ok) {
+        await _pqSay('That Was Not Recorded', res.body?.detail || res.body?.error || 'Could not record that.');
+        ecRender();
+        return;
+    }
+    await _pqReload();
+}
+window.pqShouldFlag = pqShouldFlag;
 
 async function pqReorder(pid) {
     const row = (_pqData?.queue || []).find(r => r.productId === pid);

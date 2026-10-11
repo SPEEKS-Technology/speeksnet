@@ -98,7 +98,8 @@ t('picture quality: No Photos is the first tab for a reader who holds it, and le
     var tabs =[].map.call(d.querySelectorAll('.rc-mode'), function (b) { return b.textContent.trim().split(/\s+/)[0]; });
     _lhScope = { mayPhotos: false, mayCats: false }; _lhPhotos = null;
     if (tabs[0] !== 'No') return 'first tab is ' + tabs[0];
-    if (tabs.length !== 4) return tabs.length + ' tabs, expected 4';
+    if (tabs.length !== 5) return tabs.length + ' tabs, expected 5 (No Photos, Retake, Fix, Quick Fixes, Passed)';
+    if (tabs[4] !== 'Passed') return 'last tab is ' + tabs[4] + ', expected Passed';
     return d.textContent.indexOf('Empty Square') >= 0 || 'the no-photo listing is not on the opening tab';
 });
 
@@ -673,4 +674,33 @@ t('a flagged row with a duplicate keeps Recheck and gains Approve Deletion; a st
     _pqData = data([Object.assign({}, row, { stale: true })]);
     host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
     return !host.querySelector('button[onclick^="pqDeletePhotos"]') || 'Approve Deletion offered on photos that changed';
+});
+
+// PASSED (Ethan, 2026-10-11): passes are shown for agreeing with, never as work.
+var PASS = { productId: 'gid://shopify/Product/9', sku: 'MO01-9', title: 'Wii Fit (Game Only)', handle: 'wii',
+    sheet: 'windows-laptops', sheetName: 'Video Games', verdict: 'pass', reviewedAt: new Date().toISOString(),
+    findings: [{ code: 'missing_shot', tier: 'view_free', shot: 'Back', text: 'Missing: Back.' }],
+    stale: false, photos: ph(3), titleNotes: [] };
+t('passed: its own tab, never the landing tab, never in the total', function () {
+    _pqData = data([PASS, FIX]); _pqErr = null; _pqTier = null; _pqPicked = false;
+    var h = _pqHtml();
+    if (h.indexOf('>Passed') < 0 && h.indexOf('Passed\n') < 0 && h.indexOf('Passed') < 0) return 'no Passed tab';
+    if (_pqTier !== 'fix') return 'landed on ' + _pqTier + ', not the work';
+    if (h.indexOf('lh-count lh-count-warn">1<') < 0) return 'the section total counts the pass';
+    _pqData = data([PASS]); _pqTier = null; _pqPicked = false; _pqHtml();
+    return _pqTier !== 'pass' || 'a store with only passes landed on Passed';
+});
+t('passed: the row shows its notes and Should Flag — no Recheck, Dismiss or Approve', function () {
+    _pqData = data([PASS]); _pqTier = 'pass'; _pqPicked = true;
+    var h = _pqHtml();
+    if (h.indexOf('Wii Fit') < 0) return 'the pass is not listed';
+    if (h.indexOf('pqShouldFlag(') < 0) return 'no Should Flag';
+    if (h.indexOf('Missing: Back') < 0 && h.indexOf('Back') < 0) return 'the free finding is hidden';
+    if (/pqRecheck\(|pqDismiss\(|pqReorder\(|pqDeletePhotos\(/.test(h)) return 'a work button is on a pass';
+    return true;
+});
+t('passed: the Listing Health chip does not count passes', function () {
+    _pqData = data([PASS]);
+    var n = ((_pqData.queue || []).filter(function (r) { return r.verdict !== 'pass'; })).length;
+    return n === 0 || 'pass counted';
 });

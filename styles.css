@@ -19604,6 +19604,7 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .pq-v-retake  { border-left: 3px solid #d1443b; }
 .pq-v-fix     { border-left: 3px solid #d69e2e; }
 .pq-v-reorder { border-left: 3px solid var(--cb-sage); }
+.pq-v-pass    { border-left: 3px solid var(--cb-line, #d6d3cd); }
 .pq-title { font-size: 13px; font-weight: 800; color: var(--cb-ink); line-height: 1.4; overflow-wrap: anywhere; }
 .pq-sheet { font-size: 11px; font-weight: 600; color: var(--cb-faint); }
 .pq-sheet b { font-weight: 800; color: var(--cb-muted); }
