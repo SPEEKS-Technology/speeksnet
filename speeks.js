@@ -56143,7 +56143,11 @@ function _pqRow(r) {
              is always there and never a raw tag. Its own line, not a third pill
              beside the links: those are two columns the SKU and photo count
              centre over. -->
-        <div class="pq-lister">${_ltListerPill({ listerTag: r.lister || '' }, r.lister ? { [r.lister]: r.lister } : null)}</div>
+        <!-- The price beside who listed it (Ethan, 2026-10-11): it is what the
+             dirty-table and reflection points are scaled by, and how much a
+             reshoot is worth. -->
+        <div class="pq-lister">${_ltListerPill({ listerTag: r.lister || '' }, r.lister ? { [r.lister]: r.lister } : null)}${
+          r.price > 0 ? `<span class="pq-price">$${Number(r.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>` : ''}</div>
         <div class="lt-acts pq-acts">
           ${r.verdict === 'pass'
             ? `<button class="lt-no" onclick="pqShouldFlag('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}

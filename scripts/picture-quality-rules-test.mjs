@@ -106,6 +106,18 @@ t("all four sides shown: no side or corner shot is missing, whatever the angle (
   const n = run({}, PHONE, { missing_shots: miss, all_sides_shown: false });
   const left = d.findings.filter(f => f.code === "missing_shot").map(f => f.shot);
   return (left.join() === "Back of Phone" && n.findings.filter(f => f.code === "missing_shot").length === 3) || `${left.join()} | ${say(n)}`; });
+t("flat retail packaging on New In Box: only front, back and label are asked for (WSP SanDisk, 10-11)", () => {
+  const NIB = { slug: "new-in-box", shots: ["Front of Box", "Back of Box", "Top of Box", "Bottom of Box", "Side of Box", "Opposite Side of Box", "Closeup of Model/Serial Info"].map(label => ({ label, cond: null })) };
+  const miss = ["Top of Box", "Bottom of Box", "Side of Box", "Opposite Side of Box"];
+  const flat = run({ title: "New SanDisk 512GB microSDXC" }, NIB, { missing_shots: miss, flat_package: true, serial: "shown" });
+  const box = run({ title: "New SanDisk 512GB microSDXC" }, NIB, { missing_shots: miss, flat_package: false, serial: "shown" });
+  return (flat.verdict === "pass" && box.verdict === "retake") || `${say(flat)} | ${say(box)}`; });
+t("different spot: the FIRST group is the standard, and closeups are never odd (WSP AirPods, OVL Loupedeck, 10-11)", () => {
+  const ps = report().photos; ps[7] = photo(8, { whole_item: false });
+  const d = run({}, PHONE, { photos: ps, setups: [[1, 2, 4], [3, 5, 6, 7, 8, 9, 10]] });
+  const f = d.findings.find(x => x.code === "mixed_setups");
+  const odd = f ? f.photos.join() : "";
+  return odd === "3,5,6,7,9,10" || `odd: ${odd}`; });
 t("Core info: −15 ONCE however many are missing, each one listed", () => {
   const d = run({}, PHONE, { missing_shots: ["About Phone", "Storage Information"] });
   const core = d.findings.filter(f => f.tier === "core").length;
@@ -197,6 +209,9 @@ t("second look only when the flag is close to the line (cost cut, 10-11)", () =>
   const L = listing({}); L.photos = L.photos.map((p, i) => i === 0 ? { ...p, width: 1080, height: 1350 } : p);
   const measured = needsSecondLook(L, PHONE, report({ photos: one }));                   // not square is measured
   return (single && !sure && !passing && !measured) || [single, sure, passing, measured].join(); });
+t("a suggested deletion ALWAYS gets a second look (WSP watches, 10-11)", () => {
+  const ps = report().photos; ps[4] = photo(5, { repeats: 2 });
+  return needsSecondLook(listing({}), PHONE, report({ photos: ps })) || "no second look for a repeat"; });
 t("two looks: a flag must be seen by both; a pass from either", () => {
   const a = report({ needed_missing: ["Everything Included"], units_claimed: 2, units_together: false, missing_shots: ["Back of Phone"] });
   const b = report({ needed_missing: [], units_claimed: 2, units_together: true, missing_shots: ["Back of Phone"] });

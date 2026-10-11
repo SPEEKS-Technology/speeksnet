@@ -19677,7 +19677,9 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .pq-row .rc-links { display: flex; gap: 6px; }
 .pq-row .rc-links .ec-pill { flex: 1 1 0; justify-content: center; }
 /* Who listed it: its own line, centred under the two links. */
-.pq-lister { display: flex; justify-content: center; }
+.pq-lister { display: flex; justify-content: center; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* The price beside it: plain figures, the same weight as the photo count. */
+.pq-price { font-size: 12px; font-weight: 800; color: var(--cb-ink); font-variant-numeric: tabular-nums; }
 
 /* TRAIN THE CHECKER (2026-10-08) — one photo beside the guide's example of the
    same shot, and a row of answers. The photo is shown WHOLE inside a square

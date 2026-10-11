@@ -390,6 +390,8 @@ Rules:
 - A game whose case is NOT included (e.g. "Case" in the not-included list) uses the Video Games (No Case) sheet, slug "video-games-disk-cartridge-only". A game with its case, sealed or not, uses "video-games".
 - "New In Box", "New Open Box" and "Item Lots" are for items that are new-in-box, open-box, or a lot of several items — but new sealed video games use "video-games".
 - Two matching speakers sold together use "speaker-pairs".
+- Trading cards (Pokémon, Magic, Yu-Gi-Oh, sports cards, any TCG card) use "video-games-disk-cartridge-only" — a card is shot like a game with no case.
+- A NEW item still sealed in its retail packaging (the title starts "New", or the condition says new or sealed) uses "new-in-box" — small things on a card or blister pack too (a memory card, a cable) — except video games, which keep "video-games".
 - An item with no sheet of its own uses the CLOSEST similar sheet — a mirrorless or DSLR camera uses "point-and-shoot-cameras", a tablet-like device uses a tablet sheet. Use "small-medium-misc-items" only when nothing on the list is similar.
 - If you cannot tell what the item is, return null with confidence "low".`;
 
@@ -421,6 +423,7 @@ const Report = z.object({
   all_units_shown: z.boolean(),
   units_together: z.boolean(),
   all_sides_shown: z.boolean(),
+  flat_package: z.boolean(),
   main_flaw: z.object({
     stated: z.string().nullable(),
     source: z.enum(["unit", "title", "none"]),
@@ -442,12 +445,12 @@ const REVIEW_SYSTEM = `You grade the photos of one used-electronics listing agai
 
 The owner's principle: a photo problem matters only if it would stop a buyer judging the item. When a call is borderline, report no issue.
 
-sheet_fits: false only if this sheet is clearly the wrong kind of item (e.g. a camera listed on a phone sheet). Then give better_sheet as a slug from OTHER SHEETS; otherwise better_sheet is null.
+sheet_fits: false only if this sheet is clearly the wrong kind of item (e.g. a camera listed on a phone sheet). Then give better_sheet as a slug from OTHER SHEETS; otherwise better_sheet is null. One more case: on the New In Box sheet, if the photos show the item ITSELF out of its packaging (opened, handled, not sealed), the sheet is wrong — better_sheet "new-open-box" (WSP Yale lock, 2026-10-11).
 
 For each photo (numbered from 1, in listing order), report:
 - shots: which sheet shot labels it covers. One photo may cover two (a front view with the lens cap off is both "Front of Projector" and "Front of Projector (Lens Open)"). Use "Box" for packaging, "Extra" for anything that is not a sheet shot.
 - whole_item: true if it is meant to show the whole item, false for a deliberate closeup (glass, mount, ports, a label). A closeup may be tight — never report cut_off on one.
-- repeats: the number of an EARLIER photo this one repeats — the same side from the same angle, only slightly moved or re-cropped, adding nothing a buyer did not already see. Null if it shows anything new (another side, another angle, a detail). A CLOSER shot of the same view that brings a guide shot into focus is that guide shot, not a repeat: a tight front shot of glasses that shows the middle bridge is "Middle Bridge" (OVL Ray-Ban Meta, 2026-10-11 — photo 4 was called a repeat of photo 1 and the bridge was called missing). Check every closeup against the sheet's detail shots before calling it a repeat.
+- repeats: the number of an EARLIER photo this one repeats — ONLY when the two are near-identical: the same face of the item, from the same angle, in the same setup, only slightly moved or re-cropped, adding nothing a buyer did not already see. Null if it shows anything new (another side, another angle, a detail). NOT repeats, however alike they look (WSP, 2026-10-11 — every one of these was wrongly called a repeat): the different sides of a watch or device seen at different angles; a screen-off shot and an everything-included shot of the same watch; the faces of a PLAIN box — top, bottom and the two sides are different faces even with nothing printed on them; two views of earbuds at different angles. When in doubt, null — a repeat offers the store a one-click deletion, so a wrong one deletes a good photo. A CLOSER shot of the same view that brings a guide shot into focus is that guide shot, not a repeat: a tight front shot of glasses that shows the middle bridge is "Middle Bridge" (OVL Ray-Ban Meta, 2026-10-11 — photo 4 was called a repeat of photo 1 and the bridge was called missing). Check every closeup against the sheet's detail shots before calling it a repeat.
 - framing: compare the photo to the sheet's EXAMPLE of the same shot. "matches" = shot like the example. "close" = small differences a buyer would not care about. "off" = one of these framing_problems. Judge EVERY photo of the item on its own — a listing where photo after photo sits low or to one side of the frame, or leans, is exactly what the store wants found, even when each one alone looks like a small miss:
   crooked — the item is rotated IN THE PICTURE: edges that should run level or upright visibly slant, as if the camera was turned. An item or box propped on the ITEM STAND to show a narrow side, top or bottom will lean or sit at an angle — that is how the stand holds it, and it is NEVER crooked (OVL Xbox 360 controller box: its side shots on the stand were called crooked, and they are to standard). A different VIEWPOINT is not crooked — a tablet stood on edge and shot from the corner, a game case shown at the same angle as the example, a deliberately angled side view. A round item shot face-on (a lens, a speaker cone) is never crooked.
   off_center — the item sits clearly to one side, or low or high, in the frame instead of centred like the example (a stray cable or the stand does not count; the item does).
@@ -458,7 +461,7 @@ For each photo (numbered from 1, in listing order), report:
 - issues, only when clearly true, each with a severity. "major" means a buyer would notice and it hurts the listing; "minor" means you can see it but it does not matter. Only major issues are acted on:
   blurry, too_dark_or_glare — the detail the shot exists for cannot be made out AND it is something a buyer needs: a label, a screen, a flaw, the face or body of the item. An edge-on view of a thin item with nothing printed on its edge (a memory stick's side) is not this, even if soft. A "Screen Off" shot is meant to be a dark screen with reflections — never report it.
   reflection — the room, a light, a window, the photographer, or the phone or camera taking the photo is mirrored in the item's glossy surface (a screen, a case, the shrink-wrap of a box) — a reflection you can plainly make out. Report it on EVERY photo it shows in, as "major" whenever you can see it. NEVER on a "Screen Off" shot: that photo exists to show the dark screen, reflections and all. Soft even sheen with nothing mirrored in it is not a reflection.
-  clutter — something in the frame that is not the item, its stand or the plain white backdrop: the edge of the lightbox or a wall, another item, a hand, a tool, mess. Report it on EVERY photo it shows in, and as "major" whenever you can plainly see it — a buyer's eye goes straight to it. Things that come WITH the item (its box, cables, accessories, everything included, the other items of a lot) are not clutter.
+  clutter — something in the frame that is not the item, its stand or the plain white backdrop: the edge of the lightbox or a wall, another item, a hand, a tool, mess. Check EVERY photo for it separately — a wall or lightbox edge in one photo is usually in the photos taken next to it too (WSP i5-4690K: photo 3 was missed beside photo 4). Report it on EVERY photo it shows in, and as "major" whenever you can plainly see it — a buyer's eye goes straight to it. Things that come WITH the item (its box, cables, accessories, everything included, the other items of a lot) are not clutter.
   stock_photo — a manufacturer or web image, not this unit.
   fake_or_edited — looks AI-generated, composited or heavily edited (a product floating unnaturally with no surface).
   personal_info — a customer's name, Apple ID, email or phone number on screen.
@@ -468,20 +471,21 @@ For each photo (numbered from 1, in listing order), report:
   not_on_stand — VIDEO GAME SHEETS ONLY: the game (its case, opened case, disc or cartridge) is lying flat on the table or propped some other way, instead of standing upright on the clear item stand the way the guide's examples are shot. Report it on EVERY such photo, always as "major". Never on any other kind of item.
 - note: a few words on what the photo shows.
 
-missing_shots: the sheet's ALWAYS shots with no photo covering them (never an "only if" shot — those go in needed_missing). Info shots (serial, model, CPU, RAM, storage) count as covered if ANY photo or screen shows the information legibly, including a BIOS or settings screen. A round item turned 90° looks the same — do not list its near-identical rotations as missing. BEFORE listing any shot as missing, look again at every photo you labelled Extra: it is often a shot you did not name (a top edge, a side of a box). For a box, deduce each side from what is printed on it. A serial/model closeup is not missing when the serial is hidden behind something that must be removed (a battery cover) — only when it is printed on the outside.
+missing_shots: the sheet's ALWAYS shots with no photo covering them (never an "only if" shot — those go in needed_missing). Info shots (serial, model, CPU, RAM, storage) count as covered if ANY photo or screen shows the information legibly, including a BIOS or settings screen. A round item turned 90° looks the same — do not list its near-identical rotations as missing. BEFORE listing any shot as missing, look again at every photo you labelled Extra: it is often a shot you did not name (a top edge, a side of a box). For a box, deduce each side from what is printed on it — and for a PLAIN box (an Apple box is plain on most faces), from its shape and orientation: the long thin faces are the top and bottom, the short ends are the sides. A shot is covered only when the photo shows the item set up as in the example: a watch sold WITH a band must be photographed with the band attached, as the guide's examples are — a bare watch face (band shown separately) does not cover those shots. A serial/model closeup is not missing when the serial is hidden behind something that must be removed (a battery cover) — only when it is printed on the outside.
 
 needed_missing: the sheet's "only if" shots that THIS listing calls for and no photo covers. A listing calls for one when it says the thing the shot is for: Everything Included when the INCLUDED field lists items; Extra Accessories when the listing names extras beyond the standard contents; Cosmetic Flaws when a cosmetic note marked [unit] describes a flaw on this unit (never for [standard] sentences); LCD Flaws when the functional notes describe a screen problem; any other "only if" shot when the listing states its condition (e.g. lamp hours, an active warranty). Use the sheet's exact shot names. Empty if none.
 
 flaw_views: the sheet's view shots (sides, back, top, bottom, corners) that a [unit] cosmetic note or the title puts a flaw ON — "dent on the back" makes the back view one. Exact shot names; empty if none.
 
 units_claimed: when the listing sells MORE THAN ONE of something — a pair, a set, a 2-pack, "Lot of 6", several units in the INCLUDED field — the number of units; otherwise null. all_units_shown: true unless the photos, taken together, plainly fail to show every unit the listing says it has (a lot of 6 games must show 6 games). units_together: true if the whole-item shots (front, back, sides, top, bottom) show all the units together; false if those shots show one unit at a time (single-unit photos as extras are fine). For a single item: null, true, true.
+flat_package: NEW IN BOX / NEW OPEN BOX sheets only — true when the packaging is FLAT: a blister card, a hanging card, a sleeve or an envelope (a memory card on its card), with no real top, bottom or sides to photograph. False for a box, and on every other sheet.
 all_sides_shown: true when the photos, taken together, show EVERY edge of the device — top, bottom, left and right — clearly enough to judge its condition. A corner shot shows the two edges that meet there, so four corner shots can show all four sides. Angles different from the guide's are fine; the side and corner shots exist to show the sides, not to match one exact angle. False if any edge is never seen. For a boxed item, judge the item, not the box.
 
 main_flaw: the one specific defect that is the main reason this unit is not in better condition — a crack, a dent, missing keys, a broken part — taken from notes marked [unit] (source "unit") or from the title (source "title"). General wear ("scuffs, scratches and wear", "minor marks") is NOT a main flaw. Ignore every sentence marked [standard] — it is the listing program's template, not about this unit. If there is no such specific defect: stated null, source "none", shown "not_applicable". A screenshot counts as showing a defect only a screen can show (Battery Health for a bad battery, a lock or iCloud screen). Otherwise: shown "yes" if a photo shows it clearly, "partly" if it is visible but not clearly, "no" if no photo shows it. Lesser flaws never need their own photo.
 
 serial: "shown" if any photo shows the serial number legibly — a label, or a settings / About screen that lists it; "hidden_behind_cover" if it is on a part that must be removed to see it (under a battery cover, inside a compartment) and no photo opens it; otherwise "not_shown".
 
-setups: group EVERY photo of the ITEM by where it was taken — the same backdrop, the same lighting, the same stand or surface — one array of photo numbers per spot. A listing shot all in one place is one group. Two groups means some photos were plainly taken somewhere else: a different backdrop or wall, light that is a different colour or brightness, a different surface, the stand in one and not the other. A closeup that is nearer than the others, the same spot otherwise, is the SAME spot. Leave out photos that are not of the item (a box or accessory spread shot elsewhere on purpose) and screenshots. setup_difference: a few words on what differs between the groups, or "" if one group.
+setups: list the store's STANDARD setup FIRST. When some photos use the clear item stand and others do not, the stand photos are the standard, and photos of the SAME object taken off the stand are the odd ones (WSP AirPods: the case on the stand in photos 1, 2 and 4 — a stand propping the lid open is fine — so the case lying flat in 3 and 7 is the odd one). Leave OUT of every group: closeups (whole_item false, e.g. a serial label) and small loose parts lying flat (earbuds out of their case, cables) — those may be shot off the stand. Then: group EVERY photo of the ITEM by where it was taken — the same backdrop, the same lighting, the same stand or surface — one array of photo numbers per spot. A listing shot all in one place is one group. Two groups means some photos were plainly taken somewhere else: a different backdrop or wall, light that is a different colour or brightness, a different surface, the stand in one and not the other. A closeup that is nearer than the others, the same spot otherwise, is the SAME spot. Leave out photos that are not of the item (a box or accessory spread shot elsewhere on purpose) and screenshots. setup_difference: a few words on what differs between the groups, or "" if one group.
 
 lead_ok: true if photo 1 is a clear shot that shows what the item is (it need not be the sheet's first shot).
 
@@ -610,7 +614,25 @@ function isVideoGame(l: Listing): boolean {
   if (tail && GAME_PLATFORM.test(tail[1])) return true;
   return l.collections.some(h => /(^|-)games?(-|$)|video-games/i.test(h) && !/console/i.test(h));
 }
+// TRADING CARDS ARE SHOT LIKE A GAME WITH NO CASE (Ethan, 2026-10-11: "Trading
+// cards can be treated the same as video games without a case"). There is no
+// card sheet, and the pick sent one WSP Pokémon card to Small/Medium Misc (a
+// "retake" for missing device sides) and found nothing for the other. Decided
+// here, not asked — a Pokémon GAME has the platform tail and stays a game.
+const CARD_WORDS = /\b(tcg|trading cards?|ccg)\b/i;
+const CARD_BRANDS = /\b(pok[eé]mon|yu-?gi-?oh|magic the gathering|mtg|panini|topps|upper deck|one piece card|lorcana)\b/i;
+const isTradingCard = (l: Listing) => CARD_WORDS.test(l.title) || (CARD_BRANDS.test(l.title) && !isVideoGame(l)
+  && !/\b(plush|figure|console|game boy|switch)\b/i.test(l.title));
+
 function gameSheetFor(l: Listing, sheet: Sheet | null, sheets: Sheet[]): Sheet | null {
+  if (isTradingCard(l)) return sheets.find(s => s.slug === "video-games-disk-cartridge-only") || sheet;
+  // A NEW item is shot in its packaging (Ethan, 2026-10-11: the WSP SanDisk card
+  // "should be based on new in box guide") — the pick kept sending it to Small/
+  // Medium Misc. "New …" titles go to New In Box unless already on a box sheet
+  // (an open-box re-sheet stands — the WSP Yale lock). Games are decided below.
+  if (sheet && /^new\b/i.test(l.title) && !isVideoGame(l) && !BOX_SHEETS.has(sheet.slug)) {
+    return sheets.find(s => s.slug === "new-in-box") || sheet;
+  }
   if (!sheet || !BOX_SHEETS.has(sheet.slug) || !isVideoGame(l)) return sheet;
   const noCase = /\bcase\b/i.test(l.notIncluded);
   return sheets.find(s => s.slug === (noCase ? "video-games-disk-cartridge-only" : "video-games")) || sheet;
@@ -1249,6 +1271,7 @@ async function reviewView(scope: Scope, asked: string) {
       staleWhy: String(r.stamp || "").split(":")[0] !== RECIPE ? "recipe" : "listing",
       // A name, or null — the panel says "Unknown" for null, never the raw tag.
       lister: listerFrom(l.tags, listerIx, store)?.name || null,
+      price: l.price,
       photos: l.photos.map(p => ({ thumb: p.thumb, full: p.src, w: p.width, h: p.height })),
     });
   }
@@ -1484,9 +1507,15 @@ async function applyReorder(scope: Scope, store: string, productId: string) {
 // referencesToRemove, which leaves the file in Files rather than destroying
 // it). Rather than bet on which one API ${SHOPIFY_API_VERSION} still has, the
 // schema is asked once per invocation.
+// ⚠️ includeDeprecated: true. productDeleteMedia IS deprecated (in favour of
+// fileUpdate), so a plain `fields` list leaves it out — and the code fell
+// through to fileUpdate, which needs the write_files scope no store granted:
+// the first live Approve Deletion (WSP AirPods, 2026-10-11) came back
+// "Access denied for fileUpdate field". productDeleteMedia needs only
+// write_products, which all five stores have.
 let deleteVia: Promise<"productDeleteMedia" | "fileUpdate" | null> | null = null;
 function deleteMutation(shop: string, token: string) {
-  deleteVia ||= gql(shop, token, `{ __type(name: "Mutation") { fields { name } } }`).then((d: any) => {
+  deleteVia ||= gql(shop, token, `{ __type(name: "Mutation") { fields(includeDeprecated: true) { name } } }`).then((d: any) => {
     const names = new Set((d?.__type?.fields || []).map((x: any) => x.name));
     return names.has("productDeleteMedia") ? "productDeleteMedia" : names.has("fileUpdate") ? "fileUpdate" : null;
   });

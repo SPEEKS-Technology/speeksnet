@@ -139,6 +139,8 @@ export type ReportR = {
   units_together?: boolean;
   // Do the photos, taken together, show every edge of the device? See decide().
   all_sides_shown?: boolean;
+  // New In Box / Open Box: the packaging is flat (a blister or hanging card).
+  flat_package?: boolean;
   main_flaw: { stated: string | null; source: string; shown: string; photo: number | null };
   serial: "shown" | "hidden_behind_cover" | "not_shown";
   lead_ok: boolean;
@@ -336,9 +338,16 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
   // "They both look good." Different spots still count on a single item (the
   // OVL Sony lens: the same shots on and off the stand).
   const isLot = (r.units_claimed || 0) > 1 || r.photos.some(p => p.shots.some(s => /\bof lot\b/i.test(s)));
-  const setups = isLot ? [] : (r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n)).filter(g => g.length);
+  // Closeups (a serial label) may be shot anywhere — the OVL Loupedeck's photo 8
+  // was called "a different spot" for being a closeup (Ethan, 2026-10-11).
+  const closeup = new Set(r.photos.filter(p => !p.whole_item).map(p => p.n));
+  const setups = isLot ? [] : (r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x))).filter(g => g.length);
   if (setups.length > 1) {
-    const main = setups.reduce((a, b) => (b.length > a.length ? b : a));
+    // The FIRST group is the store's standard setup (the prompt lists it first:
+    // the stand photos when some are on the stand), not the biggest — the WSP
+    // AirPods' stand photos were outnumbered by flat ones, and the flat case
+    // shots were the ones to retake.
+    const main = setups[0];
     const odd = setups.filter(g => g !== main).flat().sort((a, b) => a - b);
     findings.push({ code: "mixed_setups", photos: odd,
       text: `${plural(odd, "Photo", "Photos")} ${list(odd)} ${plural(odd, "was", "were")} taken in a different spot from the rest`
@@ -376,7 +385,12 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
   const hasBox = /\bbox\b/i.test(l.included);
   const requiredShots = sheet.shots.filter(s => !s.cond)
     .filter(s => !(sealed && gameSheet && /opened case/i.test(s.label)))
-    .filter(s => !(sheet.slug === "item-lots" && !hasBox && /\bbox\b/i.test(s.label)));
+    .filter(s => !(sheet.slug === "item-lots" && !hasBox && /\bbox\b/i.test(s.label)))
+    // FLAT RETAIL PACKAGING (Ethan, 2026-10-11, WSP SanDisk microSD on its
+    // card: "I wouldn't flag this one"): a blister or hanging card has no real
+    // top, bottom or sides, so on a box sheet only its front, back and label
+    // are asked for — the sealed-game reasoning, for everything else sold new.
+    .filter(s => !(BOX_SHEETS.has(sheet.slug) && r.flat_package === true && /\b(top|bottom|side)\b/i.test(s.label)));
   const byLabel = new Map(sheet.shots.map(s => [s.label.toLowerCase(), s]));
   // SIDES AND CORNERS ARE FOR SHOWING THE SIDES (Ethan, 2026-10-11, OVL Galaxy
   // Tab A: "6,7,8,9 all do show the top, bottom, and the corners. It's okay if
@@ -518,6 +532,11 @@ const MEASURED = new Set(["not_square", "no_photos"]);
 export function needsSecondLook(l: ListingR, sheet: SheetR, r: ReportR): boolean {
   const d = decide(l, sheet, r);
   if (d.verdict === "pass") return false;
+  // A REPEAT ALWAYS GETS ITS SECOND LOOK: it offers a one-click deletion, and
+  // agree() keeps only a repeat both looks name. One look called the sides of
+  // two WSP Galaxy watches and a Watch6's screen-off vs everything-included
+  // "the same shot" (2026-10-11) — Approve Deletion would have removed good photos.
+  if (d.deletion) return true;
   // A suggested ORDER still needs both looks: approving it changes the listing in
   // Shopify, and one look's labels once moved the Synology's photos wrongly.
   // Rare, so cheap. A repeat-only Quick Fix (deletion) does not.
@@ -569,6 +588,7 @@ export function agree<T extends ReportR>(a: T, b: T): T {
     all_units_shown: a.all_units_shown !== false || b.all_units_shown !== false,
     units_together: a.units_together !== false || b.units_together !== false,
     all_sides_shown: a.all_sides_shown === true || b.all_sides_shown === true,
+    flat_package: a.flat_package === true || b.flat_package === true,
     main_flaw: bothNo ? a.main_flaw
       : { ...a.main_flaw, shown: a.main_flaw.shown === "no" ? b.main_flaw.shown : a.main_flaw.shown },
     serial: a.serial === "shown" || b.serial === "shown" ? "shown"
