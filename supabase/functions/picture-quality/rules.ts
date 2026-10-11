@@ -276,9 +276,17 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
   // Crooked / off-centre / too small come from the framing look when it ran
   // (off by default — see index.ts FramingReport); otherwise the review's word.
   const ownLook = new Set(faults ? ["crooked", "off_center", "too_small"] : []);
+  // ⚠️ PAUSED (Ethan, 2026-10-11): the review's own crooked / off-centre / too
+  // small calls do not count — not shown, no points, never the lead-photo flag.
+  // Scored against his 395 trainer labels they were nearly all false alarms
+  // (crooked 1 right, 13 wrong), and a false "crooked" on the OVL Micron lot's
+  // photo 1 flagged the listing by itself. Cut off and wrong angle still count.
+  // TO REVISIT once everything else is settled ("I want to revisit it after you
+  // believe we are good on everything else") — see picture-quality-lab.
+  const PAUSED = new Set(["crooked", "off_center", "too_small"]);
   for (const p of r.photos) {
     if (staged(p)) continue;
-    const said = p.framing !== "off" ? [] : p.framing_problems.filter(x => !ownLook.has(x)
+    const said = p.framing !== "off" ? [] : p.framing_problems.filter(x => !ownLook.has(x) && !PAUSED.has(x)
       && !(x === "cut_off" && !p.whole_item) && !(x === "too_small" && gameSheet)
       && !(x === "wrong_angle" && extraOnly(p)));
     const probs = [...new Set([...(faults?.get(p.n) || []), ...said])];

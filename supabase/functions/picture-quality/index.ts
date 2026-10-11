@@ -1143,6 +1143,50 @@ async function pollBatches() {
   return { batches: report };
 }
 
+// --- re-apply the rules to saved reports, for free ---------------------------------
+//
+// ?redecide=1&store=X — when a RULE changes (rules.ts) but the question asked of
+// the model did not, every open row's verdict can be brought up to date from
+// the report already saved with it: no model call, no cost. First used when
+// the review's crooked / off-centre / too-small calls were paused (2026-10-11),
+// so the queue Ethan reviewed did not show calls that no longer count. A
+// listing edited since its grade is left alone — its stamp no longer matches
+// and the next sweep re-grades it. The looks are kept as they were.
+async function redecide(store: string) {
+  const { shop, token } = await shopFor(store);
+  const saved: any[] = await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open&stamp=like.${RECIPE}:*`
+    + `&select=product_id,sku,title,photo_count,model,verdict,reorder,report,sheet_slug,stamp&limit=2000`);
+  const sheets = await loadSheets();
+  const standard = new Map<string, number>();
+  const live = new Map<string, Listing>();
+  for (let i = 0; i < saved.length; i += 25) {
+    for (const l of await fetchListings(shop, token, saved.slice(i, i + 25).map(r => r.product_id))) live.set(l.id, l);
+  }
+  const out: any[] = [];
+  let skipped = 0, changed = 0;
+  for (const r of saved) {
+    const l = live.get(r.product_id), sheet = sheets.find(s => s.slug === r.sheet_slug);
+    if (!l || !sheet || !r.report?.photos) { skipped++; continue; }
+    const row = await finalRow(l, sheet, standard, r.report.sheetPick ?? null, !!r.report.reSheeted, r.report as ReportT, null);
+    // A reorder the second look turned down stays turned down.
+    if (!r.reorder && row.reorder) {
+      row.reorder = null;
+      const pic = pictureScore(row.findings, l.photos.length, l.price);
+      row.verdict = row.findings.some((f: any) => f.code === "retake") ? "retake" : pic.score < PASS_BAR ? "fix" : row.deletion ? "reorder" : "pass";
+      row.report = { ...row.report, pictureScore: pic.score, costs: pic.costs };
+    }
+    if (row.verdict !== r.verdict) changed++;
+    out.push({ store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model: r.model,
+               ...row, report: { ...row.report, looks: r.report.looks, firstLook: r.report.firstLook,
+                                 secondLook: r.report.secondLook, batch: r.report.batch, redecided: new Date().toISOString() } });
+  }
+  // Only rows whose stamp still matches the live listing are written.
+  const fresh = out.filter(o => saved.find(s => s.product_id === o.product_id)?.stamp === o.stamp);
+  skipped += out.length - fresh.length;
+  await saveRows(fresh);
+  return { store, open: saved.length, rewritten: fresh.length, verdictChanged: changed, skipped };
+}
+
 // --- the panel's half ----------------------------------------------------------
 //
 // The queue comes back with the listing's photos AS THEY ARE NOW, read live, and
@@ -1626,6 +1670,12 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!secretOk(url)) return json({ error: "unauthorized" }, 401);
+    // ?redecide=1&store=X — re-apply today's rules to saved reports, free.
+    if (url.searchParams.get("redecide") === "1") {
+      const st = (url.searchParams.get("store") || "").toUpperCase();
+      if (!STORES.includes(st)) return json({ error: "pass ?store=" }, 400);
+      return streamed(() => redecide(st));
+    }
     // ?poll=1 — collect ended batches (every store at once). See pollBatches.
     if (url.searchParams.get("poll") === "1") return streamed(() => pollBatches());
     const store = (url.searchParams.get("store") || "").toUpperCase();

@@ -73,10 +73,14 @@ t("automatic flag: retake at 40% and 3+ of the required shots", () => {
   const d = run({}, PHONE, { missing_shots: ["Back of Phone", "Side of Phone", "Opposite Side of Phone", "Top Side of Phone", "Bottom Side of Phone"] });
   return d.verdict === "retake" || say(d); });
 
+t("crooked / off-centre / too small from the review are PAUSED — no finding, no points (Ethan, 10-11)", () => {
+  const r = report(); r.photos[0] = photo(1, { framing: "off", framing_problems: ["crooked", "off_center", "too_small"] });
+  const d = decide(listing({}), PHONE, r);
+  return (d.verdict === "pass" && !d.findings.some(f => f.code === "framing")) || say(d); });
 t("lead photo framing is an automatic flag; another photo's costs 30 ÷ photos", () => {
-  const lead = report(); lead.photos[0] = photo(1, { framing: "off", framing_problems: ["off_center"] });
+  const lead = report(); lead.photos[0] = photo(1, { framing: "off", framing_problems: ["cut_off"] });
   const d1 = run({}, PHONE, lead);
-  const other = report(); other.photos[5] = photo(6, { framing: "off", framing_problems: ["crooked"] });
+  const other = report(); other.photos[5] = photo(6, { framing: "off", framing_problems: ["cut_off"] });
   const d2 = run({}, PHONE, other);
   return (flagged(d1) && d2.verdict === "pass" && d2.pictureScore === 97) || `${say(d1)} | ${say(d2)}`; });
 t("anything besides item + backdrop: automatic flag, with the Shopify AI background tip", () => {
@@ -170,7 +174,7 @@ t("reflections: 3 / 6 / 9 by price, never on Screen Off", () => {
   const d = run({}, PHONE, { photos: off });
   return (s.join() === "97,94,91" && d.pictureScore === 100) || `${s.join()} | ${say(d)}`; });
 t("different spots: −5, re-position wording, and framing stacks on top", () => {
-  const ps = report().photos; ps[7] = photo(8, { framing: "off", framing_problems: ["off_center"] });
+  const ps = report().photos; ps[7] = photo(8, { framing: "off", framing_problems: ["cut_off"] });
   const d = run({}, PHONE, { photos: ps, setups: [[1, 2, 3, 4, 5, 6, 7], [8, 9]], setup_difference: "brighter backdrop" });
   const f = d.findings.find(x => x.code === "mixed_setups");
   return (d.pictureScore === 92 && /Photos 8 and 9 were taken in a different spot/.test(f.text) && /re-position the item/.test(f.text)
