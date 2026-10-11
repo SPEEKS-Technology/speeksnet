@@ -26,7 +26,8 @@
 //   pair / set / lot not all shown       dirty table or backdrop           −5/−10/−15 by price
 //   lead photo not to standard           reflections on the item           −3/−6/−9 by price
 //   anything besides item + backdrop     photos from different spots       −5
-//   missing CRUCIAL view                 photo order                       0 (Quick Fixes)
+//   missing the guide's FIRST photo      photo order                       0 (Quick Fixes)
+//     (or a view the notes put a flaw on)
 //   missing If Needed shot the listing calls for
 //
 // Price breaks are $100 and $250: under $100, $100–$250, over $250.
@@ -351,8 +352,21 @@ export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<numb
     if (kind === "serial") continue;   // the serial rule below decides
     if (kind === "core") { core.push(m); continue; }
     if (kind === "minor") { missing.push({ code: "missing_shot", tier: "minor", shot: m, text: `Missing: ${m}.` }); continue; }
-    const crucial = !!byLabel.get(m.toLowerCase())?.crucial || flawViews.has(m.toLowerCase());
-    if (crucial) { missing.push({ code: "missing_shot", tier: "crucial", shot: m, text: `Missing: ${m} — a crucial view for this item.` }); continue; }
+    // CRUCIAL = the guide's FIRST photo, or a view the notes put a flaw on
+    // (Ethan, 2026-10-11). The per-photo Crucial tick is gone: he found himself
+    // ticking nearly every required photo, and "every required view flags" would
+    // have flagged three listings he passed for one missing side each (WSP PS5
+    // Slim, OVL Dell WD15 lot, OVL Synology). His line instead: "as long as the
+    // missing photo is not the first one, the serial number, or any applicable
+    // settings pages then it is just points". The serial and the settings pages
+    // keep their own rules above and below.
+    const first = requiredShots.find(s => shotKind(s.label) === "view");
+    const isFirst = !!first && first.label.toLowerCase() === m.toLowerCase();
+    if (isFirst || flawViews.has(m.toLowerCase())) {
+      missing.push({ code: "missing_shot", tier: "crucial", shot: m,
+        text: `Missing: ${m} — ${isFirst ? "the first photo the guide asks for" : "the listing puts a flaw on this view"}.` });
+      continue;
+    }
     // "One missing plain view on its own" is free — listed anyway, so a flagged
     // row still asks for every shot the guide wants.
     missing.push({ code: "missing_shot", tier: freeUsed ? "view" : "view_free", shot: m, text: `Missing: ${m}.` });

@@ -9660,6 +9660,10 @@ function _pgRenderAdmin(body) {
       </div>`);
 }
 
+// No Crucial tick on the row or in the form (Ethan, 2026-10-11). It was briefly
+// in both, but every required photo turned out to be one he would tick; Picture
+// Quality treats the guide's FIRST photo as the crucial one instead
+// (picture-quality/rules.ts). pg_shots.crucial (0142) stays in the table, unread.
 function _pgAdminRowHtml(s, i, n) {
     if (_pgAdmin.editing === s.id) return _pgAdminEditHtml(s);
     return `
@@ -9676,17 +9680,7 @@ function _pgAdminRowHtml(s, i, n) {
             : 'Always taken'}${s.img ? '' : ' &middot; No photo yet'}</small>
         </div>
         <div class="pg-etools">
-          <!-- CRUCIAL lives on the row, not in the Edit form (Ethan, 2026-10-11):
-               it is ticked across a whole sheet at a time, and a form per photo
-               made that a dozen open-edit-save trips. Required photos only — an
-               optional one is "only if", which cannot also be "must have" — so
-               an optional row keeps an empty slot of the same width and the
-               camera and Edit buttons stay in one column down the sheet. -->
-          ${s.cond
-            ? '<span class="pg-ecrucial pg-ecrucial-na" aria-hidden="true"></span>'
-            : `<label class="pg-ecrucial${s.crucial ? ' on' : ''}" title="A listing missing this photo is flagged by Picture Quality">
-                <input type="checkbox"${s.crucial ? ' checked' : ''} onchange="pgToggleCrucial(${s.id}, this)"><span>Crucial</span>
-              </label>`}
+
           <label class="pg-ephoto" title="${s.img ? 'Replace the photo' : 'Add a photo'}">
             <input type="file" accept="image/png,image/jpeg,image/webp" onchange="pgUploadShotPhoto(${s.id}, this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.2"/></svg>
@@ -9835,35 +9829,11 @@ async function pgSaveShot(id, btn) {
         action: 'saveShot', id, label,
         cond: opt ? cond.trim() : null,
         rep:  opt ? rep : false,
-        // Crucial is ticked on the row now, so the form leaves it alone — except
-        // that a photo turned optional stops being crucial.
-        ...(opt ? { crucial: false } : {}),
         note,
     }, btn);
     if (!out) return;
     _pgAdmin.editing = null;
     await _pgReload();
-}
-
-// The row's Crucial tick. Saves on the spot like every other control here, and
-// updates the row in place instead of reloading the sheet, so ticking down a
-// whole sheet is one click per photo. saveShot carries the whole row, so the
-// other fields are resent as they are. A save refused (another still going) or
-// failed puts the tick back, so the box never shows something not stored.
-async function pgToggleCrucial(id, box) {
-    const s = _pgShotById(id);
-    if (!s || s.cond) { if (box) box.checked = false; return; }
-    const on = !!box.checked;
-    box.disabled = true;
-    const out = await _pgPost({
-        action: 'saveShot', id, label: s.label, cond: null,
-        rep: false, note: s.note, crucial: on,
-    });
-    box.disabled = false;
-    if (!out) { box.checked = !on; return; }
-    s.crucial = on;
-    const lab = box.closest('.pg-ecrucial');
-    if (lab) lab.classList.toggle('on', on);
 }
 
 async function pgAddShot() {

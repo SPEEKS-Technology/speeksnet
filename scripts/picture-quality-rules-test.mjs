@@ -36,7 +36,7 @@ const PHONE = { slug: "android-phones", shots: [
   { label: "About Phone", cond: null }, { label: "Storage Information", cond: null },
   { label: "Software Information", cond: null }, { label: "LCD Flaws", cond: "LCD flaws" },
   { label: "Screen Off", cond: null }, { label: "Back of Phone", cond: null },
-  { label: "Side of Phone", cond: null, crucial: true }, { label: "Opposite Side of Phone", cond: null },
+  { label: "Side of Phone", cond: null }, { label: "Opposite Side of Phone", cond: null },
   { label: "Top Side of Phone", cond: null }, { label: "Bottom Side of Phone", cond: null },
   { label: "Cosmetic Flaws", cond: "Cosmetic flaws" }, { label: "Extra Accessories", cond: "Extra accessories" }] };
 const PAD = { slug: "game-controllers", shots: [
@@ -89,8 +89,10 @@ t("missing plain views: the first is free (and listed), then −8 each", () => {
   const two = run({}, PHONE, { missing_shots: ["Back of Phone", "Top Side of Phone"] });
   return (one.pictureScore === 100 && one.findings.some(f => f.tier === "view_free") && two.pictureScore === 92 && two.verdict === "pass")
     || `${say(one)} | ${say(two)}`; });
-t("a missing CRUCIAL view (ticked in the guide) is an automatic flag", () => {
-  const d = run({}, PHONE, { missing_shots: ["Side of Phone"] }); return flagged(d) || say(d); });
+t("a missing FIRST photo of the guide is an automatic flag (the Crucial tick is gone)", () => {
+  const d = run({}, PHONE, { missing_shots: ["Home/Lock Screen"] });
+  const side = run({}, PHONE, { missing_shots: ["Side of Phone"] });
+  return (flagged(d) && side.verdict === "pass") || `${say(d)} | ${say(side)}`; });
 t("a missing view the notes put a flaw on is crucial too", () => {
   const d = run({}, PHONE, { missing_shots: ["Back of Phone"], flaw_views: ["Back of Phone"] }); return flagged(d) || say(d); });
 

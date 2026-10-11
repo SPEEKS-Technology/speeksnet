@@ -42,20 +42,13 @@ has(opt, 'type="hidden" id="pg-f-note" value="Settings Screen Showing Carrier Un
     'carried through so Save cannot erase it');
 has(opt, 'Words on the Slot', false, 'and is no longer a visible field');
 
-console.log('\nCRUCIAL — on the row, required photos only (Picture Quality, 2026-10-11)');
+console.log('\nno Crucial tick anywhere (the guide\'s first photo is the crucial one, 2026-10-11)');
 const _pgAdmin = { editing: null };
 const _pgArt = () => '';
 eval(cut('_pgAdminRowHtml'));
-const rowReq = _pgAdminRowHtml({ id: 1, label: 'Front', cond: null, rep: false, note: '', img: null }, 0, 3);
 const rowCru = _pgAdminRowHtml({ id: 4, label: 'Side', cond: null, rep: false, note: '', img: null, crucial: true }, 1, 3);
-const rowOpt = _pgAdminRowHtml({ id: 2, label: 'Flaws', cond: 'cosmetic flaws', rep: true, note: '', img: null }, 2, 3);
-has(rowReq, 'onchange="pgToggleCrucial(1, this)"', true, 'a required row offers the Crucial tick');
-has(rowReq, ' checked', false, 'unticked by default');
-has(rowCru, 'type="checkbox" checked', true, 'a crucial row shows ticked');
-has(rowCru, 'pg-ecrucial on', true, 'and is coloured as ticked');
-has(rowOpt, 'pgToggleCrucial', false, 'an optional row has no tick');
-has(rowOpt, 'pg-ecrucial-na', true, 'but keeps the slot so the buttons line up');
-has(req, 'pg-f-crucial', false, 'the Edit form no longer carries it');
+has(rowCru, 'rucial', false, 'not on the row, even for a shot still marked crucial in the table');
+has(req, 'rucial', false, 'not in the Edit form');
 
 console.log('\nnothing goes through unescaped');
 const evil = _pgAdminEditHtml({ id: 3, label: '"><script>x</script>', cond: 'a & b', rep: false, note: '', img: null });
