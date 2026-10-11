@@ -42,7 +42,7 @@ t('picture quality: the section draws its three tabs with counts', function () {
     _pqData = data([RETAKE, FIX, REORDER]); _pqErr = null; _pqTier = 'retake'; _ecStore = 'WSP';
     var h = _pqHtml();
     if (h.indexOf('Picture Quality') < 0) return 'no section title';
-    if (h.indexOf('Retake') < 0 || h.indexOf('Fix These Photos') < 0 || h.indexOf('Reorder') < 0) return 'a tab is missing';
+    if (h.indexOf('Retake') < 0 || h.indexOf('Fix These Photos') < 0 || h.indexOf('One-Click Fixes') < 0) return 'a tab is missing';
     return h.indexOf('Acer Aspire') >= 0 || 'the retake row is not on the Retake tab';
 });
 
@@ -639,4 +639,38 @@ t('a flagged row never shows its score — every fix is listed, not enough to pa
     var txt = host.querySelector('.pq-row').textContent;
     if (/\b84\b|score/i.test(txt)) return 'the score is on the row';
     return host.querySelectorAll('.lt-why li').length === 2 || 'not every finding is listed';
+});
+
+// --- One-Click Fixes: Approve Deletion (2026-10-11) ---------------------------------
+t('one-click fixes: a duplicate alone gets Approve Deletion + Dismiss, and says what it does', function () {
+    var row = Object.assign({}, REORDER, { reorder: null, deletion: { photos: [5], of: [1] },
+        findings: [{ code: 'repeat', photos: [5], text: 'Photo 5 is the same shot as photo 1. Approve Deletion removes it.' }] });
+    _pqData = data([row]); _pqTier = 'reorder';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    var b = host.querySelector('button[onclick^="pqDeletePhotos"]');
+    if (!b || b.textContent.trim() !== 'Approve Deletion') return 'no Approve Deletion button';
+    if (!host.querySelector('button[onclick^="pqDismiss"]')) return 'no Dismiss';
+    if (host.querySelector('button[onclick^="pqRecheck"]')) return 'Recheck offered on a one-click fix';
+    return /Approve Deletion removes photo 5 from Shopify/.test(host.textContent) || 'the hint does not say what it does';
+});
+
+t('one-click fixes: a reorder AND a duplicate get both approvals', function () {
+    var row = Object.assign({}, REORDER, { deletion: { photos: [6], of: [2] } });
+    _pqData = data([row]); _pqTier = 'reorder';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    return (!!host.querySelector('button[onclick^="pqReorder"]') && !!host.querySelector('button[onclick^="pqDeletePhotos"]'))
+        || 'missing one of the two approvals';
+});
+
+t('a flagged row with a duplicate keeps Recheck and gains Approve Deletion; a stale one does not', function () {
+    var row = Object.assign({}, FIX, { stale: false, deletion: { photos: [3], of: [2] } });
+    _pqData = data([row]); _pqTier = 'fix';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    if (!host.querySelector('button[onclick^="pqRecheck"]') || !host.querySelector('button[onclick^="pqDeletePhotos"]')) return 'fresh row: buttons wrong';
+    _pqData = data([Object.assign({}, row, { stale: true })]);
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    return !host.querySelector('button[onclick^="pqDeletePhotos"]') || 'Approve Deletion offered on photos that changed';
 });

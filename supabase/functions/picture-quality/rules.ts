@@ -1,0 +1,411 @@
+// ============================================================================
+// picture-quality/rules.ts — the scoring card, in code.
+//
+// ⚠️ PURE ON PURPOSE. No Deno, no npm, no model, no network: the model REPORTS
+// (index.ts asks it), and everything here DECIDES. That split is what lets a
+// rule be changed and re-scored against saved reports for free —
+// `node --experimental-strip-types scripts/picture-quality-rules-test.mjs` —
+// before any paid run (Ethan, 2026-10-08: "don't spend any more money on this
+// until we feel a new test of 10 random ones from OVL might work 100%").
+// Keep it that way: an import of anything with side effects here breaks the
+// offline test without breaking the deploy, which is the worst way round.
+//
+// THE CARD (Ethan's sheet "Picture Tool Scoring", signed off 2026-10-11).
+// Every listing starts at 100 and is flagged under PASS_BAR. A flagged row shows
+// EVERY finding — the score decides whether, never what — and never the number.
+//
+//   AUTOMATIC FLAG                       POINTS
+//   not square                           missing Core info (any number)   −15 once
+//   stock photo                          missing other settings screen     −3 each
+//   fake / AI / heavily edited           missing serial (no-screen items)  −3
+//   wrong item                           missing view, not crucial         −8 each,
+//   personal info on screen                                               first one free
+//   main flaw not shown                  repeated photo                    −4 each
+//   no photos                            other photo's framing             −30 ÷ photos
+//   retake (40%+ of required, ≥3)        blurry / dark / glare on a shot   −8 each
+//   pair / set / lot not all shown       dirty table or backdrop           −5/−10/−15 by price
+//   lead photo not to standard           reflections on the item           −3/−6/−9 by price
+//   anything besides item + backdrop     photos from different spots       −5
+//   missing CRUCIAL view                 photo order                       0 (One-Click Fixes)
+//   missing If Needed shot the listing calls for
+//
+// Price breaks are $100 and $250: under $100, $100–$250, over $250.
+// ============================================================================
+
+export const PASS_BAR = 90;
+export const SQUARE_TOLERANCE = 0.01;
+export const RETAKE_SHARE = 0.4;
+
+export type Issue = { type: string; severity: "minor" | "major" };
+export type PhotoR = {
+  n: number; shots: string[]; whole_item: boolean; repeats: number | null;
+  framing: "matches" | "close" | "off"; framing_problems: string[]; issues: Issue[]; note?: string;
+};
+export type ReportR = {
+  photos: PhotoR[];
+  missing_shots: string[];
+  // If Needed shots the listing CALLS FOR (it says the thing the shot covers)
+  // and no photo covers. Older reports lack these fields; every reader defaults.
+  needed_missing?: string[];
+  // Sheet views the [unit] notes put a flaw on — those views become crucial.
+  flaw_views?: string[];
+  units_claimed?: number | null;
+  all_units_shown?: boolean;
+  units_together?: boolean;
+  main_flaw: { stated: string | null; source: string; shown: string; photo: number | null };
+  serial: "shown" | "hidden_behind_cover" | "not_shown";
+  lead_ok: boolean;
+  setups?: number[][];
+  setup_difference?: string;
+  suggested_order: number[];
+  [k: string]: unknown;
+};
+export type ShotR = { label: string; cond: string | null; crucial?: boolean };
+export type SheetR = { slug: string; shots: ShotR[] };
+export type ListingR = {
+  title: string; cosmetic: string; functional: string; included: string; price: number;
+  photos: { width: number; height: number }[];
+  // The cosmetic sentences that are about THIS unit (not PayMore's template).
+  unitCosmetic: string[];
+};
+export type Finding = {
+  code: string; text: string; photo?: number; shot?: string; shots?: string[]; photos?: number[];
+  // missing_shot only: which line of the card it is costed on.
+  tier?: "core" | "minor" | "serial" | "view" | "view_free" | "crucial" | "needed";
+};
+
+export const BOX_SHEETS = new Set(["new-in-box", "new-open-box"]);
+
+// --- what kind of shot is this ------------------------------------------------
+// From the guide's real labels (checked 2026-10-11 across all 53 sheets). Core is
+// Ethan's list: Battery Health, the About / device page, Storage, and for
+// computers CPU, RAM, GPU — "some laptops like MacBooks have different style
+// pages to show those 4, so it may look different on each laptop, we just need
+// to make sure it's there", which is the model's job (info counts as shown if ANY
+// photo shows it legibly). Minor is every other info screen ("Software
+// Information missing is like a −3"). Anything else required is a VIEW.
+const CORE = /^(battery health|about\b|settings about page|settings page( 1)?$|model information|system information|storage information|cpu information|processor information|ram information|gpu information|graphics information)/i;
+const MINOR = /^(software information|operating system)/i;
+const SERIAL = /serial/i;
+export function shotKind(label: string): "core" | "minor" | "serial" | "view" {
+  const s = label.trim();
+  if (SERIAL.test(s)) return "serial";
+  if (CORE.test(s)) return "core";
+  if (MINOR.test(s)) return "minor";
+  return "view";
+}
+// A device with a screen: its sheet asks for an About / Settings / System page.
+// Its serial matters ("on things like phones where the serial number is very
+// important, as long as it shows in the settings picture the closeup not being
+// there is fine") and counts as Core; anything else's serial is −3.
+export const hasScreenInfo = (sheet: SheetR) =>
+  sheet.shots.some(s => !s.cond && /^(about\b|settings|system information|model information)/i.test(s.label));
+
+const priceStep = (price: number, low: number, mid: number, high: number) =>
+  price > 250 ? high : price >= 100 ? mid : low;
+
+// --- the score -------------------------------------------------------------------
+export const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake_or_edited", "wrong_item",
+  "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead"]);
+
+export function pictureScore(findings: Finding[], photoCount: number, price: number) {
+  const n = Math.max(1, photoCount);
+  let score = 100, coreTaken = false;
+  const costs: { code: string; cost: number; photo?: number; shot?: string }[] = [];
+  for (const f of findings) {
+    let cost: number;
+    if (ALWAYS_FLAG.has(f.code)) cost = 100;
+    else if (f.code === "missing_shot") {
+      cost = f.tier === "crucial" || f.tier === "needed" ? 100
+        // "−15 total. Detail each one that's missing, but no need to dock them
+        // −15 for each missing."
+        : f.tier === "core" ? (coreTaken ? 0 : (coreTaken = true, 15))
+        : f.tier === "minor" || f.tier === "serial" ? 3
+        : f.tier === "view_free" ? 0
+        : 8;
+    }
+    else if (f.code === "framing") cost = f.photo === 1 ? 100 : 30 / n;   // the lead photo is a flag
+    else if (f.code === "repeat") cost = 4 * (f.photos?.length || 1);
+    else if (f.code === "dirty_backdrop") cost = priceStep(price, 5, 10, 15);
+    else if (f.code === "reflection") cost = priceStep(price, 3, 6, 9);
+    else if (f.code === "mixed_setups") cost = 5;
+    else cost = 8;   // blurry, too dark or glare on a guide shot
+    score -= cost;
+    costs.push({ code: f.code, cost: Math.round(cost * 10) / 10, photo: f.photo, shot: f.shot });
+  }
+  return { score: Math.max(0, Math.round(score)), costs };
+}
+
+// Longest run of photos already in sheet order, as a share of the photos that
+// map to a sheet shot. Box and extras do not count either way.
+export function orderScore(photos: PhotoR[], sheet: SheetR): number {
+  const ix = (label: string) => sheet.shots.findIndex(s => s.label.toLowerCase() === label.toLowerCase());
+  const seq = photos.map(p => Math.min(...p.shots.map(ix).filter(i => i >= 0), Infinity))
+    .filter(i => Number.isFinite(i));
+  if (seq.length < 2) return 1;
+  const tails: number[] = [];
+  for (const v of seq) {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (tails[m] <= v) lo = m + 1; else hi = m; }
+    tails[lo] = v;
+  }
+  return tails.length / seq.length;
+}
+
+const ISSUE_TEXT: Record<string, string> = {
+  blurry: "is blurry", too_dark_or_glare: "is too dark or has glare",
+  stock_photo: "is a stock photo", fake_or_edited: "looks fake or edited", personal_info: "shows personal information",
+  wrong_item: "shows a different item",
+};
+const PROBLEM_TEXT: Record<string, string> = { crooked: "crooked", off_center: "not centred",
+  too_small: "too small in the frame", cut_off: "cut off", wrong_angle: "taken from the wrong angle" };
+const plural = (ns: number[], one: string, many: string) => (ns.length > 1 ? many : one);
+const list = (ns: (number | string)[]) => ns.length < 3 ? ns.join(" and ") : ns.slice(0, -1).join(", ") + " and " + ns[ns.length - 1];
+
+// --- the verdict ---------------------------------------------------------------
+export function decide(l: ListingR, sheet: SheetR, r: ReportR, faults?: Map<number, string[]>) {
+  const findings: Finding[] = [];
+  const n = l.photos.length;
+
+  // Measured, not asked.
+  l.photos.forEach((p, i) => {
+    if (p.width && p.height && Math.abs(p.width - p.height) / Math.max(p.width, p.height) > SQUARE_TOLERANCE) {
+      findings.push({ code: "not_square", photo: i + 1, text: `Photo ${i + 1} isn't square (${p.width}×${p.height}).` });
+    }
+  });
+
+  // A game is shot as close as a game can be; empty space around a cartridge is
+  // the cartridge being small, not a framing mistake.
+  const gameSheet = /^video-games/.test(sheet.slug);
+  // Box, everything-included and accessory photos are staged, not framed — the
+  // PS5's controllers sit angled on purpose. NOT a bare "Extra": that waved
+  // through the iPad's cropped screen closeup, a photo of the item itself.
+  const staged = (p: PhotoR) => p.shots.length > 0
+    && p.shots.every(s => /^(box|everything included|extra accessories)/i.test(s.trim()));
+  // A photo that is not a sheet shot has no example to be at the wrong angle to
+  // (OVL RAM edge-on extras, a PS3's upside-down extra — Ethan passed them).
+  const extraOnly = (p: PhotoR) => p.shots.every(s => /^extra/i.test(s.trim()));
+  // Crooked / off-centre / too small come from the framing look when it ran
+  // (off by default — see index.ts FramingReport); otherwise the review's word.
+  const ownLook = new Set(faults ? ["crooked", "off_center", "too_small"] : []);
+  for (const p of r.photos) {
+    if (staged(p)) continue;
+    const said = p.framing !== "off" ? [] : p.framing_problems.filter(x => !ownLook.has(x)
+      && !(x === "cut_off" && !p.whole_item) && !(x === "too_small" && gameSheet)
+      && !(x === "wrong_angle" && extraOnly(p)));
+    const probs = [...new Set([...(faults?.get(p.n) || []), ...said])];
+    if (probs.length) {
+      findings.push({ code: "framing", photo: p.n,
+        text: `Photo ${p.n} isn't to the guide's standard: ${probs.map(x => PROBLEM_TEXT[x] || x).join(", ")}.` });
+    }
+  }
+
+  // ONE FINDING PER LISTING for what is the same in every shot: the table, what
+  // else is in frame, reflections, and where the photos were taken.
+  const withIssue = (type: string, skip?: (p: PhotoR) => boolean) => r.photos
+    .filter(p => !(skip && skip(p)) && p.issues.some(it => it.type === type && it.severity === "major")).map(p => p.n);
+  const dirty = withIssue("dirty_backdrop");
+  if (dirty.length) findings.push({ code: "dirty_backdrop", photos: dirty,
+    text: `The table or backdrop is dirty in ${plural(dirty, "photo", "photos")} ${list(dirty)} — clean it, then retake.` });
+  // Anything besides the item, its stand and the white backdrop: an automatic
+  // flag (Ethan, 2026-10-11: "Nothing else should be in frame"), with the tip he
+  // gave for things too big for the lightbox.
+  const cluttered = withIssue("clutter");
+  if (cluttered.length) findings.push({ code: "clutter", photos: cluttered,
+    text: `Something besides the item and the white backdrop is in ${plural(cluttered, "photo", "photos")} ${list(cluttered)} — `
+      + `clear it out of the frame and retake. For a large or long item, Shopify's AI background tool can make the background white.` });
+  // The guide's Screen Off shot is photographed FOR its reflections.
+  const reflected = withIssue("reflection", p => p.shots.some(x => /screen off/i.test(x)));
+  if (reflected.length) findings.push({ code: "reflection", photos: reflected,
+    text: `A reflection shows on the item in ${plural(reflected, "photo", "photos")} ${list(reflected)} — angle the item or the light, then retake.` });
+  // One listing, one spot. The odd photos are everything outside the biggest
+  // group; their own framing problems, if any, are separate findings above —
+  // "if they also aren't centred then it can double up as that too".
+  const setups = (r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n)).filter(g => g.length);
+  if (setups.length > 1) {
+    const main = setups.reduce((a, b) => (b.length > a.length ? b : a));
+    const odd = setups.filter(g => g !== main).flat().sort((a, b) => a - b);
+    findings.push({ code: "mixed_setups", photos: odd,
+      text: `${plural(odd, "Photo", "Photos")} ${list(odd)} ${plural(odd, "was", "were")} taken in a different spot from the rest`
+        + (r.setup_difference ? ` (${String(r.setup_difference).trim().replace(/\.$/, "")})` : "")
+        + ` — re-position the item where ${plural(main, "photo", "photos")} ${list(main.slice(0, 3))} ${plural(main, "was", "were")} taken, and retake ${plural(odd, "it", "them")} to match.` });
+  }
+
+  for (const p of r.photos) {
+    for (const it of p.issues) {
+      // Only what the model stands behind as major costs a manager a reshoot.
+      if (it.severity !== "major" || !(it.type in ISSUE_TEXT)) continue;
+      // A soft EXTRA hides nothing the guide asks for (OVL Micron RAM).
+      if (it.type === "blurry" && extraOnly(p)) continue;
+      findings.push({ code: it.type, photo: p.n, text: `Photo ${p.n} ${ISSUE_TEXT[it.type]}.` });
+    }
+  }
+
+  // A pair, a set, a lot: the photos must show everything the listing says it
+  // has, together in the whole-item shots (Ethan, 2026-10-11: "a lot of 6 games
+  // needs to show pictures of the 6 games"). General — it replaced the speaker-
+  // pair-only rule.
+  const units = Number(r.units_claimed || 0);
+  if (units > 1 && (r.all_units_shown === false || r.units_together === false)) {
+    findings.push({ code: "lot_not_shown",
+      text: r.all_units_shown === false
+        ? `The listing is for ${units} items, but the photos don't show all ${units} — retake the guide's shots with every item in them.`
+        : `The listing is for ${units} items, but the guide's shots show them one at a time — retake those shots with all ${units} together (single-item photos can stay as extras).` });
+  }
+
+  // --- missing shots ---------------------------------------------------------------
+  // Shots that cannot apply to some listings, decided here:
+  //  - a SEALED game cannot be opened (OVL Death Stranding 2);
+  //  - a LOT with no box has no box to photograph (the Dell WD15 lot).
+  const sealed = /^new\b/i.test(l.title) || /\bsealed\b/i.test(l.cosmetic);
+  const hasBox = /\bbox\b/i.test(l.included);
+  const requiredShots = sheet.shots.filter(s => !s.cond)
+    .filter(s => !(sealed && gameSheet && /opened case/i.test(s.label)))
+    .filter(s => !(sheet.slug === "item-lots" && !hasBox && /\bbox\b/i.test(s.label)));
+  const byLabel = new Map(sheet.shots.map(s => [s.label.toLowerCase(), s]));
+  const missingRequired = [...new Set(r.missing_shots.map(m => m.trim()))]
+    .filter(m => requiredShots.some(s => s.label.toLowerCase() === m.toLowerCase()));
+  // 40%, and at least three: Ethan is testing this line (blue on the card).
+  const retake = requiredShots.length > 0 && missingRequired.length >= 3
+    && missingRequired.length / requiredShots.length >= RETAKE_SHARE;
+
+  const screen = hasScreenInfo(sheet);
+  const flawViews = new Set((r.flaw_views || []).map(v => v.trim().toLowerCase()));
+  const missing: Finding[] = [];
+  const core: string[] = [];
+  let freeUsed = false;
+  for (const m of missingRequired) {
+    const kind = shotKind(m);
+    if (kind === "serial") continue;   // the serial rule below decides
+    if (kind === "core") { core.push(m); continue; }
+    if (kind === "minor") { missing.push({ code: "missing_shot", tier: "minor", shot: m, text: `Missing: ${m}.` }); continue; }
+    const crucial = !!byLabel.get(m.toLowerCase())?.crucial || flawViews.has(m.toLowerCase());
+    if (crucial) { missing.push({ code: "missing_shot", tier: "crucial", shot: m, text: `Missing: ${m} — a crucial view for this item.` }); continue; }
+    // "One missing plain view on its own" is free — listed anyway, so a flagged
+    // row still asks for every shot the guide wants.
+    missing.push({ code: "missing_shot", tier: freeUsed ? "view" : "view_free", shot: m, text: `Missing: ${m}.` });
+    freeUsed = true;
+  }
+  // The serial. A screen device must show it somewhere — the settings page or a
+  // closeup — or it is Core. Anything else missing one is −3, even under a
+  // battery cover (Ethan changed his mind on the Xbox controller, 2026-10-10).
+  const serialShot = sheet.shots.find(s => !s.cond && shotKind(s.label) === "serial");
+  if (r.serial !== "shown") {
+    if (screen) core.push(serialShot ? serialShot.label : "Serial Number (in settings or a closeup)");
+    else if (serialShot) missing.push({ code: "missing_shot", tier: "serial", shot: serialShot.label, text: `Missing: ${serialShot.label}.` });
+  }
+  for (const m of core) missing.push({ code: "missing_shot", tier: "core", shot: m, text: `Missing: ${m}.` });
+
+  // If Needed shots the listing CALLS FOR — an automatic flag (Ethan,
+  // 2026-10-10). The model says which; the code checks the listing really says
+  // the thing, so a model that imagines a flaw cannot demand a photo of it.
+  const unitCos = l.unitCosmetic.length > 0;
+  const screenFault = /\b(screen|lcd|display|pixel|lines?|burn|touch|backlight|spot|bleed)\b/i.test(l.functional || "");
+  const included = !!l.included && !/^\(?not listed\)?$/i.test(l.included.trim());
+  for (const m of [...new Set((r.needed_missing || []).map(x => x.trim()))]) {
+    const shot = byLabel.get(m.toLowerCase());
+    if (!shot || !shot.cond) continue;
+    if (/^everything included/i.test(m) && !included) continue;
+    if (/^cosmetic flaws/i.test(m) && !unitCos) continue;
+    if (/^lcd flaws/i.test(m) && !screenFault) continue;
+    missing.push({ code: "missing_shot", tier: "needed", shot: shot.label,
+      text: `Missing: ${shot.label} — the listing says ${shot.cond.charAt(0).toLowerCase() + shot.cond.slice(1).replace(/\.$/, "")}, so it needs this photo.` });
+  }
+
+  // Repeats: −4 each for now, an automatic flag once the trainer shows the
+  // signal holds. The fix is a click on the One-Click Fixes tab, not a chore for
+  // the store (Ethan: "say approve deletion. Don't imply that the user should
+  // delete it themselves").
+  const repeats = r.photos.filter(p => p.repeats != null && p.repeats >= 1 && p.repeats < p.n);
+  const deletion = repeats.length ? { photos: repeats.map(p => p.n), of: repeats.map(p => p.repeats as number) } : null;
+  if (repeats.length) {
+    const ns = deletion!.photos;
+    const wanted = missing.filter(f => f.tier !== "view_free").map(f => f.shot!).slice(0, ns.length);
+    findings.push({ code: "repeat", photos: ns,
+      text: ns.map((x, i) => `Photo ${x} is the same shot as photo ${deletion!.of[i]}`).join("; ")
+        + `. Approve Deletion removes ${plural(ns, "it", "them")}`
+        + (wanted.length ? ` — then take ${list(wanted)} instead.` : ".") });
+  }
+
+  // The main flaw — only DAMAGE about THIS unit (template wording and general
+  // wear never qualify; AirPods Max "hinges have scuffs" was passed).
+  const damage = /\b(crack|cracked|dent|dented|broken|break|missing|chip|chipped|bent|hole|burn|burned|stain|stained|shatter|shattered|peel|peeling|torn|tear|damage|damaged|dead pixel|spot)/i;
+  if (r.main_flaw.shown === "no" && r.main_flaw.stated && r.main_flaw.source !== "none" && damage.test(r.main_flaw.stated)) {
+    findings.push({ code: "flaw_not_shown", text: `The main flaw isn't shown: ${r.main_flaw.stated}.` });
+  }
+
+  // Order — a suggestion for the BIG moves only (box before the item, Everything
+  // Included buried, a lead photo that does not show the item).
+  const oScore = orderScore(r.photos, sheet);
+  const isBox = (p: PhotoR) => p.shots.some(s => /^box/i.test(s.trim()));
+  const isEI = (p: PhotoR) => p.shots.some(s => /^everything included/i.test(s.trim()));
+  const isItem = (p: PhotoR) => !isBox(p) && p.shots.some(s => !/^(box|extra|everything included)/i.test(s.trim()));
+  const byN = [...r.photos].sort((a, b) => a.n - b.n);
+  const firstBox = byN.findIndex(isBox), firstItem = byN.findIndex(isItem), firstEI = byN.findIndex(isEI);
+  const boxFirst = firstBox >= 0 && firstItem >= 0 && firstBox < firstItem;
+  const eiLate = firstEI > 2;
+  const order = r.suggested_order.filter((x, i, a) => x >= 1 && x <= n && a.indexOf(x) === i);
+  const changed = order.length === n && order.some((x, i) => x !== i + 1);
+  const reorder = changed && (boxFirst || eiLate || !r.lead_ok)
+    ? { current: l.photos.map((_, i) => i + 1), suggested: order, score: Math.round(oScore * 100) / 100,
+        why: [boxFirst && "box photos come before the item", eiLate && "Everything Included is not in the first three",
+              !r.lead_ok && "the first photo does not show the item"].filter(Boolean) as string[] }
+    : null;
+  if (!r.lead_ok && !reorder) findings.push({ code: "lead", photo: 1, text: "Photo 1 doesn't show what the item is." });
+
+  if (retake) {
+    findings.unshift({ code: "retake", shots: missingRequired,
+      text: `Retake following the guide — ${missingRequired.length} of ${requiredShots.length} required shots are missing: ${missingRequired.join(", ")}.` });
+    // The retake line names the guide's shots; If Needed ones still flag on their own.
+    findings.push(...missing.filter(f => f.tier === "needed"));
+  } else {
+    findings.push(...missing);
+  }
+
+  const pic = pictureScore(findings, n, l.price);
+  const verdict = retake ? "retake" : pic.score < PASS_BAR ? "fix" : (reorder || deletion) ? "reorder" : "pass";
+  return { verdict, findings, reorder, deletion, orderScore: Math.round(oScore * 100) / 100,
+           pictureScore: pic.score, costs: pic.costs };
+}
+
+// --- the second look ---------------------------------------------------------------
+// ⚠️ A FLAG HAS TO BE SEEN TWICE. Merged at the REPORT level so decide() runs
+// once on facts both looks agree on. Leniency runs one way: anything that would
+// PASS a listing is taken from either look.
+export function agree<T extends ReportR>(a: T, b: T): T {
+  const photos = a.photos.map(p => {
+    const q = b.photos.find(x => x.n === p.n);
+    const probs = q ? p.framing_problems.filter(x => q.framing_problems.includes(x)) : [];
+    const off = !!q && p.framing === "off" && q.framing === "off" && probs.length > 0;
+    return {
+      ...p,
+      shots: [...new Set([...p.shots, ...(q?.shots || [])])],
+      repeats: q && p.repeats != null && p.repeats === q.repeats ? p.repeats : null,
+      whole_item: p.whole_item && !!q?.whole_item,
+      framing: off ? "off" as const : "close" as const,
+      framing_problems: off ? probs : [],
+      issues: p.issues.filter(it => it.severity === "major"
+        && !!q?.issues.some(x => x.type === it.type && x.severity === "major")),
+    };
+  });
+  const both = (x?: string[], y?: string[]) => {
+    const s = new Set((y || []).map(m => m.trim().toLowerCase()));
+    return (x || []).filter(m => s.has(m.trim().toLowerCase()));
+  };
+  const bothNo = a.main_flaw.shown === "no" && b.main_flaw.shown === "no";
+  return {
+    ...a,
+    photos,
+    missing_shots: both(a.missing_shots, b.missing_shots),
+    needed_missing: both(a.needed_missing, b.needed_missing),
+    flaw_views: both(a.flaw_views, b.flaw_views),
+    all_units_shown: a.all_units_shown !== false || b.all_units_shown !== false,
+    units_together: a.units_together !== false || b.units_together !== false,
+    main_flaw: bothNo ? a.main_flaw
+      : { ...a.main_flaw, shown: a.main_flaw.shown === "no" ? b.main_flaw.shown : a.main_flaw.shown },
+    serial: a.serial === "shown" || b.serial === "shown" ? "shown"
+      : a.serial === "hidden_behind_cover" || b.serial === "hidden_behind_cover" ? "hidden_behind_cover" : "not_shown",
+    lead_ok: a.lead_ok || b.lead_ok,
+    setups: (a.setups || []).length > 1 && (b.setups || []).length > 1 ? a.setups : [(a.setups || []).flat()],
+  };
+}

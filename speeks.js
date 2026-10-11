@@ -9673,7 +9673,7 @@ function _pgAdminRowHtml(s, i, n) {
           <b>${_pgEsc(s.label)}</b>
           <small>${s.cond
             ? `Only when: ${_pgEsc(s.cond)}${s.rep ? ' &middot; Take as many photos as needed' : ''}`
-            : 'Always taken'}${s.img ? '' : ' &middot; No photo yet'}</small>
+            : 'Always taken'}${!s.cond && s.crucial ? ' &middot; <b class="pg-crucial">Crucial</b>' : ''}${s.img ? '' : ' &middot; No photo yet'}</small>
         </div>
         <div class="pg-etools">
           <label class="pg-ephoto" title="${s.img ? 'Replace the photo' : 'Add a photo'}">
@@ -9705,6 +9705,17 @@ function _pgAdminEditHtml(s) {
             <span>Photo Name</span>
             <input type="text" id="pg-f-label" value="${_pgEsc(s.label)}" placeholder="Back of Tablet">
           </label>
+          <!-- CRUCIAL (Picture Quality, 2026-10-11): a listing missing this photo is
+               flagged outright, where any other missing view only costs points.
+               Ethan: "if we are missing a crucial view it should be automatic
+               flag." A required photo only — an optional one is "only if", which
+               cannot also be "must have". -->
+          <div id="pg-f-req"${opt ? ' hidden' : ''}>
+            <label class="pg-f pg-f-check">
+              <input type="checkbox" id="pg-f-crucial"${s.crucial ? ' checked' : ''}>
+              <span>Crucial <em>&mdash; a listing missing this photo is flagged by Picture Quality</em></span>
+            </label>
+          </div>
           <div id="pg-f-opt"${opt ? '' : ' hidden'}>
             <label class="pg-f">
               <span>Description <em>(when to take it &mdash; the card reads &ldquo;Only if&hellip;&rdquo;)</em></span>
@@ -9743,6 +9754,8 @@ function _pgFormMode(mode) {
     form.dataset.mode = mode;
     const box = document.getElementById('pg-f-opt');
     if (box) box.hidden = (mode !== 'opt');
+    const req = document.getElementById('pg-f-req');
+    if (req) req.hidden = (mode === 'opt');
     form.querySelectorAll('.pg-eseg-b').forEach((b, i) => {
         b.classList.toggle('on', (i === 0) === (mode === 'req'));
     });
@@ -9813,6 +9826,7 @@ async function pgSaveShot(id, btn) {
     const cond  = (document.getElementById('pg-f-cond')  || {}).value || '';
     const note  = (document.getElementById('pg-f-note')  || {}).value || '';
     const rep   = !!(document.getElementById('pg-f-rep') || {}).checked;
+    const crucial = !!(document.getElementById('pg-f-crucial') || {}).checked;
     if (!label.trim()) { alert('A photo needs a name. It is the only instruction on the card.'); return; }
     // An optional photo with no description is a required one wearing a red
     // border: the card would print "Only if" and then stop.
@@ -9824,6 +9838,7 @@ async function pgSaveShot(id, btn) {
         action: 'saveShot', id, label,
         cond: opt ? cond.trim() : null,
         rep:  opt ? rep : false,
+        crucial: opt ? false : crucial,
         note,
     }, btn);
     if (!out) return;
@@ -55602,7 +55617,11 @@ const _PQ_TIERS = [
     { v: 'nophotos', label: 'No Photos',        cls: 'lt-t-bad',  half: 'photos' },
     { v: 'retake',   label: 'Retake',           cls: 'lt-t-bad',  half: 'pictures' },
     { v: 'fix',      label: 'Fix These Photos', cls: 'lt-t-warn', half: 'pictures' },
-    { v: 'reorder',  label: 'Reorder',          cls: 'lt-t-ok',   half: 'pictures' },
+    // ONE-CLICK FIXES (Ethan, 2026-10-11): the photos are fine, and the fix is a
+    // change the tool makes when a manager approves it — a new order, or deleting
+    // a duplicate. The verdict is still called 'reorder' in the table and the
+    // API; only the words on screen changed.
+    { v: 'reorder',  label: 'One-Click Fixes',  cls: 'lt-t-ok',   half: 'pictures' },
 ];
 
 function _pqHtml() {
@@ -56053,6 +56072,11 @@ function _pqRow(r) {
     const flagged = new Set((r.findings || []).flatMap(f => [f.photo, ...(f.photos || [])]).filter(Boolean));
     const now = photos.map((_, i) => i + 1);
     const isReorder = r.verdict === 'reorder' && r.reorder && Array.isArray(r.reorder.suggested);
+    // A duplicate photo the tool can delete on approval — on any tab: a flagged
+    // listing with a repeat gets the button too, under its Recheck.
+    const del = !r.stale && r.deletion && Array.isArray(r.deletion.photos) && r.deletion.photos.length ? r.deletion : null;
+    const oneClick = r.verdict === 'reorder';
+    const delWhat = del ? `photo${del.photos.length > 1 ? 's' : ''} ${del.photos.join(', ')}` : '';
     const findings = (r.verdict === 'retake' ? `<li class="pq-retake-said">${_pqRetakeSaid(r.findings)}</li>` : '')
         + _pqFindingLines((r.findings || []).filter(f => r.verdict !== 'retake' || f.code !== 'retake'));
     // The row's own reason, now there is no tab sentence above it.
@@ -56122,18 +56146,28 @@ function _pqRow(r) {
         <div class="pq-lister">${_ltListerPill({ listerTag: r.lister || '' }, r.lister ? { [r.lister]: r.lister } : null)}</div>
         <div class="lt-acts pq-acts">
           ${isReorder && !r.stale
-            ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve'}</button>
+            ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Order'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', true)" ${busy ? 'disabled' : ''}
                   title="The current order is fine. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
+            : oneClick && del
+            ? `<button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>${busy && !checking ? 'Saving…' : 'Approve Deletion'}</button>
+               <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
+                  title="Keep the photo. Say why, and the note comes to Listing Health Notes.">Dismiss</button>`
             : `<button class="lt-ok" onclick="pqRecheck('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}
                   title="After the photos are retaken in Shopify, this grades them again now instead of waiting for the next sweep. About a minute.">${checking ? 'Checking…' : 'Recheck'}</button>
                <button class="lt-no" onclick="pqDismiss('${_ecEsc(id)}', false)" ${busy ? 'disabled' : ''}
                   title="The photos are fine as they are. Say why, and the note comes to Listing Health Notes so the rule gets looked at.">Dismiss</button>`}
         </div>
-        <!-- What Recheck is FOR, on the row. Ethan asked what "Check Again"
+        <!-- A duplicate to delete beside a reorder, or on a flagged row: its own
+             line, so the row's main pair keeps its one job. -->
+        ${del && (isReorder || !oneClick) ? `<div class="lt-acts pq-acts">
+            <button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Approve Deletion</button></div>` : ''}
+        <!-- What each button DOES, on the row. Ethan asked what "Check Again"
              meant; a button that needs asking about needs a sentence. -->
-        ${isReorder && !r.stale ? `<span class="pq-hint">Approve saves this order to Shopify.</span>`
-          : `<span class="pq-hint">Retook the photos? Recheck grades them now.</span>`}
+        ${[isReorder && !r.stale && 'Approve Order saves this order to Shopify.',
+           del && `Approve Deletion removes ${delWhat} from Shopify.`,
+           !(isReorder && !r.stale) && !(oneClick && del) && 'Retook the photos? Recheck grades them now.']
+          .filter(Boolean).map(x => `<span class="pq-hint">${x}</span>`).join('')}
       </div>
     </div>`;
 }
@@ -56184,6 +56218,32 @@ async function pqReorder(pid) {
     await _pqReload();
 }
 window.pqReorder = pqReorder;
+
+// APPROVE DELETION — a duplicate photo, removed from the Shopify listing by the
+// tool (Ethan, 2026-10-11: "say approve deletion. Don't imply that the user
+// should delete it themselves"). The server refuses if the photos changed since
+// the check, so the numbers here always point at the photos shown.
+async function pqDeletePhotos(pid) {
+    const row = (_pqData?.queue || []).find(r => r.productId === pid);
+    const del = row && row.deletion;
+    if (!del || !Array.isArray(del.photos) || !del.photos.length) return;
+    const pairs = del.photos.map((n, i) => `Photo ${n} is the same shot as photo ${(del.of || [])[i]}.`).join(' ');
+    const said = await _ltAsk({
+        kind: 'warn', eyebrow: 'Picture Quality', title: 'Approve Deletion?',
+        body: `<p class="lt-ask-say">${_ecEsc(row.title || '')}</p>
+               ${_pqStrip(row.photos || [], del.photos, new Set(del.photos))}
+               <p class="lt-ask-say">${_ecEsc(pairs)} ${del.photos.length > 1 ? 'They are' : 'It is'} removed from the Shopify listing — every other photo stays as it is.</p>`,
+        go: 'Approve Deletion', cancel: 'Cancel' });
+    if (!said) return;
+    _pqBusy.add(pid); ecRender();
+    const res = await _pqPost({ action: 'delete-photos', store: _ecStore, productId: pid });
+    _pqBusy.delete(pid);
+    if (!res.ok) {
+        await _pqSay('Nothing Was Deleted', res.body?.detail || res.body?.error || 'Shopify did not take the change.');
+    }
+    await _pqReload();
+}
+window.pqDeletePhotos = pqDeletePhotos;
 
 async function pqRecheck(pid) {
     _pqBusy.add(pid); _pqChecking.add(pid); ecRender();

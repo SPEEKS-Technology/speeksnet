@@ -42,6 +42,14 @@ has(opt, 'type="hidden" id="pg-f-note" value="Settings Screen Showing Carrier Un
     'carried through so Save cannot erase it');
 has(opt, 'Words on the Slot', false, 'and is no longer a visible field');
 
+console.log('\nCRUCIAL — required photos only (Picture Quality, 2026-10-11)');
+const cru = _pgAdminEditHtml({ id: 4, label: 'Side of Phone', cond: null, rep: false, note: '', img: null, crucial: true });
+has(req, 'id="pg-f-crucial"', true,  'a required photo offers the Crucial tick');
+has(req, 'id="pg-f-req" hidden', false, 'and it is visible');
+has(req, 'id="pg-f-crucial" checked', false, 'unticked by default');
+has(cru, 'id="pg-f-crucial" checked', true, 'a crucial photo opens ticked');
+has(opt, 'id="pg-f-req" hidden', true, 'an optional photo hides it');
+
 console.log('\nnothing goes through unescaped');
 const evil = _pgAdminEditHtml({ id: 3, label: '"><script>x</script>', cond: 'a & b', rep: false, note: '', img: null });
 has(evil, '<script>', false, 'a name cannot break out of the attribute');

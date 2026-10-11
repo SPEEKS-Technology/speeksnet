@@ -17,8 +17,11 @@ const FN = "https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/picture-qualit
 const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 const [model = "claude-sonnet-5", effort = "medium"] = process.argv.slice(2);
 
-// flag = retake | fix | reorder — a reorder is an action a manager approves,
-// and Ethan kept the Surface's out-of-place Everything Included as a flag.
+// flag = retake | fix. Since the scoring card (2026-10-11) a "reorder" verdict
+// is a ONE-CLICK FIX — the photos are fine and the tool makes the change on
+// approval (a new order, a duplicate deleted) — so it scores as a pass. (It
+// used to count as a flag: Ethan kept the Surface's buried Everything Included
+// as one, which is now a One-Click Fix beside its missing Screen Off.)
 // [store, product id, name, Ethan's verdict ("?" = not scored yet), why]
 const KEY = [
   // WSP, graded 2026-09-24/25.
@@ -59,7 +62,7 @@ const KEY = [
   ["OVL", "15228968894566", "Galaxy S26 Cobalt Violet", "flag", "missing Storage and Software Information — perfect"],
 ];
 
-const asFlag = v => ["retake", "fix", "reorder"].includes(v) ? "flag" : v;
+const asFlag = v => ["retake", "fix"].includes(v) ? "flag" : v === "reorder" ? "pass" : v;
 
 // ONE listing per call, THREE calls at a time. The edge wall is 150s of
 // silence, and a flagged listing now gets two looks — two such listings in one

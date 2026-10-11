@@ -23830,6 +23830,8 @@ select.dd-native {
 .pg-ename { flex: 1; min-width: 0; }
 .pg-ename b { display: block; font-size: 13px; font-weight: 750; color: var(--pg-ink); }
 .pg-ename small { font-size: 11px; color: var(--pg-muted); }
+/* A crucial photo (Picture Quality: missing it flags the listing). */
+.pg-ename .pg-crucial { color: #b91c1c; font-weight: 800; }
 .pg-etools { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
 /* The file input is the label, so the camera glyph IS the control — a visible
    "Choose file" reads as a form to fill in rather than a photo to swap. */
