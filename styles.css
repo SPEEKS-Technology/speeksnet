@@ -6933,6 +6933,17 @@ input.vr-up-input[type="file"] {
 .recycle-review-cell { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
 .recycle-review-cell .dd-host { flex: 1 1 auto; }
 
+/* The request's reason (Poor Testing, Damaged/Broken…) as a small tag at the
+   front of the Description cell rather than a column of its own — the table is
+   already ten columns wide in a modal, and the reason reads as part of "what is
+   this and why". */
+.recycle-reason-chip {
+  display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .2px;
+  color: #475569; background: #f1f5f9; border: 1px solid #e2e8f0;
+  border-radius: 20px; padding: 1px 8px; margin-right: 4px; white-space: nowrap;
+  vertical-align: 1px;
+}
+
 .recycle-new-dot {
     position: relative;
     display: inline-block;

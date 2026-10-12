@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20261011g">
+  <link rel="stylesheet" href="styles.css?v=20261012a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20261011f" defer></script>
+  <script src="speeks.js?v=20261012a" defer></script>
 </head>
 <body class="preload">
 
@@ -935,6 +935,10 @@
                     <input type="text" id="recycleInvValue" class="form-input-lg" inputmode="decimal" placeholder="0.00" oninput="recycleInvSanitizeMoney(this)">
                 </div>
             </div>
+            <div style="margin-bottom:14px;">
+                <label class="form-label-caps">Reason <span style="font-weight:400;color:#ef4444;">*</span></label>
+                <select id="recycleInvReason" class="form-input-lg"></select>
+            </div>
             <label class="form-label-caps">Item Description <span style="font-weight:400;color:#ef4444;">*</span></label>
             <textarea id="recycleInvDescription" class="form-input-lg" rows="3"
                 placeholder="What is the item, and why is it being recycled out of inventory?"></textarea>
@@ -953,6 +957,10 @@
                 <div id="recycle-view-filter-row" style="display:none; flex:1; min-width:150px;">
                     <label class="form-label-caps">Store</label>
                     <select id="recycle-view-filter" class="form-input-lg" onchange="renderMyRecycleTable()"></select>
+                </div>
+                <div style="flex:1; min-width:150px;">
+                    <label class="form-label-caps">Reason</label>
+                    <select id="recycle-reason-filter" class="form-input-lg" onchange="renderMyRecycleTable()"></select>
                 </div>
             </div>
             <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">

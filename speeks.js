@@ -40735,6 +40735,21 @@ function copyBoxOrder(button) {
 
 const RECYCLE_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
+// Why an item is being recycled — required on every new request (Ethan,
+// 2026-10-12), on top of the free-text note, so the review tab can filter and
+// total by it. The key is what the DB stores (migration 0145 checks the same
+// four), the label is what people see — relabel freely, never re-key.
+// Rows filed before the field existed have no reason; the filter calls them
+// 'none' so they stay findable instead of vanishing under every option.
+const RECYCLE_REASONS = [
+    { key: 'poor_testing', label: 'Poor Testing' },
+    { key: 'damaged',      label: 'Damaged/Broken' },
+    { key: 'low_value',    label: 'Low Value' },
+    { key: 'other',        label: 'Other' },
+];
+const _recycleReasonLabel = k => (RECYCLE_REASONS.find(x => x.key === k) || {}).label || '';
+const _recycleReasonKey = r => (RECYCLE_REASONS.some(x => x.key === r.reason) ? r.reason : 'none');
+
 // Which store(s) this user can file/view recycle requests for.
 function _recycleStores() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
@@ -40834,6 +40849,7 @@ function toggleRecycleInventory() {
     });
     const qty = document.getElementById('recycleInvQty');
     if (qty) qty.value = '1';
+    _buildRecycleReasonPicker();
     switchRecycleTab('new');
 }
 
@@ -40871,9 +40887,22 @@ function _buildRecycleStorePicker() {
     else if (sel.options.length) sel.selectedIndex = 0;
 }
 
+// The reason dropdown on New Request. Built from RECYCLE_REASONS so the five
+// pages' markup only carries an empty <select>, and it opens on a placeholder
+// rather than the first reason — a preselected "Poor Testing" would get
+// submitted by everyone who didn't look, which defeats making it required.
+function _buildRecycleReasonPicker() {
+    const sel = document.getElementById('recycleInvReason');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— Select a reason —</option>'
+        + RECYCLE_REASONS.map(x => `<option value="${x.key}">${x.label}</option>`).join('');
+    sel.value = '';
+}
+
 async function submitRecycleRequest() {
     const val = id => (document.getElementById(id) || {}).value;
     const store = (val('recycleInvStoreSelect') || '').toUpperCase();
+    const reason = val('recycleInvReason') || '';
     const sku = (val('recycleInvSku') || '').trim();
     const desc = (val('recycleInvDescription') || '').trim();
     const qty = Math.floor(Number(val('recycleInvQty')));
@@ -40886,6 +40915,7 @@ async function submitRecycleRequest() {
     if (costRaw === '' || costRaw == null || !Number.isFinite(Number(costRaw))) {
         alert('Please enter the item cost (per unit).'); return;
     }
+    if (!RECYCLE_REASONS.some(x => x.key === reason)) { alert('Please choose a reason for recycling.'); return; }
     if (!desc) { alert('Please describe the item and why it is being recycled.'); return; }
 
     const btn = document.getElementById('submitRecycleBtn');
@@ -40895,7 +40925,7 @@ async function submitRecycleRequest() {
         const res = await fetch(RECYCLE_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                action: 'submit_request', store, sku, description: desc, quantity: qty,
+                action: 'submit_request', store, sku, reason, description: desc, quantity: qty,
                 value: valueRaw === '' ? null : Number(valueRaw),
                 cost: Number(costRaw),
                 created_by: sessionStorage.getItem('speeksUserName') || null,
@@ -40912,6 +40942,10 @@ async function submitRecycleRequest() {
         });
         const qtyEl = document.getElementById('recycleInvQty');
         if (qtyEl) qtyEl.value = '1';
+        // Reason resets too: carrying the last one over is how a batch of five
+        // "Damaged/Broken" picks up a sixth item that was really Low Value.
+        const reasonEl = document.getElementById('recycleInvReason');
+        if (reasonEl) reasonEl.value = '';
         const skuEl = document.getElementById('recycleInvSku');
         if (skuEl) skuEl.focus();
         if (btn) {
@@ -41014,6 +41048,19 @@ function _buildRecycleViewFilters(stores) {
         // when it's actually there.
         if (pinned && [...mSel.options].some(o => o.value === pinned)) mSel.value = pinned;
     }
+    // Reason filter — shown to managers and DM/CEO alike, so both sides of the
+    // tool can see what a month's recycling was FOR. "No reason (older)" is only
+    // offered while some fetched row actually lacks one; once those age out of
+    // the 12-month window it disappears on its own.
+    const rSel = document.getElementById('recycle-reason-filter');
+    if (rSel) {
+        const cur = rSel.value;
+        const hasNone = _recycleMine.some(r => _recycleReasonKey(r) === 'none');
+        rSel.innerHTML = '<option value="">All reasons</option>'
+            + RECYCLE_REASONS.map(x => `<option value="${x.key}">${x.label}</option>`).join('')
+            + (hasNone ? '<option value="none">No reason (older)</option>' : '');
+        if ([...rSel.options].some(o => o.value === cur)) rSel.value = cur;
+    }
     const row = document.getElementById('recycle-view-filter-row');
     const sel = document.getElementById('recycle-view-filter');
     if (!row || !sel) return;
@@ -41046,7 +41093,7 @@ let _recycleQuery = '';
 // of reading the row.
 function _recycleMatches(r, q) {
     if (!q) return true;
-    const hay = [r.sku, r.description, r.created_by, r.store]
+    const hay = [r.sku, r.description, r.created_by, r.store, _recycleReasonLabel(r.reason)]
         .map(v => String(v == null ? '' : v).toLowerCase()).join(' \u0001 ');
     // Every word must appear somewhere, in any order: "iphone lee" finds the
     // LEE iPhone line without anybody having to guess the column order.
@@ -41081,6 +41128,13 @@ function renderMyRecycleTable() {
     const filterStore = (document.getElementById('recycle-view-filter') || {}).value || '';
     let rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
     if (filterStore) rows = rows.filter(r => (r.store || '').toUpperCase() === filterStore);
+    // Reason narrows the rows BEFORE any total is summed, so every footer line —
+    // the headline, Against/For, Ignored, Denied — is the total for that reason
+    // alone. It is a filter like the store one, not a search, so it also comes
+    // before monthCount: "3 of 12" under a reason means 3 of that reason's 12.
+    const filterReason = (document.getElementById('recycle-reason-filter') || {}).value || '';
+    const reasonName = filterReason === 'none' ? 'No reason' : _recycleReasonLabel(filterReason);
+    if (filterReason) rows = rows.filter(r => _recycleReasonKey(r) === filterReason);
     const q = _recycleQuery;
     // Counted BEFORE the search narrows anything, because "3 of 47" is the
     // number that tells somebody whether their search worked.
@@ -41095,6 +41149,7 @@ function renderMyRecycleTable() {
     const elsewhere = q && !rows.length
         ? _recycleMine.filter(r => _recycleMonthKey(r.created_at) !== month
                                    && (!filterStore || (r.store || '').toUpperCase() === filterStore)
+                                   && (!filterReason || _recycleReasonKey(r) === filterReason)
                                    && _recycleMatches(r, q))
         : [];
     // Keep the Store column whenever the user spans multiple stores — even with
@@ -41116,7 +41171,9 @@ function renderMyRecycleTable() {
         // another month and here is the button that takes you there.
         let emptyMsg;
         if (!q) {
-            emptyMsg = `No recycle requests for ${_recycleMonthLabel(month)}.`;
+            emptyMsg = filterReason
+                ? `No “${escapeHtml(reasonName)}” recycle requests for ${_recycleMonthLabel(month)}.`
+                : `No recycle requests for ${_recycleMonthLabel(month)}.`;
         } else if (elsewhere.length) {
             const months = [...new Set(elsewhere.map(r => _recycleMonthKey(r.created_at)))]
                 .sort().reverse();
@@ -41283,7 +41340,7 @@ function renderMyRecycleTable() {
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`, '', 'Date')}
             ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`, '', 'Store') : ''}
             ${td(`${siteSkuSpan(r.sku || '', 'font-weight:700; color:var(--slate-charcoal);')}${siteCopyBtn(r.sku, 'SKU')}`, 'min-width:110px;', 'SKU')}
-            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`, '', 'Description')}
+            ${td(`${r.reason && _recycleReasonLabel(r.reason) ? `<span class="recycle-reason-chip">${escapeHtml(_recycleReasonLabel(r.reason))}</span> ` : ''}<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`, '', 'Description')}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;', 'Qty')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;', 'Unit Cost')}
             ${td(struck
@@ -41318,8 +41375,8 @@ function renderMyRecycleTable() {
     const footLabel = (t, c) => `<td colspan="${labelSpan}" style="padding:${c ? '4px' : '11px'} 10px; font-weight:800; font-size:${c ? '10.5px' : '12px'}; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">${t}</td>`;
     html += `</tbody><tfoot><tr>
         ${footLabel(q
-            ? `${rows.length} of ${monthCount} lines · “${escapeHtml(q)}”`
-            : `Total recycled cost · ${_recycleMonthLabel(month)}`)}
+            ? `${rows.length} of ${monthCount} lines · “${escapeHtml(q)}”${filterReason ? ` · ${escapeHtml(reasonName)}` : ''}`
+            : `Total recycled cost · ${_recycleMonthLabel(month)}${filterReason ? ` · ${escapeHtml(reasonName)}` : ''}`)}
         <td style="padding:11px 10px; font-weight:900; font-size:14px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(total)}</td>
         <td colspan="2"></td>
     </tr>`;
