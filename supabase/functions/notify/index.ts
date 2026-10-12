@@ -1170,10 +1170,12 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   // Gate: _VR_MANAGER_ROLES = manager / owner (manager) / owner manager. One
   // email per uploaded PERIOD (the dedupe period is the period id), so a fresh
   // upload notifies again but an unanswered one doesn't nag daily.
+  // A period the DM has ENDED (ended_at, 0146) is skipped here and in the
+  // "replies are in" pass below: its reply cycle is over by the DM's decision.
   {
     const { data: periods } = await sb.from("variance_reply_periods")
       .select("id, store, manager_due_at, all_clear, uploaded_at")
-      .eq("all_clear", false).gte("uploaded_at", vrCutoff);
+      .eq("all_clear", false).is("ended_at", null).gte("uploaded_at", vrCutoff);
     for (const per of periods || []) {
       // gm_note, NOT mgr_reply. This notification is "explain your variance
       // lines", and gm_note is the explanation; mgr_reply is the answer to a DM
@@ -1317,7 +1319,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
   {
     const { data: periods } = await sb.from("variance_reply_periods")
       .select("id, store, manager_due_at, dm_notes_at, dm_reviewed_at, all_clear, uploaded_at")
-      .eq("all_clear", false).gte("uploaded_at", vrCutoff);
+      .eq("all_clear", false).is("ended_at", null).gte("uploaded_at", vrCutoff);
 
     for (const per of periods || []) {
       const store = String(per.store || "").toUpperCase();

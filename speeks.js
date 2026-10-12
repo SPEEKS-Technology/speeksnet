@@ -44274,13 +44274,14 @@ const _vrDayPast = (ms, addDays = 0) => {
 // checks never got told. Without the guard WSP's phantom deadline quietly
 // elapsed, which opened the DM note columns, painted seven read-only lines red
 // as "missed", and put an Edit button on a report the banner called clear.
+// An ENDED period is the same: the DM closed it, so nothing is late any more.
 function _vrIsPastDue(p) {
-    if (!p || p.all_clear || !p.manager_due_at) return false;
+    if (!p || p.all_clear || p.ended_at || !p.manager_due_at) return false;
     return _vrDayPast(new Date(p.manager_due_at).getTime());
 }
 // The seventh day itself — still on time, but the last day it will be.
 function _vrIsDueToday(p) {
-    if (!p || p.all_clear) return false;
+    if (!p || p.all_clear || p.ended_at) return false;
     const d = _vrDueDay(p);
     return !!d && _vrCtDay(Date.now()) === d;
 }
@@ -44292,6 +44293,8 @@ function _vrSubtitleText() {
     // The banner in the body already says what's going on; a "replies due"
     // date next to it would only contradict it.
     if (p.all_clear) return '';
+    // Ended: the banner says who closed it and when; no deadline to show.
+    if (p.ended_at) return 'Reply cycle ended';
     // Count the lines that were ASKED for, not every line stored. A targeted
     // upload also stores the rest of the store's report as read-only context,
     // and counting those made a 16-line ask read as "0/40 explained" — a
@@ -44405,14 +44408,19 @@ function renderVarianceReplies() {
     // Nothing was owed this period. The manager still gets the report to read —
     // that is the whole point of an all-clear upload rather than no upload.
     if (p.all_clear) html += _vrAllClearBannerHtml(p);
+    const ended = !!p.ended_at;
+    if (ended) html += _vrEndedBannerHtml(p);
     // A manager whose store is "in the clear" views the report read-only — no
     // reply obligation — so they can't edit notes (canGm off) but still see the
     // line items, team variance and download. A banner explains it.
     // The store-wide view of a targeted report is read-only for the same reason.
     // An all-clear period is read-only for the manager: the banner above already
     // says why, and there is nothing to answer.
-    const canGm = _vrIsManager() && !p.all_clear && !storeView;
+    // Ended is read-only for both sides. canDm stays true so the DM keeps the
+    // header actions (Reopen, Delete); dmCanEdit is what an ended period turns off.
+    const canGm = _vrIsManager() && !p.all_clear && !ended && !storeView;
     const canDm = _vrIsDM() && !storeView;
+    const dmCanEdit = canDm && !ended;
 
     // The reply cycle reveals columns as each side takes its turn:
     //   1. Managers fill GM Notes (extra-wide while it's the only note column);
@@ -44445,7 +44453,7 @@ function renderVarianceReplies() {
     const gmUnexplained = items.some(i => !i.gm_note);
     const replyPending = items.some(i => i.dm_note && i.dm_reply_requested && !i.mgr_reply);
     const mgrHasWork = !anyDmNote || gmUnexplained || replyPending;
-    const canEditNow = items.length > 0 && ((canGm && mgrHasWork) || (canDm && dmNotesOpen && !dmCycleDone)) && !_vrUploadOpen;
+    const canEditNow = items.length > 0 && ((canGm && mgrHasWork) || (dmCanEdit && dmNotesOpen && !dmCycleDone)) && !_vrUploadOpen;
     const editBtn = document.getElementById('vr-edit-btn');
     const saveBtn = document.getElementById('vr-save-btn');
     const cancelEditBtn = document.getElementById('vr-edit-cancel-btn');
@@ -44467,6 +44475,9 @@ function renderVarianceReplies() {
         </div>
         <div class="align-center gap-8" style="margin-right:14px;">
             ${dlBtn}
+            ${canDm && !p.all_clear && !_vrEditing ? (ended
+                ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrEndPeriod('${p.id}', false)" title="Open the reply cycle again — reminders resume where they left off">Reopen period</button>`
+                : `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrEndPeriod('${p.id}', true)" title="Close the reply cycle: no more reminders for you or the manager. The report stays.">End period</button>`) : ''}
             ${canDm ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrDeletePeriod('${p.id}')">Delete this upload</button>` : ''}
         </div>
     </div>`;
@@ -44505,7 +44516,7 @@ function renderVarianceReplies() {
             ${showDmCol ? td((() => {
                 // Same lock the other way: a DM note the manager already
                 // replied to can't be edited out from under the reply.
-                const dmEditing = canDm && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
+                const dmEditing = dmCanEdit && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
                 let cell = _vrNoteCell(it, 'dm_note', dmEditing, 'Advice or a question for the manager…');
                 // Only the note that WANTS something carries a chip (user,
                 // 2026-08-10). There used to be an "FYI — no reply needed" chip on
@@ -44543,6 +44554,9 @@ function _vrDmNotesOpen(p) {
     // A cleared period has no reply cycle to open, so the DM gets no note
     // columns and no Edit button on it — the green banner is the whole story.
     if (p && p.all_clear) return false;
+    // Ended: the columns open so whatever explanations DID come in can be read.
+    // Editing is switched off separately (canGm / dmCanEdit in the renderer).
+    if (p && p.ended_at) return true;
     return !p.manager_due_at || _vrIsPastDue(p);
 }
 
@@ -44651,6 +44665,33 @@ async function vrSaveEdits(btn) {
     renderVarianceReplies();
 }
 
+// End (or reopen) a period's reply cycle — DM only. The way out for a store
+// that never replied and won't be made to: every reminder about the period stops
+// on both sides, and the report stays. Reopening puts it back exactly as it was.
+async function vrEndPeriod(id, ended) {
+    if (ended && !confirm('End this period? No more reminders go to you or the manager, and the notes become read-only. You can reopen it later.')) return;
+    try {
+        const res = await fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'end_period', id, ended, by: sessionStorage.getItem('speeksUserName') || null }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const patch = { ended_at: json.ended_at || null, ended_by: json.ended_by || null };
+        if (_vrCurrent && _vrCurrent.period && _vrCurrent.period.id === id) Object.assign(_vrCurrent.period, patch);
+        const row = _vrPeriods.find(p => p.id === id);
+        if (row) Object.assign(row, patch);
+        _vrEditing = false;
+        renderVarianceReplies();
+        // Ending IS the thing the review card was nagging about — recompute now
+        // rather than at the next 30-minute poll.
+        if (typeof checkVarianceDmReminders === 'function') checkVarianceDmReminders();
+    } catch (e) {
+        alert('Could not ' + (ended ? 'end' : 'reopen') + ' the period: ' + e.message);
+    }
+}
+window.vrEndPeriod = vrEndPeriod;
+
 async function vrDeletePeriod(id) {
     if (!confirm('Delete this entire variance upload (all line items and replies)?')) return;
     try {
@@ -44727,6 +44768,20 @@ function _vrViewToggleHtml(p, allRows, storeView) {
                 ? 'Every line at ' + _VR_VARIANCE_CUTOFF + '% or worse — read only.'
                 : (names ? 'Replies requested from ' + escapeHtml(names) + '.' : '')
         }</span>
+    </div>`;
+}
+
+// Shown on an ENDED period (0146), to both sides. Says who ended it and when so
+// a manager opening an old report knows it was closed on purpose, not lost.
+function _vrEndedBannerHtml(p) {
+    const who = p.ended_by ? ' by ' + escapeHtml(p.ended_by) : '';
+    const when = p.ended_at
+        ? ' on ' + new Date(p.ended_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' })
+        : '';
+    return `<div style="display:flex; align-items:center; gap:9px; background:#f1f5f9; border:1.5px solid #cbd5e1;
+        border-radius:10px; padding:10px 14px; margin-bottom:12px; font-size:12.5px; font-weight:700; color:#475569;">
+        <span style="font-size:15px;">■</span>
+        <span>This period was ended${who}${when} — no more replies are needed.</span>
     </div>`;
 }
 
@@ -45180,7 +45235,10 @@ async function checkVarianceReminders() {
         // Cleared stores stay in the cache (they still get the "report is live"
         // announcement) — the dot + reply nags are gated on cleared separately.
         const cutoff = Date.now() - 45 * 86400000;
-        _vrMyPeriodsCache = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
+        // An ENDED period (the DM closed its reply cycle, 0146) owes nothing and
+        // announces nothing, so it never enters the cache — dot, feed card and
+        // every row of _vrMaybePopup go quiet together.
+        _vrMyPeriodsCache = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff && !p.ended_at);
         applyKpiReminder(); // re-evaluates the shared workspace nav dot + tab dot
         _vrMaybePopup();
     } catch (e) { /* next poll retries */ }
@@ -45223,9 +45281,12 @@ async function checkVarianceDmReminders() {
         if (!json || json.success === false) return;
         const now = Date.now();
         const cutoff = now - 45 * 86400000;
-        // Skip stores the DM has marked "in the clear" — no review nudges for them.
+        // Skip stores the DM has marked "in the clear" — no review nudges for them —
+        // and periods the DM has ENDED. Before End existed the only way out of the
+        // "ready for review" card was writing DM notes, so a store that never
+        // replied nagged forever (Ethan, 2026-10-12).
         const periods = (json.data || []).filter(p =>
-            new Date(p.uploaded_at).getTime() > cutoff && !p.all_clear);
+            new Date(p.uploaded_at).getTime() > cutoff && !p.all_clear && !p.ended_at);
         // State-based, like the manager side: persists until the DM acts, then
         // clears — no one-shot localStorage that vanished on navigation.
         // Track WHICH stores need the DM's eyes, so clicking the alert lands on one
