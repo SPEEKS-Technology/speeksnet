@@ -42,6 +42,14 @@ has(opt, 'type="hidden" id="pg-f-note" value="Settings Screen Showing Carrier Un
     'carried through so Save cannot erase it');
 has(opt, 'Words on the Slot', false, 'and is no longer a visible field');
 
+console.log('\nno Crucial tick anywhere (the guide\'s first photo is the crucial one, 2026-10-11)');
+const _pgAdmin = { editing: null };
+const _pgArt = () => '';
+eval(cut('_pgAdminRowHtml'));
+const rowCru = _pgAdminRowHtml({ id: 4, label: 'Side', cond: null, rep: false, note: '', img: null, crucial: true }, 1, 3);
+has(rowCru, 'rucial', false, 'not on the row, even for a shot still marked crucial in the table');
+has(req, 'rucial', false, 'not in the Edit form');
+
 console.log('\nnothing goes through unescaped');
 const evil = _pgAdminEditHtml({ id: 3, label: '"><script>x</script>', cond: 'a & b', rep: false, note: '', img: null });
 has(evil, '<script>', false, 'a name cannot break out of the attribute');

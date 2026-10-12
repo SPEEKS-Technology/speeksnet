@@ -42,7 +42,7 @@ t('picture quality: the section draws its three tabs with counts', function () {
     _pqData = data([RETAKE, FIX, REORDER]); _pqErr = null; _pqTier = 'retake'; _ecStore = 'WSP';
     var h = _pqHtml();
     if (h.indexOf('Picture Quality') < 0) return 'no section title';
-    if (h.indexOf('Retake') < 0 || h.indexOf('Fix These Photos') < 0 || h.indexOf('Reorder') < 0) return 'a tab is missing';
+    if (h.indexOf('Retake') < 0 || h.indexOf('Fix These Photos') < 0 || h.indexOf('Quick Fixes') < 0) return 'a tab is missing';
     return h.indexOf('Acer Aspire') >= 0 || 'the retake row is not on the Retake tab';
 });
 
@@ -98,7 +98,8 @@ t('picture quality: No Photos is the first tab for a reader who holds it, and le
     var tabs =[].map.call(d.querySelectorAll('.rc-mode'), function (b) { return b.textContent.trim().split(/\s+/)[0]; });
     _lhScope = { mayPhotos: false, mayCats: false }; _lhPhotos = null;
     if (tabs[0] !== 'No') return 'first tab is ' + tabs[0];
-    if (tabs.length !== 4) return tabs.length + ' tabs, expected 4';
+    if (tabs.length !== 5) return tabs.length + ' tabs, expected 5 (No Photos, Retake, Fix, Quick Fixes, Passed)';
+    if (tabs[4] !== 'Passed') return 'last tab is ' + tabs[4] + ', expected Passed';
     return d.textContent.indexOf('Empty Square') >= 0 || 'the no-photo listing is not on the opening tab';
 });
 
@@ -361,6 +362,20 @@ t('picture quality: the photo count sits centred over the Store pill', function 
     return dx <= 2 || 'off centre by ' + Math.round(dx) + 'px';
 });
 
+t('picture quality: who listed it — a name, or Unknown, on its own line under the links', function () {
+    var host = document.getElementById('pq-host');
+    host.style.cssText = 'width:1440px;';
+    _pqData = data([Object.assign({}, FIX, { lister: 'Calvin Meadows' })]); _pqTier = 'fix';
+    host.innerHTML = '<div class="cb-panel" style="width:100%">' + _pqHtml() + '</div>';
+    var pill = host.querySelector('.pq-lister .lt-lister');
+    if (!pill || pill.textContent.trim() !== 'Calvin Meadows') return 'no name pill: ' + (pill && pill.textContent);
+    if (host.querySelector('.rc-links .lt-lister')) return 'the pill sits among the links';
+    _pqData = data([Object.assign({}, FIX, { lister: null })]);
+    host.innerHTML = '<div class="cb-panel" style="width:100%">' + _pqHtml() + '</div>';
+    var un = host.querySelector('.pq-lister .lt-lister-unknown');
+    return (un && un.textContent.trim() === 'Unknown') || 'no Unknown pill when no tag matched';
+});
+
 t('dismiss notes are required: the button waits for words, in both tools', function () {
     var p = _ltAsk({ kind: 'warn', title: 'T', note: { label: 'Why?', required: true }, go: 'Dismiss It' });
     var go = document.querySelector('#ltAskOverlay .lt-ask-go'), box = document.getElementById('ltAskNote');
@@ -523,4 +538,169 @@ t('patch notes: Add New and Edit Previous are the same width', function () {
     var e = document.getElementById('pnmTab-edit').getBoundingClientRect().width;
     host.remove();
     return Math.abs(a - e) <= 1 || 'widths ' + a + ' vs ' + e;
+});
+
+// --- Train The Checker -------------------------------------------------------
+// Built up by hand rather than through pqTrainOpen, because the open fetches
+// and these assertions are synchronous. _pqPost is invoked before pqTrainLabel's
+// first await, so a recorder sees the payload in the same tick.
+function trainState() {
+    var img = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+    return { store: 'OVL', i: 0, picks: new Set(), busy: false, err: null, skipped: 0, total: 3, done: 0, left: 3,
+             queue: [1, 2, 3].map(function (n) {
+                 return { productId: 'gid://shopify/Product/9', sku: 'KS01-1', title: 'PS3 Controller', n: n, of: 3,
+                          src: 'https://cdn/x' + n + '.jpg', img: img, w: 1080, h: 1080, sheet: 'game-controllers',
+                          sheetName: 'Game Controllers', shot: n === 3 ? null : 'Front of Controller', said: [],
+                          example: n === 1 ? img : null };
+             }) };
+}
+
+t('train: the entry button sits under the Picture Quality section', function () {
+    _pqData = data([FIX]); _pqTier = 'fix';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    return !!host.querySelector('.pqt-entry button[onclick="pqTrainOpen()"]') || 'no Train The Checker button';
+});
+
+t('train: photo beside its guide example, answers with their keys', function () {
+    _pqTrain = trainState(); _pqTrainRender();
+    var el = document.getElementById('pqTrainOverlay');
+    try {
+        var figs = el.querySelectorAll('.pqt-fig');
+        if (figs.length !== 2) return 'expected photo + example, got ' + figs.length;
+        if (!figs[1].querySelector('img')) return 'the guide example is not shown';
+        if (!/Front of Controller/.test(figs[1].textContent)) return 'the shot is not named';
+        var keys = [].map.call(el.querySelectorAll('.pqt-acts kbd'), function (k) { return k.textContent; }).join(',');
+        return keys === '1,2,3,4,5,6,7,8,9,S,Enter,0' || 'keys: ' + keys;
+    } finally { pqTrainClose(); }
+});
+
+t('train: Save Problems needs a pick, and sends exactly the picks for this photo', function () {
+    var sent = [], real = _pqPost;
+    _pqPost = function (p) { sent.push(p); return new Promise(function () {}); };   // never settles: no network
+    try {
+        _pqTrain = trainState(); _pqTrainRender();
+        document.addEventListener('keydown', _pqTrainKey);
+        var key = function (k) { document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })); };
+        key('Enter');
+        if (sent.length) return 'Save Problems sent with nothing picked';
+        key('2'); key('3'); key('3');   // off-centre on, crooked on then off again
+        if ([..._pqTrain.picks].join() !== 'off_center') return 'picks: ' + [..._pqTrain.picks].join();
+        key('Enter');
+        var p = sent[0];
+        if (!p || p.action !== 'label' || p.label !== 'problem' || p.problems.join() !== 'off_center') return 'sent: ' + JSON.stringify(p);
+        if (p.src !== 'https://cdn/x1.jpg' || p.shot !== 'Front of Controller' || p.store !== 'OVL') return 'wrong photo: ' + JSON.stringify(p);
+        return true;
+    } finally { _pqPost = real; pqTrainClose(); }
+});
+
+t('train: a photo with no matched shot says so instead of showing a wrong example', function () {
+    _pqTrain = trainState(); _pqTrain.i = 2; _pqTrainRender();
+    try {
+        var f = document.querySelectorAll('#pqTrainOverlay .pqt-fig')[1];
+        return (!f.querySelector('img') && /Not matched to a guide shot/.test(f.textContent)) || 'shown: ' + f.textContent.trim();
+    } finally { pqTrainClose(); }
+});
+
+t('train @390px: the trainer fits a phone, and the photo frame is square', function () {
+    // The overlay is position:fixed, so it is the overlay that gets narrowed —
+    // the body's width does not reach it.
+    _pqTrain = trainState(); _pqTrainRender();
+    var ov = document.getElementById('pqTrainOverlay');
+    ov.style.width = '390px'; ov.style.right = 'auto';
+    try {
+        var box = document.querySelector('#pqTrainOverlay .pqt-box').getBoundingClientRect();
+        if (box.right > 390 + 1) return 'box ends at ' + Math.round(box.right) + 'px';
+        var fr = document.querySelector('#pqTrainOverlay .pqt-frame').getBoundingClientRect();
+        return Math.abs(fr.width - fr.height) <= 2 || 'frame ' + Math.round(fr.width) + '×' + Math.round(fr.height);
+    } finally { pqTrainClose(); }
+});
+
+t('a dirty table is one line for the listing, and outlines every photo it names', function () {
+    var row = Object.assign({}, FIX, { stale: false, findings: [{ code: 'dirty_backdrop', photos: [1, 2],
+        text: 'The table or backdrop is dirty in photos 1, 2 — clean it, then retake.' }] });
+    _pqData = data([row]); _pqTier = 'fix';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    var lines = host.querySelectorAll('.lt-why li');
+    if (lines.length !== 1 || !/dirty in photos 1, 2/.test(lines[0].textContent)) return 'lines: ' + [].map.call(lines, function (l) { return l.textContent; }).join(' | ');
+    var marked = host.querySelectorAll('.pq-ph-flag').length;
+    return marked >= 2 || 'only ' + marked + ' photos outlined';
+});
+
+t('a flagged row never shows its score — every fix is listed, not enough to pass', function () {
+    // Ethan, 2026-10-08: "the user should make all required fixes, not just enough
+    // to bring them above 90 … we probably shouldn't show the score".
+    var row = Object.assign({}, FIX, { stale: false, pictureScore: 84, findings: [
+        { code: 'reflection', photos: [2, 3], text: 'A reflection shows on the item in photos 2, 3 — angle the item or the light, then retake.' },
+        { code: 'framing', photo: 5, text: "Photo 5 isn't to the guide's standard: not centred." }] });
+    _pqData = data([row]); _pqTier = 'fix';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    var txt = host.querySelector('.pq-row').textContent;
+    if (/\b84\b|score/i.test(txt)) return 'the score is on the row';
+    return host.querySelectorAll('.lt-why li').length === 2 || 'not every finding is listed';
+});
+
+// --- Quick Fixes: Approve Deletion (2026-10-11) ---------------------------------
+t('quick fixes: a duplicate alone gets Approve Deletion + Dismiss, and says what it does', function () {
+    var row = Object.assign({}, REORDER, { reorder: null, deletion: { photos: [5], of: [1] },
+        findings: [{ code: 'repeat', photos: [5], text: 'Photo 5 is the same shot as photo 1. Approve Deletion removes it.' }] });
+    _pqData = data([row]); _pqTier = 'reorder';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    var b = host.querySelector('button[onclick^="pqDeletePhotos"]');
+    if (!b || b.textContent.trim() !== 'Approve Deletion') return 'no Approve Deletion button';
+    if (!host.querySelector('button[onclick^="pqDismiss"]')) return 'no Dismiss';
+    if (host.querySelector('button[onclick^="pqRecheck"]')) return 'Recheck offered on a quick fix';
+    return /Approve Deletion removes photo 5 from Shopify/.test(host.textContent) || 'the hint does not say what it does';
+});
+
+t('quick fixes: a reorder AND a duplicate get both approvals', function () {
+    var row = Object.assign({}, REORDER, { deletion: { photos: [6], of: [2] } });
+    _pqData = data([row]); _pqTier = 'reorder';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    return (!!host.querySelector('button[onclick^="pqReorder"]') && !!host.querySelector('button[onclick^="pqDeletePhotos"]'))
+        || 'missing one of the two approvals';
+});
+
+t('a flagged row with a duplicate keeps Recheck and gains Approve Deletion; a stale one does not', function () {
+    var row = Object.assign({}, FIX, { stale: false, deletion: { photos: [3], of: [2] } });
+    _pqData = data([row]); _pqTier = 'fix';
+    var host = document.getElementById('pq-host');
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    if (!host.querySelector('button[onclick^="pqRecheck"]') || !host.querySelector('button[onclick^="pqDeletePhotos"]')) return 'fresh row: buttons wrong';
+    _pqData = data([Object.assign({}, row, { stale: true })]);
+    host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
+    return !host.querySelector('button[onclick^="pqDeletePhotos"]') || 'Approve Deletion offered on photos that changed';
+});
+
+// PASSED (Ethan, 2026-10-11): passes are shown for agreeing with, never as work.
+var PASS = { productId: 'gid://shopify/Product/9', sku: 'MO01-9', title: 'Wii Fit (Game Only)', handle: 'wii',
+    sheet: 'windows-laptops', sheetName: 'Video Games', verdict: 'pass', reviewedAt: new Date().toISOString(),
+    findings: [{ code: 'missing_shot', tier: 'view_free', shot: 'Back', text: 'Missing: Back.' }],
+    stale: false, photos: ph(3), titleNotes: [] };
+t('passed: its own tab, never the landing tab, never in the total', function () {
+    _pqData = data([PASS, FIX]); _pqErr = null; _pqTier = null; _pqPicked = false;
+    var h = _pqHtml();
+    if (h.indexOf('>Passed') < 0 && h.indexOf('Passed\n') < 0 && h.indexOf('Passed') < 0) return 'no Passed tab';
+    if (_pqTier !== 'fix') return 'landed on ' + _pqTier + ', not the work';
+    if (h.indexOf('lh-count lh-count-warn">1<') < 0) return 'the section total counts the pass';
+    _pqData = data([PASS]); _pqTier = null; _pqPicked = false; _pqHtml();
+    return _pqTier !== 'pass' || 'a store with only passes landed on Passed';
+});
+t('passed: the row shows its notes and Should Flag — no Recheck, Dismiss or Approve', function () {
+    _pqData = data([PASS]); _pqTier = 'pass'; _pqPicked = true;
+    var h = _pqHtml();
+    if (h.indexOf('Wii Fit') < 0) return 'the pass is not listed';
+    if (h.indexOf('pqShouldFlag(') < 0) return 'no Should Flag';
+    if (h.indexOf('Missing: Back') < 0 && h.indexOf('Back') < 0) return 'the free finding is hidden';
+    if (/pqRecheck\(|pqDismiss\(|pqReorder\(|pqDeletePhotos\(/.test(h)) return 'a work button is on a pass';
+    return true;
+});
+t('passed: the Listing Health chip does not count passes', function () {
+    _pqData = data([PASS]);
+    var n = ((_pqData.queue || []).filter(function (r) { return r.verdict !== 'pass'; })).length;
+    return n === 0 || 'pass counted';
 });
