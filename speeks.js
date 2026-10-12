@@ -37716,9 +37716,13 @@ function _claimsDueBubbleEl() {
     if (!anchor || !anchor.parentElement) return null;
     b = document.createElement('div');
     b.id = 'claimsDueAlertBubble';
-    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #dc2626, #7f1d1d); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(127, 29, 29, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
-    b.innerHTML = '<span style="font-size:16px; flex-shrink:0; margin-top:2px;">⏰</span>'
-        + '<span id="claimsDueAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>';
+    // FEED ONLY — an invisible state-carrier, same as _plBubbleEl. It shipped
+    // 2026-10-08 dressed as a red floating toast and missing from the retired-
+    // bubble rule in styles.css, so it popped up on screen (Ethan, 2026-10-12:
+    // "we outlawed that style of popup a long time ago"). It must still go to
+    // display:flex when live — that is how _samGatherReminders sees it.
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = '<span id="claimsDueAlertBubbleText"></span>';
     anchor.parentElement.appendChild(b);
     return b;
 }

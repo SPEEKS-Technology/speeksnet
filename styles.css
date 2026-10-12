@@ -10697,7 +10697,12 @@ body.sam-active .hotbar-btn:hover {
 /* Added 2026-09-04 with the dismissed-with-a-note card, listed here in the
    same commit that created it — see the note above for what happens
    otherwise. */
-#titleNoteAlertBubble {
+#titleNoteAlertBubble,
+/* Added 2026-10-12 — the claims 4pm "due today" card (2026-10-08) shipped
+   without this line and floated a red "Card expired … overdue" toast on every
+   store manager's screen. scripts/retired-bubble-check.js now fails any
+   *AlertBubble id speeks.js creates that is missing from this list. */
+#claimsDueAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
