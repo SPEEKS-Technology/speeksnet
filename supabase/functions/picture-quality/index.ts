@@ -90,7 +90,10 @@ const PQ_DEFAULT_ROLES = ["district manager", "ceo"];
 // The cheaper model by default, because the task is recognition against a
 // reference, not deep reasoning — and the calibration run is what decides
 // whether that holds (?model= swaps it without a redeploy).
-const DEFAULT_MODEL = "claude-sonnet-5";
+// Opus 5.5 from 2026-10-13 (Ethan: "let's move to opus"). On the 26 listings
+// he had called it matched 21-22 to Sonnet 5's 12, for about the same money —
+// Sonnet wrote ~4x the output tokens. See scratchpad ab.mjs / ab-score.mjs.
+const DEFAULT_MODEL = "claude-opus-5-5";
 const DEFAULT_EFFORT = "medium";   // low wandered run to run on small visual calls (calibration 2026-09-25)
 const PRICES: Record<string, [number, number]> = {   // $ per million in / out
   "claude-sonnet-5": [2, 10],
@@ -1022,7 +1025,7 @@ async function inFlight(store: string) {
 // NEW listings only — created in the last `days` days — whose saved grade is
 // missing or stale. The one-time backfill of the existing catalogue is a
 // separate decision (Ethan, 2026-10-11: "do not include the one time backfill").
-async function batchSweep(store: string, limit: number, days: number, model: string, effort: string) {
+async function batchSweep(store: string, limit: number, days: number, model: string, effort: string, regrade = false) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
   const client = new Anthropic({ apiKey });
@@ -1030,8 +1033,12 @@ async function batchSweep(store: string, limit: number, days: number, model: str
   const since = new Date(Date.now() - days * 86400000).toISOString();
   const cat: any[] = await rows(`ebay_catalog?store_code=eq.${store}&quantity=gt.0&online_published=is.true`
     + `&product_created_at=gte.${since}&select=product_id&order=product_created_at.desc&limit=1000`);
-  const ids = [...new Set(cat.map(c => String(c.product_id || "")).filter(Boolean)
+  let ids = [...new Set(cat.map(c => String(c.product_id || "")).filter(Boolean)
     .map(s => s.startsWith("gid://") ? s : `gid://shopify/Product/${s}`))];
+  // &regrade=1 — the store's OPEN rows, graded again whatever their stamp (a
+  // model or rules change; Ethan's review queue after the Opus switch, 10-13).
+  if (regrade) ids = [...new Set<string>((await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open&select=product_id&limit=10000`))
+    .map((r: any) => String(r.product_id) as string))];
   const flying = await inFlight(store);
   const seen = new Map<string, string>((await rows(`picture_quality_reviews?store_code=eq.${store}&select=product_id,stamp&limit=10000`))
     .map((r: any) => [String(r.product_id), String(r.stamp || "")]));
@@ -1050,7 +1057,7 @@ async function batchSweep(store: string, limit: number, days: number, model: str
       // sheet is part of the stamp, so check against any sheet's stamp shape —
       // a stale recipe or a changed listing never matches.
       const was = seen.get(l.id);
-      if (was && String(was).startsWith(RECIPE + ":")) {
+      if (!regrade && was && String(was).startsWith(RECIPE + ":")) {
         const same = await Promise.all(sheets.map(s => stampFor(l, s)));
         if (same.includes(was) || was === await stampFor(l, null)) continue;
       }
@@ -1736,7 +1743,7 @@ Deno.serve(async (req: Request) => {
         return json({ store, paused: true, note: "Nightly sweep paused (PQ_NIGHTLY_PAUSED=1) — nothing submitted." });
       }
       const days = Math.min(Math.max(Number(url.searchParams.get("days") || 3), 1), 30);
-      return streamed(() => batchSweep(store, Math.min(sweep, 200), days, model, effort));
+      return streamed(() => batchSweep(store, Math.min(sweep, 200), days, model, effort, url.searchParams.get("regrade") === "1"));
     }
     if (sweep > 0) {
       return streamed(async () => {
