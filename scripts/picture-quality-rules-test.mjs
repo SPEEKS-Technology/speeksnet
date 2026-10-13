@@ -252,6 +252,11 @@ t("missing Everything Included carries what the listing says comes with it (OVL 
   const d = run({ included: "Charger, box" }, PHONE, { needed_missing: ["Everything Included"] });
   const f = d.findings.find(x => x.shot === "Everything Included");
   return (f && f.included === "Charger, box") || say(d); });
+t("the 'repeat' of a photo that also holds the closeup IS the closeup (OVL Intel SSD, 10-13)", () => {
+  const ps = report().photos; ps[0] = photo(1, { shots: ["Top of Controller", "Closeup of Serial/Model Info"] });
+  ps[1] = photo(2, { shots: ["Top of Controller"], repeats: 1 });
+  const d = run({}, PAD, { photos: ps });
+  return !d.deletion || say(d); });
 t("two looks: a flag must be seen by both; a pass from either", () => {
   const a = report({ needed_missing: ["Everything Included"], units_claimed: 2, units_together: false, missing_shots: ["Back of Phone"] });
   const b = report({ needed_missing: [], units_claimed: 2, units_together: true, missing_shots: ["Back of Phone"] });

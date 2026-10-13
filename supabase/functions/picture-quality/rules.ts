@@ -281,9 +281,21 @@ function oppositeShot(label: string, sheet: SheetR): string | null {
 export function lookAlikeFaces(r: ReportR, sheet: SheetR): ReportR {
   const byN = new Map(r.photos.map(p => [p.n, p]));
   const freed: string[] = [];
+  let closeTaken = false;
   const photos = r.photos.map(p => {
     const q = p.repeats != null ? byN.get(p.repeats) : undefined;
     if (!q) return p;
+    // THE CLOSEUP LOOKS LIKE THE FACE IT IS ON (Ethan, 2026-10-13, OVL Intel
+    // SSD: "it just looks like the same photo because the closeup is going to be
+    // on either the top or the bottom"). The model read the label off photo 1,
+    // counted it as the Top AND the serial closeup, and called the real closeup
+    // (photo 2) a repeat. When the original is the only photo holding the
+    // sheet's closeup shot, the "repeat" is that closeup.
+    const close = q.shots.find(s => /closeup|serial/i.test(s) && sheet.shots.some(x => x.label.toLowerCase() === s.toLowerCase()));
+    if (close && !closeTaken && !r.photos.some(o => o !== q && o.shots.some(x => x.toLowerCase() === close.toLowerCase()))) {
+      closeTaken = true;
+      return { ...p, repeats: null, whole_item: false, shots: [close] };
+    }
     const shared = p.shots.find(s => q.shots.some(x => x.toLowerCase() === s.toLowerCase()));
     const opp = shared ? oppositeShot(shared, sheet) : null;
     // Only while no OTHER photo shows that face: with the back already shown,
@@ -294,7 +306,7 @@ export function lookAlikeFaces(r: ReportR, sheet: SheetR): ReportR {
     freed.push(opp.toLowerCase());
     return { ...p, repeats: null, shots: [opp] };
   });
-  if (!freed.length) return r;
+  if (!freed.length && !closeTaken) return r;
   return { ...r, photos, missing_shots: r.missing_shots.filter(m => !freed.includes(m.trim().toLowerCase())) };
 }
 
