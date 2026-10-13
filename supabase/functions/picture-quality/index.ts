@@ -1725,6 +1725,14 @@ Deno.serve(async (req: Request) => {
     // ?sweep=N&batch=1[&days=3] — the nightly path: NEW listings through the
     // Batch API at half price. See batchSweep.
     if (sweep > 0 && url.searchParams.get("batch") === "1") {
+      // PAUSED by Ethan 2026-10-13 until he has reviewed the first nights' rows
+      // ("I don't need this running every night if there are errors"). The cron
+      // still fires and gets this answer; nothing is graded or spent. Resume:
+      //   npx supabase secrets unset PQ_NIGHTLY_PAUSED --project-ref ejzaqmyxxrkmxvzbjeuo
+      // A hand run can still go with &force=1.
+      if (Deno.env.get("PQ_NIGHTLY_PAUSED") === "1" && url.searchParams.get("force") !== "1") {
+        return json({ store, paused: true, note: "Nightly sweep paused (PQ_NIGHTLY_PAUSED=1) — nothing submitted." });
+      }
       const days = Math.min(Math.max(Number(url.searchParams.get("days") || 3), 1), 30);
       return streamed(() => batchSweep(store, Math.min(sweep, 200), days, model, effort));
     }
