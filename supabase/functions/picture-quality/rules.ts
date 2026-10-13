@@ -159,6 +159,8 @@ export type ListingR = {
 };
 export type Finding = {
   code: string; text: string; photo?: number; shot?: string; shots?: string[]; photos?: number[];
+  // missing Everything Included only: what the listing says comes with it.
+  included?: string;
   // missing_shot only: which line of the card it is costed on.
   tier?: "core" | "minor" | "serial" | "view" | "view_free" | "crucial" | "needed";
 };
@@ -299,6 +301,15 @@ export function lookAlikeFaces(r: ReportR, sheet: SheetR): ReportR {
 // --- the verdict ---------------------------------------------------------------
 export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<number, string[]>) {
   const r = lookAlikeFaces(r0, sheet);
+  // Repeats the code stands behind. A closeup of a label is never a repeat of
+  // the face it sits on, nor a whole shot of a closeup (Ethan, 2026-10-13, OVL
+  // Intel SSD: "the closeup is going to be on either the top or the bottom").
+  const byNr = new Map(r.photos.map(p => [p.n, p]));
+  const realRepeats = r.photos.filter(p => {
+    const q = p.repeats != null && p.repeats >= 1 && p.repeats < p.n ? byNr.get(p.repeats) : undefined;
+    return !!q && p.whole_item === q.whole_item && !p.shots.some(s => /closeup|serial/i.test(s));
+  });
+  const repeatSet = new Set(realRepeats.map(p => p.n));
   const findings: Finding[] = [];
   const n = l.photos.length;
 
@@ -338,7 +349,9 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
       && !(x === "wrong_angle" && extraOnly(p)));
     // Turned is its own automatic flag, not framing points (Ethan, 2026-10-11,
     // WSP TeamGroup RAM photo 2 stood on end: "I would also have flagged" it).
-    if (said.includes("turned")) findings.push({ code: "turned", photo: p.n,
+    // Never on a side / top / bottom / corner shot: turning the item to show an
+    // edge is the point of it (OVL Toshiba HDD photos 3 and 4, Ethan 10-13).
+    if (said.includes("turned") && !p.shots.some(s => /\b(side|top|bottom|corner|edge)\b/i.test(s))) findings.push({ code: "turned", photo: p.n,
       text: `Photo ${p.n} has the item turned a different way from the guide and the other photos — turn it to match, then retake.` });
     const probs = [...new Set([...(faults?.get(p.n) || []), ...said.filter(x => x !== "turned")])];
     if (probs.length) {
@@ -390,7 +403,11 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // Closeups (a serial label) may be shot anywhere — the OVL Loupedeck's photo 8
   // was called "a different spot" for being a closeup (Ethan, 2026-10-11).
   const closeup = new Set(r.photos.filter(p => !p.whole_item).map(p => p.n));
-  const setups = isLot ? [] : (r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x))).filter(g => g.length);
+  // A photo that REPEATS one in the standard setup is deleted, not retaken
+  // (Ethan, 2026-10-13, OVL Ryzen 7 2700X: "5, 6 and 7 can just be deleted as
+  // they are the same as 1 and 2"; the Oliver Twins game's 4 and 6) — so it is
+  // left out of the different-spot line, which then names only what to retake.
+  const setups = isLot ? [] : (r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x) && !repeatSet.has(x))).filter(g => g.length);
   if (setups.length > 1) {
     // The FIRST group is the store's standard setup (the prompt lists it first:
     // the stand photos when some are on the stand), not the biggest — the WSP
@@ -399,9 +416,10 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     const main = setups[0];
     const odd = setups.filter(g => g !== main).flat().sort((a, b) => a - b);
     findings.push({ code: "mixed_setups", photos: odd,
-      text: `${plural(odd, "Photo", "Photos")} ${list(odd)} ${plural(odd, "was", "were")} taken in a different spot from the rest`
-        + (r.setup_difference ? ` (${String(r.setup_difference).trim().replace(/\.$/, "")})` : "")
-        + ` — re-position the item where ${plural(main, "photo", "photos")} ${list(main.slice(0, 3))} ${plural(main, "was", "were")} taken, and retake ${plural(odd, "it", "them")} to match.` });
+      // Short (Ethan, 10-13: "Too many words"), and either position will do as
+      // long as every photo matches (his note on the OVL Sony lens).
+      text: `${plural(odd, "Photo", "Photos")} ${list(odd)} ${plural(odd, "was", "were")} taken in a different spot from photo ${main[0]}`
+        + ` — retake so every photo is shot the same way (all on the stand, or all off it).` });
   }
 
   for (const p of r.photos) {
@@ -509,6 +527,8 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     if (/^cosmetic flaws/i.test(m) && !unitCos) continue;
     if (/^lcd flaws/i.test(m) && !screenFault) continue;
     missing.push({ code: "missing_shot", tier: "needed", shot: shot.label,
+      // What the listing says comes with it, for the row (Ethan, OVL GTX 1660).
+      ...(/^everything included/i.test(m) ? { included: l.included.trim() } : {}),
       text: /^everything included/i.test(m)
         // "the listing says everything Included" read badly (WSP Galaxy Tab A9).
         ? `Missing: ${shot.label} — the listing lists what comes with it, so it needs one photo of the item with all of it together (photos of the accessories on their own don't count).`
@@ -519,7 +539,7 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // signal holds. The fix is a click on the Quick Fixes tab, not a chore for
   // the store (Ethan: "say approve deletion. Don't imply that the user should
   // delete it themselves").
-  const repeats = r.photos.filter(p => p.repeats != null && p.repeats >= 1 && p.repeats < p.n);
+  const repeats = realRepeats;
   const deletion = repeats.length ? { photos: repeats.map(p => p.n), of: repeats.map(p => p.repeats as number) } : null;
   if (repeats.length) {
     const ns = deletion!.photos;
@@ -567,6 +587,14 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
 
   const pic = pictureScore(findings, n, l.price);
   const verdict = retake ? "retake" : pic.score < PASS_BAR ? "fix" : (reorder || deletion) ? "reorder" : "pass";
+  // A flagged listing is being reshot anyway, so it hears about ANY real order
+  // problem, not only the big moves a passing one is offered (Ethan, 10-13: OVL
+  // HP Stream's keyboard in photo 2, the Surface Book 3). Ethan's first bar
+  // (09-25): under ~85% in sheet order, or the first two photos wrong. No
+  // points — it rides along with the retake.
+  if ((verdict === "fix" || verdict === "retake") && changed && (reorder || oScore < 0.85 || order[0] !== 1 || order[1] !== 2)) {
+    findings.push({ code: "order", text: "The photos are out of the guide's order — use the guide's order when you retake." });
+  }
   return { verdict, findings, reorder, deletion, orderScore: Math.round(oScore * 100) / 100,
            pictureScore: pic.score, costs: pic.costs };
 }

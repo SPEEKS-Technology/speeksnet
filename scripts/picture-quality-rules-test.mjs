@@ -185,11 +185,11 @@ t("reflections: 3 / 6 / 9 by price, never on Screen Off", () => {
   const off = report().photos; off[2] = photo(3, { shots: ["Screen Off"], issues: [issue("reflection")] });
   const d = run({}, PHONE, { photos: off });
   return (s.join() === "97,94,91" && d.pictureScore === 100) || `${s.join()} | ${say(d)}`; });
-t("different spots: −5, re-position wording, and framing stacks on top", () => {
+t("different spots: −5, short wording, and framing stacks on top", () => {
   const ps = report().photos; ps[7] = photo(8, { framing: "off", framing_problems: ["cut_off"] });
   const d = run({}, PHONE, { photos: ps, setups: [[1, 2, 3, 4, 5, 6, 7], [8, 9]], setup_difference: "brighter backdrop" });
   const f = d.findings.find(x => x.code === "mixed_setups");
-  return (d.pictureScore === 92 && /Photos 8 and 9 were taken in a different spot/.test(f.text) && /re-position the item/.test(f.text)
+  return (d.pictureScore === 92 && /Photos 8 and 9 were taken in a different spot/.test(f.text) && /retake so every photo is shot the same way/.test(f.text)
     && d.findings.some(x => x.code === "framing" && x.photo === 8)) || say(d); });
 
 t("a flagged listing lists EVERY finding, the small ones too", () => {
@@ -229,6 +229,29 @@ t("turned is an automatic flag, even on an Extra photo (WSP TeamGroup RAM photo 
   const ps = report().photos; ps[1] = photo(2, { framing: "off", framing_problems: ["turned"] });
   const d = run({}, PHONE, { photos: ps });
   return (flagged(d) && d.findings.some(f => f.code === "turned" && f.photo === 2)) || say(d); });
+t("a closeup of a label is never a repeat of its face (OVL Intel SSD, 10-13)", () => {
+  const ps = report().photos; ps[0] = photo(1, { shots: ["Top of Controller"] });
+  ps[1] = photo(2, { shots: ["Closeup of Serial/Model Info"], whole_item: false, repeats: 1 });
+  const d = run({}, PAD, { photos: ps });
+  return !d.deletion || say(d); });
+t("a repeat off the standard setup is deleted, not also retaken (OVL Ryzen 2700X, 10-13)", () => {
+  const ps = report().photos; ps[4] = photo(5, { repeats: 1 }); ps[5] = photo(6, { repeats: 2 });
+  const d = run({}, PHONE, { photos: ps, setups: [[1, 2, 3, 4, 7, 8, 9, 10], [5, 6]] });
+  return (d.deletion && d.deletion.photos.join() === "5,6" && !d.findings.some(f => f.code === "mixed_setups")) || say(d); });
+t("turned never counts on a side shot (OVL Toshiba HDD photos 3-4, 10-13)", () => {
+  const ps = report().photos; ps[2] = photo(3, { shots: ["Side of Phone"], framing: "off", framing_problems: ["turned"] });
+  const d = run({}, PHONE, { photos: ps });
+  return !d.findings.some(f => f.code === "turned") || say(d); });
+t("a flagged listing hears about order; a passing one does not (OVL HP Stream, 10-13)", () => {
+  const so = [1, 3, 4, 5, 6, 7, 8, 9, 10, 2];
+  const ps = report().photos; ps[0].issues = [issue("stock_photo")];
+  const bad = run({}, PHONE, { photos: ps, suggested_order: so });
+  const good = run({}, PHONE, { suggested_order: so });
+  return (bad.findings.some(f => f.code === "order") && !good.findings.some(f => f.code === "order")) || say(bad) + " | " + say(good); });
+t("missing Everything Included carries what the listing says comes with it (OVL GTX 1660)", () => {
+  const d = run({ included: "Charger, box" }, PHONE, { needed_missing: ["Everything Included"] });
+  const f = d.findings.find(x => x.shot === "Everything Included");
+  return (f && f.included === "Charger, box") || say(d); });
 t("two looks: a flag must be seen by both; a pass from either", () => {
   const a = report({ needed_missing: ["Everything Included"], units_claimed: 2, units_together: false, missing_shots: ["Back of Phone"] });
   const b = report({ needed_missing: [], units_claimed: 2, units_together: true, missing_shots: ["Back of Phone"] });

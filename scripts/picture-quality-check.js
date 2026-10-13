@@ -344,8 +344,8 @@ t('picture quality: retake sentence sits in the row above the photos, and the sh
     var d = document.createElement('div'); d.innerHTML = _pqHtml();
     if (d.querySelector('.lt-said')) return 'there is still a line above the listings';
     var first = d.querySelector('.pq-row .lt-why li');
-    if (!first || first.textContent.indexOf('Retake it following the guide') < 0) return 'the first line of the row is not the retake sentence';
-    if (first.textContent.indexOf('6 of 14 required shots are missing') < 0) return 'the missing count was dropped';
+    if (!first || first.textContent.indexOf('Retake Following The Guide') < 0) return 'the first line of the row is not the retake sentence';
+    if (first.textContent.indexOf('6 of 14 required shots missing') < 0) return 'the missing count was dropped';
     if (d.textContent.indexOf('Retake following the guide —') >= 0) return 'the old retake line is still there';
     var sheet = d.querySelector('.pq-sheet').textContent.replace(/\s+/g, ' ').trim();
     return /^Checked [A-Z][a-z]{2} \d{1,2} Against: Windows Laptops$/.test(sheet) || 'sheet line: ' + sheet;
@@ -623,7 +623,7 @@ t('a dirty table is one line for the listing, and outlines every photo it names'
     var host = document.getElementById('pq-host');
     host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
     var lines = host.querySelectorAll('.lt-why li');
-    if (lines.length !== 1 || !/dirty in photos 1, 2/.test(lines[0].textContent)) return 'lines: ' + [].map.call(lines, function (l) { return l.textContent; }).join(' | ');
+    if (lines.length !== 1 || !/^Dirty Table — Photos 1, 2/.test(lines[0].textContent)) return 'lines: ' + [].map.call(lines, function (l) { return l.textContent; }).join(' | ');
     var marked = host.querySelectorAll('.pq-ph-flag').length;
     return marked >= 2 || 'only ' + marked + ' photos outlined';
 });

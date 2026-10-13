@@ -56131,40 +56131,59 @@ function _pqDay(iso) {
     return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-// The retake sentence for ONE listing, with the check's count of what is
-// missing kept ("3 of 5 required shots are missing") — the guide strip below
-// names which, so the names are not repeated here.
+// The retake line for ONE listing, with the check's count kept ("4 of 6
+// required shots missing") — the guide strip below names which.
 function _pqRetakeSaid(findings) {
     const f = (findings || []).find(x => x.code === 'retake');
-    const m = f && /(\d+ of \d+ required shots are missing)/.exec(f.text || '');
-    return `This listing is missing so much of the Picture Guide that a buyer cannot judge the item${
-        m ? ' — ' + _ecEsc(m[1]) : ''}. <strong>Retake it following the guide</strong>, then press Recheck.`;
+    const m = f && /(\d+ of \d+) required shots are missing/.exec(f.text || '');
+    return `<b>Retake Following The Guide</b>${m ? ' — ' + _ecEsc(m[1]) + ' required shots missing' : ''}`;
 }
 
-// ⚠️ ONE LINE PER PROBLEM, NOT PER PHOTO (Ethan, 2026-09-30, on a RAM listing
-// that read "Photo 2 … wrong angle / Photo 3 … wrong angle / Photo 4 … wrong
-// angle / Photo 2 is blurry / Photo 3 is blurry …": "any way to make this look
-// not as chaotic?"). The same three photos named twice, seven lines for two
-// problems. Grouped, it is "Taken From The Wrong Angle — Photos 2, 3, 4" and
-// "Blurry — Photos 2, 3, 4", which is also the order the store fixes them in.
-// The server's sentences are unchanged (the notes and the ask still quote
-// them); this only regroups them for reading.
-//   not square  → "Not Square (Should Be 1×1)" — the size it IS was noise; the
-//                 size it should be is what the store needs (Ethan, same day)
-//   framing     → one group per problem it names ("…standard: crooked, cut off")
-//   missing     → one line naming the shots
-//   anything else with a photo → its own words, with the photo stripped off
+// ⚠️ ONE SHORT LINE PER PROBLEM (Ethan, 2026-09-30: "any way to make this look
+// not as chaotic?"; and 2026-10-13: "Too many words and people won't read it
+// fully"). Every line is "<b>Label</b> — Photos 2, 3 · what to do", the photos
+// grouped per problem — never the server's full sentence. The server's
+// sentences are unchanged (Listing Health Notes and the ask still quote them).
+//   missing   → one line naming the shots; Everything Included adds what the
+//               listing says comes with it (Ethan, OVL GTX 1660)
+//   framing   → one group per problem it names ("…standard: crooked, cut off")
+//   repeat    → "Photo 4 (same as 1)" · Approve Deletion
+//   the rest  → a short label from _PQ_SHORT, else its own words, photo stripped
+const _PQ_SHORT = {
+    mixed_setups: ['Different Spot', 'retake so every photo is shot the same way — all on the stand, or all off it'],
+    reflection: ['Reflection', 'angle the item or the light'],
+    dirty_backdrop: ['Dirty Table', 'clean it, then retake'],
+    clutter: ['Something Else In The Frame', 'clear it out, then retake'],
+    loose_cords: ['Loose Cord', 'wrap it up'],
+    not_on_stand: ['Not On The Stand'],
+    turned: ['Turned The Wrong Way', 'turn it to match the guide'],
+    order: ['Out Of Order', 'use the guide\'s order when you retake'],
+};
 function _pqFindingLines(findings) {
     const cap = s => String(s).replace(/(^|\s)([a-z])/g, (m, a, b) => a + b.toUpperCase());
     const groups = new Map(), misses = [], loose = [];
-    const add = (label, n) => {
-        if (!groups.has(label)) groups.set(label, new Set());
-        groups.get(label).add(n);
+    const add = (label, n, hint) => {
+        if (!groups.has(label)) groups.set(label, { nums: new Set(), hint: hint || '' });
+        if (n) groups.get(label).nums.add(n);
     };
+    let included = '';
     for (const f of findings || []) {
         const text = String(f.text || '');
-        if (f.code === 'missing_shot') { misses.push(f.shot || text.replace(/^Missing:\s*|\.$/g, '')); continue; }
-        if (!f.photo) { loose.push(text); continue; }
+        if (f.code === 'missing_shot') {
+            misses.push(f.shot || text.replace(/^Missing:\s*|\.$/g, ''));
+            if (/^everything included/i.test(f.shot || '') && f.included) included = f.included;
+            continue;
+        }
+        if (f.code === 'repeat') {
+            // "Photo 4 is the same shot as photo 1; Photo 6 is the same shot as photo 2."
+            const pairs = [...text.matchAll(/Photo (\d+) is the same shot as photo (\d+)/g)].map(m => `${m[1]} (same as ${m[2]})`);
+            const many = pairs.length > 1;
+            loose.push(`<b>Repeat</b> — ${many ? 'Photos' : 'Photo'} ${_ecEsc(pairs.join(', '))} · Approve Deletion removes ${many ? 'them' : 'it'}`);
+            continue;
+        }
+        const short = _PQ_SHORT[f.code];
+        if (short) { (f.photos || [f.photo]).forEach(n => add(short[0], n, short[1])); continue; }
+        if (!f.photo) { loose.push(_ecEsc(text)); continue; }
         if (f.code === 'not_square') { add('Not Square (Should Be 1×1)', f.photo); continue; }
         if (f.code === 'framing') {
             const m = /standard:\s*(.+?)\.?$/.exec(text);
@@ -56176,10 +56195,14 @@ function _pqFindingLines(findings) {
         add(cap(said), f.photo);
     }
     const nums = s => { const a = [...s].sort((x, y) => x - y); return (a.length === 1 ? 'Photo ' : 'Photos ') + a.join(', '); };
+    const missLine = misses.length
+        ? `<li><b>Missing</b> — ${_ecEsc(misses.join(', '))}${included ? ` (the listing says it comes with: ${_ecEsc(included)})` : ''}</li>`
+        : '';
     return [
-        ...(misses.length ? [`<li><b>Missing</b> — ${_ecEsc(misses.join(', '))}</li>`] : []),
-        ...[...groups].map(([label, s]) => `<li><b>${_ecEsc(label)}</b> — ${nums(s)}</li>`),
-        ...loose.map(t => `<li>${_ecEsc(t)}</li>`),
+        missLine,
+        ...[...groups].map(([label, g]) =>
+            `<li><b>${_ecEsc(label)}</b>${g.nums.size ? ' — ' + nums(g.nums) : ''}${g.hint ? ' · ' + _ecEsc(g.hint) : ''}</li>`),
+        ...loose.map(t => `<li>${t}</li>`),
     ].join('');
 }
 
