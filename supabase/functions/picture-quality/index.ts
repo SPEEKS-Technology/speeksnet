@@ -1025,7 +1025,7 @@ async function inFlight(store: string) {
 // NEW listings only — created in the last `days` days — whose saved grade is
 // missing or stale. The one-time backfill of the existing catalogue is a
 // separate decision (Ethan, 2026-10-11: "do not include the one time backfill").
-async function batchSweep(store: string, limit: number, days: number, model: string, effort: string, regrade = false) {
+async function batchSweep(store: string, limit: number, days: number, model: string, effort: string, regrade = false, random = false) {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this project");
   const client = new Anthropic({ apiKey });
@@ -1037,6 +1037,8 @@ async function batchSweep(store: string, limit: number, days: number, model: str
     .map(s => s.startsWith("gid://") ? s : `gid://shopify/Product/${s}`))];
   // &regrade=1 — the store's OPEN rows, graded again whatever their stamp (a
   // model or rules change; Ethan's review queue after the Opus switch, 10-13).
+  // A random handful, not the newest (Ethan's nightly sample, 10-13).
+  if (random) ids = ids.map(id => [Math.random(), id] as const).sort((a, b) => a[0] - b[0]).map(x => x[1]);
   if (regrade) ids = [...new Set<string>((await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open&select=product_id&limit=10000`))
     .map((r: any) => String(r.product_id) as string))];
   const flying = await inFlight(store);
@@ -1742,8 +1744,19 @@ Deno.serve(async (req: Request) => {
       if (Deno.env.get("PQ_NIGHTLY_PAUSED") === "1" && url.searchParams.get("force") !== "1") {
         return json({ store, paused: true, note: "Nightly sweep paused (PQ_NIGHTLY_PAUSED=1) — nothing submitted." });
       }
-      const days = Math.min(Math.max(Number(url.searchParams.get("days") || 3), 1), 30);
-      return streamed(() => batchSweep(store, Math.min(sweep, 200), days, model, effort, url.searchParams.get("regrade") === "1"));
+      // THE NIGHTLY SAMPLE (Ethan, 2026-10-13): "if we turn the batch back on, I
+      // only want it for OVL and only pull 10 new listings from today at random".
+      // The cron still calls every store with sweep=200&days=3; anything without
+      // &force=1 is held to this instead. A hand run (&force=1) takes its params.
+      const NIGHTLY = { stores: ["OVL"], limit: 10, days: 1 };
+      const forced = url.searchParams.get("force") === "1";
+      if (!forced && !NIGHTLY.stores.includes(store)) {
+        return json({ store, skipped: true, note: `Nightly sample is ${NIGHTLY.stores.join(", ")} only.` });
+      }
+      const days = forced ? Math.min(Math.max(Number(url.searchParams.get("days") || 3), 1), 30) : NIGHTLY.days;
+      const limit = forced ? Math.min(sweep, 200) : NIGHTLY.limit;
+      return streamed(() => batchSweep(store, limit, days, model, effort, url.searchParams.get("regrade") === "1",
+        !forced || url.searchParams.get("random") === "1"));
     }
     if (sweep > 0) {
       return streamed(async () => {
