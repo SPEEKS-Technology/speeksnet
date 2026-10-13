@@ -257,6 +257,14 @@ t("the 'repeat' of a photo that also holds the closeup IS the closeup (OVL Intel
   ps[1] = photo(2, { shots: ["Top of Controller"], repeats: 1 });
   const d = run({}, PAD, { photos: ps });
   return !d.deletion || say(d); });
+t("a photo being deleted is not also sent back for a retake (OVL Evercade, 10-13 A/B)", () => {
+  const GAME = { slug: "video-games", shots: [{ label: "Front of Game", cond: null }, { label: "Back of Game", cond: null }] };
+  const ps = report({ n: 6 }).photos;
+  ps[0] = photo(1, { shots: ["Front of Game"] }); ps[1] = photo(2, { shots: ["Back of Game"] });
+  ps[3] = photo(4, { shots: ["Front of Game"], repeats: 1, issues: [issue("not_on_stand")] });
+  ps[5] = photo(6, { shots: ["Back of Game"], repeats: 2, issues: [issue("not_on_stand"), issue("reflection")] });
+  const d = decide(listing({ n: 6 }), GAME, report({ n: 6, photos: ps }));
+  return (d.verdict === "reorder" && !d.findings.some(f => f.code === "not_on_stand" || f.code === "reflection")) || say(d); });
 t("two looks: a flag must be seen by both; a pass from either", () => {
   const a = report({ needed_missing: ["Everything Included"], units_claimed: 2, units_together: false, missing_shots: ["Back of Phone"] });
   const b = report({ needed_missing: [], units_claimed: 2, units_together: true, missing_shots: ["Back of Phone"] });

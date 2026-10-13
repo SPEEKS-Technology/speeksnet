@@ -597,6 +597,27 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     findings.push(...missing);
   }
 
+  // A photo that Approve Deletion removes is not ALSO sent back for a retake —
+  // its own problems go with it (OVL Evercade, 10-13 A/B: photos 4 and 6 were
+  // both repeats to delete and "not on the stand, retake them").
+  if (repeatSet.size) {
+    for (let i = findings.length - 1; i >= 0; i--) {
+      const f = findings[i];
+      if (f.code === "repeat") continue;
+      if (f.photo && repeatSet.has(f.photo)) { findings.splice(i, 1); continue; }
+      if (f.photos) {
+        const kept = f.photos.filter(x => !repeatSet.has(x));
+        if (!kept.length) findings.splice(i, 1);
+        else if (kept.length < f.photos.length) {
+          // The sentence names the photos; rebuild just the photo list in it.
+          f.text = f.text.replace(/^(Photos?) [\d, and]+? (was|were|is|are)\b/, () => `${plural(kept, "Photo", "Photos")} ${list(kept)} ${plural(kept, "was", "were")}`)
+            .replace(/in photos? [\d, and]+? —/, () => `in ${plural(kept, "photo", "photos")} ${list(kept)} —`)
+            .replace(/(Photos?) [\d, and]+? (aren't|isn't)/, () => `${plural(kept, "Photo", "Photos")} ${list(kept)} ${plural(kept, "isn't", "aren't")}`);
+          f.photos = kept;
+        }
+      }
+    }
+  }
   const pic = pictureScore(findings, n, l.price);
   const verdict = retake ? "retake" : pic.score < PASS_BAR ? "fix" : (reorder || deletion) ? "reorder" : "pass";
   // A flagged listing is being reshot anyway, so it hears about ANY real order

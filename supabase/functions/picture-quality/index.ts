@@ -95,6 +95,7 @@ const DEFAULT_EFFORT = "medium";   // low wandered run to run on small visual ca
 const PRICES: Record<string, [number, number]> = {   // $ per million in / out
   "claude-sonnet-5": [2, 10],
   "claude-opus-5": [5, 25],
+  "claude-opus-5-5": [4, 20],   // 2026-10-13, A/B against Sonnet on Ethan's calls; list price, check before budgeting
   "claude-haiku-5-5": [0.1, 0.5],   // 2026-10-11, for the simple sheets (games) — see modelFor
 };
 
