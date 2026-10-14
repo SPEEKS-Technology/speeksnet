@@ -15,22 +15,21 @@ function frag(html) { var d = document.createElement('div'); d.innerHTML = html;
 
 // ---- markup ---------------------------------------------------------------
 
-t('kind column holds the dot and Sale; the line is store · amount · time', function () {
+t('the line is Sale · store · amount · time; the dot comes after the text', function () {
     var d = frag(_lvChipHtml(sale([])));
     if (d.querySelector('.lv-ahead')) return 'header rendered with no items';
-    var kind = d.querySelector('.lv-akind');
-    if (!kind || !kind.querySelector('.lv-adot')) return 'dot is not in the kind column';
-    if (kind.textContent !== 'Sale') return 'kind text: ' + kind.textContent;
     var line = d.querySelector('.lv-abody .lv-aline');
     if (!line) return 'no .lv-aline in the body';
-    if (line.querySelector('.lv-adot')) return 'dot still in the line';
-    return /^OVL · \$812\.40 · /.test(line.textContent) || 'line text: ' + line.textContent;
+    if (line.querySelector('.lv-adot')) return 'dot is inside the line';
+    var last = d.lastElementChild;
+    if (!last || !last.classList.contains('lv-adot')) return 'dot is not the last thing in the chip';
+    return /^Sale · OVL · \$812\.40 · /.test(line.textContent) || 'line text: ' + line.textContent;
 });
 
-t('refund chip says Refund in the kind column', function () {
+t('refund chip says Refund in the line', function () {
     var e = sale([]); e.kind = 'refund';
-    var kind = frag(_lvChipHtml(e)).querySelector('.lv-akind');
-    return (kind && kind.textContent === 'Refund') || 'kind text: ' + (kind && kind.textContent);
+    var line = frag(_lvChipHtml(e)).querySelector('.lv-aline');
+    return /^Refund · OVL/.test(line.textContent) || 'line text: ' + line.textContent;
 });
 
 t('payload from before titles (no items key) renders without a header', function () {
@@ -187,19 +186,19 @@ function chips(width, events) {
     });
 });
 
-t('the title starts where the store code does', function () {
+t('the title starts where "Sale" does', function () {
     var c = chips(1440, [sale([{ title: 'AirPods Pro', qty: 1 }])])[0];
     var name = c.querySelector('.lv-aname').getBoundingClientRect().left;
-    var code = c.querySelector('.lv-aline b').getBoundingClientRect().left;
-    return Math.abs(name - code) <= 1 || 'title at ' + name + ', store code at ' + code;
+    var line = c.querySelector('.lv-aline').getBoundingClientRect().left;
+    return Math.abs(name - line) <= 1 || 'title at ' + name + ', Sale at ' + line;
 });
 
-t('dot and Sale sit centred on the left of a two-line chip', function () {
+t('the dot sits centred on the right of a two-line chip', function () {
     var c = chips(1440, [sale([{ title: 'AirPods Pro', qty: 1 }])])[0];
     var cr = c.getBoundingClientRect(), dr = c.querySelector('.lv-adot').getBoundingClientRect();
-    var kr = c.querySelector('.lv-akind').getBoundingClientRect();
     var br = c.querySelector('.lv-abody').getBoundingClientRect();
-    if (!(kr.right <= br.left)) return 'kind column overlaps the body';
+    if (!(dr.left >= br.right)) return 'dot is not right of the text';
+    if (cr.right - dr.right > 14) return 'dot is ' + (cr.right - dr.right) + 'px from the right edge';
     var mid = (cr.top + cr.bottom) / 2, dmid = (dr.top + dr.bottom) / 2;
     return Math.abs(mid - dmid) <= 1.5 || 'dot centre ' + dmid + ' vs chip centre ' + mid;
 });

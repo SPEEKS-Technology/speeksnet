@@ -13570,15 +13570,14 @@ function _lvActivity() {
     return '<div class="lv-activity-row"></div>';
 }
 
-// A chip is two columns. On the left, the dot and the word Sale or Refund,
-// centred top to bottom — what KIND of event, readable at a glance down a row.
-// On the right, a quiet header naming the items (the first, cut off with a
-// fade, and "+N more"), over store · amount · time (user's call, 2026-10-14).
+// A chip is the text, then the dot centred top to bottom on the RIGHT. The text
+// is a quiet header naming the items (the first, cut off with a fade, and "+N
+// more") over Sale · store · amount · time (user's call, 2026-10-14, after a
+// version with Sale/Refund in a column of its own on the left).
 //
-// The header does NOT widen the chip: the store · amount · time line under it
-// sets the right column's width, and the title is cut off to fit. Titles run
-// long, and the chips were to stay the size they were — the left column costs a
-// little width, which was allowed for. The full list is in the chip's tooltip.
+// The header does NOT widen the chip: the line under it sets the text's width,
+// and the title is cut off to fit. Titles run long, and the chips were to stay
+// the size they were. The full list is in the chip's tooltip.
 //
 // Refunds carry titles too, from shopify-live's recentRefunds. A chip with no
 // items (a refund the list had not caught up with, or a payload from before
@@ -13591,12 +13590,11 @@ function _lvChipHtml(e) {
             + (items.length > 1 ? '<span class="lv-amore">+' + (items.length - 1) + ' more</span>' : '')
             + '</span>'
         : '';
-    return '<span class="lv-akind"><span class="lv-adot"></span>' + (refund ? 'Refund' : 'Sale') + '</span>'
-        + '<span class="lv-abody">' + head
-        + '<span class="lv-aline"><b>' + escapeHtml(e.code) + '</b>'
+    return '<span class="lv-abody">' + head
+        + '<span class="lv-aline">' + (refund ? 'Refund' : 'Sale') + ' &middot; <b>' + escapeHtml(e.code) + '</b>'
         + (e.amount > 0 ? ' &middot; <b>' + _lvMoney(e.amount, true) + '</b>' : '')
         + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '')
-        + '</span></span>';
+        + '</span></span><span class="lv-adot"></span>';
 }
 
 // The chip's hover: every item on the sale or refund, in full. Goes in data-tip,
