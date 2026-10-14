@@ -140,11 +140,33 @@ function chips(width, events) {
         var c = chips(w, [sale([{ title: LONG, qty: 1 }, { title: 'B', qty: 1 }, { title: 'C', qty: 1 }])])[0];
         var name = c.querySelector('.lv-aname'), more = c.querySelector('.lv-amore');
         if (!(name.scrollWidth > name.clientWidth)) return 'title not truncated';
-        if (getComputedStyle(name).textOverflow !== 'ellipsis') return 'no ellipsis';
+        // Faded, not "…": an ellipsis on nearly every chip read as clutter.
+        var cs = getComputedStyle(name);
+        if (cs.textOverflow === 'ellipsis') return 'ellipsis is back';
+        if (!/gradient/.test(cs.webkitMaskImage || cs.maskImage || '')) return 'no fade mask';
         if (more.scrollWidth > more.clientWidth) return '"+2 more" clipped';
         var cr = c.getBoundingClientRect(), mr = more.getBoundingClientRect();
         return mr.right <= cr.right + 0.5 || '"+2 more" overflows the chip by ' + (mr.right - cr.right) + 'px';
     });
+});
+
+t('the title starts where "Sale" does, not under the dot', function () {
+    var c = chips(1440, [sale([{ title: 'AirPods Pro', qty: 1 }])])[0];
+    var name = c.querySelector('.lv-aname').getBoundingClientRect().left;
+    var r = document.createRange();
+    var saleText = Array.prototype.find.call(c.querySelector('.lv-aline').childNodes,
+        function (n) { return n.nodeType === 3 && /Sale/.test(n.textContent); });
+    r.selectNodeContents(saleText);
+    var saleLeft = r.getBoundingClientRect().left;
+    return Math.abs(name - saleLeft) <= 1 || 'title at ' + name + ', Sale at ' + saleLeft;
+});
+
+t('a short title is not faded', function () {
+    var c = chips(1440, [sale([{ title: 'iPad', qty: 1 }])])[0];
+    var name = c.querySelector('.lv-aname');
+    var r = document.createRange(); r.selectNodeContents(name);
+    var textRight = r.getBoundingClientRect().right, boxRight = name.getBoundingClientRect().right;
+    return boxRight - textRight >= 16 || 'text ends ' + (boxRight - textRight) + 'px from the fade edge';
 });
 
 t('the Sale lines share a bottom edge in a mixed row', function () {

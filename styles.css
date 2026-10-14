@@ -12232,16 +12232,29 @@ body.sam-active .hotbar-btn:hover {
    chip's shrink-to-fit sizing entirely, and min-width:100% then hands it back
    exactly the width .lv-aline asked for — so the title is cut off at the chip's
    edge, whatever its length. "+N more" never shrinks; the title gives way first.
-   The full list is in the chip's data-tip tooltip. */
+   The full list is in the chip's data-tip tooltip.
+
+   Indented by the dot and its gap (7px + 7px) so the title starts where "Sale"
+   does and the dot hangs in the margin. Flush with the dot, the two lines did not
+   line up and the chip read as two things stacked (user's call, 2026-10-14). */
 .lv-ahead {
     display: flex; align-items: baseline; gap: 5px;
-    width: 0; min-width: 100%;
-    font-size: 10.5px; font-weight: 600; color: #8a94a3; line-height: 1.25;
+    width: 0; min-width: 100%; box-sizing: border-box; padding-left: 14px;
+    font-size: 10.5px; font-weight: 500; color: #98a2b3; line-height: 1.25;
 }
-.lv-aname { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.lv-amore { flex: none; font-weight: 700; color: #a0a9b6; }
+/* Cut off with a fade, not an ellipsis: nearly every title is cut, and a row of
+   "…" read as clutter (user's call, 2026-10-14). The name FILLS the header so the
+   fade always sits at the header's right edge, where a short title never reaches
+   — fading a title that fits would eat its last letters. That pushes "+N more" to
+   the right edge, which also lines it up across a row. */
+.lv-aname {
+    flex: 1 1 auto; min-width: 0; overflow: hidden;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+}
+.lv-amore { flex: none; font-weight: 650; color: #7c8696; }
 /* Two lines in a pill radius pinches the header's ends into the curve. */
-.lv-activity.has-items { border-radius: 12px; padding-top: 4px; cursor: default; }
+.lv-activity.has-items { border-radius: 14px; gap: 1px; padding-top: 5px; cursor: default; }
 .lv-activity b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
 .lv-activity .lv-aq { color: #94a3b8; font-weight: 650; }
 .lv-adot {
