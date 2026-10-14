@@ -12183,66 +12183,114 @@ body.sam-active .hotbar-btn:hover {
     .lv-strip.lv-fc-strip { grid-template-columns: 1fr; }
 }
 
-/* Sales and refunds as they land, newest at the left, each shifting the rest along
-   and expiring on its own clock. The row collapses to nothing when empty so a
-   quiet dashboard carries no stray gap. */
-/* Bottom-aligned, not centred: a sale chip with an item header is a line taller
-   than a refund (or a sale from before titles), and lining them up by their
-   bottom keeps every "Sale · store · amount · time" line on one baseline. */
+/* Sales and refunds as they land, newest at the left. The row collapses to
+   nothing when empty so a quiet dashboard carries no stray gap.
+
+   ONE ROW OF EVEN CARDS, NEVER WRAPPED, NEVER SCROLLED (user's call, 2026-10-14).
+   The chips used to be pills sized to their text, which wrapped ragged — four on
+   one line and an orphan under them. Now every card is one grid column wide, and
+   a card that does not fit the width is simply not shown: the newest are on the
+   left, so what drops off is always the oldest.
+
+   Done by the grid rather than measured in JS, so it holds through a window
+   resize with nothing listening for one. Row 1 is the only real row; every card
+   that overflows it lands in an implicit row of ZERO height, and overflow:hidden
+   clips it away entirely. No row gap and no bottom padding, or a sliver of the
+   next row would show through. auto-fill rather than auto-fit, so two cards on a
+   wide screen stay card-sized instead of stretching across the panel.
+
+   ⚠️ The cards are align-self: start (below), and it is load-bearing. Left to
+   stretch, a card in a zero-height row is squeezed to its minimum (14px), and
+   because a card centres its content, the rest of its 51px spilled UPWARD out of
+   that box and back into the visible row — the clipped cards' titles printed
+   over the bottom of the shown ones. At its natural height it sits wholly below
+   the row's edge and is clipped clean. Caught on the real dashboard at 950px. */
 .lv-activity-row {
-    display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap;
-    margin-top: 13px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr));
+    grid-template-rows: auto; grid-auto-rows: 0; column-gap: 8px; row-gap: 0;
+    overflow: hidden; margin-top: 13px;
 }
 .lv-activity-row:empty { display: none; margin-top: 0; }
-/* A column of two lines: the optional item header, then .lv-aline — which is the
-   whole chip as it was before headers, dot and all, so a chip without one renders
-   exactly as it always did. */
+/* The "Recent activity" header (see _lvActivity). The caption is .lv-split, the
+   same one "Selling" uses; the whole block goes when the row has nothing in it,
+   so a quiet morning carries no orphan heading. */
+.lv-activity-wrap:has(> .lv-activity-row:empty) { display: none; }
+.lv-activity-wrap .lv-act-h { margin: 18px 0 10px; }
+.lv-activity-wrap .lv-activity-row { margin-top: 0; }
+/* LIVE: shown only while the shop is open on today's view (.is-live, set in
+   _lvSyncActivity). Same green as the OPEN pill and the sale dot, and the same
+   ping, so it reads as part of that family rather than a new signal. */
+.lv-live {
+    display: none; align-items: center; gap: 6px; flex: none;
+    padding: 3px 8px; border-radius: 999px; background: #e8f6ee; color: #1f7a47;
+    font-size: 9.5px; font-weight: 800; line-height: 1; letter-spacing: .1em;
+    text-transform: uppercase;
+}
+.lv-activity-wrap.is-live .lv-live { display: inline-flex; }
+.lv-live i { position: relative; width: 6px; height: 6px; border-radius: 50%; background: #1f9d57; }
+.lv-live i::after {
+    content: ''; position: absolute; inset: 0; border-radius: 50%; background: #1f9d57;
+    animation: lvPing 1.9s cubic-bezier(.22, .61, .36, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) { .lv-live i::after { animation: none; } }
+/* A card: the dot, centred top to bottom on the left, then two lines — what sold
+   and for how much, over Sale · store · time. See _lvChipHtml. White and quiet,
+   with the refund's amber kept for the one event worth a second look. */
+/* Type and colour are the Live Dashboard's own, measured off it rather than
+   picked (consistency pass, 2026-10-14): the title is the selling table's row
+   text (12px / 650 / slate), the amount its money cells (13px / 850 / near-black,
+   tabular), the meta line its muted grey (#94a3b8). Border is the panel's own
+   #e6ebf1, and the 10px radius is the day toggle's — the inner-control radius
+   inside an 18px card. */
 .lv-activity {
-    display: inline-flex; flex-direction: column; gap: 2px; flex: none;
-    font-size: 11.5px; font-weight: 700; color: #647082;
-    background: #f6f8fa; border: 1px solid #e6ebf1; border-radius: 999px;
-    padding: 5px 12px 5px 10px; white-space: nowrap;
-    /* One 30s animation covers the whole life: slide in, hold, fade out. A
-       negative delay set in JS resumes it mid-life after a re-render. */
+    display: flex; align-items: center; gap: 10px; min-width: 0; align-self: start;
+    font-size: 12px; font-weight: 650; color: #475467;
+    background: #fff; border: 1px solid #e6ebf1; border-radius: 10px;
+    padding: 8px 12px 8px 11px; white-space: nowrap;
+    /* One 30s animation covers the whole life: fade in, hold, fade out. A
+       negative delay set in JS resumes it mid-life after a re-render. Opacity
+       only: the row clips its overflow, so a card sliding up from below would
+       arrive with its bottom edge cut off. */
     animation: lvChipLife 30s ease-out forwards;
 }
 @keyframes lvChipLife {
-    0%   { opacity: 0; transform: translateY(5px) scale(.96); }
-    3%   { opacity: 1; transform: translateY(0) scale(1); }
+    0%   { opacity: 0; }
+    3%   { opacity: 1; }
     90%  { opacity: 1; }
-    100% { opacity: 0; transform: translateY(-3px); }
+    100% { opacity: 0; }
 }
 /* Pinned: the entrance only, holding where lvChipLife would start fading. Used
    on a store dashboard while the shop is open, where the strip is a running
    record of the day rather than a 30-second ticker. See _lvActivityHolds. */
 .lv-activity.pinned { animation: lvChipIn .5s ease-out both; }
 @keyframes lvChipIn {
-    from { opacity: 0; transform: translateY(5px) scale(.96); }
-    to   { opacity: 1; transform: translateY(0) scale(1); }
+    from { opacity: 0; }
+    to   { opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
     .lv-activity, .lv-activity.pinned { animation: none; }
 }
-.lv-aline { display: flex; align-items: center; gap: 7px; }
-/* The item header. Quiet on purpose — smaller, lighter and greyer than the line
-   it sits on, so the strip still reads as Sale · store · amount at a glance.
-
-   It must NOT widen the chip (user's call, 2026-10-14): product titles run long
-   and the chips stay the size they were. width:0 takes the header out of the
-   chip's shrink-to-fit sizing entirely, and min-width:100% then hands it back
-   exactly the width .lv-aline asked for — so the title is cut off at the chip's
-   edge, whatever its length. "+N more" never shrinks; the title gives way first.
-   The full list is in the chip's data-tip tooltip. */
-.lv-ahead {
-    display: flex; align-items: baseline; gap: 5px;
-    width: 0; min-width: 100%;
-    font-size: 10.5px; font-weight: 600; color: #8a94a3; line-height: 1.25;
+.lv-abody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+/* Line 1: the first item's title, "+N more", and the amount pinned right. */
+.lv-atop { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+/* Cut off with a fade, not an ellipsis: nearly every title is cut, and a row of
+   "…" read as clutter (user's call, 2026-10-14). The name FILLS the line so the
+   fade always sits at its right edge, where a short title never reaches — fading
+   a title that fits would eat its last letters. It is also what gives way when
+   the card is narrow: "+N more" and the amount never shrink. */
+.lv-aname {
+    flex: 1 1 auto; min-width: 0; overflow: hidden;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
-.lv-aname { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.lv-amore { flex: none; font-weight: 700; color: #a0a9b6; }
-/* Two lines in a pill radius pinches the header's ends into the curve. */
-.lv-activity.has-items { border-radius: 12px; padding-top: 4px; cursor: default; }
-.lv-activity b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
+.lv-amore { flex: none; font-size: 10.5px; font-weight: 700; color: #94a3b8; }
+.lv-aamt {
+    flex: none; font-size: 13px; color: var(--slate-charcoal); font-weight: 850;
+    font-variant-numeric: tabular-nums;
+}
+/* Line 2: Sale · store · time, quiet. */
+.lv-ameta { font-size: 10.5px; font-weight: 650; color: #94a3b8; }
+.lv-activity.has-items { cursor: default; }
 .lv-activity .lv-aq { color: #94a3b8; font-weight: 650; }
 .lv-adot {
     position: relative; width: 7px; height: 7px; border-radius: 50%;
@@ -12252,7 +12300,12 @@ body.sam-active .hotbar-btn:hover {
     content: ''; position: absolute; inset: 0; border-radius: 50%;
     background: #1f9d57; z-index: -1;
 }
-.lv-activity.refund { color: #b3760a; background: #fdf3e1; border-color: #f0dcb4; }
+/* A refund is told apart by its red dot, the word Refund in amber, and its
+   amount in red — on the same white card as a sale. It used to be a whole amber
+   card, which was the loudest thing on a dashboard that tints only to flag
+   (the pale-green leading tile, the red under-goal pill). */
+.lv-activity.refund .lv-aamt { color: #b42318; }
+.lv-activity.refund .lv-ameta { color: #b3760a; }
 
 /* Same radar ping as the OPEN dot. On a ticker chip it cannot outlive the
    notification, because the chip goes after 30 seconds. A PINNED chip does

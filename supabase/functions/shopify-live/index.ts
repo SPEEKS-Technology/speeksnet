@@ -39,12 +39,13 @@
 //   this cache overnight, but a manager opening the app at 07:30 should not be
 //   looking at last night 9pm numbers. CLOSED_STALE_MS = Infinity for a true stop.
 //
-// COST: one ShopifyQL query plus one recent-orders query per store. The ShopifyQL
-// one is ~10 points; the orders one is ~60, because it carries each order's line
-// items and Shopify prices a nested connection as RECENT_ORDERS x RECENT_ITEMS.
-// Against a 2000-point bucket restoring at 100/s — and each store is its own shop
-// with its own bucket — a per-minute pass over five stores is nowhere near a
-// limit.
+// COST: one ShopifyQL query, one recent-orders query and one refunds query per
+// store. The ShopifyQL one is ~10 points; the orders one is ~80, because it
+// carries each order's line items and Shopify prices a nested connection as
+// RECENT_ORDERS x RECENT_ITEMS; the refunds one is at most ~220 (orders x 3
+// refunds x items), and in practice far less. Against a 2000-point bucket
+// restoring at 100/s — and each store is its own shop with its own bucket — a
+// per-minute pass over five stores is nowhere near a limit.
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -83,8 +84,9 @@ const SHOP_TO_CODE: Record<string, string> = {
 const STORE_ORDER = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 // How many of today's orders ride along on each store row, for the activity strip
 // to open with. Matches what that strip pins (LV_ACTIVITY_KEEP in speeks.js) —
-// fetching more would only be trimmed on arrival.
-const RECENT_ORDERS = 5;
+// fetching more would only be trimmed on arrival. Seven since 2026-10-14, when
+// the strip became a row of up to seven cards; it also caps recentRefunds.
+const RECENT_ORDERS = 7;
 // Line items fetched per recent order, for the item title on each strip chip. The
 // chip shows the first and counts the rest ("+2 more"); its tooltip lists them
 // all. An order with more lines than this undercounts in that "+N more", which on
@@ -468,6 +470,17 @@ type StoreMetrics = {
   // (currentQuantity), so a line refunded off it does not announce itself as
   // sold — the same reason `amount` is the current total, not the original.
   recentOrders: { at: string; amount: number; items: { title: string; qty: number }[] }[];
+  // Today's last few REFUNDS, newest first, with what was refunded — so a refund
+  // chip can name its items the way a sale chip does (user's call, 2026-10-14).
+  // A refund is its own event with its own time, often against an order from a
+  // previous day, so it cannot be read off recentOrders. Fetched in its own call:
+  // see refundsError.
+  recentRefunds: { at: string; amount: number; items: { title: string; qty: number }[] }[];
+  // Set only when the refunds call failed. Kept apart from `error` on purpose: a
+  // refund lookup failing must not mark the store's row as broken, cost it its
+  // sales figures, or take it out of the district totals — it only means today's
+  // refund chips carry no titles.
+  refundsError?: string;
   prev: DayMetrics | null;
   // Month-over-month and year-over-year for the month-through-yesterday span.
   // Filled in by refresh() rather than by fetchStore: it is fetched once a day and
@@ -570,6 +583,7 @@ async function fetchStore(
     goal, pctOfGoal: null, paceIndex: null,
     lastOrderAt: null, lastOrderAmount: null,
     recentOrders: [],
+    recentRefunds: [],
     prev: null,
   };
 
@@ -773,6 +787,51 @@ async function fetchStore(
             qty: num(li.currentQuantity),
           })),
       }));
+
+    // TODAY'S REFUNDS. Their own call and their own catch, for the same reason the
+    // two calls above are split: this is the least important thing on the row, and
+    // a fault in it must cost nothing but refund titles.
+    //
+    // Found through the ORDER, sorted by when it last changed: a refund updates its
+    // order, so today's refunds are on the most recently updated refunded orders —
+    // including a refund today against a sale from last week, which is the usual
+    // case. Filtered to refunded orders, or the newest updates would be today's
+    // sales crowding every refund out of the first page.
+    try {
+      const day = iso(c);
+      const refData = await gql(shop, token, `{
+        orders(first: ${RECENT_ORDERS}, reverse: true, sortKey: UPDATED_AT,
+               query: "updated_at:>=${day} AND (financial_status:refunded OR financial_status:partially_refunded)") {
+          nodes {
+            refunds(first: 3) {
+              createdAt
+              totalRefundedSet { shopMoney { amount } }
+              refundLineItems(first: ${RECENT_ITEMS}) { nodes { quantity lineItem { title } } }
+            }
+          }
+        }
+      }`);
+      const all: StoreMetrics["recentRefunds"] = [];
+      for (const o of (refData?.orders?.nodes ?? [])) {
+        for (const r of (o?.refunds ?? [])) {
+          if (!r?.createdAt || centralDay(r.createdAt) !== day) continue;
+          all.push({
+            at: String(r.createdAt),
+            amount: round2(num(r.totalRefundedSet?.shopMoney?.amount)),
+            items: (r.refundLineItems?.nodes ?? [])
+              .filter((li: any) => li?.lineItem?.title && num(li.quantity) > 0)
+              .map((li: any) => ({
+                title: String(li.lineItem.title).trim().slice(0, ITEM_TITLE_MAX),
+                qty: num(li.quantity),
+              })),
+          });
+        }
+      }
+      all.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+      base.recentRefunds = all.slice(0, RECENT_ORDERS);
+    } catch (err) {
+      base.refundsError = String(err).slice(0, 200);
+    }
   } catch (err) {
     // One store failing must not blank the other four. The row carries its own
     // error and the district totals simply exclude it.
