@@ -13483,6 +13483,22 @@ let _lvSnap = null;    // code -> { net, orders, returns, lastOrderAt }
 let _lvPulse = {};     // code -> 'sale' | 'refund'; consumed by the next render
 let _lvEvents = [];    // newest first; each lives LV_ACTIVITY_MS then goes
 let _lvEvSeq = 0;
+// Every order this page has already put on the strip, by _lvOrderKey. Kept apart
+// from _lvEvents because a ticker chip leaves that list after 30 seconds, and the
+// second sighting of the same order can arrive later than that.
+const _lvAnnounced = new Set();
+
+// One order, one id — shared by the seed and the diff path.
+//
+// The payload reports a new sale in two halves that land on different fetches:
+// lastOrderAt comes off the Orders API and moves the moment the till rings,
+// ordersToday is ShopifyQL and catches up a poll or two later. Each half on its
+// own reads as "a sale just happened", so the same order (same amount, same time)
+// came up as two chips with two chimes. Keying on the order itself is what makes
+// the second half a no-op.
+function _lvOrderKey(code, at) {
+    return 'o' + code + String(at).replace(/\D/g, '');
+}
 
 // Which store codes belong to the person looking. Two callers, both asking the
 // same question: the chime (is this worth a NOISE) and the activity strip (is
@@ -13562,10 +13578,14 @@ function _lvTrackChanges(d) {
                     // Order's own amount first, net delta second. Falling back to
                     // "now" for the time as well means a chip can never come out as
                     // just a store name with nothing beside it.
-                    const amt = _lvOrderAmount(byCode[code], b.lastOrderAt) || (b.net - a.net);
-                    _lvPush({ kind: 'sale', code, amount: amt,
-                              at: b.lastOrderAt || new Date().toISOString() });
-                    sold = true;
+                    const key = b.lastOrderAt ? _lvOrderKey(code, b.lastOrderAt) : '';
+                    if (!key || !_lvAnnounced.has(key)) {
+                        if (key) _lvAnnounced.add(key);
+                        const amt = _lvOrderAmount(byCode[code], b.lastOrderAt) || (b.net - a.net);
+                        _lvPush({ kind: 'sale', code, amount: amt, key,
+                                  at: b.lastOrderAt || new Date().toISOString() });
+                        sold = true;
+                    }
                 }
             }
         });
@@ -13584,7 +13604,7 @@ function _lvTrackChanges(d) {
 
 // Newest first, so a fresh sale enters at the left and pushes the rest along.
 function _lvPush(e) {
-    e.id = 'e' + (++_lvEvSeq);
+    e.id = e.key || ('e' + (++_lvEvSeq));
     e.ts = Date.now();
     _lvEvents.unshift(e);
     if (_lvEvents.length > LV_ACTIVITY_MAX) _lvEvents.length = LV_ACTIVITY_MAX;
@@ -13669,10 +13689,12 @@ function _lvSeedEvents(d) {
         (m.recentOrders || []).forEach(o => {
             const ts = Date.parse(o.at);
             if (!isFinite(ts)) return;
-            // Keyed by store and order time so the id is stable across renders and
-            // cannot collide with the diff path's own "e1, e2, …" sequence.
+            // Keyed by store and order time so the id is stable across renders, and
+            // is the same id the diff path gives this order — see _lvOrderKey.
+            const id = _lvOrderKey(m.code, o.at);
+            _lvAnnounced.add(id);
             out.push({
-                id: 'o' + m.code + String(o.at).replace(/\D/g, ''),
+                id,
                 kind: 'sale', code: m.code, amount: Number(o.amount) || 0,
                 at: o.at, ts: ts,
             });
