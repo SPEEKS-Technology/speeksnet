@@ -1778,6 +1778,21 @@ Deno.serve(async (req: Request) => {
     }
     // ?poll=1 — collect ended batches (every store at once). See pollBatches.
     if (url.searchParams.get("poll") === "1") return streamed(() => pollBatches());
+    // ?cancel=<batch id> — a batch stuck "in progress" (MPL second looks, 10-14:
+    // over an hour for 15 requests; the first pass of 65 took 14 minutes). Not
+    // yet processed requests are not billed. Marked cancelled so the poller
+    // leaves it, and the listings' ids come back to grade live.
+    const cancelId = url.searchParams.get("cancel");
+    if (cancelId) {
+      const b = (await rows(`pq_batches?batch_id=eq.${encodeURIComponent(cancelId)}&select=id,store_code,items,status&limit=1`))?.[0];
+      if (!b) return json({ error: "no such batch" }, 404);
+      const client = new Anthropic({ apiKey: Deno.env.get("ANTHROPIC_API_KEY") || "" });
+      const info = await (client as any).messages.batches.cancel(cancelId);
+      await sb(`pq_batches?id=eq.${b.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ status: "cancelled", finished_at: new Date().toISOString() }) });
+      const pids = [...new Set(Object.values((b.items || {}) as Record<string, Pending>).map(p => p.pid))];
+      return json({ cancelled: cancelId, store: b.store_code, processing_status: info?.processing_status, request_counts: info?.request_counts, pids });
+    }
     const store = (url.searchParams.get("store") || "").toUpperCase();
     if (!STORES.includes(store)) return json({ error: "pass ?store=OVL|LEE|WSP|MPL|BAL" }, 400);
     const model = url.searchParams.get("model") || DEFAULT_MODEL;
