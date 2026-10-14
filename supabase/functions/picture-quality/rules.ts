@@ -376,7 +376,10 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     // WSP TeamGroup RAM photo 2 stood on end: "I would also have flagged" it).
     // Never on a side / top / bottom / corner shot: turning the item to show an
     // edge is the point of it (OVL Toshiba HDD photos 3 and 4, Ethan 10-13).
-    if (said.includes("turned") && !p.shots.some(s => /\b(side|top|bottom|corner|edge)\b/i.test(s))) findings.push({ code: "turned", photo: p.n,
+    // Except a LENS: its sides are shot standing upright like the front and
+    // back, so one lying on its barrel is the wrong angle (Ethan, 2026-10-14, MPL
+    // Pentax 20790 photos 5-6, Pentax 50 photo 5).
+    if (said.includes("turned") && (sheet.slug === "lenses" || !p.shots.some(s => /\b(side|top|bottom|corner|edge)\b/i.test(s)))) findings.push({ code: "turned", photo: p.n,
       text: `Photo ${p.n} has the item turned a different way from the guide and the other photos — turn it to match, then retake.` });
     const probs = [...new Set([...(faults?.get(p.n) || []), ...said.filter(x => x !== "turned")])];
     if (probs.length) {
@@ -594,7 +597,24 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // Everything Included is the guide's photo 2 (Ethan, 2026-10-14, BAL Canon
   // EOS 2000D: "everything included is 3 when it should be 2").
   const eiLate = firstEI > 1;
-  let order = r.suggested_order.filter((x, i, a) => x >= 1 && x <= n && a.indexOf(x) === i);
+  // ⚠️ THE ORDER IS BUILT FROM THE LABELS, NOT TAKEN FROM THE MODEL (Ethan,
+  // 2026-10-14, MPL). The model's suggested_order kept breaking his rules in
+  // small ways — the Xbox Series S serial closeup put after the accessories, a
+  // Pentax lens's top and bottom moved ahead of its sides. Now: the guide's
+  // order by each photo's shot; a photo of the device that is no sheet shot (a
+  // serial closeup on a sheet without one) after the sheet shots; then the box;
+  // ACCESSORIES ALWAYS LAST ("accessory pictures should always be last"). Ties
+  // keep the store's order. The model's labels still decide which shot is which.
+  const shotIx = (label: string) => sheet.shots.findIndex(s => s.label.toLowerCase() === label.trim().toLowerCase());
+  const isAcc = (p: PhotoR) => p.shots.length > 0 && p.shots.every(s => /^extra accessor/i.test(s.trim()));
+  const keyOf = (p: PhotoR) => {
+    if (isAcc(p)) return 3000;
+    if (isBox(p)) return 2000;
+    const ixs = p.shots.map(shotIx).filter(i => i >= 0 && !/^extra accessor/i.test(sheet.shots[i].label));
+    return ixs.length ? Math.min(...ixs) : 1000;
+  };
+  const allSeen = byN.length === n && byN.every((p, i) => p.n === i + 1);
+  let order = allSeen ? [...byN].sort((a, b) => keyOf(a) - keyOf(b) || a.n - b.n).map(p => p.n) : [];
   let leadMoved = false;
   if (order.length === n) {
     // THE GUIDE'S FIRST PHOTO LEADS (Ethan, 2026-10-14, OVL iPhone 17 Pro: the
@@ -602,16 +622,22 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     // guide"). When a photo covers that shot, it goes first. Only when none does
     // does a lead photo that shows the item stay put (rule 4, 2026-09-25).
     const firstShot = sheet.shots.find(s => !s.cond)?.label.toLowerCase();
-    const lead = firstShot ? [...r.photos].sort((a, b) => a.n - b.n).find(p => p.shots.some(s => s.toLowerCase() === firstShot)) : undefined;
+    const lead = firstShot ? byN.find(p => p.shots.some(s => s.toLowerCase() === firstShot)) : undefined;
     if (lead) { order = [lead.n, ...order.filter(x => x !== lead.n)]; leadMoved = lead.n !== 1; }
     else if (r.lead_ok) order = [1, ...order.filter(x => x !== 1)];
-    // The spec screenshots keep the STORE'S order among themselves; only their
-    // slots move (BAL 2025 MacBook Air, 10-14: "the original order of the specs
-    // from photos 3-8 is already in good order").
-    const info = new Set(r.photos.filter(p => p.shots.some(s => INFO_SHOT.test(s))).map(p => p.n));
-    const mine = [...info].sort((a, b) => a - b);
-    let k = 0;
-    order = order.map(x => info.has(x) ? mine[k++] : x);
+    // Groups that keep the STORE'S order among themselves; only their slots
+    // move. Spec screenshots (BAL 2025 MacBook Air, 10-14: "the original order
+    // of the specs from photos 3-8 is already in good order"), and side / corner
+    // views (MPL Galaxy Tab A11, 10-14: "4 photos in a row in the correct 4
+    // photo placement are the sides even if it isn't the specific side").
+    const keep = (inGroup: (p: PhotoR) => boolean) => {
+      const g = new Set(byN.filter(inGroup).map(p => p.n));
+      const mine = [...g].sort((a, b) => a - b);
+      let k = 0;
+      order = order.map(x => g.has(x) ? mine[k++] : x);
+    };
+    keep(p => p.shots.some(s => INFO_SHOT.test(s)));
+    keep(p => p.shots.length > 0 && p.shots.every(s => /\b(side|corner)\b/i.test(s)));
   }
   const changed = order.length === n && order.some((x, i) => x !== i + 1);
   // ANY real order change is offered — a passing listing too, as a Quick Fix

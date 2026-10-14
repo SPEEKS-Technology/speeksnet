@@ -55813,12 +55813,10 @@ function _pqHtml() {
     }
     const total = tiers.filter(t => !t.review).reduce((s, t) => s + count(t.v), 0);
     const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
-    // Train The Checker — see pqTrainOpen. Only for readers who hold the
-    // picture half; it reads the same graded listings the queue does.
-    const train = mayPics ? `<div class="pqt-entry">
-        <button type="button" class="lh-tool-done-btn" onclick="pqTrainOpen()">Train The Checker</button>
-        <span>Grade photos one at a time against the guide, so the checker learns what "to standard" means.</span>
-      </div>` : '';
+    // Train The Checker is RETIRED from the screen (Ethan, 2026-10-14: "we don't
+    // need it anymore"). pqTrainOpen and the trainer stay in the file, and his
+    // 395 labels stay in pq_photo_labels — framing is to be revisited.
+    const train = '';
     return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : '') + train,
                 `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
 }
@@ -56256,7 +56254,10 @@ function _pqRow(r) {
     const why = isReorder
         ? `<li>The photos are good but in the wrong order${(r.reorder.why || []).length
             ? ' — ' + _ecEsc(r.reorder.why.join('; ')) : ''}.</li>` : '';
-    const titleNotes = (r.titleNotes || []).length
+    // ⚠️ TITLE NOTES ARE OFF THE ROW (Ethan, 2026-10-14): once this is tied to
+    // the title tool, a photo fact sends the listing to the TITLE tool's own
+    // screen instead of sitting in a drawer here. Still saved (title_notes).
+    const titleNotes = false && (r.titleNotes || []).length
         ? `<details class="lt-comps pq-tnotes"><summary>${r.titleNotes.length} Title Note${r.titleNotes.length === 1 ? '' : 's'} From The Photos (Not Checked Yet)</summary>
              <ul>${r.titleNotes.map(t => `<li>${_ecEsc(t.issue || '')}${t.suggestion ? ' → ' + _ecEsc(t.suggestion) : ''}</li>`).join('')}</ul>
            </details>` : '';

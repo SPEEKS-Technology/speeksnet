@@ -242,12 +242,12 @@ t("turned never counts on a side shot (OVL Toshiba HDD photos 3-4, 10-13)", () =
   const ps = report().photos; ps[2] = photo(3, { shots: ["Side of Phone"], framing: "off", framing_problems: ["turned"] });
   const d = run({}, PHONE, { photos: ps });
   return !d.findings.some(f => f.code === "turned") || say(d); });
-t("a flagged listing hears about order; a passing one does not (OVL HP Stream, 10-13)", () => {
-  const so = [1, 3, 4, 5, 6, 7, 8, 9, 10, 2];
-  const ps = report().photos; ps[0].issues = [issue("stock_photo")];
-  const bad = run({}, PHONE, { photos: ps, suggested_order: so });
-  const good = run({}, PHONE, { suggested_order: so });
-  return (bad.findings.some(f => f.code === "order") && !good.findings.some(f => f.code === "order")) || say(bad) + " | " + say(good); });
+t("a flagged listing hears about order; a passing one gets a Quick Fix reorder (OVL HP Stream, 10-13)", () => {
+  const lab = () => { const ps = report().photos; ps[0] = photo(1, { shots: ["Home/Lock Screen"] }); ps[1] = photo(2, { shots: ["Back of Phone"] }); ps[2] = photo(3, { shots: ["About Phone"] }); return ps; };
+  const ps = lab(); ps[3].issues = [issue("stock_photo")];
+  const bad = run({}, PHONE, { photos: ps });
+  const good = run({}, PHONE, { photos: lab() });
+  return (bad.findings.some(f => f.code === "order") && good.verdict === "reorder" && !good.findings.some(f => f.code === "order")) || say(bad) + " | " + say(good); });
 t("missing Everything Included carries what the listing says comes with it (OVL GTX 1660)", () => {
   const d = run({ included: "Charger, box" }, PHONE, { needed_missing: ["Everything Included"] });
   const f = d.findings.find(x => x.shot === "Everything Included");
@@ -270,13 +270,21 @@ t("PayMore's Acceptable game-case line is standard; a real rip is not (BAL Gears
   const unit = "The case has a large rip across the back cover.";
   return (isStandardSentence(std) && !isStandardSentence(unit)) || `${isStandardSentence(std)} ${isStandardSentence(unit)}`; });
 t("a passing listing gets a reorder for a small move (BAL Takumar photo 7, 10-14)", () => {
-  const d = run({}, PHONE, { suggested_order: [1, 2, 3, 10, 4, 5, 6, 7, 8, 9] });
-  return (d.verdict === "reorder" && d.reorder.suggested.join() === "1,2,3,10,4,5,6,7,8,9") || say(d); });
-t("reorder keeps photo 1 and the store's order of spec screens (BAL MacBook Air, 10-14)", () => {
-  const ps = report().photos; ps[2] = photo(3, { shots: ["About Phone"] }); ps[3] = photo(4, { shots: ["Storage Information"] });
-  ps[4] = photo(5, { shots: ["Battery Health"] });
-  const d = run({}, PHONE, { photos: ps, suggested_order: [2, 1, 5, 3, 4, 6, 7, 8, 9, 10] });
-  return (d.reorder && d.reorder.suggested.join() === "1,2,3,4,5,6,7,8,9,10".split(",").join() ) ? "should be unchanged → no reorder" : (!d.reorder || say(d)); });
+  const ps = report().photos; ps[0] = photo(1, { shots: ["Home/Lock Screen"] }); ps[1] = photo(2, { shots: ["Back of Phone"] }); ps[2] = photo(3, { shots: ["About Phone"] });
+  const d = run({}, PHONE, { photos: ps });
+  return (d.verdict === "reorder" && d.reorder.suggested.join() === "1,3,2,4,5,6,7,8,9,10") || say(d) + " " + (d.reorder && d.reorder.suggested); });
+t("spec screens and side/corner shots keep the store's order (BAL MacBook Air, MPL Tab A11, 10-14)", () => {
+  const ps = report().photos; ps[1] = photo(2, { shots: ["Storage Information"] }); ps[2] = photo(3, { shots: ["About Phone"] });
+  ps[3] = photo(4, { shots: ["Screen Off"] }); ps[4] = photo(5, { shots: ["Opposite Side of Phone"] }); ps[5] = photo(6, { shots: ["Side of Phone"] });
+  const d = run({}, PHONE, { photos: ps });
+  return !d.reorder || say(d) + " " + d.reorder.suggested; });
+t("accessories always last; a device extra goes before them (MPL Xbox Series S, 10-14)", () => {
+  const ps = report({ n: 6 }).photos;
+  ps[0] = photo(1, { shots: ["Home/Lock Screen"] }); ps[1] = photo(2, { shots: ["Extra Accessories"] });
+  ps[2] = photo(3, { shots: ["Back of Phone"] }); ps[3] = photo(4, { shots: ["Extra"] });
+  ps[4] = photo(5, { shots: ["Extra Accessories"] }); ps[5] = photo(6, { shots: ["Screen Off"] });
+  const d = decide(listing({ n: 6 }), PHONE, report({ n: 6, photos: ps }));
+  return (d.reorder && d.reorder.suggested.join() === "1,6,3,4,2,5") || say(d) + " " + (d.reorder && d.reorder.suggested); });
 t("the guide's first shot leads: a back-first iPhone gets a reorder (OVL iPhone 17 Pro, 10-14)", () => {
   const ps = report().photos; ps[0] = photo(1, { shots: ["Back of Phone"] }); ps[1] = photo(2, { shots: ["Home/Lock Screen"] });
   const d = run({}, PHONE, { photos: ps });

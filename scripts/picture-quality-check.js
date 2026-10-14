@@ -555,11 +555,15 @@ function trainState() {
              }) };
 }
 
-t('train: the entry button sits under the Picture Quality section', function () {
+// Retired 2026-10-14 (Ethan): no Train The Checker button, and no title-notes
+// drawer on a row — photo facts will go to the title tool's own screen.
+t('train: the entry button is gone, and rows carry no title-notes drawer', function () {
     _pqData = data([FIX]); _pqTier = 'fix';
     var host = document.getElementById('pq-host');
     host.innerHTML = '<div class="cb-panel">' + _pqHtml() + '</div>';
-    return !!host.querySelector('.pqt-entry button[onclick="pqTrainOpen()"]') || 'no Train The Checker button';
+    if (host.querySelector('.pqt-entry')) return 'Train The Checker is still shown';
+    if (host.querySelector('.pq-tnotes') || /Title Note/.test(host.textContent)) return 'a title-notes drawer is still shown';
+    return true;
 });
 
 t('train: photo beside its guide example, answers with their keys', function () {
