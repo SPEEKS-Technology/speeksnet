@@ -56320,7 +56320,12 @@ function _pqRow(r) {
         <!-- The price beside who listed it (Ethan, 2026-10-11): it is what the
              dirty-table and reflection points are scaled by, and how much a
              reshoot is worth. -->
-        <div class="pq-lister">${_ltListerPill({ listerTag: r.lister || '' }, r.lister ? { [r.lister]: r.lister } : null)}${
+        <!-- A tag that matches nobody in users shows AS the tag (Ethan, 10-14:
+             "Instead of unknown, just put the raw tag"), titled so it reads as
+             a Shopify tag, not a confirmed employee. -->
+        <div class="pq-lister">${r.listerRaw
+          ? `<span class="lt-lister" title="Shopify tag — no SPEEKSNET user matches it yet. Add them in Permissions to show their name.">${_ecEsc(r.lister)}</span>`
+          : _ltListerPill({ listerTag: r.lister || '' }, r.lister ? { [r.lister]: r.lister } : null)}${
           r.price > 0 ? `<span class="pq-price">$${Number(r.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>` : ''}</div>
         <div class="lt-acts pq-acts">
           ${r.verdict === 'pass'

@@ -212,6 +212,18 @@ const priceStep = (price: number, low: number, mid: number, high: number) =>
 export const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake_or_edited", "wrong_item",
   "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead", "not_on_stand", "turned"]);
 
+// ⚠️ THE VERDICT, ONE RULE FOR EVERY CALLER (decide, the second-look reorder
+// check, redecide). A listing at or over the bar with ANYTHING still to show —
+// a free missing view, a few reflection points — is a Quick Fix, not a pass
+// (Ethan, 2026-10-14: "If even it is 'free' still flag it on the site so they
+// can see it, it just may not fall into the fix or retake category"). Pass now
+// means nothing at all to show.
+export function verdictOf(findings: { code: string }[], score: number, reorder: unknown, deletion: unknown) {
+  if (findings.some(f => f.code === "retake")) return "retake";
+  if (score < PASS_BAR) return "fix";
+  return reorder || deletion || findings.length ? "reorder" : "pass";
+}
+
 export function pictureScore(findings: Finding[], photoCount: number, price: number) {
   const n = Math.max(1, photoCount);
   let score = 100, coreTaken = false;
@@ -683,7 +695,7 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     }
   }
   const pic = pictureScore(findings, n, l.price);
-  const verdict = retake ? "retake" : pic.score < PASS_BAR ? "fix" : (reorder || deletion) ? "reorder" : "pass";
+  const verdict = verdictOf(findings, pic.score, reorder, deletion);
   // A flagged listing is being reshot anyway, so it hears about ANY real order
   // problem, not only the big moves a passing one is offered (Ethan, 10-13: OVL
   // HP Stream's keyboard in photo 2, the Surface Book 3). Ethan's first bar

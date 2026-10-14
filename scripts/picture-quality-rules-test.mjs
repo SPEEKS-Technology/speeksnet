@@ -82,7 +82,7 @@ t("lead photo framing is an automatic flag; another photo's costs 30 ÷ photos",
   const d1 = run({}, PHONE, lead);
   const other = report(); other.photos[5] = photo(6, { framing: "off", framing_problems: ["cut_off"] });
   const d2 = run({}, PHONE, other);
-  return (flagged(d1) && d2.verdict === "pass" && d2.pictureScore === 97) || `${say(d1)} | ${say(d2)}`; });
+  return (flagged(d1) && d2.verdict === "reorder" && d2.pictureScore === 97) || `${say(d1)} | ${say(d2)}`; });
 t("anything besides item + backdrop: automatic flag, with the Shopify AI background tip", () => {
   const ps = report().photos; ps[2].issues = [issue("clutter")]; ps[6].issues = [issue("clutter")];
   const d = run({}, PHONE, { photos: ps }); const f = d.findings.find(x => x.code === "clutter");
@@ -91,12 +91,12 @@ t("anything besides item + backdrop: automatic flag, with the Shopify AI backgro
 t("missing plain views: the first is free (and listed), then −8 each", () => {
   const one = run({}, PHONE, { missing_shots: ["Back of Phone"] });
   const two = run({}, PHONE, { missing_shots: ["Back of Phone", "Top Side of Phone"] });
-  return (one.pictureScore === 100 && one.findings.some(f => f.tier === "view_free") && two.pictureScore === 92 && two.verdict === "pass")
+  return (one.pictureScore === 100 && one.findings.some(f => f.tier === "view_free") && two.pictureScore === 92 && two.verdict === "reorder")
     || `${say(one)} | ${say(two)}`; });
 t("a missing FIRST photo of the guide is an automatic flag (the Crucial tick is gone)", () => {
   const d = run({}, PHONE, { missing_shots: ["Home/Lock Screen"] });
   const side = run({}, PHONE, { missing_shots: ["Side of Phone"] });
-  return (flagged(d) && side.verdict === "pass") || `${say(d)} | ${say(side)}`; });
+  return (flagged(d) && side.verdict === "reorder") || `${say(d)} | ${say(side)}`; });
 t("a missing view the notes put a flaw on is crucial too", () => {
   const d = run({}, PHONE, { missing_shots: ["Back of Phone"], flaw_views: ["Back of Phone"] }); return flagged(d) || say(d); });
 
@@ -123,7 +123,7 @@ t("Core info: −15 ONCE however many are missing, each one listed", () => {
   const core = d.findings.filter(f => f.tier === "core").length;
   return (d.pictureScore === 85 && core === 2 && flagged(d)) || say(d); });
 t("other settings screens: −3 each", () => {
-  const d = run({}, PHONE, { missing_shots: ["Software Information"] }); return (d.pictureScore === 97 && d.verdict === "pass") || say(d); });
+  const d = run({}, PHONE, { missing_shots: ["Software Information"] }); return (d.pictureScore === 97 && d.verdict === "reorder") || say(d); });
 t("serial on a screen device: not shown anywhere is Core", () => {
   const d = run({}, PHONE, { serial: "not_shown" }); return (d.pictureScore === 85 && d.findings.some(f => f.tier === "core")) || say(d); });
 t("serial on a no-screen item: −3, under a battery cover too", () => {
@@ -167,7 +167,7 @@ t("loose cords: −5 a photo, never an automatic flag (Ethan, 10-11, OVL ADC)", 
   const one = report().photos; one[0].issues = [issue("loose_cord")];
   const three = report().photos; [0, 1, 2].forEach(i => { three[i].issues = [issue("loose_cord")]; });
   const a = run({}, PHONE, { photos: one }), b = run({}, PHONE, { photos: three });
-  return (a.pictureScore === 95 && a.verdict === "pass" && b.pictureScore === 85 && b.verdict === "fix") || `${say(a)} | ${say(b)}`; });
+  return (a.pictureScore === 95 && a.verdict === "reorder" && b.pictureScore === 85 && b.verdict === "fix") || `${say(a)} | ${say(b)}`; });
 t("a video game off the stand is an automatic flag — on game sheets only (OVL Wii Fit, 10-11)", () => {
   const GAME = { slug: "video-games", shots: [{ label: "Front of Case", cond: null }, { label: "Back of Case", cond: null }, { label: "Opened Case With Disk", cond: null }] };
   const ps = report({ n: 3 }).photos; ps[2].issues = [issue("not_on_stand")];
@@ -289,6 +289,10 @@ t("the guide's first shot leads: a back-first iPhone gets a reorder (OVL iPhone 
   const ps = report().photos; ps[0] = photo(1, { shots: ["Back of Phone"] }); ps[1] = photo(2, { shots: ["Home/Lock Screen"] });
   const d = run({}, PHONE, { photos: ps });
   return (d.verdict === "reorder" && d.reorder.suggested[0] === 2) || say(d); });
+t("a passing listing with anything to show is a Quick Fix; pass means nothing to show (Ethan, 10-14)", () => {
+  const free = run({}, PHONE, { missing_shots: ["Back of Phone"] });
+  const clean = run({}, PHONE, {});
+  return (free.verdict === "reorder" && free.pictureScore === 100 && clean.verdict === "pass") || say(free) + " | " + say(clean); });
 t("two looks: a flag must be seen by both; a pass from either", () => {
   const a = report({ needed_missing: ["Everything Included"], units_claimed: 2, units_together: false, missing_shots: ["Back of Phone"] });
   const b = report({ needed_missing: [], units_claimed: 2, units_together: true, missing_shots: ["Back of Phone"] });

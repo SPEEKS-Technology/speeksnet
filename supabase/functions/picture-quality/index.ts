@@ -66,7 +66,7 @@
 import Anthropic from "npm:@anthropic-ai/sdk";
 import { z } from "npm:zod";
 import { zodOutputFormat } from "npm:@anthropic-ai/sdk/helpers/zod";
-import { agree, BOX_SHEETS, decide, isStandardSentence, needsSecondLook, PASS_BAR, pictureScore, type ListingR } from "./rules.ts";
+import { agree, BOX_SHEETS, decide, isStandardSentence, needsSecondLook, PASS_BAR, pictureScore, verdictOf, type ListingR } from "./rules.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -316,6 +316,13 @@ function indexOf(users: { name: string; role?: string; store?: string }[], home:
     }
   }
   return ix;
+}
+// No match in users: the tag ITSELF, so the row still says who (Ethan,
+// 2026-10-14: "Instead of unknown, just put the raw tag for those people").
+// Only a tag that looks like a person — not eBay / INV / market / a number.
+const NOT_A_PERSON = /^(ebay|inv|market|pickuponly|pendingoffer|b2b|rcy|new|used|sale|read|no|yes|local|shipped|hold)$/i;
+function rawListerTag(tags: string[]): string | null {
+  return tags.map(t => String(t || "").trim()).find(t => /^[a-z][a-z'.-]{2,}$/i.test(t) && !NOT_A_PERSON.test(t)) || null;
 }
 function listerFrom(tags: string[], ix: ListerIx, store: string): { tag: string; name: string } | null {
   for (const table of [ix.byStore[store], ix.all]) {
@@ -768,7 +775,7 @@ async function finalRow(l: Listing, sheet: Sheet, standard: Map<string, number>,
       if (!report.lead_ok) d.findings.push({ code: "lead", photo: 1, text: "Photo 1 doesn't show what the item is." });
       const pic = pictureScore(d.findings, l.photos.length, l.price);
       d = { ...d, pictureScore: pic.score, costs: pic.costs };
-      d.verdict = d.findings.some(f => f.code === "retake") ? "retake" : pic.score < PASS_BAR ? "fix" : d.deletion ? "reorder" : "pass";
+      d.verdict = verdictOf(d.findings, pic.score, null, d.deletion);
     }
   }
   return { verdict: d.verdict, findings: d.findings, reorder: d.reorder, deletion: d.deletion,
@@ -1213,7 +1220,7 @@ async function redecide(store: string) {
     if (!r.reorder && row.reorder) {
       row.reorder = null;
       const pic = pictureScore(row.findings, l.photos.length, l.price);
-      row.verdict = row.findings.some((f: any) => f.code === "retake") ? "retake" : pic.score < PASS_BAR ? "fix" : row.deletion ? "reorder" : "pass";
+      row.verdict = verdictOf(row.findings, pic.score, null, row.deletion);
       row.report = { ...row.report, pictureScore: pic.score, costs: pic.costs };
     }
     if (row.verdict !== r.verdict) changed++;
@@ -1289,7 +1296,8 @@ async function reviewView(scope: Scope, asked: string) {
       // sort of wrong that makes the rest of the row unbelievable.
       staleWhy: String(r.stamp || "").split(":")[0] !== RECIPE ? "recipe" : "listing",
       // A name, or null — the panel says "Unknown" for null, never the raw tag.
-      lister: listerFrom(l.tags, listerIx, store)?.name || null,
+      lister: listerFrom(l.tags, listerIx, store)?.name || rawListerTag(l.tags),
+      listerRaw: !listerFrom(l.tags, listerIx, store) && !!rawListerTag(l.tags),
       price: l.price,
       photos: l.photos.map(p => ({ thumb: p.thumb, full: p.src, w: p.width, h: p.height })),
     });
