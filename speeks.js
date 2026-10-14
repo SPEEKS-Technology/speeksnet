@@ -13570,31 +13570,29 @@ function _lvActivity() {
     return '<div class="lv-activity-row"></div>';
 }
 
-// A chip is the text, then the dot centred top to bottom on the RIGHT. The text
-// is a quiet header naming the items (the first, cut off with a fade, and "+N
-// more") over Sale · store · amount · time (user's call, 2026-10-14, after a
-// version with Sale/Refund in a column of its own on the left).
+// A card is the dot, centred top to bottom on the left, then two lines: what
+// sold and for how much — the first item's title (cut off with a fade), "+N
+// more", and the amount pinned right — over a quiet Sale · store · time (user's
+// call, 2026-10-14, picked from four mock-ups on the real dashboard). The cards
+// sit in a one-row grid that never wraps or scrolls; see .lv-activity-row.
 //
-// The header does NOT widen the chip: the line under it sets the text's width,
-// and the title is cut off to fit. Titles run long, and the chips were to stay
-// the size they were. The full list is in the chip's tooltip.
-//
-// Refunds carry titles too, from shopify-live's recentRefunds. A chip with no
-// items (a refund the list had not caught up with, or a payload from before
-// titles) has no header and is a single line.
+// Refunds carry titles too, from shopify-live's recentRefunds, and their amount
+// reads as money going OUT. A card with no items (a refund the list had not
+// caught up with, or a payload from before titles) puts the word Sale or Refund
+// where the title would be, so it is never a bare amount. The full list of
+// items is in the card's tooltip.
 function _lvChipHtml(e) {
     const refund = e.kind === 'refund';
+    const kind = refund ? 'Refund' : 'Sale';
     const items = e.items || [];
-    const head = items.length
-        ? '<span class="lv-ahead"><span class="lv-aname">' + escapeHtml(items[0].title) + '</span>'
-            + (items.length > 1 ? '<span class="lv-amore">+' + (items.length - 1) + ' more</span>' : '')
-            + '</span>'
-        : '';
-    return '<span class="lv-abody">' + head
-        + '<span class="lv-aline">' + (refund ? 'Refund' : 'Sale') + ' &middot; <b>' + escapeHtml(e.code) + '</b>'
-        + (e.amount > 0 ? ' &middot; <b>' + _lvMoney(e.amount, true) + '</b>' : '')
-        + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '')
-        + '</span></span><span class="lv-adot"></span>';
+    return '<span class="lv-adot"></span><span class="lv-abody">'
+        + '<span class="lv-atop"><span class="lv-aname">' + escapeHtml(items.length ? items[0].title : kind) + '</span>'
+        + (items.length > 1 ? '<span class="lv-amore">+' + (items.length - 1) + ' more</span>' : '')
+        + (e.amount > 0 ? '<b class="lv-aamt">' + (refund ? '&minus;' : '') + _lvMoney(e.amount, true) + '</b>' : '')
+        + '</span>'
+        + '<span class="lv-ameta">' + kind + ' &middot; ' + escapeHtml(e.code)
+        + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '') + '</span>'
+        + '</span>';
 }
 
 // The chip's hover: every item on the sale or refund, in full. Goes in data-tip,

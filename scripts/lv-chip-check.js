@@ -1,46 +1,60 @@
-// LIVE DASHBOARD activity chips — the item-title header.
+// LIVE DASHBOARD activity cards — sale and refund, with what sold.
 //
 //   powershell -File scripts/browser-check.ps1 lv-chip-check.js
 //
 // Two halves. The markup half asserts about what _lvChipHtml / _lvChipTip return.
-// The layout half mounts real chips with the real stylesheet and MEASURES, because
-// the one promise the header makes — it never makes a chip wider than it was —
-// is invisible to a string assertion.
+// The layout half mounts real cards with the real stylesheet and MEASURES, because
+// the promises the strip makes — one row of even cards, never wrapped, never
+// scrolled, the overflow simply not shown — are invisible to a string assertion.
 
 var LONG = 'Apple iPhone 13 Pro Max 256GB Unlocked - Graphite - Good Condition - '
     + 'Includes Original Box, Charger and Case';
 var SALE = { id: 'x1', kind: 'sale', code: 'OVL', amount: 812.4, at: '2026-10-14T19:14:00Z' };
 function sale(items) { return Object.assign({}, SALE, { items: items }); }
+function refund(items) { return Object.assign(sale(items), { kind: 'refund' }); }
 function frag(html) { var d = document.createElement('div'); d.innerHTML = html; return d; }
 
 // ---- markup ---------------------------------------------------------------
 
-t('the line is Sale · store · amount · time; the dot comes after the text', function () {
+t('dot first; line 1 is title + amount, line 2 is Sale · store · time', function () {
+    var d = frag(_lvChipHtml(sale([{ title: 'AirPods Pro', qty: 1 }])));
+    var first = d.firstElementChild;
+    if (!first || !first.classList.contains('lv-adot')) return 'dot is not the first thing in the card';
+    var top = d.querySelector('.lv-abody .lv-atop');
+    if (!top) return 'no top line';
+    if (top.querySelector('.lv-aname').textContent !== 'AirPods Pro') return 'name: ' + top.textContent;
+    var amt = top.querySelector('.lv-aamt');
+    if (!amt || amt.textContent !== '$812.40') return 'amount: ' + (amt && amt.textContent);
+    var meta = d.querySelector('.lv-abody .lv-ameta');
+    return /^Sale · OVL · /.test(meta && meta.textContent) || 'meta: ' + (meta && meta.textContent);
+});
+
+t('refund: Refund in the meta line, amount reads as money out', function () {
+    var d = frag(_lvChipHtml(refund([{ title: 'Returned thing', qty: 1 }])));
+    var meta = d.querySelector('.lv-ameta').textContent;
+    if (!/^Refund · OVL/.test(meta)) return 'meta: ' + meta;
+    var amt = d.querySelector('.lv-aamt').textContent;
+    return amt === '−$812.40' || 'amount: ' + amt;
+});
+
+t('no items: the word Sale stands in for the title', function () {
     var d = frag(_lvChipHtml(sale([])));
-    if (d.querySelector('.lv-ahead')) return 'header rendered with no items';
-    var line = d.querySelector('.lv-abody .lv-aline');
-    if (!line) return 'no .lv-aline in the body';
-    if (line.querySelector('.lv-adot')) return 'dot is inside the line';
-    var last = d.lastElementChild;
-    if (!last || !last.classList.contains('lv-adot')) return 'dot is not the last thing in the chip';
-    return /^Sale · OVL · \$812\.40 · /.test(line.textContent) || 'line text: ' + line.textContent;
+    return d.querySelector('.lv-aname').textContent === 'Sale' || 'name: ' + d.querySelector('.lv-aname').textContent;
 });
 
-t('refund chip says Refund in the line', function () {
-    var e = sale([]); e.kind = 'refund';
-    var line = frag(_lvChipHtml(e)).querySelector('.lv-aline');
-    return /^Refund · OVL/.test(line.textContent) || 'line text: ' + line.textContent;
-});
-
-t('payload from before titles (no items key) renders without a header', function () {
+t('payload from before titles (no items key) still renders a whole card', function () {
     var e = Object.assign({}, SALE); delete e.items;
-    return !frag(_lvChipHtml(e)).querySelector('.lv-ahead') || 'header rendered';
+    var d = frag(_lvChipHtml(e));
+    return (d.querySelector('.lv-aname').textContent === 'Sale' && !!d.querySelector('.lv-aamt')) || d.innerHTML;
+});
+
+t('no amount: no empty amount slot', function () {
+    var e = sale([{ title: 'A', qty: 1 }]); e.amount = 0;
+    return !frag(_lvChipHtml(e)).querySelector('.lv-aamt') || 'amount rendered for zero';
 });
 
 t('one item: title, no "+N more"', function () {
     var d = frag(_lvChipHtml(sale([{ title: 'AirPods Pro', qty: 1 }])));
-    var name = d.querySelector('.lv-ahead .lv-aname');
-    if (!name || name.textContent !== 'AirPods Pro') return 'name: ' + (name && name.textContent);
     return !d.querySelector('.lv-amore') || '"+N more" on a one-item order';
 });
 
@@ -51,10 +65,9 @@ t('three items: first title and "+2 more"', function () {
     return (more && more.textContent === '+2 more') || 'more: ' + (more && more.textContent);
 });
 
-t('refund with items gets a header and a "refunded" tooltip', function () {
-    var e = sale([{ title: 'A', qty: 1 }, { title: 'B', qty: 1 }]); e.kind = 'refund';
-    var name = frag(_lvChipHtml(e)).querySelector('.lv-ahead .lv-aname');
-    if (!name || name.textContent !== 'A') return 'refund header: ' + (name && name.textContent);
+t('refund with items: titled, with a "refunded" tooltip', function () {
+    var e = refund([{ title: 'A', qty: 1 }, { title: 'B', qty: 1 }]);
+    if (frag(_lvChipHtml(e)).querySelector('.lv-aname').textContent !== 'A') return 'refund title missing';
     return /2 items refunded/.test(_lvChipTip(e) || '') || 'tip: ' + _lvChipTip(e);
 });
 
@@ -84,7 +97,7 @@ t('seeding a store dashboard includes today\'s refunds, with titles', function (
     }
 });
 
-t('titles are escaped in the chip', function () {
+t('titles are escaped in the card', function () {
     var d = frag(_lvChipHtml(sale([{ title: '<img src=x onerror=alert(1)>', qty: 1 }])));
     if (d.querySelector('img')) return 'title injected an element';
     return d.querySelector('.lv-aname').textContent === '<img src=x onerror=alert(1)>' || 'text mangled';
@@ -109,7 +122,7 @@ t('tooltip: several items are counted and listed, with quantities', function () 
 });
 
 t('tooltip: none without items', function () {
-    return _lvChipTip(sale([])) === null || 'tooltip on an itemless chip';
+    return _lvChipTip(sale([])) === null || 'tooltip on an itemless card';
 });
 
 t('_lvItems drops blanks and defaults qty', function () {
@@ -128,7 +141,7 @@ t('_lvRecentOrder finds the order by its timestamp', function () {
     return _lvRecentOrder(m, 'zz') === null && _lvRecentOrder(null, 'b') === null || 'miss not null';
 });
 
-t('_lvSyncActivity tags the chip and sets its tooltip', function () {
+t('_lvSyncActivity tags the card and sets its tooltip', function () {
     var host = document.createElement('div');
     host.innerHTML = '<div class="lv-activity-row"></div>';
     document.body.appendChild(host);
@@ -137,10 +150,10 @@ t('_lvSyncActivity tags the chip and sets its tooltip', function () {
         _lvData = null;   // no scope -> ticker mode, no seeding
         _lvEvents = [Object.assign(sale([{ title: 'A', qty: 1 }, { title: 'B', qty: 1 }]), { ts: Date.now() })];
         _lvSyncActivity();
-        var chip = host.querySelector('.lv-activity');
-        if (!chip) return 'no chip rendered';
-        if (!chip.classList.contains('has-items')) return 'no has-items class';
-        return /2 items/.test(chip.getAttribute('data-tip') || '') || 'data-tip: ' + chip.getAttribute('data-tip');
+        var card = host.querySelector('.lv-activity');
+        if (!card) return 'no card rendered';
+        if (!card.classList.contains('has-items')) return 'no has-items class';
+        return /2 items/.test(card.getAttribute('data-tip') || '') || 'data-tip: ' + card.getAttribute('data-tip');
     } finally {
         if (_lvActTimer) { clearTimeout(_lvActTimer); _lvActTimer = null; }
         _lvEvents = saved.ev; _lvData = saved.data;
@@ -150,9 +163,10 @@ t('_lvSyncActivity tags the chip and sets its tooltip', function () {
 
 // ---- layout ---------------------------------------------------------------
 
-// A row of chips at a known width. offsetWidth, not getBoundingClientRect: the
-// chip's entrance animation scales it, and a transform must not count as width.
-function chips(width, events) {
+// A strip of cards at a known width, built the way _lvSyncActivity builds them.
+// Animation off: it is opacity-only now, but a measurement should never depend
+// on where a card is in its fade.
+function cards(width, events) {
     var host = document.getElementById('lv-host');
     if (!host) { host = document.createElement('div'); host.id = 'lv-host'; document.body.appendChild(host); }
     host.style.cssText = 'width:' + width + 'px;';
@@ -162,64 +176,102 @@ function chips(width, events) {
             + _lvChipHtml(e) + '</div>';
     }).join('') + '</div>';
     void host.offsetHeight;
-    return Array.prototype.slice.call(host.querySelectorAll('.lv-activity'));
+    var row = host.querySelector('.lv-activity-row');
+    var all = Array.prototype.slice.call(row.children);
+    var rb = row.getBoundingClientRect();
+    // Shown = sits inside the row's box. A card clipped away by the row lands in
+    // a zero-height implicit row, at or below the row's bottom edge.
+    var shown = all.filter(function (c) { return c.getBoundingClientRect().top < rb.bottom - 1; });
+    return { row: row, all: all, shown: shown };
+}
+function five() {
+    return [sale([{ title: LONG, qty: 1 }, { title: 'B', qty: 1 }, { title: 'C', qty: 1 }]),
+            refund([{ title: 'Returned graphics card', qty: 1 }]),
+            sale([{ title: 'iPad', qty: 1 }]), sale([]), sale([{ title: 'Nintendo Switch OLED', qty: 1 }])];
 }
 
-[390, 820, 1440].forEach(function (w) {
-    t('@' + w + ': a long title does not widen the chip', function () {
-        var c = chips(w, [sale([]), sale([{ title: LONG, qty: 1 }, { title: 'B', qty: 1 }, { title: 'C', qty: 1 }])]);
-        var bare = c[0].offsetWidth, titled = c[1].offsetWidth;
-        return Math.abs(bare - titled) <= 1 || 'bare ' + bare + 'px, titled ' + titled + 'px';
+[390, 820, 1100, 1440].forEach(function (w) {
+    t('@' + w + ': one row only — no wrap, no scroll', function () {
+        var s = cards(w, five());
+        if (!s.shown.length) return 'no card shown at all';
+        var top = s.shown[0].getBoundingClientRect().top;
+        var off = s.shown.filter(function (c) { return Math.abs(c.getBoundingClientRect().top - top) > 0.5; });
+        if (off.length) return off.length + ' shown card(s) on another line';
+        if (s.row.scrollWidth > s.row.clientWidth + 1) return 'row scrolls sideways: ' + s.row.scrollWidth + ' > ' + s.row.clientWidth;
+        var h = s.row.getBoundingClientRect().height, ch = s.shown[0].getBoundingClientRect().height;
+        return Math.abs(h - ch) <= 0.5 || 'row is ' + h + 'px tall for ' + ch + 'px cards: a second row is showing';
     });
 
-    t('@' + w + ': the title is cut off, "+2 more" is whole and inside the chip', function () {
-        var c = chips(w, [sale([{ title: LONG, qty: 1 }, { title: 'B', qty: 1 }, { title: 'C', qty: 1 }])])[0];
-        var name = c.querySelector('.lv-aname'), more = c.querySelector('.lv-amore');
+    t('@' + w + ': what is shown is the newest, and every shown card is the same width', function () {
+        var s = cards(w, five());
+        for (var i = 0; i < s.shown.length; i++) if (s.shown[i] !== s.all[i]) return 'card ' + i + ' shown out of order';
+        var widths = s.shown.map(function (c) { return c.offsetWidth; });
+        var even = widths.every(function (x) { return Math.abs(x - widths[0]) <= 1; });
+        return even || 'widths ' + widths.join(', ');
+    });
+
+    t('@' + w + ': a long title is cut with a fade; "+2 more" and the amount stay whole inside', function () {
+        var c = cards(w, five()).shown[0];
+        var name = c.querySelector('.lv-aname'), more = c.querySelector('.lv-amore'), amt = c.querySelector('.lv-aamt');
         if (!(name.scrollWidth > name.clientWidth)) return 'title not truncated';
-        // Faded, not "…": an ellipsis on nearly every chip read as clutter.
         var cs = getComputedStyle(name);
         if (cs.textOverflow === 'ellipsis') return 'ellipsis is back';
         if (!/gradient/.test(cs.webkitMaskImage || cs.maskImage || '')) return 'no fade mask';
         if (more.scrollWidth > more.clientWidth) return '"+2 more" clipped';
-        var cr = c.getBoundingClientRect(), mr = more.getBoundingClientRect();
-        return mr.right <= cr.right + 0.5 || '"+2 more" overflows the chip by ' + (mr.right - cr.right) + 'px';
+        if (amt.scrollWidth > amt.clientWidth) return 'amount clipped';
+        var cr = c.getBoundingClientRect(), ar = amt.getBoundingClientRect();
+        return ar.right <= cr.right + 0.5 || 'amount overflows the card by ' + (ar.right - cr.right) + 'px';
     });
 });
 
-t('the title starts where "Sale" does', function () {
-    var c = chips(1440, [sale([{ title: 'AirPods Pro', qty: 1 }])])[0];
-    var name = c.querySelector('.lv-aname').getBoundingClientRect().left;
-    var line = c.querySelector('.lv-aline').getBoundingClientRect().left;
-    return Math.abs(name - line) <= 1 || 'title at ' + name + ', Sale at ' + line;
+// The bug the first version shipped to a preview with: hidden cards squeezed to
+// 14px spilled their centred content back up into the shown row. Asserts on the
+// CONTENT of every hidden card, not its box — the box was below the edge all along.
+[390, 820, 1100].forEach(function (w) {
+    t('@' + w + ': nothing of a hidden card shows inside the row', function () {
+        var s = cards(w, five());
+        var rb = s.row.getBoundingClientRect();
+        var leaks = [];
+        s.all.filter(function (c) { return s.shown.indexOf(c) < 0; }).forEach(function (c, i) {
+            Array.prototype.forEach.call(c.querySelectorAll('*'), function (el) {
+                var r = el.getBoundingClientRect();
+                if (r.height && r.top < rb.bottom - 0.5) leaks.push('hidden card ' + i + ' ' + el.className + ' at ' + r.top.toFixed(1));
+            });
+        });
+        return !leaks.length || leaks.slice(0, 3).join('; ') + ' (row ends ' + rb.bottom.toFixed(1) + ')';
+    });
 });
 
-t('the dot sits centred on the right of a two-line chip', function () {
-    var c = chips(1440, [sale([{ title: 'AirPods Pro', qty: 1 }])])[0];
+t('@1440 all five fit; @820 the two oldest are not shown; @390 only the newest', function () {
+    var a = cards(1440, five()).shown.length, b = cards(820, five()).shown.length, c = cards(390, five()).shown.length;
+    return (a === 5 && b === 3 && c === 1) || 'shown: 1440=' + a + ' 820=' + b + ' 390=' + c;
+});
+
+t('two cards on a wide screen stay card-sized, not stretched across', function () {
+    var s = cards(1440, [sale([{ title: 'A', qty: 1 }]), sale([{ title: 'B', qty: 1 }])]);
+    return s.shown[0].offsetWidth < 300 || 'card is ' + s.shown[0].offsetWidth + 'px wide';
+});
+
+t('the dot sits centred on the left of the card', function () {
+    var c = cards(1440, [sale([{ title: 'AirPods Pro', qty: 1 }])]).shown[0];
     var cr = c.getBoundingClientRect(), dr = c.querySelector('.lv-adot').getBoundingClientRect();
     var br = c.querySelector('.lv-abody').getBoundingClientRect();
-    if (!(dr.left >= br.right)) return 'dot is not right of the text';
-    if (cr.right - dr.right > 14) return 'dot is ' + (cr.right - dr.right) + 'px from the right edge';
+    if (!(dr.right <= br.left)) return 'dot is not left of the text';
+    if (dr.left - cr.left > 14) return 'dot is ' + (dr.left - cr.left) + 'px from the left edge';
     var mid = (cr.top + cr.bottom) / 2, dmid = (dr.top + dr.bottom) / 2;
-    return Math.abs(mid - dmid) <= 1.5 || 'dot centre ' + dmid + ' vs chip centre ' + mid;
+    return Math.abs(mid - dmid) <= 1.5 || 'dot centre ' + dmid + ' vs card centre ' + mid;
 });
 
-t('a refund chip with items is the same height as a sale chip', function () {
-    var r = sale([{ title: 'Returned thing', qty: 1 }]); r.kind = 'refund';
-    var c = chips(1440, [sale([{ title: 'AirPods Pro', qty: 1 }]), r]);
-    return c[0].offsetHeight === c[1].offsetHeight || c[0].offsetHeight + ' vs ' + c[1].offsetHeight;
+t('sale, refund and untitled cards are all the same height', function () {
+    var s = cards(1440, [sale([{ title: 'AirPods Pro', qty: 1 }]), refund([{ title: 'X', qty: 1 }]), sale([])]);
+    var h = s.shown.map(function (c) { return c.offsetHeight; });
+    return (h[0] === h[1] && h[1] === h[2]) || 'heights ' + h.join(', ');
 });
 
 t('a short title is not faded', function () {
-    var c = chips(1440, [sale([{ title: 'iPad', qty: 1 }])])[0];
+    var c = cards(1440, [sale([{ title: 'iPad', qty: 1 }])]).shown[0];
     var name = c.querySelector('.lv-aname');
     var r = document.createRange(); r.selectNodeContents(name);
     var textRight = r.getBoundingClientRect().right, boxRight = name.getBoundingClientRect().right;
     return boxRight - textRight >= 16 || 'text ends ' + (boxRight - textRight) + 'px from the fade edge';
-});
-
-t('the Sale lines share a bottom edge in a mixed row', function () {
-    var c = chips(1440, [sale([]), sale([{ title: 'AirPods Pro', qty: 1 }])]);
-    var a = c[0].getBoundingClientRect().bottom, b = c[1].getBoundingClientRect().bottom;
-    if (!(c[1].offsetHeight > c[0].offsetHeight)) return 'titled chip is not taller';
-    return Math.abs(a - b) <= 1 || 'bottoms ' + a + ' vs ' + b;
 });
