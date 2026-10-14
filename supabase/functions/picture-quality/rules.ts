@@ -61,6 +61,10 @@ export const PAYMORE_TEMPLATES: Record<string, string> = {
   misc: `This device is used but in like-new, excellent condition. There are very few, if any, scratches or scuffs. This device is used in good condition. There are some scratches or scuffs from everyday use. This device is used in fair condition. There are many visible scratches, scuffs, and/or visible dings from heavy use.`,
   cameras: `The camera body is in good cosmetic condition with some minimal wear. The LCD and mirror are in good condition with no major wear, scratches or scuffs. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body is in fair cosmetic condition due to some scuffs, scratches and wear. Some of the wear is easily seen. The mirror and LCD both have some visible scuffs and scratches, but the images come out clear. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body is in fair cosmetic condition due to some visible scuffs, scratches and wear. However, the mirror and LCD are both in good condition with little to no wear. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body and LCD are both in good condition with some minimal wear. The mirror however, has some visible scratches and wear. The camera still takes good clear images. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body is in good cosmetic condition with some minor wear. The mirror is also in good condition with no major wear or scratches. The LCD however, has some significant scratches and wear. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body is in good condition, but the mirror and LCD both have some heavy scratches and wear. The camera still takes clear photos. Please view our close up photos, as these are taken of the actual item being offered for sale. This camera body is in fair condition due to some visible scuffs, scratches and wear. The LCD also has some heavy scratches and wear that is easily seen. The mirror however, is in good condition with no major wear or scratches. Please view our close up photos, as these are taken of the actual item being offered for sale. The LCD is in good condition, but the camera body is fair due to some visible scuffs, scratches and wear. The mirror is also fair with some easily seen scratches and wear. The camera still takes clear photos. Please view our close up photos, as these are taken of the actual item being offered for sale.`,
   consoles: `This console is in excellent cosmetic condition. The top, bottom and sides all have minimal, if any, scuffs and wear. Please view our close up photos, as these are taken of the actual item being offered for sale. The bottom of the console is in good condition, but the top casing has some scuffs, scratches and wear. The vents have been cleaned and are in good condition. All crevices and vents have been cleaned of dust and debris. Please view our close up photos, as these are taken of the actual item being offered for sale. The top casing is in good condition with some minor wear, but the bottom has some heavy scuffs, scratches and wear. The vents have been cleaned and are in good condition. All crevices and vents have been cleaned of dust and debris. Please view our close up photos, as these are taken of the actual item being offered for sale. The top and bottom casing are both in good condition with some minor wear. The vents however, are fair with some scratches, dings and debris. The vents have been cleaned to the best of our ability. Please view our close up photos, as these are taken of the actual item being offered for sale. This console is in fair cosmetic condition. The top and bottom casings both have some heavy scuffs, scratches, dings and wear. The vents also have some dings, wear and debris. The vents have been cleaned to the best of our ability. Please view our close up photos, as these are taken of the actual item being offered for sale. The top and bottom casings are both in fair condition due to scuffs, scratches, dings and wear. The vents however, are in good condition and have been cleaned. All crevices and vents have been cleaned of dust and debris. Please view our close up photos, as these are taken of the actual item being offered for sale. The top casing is in good cosmetic condition with some minor wear. The bottom casing and vents are both in fair condition due to scuffs, scratches, dings and debris. The vents have been cleaned to the best of our ability. Please view our close up photos, as these are taken of the actual item being offered for sale. The bottom of this console is in good condition, but the top and vents are fair. The top casing and the vents are fair due to scuffs, scratches, dings and debris. The vents have been cleaned to the best of our ability. Please view our close up photos, as these are taken of the actual item being offered for sale. The console is in good pre-owned condition with a few noticeable scuffs, scratches, and wear.`,
+  // Game case/box lines. The Acceptable one names stains, rips and major
+  // creases and is STILL PayMore's wording — Ethan, 2026-10-14, BAL Gears 5:
+  // "the cosmetic description is normal for fair for PayMore listings".
+  games: `The case/box is in good condition with light to moderate wear, including some small stains, creases, or tears. The case/box is in acceptable condition with a good amount of noticeable scratches, small stains, small rips, major creases, and other wear. This disc game is in good pre-owned condition. There is some light wear on the top and light scratches on the bottom from use.`,
   pcs: `The case is in good cosmetic condition with minimal wear. The case is in fair condition due to scuffs, dents, scratches and wear. Some of these scratches are semi-deep and easily seen. The glass is in good condition with some minor wear and scuffs. The glass is in fair condition due to scratches, scuffs and wear. All sides are in good cosmetic condition with minimal wear. The sides are in fair condition due to some deep scratches, dents and wear. All of the ports are in good condition and clean. The ports are functional, but are in fair condition due to heavy use, dings and scratches.`,
 };
 
@@ -72,10 +76,12 @@ const words = (s: string) => String(s || "").toLowerCase().replace(/[^a-z0-9 ]/g
 // Damage the templates never describe. A sentence naming one is about the
 // unit, however template-like the rest of it reads ("the screen is in good
 // condition but has a crack in the corner").
-export const SEVERE = /\b(crack|cracked|cracks|shatter|shattered|broken|break|missing|chip|chipped|chips|burn|burned|burnt|dead pixels?|bent|peel|peeling|stain|stained|hole|torn|tear|lines? on|spots? on|bruis|discolou?r|scorch|melt|bulg|swell|swollen|water damage)/i;
+export const SEVERE = /\b(crack|cracked|cracks|shatter|shattered|broken|break|missing|chip|chipped|chips|burn|burned|burnt|dead pixels?|bent|peel|peeling|stain|stained|hole|torn|tear|rips?|ripped|lines? on|spots? on|bruis|discolou?r|scorch|melt|bulg|swell|swollen|water damage)/i;
 
 const TEMPLATE_WORDS: Set<string>[] = Object.values(PAYMORE_TEMPLATES)
   .flatMap(splitSentences).map(x => new Set(words(x)));
+const SEVERE_TEMPLATE_WORDS: Set<string>[] = Object.values(PAYMORE_TEMPLATES)
+  .flatMap(splitSentences).filter(x => SEVERE.test(x)).map(x => new Set(words(x)));
 // ≥ 85% of a sentence's words inside ONE template sentence: the template with a
 // device name swapped or a clause dropped still counts.
 const TEMPLATE_SHARE = 0.85;
@@ -111,9 +117,14 @@ const LOCATED = /\bgouge[ds]?\b|\b(dent|ding|scratch|scuff|mark|nick|scrape)\b[^
 // is still a crack.
 const NOT_A_CLAIM = /\b(no|not any|without|free of|free from|(may|might|could)\s+(include|have|show)|including\s+(some\s+)?(small|minor|light|slight|possible|occasional)|(such as|like)\s+(some\s+)?(small|minor|light|slight|possible|occasional))\b[^.;]*?(?=,\s*(and|but)\b|[.;]|$)/gi;
 export function isStandardSentence(sentence: string, _seen = 0): boolean {
-  if (SEVERE.test(sentence.replace(NOT_A_CLAIM, " "))) return false;
   const w = words(sentence);
-  if (w.length && TEMPLATE_WORDS.some(t => w.filter(x => t.has(x)).length / w.length >= TEMPLATE_SHARE)) return true;
+  const fits = (ts: Set<string>[]) => w.length > 0 && ts.some(t => w.filter(x => t.has(x)).length / w.length >= TEMPLATE_SHARE);
+  // A template that itself names damage (the Acceptable game case: "small
+  // stains, small rips, major creases") is matched BEFORE the damage words —
+  // only a sentence that IS that template, not one that borrows a word from it.
+  if (fits(SEVERE_TEMPLATE_WORDS)) return true;
+  if (SEVERE.test(sentence.replace(NOT_A_CLAIM, " "))) return false;
+  if (fits(TEMPLATE_WORDS)) return true;
   return !LOCATED.test(sentence);
 }
 
@@ -178,6 +189,8 @@ export const BOX_SHEETS = new Set(["new-in-box", "new-open-box"]);
 const CORE = /^(battery health|about\b|settings about page|settings page( 1)?$|model information|system information|storage information|cpu information|processor information|ram information|gpu information|graphics information)/i;
 const MINOR = /^(software information|operating system)/i;
 const SERIAL = /serial/i;
+// Any spec / settings screenshot — for keeping the store's order among them.
+const INFO_SHOT = /^(battery health|about\b|settings|model information|system information|storage information|cpu information|processor information|ram information|gpu information|graphics information|software information|operating system|parts|apple warranty)/i;
 export function shotKind(label: string): "core" | "minor" | "serial" | "view" {
   const s = label.trim();
   if (SERIAL.test(s)) return "serial";
@@ -578,13 +591,30 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   const byN = [...r.photos].sort((a, b) => a.n - b.n);
   const firstBox = byN.findIndex(isBox), firstItem = byN.findIndex(isItem), firstEI = byN.findIndex(isEI);
   const boxFirst = firstBox >= 0 && firstItem >= 0 && firstBox < firstItem;
-  const eiLate = firstEI > 2;
-  const order = r.suggested_order.filter((x, i, a) => x >= 1 && x <= n && a.indexOf(x) === i);
+  // Everything Included is the guide's photo 2 (Ethan, 2026-10-14, BAL Canon
+  // EOS 2000D: "everything included is 3 when it should be 2").
+  const eiLate = firstEI > 1;
+  let order = r.suggested_order.filter((x, i, a) => x >= 1 && x <= n && a.indexOf(x) === i);
+  if (order.length === n) {
+    // A lead photo that shows the item stays first (rule 4, 2026-09-25).
+    if (r.lead_ok) order = [1, ...order.filter(x => x !== 1)];
+    // The spec screenshots keep the STORE'S order among themselves; only their
+    // slots move (BAL 2025 MacBook Air, 10-14: "the original order of the specs
+    // from photos 3-8 is already in good order").
+    const info = new Set(r.photos.filter(p => p.shots.some(s => INFO_SHOT.test(s))).map(p => p.n));
+    const mine = [...info].sort((a, b) => a - b);
+    let k = 0;
+    order = order.map(x => info.has(x) ? mine[k++] : x);
+  }
   const changed = order.length === n && order.some((x, i) => x !== i + 1);
-  const reorder = changed && (boxFirst || eiLate || !r.lead_ok)
+  // ANY real order change is offered — a passing listing too, as a Quick Fix
+  // (Ethan, 2026-10-14, BAL: Takumar's photo 7, the Sony ZV-1, the Canon). It
+  // was the big moves only; both looks must still ask for it (see index.ts).
+  const reorder = changed
     ? { current: l.photos.map((_, i) => i + 1), suggested: order, score: Math.round(oScore * 100) / 100,
-        why: [boxFirst && "box photos come before the item", eiLate && "Everything Included is not in the first three",
-              !r.lead_ok && "the first photo does not show the item"].filter(Boolean) as string[] }
+        why: [boxFirst && "box photos come before the item", eiLate && "Everything Included should be photo 2",
+              !r.lead_ok && "the first photo does not show the item",
+              !boxFirst && !eiLate && r.lead_ok && "photos are out of the guide's order"].filter(Boolean) as string[] }
     : null;
   if (!r.lead_ok && !reorder) findings.push({ code: "lead", photo: 1, text: "Photo 1 doesn't show what the item is." });
 

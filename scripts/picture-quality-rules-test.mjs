@@ -265,6 +265,18 @@ t("a photo being deleted is not also sent back for a retake (OVL Evercade, 10-13
   ps[5] = photo(6, { shots: ["Back of Game"], repeats: 2, issues: [issue("not_on_stand"), issue("reflection")] });
   const d = decide(listing({ n: 6 }), GAME, report({ n: 6, photos: ps }));
   return (d.verdict === "reorder" && !d.findings.some(f => f.code === "not_on_stand" || f.code === "reflection")) || say(d); });
+t("PayMore's Acceptable game-case line is standard; a real rip is not (BAL Gears 5, 10-14)", () => {
+  const std = "The case/box is in acceptable condition with a good amount of noticeable scratches, small stains, small rips, major creases, and other wear.";
+  const unit = "The case has a large rip across the back cover.";
+  return (isStandardSentence(std) && !isStandardSentence(unit)) || `${isStandardSentence(std)} ${isStandardSentence(unit)}`; });
+t("a passing listing gets a reorder for a small move (BAL Takumar photo 7, 10-14)", () => {
+  const d = run({}, PHONE, { suggested_order: [1, 2, 3, 10, 4, 5, 6, 7, 8, 9] });
+  return (d.verdict === "reorder" && d.reorder.suggested.join() === "1,2,3,10,4,5,6,7,8,9") || say(d); });
+t("reorder keeps photo 1 and the store's order of spec screens (BAL MacBook Air, 10-14)", () => {
+  const ps = report().photos; ps[2] = photo(3, { shots: ["About Phone"] }); ps[3] = photo(4, { shots: ["Storage Information"] });
+  ps[4] = photo(5, { shots: ["Battery Health"] });
+  const d = run({}, PHONE, { photos: ps, suggested_order: [2, 1, 5, 3, 4, 6, 7, 8, 9, 10] });
+  return (d.reorder && d.reorder.suggested.join() === "1,2,3,4,5,6,7,8,9,10".split(",").join() ) ? "should be unchanged → no reorder" : (!d.reorder || say(d)); });
 t("two looks: a flag must be seen by both; a pass from either", () => {
   const a = report({ needed_missing: ["Everything Included"], units_claimed: 2, units_together: false, missing_shots: ["Back of Phone"] });
   const b = report({ needed_missing: [], units_claimed: 2, units_together: true, missing_shots: ["Back of Phone"] });
