@@ -13404,11 +13404,16 @@ function _lvPace(pctOfGoal, elapsedPct) {
 // highlight would stop meaning "just now".
 // How long each sale or refund stays on screen, and how many can queue up.
 const LV_ACTIVITY_MS = 30000;
-const LV_ACTIVITY_MAX = 6;
+const LV_ACTIVITY_MAX = 8;
 // How many stay pinned on a store dashboard while the shop is open — see
 // _lvActivityHolds. Below LV_ACTIVITY_MAX on purpose: the queue can hold one
 // more than the strip shows, so the newest never has to wait for a slot.
-const LV_ACTIVITY_KEEP = 5;
+//
+// SEVEN, the most the strip will ever show (user's call, 2026-10-14). It is a
+// ceiling, not a target: the strip is one row that drops whatever does not fit
+// (see .lv-activity-row), so a narrower screen shows fewer. shopify-live's
+// RECENT_ORDERS matches it, so a dashboard opening mid-day can fill all seven.
+const LV_ACTIVITY_KEEP = 7;
 let _lvActTimer = null;
 let _lvHeld = false;   // was the strip pinned on the previous sync
 
@@ -13566,15 +13571,53 @@ function _lvPush(e) {
  * The markup is an empty container; _lvSyncActivity fills it. Rendering the chips
  * inline would restart their fade on every unrelated re-render.
  */
+//
+// Headed "Recent activity" with a LIVE badge (user's call, 2026-10-14), using
+// the same .lv-split caption as "Selling" so the two cannot drift apart. The
+// header is OUTSIDE .lv-activity-row on purpose: _lvSyncActivity owns every
+// child of that row and would remove anything it did not put there. The whole
+// block hides while the row is empty (CSS :has), and the badge shows only while
+// the shop is open on today's view — see _lvSyncActivity.
 function _lvActivity() {
-    return '<div class="lv-activity-row"></div>';
+    return '<div class="lv-activity-wrap">'
+        + '<div class="lv-split lv-act-h"><span class="lv-split-l">Recent activity</span>'
+        + '<span class="lv-live"><i></i>Live</span></div>'
+        + '<div class="lv-activity-row"></div></div>';
+}
+
+// "How long ago", for the card's meta line: just now, 4m ago, 1h 12m ago, and
+// past ten hours just "11h ago" — at that range the minutes are noise. A clock
+// a little ahead of Shopify's reads as "just now" rather than as a negative.
+// The exact time is still in the card's tooltip.
+function _lvAgo(iso, now) {
+    const t = Date.parse(iso);
+    if (!isFinite(t)) return '';
+    const m = Math.floor(((now || Date.now()) - t) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60);
+    return h >= 10 ? h + 'h ago' : h + 'h ' + (m % 60) + 'm ago';
+}
+
+// Cards are never re-rendered once placed (see _lvSyncActivity), so their "ago"
+// would freeze at whatever it said when the card landed. One timer for the
+// whole page re-reads every one of them; it only writes text that changed.
+let _lvAgoTimer = null;
+function _lvRefreshAgo() {
+    const now = Date.now();
+    document.querySelectorAll('.lv-ago[data-at]').forEach(el => {
+        const txt = _lvAgo(el.getAttribute('data-at'), now);
+        if (el.textContent !== txt) el.textContent = txt;
+    });
 }
 
 // A card is the dot, centred top to bottom on the left, then two lines: what
 // sold and for how much — the first item's title (cut off with a fade), "+N
-// more", and the amount pinned right — over a quiet Sale · store · time (user's
-// call, 2026-10-14, picked from four mock-ups on the real dashboard). The cards
-// sit in a one-row grid that never wraps or scrolls; see .lv-activity-row.
+// more", and the amount pinned right — over a quiet Sale · store · how long ago
+// (user's call, 2026-10-14, picked from mock-ups on the real dashboard). The
+// cards sit in a one-row grid that never wraps or scrolls; see .lv-activity-row.
+// The "ago" is a .lv-ago span carrying its own timestamp, kept current by
+// _lvRefreshAgo; the exact clock time is in the tooltip.
 //
 // Refunds carry titles too, from shopify-live's recentRefunds, and their amount
 // reads as money going OUT. A card with no items (a refund the list had not
@@ -13591,21 +13634,24 @@ function _lvChipHtml(e) {
         + (e.amount > 0 ? '<b class="lv-aamt">' + (refund ? '&minus;' : '') + _lvMoney(e.amount, true) + '</b>' : '')
         + '</span>'
         + '<span class="lv-ameta">' + kind + ' &middot; ' + escapeHtml(e.code)
-        + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '') + '</span>'
+        + (e.at ? ' &middot; <span class="lv-ago" data-at="' + escapeHtml(e.at) + '">' + _lvAgo(e.at) + '</span>' : '')
+        + '</span>'
         + '</span>';
 }
 
-// The chip's hover: every item on the sale or refund, in full. Goes in data-tip,
-// which the site tooltip injects as HTML — so each title is escaped here, once,
-// and the attribute is set with setAttribute (no second escape needed). Null for
-// a chip with no items, which then has no tooltip at all.
+// The card's hover: what kind, at what exact time (the card itself says how long
+// ago), then every item in full. Goes in data-tip, which the site tooltip injects
+// as HTML — so each title is escaped here, once, and the attribute is set with
+// setAttribute (no second escape needed). Null only for a card with neither a
+// time nor items, which then has no tooltip at all.
 function _lvChipTip(e) {
     const items = e.items || [];
-    if (!items.length) return null;
+    const when = e.at ? _lvOrderClock(e.at) : '';
+    const head = (e.kind === 'refund' ? 'Refund' : 'Sale') + (when ? ' at ' + when : '');
+    if (!items.length) return when ? '<b>' + head + '</b>' : null;
     const line = it => (it.qty > 1 ? it.qty + ' &times; ' : '') + escapeHtml(it.title);
-    return items.length === 1 ? line(items[0])
-        : '<b>' + items.length + ' items' + (e.kind === 'refund' ? ' refunded' : '') + '</b><br>'
-            + items.map(line).join('<br>');
+    return '<b>' + head + (items.length > 1 ? ' &middot; ' + items.length + ' items' : '') + '</b><br>'
+        + items.map(line).join('<br>');
 }
 
 /**
@@ -13708,7 +13754,10 @@ function _lvSyncActivity() {
     _lvEvents = hold
         ? _lvEvents.slice(0, LV_ACTIVITY_KEEP)
         : _lvEvents.filter(e => now - e.ts < LV_ACTIVITY_MS);
-    const live = _lvIsPrev() ? [] : _lvEvents;   // a finished day has no "just now"
+    // A finished day has no "just now". Capped at LV_ACTIVITY_KEEP in ticker mode
+    // too: the queue holds one more than that, and seven is the most the strip
+    // ever shows.
+    const live = _lvIsPrev() ? [] : _lvEvents.slice(0, LV_ACTIVITY_KEEP);
 
     // A pinned chip stops claiming to be news once it is older than the ticker
     // window: the dot's ping is a "just happened" cue, and left running on a
@@ -13746,7 +13795,13 @@ function _lvSyncActivity() {
             el.style.animationDelay = delay(e);
             row.insertBefore(el, row.children[i] || null);
         });
+        // LIVE only while it is: the shop open, on today's view. Closed, the
+        // strip is a ticker of nothing much; on Yesterday it is history.
+        const wrap = row.closest('.lv-activity-wrap');
+        if (wrap) wrap.classList.toggle('is-live', !!(_lvData && _lvData.open) && !_lvIsPrev());
     });
+    _lvRefreshAgo();
+    if (!_lvAgoTimer) _lvAgoTimer = setInterval(_lvRefreshAgo, 30000);
     _lvScheduleActivityExpiry();
 }
 

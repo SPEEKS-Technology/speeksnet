@@ -40,12 +40,12 @@
 //   looking at last night 9pm numbers. CLOSED_STALE_MS = Infinity for a true stop.
 //
 // COST: one ShopifyQL query, one recent-orders query and one refunds query per
-// store. The ShopifyQL one is ~10 points; the orders one is ~60, because it
+// store. The ShopifyQL one is ~10 points; the orders one is ~80, because it
 // carries each order's line items and Shopify prices a nested connection as
-// RECENT_ORDERS x RECENT_ITEMS; the refunds one is at most ~160 (orders x 3
-// refunds x items), and in practice far less. Against a 2000-point bucket restoring at 100/s — and each store is its own shop
-// with its own bucket — a per-minute pass over five stores is nowhere near a
-// limit.
+// RECENT_ORDERS x RECENT_ITEMS; the refunds one is at most ~220 (orders x 3
+// refunds x items), and in practice far less. Against a 2000-point bucket
+// restoring at 100/s — and each store is its own shop with its own bucket — a
+// per-minute pass over five stores is nowhere near a limit.
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -84,8 +84,9 @@ const SHOP_TO_CODE: Record<string, string> = {
 const STORE_ORDER = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 // How many of today's orders ride along on each store row, for the activity strip
 // to open with. Matches what that strip pins (LV_ACTIVITY_KEEP in speeks.js) —
-// fetching more would only be trimmed on arrival.
-const RECENT_ORDERS = 5;
+// fetching more would only be trimmed on arrival. Seven since 2026-10-14, when
+// the strip became a row of up to seven cards; it also caps recentRefunds.
+const RECENT_ORDERS = 7;
 // Line items fetched per recent order, for the item title on each strip chip. The
 // chip shows the first and counts the rest ("+2 more"); its tooltip lists them
 // all. An order with more lines than this undercounts in that "+N more", which on

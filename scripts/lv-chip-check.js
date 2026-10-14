@@ -65,10 +65,50 @@ t('three items: first title and "+2 more"', function () {
     return (more && more.textContent === '+2 more') || 'more: ' + (more && more.textContent);
 });
 
-t('refund with items: titled, with a "refunded" tooltip', function () {
+t('refund with items: titled, and the tooltip says Refund', function () {
     var e = refund([{ title: 'A', qty: 1 }, { title: 'B', qty: 1 }]);
     if (frag(_lvChipHtml(e)).querySelector('.lv-aname').textContent !== 'A') return 'refund title missing';
-    return /2 items refunded/.test(_lvChipTip(e) || '') || 'tip: ' + _lvChipTip(e);
+    return /^Refund at .* · 2 items/.test(frag(_lvChipTip(e) || '').innerText) || 'tip: ' + _lvChipTip(e);
+});
+
+t('meta line says how long ago, from a timestamp it carries', function () {
+    var e = sale([{ title: 'A', qty: 1 }]); e.at = new Date(Date.now() - 4 * 60000 - 5000).toISOString();
+    var ago = frag(_lvChipHtml(e)).querySelector('.lv-ameta .lv-ago');
+    if (!ago) return 'no .lv-ago';
+    if (ago.getAttribute('data-at') !== e.at) return 'data-at: ' + ago.getAttribute('data-at');
+    return ago.textContent === '4m ago' || 'ago: ' + ago.textContent;
+});
+
+t('_lvAgo: just now, minutes, hours and minutes, then whole hours', function () {
+    var now = Date.parse('2026-10-14T20:00:00Z');
+    var at = function (min) { return new Date(now - min * 60000).toISOString(); };
+    var got = [_lvAgo(at(0.5), now), _lvAgo(at(-2), now), _lvAgo(at(4), now), _lvAgo(at(59), now),
+               _lvAgo(at(72), now), _lvAgo(at(9 * 60 + 59), now), _lvAgo(at(11 * 60 + 5), now), _lvAgo('nope', now)];
+    var want = ['just now', 'just now', '4m ago', '59m ago', '1h 12m ago', '9h 59m ago', '11h ago', ''];
+    return JSON.stringify(got) === JSON.stringify(want) || JSON.stringify(got);
+});
+
+t('_lvRefreshAgo rewrites an aged card in place', function () {
+    var host = document.createElement('div');
+    host.innerHTML = '<span class="lv-ago" data-at="' + new Date(Date.now() - 125 * 60000).toISOString() + '">just now</span>';
+    document.body.appendChild(host);
+    try {
+        _lvRefreshAgo();
+        var txt = host.querySelector('.lv-ago').textContent;
+        return txt === '2h 5m ago' || 'after refresh: ' + txt;
+    } finally { host.remove(); }
+});
+
+t('header: Recent activity on the Selling caption, outside the row', function () {
+    var d = frag(_lvActivity());
+    var wrap = d.querySelector('.lv-activity-wrap');
+    if (!wrap) return 'no wrap';
+    var h = wrap.querySelector('.lv-split.lv-act-h .lv-split-l');
+    if (!h || h.textContent !== 'Recent activity') return 'label: ' + (h && h.textContent);
+    if (!wrap.querySelector('.lv-act-h .lv-live')) return 'no LIVE badge';
+    var row = wrap.querySelector('.lv-activity-row');
+    if (!row || row.children.length) return 'row missing or not empty';
+    return !row.contains(wrap.querySelector('.lv-act-h')) || 'header is inside the row, which _lvSyncActivity empties';
 });
 
 t('_lvNewRefund hands out the newest unseen refund once', function () {
@@ -105,24 +145,30 @@ t('titles are escaped in the card', function () {
 
 t('titles are escaped in the tooltip HTML', function () {
     var tip = _lvChipTip(sale([{ title: '<b onmouseover=x>Hi</b>', qty: 1 }]));
-    return frag(tip).querySelector('b') === null || 'tooltip injected an element: ' + tip;
+    var d = frag(tip);
+    if (d.querySelector('[onmouseover]')) return 'tooltip injected an element: ' + tip;
+    return d.innerText.indexOf('<b onmouseover=x>Hi</b>') >= 0 || 'title text mangled: ' + d.innerText;
 });
 
-t('tooltip: one item is the bare title', function () {
-    var tip = _lvChipTip(sale([{ title: 'AirPods Pro', qty: 1 }]));
-    return tip === 'AirPods Pro' || tip;
+t('tooltip: one item is the exact time, then the title', function () {
+    var e = sale([{ title: 'AirPods Pro', qty: 1 }]);
+    var tip = _lvChipTip(e);
+    return tip === '<b>Sale at ' + _lvOrderClock(e.at) + '</b><br>AirPods Pro' || tip;
 });
 
 t('tooltip: several items are counted and listed, with quantities', function () {
     var tip = _lvChipTip(sale([{ title: 'Cable', qty: 3 }, { title: 'Phone', qty: 1 }]));
     var txt = frag(tip).innerText;
-    if (!/^2 items/.test(txt)) return 'no count: ' + txt;
+    if (!/^Sale at .* · 2 items/.test(txt)) return 'no count: ' + txt;
     if (!/3 × Cable/.test(txt)) return 'no qty: ' + txt;
     return /Phone/.test(txt) || 'missing item: ' + txt;
 });
 
-t('tooltip: none without items', function () {
-    return _lvChipTip(sale([])) === null || 'tooltip on an itemless card';
+t('tooltip: no items still gives the exact time; no time and no items gives none', function () {
+    var a = _lvChipTip(sale([]));
+    if (!a || !/^<b>Sale at /.test(a)) return 'itemless tip: ' + a;
+    var e = sale([]); delete e.at;
+    return _lvChipTip(e) === null || 'tip with nothing to say: ' + _lvChipTip(e);
 });
 
 t('_lvItems drops blanks and defaults qty', function () {
@@ -157,6 +203,58 @@ t('_lvSyncActivity tags the card and sets its tooltip', function () {
     } finally {
         if (_lvActTimer) { clearTimeout(_lvActTimer); _lvActTimer = null; }
         _lvEvents = saved.ev; _lvData = saved.data;
+        host.remove();
+    }
+});
+
+t('never more than 7 cards: seeding keeps 7, and the ticker draws at most 7', function () {
+    var saved = { ev: _lvEvents, data: _lvData };
+    var host = document.createElement('div');
+    host.innerHTML = '<div class="lv-activity-row"></div>';
+    document.body.appendChild(host);
+    try {
+        var orders = [];
+        for (var i = 0; i < 9; i++) orders.push({ at: '2026-10-14T1' + i + ':00:00Z', amount: 10 + i, items: [{ title: 'T' + i, qty: 1 }] });
+        _lvSeedEvents({ scope: { role: 'manager', store: 'OVL' }, stores: [{ code: 'OVL', recentOrders: orders }] });
+        if (_lvEvents.length !== 7) return 'seeded ' + _lvEvents.length;
+        _lvData = null;   // ticker mode
+        _lvEvents = [];
+        for (var j = 0; j < 9; j++) _lvPush(Object.assign(sale([{ title: 'P' + j, qty: 1 }]), { id: null }));
+        _lvSyncActivity();
+        var n = host.querySelectorAll('.lv-activity').length;
+        return n === 7 || 'ticker drew ' + n;
+    } finally {
+        if (_lvActTimer) { clearTimeout(_lvActTimer); _lvActTimer = null; }
+        _lvEvents = saved.ev; _lvData = saved.data;
+        host.remove();
+    }
+});
+
+t('LIVE shows only while open on today\'s view; the header hides with an empty row', function () {
+    var saved = { ev: _lvEvents, data: _lvData, mode: _lvMode };
+    var host = document.createElement('div');
+    host.innerHTML = _lvActivity();
+    document.body.appendChild(host);
+    var wrap = host.querySelector('.lv-activity-wrap');
+    var live = function () { return getComputedStyle(wrap.querySelector('.lv-live')).display !== 'none'; };
+    try {
+        _lvEvents = [];
+        _lvData = { open: true, stores: [] };
+        _lvSyncActivity();
+        if (getComputedStyle(wrap).display !== 'none') return 'header shows over an empty row';
+        _lvEvents = [Object.assign(sale([{ title: 'A', qty: 1 }]), { ts: Date.now() })];
+        _lvSyncActivity();
+        if (getComputedStyle(wrap).display === 'none') return 'header hidden with a card in the row';
+        if (!live()) return 'no LIVE while open';
+        _lvData = { open: false, stores: [] };
+        _lvSyncActivity();
+        if (live()) return 'LIVE while closed';
+        _lvData = { open: true, stores: [] }; _lvMode = 'prev';
+        _lvSyncActivity();
+        return !live() || 'LIVE on the Yesterday view';
+    } finally {
+        if (_lvActTimer) { clearTimeout(_lvActTimer); _lvActTimer = null; }
+        _lvEvents = saved.ev; _lvData = saved.data; _lvMode = saved.mode;
         host.remove();
     }
 });

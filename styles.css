@@ -12211,14 +12211,42 @@ body.sam-active .hotbar-btn:hover {
     overflow: hidden; margin-top: 13px;
 }
 .lv-activity-row:empty { display: none; margin-top: 0; }
+/* The "Recent activity" header (see _lvActivity). The caption is .lv-split, the
+   same one "Selling" uses; the whole block goes when the row has nothing in it,
+   so a quiet morning carries no orphan heading. */
+.lv-activity-wrap:has(> .lv-activity-row:empty) { display: none; }
+.lv-activity-wrap .lv-act-h { margin: 18px 0 10px; }
+.lv-activity-wrap .lv-activity-row { margin-top: 0; }
+/* LIVE: shown only while the shop is open on today's view (.is-live, set in
+   _lvSyncActivity). Same green as the OPEN pill and the sale dot, and the same
+   ping, so it reads as part of that family rather than a new signal. */
+.lv-live {
+    display: none; align-items: center; gap: 6px; flex: none;
+    padding: 3px 8px; border-radius: 999px; background: #e8f6ee; color: #1f7a47;
+    font-size: 9.5px; font-weight: 800; line-height: 1; letter-spacing: .1em;
+    text-transform: uppercase;
+}
+.lv-activity-wrap.is-live .lv-live { display: inline-flex; }
+.lv-live i { position: relative; width: 6px; height: 6px; border-radius: 50%; background: #1f9d57; }
+.lv-live i::after {
+    content: ''; position: absolute; inset: 0; border-radius: 50%; background: #1f9d57;
+    animation: lvPing 1.9s cubic-bezier(.22, .61, .36, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) { .lv-live i::after { animation: none; } }
 /* A card: the dot, centred top to bottom on the left, then two lines — what sold
    and for how much, over Sale · store · time. See _lvChipHtml. White and quiet,
    with the refund's amber kept for the one event worth a second look. */
+/* Type and colour are the Live Dashboard's own, measured off it rather than
+   picked (consistency pass, 2026-10-14): the title is the selling table's row
+   text (12px / 650 / slate), the amount its money cells (13px / 850 / near-black,
+   tabular), the meta line its muted grey (#94a3b8). Border is the panel's own
+   #e6ebf1, and the 10px radius is the day toggle's — the inner-control radius
+   inside an 18px card. */
 .lv-activity {
-    display: flex; align-items: center; gap: 9px; min-width: 0; align-self: start;
-    font-size: 11.5px; font-weight: 600; color: #475467;
-    background: #fff; border: 1px solid #e9edf2; border-radius: 12px;
-    padding: 6px 12px 6px 10px; white-space: nowrap;
+    display: flex; align-items: center; gap: 10px; min-width: 0; align-self: start;
+    font-size: 12px; font-weight: 650; color: #475467;
+    background: #fff; border: 1px solid #e6ebf1; border-radius: 10px;
+    padding: 8px 12px 8px 11px; white-space: nowrap;
     /* One 30s animation covers the whole life: fade in, hold, fade out. A
        negative delay set in JS resumes it mid-life after a re-render. Opacity
        only: the row clips its overflow, so a card sliding up from below would
@@ -12255,13 +12283,13 @@ body.sam-active .hotbar-btn:hover {
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
             mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
-.lv-amore { flex: none; font-size: 10.5px; font-weight: 650; color: #98a2b3; }
+.lv-amore { flex: none; font-size: 10.5px; font-weight: 700; color: #94a3b8; }
 .lv-aamt {
-    flex: none; color: var(--slate-charcoal); font-weight: 800;
+    flex: none; font-size: 13px; color: var(--slate-charcoal); font-weight: 850;
     font-variant-numeric: tabular-nums;
 }
 /* Line 2: Sale · store · time, quiet. */
-.lv-ameta { font-size: 10.5px; font-weight: 500; color: #98a2b3; }
+.lv-ameta { font-size: 10.5px; font-weight: 650; color: #94a3b8; }
 .lv-activity.has-items { cursor: default; }
 .lv-activity .lv-aq { color: #94a3b8; font-weight: 650; }
 .lv-adot {
@@ -12272,9 +12300,12 @@ body.sam-active .hotbar-btn:hover {
     content: ''; position: absolute; inset: 0; border-radius: 50%;
     background: #1f9d57; z-index: -1;
 }
-.lv-activity.refund { background: #fffaf2; border-color: #f3e2c2; }
+/* A refund is told apart by its red dot, the word Refund in amber, and its
+   amount in red — on the same white card as a sale. It used to be a whole amber
+   card, which was the loudest thing on a dashboard that tints only to flag
+   (the pale-green leading tile, the red under-goal pill). */
 .lv-activity.refund .lv-aamt { color: #b42318; }
-.lv-activity.refund .lv-ameta { color: #c4934a; }
+.lv-activity.refund .lv-ameta { color: #b3760a; }
 
 /* Same radar ping as the OPEN dot. On a ticker chip it cannot outlive the
    notification, because the chip goes after 30 seconds. A PINNED chip does
