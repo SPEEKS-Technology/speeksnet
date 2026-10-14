@@ -183,35 +183,6 @@ t('layout: the collection-date pencil is reachable, not zero-sized', function ()
     });
 });
 
-t('layout: the Overview fits on a phone', function () {
-    var role = sessionStorage.getItem('speeksUserRole');
-    sessionStorage.setItem('speeksUserRole', 'ceo');
-    var deals = [
-        { id: 'a', ref: 'A-001', stage: 'pricing', pricing_store: 'LEE', total_units: 2,
-          total_offer: 200, client: { company: 'Alpha Industrial Supply' },
-          stage_changed_at: '2026-08-20T00:00:00Z' },
-        { id: 'b', ref: 'B-001', stage: 'listing', pricing_store: 'OVL', listing_store: 'OVL',
-          total_units: 2, listed_units: 0, accepted_at: '2026-09-20T00:00:00Z',
-          total_offer: 500, client: { company: 'Beta Medical Group' },
-          stage_changed_at: '2026-09-20T00:00:00Z' },
-        { id: 'c', ref: 'C-001', stage: 'completed', accepted_at: '2026-08-11T00:00:00Z',
-          total_offer: 900, total_units: 1, client: { company: 'Older Co' },
-          stage_changed_at: '2026-08-11T00:00:00Z' },
-    ];
-    try {
-        var host = stage(390, _b2bRenderOverview(deals));
-        var bad = overflowing(host);
-        if (bad.length) return bad.slice(0, 3).join(' | ');
-        // And the wide table must be genuinely reachable, not clipped: the card
-        // sets overflow:hidden for its radius, so the scroll has to live on the
-        // inner wrapper or the right-hand columns cannot be got at on a phone.
-        var wrap = host.querySelector('.b2b-ov-scroll');
-        if (!wrap) return 'no scroll wrapper around the Overview tables';
-        if (getComputedStyle(wrap).overflowX !== 'auto') return 'wrapper does not scroll';
-        return wrap.scrollWidth > wrap.clientWidth
-            || 'expected the table to overflow its wrapper on a phone; it did not, so this check proves nothing';
-    } finally { sessionStorage.setItem('speeksUserRole', role); }
-});
 
 t('layout: the long research link cannot stretch the listing row', function () {
     // listing_info holds a 100+ character eBay URL. If it does not wrap it drags
@@ -310,7 +281,7 @@ t('audit §2: tab labels do not wrap, and the strip can scroll', function () {
         + '<button class="mb-view-btn" role="tab">Completed</button>'
         + '<button class="mb-view-btn" role="tab">Evaluations</button>'
         + '<button class="mb-view-btn" role="tab">Clients</button>'
-        + '<button class="mb-view-btn" role="tab">Overview</button>'
+        // Five tabs, which is the real set since the Overview went on 2026-09-10.
         + '</div>');
     var strip = host.querySelector('.b2b-view-toggle');
     var first = host.querySelector('.mb-view-btn');
