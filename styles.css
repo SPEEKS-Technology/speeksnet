@@ -12186,19 +12186,20 @@ body.sam-active .hotbar-btn:hover {
 /* Sales and refunds as they land, newest at the left, each shifting the rest along
    and expiring on its own clock. The row collapses to nothing when empty so a
    quiet dashboard carries no stray gap. */
-/* Bottom-aligned, not centred: a sale chip with an item header is a line taller
-   than a refund (or a sale from before titles), and lining them up by their
-   bottom keeps every "Sale · store · amount · time" line on one baseline. */
+/* Bottom-aligned, not centred: a chip with an item header is a line taller than
+   one without (a refund the list had not caught up with, or a sale from before
+   titles), and lining them up by their bottom keeps every store · amount · time
+   line on one baseline. */
 .lv-activity-row {
     display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap;
     margin-top: 13px;
 }
 .lv-activity-row:empty { display: none; margin-top: 0; }
-/* A column of two lines: the optional item header, then .lv-aline — which is the
-   whole chip as it was before headers, dot and all, so a chip without one renders
-   exactly as it always did. */
+/* Two columns: .lv-akind (dot + Sale/Refund) centred top to bottom on the left,
+   and .lv-abody on the right — the optional item header over store · amount ·
+   time. See _lvChipHtml. */
 .lv-activity {
-    display: inline-flex; flex-direction: column; gap: 2px; flex: none;
+    display: inline-flex; align-items: center; gap: 9px; flex: none;
     font-size: 11.5px; font-weight: 700; color: #647082;
     background: #f6f8fa; border: 1px solid #e6ebf1; border-radius: 999px;
     padding: 5px 12px 5px 10px; white-space: nowrap;
@@ -12223,23 +12224,30 @@ body.sam-active .hotbar-btn:hover {
 @media (prefers-reduced-motion: reduce) {
     .lv-activity, .lv-activity.pinned { animation: none; }
 }
+/* The kind of event, centred on the left whatever the chip's height (user's call,
+   2026-10-14). The hairline after it is what lets the right column read as one
+   block — without it the word Sale ran into the store code and the chip read as
+   one long sentence again. Stretched so the hairline runs the chip's full
+   height, and the dot and word still centre inside it. */
+.lv-akind {
+    display: flex; align-items: center; gap: 6px; flex: none; align-self: stretch;
+    padding-right: 9px; border-right: 1px solid rgba(100, 112, 130, .16);
+}
+.lv-abody { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .lv-aline { display: flex; align-items: center; gap: 7px; }
 /* The item header. Quiet on purpose — smaller, lighter and greyer than the line
    it sits on, so the strip still reads as Sale · store · amount at a glance.
 
    It must NOT widen the chip (user's call, 2026-10-14): product titles run long
    and the chips stay the size they were. width:0 takes the header out of the
-   chip's shrink-to-fit sizing entirely, and min-width:100% then hands it back
+   body's shrink-to-fit sizing entirely, and min-width:100% then hands it back
    exactly the width .lv-aline asked for — so the title is cut off at the chip's
    edge, whatever its length. "+N more" never shrinks; the title gives way first.
-   The full list is in the chip's data-tip tooltip.
-
-   Indented by the dot and its gap (7px + 7px) so the title starts where "Sale"
-   does and the dot hangs in the margin. Flush with the dot, the two lines did not
-   line up and the chip read as two things stacked (user's call, 2026-10-14). */
+   The full list is in the chip's data-tip tooltip. It starts where the store
+   code does, because both sit in .lv-abody. */
 .lv-ahead {
     display: flex; align-items: baseline; gap: 5px;
-    width: 0; min-width: 100%; box-sizing: border-box; padding-left: 14px;
+    width: 0; min-width: 100%; box-sizing: border-box;
     font-size: 10.5px; font-weight: 500; color: #98a2b3; line-height: 1.25;
 }
 /* Cut off with a fade, not an ellipsis: nearly every title is cut, and a row of
@@ -12254,7 +12262,8 @@ body.sam-active .hotbar-btn:hover {
 }
 .lv-amore { flex: none; font-weight: 650; color: #7c8696; }
 /* Two lines in a pill radius pinches the header's ends into the curve. */
-.lv-activity.has-items { border-radius: 14px; gap: 1px; padding-top: 5px; cursor: default; }
+.lv-activity.has-items { border-radius: 14px; padding-top: 5px; cursor: default; }
+.lv-activity.refund .lv-akind { border-right-color: rgba(179, 118, 10, .22); }
 .lv-activity b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
 .lv-activity .lv-aq { color: #94a3b8; font-weight: 650; }
 .lv-adot {

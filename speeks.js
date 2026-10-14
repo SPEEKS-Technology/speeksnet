@@ -13461,6 +13461,22 @@ function _lvItems(o) {
         .map(it => ({ title: String(it.title), qty: Number(it.qty) || 1 }));
 }
 
+// Refunds already given a chip (or already on the books when this page first
+// looked), keyed by the refund's own timestamp from shopify-live's recentRefunds.
+//
+// The refund chip is still TRIGGERED by returnsToday rising, as it always was;
+// recentRefunds only says which refund that was, so the chip can name what came
+// back. "The newest one not yet shown" rather than "the newest one": two refunds
+// a minute apart must not both claim the same items. Everything on the list at
+// first sight goes straight in, so the first refund after sign-in cannot be
+// matched to one rung up hours earlier.
+const _lvRefundsShown = new Set();
+function _lvNewRefund(m) {
+    const hit = ((m && m.recentRefunds) || []).find(r => r && r.at && !_lvRefundsShown.has(r.at));
+    if (hit) _lvRefundsShown.add(hit.at);
+    return hit || null;
+}
+
 function _lvTrackChanges(d) {
     let sold = false, refunded = false;
     // Your own store(s). Scopes BOTH the chime and the activity chips: a shop
@@ -13479,6 +13495,8 @@ function _lvTrackChanges(d) {
             net: Number(m.netToday) || 0, orders: Number(m.ordersToday) || 0,
             returns: Number(m.returnsToday) || 0, lastOrderAt: m.lastOrderAt || '',
         };
+        // First sight: today's refunds so far are history, not news.
+        if (!_lvSnap) (m.recentRefunds || []).forEach(r => r && r.at && _lvRefundsShown.add(r.at));
     });
     if (_lvSnap) {
         Object.keys(next).forEach(code => {
@@ -13489,12 +13507,16 @@ function _lvTrackChanges(d) {
             // "nothing happened" — the one event most worth surfacing.
             if (b.returns > a.returns) {
                 _lvPulse[code] = 'refund';
-                // Shopify gives no per-refund timestamp in this payload, so the
-                // moment we saw it is the honest stamp — and it is what the person
-                // watching actually wants: when it came through.
+                // The refund's own amount, items and time when recentRefunds has
+                // it. If it has not caught up yet (it is a separate Shopify call
+                // from the figure that moved), the returns delta and the moment we
+                // saw it — the chip then simply has no header.
                 if (ours(code)) {
-                    _lvPush({ kind: 'refund', code, amount: b.returns - a.returns,
-                              at: new Date().toISOString() });
+                    const r = _lvNewRefund(byCode[code]);
+                    _lvPush({ kind: 'refund', code,
+                              amount: (r && Number(r.amount)) || (b.returns - a.returns),
+                              items: _lvItems(r),
+                              at: (r && r.at) || new Date().toISOString() });
                     refunded = true;
                 }
             } else if (b.orders > a.orders || b.lastOrderAt > a.lastOrderAt) {
@@ -13548,39 +13570,46 @@ function _lvActivity() {
     return '<div class="lv-activity-row"></div>';
 }
 
-// A sale chip carries a quiet header naming what sold: the first item, cut off
-// at the chip's width, and "+N more" for the rest. The header does NOT widen the
-// chip — the Sale · store · amount · time line under it still sets the width, as
-// it always has (user's call, 2026-10-14: the titles are long and the chips were
-// to stay the size they are). The full list is in the chip's tooltip.
+// A chip is two columns. On the left, the dot and the word Sale or Refund,
+// centred top to bottom — what KIND of event, readable at a glance down a row.
+// On the right, a quiet header naming the items (the first, cut off with a
+// fade, and "+N more"), over store · amount · time (user's call, 2026-10-14).
 //
-// Refunds get no header: shopify-live's payload says a refund happened, not what
-// was on it.
+// The header does NOT widen the chip: the store · amount · time line under it
+// sets the right column's width, and the title is cut off to fit. Titles run
+// long, and the chips were to stay the size they were — the left column costs a
+// little width, which was allowed for. The full list is in the chip's tooltip.
+//
+// Refunds carry titles too, from shopify-live's recentRefunds. A chip with no
+// items (a refund the list had not caught up with, or a payload from before
+// titles) has no header and is a single line.
 function _lvChipHtml(e) {
     const refund = e.kind === 'refund';
-    const items = refund ? [] : (e.items || []);
+    const items = e.items || [];
     const head = items.length
         ? '<span class="lv-ahead"><span class="lv-aname">' + escapeHtml(items[0].title) + '</span>'
             + (items.length > 1 ? '<span class="lv-amore">+' + (items.length - 1) + ' more</span>' : '')
             + '</span>'
         : '';
-    return head + '<span class="lv-aline"><span class="lv-adot"></span>'
-        + (refund ? 'Refund' : 'Sale') + ' &middot; <b>' + escapeHtml(e.code) + '</b>'
+    return '<span class="lv-akind"><span class="lv-adot"></span>' + (refund ? 'Refund' : 'Sale') + '</span>'
+        + '<span class="lv-abody">' + head
+        + '<span class="lv-aline"><b>' + escapeHtml(e.code) + '</b>'
         + (e.amount > 0 ? ' &middot; <b>' + _lvMoney(e.amount, true) + '</b>' : '')
         + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '')
-        + '</span>';
+        + '</span></span>';
 }
 
-// The chip's hover: every item on the order, in full. Goes in data-tip, which the
-// site tooltip injects as HTML — so each title is escaped here, once, and the
-// attribute is set with setAttribute (no second escape needed). Null for a chip
-// with no items, which then has no tooltip at all.
+// The chip's hover: every item on the sale or refund, in full. Goes in data-tip,
+// which the site tooltip injects as HTML — so each title is escaped here, once,
+// and the attribute is set with setAttribute (no second escape needed). Null for
+// a chip with no items, which then has no tooltip at all.
 function _lvChipTip(e) {
-    const items = e.kind === 'refund' ? [] : (e.items || []);
+    const items = e.items || [];
     if (!items.length) return null;
     const line = it => (it.qty > 1 ? it.qty + ' &times; ' : '') + escapeHtml(it.title);
     return items.length === 1 ? line(items[0])
-        : '<b>' + items.length + ' items</b><br>' + items.map(line).join('<br>');
+        : '<b>' + items.length + ' items' + (e.kind === 'refund' ? ' refunded' : '') + '</b><br>'
+            + items.map(line).join('<br>');
 }
 
 /**
@@ -13624,9 +13653,10 @@ function _lvActivityHolds(d) {
 // second id to an order the diff path had already pushed, and the strip is keyed
 // by id — two chips, one sale.
 //
-// Sales only: Shopify's order list has no refunds in it. A refund seen before a
-// reload is not restored, which is the one thing lost by deriving this from the
-// payload instead of remembering it locally.
+// Refunds too, since shopify-live started sending recentRefunds (2026-10-14) —
+// before that the order list was the only source and a refund seen before a
+// reload was lost. Same id scheme, prefixed 'r', and marked shown so the diff
+// path cannot announce one a second time.
 let _lvSeeded = false;
 
 function _lvSeedEvents(d) {
@@ -13644,6 +13674,16 @@ function _lvSeedEvents(d) {
                 id: 'o' + m.code + String(o.at).replace(/\D/g, ''),
                 kind: 'sale', code: m.code, amount: Number(o.amount) || 0,
                 items: _lvItems(o), at: o.at, ts: ts,
+            });
+        });
+        (m.recentRefunds || []).forEach(r => {
+            const ts = Date.parse(r && r.at);
+            if (!isFinite(ts)) return;
+            _lvRefundsShown.add(r.at);
+            out.push({
+                id: 'r' + m.code + String(r.at).replace(/\D/g, ''),
+                kind: 'refund', code: m.code, amount: Number(r.amount) || 0,
+                items: _lvItems(r), at: r.at, ts: ts,
             });
         });
     });

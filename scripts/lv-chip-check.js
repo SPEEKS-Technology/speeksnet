@@ -15,13 +15,22 @@ function frag(html) { var d = document.createElement('div'); d.innerHTML = html;
 
 // ---- markup ---------------------------------------------------------------
 
-t('no items: no header, same line as before', function () {
+t('kind column holds the dot and Sale; the line is store · amount · time', function () {
     var d = frag(_lvChipHtml(sale([])));
     if (d.querySelector('.lv-ahead')) return 'header rendered with no items';
-    var line = d.querySelector('.lv-aline');
-    if (!line) return 'no .lv-aline';
-    if (!line.querySelector('.lv-adot')) return 'dot moved out of the line';
-    return /Sale · OVL · \$812\.40 · /.test(line.textContent) || 'line text: ' + line.textContent;
+    var kind = d.querySelector('.lv-akind');
+    if (!kind || !kind.querySelector('.lv-adot')) return 'dot is not in the kind column';
+    if (kind.textContent !== 'Sale') return 'kind text: ' + kind.textContent;
+    var line = d.querySelector('.lv-abody .lv-aline');
+    if (!line) return 'no .lv-aline in the body';
+    if (line.querySelector('.lv-adot')) return 'dot still in the line';
+    return /^OVL · \$812\.40 · /.test(line.textContent) || 'line text: ' + line.textContent;
+});
+
+t('refund chip says Refund in the kind column', function () {
+    var e = sale([]); e.kind = 'refund';
+    var kind = frag(_lvChipHtml(e)).querySelector('.lv-akind');
+    return (kind && kind.textContent === 'Refund') || 'kind text: ' + (kind && kind.textContent);
 });
 
 t('payload from before titles (no items key) renders without a header', function () {
@@ -43,10 +52,37 @@ t('three items: first title and "+2 more"', function () {
     return (more && more.textContent === '+2 more') || 'more: ' + (more && more.textContent);
 });
 
-t('refund never gets a header, even if handed items', function () {
-    var e = sale([{ title: 'A', qty: 1 }]); e.kind = 'refund';
-    if (frag(_lvChipHtml(e)).querySelector('.lv-ahead')) return 'refund has a header';
-    return _lvChipTip(e) === null || 'refund has a tooltip';
+t('refund with items gets a header and a "refunded" tooltip', function () {
+    var e = sale([{ title: 'A', qty: 1 }, { title: 'B', qty: 1 }]); e.kind = 'refund';
+    var name = frag(_lvChipHtml(e)).querySelector('.lv-ahead .lv-aname');
+    if (!name || name.textContent !== 'A') return 'refund header: ' + (name && name.textContent);
+    return /2 items refunded/.test(_lvChipTip(e) || '') || 'tip: ' + _lvChipTip(e);
+});
+
+t('_lvNewRefund hands out the newest unseen refund once', function () {
+    var m = { recentRefunds: [{ at: 'T-new-9', amount: 5, items: [{ title: 'X', qty: 1 }] },
+                              { at: 'T-old-9', amount: 3, items: [] }] };
+    var a = _lvNewRefund(m), b = _lvNewRefund(m), c = _lvNewRefund(m);
+    _lvRefundsShown.delete('T-new-9'); _lvRefundsShown.delete('T-old-9');
+    if (!a || a.at !== 'T-new-9') return 'first: ' + (a && a.at);
+    if (!b || b.at !== 'T-old-9') return 'second: ' + (b && b.at);
+    return c === null || 'third should be null, got ' + c.at;
+});
+
+t('seeding a store dashboard includes today\'s refunds, with titles', function () {
+    var saved = _lvEvents;
+    try {
+        _lvSeedEvents({ scope: { role: 'manager', store: 'OVL' }, stores: [{ code: 'OVL',
+            recentOrders: [{ at: '2026-10-14T18:00:00Z', amount: 10, items: [{ title: 'S', qty: 1 }] }],
+            recentRefunds: [{ at: '2026-10-14T18:30:00Z', amount: 4, items: [{ title: 'R', qty: 1 }] }] }] });
+        var r = _lvEvents.find(function (e) { return e.kind === 'refund'; });
+        if (!r) return 'no refund seeded';
+        if (_lvEvents[0] !== r) return 'refund (newer) is not first';
+        if (!_lvRefundsShown.has('2026-10-14T18:30:00Z')) return 'seeded refund not marked shown';
+        return (r.items[0] && r.items[0].title === 'R') || 'refund items: ' + JSON.stringify(r.items);
+    } finally {
+        _lvEvents = saved; _lvRefundsShown.delete('2026-10-14T18:30:00Z');
+    }
 });
 
 t('titles are escaped in the chip', function () {
@@ -122,7 +158,8 @@ function chips(width, events) {
     if (!host) { host = document.createElement('div'); host.id = 'lv-host'; document.body.appendChild(host); }
     host.style.cssText = 'width:' + width + 'px;';
     host.innerHTML = '<div class="lv-activity-row">' + events.map(function (e) {
-        return '<div class="lv-activity' + (_lvChipTip(e) ? ' has-items' : '') + '" style="animation:none">'
+        return '<div class="lv-activity' + (e.kind === 'refund' ? ' refund' : '')
+            + (_lvChipTip(e) ? ' has-items' : '') + '" style="animation:none">'
             + _lvChipHtml(e) + '</div>';
     }).join('') + '</div>';
     void host.offsetHeight;
@@ -150,15 +187,27 @@ function chips(width, events) {
     });
 });
 
-t('the title starts where "Sale" does, not under the dot', function () {
+t('the title starts where the store code does', function () {
     var c = chips(1440, [sale([{ title: 'AirPods Pro', qty: 1 }])])[0];
     var name = c.querySelector('.lv-aname').getBoundingClientRect().left;
-    var r = document.createRange();
-    var saleText = Array.prototype.find.call(c.querySelector('.lv-aline').childNodes,
-        function (n) { return n.nodeType === 3 && /Sale/.test(n.textContent); });
-    r.selectNodeContents(saleText);
-    var saleLeft = r.getBoundingClientRect().left;
-    return Math.abs(name - saleLeft) <= 1 || 'title at ' + name + ', Sale at ' + saleLeft;
+    var code = c.querySelector('.lv-aline b').getBoundingClientRect().left;
+    return Math.abs(name - code) <= 1 || 'title at ' + name + ', store code at ' + code;
+});
+
+t('dot and Sale sit centred on the left of a two-line chip', function () {
+    var c = chips(1440, [sale([{ title: 'AirPods Pro', qty: 1 }])])[0];
+    var cr = c.getBoundingClientRect(), dr = c.querySelector('.lv-adot').getBoundingClientRect();
+    var kr = c.querySelector('.lv-akind').getBoundingClientRect();
+    var br = c.querySelector('.lv-abody').getBoundingClientRect();
+    if (!(kr.right <= br.left)) return 'kind column overlaps the body';
+    var mid = (cr.top + cr.bottom) / 2, dmid = (dr.top + dr.bottom) / 2;
+    return Math.abs(mid - dmid) <= 1.5 || 'dot centre ' + dmid + ' vs chip centre ' + mid;
+});
+
+t('a refund chip with items is the same height as a sale chip', function () {
+    var r = sale([{ title: 'Returned thing', qty: 1 }]); r.kind = 'refund';
+    var c = chips(1440, [sale([{ title: 'AirPods Pro', qty: 1 }]), r]);
+    return c[0].offsetHeight === c[1].offsetHeight || c[0].offsetHeight + ' vs ' + c[1].offsetHeight;
 });
 
 t('a short title is not faded', function () {
