@@ -72,3 +72,11 @@ t('every modal the B2B code opens is in operations.html', function () {
     return !missing.length || 'opened but not in the page: '
         + missing.map(function (id) { return id + ' (by ' + ids[id] + ')'; }).join(', ');
 });
+
+// The Overview tab was removed on 2026-09-10 (its renderer and router are gone),
+// and a merge put the button back in operations.html: it rendered for CEO and DM,
+// and clicking it did nothing. Same failure as the Move Lines modal, other way
+// round -- the page outlived the code. Found by clicking it on 2026-10-14.
+t('the removed Overview tab is not in the page', function () {
+    return !document.getElementById('b2bViewOverviewBtn') || 'the Overview button is back, with no view behind it';
+});
