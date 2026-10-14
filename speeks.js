@@ -13440,17 +13440,25 @@ function _lvMyCodes(d) {
     return new Set([own]);
 }
 
-// The amount of the order the store's `lastOrderAt` just moved to, read off the
-// payload's own order list.
+// The order the store's `lastOrderAt` just moved to, read off the payload's own
+// order list — for its amount and its items.
 //
-// The net delta used to be the only source, and it is a poor one: a sale landing
-// in the same poll window as a refund nets out to zero or below, and the chip
-// then rendered as a bare "Sale · BAL" with no figure on it at all. The order
-// list already carries the real number for today's last few orders.
-function _lvOrderAmount(m, at) {
-    if (!m || !at) return 0;
-    const hit = (m.recentOrders || []).find(o => o && o.at === at);
-    return hit ? (Number(hit.amount) || 0) : 0;
+// The net delta used to be the only source of the amount, and it is a poor one:
+// a sale landing in the same poll window as a refund nets out to zero or below,
+// and the chip then rendered as a bare "Sale · BAL" with no figure on it at all.
+// The order list already carries the real number for today's last few orders.
+function _lvRecentOrder(m, at) {
+    if (!m || !at) return null;
+    return (m.recentOrders || []).find(o => o && o.at === at) || null;
+}
+
+// What sold, for the chip's header: [{ title, qty }], from shopify-live's
+// recentOrders. Tolerant of a payload from before titles were added (no `items`
+// at all) — that chip simply gets no header, and looks exactly as it used to.
+function _lvItems(o) {
+    return ((o && o.items) || [])
+        .filter(it => it && it.title)
+        .map(it => ({ title: String(it.title), qty: Number(it.qty) || 1 }));
 }
 
 function _lvTrackChanges(d) {
@@ -13495,8 +13503,9 @@ function _lvTrackChanges(d) {
                     // Order's own amount first, net delta second. Falling back to
                     // "now" for the time as well means a chip can never come out as
                     // just a store name with nothing beside it.
-                    const amt = _lvOrderAmount(byCode[code], b.lastOrderAt) || (b.net - a.net);
-                    _lvPush({ kind: 'sale', code, amount: amt,
+                    const hit = _lvRecentOrder(byCode[code], b.lastOrderAt);
+                    const amt = (hit && Number(hit.amount)) || (b.net - a.net);
+                    _lvPush({ kind: 'sale', code, amount: amt, items: _lvItems(hit),
                               at: b.lastOrderAt || new Date().toISOString() });
                     sold = true;
                 }
@@ -13539,12 +13548,39 @@ function _lvActivity() {
     return '<div class="lv-activity-row"></div>';
 }
 
+// A sale chip carries a quiet header naming what sold: the first item, cut off
+// at the chip's width, and "+N more" for the rest. The header does NOT widen the
+// chip — the Sale · store · amount · time line under it still sets the width, as
+// it always has (user's call, 2026-10-14: the titles are long and the chips were
+// to stay the size they are). The full list is in the chip's tooltip.
+//
+// Refunds get no header: shopify-live's payload says a refund happened, not what
+// was on it.
 function _lvChipHtml(e) {
     const refund = e.kind === 'refund';
-    return '<span class="lv-adot"></span>'
+    const items = refund ? [] : (e.items || []);
+    const head = items.length
+        ? '<span class="lv-ahead"><span class="lv-aname">' + escapeHtml(items[0].title) + '</span>'
+            + (items.length > 1 ? '<span class="lv-amore">+' + (items.length - 1) + ' more</span>' : '')
+            + '</span>'
+        : '';
+    return head + '<span class="lv-aline"><span class="lv-adot"></span>'
         + (refund ? 'Refund' : 'Sale') + ' &middot; <b>' + escapeHtml(e.code) + '</b>'
         + (e.amount > 0 ? ' &middot; <b>' + _lvMoney(e.amount, true) + '</b>' : '')
-        + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '');
+        + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '')
+        + '</span>';
+}
+
+// The chip's hover: every item on the order, in full. Goes in data-tip, which the
+// site tooltip injects as HTML — so each title is escaped here, once, and the
+// attribute is set with setAttribute (no second escape needed). Null for a chip
+// with no items, which then has no tooltip at all.
+function _lvChipTip(e) {
+    const items = e.kind === 'refund' ? [] : (e.items || []);
+    if (!items.length) return null;
+    const line = it => (it.qty > 1 ? it.qty + ' &times; ' : '') + escapeHtml(it.title);
+    return items.length === 1 ? line(items[0])
+        : '<b>' + items.length + ' items</b><br>' + items.map(line).join('<br>');
 }
 
 /**
@@ -13607,7 +13643,7 @@ function _lvSeedEvents(d) {
             out.push({
                 id: 'o' + m.code + String(o.at).replace(/\D/g, ''),
                 kind: 'sale', code: m.code, amount: Number(o.amount) || 0,
-                at: o.at, ts: ts,
+                items: _lvItems(o), at: o.at, ts: ts,
             });
         });
     });
@@ -13665,9 +13701,12 @@ function _lvSyncActivity() {
             if (row.querySelector('[data-ev="' + e.id + '"]')) return;
             const el = document.createElement('div');
             el.setAttribute('data-ev', e.id);
+            const tip = _lvChipTip(e);
             el.className = 'lv-activity' + (e.kind === 'refund' ? ' refund' : '')
+                + (tip ? ' has-items' : '')
                 + (hold ? ' pinned' : '') + (aged(e) ? ' aged' : '');
             el.innerHTML = _lvChipHtml(e);
+            if (tip) el.setAttribute('data-tip', tip);
             el.style.animationDelay = delay(e);
             row.insertBefore(el, row.children[i] || null);
         });

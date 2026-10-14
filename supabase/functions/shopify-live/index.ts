@@ -39,9 +39,11 @@
 //   this cache overnight, but a manager opening the app at 07:30 should not be
 //   looking at last night 9pm numbers. CLOSED_STALE_MS = Infinity for a true stop.
 //
-// COST: one ShopifyQL query plus one recent-orders query per store, ~10 points
-// each against a 2000-point bucket restoring at 100/s — and each store is its own
-// shop with its own bucket. A per-minute pass over five stores is nowhere near a
+// COST: one ShopifyQL query plus one recent-orders query per store. The ShopifyQL
+// one is ~10 points; the orders one is ~60, because it carries each order's line
+// items and Shopify prices a nested connection as RECENT_ORDERS x RECENT_ITEMS.
+// Against a 2000-point bucket restoring at 100/s — and each store is its own shop
+// with its own bucket — a per-minute pass over five stores is nowhere near a
 // limit.
 // ============================================================================
 
@@ -83,6 +85,14 @@ const STORE_ORDER = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 // to open with. Matches what that strip pins (LV_ACTIVITY_KEEP in speeks.js) —
 // fetching more would only be trimmed on arrival.
 const RECENT_ORDERS = 5;
+// Line items fetched per recent order, for the item title on each strip chip. The
+// chip shows the first and counts the rest ("+2 more"); its tooltip lists them
+// all. An order with more lines than this undercounts in that "+N more", which on
+// a resale counter is rare enough not to pay for. Titles are clipped here too:
+// they are seller-written, some run to a paragraph, and the chip cuts them off at
+// a fraction of this anyway — this only bounds the payload.
+const RECENT_ITEMS = 10;
+const ITEM_TITLE_MAX = 120;
 const STORE_NAMES: Record<string, string> = {
   OVL: "Overland Park", LEE: "Lees Summit", WSP: "Westport",
   MPL: "Maplewood", BAL: "Ballwin",
@@ -453,7 +463,11 @@ type StoreMetrics = {
   // show what happened while that page was open — so a screen switched on at noon,
   // or signed back in after a break, sat empty next to a till that had been ringing
   // all morning. This is the same list the strip would have built for itself.
-  recentOrders: { at: string; amount: number }[];
+  //
+  // `items` is what sold, for the header on each chip: lines still on the order
+  // (currentQuantity), so a line refunded off it does not announce itself as
+  // sold — the same reason `amount` is the current total, not the original.
+  recentOrders: { at: string; amount: number; items: { title: string; qty: number }[] }[];
   prev: DayMetrics | null;
   // Month-over-month and year-over-year for the month-through-yesterday span.
   // Filled in by refresh() rather than by fetchStore: it is fetched once a day and
@@ -579,7 +593,10 @@ async function fetchStore(
     // fault in one of the two halves. Split, each half fails on its own.
     const ordersData = await gql(shop, token, `{
       orders(first: ${RECENT_ORDERS}, reverse: true, sortKey: CREATED_AT) {
-        nodes { createdAt currentTotalPriceSet { shopMoney { amount } } }
+        nodes {
+          createdAt currentTotalPriceSet { shopMoney { amount } }
+          lineItems(first: ${RECENT_ITEMS}) { nodes { title currentQuantity } }
+        }
       }
     }`);
 
@@ -749,6 +766,12 @@ async function fetchStore(
       .map(o => ({
         at: String(o.createdAt),
         amount: round2(num(o.currentTotalPriceSet?.shopMoney?.amount)),
+        items: (o.lineItems?.nodes ?? [])
+          .filter((li: any) => li?.title && num(li.currentQuantity) > 0)
+          .map((li: any) => ({
+            title: String(li.title).trim().slice(0, ITEM_TITLE_MAX),
+            qty: num(li.currentQuantity),
+          })),
       }));
   } catch (err) {
     // One store failing must not blank the other four. The row carries its own

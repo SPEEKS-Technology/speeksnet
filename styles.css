@@ -12186,13 +12186,19 @@ body.sam-active .hotbar-btn:hover {
 /* Sales and refunds as they land, newest at the left, each shifting the rest along
    and expiring on its own clock. The row collapses to nothing when empty so a
    quiet dashboard carries no stray gap. */
+/* Bottom-aligned, not centred: a sale chip with an item header is a line taller
+   than a refund (or a sale from before titles), and lining them up by their
+   bottom keeps every "Sale · store · amount · time" line on one baseline. */
 .lv-activity-row {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap;
     margin-top: 13px;
 }
 .lv-activity-row:empty { display: none; margin-top: 0; }
+/* A column of two lines: the optional item header, then .lv-aline — which is the
+   whole chip as it was before headers, dot and all, so a chip without one renders
+   exactly as it always did. */
 .lv-activity {
-    display: inline-flex; align-items: center; gap: 7px; flex: none;
+    display: inline-flex; flex-direction: column; gap: 2px; flex: none;
     font-size: 11.5px; font-weight: 700; color: #647082;
     background: #f6f8fa; border: 1px solid #e6ebf1; border-radius: 999px;
     padding: 5px 12px 5px 10px; white-space: nowrap;
@@ -12217,6 +12223,25 @@ body.sam-active .hotbar-btn:hover {
 @media (prefers-reduced-motion: reduce) {
     .lv-activity, .lv-activity.pinned { animation: none; }
 }
+.lv-aline { display: flex; align-items: center; gap: 7px; }
+/* The item header. Quiet on purpose — smaller, lighter and greyer than the line
+   it sits on, so the strip still reads as Sale · store · amount at a glance.
+
+   It must NOT widen the chip (user's call, 2026-10-14): product titles run long
+   and the chips stay the size they were. width:0 takes the header out of the
+   chip's shrink-to-fit sizing entirely, and min-width:100% then hands it back
+   exactly the width .lv-aline asked for — so the title is cut off at the chip's
+   edge, whatever its length. "+N more" never shrinks; the title gives way first.
+   The full list is in the chip's data-tip tooltip. */
+.lv-ahead {
+    display: flex; align-items: baseline; gap: 5px;
+    width: 0; min-width: 100%;
+    font-size: 10.5px; font-weight: 600; color: #8a94a3; line-height: 1.25;
+}
+.lv-aname { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.lv-amore { flex: none; font-weight: 700; color: #a0a9b6; }
+/* Two lines in a pill radius pinches the header's ends into the curve. */
+.lv-activity.has-items { border-radius: 12px; padding-top: 4px; cursor: default; }
 .lv-activity b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
 .lv-activity .lv-aq { color: #94a3b8; font-weight: 650; }
 .lv-adot {
