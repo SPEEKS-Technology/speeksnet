@@ -56239,6 +56239,12 @@ function _pqRow(r) {
     const flagged = new Set((r.findings || []).flatMap(f => [f.photo, ...(f.photos || [])]).filter(Boolean));
     const now = photos.map((_, i) => i + 1);
     const isReorder = r.verdict === 'reorder' && r.reorder && Array.isArray(r.reorder.suggested);
+    // A suggested order on a FIX / RETAKE row too (Ethan, 2026-10-14: "things
+    // that are in fix these photos can still have quick fix deletion and re
+    // orders"): the same Now / Suggested / Guide strips, and Approve Order on
+    // its own line under Recheck. Approving it keeps the row open for the rest.
+    const hasOrder = r.verdict !== 'pass' && r.reorder && Array.isArray(r.reorder.suggested);
+    const extraOrder = hasOrder && !isReorder && !r.stale;
     // A duplicate photo the tool can delete on approval — on any tab: a flagged
     // listing with a repeat gets the button too, under its Recheck.
     const del = !r.stale && r.deletion && Array.isArray(r.deletion.photos) && r.deletion.photos.length ? r.deletion : null;
@@ -56256,8 +56262,8 @@ function _pqRow(r) {
            </details>` : '';
 
     const missing = _pqMissing(r.findings);
-    const moved = isReorder ? r.reorder.suggested.filter((n, i) => n !== i + 1).length : 0;
-    const body = isReorder
+    const moved = hasOrder ? r.reorder.suggested.filter((n, i) => n !== i + 1).length : 0;
+    const body = hasOrder
         // ⚠️ ONE SCROLL FOR ALL THREE ROWS, ONE BOX SIZE (Ethan, 2026-09-30: "do
         // you have a better way to make this not feel so chaotic looking?"). The
         // three strips used to scroll separately, at two box sizes, so slot 3 of
@@ -56334,13 +56340,14 @@ function _pqRow(r) {
         </div>
         <!-- A duplicate to delete beside a reorder, or on a flagged row: its own
              line, so the row's main pair keeps its one job. -->
-        ${del && r.verdict !== 'pass' && (isReorder || !oneClick) ? `<div class="lt-acts pq-acts">
-            <button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Approve Deletion</button></div>` : ''}
+        ${(del && r.verdict !== 'pass' && (isReorder || !oneClick)) || extraOrder ? `<div class="lt-acts pq-acts">
+            ${extraOrder ? `<button class="lt-ok" onclick="pqReorder('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Approve Order</button>` : ''}
+            ${del && r.verdict !== 'pass' && (isReorder || !oneClick) ? `<button class="lt-ok" onclick="pqDeletePhotos('${_ecEsc(id)}')" ${busy ? 'disabled' : ''}>Approve Deletion</button>` : ''}</div>` : ''}
         <!-- What each button DOES, on the row. Ethan asked what "Check Again"
              meant; a button that needs asking about needs a sentence. -->
         ${(r.verdict === 'pass'
           ? ['Agree it passes? Nothing to do. Would you have flagged it? Should Flag, and say what was missed.']
-          : [isReorder && !r.stale && 'Approve Order saves this order to Shopify.',
+          : [hasOrder && !r.stale && 'Approve Order saves this order to Shopify.',
            del && `Approve Deletion removes ${delWhat} from Shopify.`,
            !(isReorder && !r.stale) && !(oneClick && del) && 'Retook the photos? Recheck grades them now.'])
           .filter(Boolean).map(x => `<span class="pq-hint">${x}</span>`).join('')}

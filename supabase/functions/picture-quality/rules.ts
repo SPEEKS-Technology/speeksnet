@@ -595,9 +595,16 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // EOS 2000D: "everything included is 3 when it should be 2").
   const eiLate = firstEI > 1;
   let order = r.suggested_order.filter((x, i, a) => x >= 1 && x <= n && a.indexOf(x) === i);
+  let leadMoved = false;
   if (order.length === n) {
-    // A lead photo that shows the item stays first (rule 4, 2026-09-25).
-    if (r.lead_ok) order = [1, ...order.filter(x => x !== 1)];
+    // THE GUIDE'S FIRST PHOTO LEADS (Ethan, 2026-10-14, OVL iPhone 17 Pro: the
+    // back first "should've been flagged since lead photo is different than
+    // guide"). When a photo covers that shot, it goes first. Only when none does
+    // does a lead photo that shows the item stay put (rule 4, 2026-09-25).
+    const firstShot = sheet.shots.find(s => !s.cond)?.label.toLowerCase();
+    const lead = firstShot ? [...r.photos].sort((a, b) => a.n - b.n).find(p => p.shots.some(s => s.toLowerCase() === firstShot)) : undefined;
+    if (lead) { order = [lead.n, ...order.filter(x => x !== lead.n)]; leadMoved = lead.n !== 1; }
+    else if (r.lead_ok) order = [1, ...order.filter(x => x !== 1)];
     // The spec screenshots keep the STORE'S order among themselves; only their
     // slots move (BAL 2025 MacBook Air, 10-14: "the original order of the specs
     // from photos 3-8 is already in good order").
@@ -614,7 +621,8 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     ? { current: l.photos.map((_, i) => i + 1), suggested: order, score: Math.round(oScore * 100) / 100,
         why: [boxFirst && "box photos come before the item", eiLate && "Everything Included should be photo 2",
               !r.lead_ok && "the first photo does not show the item",
-              !boxFirst && !eiLate && r.lead_ok && "photos are out of the guide's order"].filter(Boolean) as string[] }
+              leadMoved && r.lead_ok && "the guide's first photo should lead",
+              !boxFirst && !eiLate && r.lead_ok && !leadMoved && "photos are out of the guide's order"].filter(Boolean) as string[] }
     : null;
   if (!r.lead_ok && !reorder) findings.push({ code: "lead", photo: 1, text: "Photo 1 doesn't show what the item is." });
 

@@ -1483,7 +1483,7 @@ async function feedbackView(scope: Scope, days: number) {
 // Ethan wants the overnight test re-run near launch, and the first approve is it).
 async function applyReorder(scope: Scope, store: string, productId: string) {
   const r = (await rows(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
-    + `&select=verdict,status,reorder,stamp,sheet_slug&limit=1`))?.[0];
+    + `&select=verdict,status,reorder,deletion,findings,report,stamp,sheet_slug&limit=1`))?.[0];
   if (!r || r.status !== "open" || !r.reorder?.suggested) return json({ error: "no open reorder for this listing" }, 409);
   const { shop, token } = await shopFor(store);
   const l = (await fetchListings(shop, token, [productId]))[0];
@@ -1505,10 +1505,15 @@ async function applyReorder(scope: Scope, store: string, productId: string) {
   // The stamp moves to the NEW order, so the sweep does not pay to re-grade a
   // listing whose only change is the one we just made.
   const reordered = { ...l, photos: order.map(n => l.photos[n - 1]) };
+  // Done only when nothing else is waiting: a Fix row keeps its real problems,
+  // and a Quick Fix with a deletion still to approve keeps that (renumbered).
+  const moved = renumberRow({ ...r, reorder: null }, n => { const i = order.indexOf(n); return i < 0 ? null : i + 1; });
+  const findings = moved.findings.filter((f: any) => f.code !== "order");
+  const done = r.verdict === "reorder" && !moved.deletion;
   await sb(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
     method: "PATCH", headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({ status: "applied", decided_by: scope.name, decided_at: new Date().toISOString(),
-                           decided_note: "reorder approved", stamp: await stampFor(reordered, sheet) }),
+    body: JSON.stringify({ reorder: null, deletion: moved.deletion, findings, report: moved.report, stamp: await stampFor(reordered, sheet),
+      ...(done ? { status: "applied", decided_by: scope.name, decided_at: new Date().toISOString(), decided_note: "reorder approved" } : {}) }),
   });
   return json({ ok: true, applied: productId, order });
 }
@@ -1539,9 +1544,53 @@ function deleteMutation(shop: string, token: string) {
   return deleteVia;
 }
 
+// ⚠️ PHOTO NUMBERS MOVE WHEN THE PHOTOS DO. Approve Order and Approve Deletion
+// can now be used on a Fix row too (Ethan, 2026-10-14: "things that are in fix
+// these photos can still have quick fix deletion and re orders"), and the row
+// stays open for its real problems — so every number still on it (findings, the
+// deletion, a suggested order, the saved report Recheck-free re-deciding reads)
+// is moved to the new numbering. `to` maps an old photo number to its new one,
+// or null when that photo is gone.
+function renumberRow(r: any, to: (n: number) => number | null) {
+  const m = (n: unknown) => typeof n === "number" ? to(n) : null;
+  const findings = (r.findings || []).map((f: any) => {
+    const g = { ...f };
+    if (typeof f.photo === "number") g.photo = m(f.photo);
+    if (Array.isArray(f.photos)) g.photos = f.photos.map(m).filter((x: number | null) => x != null);
+    return g;
+  }).filter((f: any) => f.photo !== null && !(Array.isArray(f.photos) && !f.photos.length && f.code !== "retake"));
+  let deletion = null;
+  if (r.deletion?.photos?.length) {
+    const pairs = r.deletion.photos.map((x: number, i: number) => [m(x), m(r.deletion.of?.[i])])
+      .filter(([a, b]: (number | null)[]) => a != null && b != null) as [number, number][];
+    if (pairs.length) deletion = { photos: pairs.map(q => q[0]), of: pairs.map(q => q[1]) };
+  }
+  // The repeat line names its photos in words; say it again in the new numbers.
+  for (const f of findings) if (f.code === "repeat") {
+    if (!deletion) { f.drop = true; continue; }
+    f.photos = deletion.photos;
+    f.text = deletion.photos.map((x: number, i: number) => `Photo ${x} is the same shot as photo ${deletion!.of[i]}`).join("; ")
+      + `. Approve Deletion removes ${deletion.photos.length > 1 ? "them" : "it"}.`;
+  }
+  let reorder = null;
+  if (r.reorder?.suggested?.length) {
+    const sug = r.reorder.suggested.map(m).filter((x: number | null) => x != null) as number[];
+    if (sug.some((x, i) => x !== i + 1)) reorder = { ...r.reorder, current: sug.map((_, i) => i + 1), suggested: sug };
+  }
+  const rep = r.report;
+  const kept = rep?.photos ? rep.photos.map((q: any) => ({ ...q, n: m(q.n), repeats: m(q.repeats) }))
+    .filter((q: any) => q.n != null).sort((a: any, b: any) => a.n - b.n) : null;
+  const report = kept ? { ...rep, photos: kept,
+    setups: (rep.setups || []).map((g: number[]) => g.map(m).filter((x: number | null) => x != null)),
+    // Nothing left to move: the order as it now stands.
+    suggested_order: reorder ? reorder.suggested : kept.map((_: any, i: number) => i + 1),
+  } : rep;
+  return { findings: findings.filter((f: any) => !f.drop), deletion, reorder, report };
+}
+
 async function applyDeletion(scope: Scope, store: string, productId: string) {
   const r = (await rows(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`
-    + `&select=verdict,status,deletion,findings,stamp,sheet_slug&limit=1`))?.[0];
+    + `&select=verdict,status,deletion,reorder,findings,report,stamp,sheet_slug&limit=1`))?.[0];
   if (!r || r.status !== "open" || !r.deletion?.photos?.length) return json({ error: "no open deletion for this listing" }, 409);
   const { shop, token } = await shopFor(store);
   const l = (await fetchListings(shop, token, [productId]))[0];
@@ -1577,11 +1626,16 @@ async function applyDeletion(scope: Scope, store: string, productId: string) {
   // order was worked out on the old numbering, so it goes too; the repeat
   // finding is done. A row that was only a Quick Fix is finished.
   const kept = { ...l, photos: l.photos.filter((_, i) => !nums.includes(i + 1)) };
-  const findings = (r.findings || []).filter((f: any) => f.code !== "repeat");
-  const done = r.verdict === "reorder";
+  // Old number → new, with the deleted photos gone (see renumberRow). The
+  // suggested order follows the photos that remain.
+  const left = l.photos.map((_, i) => i + 1).filter(n => !nums.includes(n));
+  const moved = renumberRow({ ...r, deletion: null }, n => { const i = left.indexOf(n); return i < 0 ? null : i + 1; });
+  const findings = moved.findings.filter((f: any) => f.code !== "repeat");
+  // A Quick Fix row is finished once nothing is left to approve on it.
+  const done = r.verdict === "reorder" && !moved.reorder;
   await sb(`picture_quality_reviews?store_code=eq.${store}&product_id=eq.${encodeURIComponent(productId)}`, {
     method: "PATCH", headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({ deletion: null, reorder: null, findings, stamp: await stampFor(kept, sheet),
+    body: JSON.stringify({ deletion: null, reorder: moved.reorder, findings, report: moved.report, stamp: await stampFor(kept, sheet),
       ...(done ? { status: "applied", decided_by: scope.name, decided_at: new Date().toISOString(),
                    decided_note: `deletion approved: photo ${nums.join(", ")}` } : {}) }),
   });

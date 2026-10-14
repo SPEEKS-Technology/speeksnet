@@ -277,6 +277,10 @@ t("reorder keeps photo 1 and the store's order of spec screens (BAL MacBook Air,
   ps[4] = photo(5, { shots: ["Battery Health"] });
   const d = run({}, PHONE, { photos: ps, suggested_order: [2, 1, 5, 3, 4, 6, 7, 8, 9, 10] });
   return (d.reorder && d.reorder.suggested.join() === "1,2,3,4,5,6,7,8,9,10".split(",").join() ) ? "should be unchanged → no reorder" : (!d.reorder || say(d)); });
+t("the guide's first shot leads: a back-first iPhone gets a reorder (OVL iPhone 17 Pro, 10-14)", () => {
+  const ps = report().photos; ps[0] = photo(1, { shots: ["Back of Phone"] }); ps[1] = photo(2, { shots: ["Home/Lock Screen"] });
+  const d = run({}, PHONE, { photos: ps });
+  return (d.verdict === "reorder" && d.reorder.suggested[0] === 2) || say(d); });
 t("two looks: a flag must be seen by both; a pass from either", () => {
   const a = report({ needed_missing: ["Everything Included"], units_claimed: 2, units_together: false, missing_shots: ["Back of Phone"] });
   const b = report({ needed_missing: [], units_claimed: 2, units_together: true, missing_shots: ["Back of Phone"] });

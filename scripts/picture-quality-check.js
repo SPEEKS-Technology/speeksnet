@@ -704,3 +704,20 @@ t('passed: the Listing Health chip does not count passes', function () {
     var n = ((_pqData.queue || []).filter(function (r) { return r.verdict !== 'pass'; })).length;
     return n === 0 || 'pass counted';
 });
+
+// A Fix row can carry a reorder (Ethan, 2026-10-14): the three strips, Recheck
+// as its main button, and Approve Order on its own line beside any deletion.
+t('a fix row with a suggested order shows the strips and Approve Order under Recheck', function () {
+    var row = Object.assign({}, FIX, { stale: false, photos: ph(6),
+        reorder: { current: [1, 2, 3, 4, 5, 6], suggested: [2, 1, 3, 4, 5, 6], why: ["the guide's first photo should lead"] },
+        deletion: { photos: [6], of: [3] },
+        findings: [{ code: 'dirty_backdrop', photos: [4], text: 'The table or backdrop is dirty in photo 4 — clean it, then retake.' },
+                   { code: 'repeat', photos: [6], text: 'Photo 6 is the same shot as photo 3. Approve Deletion removes it.' }] });
+    _pqData = data([row]); _pqTier = 'fix';
+    var d = document.createElement('div'); d.innerHTML = _pqHtml();
+    if (!d.querySelector('.pq-ro')) return 'no Now / Suggested / Guide strips';
+    var btns = [].map.call(d.querySelectorAll('.pq-acts button'), function (b) { return b.textContent.trim(); });
+    if (btns[0] !== 'Recheck') return 'main button is ' + btns[0];
+    if (btns.indexOf('Approve Order') < 0 || btns.indexOf('Approve Deletion') < 0) return 'buttons: ' + btns.join(' | ');
+    return true;
+});
