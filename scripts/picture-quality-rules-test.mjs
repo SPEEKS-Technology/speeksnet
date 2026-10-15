@@ -342,6 +342,44 @@ t("template wording never makes Cosmetic Flaws required; a unit sentence does", 
   const a = run({ unitCosmetic: [tmpl].filter(x => !isStandardSentence(x)) }, PHONE, { needed_missing: ["Cosmetic Flaws"] });
   const b = run({ unitCosmetic: ["Small crack in the bottom left corner of the screen."].filter(x => !isStandardSentence(x)) }, PHONE, { needed_missing: ["Cosmetic Flaws"] });
   return (a.verdict === "pass" && flagged(b)) || `${say(a)} | ${say(b)}`; });
+// --- Ethan's OVL review on Opus, 10-14 ---
+const BOARD = { slug: "motherboards", shots: ["Top of Board", "Everything Included", "Front Side of Board", "Back Side of Board",
+  "Closeup of I/O Panel", "Side of Board", "Opposite Side of Board", "Closeup of RAM Sockets", "Closeup of CPU Socket",
+  "Bottom of Board"].map(label => ({ label, cond: label === "Everything Included" ? "x" : null })) };
+const GPU = { slug: "graphics-cards", shots: ["Front of GPU", "Everything Included", "Back of GPU", "Top Side of GPU",
+  "Bottom Side of GPU", "Side of GPU (Not Pins)", "Side of GPU (Pin Side)", "Closeup of Pins", "Closeup of Serial/Model Info"]
+  .map(label => ({ label, cond: label === "Everything Included" ? "x" : null })) };
+const shotsAre = (labels, o = {}) => labels.map((s, i) => photo(i + 1, { shots: [s], ...(o[i + 1] || {}) }));
+t("closeups go after the sides (OVL MSI Z790)", () => {
+  const ps = shotsAre(["Top of Board", "Closeup of I/O Panel", "Closeup of RAM Sockets", "Side of Board", "Front Side of Board",
+    "Opposite Side of Board", "Bottom of Board"], { 2: { whole_item: false }, 3: { whole_item: false } });
+  const d = decide(listing({ n: 7 }), BOARD, report({ n: 7, photos: ps }));
+  return d.reorder?.suggested.join() === "1,4,5,6,2,3,7" || say(d) + " " + d.reorder?.suggested; });
+t("top and bottom sides go in the guide's order (OVL GTX 1080)", () => {
+  const ps = shotsAre(["Front of GPU", "Top Side of GPU", "Side of GPU (Not Pins)", "Bottom Side of GPU", "Back of GPU"]);
+  const d = decide(listing({ n: 5 }), GPU, report({ n: 5, photos: ps }));
+  return d.reorder?.suggested.join() === "1,5,2,4,3" || say(d) + " " + d.reorder?.suggested; });
+t("Everything Included is photo 2 even beside a second front (OVL Canon SX740)", () => {
+  const ps = shotsAre(["Home/Lock Screen", "Back of Phone", "Home/Lock Screen", "Everything Included"]);
+  const d = decide(listing({ n: 4 }), PHONE, report({ n: 4, photos: ps }));
+  return d.reorder?.suggested.join() === "1,4,3,2" || say(d) + " " + d.reorder?.suggested; });
+t("an unlabelled screen closeup stays with the screens (OVL Galaxy S26 Ultra photo 6)", () => {
+  const ps = shotsAre(["Home/Lock Screen", "Back of Phone", "Extra", "About Phone", "Storage Information"], { 3: { whole_item: false } });
+  const d = decide(listing({ n: 5 }), PHONE, report({ n: 5, photos: ps }));
+  return d.reorder?.suggested.join() === "1,3,4,5,2" || say(d) + " " + d.reorder?.suggested; });
+t("a figure lot has no back of lot; a collector's set no opened case, stand or spot (OVL Skylanders, FX Unit Yuki)", () => {
+  const LOT = { slug: "item-lots", shots: [{ label: "Front of Lot", cond: null }, { label: "Back of Lot", cond: null }] };
+  const GAME = { slug: "video-games", shots: [{ label: "Front of Game", cond: null }, { label: "Back of Game", cond: null }, { label: "Opened Case With Disk", cond: null }] };
+  const a = decide(listing({ n: 2, title: "LOT OF 36x SKYLANDERS FIGURES" }), LOT, report({ n: 2, missing_shots: ["Back of Lot"] }));
+  const ps = shotsAre(["Front of Game", "Back of Game", "Extra"], { 3: { issues: [issue("not_on_stand")] } });
+  const b = decide(listing({ n: 3, title: "FX Unit Yuki - SG Memorial Box - Limited Edition Collectors Box" }), GAME,
+    report({ n: 3, photos: ps, missing_shots: ["Opened Case With Disk"], setups: [[1, 2], [3]] }));
+  return (a.verdict === "pass" && b.verdict === "pass") || say(a) + " | " + say(b); });
+t("cords in an Everything Included or accessories photo are not loose (OVL Sony Handycam)", () => {
+  const ps = shotsAre(["Home/Lock Screen", "Everything Included", "Extra Accessories"],
+    { 2: { issues: [issue("loose_cord")] }, 3: { issues: [issue("loose_cord")] } });
+  const d = decide(listing({ n: 3 }), PHONE, report({ n: 3, photos: ps }));
+  return !d.findings.some(f => f.code === "loose_cords") || say(d); });
 
 // --- 2. THE REPLAY ----------------------------------------------------------------------
 const fx = JSON.parse(fs.readFileSync(path.join(here, "fixtures", "pq-replay-2026-10-08.json"), "utf8"));

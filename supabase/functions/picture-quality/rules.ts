@@ -191,6 +191,12 @@ const MINOR = /^(software information|operating system)/i;
 const SERIAL = /serial/i;
 // Any spec / settings screenshot — for keeping the store's order among them.
 const INFO_SHOT = /^(battery health|about\b|settings|model information|system information|storage information|cpu information|processor information|ram information|gpu information|graphics information|software information|operating system|parts|apple warranty)/i;
+// A screen photo of any kind — spec screens and the screen-on shots — for keeping
+// them together at the front.
+const SCREEN_ON = /^(home|lock|screen on|setting)/i;
+// Titles that change which shots apply (see decide).
+const FIGURE_LOT = /\b(figures?|figurines?|amiibos?|skylanders?|funko)\b/i;
+const COLLECTOR_SET = /\b(collector'?s'?|limited edition|memorial box|box set|premium edition)\b/i;
 export function shotKind(label: string): "core" | "minor" | "serial" | "view" {
   const s = label.trim();
   if (SERIAL.test(s)) return "serial";
@@ -360,6 +366,12 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // A game is shot as close as a game can be; empty space around a cartridge is
   // the cartridge being small, not a framing mistake.
   const gameSheet = /^video-games/.test(sheet.slug);
+  // A COLLECTOR'S SET is a box of extras, not a case: it is shot from every
+  // side, flat as often as standing, with more photos than the guide asks for —
+  // "they definitely added a ton more pictures than necessary which is good"
+  // (Ethan, 2026-10-14, OVL FX Unit Yuki SG Memorial Box). No opened case, no
+  // stand, no different-spot line.
+  const collectorSet = gameSheet && COLLECTOR_SET.test(l.title);
   // Box, everything-included and accessory photos are staged, not framed — the
   // PS5's controllers sit angled on purpose. NOT a bare "Extra": that waved
   // through the iPad's cropped screen closeup, a photo of the item itself.
@@ -415,13 +427,16 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // change that because it looks bad like that." First a flag in 3+ photos; the
   // same day, on the OVL ADC equalizer: "To make it easier as a rule just do
   // every picture is −5 points". The good example is the OVL Roland MA-8 pair.
-  const corded = withIssue("loose_cord");
+  // Not in a box, Everything Included or accessories photo: the cords there lie
+  // beside the item to show they come with it (Ethan, 2026-10-14, OVL Sony
+  // Handycam photos 2, 11 and 12: "the cords in this are fine as they are").
+  const corded = withIssue("loose_cord", staged);
   if (corded.length) findings.push({ code: "loose_cords", photos: corded,
     text: `The cord is loose and sprawled out in ${plural(corded, "photo", "photos")} ${list(corded)} — tie or wrap it up, then retake.` });
   // VIDEO GAMES STAND ON THE STAND (Ethan, 2026-10-11, OVL Wii Fit: "If video
   // game are not on stands, it should be flagged"). An automatic flag, on the
   // game sheets only — the model is asked about it only there.
-  const flat = gameSheet ? withIssue("not_on_stand") : [];
+  const flat = gameSheet && !collectorSet ? withIssue("not_on_stand") : [];
   if (flat.length) findings.push({ code: "not_on_stand", photos: flat,
     text: `${plural(flat, "Photo", "Photos")} ${list(flat)} ${plural(flat, "isn't", "aren't")} on the stand — a game is shot standing on the clear stand, like the guide's example. Retake ${plural(flat, "it", "them")} on the stand.` });
   const cluttered = withIssue("clutter");
@@ -447,7 +462,7 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // (Ethan, 2026-10-13, OVL Ryzen 7 2700X: "5, 6 and 7 can just be deleted as
   // they are the same as 1 and 2"; the Oliver Twins game's 4 and 6) — so it is
   // left out of the different-spot line, which then names only what to retake.
-  const setups = isLot ? [] : (r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x) && !repeatSet.has(x))).filter(g => g.length);
+  const setups = isLot || collectorSet ? [] :(r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x) && !repeatSet.has(x))).filter(g => g.length);
   if (setups.length > 1) {
     // The FIRST group is the store's standard setup (the prompt lists it first:
     // the stand photos when some are on the stand), not the biggest — the WSP
@@ -491,7 +506,11 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   const sealed = /^new\b/i.test(l.title) || /\bsealed\b/i.test(l.cosmetic);
   const hasBox = /\bbox\b/i.test(l.included);
   const requiredShots = sheet.shots.filter(s => !s.cond)
-    .filter(s => !(sealed && gameSheet && /opened case/i.test(s.label)))
+    .filter(s => !((sealed || collectorSet) && gameSheet && /opened case/i.test(s.label)))
+    //  - a lot of FIGURES has no back of lot — each figure is shown on its own
+    //    (Ethan, 2026-10-14, OVL Skylanders lot: "the same way trading cards are
+    //    like cartridge only").
+    .filter(s => !(sheet.slug === "item-lots" && FIGURE_LOT.test(l.title) && /^back of lot/i.test(s.label)))
     .filter(s => !(sheet.slug === "item-lots" && !hasBox && /\bbox\b/i.test(s.label)))
     // FLAT RETAIL PACKAGING (Ethan, 2026-10-11, WSP SanDisk microSD on its
     // card: "I wouldn't flag this one"): a blister or hanging card has no real
@@ -619,14 +638,42 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // keep the store's order. The model's labels still decide which shot is which.
   const shotIx = (label: string) => sheet.shots.findIndex(s => s.label.toLowerCase() === label.trim().toLowerCase());
   const isAcc = (p: PhotoR) => p.shots.length > 0 && p.shots.every(s => /^extra accessor/i.test(s.trim()));
-  const keyOf = (p: PhotoR) => {
+  // CLOSEUPS GO TOGETHER, AFTER THE SIDES (Ethan, 2026-10-14, OVL MSI Z790 and
+  // B550: the I/O panel closeup "should come after photo 6 or 7", the sides).
+  // A closeup the guide lists before its side views is sorted with the guide's
+  // later closeups (the RAM and CPU sockets), in the guide's order among them.
+  const lastSide = sheet.shots.reduce((m, s, i) => /\b(side|corner)\b/i.test(s.label) ? i : m, -1);
+  const closeAnchor = sheet.shots.findIndex((s, i) => i > lastSide && /^closeup/i.test(s.label));
+  const ixOf = (label: string) => {
+    const i = shotIx(label);
+    return i >= 0 && closeAnchor > i && /^closeup/i.test(sheet.shots[i].label) ? closeAnchor - 0.5 + i / 1000 : i;
+  };
+  const screenish = (p?: PhotoR) => !!p && p.shots.some(s => SCREEN_ON.test(s.trim()) || INFO_SHOT.test(s.trim()));
+  const baseKey = (p: PhotoR) => {
     if (isAcc(p)) return 3000;
     if (isBox(p)) return 2000;
-    const ixs = p.shots.map(shotIx).filter(i => i >= 0 && !/^extra accessor/i.test(sheet.shots[i].label));
+    const ixs = p.shots.filter(s => shotIx(s) >= 0 && !/^extra accessor/i.test(s.trim())).map(ixOf);
     return ixs.length ? Math.min(...ixs) : 1000;
   };
+  // A SCREEN PHOTO THAT IS NO SHEET SHOT stays with the screen photos beside it
+  // (Ethan, 2026-10-14: OVL Galaxy S26 Ultra photo 6, a RAM Plus screen, was sent
+  // to the end — "I have all screen on stuff at the front"; OVL iPad 8th Gen
+  // photo 2, a closer home screen). It rides with the screen shot next to it.
+  const byNum = new Map(byN.map(p => [p.n, p]));
+  const riders = new Set<number>();
+  const keyOf = (p: PhotoR): number => {
+    const k = baseKey(p);
+    // Only a closeup — what the model makes of a screen it has no label for. A
+    // whole-item Extra beside a screen shot is just as likely the back again.
+    if (k !== 1000 || screenish(p) || p.whole_item) return k;
+    const nb = [byNum.get(p.n - 1), byNum.get(p.n + 1)].find(screenish);
+    if (!nb) return k;
+    riders.add(p.n);
+    return baseKey(nb);
+  };
+  const keys = new Map(byN.map(p => [p.n, keyOf(p)]));
   const allSeen = byN.length === n && byN.every((p, i) => p.n === i + 1);
-  let order = allSeen ? [...byN].sort((a, b) => keyOf(a) - keyOf(b) || a.n - b.n).map(p => p.n) : [];
+  let order = allSeen ? [...byN].sort((a, b) => keys.get(a.n)! - keys.get(b.n)! || a.n - b.n).map(p => p.n) : [];
   let leadMoved = false;
   if (order.length === n) {
     // THE GUIDE'S FIRST PHOTO LEADS (Ethan, 2026-10-14, OVL iPhone 17 Pro: the
@@ -637,6 +684,11 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     const lead = firstShot ? byN.find(p => p.shots.some(s => s.toLowerCase() === firstShot)) : undefined;
     if (lead) { order = [lead.n, ...order.filter(x => x !== lead.n)]; leadMoved = lead.n !== 1; }
     else if (r.lead_ok) order = [1, ...order.filter(x => x !== 1)];
+    // EVERYTHING INCLUDED IS PHOTO 2, right after the lead — even when another
+    // photo shares the lead's shot (Ethan, 2026-10-14, OVL Canon SX740: a second
+    // front, photo 4, took slot 2 and the Everything Included went third).
+    const ei = order.find(x => isEI(byNum.get(x)!));
+    if (ei != null && order[0] !== ei) order = [order[0], ei, ...order.slice(1).filter(x => x !== ei)];
     // Groups that keep the STORE'S order among themselves; only their slots
     // move. Spec screenshots (BAL 2025 MacBook Air, 10-14: "the original order
     // of the specs from photos 3-8 is already in good order"), and side / corner
@@ -648,8 +700,11 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
       let k = 0;
       order = order.map(x => g.has(x) ? mine[k++] : x);
     };
-    keep(p => p.shots.some(s => INFO_SHOT.test(s)));
-    keep(p => p.shots.length > 0 && p.shots.every(s => /\b(side|corner)\b/i.test(s)));
+    keep(p => p.shots.some(s => INFO_SHOT.test(s)) || riders.has(p.n));
+    // Not a Top Side / Bottom Side: those are plainly different edges and go in
+    // the guide's order (Ethan, 2026-10-14, OVL GTX 1080: "photos 3 and 4 should
+    // be swapped" — the bottom side belongs before the plain side).
+    keep(p => p.shots.length > 0 && p.shots.every(s => /\b(side|corner)\b/i.test(s) && !/\b(top|bottom) side\b/i.test(s)));
   }
   const changed = order.length === n && order.some((x, i) => x !== i + 1);
   // ANY real order change is offered — a passing listing too, as a Quick Fix
