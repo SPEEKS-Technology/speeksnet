@@ -152,6 +152,7 @@ export type ReportR = {
   all_sides_shown?: boolean;
   // New In Box / Open Box: the packaging is flat (a blister or hanging card).
   flat_package?: boolean;
+  screen_never_on?: boolean;
   main_flaw: { stated: string | null; source: string; shown: string; photo: number | null };
   serial: "shown" | "hidden_behind_cover" | "not_shown";
   lead_ok: boolean;
@@ -197,6 +198,23 @@ const SCREEN_ON = /^(home|lock|screen on|setting)/i;
 // Titles that change which shots apply (see decide).
 const FIGURE_LOT = /\b(figures?|figurines?|amiibos?|skylanders?|funko)\b/i;
 const COLLECTOR_SET = /\b(collector'?s'?|limited edition|memorial box|box set|premium edition)\b/i;
+// Does a photo's shot name the PART a cosmetic sentence is about? The label's
+// own nouns (cushion, keyboard, lens, screen…), not the view words every label has.
+const VIEW_WORDS = new Set(["of", "the", "and", "front", "back", "side", "opposite", "top", "bottom", "inside", "outside",
+  "closeup", "corner", "device", "item", "with", "on", "off", "extra", "everything", "included", "cosmetic", "flaw", "info", "model", "serial",
+  "lcd", "information", "page", "picture", "photo", "accessorie", "opened", "closed", "open", "unit"]);
+// The item's own name is in most of its sheet's labels (Front of Headphones,
+// Side of Headphones…) and would match every sentence, so a word in 3+ labels
+// is not a part.
+export function partShown(text: string, photos: { shots: string[] }[], sheet: SheetR): boolean {
+  const stem = (w: string) => w.replace(/s$/, "");
+  const words = (x: string) => (x.toLowerCase().match(/[a-z]+/g) || []).map(stem);
+  const common = new Map<string, number>();
+  for (const sh of sheet.shots) for (const w of new Set(words(sh.label))) common.set(w, (common.get(w) || 0) + 1);
+  const said = new Set(words(text));
+  return photos.some(p => p.shots.some(s => words(s)
+    .some(w => w.length > 3 && !VIEW_WORDS.has(w) && (common.get(w) || 0) < 3 && said.has(w))));
+}
 export function shotKind(label: string): "core" | "minor" | "serial" | "view" {
   const s = label.trim();
   if (SERIAL.test(s)) return "serial";
@@ -416,7 +434,10 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // else is in frame, reflections, and where the photos were taken.
   const withIssue = (type: string, skip?: (p: PhotoR) => boolean) => r.photos
     .filter(p => !(skip && skip(p)) && p.issues.some(it => it.type === type && it.severity === "major")).map(p => p.n);
-  const dirty = withIssue("dirty_backdrop");
+  // Not on a photo of only accessories or the box: a little dirt beside a
+  // charger "would not prevent the sale" (Ethan, 2026-10-15, WSP 2024 iMac
+  // photos 15 and 16). Everything Included still counts — the item is in it.
+  const dirty = withIssue("dirty_backdrop", p => p.shots.length > 0 && p.shots.every(s => /^(box|extra accessor)/i.test(s.trim())));
   if (dirty.length) findings.push({ code: "dirty_backdrop", photos: dirty,
     text: `The table or backdrop is dirty in ${plural(dirty, "photo", "photos")} ${list(dirty)} — clean it, then retake.` });
   // Anything besides the item, its stand and the white backdrop: an automatic
@@ -427,10 +448,10 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // change that because it looks bad like that." First a flag in 3+ photos; the
   // same day, on the OVL ADC equalizer: "To make it easier as a rule just do
   // every picture is −5 points". The good example is the OVL Roland MA-8 pair.
-  // Not in a box, Everything Included or accessories photo: the cords there lie
-  // beside the item to show they come with it (Ethan, 2026-10-14, OVL Sony
-  // Handycam photos 2, 11 and 12: "the cords in this are fine as they are").
-  const corded = withIssue("loose_cord", staged);
+  // In an accessories photo too: a coil left in loose loops is loose (Ethan,
+  // 2026-10-15, WSP XP-PEN photo 6 — which undid a day-old exemption for staged
+  // photos). The OVL Handycam's neat accessory cords are the prompt's job.
+  const corded = withIssue("loose_cord");
   if (corded.length) findings.push({ code: "loose_cords", photos: corded,
     text: `The cord is loose and sprawled out in ${plural(corded, "photo", "photos")} ${list(corded)} — tie or wrap it up, then retake.` });
   // VIDEO GAMES STAND ON THE STAND (Ethan, 2026-10-11, OVL Wii Fit: "If video
@@ -462,7 +483,12 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // (Ethan, 2026-10-13, OVL Ryzen 7 2700X: "5, 6 and 7 can just be deleted as
   // they are the same as 1 and 2"; the Oliver Twins game's 4 and 6) — so it is
   // left out of the different-spot line, which then names only what to retake.
-  const setups = isLot || collectorSet ? [] :(r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x) && !repeatSet.has(x))).filter(g => g.length);
+  // GAMES: the one spot rule is the stand, and "not on the stand" says it — the
+  // model's spot groups called WSP Hitman 3's photo 1 different with all three
+  // on the stand (Ethan, 2026-10-15). A BOTTOM shot is the item turned over, so
+  // it never matches the rest (WSP Epson projector photo 6: "it's the bottom").
+  const bottomOnly = new Set(r.photos.filter(p => p.shots.length > 0 && p.shots.every(s => /^bottom\b/i.test(s.trim()))).map(p => p.n));
+  const setups = isLot || collectorSet || gameSheet ? [] : (r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x) && !repeatSet.has(x) && !bottomOnly.has(x))).filter(g => g.length);
   if (setups.length > 1) {
     // The FIRST group is the store's standard setup (the prompt lists it first:
     // the stand photos when some are on the stand), not the biggest — the WSP
@@ -492,7 +518,11 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // needs to show pictures of the 6 games"). General — it replaced the speaker-
   // pair-only rule.
   const units = Number(r.units_claimed || 0);
-  if (units > 1 && (r.all_units_shown === false || r.units_together === false)) {
+  // A sheet with its own LOT shot asks for the units together there only; its
+  // single-unit shots are meant to show one (Ethan, 2026-10-15, WSP TeamGroup
+  // RAM: photo 1 shows both sticks "and follows the guide properly").
+  const lotShown = r.photos.some(p => p.shots.some(s => /\bof lot\b/i.test(s)));
+  if (units > 1 && (r.all_units_shown === false || (r.units_together === false && !lotShown))) {
     findings.push({ code: "lot_not_shown",
       text: r.all_units_shown === false
         ? `The listing is for ${units} items, but the photos don't show all ${units} — retake the guide's shots with every item in them.`
@@ -571,6 +601,12 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     if (screen) core.push(serialShot ? serialShot.label : "Serial Number (in settings or a closeup)");
     else if (serialShot) missing.push({ code: "missing_shot", tier: "serial", shot: serialShot.label, text: `Missing: ${serialShot.label}.` });
   }
+  // An item with its own screen, on a sheet that never asks for it on (Ethan,
+  // 2026-10-15, WSP XP-PEN Artist 12 on Misc). A view, not a settings page.
+  if (r.screen_never_on === true && !sheet.shots.some(s => /screen on|home|lock|\(on\)/i.test(s.label))) {
+    missing.push({ code: "missing_shot", tier: freeUsed ? "view" : "view_free", shot: "Screen On (it has a screen)", text: "Missing: Screen On — the item has its own screen; show it turned on." });
+    freeUsed = true;
+  }
   for (const m of core) missing.push({ code: "missing_shot", tier: "core", shot: m, text: `Missing: ${m}.` });
 
   // If Needed shots the listing CALLS FOR — an automatic flag (Ethan,
@@ -584,6 +620,10 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     if (!shot || !shot.cond) continue;
     if (/^everything included/i.test(m) && !included) continue;
     if (/^cosmetic flaws/i.test(m) && !unitCos) continue;
+    // The flaw sits on a part a guide shot already shows: that shot is the
+    // closeup (Ethan, WSP Beats Solo4 10-08 and again 10-15: "the inside of both
+    // cushion pictures doubled up as the cosmetic flaw").
+    if (/^cosmetic flaws/i.test(m) && partShown(l.unitCosmetic.join(" "), r.photos, sheet)) continue;
     if (/^lcd flaws/i.test(m) && !screenFault) continue;
     missing.push({ code: "missing_shot", tier: "needed", shot: shot.label,
       // What the listing says comes with it, for the row (Ethan, OVL GTX 1660).
@@ -649,10 +689,16 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     return i >= 0 && closeAnchor > i && /^closeup/i.test(sheet.shots[i].label) ? closeAnchor - 0.5 + i / 1000 : i;
   };
   const screenish = (p?: PhotoR) => !!p && p.shots.some(s => SCREEN_ON.test(s.trim()) || INFO_SHOT.test(s.trim()));
+  // Two shots that close the device's photos, after any extra of it (Ethan,
+  // 2026-10-15, WSP): COSMETIC FLAWS "should always be the final picture before
+  // accessories" (Galaxy Watch6 photo 6), and the EARBUDS out of their case are
+  // "the final pictures before any accessories" (AirPods 5th Gen photo 5).
+  const late = (label: string) => /^cosmetic flaw/i.test(label.trim()) ? 1500
+    : sheet.slug === "earbuds" && /\bearbuds?\b/i.test(label) ? 1400 + shotIx(label) / 1000 : null;
   const baseKey = (p: PhotoR) => {
     if (isAcc(p)) return 3000;
     if (isBox(p)) return 2000;
-    const ixs = p.shots.filter(s => shotIx(s) >= 0 && !/^extra accessor/i.test(s.trim())).map(ixOf);
+    const ixs = p.shots.filter(s => shotIx(s) >= 0 && !/^extra accessor/i.test(s.trim())).map(s => late(s) ?? ixOf(s));
     return ixs.length ? Math.min(...ixs) : 1000;
   };
   // A SCREEN PHOTO THAT IS NO SHEET SHOT stays with the screen photos beside it
@@ -833,6 +879,7 @@ export function agree<T extends ReportR>(a: T, b: T): T {
     units_together: a.units_together !== false || b.units_together !== false,
     all_sides_shown: a.all_sides_shown === true || b.all_sides_shown === true,
     flat_package: a.flat_package === true || b.flat_package === true,
+    screen_never_on: a.screen_never_on === true && b.screen_never_on === true,
     main_flaw: bothNo ? a.main_flaw
       : { ...a.main_flaw, shown: a.main_flaw.shown === "no" ? b.main_flaw.shown : a.main_flaw.shown },
     serial: a.serial === "shown" || b.serial === "shown" ? "shown"

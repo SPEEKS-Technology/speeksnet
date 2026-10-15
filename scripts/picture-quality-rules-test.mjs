@@ -375,11 +375,39 @@ t("a figure lot has no back of lot; a collector's set no opened case, stand or s
   const b = decide(listing({ n: 3, title: "FX Unit Yuki - SG Memorial Box - Limited Edition Collectors Box" }), GAME,
     report({ n: 3, photos: ps, missing_shots: ["Opened Case With Disk"], setups: [[1, 2], [3]] }));
   return (a.verdict === "pass" && b.verdict === "pass") || say(a) + " | " + say(b); });
-t("cords in an Everything Included or accessories photo are not loose (OVL Sony Handycam)", () => {
-  const ps = shotsAre(["Home/Lock Screen", "Everything Included", "Extra Accessories"],
-    { 2: { issues: [issue("loose_cord")] }, 3: { issues: [issue("loose_cord")] } });
+t("a loose cord counts in an accessories photo; a dirty table there does not (WSP XP-PEN, 2024 iMac)", () => {
+  const ps = shotsAre(["Home/Lock Screen", "Back of Phone", "Extra Accessories"],
+    { 3: { issues: [issue("loose_cord"), issue("dirty_backdrop")] } });
   const d = decide(listing({ n: 3 }), PHONE, report({ n: 3, photos: ps }));
-  return !d.findings.some(f => f.code === "loose_cords") || say(d); });
+  return (d.findings.some(f => f.code === "loose_cords") && !d.findings.some(f => f.code === "dirty_backdrop")) || say(d); });
+// --- Ethan's WSP review on Opus, 10-15 ---
+t("cosmetic flaws, then the earbuds, close the device's photos (WSP Galaxy Watch6, AirPods 5th Gen)", () => {
+  const ps = shotsAre(["Home/Lock Screen", "Back of Phone", "Cosmetic Flaws", "Extra", "Extra Accessories"]);
+  const a = decide(listing({ n: 5 }), PHONE, report({ n: 5, photos: ps }));
+  const BUDS = { slug: "earbuds", shots: ["Front of Case", "Back of Case", "Case Opened (Empty)", "Top of Earbuds"].map(label => ({ label, cond: null })) };
+  const bs = shotsAre(["Front of Case", "Back of Case", "Top of Earbuds", "Case Opened (Empty)", "Extra"]);
+  const b = decide(listing({ n: 5 }), BUDS, report({ n: 5, photos: bs }));
+  return (a.reorder?.suggested.join() === "1,2,4,3,5" && b.reorder?.suggested.join() === "1,2,4,5,3") || a.reorder?.suggested + " | " + b.reorder?.suggested; });
+t("no different spot on a game or a bottom shot (WSP Hitman 3, Epson)", () => {
+  const GAME = { slug: "video-games", shots: [{ label: "Front of Game", cond: null }, { label: "Back of Game", cond: null }] };
+  const a = decide(listing({ n: 2 }), GAME, report({ n: 2, photos: shotsAre(["Front of Game", "Back of Game"]), setups: [[2], [1]] }));
+  const b = run({}, PHONE, { photos: shotsAre(["Home/Lock Screen", "Back of Phone", "Bottom Side of Phone"]), setups: [[1, 2], [3]], n: 3 });
+  return (!a.findings.some(f => f.code === "mixed_setups") && !b.findings.some(f => f.code === "mixed_setups")) || say(a) + " | " + say(b); });
+t("units apart in single-unit shots are fine when a lot shot shows them together (WSP TeamGroup RAM)", () => {
+  const RAM = { slug: "ram", shots: [{ label: "Top of Lot", cond: null }, { label: "Top of RAM", cond: null }] };
+  const d = decide(listing({ n: 2 }), RAM, report({ n: 2, photos: shotsAre(["Top of Lot", "Top of RAM"]), units_claimed: 2, units_together: false }));
+  return !d.findings.some(f => f.code === "lot_not_shown") || say(d); });
+t("a cushion closeup covers a flaw on the cushion, not one on the band (WSP Beats Solo4)", () => {
+  const HP = { slug: "headphones-over-ear", shots: ["Front of Headphones", "Side of Headphones", "Back of Headphones", "Inside of Cushion", "Cosmetic Flaws"]
+    .map(label => ({ label, cond: label === "Cosmetic Flaws" ? "Cosmetic flaws" : null })) };
+  const ps = shotsAre(["Front of Headphones", "Inside of Cushion"]);
+  const go = (txt) => decide(listing({ n: 2, unitCosmetic: [txt] }), HP, report({ n: 2, photos: ps, needed_missing: ["Cosmetic Flaws"] }));
+  const a = go("The left cushion has a small tear."), b = go("The headphones have a scratch on the band.");
+  return (!a.findings.some(f => f.shot === "Cosmetic Flaws") && b.findings.some(f => f.shot === "Cosmetic Flaws")) || say(a) + " | " + say(b); });
+t("an item with its own screen never shown on is missing Screen On (WSP XP-PEN)", () => {
+  const MISC = { slug: "small-medium-misc-items", shots: [{ label: "Front of Device", cond: null }] };
+  const d = decide(listing({ n: 1 }), MISC, report({ n: 1, photos: shotsAre(["Front of Device"]), screen_never_on: true }));
+  return d.findings.some(f => /Screen On/.test(f.shot || "")) || say(d); });
 
 // --- 2. THE REPLAY ----------------------------------------------------------------------
 const fx = JSON.parse(fs.readFileSync(path.join(here, "fixtures", "pq-replay-2026-10-08.json"), "utf8"));
