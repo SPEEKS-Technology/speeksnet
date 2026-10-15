@@ -236,7 +236,7 @@ const priceStep = (price: number, low: number, mid: number, high: number) =>
 export const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake_or_edited", "wrong_item",
   "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead", "not_on_stand", "turned"]);
 
-// ⚠️ THE VERDICT, ONE RULE FOR EVERY CALLER (decide, the second-look reorder
+// ⚠️ THE VERDICT, ONE RULE FOR EVERY CALLER (see the revision inside) (decide, the second-look reorder
 // check, redecide). A listing at or over the bar with ANYTHING still to show —
 // a free missing view, a few reflection points — is a Quick Fix, not a pass
 // (Ethan, 2026-10-14: "If even it is 'free' still flag it on the site so they
@@ -245,7 +245,11 @@ export const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake
 export function verdictOf(findings: { code: string }[], score: number, reorder: unknown, deletion: unknown) {
   if (findings.some(f => f.code === "retake")) return "retake";
   if (score < PASS_BAR) return "fix";
-  return reorder || deletion || findings.length ? "reorder" : "pass";
+  // ⚠️ REVISED THE NEXT DAY (Ethan, 2026-10-15, WSP SanDisk): "in the quick fix
+  // show it, but when the order or deletion is good, it can go away". Quick
+  // Fixes is for what can be APPROVED; the small notes ride along there, and a
+  // pass with nothing to approve is a pass — its notes still show on its card.
+  return reorder || deletion ? "reorder" : "pass";
 }
 
 export function pictureScore(findings: Finding[], photoCount: number, price: number) {

@@ -56352,11 +56352,11 @@ function _pqRow(r) {
         <!-- What each button DOES, on the row. Ethan asked what "Check Again"
              meant; a button that needs asking about needs a sentence. -->
         ${(r.verdict === 'pass'
-          ? ['Agree it passes? Nothing to do. Would you have flagged it? Should Flag, and say what was missed.']
-          // A Quick Fix with nothing to approve: it passed, but has small
-          // things to see (Ethan, 10-14: "no quick fix option here?").
-          : [r.verdict === 'reorder' && !hasOrder && !del && 'Passed, with small things to know — nothing to approve. Fix them on the next retake, or Dismiss once seen.',
-           hasOrder && !r.stale && 'Approve Order saves this order to Shopify.',
+          // A pass can carry small notes — shown, nothing to approve (Ethan,
+          // 10-15: the SanDisk belongs in Passed, its note still on the card).
+          ? [(r.findings || []).length && 'Passed — the notes are small things to fix on the next retake.',
+             'Agree it passes? Nothing to do. Would you have flagged it? Should Flag, and say what was missed.']
+          : [hasOrder && !r.stale && 'Approve Order saves this order to Shopify.',
            del && `Approve Deletion removes ${delWhat} from Shopify.`,
            !(isReorder && !r.stale) && !(oneClick && del) && 'Retook the photos? Recheck grades them now.'])
           .filter(Boolean).map(x => `<span class="pq-hint">${x}</span>`).join('')}
