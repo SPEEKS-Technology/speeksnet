@@ -388,9 +388,34 @@ export function lookAlikeFaces(r: ReportR, sheet: SheetR): ReportR {
   return { ...r, photos, missing_shots: r.missing_shots.filter(m => !freed.includes(m.trim().toLowerCase())) };
 }
 
+// A LABEL CLOSEUP IS ONLY THE CLOSEUP. The model read the serial off a tight
+// shot of the box's back label and counted it as the Back of Box too (Ethan,
+// 2026-10-16, MPL RingConn Gen 3 Air: "The 2nd photo is the closeup of the
+// serial/model. I would've flagged that there is no back of box picture").
+// A closeup (whole_item false) that holds the sheet's closeup shot covers no
+// whole view; a view only it claimed is missing.
+export function closeupOnly(r: ReportR, sheet: SheetR): ReportR {
+  const onSheet = (s: string) => sheet.shots.some(x => x.label.toLowerCase() === s.trim().toLowerCase());
+  const isClose = (s: string) => /closeup|serial/i.test(s);
+  const dropped: string[] = [];
+  const photos = r.photos.map(p => {
+    if (p.whole_item || !p.shots.some(s => isClose(s) && onSheet(s))) return p;
+    const views = p.shots.filter(s => onSheet(s) && !isClose(s) && !INFO_SHOT.test(s.trim()));
+    if (!views.length) return p;
+    dropped.push(...views);
+    return { ...p, shots: p.shots.filter(s => !views.includes(s)) };
+  });
+  if (!dropped.length) return r;
+  const covered = (s: string) => photos.some(p => p.shots.some(x => x.trim().toLowerCase() === s.trim().toLowerCase()));
+  const nowMissing = [...new Set(dropped.map(s => s.trim()))].filter(s => !covered(s)
+    && !r.missing_shots.some(m => m.trim().toLowerCase() === s.toLowerCase())
+    && !sheet.shots.find(x => x.label.toLowerCase() === s.toLowerCase())?.cond);
+  return { ...r, photos, missing_shots: [...r.missing_shots, ...nowMissing] };
+}
+
 // --- the verdict ---------------------------------------------------------------
 export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<number, string[]>) {
-  const r = lookAlikeFaces(r0, sheet);
+  const r = lookAlikeFaces(closeupOnly(r0, sheet), sheet);
   // Repeats the code stands behind. A closeup of a label is never a repeat of
   // the face it sits on, nor a whole shot of a closeup (Ethan, 2026-10-13, OVL
   // Intel SSD: "the closeup is going to be on either the top or the bottom").
@@ -851,6 +876,19 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // a second cushion closeup between the two cushions — "not that great relative
   // to the guide"). Not a sheet shot that may repeat, a spec screen (two pages of
   // battery info are both wanted) or a steelbook's two fronts.
+  // THE STORE'S CLOSING RUN STAYS AS SHOT (Ethan, 2026-10-16, MPL Beats 360:
+  // "The initial order is good. The final 3 photos in the original are 3
+  // accessories/extras" — the bag, the box, the quick start card). When the
+  // listing ENDS on box / accessory photos, those and any bare "Extra" among
+  // them (paperwork, a card) keep the store's order, after the device's photos.
+  // An Extra just BEFORE the run is still the device's (WSP Galaxy Watch6: its
+  // photo 4 went ahead of Cosmetic Flaws), so the run starts at a box or accessory.
+  const bareExtra = (p: PhotoR) => p.shots.length > 0 && p.shots.every(s => /^extra$/i.test(s.trim()));
+  const tail = new Set<number>();
+  let runFrom = byN.length;
+  for (let i = byN.length - 1; i >= 0 && (isBox(byN[i]) || isAcc(byN[i]) || bareExtra(byN[i])); i--) runFrom = i;
+  while (runFrom < byN.length && bareExtra(byN[runFrom])) runFrom++;
+  for (let i = runFrom; i < byN.length; i++) tail.add(byN[i].n);
   const shotRepeatable = (label: string) => sheet.shots.some(s => s.repeatable && s.label.toLowerCase() === label.trim().toLowerCase());
   // Taken = an earlier photo's MAIN label, or the model called this one an
   // Extra too. A view an earlier angled photo only also covers is still owed
@@ -872,6 +910,7 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     // A photo Approve Deletion removes takes no slot among the ones that stay
     // (LEE Wii Remote QTY3: deleted photo 8 was kept in the sides' slots).
     if (repeatSet.has(p.n)) return 5000;
+    if (tail.has(p.n)) return 2000;
     if (isAcc(p)) return 3000;
     if (isBox(p)) return 2000;
     // A second cushion shot goes after both cushions, not between them.

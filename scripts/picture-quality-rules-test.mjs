@@ -494,6 +494,20 @@ t("cosmetic flaws, then the earbuds, close the device's photos (WSP Galaxy Watch
   const bs = shotsAre(["Front of Case", "Back of Case", "Top of Earbuds", "Case Opened (Empty)", "Extra"]);
   const b = decide(listing({ n: 5 }), BUDS, report({ n: 5, photos: bs }));
   return (a.reorder?.suggested.join() === "1,2,4,3,5" && b.reorder?.suggested.join() === "1,2,4,5,3") || a.reorder?.suggested + " | " + b.reorder?.suggested; });
+t("the store's closing accessories / box / extra keep their order (MPL Beats 360, 10-16)", () => {
+  const CANS = { slug: "headphones-any-over-ear", shots: ["Front of Headphones", "Everything Included", "Side of Headphones", "Back of Headphones",
+    "Inside of Cushion", "Extra Accessories"].map(label => ({ label, cond: /Everything|Extra/.test(label) ? label : null })) };
+  const ps = shotsAre(["Front of Headphones", "Everything Included", "Side of Headphones", "Back of Headphones", "Inside of Cushion",
+    "Extra Accessories", "Box", "Extra"], { 5: { whole_item: false } });
+  const d = decide(listing({ n: 8 }), CANS, report({ n: 8, photos: ps }));
+  return (!d.reorder && d.verdict === "pass") || say(d) + " " + (d.reorder && d.reorder.suggested); });
+t("a closeup of the box's back label is not also the Back of Box (MPL RingConn, 10-16)", () => {
+  const NIB = { slug: "new-in-box", shots: ["Front of Box", "Back of Box", "Top of Box", "Bottom of Box", "Side of Box", "Opposite Side of Box",
+    "Closeup of Model/Serial Info"].map(label => ({ label, cond: null })) };
+  const ps = shotsAre(["Front of Box", "Back of Box", "Top of Box", "Side of Box", "Opposite Side of Box", "Bottom of Box"]);
+  ps[1] = photo(2, { shots: ["Back of Box", "Closeup of Model/Serial Info"], whole_item: false });
+  const d = decide(listing({ n: 6 }), NIB, report({ n: 6, photos: ps }));
+  return d.findings.some(f => f.shot === "Back of Box") || say(d); });
 t("no different spot on a game or a bottom shot — but a bottom SIDE counts (WSP Hitman 3, Epson; LEE Samsung 860 Evo)", () => {
   const GAME = { slug: "video-games", shots: [{ label: "Front of Game", cond: null }, { label: "Back of Game", cond: null }] };
   const a = decide(listing({ n: 2 }), GAME, report({ n: 2, photos: shotsAre(["Front of Game", "Back of Game"]), setups: [[2], [1]] }));
