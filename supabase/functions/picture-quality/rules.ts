@@ -116,7 +116,13 @@ const LOCATED = /\bgouge[ds]?\b|\b(dent|ding|scratch|scuff|mark|nick|scrape)\b[^
 // the clause ends at ", and" / ", but" — "No manual, and the case is cracked"
 // is still a crack.
 const NOT_A_CLAIM = /\b(no|not any|without|free of|free from|(may|might|could)\s+(include|have|show)|including\s+(some\s+)?(small|minor|light|slight|possible|occasional)|(such as|like)\s+(some\s+)?(small|minor|light|slight|possible|occasional))\b[^.;]*?(?=,\s*(and|but)\b|[.;]|$)/gi;
+// The SHRINK-WRAP gone is not a flaw on the item (Ethan, 2026-10-15, LEE Payday
+// 2: "It is missing the plastic due to heavy wear" asked for a Cosmetic Flaws
+// photo — "I didn't see any cosmetic flaws"). There is nothing to photograph.
+const PACKAGING_GONE = /\b(missing|no longer has|without|removed)\s+(the\s+|its\s+)?(original\s+)?(plastic|shrink[\s-]?wrap(ping)?|cellophane|seal)\b/i;
 export function isStandardSentence(sentence: string, _seen = 0): boolean {
+  if (PACKAGING_GONE.test(sentence)
+    && !SEVERE.test(sentence.replace(new RegExp(PACKAGING_GONE.source, "gi"), " ").replace(NOT_A_CLAIM, " "))) return true;
   const w = words(sentence);
   const fits = (ts: Set<string>[]) => w.length > 0 && ts.some(t => w.filter(x => t.has(x)).length / w.length >= TEMPLATE_SHARE);
   // A template that itself names damage (the Acceptable game case: "small
@@ -153,6 +159,9 @@ export type ReportR = {
   // New In Box / Open Box: the packaging is flat (a blister or hanging card).
   flat_package?: boolean;
   screen_never_on?: boolean;
+  // The listing calls it new / sealed / never used, and the photos show a used
+  // item (LEE Payday 2, 2026-10-15). Older reports lack it.
+  new_claim_wrong?: boolean;
   main_flaw: { stated: string | null; source: string; shown: string; photo: number | null };
   serial: "shown" | "hidden_behind_cover" | "not_shown";
   lead_ok: boolean;
@@ -161,10 +170,11 @@ export type ReportR = {
   suggested_order: number[];
   [k: string]: unknown;
 };
-export type ShotR = { label: string; cond: string | null; crucial?: boolean };
+export type ShotR = { label: string; cond: string | null; crucial?: boolean; repeatable?: boolean };
 export type SheetR = { slug: string; shots: ShotR[] };
 export type ListingR = {
   title: string; cosmetic: string; functional: string; included: string; price: number;
+  sku?: string; condition?: string;
   photos: { width: number; height: number }[];
   // The cosmetic sentences that are about THIS unit (not PayMore's template).
   unitCosmetic: string[];
@@ -173,6 +183,8 @@ export type Finding = {
   code: string; text: string; photo?: number; shot?: string; shots?: string[]; photos?: number[];
   // missing Everything Included only: what the listing says comes with it.
   included?: string;
+  // missing Cosmetic / LCD Flaws only: what the listing says the flaw is.
+  said?: string;
   // missing_shot only: which line of the card it is costed on.
   tier?: "core" | "minor" | "serial" | "view" | "view_free" | "crucial" | "needed";
 };
@@ -191,13 +203,17 @@ const CORE = /^(battery health|about\b|settings about page|settings page( 1)?$|m
 const MINOR = /^(software information|operating system)/i;
 const SERIAL = /serial/i;
 // Any spec / settings screenshot — for keeping the store's order among them.
-const INFO_SHOT = /^(battery health|about\b|settings|model information|system information|storage information|cpu information|processor information|ram information|gpu information|graphics information|software information|operating system|parts|apple warranty)/i;
+// A bare "CPU" / "RAM" is the model naming an info screen on a sheet that has
+// no such shot (LEE HP Envy desktop, 2026-10-15: photo 4, "CPU", was sent to the
+// end, away from the other screens — "just like we have for all screen on items").
+const INFO_SHOT = /^(battery health|about\b|settings|model information|system information|storage information|cpu information|processor information|ram information|gpu information|graphics information|software information|operating system|parts|apple warranty|(cpu|processor|ram|memory|gpu|graphics|storage)$)/i;
 // A screen photo of any kind — spec screens and the screen-on shots — for keeping
 // them together at the front.
 const SCREEN_ON = /^(home|lock|screen on|setting)/i;
 // Titles that change which shots apply (see decide).
 const FIGURE_LOT = /\b(figures?|figurines?|amiibos?|skylanders?|funko)\b/i;
 const COLLECTOR_SET = /\b(collector'?s'?|limited edition|memorial box|box set|premium edition)\b/i;
+const STEELBOOK = /\bsteel\s?book\b/i;
 // Does a photo's shot name the PART a cosmetic sentence is about? The label's
 // own nouns (cushion, keyboard, lens, screen…), not the view words every label has.
 const VIEW_WORDS = new Set(["of", "the", "and", "front", "back", "side", "opposite", "top", "bottom", "inside", "outside",
@@ -234,7 +250,7 @@ const priceStep = (price: number, low: number, mid: number, high: number) =>
 
 // --- the score -------------------------------------------------------------------
 export const ALWAYS_FLAG = new Set(["retake", "not_square", "stock_photo", "fake_or_edited", "wrong_item",
-  "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead", "not_on_stand", "turned"]);
+  "personal_info", "flaw_not_shown", "no_photos", "lot_not_shown", "clutter", "lead", "not_on_stand", "turned", "new_claim"]);
 
 // ⚠️ THE VERDICT, ONE RULE FOR EVERY CALLER (see the revision inside) (decide, the second-look reorder
 // check, redecide). A listing at or over the bar with ANYTHING still to show —
@@ -370,13 +386,90 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // the face it sits on, nor a whole shot of a closeup (Ethan, 2026-10-13, OVL
   // Intel SSD: "the closeup is going to be on either the top or the bottom").
   const byNr = new Map(r.photos.map(p => [p.n, p]));
-  const realRepeats = r.photos.filter(p => {
+  // TWO LIT SCREENS ARE TWO SCREENS (Ethan, 2026-10-15, LEE Insta360 X3: photo
+  // 4 "is different because they are showing the menu and the camera working" —
+  // the model called it photo 3 again). What is ON the screen is the point.
+  const screenLit = (p: PhotoR) => p.shots.some(s => SCREEN_ON.test(s.trim()) || /\(on\)/i.test(s));
+  const pairs: { n: number; of: number }[] = r.photos.filter(p => {
     const q = p.repeats != null && p.repeats >= 1 && p.repeats < p.n ? byNr.get(p.repeats) : undefined;
-    return !!q && p.whole_item === q.whole_item && !p.shots.some(s => /closeup|serial/i.test(s));
-  });
-  const repeatSet = new Set(realRepeats.map(p => p.n));
-  const findings: Finding[] = [];
+    return !!q && p.whole_item === q.whole_item && !p.shots.some(s => /closeup|serial/i.test(s))
+      && !(screenLit(p) && screenLit(q));
+  }).map(p => ({ n: p.n, of: p.repeats as number }));
+
   const n = l.photos.length;
+  const gameSheet = /^video-games/.test(sheet.slug);
+  const collectorSet = gameSheet && COLLECTOR_SET.test(l.title);
+  // A STEELBOOK has two fronts and two backs on purpose — the slipcover's and
+  // the steelbook's (Ethan, 2026-10-15, LEE Red Dead Redemption 2: "the pictures
+  // were front and back of game, front and back of steelbook, then case opened").
+  const steelbook = gameSheet && STEELBOOK.test(l.title);
+  const isLot = (r.units_claimed || 0) > 1 || r.photos.some(p => p.shots.some(s => /\bof lot\b/i.test(s)));
+  // ONE OF EACH SHOT, found by the code when the model let a second one through:
+  //  - a GAME has one front and one back (LEE Zelda Breath of the Wild: photo 3
+  //    "is the same photo as 1 so it should be deleted" — a closer front);
+  //  - a QTY listing sells ONE of several identical units, so the same view of
+  //    the next unit adds nothing (LEE Wii Remote QTY3: "more repeats are here
+  //    and can be deleted than what was shown" — each remote shot side by side).
+  // The later photo repeats the first one with that shot. Not when the sheet's
+  // OPPOSITE face is nowhere in the photos: then the "second front" is far more
+  // likely the back, labelled wrong (see lookAlikeFaces).
+  const qty = /-QTY\d+/i.test(l.sku || "");
+  if ((gameSheet && !collectorSet && !steelbook && !isLot) || (qty && !isLot)) {
+    const first = new Map<string, number>();
+    const taken = new Set(pairs.map(x => x.n));
+    const viewsOf = (p: PhotoR) => p.shots.map(s => s.trim()).filter(s => !/^extra$/i.test(s));
+    for (const p of [...r.photos].sort((a, b) => a.n - b.n)) {
+      const views = viewsOf(p);
+      const plain = p.whole_item && views.length > 0 && !taken.has(p.n)
+        && views.every(s => !INFO_SHOT.test(s) && !/closeup|serial|cosmetic|everything included|^box|accessor/i.test(s));
+      const firstOf = plain ? views.map(s => first.get(s.toLowerCase())) : [];
+      const opp = (s: string) => oppositeShot(s, sheet);
+      if (plain && firstOf.every(x => x != null)
+        && views.every(s => { const o = opp(s); return !o || r.photos.some(x => x.shots.some(y => y.toLowerCase() === o.toLowerCase())); })) {
+        pairs.push({ n: p.n, of: firstOf[0] as number });
+        taken.add(p.n);
+        continue;
+      }
+      for (const s of views) if (!first.has(s.toLowerCase())) first.set(s.toLowerCase(), p.n);
+    }
+  }
+
+  // --- where each photo was taken ---------------------------------------------
+  // Closeups (a serial label) may be shot anywhere — the OVL Loupedeck's photo 8
+  // was called "a different spot" for being a closeup (Ethan, 2026-10-11).
+  const closeup = new Set(r.photos.filter(p => !p.whole_item).map(p => p.n));
+  // A BOTTOM shot is the item turned over, so it never matches the rest (WSP
+  // Epson projector photo 6: "it's the bottom"). Not a BOTTOM SIDE — that is an
+  // edge, shot like the other edges (Ethan, 2026-10-15, LEE Samsung 860 Evo:
+  // photo 3, the connector edge lying flat beside stand photos, "should also be
+  // flagged for wrong spot").
+  const bottomOnly = new Set(r.photos.filter(p => p.shots.length > 0
+    && p.shots.every(s => /^bottom\b/i.test(s.trim()) && !/^bottom side\b/i.test(s.trim()))).map(p => p.n));
+  const groups = isLot || collectorSet || gameSheet ? [] : (r.setups || [])
+    .map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x) && !bottomOnly.has(x))).filter(g => g.length);
+  // ⚠️ THE MAJORITY IS THE STANDARD (Ethan, 2026-10-15, LEE Sony A7 III: the
+  // one photo on the stand was named the standard and the seven off it were
+  // sent back — "When the majority is taken a certain way, the minority should
+  // be the flag"). This replaced "the stand group first" (WSP AirPods, 10-11).
+  // A tie keeps the model's first group, the stand one.
+  const main = groups.reduce<number[] | null>((m, g) => !m || g.length > m.length ? g : m, null) || [];
+  // A repeat taken in the ODD spot is the one to delete, whichever came first —
+  // the Sony's front on the stand (photo 3) repeated its front off it (photo 4):
+  // "I would delete photo [3] and call that one out for being different".
+  if (main.length) {
+    const inMain = new Set(main);
+    // Never the LEAD photo: it is the storefront's thumbnail, and deleting it
+    // to settle a spot is a bigger change than the spot (LEE Insta360 X3: the
+    // stand-shot front, photo 1, was about to go for the flat one, photo 2).
+    for (const x of pairs) if (x.of !== 1 && inMain.has(x.n) && !inMain.has(x.of) && groups.some(g => g.includes(x.of))) [x.n, x.of] = [x.of, x.n];
+  }
+  // A chain (9 repeats 8, and 8 repeats 5) points at the photo that stays.
+  const rootOf = new Map(pairs.map(x => [x.n, x.of]));
+  for (const x of pairs) { let o = x.of, hops = 0; while (rootOf.has(o) && hops++ < 20) o = rootOf.get(o)!; x.of = o; }
+  pairs.sort((a, b) => a.n - b.n);
+  const realRepeats = pairs.map(x => ({ ...byNr.get(x.n)!, repeats: x.of }));
+  const repeatSet = new Set(pairs.map(x => x.n));
+  const findings: Finding[] = [];
 
   // Measured, not asked.
   l.photos.forEach((p, i) => {
@@ -386,14 +479,12 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   });
 
   // A game is shot as close as a game can be; empty space around a cartridge is
-  // the cartridge being small, not a framing mistake.
-  const gameSheet = /^video-games/.test(sheet.slug);
+  // the cartridge being small, not a framing mistake (gameSheet, above).
   // A COLLECTOR'S SET is a box of extras, not a case: it is shot from every
   // side, flat as often as standing, with more photos than the guide asks for —
   // "they definitely added a ton more pictures than necessary which is good"
   // (Ethan, 2026-10-14, OVL FX Unit Yuki SG Memorial Box). No opened case, no
-  // stand, no different-spot line.
-  const collectorSet = gameSheet && COLLECTOR_SET.test(l.title);
+  // stand, no different-spot line (collectorSet, above).
   // Box, everything-included and accessory photos are staged, not framed — the
   // PS5's controllers sit angled on purpose. NOT a bare "Extra": that waved
   // through the iPad's cropped screen closeup, a photo of the item itself.
@@ -460,8 +551,13 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     text: `The cord is loose and sprawled out in ${plural(corded, "photo", "photos")} ${list(corded)} — tie or wrap it up, then retake.` });
   // VIDEO GAMES STAND ON THE STAND (Ethan, 2026-10-11, OVL Wii Fit: "If video
   // game are not on stands, it should be flagged"). An automatic flag, on the
-  // game sheets only — the model is asked about it only there.
-  const flat = gameSheet && !collectorSet ? withIssue("not_on_stand") : [];
+  // game sheets only — the model is asked about it only there. Not a photo of
+  // the game laid out WITH its manual and inserts: that one shows what comes
+  // with it, and lies flat to do it (Ethan, 2026-10-15, LEE Bully photo 4: "all
+  // good because it is showing the game with accessories of the game"). The
+  // prompt asks the model not to report it; a staged label is the code's
+  // backstop. NOT a bare "Extra": the OVL Wii Fit's flat case was one.
+  const flat = gameSheet && !collectorSet ? withIssue("not_on_stand", staged) : [];
   if (flat.length) findings.push({ code: "not_on_stand", photos: flat,
     text: `${plural(flat, "Photo", "Photos")} ${list(flat)} ${plural(flat, "isn't", "aren't")} on the stand — a game is shot standing on the clear stand, like the guide's example. Retake ${plural(flat, "it", "them")} on the stand.` });
   const cluttered = withIssue("clutter");
@@ -473,39 +569,27 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   if (reflected.length) findings.push({ code: "reflection", photos: reflected,
     text: `A reflection shows on the item in ${plural(reflected, "photo", "photos")} ${list(reflected)} — angle the item or the light, then retake.` });
   // One listing, one spot. The odd photos are everything outside the biggest
-  // group; their own framing problems, if any, are separate findings above —
-  // "if they also aren't centred then it can double up as that too".
+  // group (`main`, worked out with the repeats above); their own framing
+  // problems, if any, are separate findings above — "if they also aren't
+  // centred then it can double up as that too".
   // A LOT is the exception (Ethan, 2026-10-11, OVL Micron RAM lot): the group
   // shots of the whole lot lie flat, and single units may go on the stand —
   // "They both look good." Different spots still count on a single item (the
   // OVL Sony lens: the same shots on and off the stand).
-  const isLot = (r.units_claimed || 0) > 1 || r.photos.some(p => p.shots.some(s => /\bof lot\b/i.test(s)));
-  // Closeups (a serial label) may be shot anywhere — the OVL Loupedeck's photo 8
-  // was called "a different spot" for being a closeup (Ethan, 2026-10-11).
-  const closeup = new Set(r.photos.filter(p => !p.whole_item).map(p => p.n));
   // A photo that REPEATS one in the standard setup is deleted, not retaken
   // (Ethan, 2026-10-13, OVL Ryzen 7 2700X: "5, 6 and 7 can just be deleted as
   // they are the same as 1 and 2"; the Oliver Twins game's 4 and 6) — so it is
   // left out of the different-spot line, which then names only what to retake.
   // GAMES: the one spot rule is the stand, and "not on the stand" says it — the
   // model's spot groups called WSP Hitman 3's photo 1 different with all three
-  // on the stand (Ethan, 2026-10-15). A BOTTOM shot is the item turned over, so
-  // it never matches the rest (WSP Epson projector photo 6: "it's the bottom").
-  const bottomOnly = new Set(r.photos.filter(p => p.shots.length > 0 && p.shots.every(s => /^bottom\b/i.test(s.trim()))).map(p => p.n));
-  const setups = isLot || collectorSet || gameSheet ? [] : (r.setups || []).map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x) && !repeatSet.has(x) && !bottomOnly.has(x))).filter(g => g.length);
-  if (setups.length > 1) {
-    // The FIRST group is the store's standard setup (the prompt lists it first:
-    // the stand photos when some are on the stand), not the biggest — the WSP
-    // AirPods' stand photos were outnumbered by flat ones, and the flat case
-    // shots were the ones to retake.
-    const main = setups[0];
-    const odd = setups.filter(g => g !== main).flat().sort((a, b) => a - b);
-    findings.push({ code: "mixed_setups", photos: odd,
-      // Short (Ethan, 10-13: "Too many words"), and either position will do as
-      // long as every photo matches (his note on the OVL Sony lens).
-      text: `${plural(odd, "Photo", "Photos")} ${list(odd)} ${plural(odd, "was", "were")} taken in a different spot from photo ${main[0]}`
-        + ` — retake so every photo is shot the same way (all on the stand, or all off it).` });
-  }
+  // on the stand (Ethan, 2026-10-15).
+  const mainLeft = main.filter(x => !repeatSet.has(x));
+  const odd = mainLeft.length ? [...new Set(groups.flat())].filter(x => !repeatSet.has(x) && !mainLeft.includes(x)).sort((a, b) => a - b) : [];
+  if (odd.length) findings.push({ code: "mixed_setups", photos: odd,
+    // Short (Ethan, 10-13: "Too many words"), and either position will do as
+    // long as every photo matches (his note on the OVL Sony lens).
+    text: `${plural(odd, "Photo", "Photos")} ${list(odd)} ${plural(odd, "was", "were")} taken in a different spot from photo ${Math.min(...mainLeft)}`
+      + ` — retake so every photo is shot the same way (all on the stand, or all off it).` });
 
   for (const p of r.photos) {
     for (const it of p.issues) {
@@ -629,9 +713,17 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     // cushion pictures doubled up as the cosmetic flaw").
     if (/^cosmetic flaws/i.test(m) && partShown(l.unitCosmetic.join(" "), r.photos, sheet)) continue;
     if (/^lcd flaws/i.test(m) && !screenFault) continue;
+    // WHAT THE LISTING SAYS THE FLAW IS, for the row (Ethan, 2026-10-15, LEE:
+    // "give a brief description of what cosmetic or functionality flaws we
+    // stated in the listing when flagging for this"). The [unit] sentences for a
+    // cosmetic flaw, the screen sentence for an LCD one.
+    const flawSaid = /^cosmetic flaws/i.test(m) ? l.unitCosmetic.join(" ")
+      : /^lcd flaws/i.test(m) ? splitSentences(l.functional || "").filter(x => /\b(screen|lcd|display|pixel|lines?|burn|touch|backlight|spot|bleed)\b/i.test(x)).join(" ")
+      : "";
     missing.push({ code: "missing_shot", tier: "needed", shot: shot.label,
       // What the listing says comes with it, for the row (Ethan, OVL GTX 1660).
       ...(/^everything included/i.test(m) ? { included: l.included.trim() } : {}),
+      ...(flawSaid ? { said: flawSaid.length > 160 ? flawSaid.slice(0, 157).replace(/\s+\S*$/, "") + "…" : flawSaid } : {}),
       text: /^everything included/i.test(m)
         // "the listing says everything Included" read badly (WSP Galaxy Tab A9).
         ? `Missing: ${shot.label} — the listing lists what comes with it, so it needs one photo of the item with all of it together (photos of the accessories on their own don't count).`
@@ -658,6 +750,17 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   const damage = /\b(crack|cracked|dent|dented|broken|break|missing|chip|chipped|bent|hole|burn|burned|stain|stained|shatter|shattered|peel|peeling|torn|tear|damage|damaged|dead pixel|spot)/i;
   if (r.main_flaw.shown === "no" && r.main_flaw.stated && r.main_flaw.source !== "none" && damage.test(r.main_flaw.stated)) {
     findings.push({ code: "flaw_not_shown", text: `The main flaw isn't shown: ${r.main_flaw.stated}.` });
+  }
+
+  // THE LISTING SAYS NEW, THE PHOTOS SAY USED (Ethan, 2026-10-15, LEE Payday 2:
+  // "in the listing we said this game is brand new when it is in fact not").
+  // Not a photo to retake — the words to correct, and a buyer who would return
+  // it. The model judges the photos; the code checks the listing really says it.
+  const saysNew = /\b(brand new|never (been )?used|factory sealed|still sealed|unopened)\b/i.test(`${l.cosmetic} ${l.title}`)
+    || /^new\b/i.test(l.title) || /^(new|brand new)$/i.test((l.condition || "").trim());
+  if (r.new_claim_wrong === true && saysNew) {
+    findings.push({ code: "new_claim",
+      text: "The listing says it's brand new, but the photos show a used item — correct the condition and description." });
   }
 
   // Order — a suggestion for the BIG moves only (box before the item, Everything
@@ -699,10 +802,31 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // "the final pictures before any accessories" (AirPods 5th Gen photo 5).
   const late = (label: string) => /^cosmetic flaw/i.test(label.trim()) ? 1500
     : sheet.slug === "earbuds" && /\bearbuds?\b/i.test(label) ? 1400 + shotIx(label) / 1000 : null;
+  // A SECOND PHOTO OF A SHOT ALREADY TAKEN is an extra, after the sheet's shots
+  // — not slotted in beside the first one (Ethan, 2026-10-15, LEE Beats Studio
+  // Pro: photo 6, the headphones lying flat, a second front, went to slot 2, and
+  // a second cushion closeup between the two cushions — "not that great relative
+  // to the guide"). Not a sheet shot that may repeat, a spec screen (two pages of
+  // battery info are both wanted) or a steelbook's two fronts.
+  const shotRepeatable = (label: string) => sheet.shots.some(s => s.repeatable && s.label.toLowerCase() === label.trim().toLowerCase());
+  const secondOf = (p: PhotoR) => {
+    if (steelbook || screenLit(p)) return false;
+    const views = p.shots.map(s => s.trim()).filter(s => !/^extra$/i.test(s) && shotIx(s) >= 0);
+    return views.length > 0 && views.every(s => !INFO_SHOT.test(s) && !shotRepeatable(s) && !/^(box|extra accessor|everything included)/i.test(s)
+      && r.photos.some(o => o.n < p.n && o.shots.some(x => x.trim().toLowerCase() === s.toLowerCase())));
+  };
+  // A spec screen the sheet has no shot for ("CPU" on the desktop sheet) sorts
+  // with the sheet's first spec screen, so the screens stay together.
+  const firstInfo = sheet.shots.findIndex(s => INFO_SHOT.test(s.label));
   const baseKey = (p: PhotoR) => {
+    // A photo Approve Deletion removes takes no slot among the ones that stay
+    // (LEE Wii Remote QTY3: deleted photo 8 was kept in the sides' slots).
+    if (repeatSet.has(p.n)) return 5000;
     if (isAcc(p)) return 3000;
     if (isBox(p)) return 2000;
+    if (secondOf(p)) return 1000;
     const ixs = p.shots.filter(s => shotIx(s) >= 0 && !/^extra accessor/i.test(s.trim())).map(s => late(s) ?? ixOf(s));
+    if (!ixs.length && firstInfo >= 0 && p.shots.some(s => INFO_SHOT.test(s.trim()))) return firstInfo;
     return ixs.length ? Math.min(...ixs) : 1000;
   };
   // A SCREEN PHOTO THAT IS NO SHEET SHOT stays with the screen photos beside it
@@ -745,7 +869,7 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     // views (MPL Galaxy Tab A11, 10-14: "4 photos in a row in the correct 4
     // photo placement are the sides even if it isn't the specific side").
     const keep = (inGroup: (p: PhotoR) => boolean) => {
-      const g = new Set(byN.filter(inGroup).map(p => p.n));
+      const g = new Set(byN.filter(p => !repeatSet.has(p.n) && inGroup(p)).map(p => p.n));
       const mine = [...g].sort((a, b) => a - b);
       let k = 0;
       order = order.map(x => g.has(x) ? mine[k++] : x);
@@ -755,8 +879,13 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     // the guide's order (Ethan, 2026-10-14, OVL GTX 1080: "photos 3 and 4 should
     // be swapped" — the bottom side belongs before the plain side).
     keep(p => p.shots.length > 0 && p.shots.every(s => /\b(side|corner)\b/i.test(s) && !/\b(top|bottom) side\b/i.test(s)));
+    // A steelbook's slipcover front and back, then the steelbook's, as shot.
+    if (steelbook) keep(p => p.shots.some(s => /^(front|back) of game/i.test(s.trim())));
   }
-  const changed = order.length === n && order.some((x, i) => x !== i + 1);
+  // Among the photos that STAY: sending a deleted one to the end is not a
+  // reorder of its own.
+  const staying = order.filter(x => !repeatSet.has(x));
+  const changed = order.length === n && staying.some((x, i, a) => i > 0 && x < a[i - 1]);
   // ANY real order change is offered — a passing listing too, as a Quick Fix
   // (Ethan, 2026-10-14, BAL: Takumar's photo 7, the Sony ZV-1, the Canon). It
   // was the big moves only; both looks must still ask for it (see index.ts).
@@ -884,6 +1013,7 @@ export function agree<T extends ReportR>(a: T, b: T): T {
     all_sides_shown: a.all_sides_shown === true || b.all_sides_shown === true,
     flat_package: a.flat_package === true || b.flat_package === true,
     screen_never_on: a.screen_never_on === true && b.screen_never_on === true,
+    new_claim_wrong: a.new_claim_wrong === true && b.new_claim_wrong === true,
     main_flaw: bothNo ? a.main_flaw
       : { ...a.main_flaw, shown: a.main_flaw.shown === "no" ? b.main_flaw.shown : a.main_flaw.shown },
     serial: a.serial === "shown" || b.serial === "shown" ? "shown"

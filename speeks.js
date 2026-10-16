@@ -54827,7 +54827,14 @@ function _ecSyncChrome() {
         const bits = [];
         if (_lhPhotoErr) bits.push('Photo Check Failed');
         else if (pics) bits.push(`${pics} Missing A Photo`);
-        if (toFile) bits.push(`${toFile} Item${toFile === 1 ? '' : 's'} To Submit`);
+        // EVERY TOOL ON THE PAGE, not only Categories (Ethan, 2026-10-15: "LEE ·
+        // All Clear" sat over Title and Picture Quality rows — "This should have
+        // the total to submit include everything available not just one or two of
+        // the 3 tools"). The same counts as the tab chips, from _lhTabCounts, so
+        // the header and the chips can never disagree.
+        const total = _lhTabCounts().reduce((s, t) => s + t.n, 0);
+        if (total) bits.push(`${total} To Submit`);
+        else if (toFile) bits.push(`${toFile} Item${toFile === 1 ? '' : 's'} To Submit`);
         sub.textContent = _ecView === 'cats'
             ? `${_ecStore || ''} · ${bits.length ? bits.join(' · ') : 'All Clear'}`
             : _ecView === 'health' ? 'Every store, at a glance'
@@ -55533,6 +55540,23 @@ let _lhTab = null;   // 'titles' | 'photos' | 'cats' — null until somebody pic
 function lhSetTab(t) { _lhTab = t; ecRender(); }
 window.lhSetTab = lhSetTab;
 
+// The three tools' counts, for the tab chips AND the header line (_ecSyncChrome)
+// — one place, so they always agree. Only the tools this reader holds.
+function _lhTabCounts() {
+    const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
+    const catN = _rcData?.counts
+        ? (_rcData.counts.other || 0) + (_rcData.counts.misfiled || 0) + (_rcData.counts.unmatched || 0)
+        : (_rcData?.queue || []).length;
+    return [
+        { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
+          n: (_ltData?.queue || []).length, bad: !!_ltErr },
+        { v: 'photos', label: 'Picture Quality', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
+          // Passed rows ride in the same queue (for the Passed tab) but are not work.
+          n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).filter(r => r.verdict !== 'pass').length, bad: noPhotos > 0 || !!_lhPhotoErr },
+        { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
+    ].filter(t => t.on);
+}
+
 function _lhHtml() {
     // No Upload drawer here — it lives at the bottom of the All Stores page,
     // with the other whole-estate things. This page is the daily one.
@@ -55541,17 +55565,7 @@ function _lhHtml() {
     // ec-view-photos, only the DM holds Picture Quality for now, so a manager
     // sees this tab with the one sub-tab they have.
     const noPhotos = _lhPhotos ? (_lhPhotos.queue || []).length : 0;
-    const catN = _rcData?.counts
-        ? (_rcData.counts.other || 0) + (_rcData.counts.misfiled || 0) + (_rcData.counts.unmatched || 0)
-        : (_rcData?.queue || []).length;
-    const tabs = [
-        { v: 'titles', label: 'Title Quality', on: _lhMay('titles'), html: () => _ltHtml(),
-          n: (_ltData?.queue || []).length, bad: !!_ltErr },
-        { v: 'photos', label: 'Picture Quality', on: _lhMay('photos') || _lhMay('pictures'), html: () => _pqHtml(),
-          // Passed rows ride in the same queue (for the Passed tab) but are not work.
-          n: noPhotos + ((_lhMay('pictures') && _pqData?.queue) || []).filter(r => r.verdict !== 'pass').length, bad: noPhotos > 0 || !!_lhPhotoErr },
-        { v: 'cats', label: 'Categories', on: _lhMay('cats'), html: () => _lhCatsHtml(), n: catN, bad: false },
-    ].filter(t => t.on);
+    const tabs = _lhTabCounts();
     // Reachable only by a race: the pill needs one of the switches, so losing
     // all of them between the click and the render means an override changed
     // underneath. Say that, rather than drawing an empty page that looks broken.
@@ -55766,6 +55780,36 @@ const _PQ_TIERS = [
     { v: 'pass',     label: 'Passed',       cls: 'lt-t-ok',   half: 'pictures', review: true },
 ];
 
+// ⚠️ ROWS STAY WHERE THEY WERE (Ethan, 2026-10-15, LEE: "when I delete or
+// reorder, the line will disappear and just move up or down the list, please
+// keep it static so the user can just go down the list without thinking if they
+// have fixed something or not"). The queue comes back newest-graded first and an
+// approval re-saves the row, so it jumped; a Quick Fix it closed vanished. Now
+// each tab keeps the order it was first shown in, for this store, until the page
+// is reloaded: a row approved here keeps its slot and says what was done, and a
+// row that left the tab stays as a done card in that slot. New rows go at the end.
+let _pqPlaces = { store: null, order: new Map(), done: new Map() };
+function _pqPlace(tier, all) {
+    if (_pqPlaces.store !== _ecStore) _pqPlaces = { store: _ecStore, order: new Map(), done: new Map() };
+    const live = new Map(all.map(r => [r.productId, r]));
+    const here = all.filter(r => r.verdict === tier).map(r => r.productId);
+    const done = _pqPlaces.done;
+    const was = (_pqPlaces.order.get(tier) || []).filter(id => here.includes(id) || done.get(id)?.tier === tier);
+    // A row acted on in ANOTHER tab that has moved here stays in its own tab.
+    const ids = [...was, ...here.filter(id => !was.includes(id) && !(done.has(id) && done.get(id).tier !== tier))];
+    _pqPlaces.order.set(tier, ids);
+    return ids.map(id => {
+        const d = done.get(id);
+        if (here.includes(id)) return { r: live.get(id), done: d ? d.said : null, gone: false };
+        return { r: live.get(id) || d.row, done: d.said, gone: true };
+    });
+}
+function _pqMarkDone(pid, row, what) {
+    if (_pqPlaces.store !== _ecStore) return;
+    const d = _pqPlaces.done.get(pid);
+    _pqPlaces.done.set(pid, { tier: d ? d.tier : _pqTier, row, said: d ? [...d.said, what] : [what] });
+}
+
 function _pqHtml() {
     const head = (inner, badge) => _lhSec('Photos', 'Picture Quality', inner, badge);
     const store = _ecEsc(_ecStore || '');
@@ -55789,6 +55833,7 @@ function _pqHtml() {
                 <span class="rc-chip-n ${n ? t.cls : ''}">${n}</span></button>`;
     }).join('')}</div>`;
 
+    const placed = _pqTier === 'nophotos' || !_pqData ? [] : _pqPlace(_pqTier, all);
     let inner;
     if (_pqTier === 'nophotos') {
         inner = _lhPhotosHtml(true);
@@ -55800,7 +55845,7 @@ function _pqHtml() {
           </div>`;
     } else if (!_pqData) {
         inner = '';
-    } else if (!count(_pqTier)) {
+    } else if (!placed.length) {
         inner = _pqTier === 'pass'
           ? `<div class="lh-clear"><span>No Listings Passed At ${store} In The Last 14 Days</span></div>`
           : `<div class="lh-clear">
@@ -55808,8 +55853,7 @@ function _pqHtml() {
             <span>All Clear — Nothing To ${_ecEsc(tiers.find(t => t.v === _pqTier)?.label || '')} At ${store}</span>
           </div>`;
     } else {
-        const rows = all.filter(r => r.verdict === _pqTier);
-        inner = `<div class="lt-rows">${rows.map(_pqRow).join('')}</div>`;
+        inner = `<div class="lt-rows">${placed.map(x => _pqRow(x.r, x.done, x.gone)).join('')}</div>`;
     }
     const total = tiers.filter(t => !t.review).reduce((s, t) => s + count(t.v), 0);
     const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
@@ -56178,6 +56222,8 @@ const _PQ_SHORT = {
     not_on_stand: ['Not On The Stand'],
     turned: ['Turned The Wrong Way', 'turn it to match the guide'],
     order: ['Out Of Order', 'use the guide\'s order when you retake'],
+    // Not a photo — the words (Ethan, 2026-10-15, LEE Payday 2).
+    new_claim: ['Listing Says Brand New', 'the photos show it used — correct the condition and description'],
 };
 function _pqFindingLines(findings) {
     const cap = s => String(s).replace(/(^|\s)([a-z])/g, (m, a, b) => a + b.toUpperCase());
@@ -56187,11 +56233,16 @@ function _pqFindingLines(findings) {
         if (n) groups.get(label).nums.add(n);
     };
     let included = '';
+    // WHAT THE LISTING SAYS THE FLAW IS, beside a missing Cosmetic / LCD Flaws
+    // shot (Ethan, 2026-10-15, LEE: "give a brief description of what cosmetic or
+    // functionality flaws we stated in the listing when flagging for this").
+    const flawSaid = [];
     for (const f of findings || []) {
         const text = String(f.text || '');
         if (f.code === 'missing_shot') {
             misses.push(f.shot || text.replace(/^Missing:\s*|\.$/g, ''));
             if (/^everything included/i.test(f.shot || '') && f.included) included = f.included;
+            if (f.said) flawSaid.push(`${f.shot}: “${f.said}”`);
             continue;
         }
         if (f.code === 'repeat') {
@@ -56216,7 +56267,8 @@ function _pqFindingLines(findings) {
     }
     const nums = s => { const a = [...s].sort((x, y) => x - y); return (a.length === 1 ? 'Photo ' : 'Photos ') + a.join(', '); };
     const missLine = misses.length
-        ? `<li><b>Missing</b> — ${_ecEsc(misses.join(', '))}${included ? ` (the listing says it comes with: ${_ecEsc(included)})` : ''}</li>`
+        ? `<li><b>Missing</b> — ${_ecEsc(misses.join(', '))}${included ? ` (the listing says it comes with: ${_ecEsc(included)})` : ''}${
+            flawSaid.length ? `<span class="pq-said">The listing says — ${_ecEsc(flawSaid.join(' · '))}</span>` : ''}</li>`
         : '';
     return [
         missLine,
@@ -56226,7 +56278,17 @@ function _pqFindingLines(findings) {
     ].join('');
 }
 
-function _pqRow(r) {
+function _pqRow(r, done, gone) {
+    // Approved here and nothing left to do: the card stays in its slot, done.
+    if (gone) {
+        return `<div class="lt-row pq-row pq-row-done">
+          <div class="lt-main">
+            <div class="pq-title">${_ecEsc(r.title || 'Untitled Listing')}</div>
+            <div class="pq-done">✓ ${_ecEsc((done || []).join(' · '))} — nothing left to do on this one.</div>
+          </div>
+          <div class="lt-side"><div class="lt-meta"><span class="lh-sku">${_ecEsc(r.sku || '—')}</span></div></div>
+        </div>`;
+    }
     const id = String(r.productId || '');
     const numeric = _ecEsc(id.split('/').pop());
     const shop = _ecEsc(_pqData?.shop || '');
@@ -56296,6 +56358,7 @@ function _pqRow(r) {
             ? 'The check has been improved since this listing was graded'
             : 'The photos or notes changed after this was checked'} —
             press Recheck before acting on it.</div>` : ''}
+        ${done ? `<div class="pq-done">✓ ${_ecEsc(done.join(' · '))}</div>` : ''}
         <ul class="lt-why">${findings}${why}</ul>
         ${body}
         ${titleNotes}
@@ -56433,6 +56496,7 @@ async function pqReorder(pid) {
         await _pqReload();
         return;
     }
+    _pqMarkDone(pid, row, 'Order Saved To Shopify');
     await _pqReload();
 }
 window.pqReorder = pqReorder;
@@ -56458,6 +56522,8 @@ async function pqDeletePhotos(pid) {
     _pqBusy.delete(pid);
     if (!res.ok) {
         await _pqSay('Nothing Was Deleted', res.body?.detail || res.body?.error || 'Shopify did not take the change.');
+    } else {
+        _pqMarkDone(pid, row, `${del.photos.length > 1 ? 'Photos' : 'Photo'} ${del.photos.join(', ')} Deleted`);
     }
     await _pqReload();
 }

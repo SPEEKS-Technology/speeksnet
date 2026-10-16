@@ -57,6 +57,7 @@ const issue = (type) => ({ type, severity: "major" });
 const run = (lo, sh, ro) => decide(listing(lo), sh, report(ro));
 const flagged = d => d.verdict === "fix" || d.verdict === "retake";
 const say = d => `${d.verdict} ${d.pictureScore} [${d.findings.map(f => f.code + (f.tier ? ":" + f.tier : "")).join(", ")}]`;
+const shotsAre = (labels, o = {}) => labels.map((s, i) => photo(i + 1, { shots: [s], ...(o[i + 1] || {}) }));
 
 // --- 1. THE CARD -----------------------------------------------------------------------
 t("a clean listing passes at 100", () => { const d = run({}, PHONE, {}); return (d.verdict === "pass" && d.pictureScore === 100) || say(d); });
@@ -112,12 +113,64 @@ t("flat retail packaging on New In Box: only front, back and label are asked for
   const flat = run({ title: "New SanDisk 512GB microSDXC" }, NIB, { missing_shots: miss, flat_package: true, serial: "shown" });
   const box = run({ title: "New SanDisk 512GB microSDXC" }, NIB, { missing_shots: miss, flat_package: false, serial: "shown" });
   return (flat.verdict === "pass" && box.verdict === "retake") || `${say(flat)} | ${say(box)}`; });
-t("different spot: the FIRST group is the standard, and closeups are never odd (WSP AirPods, OVL Loupedeck, 10-11)", () => {
+t("different spot: the BIGGEST group is the standard, and closeups are never odd (LEE Sony A7 III 10-15, OVL Loupedeck)", () => {
   const ps = report().photos; ps[7] = photo(8, { whole_item: false });
   const d = run({}, PHONE, { photos: ps, setups: [[1, 2, 4], [3, 5, 6, 7, 8, 9, 10]] });
   const f = d.findings.find(x => x.code === "mixed_setups");
   const odd = f ? f.photos.join() : "";
-  return odd === "3,5,6,7,9,10" || `odd: ${odd}`; });
+  // A tie keeps the model's first group (the stand one).
+  const tie = run({}, PHONE, { n: 4, photos: report({ n: 4 }).photos, setups: [[1, 2], [3, 4]] });
+  const g = tie.findings.find(x => x.code === "mixed_setups");
+  return (odd === "1,2,4" && g?.photos.join() === "3,4") || `odd: ${odd} | tie: ${g?.photos}`; });
+t("a repeat in the odd spot is the one deleted, whichever came first (LEE Sony A7 III)", () => {
+  const ps = report({ n: 5 }).photos; ps[3] = photo(4, { repeats: 3 });
+  const d = run({}, PHONE, { n: 5, photos: ps, setups: [[3], [1, 2, 4, 5]] });
+  // …but never the lead photo (LEE Insta360 X3).
+  const qs = report({ n: 5 }).photos; qs[1] = photo(2, { repeats: 1 });
+  const e = run({}, PHONE, { n: 5, photos: qs, setups: [[1], [2, 3, 4, 5]] });
+  return (d.deletion?.photos.join() === "3" && d.deletion?.of.join() === "4" && !d.findings.some(f => f.code === "mixed_setups")
+    && e.deletion?.photos.join() === "2") || say(d) + " " + JSON.stringify(d.deletion) + " | " + JSON.stringify(e.deletion); });
+t("two lit screens are not repeats (LEE Insta360 X3 photos 3 and 4)", () => {
+  const ps = shotsAre(["Front of Device", "Screen On", "Screen On"]); ps[2].repeats = 2;
+  const d = decide(listing({ n: 3 }), PHONE, report({ n: 3, photos: ps }));
+  return !d.deletion || say(d); });
+t("a game has one front: a second is a repeat, unless the back is nowhere (LEE Zelda BOTW)", () => {
+  const CART = { slug: "video-games-disk-cartridge-only", shots: [{ label: "Front of Game", cond: null }, { label: "Back of Game", cond: null }] };
+  const a = decide(listing({ n: 3, title: "Zelda Breath of the Wild" }), CART, report({ n: 3, photos: shotsAre(["Front of Game", "Back of Game", "Front of Game"]) }));
+  const b = decide(listing({ n: 2, title: "Zelda Breath of the Wild" }), CART, report({ n: 2, photos: shotsAre(["Front of Game", "Front of Game"]) }));
+  return (a.deletion?.photos.join() === "3" && a.deletion?.of.join() === "1" && !b.deletion) || say(a) + " | " + say(b); });
+t("a steelbook keeps its two fronts and backs, in the store's order (LEE Red Dead Redemption 2)", () => {
+  const GAME = { slug: "video-games", shots: ["Front of Game", "Back of Game", "Opened Case With Disk"].map(label => ({ label, cond: null })) };
+  const d = decide(listing({ n: 5, title: "Red Dead Redemption 2 [Steelbook Edition]" }), GAME,
+    report({ n: 5, photos: shotsAre(["Front of Game", "Back of Game", "Front of Game", "Back of Game", "Opened Case With Disk"]) }));
+  return (!d.deletion && !d.reorder) || say(d) + " " + d.reorder?.suggested; });
+t("a QTY listing: the same view of the next unit is a repeat, chains point at the one kept (LEE Wii Remote QTY3)", () => {
+  const ps = shotsAre(["Front of Controller", "Back of Controller", "Side of Controller", "Side of Controller", "Side of Controller", "Opposite Side of Controller"]);
+  ps[4].repeats = 4;
+  const d = decide(listing({ n: 6, sku: "MO01-5679C-QTY3-E4" }), PAD, report({ n: 6, photos: ps }));
+  return (d.deletion?.photos.join() === "4,5" && d.deletion?.of.join() === "3,3") || say(d) + " " + JSON.stringify(d.deletion); });
+t("a second photo of a shot already taken goes with the extras (LEE Beats Studio Pro)", () => {
+  const HP = { slug: "headphones-over-ear", shots: ["Front of Headphones", "Side of Headphones", "Back of Headphones", "Top of Headphones", "Inside of Cushion", "Inside of Opposite Cushion"]
+    .map(label => ({ label, cond: null })) };
+  const ps = shotsAre(["Front of Headphones", "Top of Headphones", "Back of Headphones", "Inside of Cushion", "Inside of Opposite Cushion", "Front of Headphones", "Inside of Cushion"]);
+  ps[6].whole_item = false;
+  const d = decide(listing({ n: 7 }), HP, report({ n: 7, photos: ps }));
+  return d.reorder?.suggested.join() === "1,3,2,4,5,6,7" || say(d) + " " + d.reorder?.suggested; });
+t("a spec screen the sheet has no shot for stays with the screens (LEE HP Envy 'CPU')", () => {
+  const DESK = { slug: "windows-desktop", shots: ["Front of Desktop", "Settings About Page", "Storage Information", "Back of Desktop", "Closeup of Serial/Model Info"].map(label => ({ label, cond: null })) };
+  const ps = shotsAre(["Front of Desktop", "Back of Desktop", "CPU", "RAM", "Storage Information", "Closeup of Serial/Model Info"]);
+  [2, 3, 4, 5].forEach(i => { ps[i].whole_item = false; });
+  const d = decide(listing({ n: 6 }), DESK, report({ n: 6, photos: ps }));
+  return d.reorder?.suggested.join() === "1,3,4,5,2,6" || say(d) + " " + d.reorder?.suggested; });
+t("missing Cosmetic Flaws says what the listing says; a shrink-wrap sentence asks for nothing (LEE Payday 2)", () => {
+  const d = run({ unitCosmetic: ["The label is torn on the front."] }, PHONE, { needed_missing: ["Cosmetic Flaws"] });
+  const f = d.findings.find(x => x.shot === "Cosmetic Flaws");
+  return (f?.said === "The label is torn on the front." && isStandardSentence("It is missing the plastic due to heavy wear.")
+    && !isStandardSentence("It is missing the plastic and the case is cracked.")) || say(d); });
+t("the listing says brand new, the photos say used: an automatic flag (LEE Payday 2)", () => {
+  const a = run({ cosmetic: "This game is BRAND NEW! It has never been used." }, PHONE, { new_claim_wrong: true });
+  const b = run({ cosmetic: "Light wear from use." }, PHONE, { new_claim_wrong: true });
+  return (a.findings.some(f => f.code === "new_claim") && flagged(a) && b.verdict === "pass") || say(a) + " | " + say(b); });
 t("Core info: −15 ONCE however many are missing, each one listed", () => {
   const d = run({}, PHONE, { missing_shots: ["About Phone", "Storage Information"] });
   const core = d.findings.filter(f => f.tier === "core").length;
@@ -349,7 +402,6 @@ const BOARD = { slug: "motherboards", shots: ["Top of Board", "Everything Includ
 const GPU = { slug: "graphics-cards", shots: ["Front of GPU", "Everything Included", "Back of GPU", "Top Side of GPU",
   "Bottom Side of GPU", "Side of GPU (Not Pins)", "Side of GPU (Pin Side)", "Closeup of Pins", "Closeup of Serial/Model Info"]
   .map(label => ({ label, cond: label === "Everything Included" ? "x" : null })) };
-const shotsAre = (labels, o = {}) => labels.map((s, i) => photo(i + 1, { shots: [s], ...(o[i + 1] || {}) }));
 t("closeups go after the sides (OVL MSI Z790)", () => {
   const ps = shotsAre(["Top of Board", "Closeup of I/O Panel", "Closeup of RAM Sockets", "Side of Board", "Front Side of Board",
     "Opposite Side of Board", "Bottom of Board"], { 2: { whole_item: false }, 3: { whole_item: false } });
@@ -388,11 +440,13 @@ t("cosmetic flaws, then the earbuds, close the device's photos (WSP Galaxy Watch
   const bs = shotsAre(["Front of Case", "Back of Case", "Top of Earbuds", "Case Opened (Empty)", "Extra"]);
   const b = decide(listing({ n: 5 }), BUDS, report({ n: 5, photos: bs }));
   return (a.reorder?.suggested.join() === "1,2,4,3,5" && b.reorder?.suggested.join() === "1,2,4,5,3") || a.reorder?.suggested + " | " + b.reorder?.suggested; });
-t("no different spot on a game or a bottom shot (WSP Hitman 3, Epson)", () => {
+t("no different spot on a game or a bottom shot — but a bottom SIDE counts (WSP Hitman 3, Epson; LEE Samsung 860 Evo)", () => {
   const GAME = { slug: "video-games", shots: [{ label: "Front of Game", cond: null }, { label: "Back of Game", cond: null }] };
   const a = decide(listing({ n: 2 }), GAME, report({ n: 2, photos: shotsAre(["Front of Game", "Back of Game"]), setups: [[2], [1]] }));
-  const b = run({}, PHONE, { photos: shotsAre(["Home/Lock Screen", "Back of Phone", "Bottom Side of Phone"]), setups: [[1, 2], [3]], n: 3 });
-  return (!a.findings.some(f => f.code === "mixed_setups") && !b.findings.some(f => f.code === "mixed_setups")) || say(a) + " | " + say(b); });
+  const b = run({}, PHONE, { photos: shotsAre(["Home/Lock Screen", "Back of Phone", "Bottom of Projector"]), setups: [[1, 2], [3]], n: 3 });
+  const c = run({}, PHONE, { photos: shotsAre(["Home/Lock Screen", "Back of Phone", "Bottom Side of Phone", "Top Side of Phone"]), setups: [[1, 2], [3, 4]], n: 4 });
+  const odd = c.findings.find(f => f.code === "mixed_setups");
+  return (!a.findings.some(f => f.code === "mixed_setups") && !b.findings.some(f => f.code === "mixed_setups") && odd?.photos.join() === "3,4") || say(a) + " | " + say(b) + " | " + say(c); });
 t("units apart in single-unit shots are fine when a lot shot shows them together (WSP TeamGroup RAM)", () => {
   const RAM = { slug: "ram", shots: [{ label: "Top of Lot", cond: null }, { label: "Top of RAM", cond: null }] };
   const d = decide(listing({ n: 2 }), RAM, report({ n: 2, photos: shotsAre(["Top of Lot", "Top of RAM"]), units_claimed: 2, units_together: false }));
