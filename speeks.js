@@ -55790,17 +55790,28 @@ const _PQ_TIERS = [
 // rows go at the end. A row with NOTHING LEFT goes away (Ethan, the same
 // evening, looking at the done cards: "When they are good now, shouldn't they
 // just go away?") — the rest keep their order, so nothing jumps.
-let _pqPlaces = { store: null, order: new Map(), done: new Map() };
+// RECHECK STAYS ON THE ROW, IN ITS SLOT (Ethan, 2026-10-16): greyed with a
+// "Reviewing…" line while it runs, then "✓ Passed On Recheck" — or "Rechecked —
+// still needs:" over the new findings. No popup, and the row does not jump to
+// another tab. A pass shows the row as it WAS, its findings struck through.
+// Held in _pqPlaces.rechecked, so it is this page's only: "a passed on recheck
+// row should go away after a refresh".
+let _pqPlaces = { store: null, order: new Map(), done: new Map(), rechecked: new Map() };
 function _pqPlace(tier, all) {
-    if (_pqPlaces.store !== _ecStore) _pqPlaces = { store: _ecStore, order: new Map(), done: new Map() };
+    if (_pqPlaces.store !== _ecStore) _pqPlaces = { store: _ecStore, order: new Map(), done: new Map(), rechecked: new Map() };
     const live = new Map(all.map(r => [r.productId, r]));
-    const here = all.filter(r => r.verdict === tier).map(r => r.productId);
-    const done = _pqPlaces.done;
-    const was = (_pqPlaces.order.get(tier) || []).filter(id => here.includes(id) || done.get(id)?.tier === tier);
+    const done = _pqPlaces.done, rc = _pqPlaces.rechecked;
+    const rcHere = id => rc.get(id)?.tier === tier;
+    const here = all.filter(r => r.verdict === tier && !(rc.has(r.productId) && !rcHere(r.productId))).map(r => r.productId);
+    const shown = id => here.includes(id) || (rcHere(id) && (live.has(id) || rc.get(id).verdict === 'pass'));
+    const was = (_pqPlaces.order.get(tier) || []).filter(id => shown(id) || done.get(id)?.tier === tier);
     // A row acted on in ANOTHER tab that has moved here stays in its own tab.
     const ids = [...was, ...here.filter(id => !was.includes(id) && !(done.has(id) && done.get(id).tier !== tier))];
     _pqPlaces.order.set(tier, ids);
-    return ids.filter(id => here.includes(id)).map(id => ({ r: live.get(id), done: done.get(id)?.said || null, gone: false }));
+    return ids.filter(shown).map(id => {
+        const c = rcHere(id) ? rc.get(id) : null;
+        return { r: c && c.verdict === 'pass' ? c.before : live.get(id), done: done.get(id)?.said || null, rc: c, gone: false };
+    });
 }
 function _pqMarkDone(pid, row, what) {
     if (_pqPlaces.store !== _ecStore) return;
@@ -55851,7 +55862,7 @@ function _pqHtml() {
             <span>All Clear — Nothing To ${_ecEsc(tiers.find(t => t.v === _pqTier)?.label || '')} At ${store}</span>
           </div>`;
     } else {
-        inner = `<div class="lt-rows">${placed.map(x => _pqRow(x.r, x.done)).join('')}</div>`;
+        inner = `<div class="lt-rows">${placed.map(x => _pqRow(x.r, x.done, x.rc)).join('')}</div>`;
     }
     const total = tiers.filter(t => !t.review).reduce((s, t) => s + count(t.v), 0);
     const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
@@ -56276,12 +56287,19 @@ function _pqFindingLines(findings) {
     ].join('');
 }
 
-function _pqRow(r, done) {
+function _pqRow(r, done, rc) {
     const id = String(r.productId || '');
     const numeric = _ecEsc(id.split('/').pop());
     const shop = _ecEsc(_pqData?.shop || '');
-    const busy = _pqBusy.has(id);
     const checking = _pqChecking.has(id);
+    // Passed on recheck: the row as it was, nothing left to press.
+    const passed = !!rc && rc.verdict === 'pass' && !checking;
+    const busy = _pqBusy.has(id) || passed;
+    const rcAt = rc ? `${_pqDay(rc.at.toISOString())}, ${rc.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : '';
+    const rcLine = checking
+        ? `<div class="pq-reviewing" role="status"><span class="pq-spin" aria-hidden="true"></span>Reviewing The Photos… About 1–2 Minutes</div>`
+        : passed ? `<div class="pq-passed" role="status">✓ Passed On Recheck — ${_ecEsc(rcAt)}</div>`
+        : rc ? `<div class="pq-rechecked" role="status">Rechecked ${_ecEsc(rcAt)} — Still Needs:</div>` : '';
     const photos = r.photos || [];
     // A listing-wide finding (a dirty table, a repeat) names its photos in `photos`.
     const flagged = new Set((r.findings || []).flatMap(f => [f.photo, ...(f.photos || [])]).filter(Boolean));
@@ -56341,7 +56359,7 @@ function _pqRow(r, done) {
     // NEW: graded by the nightly random sample in the last 3 days — outlined all
     // the way round so the reviewer can find the fresh ones (Ethan, 2026-10-15).
     const isNew = !!r.sample && Date.now() - new Date(r.sample).getTime() < 3 * 86400000;
-    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}${isNew ? ' pq-row-new' : ''}">
+    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}${isNew ? ' pq-row-new' : ''}${checking ? ' pq-row-checking' : ''}${passed ? ' pq-row-passed' : ''}"${checking ? ' aria-busy="true"' : ''}>
       <div class="lt-main">
         <div class="pq-title">${isNew ? '<span class="pq-new-tag" title="Graded by the nightly random sample">New</span>' : ''}${_ecEsc(r.title || 'Untitled Listing')}</div>
         <div class="pq-sheet">Checked ${_pqDay(r.reviewedAt)} Against: <b>${_ecEsc(r.sheetName || '—')}</b></div>
@@ -56350,7 +56368,8 @@ function _pqRow(r, done) {
             : 'The photos or notes changed after this was checked'} —
             press Recheck before acting on it.</div>` : ''}
         ${done ? `<div class="pq-done">✓ ${_ecEsc(done.join(' · '))}</div>` : ''}
-        <ul class="lt-why">${findings}${why}</ul>
+        ${rcLine}
+        <ul class="lt-why${passed ? ' pq-why-fixed' : ''}">${findings}${why}</ul>
         ${body}
         ${titleNotes}
       </div>
@@ -56521,16 +56540,19 @@ async function pqDeletePhotos(pid) {
 window.pqDeletePhotos = pqDeletePhotos;
 
 async function pqRecheck(pid) {
+    const before = (_pqData?.queue || []).find(r => r.productId === pid);
+    const tier = _pqTier, store = _ecStore;
     _pqBusy.add(pid); _pqChecking.add(pid); ecRender();
-    const res = await _pqPost({ action: 'recheck', store: _ecStore, productId: pid });
+    const res = await _pqPost({ action: 'recheck', store, productId: pid });
     _pqBusy.delete(pid); _pqChecking.delete(pid);
-    if (!res.ok) {
+    if (!res.ok || !res.body?.ok) {
         await _pqSay('Could Not Check It Again', res.body?.detail || res.body?.error || 'The check did not finish.');
         ecRender();
         return;
     }
-    if (res.body.verdict === 'pass') {
-        await _pqSay('These Photos Now Pass', 'The listing meets the guide and has left the list.', 'ok');
+    // The store may have been switched while it ran: _pqPlace starts over then.
+    if (before && _pqPlaces.store === store) {
+        _pqPlaces.rechecked.set(pid, { tier, before, verdict: res.body.verdict, at: new Date() });
     }
     await _pqReload();
 }
