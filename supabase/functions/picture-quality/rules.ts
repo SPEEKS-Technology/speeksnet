@@ -452,7 +452,9 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // flagged for wrong spot").
   const bottomOnly = new Set(r.photos.filter(p => p.shots.length > 0
     && p.shots.every(s => /^bottom\b/i.test(s.trim()) && !/^bottom side\b/i.test(s.trim()))).map(p => p.n));
-  const groups = isLot || collectorSet || gameSheet ? [] : (r.setups || [])
+  // A KIT too: its loose pieces "aren't easily put on stands" (Ethan,
+  // 2026-10-15, LEE Wii Extreme Sports Kit), so stand vs flat says nothing.
+  const groups = isLot || collectorSet || gameSheet || kit ? [] : (r.setups || [])
     .map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x) && !bottomOnly.has(x))).filter(g => g.length);
   // ⚠️ THE STAND WINS A MIX; A LANDSLIDE WINS OVER THE STAND (Ethan,
   // 2026-10-15, LEE). The model lists the stand group first (WSP AirPods,
@@ -818,8 +820,13 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // 2026-10-15, WSP): COSMETIC FLAWS "should always be the final picture before
   // accessories" (Galaxy Watch6 photo 6), and the EARBUDS out of their case are
   // "the final pictures before any accessories" (AirPods 5th Gen photo 5).
+  // The CUSHIONS close a pair of headphones' photos the same way, after any
+  // extra of the device (Ethan, 2026-10-15, LEE Beats Studio Pro: "the cushions
+  // weren't last", with a side closeup after them).
+  const cushion = (label: string) => /^headphones/.test(sheet.slug) && /\bcushion\b/i.test(label);
   const late = (label: string) => /^cosmetic flaw/i.test(label.trim()) ? 1500
-    : sheet.slug === "earbuds" && /\bearbuds?\b/i.test(label) ? 1400 + shotIx(label) / 1000 : null;
+    : sheet.slug === "earbuds" && /\bearbuds?\b/i.test(label) ? 1400 + shotIx(label) / 1000
+    : cushion(label) ? 1400 + shotIx(label) / 1000 : null;
   // A SECOND PHOTO OF A SHOT ALREADY TAKEN is an extra, after the sheet's shots
   // — not slotted in beside the first one (Ethan, 2026-10-15, LEE Beats Studio
   // Pro: photo 6, the headphones lying flat, a second front, went to slot 2, and
@@ -849,7 +856,8 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     if (repeatSet.has(p.n)) return 5000;
     if (isAcc(p)) return 3000;
     if (isBox(p)) return 2000;
-    if (secondOf(p)) return 1000;
+    // A second cushion shot goes after both cushions, not between them.
+    if (secondOf(p)) return p.shots.some(cushion) ? 1499 : 1000;
     const ixs = p.shots.filter(s => shotIx(s) >= 0 && !/^extra accessor/i.test(s.trim())).map(s => late(s) ?? ixOf(s));
     if (!ixs.length && firstInfo >= 0 && p.shots.some(s => INFO_SHOT.test(s.trim()))) return firstInfo;
     return ixs.length ? Math.min(...ixs) : 1000;

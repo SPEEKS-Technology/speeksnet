@@ -19621,6 +19621,15 @@ body.is-store-board .nav-bar a.nav-link[href="operations.html"] { display: flex 
 .pq-v-fix     { border-left: 3px solid #d69e2e; }
 .pq-v-reorder { border-left: 3px solid var(--cb-sage); }
 .pq-v-pass    { border-left: 3px solid var(--cb-line, #d6d3cd); }
+/* NEW — graded by the nightly random sample: the WHOLE border in the verdict's
+   colour, not just the left edge (Ethan, 2026-10-15: "have the entire box border
+   for these highlighted so I know which ones are new for me to review"). */
+.pq-row-new.pq-v-retake  { border: 3px solid #d1443b; }
+.pq-row-new.pq-v-fix     { border: 3px solid #d69e2e; }
+.pq-row-new.pq-v-reorder { border: 3px solid var(--cb-sage); }
+.pq-row-new.pq-v-pass    { border: 3px solid #8a8f98; }
+.pq-new-tag { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+    color: #fff; background: #2f6fed; border-radius: 6px; padding: 2px 6px; margin-right: 6px; vertical-align: 1px; }
 .pq-title { font-size: 13px; font-weight: 800; color: var(--cb-ink); line-height: 1.4; overflow-wrap: anywhere; }
 .pq-sheet { font-size: 11px; font-weight: 600; color: var(--cb-faint); }
 .pq-sheet b { font-weight: 800; color: var(--cb-muted); }

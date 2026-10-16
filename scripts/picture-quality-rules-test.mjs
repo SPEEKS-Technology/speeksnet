@@ -146,13 +146,15 @@ t("a QTY listing: the same view of the next unit is a repeat, chains point at th
   ps[4].repeats = 4;
   const d = decide(listing({ n: 6, sku: "MO01-5679C-QTY3-E4" }), PAD, report({ n: 6, photos: ps }));
   return (d.deletion?.photos.join() === "4,5" && d.deletion?.of.join() === "3,3") || say(d) + " " + JSON.stringify(d.deletion); });
-t("a second photo of a shot already taken goes with the extras (LEE Beats Studio Pro)", () => {
+t("a second photo of a shot already taken goes with the extras; the cushions close (LEE Beats Studio Pro)", () => {
   const HP = { slug: "headphones-over-ear", shots: ["Front of Headphones", "Side of Headphones", "Back of Headphones", "Top of Headphones", "Inside of Cushion", "Inside of Opposite Cushion"]
     .map(label => ({ label, cond: null })) };
-  const ps = shotsAre(["Front of Headphones", "Top of Headphones", "Back of Headphones", "Inside of Cushion", "Inside of Opposite Cushion", "Front of Headphones", "Inside of Cushion"]);
-  ps[6].whole_item = false;
-  const d = decide(listing({ n: 7 }), HP, report({ n: 7, photos: ps }));
-  return d.reorder?.suggested.join() === "1,3,2,4,5,6,7" || say(d) + " " + d.reorder?.suggested; });
+  const ps = [photo(1, { shots: ["Front of Headphones"] }), photo(2, { shots: ["Top of Headphones"] }), photo(3, { shots: ["Back of Headphones"] }),
+    photo(4, { shots: ["Inside of Cushion"], whole_item: false }), photo(5, { shots: ["Inside of Opposite Cushion"], whole_item: false }),
+    photo(6, { shots: ["Front of Headphones", "Extra"] }), photo(7, { shots: ["Extra", "Inside of Cushion"], whole_item: false }),
+    photo(8, { shots: ["Extra"], whole_item: false })];
+  const d = decide(listing({ n: 8 }), HP, report({ n: 8, photos: ps }));
+  return d.reorder?.suggested.join() === "1,3,2,6,8,4,5,7" || say(d) + " " + d.reorder?.suggested; });
 t("a spec screen the sheet has no shot for stays with the screens (LEE HP Envy 'CPU')", () => {
   const DESK = { slug: "windows-desktop", shots: ["Front of Desktop", "Settings About Page", "Storage Information", "Back of Desktop", "Closeup of Serial/Model Info"].map(label => ({ label, cond: null })) };
   const ps = shotsAre(["Front of Desktop", "Back of Desktop", "CPU", "RAM", "Storage Information", "Closeup of Serial/Model Info"]);
@@ -264,8 +266,9 @@ t("detail closeups keep the store's order beside the label closeup (LEE NES cont
 t("a kit: box first stays, no side/top/bottom shots owed (LEE Wii Extreme Sports Kit)", () => {
   const MISC = { slug: "small-medium-misc-items", shots: ["Front of Device", "Back of Device", "Side of Device", "Opposite Side of Device", "Top of Device", "Bottom of Device"].map(label => ({ label, cond: null })) };
   const d = decide(listing({ n: 5, title: "Nintendo Wii Extreme Sports Kit White" }), MISC,
-    report({ n: 5, photos: shotsAre(["Box", "Box", "Front of Device", "Back of Device", "Extra"]), missing_shots: ["Side of Device", "Opposite Side of Device", "Top of Device", "Bottom of Device"] }));
-  return (d.verdict === "pass" && !d.reorder) || say(d) + " " + d.reorder?.suggested; });
+    report({ n: 5, photos: shotsAre(["Box", "Box", "Front of Device", "Back of Device", "Extra"]), missing_shots: ["Side of Device", "Opposite Side of Device", "Top of Device", "Bottom of Device"],
+      setups: [[5], [3, 4]] }));
+  return (d.verdict === "pass" && !d.reorder && !d.findings.length) || say(d) + " " + d.reorder?.suggested; });
 t("different spots: −5, short wording, and framing stacks on top", () => {
   const ps = report().photos; ps[7] = photo(8, { framing: "off", framing_problems: ["cut_off"] });
   const d = run({}, PHONE, { photos: ps, setups: [[1, 2, 3, 4, 5, 6, 7], [8, 9]], setup_difference: "brighter backdrop" });

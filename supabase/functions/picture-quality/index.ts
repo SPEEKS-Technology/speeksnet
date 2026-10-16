@@ -1014,8 +1014,12 @@ function reviewParams(l: Listing, sheet: Sheet, standard: Map<string, number>, o
   };
 }
 
+// `sample`: sent by a random sample (the nightly, or a hand run with &random=1)
+// — saved on the row's report so the panel can outline it as NEW (Ethan,
+// 2026-10-15: "have the entire box border for these highlighted so I know which
+// ones are new for me to review tomorrow"). Follow-ups carry it ({...p}).
 type Pending = { pid: string; kind: "first" | "resheet" | "second"; sheet: string; pick: unknown;
-                 reSheeted: boolean; stamp: string; first?: ReportT };
+                 reSheeted: boolean; stamp: string; first?: ReportT; sample?: boolean };
 const customId = (p: Pending) => `${p.kind[0]}${p.pid.split("/").pop()}`;
 
 async function submitBatch(client: Anthropic, store: string, model: string, effort: string,
@@ -1086,7 +1090,8 @@ async function batchSweep(store: string, limit: number, days: number, model: str
   const pickOne = async () => {
     while (next < todo.length) {
       const l = todo[next++];
-      const base = { store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model };
+      const base = { store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model,
+                     ...(random ? { report: { sample: new Date().toISOString() } } : {}) };
       if (!l.photos.length) {
         direct.push({ ...base, verdict: "fix", findings: [{ code: "no_photos", text: "This listing has no photos." }],
                       stamp: await stampFor(l, null), sheet_slug: null, sheet_name: null });
@@ -1103,7 +1108,7 @@ async function batchSweep(store: string, limit: number, days: number, model: str
           continue;
         }
         const others = sheets.filter(x => x.slug !== sheet!.slug).map(x => `${x.slug} (${x.name})`).join(", ");
-        reqs.push({ p: { pid: l.id, kind: "first", sheet: sheet.slug, pick, reSheeted: false, stamp: await stampFor(l, sheet) },
+        reqs.push({ p: { pid: l.id, kind: "first", sheet: sheet.slug, pick, reSheeted: false, stamp: await stampFor(l, sheet), ...(random ? { sample: true } : {}) },
                     params: reviewParams(l, sheet, standard, others, model, effort) });
       } catch (e) {
         // One failed pick costs that listing tonight, not the whole batch.
@@ -1181,7 +1186,7 @@ async function pollBatches() {
       const second = p.kind === "second" ? parsed : null;
       const row = await finalRow(l, sheet, standard, p.pick, p.reSheeted, first, second);
       save.push({ store_code: b.store_code, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length,
-                  model: b.model, ...row, report: { ...row.report, batch: b.batch_id } });
+                  model: b.model, ...row, report: { ...row.report, batch: b.batch_id, ...(p.sample ? { sample: new Date().toISOString() } : {}) } });
     }
     await saveRows(save);
     // Batch tokens are half price; a cache read is a tenth of input.
@@ -1231,7 +1236,7 @@ async function redecide(store: string) {
     if (row.verdict !== r.verdict) changed++;
     out.push({ store_code: store, product_id: l.id, sku: l.sku, title: l.title, photo_count: l.photos.length, model: r.model,
                ...row, report: { ...row.report, looks: r.report.looks, firstLook: r.report.firstLook,
-                                 secondLook: r.report.secondLook, batch: r.report.batch, redecided: new Date().toISOString() } });
+                                 secondLook: r.report.secondLook, batch: r.report.batch, sample: r.report.sample, redecided: new Date().toISOString() } });
   }
   // Only rows whose stamp still matches the live listing are written.
   const fresh = out.filter(o => saved.find(s => s.product_id === o.product_id)?.stamp === o.stamp);
@@ -1256,7 +1261,7 @@ async function reviewView(scope: Scope, asked: string) {
   // hidden until the sweep grades it again under the rules that are true now.
   const queue: any[] = await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open`
     + `&verdict=in.(retake,fix,reorder)&stamp=like.${RECIPE}:*`
-    + `&select=product_id,sku,title,sheet_slug,sheet_name,verdict,findings,reorder,deletion,title_notes,photo_count,reviewed_at,stamp`
+    + `&select=product_id,sku,title,sheet_slug,sheet_name,verdict,findings,reorder,deletion,title_notes,photo_count,reviewed_at,stamp,sample:report->>sample`
     + `&order=reviewed_at.desc&limit=500`);
   // PASSED, for agreeing with (Ethan, 2026-10-11: "Can I see all of the OVL ones
   // on the tool even if they passed so I can confirm that I agree with the
@@ -1267,7 +1272,7 @@ async function reviewView(scope: Scope, asked: string) {
   const since = new Date(Date.now() - 14 * 86400000).toISOString();
   queue.push(...await rows(`picture_quality_reviews?store_code=eq.${store}&status=eq.open`
     + `&verdict=eq.pass&stamp=like.${RECIPE}:*&reviewed_at=gte.${since}`
-    + `&select=product_id,sku,title,sheet_slug,sheet_name,verdict,findings,reorder,deletion,title_notes,photo_count,reviewed_at,stamp`
+    + `&select=product_id,sku,title,sheet_slug,sheet_name,verdict,findings,reorder,deletion,title_notes,photo_count,reviewed_at,stamp,sample:report->>sample`
     + `&order=reviewed_at.desc&limit=60`));
   // What a person already answered, for the Confirmed Fine drawer under the
   // queue — the same drawer the Categories and Titles sections keep, so a
@@ -1295,6 +1300,8 @@ async function reviewView(scope: Scope, asked: string) {
       sheet: r.sheet_slug, sheetName: r.sheet_name, verdict: r.verdict,
       findings: r.findings || [], reorder: r.reorder, deletion: r.deletion || null, titleNotes: r.title_notes || [],
       reviewedAt: r.reviewed_at,
+      // Graded by a random sample — outlined as NEW on the panel. See Pending.
+      sample: r.sample || null,
       stale: r.stamp !== await stampFor(l, sheet),
       // Which kind: the LISTING moved, or the check itself was improved since.
       // Telling a manager "your photos changed" when nobody touched them is the
@@ -1808,8 +1815,12 @@ Deno.serve(async (req: Request) => {
       if (!b) return json({ error: "no such batch" }, 404);
       const client = new Anthropic({ apiKey: Deno.env.get("ANTHROPIC_API_KEY") || "" });
       const info = await (client as any).messages.batches.cancel(cancelId);
+      // "failed", with a note: pq_batches_status_check allows only submitted /
+      // done / failed, so the "cancelled" this wrote was refused and the row
+      // stayed "submitted" (LEE, 2026-10-15) — leaving its listings "in flight"
+      // for the next sweep and its partial results for the next poll.
       await sb(`pq_batches?id=eq.${b.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" },
-        body: JSON.stringify({ status: "cancelled", finished_at: new Date().toISOString() }) });
+        body: JSON.stringify({ status: "failed", finished_at: new Date().toISOString(), result: { cancelled: true } }) });
       const pids = [...new Set(Object.values((b.items || {}) as Record<string, Pending>).map(p => p.pid))];
       return json({ cancelled: cancelId, store: b.store_code, processing_status: info?.processing_status, request_counts: info?.request_counts, pids });
     }
@@ -1837,7 +1848,10 @@ Deno.serve(async (req: Request) => {
       // only want it for OVL and only pull 10 new listings from today at random".
       // The cron still calls every store with sweep=200&days=3; anything without
       // &force=1 is held to this instead. A hand run (&force=1) takes its params.
-      const NIGHTLY = { stores: ["OVL"], limit: 10, days: 1 };
+      // WIDENED TO ALL FIVE STORES (Ethan, 2026-10-15, once every store had been
+      // re-graded on Opus and reviewed: "turn the nightly batch run back on and
+      // run 10 random listings made today from all 5 stores").
+      const NIGHTLY = { stores: ["OVL", "LEE", "WSP", "MPL", "BAL"], limit: 10, days: 1 };
       const forced = url.searchParams.get("force") === "1";
       if (!forced && !NIGHTLY.stores.includes(store)) {
         return json({ store, skipped: true, note: `Nightly sample is ${NIGHTLY.stores.join(", ")} only.` });

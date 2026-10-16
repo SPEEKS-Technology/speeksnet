@@ -56338,9 +56338,12 @@ function _pqRow(r, done) {
                ? `<br><span class="pq-lab-miss">${missing.size} Missing</span>` : ''}</span>${_pqGuideStrip(r.sheet, missing)}</div>
            </div>`;
 
-    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}">
+    // NEW: graded by the nightly random sample in the last 3 days — outlined all
+    // the way round so the reviewer can find the fresh ones (Ethan, 2026-10-15).
+    const isNew = !!r.sample && Date.now() - new Date(r.sample).getTime() < 3 * 86400000;
+    return `<div class="lt-row pq-row pq-v-${_ecEsc(r.verdict)}${isNew ? ' pq-row-new' : ''}">
       <div class="lt-main">
-        <div class="pq-title">${_ecEsc(r.title || 'Untitled Listing')}</div>
+        <div class="pq-title">${isNew ? '<span class="pq-new-tag" title="Graded by the nightly random sample">New</span>' : ''}${_ecEsc(r.title || 'Untitled Listing')}</div>
         <div class="pq-sheet">Checked ${_pqDay(r.reviewedAt)} Against: <b>${_ecEsc(r.sheetName || '—')}</b></div>
         ${r.stale ? `<div class="pq-stale">${r.staleWhy === 'recipe'
             ? 'The check has been improved since this listing was graded'
