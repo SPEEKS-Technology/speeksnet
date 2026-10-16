@@ -56181,6 +56181,9 @@ const _PQC_FLAGS = [
                ['wrong_item', 'Wrong Item']]],
 ];
 const _PQC_BOX = ['new-in-box', 'new-open-box'];
+// A title that itself states the defect ("Broken …", "… For Parts") gives the
+// model a main flaw with source "title", so the question is asked for it too.
+const _PQC_TITLE_FLAW = /\b(broken|for parts|parts only|cracked|damaged|as[- ]is|not working|read desc)/i;
 const _PQC_MULTI = ['item-lots', 'speaker-pairs'];
 // Which listing-level questions apply. Asked only where the rule can fire, so a
 // plain used game is two toggles, not seven.
@@ -56191,7 +56194,13 @@ function _pqcAsks(l) {
     // Main Flaw Shown is asked when a sentence names a flaw on this unit, AS THE
     // PERSON READS IT. Mark the only "flaw" sentence as standard wording and the
     // question goes away; mark a dismissed one as a real flaw and it appears.
-    const flaw = !!(_pqcNotes(l).some(n => n.real) || String(l.functional || '').trim());
+    // ⚠️ NOT the functional notes. The grading prompt takes the main flaw only
+    // from a cosmetic line about THIS unit or from the title (source unit |
+    // title), and nearly every listing has functional notes ("powers on and off
+    // properly…"). Counting them asked the question on almost every listing with
+    // nothing to answer it about (Ethan, 2026-10-16). Functional notes matter to
+    // the rules only for LCD Flaws, and they are still shown for that.
+    const flaw = !!(_pqcNotes(l).some(n => n.real) || _PQC_TITLE_FLAW.test(l.title || ''));
     return {
         flaw,
         isNew: /\b(new|sealed)\b/i.test(l.title || '') || /\b(new|sealed)\b/i.test(l.condition || ''),
@@ -56332,7 +56341,9 @@ async function pqConfirmNext(all) {
     const facts = { ...l.facts,
         // A question not asked is answered by the rule's own default.
         new_claim_wrong: a.isNew && l.facts.new_claim_wrong, units_apart: a.multi && l.facts.units_apart,
-        flat_package: a.box && l.facts.flat_package, main_flaw_shown: a.flaw ? l.facts.main_flaw_shown : null,
+        flat_package: a.box && l.facts.flat_package, // Not asked = no unit line and no title flaw, which is the model's
+        // "not_applicable" by the prompt's own definition, so it is still a label.
+        main_flaw_shown: a.flaw ? l.facts.main_flaw_shown : 'not_applicable',
         // Every sentence with the code's call and the person's: unclicked = agreed.
         sentences: _pqcNotes(l).map(n => ({ text: n.text, system: !!n.unit, real: !!n.real })) };
     c.busy = true; _pqcRender();

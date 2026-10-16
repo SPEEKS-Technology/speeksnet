@@ -49,6 +49,15 @@ t('a store manager gets no entry and no screen', function () {
     return !el || 'overlay opened for a manager';
 });
 
+t('Main Flaw Shown: asked for a unit flaw line or a broken title, never for functional notes alone', function () {
+    function L(o) { return Object.assign({ title: 'Some Game', pickedSheet: 'video-games', notes: [], flip: new Set(), functional: '' }, o); }
+    if (_pqcAsks(L({ functional: 'The console powers on and off properly and reads discs.' })).flaw) return 'asked for functional notes alone';
+    if (!_pqcAsks(L({ title: 'Broken Unlocked Apple iPhone SE 64GB' })).flaw) return 'not asked for a Broken title';
+    if (!_pqcAsks(L({ notes: [{ text: 'A dent on the back corner.', unit: true }] })).flaw) return 'not asked for a unit flaw line';
+    if (_pqcAsks(L({ notes: [{ text: 'Good pre-owned condition.', unit: false }] })).flaw) return 'asked for template wording';
+    return true;
+});
+
 t('the DM and the CEO may use it', function () {
     pqcAs('District Manager'); var dm = _pqcMayUse();
     pqcAs('CEO'); var ceo = _pqcMayUse();
@@ -138,7 +147,7 @@ t('Enter keeps, a key replaces, Shift adds, the last photo saves the listing', f
             if (b.checked !== true) return 'checked not sent';
             if (!b.listing || b.listing.lead_unclear !== true || b.listing.serial_hidden !== false) return 'listing facts ' + JSON.stringify(b.listing);
             // Not asked on a used, single, boxed-in-a-case game: sent as the rule's default.
-            if (b.listing.new_claim_wrong !== false || b.listing.flat_package !== false || b.listing.main_flaw_shown !== null) return 'unasked facts ' + JSON.stringify(b.listing);
+            if (b.listing.new_claim_wrong !== false || b.listing.flat_package !== false || b.listing.main_flaw_shown !== 'not_applicable') return 'unasked facts ' + JSON.stringify(b.listing);
             if (b.photos[1].said.join() !== 'Back of Game') return 'model label not sent';
             if (b.photos.some(function (p) { return /\?/.test(p.src); })) return 'src kept its query string';
             return true;
