@@ -55870,10 +55870,12 @@ function _pqHtml() {
     // need it anymore"). pqTrainOpen and the trainer stay in the file, and his
     // 395 labels stay in pq_photo_labels — framing is to be revisited.
     // Confirm Shots (2026-10-16) takes its place: the gold set's shot labels.
-    const train = _pqcMayUse() ? `<div class="pqt-entry">
+    // ABOVE the tabs, not under the queue: at the bottom it sat 4,000px down on
+    // OVL Quick Fixes and Ethan could not find it (2026-10-16).
+    const train = _pqcMayUse() ? `<div class="pqt-entry pqt-entry-top">
         <button type="button" class="pqt-btn" onclick="pqConfirmOpen()">Confirm Shots</button>
         <span>Say which shot each photo is — the answer key a cheaper model is tested against.</span></div>` : '';
-    return head(tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : '') + train,
+    return head(train + tabs + inner + (mayPics && _pqTier !== 'nophotos' ? _pqDismissedHtml(_pqTier) : ''),
                 `<span class="lh-count ${total ? worst : 'lh-count-ok'}">${total}</span>`);
 }
 
