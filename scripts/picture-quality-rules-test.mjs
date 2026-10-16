@@ -113,15 +113,12 @@ t("flat retail packaging on New In Box: only front, back and label are asked for
   const flat = run({ title: "New SanDisk 512GB microSDXC" }, NIB, { missing_shots: miss, flat_package: true, serial: "shown" });
   const box = run({ title: "New SanDisk 512GB microSDXC" }, NIB, { missing_shots: miss, flat_package: false, serial: "shown" });
   return (flat.verdict === "pass" && box.verdict === "retake") || `${say(flat)} | ${say(box)}`; });
-t("different spot: the BIGGEST group is the standard, and closeups are never odd (LEE Sony A7 III 10-15, OVL Loupedeck)", () => {
+t("different spot: the FIRST (stand) group wins a mix, and closeups are never odd (WSP AirPods, OVL Loupedeck)", () => {
   const ps = report().photos; ps[7] = photo(8, { whole_item: false });
   const d = run({}, PHONE, { photos: ps, setups: [[1, 2, 4], [3, 5, 6, 7, 8, 9, 10]] });
   const f = d.findings.find(x => x.code === "mixed_setups");
   const odd = f ? f.photos.join() : "";
-  // A tie keeps the model's first group (the stand one).
-  const tie = run({}, PHONE, { n: 4, photos: report({ n: 4 }).photos, setups: [[1, 2], [3, 4]] });
-  const g = tie.findings.find(x => x.code === "mixed_setups");
-  return (odd === "1,2,4" && g?.photos.join() === "3,4") || `odd: ${odd} | tie: ${g?.photos}`; });
+  return odd === "3,5,6,7,9,10" || `odd: ${odd}`; });
 t("a repeat in the odd spot is the one deleted, whichever came first (LEE Sony A7 III)", () => {
   const ps = report({ n: 5 }).photos; ps[3] = photo(4, { repeats: 3 });
   const d = run({}, PHONE, { n: 5, photos: ps, setups: [[3], [1, 2, 4, 5]] });
@@ -232,12 +229,43 @@ t("a lot's group shots flat and singles on the stand are not different spots (OV
   const lot = run({}, PHONE, { photos: ps, setups: [[1, 2], [3, 4, 5, 6, 7, 8, 9, 10]] });
   const one = run({}, PHONE, { setups: [[1, 2], [3, 4, 5, 6, 7, 8, 9, 10]] });
   return (!lot.findings.some(f => f.code === "mixed_setups") && one.findings.some(f => f.code === "mixed_setups")) || `${say(lot)} | ${say(one)}`; });
-t("reflections: 3 / 6 / 9 by price, never on Screen Off", () => {
+t("reflections: 3 / 6 / 9 by price, on Screen Off too (LEE Lenovo 13w, 10-15 — reversed 10-08)", () => {
   const ps = report().photos; ps[1].issues = [issue("reflection")];
   const s = [50, 150, 300].map(price => run({ price }, PHONE, { photos: ps }).pictureScore);
   const off = report().photos; off[2] = photo(3, { shots: ["Screen Off"], issues: [issue("reflection")] });
   const d = run({}, PHONE, { photos: off });
-  return (s.join() === "97,94,91" && d.pictureScore === 100) || `${s.join()} | ${say(d)}`; });
+  return (s.join() === "97,94,91" && d.pictureScore === 97) || `${s.join()} | ${say(d)}`; });
+t("the stand wins a mix; a landslide (4×) wins over it (LEE Insta360 6:3, Sony 7:1)", () => {
+  const mix = run({}, PHONE, { n: 9, photos: report({ n: 9 }).photos, setups: [[1, 3, 4], [2, 5, 6, 7, 8, 9]] });
+  const slide = run({}, PHONE, { n: 9, photos: report({ n: 9 }).photos, setups: [[3], [1, 2, 4, 5, 6, 7, 8, 9]] });
+  const a = mix.findings.find(f => f.code === "mixed_setups")?.photos.join(), b = slide.findings.find(f => f.code === "mixed_setups")?.photos.join();
+  return (a === "2,5,6,7,8,9" && b === "3") || `${a} | ${b}`; });
+t("a second opened case is not a repeat (LEE Suikoden Tactics, two discs)", () => {
+  const GAME = { slug: "video-games", shots: ["Front of Game", "Back of Game", "Opened Case With Disk"].map(label => ({ label, cond: null })) };
+  const d = decide(listing({ n: 4, title: "Suikoden Tactics" }), GAME, report({ n: 4, photos: shotsAre(["Front of Game", "Back of Game", "Opened Case With Disk", "Opened Case With Disk"]) }));
+  return !d.deletion || say(d); });
+t("a device's two sides named a repeat stay a repeat; front/back still flip (LEE Elenva ring)", () => {
+  const MISC = { slug: "small-medium-misc-items", shots: ["Front of Device", "Back of Device", "Side of Device", "Opposite Side of Device"].map(label => ({ label, cond: null })) };
+  const ps = shotsAre(["Front of Device", "Back of Device", "Side of Device", "Side of Device"]); ps[3].repeats = 3;
+  const d = decide(listing({ n: 4 }), MISC, report({ n: 4, photos: ps }));
+  return d.deletion?.photos.join() === "4" || say(d); });
+t("a view an earlier photo only also covers still gets its slot (LEE pink Beats Studio Pro)", () => {
+  const HP = { slug: "headphones-over-ear", shots: ["Front of Headphones", "Side of Headphones", "Back of Headphones", "Opposite Side of Headphones", "Top of Headphones", "Bottom of Headphones", "Inside of Cushion", "Inside of Opposite Cushion"]
+    .map(label => ({ label, cond: null })) };
+  const ps = [photo(1, { shots: ["Front of Headphones", "Side of Headphones"] }), photo(2, { shots: ["Back of Headphones", "Opposite Side of Headphones"] }),
+    photo(3, { shots: ["Top of Headphones"] }), photo(4, { shots: ["Inside of Cushion"], whole_item: false }), photo(5, { shots: ["Bottom of Headphones"] }),
+    photo(6, { shots: ["Side of Headphones"] }), photo(7, { shots: ["Inside of Opposite Cushion"], whole_item: false })];
+  const d = decide(listing({ n: 7 }), HP, report({ n: 7, photos: ps }));
+  return d.reorder?.suggested.join() === "1,6,2,3,5,4,7" || say(d) + " " + d.reorder?.suggested; });
+t("detail closeups keep the store's order beside the label closeup (LEE NES controller)", () => {
+  const ps = shotsAre(["Front of Controller", "Back of Controller", "Extra", "Extra", "Extra", "Closeup of Serial/Model Info"], { 3: { whole_item: false }, 4: { whole_item: false }, 5: { whole_item: false }, 6: { whole_item: false } });
+  const d = decide(listing({ n: 6 }), PAD, report({ n: 6, photos: ps }));
+  return !d.reorder || say(d) + " " + d.reorder?.suggested; });
+t("a kit: box first stays, no side/top/bottom shots owed (LEE Wii Extreme Sports Kit)", () => {
+  const MISC = { slug: "small-medium-misc-items", shots: ["Front of Device", "Back of Device", "Side of Device", "Opposite Side of Device", "Top of Device", "Bottom of Device"].map(label => ({ label, cond: null })) };
+  const d = decide(listing({ n: 5, title: "Nintendo Wii Extreme Sports Kit White" }), MISC,
+    report({ n: 5, photos: shotsAre(["Box", "Box", "Front of Device", "Back of Device", "Extra"]), missing_shots: ["Side of Device", "Opposite Side of Device", "Top of Device", "Bottom of Device"] }));
+  return (d.verdict === "pass" && !d.reorder) || say(d) + " " + d.reorder?.suggested; });
 t("different spots: −5, short wording, and framing stacks on top", () => {
   const ps = report().photos; ps[7] = photo(8, { framing: "off", framing_problems: ["cut_off"] });
   const d = run({}, PHONE, { photos: ps, setups: [[1, 2, 3, 4, 5, 6, 7], [8, 9]], setup_difference: "brighter backdrop" });

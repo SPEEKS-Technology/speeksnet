@@ -366,7 +366,11 @@ export function lookAlikeFaces(r: ReportR, sheet: SheetR): ReportR {
       return { ...p, repeats: null, whole_item: false, shots: [close] };
     }
     const shared = p.shots.find(s => q.shots.some(x => x.toLowerCase() === s.toLowerCase()));
-    const opp = shared ? oppositeShot(shared, sheet) : null;
+    // Side ↔ Opposite Side only on a BOX: a device's two sides seen from the
+    // same angle really are the same photo (Ethan, 2026-10-15, LEE Elenva ring:
+    // the model named 4 a repeat of 3, and this turned it into the "opposite
+    // side" — "Photo 3 or 4 should be deleted"). Front ↔ Back everywhere.
+    const opp = shared && (/^(front|back)\b/i.test(shared.trim()) || BOX_SHEETS.has(sheet.slug)) ? oppositeShot(shared, sheet) : null;
     // Only while no OTHER photo shows that face: with the back already shown,
     // a second front is a real repeat (the OVL PS3 controllers, the Duke, the
     // HP 952XL box — Ethan flagged all four on 10-08).
@@ -403,6 +407,7 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // the steelbook's (Ethan, 2026-10-15, LEE Red Dead Redemption 2: "the pictures
   // were front and back of game, front and back of steelbook, then case opened").
   const steelbook = gameSheet && STEELBOOK.test(l.title);
+  const kit = sheet.slug === "small-medium-misc-items" && /\bkit\b/i.test(l.title);
   const isLot = (r.units_claimed || 0) > 1 || r.photos.some(p => p.shots.some(s => /\bof lot\b/i.test(s)));
   // ONE OF EACH SHOT, found by the code when the model let a second one through:
   //  - a GAME has one front and one back (LEE Zelda Breath of the Wild: photo 3
@@ -421,7 +426,9 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     for (const p of [...r.photos].sort((a, b) => a.n - b.n)) {
       const views = viewsOf(p);
       const plain = p.whole_item && views.length > 0 && !taken.has(p.n)
-        && views.every(s => !INFO_SHOT.test(s) && !/closeup|serial|cosmetic|everything included|^box|accessor/i.test(s));
+        // Not the OPENED CASE: a second one shows the other disc (Ethan,
+        // 2026-10-15, LEE Suikoden Tactics: "not the same as this game has 2 disks").
+        && views.every(s => !INFO_SHOT.test(s) && !/closeup|serial|cosmetic|everything included|^box|accessor|opened case/i.test(s));
       const firstOf = plain ? views.map(s => first.get(s.toLowerCase())) : [];
       const opp = (s: string) => oppositeShot(s, sheet);
       if (plain && firstOf.every(x => x != null)
@@ -447,12 +454,17 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     && p.shots.every(s => /^bottom\b/i.test(s.trim()) && !/^bottom side\b/i.test(s.trim()))).map(p => p.n));
   const groups = isLot || collectorSet || gameSheet ? [] : (r.setups || [])
     .map(g => [...new Set(g)].filter(x => x >= 1 && x <= n && !closeup.has(x) && !bottomOnly.has(x))).filter(g => g.length);
-  // ⚠️ THE MAJORITY IS THE STANDARD (Ethan, 2026-10-15, LEE Sony A7 III: the
-  // one photo on the stand was named the standard and the seven off it were
-  // sent back — "When the majority is taken a certain way, the minority should
-  // be the flag"). This replaced "the stand group first" (WSP AirPods, 10-11).
-  // A tie keeps the model's first group, the stand one.
-  const main = groups.reduce<number[] | null>((m, g) => !m || g.length > m.length ? g : m, null) || [];
+  // ⚠️ THE STAND WINS A MIX; A LANDSLIDE WINS OVER THE STAND (Ethan,
+  // 2026-10-15, LEE). The model lists the stand group first (WSP AirPods,
+  // 10-11). On the Sony A7 III that sent seven photos back for the one on the
+  // stand — "When the majority is taken a certain way, the minority should be
+  // the flag" — and then, the same evening: "Stand photos should still win if
+  // it's more of a mix. If like 5 to 1 not on stand then they all should not be
+  // on stand." So the first group stands unless another is LANDSLIDE times its
+  // size (4: his "like 5 to 1"; the Sony was 7 to 1, the Insta360 6 to 3).
+  const LANDSLIDE = 4;
+  const biggest = groups.reduce<number[] | null>((m, g) => !m || g.length > m.length ? g : m, null) || [];
+  const main = groups.length && biggest.length >= LANDSLIDE * groups[0].length ? biggest : (groups[0] || []);
   // A repeat taken in the ODD spot is the one to delete, whichever came first —
   // the Sony's front on the stand (photo 3) repeated its front off it (photo 4):
   // "I would delete photo [3] and call that one out for being different".
@@ -564,8 +576,10 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   if (cluttered.length) findings.push({ code: "clutter", photos: cluttered,
     text: `Something besides the item and the white backdrop is in ${plural(cluttered, "photo", "photos")} ${list(cluttered)} — `
       + `clear it out of the frame and retake. For a large or long item, Shopify's AI background tool can make the background white.` });
-  // The guide's Screen Off shot is photographed FOR its reflections.
-  const reflected = withIssue("reflection", p => p.shots.some(x => /screen off/i.test(x)));
+  // Screen Off shots too (Ethan, 2026-10-15, LEE Lenovo 13w photo 6: "Screen
+  // off can definitely be flagged for reflection too") — this reverses 10-08's
+  // "never on a Screen Off shot".
+  const reflected = withIssue("reflection");
   if (reflected.length) findings.push({ code: "reflection", photos: reflected,
     text: `A reflection shows on the item in ${plural(reflected, "photo", "photos")} ${list(reflected)} — angle the item or the light, then retake.` });
   // One listing, one spot. The odd photos are everything outside the biggest
@@ -624,6 +638,10 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   const sealed = /^new\b/i.test(l.title) || /\bsealed\b/i.test(l.cosmetic);
   const hasBox = /\bbox\b/i.test(l.included);
   const requiredShots = sheet.shots.filter(s => !s.cond)
+    //  - a KIT of loose attachments on the Misc sheet has no sides, top or
+    //    bottom of its own — its tray and its pieces are shown instead (Ethan,
+    //    2026-10-15, LEE Wii Extreme Sports Kit: no retake).
+    .filter(s => !(kit && /\b(side|top|bottom)\b/i.test(s.label)))
     .filter(s => !((sealed || collectorSet) && gameSheet && /opened case/i.test(s.label)))
     //  - a lot of FIGURES has no back of lot — each figure is shown on its own
     //    (Ethan, 2026-10-14, OVL Skylanders lot: "the same way trading cards are
@@ -809,15 +827,22 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // to the guide"). Not a sheet shot that may repeat, a spec screen (two pages of
   // battery info are both wanted) or a steelbook's two fronts.
   const shotRepeatable = (label: string) => sheet.shots.some(s => s.repeatable && s.label.toLowerCase() === label.trim().toLowerCase());
+  // Taken = an earlier photo's MAIN label, or the model called this one an
+  // Extra too. A view an earlier angled photo only also covers is still owed
+  // its own slot (Ethan, 2026-10-15, LEE pink Beats Studio Pro: photo 1 is
+  // "Front, Side"; photo 6, the straight side view, was sent to the end — it
+  // belongs "where one of the side pictures should be").
   const secondOf = (p: PhotoR) => {
     if (steelbook || screenLit(p)) return false;
+    const extraToo = p.shots.some(s => /^extra$/i.test(s.trim()));
     const views = p.shots.map(s => s.trim()).filter(s => !/^extra$/i.test(s) && shotIx(s) >= 0);
     return views.length > 0 && views.every(s => !INFO_SHOT.test(s) && !shotRepeatable(s) && !/^(box|extra accessor|everything included)/i.test(s)
-      && r.photos.some(o => o.n < p.n && o.shots.some(x => x.trim().toLowerCase() === s.toLowerCase())));
+      && r.photos.some(o => o.n < p.n && (extraToo ? o.shots : o.shots.slice(0, 1)).some(x => x.trim().toLowerCase() === s.toLowerCase())));
   };
   // A spec screen the sheet has no shot for ("CPU" on the desktop sheet) sorts
   // with the sheet's first spec screen, so the screens stay together.
   const firstInfo = sheet.shots.findIndex(s => INFO_SHOT.test(s.label));
+  const closeKey = (() => { const i = sheet.shots.findIndex(s => /^closeup/i.test(s.label)); return i < 0 ? -1 : ixOf(sheet.shots[i].label); })();
   const baseKey = (p: PhotoR) => {
     // A photo Approve Deletion removes takes no slot among the ones that stay
     // (LEE Wii Remote QTY3: deleted photo 8 was kept in the sides' slots).
@@ -841,7 +866,11 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     // whole-item Extra beside a screen shot is just as likely the back again.
     if (k !== 1000 || screenish(p) || p.whole_item) return k;
     const nb = [byNum.get(p.n - 1), byNum.get(p.n + 1)].find(screenish);
-    if (!nb) return k;
+    // A DETAIL CLOSEUP OF THE DEVICE (no sheet shot) sorts with the sheet's
+    // closeups, in the store's order — not behind them (Ethan, 2026-10-15, LEE
+    // NES controller: the D-pad and button closeups, then the label closeup,
+    // "the order in this is correct").
+    if (!nb) return closeKey >= 0 && !secondOf(p) && p.shots.every(s => /^extra$/i.test(s.trim())) ? closeKey : k;
     riders.add(p.n);
     return baseKey(nb);
   };
@@ -856,7 +885,13 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     // does a lead photo that shows the item stay put (rule 4, 2026-09-25).
     const firstShot = sheet.shots.find(s => !s.cond)?.label.toLowerCase();
     const lead = firstShot ? byN.find(p => p.shots.some(s => s.toLowerCase() === firstShot)) : undefined;
-    if (lead) { order = [lead.n, ...order.filter(x => x !== lead.n)]; leadMoved = lead.n !== 1; }
+    // A KIT'S BOX LEADS when it was shot first: the box is "the only thing that
+    // shows what the item/kit is" (Ethan, 2026-10-15, LEE Wii Extreme Sports Kit
+    // photos 1 and 2).
+    const kitBoxes: number[] = [];
+    if (kit) for (const p of byN) { if (isBox(p)) kitBoxes.push(p.n); else break; }
+    if (kitBoxes.length) order = [...kitBoxes, ...order.filter(x => !kitBoxes.includes(x))];
+    else if (lead) { order = [lead.n, ...order.filter(x => x !== lead.n)]; leadMoved = lead.n !== 1; }
     else if (r.lead_ok) order = [1, ...order.filter(x => x !== 1)];
     // EVERYTHING INCLUDED IS PHOTO 2, right after the lead — even when another
     // photo shares the lead's shot (Ethan, 2026-10-14, OVL Canon SX740: a second

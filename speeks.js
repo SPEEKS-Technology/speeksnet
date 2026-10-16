@@ -55786,8 +55786,10 @@ const _PQ_TIERS = [
 // have fixed something or not"). The queue comes back newest-graded first and an
 // approval re-saves the row, so it jumped; a Quick Fix it closed vanished. Now
 // each tab keeps the order it was first shown in, for this store, until the page
-// is reloaded: a row approved here keeps its slot and says what was done, and a
-// row that left the tab stays as a done card in that slot. New rows go at the end.
+// is reloaded: a row approved here keeps its slot and says what was done. New
+// rows go at the end. A row with NOTHING LEFT goes away (Ethan, the same
+// evening, looking at the done cards: "When they are good now, shouldn't they
+// just go away?") — the rest keep their order, so nothing jumps.
 let _pqPlaces = { store: null, order: new Map(), done: new Map() };
 function _pqPlace(tier, all) {
     if (_pqPlaces.store !== _ecStore) _pqPlaces = { store: _ecStore, order: new Map(), done: new Map() };
@@ -55798,11 +55800,7 @@ function _pqPlace(tier, all) {
     // A row acted on in ANOTHER tab that has moved here stays in its own tab.
     const ids = [...was, ...here.filter(id => !was.includes(id) && !(done.has(id) && done.get(id).tier !== tier))];
     _pqPlaces.order.set(tier, ids);
-    return ids.map(id => {
-        const d = done.get(id);
-        if (here.includes(id)) return { r: live.get(id), done: d ? d.said : null, gone: false };
-        return { r: live.get(id) || d.row, done: d.said, gone: true };
-    });
+    return ids.filter(id => here.includes(id)).map(id => ({ r: live.get(id), done: done.get(id)?.said || null, gone: false }));
 }
 function _pqMarkDone(pid, row, what) {
     if (_pqPlaces.store !== _ecStore) return;
@@ -55853,7 +55851,7 @@ function _pqHtml() {
             <span>All Clear — Nothing To ${_ecEsc(tiers.find(t => t.v === _pqTier)?.label || '')} At ${store}</span>
           </div>`;
     } else {
-        inner = `<div class="lt-rows">${placed.map(x => _pqRow(x.r, x.done, x.gone)).join('')}</div>`;
+        inner = `<div class="lt-rows">${placed.map(x => _pqRow(x.r, x.done)).join('')}</div>`;
     }
     const total = tiers.filter(t => !t.review).reduce((s, t) => s + count(t.v), 0);
     const worst = (noPhotos || count('retake')) ? 'lh-count-bad' : count('fix') ? 'lh-count-warn' : 'lh-count-ok';
@@ -56278,17 +56276,7 @@ function _pqFindingLines(findings) {
     ].join('');
 }
 
-function _pqRow(r, done, gone) {
-    // Approved here and nothing left to do: the card stays in its slot, done.
-    if (gone) {
-        return `<div class="lt-row pq-row pq-row-done">
-          <div class="lt-main">
-            <div class="pq-title">${_ecEsc(r.title || 'Untitled Listing')}</div>
-            <div class="pq-done">✓ ${_ecEsc((done || []).join(' · '))} — nothing left to do on this one.</div>
-          </div>
-          <div class="lt-side"><div class="lt-meta"><span class="lh-sku">${_ecEsc(r.sku || '—')}</span></div></div>
-        </div>`;
-    }
+function _pqRow(r, done) {
     const id = String(r.productId || '');
     const numeric = _ecEsc(id.split('/').pop());
     const shop = _ecEsc(_pqData?.shop || '');
