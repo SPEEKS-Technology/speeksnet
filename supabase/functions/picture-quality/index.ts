@@ -1430,7 +1430,16 @@ async function saveLabel(scope: Scope, body: any) {
 // FREE. No model call. Photos are read live through the Admin API (Shopify
 // CDN, never a Supabase transform); guide examples are /object/public/.
 const CONFIRM_TARGET = 40;
-const CONFIRM_FLAGS = ["screen_on", "label_legible", "blurry", "turned", "cropped"];
+// Every per-photo field rules.ts reads from the model, by the model's own name
+// (0149): framing problems, the issues it costs (major only, so a flag means "a
+// buyer would notice"), and closeup = whole_item false. "cropped" is the 0148
+// name for cut_off and is kept so an old row still validates.
+const CONFIRM_FLAGS = ["crooked", "off_center", "too_small", "cut_off", "turned", "wrong_angle",
+  "blurry", "too_dark_or_glare", "reflection",
+  "clutter", "dirty_backdrop", "loose_cord", "not_on_stand", "different_spot",
+  "closeup", "screen_on", "label_legible", "personal_info", "stock_photo", "fake_or_edited", "wrong_item", "cropped"];
+// The listing-level facts (0149), yes/no unless noted.
+const CONFIRM_FACTS = ["lead_unclear", "serial_hidden", "new_claim_wrong", "units_apart", "flat_package"];
 const confirmer = (scope: Scope) => ["district manager", "ceo"].includes(scope.role);
 
 async function confirmView(scope: Scope, want: string, skip: Set<string>) {
@@ -1482,6 +1491,13 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
         if (!l || l.photos.length !== g.photos.length) { misaligned.push(g.product_id); continue; }
         listings.push({ store: g.store_code, productId: g.product_id, sku: g.sku || l.sku, title: l.title || g.title,
           sheet: g.sheet_slug, model: g.model, stamp: g.stamp, reviewedAt: g.reviewed_at,
+          // What the listing SAYS, for the listing-level questions: the
+          // cosmetic sentences about this unit (PayMore's template wording
+          // left out, the way decide() reads them), the functional notes,
+          // what's included, and the condition.
+          unitNotes: sentences(l.cosmetic || "").filter(x => !isStandardSentence(x, 0)).slice(0, 8),
+          functional: String(l.functional || "").slice(0, 400), included: String(l.included || "").slice(0, 300),
+          condition: String(l.condition || "").slice(0, 120),
           photos: l.photos.map((p, k) => ({ n: k + 1, src: p.src.split("?")[0], img: p.url, w: p.width, h: p.height,
             said: (g.photos.find((x: any) => x.n === k + 1)?.shots || []).map(String) })) });
       }
@@ -1505,11 +1521,21 @@ async function saveShots(scope: Scope, body: any) {
   if (!productId || !sheet || !photos.length) return json({ error: "productId, sheet and photos required" }, 400);
   const clean = (a: unknown, max: number) => (Array.isArray(a) ? a : []).map(x => String(x).trim().slice(0, 80)).filter(Boolean).slice(0, max);
   const now = new Date().toISOString();
+  const lf = body.listing && typeof body.listing === "object" ? body.listing : {};
+  const facts = body.checked === true ? {
+    ...Object.fromEntries(CONFIRM_FACTS.map(k => [k, lf[k] === true])),
+    main_flaw_shown: ["yes", "partly", "no"].includes(lf.main_flaw_shown) ? lf.main_flaw_shown : null,
+    needed: clean(lf.needed, 12),
+  } : null;
   const out = photos.map((p: any) => ({
     store_code: store, product_id: productId, sheet_slug: sheet, model_sheet: body.modelSheet || null,
     photo_src: String(p.src || "").split("?")[0], photo_n: Number(p.n) || 0,
     shots: clean(p.shots, 4), model_shots: clean(p.said, 6),
-    flags: clean(p.flags, 5).filter(f => CONFIRM_FLAGS.includes(f)),
+    flags: clean(p.flags, CONFIRM_FLAGS.length).filter(f => CONFIRM_FLAGS.includes(f)),
+    repeat_of: Number.isInteger(p.repeatOf) && p.repeatOf >= 1 && p.repeatOf < (Number(p.n) || 0) ? p.repeatOf : null,
+    // A flag left blank on a photo that was answered means NO (0149).
+    flags_checked: body.checked === true,
+    listing: facts,
     model: body.model || null, review_stamp: body.stamp || null, confirmed_by: scope.name, confirmed_at: now,
   }));
   if (out.some((r: any) => !r.photo_src || !r.photo_n || !r.shots.length)) return json({ error: "every photo needs src, n and at least one shot" }, 400);

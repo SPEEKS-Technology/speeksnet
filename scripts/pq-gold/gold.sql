@@ -19,7 +19,11 @@
 --                                one that answers "which shot is this photo".
 --                                It also holds the sheet he confirmed and
 --                                optional flags (screen_on, label_legible,
---                                blurry, turned, cropped). ⚠️ This query
+--                                blurry, turned, cropped). From 0149, every
+--                                photo field the rules read (flags named after
+--                                the model's fields, repeat_of), plus the
+--                                listing-level facts; flags_checked says a
+--                                blank flag means NO. ⚠️ This query
 --                                reads the table, so it fails until migration
 --                                0148 is applied.
 --   pq_photo_labels (0141)       EXPLICIT, per photo, FRAMING only — fine /
@@ -83,6 +87,7 @@ confirmed as (
          jsonb_agg(jsonb_build_object(
            'n', photo_n, 'src', photo_src, 'sheet', sheet_slug, 'model_sheet', model_sheet,
            'shots', to_jsonb(shots), 'model_shots', to_jsonb(model_shots), 'flags', to_jsonb(flags),
+           'repeat_of', repeat_of, 'checked', flags_checked, 'listing', listing,
            'model', model, 'stamp', review_stamp, 'by', confirmed_by, 'at', confirmed_at) order by photo_n) as shots
   from pq_shot_labels
   group by store_code, product_id

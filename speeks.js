@@ -56152,14 +56152,48 @@ function _pqTrainRender() {
 // moves on; a listing that is right throughout is Shift+Enter, once. A wrong
 // label is one key: 1–9, 0 for the sheet's first ten shots, A S D F G H J K L ;
 // for the next ten, X = Extra, B = Box. Shift with a shot key ADDS it (one photo
-// can be two shots: front AND lens open). ← goes back. Flags are optional, and
-// click only, so they can't cost a keystroke on the common path.
+// can be two shots: front AND lens open). ← goes back.
+// ⚠️ THE FLAGS ARE EVERYTHING ELSE THE RULES READ (0149; Ethan, 2026-10-16: "add
+// in anything else that you see our rules use if this is for the purpose of
+// training"). Each one is named after the model's own field: framing problems,
+// the issues rules.ts costs, closeup (= whole_item false) and "repeats photo
+// N". The flags start BLANK, not prefilled from the grade, because a prefilled
+// "no reflection" would train the eye to agree with the model. On a photo that
+// was answered, blank means NO (flags_checked). That is the only way a flag can
+// be scored, so it only works if every answered photo gets a glance for them.
+// Click only, so the common path is still one key. The listing-level facts (the
+// lead photo, a hidden serial, the main flaw shown…) sit in their own panel,
+// and only the questions that apply to the listing are asked.
 // ⚠️ DM / CEO ONLY — the server enforces it too. Nothing here calls a model.
 // The queue order (busiest sheet with the least gold first) is the server's.
 let _pqc = null;
 const _PQC_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';'];
-const _PQC_FLAGS = [['screen_on', 'Screen On'], ['label_legible', 'Label Legible'], ['blurry', 'Blurry'],
-                    ['turned', 'Turned'], ['cropped', 'Cropped']];
+// Grouped the way they're judged. Only mark an issue a buyer would notice:
+// rules.ts acts on MAJOR issues only.
+const _PQC_FLAGS = [
+    ['Framing', [['crooked', 'Crooked'], ['off_center', 'Off-Centre'], ['too_small', 'Too Small'], ['cut_off', 'Cut Off'],
+                 ['turned', 'Turned'], ['wrong_angle', 'Wrong Angle']]],
+    ['Photo', [['blurry', 'Blurry'], ['too_dark_or_glare', 'Dark / Glare'], ['reflection', 'Reflection']]],
+    ['Setting', [['clutter', 'Off Backdrop'], ['dirty_backdrop', 'Dirty Table'], ['loose_cord', 'Loose Cord'],
+                 ['not_on_stand', 'Not On Stand'], ['different_spot', 'Different Spot']]],
+    ['Shows', [['closeup', 'Closeup'], ['screen_on', 'Screen On'], ['label_legible', 'Serial Legible'],
+               ['personal_info', 'Personal Info'], ['stock_photo', 'Stock Photo'], ['fake_or_edited', 'Fake / Edited'],
+               ['wrong_item', 'Wrong Item']]],
+];
+const _PQC_BOX = ['new-in-box', 'new-open-box'];
+const _PQC_MULTI = ['item-lots', 'speaker-pairs'];
+// Which listing-level questions apply. Asked only where the rule can fire, so a
+// plain used game is two toggles, not seven.
+function _pqcAsks(l) {
+    const flaw = !!((l.unitNotes || []).length || String(l.functional || '').trim());
+    return {
+        flaw,
+        isNew: /\b(new|sealed)\b/i.test(l.title || '') || /\b(new|sealed)\b/i.test(l.condition || ''),
+        multi: _PQC_MULTI.includes(l.pickedSheet)
+            || /\b(lot|pair|bundle|set of)\b|\b\d+\s*-?\s*(pack|pk)\b/i.test(l.title || ''),
+        box: _PQC_BOX.includes(l.pickedSheet),
+    };
+}
 const _pqcMayUse = () => ['district manager', 'ceo'].includes((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
 
 async function pqConfirmOpen(sheet) {
@@ -56183,7 +56217,9 @@ async function _pqcLoad(sheet) {
         // Each photo starts from the grade's label; `seen` marks it answered.
         for (const l of d.listings || []) {
             l.pickedSheet = l.sheet;
-            for (const p of l.photos) { p.shots = [...p.said]; p.flags = new Set(); p.seen = false; }
+            l.facts = { lead_unclear: false, serial_hidden: false, new_claim_wrong: false, units_apart: false,
+                        flat_package: false, main_flaw_shown: null, needed: [] };
+            for (const p of l.photos) { p.shots = [...p.said]; p.flags = new Set(); p.repeatOf = null; p.seen = false; }
         }
         c.data = d; c.sheet = d.sheet || ''; c.li = 0; c.pi = 0;
     } catch (e) { c.err = e.message || String(e); }
@@ -56233,6 +56269,30 @@ function pqConfirmFlag(k) {
 }
 window.pqConfirmFlag = pqConfirmFlag;
 
+// This photo repeats an earlier one (the model's `repeats`; it drives Approve
+// Deletion). Only an EARLIER photo can be named, the way the model reports it.
+function pqConfirmRepeat(v) {
+    const l = _pqcListing();
+    const p = l && l.photos[_pqc.pi];
+    if (!p || _pqc.busy) return;
+    const n = Number(v);
+    p.repeatOf = Number.isInteger(n) && n >= 1 && n < p.n ? n : null;
+    _pqcRender();
+}
+window.pqConfirmRepeat = pqConfirmRepeat;
+
+// A listing-level fact: a yes/no toggles; main_flaw_shown takes yes/partly/no;
+// `needed` toggles an If-Needed shot the listing calls for.
+function pqConfirmFact(k, v) {
+    const l = _pqcListing();
+    if (!l || _pqc.busy) return;
+    if (k === 'main_flaw_shown') l.facts.main_flaw_shown = l.facts.main_flaw_shown === v ? null : v;
+    else if (k === 'needed') l.facts.needed = l.facts.needed.includes(v) ? l.facts.needed.filter(x => x !== v) : [...l.facts.needed, v];
+    else l.facts[k] = !l.facts[k];
+    _pqcRender();
+}
+window.pqConfirmFact = pqConfirmFact;
+
 function pqConfirmGo(i) {
     const l = _pqcListing();
     if (!l || _pqc.busy) return;
@@ -56253,10 +56313,20 @@ async function pqConfirmNext(all) {
     const open = after >= 0 ? after : l.photos.findIndex(p => !p.seen);
     if (open >= 0) { c.pi = open; _pqcRender(); return; }
     if (l.photos.some(p => !p.shots.length)) { c.err = 'Every photo needs a shot.'; _pqcRender(); return; }
+    const a = _pqcAsks(l);
+    // The one question with no safe blank: a missing answer to "was the flaw
+    // shown" is not a no.
+    if (a.flaw && !l.facts.main_flaw_shown) {
+        c.err = 'Answer "Main Flaw Shown" under This Listing, then save.'; _pqcRender(); return;
+    }
+    const facts = { ...l.facts,
+        // A question not asked is answered by the rule's own default.
+        new_claim_wrong: a.isNew && l.facts.new_claim_wrong, units_apart: a.multi && l.facts.units_apart,
+        flat_package: a.box && l.facts.flat_package, main_flaw_shown: a.flaw ? l.facts.main_flaw_shown : null };
     c.busy = true; _pqcRender();
     const r = await _pqPost({ action: 'confirm-shots', store: l.store, productId: l.productId, sheet: l.pickedSheet,
-        modelSheet: l.sheet, model: l.model, stamp: l.stamp,
-        photos: l.photos.map(p => ({ n: p.n, src: p.src, said: p.said, shots: p.shots, flags: [...p.flags] })) });
+        modelSheet: l.sheet, model: l.model, stamp: l.stamp, checked: true, listing: facts,
+        photos: l.photos.map(p => ({ n: p.n, src: p.src, said: p.said, shots: p.shots, flags: [...p.flags], repeatOf: p.repeatOf })) });
     if (_pqc !== c) return;
     c.busy = false;
     if (!r.ok) { c.err = r.body.detail || r.body.error || `Could not save (${r.status})`; _pqcRender(); return; }
@@ -56350,7 +56420,8 @@ function _pqcHtml() {
     const thumbs = l.photos.map((q, i) => `<button type="button" class="pqc-thumb${i === c.pi ? ' pqc-thumb-on' : ''}${q.seen ? ' pqc-thumb-done' : ''}"
         onclick="pqConfirmGo(${i})" title="${_ecEsc(q.shots.join(', '))}">
         <img src="${_ecEsc(q.img)}" alt="" loading="lazy"><span class="pqc-thumb-n">${q.n}</span>
-        <span class="pqc-thumb-l">${_ecEsc(q.shots.join(' + ') || '—')}${q.shots.join('|') !== q.said.join('|') ? ' ✎' : ''}</span></button>`).join('');
+        <span class="pqc-thumb-l">${_ecEsc(q.shots.join(' + ') || '—')}${q.shots.join('|') !== q.said.join('|') ? ' ✎' : ''}</span>
+        ${q.flags.size || q.repeatOf ? `<span class="pqc-thumb-f">${q.repeatOf ? `= ${q.repeatOf}` : ''}${q.flags.size ? `${q.repeatOf ? ' · ' : ''}${q.flags.size} flag${q.flags.size === 1 ? '' : 's'}` : ''}</span>` : ''}</button>`).join('');
     return head + err + sheets + `
       <div class="pqc-listing">
         <div class="pqc-title">${_ecEsc(l.title || '')}</div>
@@ -56370,8 +56441,18 @@ function _pqcHtml() {
         </figure>
       </div>
       <div class="pqc-chips">${choices.map((s, i) => chip(s, _PQC_KEYS[i], i)).join('')}${chip('Extra', 'x', 'x')}${chip('Box', 'b', 'b')}</div>
-      <div class="pqc-flags">${_PQC_FLAGS.map(([k, label]) => `<button type="button" class="pqc-flag${p.flags.has(k) ? ' pqc-flag-on' : ''}"
-          onclick="pqConfirmFlag('${k}')" ${c.busy ? 'disabled' : ''}>${label}</button>`).join('')}</div>
+      <div class="pqc-flagbox">
+        <div class="pqc-flaghead">This Photo <span>— mark only what a buyer would notice; blank means no</span></div>
+        ${_PQC_FLAGS.map(([group, list]) => `<div class="pqc-flags"><span class="pqc-flaggroup">${group}</span>${list.map(([k, label]) =>
+            `<button type="button" class="pqc-flag${p.flags.has(k) ? ' pqc-flag-on' : ''}"
+              onclick="pqConfirmFlag('${k}')" ${c.busy ? 'disabled' : ''}>${label}</button>`).join('')}</div>`).join('')}
+        ${p.n > 1 ? `<div class="pqc-flags"><span class="pqc-flaggroup">Repeat</span>
+          <label class="pqc-repeat">Same shot as <select onchange="pqConfirmRepeat(this.value)" ${c.busy ? 'disabled' : ''}>
+            <option value="">— not a repeat —</option>
+            ${l.photos.filter(q => q.n < p.n).map(q => `<option value="${q.n}"${p.repeatOf === q.n ? ' selected' : ''}>Photo ${q.n}</option>`).join('')}
+          </select></label></div>` : ''}
+      </div>
+      ${_pqcListingPanel(l)}
       <div class="pqt-acts">
         <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(false)" ${c.busy ? 'disabled' : ''}>Keep <kbd>Enter</kbd></button>
         <button type="button" class="pqt-btn pqt-fine" onclick="pqConfirmNext(true)" ${c.busy ? 'disabled' : ''}
@@ -56380,6 +56461,40 @@ function _pqcHtml() {
       </div>
       <div class="pqt-ask">A shot key replaces the label and moves on; with Shift it adds a second shot. ← goes back.</div>
       <div class="pqc-thumbs">${thumbs}</div>`;
+}
+
+// The listing-level facts rules.ts reads, asked once per listing. What the
+// listing SAYS is shown beside the questions that depend on it.
+function _pqcListingPanel(l) {
+    const a = _pqcAsks(l);
+    const f = l.facts;
+    const busy = _pqc.busy ? 'disabled' : '';
+    const tog = (k, label, title) => `<button type="button" class="pqc-flag${f[k] ? ' pqc-flag-on' : ''}" title="${_ecEsc(title)}"
+        onclick="pqConfirmFact('${k}')" ${busy}>${label}</button>`;
+    const guide = (_pqc.data.guide || {})[l.pickedSheet] || { shots: [] };
+    const ifNeeded = [...new Set(guide.shots.filter(s => s.cond).map(s => s.label))];
+    const said = [
+        ...(l.unitNotes || []).map(x => ['Cosmetic', x]),
+        ...(String(l.functional || '').trim() ? [['Functional', l.functional]] : []),
+        ...(String(l.included || '').trim() ? [['Included', l.included]] : []),
+    ];
+    return `<div class="pqc-flagbox pqc-listbox">
+      <div class="pqc-flaghead">This Listing <span>— asked once; blank means no</span></div>
+      ${said.length ? `<div class="pqc-said">${said.map(([k, x]) => `<div><b>${k}:</b> ${_ecEsc(x)}</div>`).join('')}</div>` : ''}
+      <div class="pqc-flags">
+        ${tog('lead_unclear', 'Lead Photo Unclear', 'Photo 1 does not clearly show what the item is')}
+        ${tog('serial_hidden', 'Serial Hidden Behind A Cover', 'The serial is only under a battery cover or similar')}
+        ${a.isNew ? tog('new_claim_wrong', 'Says New, Looks Used', 'The listing says new/sealed and the photos show a used item') : ''}
+        ${a.multi ? tog('units_apart', 'Not Every Unit Shown Together', 'A lot/pair/pack where the whole-item shots do not show every unit') : ''}
+        ${a.box ? tog('flat_package', 'Flat Package', 'A blister pack or hanging card, not a box') : ''}
+      </div>
+      ${a.flaw ? `<div class="pqc-flags"><span class="pqc-flaggroup">Main Flaw Shown</span>
+        ${['yes', 'partly', 'no'].map(v => `<button type="button" class="pqc-flag${f.main_flaw_shown === v ? ' pqc-flag-on' : ''}"
+          onclick="pqConfirmFact('main_flaw_shown','${v}')" ${busy}>${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>` : ''}
+      ${ifNeeded.length ? `<div class="pqc-flags"><span class="pqc-flaggroup">Listing Calls For</span>
+        ${ifNeeded.map(s => `<button type="button" class="pqc-flag${f.needed.includes(s) ? ' pqc-flag-on' : ''}"
+          onclick="pqConfirmFact('needed', this.dataset.s)" data-s="${_ecEsc(s)}" ${busy}>${_ecEsc(s)}</button>`).join('')}</div>` : ''}
+    </div>`;
 }
 
 function _pqcRender() {

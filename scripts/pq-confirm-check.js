@@ -67,7 +67,13 @@ t('at 390px nothing in the Confirm Shots box runs past its edge', function () {
     l.photos = [];
     for (var n = 1; n <= 12; n++) l.photos.push({ n: n, src: 'https://cdn.shopify.com/p' + n + '.jpg', img: '', w: 1080, h: 1080, said: ['Opposite Side Of The Console Lying Down'] });
     l.pickedSheet = l.sheet;
-    l.photos.forEach(function (p) { p.shots = p.said.slice(); p.flags = new Set(); p.seen = false; });
+    // The listing panel at its fullest: long notes, every question asked.
+    l.title = 'New Lot Of 2 ' + l.title;
+    l.unitNotes = ['There is a long deep scratch running across the entire back panel of the console, visible in photos 4 through 9 and under the stand.'];
+    l.functional = 'The left controller drifts slightly to the left when the stick is released, tested in the system menu.';
+    l.included = 'Console, 2 controllers, HDMI cable, power cable, charging dock, 3 games';
+    l.facts = { lead_unclear: true, serial_hidden: false, new_claim_wrong: true, units_apart: false, flat_package: false, main_flaw_shown: 'partly', needed: [] };
+    l.photos.forEach(function (p) { p.shots = p.said.slice(); p.flags = new Set(['reflection', 'off_center']); p.repeatOf = null; p.seen = false; });
     _pqc = { sheet: d.sheet, data: d, li: 0, pi: 0, busy: false, err: null, skip: new Set(), saved: 0, started: Date.now() };
     var host = document.createElement('div');
     host.style.cssText = 'width:390px;position:absolute;left:0;top:0;';
@@ -109,6 +115,12 @@ t('Enter keeps, a key replaces, Shift adds, the last photo saves the listing', f
         if (p3.shots.join() !== 'Extra,Front of Game') return 'Shift+1 gave ' + p3.shots.join();
         if (_pqc.pi !== 2) return 'Shift+key moved on';
         pqConfirmFlag('label_legible');
+        pqConfirmFlag('reflection');
+        pqConfirmRepeat('1');                  // photo 3 repeats photo 1
+        pqConfirmRepeat('3');                  // not an earlier photo: refused
+        if (p3.repeatOf !== null) return 'a repeat of a later photo was kept (' + p3.repeatOf + ')';
+        pqConfirmRepeat('1');
+        pqConfirmFact('lead_unclear');
         if (document.getElementById('pqConfirmOverlay').innerHTML.indexOf('✎') < 0) return 'changed label has no pencil';
         pqcKey('Enter');                       // last photo → save
         return new Promise(function (r) { setTimeout(r, 0); }).then(function () {
@@ -117,7 +129,13 @@ t('Enter keeps, a key replaces, Shift adds, the last photo saves the listing', f
             if (b.action !== 'confirm-shots' || b.store !== 'OVL' || b.sheet !== 'video-games') return 'payload head ' + JSON.stringify(b).slice(0, 120);
             var got = b.photos.map(function (p) { return p.shots.join('+'); }).join('|');
             if (got !== 'Front of Game|Opened Case|Extra+Front of Game') return 'saved ' + got;
-            if (b.photos[2].flags.join() !== 'label_legible') return 'flags ' + b.photos[2].flags.join();
+            if (b.photos[2].flags.join() !== 'label_legible,reflection') return 'flags ' + b.photos[2].flags.join();
+            if (b.photos[2].repeatOf !== 1 || b.photos[0].repeatOf !== null) return 'repeatOf ' + b.photos.map(function (p) { return p.repeatOf; }).join();
+            // Answered photos: blank flags mean NO.
+            if (b.checked !== true) return 'checked not sent';
+            if (!b.listing || b.listing.lead_unclear !== true || b.listing.serial_hidden !== false) return 'listing facts ' + JSON.stringify(b.listing);
+            // Not asked on a used, single, boxed-in-a-case game: sent as the rule's default.
+            if (b.listing.new_claim_wrong !== false || b.listing.flat_package !== false || b.listing.main_flaw_shown !== null) return 'unasked facts ' + JSON.stringify(b.listing);
             if (b.photos[1].said.join() !== 'Back of Game') return 'model label not sent';
             if (b.photos.some(function (p) { return /\?/.test(p.src); })) return 'src kept its query string';
             return true;
@@ -127,8 +145,17 @@ t('Enter keeps, a key replaces, Shift adds, the last photo saves the listing', f
         // The save emptied the queue, so it reloaded the next lot (the stub
         // returns the same listing): Shift+Enter now saves it whole.
         pqcPosts = [];
+        // The notes name a flaw on this unit, so "Main Flaw Shown" must be
+        // answered: Shift+Enter refuses until it is.
+        _pqc.data.listings[0].unitNotes = ['There is a deep scratch across the back of the case.'];
+        pqcKey('Enter', true);
+        if (pqcPosts.length) { pqConfirmClose(); return 'saved without a Main Flaw answer'; }
+        if (!/Main Flaw Shown/.test(_pqc.err || '')) { pqConfirmClose(); return 'no error asking for Main Flaw Shown'; }
+        if (document.getElementById('pqConfirmOverlay').innerHTML.indexOf('deep scratch') < 0) { pqConfirmClose(); return 'the unit note is not shown'; }
+        pqConfirmFact('main_flaw_shown', 'partly');
         pqcKey('Enter', true);
         return new Promise(function (res) { setTimeout(res, 0); }).then(function () {
+            if (pqcPosts.length !== 1 || pqcPosts[0].listing.main_flaw_shown !== 'partly') { pqConfirmClose(); return 'main flaw answer not saved'; }
             var ok = pqcPosts.length === 1 && pqcPosts[0].photos.map(function (p) { return p.shots.join(); }).join('|') === 'Front of Game|Back of Game|Extra';
             // A changed sheet changes the offered shots.
             pqConfirmSheet('lenses');

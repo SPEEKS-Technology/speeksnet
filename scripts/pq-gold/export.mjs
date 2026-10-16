@@ -158,12 +158,16 @@ for (const r of rows) {
   for (const c of confirmed) {
     const p = livePhotos ? photos.find(x => fileKey(x.url) === fileKey(c.src)) : photos.find(x => x.url === c.src);
     if (!p) { unconfirmed++; continue; }
-    Object.assign(p, { shots: c.shots, shots_from: "confirmed", shots_tier: "explicit", flags: c.flags || [],
-                       model_shots_then: c.model_shots, confirmed_at: c.at });
+    // "cropped" is 0148's name for cut_off. flags_checked (0149): blank = NO.
+    Object.assign(p, { shots: c.shots, shots_from: "confirmed", shots_tier: "explicit",
+                       flags: (c.flags || []).map(x => x === "cropped" ? "cut_off" : x), flags_checked: !!c.checked,
+                       repeat_of: c.repeat_of ?? null, model_shots_then: c.model_shots, confirmed_at: c.at });
   }
   if (unconfirmed) warnings.push(`${unconfirmed} confirmed label(s) match no live photo (retaken or deleted since)`);
   const allConfirmed = !!confirmed.length && photos.length > 0 && photos.every(p => p.shots_from === "confirmed");
   const cSheet = confirmed[0]?.sheet || null;
+  // Listing-level facts (0149), the same on every row; only from a checked save.
+  const lfacts = confirmed.find(c => c.checked && c.listing)?.listing || null;
   const guide = r.confirmed_guide || r.guide || null;
 
   // EXPLICIT framing labels, by address.
@@ -200,7 +204,9 @@ for (const r of rows) {
   if (allConfirmed && guide) {
     const have = new Set(photos.flatMap(p => p.shots || []).map(x => x.toLowerCase()));
     missing = { exact: [...new Set(guide.filter(s => !s.cond).map(s => s.label))].filter(x => !have.has(x.toLowerCase())),
-                scope: "always", from: "confirmed_shots", tier: "explicit" };
+                scope: "always", from: "confirmed_shots", tier: "explicit",
+                // If-Needed shots he said the listing calls for, that no photo covers.
+                ...(lfacts ? { needed: (lfacts.needed || []).filter(x => !have.has(String(x).toLowerCase())) } : {}) };
   } else if (facts && (facts.missing || facts.includes || facts.not)) {
     missing = { ...(facts.missing ? { exact: facts.missing } : {}), ...(facts.includes ? { includes: facts.includes } : {}),
                 ...(facts.not ? { not: facts.not } : {}), from: "calibration_key", tier: "explicit",
@@ -222,7 +228,7 @@ for (const r of rows) {
     notes: r.graded?.notes || [],
     graded: r.graded ? { model: r.graded.model, stamp: r.graded.stamp, reviewed_at: r.graded.reviewed_at,
                          photo_count: gradedCount, verdict: r.graded.verdict } : null,
-    aligned, photos, verdict, missing, warnings,
+    aligned, photos, verdict, missing, facts: lfacts, warnings,
   });
 }
 
