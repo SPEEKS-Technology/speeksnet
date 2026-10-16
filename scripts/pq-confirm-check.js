@@ -72,6 +72,9 @@ t('at 390px nothing in the Confirm Shots box runs past its edge', function () {
     l.unitNotes = ['There is a long deep scratch running across the entire back panel of the console, visible in photos 4 through 9 and under the stand.'];
     l.functional = 'The left controller drifts slightly to the left when the stick is released, tested in the system menu.';
     l.included = 'Console, 2 controllers, HDMI cable, power cable, charging dock, 3 games';
+    l.notes = [{ text: l.unitNotes[0], unit: true },
+               { text: 'This console is in good pre-owned condition, showing light to moderate signs of use such as small scuffs, scratches, or dings across the top panel.', unit: false }];
+    l.flip = new Set([1]);
     l.facts = { lead_unclear: true, serial_hidden: false, new_claim_wrong: true, units_apart: false, flat_package: false, main_flaw_shown: 'partly', needed: [] };
     l.photos.forEach(function (p) { p.shots = p.said.slice(); p.flags = new Set(['reflection', 'off_center']); p.repeatOf = null; p.seen = false; });
     _pqc = { sheet: d.sheet, data: d, li: 0, pi: 0, busy: false, err: null, skip: new Set(), saved: 0, started: Date.now() };
@@ -147,15 +150,28 @@ t('Enter keeps, a key replaces, Shift adds, the last photo saves the listing', f
         pqcPosts = [];
         // The notes name a flaw on this unit, so "Main Flaw Shown" must be
         // answered: Shift+Enter refuses until it is.
-        _pqc.data.listings[0].unitNotes = ['There is a deep scratch across the back of the case.'];
+        var L2 = _pqc.data.listings[0];
+        L2.notes = [{ text: 'There is a deep scratch across the back of the case.', unit: true },
+                    { text: 'The case shows light wear from normal use.', unit: false }];
         pqcKey('Enter', true);
         if (pqcPosts.length) { pqConfirmClose(); return 'saved without a Main Flaw answer'; }
         if (!/Main Flaw Shown/.test(_pqc.err || '')) { pqConfirmClose(); return 'no error asking for Main Flaw Shown'; }
         if (document.getElementById('pqConfirmOverlay').innerHTML.indexOf('deep scratch') < 0) { pqConfirmClose(); return 'the unit note is not shown'; }
-        pqConfirmFact('main_flaw_shown', 'partly');
+        // The system was wrong both ways: the "flaw" is template wording, and
+        // the faded line is the real flaw. Overruling the first alone drops the
+        // question; overruling the second brings it back.
+        pqConfirmFact('flip', 0);
+        if (_pqcAsks(L2).flaw) { pqConfirmClose(); return 'Main Flaw still asked after its only flaw line was marked standard'; }
+        pqConfirmFact('flip', 1);
+        if (!_pqcAsks(L2).flaw) { pqConfirmClose(); return 'a line marked Real Flaw did not bring the question back'; }
+        if (document.getElementById('pqConfirmOverlay').innerHTML.indexOf('No Real Flaw') < 0) { pqConfirmClose(); return 'no "No Real Flaw" answer'; }
+        pqConfirmFact('main_flaw_shown', 'not_applicable');
         pqcKey('Enter', true);
         return new Promise(function (res) { setTimeout(res, 0); }).then(function () {
-            if (pqcPosts.length !== 1 || pqcPosts[0].listing.main_flaw_shown !== 'partly') { pqConfirmClose(); return 'main flaw answer not saved'; }
+            var b2 = pqcPosts[0];
+            if (pqcPosts.length !== 1 || b2.listing.main_flaw_shown !== 'not_applicable') { pqConfirmClose(); return 'No Real Flaw not saved'; }
+            var sent = (b2.listing.sentences || []).map(function (x) { return (x.system ? 'S' : 's') + (x.real ? 'R' : 'r'); }).join();
+            if (sent !== 'Sr,sR') { pqConfirmClose(); return 'sentences saved as ' + sent; }
             var ok = pqcPosts.length === 1 && pqcPosts[0].photos.map(function (p) { return p.shots.join(); }).join('|') === 'Front of Game|Back of Game|Extra';
             // A changed sheet changes the offered shots.
             pqConfirmSheet('lenses');

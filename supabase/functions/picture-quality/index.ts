@@ -1496,6 +1496,10 @@ async function confirmView(scope: Scope, want: string, skip: Set<string>) {
           // left out, the way decide() reads them), the functional notes,
           // what's included, and the condition.
           unitNotes: sentences(l.cosmetic || "").filter(x => !isStandardSentence(x, 0)).slice(0, 8),
+          // EVERY cosmetic sentence with the code's call on it, so a person can
+          // overrule it in either direction: template wording read as a flaw,
+          // or a real flaw dismissed as template wording (Ethan, 2026-10-16).
+          notes: sentences(l.cosmetic || "").slice(0, 12).map(x => ({ text: x, unit: !isStandardSentence(x, 0) })),
           functional: String(l.functional || "").slice(0, 400), included: String(l.included || "").slice(0, 300),
           condition: String(l.condition || "").slice(0, 120),
           photos: l.photos.map((p, k) => ({ n: k + 1, src: p.src.split("?")[0], img: p.url, w: p.width, h: p.height,
@@ -1524,7 +1528,14 @@ async function saveShots(scope: Scope, body: any) {
   const lf = body.listing && typeof body.listing === "object" ? body.listing : {};
   const facts = body.checked === true ? {
     ...Object.fromEntries(CONFIRM_FACTS.map(k => [k, lf[k] === true])),
-    main_flaw_shown: ["yes", "partly", "no"].includes(lf.main_flaw_shown) ? lf.main_flaw_shown : null,
+    // not_applicable = "No Real Flaw": the notes name no flaw on this unit
+    // (the model's own word for it, so it scores directly).
+    main_flaw_shown: ["yes", "partly", "no", "not_applicable"].includes(lf.main_flaw_shown) ? lf.main_flaw_shown : null,
+    // Each cosmetic sentence: the code's call (system) and the person's (real),
+    // the answer key for isStandardSentence / PAYMORE_TEMPLATES.
+    sentences: (Array.isArray(lf.sentences) ? lf.sentences : []).slice(0, 12)
+      .filter((x: any) => x && typeof x.text === "string" && x.text.trim())
+      .map((x: any) => ({ text: String(x.text).trim().slice(0, 400), system: x.system === true, real: x.real === true })),
     needed: clean(lf.needed, 12),
   } : null;
   const out = photos.map((p: any) => ({

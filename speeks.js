@@ -56184,8 +56184,14 @@ const _PQC_BOX = ['new-in-box', 'new-open-box'];
 const _PQC_MULTI = ['item-lots', 'speaker-pairs'];
 // Which listing-level questions apply. Asked only where the rule can fire, so a
 // plain used game is two toggles, not seven.
+// The cosmetic sentences as the person now reads them: the code's call on each,
+// turned over where the person said it was wrong (l.flip, by index).
+const _pqcNotes = l => (l.notes || []).map((n, i) => ({ ...n, real: l.flip && l.flip.has(i) ? !n.unit : n.unit }));
 function _pqcAsks(l) {
-    const flaw = !!((l.unitNotes || []).length || String(l.functional || '').trim());
+    // Main Flaw Shown is asked when a sentence names a flaw on this unit, AS THE
+    // PERSON READS IT. Mark the only "flaw" sentence as standard wording and the
+    // question goes away; mark a dismissed one as a real flaw and it appears.
+    const flaw = !!(_pqcNotes(l).some(n => n.real) || String(l.functional || '').trim());
     return {
         flaw,
         isNew: /\b(new|sealed)\b/i.test(l.title || '') || /\b(new|sealed)\b/i.test(l.condition || ''),
@@ -56219,6 +56225,9 @@ async function _pqcLoad(sheet) {
             l.pickedSheet = l.sheet;
             l.facts = { lead_unclear: false, serial_hidden: false, new_claim_wrong: false, units_apart: false,
                         flat_package: false, main_flaw_shown: null, needed: [] };
+            // Older queue payloads only had unitNotes; read those as the code's flaws.
+            if (!Array.isArray(l.notes)) l.notes = (l.unitNotes || []).map(text => ({ text, unit: true }));
+            l.flip = new Set();
             for (const p of l.photos) { p.shots = [...p.said]; p.flags = new Set(); p.repeatOf = null; p.seen = false; }
         }
         c.data = d; c.sheet = d.sheet || ''; c.li = 0; c.pi = 0;
@@ -56287,6 +56296,7 @@ function pqConfirmFact(k, v) {
     const l = _pqcListing();
     if (!l || _pqc.busy) return;
     if (k === 'main_flaw_shown') l.facts.main_flaw_shown = l.facts.main_flaw_shown === v ? null : v;
+    else if (k === 'flip') { const i = Number(v); l.flip.has(i) ? l.flip.delete(i) : l.flip.add(i); }
     else if (k === 'needed') l.facts.needed = l.facts.needed.includes(v) ? l.facts.needed.filter(x => x !== v) : [...l.facts.needed, v];
     else l.facts[k] = !l.facts[k];
     _pqcRender();
@@ -56322,7 +56332,9 @@ async function pqConfirmNext(all) {
     const facts = { ...l.facts,
         // A question not asked is answered by the rule's own default.
         new_claim_wrong: a.isNew && l.facts.new_claim_wrong, units_apart: a.multi && l.facts.units_apart,
-        flat_package: a.box && l.facts.flat_package, main_flaw_shown: a.flaw ? l.facts.main_flaw_shown : null };
+        flat_package: a.box && l.facts.flat_package, main_flaw_shown: a.flaw ? l.facts.main_flaw_shown : null,
+        // Every sentence with the code's call and the person's: unclicked = agreed.
+        sentences: _pqcNotes(l).map(n => ({ text: n.text, system: !!n.unit, real: !!n.real })) };
     c.busy = true; _pqcRender();
     const r = await _pqPost({ action: 'confirm-shots', store: l.store, productId: l.productId, sheet: l.pickedSheet,
         modelSheet: l.sheet, model: l.model, stamp: l.stamp, checked: true, listing: facts,
@@ -56473,13 +56485,24 @@ function _pqcListingPanel(l) {
         onclick="pqConfirmFact('${k}')" ${busy}>${label}</button>`;
     const guide = (_pqc.data.guide || {})[l.pickedSheet] || { shots: [] };
     const ifNeeded = [...new Set(guide.shots.filter(s => s.cond).map(s => s.label))];
+    // Cosmetic sentences one per line, each with the code's call and a button to
+    // overrule it. Standard wording is shown faded, so a real flaw the code
+    // dismissed can still be caught (Ethan, 2026-10-16: the system can be wrong
+    // about a flaw).
+    const notes = _pqcNotes(l).map((n, i) => {
+        const flipped = l.flip.has(i);
+        return `<div class="pqc-note${n.real ? '' : ' pqc-note-std'}${flipped ? ' pqc-note-flip' : ''}">
+          <span class="pqc-note-t"><b>${n.real ? 'Flaw' : 'Standard'}:</b> ${_ecEsc(n.text)}</span>
+          <button type="button" class="pqc-note-b" onclick="pqConfirmFact('flip', ${i})" ${busy}
+            title="${flipped ? 'Undo: go back to what the system said' : n.unit ? 'This is PayMore\'s standard wording, not a flaw on this unit' : 'This names a real flaw on this unit'}">${flipped ? 'Undo' : n.unit ? 'Standard Wording' : 'Real Flaw'}</button></div>`;
+    }).join('');
     const said = [
-        ...(l.unitNotes || []).map(x => ['Cosmetic', x]),
         ...(String(l.functional || '').trim() ? [['Functional', l.functional]] : []),
         ...(String(l.included || '').trim() ? [['Included', l.included]] : []),
     ];
     return `<div class="pqc-flagbox pqc-listbox">
       <div class="pqc-flaghead">This Listing <span>— asked once; blank means no</span></div>
+      ${notes ? `<div class="pqc-notes">${notes}</div>` : ''}
       ${said.length ? `<div class="pqc-said">${said.map(([k, x]) => `<div><b>${k}:</b> ${_ecEsc(x)}</div>`).join('')}</div>` : ''}
       <div class="pqc-flags">
         ${tog('lead_unclear', 'Lead Photo Unclear', 'Photo 1 does not clearly show what the item is')}
@@ -56489,8 +56512,9 @@ function _pqcListingPanel(l) {
         ${a.box ? tog('flat_package', 'Flat Package', 'A blister pack or hanging card, not a box') : ''}
       </div>
       ${a.flaw ? `<div class="pqc-flags"><span class="pqc-flaggroup">Main Flaw Shown</span>
-        ${['yes', 'partly', 'no'].map(v => `<button type="button" class="pqc-flag${f.main_flaw_shown === v ? ' pqc-flag-on' : ''}"
-          onclick="pqConfirmFact('main_flaw_shown','${v}')" ${busy}>${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>` : ''}
+        ${[['yes', 'Yes'], ['partly', 'Partly'], ['no', 'No'], ['not_applicable', 'No Real Flaw']].map(([v, label]) => `<button type="button" class="pqc-flag${f.main_flaw_shown === v ? ' pqc-flag-on' : ''}"
+          onclick="pqConfirmFact('main_flaw_shown','${v}')" ${busy}
+          ${v === 'not_applicable' ? 'title="The notes name no flaw on this unit, whatever the system read"' : ''}>${label}</button>`).join('')}</div>` : ''}
       ${ifNeeded.length ? `<div class="pqc-flags"><span class="pqc-flaggroup">Listing Calls For</span>
         ${ifNeeded.map(s => `<button type="button" class="pqc-flag${f.needed.includes(s) ? ' pqc-flag-on' : ''}"
           onclick="pqConfirmFact('needed', this.dataset.s)" data-s="${_ecEsc(s)}" ${busy}>${_ecEsc(s)}</button>`).join('')}</div>` : ''}

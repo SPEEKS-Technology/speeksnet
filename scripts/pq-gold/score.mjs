@@ -250,6 +250,18 @@ console.log(`  photo flags (Confirm Shots): ${seenF.length ? seenF.map(k => `${k
 const seenK = FACTS.filter(k => all.facts[k].n);
 console.log(`  listing facts: ${seenK.length ? seenK.map(k => `${k} ${pct(all.facts[k].agree, all.facts[k].n)} of ${all.facts[k].n}`).join(" · ") : "none scored yet"}`);
 if (all.needed.tp + all.needed.fp + all.needed.fn) console.log(`  If-Needed missing: ${pr(all.needed)}`);
+// The STANDARD-WORDING CHECK, scored as the code stands today (not the model):
+// every cosmetic sentence Ethan saw in Confirm Shots, with his call on whether it
+// names a flaw on this unit. A rules change to isStandardSentence /
+// PAYMORE_TEMPLATES is checked here for free. Independent of the model output.
+const said = goldFile.listings.flatMap(g => (g.facts?.sentences || []).map(x => ({ ...x, g })));
+if (said.length) {
+  if (!isStandardSentence) ({ decide, isStandardSentence } = await import("../../supabase/functions/picture-quality/rules.ts"));
+  const wrong = said.filter(x => !isStandardSentence(x.text) !== x.real);
+  console.log(`  standard-wording check (today's rules.ts): ${said.length - wrong.length}/${said.length} sentences read as Ethan reads them`
+    + ` · ${wrong.filter(x => x.real).length} real flaws taken for wording, ${wrong.filter(x => !x.real).length} wording taken for flaws`);
+  if (process.env.VERBOSE) for (const x of wrong) misses.push(`wording ${x.g.store} ${x.g.sku || tail(x.g.product_id)}: Ethan ${x.real ? "FLAW" : "standard"} · code ${x.real ? "standard" : "flaw"} — "${x.text.slice(0, 90)}"`);
+}
 console.log("\nBY SHEET");
 for (const [k, b] of [...tallies].filter(([k]) => k.startsWith("sheet:")).sort((a, b) => b[1].listings - a[1].listings))
   console.log(line(k.slice(6), b));
