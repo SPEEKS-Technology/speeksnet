@@ -25911,10 +25911,13 @@ async function _b2bCustodyPdf(d, sigImg, signedAt) {
     }
 
     // The statement, then the signature under it -- kept together on one page.
+    // Font FIRST: splitTextToSize measures in whatever font is current, and the
+    // table above leaves it at 9.5pt -- measured there and printed at 11pt, the
+    // statement ran off the right edge of the page.
+    ink(); doc.setFont('helvetica', 'normal'); doc.setFontSize(11);
     const terms = doc.splitTextToSize(B2B_CUSTODY_TERMS, R - M);
     ensure(terms.length * 15 + 170);
     y += 6;
-    ink(); doc.setFont('helvetica', 'normal'); doc.setFontSize(11);
     terms.forEach(line => { doc.text(line, M, y); y += 15; });
     y += 18;
     doc.addImage(sigImg, 'JPEG', M, y, 270, 96);
@@ -29507,7 +29510,7 @@ function _b2bListRows() {
         // Line order is the resting state, not a direction -- no arrow on it.
         const arrow = on && key !== 'line' ? (_b2bListSort.dir === 'asc' ? '▲' : '▼') : '';
         return `<button type="button" class="b2b-lsort ${on ? 'on' : ''}" onclick="b2bListSortBy('${key}')"
-            aria-label="Sort by ${escapeHtml(label)}${on ? (_b2bListSort.dir === 'asc' ? ', lowest first' : ', highest first') : ''}"
+            aria-label="${key === 'line' ? 'Back to line order' : `Sort by ${escapeHtml(label)}${arrow ? (_b2bListSort.dir === 'asc' ? ', lowest first' : ', highest first') : ''}`}"
             data-tip="${key === 'line' ? 'Back to line order' : `Sort by ${escapeHtml(label.toLowerCase())}`}">${escapeHtml(label)}${
             arrow ? `<i aria-hidden="true">${arrow}</i>` : ''}</button>`;
     };
