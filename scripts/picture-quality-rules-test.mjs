@@ -338,9 +338,32 @@ t("missing Everything Included carries what the listing says comes with it (OVL 
   return (f && f.included === "Charger, box") || say(d); });
 t("the 'repeat' of a photo that also holds the closeup IS the closeup (OVL Intel SSD, 10-13)", () => {
   const ps = report().photos; ps[0] = photo(1, { shots: ["Top of Controller", "Closeup of Serial/Model Info"] });
-  ps[1] = photo(2, { shots: ["Top of Controller"], repeats: 1 });
+  ps[1] = photo(2, { shots: ["Top of Controller"], repeats: 1, whole_item: false });
   const d = run({}, PAD, { photos: ps });
   return !d.deletion || say(d); });
+const RAM = { slug: "ram", shots: [
+  { label: "Top of Lot", cond: "Lot" }, { label: "Bottom of Lot", cond: "Lot" }, { label: "Top of RAM", cond: null },
+  { label: "Everything Included", cond: "Everything Included" }, { label: "Bottom of RAM", cond: null },
+  { label: "Closeup of Serial/Model Info", cond: null }, { label: "Cosmetic Flaws", cond: "Cosmetic flaws" }] };
+t("a second WHOLE shot of the label face is a repeat, not the closeup (OVL Crucial DDR5 photo 2, 10-16)", () => {
+  const ps = [photo(1, { shots: ["Top of RAM", "Closeup of Serial/Model Info"] }),
+    photo(2, { shots: ["Extra", "Top of RAM"], repeats: 1 }), photo(3, { shots: ["Bottom of RAM"] })];
+  const d = decide(listing({ n: 3 }), RAM, report({ n: 3, photos: ps }));
+  return (d.deletion && d.deletion.photos.join() === "2" && d.findings.some(f => f.shot === "Closeup of Serial/Model Info")) || say(d); });
+t("a real closeup still covers the closeup shot (OVL Micron DDR4 photo 3)", () => {
+  const ps = [photo(1, { shots: ["Top of RAM"] }), photo(2, { shots: ["Bottom of RAM"] }),
+    photo(3, { shots: ["Closeup of Serial/Model Info"], whole_item: false })];
+  const d = decide(listing({ n: 3 }), RAM, report({ n: 3, photos: ps }));
+  return !d.findings.some(f => f.shot === "Closeup of Serial/Model Info") || say(d); });
+t("turned counts on a flat item's Top/Bottom face (OVL SK Hynix SSD photo 3, 10-16)", () => {
+  const ps = [photo(1, { shots: ["Top of RAM"] }), photo(2, { shots: ["Bottom of RAM"] }),
+    photo(3, { shots: ["Top of RAM"], framing: "off", framing_problems: ["turned"] })];
+  const d = decide(listing({ n: 3 }), RAM, report({ n: 3, photos: ps }));
+  return (flagged(d) && d.findings.some(f => f.code === "turned" && f.photo === 3)) || say(d); });
+t("turned still never counts on a device's Top shot (a sheet with a Front)", () => {
+  const ps = report().photos; ps[3] = photo(4, { shots: ["Top of Controller"], framing: "off", framing_problems: ["turned"] });
+  const d = run({}, PAD, { photos: ps });
+  return !d.findings.some(f => f.code === "turned") || say(d); });
 t("a photo being deleted is not also sent back for a retake (OVL Evercade, 10-13 A/B)", () => {
   const GAME = { slug: "video-games", shots: [{ label: "Front of Game", cond: null }, { label: "Back of Game", cond: null }] };
   const ps = report({ n: 6 }).photos;

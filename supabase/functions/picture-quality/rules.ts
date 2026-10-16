@@ -360,7 +360,12 @@ export function lookAlikeFaces(r: ReportR, sheet: SheetR): ReportR {
     // counted it as the Top AND the serial closeup, and called the real closeup
     // (photo 2) a repeat. When the original is the only photo holding the
     // sheet's closeup shot, the "repeat" is that closeup.
-    const close = q.shots.find(s => /closeup|serial/i.test(s) && sheet.shots.some(x => x.label.toLowerCase() === s.toLowerCase()));
+    // Only a photo the model calls a closeup: a second WHOLE shot of the face is
+    // the repeat it was called (Ethan, 2026-10-16, OVL Crucial DDR5: photo 2,
+    // the label side again with the pins up, "is the same photo as photo 1" —
+    // and "there is no closeup of serial number").
+    const close = p.whole_item ? undefined
+      : q.shots.find(s => /closeup|serial/i.test(s) && sheet.shots.some(x => x.label.toLowerCase() === s.toLowerCase()));
     if (close && !closeTaken && !r.photos.some(o => o !== q && o.shots.some(x => x.toLowerCase() === close.toLowerCase()))) {
       closeTaken = true;
       return { ...p, repeats: null, whole_item: false, shots: [close] };
@@ -530,7 +535,14 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
     // Except a LENS: its sides are shot standing upright like the front and
     // back, so one lying on its barrel is the wrong angle (Ethan, 2026-10-14, MPL
     // Pentax 20790 photos 5-6, Pentax 50 photo 5).
-    if (said.includes("turned") && (sheet.slug === "lenses" || !p.shots.some(s => /\b(side|top|bottom|corner|edge)\b/i.test(s)))) findings.push({ code: "turned", photo: p.n,
+    // Nor a FLAT item's faces: on a sheet with no Front shot (RAM, SSD, a
+    // board), "Top of X" and "Bottom of X" ARE the faces, shot like a front
+    // (Ethan, 2026-10-16, OVL SK Hynix PC601 photo 3: the model said turned, and
+    // the word "Top" waved it through — "should've been flagged").
+    const faceSheet = !sheet.shots.some(s => /^front\b/i.test(s.label.trim()));
+    const edgeShot = (s: string) => /\b(side|corner|edge)\b/i.test(s)
+      || (/\b(top|bottom)\b/i.test(s) && !(faceSheet && /^(top|bottom) of\b/i.test(s.trim())));
+    if (said.includes("turned") && (sheet.slug === "lenses" || !p.shots.some(edgeShot))) findings.push({ code: "turned", photo: p.n,
       text: `Photo ${p.n} has the item turned a different way from the guide and the other photos — turn it to match, then retake.` });
     const probs = [...new Set([...(faults?.get(p.n) || []), ...said.filter(x => x !== "turned")])];
     if (probs.length) {
@@ -705,7 +717,13 @@ export function decide(l: ListingR, sheet: SheetR, r0: ReportR, faults?: Map<num
   // closeup — or it is Core. Anything else missing one is −3, even under a
   // battery cover (Ethan changed his mind on the Xbox controller, 2026-10-10).
   const serialShot = sheet.shots.find(s => !s.cond && shotKind(s.label) === "serial");
-  if (r.serial !== "shown") {
+  // A CLOSEUP shot needs a closeup. A label the model can read on the full-size
+  // whole-item photo is not one a buyer can read on the listing (Ethan,
+  // 2026-10-16, OVL Crucial DDR5: "there is no closeup of serial number").
+  // Not a screen device — its settings page shows the serial.
+  const closeupOnlyWhole = !screen && !!serialShot && /closeup/i.test(serialShot.label)
+    && !r.photos.some(p => !p.whole_item && p.shots.some(s => s.trim().toLowerCase() === serialShot.label.toLowerCase()));
+  if (r.serial !== "shown" || closeupOnlyWhole) {
     if (screen) core.push(serialShot ? serialShot.label : "Serial Number (in settings or a closeup)");
     else if (serialShot) missing.push({ code: "missing_shot", tier: "serial", shot: serialShot.label, text: `Missing: ${serialShot.label}.` });
   }
